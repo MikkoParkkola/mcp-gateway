@@ -338,6 +338,7 @@ pub(in super::super) fn caller_as<'a>(
         signing: None,
         execution: None,
         credential_principal,
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
         credential_kind: crate::security::audit::CredentialKind::None,
         is_modern: false,

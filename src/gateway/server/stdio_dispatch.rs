@@ -148,6 +148,7 @@ impl Gateway {
                             &retry,
                             &request_shape,
                             client,
+                            meta_mcp.record_key(),
                         );
                         let shape = &request_shape;
                         stdio_tasks::serve(client.tasks, m, id, params, shape, &caller, session_id)
@@ -415,6 +416,7 @@ impl Gateway {
         retry: &'a crate::protocol::mrtr::RetryFields,
         request_shape: &crate::protocol::meta::RequestShape,
         client: StdioClient<'a>,
+        record_key: &crate::gateway::record_principal::RecordPrincipalKey,
     ) -> MetaMcpCallerContext<'a> {
         MetaMcpCallerContext {
             // Filled after the route stage, by the task intent, when the
@@ -426,6 +428,11 @@ impl Gateway {
             is_modern,
             protocol_revision,
             credential_principal: Some(STDIO_CREDENTIAL_PRINCIPAL),
+            // The stdio constant, keyed like any principal (MIK-8697 §16.11).
+            record_principal: crate::gateway::record_principal::InternalPrincipal::new(
+                STDIO_CREDENTIAL_PRINCIPAL.to_owned(),
+            )
+            .record_form(record_key),
             authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
             credential_kind: crate::security::audit::CredentialKind::LocalTransport,
             authorizer: stdio_authorizer,
@@ -585,6 +592,7 @@ impl Gateway {
                 &retry,
                 request_shape,
                 client,
+                meta_mcp.record_key(),
             );
             // The signing nonce is admitted before the route stage, so a bad
             // nonce is refused without paying for the payload

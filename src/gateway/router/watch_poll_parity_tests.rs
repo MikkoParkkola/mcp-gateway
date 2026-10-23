@@ -191,10 +191,15 @@ async fn a_poll_writes_an_audit_record_for_its_subscriber() {
         .filter(|entry: &serde_json::Value| entry.get("request_hash").is_some())
         .collect();
     assert_eq!(records.len(), 1, "{records:?}");
-    let who = records[0]["who"].to_string();
-    assert!(
-        who.contains("subscriber"),
-        "attributed to the subscriber: {who}"
+    // Attributed to the subscriber's key, by its keyed principal: never the
+    // stored owner string (MIK-8697).
+    let subscriber = crate::gateway::auth::principal_of("k-std")
+        .record_form(&crate::gateway::record_principal::test_record_key());
+    assert_eq!(
+        records[0]["who"]["principal"],
+        subscriber.as_str(),
+        "attributed to the subscriber: {}",
+        records[0]["who"]
     );
     assert_eq!(records[0]["who"]["credential_kind"], "api_key");
 }

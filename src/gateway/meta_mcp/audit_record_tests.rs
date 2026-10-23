@@ -157,6 +157,10 @@ fn context<'a>(
         signing: None,
         execution: None,
         credential_principal: Some(who.principal.as_str()),
+        record_principal: crate::gateway::record_principal::InternalPrincipal::new(
+            who.principal.clone(),
+        )
+        .record_form(&crate::gateway::record_principal::test_record_key()),
         authentication: if who.authenticated {
             Authentication::Authenticated
         } else {

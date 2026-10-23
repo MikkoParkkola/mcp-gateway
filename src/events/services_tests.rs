@@ -43,6 +43,12 @@ fn services(keys: Vec<ApiKeyConfig>) -> Services {
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: LiveCredentials::default(),
+        record_key: Some(std::sync::Arc::new(
+            crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )
+            .expect("test key"),
+        )),
     }
 }
 
@@ -236,6 +242,12 @@ fn bound(
 fn with(credentials: LiveCredentials) -> Services {
     Services {
         credentials,
+        record_key: Some(std::sync::Arc::new(
+            crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )
+            .expect("test key"),
+        )),
         ..services(Vec::new())
     }
 }

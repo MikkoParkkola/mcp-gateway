@@ -687,6 +687,7 @@ mod mik_8659_caller_tests {
         let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
             api_key_name: Some(client.name.as_str()),
             credential_principal: Some(client.principal.storage_form()),
+            record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
             authentication: crate::gateway::meta_mcp::Authentication::of(Some(&client)),
             credential_kind: CredentialKind::of(Some(&client)),
             ..crate::gateway::meta_mcp::anonymous_caller()

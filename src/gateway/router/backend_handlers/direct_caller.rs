@@ -241,6 +241,7 @@ pub(super) async fn read_envelope(
         &json_request,
         caller.client.as_ref(),
         caller.grant_subject.as_ref(),
+        state.auth_config.record_key(),
     );
     reads.capture(state, &json_request, || caller.spend_key.clone());
 

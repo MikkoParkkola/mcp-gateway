@@ -23,6 +23,7 @@ fn context_for(
     crate::gateway::meta_mcp::MetaMcpCallerContext {
         api_key_name: Some(client.name.as_str()),
         credential_principal: Some(client.principal.storage_form()),
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         authentication: crate::gateway::meta_mcp::Authentication::of(Some(client)),
         credential_kind: crate::security::audit::CredentialKind::of(Some(client)),
         ..crate::gateway::meta_mcp::anonymous_caller()
@@ -186,6 +187,7 @@ fn t4_oidc_gives_identity_quota_when_an_identity_is_passed() {
     let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
         api_key_name: Some(client.name.as_str()),
         credential_principal: Some(client.principal.storage_form()),
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         authentication: crate::gateway::meta_mcp::Authentication::of(Some(&client)),
         credential_kind: crate::security::audit::CredentialKind::of(Some(&client)),
         verified_identity: Some(&identity),
@@ -214,6 +216,7 @@ fn t4_quota_precedence_and_fallthrough() {
     let full = crate::gateway::meta_mcp::MetaMcpCallerContext {
         api_key_name: Some("k"),
         credential_principal: Some("p"),
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
         credential_kind: crate::security::audit::CredentialKind::ApiKey,
         verified_identity: Some(&identity),
@@ -229,6 +232,7 @@ fn t4_quota_precedence_and_fallthrough() {
     let no_identity = crate::gateway::meta_mcp::MetaMcpCallerContext {
         api_key_name: Some("k"),
         credential_principal: Some("p"),
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
         credential_kind: crate::security::audit::CredentialKind::ApiKey,
         verified_identity: None,
@@ -244,6 +248,7 @@ fn t4_quota_precedence_and_fallthrough() {
     let empty_principal = crate::gateway::meta_mcp::MetaMcpCallerContext {
         api_key_name: Some("k"),
         credential_principal: Some(""),
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
         credential_kind: crate::security::audit::CredentialKind::ApiKey,
         verified_identity: None,
@@ -259,6 +264,7 @@ fn t4_quota_precedence_and_fallthrough() {
     let empty_name = crate::gateway::meta_mcp::MetaMcpCallerContext {
         api_key_name: Some(""),
         credential_principal: None,
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         ..crate::gateway::meta_mcp::anonymous_caller()
     };
     assert_eq!(empty_name.quota_key(), None, "empty name gives None");
@@ -266,6 +272,7 @@ fn t4_quota_precedence_and_fallthrough() {
     let stdio = crate::gateway::meta_mcp::MetaMcpCallerContext {
         api_key_name: Some("k"),
         credential_principal: Some("p"),
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
         credential_kind: crate::security::audit::CredentialKind::ApiKey,
         verified_identity: Some(&identity),
@@ -290,6 +297,7 @@ fn t3_credential_owner_goldens() {
     let bare = crate::gateway::meta_mcp::MetaMcpCallerContext {
         authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
         credential_principal: Some("ab12"),
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         ..crate::gateway::meta_mcp::anonymous_caller()
     };
     assert_eq!(
@@ -299,6 +307,7 @@ fn t3_credential_owner_goldens() {
     let prefixed = crate::gateway::meta_mcp::MetaMcpCallerContext {
         authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
         credential_principal: Some("credential:ab12"),
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         ..crate::gateway::meta_mcp::anonymous_caller()
     };
     assert_eq!(
@@ -422,6 +431,7 @@ fn t2_auth_disabled_task_worker_has_no_credential() {
     let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
         authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
         credential_principal: Some("local:auth-disabled:tasks:v1"),
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         credential_kind: crate::security::audit::CredentialKind::None,
         api_key_name: None,
         verified_identity: None,
@@ -495,6 +505,12 @@ async fn events_search_visible(name: &str, principal: Option<&str>) -> bool {
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: crate::events::LiveCredentials::default(),
+        record_key: Some(std::sync::Arc::new(
+            crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )
+            .expect("test key"),
+        )),
     };
     hub.start(services);
     let meta = crate::gateway::meta_mcp::MetaMcp::new(std::sync::Arc::new(
@@ -506,6 +522,7 @@ async fn events_search_visible(name: &str, principal: Option<&str>) -> bool {
         credential_kind: crate::security::audit::CredentialKind::ApiKey,
         api_key_name: Some(name),
         credential_principal: principal,
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         ..crate::gateway::meta_mcp::anonymous_caller()
     };
     let matches = meta.event_search_matches("alpha", 10, &caller, None);

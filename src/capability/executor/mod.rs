@@ -489,8 +489,10 @@ impl CapabilityExecutor {
     ///
     /// This is the core REST execution method. It is `pub(crate)` so the
     /// [`RestExecutor`](rest::RestExecutor) adapter can delegate to it.
+    // `context` is skipped: its caller fields would otherwise land in every
+    // span as Debug, owner key included (MIK-8697 §16.12, row G-SPAN).
     #[tracing::instrument(
-        skip(self, params),
+        skip(self, params, context),
         fields(
             capability = %capability.name,
             provider = %provider.service

@@ -271,3 +271,320 @@ fn g_key_no_fixed_record_key_ships_outside_test_code() {
         "a fixed record key outside test code: {hits:?}"
     );
 }
+
+/// Brace depth outside strings, raw strings, char literals and comments,
+/// carried across lines.
+#[derive(Default)]
+struct Braces {
+    depth: usize,
+    in_str: bool,
+    raw_hashes: Option<usize>,
+    in_block_comment: bool,
+}
+
+impl Braces {
+    fn feed(&mut self, line: &str) {
+        let b = line.as_bytes();
+        let mut i = 0;
+        while i < b.len() {
+            if self.in_block_comment {
+                if b[i..].starts_with(b"*/") {
+                    self.in_block_comment = false;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+                continue;
+            }
+            if let Some(hashes) = self.raw_hashes {
+                let closes = b[i] == b'"'
+                    && b.len() > i + hashes
+                    && b[i + 1..=i + hashes].iter().all(|&c| c == b'#');
+                if closes {
+                    self.raw_hashes = None;
+                    i += 1 + hashes;
+                } else {
+                    i += 1;
+                }
+                continue;
+            }
+            if self.in_str {
+                match b[i] {
+                    b'\\' => i += 2,
+                    b'"' => {
+                        self.in_str = false;
+                        i += 1;
+                    }
+                    _ => i += 1,
+                }
+                continue;
+            }
+            let ident_before = i > 0 && (b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_');
+            match b[i] {
+                b'/' if b.get(i + 1) == Some(&b'/') => break,
+                b'/' if b.get(i + 1) == Some(&b'*') => {
+                    self.in_block_comment = true;
+                    i += 2;
+                }
+                b'r' if !ident_before => {
+                    let hashes = b[i + 1..].iter().take_while(|&&c| c == b'#').count();
+                    if b.get(i + 1 + hashes) == Some(&b'"') {
+                        self.raw_hashes = Some(hashes);
+                        i += 2 + hashes;
+                    } else {
+                        i += 1;
+                    }
+                }
+                b'"' => {
+                    self.in_str = true;
+                    i += 1;
+                }
+                // A char literal ('{', '\''); a lifetime has no closing quote.
+                b'\'' if b.get(i + 1) == Some(&b'\\') => {
+                    i += 3;
+                    while i < b.len() && b[i] != b'\'' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+                b'\'' if b.get(i + 2) == Some(&b'\'') => i += 3,
+                b'{' => {
+                    self.depth += 1;
+                    i += 1;
+                }
+                b'}' => {
+                    self.depth = self.depth.saturating_sub(1);
+                    i += 1;
+                }
+                _ => i += 1,
+            }
+        }
+    }
+}
+
+/// The lines of `text` outside inline test modules, with their 0-based
+/// numbers. A test module is `#[cfg(test)]` then `mod NAME {` and runs to its
+/// matching `}`: classified by its extent, so production code after it is
+/// still scanned. A `#[cfg(test)]` on a field, a fn or an out-of-line
+/// `mod x;` marks no section (the lesson of the first cfg(test) line).
+fn production_lines(text: &str) -> Vec<(usize, &str)> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut braces = Braces::default();
+    let mut armed = false;
+    // The depth the open test module closes back to.
+    let mut test_until: Option<usize> = None;
+    let mut out = Vec::new();
+    for (n, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        let opens = armed
+            && test_until.is_none()
+            && trimmed.split_whitespace().any(|w| w == "mod")
+            && trimmed.ends_with('{');
+        if opens {
+            test_until = Some(braces.depth);
+        }
+        let in_test = test_until.is_some() || trimmed == "#[cfg(test)]";
+        if trimmed == "#[cfg(test)]" {
+            armed = true;
+        } else if !trimmed.is_empty() && !trimmed.starts_with("#[") && !trimmed.starts_with("//") {
+            armed = false;
+        }
+        braces.feed(line);
+        if !in_test {
+            out.push((n, *line));
+        }
+        if test_until.is_some_and(|d| braces.depth == d) && !opens {
+            test_until = None;
+        }
+    }
+    out
+}
+
+/// The scan classifies by enclosing item: production code after an inline
+/// test module's closing brace is production, and braces in strings, char
+/// literals and comments inside the module do not end it early.
+#[test]
+fn production_lines_classify_by_enclosing_item() {
+    let src = r##"fn early() {}
+#[cfg(test)]
+pub(crate) value: u8,
+#[cfg(test)]
+mod key_tests;
+#[cfg(test)]
+mod tests {
+    fn t() {
+        let _ = "}}}";
+        let _ = r#"}"#;
+        let _ = '}';
+        // }
+        /* } */
+        if true { let _ = 1; }
+    }
+}
+fn after_the_test_module() {}
+"##;
+    let kept: Vec<&str> = production_lines(src).into_iter().map(|(_, l)| l).collect();
+    assert!(kept.contains(&"fn early() {}"), "{kept:?}");
+    assert!(kept.contains(&"pub(crate) value: u8,"), "{kept:?}");
+    assert!(kept.contains(&"mod key_tests;"), "{kept:?}");
+    assert!(kept.contains(&"fn after_the_test_module() {}"), "{kept:?}");
+    assert!(
+        !kept
+            .iter()
+            .any(|l| l.contains("fn t()") || l.contains("\"}}}\"")),
+        "{kept:?}"
+    );
+}
+
+// G-META (lead, 2026-10-23): `MetaMcp::record_key` panics when no key was
+// installed, which is acceptable only if no production MetaMcp can lack one.
+// (1) Outside test code, MetaMcp is constructed only in build_meta_mcp
+// (src/gateway/server/build_meta.rs). (2) That function installs the key at
+// its top level, never under a condition.
+#[test]
+fn g_meta_every_production_meta_mcp_gets_the_record_key() {
+    // Files included only under `#[cfg(test)]` from elsewhere, so nothing in
+    // them marks them as test code; each named with where it is included.
+    const TEST_ONLY_INCLUDES: &[&str] = &[
+        "src/gateway/meta_mcp/search_disclosure_e2e", // meta_mcp/mod.rs, #[cfg(test)]
+        "src/gateway/meta_mcp/list_paging_e2e.rs",    // surface_compaction_tests.rs
+        "src/gateway/meta_mcp/account_resolver_",     // account_resolver_fixture (tests)
+        "src/gateway/meta_mcp/account_rest_fixture.rs", // meta_mcp/mod.rs, #[cfg(test)]
+        "src/gateway/meta_mcp/slot_verdict_fixture.rs", // meta_mcp/mod.rs, #[cfg(test)]
+        "src/gateway/router/direct_guards_fixture.rs", // router/mod.rs, #[cfg(test)]
+        // #[path] from stored_replay_liveness_token_exchange_tests.rs
+        "src/gateway/router/stored_replay_liveness_idp_fixture.rs",
+    ];
+    const BUILD_META: &str = "src/gateway/server/build_meta.rs";
+    fn walk(dir: &Path, root: &Path, hits: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).expect("src readable").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, root, hits);
+                continue;
+            }
+            let rel = path
+                .strip_prefix(root)
+                .expect("under root")
+                .to_string_lossy()
+                .replace('\\', "/");
+            if !rel.ends_with(".rs")
+                || rel.contains("_tests")
+                || rel.contains("/tests/")
+                || rel.ends_with("tests.rs")
+                || rel == BUILD_META
+                || TEST_ONLY_INCLUDES.iter().any(|p| rel.starts_with(p))
+            {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("source readable");
+            for (n, line) in production_lines(&text) {
+                let constructs = line.contains("MetaMcp::new(")
+                    || line.contains("MetaMcp::with_features(")
+                    || line.contains("MetaMcp::with_features_and_clock(");
+                if constructs && !line.trim_start().starts_with("//") {
+                    hits.push(format!("{rel}:{}", n + 1));
+                }
+            }
+        }
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut hits = Vec::new();
+    walk(&root.join("src"), root, &mut hits);
+    assert!(
+        hits.is_empty(),
+        "a production MetaMcp built outside build_meta_mcp could lack the record key: {hits:?}"
+    );
+    let build_meta = std::fs::read_to_string(root.join(BUILD_META)).expect("build_meta");
+    let installs: Vec<&str> = build_meta
+        .lines()
+        .filter(|l| l.contains("meta_mcp_builder.set_record_key("))
+        .collect();
+    assert_eq!(
+        installs.len(),
+        1,
+        "build_meta_mcp installs the record key exactly once"
+    );
+    assert!(
+        installs[0].starts_with("        meta_mcp_builder"),
+        "the install is at the function's top level, not under a condition: {:?}",
+        installs[0]
+    );
+}
+
+// G-LOGSITES (lead, 2026-10-23): a logger opened in test code starts keyed,
+// so this proves the production openers by source. Outside test code the
+// logger is opened in two places: build_meta_mcp, which installs the record
+// key on the logger it opens, and the governance store, whose records never
+// carry a `caller_key` (the only field the logger keys), so it needs none.
+#[test]
+fn g_logsites_every_production_logger_is_keyed_or_never_keys() {
+    // Included only under `#[cfg(test)]`, each named with where.
+    const TEST_ONLY: &[&str] = &[
+        "src/gateway/meta_mcp/account_resolver_", // account_resolver_fixture (tests)
+        "src/gateway/meta_mcp/account_rest_fixture.rs", // meta_mcp/mod.rs
+        "src/gateway/meta_mcp/grant_audit_fixture.rs", // meta_mcp/mod.rs
+        "src/gateway/meta_mcp/slot_verdict_fixture.rs", // meta_mcp/mod.rs
+        "src/gateway/router/direct_guards_fixture_quota.rs", // direct_guards_fixture.rs
+        "src/gateway/router/stored_replay_liveness_idp_fixture.rs", // its _tests.rs
+        "src/gateway/server/tools_changed/audience_fixture.rs", // tools_changed.rs
+    ];
+    const OPENERS: &[&str] = &[
+        "src/gateway/server/build_meta.rs",
+        "src/gateway/server/control_plane_store.rs",
+    ];
+    fn walk(dir: &Path, root: &Path, hits: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).expect("src readable").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, root, hits);
+                continue;
+            }
+            let rel = path
+                .strip_prefix(root)
+                .expect("under root")
+                .to_string_lossy()
+                .replace('\\', "/");
+            if !rel.ends_with(".rs")
+                || rel.contains("_tests")
+                || rel.contains("/tests/")
+                || rel.ends_with("tests.rs")
+                || TEST_ONLY.iter().any(|p| rel.starts_with(p))
+            {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("source readable");
+            for (_, line) in production_lines(&text) {
+                if line.contains("TransparencyLogger::open(")
+                    && !line.trim_start().starts_with("//")
+                {
+                    hits.push(rel.clone());
+                }
+            }
+        }
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut hits = Vec::new();
+    walk(&root.join("src"), root, &mut hits);
+    hits.sort();
+    hits.dedup();
+    assert_eq!(hits, OPENERS, "a new production logger opener");
+    let build_meta = std::fs::read_to_string(root.join(OPENERS[0])).expect("build_meta");
+    assert!(
+        build_meta.contains(".with_record_key(Arc::clone(&record_key))"),
+        "build_meta_mcp keys the logger it opens"
+    );
+    fn mentions_caller_key(dir: &Path) -> bool {
+        std::fs::read_dir(dir).expect("dir").flatten().any(|e| {
+            let p = e.path();
+            if p.is_dir() {
+                return mentions_caller_key(&p);
+            }
+            std::fs::read_to_string(&p).is_ok_and(|t| t.contains("caller_key"))
+        })
+    }
+    assert!(
+        !mentions_caller_key(&root.join("src/control_plane")),
+        "a governance record now carries caller_key, so its logger needs the record key"
+    );
+}

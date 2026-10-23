@@ -23,6 +23,11 @@ pub(crate) const TEST_RECORD_KEY: &str = "test-record-key-not-a-secret-012345678
 /// The record principal of a caller that presented no credential (§16.6): the
 /// shape records already carry for it (src/security/audit.rs `from_parts`).
 pub(crate) const NO_CREDENTIAL_RECORD: &str = "";
+/// The record key unit-test fixtures key with ([`TEST_RECORD_KEY`]).
+#[cfg(test)]
+pub(crate) fn test_record_key() -> RecordPrincipalKey {
+    RecordPrincipalKey::from_text(TEST_RECORD_KEY).expect("the test key is long enough")
+}
 /// The shortest key accepted, in bytes of key text.
 const MIN_KEY_BYTES: usize = 32;
 
@@ -136,14 +141,60 @@ impl InternalPrincipal {
 }
 
 /// A record principal: 12 hex of a keyed HMAC, safe to write anywhere.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize)]
+#[serde(transparent)]
 pub(crate) struct RecordPrincipal(String);
 
 impl RecordPrincipal {
+    /// The no-credential record principal, [`NO_CREDENTIAL_RECORD`]: what
+    /// `record_form` gives the empty principal, for a record no caller made.
+    pub(crate) fn none() -> Self {
+        Self(NO_CREDENTIAL_RECORD.to_owned())
+    }
+
     /// The record value.
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
+}
+
+/// A credential-derived owner, keyed for a record (MIK-8697 §16.12, §16.14).
+/// Both the owner form `credential:<p>` and the caller-key form
+/// `credential:<len>:<p>` become `credential:rp:<record_form(p)>`. The `rp:`
+/// mark makes this idempotent: a keyed value passes through, so a writer that
+/// keys and the logger that keys again cannot double-key. Any other owner
+/// (`oidc:…`, a stdio or anonymous constant) names no credential digest and
+/// passes through. Lookup keys keep the original string.
+pub(crate) fn record_owner(owner: &str, key: &RecordPrincipalKey) -> String {
+    const PREFIX: &str = crate::gateway::auth::CREDENTIAL_OWNER_PREFIX;
+    let Some(rest) = owner.strip_prefix(PREFIX) else {
+        return owner.to_owned();
+    };
+    if is_keyed_owner(rest) {
+        return owner.to_owned();
+    }
+    // The caller-key form is length-prefixed (router/identity.rs).
+    let principal = rest
+        .split_once(':')
+        .filter(|(len, p)| len.parse::<usize>().is_ok_and(|n| n == p.len()))
+        .map_or(rest, |(_, p)| p);
+    let keyed = InternalPrincipal::new(principal.to_owned()).record_form(key);
+    format!("{PREFIX}{KEYED_OWNER_MARK}{}", keyed.as_str())
+}
+
+/// Marks a `credential:` owner whose digest is already the keyed record form.
+const KEYED_OWNER_MARK: &str = "rp:";
+
+/// Whether `rest` (after `credential:`) is exactly the keyed shape: the mark
+/// and a 12-lowercase-hex record form. Matching the whole shape, not only the
+/// prefix, means a raw principal that happened to start with `rp:` would still
+/// be keyed. None can: stored principals are 12 hex (`principal_of`,
+/// `principal_of_digest`), `kst:`/`oidc:` + 64 hex (key_server
+/// `runtime_principal`), or fixed constants (stdio, the dashboard session).
+fn is_keyed_owner(rest: &str) -> bool {
+    rest.strip_prefix(KEYED_OWNER_MARK).is_some_and(|rf| {
+        rf.len() == 12 && rf.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    })
 }
 
 /// The keyed alias of a stored subscription id: the client-facing handle.
@@ -212,6 +263,69 @@ mod tests {
         let real = InternalPrincipal::new("3f2a9c0d1e7b".to_owned()).record_form(&key);
         assert_ne!(real.as_str(), NO_CREDENTIAL_RECORD);
         assert_eq!(real.as_str().len(), 12);
+    }
+
+    // S1b: none(), the only other constructor, builds exactly the sentinel
+    // record_form gives an absent principal, and nothing else.
+    #[test]
+    fn s1b_none_is_the_record_form_of_an_absent_principal() {
+        let key = RecordPrincipalKey::from_text(KEY_A5).expect("key");
+        assert_eq!(
+            RecordPrincipal::none(),
+            InternalPrincipal::default().record_form(&key)
+        );
+        assert_eq!(RecordPrincipal::none().as_str(), NO_CREDENTIAL_RECORD);
+    }
+
+    // O1: both credential forms key to one marked shape; any other owner
+    // passes through; no form keeps the digest.
+    #[test]
+    fn o1_record_owner_keys_both_credential_forms_only() {
+        let key = RecordPrincipalKey::from_text(KEY_A5).expect("key");
+        let rf = InternalPrincipal::new("3f2a9c0d1e7b".to_owned()).record_form(&key);
+        let want = format!("credential:rp:{}", rf.as_str());
+        assert_eq!(record_owner("credential:3f2a9c0d1e7b", &key), want);
+        assert_eq!(record_owner("credential:12:3f2a9c0d1e7b", &key), want);
+        for other in ["oidc:3:iss:3:sub", "stdio", ""] {
+            assert_eq!(record_owner(other, &key), other);
+        }
+        assert!(!want.contains("3f2a9c0d1e7b"));
+    }
+
+    // O2 (lead): idempotent. A keyed value, or one that is not
+    // credential-derived, passes through unchanged, so nothing double-keys.
+    #[test]
+    fn o2_record_owner_is_idempotent() {
+        let key = RecordPrincipalKey::from_text(KEY_A5).expect("key");
+        for owner in [
+            "credential:3f2a9c0d1e7b",
+            "credential:12:3f2a9c0d1e7b",
+            "oidc:3:iss:3:sub",
+            "stdio",
+            "",
+        ] {
+            let once = record_owner(owner, &key);
+            assert_eq!(record_owner(&once, &key), once, "{owner}");
+        }
+    }
+
+    // O3 (lead): the pass-through matches the exact keyed shape, so a raw
+    // owner whose principal starts with `rp:` is still keyed, never passed.
+    #[test]
+    fn o3_a_raw_principal_starting_with_the_mark_is_keyed() {
+        let key = RecordPrincipalKey::from_text(KEY_A5).expect("key");
+        for raw in [
+            "credential:rp:abc",
+            "credential:rp:3f2a9c0d1e7bxx",
+            "credential:rp:3F2A9C0D1E7B",
+        ] {
+            let out = record_owner(raw, &key);
+            assert_ne!(out, raw, "{raw} passed through unkeyed");
+            assert!(
+                is_keyed_owner(out.strip_prefix("credential:").expect("prefix")),
+                "{out}"
+            );
+        }
     }
 
     // §16.6 #1: fewer than 32 bytes is refused, naming the field.

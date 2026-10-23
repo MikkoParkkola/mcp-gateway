@@ -89,6 +89,12 @@ impl MetaMcp {
             provenance_signer: None,
             public_provenance_signer: None,
             chain_signer: None,
+            // Production installs the resolved key in build_meta_mcp (G-META);
+            // a MetaMcp built in test code starts with the fixed test key.
+            #[cfg(not(test))]
+            record_key: None,
+            #[cfg(test)]
+            record_key: Some(Arc::new(crate::gateway::record_principal::test_record_key())),
             claim_capture: None,
             require_nonce: false,
             transparency_logger: None,

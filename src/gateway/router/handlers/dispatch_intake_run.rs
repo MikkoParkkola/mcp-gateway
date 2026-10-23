@@ -746,6 +746,7 @@ async fn answer_intake(
         client,
         grant_subject,
         session_id,
+        state.auth_config.record_key(),
     )
     .answer_intake(state, target, id, error)
     .await

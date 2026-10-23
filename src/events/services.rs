@@ -32,6 +32,9 @@ pub(crate) struct Services {
     )>,
     /// What the credentials that are not API keys are re-checked against.
     pub credentials: LiveCredentials,
+    /// The process's record key (MIK-8697 §16.12), from the MetaMcp that
+    /// built these services.
+    pub(crate) record_key: Option<Arc<crate::gateway::record_principal::RecordPrincipalKey>>,
 }
 
 /// The live authorities behind the credentials that are not API keys (design
@@ -83,6 +86,21 @@ pub(crate) struct Subject<'a> {
     pub principal: &'a str,
     pub backend: &'a str,
     pub name: &'a str,
+}
+
+impl Services {
+    /// The record key every event record is keyed with.
+    ///
+    /// # Panics
+    ///
+    /// When these services were not built by `MetaMcp::events_services`.
+    pub(crate) fn record_key(&self) -> &crate::gateway::record_principal::RecordPrincipalKey {
+        // invariant: Services are built only by MetaMcp::events_services, which
+        // passes the MetaMcp key that build_meta_mcp installs (row G-META).
+        self.record_key
+            .as_deref()
+            .expect("events services carry the MetaMcp record key")
+    }
 }
 
 impl Services {
@@ -312,9 +330,13 @@ impl Services {
             server: subject.backend.to_owned(),
             tool: subject.name.to_owned(),
         }];
+        // The firewall audit names the caller: a subscription owner is keyed
+        // for that record (MIK-8697 §16.12).
+        let caller =
+            crate::gateway::record_principal::record_owner(subject.principal, self.record_key());
         let correlation = ResponseCorrelation {
             session_id: subject.event_id,
-            caller: subject.principal,
+            caller: &caller,
             external_server: subject.backend,
             external_tool: subject.name,
             subject: None,
@@ -513,7 +535,10 @@ impl Services {
         extra.insert("subscription_id".into(), attempt.subscription_id.into());
         extra.insert("event_id".into(), attempt.event_id.into());
         extra.insert("attempt".into(), attempt.number.into());
-        extra.insert("principal".into(), attempt.principal.into());
+        let key = self.record_key();
+        // A credential-derived owner, keyed for the record (MIK-8697 §16.12).
+        let owner = crate::gateway::record_principal::record_owner(attempt.principal, key);
+        extra.insert("principal".into(), owner.clone().into());
         extra.insert("callback_host".into(), attempt.callback_host.into());
         extra.insert("status".into(), attempt.status.into());
         extra.insert("body_sha256".into(), attempt.body_sha256.into());
@@ -530,8 +555,11 @@ impl Services {
             },
             who: AuditWho::from_parts(
                 attempt.credential_kind,
-                attempt.credential_principal,
-                attempt.api_key_name.or(Some(attempt.principal)),
+                crate::gateway::record_principal::InternalPrincipal::new(
+                    attempt.credential_principal.unwrap_or_default().to_owned(),
+                )
+                .record_form(key),
+                attempt.api_key_name.or(Some(owner.as_str())),
                 None,
             ),
         };

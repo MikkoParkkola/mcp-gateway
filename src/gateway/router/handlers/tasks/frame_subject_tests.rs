@@ -172,7 +172,10 @@ async fn a_task_frame_delivery_names_the_api_key_credential() {
     assert_eq!(record["who"]["credential_kind"], "api_key", "{record}");
     assert_eq!(
         record["who"]["principal"],
-        reader.principal.storage_form(),
+        reader
+            .principal
+            .record_form(&crate::gateway::record_principal::test_record_key())
+            .as_str(),
         "{record}"
     );
 }

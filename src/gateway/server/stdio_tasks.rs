@@ -291,6 +291,10 @@ impl StdioTasks {
             None,
             None,
             super::STDIO_CREDENTIAL_PRINCIPAL.to_owned(),
+            crate::gateway::record_principal::InternalPrincipal::new(
+                super::STDIO_CREDENTIAL_PRINCIPAL.to_owned(),
+            )
+            .record_form(self.host.meta_mcp.record_key()),
             crate::gateway::meta_mcp::Authentication::Authenticated,
             crate::security::audit::CredentialKind::LocalTransport,
             // As every stdio call: the client spawned this process.

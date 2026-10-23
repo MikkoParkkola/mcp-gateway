@@ -291,6 +291,18 @@ impl AuthenticatedClient {
         api_key_name(self.authenticated, self.credential_kind, Some(&self.name))
     }
 
+    /// The record principal of `client`, keyed (MIK-8697 §16.11): what a record
+    /// of its request writes as `who.principal`. No client is no credential.
+    pub(crate) fn record_principal_of(
+        client: Option<&Self>,
+        key: &crate::gateway::record_principal::RecordPrincipalKey,
+    ) -> crate::gateway::record_principal::RecordPrincipal {
+        client.map_or_else(
+            || InternalPrincipal::default().record_form(key),
+            |c| c.principal.record_form(key),
+        )
+    }
+
     /// The validated credential principal iff this client authenticated with a non-empty one (MIK-8659).
     #[must_use]
     pub(in crate::gateway) fn credential_principal(&self) -> Option<&InternalPrincipal> {
@@ -433,8 +445,10 @@ pub(crate) fn cookie_secure(state: &AuthState) -> bool {
 /// Who a dashboard-session action is attributed to in the audit log: the same
 /// identity the middleware gives a valid session.
 #[cfg(feature = "webui")]
-pub(crate) fn dashboard_session_who() -> crate::security::audit::AuditWho {
-    crate::security::audit::AuditWho::from_request(Some(&dashboard_client()), None)
+pub(crate) fn dashboard_session_who(
+    key: &crate::gateway::record_principal::RecordPrincipalKey,
+) -> crate::security::audit::AuditWho {
+    crate::security::audit::AuditWho::from_request(Some(&dashboard_client()), None, key)
 }
 
 #[path = "auth_clients.rs"]

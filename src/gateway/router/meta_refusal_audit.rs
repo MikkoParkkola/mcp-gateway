@@ -49,10 +49,11 @@ impl<'a> Refused<'a> {
         client: Option<&AuthenticatedClient>,
         grant_subject: Option<&GrantSubject>,
         session_id: &'a str,
+        record_key: &crate::gateway::record_principal::RecordPrincipalKey,
     ) -> Self {
         Self {
             arguments,
-            who: AuditWho::from_request(client, grant_subject),
+            who: AuditWho::from_request(client, grant_subject, record_key),
             session_id,
         }
     }

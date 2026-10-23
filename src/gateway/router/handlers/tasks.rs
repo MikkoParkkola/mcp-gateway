@@ -133,6 +133,11 @@ pub(super) fn task_intent_for_call(
             // The same owner the durable record is admitted under, handed over
             // rather than re-derived, so the worker's caller and the task agree.
             req.owner.to_owned(),
+            // The live request's keyed principal: the worker's records carry it.
+            crate::gateway::auth::AuthenticatedClient::record_principal_of(
+                req.client,
+                state.auth_config.record_key(),
+            ),
             crate::gateway::meta_mcp::Authentication::of(req.client),
             crate::security::audit::CredentialKind::of(req.client),
             req.is_admin,
@@ -203,7 +208,12 @@ fn with_policy_caller<R>(
         caller.cert_identity,
         caller.client,
     );
-    check(&policy_context(caller, authorizer, &caller_key))
+    check(&policy_context(
+        caller,
+        authorizer,
+        &caller_key,
+        state.auth_config.record_key(),
+    ))
 }
 
 /// The policy caller [`with_policy_caller`] checks under, built once for it
@@ -213,12 +223,17 @@ fn policy_context<'a>(
     caller: &'a RecoveryCaller<'_>,
     authorizer: &'a (dyn crate::gateway::authz::ToolAuthorizer + Sync),
     caller_key: &'a str,
+    record_key: &crate::gateway::record_principal::RecordPrincipalKey,
 ) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'a> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
         is_modern: true,
         // This context checks authorization only; it never accesses a cache.
         protocol_revision: None,
         credential_principal: caller.client.map(|client| client.principal.storage_form()),
+        record_principal: crate::gateway::auth::AuthenticatedClient::record_principal_of(
+            caller.client,
+            record_key,
+        ),
         authentication: crate::gateway::meta_mcp::Authentication::of(caller.client),
         credential_kind: crate::security::audit::CredentialKind::of(caller.client),
         execution: None,
@@ -447,6 +462,10 @@ fn update_caller(
         caller.grant_subject.clone(),
         caller.verified_identity.cloned(),
         owner.to_owned(),
+        crate::gateway::auth::AuthenticatedClient::record_principal_of(
+            caller.client,
+            state.auth_config.record_key(),
+        ),
         crate::gateway::meta_mcp::Authentication::of(caller.client),
         crate::security::audit::CredentialKind::of(caller.client),
         caller.is_admin,
@@ -618,7 +637,7 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
         )
         .await?;
         let holds = std::mem::take(&mut pending.holds);
-        let credential = DeliveryCredential::of(Some(reader));
+        let credential = DeliveryCredential::of(Some(reader), self.state.auth_config.record_key());
         Some(crate::gateway::streaming::TaskFrame {
             frame: pending.frame.clone(),
             restored_output: pending.restored_output,
@@ -628,7 +647,7 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
                 pending,
                 caller: reader.name.clone(),
                 credential_kind: credential.kind,
-                principal: credential.principal.to_owned(),
+                principal: credential.principal,
                 session_id: self.session_id.clone().unwrap_or_default(),
                 subject: self.grant_subject.clone(),
             }),
@@ -643,7 +662,8 @@ struct FrameDelivery {
     pending: crate::gateway::meta_mcp::task_notify::PendingTaskFrame,
     caller: String,
     credential_kind: CredentialKind,
-    principal: String,
+    /// The reader's keyed record principal (MIK-8697 §16.11).
+    principal: crate::gateway::record_principal::RecordPrincipal,
     session_id: String,
     subject: Option<crate::identity_grants::GrantSubject>,
 }
@@ -666,7 +686,7 @@ impl crate::gateway::streaming::TaskFrameDelivery for FrameDelivery {
             subject: subject.as_ref(),
             credential: DeliveryCredential {
                 kind: credential_kind,
-                principal: &principal,
+                principal,
             },
         };
         state.meta_mcp.finish_task_frame(pending, sent, &who).await

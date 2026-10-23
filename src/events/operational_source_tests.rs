@@ -76,6 +76,12 @@ fn hub_with(
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials,
+        record_key: Some(std::sync::Arc::new(
+            crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )
+            .expect("test key"),
+        )),
     };
     let _ = hub.runtime.services.set(Arc::new(services));
     (hub, live)

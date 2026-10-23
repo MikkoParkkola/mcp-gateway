@@ -124,6 +124,11 @@ impl ResolvedAuthConfig {
             .expect("auth config secret references and the record key should resolve")
     }
 
+    /// The record key clients minted here are keyed with (MIK-8697 §16.11).
+    pub(crate) fn record_key(&self) -> &RecordPrincipalKey {
+        &self.record_key
+    }
+
     /// Check if a path is public (bypasses auth)
     #[must_use]
     pub fn is_public_path(&self, path: &str) -> bool {

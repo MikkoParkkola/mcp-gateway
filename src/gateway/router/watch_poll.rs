@@ -56,7 +56,14 @@ pub(crate) async fn poll_capability(
     {
         return Err(PollRefused::RateLimited);
     }
-    let session = format!("watch:{principal}");
+    // The firewall fingerprints this name into its records, so it carries the
+    // keyed principal, never the stored one (MIK-8697 §16.12).
+    let session = format!(
+        "watch:{}",
+        crate::gateway::record_principal::InternalPrincipal::new(principal.to_owned())
+            .record_form(state.auth_config.record_key())
+            .as_str()
+    );
     let identity = super::identity::caller_key(None, None, Some(client));
     #[cfg(feature = "firewall")]
     if let Some(fw) = &state.firewall {
@@ -81,6 +88,13 @@ pub(crate) async fn poll_capability(
         None,
         None,
         principal.to_owned(),
+        // `principal` is the subscription's owner string; the record names the
+        // credential the poll runs as (the subscriber's own key), keyed, so it
+        // matches that credential's other records (MIK-8697).
+        crate::gateway::auth::AuthenticatedClient::record_principal_of(
+            Some(client),
+            state.auth_config.record_key(),
+        ),
         crate::gateway::meta_mcp::Authentication::of(Some(client)),
         crate::security::audit::CredentialKind::of(Some(client)),
         client.admin,

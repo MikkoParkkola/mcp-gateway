@@ -15,7 +15,7 @@ impl super::super::MetaMcp {
         &self,
         response: crate::protocol::JsonRpcResponse,
         correlation: &ResponseCorrelation<'_>,
-        credential: DeliveryCredential<'_>,
+        credential: DeliveryCredential,
         read: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> crate::protocol::JsonRpcResponse {
         if self
@@ -33,7 +33,7 @@ impl super::super::MetaMcp {
         &self,
         response: &crate::protocol::JsonRpcResponse,
         correlation: &ResponseCorrelation<'_>,
-        credential: DeliveryCredential<'_>,
+        credential: DeliveryCredential,
         read: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> bool {
         // Logging applies to every actual response, including unscanned methods.
@@ -65,7 +65,7 @@ impl super::super::MetaMcp {
         &self,
         response: &crate::protocol::JsonRpcResponse,
         correlation: &ResponseCorrelation<'_>,
-        credential: DeliveryCredential<'_>,
+        credential: DeliveryCredential,
         read: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> bool {
         use crate::security::audit::AuditOutcome;
@@ -91,7 +91,7 @@ impl super::super::MetaMcp {
         &self,
         frame: &serde_json::Value,
         correlation: &ResponseCorrelation<'_>,
-        credential: DeliveryCredential<'_>,
+        credential: DeliveryCredential,
     ) -> bool {
         self.record_delivery_attempt(
             || Ok(frame.clone()),
@@ -110,7 +110,7 @@ impl super::super::MetaMcp {
         outcome: crate::security::audit::AuditOutcome,
         stage: &str,
         correlation: &ResponseCorrelation<'_>,
-        credential: DeliveryCredential<'_>,
+        credential: DeliveryCredential,
         read: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> bool {
         append_delivery_attempt(
@@ -136,7 +136,7 @@ pub(in crate::gateway) async fn record_answer_delivery(
     answer: serde_json::Result<serde_json::Value>,
     outcome: crate::security::audit::AuditOutcome,
     correlation: &ResponseCorrelation<'_>,
-    credential: DeliveryCredential<'_>,
+    credential: DeliveryCredential,
     read: Option<serde_json::Map<String, serde_json::Value>>,
 ) -> bool {
     append_delivery_attempt(
@@ -160,7 +160,7 @@ async fn append_delivery_attempt(
     outcome: crate::security::audit::AuditOutcome,
     stage: &str,
     correlation: &ResponseCorrelation<'_>,
-    credential: DeliveryCredential<'_>,
+    credential: DeliveryCredential,
     read: Option<serde_json::Map<String, serde_json::Value>>,
 ) -> bool {
     use crate::security::audit::{AuditEnvelope, AuditFailurePolicy, AuditWho};
@@ -210,7 +210,7 @@ async fn append_delivery_attempt(
     // only its verified grant subject says who it was.
     let mut who = AuditWho::from_actor_id(correlation.caller);
     who.credential_kind = Some(credential.kind);
-    credential.principal.clone_into(&mut who.principal);
+    who.principal = credential.principal;
     if let Some(grant) = correlation.subject {
         who.authority = Some(grant.authority.clone());
         who.subject = Some(grant.subject.clone());

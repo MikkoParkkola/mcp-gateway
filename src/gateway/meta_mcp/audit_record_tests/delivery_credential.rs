@@ -54,7 +54,10 @@ async fn record_delivery_for(
         meta.record_delivery_of(
             &response,
             &correlation,
-            DeliveryCredential::of(Some(client)),
+            DeliveryCredential::of(
+                Some(client),
+                &crate::gateway::record_principal::test_record_key()
+            ),
             None,
         )
         .await,
@@ -72,7 +75,10 @@ fn assert_delivery_matches_invocation(dir: &tempfile::TempDir, kind: &str, princ
         json!(kind),
         "{delivery}"
     );
-    assert_eq!(delivery["who"]["principal"], json!(principal), "{delivery}");
+    // The record carries the keyed form, never the stored principal (MIK-8697).
+    let keyed = crate::gateway::record_principal::InternalPrincipal::new(principal.to_owned())
+        .record_form(&crate::gateway::record_principal::test_record_key());
+    assert_eq!(delivery["who"]["principal"], json!(keyed), "{delivery}");
     assert_eq!(
         delivery["who"]["credential_kind"], invocation["who"]["credential_kind"],
         "{invocation}"
@@ -248,7 +254,9 @@ async fn two_tokens_for_one_actor_name_different_principals() {
     );
     for principal in &principals {
         assert!(
-            principal.as_str().is_some_and(|p| p.starts_with("kst:")),
+            principal
+                .as_str()
+                .is_some_and(|p| p.len() == 12 && !p.starts_with("kst:")),
             "{principal}"
         );
     }

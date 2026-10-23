@@ -109,6 +109,7 @@ fn owned_context(fx: &Fixture) -> OwnedCallerContext {
         None,
         None,
         OWNER.to_owned(),
+        crate::gateway::record_principal::RecordPrincipal::none(),
         crate::gateway::meta_mcp::Authentication::Anonymous,
         crate::security::audit::CredentialKind::None,
         false,

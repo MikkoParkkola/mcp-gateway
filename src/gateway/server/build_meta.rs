@@ -249,6 +249,8 @@ impl Gateway {
             ));
         }
         let security = &self.config.security;
+        // MIK-8697 §16.11: every record MetaMcp writes is keyed with this.
+        meta_mcp_builder.set_record_key(Arc::clone(&record_key));
         if let Some(chain) = &security.signature_chain {
             meta_mcp_builder.set_chain_signer(chain.resolve_with_env(&self.env.get())?, chain.emit);
             let keys = security.remote_server_signing.trusted_keys.clone();
@@ -312,7 +314,11 @@ impl Gateway {
             };
             match crate::security::TransparencyLogger::open(tl_cfg) {
                 Ok(logger) => {
-                    let logger = Arc::new(logger.with_failure_policy(policy));
+                    let logger = Arc::new(
+                        logger
+                            .with_failure_policy(policy)
+                            .with_record_key(Arc::clone(&record_key)),
+                    );
                     Arc::get_mut(&mut meta_mcp)
                         .expect("no other Arc references at this point")
                         .enable_transparency_log(Arc::clone(&logger));

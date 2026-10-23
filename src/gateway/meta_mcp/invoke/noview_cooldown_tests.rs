@@ -79,6 +79,7 @@ fn r5_shared_backend_cooldown_is_refused_at_admission() {
         retry: &retry,
         is_modern: true,
         credential_principal: Some("verified-credential-owner"),
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         ..ctx(&AllowAll)
     };
     let admitted = meta.admit_meta_sync_for_test(

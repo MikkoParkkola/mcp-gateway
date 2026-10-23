@@ -522,6 +522,7 @@ async fn an_unnamed_tasks_method_fails_closed() {
             discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
             sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
+        &crate::gateway::record_principal::test_record_key(),
     );
     let answer = fixture
         .tasks
