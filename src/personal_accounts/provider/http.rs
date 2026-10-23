@@ -20,7 +20,6 @@
 //! cannot be made to the first cannot be made to the others either.
 
 use std::future::Future;
-use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt as _;
@@ -28,7 +27,7 @@ use futures::StreamExt as _;
 use super::{
     HttpError, HttpResponse, ProviderBuildError, ProviderHttp, RetrievalFailure, TerminalFailure,
 };
-use crate::security::ssrf::{PinningResolver, SystemResolver, validate_url_not_ssrf};
+use crate::security::ssrf::validate_url_not_ssrf;
 
 /// Whole-request bound, connection included.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -47,17 +46,13 @@ pub(crate) struct GatewayProviderHttp {
 /// from HERE: a second builder would be a second policy, and the one that is
 /// not tested is the one that ships.
 fn strict_builder() -> reqwest::ClientBuilder {
-    reqwest::Client::builder()
+    crate::security::ssrf::pinned_client_builder()
         .timeout(REQUEST_TIMEOUT)
         .connect_timeout(CONNECT_TIMEOUT)
         // Not `Policy::limited(0)`: `none()` also refuses to strip the
         // authorization off a cross-origin hop, because no hop happens.
         .redirect(reqwest::redirect::Policy::none())
         .https_only(true)
-        // A proxy performs its own name resolution, which would make the
-        // pinning resolver below decorative.
-        .no_proxy()
-        .dns_resolver(Arc::new(PinningResolver::new(SystemResolver)))
     // Default roots and default certificate/hostname verification. No
     // `danger_accept_invalid_*` call exists in this file, and adding one
     // is what would make every terminal-failure test meaningless.
@@ -195,37 +190,38 @@ fn classify(error: &reqwest::Error) -> HttpError {
         // No answer at all, and no statement about the host: the one case that
         // may legitimately advance to the next candidate.
         HttpError::Retryable(RetrievalFailure::Unreachable)
-    } else if names_certificate_failure(error) {
+    } else if crate::security::http_diagnostics::is_tls_failure(error) {
         HttpError::Terminal(TerminalFailure::Certificate)
     } else {
         HttpError::Terminal(TerminalFailure::Unclassified)
     }
 }
 
-/// Whether the error chain names a TLS failure.
-///
-/// PURELY DIAGNOSTIC, and deliberately so: `Certificate` and `Unclassified` are
-/// both terminal, so a miss here changes what an operator reads and never what
-/// the discovery loop does. There is no typed predicate to use instead —
-/// `reqwest` reports a rejected certificate as a connect error, the same as a
-/// refused connection — so this reads the chain the TLS backend wrote rather
-/// than claiming a distinction the API does not offer.
-fn names_certificate_failure(error: &reqwest::Error) -> bool {
-    const MARKERS: [&str; 4] = ["certificate", "tls", "handshake", "verification"];
-    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
-    while let Some(current) = source {
-        let rendered = current.to_string().to_ascii_lowercase();
-        if MARKERS.iter().any(|marker| rendered.contains(marker)) {
-            return true;
-        }
-        source = current.source();
-    }
-    false
-}
-
 #[cfg(test)]
 mod embedded_userinfo_guard_tests {
     use super::*;
+
+    // MIK-8660 T8b: the classifier used to match strings in the error, and the
+    // error embeds the URL, so a refused connection to a path named `handshake`
+    // read as a certificate failure. It must not: the check is by type.
+    #[tokio::test]
+    async fn a_refused_connection_named_handshake_is_not_a_certificate_failure() {
+        let error = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client")
+            .get("http://127.0.0.1:1/handshake")
+            .send()
+            .await
+            .expect_err("port 1 refuses");
+        assert!(
+            !matches!(
+                classify(&error),
+                HttpError::Terminal(TerminalFailure::Certificate)
+            ),
+            "{error}"
+        );
+    }
 
     /// Synthetic markers only. These are not credentials for anything.
     const USER: &str = "not-a-real-user";

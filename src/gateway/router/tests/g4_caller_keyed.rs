@@ -375,6 +375,48 @@ async fn guard_the_capability_is_projected_when_projection_is_on() {
     assert!(projected(&body), "fixture spec does not project: {body}");
 }
 
+/// MIK-8663 T1b: the `_full` directive the shared strip returns reaches
+/// projection through the real intake path. With projection on, a plain call
+/// is projected and a `_full: true` call is delivered whole. Mutant: the
+/// strip's returned flag dropped projects both. The two calls send different
+/// arguments, so neither can be served from the other's cache entry.
+#[tokio::test]
+async fn t1b_full_bypasses_projection_through_intake() {
+    let (f, _endpoint) = arm_fixture(Auth::Keys, ProjectionMode::On).await;
+    let full = json!({
+        "server": PROJ_CAPS,
+        "tool": PROJ_DAY,
+        "arguments": { "q": "full", "_full": true },
+    });
+    let full_body = modern(&f.router, Some("open-key"), "gateway_invoke", full).await;
+    assert!(
+        !projected(&full_body),
+        "a `_full: true` call was projected: {full_body}"
+    );
+    // gpt impl r1: delivered whole and successfully, not merely unprojected.
+    let full_result = &delivered(&full_body)["result"];
+    assert_ne!(
+        full_result["isError"],
+        json!(true),
+        "a `_full: true` call came back as a tool error: {full_body}"
+    );
+    let full_text = full_result.to_string();
+    assert!(
+        full_text.contains("2026-09-27") && full_text.contains("events"),
+        "a `_full: true` call lost the backend's own payload: {full_body}"
+    );
+    let plain = json!({
+        "server": PROJ_CAPS,
+        "tool": PROJ_DAY,
+        "arguments": { "q": "plain" },
+    });
+    let plain_body = modern(&f.router, Some("open-key"), "gateway_invoke", plain).await;
+    assert!(
+        projected(&plain_body),
+        "a plain call was not projected: {plain_body}"
+    );
+}
+
 #[tokio::test]
 async fn r3_two_caller_keys_get_their_own_arms() {
     // Offline: "credential:12:" + sha256(name)[..12] puts open-key in

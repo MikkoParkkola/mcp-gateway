@@ -6,7 +6,7 @@
 
 use std::fmt::Write as _;
 
-use mcp_gateway::registry::server_registry::{self, Transport};
+use mcp_gateway::registry::server_registry::{self, CatalogTransport};
 
 /// The `backends:` block for the starter set, and one line per entry left out
 /// because its launcher (`npx`, `uvx`) is not on PATH: a backend written
@@ -25,7 +25,7 @@ pub(super) fn starter_backends(launcher_present: impl Fn(&str) -> bool) -> (Stri
         .filter(|e| e.default_enabled())
     {
         let transport = match entry.transport {
-            Transport::Stdio => {
+            CatalogTransport::Stdio => {
                 let launcher = entry.command.split_whitespace().next().unwrap_or_default();
                 if !launcher_present(launcher) {
                     skipped.push(format!(
@@ -40,7 +40,7 @@ pub(super) fn starter_backends(launcher_present: impl Fn(&str) -> bool) -> (Stri
             // `url` only: the transport is detected at connect (POST first,
             // the SSE handshake on a 4xx), so the registry's flavour is not
             // written as the hidden `streamable_http` key.
-            Transport::Http { default_url, .. } => {
+            CatalogTransport::Http { default_url, .. } => {
                 format!("    url: {}\n", quoted(default_url))
             }
         };

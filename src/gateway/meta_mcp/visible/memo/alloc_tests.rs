@@ -2,17 +2,17 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8498.VISIBLE.1b: a memo read looks its entry up by the caller's own
 //! strings, so it allocates no key. Before, every read built an owned
-//! `(String, String)` or `(String, AccountKey)` key: two allocations per
+//! `(String, String)` or `(String, DescriptorId)` key: two allocations per
 //! read on every tools/call that consults the memo.
 
 use super::{
-    AccountKey, AccountOutcome, VISIBILITY_MEMO, Visibility, VisibilityMemo, account_outcome,
+    AccountOutcome, DescriptorId, VISIBILITY_MEMO, Visibility, VisibilityMemo, account_outcome,
     account_slot, target_key,
 };
 use crate::gateway::alloc_meter::measure;
 
 /// A memo with one visibility entry and one account outcome recorded.
-fn memo(account: &AccountKey) -> VisibilityMemo {
+fn memo(account: &DescriptorId) -> VisibilityMemo {
     let memo = VisibilityMemo::default();
     memo.visibility
         .set(target_key("alpha", "read"), Visibility::Visible);
@@ -23,7 +23,7 @@ fn memo(account: &AccountKey) -> VisibilityMemo {
 
 #[test]
 fn a_memo_read_allocates_no_key() {
-    let account = AccountKey("acct-1".to_owned());
+    let account = DescriptorId("acct-1".to_owned());
     VISIBILITY_MEMO.sync_scope(memo(&account), || {
         let (seen, measured) =
             measure(|| VISIBILITY_MEMO.with(|memo| memo.recorded("alpha", "read")));
@@ -58,7 +58,7 @@ use super::{Pair, slot, target};
 // lookup's own.
 
 /// A memo with one denial code and one account outcome recorded.
-fn stocked(account: &AccountKey) -> VisibilityMemo {
+fn stocked(account: &DescriptorId) -> VisibilityMemo {
     let memo = VisibilityMemo::default();
     memo.denial_code.set(target_key("alpha", "read"), -32003);
     memo.offer_pending
@@ -68,7 +68,7 @@ fn stocked(account: &AccountKey) -> VisibilityMemo {
 
 #[test]
 fn a_memo_with_allocates_no_key() {
-    let account = AccountKey("acct-1".to_owned());
+    let account = DescriptorId("acct-1".to_owned());
     let memo = stocked(&account);
     let (code, measured) = measure(|| {
         memo.denial_code
@@ -98,7 +98,7 @@ fn a_memo_with_allocates_no_key() {
 
 #[test]
 fn a_memo_contains_allocates_no_key() {
-    let account = AccountKey("acct-1".to_owned());
+    let account = DescriptorId("acct-1".to_owned());
     let memo = stocked(&account);
     let (held, measured) = measure(|| {
         memo.denial_code
@@ -122,7 +122,7 @@ fn a_memo_contains_allocates_no_key() {
 
 #[test]
 fn a_memo_take_allocates_no_key() {
-    let account = AccountKey("acct-1".to_owned());
+    let account = DescriptorId("acct-1".to_owned());
     let memo = stocked(&account);
     let (code, measured) = measure(|| {
         memo.denial_code

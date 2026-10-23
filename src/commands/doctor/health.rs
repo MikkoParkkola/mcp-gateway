@@ -11,6 +11,14 @@ use super::CheckResult;
 const RUNTIME_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 pub(super) const MCP_SESSION_HEADER: &str = "mcp-session-id";
 
+/// Gateway-runtime probe client with `RUNTIME_PROBE_TIMEOUT`.
+fn runtime_probe_client() -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(RUNTIME_PROBE_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+}
+
 pub(super) async fn check_port_and_gateway_runtime(config: &Config) -> Vec<CheckResult> {
     let bind_addr = format!("{}:{}", config.server.host, config.server.port);
     if TcpListener::bind(&bind_addr).is_ok() {
@@ -23,10 +31,7 @@ pub(super) async fn check_port_and_gateway_runtime(config: &Config) -> Vec<Check
         ];
     }
 
-    let client = match reqwest::Client::builder()
-        .timeout(RUNTIME_PROBE_TIMEOUT)
-        .build()
-    {
+    let client = match runtime_probe_client() {
         Ok(client) => client,
         Err(e) => {
             return vec![
@@ -79,6 +84,20 @@ async fn probe_gateway_health(client: &reqwest::Client, base_url: &str) -> Gatew
         Ok(resp) => {
             let ms = start.elapsed().as_millis();
             let status = resp.status();
+            if status.is_redirection() {
+                let location =
+                    mcp_gateway::security::http_diagnostics::redirect_target_phrase(&resp);
+                return GatewayHealthProbe {
+                    result: CheckResult::fail(
+                        "Gateway runtime",
+                        format!(
+                            "HTTP {status} redirect to {location} (not followed; point doctor at the final URL)"
+                        ),
+                    )
+                    .with_category("runtime"),
+                    gateway_detected: false,
+                };
+            }
             match resp.json::<Value>().await {
                 Ok(body) => {
                     let gateway_detected =
@@ -264,6 +283,18 @@ async fn post_mcp_probe(
     })?;
 
     let status = response.status();
+    if status.is_redirection() {
+        let location = mcp_gateway::security::http_diagnostics::redirect_target_phrase(&response);
+        return Err(Box::new(
+            CheckResult::fail(
+                "MCP handshake",
+                format!(
+                    "HTTP {status} redirect to {location} (not followed; point doctor at the final URL)"
+                ),
+            )
+            .with_category("mcp_handshake"),
+        ));
+    }
     let session_id = response
         .headers()
         .get(MCP_SESSION_HEADER)
@@ -327,4 +358,213 @@ fn runtime_base_url(config: &Config) -> String {
         host => host,
     };
     format!("http://{}:{}", host, config.server.port)
+}
+
+#[cfg(test)]
+mod redirect_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const HANG_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
+
+    /// A listener on loopback serving `app`; returns its base URL.
+    async fn serve(app: axum::Router) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        format!("http://{addr}")
+    }
+
+    /// A counting listener; returns its base URL and hit count.
+    async fn serve_counter() -> (String, Arc<AtomicUsize>) {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&hits);
+        let base = serve(axum::Router::new().fallback(move || {
+            let seen = Arc::clone(&seen);
+            async move {
+                seen.fetch_add(1, Ordering::SeqCst);
+                axum::http::StatusCode::OK
+            }
+        }))
+        .await;
+        (base, hits)
+    }
+
+    /// T13b (RED): a 301 from `/health` is reported, not followed.
+    #[tokio::test]
+    async fn gateway_health_probe_reports_a_redirect_without_following_it() {
+        let (counter, hits) = serve_counter().await;
+        let location = format!("{counter}/moved/here");
+        let expected = counter.clone();
+        let app = axum::Router::new().route(
+            "/health",
+            axum::routing::get(move || {
+                let location = location.clone();
+                async move {
+                    (
+                        axum::http::StatusCode::MOVED_PERMANENTLY,
+                        [(axum::http::header::LOCATION, location)],
+                    )
+                }
+            }),
+        );
+        let base = serve(app).await;
+        let client = runtime_probe_client().expect("client");
+        let probe = tokio::time::timeout(HANG_BOUND, probe_gateway_health(&client, &base))
+            .await
+            .expect("bounded");
+        assert!(
+            probe.result.detail.contains("301"),
+            "detail: {}",
+            probe.result.detail
+        );
+        assert!(
+            probe.result.detail.contains(&expected),
+            "detail: {}",
+            probe.result.detail
+        );
+        assert!(
+            !probe.result.detail.contains("/moved/here"),
+            "detail: {}",
+            probe.result.detail
+        );
+        assert!(
+            !probe
+                .result
+                .detail
+                .contains("was not a gateway health payload"),
+            "detail: {}",
+            probe.result.detail
+        );
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    /// T13c (RED): a 301 from POST `/mcp` is reported, not followed.
+    #[tokio::test]
+    async fn mcp_probe_reports_a_redirect_without_following_it() {
+        let (counter, hits) = serve_counter().await;
+        let location = format!("{counter}/moved/here");
+        let expected = counter.clone();
+        let app = axum::Router::new().route(
+            "/mcp",
+            axum::routing::post(move || {
+                let location = location.clone();
+                async move {
+                    (
+                        axum::http::StatusCode::MOVED_PERMANENTLY,
+                        [(axum::http::header::LOCATION, location)],
+                    )
+                }
+            }),
+        );
+        let base = serve(app).await;
+        let client = runtime_probe_client().expect("client");
+        let outcome = tokio::time::timeout(
+            HANG_BOUND,
+            post_mcp_probe(&client, &base, serde_json::json!({}), None),
+        )
+        .await
+        .expect("bounded");
+        match outcome {
+            Ok(_) => panic!("expected Err, got Ok"),
+            Err(result) => {
+                assert!(result.detail.contains("301"), "detail: {}", result.detail);
+                assert!(
+                    result.detail.contains(&expected),
+                    "detail: {}",
+                    result.detail
+                );
+                assert!(
+                    !result.detail.contains("/moved/here"),
+                    "detail: {}",
+                    result.detail
+                );
+            }
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    /// A `/health` redirect Location carrying userinfo, a query token and a
+    /// fragment is reported redacted, in the text detail and in the `--json`
+    /// report alike.
+    #[tokio::test]
+    async fn gateway_health_probe_redacts_credentials_in_a_redirect_location() {
+        let (counter, hits) = serve_counter().await;
+        let location = counter.replacen("http://", "http://user:hunter2@", 1)
+            + "/final/path?token=sekret-token-value#frag";
+        let app = axum::Router::new().route(
+            "/health",
+            axum::routing::get(move || {
+                let location = location.clone();
+                async move {
+                    (
+                        axum::http::StatusCode::MOVED_PERMANENTLY,
+                        [(axum::http::header::LOCATION, location)],
+                    )
+                }
+            }),
+        );
+        let base = serve(app).await;
+        let client = runtime_probe_client().expect("client");
+        let probe = tokio::time::timeout(HANG_BOUND, probe_gateway_health(&client, &base))
+            .await
+            .expect("bounded");
+        assert_redacted(&probe.result.detail, &counter);
+        let report = super::super::check_result_json_value(&probe.result).to_string();
+        assert_redacted(&report, &counter);
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    /// A POST `/mcp` redirect Location carrying userinfo, a query token and a
+    /// fragment is reported redacted, in the text detail and in the `--json`
+    /// report alike.
+    #[tokio::test]
+    async fn mcp_probe_redacts_credentials_in_a_redirect_location() {
+        let (counter, hits) = serve_counter().await;
+        let location = counter.replacen("http://", "http://user:hunter2@", 1)
+            + "/final/path?token=sekret-token-value#frag";
+        let app = axum::Router::new().route(
+            "/mcp",
+            axum::routing::post(move || {
+                let location = location.clone();
+                async move {
+                    (
+                        axum::http::StatusCode::MOVED_PERMANENTLY,
+                        [(axum::http::header::LOCATION, location)],
+                    )
+                }
+            }),
+        );
+        let base = serve(app).await;
+        let client = runtime_probe_client().expect("client");
+        let outcome = tokio::time::timeout(
+            HANG_BOUND,
+            post_mcp_probe(&client, &base, serde_json::json!({}), None),
+        )
+        .await
+        .expect("bounded");
+        match outcome {
+            Ok(_) => panic!("expected Err, got Ok"),
+            Err(result) => {
+                assert_redacted(&result.detail, &counter);
+                let report = super::super::check_result_json_value(&result).to_string();
+                assert_redacted(&report, &counter);
+            }
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    /// The redaction contract both doctor probes' redirect messages keep: no
+    /// credential survives, only the target origin is shown.
+    fn assert_redacted(text: &str, origin: &str) {
+        assert!(!text.contains("hunter2"), "text: {text}");
+        assert!(!text.contains("sekret-token-value"), "text: {text}");
+        assert!(!text.contains("user:"), "text: {text}");
+        assert!(!text.contains("/final/path"), "text: {text}");
+        assert!(text.contains(origin), "text: {text}");
+        assert!(text.contains("path hidden"), "text: {text}");
+    }
 }

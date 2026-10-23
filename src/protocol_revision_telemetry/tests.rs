@@ -110,7 +110,7 @@ fn notifications_are_not_request_observations() {
 fn cache_scope_public_only_when_unfiltered() {
     assert_eq!(
         cache_scope_decision(ListFilters::default()),
-        CacheScope::Public
+        ShadowCacheScope::Public
     );
     let filtered = ListFilters {
         principal: true,
@@ -118,9 +118,9 @@ fn cache_scope_public_only_when_unfiltered() {
         session: false,
         request: false,
     };
-    assert_eq!(cache_scope_decision(filtered), CacheScope::Private);
-    assert!(!public_over_filtered(filtered, CacheScope::Private));
-    assert!(public_over_filtered(filtered, CacheScope::Public));
+    assert_eq!(cache_scope_decision(filtered), ShadowCacheScope::Private);
+    assert!(!public_over_filtered(filtered, ShadowCacheScope::Private));
+    assert!(public_over_filtered(filtered, ShadowCacheScope::Public));
 }
 
 #[test]
@@ -287,7 +287,7 @@ fn shadow_tools_list_records_filters_and_would_be_scope() {
         request: false,
     });
     assert!(shadow.profile && shadow.session);
-    assert_eq!(shadow.would_emit_cache_scope, CacheScope::Private);
+    assert_eq!(shadow.would_emit_cache_scope, ShadowCacheScope::Private);
     assert_eq!(
         reg.shadow_count(ListFilters {
             principal: false,
@@ -297,4 +297,10 @@ fn shadow_tools_list_records_filters_and_would_be_scope() {
         }),
         1
     );
+}
+
+#[test]
+fn cache_scope_labels_are_the_spec_strings() {
+    assert_eq!(ShadowCacheScope::Public.as_str(), "public");
+    assert_eq!(ShadowCacheScope::Private.as_str(), "private");
 }

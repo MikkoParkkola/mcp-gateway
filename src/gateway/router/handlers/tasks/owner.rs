@@ -4,7 +4,7 @@
 //! events owner, and the admission principal.
 
 use crate::gateway::auth::AuthenticatedClient;
-use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
+use crate::gateway::oauth::OAuthAgentIdentity;
 use crate::gateway::router::AppState;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;

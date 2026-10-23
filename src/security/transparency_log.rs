@@ -42,12 +42,10 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use hmac::{Hmac, KeyInit, Mac};
+use hmac::{KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
-// ── Type aliases ──────────────────────────────────────────────────────────────
-
-type HmacSha256 = Hmac<Sha256>;
+use crate::hashing::HmacSha256;
 
 // ── Read bounds (MIK-6710 memory-DoS mitigation) ───────────────────────────────
 

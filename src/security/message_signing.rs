@@ -31,21 +31,17 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use hmac::{Hmac, KeyInit, Mac};
+use hmac::{KeyInit, Mac};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
-use sha2::Sha256;
 use tracing::debug;
 
+use crate::hashing::HmacSha256;
 use crate::{Error, Result};
 
 #[path = "message_signing_v2.rs"]
 mod v2;
 pub(crate) use v2::has_interoperable_numbers;
-
-// ── Type alias ───────────────────────────────────────────────────────────────
-
-type HmacSha256 = Hmac<Sha256>;
 
 // ── Constants ────────────────────────────────────────────────────────────────
 

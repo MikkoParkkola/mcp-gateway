@@ -314,10 +314,20 @@ fn print_skill_summary(skill: &ImportedSkill) {
     }
 }
 
+/// Plain HTTP client for skill URL fetches.
+fn skill_fetch_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))
+}
+
 /// Load a skill from a local path or an http(s) URL.
 async fn load_skill_from_source(source: &str) -> Result<ImportedSkill, String> {
     if source.starts_with("http://") || source.starts_with("https://") {
-        return fetch_skill_from_url(source).await;
+        let client = skill_fetch_client()?;
+        return fetch_skill_from_url(&client, source).await;
     }
 
     let path = Path::new(source);
@@ -331,29 +341,45 @@ async fn load_skill_from_source(source: &str) -> Result<ImportedSkill, String> {
     }
 }
 
-async fn fetch_skill_from_url(url: &str) -> Result<ImportedSkill, String> {
-    let response = reqwest::get(url)
-        .await
-        .map_err(|e| format!("Failed to fetch '{url}': {e}"))?;
-    if !response.status().is_success() {
-        return Err(format!("GET '{url}' returned HTTP {}", response.status()));
+async fn fetch_skill_from_url(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<ImportedSkill, String> {
+    let shown_url = mcp_gateway::security::sanitize::redact_url_for_diagnostics(url);
+    let response = client.get(url).send().await.map_err(|e| {
+        mcp_gateway::security::http_diagnostics::safe_reqwest_message(
+            &format!("Failed to fetch '{shown_url}'"),
+            &e,
+        )
+    })?;
+    if response.status().is_redirection() {
+        let phrase = mcp_gateway::security::http_diagnostics::redirect_target_phrase(&response);
+        return Err(format!(
+            "{shown_url} redirected to {phrase}; use the final URL"
+        ));
     }
-    let content = response
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read body from '{url}': {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "GET '{shown_url}' returned HTTP {}",
+            response.status()
+        ));
+    }
+    let content = response.text().await.map_err(|e| {
+        mcp_gateway::security::http_diagnostics::safe_reqwest_message(
+            &format!("Failed to read body from '{shown_url}'"),
+            &e,
+        )
+    })?;
     mcp_gateway::skills::parse_skill_md(&content).map_err(|e| e.to_string())
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_owned();
-    }
-    let mut end = max;
-    while !s.is_char_boundary(end) && end > 0 {
-        end -= 1;
-    }
-    format!("{}…", &s[..end])
+    crate::truncate::truncate(
+        s,
+        crate::truncate::Budget::Bytes(max),
+        "…",
+        crate::truncate::Suffix::After,
+    )
 }
 
 fn print_dry_run_summary(bundles: &[mcp_gateway::skills::SkillBundle]) {
@@ -365,5 +391,283 @@ fn print_dry_run_summary(bundles: &[mcp_gateway::skills::SkillBundle]) {
         for (name, _) in &bundle.command_docs {
             println!("    commands/{name}.md");
         }
+    }
+}
+
+#[cfg(test)]
+mod redirect_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const HANG_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
+
+    /// A listener on loopback serving `app`; returns its base URL.
+    async fn serve(app: axum::Router) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        format!("http://{addr}")
+    }
+
+    /// A counting listener; returns its base URL and hit count.
+    async fn serve_counter() -> (String, Arc<AtomicUsize>) {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&hits);
+        let base = serve(axum::Router::new().fallback(move || {
+            let seen = Arc::clone(&seen);
+            async move {
+                seen.fetch_add(1, Ordering::SeqCst);
+                axum::http::StatusCode::OK
+            }
+        }))
+        .await;
+        (base, hits)
+    }
+
+    /// T16 (RED): a 302 on the skill URL is reported, not followed.
+    #[tokio::test]
+    async fn skill_fetch_reports_a_redirect_without_following_it() {
+        let (target, hits) = serve_counter().await;
+        let location = target.clone();
+        let app = axum::Router::new().route(
+            "/skill.md",
+            axum::routing::get(move || {
+                let location = location.clone();
+                async move {
+                    (
+                        axum::http::StatusCode::FOUND,
+                        [(axum::http::header::LOCATION, location)],
+                    )
+                }
+            }),
+        );
+        let base = serve(app).await;
+        let url = format!("{base}/skill.md");
+        let client = skill_fetch_client().expect("client");
+        let outcome = tokio::time::timeout(HANG_BOUND, fetch_skill_from_url(&client, &url))
+            .await
+            .expect("bounded");
+        match outcome {
+            Ok(_) => panic!("expected Err, got Ok"),
+            Err(msg) => assert_eq!(
+                msg,
+                format!(
+                    "{base} redirected to {target} (path hidden; run `curl -I` on the URL you gave to see the full Location); use the final URL"
+                )
+            ),
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    /// A redirect Location carrying userinfo, a query token and a fragment is
+    /// reported origin-only: no credential survives, and the path stays hidden.
+    #[tokio::test]
+    async fn skill_fetch_redacts_credentials_in_a_redirect_location() {
+        let (counter, hits) = serve_counter().await;
+        let location = counter.replacen("http://", "http://user:hunter2@", 1)
+            + "/final/path?token=sekret-token-value#frag";
+        let app = axum::Router::new().route(
+            "/skill.md",
+            axum::routing::get(move || {
+                let location = location.clone();
+                async move {
+                    (
+                        axum::http::StatusCode::FOUND,
+                        [(axum::http::header::LOCATION, location)],
+                    )
+                }
+            }),
+        );
+        let base = serve(app).await;
+        let url = format!("{base}/skill.md");
+        let client = skill_fetch_client().expect("client");
+        let outcome = tokio::time::timeout(HANG_BOUND, fetch_skill_from_url(&client, &url))
+            .await
+            .expect("bounded");
+        match outcome {
+            Ok(_) => panic!("expected Err, got Ok"),
+            Err(msg) => {
+                assert!(!msg.contains("hunter2"), "msg: {msg}");
+                assert!(!msg.contains("sekret-token-value"), "msg: {msg}");
+                assert!(!msg.contains("user:"), "msg: {msg}");
+                assert!(!msg.contains("/final/path"), "msg: {msg}");
+                assert!(msg.contains(&counter), "msg: {msg}");
+                assert!(msg.contains("path hidden"), "msg: {msg}");
+            }
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    /// A redirect Location whose path carries the secret (a webhook token) is
+    /// reported origin-only: the path never appears.
+    #[tokio::test]
+    async fn skill_fetch_hides_a_secret_carrying_redirect_path() {
+        let (counter, hits) = serve_counter().await;
+        let location = format!("{counter}/hooks/sekret-path-token-77");
+        let app = axum::Router::new().route(
+            "/skill.md",
+            axum::routing::get(move || {
+                let location = location.clone();
+                async move {
+                    (
+                        axum::http::StatusCode::FOUND,
+                        [(axum::http::header::LOCATION, location)],
+                    )
+                }
+            }),
+        );
+        let base = serve(app).await;
+        let url = format!("{base}/skill.md");
+        let client = skill_fetch_client().expect("client");
+        let outcome = tokio::time::timeout(HANG_BOUND, fetch_skill_from_url(&client, &url))
+            .await
+            .expect("bounded");
+        match outcome {
+            Ok(_) => panic!("expected Err, got Ok"),
+            Err(msg) => {
+                assert!(!msg.contains("sekret-path-token-77"), "msg: {msg}");
+                assert!(!msg.contains("/hooks/"), "msg: {msg}");
+                assert!(msg.contains(&counter), "msg: {msg}");
+                assert!(msg.contains("path hidden"), "msg: {msg}");
+            }
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    /// A typed URL carrying userinfo, a secret path segment and a query token is
+    /// shown origin-only in the redirect message and in the non-success-status
+    /// message alike.
+    #[tokio::test]
+    async fn skill_fetch_redacts_credentials_in_the_typed_url() {
+        let (target, hits) = serve_counter().await;
+        let location = target.clone();
+        let redirect_app = axum::Router::new().route(
+            "/hooks/sekret-typed-path",
+            axum::routing::get(move || {
+                let location = location.clone();
+                async move {
+                    (
+                        axum::http::StatusCode::FOUND,
+                        [(axum::http::header::LOCATION, location)],
+                    )
+                }
+            }),
+        );
+        let missing_app = axum::Router::new().route(
+            "/hooks/sekret-typed-path",
+            axum::routing::get(|| async { axum::http::StatusCode::NOT_FOUND }),
+        );
+        for app in [redirect_app, missing_app] {
+            let base = serve(app).await;
+            let typed = base.replacen("http://", "http://user:hunter2@", 1)
+                + "/hooks/sekret-typed-path?token=sekret-typed";
+            let client = skill_fetch_client().expect("client");
+            let outcome = tokio::time::timeout(HANG_BOUND, fetch_skill_from_url(&client, &typed))
+                .await
+                .expect("bounded");
+            match outcome {
+                Ok(_) => panic!("expected Err, got Ok"),
+                Err(msg) => {
+                    assert!(!msg.contains("hunter2"), "msg: {msg}");
+                    assert!(!msg.contains("sekret-typed"), "msg: {msg}");
+                    assert!(!msg.contains("sekret-typed-path"), "msg: {msg}");
+                    assert!(!msg.contains("/hooks/"), "msg: {msg}");
+                    assert!(!msg.contains("user:"), "msg: {msg}");
+                }
+            }
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    /// A send failure reports origin-only: no typed-URL secret survives, and
+    /// the origin is still named.
+    #[tokio::test]
+    async fn skill_fetch_send_error_hides_typed_url_secrets() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                drop(socket);
+            }
+        });
+        let typed = format!(
+            "http://user:hunter2@127.0.0.1:{port}/hooks/sekret-path-77/skill.md?token=sekret-q-77#frag-77"
+        );
+        let origin = format!("http://127.0.0.1:{port}");
+        let client = skill_fetch_client().expect("client");
+        let outcome = tokio::time::timeout(HANG_BOUND, fetch_skill_from_url(&client, &typed))
+            .await
+            .expect("bounded");
+        match outcome {
+            Ok(_) => panic!("expected Err, got Ok"),
+            Err(msg) => {
+                assert!(!msg.contains("hunter2"), "msg: {msg}");
+                assert!(!msg.contains("sekret-path-77"), "msg: {msg}");
+                assert!(!msg.contains("/hooks/"), "msg: {msg}");
+                assert!(!msg.contains("sekret-q-77"), "msg: {msg}");
+                assert!(!msg.contains("frag-77"), "msg: {msg}");
+                assert!(msg.contains(&origin), "msg: {msg}");
+            }
+        }
+    }
+
+    /// The body-read error alone: headers promise more bytes than arrive, so
+    /// `text()` fails after a 200 (MIK-8660).
+    #[tokio::test]
+    async fn skill_body_read_error_hides_typed_url_secrets() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut request = [0u8; 4096];
+                let _ = socket.read(&mut request).await;
+                let _ = socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nshort")
+                    .await;
+            }
+        });
+        let typed = format!(
+            "http://user:hunter2@127.0.0.1:{port}/hooks/sekret-path-78/skill.md?token=sekret-q-78#frag-78"
+        );
+        let client = skill_fetch_client().expect("client");
+        let outcome = tokio::time::timeout(HANG_BOUND, fetch_skill_from_url(&client, &typed))
+            .await
+            .expect("bounded");
+        let Err(msg) = outcome else {
+            panic!("expected Err, got Ok")
+        };
+        assert!(
+            msg.starts_with("Failed to read body from"),
+            "the body-read path: {msg}"
+        );
+        for secret in [
+            "hunter2",
+            "sekret-path-78",
+            "/hooks/",
+            "sekret-q-78",
+            "frag-78",
+        ] {
+            assert!(!msg.contains(secret), "{secret} in: {msg}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// MIK-8667: a description keeps at most `max` bytes, cut on a character
+    /// boundary, and gains `…` after them.
+    #[test]
+    fn a_cut_description_keeps_max_bytes_and_adds_an_ellipsis() {
+        assert_eq!(super::truncate("abcd", 4), "abcd");
+        assert_eq!(super::truncate("abcdef", 4), "abcd…");
+        assert_eq!(super::truncate("abcé", 4), "abc…");
     }
 }

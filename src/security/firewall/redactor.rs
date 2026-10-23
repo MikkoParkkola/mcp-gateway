@@ -32,6 +32,7 @@ use serde_json::{Map, Value};
 use super::json_literal::{self, Literal};
 use super::{Finding, FindingLocation, ScanType};
 use crate::security::Severity;
+use crate::truncate::{Budget, Suffix, truncate};
 
 /// The largest JSON-in-text leaf whose credential spans are redacted inside
 /// its string values (MIK-8745); a larger one is redacted whole, as before.
@@ -255,7 +256,7 @@ impl Redactor {
                 severity: Severity::High,
                 description: format!("Credential detected: {}{suffix}", self.descriptions[idx]),
                 // Truncate so the actual secret is not propagated.
-                matched: truncate(redacted, 40),
+                matched: truncate(redacted, Budget::Bytes(40), "...", Suffix::After),
                 location: FindingLocation::ResponseContent,
             });
         }
@@ -419,18 +420,6 @@ fn merge_spans(spans: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
         }
     }
     merged
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_string();
-    }
-
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}...", &s[..end])
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

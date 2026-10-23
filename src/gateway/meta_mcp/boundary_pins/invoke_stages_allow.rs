@@ -67,15 +67,16 @@ pub(super) const S1_INTAKE_ALLOW: &[&str] = &[
     "TracedOutcome::Live", // invoke.rs:156 the gate answer mapping; the stage exit keeps this shape in the live body
 ];
 
-/// S2 `directives`, from invoke.rs:159-199.
+/// S2 `directives`, now `invoke/intake.rs` `directives` (it was invoke.rs:159-199
+/// at acf56382d); the line references in this block cite intake.rs (MIK-8663).
 pub(super) const S2_DIRECTIVES_ALLOW: &[&str] = &[
-    "parse_tool_arguments",                     // invoke.rs:159
-    "serde_json::Value::as_bool", // invoke.rs:167 the `_full` read passed as a callback
-    "extract_client_claim",       // invoke.rs:180
-    "crate::projection::projection_key_suffix", // invoke.rs:193
-    "self.projection_mode",       // invoke.rs:193
-    "tracing::Span::current",     // invoke.rs:195 the span record stays in S2
-    "self.active_profile",        // invoke.rs:197
+    "parse_tool_arguments",                     // intake.rs:147
+    "admission::execution_arguments",           // intake.rs:161 the shared directive strip
+    "extract_client_claim",                     // intake.rs:158 read before the strip
+    "crate::projection::projection_key_suffix", // intake.rs:174
+    "self.projection_mode",                     // intake.rs:174
+    "tracing::Span::current",                   // intake.rs:176 the span record stays in S2
+    "self.active_profile",                      // intake.rs:178
 ];
 
 /// S3 `resolve`, from invoke.rs:214-252.

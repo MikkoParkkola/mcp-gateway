@@ -13,7 +13,7 @@ async fn row_1_modern_backend_is_probed_with_server_discover() {
     let backend = probe_backend(Arc::clone(&mock), true).await;
     assert_eq!(
         backend.cached_era().await,
-        Some(crate::protocol::era::Era::Modern),
+        Some(crate::protocol::era::PeerEra::Modern),
         "precondition: the fixture must construct a modern peer"
     );
 
@@ -41,7 +41,7 @@ async fn row_2_legacy_backend_is_probed_with_ping() {
     let backend = probe_backend(Arc::clone(&mock), true).await;
     assert_eq!(
         backend.cached_era().await,
-        Some(crate::protocol::era::Era::Legacy),
+        Some(crate::protocol::era::PeerEra::Legacy),
         "precondition: -32601 to server/discover classifies the peer legacy"
     );
 
@@ -139,7 +139,7 @@ async fn row_6_in_band_internal_error_is_unserved_and_leaves_the_era_alone() {
     assert!(still_wired(&backend, &mock));
     assert_eq!(
         backend.cached_era().await,
-        Some(crate::protocol::era::Era::Modern),
+        Some(crate::protocol::era::PeerEra::Modern),
         "only method-not-found is evidence about era; -32603 says nothing"
     );
 }
@@ -164,7 +164,7 @@ async fn row_6b_status_carried_internal_error_is_unserved_and_leaves_the_era_alo
     assert!(backend.is_circuit_tripped());
     assert_eq!(
         backend.cached_era().await,
-        Some(crate::protocol::era::Era::Modern),
+        Some(crate::protocol::era::PeerEra::Modern),
         "a status-carried -32603 is not evidence about era either"
     );
 }
@@ -244,14 +244,14 @@ async fn row_9_method_not_found_to_discover_invalidates_the_cached_era() {
     let backend = probe_backend(Arc::clone(&mock), true).await;
     assert_eq!(
         backend.cached_era().await,
-        Some(crate::protocol::era::Era::Modern)
+        Some(crate::protocol::era::PeerEra::Modern)
     );
 
     let _ = backend.health_probe(Duration::from_secs(5)).await;
 
     assert_ne!(
         backend.cached_era().await,
-        Some(crate::protocol::era::Era::Modern),
+        Some(crate::protocol::era::PeerEra::Modern),
         "a peer that does not know server/discover is not modern, whatever the probe said"
     );
 }
@@ -270,14 +270,14 @@ async fn row_9e_a_status_carried_method_not_found_also_invalidates_the_era() {
     let backend = probe_backend(Arc::clone(&mock), true).await;
     assert_eq!(
         backend.cached_era().await,
-        Some(crate::protocol::era::Era::Modern)
+        Some(crate::protocol::era::PeerEra::Modern)
     );
 
     let _ = backend.health_probe(Duration::from_secs(5)).await;
 
     assert_ne!(
         backend.cached_era().await,
-        Some(crate::protocol::era::Era::Modern),
+        Some(crate::protocol::era::PeerEra::Modern),
         "a refusal carried by the status line is the same evidence as an in-band one"
     );
 }
@@ -298,7 +298,7 @@ async fn row_9c_a_served_ping_is_not_evidence_of_modernity() {
 
     assert_ne!(
         backend.cached_era().await,
-        Some(crate::protocol::era::Era::Modern),
+        Some(crate::protocol::era::PeerEra::Modern),
         "an answered ping is an absence of evidence about the era, not positive evidence"
     );
 }
@@ -319,7 +319,7 @@ async fn row_9b_positive_evidence_off_the_probe_path_reclassifies_the_peer() {
     let _ = backend.health_probe(Duration::from_secs(5)).await;
     assert_ne!(
         backend.cached_era().await,
-        Some(crate::protocol::era::Era::Modern),
+        Some(crate::protocol::era::PeerEra::Modern),
         "the -32601 to server/discover must drop the cached verdict"
     );
 
@@ -334,7 +334,7 @@ async fn row_9b_positive_evidence_off_the_probe_path_reclassifies_the_peer() {
 
     assert_eq!(
         backend.cached_era().await,
-        Some(crate::protocol::era::Era::Modern),
+        Some(crate::protocol::era::PeerEra::Modern),
         "positive evidence must be able to restore the modern verdict"
     );
 

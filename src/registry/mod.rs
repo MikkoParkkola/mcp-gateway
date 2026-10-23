@@ -140,6 +140,36 @@ pub struct Registry {
     capabilities_path: PathBuf,
 }
 
+/// Pinned HTTP client for registry downloads with the SSRF redirect policy. (MIK-8660 seam)
+fn registry_client() -> crate::Result<reqwest::Client> {
+    crate::security::ssrf::pinned_client_builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(crate::security::ssrf::ssrf_redirect_policy())
+        .build()
+        .map_err(|e| Error::Config(format!("Failed to build HTTP client: {e}")))
+}
+
+/// Fetch a capability file body, or `None` on a non-success status. (MIK-8660 seam)
+async fn fetch_capability(client: &reqwest::Client, url: &str) -> crate::Result<Option<String>> {
+    let response = match client.get(url).send().await {
+        Err(e) => {
+            if let Some(refused) = crate::security::http_diagnostics::ssrf_refusal(&e) {
+                return Err(refused);
+            }
+            return Err(Error::Http(e));
+        }
+        Ok(response) => response,
+    };
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+    let body = response
+        .text()
+        .await
+        .map_err(|e| Error::Transport(format!("Failed to read capability content: {e}")))?;
+    Ok(Some(body))
+}
+
 impl Registry {
     /// Create a new registry manager
     ///
@@ -247,7 +277,7 @@ impl Registry {
         // For now, we'll construct the URL directly based on the capability name
         // A more robust implementation would fetch a directory listing first
 
-        let client = reqwest::Client::new();
+        let client = registry_client()?;
 
         // Try common capability paths
         let search_patterns = vec![
@@ -267,12 +297,8 @@ impl Registry {
             let capability_url =
                 format!("https://raw.githubusercontent.com/{repo}/{branch}/{pattern}");
 
-            match client.get(&capability_url).send().await {
-                Ok(response) if response.status().is_success() => {
-                    let capability_content = response.text().await.map_err(|e| {
-                        Error::Transport(format!("Failed to read capability content: {e}"))
-                    })?;
-
+            match fetch_capability(&client, &capability_url).await {
+                Ok(Some(capability_content)) => {
                     // Determine subdirectory from pattern
                     let pattern_path = PathBuf::from(&pattern);
                     let subdir = pattern_path
@@ -292,8 +318,9 @@ impl Registry {
 
                     return Ok(target);
                 }
-                Ok(_) => {}
-                Err(e) => last_error = Some(e),
+                Ok(None) => {}
+                Err(Error::Http(e)) => last_error = Some(e),
+                Err(e) => return Err(e),
             }
         }
 
@@ -647,5 +674,51 @@ mod tests {
                 entry.path
             );
         }
+    }
+
+    /// A port nothing listens on: from the reserved test range, which no port-0
+    /// bind can be handed (`src/test_ports.rs`), so the redirect target stays closed.
+    fn closed_port() -> u16 {
+        crate::test_ports::reserved_port()
+    }
+
+    #[tokio::test]
+    async fn fetch_capability_refuses_redirect_to_private_target() {
+        let closed = closed_port();
+        let target = format!("http://127.0.0.1:{closed}/");
+        let app = axum::Router::new().route(
+            "/x.yaml",
+            axum::routing::get(move || {
+                let target = target.clone();
+                async move {
+                    (
+                        axum::http::StatusCode::FOUND,
+                        [(axum::http::header::LOCATION, target)],
+                    )
+                }
+            }),
+        );
+        let listener = tokio::time::timeout(
+            crate::test_wait::HANG_BOUND,
+            tokio::net::TcpListener::bind("127.0.0.1:0"),
+        )
+        .await
+        .expect("bounded")
+        .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let url = format!("http://127.0.0.1:{port}/x.yaml");
+        let client = super::registry_client().expect("registry client builds");
+        let outcome = tokio::time::timeout(
+            crate::test_wait::HANG_BOUND,
+            super::fetch_capability(&client, &url),
+        )
+        .await
+        .expect("bounded");
+        let err = outcome.expect_err("a redirect to loopback must be refused");
+        assert!(
+            err.to_string().contains("SSRF blocked"),
+            "expected an SSRF refusal, got: {err}"
+        );
     }
 }

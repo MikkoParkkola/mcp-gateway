@@ -707,7 +707,7 @@ async fn a_refused_repair_is_withdrawn_and_stays_sealed() {
 /// that write fails, the row stays sealed and cannot be read.
 #[tokio::test]
 async fn a_repaired_row_whose_write_fails_stays_sealed() {
-    use super::super::store::CommitStage;
+    use super::super::store::StoreWriteStage;
     let dir = tempfile::tempdir().unwrap();
     let (path, rows, _admission, service) = sealed_service(dir.path(), &["k-unwritten"]).await;
     let (id, original) = &rows[0];
@@ -715,7 +715,7 @@ async fn a_repaired_row_whose_write_fails_stays_sealed() {
     service
         .store
         .set_hook(Some(Arc::new(|stage| {
-            if stage == CommitStage::Write {
+            if stage == StoreWriteStage::Write {
                 return Err(std::io::Error::other("the write is refused"));
             }
             Ok(())

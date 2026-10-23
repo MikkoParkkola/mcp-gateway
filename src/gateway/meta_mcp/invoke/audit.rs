@@ -410,8 +410,10 @@ pub(super) fn delivered_value(delivered: &Value) -> std::borrow::Cow<'_, Value> 
             .and_then(Value::as_array)
             .is_some_and(|content| content.len() == 1);
     let text = delivered.pointer("/content/0/text").and_then(Value::as_str);
-    let wrapped = (one_block.then(|| invoke_value(delivered)).flatten())
-        .filter(|decoded| text == serde_json::to_string_pretty(decoded).ok().as_deref());
+    let wrapped = (one_block
+        .then(|| crate::protocol::tool_result_payload(delivered))
+        .flatten())
+    .filter(|decoded| text == serde_json::to_string_pretty(decoded).ok().as_deref());
     wrapped.map_or(
         std::borrow::Cow::Borrowed(delivered),
         std::borrow::Cow::Owned,
@@ -448,15 +450,6 @@ pub(super) fn rewritten_text(delivered: &Value) -> Option<&str> {
         .ok()
         .and_then(|value| serde_json::to_string_pretty(&value).ok());
     (printed.as_deref() != Some(text)).then_some(text)
-}
-
-/// The tool value a `gateway_invoke` result carries: its `structuredContent`,
-/// else its first text block parsed as JSON.
-pub(super) fn invoke_value(result: &Value) -> Option<Value> {
-    result.get("structuredContent").cloned().or_else(|| {
-        let text = result.pointer("/content/0/text")?.as_str()?;
-        serde_json::from_str(text).ok()
-    })
 }
 
 fn sha256_of(value: &Value) -> String {
@@ -740,7 +733,7 @@ impl MetaMcp {
         // `gateway_invoke` result wraps the tool's value as JSON text
         // (`wrap_tool_success`); attribute that value, as a live call does.
         let unwrapped = match (tool_name, replay.result.as_ref()) {
-            ("gateway_invoke", Some(result)) => invoke_value(result),
+            ("gateway_invoke", Some(result)) => crate::protocol::tool_result_payload(result),
             _ => None,
         };
         let delivered = unwrapped.as_ref().or(replay.result.as_ref());

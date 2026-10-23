@@ -37,7 +37,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 DEFAULT_SOURCE = Path(__file__).resolve().parents[2] / "src/registry/server_registry_entries.rs"
-ENTRY_RE = re.compile(r"RegistryEntry \{(.*?)\n    \},", re.S)
+ENTRY_RE = re.compile(r"ServerCatalogEntry \{(.*?)\n    \},", re.S)
 # `\s*` around the value: rustfmt moves a long string onto the next line.
 FIELD_RE = {
     "name": re.compile(r'\bname:\s*"([^"]*)"'),
@@ -55,7 +55,7 @@ VERSION_RE = {
 
 
 def parse_entries(source: str) -> list[dict[str, str]]:
-    """Every `RegistryEntry { .. }` block; one that yields no name is kept
+    """Every `ServerCatalogEntry { .. }` block; one that yields no name is kept
     with a placeholder so `classify` fails it instead of the check skipping it."""
     entries = []
     for index, block in enumerate(ENTRY_RE.findall(source)):
@@ -221,9 +221,9 @@ def main(argv: list[str]) -> int:
         return 1
     # A block whose closing brace is indented differently is not matched by
     # ENTRY_RE; count the openings so it fails rather than goes unchecked.
-    declared = len(re.findall(r"^\s*RegistryEntry \{", source, re.M))
+    declared = len(re.findall(r"^\s*ServerCatalogEntry \{", source, re.M))
     if declared != len(entries):
-        print(f"FAIL: {declared} RegistryEntry blocks in {path}, {len(entries)} parsed")
+        print(f"FAIL: {declared} ServerCatalogEntry blocks in {path}, {len(entries)} parsed")
         return 1
     failures = []
     for entry in entries:
