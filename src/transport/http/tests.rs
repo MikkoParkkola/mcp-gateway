@@ -482,6 +482,12 @@ fn same_origin_truth_table() {
         ("https://h.test/", "https://g.test/", false),
         ("http://127.0.0.1:8080/", "http://127.0.0.1:8081/", false),
         ("http://127.0.0.1:8080/", "http://localhost:8080/", false),
+        (
+            "http://[::1]:8080/",
+            "http://[0:0:0:0:0:0:0:1]:8080/x",
+            true,
+        ),
+        ("http://[::1]:8080/", "http://[::2]:8080/", false),
     ];
     for (a, b, expected) in cases {
         assert_eq!(
@@ -649,6 +655,11 @@ fn transport_follows_redirect_matches_the_runtime_decision() {
     hardened.security.posture = SecurityPosture::Hardened;
     let mut listed = hardened.clone();
     listed.security.hardened.private_backends = vec!["b".to_string()];
+    // A listing only matters under hardened, and only for the backend it names.
+    let mut standard_listed = Config::default();
+    standard_listed.security.hardened.private_backends = vec!["b".to_string()];
+    let mut listed_other = hardened.clone();
+    listed_other.security.hardened.private_backends = vec!["c".to_string()];
     let cases = [
         // (config, status, base, target, followed)
         (&standard, 301, "https://h.test/a", "https://h.test/b", true),
@@ -706,6 +717,31 @@ fn transport_follows_redirect_matches_the_runtime_decision() {
             301,
             "http://127.0.0.1:9/a",
             "http://127.0.0.1:10/b",
+            false,
+        ),
+        (&standard, 302, "https://h.test/a", "https://h.test/b", true),
+        (&standard, 303, "https://h.test/a", "https://h.test/b", true),
+        (&standard, 307, "https://h.test/a", "https://h.test/b", true),
+        (
+            &standard_listed,
+            301,
+            "http://127.0.0.1:9/a",
+            "http://127.0.0.1:9/b",
+            false,
+        ),
+        (
+            &listed_other,
+            301,
+            "http://127.0.0.1:9/a",
+            "http://127.0.0.1:9/b",
+            false,
+        ),
+        (&listed, 301, "http://[::1]:9/a", "http://[::1]:9/b", true),
+        (
+            &standard,
+            301,
+            "http://[::1]:9/a",
+            "http://[::1]:9/b",
             false,
         ),
     ];
