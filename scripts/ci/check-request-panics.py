@@ -36,6 +36,9 @@ _CFG_RE = re.compile(r"#\s*\[\s*cfg\s*\(")
 _RE_UNWRAP = re.compile(r"\.\s*unwrap\s*\(\s*\)")
 _RE_EXPECT = re.compile(r"\.\s*expect\s*\(")
 _RE_ASSOC = re.compile(r"\b(?:Option|Result)\s*::\s*(?:unwrap|expect)\s*\(")
+_RE_PATH = re.compile(r"\b[A-Za-z_]\w*(\s*::\s*<[^<>]*>)?\s*::\s*(unwrap|expect)\s*\(")
+_RE_RAW_UNWRAP = re.compile(r"\.\s*r#unwrap\s*\(\s*\)")
+_RE_RAW_EXPECT = re.compile(r"\.\s*r#expect\s*\(")
 _RE_MACRO = re.compile(r"\b(?:panic|unreachable|unimplemented|todo)\s*!")
 
 _FN_ITEMS = {"fn", "struct", "enum", "union", "impl", "mod", "trait"}
@@ -90,18 +93,15 @@ def read_baseline_counts(path: Path) -> dict[tuple[str, str], int]:
     try:
         text = Path(path).read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return {}
+        raise SystemExit(f"no baseline at {BASELINE_REL.as_posix()}; run --write-baseline")
     counts: dict[tuple[str, str], int] = {}
-    for line in text.splitlines():
+    for number, line in enumerate(text.splitlines(), 1):
         if not line.strip():
             continue
         parts = line.split("\t")
-        if len(parts) != 3:
-            continue
-        try:
-            counts[(parts[0], parts[1])] = int(parts[2].strip())
-        except ValueError:
-            continue
+        if len(parts) != 3 or not parts[2].strip().isdigit():
+            raise SystemExit(f"request-panics: malformed baseline line {number} in {path}: {line!r}")
+        counts[(parts[0], parts[1])] = int(parts[2].strip())
     return counts
 
 
@@ -278,15 +278,126 @@ def _blank_cfg_items(code: str, orphan) -> str:
 
 def _find_site_starts(blanked: str) -> list[int]:
     starts: list[int] = []
-    for rx in (_RE_UNWRAP, _RE_EXPECT, _RE_ASSOC, _RE_MACRO):
+    for rx in (_RE_UNWRAP, _RE_EXPECT, _RE_ASSOC, _RE_PATH, _RE_RAW_UNWRAP, _RE_RAW_EXPECT, _RE_MACRO):
         for m in rx.finditer(blanked):
             starts.append(m.start())
-    starts.sort()
-    return starts
+    return sorted(set(starts))
+
+
+def _real_line_comment_start(line: str) -> int | None:
+    n = len(line)
+    i = 0
+    while i < n:
+        c = line[i]
+        if c == "/" and i + 1 < n:
+            nxt = line[i + 1]
+            if nxt == "/":
+                return i
+            if nxt == "*":
+                depth = 1
+                j = i + 2
+                while j < n:
+                    if line.startswith("/*", j):
+                        depth += 1
+                        j += 2
+                    elif line.startswith("*/", j):
+                        depth -= 1
+                        j += 2
+                        if depth == 0:
+                            break
+                    else:
+                        j += 1
+                if depth != 0:
+                    return None
+                i = j
+                continue
+        if c == "b" and i + 1 < n and line[i + 1] == "r":
+            if not (i > 0 and (line[i - 1].isalnum() or line[i - 1] == "_")):
+                j = i + 2
+                k = j
+                while k < n and line[k] == "#":
+                    k += 1
+                if k < n and line[k] == '"':
+                    closing = '"' + line[j:k]
+                    end = line.find(closing, k + 1)
+                    if end < 0:
+                        return None
+                    i = end + len(closing)
+                    continue
+        elif c == "r":
+            if not (i > 0 and (line[i - 1].isalnum() or line[i - 1] == "_")):
+                j = i + 1
+                k = j
+                while k < n and line[k] == "#":
+                    k += 1
+                if k < n and line[k] == '"':
+                    closing = '"' + line[j:k]
+                    end = line.find(closing, k + 1)
+                    if end < 0:
+                        return None
+                    i = end + len(closing)
+                    continue
+        if c == '"':
+            j = i + 1
+            while j < n:
+                if line[j] == "\\":
+                    j += 2
+                    continue
+                if line[j] == '"':
+                    break
+                j += 1
+            if j >= n:
+                return None
+            i = j + 1
+            continue
+        if c == "'":
+            if i + 1 < n and line[i + 1] == "\\":
+                j = i + 2
+                if j < n and line[j] == "u" and j + 1 < n and line[j + 1] == "{":
+                    brace = line.find("}", j + 2)
+                    if brace < 0 or brace + 1 >= n or line[brace + 1] != "'":
+                        i += 1
+                        continue
+                    i = brace + 2
+                    continue
+                if j < n and line[j] == "x":
+                    if j + 3 < n and line[j + 3] == "'":
+                        i = j + 4
+                        continue
+                    i += 1
+                    continue
+                if j < n and j + 1 < n and line[j + 1] == "'":
+                    i = j + 2
+                    continue
+                i += 1
+                continue
+            if i + 2 < n and line[i + 2] == "'" and line[i + 1] != "'" and line[i + 1] != "\n":
+                i += 3
+                continue
+            i += 1
+            continue
+        i += 1
+    return None
+
+
+def _line_has_invariant(line: str) -> bool:
+    pos = _real_line_comment_start(line)
+    if pos is None:
+        return False
+    return "// invariant:" in line[pos:]
+
+
+def _is_invariant_standalone(line: str) -> bool:
+    pos = _real_line_comment_start(line)
+    if pos is None:
+        return False
+    if line[:pos].strip() != "":
+        return False
+    return line[pos:].startswith("// invariant:")
 
 
 def _is_exempt(orig_lines: list[str], blanked_lines: list[str], idx0: int) -> bool:
-    if "// invariant:" in orig_lines[idx0]:
+    if _line_has_invariant(orig_lines[idx0]):
         return True
     i = idx0
     while i > 0:
@@ -304,7 +415,7 @@ def _is_exempt(orig_lines: list[str], blanked_lines: list[str], idx0: int) -> bo
         if prev_blank.endswith(";") or prev_blank.endswith("{") or prev_blank.endswith("}"):
             break
         i -= 1
-    if i > 0 and orig_lines[i - 1].strip().startswith("// invariant:"):
+    if i > 0 and _is_invariant_standalone(orig_lines[i - 1]):
         return True
     return False
 
@@ -322,15 +433,15 @@ def collect_current(root: Path, test_only: set[Path], orphan) -> tuple[dict, int
             continue
         try:
             resolved = path.resolve()
-        except OSError:
-            continue
+        except OSError as exc:
+            raise SystemExit(f"request-panics: cannot read {rel}: {exc}")
         if resolved in test_only:
             continue
-        scanned += 1
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
+        except OSError as exc:
+            raise SystemExit(f"request-panics: cannot read {rel}: {exc}")
+        scanned += 1
         blanked, _ = orphan.blank(text)
         final = _blank_cfg_items(blanked, orphan)
         starts = _find_site_starts(final)
@@ -358,6 +469,22 @@ def find_new_sites(current: dict, baseline: dict[tuple[str, str], int]) -> list[
         if len(lines) > base:
             for ln in sorted(lines)[base:]:
                 out.append((rel, ln, norm))
+    out.sort(key=lambda t: (t[0], t[1]))
+    return out
+
+
+def find_stale_allowances(current: dict, baseline: dict[tuple[str, str], int]) -> list[tuple[str, str, int, int]]:
+    out: list[tuple[str, str, int, int]] = []
+    for (rel, norm), base_cnt in baseline.items():
+        v = current.get((rel, norm))
+        if v is None:
+            live = 0
+        elif isinstance(v, list):
+            live = len(v)
+        else:
+            live = int(v)
+        if base_cnt > live:
+            out.append((rel, norm, base_cnt, live))
     out.sort(key=lambda t: (t[0], t[1]))
     return out
 
@@ -755,6 +882,138 @@ def run_self_test() -> int:
     base = {k: len(v) for k, v in cur.items()}
     check("round trip tip baseline gives zero findings", find_new_sites(cur, base) == [])
 
+    # ---- MIK-8691 round 1: path and raw-identifier calls ----
+    f, _, _, _ = _scan_temp(
+        {"src/foo.rs": "fn f(x: Option<i32>) -> i32 {\n    Option::<i32>::unwrap(x)\n}\n"}
+    )
+    check("flag Option::<i32>::unwrap", len(f) == 1, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {"src/foo.rs": "fn f(x: Maybe<i32>) -> i32 {\n    Maybe::unwrap(x)\n}\n"}
+    )
+    check("flag Maybe::unwrap via alias", len(f) == 1, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {"src/foo.rs": "fn f(x: Option<i32>) -> i32 {\n    x.r#unwrap()\n}\n"}
+    )
+    check("flag x.r#unwrap()", len(f) == 1, repr(f))
+
+    # ---- MIK-8691 round 1: invariant marker must be a real line comment ----
+    f, _, _, _ = _scan_temp(
+        {"src/foo.rs": 'fn f(x: Option<i32>) -> i32 {\n    x.unwrap(); let _s = "// invariant: x";\n}\n'}
+    )
+    check("not exempt: invariant in string on site line", len(f) == 1, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {"src/foo.rs": "fn f(x: Option<i32>) -> i32 {\n    /* // invariant: */ x.unwrap()\n}\n"}
+    )
+    check("not exempt: invariant in block comment before site", len(f) == 1, repr(f))
+
+    # ---- MIK-8691 round 1: stale baseline allowances fail ----
+    check(
+        "stale: padded baseline fails",
+        len(find_stale_allowances({("a", "x"): [2]}, {("a", "x"): 2})) == 1,
+    )
+    check(
+        "stale: key with no live site fails",
+        len(find_stale_allowances({}, {("a", "x"): 1})) == 1,
+    )
+
+    # ---- MIK-8691 round 1: strict working-tree baseline parse ----
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "baseline.txt"
+        p.write_text("badline without tabs\n", encoding="utf-8")
+        try:
+            read_baseline_counts(p)
+            check("malformed working baseline fails", False, "no error raised")
+        except SystemExit as exc:
+            msg = exc.code if isinstance(exc.code, str) else ""
+            check("malformed working baseline fails", "malformed baseline line 1" in msg, repr(msg))
+
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "does-not-exist.txt"
+        try:
+            read_baseline_counts(p)
+            check("missing committed baseline fails", False, "no error raised")
+        except SystemExit as exc:
+            msg = exc.code if isinstance(exc.code, str) else ""
+            check("missing committed baseline fails", "no baseline at" in msg, repr(msg))
+
+    # ---- MIK-8691 round 1: main() with a temp root ----
+    with tempfile.TemporaryDirectory() as td:
+        troot = Path(td)
+        old_root = globals()["ROOT"]
+        old_orphan_root = orphan.ROOT
+        try:
+            globals()["ROOT"] = troot
+            orphan.ROOT = troot
+            rc = main([])
+            check("main empty scan returns 1", rc == 1, repr(rc))
+        finally:
+            globals()["ROOT"] = old_root
+            orphan.ROOT = old_orphan_root
+
+    with tempfile.TemporaryDirectory() as td:
+        troot = Path(td)
+        (troot / "scripts/ci").mkdir(parents=True, exist_ok=True)
+        (troot / "scripts/ci/request-panic-baseline.txt").write_text("", encoding="utf-8")
+        try:
+            subprocess.run(["git", "init"], cwd=str(troot), capture_output=True)
+        except Exception:
+            pass
+        old_root = globals()["ROOT"]
+        old_orphan_root = orphan.ROOT
+        try:
+            globals()["ROOT"] = troot
+            orphan.ROOT = troot
+            try:
+                rc = main(["--base", "missing-rev-xyz-12345"])
+            except SystemExit as exc:
+                rc = exc.code if isinstance(exc.code, int) else 1
+            check("main missing base revision returns 1", rc == 1, repr(rc))
+        finally:
+            globals()["ROOT"] = old_root
+            orphan.ROOT = old_orphan_root
+
+    with tempfile.TemporaryDirectory() as td:
+        troot = Path(td)
+        (troot / "scripts/ci").mkdir(parents=True, exist_ok=True)
+        (troot / "scripts/ci/request-panic-baseline.txt").write_text("", encoding="utf-8")
+        old_root = globals()["ROOT"]
+        old_orphan_root = orphan.ROOT
+        old_run = subprocess.run
+
+        def _fake_run(cmd, **kwargs):
+            if isinstance(cmd, list) and len(cmd) >= 2 and cmd[0] == "git" and cmd[1] == "rev-parse":
+                class _P:
+                    returncode = 0
+                    stdout = ""
+                    stderr = ""
+
+                return _P()
+            if isinstance(cmd, list) and len(cmd) >= 2 and cmd[0] == "git" and cmd[1] == "show":
+                class _P:
+                    returncode = 0
+                    stdout = "badline without tabs\n"
+                    stderr = ""
+
+                return _P()
+            return old_run(cmd, **kwargs)
+
+        try:
+            globals()["ROOT"] = troot
+            orphan.ROOT = troot
+            subprocess.run = _fake_run
+            try:
+                rc = main(["--base", "fakerev"])
+            except SystemExit as exc:
+                rc = exc.code if isinstance(exc.code, int) else 1
+            check("main malformed base line returns 1", rc == 1, repr(rc))
+        finally:
+            globals()["ROOT"] = old_root
+            orphan.ROOT = old_orphan_root
+            subprocess.run = old_run
+
     print(f"self-test: {passed} cases passed")
     return 0
 
@@ -770,9 +1029,15 @@ def main(argv: list[str] | None = None) -> int:
         return run_self_test()
 
     if args.base is not None:
-        current_path = ROOT / BASELINE_REL
-        current = read_baseline_counts(current_path)
-        base = load_base_via_git(args.base)
+        try:
+            current_path = ROOT / BASELINE_REL
+            current = read_baseline_counts(current_path)
+            base = load_base_via_git(args.base)
+        except SystemExit as exc:
+            if isinstance(exc.code, str):
+                print(exc.code)
+                return 1
+            return exc.code if isinstance(exc.code, int) else 1
         if base is None:
             print(f"request-panics: no baseline at {args.base}, passing")
             return 0
@@ -784,8 +1049,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"request-panics: baseline shrink-only holds ({len(current)} keys)")
         return 0
 
-    test_only = _ORPHAN.test_only_files()
-    current, scanned, total = collect_current(ROOT, test_only, _ORPHAN)
+    try:
+        test_only = _ORPHAN.test_only_files()
+        current, scanned, total = collect_current(ROOT, test_only, _ORPHAN)
+    except SystemExit as exc:
+        if isinstance(exc.code, str):
+            print(exc.code)
+            return 1
+        return exc.code if isinstance(exc.code, int) else 1
     # A scan that read nothing proves nothing: refuse it rather than pass.
     if scanned == 0:
         print("request-panics: no source files scanned; refusing to pass")
@@ -797,11 +1068,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"request-panics: wrote {len(current)} keys to {BASELINE_REL.as_posix()}")
         return 0
 
-    baseline = read_baseline_counts(ROOT / BASELINE_REL)
+    try:
+        baseline = read_baseline_counts(ROOT / BASELINE_REL)
+    except SystemExit as exc:
+        if isinstance(exc.code, str):
+            print(exc.code)
+            return 1
+        return exc.code if isinstance(exc.code, int) else 1
     findings = find_new_sites(current, baseline)
-    if findings:
+    stale = find_stale_allowances(current, baseline)
+    if findings or stale:
         for rel, line, norm in findings:
             print(f"{rel}:{line}: new panic site without // invariant: {norm}")
+        for rel, norm, base_cnt, live in stale:
+            print(f"stale baseline allowance: {rel} {norm} {base_cnt}->{live}; regenerate with --write-baseline")
         return 1
     print(f"request-panics: {scanned} files scanned, {total} non-exempt sites, 0 new")
     return 0
