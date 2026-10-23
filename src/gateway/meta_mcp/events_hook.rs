@@ -93,14 +93,16 @@ impl MetaMcp {
         let Some(hub) = self.events() else {
             return Vec::new();
         };
-        let api_key = (caller.credential_kind == crate::security::audit::CredentialKind::ApiKey)
-            .then(|| {
-                Some(crate::events::ApiKeyRef {
-                    name: caller.api_key_name?.to_owned(),
-                    principal: caller.credential_principal?.to_owned(),
-                })
-            })
-            .flatten();
+        let api_key = caller
+            .api_key_identity()
+            .zip(crate::gateway::auth::authenticated_principal(
+                caller.authentication == super::Authentication::Authenticated,
+                caller.credential_principal,
+            ))
+            .map(|(name, principal)| crate::events::ApiKeyRef {
+                name: name.to_owned(),
+                principal: principal.to_owned(),
+            });
         hub.search(query, limit, |scope| match scope {
             Visibility::Backend(backend) => {
                 self.admits_backend(backend, caller.scope(), session_id)
@@ -184,6 +186,7 @@ impl MetaMcp {
             firewall: self.firewall.clone(),
             audit: self.transparency_logger.clone(),
             provenance: self.provenance_signer.clone(),
+            public_provenance: self.public_provenance_signer.clone(),
             #[cfg(feature = "cost-governance")]
             budget: self.budget_enforcer.clone().zip(self.cost_registry.clone()),
         }

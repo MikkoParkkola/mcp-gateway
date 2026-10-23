@@ -215,3 +215,24 @@ fn a_key_is_judged_at_the_callers_reading() {
         "resolved at a reading after its expiry"
     );
 }
+
+/// MIK-8659: an API-key resolution is always an authenticated API key. Every
+/// per-key budget and grant rests on this: `api_key_name` gives a name only
+/// when both hold, so a mint that produced an unauthenticated `ApiKey` client
+/// would silently carry no per-key budget at all.
+#[test]
+fn an_api_key_resolution_is_an_authenticated_api_key() {
+    let config = digest_key(None);
+    let client = config.validate_token(KEY).expect("the key authenticates");
+    assert!(client.authenticated, "an API key client is authenticated");
+    assert_eq!(
+        client.credential_kind,
+        crate::security::audit::CredentialKind::ApiKey,
+        "an API key client is an ApiKey"
+    );
+    assert_eq!(
+        client.api_key_identity(),
+        Some("ops"),
+        "and is named by the predicate"
+    );
+}

@@ -91,6 +91,7 @@ pub(super) fn reverse_audit_lines(
 /// `rename` → dir `fsync`. A crash at any phase leaves either the complete old
 /// file or the complete new file. `fault` injects an early return for the
 /// phase-fault crash-safety test.
+// Not `config_persistence::write_atomic`: its FaultPoint crash seam and directory fsync.
 pub(super) fn write_atomic(target: &Path, bytes: &[u8], fault: FaultPoint) -> std::io::Result<()> {
     use std::io::Write;
 

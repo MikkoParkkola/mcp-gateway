@@ -39,7 +39,7 @@ use crate::identity_propagation::{
 use crate::key_server::oidc::VerifiedIdentity;
 
 use super::AccountKey;
-use super::identity::{AccountDescriptor, Principal, account_key};
+use super::identity::{AccountKeyDescriptor, Principal, account_key};
 use super::service::{
     AccountServiceError, CredentialLease, CredentialReleaseObserver, RefreshProvider,
     RejectionOutcome, ReleasedCredentials,
@@ -192,7 +192,7 @@ fn mint_refusal(context: &str, error: &CustodyError) -> MintError {
 /// is the configuration the gateway validated before it started serving.
 pub(crate) struct VaultStrategy {
     custody: Arc<dyn AccountCustody>,
-    descriptor: AccountDescriptor,
+    descriptor: AccountKeyDescriptor,
     /// The live descriptor's `descriptor_revision`, computed at install from
     /// the configuration this gateway validated. A grant stored under any other
     /// revision was connected under a descriptor the operator has since changed
@@ -218,7 +218,7 @@ impl VaultStrategy {
     /// [`Principal::SoleOperator`].
     pub(crate) fn new(
         custody: Arc<dyn AccountCustody>,
-        descriptor: AccountDescriptor,
+        descriptor: AccountKeyDescriptor,
         descriptor_revision: String,
         sole_operator: bool,
     ) -> Self {

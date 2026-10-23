@@ -22,6 +22,9 @@ pub(crate) struct Services {
     pub audit: Option<Arc<TransparencyLogger>>,
     /// The provenance signer, when stamping is on.
     pub provenance: Option<Arc<crate::attestation::BnautAttestationSigner>>,
+    /// The public (Ed25519) provenance signer (MIK-8398).
+    pub(crate) public_provenance:
+        Option<Arc<crate::trust::provenance_public::ProvenancePublicSigner>>,
     #[cfg(feature = "cost-governance")]
     pub budget: Option<(
         Arc<crate::cost_accounting::enforcer::BudgetEnforcer>,
@@ -278,10 +281,18 @@ impl Services {
         let receipt =
             crate::trust::RuntimeProvenanceReceipt::event(backend, name, now.to_rfc3339());
         match &self.provenance {
-            Some(signer) => serde_json::to_value(receipt.sign(signer)),
-            None => serde_json::to_value(json!({ "receipt": receipt })),
+            Some(signer) => {
+                let stamped = receipt.sign(signer);
+                match &self.public_provenance {
+                    Some(public) => crate::trust::provenance_public::provenance_value(
+                        &stamped,
+                        Some((public, None)),
+                    ),
+                    None => serde_json::to_value(stamped).unwrap_or(Value::Null),
+                }
+            }
+            None => serde_json::to_value(json!({ "receipt": receipt })).unwrap_or(Value::Null),
         }
-        .unwrap_or(Value::Null)
     }
 
     /// Run the response firewall over `data`, redacting in place.

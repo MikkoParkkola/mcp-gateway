@@ -246,12 +246,7 @@ fn read_guarded_bytes(path: &Path, what: SecretFile) -> std::result::Result<Vec<
 /// only kind that is ever read; `O_NOCTTY` keeps a terminal from becoming ours.
 #[cfg(unix)]
 fn open_for_guarded_read(path: &Path) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    let flags = rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOCTTY;
-    std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(flags.bits().cast_signed())
-        .open(path)
+    crate::open_nonblocking::open_nonblocking(path)
 }
 
 /// Windows: opens the file the way unix does, following links, so the handle
