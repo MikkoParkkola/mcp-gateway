@@ -263,7 +263,7 @@ def _pool(lines, *, repo, commit, ctx, tmp, workers, executor, line_timeout_s, s
             clone = _clone(repo, commit, tmp / f"w{n}-{index:03d}-{commit[:12]}", **setup)
         if _past(backstop_at):  # the backstop expired during setup: never start the command
             results[index] = LineResult(line.command, -1, 0.0, status="backstop",
-                                        note=_backstop_note(backstop_s, True))
+                                        note=_backstop_note(backstop_s, False))
             return None
         # The line's own timer starts here: setup never counts against it (MIK-8787 GATE.2).
         start = time.monotonic()

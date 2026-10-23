@@ -741,6 +741,7 @@ class Runner(unittest.TestCase):
             runner._clone = real_clone
         self.assertEqual(started, [], "the command started after the backstop")
         self.assertEqual([r.status for r in report.failures], ["backstop"])
+        self.assertIn("not dispatched: the step backstop", report.text)
 
     # N8 (MIK-8787 D6/R2): a check that gave no verdict on HEAD is not rerun
     # on the merge-base; it is NOT COMPARABLE and still fails the push.
