@@ -367,6 +367,12 @@ pub struct MetaMcp {
     /// are byte-identical to the un-stamped path (rung 1.2 guarantee).
     pub(super) provenance_signer: Option<Arc<BnautAttestationSigner>>,
 
+    /// Public (Ed25519) provenance signer (MIK-8398).
+    ///
+    /// `Some` when the public seed resolves; `None` otherwise.
+    pub(super) public_provenance_signer:
+        Option<Arc<crate::trust::provenance_public::ProvenancePublicSigner>>,
+
     /// ASI07 chain identity and emission mode; `None` = feature off.
     pub(super) chain_signer: Option<Arc<response_security::ChainIdentity>>,
 

@@ -4,6 +4,7 @@
 //! neutralised for (MIK-8362). The first finding is the one a refusal words.
 
 use super::*;
+use crate::security::Severity;
 
 fn finding(scan_type: ScanType) -> Finding {
     Finding {

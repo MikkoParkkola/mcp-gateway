@@ -525,3 +525,18 @@ schema:
             .any(|finding| finding.code == "TRUSTLAB_SCHEMA_DRIFT")
     );
 }
+
+/// MIK-8639 DEPTH.2: the `TrustCard` read refuses a 10,000-deep unread field
+/// with the guard's Depth text.
+#[tokio::test]
+async fn read_card_file_refuses_deep_unread_field() {
+    let temp = TempDir::new().unwrap();
+    let card_path = temp.path().join("deep-card.yaml");
+    let content = format!("probe: {}1{}\n", "[".repeat(10_000), "]".repeat(10_000));
+    std::fs::write(&card_path, content).unwrap();
+
+    let err = read_card_file(&card_path)
+        .await
+        .expect_err("10k-deep card must be refused");
+    assert!(err.contains("nesting deeper than 128"), "got: {err}");
+}

@@ -208,6 +208,7 @@ async fn apply_plan_to_directory(
         );
     }
 
+    // The write itself always replaces atomically, so this refusal is the only guard.
     if !force {
         if manifest_path.exists() {
             return Err(format!(
@@ -233,7 +234,7 @@ async fn apply_plan_to_directory(
     let mut written = Vec::new();
     for (draft, generated_yaml, path) in writable {
         let body = render_applied_draft_yaml(plan, draft, generated_yaml);
-        write_atomic(&path, &body, force).await?;
+        write_atomic(&path, &body).await?;
         written.push(AppliedDraft {
             draft_id: draft.id.clone(),
             name: draft.name.clone(),
@@ -248,7 +249,7 @@ async fn apply_plan_to_directory(
     let report = build_apply_report(plan, output, &manifest_path, written, skipped);
     let manifest_body = serde_json::to_string_pretty(&report)
         .map_err(|e| format!("failed to serialize apply manifest: {e}"))?;
-    write_atomic(&manifest_path, &format!("{manifest_body}\n"), force).await?;
+    write_atomic(&manifest_path, &format!("{manifest_body}\n")).await?;
 
     Ok(report)
 }
@@ -316,7 +317,7 @@ fn render_applied_draft_yaml(
     )
 }
 
-async fn write_atomic(path: &Path, content: &str, force: bool) -> Result<(), String> {
+async fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -325,27 +326,13 @@ async fn write_atomic(path: &Path, content: &str, force: bool) -> Result<(), Str
         .await
         .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
 
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| format!("invalid output path {}", path.display()))?;
-    let tmp = parent.join(format!(".{file_name}.tmp"));
-
-    tokio::fs::write(&tmp, content)
-        .await
-        .map_err(|e| format!("failed to write temp file {}: {e}", tmp.display()))?;
-    if force && path.exists() {
-        tokio::fs::remove_file(path)
-            .await
-            .map_err(|e| format!("failed to replace {}: {e}", path.display()))?;
-    }
-    tokio::fs::rename(&tmp, path).await.map_err(|e| {
-        format!(
-            "failed to move {} to {}: {e}",
-            tmp.display(),
-            path.display()
-        )
-    })
+    mcp_gateway::config_persistence::write_atomic(
+        path,
+        content.as_bytes(),
+        mcp_gateway::config_persistence::FileMode::Inherit,
+        mcp_gateway::config_persistence::Symlink::Replace,
+    )
+    .map_err(|e| format!("failed to replace {}: {e}", path.display()))
 }
 
 fn manifest_file_name(plan: &ImportPlan) -> String {
@@ -374,8 +361,8 @@ fn parse_document<T: DeserializeOwned>(
     content: &str,
 ) -> Result<T, String> {
     serde_json::from_str(content).or_else(|json_err| {
-        guard_untrusted_yaml(content)
-            .map_err(|guard_err| format!("rejected {label} {}: {guard_err}", file.display()))?;
+        // The YAML seam guards every caller (MIK-8639): size, depth, aliases,
+        // directives, expansion, names and syntax are refused before parsing.
         crate::yaml::from_str(content).map_err(|yaml_err| {
             format!(
                 "failed to parse {label} {} as JSON or YAML: {json_err}; {yaml_err}",
@@ -383,60 +370,6 @@ fn parse_document<T: DeserializeOwned>(
             )
         })
     })
-}
-
-/// Maximum byte size of an untrusted spec document.
-const MAX_SPEC_BYTES: usize = 16 * 1024 * 1024;
-/// Maximum number of YAML alias references tolerated. Legitimate API specs use
-/// `$ref` (a spec-level mechanism), not YAML aliases, so this is ~0 in practice;
-/// a low cap kills the exponential "billion laughs" alias-amplification bomb.
-const MAX_YAML_ALIASES: usize = 64;
-
-/// Reject hostile untrusted YAML before it reaches the YAML parser, which expands
-/// anchor/alias references during deserialization (a "billion laughs" memory /
-/// stack `DoS`). JSON parsing is already bounded by `serde_json`'s recursion limit,
-/// so this guard only runs on the YAML fallback path.
-fn guard_untrusted_yaml(content: &str) -> Result<(), String> {
-    if content.len() > MAX_SPEC_BYTES {
-        return Err(format!(
-            "document is {} bytes, exceeds the {MAX_SPEC_BYTES}-byte spec limit",
-            content.len()
-        ));
-    }
-    let alias_count = count_yaml_aliases(content);
-    if alias_count > MAX_YAML_ALIASES {
-        return Err(format!(
-            "document uses {alias_count} YAML aliases (limit {MAX_YAML_ALIASES}); \
-             alias amplification is rejected — use $ref for spec-level reuse"
-        ));
-    }
-    Ok(())
-}
-
-/// Count YAML alias references (`*name` in node position) in raw text. A node
-/// alias appears at the start of a value, i.e. after a structural character
-/// (`:`, `-`, `[`, `{`, `,`) or at line start, followed by an anchor-name char.
-/// This deliberately over-counts conservatively rather than parse YAML.
-fn count_yaml_aliases(content: &str) -> usize {
-    let bytes = content.as_bytes();
-    let mut count = 0;
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'*' && i + 1 < bytes.len() {
-            let next = bytes[i + 1];
-            let prev = bytes[..i]
-                .iter()
-                .rev()
-                .find(|b| !b.is_ascii_whitespace())
-                .copied();
-            let at_node_position = matches!(prev, None | Some(b':' | b'-' | b'[' | b'{' | b','));
-            if at_node_position && (next.is_ascii_alphanumeric() || next == b'_') {
-                count += 1;
-            }
-        }
-        i += 1;
-    }
-    count
 }
 
 fn default_source_name(file: &Path) -> String {

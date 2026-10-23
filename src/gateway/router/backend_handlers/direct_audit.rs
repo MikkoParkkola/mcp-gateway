@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::invoke::audit::DispatchNotes;
+use crate::gateway::meta_mcp::response_security::DeliveryCredential;
 use crate::identity_grants::GrantSubject;
 use crate::protocol::RequestId;
 use crate::security::audit::{
@@ -182,6 +183,21 @@ async fn audited_call_judged(
     name: String,
     request: axum::http::Request<axum::body::Body>,
 ) -> crate::gateway::outbound::OutboundReply {
+    // MIK-8672: captured before the request moves on, so a refusal in any later stage still names the
+    // presented credential; a local, not an Option, so the writer below cannot be reached without it.
+    let presented = request
+        .extensions()
+        .get::<crate::gateway::auth::AuthenticatedClient>()
+        .map(|c| {
+            (
+                crate::security::audit::CredentialKind::of(Some(c)),
+                c.principal.clone(),
+            )
+        });
+    let (credential_kind, principal) = presented.unwrap_or((
+        crate::security::audit::CredentialKind::of(None),
+        String::new(),
+    ));
     let mut call = None;
     let mut reads = DirectReads::default();
     let guard = super::super::helpers::read_guard(&state);
@@ -250,6 +266,10 @@ async fn audited_call_judged(
                 document,
                 outcome,
                 &correlation,
+                DeliveryCredential {
+                    kind: credential_kind,
+                    principal: &principal,
+                },
                 read,
             )
             .await

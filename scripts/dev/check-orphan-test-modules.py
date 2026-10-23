@@ -100,7 +100,7 @@ def cfg_expression(code: str, start: int) -> str:
         depth += {"(": 1, ")": -1}.get(code[i], 0)
         i += 1
     return code[start : i - 1]
-RAW_STRING = re.compile(r'b?r(#*)"')
+RAW_STRING = re.compile(r'[bc]?r(#*)"')
 
 
 def blank(text: str) -> tuple[str, dict[int, str]]:

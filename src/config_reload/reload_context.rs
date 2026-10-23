@@ -64,6 +64,8 @@ pub(super) const IMPLICIT_STARTUP_ENV_KEYS: &[&str] = &[
     crate::attestation::wiring::ATTESTATION_SIGNING_KEY_ENV,
     crate::attestation::wiring::ATTESTATION_KEY_ID_ENV,
     crate::attestation::wiring::ATTESTATION_AUDIENCE_ENV,
+    crate::trust::provenance_public::PROVENANCE_SEED_ENV,
+    crate::trust::provenance_public::PROVENANCE_KEY_ID_ENV,
 ];
 
 /// Startup-only environment keys a restart would read differently.

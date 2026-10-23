@@ -115,6 +115,7 @@ fn services() -> Services {
         firewall: None,
         audit: None,
         provenance: None,
+        public_provenance: None,
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: LiveCredentials::default(),

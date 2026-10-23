@@ -14,6 +14,7 @@ anstyle-query	1.1.5		https://github.com/rust-cli/anstyle.git	Apache-2.0 OR MIT		
 anstyle-wincon	3.0.11		https://github.com/rust-cli/anstyle.git	Apache-2.0 OR MIT		Styling legacy Windows terminals
 anyhow	1.0.103	David Tolnay <dtolnay@gmail.com>	https://github.com/dtolnay/anyhow	Apache-2.0 OR MIT		Flexible concrete Error type built on std::error::Error
 arc-swap	1.9.0	Michal 'vorner' Vaner <vorner@vorner.cz>	https://github.com/vorner/arc-swap	Apache-2.0 OR MIT		Atomically swappable Arc
+arraydeque	0.5.1	andylokandy	https://github.com/andylokandy/arraydeque	Apache-2.0 OR MIT		A ring buffer with a fixed capacity, which can be stored on the stack.
 asn1-rs	0.7.1	Pierre Chifflier <chifflier@wzdftpd.net>	https://github.com/rusticata/asn1-rs.git	Apache-2.0 OR MIT		Parser/encoder for ASN.1 BER/DER data
 asn1-rs-derive	0.6.0	Pierre Chifflier <chifflier@wzdftpd.net>	https://github.com/rusticata/asn1-rs.git	Apache-2.0 OR MIT		Derive macros for the `asn1-rs` crate
 asn1-rs-impl	0.2.0	Pierre Chifflier <chifflier@wzdftpd.net>	https://github.com/rusticata/asn1-rs.git	Apache-2.0 OR MIT		Implementation details for the `asn1-rs` crate
@@ -121,6 +122,7 @@ getrandom	0.3.4	The Rand Project Developers	https://github.com/rust-random/getra
 getrandom	0.4.2	The Rand Project Developers	https://github.com/rust-random/getrandom	Apache-2.0 OR MIT		A small cross-platform library for retrieving random data from system source
 glob	0.3.3	The Rust Project Developers	https://github.com/rust-lang/glob	Apache-2.0 OR MIT		Support for matching file paths against Unix shell style patterns.
 governor	0.10.4	Andreas Fuchs <asf@boinkor.net>	https://github.com/boinkor-net/governor.git	MIT		A rate-limiting implementation in Rust
+granit-parser	2.0.0	Ethiraric <ethiraric@gmail.com>|David Aguilar <davvid@gmail.com>|Yuheng Chen <yuhengchen@sensetime.com>|Bourumir Wyngs <bourumir-wyngs@gmail.com>	https://github.com/bourumir-wyngs/granit-parser	Apache-2.0 OR MIT		A YAML parser with comment, tag and style support, written in pure Rust
 h2	0.4.13	Carl Lerche <me@carllerche.com>|Sean McArthur <sean@seanmonstar.com>	https://github.com/hyperium/h2	MIT		An HTTP/2 client and server
 half	2.7.1	Kathryn Long <squeeself@gmail.com>	https://github.com/VoidStarKat/half-rs	Apache-2.0 OR MIT		Half-precision floating point f16 and bf16 types for Rust implementing the IEEE 754-2008 standard binary16 and bfloat16 types.
 hashbag	0.1.13	Jon Gjengset <jon@thesquareplanet.com>	https://github.com/jonhoo/hashbag.git	Apache-2.0 OR MIT		An unordered multiset implementation using a hash bag
