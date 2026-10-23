@@ -8,10 +8,7 @@ use serde_json::{Value, json};
 use crate::{
     hashing::canonical_json_sha256,
     protocol::Tool,
-    security::{
-        ResponseScanner,
-        response_inspect::{Severity as InspectSeverity, inspect_response},
-    },
+    security::{ResponseScanner, Severity, response_inspect::inspect_response},
     validator::{Rule, Severity as ValidationSeverity, ToolPoisoningRule},
 };
 
@@ -20,8 +17,7 @@ use super::{
     ContextIntegrityAuditEvent, ContextIntegrityClassification, ContextIntegrityClassifier,
     ContextIntegrityDecisionKind, ContextIntegrityEvaluation, ContextIntegrityFinding,
     ContextIntegrityInput, ContextIntegrityPolicy, ContextIntegrityPolicyMode,
-    ContextIntegrityPolicyVerdict, ContextIntegritySeverity, ContextIntegrityTransformedContent,
-    ContextProvenance,
+    ContextIntegrityPolicyVerdict, ContextIntegrityTransformedContent, ContextProvenance,
 };
 
 const GUARDED_INSPECT_CATEGORY: &str = concat!("sec", "ret");
@@ -171,9 +167,9 @@ impl ContextIntegrityKernel {
             && validation.severity != ValidationSeverity::Pass
         {
             let severity = if validation.severity == ValidationSeverity::Fail {
-                ContextIntegritySeverity::Critical
+                Severity::Critical
             } else {
-                ContextIntegritySeverity::High
+                Severity::High
             };
             evaluation
                 .classification
@@ -224,7 +220,7 @@ impl ContextIntegrityKernel {
         for item in self.response_scanner.scan_text(text) {
             findings.push(ContextIntegrityFinding {
                 classifier: ContextIntegrityClassifier::PromptInjection,
-                severity: ContextIntegritySeverity::Critical,
+                severity: Severity::Critical,
                 data_class: ContextDataClass::InstructionLike,
                 description: item.pattern_description,
                 evidence: safe_fragment(&item.matched_fragment),
@@ -252,7 +248,7 @@ impl ContextIntegrityKernel {
             };
             findings.push(ContextIntegrityFinding {
                 classifier,
-                severity: map_inspect_severity(item.severity),
+                severity: item.severity,
                 data_class,
                 description: item.description.to_string(),
                 evidence: format!("response_inspect pattern {}", item.matched_pattern_index),
@@ -264,7 +260,7 @@ impl ContextIntegrityKernel {
             &PERSONAL_DATA_PATTERNS,
             text,
             ContextIntegrityClassifier::PersonalData,
-            ContextIntegritySeverity::Medium,
+            Severity::Medium,
             ContextDataClass::PersonalData,
             "personal data pattern",
         );
@@ -273,7 +269,7 @@ impl ContextIntegrityKernel {
             &FINANCIAL_DATA_PATTERNS,
             text,
             ContextIntegrityClassifier::FinancialData,
-            ContextIntegritySeverity::High,
+            Severity::High,
             ContextDataClass::FinancialData,
             "financial data pattern",
         );
@@ -282,7 +278,7 @@ impl ContextIntegrityKernel {
             &DESTRUCTIVE_ACTION_PATTERNS,
             text,
             ContextIntegrityClassifier::DestructiveInstruction,
-            ContextIntegritySeverity::High,
+            Severity::High,
             ContextDataClass::InstructionLike,
             "destructive instruction pattern",
         );
@@ -291,7 +287,7 @@ impl ContextIntegrityKernel {
             &TOOL_ACCESS_ESCALATION_PATTERNS,
             text,
             ContextIntegrityClassifier::ToolAccessEscalation,
-            ContextIntegritySeverity::Critical,
+            Severity::Critical,
             ContextDataClass::InstructionLike,
             "tool access escalation pattern",
         );
@@ -300,7 +296,7 @@ impl ContextIntegrityKernel {
             &EXFILTRATION_PATTERNS,
             text,
             ContextIntegrityClassifier::DataExfiltration,
-            ContextIntegritySeverity::High,
+            Severity::High,
             ContextDataClass::Internal,
             "data exfiltration pattern",
         );
@@ -321,7 +317,7 @@ impl ContextIntegrityKernel {
         if input.destructive && input.provenance.trust_boundary.is_untrusted() {
             findings.push(ContextIntegrityFinding {
                 classifier: ContextIntegrityClassifier::DestructiveInstruction,
-                severity: ContextIntegritySeverity::High,
+                severity: Severity::High,
                 data_class: ContextDataClass::InstructionLike,
                 description: "untrusted content attached to destructive tool result".to_string(),
                 evidence: "destructive tool boundary".to_string(),
@@ -430,7 +426,7 @@ fn append_regex_findings(
     set: &RegexSet,
     text: &str,
     classifier: ContextIntegrityClassifier,
-    severity: ContextIntegritySeverity,
+    severity: Severity,
     data_class: ContextDataClass,
     description: &str,
 ) {
@@ -464,7 +460,7 @@ fn has_critical_finding(classification: &ContextIntegrityClassification) -> bool
     classification
         .findings
         .iter()
-        .any(|f| f.severity == ContextIntegritySeverity::Critical)
+        .any(|f| f.severity == Severity::Critical)
 }
 
 fn policy_verdict(
@@ -692,15 +688,6 @@ fn suffix_fragment(text: &str, limit: usize) -> &str {
         start += 1;
     }
     &text[start..]
-}
-
-fn map_inspect_severity(severity: InspectSeverity) -> ContextIntegritySeverity {
-    match severity {
-        InspectSeverity::Low => ContextIntegritySeverity::Low,
-        InspectSeverity::Medium => ContextIntegritySeverity::Medium,
-        InspectSeverity::High => ContextIntegritySeverity::High,
-        InspectSeverity::Critical => ContextIntegritySeverity::Critical,
-    }
 }
 
 fn safe_fragment(fragment: &str) -> String {

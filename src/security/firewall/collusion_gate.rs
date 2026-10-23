@@ -25,9 +25,8 @@ pub(super) use super::collusion_digest::delivery_parts;
 use super::collusion_digest::{DELIVERED_SET_CAP, key_path_joins, key_path_runs};
 pub(crate) use super::collusion_digest::{Delivered, DeliveryDigest};
 use super::collusion_digest::{Mode, UnreadReceipt, view};
-use super::{
-    Finding, FindingLocation, Firewall, FirewallAction, FirewallVerdict, ScanType, Severity,
-};
+use super::{Finding, FindingLocation, Firewall, FirewallAction, FirewallVerdict, ScanType};
+use crate::security::Severity;
 
 /// What one delivery may stage for its plan steps in all (MIK-7992): past it
 /// a step's receipt is dropped and counted, as an over-bound answer's are
