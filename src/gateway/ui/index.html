@@ -73,6 +73,7 @@ tr:hover td { background: var(--bg3); }
 .auth-bar .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 0.4rem; }
 .auth-bar .dot.on { background: var(--green); }
 .auth-bar .dot.off { background: var(--red); }
+.auth-bar .dot.neutral { background: var(--fg2); }
 
 /* Tool detail */
 .tool-detail { display: none; background: var(--bg3); padding: 0.75rem; border-radius: var(--radius); margin-top: 0.25rem; font-size: 0.8rem; }
@@ -282,6 +283,7 @@ tr:hover td { background: var(--bg3); }
   <span class="dot off" id="auth-dot"></span>
   <span id="auth-label">Not authenticated</span>
   <a href="#" id="auth-btn" style="margin-left:0.5rem">Set API Key</a>
+  <span id="auth-banner" style="display:none;margin-left:0.75rem;color:var(--fg2)"></span>
 </div>
 
 <div class="shell">
@@ -589,42 +591,60 @@ let apiKey = ''; // held in memory only for this session; never persisted to
 const authDot = document.getElementById('auth-dot');
 const authLabel = document.getElementById('auth-label');
 const authBtn = document.getElementById('auth-btn');
+const authBanner = document.getElementById('auth-banner');
 
-let authDisabled = false;
-function updateAuthUI() {
-  if (authDisabled) {
-    authDot.className = 'dot on';
-    authLabel.textContent = 'Auth disabled';
-    authBtn.style.display = 'none';
-  } else if (apiKey) {
-    authDot.className = 'dot on';
-    authLabel.textContent = 'Authenticated';
-    authBtn.textContent = 'Change Key';
-    authBtn.style.display = '';
-  } else {
-    authDot.className = 'dot off';
-    authLabel.textContent = 'Not authenticated';
-    authBtn.textContent = 'Set API Key';
-    authBtn.style.display = '';
-  }
+// MIK-8786: the page's auth state comes from the facts /ui/api/status
+// states, never from a 200 alone. "off" needs an explicit enabled === false;
+// anything missing or malformed offers sign-in.
+function authStateFrom(httpStatus, body) {
+  const a = body && body.auth;
+  const facts = httpStatus === 200 && a
+    && typeof a.enabled === 'boolean' && typeof a.signed_in === 'boolean' && typeof a.admin === 'boolean';
+  if (!facts) return 'signed_out';
+  if (a.enabled === false) return 'off';
+  if (!a.signed_in) return 'signed_out';
+  return a.admin ? 'admin' : 'signed_in';
 }
+
+// The gateway's own startup advice for turning authentication on.
+const AUTH_OFF_TEXT = 'Admin views need authentication. New install: run `mcp-gateway init`. '
+  + 'Existing config: set `auth.enabled: true` with a bearer token and keep `/health` and `/mcp` '
+  + 'under `auth.public_paths`, so tool calls keep working.';
+
+let authState = 'signed_out';
+function renderAuth(state) {
+  authState = state;
+  const view = {
+    off: ['dot neutral', 'Authentication off', null, AUTH_OFF_TEXT],
+    signed_out: ['dot off', 'Not signed in', 'Sign in', ''],
+    signed_in: ['dot on', 'Signed in (no admin)', 'Change key', 'This key has no admin role: admin views are hidden.'],
+    admin: ['dot on', 'Signed in', 'Change key', ''],
+  }[state];
+  authDot.className = view[0];
+  authLabel.textContent = view[1];
+  if (view[2]) { authBtn.textContent = view[2]; authBtn.style.display = ''; } else { authBtn.style.display = 'none'; }
+  authBanner.textContent = view[3];
+  authBanner.style.display = view[3] ? '' : 'none';
+}
+
+// The plain line a refused call shows, chosen from the current state.
+function refusedMessage(httpStatus) {
+  if (authState === 'off') return AUTH_OFF_TEXT;
+  if (authState === 'signed_out') return 'Sign in to see this';
+  if (authState === 'signed_in') return 'This needs an admin key';
+  return httpStatus === 401 ? 'Sign in to see this' : 'Refused: this action is not allowed for this key';
+}
+
+class AuthRefused extends Error {}
+
 authBtn.addEventListener('click', (e) => {
   e.preventDefault();
   const key = prompt('Enter API key (Bearer token):');
   if (key !== null) {
     apiKey = key.trim();
-    updateAuthUI();
     refreshAll();
   }
 });
-// Auto-detect if auth is disabled (API works without key)
-(async () => {
-  try {
-    const r = await fetch('/ui/api/status', { headers: { 'Accept': 'application/json' } });
-    if (r.ok) { authDisabled = true; updateAuthUI(); }
-  } catch (_) {}
-})();
-updateAuthUI();
 
 function authHeaders() {
   const h = { 'Accept': 'application/json' };
@@ -633,13 +653,63 @@ function authHeaders() {
 }
 
 // `poll` marks the 5-second refresh: the server checks it but never lets it
-// extend a dashboard session, so an unattended tab still times out.
-async function apiFetch(url, opts = {}, poll = false) {
-  opts.headers = { ...authHeaders(), ...(poll ? { 'X-Mcp-Gateway-Poll': '1' } : {}), ...opts.headers };
+// extend a dashboard session, so an unattended tab still times out. The one
+// place the marker is written.
+function requestHeaders(poll) {
+  return { ...authHeaders(), ...(poll ? { 'X-Mcp-Gateway-Poll': '1' } : {}) };
+}
+
+// The one status read. It never throws on a refusal: the caller decides from
+// the status and body. `seq` orders answers, so an older one writes nothing.
+let statusSeq = 0;
+async function readStatus(poll = false) {
+  const seq = ++statusSeq;
+  try {
+    const r = await fetch('/ui/api/status', { headers: requestHeaders(poll) });
+    const body = await r.json().catch(() => null);
+    return { seq, httpStatus: r.status, body };
+  } catch (_) {
+    return { seq, httpStatus: 0, body: null };
+  }
+}
+let renderedSeq = 0;
+function isFresh(seq) {
+  if (seq < renderedSeq) return false;
+  renderedSeq = seq;
+  return true;
+}
+
+// One shared, in-flight re-read of the auth state after a refusal.
+let authRead = null;
+function refreshAuth(poll = false) {
+  if (!authRead) {
+    authRead = readStatus(poll).then((s) => {
+      if (isFresh(s.seq)) renderAuth(authStateFrom(s.httpStatus, s.body));
+    }).finally(() => { authRead = null; });
+  }
+  return authRead;
+}
+
+// Every other /ui/api call: a 401 or 403 re-reads the auth state, then
+// throws a plain message, never a status line or a raw body.
+async function uiFetch(url, opts = {}, poll = false) {
   const r = await fetch(url, opts);
+  if (r.status === 401 || r.status === 403) {
+    await refreshAuth(poll);
+    throw new AuthRefused(refusedMessage(r.status));
+  }
+  return r;
+}
+
+async function apiFetch(url, opts = {}, poll = false) {
+  opts.headers = { ...requestHeaders(poll), ...opts.headers };
+  const r = await uiFetch(url, opts, poll);
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
   return r.json();
 }
+
+renderAuth('signed_out');
+refreshDashboard();
 
 // Router
 function showPage(name) {
@@ -739,21 +809,32 @@ function actionBadge(action) {
 
 // Dashboard
 async function refreshDashboard(poll = false) {
-  try {
-    const d = await apiFetch('/ui/api/status', {}, poll);
-    document.getElementById('d-servers').textContent = d.server_count ?? '-';
-    document.getElementById('d-tools').textContent = d.tool_count ?? '-';
-    document.getElementById('d-uptime').textContent = fmtUptime(d.uptime_secs);
-    document.getElementById('d-version').textContent = 'v' + (d.version || '?');
-    if (d.circuit_breakers) {
-      document.getElementById('d-cb-closed').textContent = d.circuit_breakers.closed ?? 0;
-      document.getElementById('d-cb-open').textContent = d.circuit_breakers.open ?? 0;
-      document.getElementById('d-cb-half').textContent = d.circuit_breakers.half_open ?? 0;
-    }
-    if (d.servers) refreshServersTable(d.servers);
-  } catch (e) {
-    console.warn('Status fetch failed:', e);
+  const s = await readStatus(poll);
+  if (!isFresh(s.seq)) return;
+  const state = authStateFrom(s.httpStatus, s.body);
+  renderAuth(state);
+  const d = (s.httpStatus === 200 && s.body) || {};
+  document.getElementById('d-servers').textContent = d.server_count ?? '-';
+  document.getElementById('d-tools').textContent = d.tool_count ?? '-';
+  document.getElementById('d-uptime').textContent = fmtUptime(d.uptime_secs);
+  document.getElementById('d-version').textContent = 'v' + (d.version || '?');
+  const cb = d.circuit_breakers || {};
+  document.getElementById('d-cb-closed').textContent = cb.closed ?? '-';
+  document.getElementById('d-cb-open').textContent = cb.open ?? '-';
+  document.getElementById('d-cb-half').textContent = cb.half_open ?? '-';
+  if (state === 'admin' && d.servers) {
+    refreshServersTable(d.servers);
+    return;
   }
+  // MIK-8786: not an admin, so no inventory: say why instead of "Loading...".
+  const why = {
+    off: AUTH_OFF_TEXT,
+    signed_out: 'Sign in to see servers',
+    signed_in: 'This needs an admin key',
+    admin: 'Status unavailable',
+  }[state];
+  document.getElementById('servers-tbody').innerHTML =
+    `<tr><td colspan="10" style="color:var(--fg2)">${esc(why)}</td></tr>`;
 }
 
 // Control Plane
@@ -953,7 +1034,7 @@ function refreshServersTable(servers) {
 async function removeServer(name) {
   if (!confirm(`Remove server "${name}"? This will update the config and hot-reload.`)) return;
   try {
-    const r = await fetch(`/ui/api/backends/${encodeURIComponent(name)}`, {
+    const r = await uiFetch(`/ui/api/backends/${encodeURIComponent(name)}`, {
       method: 'DELETE',
       headers: authHeaders(),
     });
@@ -1028,6 +1109,10 @@ async function loadRegistry() {
     const d = await apiFetch('/ui/api/registry');
     regAllServers = d.servers || d || [];
   } catch (e) {
+    if (e instanceof AuthRefused) {
+      const note = document.getElementById('add-server-note');
+      if (note) { note.textContent = e.message; note.style.display = ''; }
+    }
     console.warn('Registry load failed:', e);
   }
 }
@@ -1350,7 +1435,7 @@ async function loadCapContent(name) {
   if (ta.dataset.loaded) return;
   ta.value = 'Loading...';
   try {
-    const r = await fetch(`/ui/api/capabilities/${encodeURIComponent(name)}`, { headers: authHeaders() });
+    const r = await uiFetch(`/ui/api/capabilities/${encodeURIComponent(name)}`, { headers: authHeaders() });
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
     const text = await r.text();
     ta.value = text;
@@ -1375,7 +1460,7 @@ async function saveCap(name) {
   msg.textContent = 'Saving...';
   msg.className = 'form-msg';
   try {
-    const r = await fetch(`/ui/api/capabilities/${encodeURIComponent(name)}`, {
+    const r = await uiFetch(`/ui/api/capabilities/${encodeURIComponent(name)}`, {
       method: 'PUT',
       headers: { ...authHeaders(), 'Content-Type': 'application/x-yaml' },
       body: ta.value,
@@ -1399,7 +1484,7 @@ async function deleteCap(name) {
   if (!confirm(`Delete capability file "${name}"? This cannot be undone.`)) return;
   const msg = document.getElementById('cap-msg-' + name);
   try {
-    const r = await fetch(`/ui/api/capabilities/${encodeURIComponent(name)}`, {
+    const r = await uiFetch(`/ui/api/capabilities/${encodeURIComponent(name)}`, {
       method: 'DELETE',
       headers: authHeaders(),
     });
@@ -1434,7 +1519,7 @@ async function newCapability() {
 
   const msg_id = 'cap-new-msg';
   try {
-    const r = await fetch('/ui/api/capabilities', {
+    const r = await uiFetch('/ui/api/capabilities', {
       method: 'POST',
       headers: { ...authHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, content: CAP_TEMPLATE }),
@@ -1508,7 +1593,7 @@ async function previewOpenAPI() {
   importBtn.disabled = true;
   selectRow.style.display = 'none';
   try {
-    const r = await fetch('/ui/api/import/openapi/preview', {
+    const r = await uiFetch('/ui/api/import/openapi/preview', {
       method: 'POST',
       headers: { ...authHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ url })
@@ -1556,7 +1641,7 @@ async function doImport() {
   importBtn.disabled = true;
   msgEl.textContent = 'Importing...';
   try {
-    const r = await fetch('/ui/api/import/openapi', {
+    const r = await uiFetch('/ui/api/import/openapi', {
       method: 'POST',
       headers: { ...authHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, selected_tools: checked })
@@ -1625,7 +1710,7 @@ async function validateCapBlur(ta) {
   const errDiv = document.getElementById('err-' + id);
   if (!errDiv || !capName) return;
   try {
-    const r = await fetch('/ui/api/capabilities/' + encodeURIComponent(capName) + '?validate=1', {
+    const r = await uiFetch('/ui/api/capabilities/' + encodeURIComponent(capName) + '?validate=1', {
       method: 'PUT',
       headers: { ...authHeaders(), 'Content-Type': 'application/x-yaml', 'X-Validate-Only': '1' },
       body: ta.value
@@ -1638,8 +1723,13 @@ async function validateCapBlur(ta) {
       ta.classList.add('yaml-error');
       errDiv.textContent = body.error || 'Validation failed';
     }
-  } catch (_) {
-    // Network error: silent (server may not support validate-only yet)
+  } catch (e) {
+    // A refusal is shown; a network error stays silent (server may not
+    // support validate-only yet).
+    if (e instanceof AuthRefused) {
+      ta.classList.add('yaml-error');
+      errDiv.textContent = e.message;
+    }
   }
 }
 
@@ -1649,7 +1739,7 @@ async function saveCap(name, id) {
   const errDiv = document.getElementById('err-' + id);
   if (!ta || !errDiv) return;
   try {
-    const r = await fetch('/ui/api/capabilities/' + encodeURIComponent(name), {
+    const r = await uiFetch('/ui/api/capabilities/' + encodeURIComponent(name), {
       method: 'PUT',
       headers: { ...authHeaders(), 'Content-Type': 'application/x-yaml' },
       body: ta.value
@@ -1733,7 +1823,7 @@ async function previewOpenAPI() {
   selectRow.style.display = 'none';
 
   try {
-    const r = await fetch('/ui/api/import/openapi/preview', {
+    const r = await uiFetch('/ui/api/import/openapi/preview', {
       method: 'POST',
       headers: { ...authHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ url })
@@ -1789,7 +1879,7 @@ async function doImport() {
   msgEl.className = 'modal-msg';
 
   try {
-    const r = await fetch('/ui/api/import/openapi', {
+    const r = await uiFetch('/ui/api/import/openapi', {
       method: 'POST',
       headers: { ...authHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, selected_tools: checked })

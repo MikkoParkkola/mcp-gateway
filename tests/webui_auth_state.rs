@@ -65,6 +65,7 @@ globalThis.document = {{ getElementById: el, querySelectorAll: () => [], querySe
 globalThis.location = {{ hash: '' }};
 globalThis.prompt = () => null;
 globalThis.fmtUptime = (s) => String(s);
+globalThis.esc = (s) => String(s);
 globalThis.refreshServersTable = (servers) => {{ el('servers-tbody').innerHTML = 'ROWS:' + servers.length; }};
 globalThis.refreshAll = () => {{}};
 const answers = {answers};

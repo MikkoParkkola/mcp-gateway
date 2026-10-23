@@ -702,6 +702,7 @@ async fn ui_status_redacts_for_a_non_admin() {
         assert_eq!(
             keys,
             [
+                "auth",
                 "degraded_count",
                 "healthy_count",
                 "server_count",
@@ -709,6 +710,20 @@ async fn ui_status_redacts_for_a_non_admin() {
                 "version"
             ],
             "{caller:?} got a field beyond the counts: {text}"
+        );
+        // MIK-8786: `auth` states only three facts about the caller, never a
+        // backend detail.
+        let auth = json["auth"].as_object().expect("auth is an object");
+        let mut facts: Vec<&str> = auth.keys().map(String::as_str).collect();
+        facts.sort_unstable();
+        assert_eq!(
+            facts,
+            ["admin", "enabled", "signed_in"],
+            "{caller:?}: {text}"
+        );
+        assert!(
+            auth.values().all(Value::is_boolean),
+            "{caller:?}: every auth fact is a boolean: {text}"
         );
         assert_eq!(
             json["server_count"], 1,
