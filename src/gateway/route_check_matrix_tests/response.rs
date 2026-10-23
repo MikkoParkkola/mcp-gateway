@@ -462,10 +462,24 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
     };
     use RespRoute::{Direct, Mcp, Stdio};
     match (route, case, era, pair) {
+        (Stdio, Fresh, Era::Modern, ShapeSeal) => {
+            Driven::Row("rows::stdio::r_shape_stdio_shape_precedes_seal")
+        }
+        // A seal needs a receipt minted in this request, so every sealed,
+        // Bound clamp row also shows the stamp ran before the seal.
+        (Stdio, Fresh, _, ClampSeal | StampSeal) => {
+            Driven::Row("rows::stdio::r_clamp_stdio_scope_clamp_precedes_seal")
+        }
+        (Stdio, Fresh, _, FirewallSeal) => {
+            Driven::Row("rows::stdio::r_fwseal_stdio_firewall_precedes_seal")
+        }
+        (Stdio, Fresh, Era::Legacy, ClampLink) => {
+            Driven::Row("rows::stdio::r_link_stdio_scope_clamp_precedes_origin_link")
+        }
         (Mcp | Direct, Fresh, Era::Modern, ShapeSeal) => {
             Driven::Row("rows::r_shape_shape_precedes_seal")
         }
-        (Mcp | Direct, Fresh, _, ClampSeal) => {
+        (Mcp | Direct, Fresh, _, ClampSeal | StampSeal) => {
             Driven::Row("rows::r_clamp_scope_clamp_precedes_seal")
         }
         (Mcp | Direct, Fresh, _, FirewallSeal) => {

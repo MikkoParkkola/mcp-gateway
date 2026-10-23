@@ -25,6 +25,8 @@ pub(crate) use super::signing_allocation_tests::route_matrix_stdio_tasks::{
 };
 
 mod playbook_drivers;
+#[path = "route_matrix_driver_response_tests.rs"]
+pub(crate) mod response;
 pub(crate) use playbook_drivers::{
     playbook_of, stdio_params_counted, stdio_params_over, stdio_playbook_flaky, stdio_playbook_runs,
 };

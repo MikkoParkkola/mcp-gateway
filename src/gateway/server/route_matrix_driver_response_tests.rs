@@ -1,0 +1,137 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! Drivers for the response-stage matrix on stdio (MIK-8689 phase B): one
+//! `tools/call read` by its surfaced name through the real stdio dispatch,
+//! with the HMAC receipt and the public seal both installed. Each returns the
+//! delivered JSON-RPC body; the matrix (`route_check_matrix_tests::response`)
+//! owns every assertion.
+
+use std::sync::Arc;
+
+use serde_json::{Value, json};
+
+use super::{BackendRegistry, Counting, MetaMcp, audited_firewall_with, stdio_meta, stdio_send};
+use crate::attestation::{BnautAttestationSigner, RESULT_PROVENANCE_DOMAIN_INFO};
+use crate::protocol::meta::Era;
+use crate::trust::provenance_public::ProvenancePublicSigner;
+
+/// What else the stdio Meta-MCP runs beside the two provenance signers.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum StdioSetup {
+    /// Nothing else.
+    Plain,
+    /// The production firewall with a Warn rule on `read`: a credential in
+    /// the answer is redacted and the answer delivered.
+    Redacting,
+    /// The chain signer emitting on request; the call carries
+    /// [`crate::gateway::router::route_matrix_driver_tests::response::CHAIN_NONCE`].
+    Chained,
+}
+
+/// `alpha`'s `read` surfaced by name, so the backend envelope is the result.
+fn surface(meta: &mut MetaMcp) {
+    // Surfacing is a consuming builder; the placeholder is dropped.
+    let built = std::mem::replace(meta, MetaMcp::new(Arc::new(BackendRegistry::new())));
+    *meta = built.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
+        server: "alpha".to_string(),
+        tool: "read".to_string(),
+    }]);
+}
+
+/// Both provenance signers, keyed as the HTTP drivers key them, so one trust
+/// set verifies every route.
+fn dual_signed(meta: &mut MetaMcp) {
+    meta.enable_provenance_stamping(
+        BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+            .with_audience("test-gateway")
+            .derive_domain(RESULT_PROVENANCE_DOMAIN_INFO),
+    );
+    meta.enable_public_provenance(ProvenancePublicSigner::from_seed_for_test(
+        [7u8; 32],
+        "prov-test-1",
+    ));
+}
+
+/// One stdio `tools/call read` in `era` under `setup`, the backend answering
+/// `answer`.
+pub(crate) async fn stdio_sealed(setup: StdioSetup, era: Era, answer: Value) -> Value {
+    use crate::gateway::chain_test_support::{NONCE_KEY, signer};
+    let audit = tempfile::tempdir().expect("a temporary directory");
+    let firewall = matches!(setup, StdioSetup::Redacting).then(|| {
+        audited_firewall_with(&audit.path().join("firewall.jsonl"), |config| {
+            config.rules = vec![crate::security::firewall::FirewallRule {
+                tool_match: "read".to_string(),
+                action: crate::security::firewall::FirewallAction::Warn,
+                reason: None,
+                scan: Vec::new(),
+            }];
+        })
+    });
+    let transport = Arc::new(Counting {
+        calls: Arc::default(),
+        answer,
+    });
+    let meta = stdio_meta(
+        move |meta| {
+            surface(meta);
+            dual_signed(meta);
+            if let Some(firewall) = firewall {
+                meta.share_keyring_with_for_test(&firewall);
+                meta.set_firewall(Some(firewall));
+            }
+            if matches!(setup, StdioSetup::Chained) {
+                meta.set_chain_signer(signer(), crate::config::ChainEmit::OnRequest);
+            }
+        },
+        transport,
+    )
+    .await;
+    let mut call_meta = serde_json::Map::new();
+    if era == Era::Modern {
+        call_meta.insert(
+            "io.modelcontextprotocol/protocolVersion".to_string(),
+            json!("2026-07-28"),
+        );
+        call_meta.insert(
+            "io.modelcontextprotocol/clientCapabilities".to_string(),
+            json!({"elicitation": {"form": {}}}),
+        );
+    }
+    if matches!(setup, StdioSetup::Chained) {
+        call_meta.insert(
+            NONCE_KEY.to_string(),
+            json!(crate::gateway::router::route_matrix_driver_tests::response::CHAIN_NONCE),
+        );
+    }
+    let params = json!({ "name": "read", "arguments": {}, "_meta": call_meta });
+    stdio_send(&meta, params).await
+}
+
+/// Two legacy keyed calls (`r1`) of the surfaced `read` on one stdio
+/// Meta-MCP with idempotency on, as `build_meta.rs` enables it: the first
+/// runs, the second is the replay. Returns (first, replay, backend sends).
+pub(crate) async fn stdio_sealed_replay() -> (Value, Value, usize) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let transport = Arc::new(Counting {
+        calls: Arc::clone(&calls),
+        answer: json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+    });
+    let meta = stdio_meta(
+        |meta| {
+            surface(meta);
+            dual_signed(meta);
+            meta.enable_idempotency(
+                Arc::new(crate::idempotency::IdempotencyCache::new()),
+                crate::idempotency::CLEANUP_INTERVAL,
+            );
+        },
+        transport,
+    )
+    .await;
+    let params = json!({ "name": "read", "arguments": {},
+                         "_meta": { (crate::protocol::mrtr::IDEMPOTENCY_KEY_META): "r1" } });
+    let first = stdio_send(&meta, params.clone()).await;
+    let replay = stdio_send(&meta, params).await;
+    (first, replay, calls.load(Ordering::SeqCst))
+}

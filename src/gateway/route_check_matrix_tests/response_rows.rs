@@ -344,3 +344,148 @@ async fn r_replayseal_direct_replay_seal_gap() {
         "R-REPLAYSEAL: MIK-8705 gap closed? the direct replay is now sealed: flip the cell"
     );
 }
+
+/// Phase B: the stdio twins of the seal, clamp, firewall and link rows, on
+/// the real stdio dispatch (`server::route_matrix_driver_tests::response`).
+mod stdio {
+    use serde_json::{Value, json};
+
+    use super::{assert_sealed_bound, delivered, receipt};
+    use crate::gateway::router::route_matrix_driver_tests::response::{
+        CHAIN_NONCE, planted_credential, trust_set,
+    };
+    use crate::gateway::server::route_matrix_driver_tests::response::{
+        StdioSetup, stdio_sealed, stdio_sealed_replay,
+    };
+    use crate::protocol::meta::Era;
+    use crate::trust::provenance_public::{VerifyRefusal, verify_public};
+
+    fn text(text: &str) -> Value {
+        json!({"content": [{"type": "text", "text": text}], "isError": false})
+    }
+
+    fn public_scope() -> Value {
+        json!({"content": [{"type": "text", "text": "ok"}], "isError": false,
+               "cacheScope": "public"})
+    }
+
+    /// R-SHAPE on stdio (`Stdio` × `Fresh` × `Modern`): the answer lacks
+    /// `resultType`, the shaper writes it, and the seal binds the shaped bytes.
+    #[tokio::test]
+    async fn r_shape_stdio_shape_precedes_seal() {
+        let body = stdio_sealed(StdioSetup::Plain, Era::Modern, text("ok")).await;
+        let result = delivered(&body);
+        assert_eq!(
+            result.get("resultType").and_then(Value::as_str),
+            Some("complete"),
+            "R-SHAPE Stdio: the shaper wrote the result type: {result}"
+        );
+        assert_sealed_bound("R-SHAPE Stdio", result);
+    }
+
+    /// R-CLAMP on stdio (`Stdio` × `Fresh` × both eras): a `public` claim is
+    /// delivered `private`, Bound to the delivered bytes, never the pre-clamp.
+    #[tokio::test]
+    async fn r_clamp_stdio_scope_clamp_precedes_seal() {
+        for era in [Era::Modern, Era::Legacy] {
+            let row = format!("R-CLAMP Stdio {era:?}");
+            let body = stdio_sealed(StdioSetup::Plain, era, public_scope()).await;
+            let result = delivered(&body);
+            assert_eq!(
+                result.get("cacheScope").and_then(Value::as_str),
+                Some("private"),
+                "{row}: the clamp delivers private: {result}"
+            );
+            assert_sealed_bound(&row, result);
+            let mut pre_clamp = result.clone();
+            pre_clamp["cacheScope"] = Value::from("public");
+            assert_eq!(
+                verify_public(receipt(result), &trust_set(), Some(&pre_clamp)).err(),
+                Some(VerifyRefusal::ResultMismatch),
+                "{row}: the receipt does not bind the pre-clamp body"
+            );
+        }
+    }
+
+    /// R-FWSEAL on stdio (`Stdio` × `Fresh` × both eras): under a Warn rule
+    /// the credential is redacted, and the seal binds the redacted bytes.
+    #[tokio::test]
+    async fn r_fwseal_stdio_firewall_precedes_seal() {
+        let leak = planted_credential();
+        for era in [Era::Modern, Era::Legacy] {
+            let row = format!("R-FWSEAL Stdio {era:?}");
+            let body = stdio_sealed(StdioSetup::Redacting, era, text(leak)).await;
+            let result = delivered(&body);
+            let delivered_text = result
+                .pointer("/content/0/text")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("{row}: the answer carries its text: {result}"));
+            assert!(
+                !delivered_text.contains(leak) && delivered_text.contains("[REDACTED:credential]"),
+                "{row}: the firewall redacted the delivered text: {delivered_text}"
+            );
+            assert_sealed_bound(&row, result);
+            let mut unredacted = result.clone();
+            unredacted["content"][0]["text"] = Value::from(leak);
+            assert_eq!(
+                verify_public(receipt(result), &trust_set(), Some(&unredacted)).err(),
+                Some(VerifyRefusal::ResultMismatch),
+                "{row}: the receipt does not bind the unredacted body"
+            );
+        }
+    }
+
+    /// R-LINK on stdio (`Stdio` × `Fresh` × `Legacy`): the origin link covers
+    /// the clamped answer, not the backend's `public` claim.
+    #[tokio::test]
+    async fn r_link_stdio_scope_clamp_precedes_origin_link() {
+        use crate::gateway::chain_test_support::{chain_of, verify_self};
+        use crate::security::signature_chain::content_digest;
+        let body = stdio_sealed(StdioSetup::Chained, Era::Legacy, public_scope()).await;
+        let result = delivered(&body);
+        assert_eq!(
+            result.get("cacheScope").and_then(Value::as_str),
+            Some("private"),
+            "R-LINK Stdio: the clamp delivers private: {result}"
+        );
+        let chain = chain_of(result)
+            .unwrap_or_else(|| panic!("R-LINK Stdio: the answer carries an origin link: {body}"));
+        let digest = content_digest(result).expect("a hashable result");
+        verify_self(chain, &digest, CHAIN_NONCE)
+            .unwrap_or_else(|e| panic!("R-LINK Stdio: the link verifies: {e:?}"));
+        let mut pre_clamp = result.clone();
+        pre_clamp["cacheScope"] = Value::from("public");
+        let pre_digest = content_digest(&pre_clamp).expect("a hashable result");
+        assert!(
+            verify_self(chain, &pre_digest, CHAIN_NONCE).is_err(),
+            "R-LINK Stdio: the link does not cover the pre-clamp body"
+        );
+    }
+
+    /// R-REPLAY-Stdio, `Stdio` × `IdempotentReplay` (`NotApplicable`:
+    /// `ReplayReservesTheStoredDelivery`). stdio stores the finalized, sealed
+    /// delivery (`stdio_delivery.rs:83`, stored at `:162`) and the shared sync
+    /// admission re-serves it (`admission.rs:394`): the same result, Bound,
+    /// minted once (`cache: "miss"`), the backend run once.
+    #[tokio::test]
+    async fn r_replay_stdio_reserves_the_stored_delivery() {
+        let (first, replay, calls) = stdio_sealed_replay().await;
+        assert_eq!(
+            calls, 1,
+            "R-REPLAY-Stdio: the replay sent nothing: {replay}"
+        );
+        assert_eq!(
+            delivered(&replay),
+            delivered(&first),
+            "R-REPLAY-Stdio: the replay re-serves the stored delivery"
+        );
+        assert_sealed_bound("R-REPLAY-Stdio replay", delivered(&replay));
+        assert_eq!(
+            receipt(delivered(&replay))
+                .pointer("/receipt/cache")
+                .and_then(Value::as_str),
+            Some("miss"),
+            "R-REPLAY-Stdio: the receipt was minted once, by the first call"
+        );
+    }
+}
