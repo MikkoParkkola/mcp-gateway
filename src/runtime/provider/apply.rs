@@ -239,20 +239,15 @@ impl RuntimeCommandRunner for StdRuntimeCommandRunner {
     }
 }
 
+/// A child process's output, kept to its first 4096 bytes (cut on a
+/// character boundary, MIK-8655) with a marker after them.
 fn truncate_process_text(text: std::borrow::Cow<'_, str>) -> String {
-    const LIMIT: usize = 4096;
-    let mut output = text.into_owned();
-    if output.len() > LIMIT {
-        // Back off to a char boundary: `truncate` panics inside a multi-byte
-        // character, and the release profile aborts on panic (MIK-8655).
-        let mut cut = LIMIT;
-        while !output.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        output.truncate(cut);
-        output.push_str("...[truncated]");
-    }
-    output
+    crate::truncate::truncate(
+        &text,
+        crate::truncate::Budget::Bytes(4096),
+        "...[truncated]",
+        crate::truncate::Suffix::After,
+    )
 }
 
 fn first_nonempty_line(text: &str) -> Option<String> {

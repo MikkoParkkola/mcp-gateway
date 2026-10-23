@@ -18,6 +18,7 @@ use regex::RegexSet;
 use serde_json::{Map, Value};
 
 use super::{Finding, FindingLocation, ScanType, Severity};
+use crate::truncate::{Budget, Suffix, truncate};
 
 /// A free-text key list and the published overlay it was parsed from.
 type ParsedKeys = (Arc<crate::config::EnvOverlay>, Arc<[String]>);
@@ -223,7 +224,7 @@ impl InputScanner {
         free_text: &[String],
         findings: &mut Vec<Finding>,
     ) {
-        let fragment = truncate(value, 200);
+        let fragment = truncate(value, Budget::Bytes(200), "...", Suffix::After);
         let key_lc = key.to_lowercase();
         let in_free_text = free_text.iter().any(|k| k == &key_lc);
 
@@ -269,18 +270,6 @@ impl Default for InputScanner {
     fn default() -> Self {
         Self::new()
     }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_string();
-    }
-
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}...", &s[..end])
 }
 
 #[cfg(test)]

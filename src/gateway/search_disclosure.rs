@@ -268,6 +268,7 @@ fn first_paragraph(text: &str) -> &str {
     }
 }
 
+// Not `crate::truncate`: this trims first and backs off to a word boundary (MIK-8667).
 fn clip_chars(text: &str, max: usize) -> String {
     let trimmed = text.trim();
     if trimmed.chars().count() <= max {

@@ -43,6 +43,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::{Finding, FindingLocation, ScanType, Severity};
+use crate::truncate::{Budget, Suffix, truncate};
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -206,7 +207,7 @@ impl MemoryScanner {
     }
 
     fn scan_string(&self, key: &str, value: &str, findings: &mut Vec<Finding>) {
-        let fragment = truncate(value, 200);
+        let fragment = truncate(value, Budget::Bytes(200), "...", Suffix::After);
 
         // ── HIGH: LLM control tokens ──────────────────────────────────────────
         if self.instruction_injection.is_match(value) {
@@ -263,18 +264,6 @@ impl MemoryScanner {
             });
         }
     }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_string();
-    }
-
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}...", &s[..end])
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

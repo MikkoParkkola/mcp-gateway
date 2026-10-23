@@ -215,10 +215,12 @@ impl ResponseScanner {
                 // Truncate on a UTF-8 char boundary: `text` is untrusted remote
                 // tool-result content, so a byte-index slice (`&text[..200]`)
                 // would panic when offset 200 splits a multi-byte character.
-                let fragment = match text.char_indices().nth(200) {
-                    Some((boundary, _)) => format!("{}...", &text[..boundary]),
-                    None => text.to_string(),
-                };
+                let fragment = crate::truncate::truncate(
+                    text,
+                    crate::truncate::Budget::Chars(200),
+                    "...",
+                    crate::truncate::Suffix::After,
+                );
 
                 InjectionMatch {
                     pattern_index: idx,
