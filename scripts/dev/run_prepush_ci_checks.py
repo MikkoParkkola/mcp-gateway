@@ -73,6 +73,10 @@ def parse(text: str) -> Line:
     for extra in rest[2:]:
         key, _, value = extra.partition("=")
         setattr(line, key, value)
+    if line.direction not in ("closed", "open"):
+        raise ValueError(f"direction must be closed or open, not {line.direction!r}: {text}")
+    if line.direction == "open" and not line.marker:
+        raise ValueError(f"an open line needs marker=<skip text>: {text}")
     return line
 
 
@@ -80,19 +84,22 @@ def _git(cwd, *args, timeout=None):
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout)
 
 
-def _clone(repo, commit, dest):
+def _clone(repo, commit, dest, timeout=None):
     """A `--shared` clone of `repo` checked out at `commit` (no objects copied)."""
-    done = _git(repo, "clone", "-q", "--shared", "--no-checkout", str(repo), str(dest))
+    done = _git(repo, "clone", "-q", "--shared", "--no-checkout", str(repo), str(dest), timeout=timeout)
     if done.returncode == 0:
-        done = _git(dest, "checkout", "-q", "--detach", commit)
+        done = _git(dest, "checkout", "-q", "--detach", commit, timeout=timeout)
     if done.returncode != 0:
         raise RuntimeError(f"cannot check out {commit} in a scratch clone: {done.stderr.strip()}")
     return dest
 
 
 def _reset(clone):
-    _git(clone, "reset", "-q", "--hard")
-    _git(clone, "clean", "-qfdx")
+    """Back to the checked-out commit; a failure raises, and the worker drops the clone."""
+    for args in (("reset", "-q", "--hard"), ("clean", "-qfdx")):
+        done = _git(clone, *args)
+        if done.returncode != 0:
+            raise RuntimeError(f"git {' '.join(args)} failed in {clone}: {done.stderr.strip()}")
 
 
 def _substitute(command, *, head, merge_base, base_tip, tmp):
@@ -130,6 +137,11 @@ def _execute(command, workdir, timeout_s, tmp):
     )
     try:
         out, _ = proc.communicate(timeout=max(timeout_s, 0.01))
+        # A passing line's background children die with it, before the reset (X20).
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         return proc.returncode, out, False
     except subprocess.TimeoutExpired:
         # The whole group: a command's children die with it (X12).
@@ -183,6 +195,9 @@ def _pool(lines, *, repo, commit, ctx, tmp, workers, executor, line_timeout_s, d
                 return
             try:
                 clone = one(n, index, line, clone)
+            except subprocess.TimeoutExpired:
+                results[index] = LineResult(line.command, -1, 0.0, status="deadline", output="setup hit the deadline")
+                clone = None
             except Exception:  # fail closed: a line whose worker raises is a failure (X19)
                 results[index] = LineResult(line.command, -1, 0.0, status="crashed", output=traceback.format_exc())
                 clone = None  # a crash leaves the clone dirty: the next line gets a fresh one
@@ -200,7 +215,11 @@ def _pool(lines, *, repo, commit, ctx, tmp, workers, executor, line_timeout_s, d
             )
             return clone
         if clone is None:
-            clone = _clone(repo, commit, tmp / f"w{n}-{index:03d}-{commit[:12]}")
+            clone = _clone(repo, commit, tmp / f"w{n}-{index:03d}-{commit[:12]}", timeout=left)
+        left = deadline - time.monotonic()  # setup is inside the deadline (X22)
+        if left <= 0:
+            results[index] = LineResult(line.command, -1, 0.0, status="deadline")
+            return clone
         start = time.monotonic()
         budget = min(line_timeout_s, left)
         if executor is not None:
@@ -238,19 +257,25 @@ def _paths_missing_at(command, head_clone, base_clone):
     ]
 
 
-def _base_rerun(result, line, *, repo, ctx, tmp, deadline, n):
+def _base_rerun(result, line, *, repo, ctx, tmp, deadline, n, line_timeout_s):
     """One line: the three-way base result (§6.5, G5) as a printed line."""
     mb, tip = ctx["merge_base"], ctx["base_tip"]
     left = deadline - time.monotonic()
     if left <= 0 or result.status in ("deadline", "missing"):
         return f"NOT COMPARABLE ON MERGE-BASE {mb}: {result.status or 'deadline'}; {line.command}"
-    base = _clone(repo, mb, tmp / f"base{n}")
-    head = _clone(repo, ctx["head"], tmp / f"head{n}")
+    try:
+        base = _clone(repo, mb, tmp / f"base{n}", timeout=left)
+        head = _clone(repo, ctx["head"], tmp / f"head{n}", timeout=max(deadline - time.monotonic(), 0.01))
+    except subprocess.TimeoutExpired:
+        return f"NOT COMPARABLE ON MERGE-BASE {mb}: setup did not finish inside the deadline; {line.command}"
     missing = _paths_missing_at(line.command, head, base)
     if missing:
         return f"NOT COMPARABLE ON MERGE-BASE {mb}: {', '.join(missing)} not on the merge-base; {line.command}"
+    left = deadline - time.monotonic()
+    if left <= 0:
+        return f"NOT COMPARABLE ON MERGE-BASE {mb}: did not finish inside the deadline; {line.command}"
     command = _substitute(line.command, tmp=tmp, **{**ctx, "head": mb})
-    rc, _, timed_out = _execute(command, base, min(LINE_TIMEOUT_S, left), tmp)
+    rc, _, timed_out = _execute(command, base, min(line_timeout_s, left), tmp)
     if timed_out:
         return f"NOT COMPARABLE ON MERGE-BASE {mb}: did not finish inside the deadline; {line.command}"
     if rc != 0:
@@ -295,10 +320,12 @@ def run(
     results = _pool(parsed, repo=repo, commit=head, ctx=ctx, tmp=tmp, workers=workers,
                     executor=executor, line_timeout_s=line_timeout_s, deadline=deadline)
     failures = [r for r in results if r and r.status]
+    # Every line's rc and duration, slowest first, so the budget is debuggable (X24).
+    per_line = [f"  rc {r.rc} {r.seconds:5.1f} s  {r.command}" for r in results]
     if not failures:
         shutil.rmtree(tmp, ignore_errors=True)
-        return Report(rc=0, text=f"CI script checks: {len(results)} passed")
-    text = [f"CI script checks: {len(failures)} of {len(results)} failed (logs kept in {tmp})"]
+        return Report(rc=0, text="\n".join([*per_line, f"CI script checks: {len(results)} passed"]))
+    text = [*per_line, f"CI script checks: {len(failures)} of {len(results)} failed (logs kept in {tmp})"]
     for n, result in enumerate(failures):
         line = next(l for l in parsed if l.command == result.command)
         text.append(f"\n[{result.status}] {result.command}")
@@ -306,7 +333,8 @@ def run(
             text.append(f"  log: {result.log}")
         text.extend(result.output.splitlines()[-TAIL_LINES:])
         if executor is None and result.status != "skipped":
-            text.append(_base_rerun(result, line, repo=repo, ctx=ctx, tmp=tmp, deadline=deadline, n=n))
+            text.append(_base_rerun(result, line, repo=repo, ctx=ctx, tmp=tmp, deadline=deadline, n=n,
+                                    line_timeout_s=line_timeout_s))
     return Report(rc=1, failures=failures, text="\n".join(text))
 
 
@@ -333,6 +361,10 @@ def main(argv=None) -> int:
     parser.add_argument("--merge-base", required=True)
     parser.add_argument("--rust", action="store_true", help="run the doc/CLI-reading Rust targets instead")
     args = parser.parse_args(argv)
+    status = yaml_status()
+    print(status)
+    if status.startswith("PyYAML is missing"):
+        return 1
     repo = Path(_git(".", "rev-parse", "--show-toplevel").stdout.strip())
     head = _git(repo, "rev-parse", "HEAD").stdout.strip()
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -343,10 +375,6 @@ def main(argv=None) -> int:
                           repo=repo, merge_base=args.merge_base, base_tip=args.merge_base)
         print(report.text)
         return report.rc
-    status = yaml_status()
-    print(status)
-    if status.startswith("PyYAML is missing"):
-        return 1
     try:
         base_tip = resolve_base_tip(repo)
     except RuntimeError as err:

@@ -130,7 +130,12 @@ class Runner(unittest.TestCase):
                 state["now"] -= 1
             return 0, ""
 
-        self.f.run([line(f"true {i}") for i in range(9)], executor=executor)
+        real = runner._clone, runner._reset
+        runner._clone, runner._reset = (lambda repo, commit, dest, timeout=None: dest), (lambda clone: None)
+        try:
+            self.f.run([line(f"true {i}") for i in range(9)], executor=executor)
+        finally:
+            runner._clone, runner._reset = real
         self.assertEqual(state["calls"], 9)
         self.assertEqual(state["max"], 3)
 
@@ -211,11 +216,19 @@ class Runner(unittest.TestCase):
 
     # X8
     def test_x8_the_lanes_tree_is_untouched(self):
+        self.f._commit({"t.txt": "orig\n"}, "tracked")
+        self.f.head = git(self.f.repo, "rev-parse", "HEAD")
+        lane = {"t.txt": "lane edit\n", "u.txt": "untracked\n", "x.ignored": "ignored\n"}
+        for name, text in lane.items():
+            (self.f.repo / name).write_text(text)
         ran = self.f.marker("ran")
-        before = git(self.f.repo, "status", "--porcelain", "--ignored")
-        self.f.run([line(py(f"open('inside.txt','w').write('x'); open({str(ran)!r},'w').write('x')"))])
+        writer = py(
+            "import os; open('t.txt','w').write('W'); open('u.txt','w').write('W'); "
+            f"[os.remove(n) for n in ('x.ignored',) if os.path.exists(n)]; open({str(ran)!r},'w').write('x')"
+        )
+        self.f.run([line(writer)])
         self.assertTrue(ran.exists(), "the writer ran")
-        self.assertEqual(git(self.f.repo, "status", "--porcelain", "--ignored"), before)
+        self.assertEqual({n: (self.f.repo / n).read_text() for n in lane if (self.f.repo / n).exists()}, lane)
 
     # X9
     def test_x9_a_failing_drift_test_stops_the_pool(self):
@@ -245,17 +258,20 @@ class Runner(unittest.TestCase):
             "import subprocess,sys,time; "
             f"c=subprocess.Popen([sys.executable,'-c','import time; time.sleep(600)']); open({str(pid)!r},'w').write(str(c.pid)); time.sleep(600)"
         )
+        start = time.monotonic()
         report = self.f.run([line(spawn)], line_timeout_s=2)
+        self.assertLess(time.monotonic() - start, 2 + 10, "the timeout path blocked after the kill")
         self.assertEqual([r.status for r in report.failures], ["timeout"])
         self.assertFalse(alive(int(pid.read_text())))
 
     # X13
     def test_x13_concurrent_lines_do_not_see_each_others_files(self):
-        gate, saw = self.f.marker("gate"), self.f.marker("saw")
+        gate, saw, ack = self.f.marker("gate"), self.f.marker("saw"), self.f.marker("ack")
         writer = py(
             "import os,time; os.makedirs('src/tmpx', exist_ok=True); open('src/tmpx/f.rs','w').write('x'); "
             f"open({str(gate)!r},'w').write('w'); "
-            f"[time.sleep(0.1) for _ in range(300) if open({str(gate)!r}).read()!='done']"
+            f"[time.sleep(0.1) for _ in range(300) if open({str(gate)!r}).read()!='done']; "
+            f"open({str(ack)!r},'w').write('kept' if os.path.exists('src/tmpx/f.rs') else 'lost')"
         )
         reader = py(
             "import os,time; "
@@ -263,8 +279,10 @@ class Runner(unittest.TestCase):
             f"open({str(saw)!r},'w').write('present' if os.path.exists('src/tmpx') else 'absent'); "
             f"open({str(gate)!r},'w').write('done')"
         )
-        self.f.run([line(writer, 2), line(reader, 1)], workers=3)
+        report = self.f.run([line(writer, 2), line(reader, 1)], workers=3)
+        self.assertEqual(report.rc, 0, report.text)
         self.assertEqual(saw.read_text(), "absent")
+        self.assertEqual(ack.read_text(), "kept")
 
     # X13b
     def test_x13b_a_worker_is_reset_between_commands(self):
@@ -285,12 +303,17 @@ class Runner(unittest.TestCase):
             "corpus.json": "AB\n",
             "gen_bad.py": "print('XX')\n",
             "gen_exit.py": "print('AB'); raise SystemExit(1)\n",
+            "gen_ok.py": "print('AB')\n",
         })
         try:
+            ok = f.run([line(f"{PY} gen_ok.py | cmp - corpus.json")])
+            self.assertEqual((ok.rc, ok.failures), (0, []), "a matching corpus passes")
             bad = f.run([line(f"{PY} gen_bad.py | cmp - corpus.json")])
-            self.assertEqual(len(bad.failures), 1, "a mismatching corpus fails")
+            self.assertEqual([r.status for r in bad.failures], ["failed"], "a mismatching corpus fails")
+            self.assertIn("differ", bad.failures[0].output)
             exit1 = f.run([line(f"{PY} gen_exit.py | cmp - corpus.json")])
-            self.assertEqual(len(exit1.failures), 1, "pipefail: the producer's exit 1 fails though cmp matched")
+            self.assertEqual([(r.status, r.rc) for r in exit1.failures], [("failed", 1)],
+                             "pipefail: the producer's exit 1 fails though cmp matched")
             missing = f.run([line(f"{PY} gen_bad.py", requires="0123456789abcdef0123456789abcdef01234567")])
             self.assertIn("git fetch origin 0123456789abcdef0123456789abcdef01234567", missing.text)
             self.assertNotEqual(missing.rc, 0)
@@ -314,6 +337,10 @@ class Runner(unittest.TestCase):
         with self.assertRaises(Exception) as caught:
             runner.resolve_base_tip(self.f.repo, branch="line", timeout_s=10)
         self.assertIn("git fetch", str(caught.exception))
+        done = subprocess.run([PY, str(HERE / "run_prepush_ci_checks.py"), "--merge-base", self.f.merge_base],
+                              cwd=self.f.repo, capture_output=True, text=True, timeout=120)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("git fetch --no-tags origin", done.stdout)
 
     # X16
     def test_x16_passing_on_the_merge_base_with_a_moved_tip_says_rebase(self):
@@ -393,6 +420,68 @@ class Runner(unittest.TestCase):
         # One worker, slowest first: "a" is the line right after the crash.
         self.assertNotEqual(dirs["boom"], dirs["a"], "the line after a crash reuses the crashed clone")
 
+    # X20 (impl r1 F7): a passing line's background child dies with the line,
+    # before the worker's clone is reset for the next one.
+    def test_x20_a_passing_lines_background_child_is_killed(self):
+        pid_file = self.f.marker("pid")
+        report = self.f.run([line(f"sleep 30 > /dev/null 2>&1 & echo $! > {pid_file}")])
+        self.assertEqual(report.rc, 0, report.text)
+        self.assertFalse(alive(int(pid_file.read_text())), "the background child outlived its line")
+
+    # X21 (impl r1 F8): a failed reset is a failure, and the next line gets a
+    # fresh clone instead of the dirty one.
+    def test_x21_a_failed_reset_fails_the_line_and_drops_the_clone(self):
+        dirs = {}
+
+        def executor(command, workdir, budget):
+            dirs[command] = workdir
+            if command == "locks":
+                (pathlib.Path(workdir) / ".git/index.lock").write_text("")
+            return 0, ""
+
+        report = self.f.run([line("locks", seconds=9), line("next")], workers=1, executor=executor)
+        self.assertNotEqual(report.rc, 0)
+        self.assertEqual([(r.command, r.status) for r in report.failures], [("locks", "crashed")])
+        self.assertIn("reset", report.failures[0].output)
+        self.assertNotEqual(dirs["locks"], dirs["next"])
+
+    # X22 (impl r1 F6): clone setup counts against the deadline; the command's
+    # budget is what is left after setup.
+    def test_x22_setup_time_counts_against_the_deadline(self):
+        budgets = []
+        real_clone = runner._clone
+
+        def slow_clone(*args, **kwargs):
+            time.sleep(1.5)
+            return real_clone(*args, **kwargs)
+
+        runner._clone = slow_clone
+        try:
+            self.f.run([line("a")], executor=lambda c, w, b: (budgets.append(b), (0, ""))[1],
+                       deadline_s=2, line_timeout_s=30)
+        finally:
+            runner._clone = real_clone
+        self.assertEqual(len(budgets), 1)
+        self.assertLessEqual(budgets[0], 0.6)
+
+    # X23 (gpt L1): a list line with an unknown direction, or an open line
+    # without its skip marker, is refused before anything runs.
+    def test_x23_bad_direction_or_markerless_open_is_refused(self):
+        for bad in ("python3 x.py\t1\tsideways", "python3 x.py\t1\topen"):
+            with self.assertRaises(ValueError, msg=bad):
+                runner.parse(bad)
+        self.assertEqual(runner.parse("python3 x.py\t1\topen\tmarker=SKIP").marker, "SKIP")
+    # X24 (lead 2026-10-23, gpt L2): every line's rc and duration is printed,
+    # passing or not, so the 120 s budget can be debugged from the output.
+    def test_x24_every_lines_rc_and_duration_are_printed(self):
+        report = self.f.run([line(py("import time; time.sleep(0.3)")), line(py("raise SystemExit(4)"))])
+        rows = [l for l in report.text.splitlines() if l.startswith("  rc ")]
+        self.assertEqual(len(rows), 2, report.text)
+        slow = next(r for r in rows if "sleep" in r)
+        self.assertRegex(slow, r"^  rc 0 +[0-9]+\.[0-9] s ")
+        self.assertGreaterEqual(float(slow.split()[2]), 0.3)
+        self.assertTrue(any(r.startswith("  rc 4 ") and "SystemExit(4)" in r for r in rows), rows)
+
 
 class Step(unittest.TestCase):
     # P1: the step script fails when the runner fails, naming the step. Its
@@ -410,6 +499,40 @@ class Step(unittest.TestCase):
         calls = [l for l in pre_push.splitlines() if "prepush_ci_step.sh" in l and not l.lstrip().startswith("#")]
         self.assertEqual(len(calls), 1, calls)
         self.assertNotIn("||", calls[0])
+
+    # X4b (impl r1 F21): without PyYAML the real CLI prints the install hint
+    # and exits 1; it never dies on an import traceback first.
+    def test_x4b_the_cli_without_yaml_prints_the_hint(self):
+        f = Fixture()
+        try:
+            hide = f.dir / "hide"
+            hide.mkdir()
+            (hide / "yaml.py").write_text("raise ImportError('hidden by X4b')\n")
+            env = {**os.environ, "PYTHONPATH": str(hide)}
+            done = subprocess.run([PY, str(HERE / "run_prepush_ci_checks.py"), "--merge-base", f.merge_base],
+                                  cwd=f.repo, capture_output=True, text=True, env=env, timeout=60)
+            self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+            self.assertIn("PyYAML is missing", done.stdout)
+            self.assertNotIn("Traceback", done.stdout + done.stderr)
+        finally:
+            f.close()
+
+    # P2b (impl r1 F20)
+    def test_p2b_the_rust_step_line_stops_the_hook_and_follows_the_lib_tests(self):
+        pre_push = (HERE / "pre-push.sh").read_text()
+        steps = [l.strip() for l in pre_push.splitlines() if l.strip().startswith('step "')]
+        self.assertLess(steps.index('step "cargo test --lib"'), steps.index('step "doc/CLI Rust tests (--all-features)"'))
+        self.assertLess(steps.index('step "CI script checks"'), steps.index('step "cargo fmt --check"'))
+        rust = [l.strip() for l in pre_push.splitlines() if "run_prepush_ci_checks.py --rust" in l and not l.lstrip().startswith("#")]
+        self.assertEqual(len(rust), 1, rust)
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            (d / "scripts/dev").mkdir(parents=True)
+            (d / "scripts/dev/run_prepush_ci_checks.py").write_text("raise SystemExit(3)\n")
+            done = subprocess.run(["bash", "-c", f"set -euo pipefail\nbase=x\n{rust[0]}\necho AFTER"],
+                                  cwd=d, capture_output=True, text=True)
+            self.assertEqual(done.returncode, 3)
+            self.assertNotIn("AFTER", done.stdout)
 
     # P2
     def test_p2_the_rust_step_runs_the_derived_targets_with_all_features(self):
