@@ -1,6 +1,6 @@
 # MIK-8513: the registry check verifies content and that entries start
 
-Status: draft for review (r2: r1 seat findings folded, see the end). Scope: `scripts/dev/check-registry-packages.py`,
+Status: draft for review (r3: r1 and r2 seat findings folded, see the end). Scope: `scripts/dev/check-registry-packages.py`,
 its self-test, its testdata, `.github/workflows/registry-packages.yml`. No
 product code, no user-visible change.
 
@@ -19,7 +19,15 @@ gaps remain:
 **Where the digests live.** A sidecar file, `scripts/dev/registry-integrity.json`.
 It stays out of `src/` so that Cargo's `include = ["src/**"]` does not publish
 it. The checker takes `--integrity PATH`, defaulting to that file; the workflow
-passes each testdata file's own sidecar. It is a sidecar
+passes each testdata file's own sidecar.
+
+**Readers.** Only Python reads the sidecar: the checker and
+`test_check_registry_packages.py`, both in CI jobs that run from the
+repository checkout. No cargo test reads it. That matters because a cargo test
+that read a file outside Cargo's `include` would break in the post-merge
+Packaged suite, as MIK-8639 did. If a Rust test ever needs it, that test
+detects the packaged crate (the `packaged_crate_at` rule), or the file moves
+into `include`. It is a sidecar
 rather than a `RegistryEntry` field because a field would be product code, a
 change to a public struct that ships to users; the ticket's impact line rules
 that out.
@@ -90,9 +98,9 @@ artifact inside the isolated container (below), skipped start entries
 included. The package manager checks the actual bytes against the sidecar
 value:
 
-- **npm:** `npm pack --json <pkg>@<ver>` reports the `integrity` it computed
+- **npm:** `npm pack --json --pack-destination /work <pkg>@<ver>` reports the `integrity` it computed
   from the downloaded tarball, which must equal the sidecar.
-- **PyPI:** `pip download --no-deps --require-hashes` with `<pkg>==<ver>
+- **PyPI:** `pip download -d /work --no-deps --require-hashes` with `<pkg>==<ver>
   --hash=sha256:<v>` for every recorded file. pip refuses a download whose
   bytes match none of them.
 
@@ -144,7 +152,8 @@ environment and no host path:
   classified `(launcher, pkg, ver, args)`, so a crafted `command` in a fork PR
   cannot inject into the host.
 - **Flags:**
-  - `--rm --read-only --log-driver none`;
+  - `--rm --read-only --log-driver none -w /work`, plus `-i` on the start
+    container so the driver can write to its stdin;
   - `--cap-drop ALL --security-opt no-new-privileges --user 1000:1000`;
   - `--memory 1g --pids-limit 256 --cpus 1`;
   - `--tmpfs /tmp:exec,size=256m,uid=1000,gid=1000,mode=1777`.
@@ -152,14 +161,16 @@ environment and no host path:
   for uid 1000 and removed afterwards.
 - **Environment:** only `-e HOME=/work -e npm_config_cache=/work/.npm
   -e UV_CACHE_DIR=/work/.uv -e UV_TOOL_DIR=/work/tools
+  -e UV_TOOL_BIN_DIR=/work/bin -e PATH=/work/bin:<image PATH>
   -e XDG_CACHE_HOME=/work/.cache`.
 - **No secret** is ever passed.
 
 **Images, pinned by digest:**
 
 - `mirror.gcr.io/library/node:24-slim` for npm;
-- `ghcr.io/astral-sh/uv:python3.12-bookworm-slim` for PyPI. That one is
-  published on ghcr.io and is not Docker Hub content.
+- `ghcr.io/astral-sh/uv` with Python 3.12, a tag from Astral's currently
+  published set, for PyPI. That one is published on ghcr.io and is not Docker
+  Hub content. The implementation confirms `pip` is present in it.
 
 **Three steps per entry.** The first two use the network; the last does not.
 
@@ -173,12 +184,14 @@ environment and no host path:
 3. **Start,** in a second container on the same volume with `--network none`,
    60 s cap:
    - npm: `npx --offline -y <pkg>@<ver> <args>`;
-   - uvx: the installed tool binary `<args>`.
+   - uvx: `uvx --offline <pkg>@<ver> <args>`, the launcher users get, served
+     from the primed cache.
 
    A server that needs the network to start therefore FAILs.
 
-**The driver** writes one `initialize` request with `id: 1`. It reads stdout
-line by line, at most 1 MiB, until a JSON-RPC message with `id: 1` arrives.
+**The driver** writes one `initialize` request with `id: 1`. It reads stdout in
+64 KiB chunks against a 1 MiB byte budget, never with an unbounded
+`readline`, until a JSON-RPC message with `id: 1` arrives.
 
 - **PASS:** the message has a `result` carrying `protocolVersion` and `serverInfo`.
 - **FAIL:**
@@ -196,6 +209,10 @@ path, including timeouts.
 **Not in scope:** no `pull_request_target`, no Docker socket, no host mount.
 The host-side driver only parses bounded container output.
 
+**Path filter.** The live workflow's `pull_request` paths gain
+`scripts/dev/registry-integrity.json` and the new testdata files, so a
+digest-only change runs the live checks before merge.
+
 **Where it runs.** A new job, `starts`, in `registry-packages.yml`, with
 `timeout-minutes: 25`. Not in ci.yml (CONTENT.3).
 
@@ -203,7 +220,7 @@ The host-side driver only parses bounded container output.
 
 | AC | how it is shown | where |
 |---|---|---|
-| CONTENT.1, metadata | `registry-integrity.rs`: two healthy entries, one sidecar value wrong; `1/2 resolve`, exactly one `FAIL … integrity` | live job step |
+| CONTENT.1, metadata and bytes | `registry-integrity.rs`: two healthy entries, one sidecar value wrong; `1/2 resolve`, the wrong entry fails both the metadata comparison and the real `npm pack`/`pip download` byte step, and no other entry fails | live job step |
 | CONTENT.1, bytes | the byte step's comparison is unit-tested with a stubbed `npm pack` result whose integrity differs while the metadata matches | offline self-test |
 | CONTENT.2 | `registry-wont-start.rs`: `time` must PASS; a pinned npm package whose bin exits at once must FAIL `exited … before answering initialize`; `1/2 eligible entries start` | live job step |
 | CONTENT.2, harness | timeout, malformed reply, wrong id, and an error reply, each against a tiny local fake server driven without Docker | offline self-test |
@@ -237,3 +254,26 @@ sequential-thinking.
   - **Ruling:** the AC says "the served tarball differs", so the installer
     enforces the sidecar hash on the real download in the container. This
     stays inside the fail-fast rule: the checker hashes nothing.
+
+## r2 review folded (gpt SWF, grok SWF)
+
+- **Adopted:**
+  - `-w /work` and explicit pack/download destinations;
+  - `UV_TOOL_BIN_DIR` and `PATH`;
+  - `-i` on the start container;
+  - `uvx --offline` for PyPI starts;
+  - the path filter;
+  - chunked reads against a byte budget;
+  - a currently published uv tag;
+  - the wrong-digest testdata also proves the real byte step.
+- **Declined:**
+  - **A disk quota on `/work`.** The runner is single-use, so disk exhaustion
+    fails only this job, and a failed job is detection, not damage. A
+    size-limited tmpfs volume would not survive between the two containers.
+  - **`uv pip download`.** I don't believe uv has that subcommand; `pip` stays.
+  - **A separate Docker-level positive control.** It already exists: `time`
+    must PASS through Docker in the live job.
+  - **Corrupted bytes under unchanged metadata through a fake registry.** Too
+    costly. The installers' own verification is upstream behaviour; our
+    comparison is unit-tested, and the real-installer path is exercised by the
+    wrong-digest testdata.
