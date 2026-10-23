@@ -33,7 +33,7 @@ pub(in crate::gateway::meta_mcp) fn enforce_output_schema(
     // single plain-text item with a dump of its own wrapper.
     // `apply_capability_projection` refuses this same case as bug #167; the
     // schema path refuses it here.
-    let validation_target = match extract_output_validation_target(&result) {
+    let validation_target = match crate::protocol::tool_result_payload(&result) {
         Some(target) => target,
         // A bare payload is its own validation target: no envelope to unwrap,
         // and `apply_validated_output` returns the coerced value directly.
@@ -108,19 +108,6 @@ fn json_type(value: &Value) -> &'static str {
     }
 }
 
-pub(super) fn extract_output_validation_target(result: &Value) -> Option<Value> {
-    if let Some(structured) = result.get("structuredContent") {
-        return Some(structured.clone());
-    }
-
-    let content = result.get("content")?.as_array()?;
-    if content.len() != 1 {
-        return None;
-    }
-    let text = content[0].get("text")?.as_str()?;
-    serde_json::from_str::<Value>(text).ok()
-}
-
 /// Whether a value is an MCP tool-result envelope rather than a bare payload.
 ///
 /// The two are validated differently: an envelope's schema describes what it
@@ -130,7 +117,7 @@ pub(super) fn extract_output_validation_target(result: &Value) -> Option<Value> 
 fn is_mcp_envelope(result: &Value) -> bool {
     result.as_object().is_some_and(|obj| {
         // `content` must be an ARRAY, which is the shape
-        // `extract_output_validation_target` consumes and the specification
+        // `tool_result_payload` consumes and the specification
         // requires. Keying on the bare presence of the name would classify a
         // payload that merely has a `content` field as an envelope and return
         // it unvalidated — failing the schema gate open on exactly the values

@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use tracing::debug;
 
 use super::enforce_output_schema;
-use super::output_shape::{apply_validated_output, extract_output_validation_target};
+use super::output_shape::apply_validated_output;
 use super::r2_check::miss_with_hint;
 use super::{dispatch_guards, relay};
 use crate::gateway::meta_mcp::MetaMcp;
@@ -305,8 +305,8 @@ impl MetaMcp {
             // projection entirely.
             if !want_full && !cap_def.response_transform.is_empty() {
                 let t = ResponseTransform::new(&cap_def.response_transform);
-                let inner =
-                    extract_output_validation_target(&response).unwrap_or_else(|| response.clone());
+                let inner = crate::protocol::tool_result_payload(&response)
+                    .unwrap_or_else(|| response.clone());
                 let inner_populated = json_is_populated(&inner);
                 let transformed = t.transform_result(tool, inner).await?;
                 if inner_populated && !json_is_populated(&transformed) {

@@ -223,7 +223,12 @@ impl ContextIntegrityKernel {
                 severity: Severity::Critical,
                 data_class: ContextDataClass::InstructionLike,
                 description: item.pattern_description,
-                evidence: safe_fragment(&item.matched_fragment),
+                evidence: crate::truncate::truncate(
+                    &item.matched_fragment,
+                    crate::truncate::Budget::Chars(120),
+                    "...",
+                    crate::truncate::Suffix::After,
+                ),
             });
         }
 
@@ -602,6 +607,8 @@ impl TextSample {
         push_suffix_limited(&mut self.tail, segment, CLASSIFICATION_TEXT_EDGE_BYTES);
     }
 
+    // Not `crate::truncate`: this keeps the head and the tail around a
+    // marker (MIK-8667).
     fn into_text(self) -> String {
         if self.total_bytes <= MAX_CLASSIFICATION_TEXT_BYTES {
             return self.head;
@@ -688,14 +695,6 @@ fn suffix_fragment(text: &str, limit: usize) -> &str {
         start += 1;
     }
     &text[start..]
-}
-
-fn safe_fragment(fragment: &str) -> String {
-    let mut out = fragment.chars().take(120).collect::<String>();
-    if fragment.chars().count() > 120 {
-        out.push_str("...");
-    }
-    out
 }
 
 #[cfg(test)]

@@ -23,7 +23,7 @@ use crate::gateway::router::helpers::{
 };
 use crate::gateway::session_id::SessionId;
 use crate::gateway::streaming::{
-    MintKind, SessionCapacity, SessionHold, create_sse_response_with_view,
+    InFlightHold, MintKind, SessionCapacity, create_sse_response_with_view,
 };
 use crate::mtls::CertIdentity;
 
@@ -128,7 +128,7 @@ fn open_stream_session(
     existing: Option<&str>,
     owner: &crate::gateway::session_id::SessionOwner,
     credential: Option<crate::gateway::auth::live::HeldCredential>,
-) -> Result<(SessionId, Option<SessionHold>), Box<axum::response::Response>> {
+) -> Result<(SessionId, Option<InFlightHold>), Box<axum::response::Response>> {
     if crate::gateway::router::hardened_elicitation::is_hardened(state) {
         return state
             .multiplexer
@@ -151,7 +151,7 @@ fn open_stream_session(
 
 /// `body`, holding `hold` until it is dropped: a provisional session is never
 /// reaped under an open stream, and the drop starts its idle clock (MIK-8504).
-fn held_body(body: axum::body::Body, hold: Option<SessionHold>) -> axum::body::Body {
+fn held_body(body: axum::body::Body, hold: Option<InFlightHold>) -> axum::body::Body {
     axum::body::Body::from_stream(futures::StreamExt::map(
         body.into_data_stream(),
         move |chunk| {

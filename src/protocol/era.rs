@@ -22,14 +22,14 @@ use serde_json::json;
 /// What a peer speaks, as far as we have been able to establish.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Era {
+pub enum PeerEra {
     /// Speaks 2026-07-28 or later: stateless, per-request `_meta`, no handshake.
     Modern,
     /// Speaks a revision with the `initialize` handshake.
     Legacy,
 }
 
-impl Era {
+impl PeerEra {
     /// The wire spelling, shared by the operator read and the `era_probe`
     /// event so the two cannot drift.
     #[must_use]
@@ -75,7 +75,7 @@ impl ProbeOutcome {
     /// Silence is its own outcome, not the era the silence falls back to: an
     /// operator reading `legacy` here would take a dead transport for a peer
     /// that answered.
-    fn outcome_label(&self, era: Era) -> &'static str {
+    fn outcome_label(&self, era: PeerEra) -> &'static str {
         match self {
             Self::NoAnswer => "no_answer",
             Self::Result(_) | Self::Error(_) => era.as_str(),
@@ -90,7 +90,7 @@ impl ProbeOutcome {
 /// silence — a peer that cannot be reached at all is not thereby modern, and
 /// treating it as modern would send it requests it cannot parse.
 #[must_use]
-pub fn classify(outcome: &ProbeOutcome) -> Era {
+pub fn classify(outcome: &ProbeOutcome) -> PeerEra {
     match outcome {
         // A document that names a modern revision it speaks.
         //
@@ -104,7 +104,7 @@ pub fn classify(outcome: &ProbeOutcome) -> Era {
         // Found by adversarial review, 2026-08-29. The first version keyed on
         // presence alone, which reads correctly and is wrong in the one case
         // that matters: a dual-era peer mid-migration.
-        ProbeOutcome::Result(doc) if names_a_modern_version(doc) => Era::Modern,
+        ProbeOutcome::Result(doc) if names_a_modern_version(doc) => PeerEra::Modern,
 
         // A recognised modern error proves a modern peer just as well as a
         // document does: only a server that implements this revision knows
@@ -117,13 +117,13 @@ pub fn classify(outcome: &ProbeOutcome) -> Era {
                 UNSUPPORTED_PROTOCOL_VERSION | HEADER_MISMATCH | MISSING_REQUIRED_CLIENT_CAPABILITY
             ) =>
         {
-            Era::Modern
+            PeerEra::Modern
         }
 
         // Everything else. `-32601 method not found` is the honest legacy
         // answer, an arbitrary application error is the sloppy one, and silence
         // is the common one. None of them is evidence of modernity.
-        _ => Era::Legacy,
+        _ => PeerEra::Legacy,
     }
 }
 
@@ -172,7 +172,7 @@ pub struct EraCache {
 mod determination {
     use std::sync::atomic::{AtomicU8, Ordering};
 
-    use super::{Era, EraObservation, EraSource};
+    use super::{EraObservation, EraSource, PeerEra};
 
     /// The era lock and the verdict the outbound path reads without it.
     #[derive(Debug, Default)]
@@ -201,10 +201,10 @@ mod determination {
         }
 
         /// The determined era, without the lock; `None` when there is none.
-        pub(super) fn load(&self) -> Option<Era> {
+        pub(super) fn load(&self) -> Option<PeerEra> {
             match self.mirror.load(Ordering::Acquire) {
-                MODERN => Some(Era::Modern),
-                LEGACY => Some(Era::Legacy),
+                MODERN => Some(PeerEra::Modern),
+                LEGACY => Some(PeerEra::Legacy),
                 _ => None,
             }
         }
@@ -217,8 +217,8 @@ mod determination {
             *self.observation = value;
             let verdict = if value.source == EraSource::Probed {
                 match value.era {
-                    Era::Modern => MODERN,
-                    Era::Legacy => LEGACY,
+                    PeerEra::Modern => MODERN,
+                    PeerEra::Legacy => LEGACY,
                 }
             } else {
                 NONE
@@ -266,7 +266,7 @@ impl EraCache {
     /// flight; any brief reader holds it too, and a request to a known-Modern
     /// peer then went out legacy-shaped (MIK-8218). A probe still reads
     /// `None`: every probe runs after a discard or before any verdict.
-    pub(crate) fn cached_now(&self) -> Option<Era> {
+    pub(crate) fn cached_now(&self) -> Option<PeerEra> {
         self.observation.load()
     }
 
@@ -277,7 +277,7 @@ impl EraCache {
     }
 
     /// The era, if one has been determined and not since invalidated.
-    pub async fn cached(&self) -> Option<Era> {
+    pub async fn cached(&self) -> Option<PeerEra> {
         let observation = *self.observation.lock().await;
         (observation.source == EraSource::Probed).then_some(observation.era)
     }
@@ -287,11 +287,11 @@ impl EraCache {
     /// `Legacy` once a probe ran and the peer stayed silent, and `None` while
     /// unresolved, before the first probe or after a discard whose re-probe
     /// is in flight (MIK-7899 CLASS.3).
-    pub(crate) async fn settled(&self) -> Option<Era> {
+    pub(crate) async fn settled(&self) -> Option<PeerEra> {
         let observation = *self.observation.lock().await;
         match (observation.source, observation.evidence) {
             (EraSource::Probed, _) => Some(observation.era),
-            (_, EraEvidence::NoAnswer) => Some(Era::Legacy),
+            (_, EraEvidence::NoAnswer) => Some(PeerEra::Legacy),
             _ => None,
         }
     }
@@ -344,7 +344,7 @@ impl EraCache {
     /// of its own. Deciding and clearing together makes that impossible rather than
     /// unlikely: the second caller finds nothing cached and takes the arm that decides
     /// nothing.
-    pub async fn discard_if(&self, contradicted: impl FnOnce(Era) -> bool) -> bool {
+    pub async fn discard_if(&self, contradicted: impl FnOnce(PeerEra) -> bool) -> bool {
         self.discard_if_serving(contradicted, |clear| {
             clear();
             true
@@ -358,7 +358,7 @@ impl EraCache {
     /// caller's own guard (MIK-7643).
     pub(crate) async fn discard_if_serving(
         &self,
-        contradicted: impl FnOnce(Era) -> bool,
+        contradicted: impl FnOnce(PeerEra) -> bool,
         serving: impl FnOnce(&mut dyn FnMut()) -> bool,
     ) -> bool {
         let mut observation = self.observation.lock().await;
@@ -378,7 +378,7 @@ impl EraCache {
     }
 
     /// Return the cached era, or determine it by probing on the start path.
-    pub async fn resolve_with<F, Fut>(&self, probe: F) -> Era
+    pub async fn resolve_with<F, Fut>(&self, probe: F) -> PeerEra
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = ProbeOutcome>,
@@ -396,7 +396,7 @@ impl EraCache {
     /// between, because a replacement takes the slot's lock, not this one. When
     /// `install` declines, nothing is written and `era_probe_discarded` says so
     /// (MIK-7217.ERA.1, ERA.2).
-    pub async fn reprobe_with<F, Fut, I>(&self, probe: F, install: I) -> Era
+    pub async fn reprobe_with<F, Fut, I>(&self, probe: F, install: I) -> PeerEra
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = ProbeOutcome>,
@@ -419,7 +419,7 @@ impl EraCache {
     /// [`EraSource::Assumed`], so a backend briefly unreachable is not pinned
     /// to the legacy path for the life of the process — while still stamping
     /// `probed_at` (when the clock reads; MIK-8202), because a probe did run.
-    async fn resolve_triggered<F, Fut>(&self, trigger: ProbeTrigger, probe: F) -> Era
+    async fn resolve_triggered<F, Fut>(&self, trigger: ProbeTrigger, probe: F) -> PeerEra
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = ProbeOutcome>,
@@ -444,7 +444,7 @@ impl EraCache {
     /// restart's own resolve then sees [`EraSource::Probed`] and keeps it. Held
     /// throughout, the stale probe can only run before the reset — where the reset
     /// discards it — or after the fresh verdict, where the early return above drops it.
-    pub async fn restart_with<F, Fut>(&self, probe: F) -> Era
+    pub async fn restart_with<F, Fut>(&self, probe: F) -> PeerEra
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = ProbeOutcome>,
@@ -460,7 +460,7 @@ impl EraCache {
     /// Returns the era this start's own probe decided, installed or not, and
     /// `Legacy` (the RFC fallback) when the slot was retired before any probe. Never
     /// the shared cache: another slot may have written it since (MIK-8056).
-    pub(crate) async fn restart_while_serving<F, Fut, S>(&self, probe: F, serving: S) -> Era
+    pub(crate) async fn restart_while_serving<F, Fut, S>(&self, probe: F, serving: S) -> PeerEra
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = ProbeOutcome>,
@@ -476,7 +476,7 @@ impl EraCache {
                 discarded = true;
             }
         }) {
-            return Era::Legacy;
+            return PeerEra::Legacy;
         }
         if discarded {
             tracing::info!(
@@ -501,7 +501,7 @@ impl EraCache {
         trigger: ProbeTrigger,
         probe: F,
         install: I,
-    ) -> Era
+    ) -> PeerEra
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = ProbeOutcome>,
@@ -619,7 +619,7 @@ pub enum ProbeTrigger {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EraObservation {
     /// The era to act on now.
-    pub era: Era,
+    pub era: PeerEra,
     /// Whether [`Self::era`] was established or defaulted.
     pub source: EraSource,
     /// What produced [`Self::era`].
@@ -668,7 +668,7 @@ impl EraObservation {
     #[must_use]
     pub const fn never_probed() -> Self {
         Self {
-            era: Era::Legacy,
+            era: PeerEra::Legacy,
             source: EraSource::Assumed,
             evidence: EraEvidence::NeverProbed,
             trigger: None,
@@ -693,11 +693,11 @@ impl EraObservation {
         let era = classify(outcome);
         let (source, evidence) = match outcome {
             ProbeOutcome::NoAnswer => (EraSource::Assumed, EraEvidence::NoAnswer),
-            ProbeOutcome::Result(_) if era == Era::Modern => {
+            ProbeOutcome::Result(_) if era == PeerEra::Modern => {
                 (EraSource::Probed, EraEvidence::DiscoverModern)
             }
             ProbeOutcome::Result(_) => (EraSource::Probed, EraEvidence::DiscoverNotModern),
-            ProbeOutcome::Error(_) if era == Era::Modern => {
+            ProbeOutcome::Error(_) if era == PeerEra::Modern => {
                 (EraSource::Probed, EraEvidence::ModernErrorCode)
             }
             ProbeOutcome::Error(code) if *code == METHOD_NOT_FOUND_CODE => {

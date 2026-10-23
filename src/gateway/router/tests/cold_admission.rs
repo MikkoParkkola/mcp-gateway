@@ -40,7 +40,7 @@ impl crate::transport::Transport for CountingLister {
 
 #[tokio::test]
 async fn admission_reads_a_cold_cache_and_never_fills_it() {
-    use crate::gateway::oauth::{AgentIdentity, Scope};
+    use crate::gateway::oauth::{OAuthAgentIdentity, Scope};
 
     let (mut state, _store) = test_router_app_state_with_agent_auth_enabled().await;
     let wire = Arc::new(CountingLister(AtomicUsize::new(0)));
@@ -57,7 +57,7 @@ async fn admission_reads_a_cold_cache_and_never_fills_it() {
         let state_mut = Arc::get_mut(&mut state).expect("sole owner during setup");
         assert!(state_mut.backends.register(Arc::clone(&backend)));
     }
-    let agent = AgentIdentity {
+    let agent = OAuthAgentIdentity {
         quota_principal: None,
         client_id: "agent-1".to_string(),
         agent_name: "runner".to_string(),

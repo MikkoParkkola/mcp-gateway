@@ -153,7 +153,7 @@ pub(super) use cf::{CfVerdict, cf_verdict};
 #[derive(Clone, Default)]
 pub(crate) struct ViewSubject {
     pub(crate) grant_subject: Option<crate::identity_grants::GrantSubject>,
-    pub(crate) oauth_agent: Option<crate::gateway::oauth::AgentIdentity>,
+    pub(crate) oauth_agent: Option<crate::gateway::oauth::OAuthAgentIdentity>,
     pub(crate) cert: Option<crate::mtls::CertIdentity>,
     /// The URL asked for Code Mode (`?codemode=search_and_execute`).
     pub(crate) code_mode_url: bool,
@@ -350,7 +350,7 @@ pub(crate) struct ResolvedCaller {
     /// The agent the credential validates as now, with its current registry
     /// scopes: the digest judges the view under it, not the attach-time
     /// snapshot (MIK-8377).
-    pub(crate) agent: Option<crate::gateway::oauth::AgentIdentity>,
+    pub(crate) agent: Option<crate::gateway::oauth::OAuthAgentIdentity>,
 }
 
 /// Decides what a stream's caller is shown, for the per-stream

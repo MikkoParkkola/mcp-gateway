@@ -5,11 +5,11 @@
 //! `protocol_revision_telemetry::durable::tests` and `window_decide::tests`.
 
 use mcp_gateway::protocol_revision_telemetry::{
-    ATTRIBUTION_FLOOR, CacheScope, ListFilters, META_CLIENT_INFO, META_PROTOCOL_VERSION,
+    ATTRIBUTION_FLOOR, ListFilters, META_CLIENT_INFO, META_PROTOCOL_VERSION,
     MIN_MEASUREMENT_WINDOW, OTHER_REVISION, RETIRE_BELOW_SHARE, Registry, RetirementBlocked,
-    Transport, attribution_rate, cache_scope_decision, client_identity, distribution_table,
-    global_snapshot, observe_inbound_request, public_over_filtered, requested_revision,
-    retire_revisions,
+    ShadowCacheScope, Transport, attribution_rate, cache_scope_decision, client_identity,
+    distribution_table, global_snapshot, observe_inbound_request, public_over_filtered,
+    requested_revision, retire_revisions,
 };
 use serde_json::json;
 
@@ -153,10 +153,10 @@ fn mcp728_u1_3_tools_list_shadows_filters_and_would_be_cache_scope() {
     };
     let shadow = reg.shadow_tools_list(filtered);
     assert!(shadow.principal && shadow.session);
-    assert_eq!(shadow.would_emit_cache_scope, CacheScope::Private);
-    assert_eq!(cache_scope_decision(filtered), CacheScope::Private);
-    assert!(public_over_filtered(filtered, CacheScope::Public));
-    assert!(!public_over_filtered(filtered, CacheScope::Private));
+    assert_eq!(shadow.would_emit_cache_scope, ShadowCacheScope::Private);
+    assert_eq!(cache_scope_decision(filtered), ShadowCacheScope::Private);
+    assert!(public_over_filtered(filtered, ShadowCacheScope::Public));
+    assert!(!public_over_filtered(filtered, ShadowCacheScope::Private));
 }
 
 #[test]
@@ -193,7 +193,7 @@ fn mcp728_u1_5_public_over_filtered_is_detectable() {
             session: false,
             request: false,
         },
-        CacheScope::Public,
+        ShadowCacheScope::Public,
     );
     assert!(hazard);
     let mut reg = Registry::new();

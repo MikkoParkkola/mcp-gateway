@@ -22,7 +22,7 @@ async fn run_step_with_identity(
     state: &Arc<AppState>,
     client: &AuthenticatedClient,
     cert_identity: Option<&crate::mtls::CertIdentity>,
-    oauth_agent_identity: Option<&crate::gateway::oauth::AgentIdentity>,
+    oauth_agent_identity: Option<&crate::gateway::oauth::OAuthAgentIdentity>,
     server: &str,
     tool: &str,
 ) -> JsonRpcResponse {
@@ -550,7 +550,7 @@ async fn authz_10_certificate_policy_refuses_and_permits_a_playbook_step() {
 /// what proves it arrives.
 #[tokio::test]
 async fn authz_11_agent_scope_refuses_and_permits_a_playbook_step() {
-    use crate::gateway::oauth::{AgentIdentity, Scope};
+    use crate::gateway::oauth::{OAuthAgentIdentity, Scope};
 
     let (mut state, _store) = test_router_app_state_with_agent_auth_enabled().await;
     {
@@ -562,7 +562,7 @@ async fn authz_11_agent_scope_refuses_and_permits_a_playbook_step() {
     let client = scoped_client("scoped", vec!["*".into()], None);
 
     // Scoped to one tool on one backend.
-    let agent = AgentIdentity {
+    let agent = OAuthAgentIdentity {
         quota_principal: None,
         client_id: "agent-1".to_string(),
         agent_name: "runner".to_string(),

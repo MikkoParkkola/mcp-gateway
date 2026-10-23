@@ -301,3 +301,22 @@ async fn identity_cli_refuses_group_writable_grants() {
         "not overwritten"
     );
 }
+
+/// MIK-8667 (lead ruling): a cut table cell fits its column. It used to keep
+/// width-1 characters and add `...`, two wider than the column, so a cut row
+/// pushed every later column right. One golden row at the table's widths.
+#[test]
+fn a_cut_identity_cell_fits_its_column() {
+    let long = "abcdefghijklmnopqrstuvwxyz0123456789";
+    let row = format!(
+        "{:<28}|{:<24}|{:<16}|{:<24}|",
+        truncate(long, 28),
+        truncate(long, 24),
+        truncate("short", 16),
+        truncate("éééééééééééééééééééééééééé", 24),
+    );
+    assert_eq!(
+        row,
+        "abcdefghijklmnopqrstuvwxy...|abcdefghijklmnopqrstu...|short           |ééééééééééééééééééééé...|"
+    );
+}

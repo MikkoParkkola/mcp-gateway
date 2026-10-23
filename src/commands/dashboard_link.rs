@@ -9,20 +9,10 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use mcp_gateway::cli::dashboard_link::DashboardLinkTls;
+
 /// The environment variable the admin credential is read from.
 pub(crate) const TOKEN_ENV: &str = "MCP_GATEWAY_TOKEN";
-
-/// The TLS material the operator named on the command line (or in the
-/// matching environment variables).
-#[derive(Debug, Default, Clone)]
-pub struct LinkTlsFlags {
-    /// PEM client certificate presented to the listener.
-    pub client_cert: Option<PathBuf>,
-    /// PEM private key for `client_cert`.
-    pub client_key: Option<PathBuf>,
-    /// PEM CA the server certificate must chain to.
-    pub ca_cert: Option<PathBuf>,
-}
 
 /// What the link request trusts and presents.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -64,7 +54,7 @@ pub(crate) fn read_token(lookup: impl Fn(&str) -> Option<String>) -> Result<Stri
 /// The config load failure, when no `--url` was given.
 pub fn dashboard_link_base(
     url: Option<String>,
-    flags: LinkTlsFlags,
+    flags: DashboardLinkTls,
     load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
     port_override: Option<u16>,
     host_override: Option<&str>,
@@ -276,12 +266,7 @@ pub async fn run_dashboard_link_args(
     port_override: Option<u16>,
     host_override: Option<&str>,
 ) -> ExitCode {
-    let flags = LinkTlsFlags {
-        client_cert: args.tls.client_cert,
-        client_key: args.tls.client_key,
-        ca_cert: args.tls.ca_cert,
-    };
-    match dashboard_link_base(args.url, flags, load, port_override, host_override) {
+    match dashboard_link_base(args.url, args.tls, load, port_override, host_override) {
         Ok((base, tls)) => run_dashboard_link_command(&base, &tls).await,
         Err(message) => {
             eprintln!("dashboard-link: {message}");
@@ -299,12 +284,13 @@ pub async fn run_events_command(
     host_override: Option<&str>,
 ) -> ExitCode {
     let mcp_gateway::cli::events::EventsCommand::DeadLetters(args) = args.command;
-    let flags = LinkTlsFlags {
-        client_cert: args.tls.client_cert.clone(),
-        client_key: args.tls.client_key.clone(),
-        ca_cert: args.tls.ca_cert.clone(),
-    };
-    match dashboard_link_base(args.url.clone(), flags, load, port_override, host_override) {
+    match dashboard_link_base(
+        args.url.clone(),
+        args.tls.clone(),
+        load,
+        port_override,
+        host_override,
+    ) {
         Ok((base, tls)) => run_dead_letters_command(&base, &tls, &args).await,
         Err(message) => {
             eprintln!("events dead-letters: {message}");
@@ -422,10 +408,10 @@ pub async fn run_dashboard_link_command(base: &str, tls: &LinkTls) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{LinkTls, LinkTlsFlags, TOKEN_ENV, read_token};
+    use super::{DashboardLinkTls, LinkTls, TOKEN_ENV, read_token};
 
-    fn no_flags() -> LinkTlsFlags {
-        LinkTlsFlags::default()
+    fn no_flags() -> DashboardLinkTls {
+        DashboardLinkTls::default()
     }
 
     /// No TLS material: the pre-#1832 request.

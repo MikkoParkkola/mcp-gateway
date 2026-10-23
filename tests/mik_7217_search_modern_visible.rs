@@ -38,7 +38,7 @@ use mcp_gateway::gateway::test_helpers::{
     AppState, MetaMcp, StoreLimits, auth_state, create_router, open_runtime,
 };
 use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
-use mcp_gateway::protocol::era::Era;
+use mcp_gateway::protocol::era::PeerEra;
 use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -257,7 +257,7 @@ async fn a_2026_speaking_backend_is_visible_to_gateway_search_and_leaves_the_bre
         .expect("a modern peer starts");
     let tools = backend.get_tools().await.expect("tools are cached");
 
-    assert_eq!(backend.cached_era().await, Some(Era::Modern), "era");
+    assert_eq!(backend.cached_era().await, Some(PeerEra::Modern), "era");
     assert_eq!(tools.len(), 1, "the peer's one tool is cached");
     assert_eq!(backend.circuit_breaker_stats().state, CircuitState::Closed);
     let (state, _store_dir) = state(backends).await;

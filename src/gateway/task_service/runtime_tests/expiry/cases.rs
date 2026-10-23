@@ -293,11 +293,11 @@ async fn guard_shutdown_joins_an_in_flight_sweep_before_the_store_closes() {
     .await;
     // Armed AFTER the seed, so the seam belongs to the deletion and not to a
     // creation's own directory sync.
-    let (entered, release, hook) = paused_at(CommitStage::DirectorySync);
+    let (entered, release, hook) = paused_at(StoreWriteStage::DirectorySync);
     service.store.set_hook(Some(hook)).await;
 
     let guard = executor.start_expiry(TICK).expect("the sweep starts");
-    wait_for(entered, "CommitStage::DirectorySync").await;
+    wait_for(entered, "StoreWriteStage::DirectorySync").await;
 
     // Inside the transaction: the record is still the caller's committed one.
     let parked = service.get(OWNER, &row.id);

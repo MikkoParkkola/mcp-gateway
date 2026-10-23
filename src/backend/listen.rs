@@ -13,7 +13,7 @@ use futures::future::{BoxFuture, Shared};
 
 use super::Backend;
 use super::pool::{ActivityGuard, PoolKey};
-use crate::protocol::era::Era;
+use crate::protocol::era::PeerEra;
 use crate::transport::upstream_tap::UpstreamListen;
 use crate::{Error, Result};
 
@@ -52,7 +52,7 @@ pub(crate) struct ListenLease(#[allow(dead_code, reason = "held for its Drop")] 
 /// count a restart waits on; the listener upgrades it per call only.
 pub(crate) struct ListenTarget {
     pub handle: Weak<dyn UpstreamListen>,
-    pub era: Era,
+    pub era: PeerEra,
 }
 
 /// The admitted start a subscribe runs to learn the HTTP transport, shared

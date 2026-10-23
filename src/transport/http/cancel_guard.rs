@@ -13,7 +13,7 @@ use reqwest::header::HeaderMap;
 use tracing::debug;
 
 use super::HTTP_TARGET;
-use crate::protocol::era::Era;
+use crate::protocol::era::PeerEra;
 use crate::protocol::{JsonRpcNotification, JsonRpcRequest};
 use crate::transport::write_claim::cancelled_params;
 
@@ -41,9 +41,9 @@ impl CancelOnDrop {
         url: &str,
         headers: &HeaderMap,
         request: &JsonRpcRequest,
-        era: Option<Era>,
+        era: Option<PeerEra>,
     ) -> Self {
-        if era == Some(Era::Modern) || request.method == "initialize" {
+        if era == Some(PeerEra::Modern) || request.method == "initialize" {
             return Self(None);
         }
         Self(Some(CancelPost {

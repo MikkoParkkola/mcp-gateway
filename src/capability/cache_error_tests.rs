@@ -139,3 +139,20 @@ async fn a_capability_success_is_still_cached() {
     }
     assert_eq!(hits.load(Ordering::SeqCst), 1, "the second call is a hit");
 }
+
+/// MIK-8661 T2 (PR4.3): a REST payload is the upstream's own JSON, so a
+/// `resultType` in it is the upstream's field, not MCP's. The capability cache
+/// stores it; only the Meta-MCP cache refuses a non-final MCP result.
+#[tokio::test]
+async fn a_capability_payload_carrying_result_type_is_still_cached() {
+    let body = json!({"resultType": "input_required", "note": "rest field"});
+    let (executor, capability, hits) = scripted_executor(body.clone()).await;
+    for _ in 0..2 {
+        let delivered = executor
+            .execute_with_context(&capability, json!({}), cacheable_context())
+            .await
+            .unwrap();
+        assert_eq!(delivered, body, "the second call is served from the cache");
+    }
+    assert_eq!(hits.load(Ordering::SeqCst), 1, "the second call is a hit");
+}

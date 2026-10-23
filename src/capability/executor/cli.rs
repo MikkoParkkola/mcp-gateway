@@ -714,6 +714,7 @@ pub(crate) fn redact(text: &str, secrets: &[String], caller: &[String]) -> Strin
     if text.len() <= EXCERPT_BYTES {
         return text.to_owned();
     }
+    // Not `crate::truncate`: the excerpt keeps the tail (MIK-8667).
     let mut cut = text.len() - EXCERPT_BYTES;
     // Spans are merged, so at most one contains the cut.
     #[cfg(feature = "firewall")]

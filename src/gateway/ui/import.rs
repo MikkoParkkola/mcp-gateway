@@ -26,7 +26,6 @@ use super::super::router::AppState;
 use super::errors::{admin_auth_required, flat_error};
 use super::is_admin;
 use crate::capability::{GeneratedCapability, OpenApiConverter};
-use crate::security::ssrf::{PinningResolver, RedirectDecision, SystemResolver, redirect_decision};
 use crate::security::validate_url_not_ssrf;
 
 // ── Request / response types ────────────────────────────────────────
@@ -227,6 +226,14 @@ async fn resolve_spec(
     }
 }
 
+/// Message for a failed spec fetch from `url`. (MIK-8660 seam)
+fn fetch_error_message(url: &str, e: &reqwest::Error) -> String {
+    crate::security::http_diagnostics::ssrf_refusal(e).map_or_else(
+        || format!("Failed to fetch spec from {url}: {e}"),
+        |refused| format!("Failed to fetch spec from {url}: {refused}"),
+    )
+}
+
 /// Fetch an `OpenAPI` spec from a remote URL.
 async fn fetch_spec(url: &str, ssrf_protection: bool) -> Result<String, (StatusCode, String)> {
     // Validate URL is well-formed.
@@ -260,41 +267,46 @@ async fn fetch_spec(url: &str, ssrf_protection: bool) -> Result<String, (StatusC
     // internal one. When SSRF protection is enabled we therefore also pin DNS
     // resolution (PinningResolver validates every resolved IP, closing the
     // rebinding TOCTOU window — MIK-4019) and re-validate every redirect hop,
-    // stopping at >=5 hops. This mirrors the canonical fetch path in
+    // following at most MAX_REDIRECT_HOPS; with protection off the same budget
+    // applies without the SSRF check. This mirrors the canonical fetch path in
     // `capability::executor::client::build` and `openapi::convert_url`. The
     // guards stay gated on `ssrf_protection` so an operator may deliberately
     // disable them for trusted internal specs.
     // Never an environment proxy: it would resolve the name instead of the
     // pin below (#1881).
-    let mut builder = reqwest::Client::builder()
-        .no_proxy()
+    let policy = if ssrf_protection {
+        crate::security::ssrf::ssrf_redirect_policy()
+    } else {
+        reqwest::redirect::Policy::custom(|attempt| {
+            if crate::security::ssrf::hop_budget_spent(attempt.previous().len()) {
+                attempt.stop()
+            } else {
+                attempt.follow()
+            }
+        })
+    };
+    let base = if ssrf_protection {
+        crate::security::ssrf::pinned_client_builder()
+    } else {
+        reqwest::Client::builder().no_proxy()
+    };
+    let client = base
+        .redirect(policy)
         .timeout(std::time::Duration::from_secs(30))
-        .user_agent("mcp-gateway/openapi-importer");
-    if ssrf_protection {
-        builder = builder
-            .dns_resolver(PinningResolver::new(SystemResolver))
-            .redirect(reqwest::redirect::Policy::custom(
-                |attempt| match redirect_decision(attempt.previous().len(), attempt.url().as_str())
-                {
-                    RedirectDecision::Stop => attempt.stop(),
-                    RedirectDecision::Block(msg) => attempt.error(msg),
-                    RedirectDecision::Follow => attempt.follow(),
-                },
-            ));
-    }
-    let client = builder.build().map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to build HTTP client: {e}"),
-        )
-    })?;
+        .user_agent("mcp-gateway/openapi-importer")
+        .build()
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to build HTTP client: {e}"),
+            )
+        })?;
 
-    let resp = client.get(url).send().await.map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            format!("Failed to fetch spec from {url}: {e}"),
-        )
-    })?;
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, fetch_error_message(url, &e)))?;
 
     if !resp.status().is_success() {
         return Err((
@@ -668,3 +680,7 @@ paths:
         );
     }
 }
+
+#[cfg(test)]
+#[path = "import_redirect_tests.rs"]
+mod redirect_tests;
