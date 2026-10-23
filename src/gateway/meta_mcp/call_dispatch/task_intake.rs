@@ -8,6 +8,7 @@ use super::{
     Arc, ChainSource, JsonRpcResponse, MetaMcp, MetaMcpCallerContext, RequestId, ResultShape,
     Value, error_response_preserving_status, invoke, response_security,
 };
+use crate::error::rpc_codes::INTERNAL_ERROR;
 
 impl MetaMcp {
     /// A task-augmented call whose intake verdict met a busy custody
@@ -146,7 +147,7 @@ impl MetaMcp {
             Err(crate::gateway::task_service::ServiceError::AuditUnavailable) => {
                 error_response_preserving_status(id, &crate::Error::AuditUnavailable)
             }
-            Err(_) => JsonRpcResponse::error(Some(id), -32603, "task store unavailable"),
+            Err(_) => JsonRpcResponse::error(Some(id), INTERNAL_ERROR, "task store unavailable"),
         }
     }
 

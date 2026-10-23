@@ -18,7 +18,7 @@
 use hkdf::Hkdf;
 use hmac::{Hmac, KeyInit as _, Mac as _};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 
 use super::super::{AccountError, AccountKey, StoreConfig};
 use crate::personal_accounts::config::RECORDS_PER_ACTIVE;
@@ -379,7 +379,7 @@ fn principal_digest(owner: &AccountKey) -> Result<String, AccountError> {
 fn principal_digest_of(authority: &str, subject: &str) -> Result<String, AccountError> {
     let fields = [authority, subject];
     let encoded = super::encode_fields(PRINCIPAL_DOMAIN, &fields)?;
-    Ok(hex::encode(Sha256::digest(encoded)))
+    Ok(crate::hashing::sha256_hex(&encoded))
 }
 
 /// 32 random bytes, base64url without padding (43 characters).
@@ -391,4 +391,17 @@ fn random_secret() -> Result<String, AccountError> {
         .fill(&mut bytes)
         .map_err(|_| AccountError::StorageUnavailable)?;
     Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+}
+
+#[cfg(test)]
+mod digest_tests {
+    /// MIK-8668 X-SHA golden, computed independently (Python hashlib over the
+    /// domain and the u32-big-endian length-prefixed fields).
+    #[test]
+    fn the_principal_digest_is_the_hex_sha256_of_the_encoded_pair() {
+        assert_eq!(
+            super::principal_digest_of("auth", "subj").as_deref(),
+            Ok("b1aad82a8e9991a920e52eb687c7bfa41f28810e39348232a766269fc7b0619c")
+        );
+    }
 }

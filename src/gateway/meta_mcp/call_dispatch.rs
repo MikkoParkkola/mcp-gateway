@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `MetaMcp` `tools/call` routing and the dispatch below the gate.
 
+use crate::error::rpc_codes::{INVALID_REQUEST, METHOD_NOT_FOUND};
 use std::borrow::Cow;
 use std::ops::ControlFlow;
 
@@ -231,7 +232,7 @@ impl MetaMcp {
             // a hidden tool name matches itself and would name it.
             return error_response_preserving_status(
                 id,
-                &crate::Error::json_rpc(-32601, format!("Unknown tool: {tool_name}")),
+                &crate::Error::json_rpc(METHOD_NOT_FOUND, format!("Unknown tool: {tool_name}")),
             );
         }
         // Answers without the requestState this gateway issued answer nothing
@@ -260,7 +261,7 @@ impl MetaMcp {
         if !CallerStanding::of_admin_flag(caller.is_admin).permits(tool_name) {
             return JsonRpcResponse::error(
                 Some(id),
-                -32600,
+                INVALID_REQUEST,
                 format!("Tool '{tool_name}' requires admin access"),
             );
         }

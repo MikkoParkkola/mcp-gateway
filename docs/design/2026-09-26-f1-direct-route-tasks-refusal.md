@@ -51,7 +51,7 @@ if is_task_method(&method) {
   answer. The alternative, -32602 "no such task", is wrong for a task the caller owns on
   `/mcp`, and a caller could take it for a real store lookup. -32601 is also the code this
   path already uses for methods it does not serve (`era_removed_method`, `:444-449`, using
-  `METHOD_NOT_FOUND_CODE`). The message names `/mcp`, the route that serves tasks.
+  `rpc_codes::METHOD_NOT_FOUND`). The message names `/mcp`, the route that serves tasks.
 - **HTTP 200.** This route has no revision-aware status rule. Its existing `-32601`
   (the era refusal, `:444-449`) comes back on the forward path with 200, and this refusal
   answers the same way. `/mcp` differs: on a 2026-07-28 request it answers `-32601` with 404

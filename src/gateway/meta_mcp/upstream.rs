@@ -19,6 +19,7 @@
 //! asserted here. Eligibility is configured trust plus the peer's own
 //! declaration, and the ACTUAL reply shape decides whether a job became a task.
 
+use crate::error::rpc_codes::INTERNAL_ERROR;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -86,7 +87,7 @@ fn read_query(response: JsonRpcResponse) -> UpstreamAnswer {
             .map_or(UpstreamAnswer::Unavailable, UpstreamAnswer::Completed),
         Some("failed") => failed_answer(result.get("error")),
         Some("cancelled") => UpstreamAnswer::Substituted(JsonRpcError {
-            code: -32603,
+            code: INTERNAL_ERROR,
             message: "the upstream task was cancelled".into(),
             data: None,
         }),
@@ -106,7 +107,7 @@ fn failed_answer(error: Option<&Value>) -> UpstreamAnswer {
         .and_then(|error| error.get("code"))
         .and_then(Value::as_i64)
         .and_then(|code| i32::try_from(code).ok())
-        .unwrap_or(-32603);
+        .unwrap_or(INTERNAL_ERROR);
     match error
         .and_then(|error| error.get("message"))
         .and_then(Value::as_str)

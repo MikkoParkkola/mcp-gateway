@@ -471,8 +471,8 @@ impl Error {
             Self::JsonRpc { code, .. }
             | Self::JsonRpcRetryable { code, .. }
             | Self::Forbidden { code, .. } => *code,
-            Self::Json(_) => -32700, // Parse error
-            Self::Protocol(_) | Self::ResponseFirewallRefused => -32600, // Invalid request
+            Self::Json(_) => rpc_codes::PARSE_ERROR, // Parse error
+            Self::Protocol(_) | Self::ResponseFirewallRefused => rpc_codes::INVALID_REQUEST, // Invalid request
             Self::BackendNotFound(_) | Self::ToolNotFound(_) => -32001,
             Self::AuditUnavailable => -32005,
             Self::CliCredentialRefused { .. } => {
@@ -505,7 +505,7 @@ impl Error {
             {
                 -32000
             }
-            _ => -32603, // Internal error
+            _ => rpc_codes::INTERNAL_ERROR, // Internal error
         }
     }
 }
@@ -594,6 +594,26 @@ mod rpc_code_tests {
             }
             .to_rpc_code(),
             -32601,
+        );
+    }
+
+    /// MIK-8668: the five standard JSON-RPC 2.0 codes keep their spec values
+    /// (written as literals here on purpose; every site migrated to these
+    /// names relies on them).
+    #[test]
+    fn the_standard_codes_keep_their_spec_values() {
+        use super::rpc_codes::{
+            INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR,
+        };
+        assert_eq!(
+            [
+                PARSE_ERROR,
+                INVALID_REQUEST,
+                METHOD_NOT_FOUND,
+                INVALID_PARAMS,
+                INTERNAL_ERROR
+            ],
+            [-32700, -32600, -32601, -32602, -32603]
         );
     }
 }

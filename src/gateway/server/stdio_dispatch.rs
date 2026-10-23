@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Stdio request dispatch: the relay, tools/call, signing, parsing and the caller context (moved from `server/mod.rs`, MIK-8144).
 
+use crate::error::rpc_codes::{INVALID_PARAMS, METHOD_NOT_FOUND};
 use std::sync::Arc;
 
 use tracing::debug;
@@ -166,7 +167,7 @@ impl Gateway {
                     other => {
                         debug!(method = %other, "stdio: unknown method");
                         let message = format!("Method not found: {other}");
-                        JsonRpcResponse::error(Some(id), -32601, message)
+                        JsonRpcResponse::error(Some(id), METHOD_NOT_FOUND, message)
                     }
                 },
                 None,
@@ -532,7 +533,7 @@ impl Gateway {
             ) {
                 break 'tool_call JsonRpcResponse::error(
                     Some(id),
-                    -32602,
+                    INVALID_PARAMS,
                     "Malformed protocol metadata",
                 );
             }
@@ -544,7 +545,7 @@ impl Gateway {
             if retry.is_malformed() {
                 break 'tool_call JsonRpcResponse::error(
                     Some(id),
-                    -32602,
+                    INVALID_PARAMS,
                     format!("malformed request fields: {}", retry.malformed.join(", ")),
                 );
             }

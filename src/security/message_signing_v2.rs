@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! RFC 8785 response MAC binding for the final JSON-RPC delivery envelope.
 
+use crate::error::rpc_codes::INTERNAL_ERROR;
 use std::borrow::Cow;
 
 use serde::Serialize;
@@ -119,5 +120,5 @@ pub(crate) fn has_interoperable_numbers(value: &Value) -> bool {
 fn signing_error(message: &'static str) -> Error {
     // The signing boundary counts this failure once; the common finalizer
     // replaces the internal diagnostic with its fixed safe wire refusal.
-    Error::json_rpc(-32603, message)
+    Error::json_rpc(INTERNAL_ERROR, message)
 }
