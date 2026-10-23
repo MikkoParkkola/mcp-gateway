@@ -126,6 +126,10 @@ pub(crate) enum Invisible {
     /// `_signature` is no tenant-attribution key, so the judge reads nothing
     /// signing adds.
     JudgeReadsNothingSigningAdds,
+    /// A replay's stored bytes were clamped when first delivered, so its
+    /// clamp changes nothing before the fresh link it mints (the stored link
+    /// is stripped: "a replay mints its own", `meta_mcp/admission.rs:147`).
+    StoredBytesAlreadyClamped,
 }
 
 /// Why a cell cannot occur.
@@ -290,7 +294,7 @@ pub(crate) const fn expect(
 ) -> RespExpect {
     use Invisible::{
         JudgeOnlyReplaces, JudgeReadsNothingSigningAdds, SealWritesOnlyExcludedMeta,
-        StampIgnoresShapedMembers,
+        StampIgnoresShapedMembers, StoredBytesAlreadyClamped,
     };
     use RespCase::{CacheHit, Fresh, IdempotentReplay, Task as TaskCase};
     use RespExpect::{ExpectedGap, NotApplicable, OrderInvisibleByOutcome, Ordered};
@@ -314,13 +318,17 @@ pub(crate) const fn expect(
         (Direct, CacheHit, _, _) => NotApplicable(RespNa::NoCacheOnDirect),
         (_, _, Era::Legacy, ShapeSeal | StampShape) => NotApplicable(RespNa::NoModernShapeOnLegacy),
         // A replay runs the tail on the stored, already sealed bytes: no mint,
-        // so nothing is sealed or linked anew (lead ruling, MIK-8689 phase C).
+        // so nothing is sealed anew; it does mint a fresh link, after a clamp
+        // that changes nothing (lead rulings, MIK-8689 phase C and R3).
         (
             Mcp | Stdio | Direct,
             IdempotentReplay,
             _,
-            ShapeSeal | FirewallSeal | ClampSeal | SealSign | ClampLink,
+            ShapeSeal | FirewallSeal | ClampSeal | SealSign,
         ) => NotApplicable(RespNa::ReplayReservesTheStoredDelivery),
+        (Mcp | Stdio | Direct, IdempotentReplay, _, ClampLink) => {
+            OrderInvisibleByOutcome(StoredBytesAlreadyClamped)
+        }
         (Direct, IdempotentReplay, _, StampSeal) => ExpectedGap(RespTicket::Mik8705),
         (Mcp | Stdio, IdempotentReplay, _, StampSeal) => {
             NotApplicable(RespNa::ReplayReservesTheStoredDelivery)
