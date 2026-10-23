@@ -28,6 +28,11 @@ fn only_an_api_key_has_a_cost_key_and_every_caller_keeps_its_audit_account() {
         let caller = MetaMcpCallerContext {
             api_key_name: Some(name),
             credential_kind: kind,
+            authentication: if kind == CredentialKind::ApiKey {
+                crate::gateway::meta_mcp::Authentication::Authenticated
+            } else {
+                crate::gateway::meta_mcp::Authentication::Anonymous
+            },
             ..anonymous_caller()
         };
         assert_eq!(caller.cost_key(), cost, "{kind:?}: cost key");

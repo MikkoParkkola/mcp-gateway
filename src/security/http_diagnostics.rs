@@ -30,6 +30,34 @@ pub fn request_error_category(error: &reqwest::Error) -> &'static str {
     }
 }
 
+/// Whether a reqwest error's source chain holds a rustls failure.
+///
+/// reqwest/hyper wrap a rejected certificate as `io::Error(Other)` holding
+/// `io::Error(InvalidData)` holding `rustls::Error`, and `io::Error::source()`
+/// returns the inner error's source, skipping the middle layer, so one
+/// `get_ref` level is not enough.
+pub(crate) fn is_tls_failure(error: &reqwest::Error) -> bool {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(current) = source {
+        if current.downcast_ref::<rustls::Error>().is_some() {
+            return true;
+        }
+        if let Some(io_error) = current.downcast_ref::<std::io::Error>() {
+            let mut inner = io_error.get_ref();
+            while let Some(next) = inner {
+                if next.downcast_ref::<rustls::Error>().is_some() {
+                    return true;
+                }
+                inner = next
+                    .downcast_ref::<std::io::Error>()
+                    .and_then(std::io::Error::get_ref);
+            }
+        }
+        source = current.source();
+    }
+    false
+}
+
 /// Context + category, never `reqwest::Error` Display (that embeds the URL).
 #[must_use]
 pub fn safe_reqwest_message(context: &str, error: &reqwest::Error) -> String {
@@ -228,6 +256,31 @@ pub fn summarize_stdio_command(command: &str) -> String {
 #[must_use]
 pub fn diagnostic_url(raw: &str) -> String {
     redact_url_for_diagnostics(raw)
+}
+
+/// How a CLI message names where a redirect pointed: the response's `Location` resolved against the request URL,
+/// shown as scheme, host and port only ([`crate::security::sanitize::redact_url_for_diagnostics`]). A path, a
+/// query or userinfo can each be the secret (a webhook `/hooks/<token>`, a signed link), and doctor's `--json`
+/// report is made for pasting into bug reports, so none of them is shown; the message says how to see the rest.
+///
+/// Public only for the binary's redirect messages (stats, doctor, skills); not a stable API.
+#[doc(hidden)]
+#[must_use]
+pub fn redirect_target_phrase(response: &reqwest::Response) -> String {
+    let Some(raw) = response.headers().get(reqwest::header::LOCATION) else {
+        return "no Location".to_string();
+    };
+    // UTF-8, as reqwest decodes a Location it follows (not `to_str`, which is ASCII-only).
+    let Ok(location) = std::str::from_utf8(raw.as_bytes()) else {
+        return "an unreadable Location".to_string();
+    };
+    match response.url().join(location) {
+        Ok(resolved) => format!(
+            "{} (path hidden; run `curl -I` on the URL you gave to see the full Location)",
+            redact_url_for_diagnostics(resolved.as_str())
+        ),
+        Err(_) => "an unreadable Location".to_string(),
+    }
 }
 
 #[cfg(test)]

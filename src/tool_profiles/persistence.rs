@@ -32,31 +32,9 @@ pub struct PersistedUserProfile {
     /// when undated (MIK-8202 P4b).
     #[serde(default)]
     pub created_at: Option<u64>,
-    /// Per-tool usage records.
-    pub tools: Vec<PersistedToolUsage>,
-}
-
-/// Usage data for one tool belonging to a user.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PersistedToolUsage {
-    /// Tool name.
-    pub tool_name: String,
-    /// Number of invocations.
-    pub call_count: u64,
-    /// Unix timestamp (seconds) of the last invocation, null when undated
-    /// (MIK-8202 P4b).
-    #[serde(default)]
-    pub last_used_secs: Option<u64>,
-}
-
-impl From<ToolSuggestion> for PersistedToolUsage {
-    fn from(s: ToolSuggestion) -> Self {
-        Self {
-            tool_name: s.tool_name,
-            call_count: s.call_count,
-            last_used_secs: s.last_used_secs,
-        }
-    }
+    /// Per-tool usage records: the same row the live profile reports, so the
+    /// file holds `tool_name`, `call_count` and `last_used_secs` (MIK-8667).
+    pub tools: Vec<ToolSuggestion>,
 }
 
 // ── I/O ───────────────────────────────────────────────────────────────────────
@@ -67,6 +45,7 @@ impl From<ToolSuggestion> for PersistedToolUsage {
 ///
 /// Returns an error if the directory cannot be created or the file
 /// cannot be written.
+// In-place on purpose: keeps the inode, owner, group and ACLs; atomic replace is MIK-8700.
 pub fn save(path: &Path, profiles: &PersistedProfiles) -> crate::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -121,12 +100,12 @@ mod tests {
                 user_id: "alice".to_string(),
                 created_at: Some(1_699_000_000),
                 tools: vec![
-                    PersistedToolUsage {
+                    ToolSuggestion {
                         tool_name: "search".to_string(),
                         call_count: 42,
                         last_used_secs: Some(1_700_000_000),
                     },
-                    PersistedToolUsage {
+                    ToolSuggestion {
                         tool_name: "summarise".to_string(),
                         call_count: 7,
                         last_used_secs: Some(1_699_900_000),
@@ -209,21 +188,32 @@ mod tests {
         assert!(path.exists());
     }
 
+    /// DUPC-10.PR10.4: a profiles file this build writes round-trips to the
+    /// same bytes. One user only: the profiles live in a map.
     #[test]
-    fn persisted_tool_usage_converts_from_suggestion() {
-        // GIVEN: a ToolSuggestion
-        let suggestion = crate::tool_profiles::ToolSuggestion {
-            tool_name: "read_file".to_string(),
-            call_count: 5,
-            last_used_secs: Some(1_700_000_000),
-        };
+    fn a_saved_profiles_file_is_byte_identical() {
+        const ONE_USER: &str = "{\n  \"saved_at\": 7,\n  \"profiles\": {\n    \"u\": {\n      \"user_id\": \"u\",\n      \"created_at\": 5,\n      \"tools\": [\n        {\n          \"tool_name\": \"search\",\n          \"call_count\": 2,\n          \"last_used_secs\": 9\n        }\n      ]\n    }\n  }\n}";
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("profiles.json");
+        std::fs::write(&path, ONE_USER).unwrap();
+        save(&path, &load(&path).unwrap()).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), ONE_USER);
+    }
 
-        // WHEN: converted
-        let usage: PersistedToolUsage = suggestion.into();
-
-        // THEN: all fields are preserved
-        assert_eq!(usage.tool_name, "read_file");
-        assert_eq!(usage.call_count, 5);
-        assert_eq!(usage.last_used_secs, Some(1_700_000_000));
+    /// DUPC-10.PR10.4: a tool row written before the timestamp existed loads,
+    /// with no timestamp.
+    #[test]
+    fn a_tool_row_without_last_used_secs_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("profiles.json");
+        std::fs::write(
+            &path,
+            r#"{"saved_at":1,"profiles":{"u":{"user_id":"u","tools":[{"tool_name":"t","call_count":3}]}}}"#,
+        )
+        .unwrap();
+        let loaded = load(&path).unwrap();
+        let tool = &loaded.profiles["u"].tools[0];
+        assert_eq!((tool.tool_name.as_str(), tool.call_count), ("t", 3));
+        assert_eq!(tool.last_used_secs, None);
     }
 }

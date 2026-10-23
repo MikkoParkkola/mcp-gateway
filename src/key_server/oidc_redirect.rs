@@ -18,7 +18,7 @@ pub(super) fn remote_redirect_policy() -> reqwest::redirect::Policy {
             .previous()
             .first()
             .is_some_and(|fetched| remote_hop_allowed(fetched, attempt.url()));
-        if attempt.previous().len() > 5 {
+        if crate::security::ssrf::hop_budget_spent(attempt.previous().len()) {
             attempt.error("OIDC fetch exceeded 5 redirects")
         } else if allowed {
             attempt.follow()

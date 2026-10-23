@@ -11,13 +11,12 @@
 
 use chrono::{DateTime, TimeDelta, Utc};
 use hkdf::Hkdf;
-use hmac::{Hmac, KeyInit, Mac};
+use hmac::{KeyInit, Mac};
 use sha2::Sha256;
 use uuid::Uuid;
 
 use super::token::{AttestationToken, BNAUT_ISSUER, SIGNING_ALGORITHM, TokenClaims};
-
-type HmacSha256 = Hmac<Sha256>;
+use crate::hashing::HmacSha256;
 
 /// HKDF-SHA256 `info` label that derives the outbound runtime-provenance
 /// receipt signing subkey from the operator-configured

@@ -61,6 +61,16 @@ if [[ -f Cargo.toml ]]; then
   step "public repo hygiene"
   scripts/dev/check-public-repo-hygiene.sh
 
+  # MIK-8410: the CI-check scanner's own drift tests first (CI runs them too;
+  # the runner's 22.5 s suite runs in CI only), then CI's cargo-free
+  # PR-workflow checks, before any cargo step.
+  step "CI-check gate self-tests"
+  python3 -c 'import yaml' 2>/dev/null || { echo "PyYAML is missing: pip install --user pyyaml (CI pins 6.0.2); pre-push installs nothing"; exit 1; }
+  python3 scripts/dev/test_prepush_ci_checks.py
+
+  step "CI script checks"
+  bash scripts/dev/prepush_ci_step.sh "$base"
+
   # Cargo's own exit code decides, never a pipe's: the full output goes to a
   # log, a failure prints its tail and keeps the log, and every `test result:`
   # summary line is shown either way.
@@ -96,12 +106,23 @@ if [[ -f Cargo.toml ]]; then
   export CLIPPY_CONF_DIR="$REPO_ROOT/scripts/lint/registry-ban"
   run_cargo "registry ban all-features" clippy --lib --bins --all-features --quiet -- -D warnings
   run_cargo "registry ban no-default-features" clippy --lib --bins --no-default-features --quiet -- -D warnings
+  # MIK-8733: the release passes, as CI's Registry ban step runs them. They
+  # compile cfg(not(debug_assertions)) code the dev passes never see, and some
+  # lints fire only there (#4060: assigning_clones).
+  step "registry ban, release profile (both feature sets)"
+  run_cargo "registry ban release all-features" clippy --release --lib --bins --all-features --quiet -- -D warnings
+  run_cargo "registry ban release no-default-features" clippy --release --lib --bins --no-default-features --quiet -- -D warnings
   unset CLIPPY_CONF_DIR
   step "registry lint self-test"
   scripts/dev/check_registry_lint.sh --self-test
 
   step "cargo test --lib"
   run_cargo "cargo test --lib" test --lib --quiet
+
+  # MIK-8410 RUST.1: the integration tests that read docs/ or the CLI
+  # definition, --all-features, as CI runs them.
+  step "doc/CLI Rust tests (--all-features)"
+  CARGO="${CARGO:-cargo}" python3 scripts/dev/run_prepush_ci_checks.py --rust --merge-base "$base"
 fi
 
 step "commit metadata"

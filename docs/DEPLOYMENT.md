@@ -245,6 +245,19 @@ scripts/dev/usability-smoke.sh  # repo checkout: no prompts + safe export + rout
 scripts/dev/service-template-smoke.sh  # repo checkout: service template paths + native start smoke
 ```
 
+**Network use.** Doctor warns when a stdio backend pins a registry npm package
+to a version npm marks deprecated. That lookup is on by default: it sends only
+package names from the gateway's own registry to registry.npmjs.org (never
+backend names, versions or settings), and npm sees this host's IP address.
+Skip it with `--no-registry-check`, `MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK=1`,
+or `security.posture: hardened`; a failed lookup prints nothing and never
+fails doctor. This skips the gateway's own npm registry lookup; it does not stop npx or other servers started by --start-stdio from contacting npm, so air-gapped hosts should not use --start-stdio.
+The lookup uses only the proxy named by `HTTPS_PROXY` or `ALL_PROXY` (either case; an
+`http`/`https` proxy without credentials, honouring `NO_PROXY`), never an OS proxy setting,
+and trusts only the bundled Mozilla root certificates, never the system store. With no
+proxy variable set it connects directly. Behind a TLS-inspecting proxy, or a proxy setting
+that is unusable or unreadable, it makes no request and prints nothing.
+
 Client configs are still generated on the host, not inside the container:
 
 ```bash
@@ -1471,6 +1484,37 @@ or from any other process running as the same user, so admin is a grant that
 follows a credential.
 
 For multi-client setups with per-client tool scoping, see the [README auth section](../README.md#authentication).
+
+### Capability hot-reload
+
+Capability files are watched and reloaded without a restart. Because file
+events can stop arriving silently, the watcher also re-checks the watched
+trees every `capabilities.stale_check_secs` (default 60; `0` turns the check
+off) and reloads when the files drifted with no event. The key is
+restart-only: changing it needs a restart to take effect.
+
+The watcher warns rather than dying quietly. `shutdown channel Lagged` means
+a shutdown send was overwritten and the wait continues; `shutdown channel
+closed` means the shutdown sender is gone and the watcher keeps running;
+`file event source is gone` means file events stopped and the stale check is
+now the only reload path; `no file event arrived` means the stale check found
+drift and reloaded; `reload still running` names a reload stuck past 60 s in
+its stage, which is reported and never cancelled; `reload incomplete` means
+the reload failed or left a directory unloaded and will be retried.
+
+To force a reload, call `gateway_reload_capabilities` with an API key marked
+`admin: true`:
+
+```bash
+curl -s http://127.0.0.1:39400/mcp \
+  -H "Authorization: Bearer $ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"gateway_reload_capabilities","arguments":{}}}'
+```
+
+`$ADMIN_KEY` is an API key configured with `admin: true`. A non-admin key gets
+HTTP 403: the tool is in the admin-only set, so
+the router refuses the call before any reload runs.
 
 ### Narrowing the meta-tool surface
 

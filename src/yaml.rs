@@ -30,8 +30,10 @@
 use figment::Provider as _;
 use figment::providers::{Format as _, Yaml};
 use figment::value::{Dict, Map};
+use granit_parser::{ErrorKind, Event, Marker, ScanError, Tag, TokenType};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use std::collections::{HashMap, HashSet};
 
 /// The YAML tree and its mapping. They stay `serde_yaml`'s own until the
 /// backend swap, which keeps routing a pure path rename.
@@ -39,19 +41,81 @@ pub(crate) use serde_yaml::{Mapping, Value};
 
 /// The adapter's YAML error; its text never carries the value that caused it
 /// (MIK-8425 B3, CWE-532), keeps the key path, expected type and line/column.
-pub(crate) struct Error(serde_yaml::Error);
+pub(crate) struct Error(Repr);
+
+/// What an adapter error carries: the backend's own failure, or the guard's
+/// refusal (MIK-8639). Both print value-free.
+enum Repr {
+    /// `serde_yaml`'s error, shown redacted exactly as before the guard.
+    Backend(serde_yaml::Error),
+    /// The guard's refusal: which limit fired, and for Syntax the wording
+    /// plus an optional fixed fix hint.
+    Refused {
+        limit: Limit,
+        what: Option<String>,
+        hint: Option<&'static str>,
+    },
+}
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&redact_message(&self.0.to_string()))
+        match &self.0 {
+            Repr::Backend(err) => f.write_str(&redact_message(&err.to_string())),
+            Repr::Refused { limit, what, hint } => match limit {
+                Limit::Size { len, max } => {
+                    write!(f, "YAML refused: {len} bytes, over the {max}-byte limit")
+                }
+                Limit::Depth { line } => {
+                    write!(
+                        f,
+                        "YAML refused: nesting deeper than 128 levels at line {line}"
+                    )
+                }
+                Limit::Aliases { .. } => f.write_str("YAML refused: more than 64 aliases"),
+                Limit::TagDirectives { offset, .. } => {
+                    write!(
+                        f,
+                        "YAML refused: more than 64 %TAG directives at byte {offset}"
+                    )
+                }
+                Limit::Expansion => f.write_str("YAML refused: alias expansion over the limit"),
+                Limit::AnchorReuse { offset } => {
+                    write!(f, "YAML refused: anchor name reused at byte {offset}")
+                }
+                Limit::AnchorName { offset } => write!(
+                    f,
+                    "YAML refused: anchor or alias name outside [A-Za-z0-9_-] at byte {offset}; refused: parsers disagree"
+                ),
+                Limit::LineBreak { offset } => write!(
+                    f,
+                    "YAML refused: U+0085, U+2028 or U+2029 line break at byte {offset}; refused: parsers disagree"
+                ),
+                Limit::Syntax { line, column } => {
+                    let what = what.as_deref().unwrap_or("syntax error");
+                    if let Some(hint) = hint {
+                        write!(
+                            f,
+                            "YAML refused: {what} at line {line} column {column}; {hint}"
+                        )
+                    } else {
+                        write!(f, "YAML refused: {what} at line {line} column {column}")
+                    }
+                }
+            },
+        }
     }
 }
 
 impl std::fmt::Debug for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("Error")
-            .field(&redact_message(&self.0.to_string()))
-            .finish()
+        match &self.0 {
+            Repr::Backend(err) => f
+                .debug_tuple("Error")
+                .field(&redact_message(&err.to_string()))
+                .finish(),
+            // The limit only: never `what`'s source error.
+            Repr::Refused { limit, .. } => f.debug_tuple("Error").field(limit).finish(),
+        }
     }
 }
 
@@ -61,11 +125,74 @@ impl std::error::Error for Error {}
 impl Error {
     /// Where the refusal points in the document, if the parser knows.
     pub(crate) fn location(&self) -> Option<Location> {
-        self.0.location().map(|at| Location {
-            line: at.line(),
-            column: at.column(),
+        match &self.0 {
+            Repr::Backend(err) => err.location().map(|at| Location {
+                line: at.line(),
+                column: at.column(),
+            }),
+            Repr::Refused { limit, .. } => match limit {
+                Limit::Syntax { line, column } => Some(Location {
+                    line: *line,
+                    column: *column,
+                }),
+                _ => None,
+            },
+        }
+    }
+
+    /// Why the guard refused the text, when it did.
+    pub(crate) fn limit(&self) -> Option<&Limit> {
+        match &self.0 {
+            Repr::Backend(_) => None,
+            Repr::Refused { limit, .. } => Some(limit),
+        }
+    }
+
+    /// The backend's own failure.
+    fn backend(err: serde_yaml::Error) -> Self {
+        Self(Repr::Backend(err))
+    }
+
+    /// The guard's refusal; `what` carries the Syntax wording and nothing else.
+    fn refused(limit: Limit, what: Option<String>) -> Self {
+        Self(Repr::Refused {
+            limit,
+            what,
+            hint: None,
         })
     }
+
+    /// The guard's refusal with a fixed fix hint for one Syntax kind.
+    fn refused_hint(limit: Limit, what: Option<String>, hint: &'static str) -> Self {
+        Self(Repr::Refused {
+            limit,
+            what,
+            hint: Some(hint),
+        })
+    }
+}
+
+/// Why the guard refused a text. Value-free: carries positions and limits, never document bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Limit {
+    /// The text is longer than the size gate.
+    Size { len: usize, max: usize },
+    /// Collections nest deeper than 128 levels; the line where the 129th opens.
+    Depth { line: usize },
+    /// The stream holds more than 64 alias references.
+    Aliases { max: usize },
+    /// The input holds more than 64 `%TAG` directives; the byte where the 65th starts.
+    TagDirectives { max: usize, offset: usize },
+    /// One document's aliases would expand past 64 MiB, or an alias points at an open anchor.
+    Expansion,
+    /// An anchor name is defined twice in one document; the byte of the reusing `&`.
+    AnchorReuse { offset: usize },
+    /// An anchor or alias name leaves `[A-Za-z0-9_-]`; the byte of its `&` or `*`.
+    AnchorName { offset: usize },
+    /// A raw U+0085, U+2028 or U+2029 line break; the byte where it sits.
+    LineBreak { offset: usize },
+    /// The text is not YAML; the line and column the parser reports.
+    Syntax { line: usize, column: usize },
 }
 
 /// Where in a YAML document a refusal points.
@@ -185,16 +312,309 @@ fn location(tail: &str) -> &str {
     if exact { suffix } else { "" }
 }
 
+/// Largest text the guard lets through: 16 MiB, the protocol-import limit
+/// now on every path. A text of exactly this length is accepted.
+const MAX_YAML_BYTES: usize = 16 * 1024 * 1024;
+
+/// Deepest nesting the guard lets through, matching `serde_yaml`'s own cap.
+const MAX_DEPTH: usize = 128;
+
+/// Most alias references the guard lets through in one stream.
+const MAX_ALIASES: usize = 64;
+
+/// Most `%TAG` directives the guard lets through in one input.
+const MAX_TAG_DIRECTIVES: usize = 64;
+
+/// Most alias-added bytes the guard lets one document expand to.
+const MAX_EXPANSION_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Cost unit of one node towards the expansion cap.
+const NODE_COST: u64 = 64;
+
+/// Refuse hostile YAML text before it reaches the backend (MIK-8639).
+///
+/// The checks run in order: the size gate, the raw line-break scan, the
+/// scanner-token pass (directives, names, reuse, syntax) and the event pass
+/// (depth, alias count, expansion, syntax). The first refusal wins, and both
+/// passes are linear in the input.
+fn guard(text: &str) -> Result<(), Error> {
+    guard_inner(text).map(|_| ()).map_err(|(err, _)| err)
+}
+
+/// The guard result plus the number of parser events and scanner tokens visited.
+///
+/// Test-only work counter behind the linearity bar; absent from production builds.
+#[cfg(test)]
+pub(crate) fn guard_work(text: &str) -> (Result<(), Error>, u64) {
+    match guard_inner(text) {
+        Ok(work) => (Ok(()), work),
+        Err((err, work)) => (Err(err), work),
+    }
+}
+
+/// The guard plus its work count: tokens visited in the scanner pass and
+/// events visited in the event pass. On refusal the count covers the work
+/// done before the refusal fired.
+fn guard_inner(text: &str) -> Result<u64, (Error, u64)> {
+    if text.len() > MAX_YAML_BYTES {
+        let refused = Error::refused(
+            Limit::Size {
+                len: text.len(),
+                max: MAX_YAML_BYTES,
+            },
+            None,
+        );
+        return Err((refused, 0));
+    }
+    if let Some((offset, _)) = text
+        .char_indices()
+        .find(|(_, found)| is_disputed_break(*found))
+    {
+        let refused = Error::refused(Limit::LineBreak { offset }, None);
+        return Err((refused, 0));
+    }
+    let mut work = 0u64;
+    if let Err(err) = pass1(text, &mut work) {
+        return Err((err, work));
+    }
+    if let Err(err) = pass2(text, &mut work) {
+        return Err((err, work));
+    }
+    Ok(work)
+}
+
+/// Whether `found` is a line break libyaml sees and granit does not. Refusing
+/// it fail-closed keeps a granit comment from hiding a libyaml directive.
+fn is_disputed_break(found: char) -> bool {
+    matches!(found, '\u{85}' | '\u{2028}' | '\u{2029}')
+}
+
+/// Whether an anchor or alias name sits inside the grammar both parsers read
+/// the same way: one or more of `[A-Za-z0-9_-]`.
+fn name_in_grammar(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+}
+
+/// A refusal pointing at `marker`: the limit built from its byte offset, or a
+/// Syntax refusal at its line and column when no byte offset was recorded.
+fn at_offset(marker: Marker, make: impl FnOnce(usize) -> Limit) -> Error {
+    match marker.byte_offset() {
+        Some(offset) => Error::refused(make(offset), None),
+        None => Error::refused(
+            Limit::Syntax {
+                line: marker.line(),
+                column: marker.col().saturating_add(1),
+            },
+            Some(String::from("syntax error")),
+        ),
+    }
+}
+
+/// The fix hint for a quoted value left unclosed or continued with too little indentation.
+const QUOTED_INDENT_HINT: &str =
+    "close the quote, or indent the continuation lines, or use a block scalar (| or >)";
+
+/// A granit failure as the guard's refusal: its recursion breach is Depth,
+/// every other kind is Syntax at the marker's line and 1-based column.
+fn map_scan_error(scan: &ScanError) -> Error {
+    let marker = scan.marker();
+    if matches!(scan.kind(), ErrorKind::RecursionLimitExceeded) {
+        return Error::refused(
+            Limit::Depth {
+                line: marker.line(),
+            },
+            None,
+        );
+    }
+    let limit = Limit::Syntax {
+        line: marker.line(),
+        column: marker.col().saturating_add(1),
+    };
+    let what = syntax_what(scan.kind());
+    if matches!(scan.kind(), ErrorKind::InvalidQuotedScalarIndent) {
+        return Error::refused_hint(limit, Some(what), QUOTED_INDENT_HINT);
+    }
+    Error::refused(limit, Some(what))
+}
+
+/// The Syntax wording for a granit kind: granit's own Display, except the nine
+/// data-carrying kinds and the quoted-indent kind, which get fixed text (the
+/// exact `=2.0.0` pin freezes the set). Never echoes document bytes, names
+/// or tags.
+fn syntax_what(kind: &ErrorKind) -> String {
+    match kind {
+        ErrorKind::UnexpectedCharacter { .. } => String::from("unexpected character"),
+        ErrorKind::Custom(..) => String::from("syntax error"),
+        ErrorKind::InputIo { .. } => String::from("input could not be read"),
+        ErrorKind::InputDecoding { .. } => String::from("input could not be decoded"),
+        ErrorKind::MismatchedFlowCollectionEnd { .. } => String::from("mismatched bracket"),
+        ErrorKind::UnclosedFlowCollection { .. } => String::from("unclosed bracket"),
+        ErrorKind::InputByteLimitExceeded { .. } => String::from("input too large"),
+        ErrorKind::DirectiveByteLimitExceeded { .. }
+        | ErrorKind::TooManyReservedDirectiveParams { .. } => String::from("directive too large"),
+        ErrorKind::InvalidQuotedScalarIndent => {
+            String::from("quoted text is not closed, or continues with too little indentation,")
+        }
+        other => other.to_string(),
+    }
+}
+
+/// First pass: scanner tokens. Counts `%TAG` directives, checks anchor and
+/// alias names against the grammar both parsers share, and refuses an anchor
+/// name reused within one document. Adds the tokens visited to `work`.
+fn pass1(text: &str, work: &mut u64) -> Result<(), Error> {
+    let scanner = granit_parser::Scanner::new(granit_parser::StrInput::new(text));
+    let mut directives = 0usize;
+    let mut anchors: HashSet<String> = HashSet::new();
+    for item in scanner {
+        *work = work.saturating_add(1);
+        let token = match item {
+            Ok(token) => token,
+            Err(scan) => return Err(map_scan_error(&scan)),
+        };
+        let start = token.span().start;
+        let token_type = token.token_type();
+        match &token_type {
+            TokenType::TagDirective(..) => {
+                directives = directives.saturating_add(1);
+                if directives > MAX_TAG_DIRECTIVES {
+                    return Err(at_offset(start, |offset| Limit::TagDirectives {
+                        max: MAX_TAG_DIRECTIVES,
+                        offset,
+                    }));
+                }
+            }
+            TokenType::Anchor(name) => {
+                if !name_in_grammar(name) {
+                    return Err(at_offset(start, |offset| Limit::AnchorName { offset }));
+                }
+                if !anchors.insert(name.to_string()) {
+                    return Err(at_offset(start, |offset| Limit::AnchorReuse { offset }));
+                }
+            }
+            TokenType::Alias(name) => {
+                if !name_in_grammar(name) {
+                    return Err(at_offset(start, |offset| Limit::AnchorName { offset }));
+                }
+            }
+            TokenType::DocumentStart | TokenType::DocumentEnd => {
+                anchors.clear();
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// An open collection in the expansion walk: its cost so far and its anchor id.
+struct Frame {
+    cost: u64,
+    anchor: usize,
+}
+
+/// Add `amount` to the innermost open collection, dropping it when no
+/// collection is open. Saturating throughout.
+fn add_cost(stack: &mut [Frame], amount: u64) {
+    if let Some(frame) = stack.last_mut() {
+        frame.cost = frame.cost.saturating_add(amount);
+    }
+}
+
+/// The cost of one scalar towards the expansion cap: its bytes plus one node.
+fn scalar_cost(value: &str) -> u64 {
+    u64::try_from(value.len()).map_or(u64::MAX, |len| len.saturating_add(NODE_COST))
+}
+
+/// The cost of a node's tag towards the expansion cap: its handle plus its
+/// suffix in bytes, or 0 when untagged. Saturating throughout.
+fn tag_cost(tag: Option<&Tag>) -> u64 {
+    tag.map_or(0, |tag| {
+        let bytes = tag.handle().len().saturating_add(tag.suffix().len());
+        u64::try_from(bytes).unwrap_or(u64::MAX)
+    })
+}
+
+/// Second pass: parser events. Refuses nesting past 128 levels, a 65th alias
+/// anywhere in the stream, and one document's aliases expanding to 64 MiB.
+/// Adds the events visited to `work`.
+fn pass2(text: &str, work: &mut u64) -> Result<(), Error> {
+    let mut aliases = 0usize;
+    let mut expanded = 0u64;
+    let mut cost: HashMap<usize, u64> = HashMap::new();
+    let mut stack: Vec<Frame> = Vec::new();
+    for item in granit_parser::Parser::new_from_str(text) {
+        *work = work.saturating_add(1);
+        let (event, span) = match item {
+            Ok(pair) => pair,
+            Err(scan) => return Err(map_scan_error(&scan)),
+        };
+        match event {
+            Event::DocumentStart(..) => {
+                expanded = 0;
+                cost.clear();
+                stack.clear();
+            }
+            Event::SequenceStart(_, anchor, tag) | Event::MappingStart(_, anchor, tag) => {
+                stack.push(Frame {
+                    cost: NODE_COST.saturating_add(tag_cost(tag.as_deref())),
+                    anchor,
+                });
+                if stack.len() > MAX_DEPTH {
+                    let line = span.start.line();
+                    return Err(Error::refused(Limit::Depth { line }, None));
+                }
+            }
+            Event::SequenceEnd | Event::MappingEnd => {
+                if let Some(frame) = stack.pop() {
+                    add_cost(&mut stack, frame.cost);
+                    if frame.anchor != 0 {
+                        cost.insert(frame.anchor, frame.cost);
+                    }
+                }
+            }
+            Event::Scalar(value, _, anchor, tag) => {
+                let single = scalar_cost(&value).saturating_add(tag_cost(tag.as_deref()));
+                add_cost(&mut stack, single);
+                if anchor != 0 {
+                    cost.insert(anchor, single);
+                }
+            }
+            Event::Alias(id) => {
+                aliases = aliases.saturating_add(1);
+                if aliases > MAX_ALIASES {
+                    return Err(Error::refused(Limit::Aliases { max: MAX_ALIASES }, None));
+                }
+                if id != 0 && stack.iter().any(|frame| frame.anchor == id) {
+                    return Err(Error::refused(Limit::Expansion, None));
+                }
+                let single = cost.get(&id).copied().unwrap_or(NODE_COST);
+                if expanded.saturating_add(single) >= MAX_EXPANSION_BYTES {
+                    return Err(Error::refused(Limit::Expansion, None));
+                }
+                expanded = expanded.saturating_add(single);
+                add_cost(&mut stack, single);
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Parse `text` into `T`. A key repeated in a struct or in a `Value` is
 /// refused; a key repeated in a map keeps its last value.
 pub(crate) fn from_str<T: DeserializeOwned>(text: &str) -> Result<T, Error> {
-    serde_yaml::from_str(text).map_err(Error)
+    guard(text)?;
+    serde_yaml::from_str(text).map_err(Error::backend)
 }
 
 /// Parse `text` as figment's `Dict`, the way the config loader reads it: a
 /// repeated key keeps its last value at every level.
 pub(crate) fn from_str_loose(text: &str) -> Result<Dict, Error> {
-    Yaml::from_str(text).map_err(Error)
+    guard(text)?;
+    Yaml::from_str(text).map_err(Error::backend)
 }
 
 /// The config file's data as figment's YAML provider gives it: the
@@ -204,22 +624,23 @@ pub(crate) fn from_str_loose(text: &str) -> Result<Dict, Error> {
     reason = "figment's own `Provider::data` signature, which the config loader returns"
 )]
 pub(crate) fn figment_data(text: &str) -> figment::Result<Map<figment::Profile, Dict>> {
+    guard(text).map_err(|err| figment::Error::from(err.to_string()))?;
     Yaml::string(text).data()
 }
 
 /// Write `value` as YAML.
 pub(crate) fn to_string<T: Serialize + ?Sized>(value: &T) -> Result<String, Error> {
-    serde_yaml::to_string(value).map_err(Error)
+    serde_yaml::to_string(value).map_err(Error::backend)
 }
 
 /// Convert `value` to a YAML tree.
 pub(crate) fn to_value<T: Serialize>(value: T) -> Result<Value, Error> {
-    serde_yaml::to_value(value).map_err(Error)
+    serde_yaml::to_value(value).map_err(Error::backend)
 }
 
 /// Read `T` out of a YAML tree.
 pub(crate) fn from_value<T: DeserializeOwned>(value: Value) -> Result<T, Error> {
-    serde_yaml::from_value(value).map_err(Error)
+    serde_yaml::from_value(value).map_err(Error::backend)
 }
 
 /// Convert a YAML tree value to a JSON value (MIK-8425).
@@ -297,14 +718,18 @@ fn json_key(key: &Value) -> Option<String> {
 /// this iterator stops for it. There is no document count cap: a long
 /// manifest is read in full.
 pub(crate) fn documents(text: &str) -> impl Iterator<Item = Result<Value, Error>> + '_ {
+    let mut early = guard(text).err();
     let mut stream = serde_yaml::Deserializer::from_str(text);
-    let mut refused = false;
+    let mut refused = early.is_some();
     std::iter::from_fn(move || {
+        if let Some(err) = early.take() {
+            return Some(Err(err));
+        }
         if refused {
             return None;
         }
         let document = stream.next()?;
-        let reading = <Value as serde::Deserialize>::deserialize(document).map_err(Error);
+        let reading = <Value as serde::Deserialize>::deserialize(document).map_err(Error::backend);
         refused = reading.is_err();
         Some(reading)
     })

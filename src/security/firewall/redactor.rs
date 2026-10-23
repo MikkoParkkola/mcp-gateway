@@ -29,7 +29,9 @@ use std::collections::{HashMap, HashSet};
 use regex::{Regex, RegexSet};
 use serde_json::{Map, Value};
 
-use super::{Finding, FindingLocation, ScanType, Severity};
+use super::{Finding, FindingLocation, ScanType};
+use crate::security::Severity;
+use crate::truncate::{Budget, Suffix, truncate};
 
 /// Pre-compiled credential/PII redactor.
 pub struct Redactor {
@@ -214,7 +216,7 @@ impl Redactor {
                 severity: Severity::High,
                 description: format!("Credential detected: {}{suffix}", self.descriptions[idx]),
                 // Truncate so the actual secret is not propagated.
-                matched: truncate(shown, 40),
+                matched: truncate(shown, Budget::Bytes(40), "...", Suffix::After),
                 location: FindingLocation::ResponseContent,
             });
         }
@@ -307,18 +309,6 @@ fn merge_spans(spans: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
         }
     }
     merged
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_string();
-    }
-
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}...", &s[..end])
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

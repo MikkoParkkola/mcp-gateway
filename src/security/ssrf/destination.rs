@@ -49,6 +49,19 @@ impl DestinationPolicy {
         }
     }
 
+    /// The policy one backend runs under, given the posture's policy and
+    /// whether the backend is listed in `security.hardened.private_backends`:
+    /// a listed backend may reach private addresses under `Public`; under any
+    /// other policy the listing changes nothing. The one place this is decided,
+    /// for the registry's stamp and for `doctor`'s redirect verdict.
+    pub(crate) fn for_backend(self, listed_private: bool) -> Self {
+        if self == Self::Public && listed_private {
+            Self::Private
+        } else {
+            self
+        }
+    }
+
     /// Whether a connection under this policy may not reach `addr`.
     pub(crate) fn denies(self, addr: IpAddr) -> bool {
         match self {

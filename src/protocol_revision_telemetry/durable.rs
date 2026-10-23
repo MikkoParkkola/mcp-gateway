@@ -215,6 +215,7 @@ fn unix_seconds() -> io::Result<u64> {
 }
 
 /// Write `value` to a private temporary file, fsync it, and rename it over `path`.
+// Not `config_persistence::write_atomic`: fixed `json.tmp` under its own lock, plus a directory sync after the baseline advances.
 pub(super) fn write_json_atomic(path: &Path, value: &impl Serialize) -> io::Result<()> {
     #[cfg(test)]
     write_seam::record(path);

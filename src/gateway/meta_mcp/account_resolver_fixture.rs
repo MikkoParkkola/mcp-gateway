@@ -66,7 +66,7 @@ use crate::key_server::oidc::VerifiedIdentity;
 use crate::personal_accounts::config::{
     AccountDescriptor, AccountsConfig, AccountsLimits, DescriptorMode,
 };
-use crate::personal_accounts::identity::AccountDescriptor as AccountKeyDescriptor;
+use crate::personal_accounts::identity::AccountKeyDescriptor;
 use crate::personal_accounts::{
     AccountCustody, AccountKey, GrantRecord, PersonalAccountStore, StoreConfig,
 };

@@ -6,28 +6,12 @@
 use url::Url;
 
 use super::{same_origin, sanitize_url_for_diagnostics};
-use crate::security::ssrf::DestinationPolicy;
-
-/// Outcome of evaluating one redirect hop for the transport's HTTP client.
-///
-/// Extracted from the [`reqwest::redirect::Policy::custom`] closure so the
-/// policy is unit-testable: reqwest's `Attempt` cannot be constructed in a
-/// test, but this pure decision can. See [`evaluate_redirect`].
-
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum RedirectDecision {
-    /// Hop budget exhausted — stop and surface the last response as-is.
-    Stop,
-    /// Refuse the redirect; the payload is the operator-facing reason.
-    Reject(String),
-    /// Safe to follow.
-    Follow,
-}
+use crate::security::ssrf::{DestinationPolicy, RedirectDecision};
 
 /// Decide whether to follow a single redirect on the SSE/message client.
 ///
 /// Three guards, each of which a hop must clear:
-/// 1. **Hop cap** — at most five redirects, matching the prior policy.
+/// 1. **Hop cap** — five redirects followed, matching the prior policy.
 /// 2. **SSRF** — the target must not resolve to an internal/metadata range
 ///    ([`DestinationPolicy::check_configured_url`]).
 /// 3. **Same-origin** — the target must share the base URL's origin. The SSE
@@ -56,7 +40,7 @@ pub(super) fn evaluate_redirect_for(
     target: &Url,
     previous_hops: usize,
 ) -> RedirectDecision {
-    if previous_hops >= 5 {
+    if crate::security::ssrf::hop_budget_spent(previous_hops) {
         return RedirectDecision::Stop;
     }
     if let Err(e) = destination.check_configured_url(target.as_str()) {
@@ -72,4 +56,37 @@ pub(super) fn evaluate_redirect_for(
         ));
     }
     RedirectDecision::Follow
+}
+
+/// Whether the gateway's HTTP transport would follow this redirect: a
+/// response with `status` from `base` pointing at `target`, for the backend
+/// `backend_name` under `config`. One hop only, as `doctor` sees it; the
+/// chain after it is not followed here.
+///
+/// The verdict is [`evaluate_redirect_for`] under the backend's own
+/// destination policy ([`DestinationPolicy::for_backend`]), plus the statuses
+/// reqwest follows at all (301, 302, 303, 307, 308; any other 3xx is returned
+/// as the final response). Public only for the binary's `doctor` command, so
+/// that it reports the gateway's decision instead of a copy of it; not a
+/// stable API.
+#[doc(hidden)]
+#[must_use]
+pub fn transport_follows_redirect(
+    config: &crate::config::Config,
+    backend_name: &str,
+    status: u16,
+    base: &Url,
+    target: &Url,
+) -> bool {
+    if !matches!(status, 301 | 302 | 303 | 307 | 308) {
+        return false;
+    }
+    let listed = config
+        .security
+        .hardened
+        .private_backends
+        .iter()
+        .any(|name| name == backend_name);
+    let policy = DestinationPolicy::for_posture(config.security.posture).for_backend(listed);
+    evaluate_redirect_for(policy, base, target, 0) == RedirectDecision::Follow
 }

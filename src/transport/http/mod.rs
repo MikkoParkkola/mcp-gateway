@@ -27,12 +27,14 @@ use crate::protocol::meta::KEY_PROTOCOL_VERSION;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::http_diagnostics::SESSION_EXPIRED_MARKER;
 use crate::security::ssrf::DestinationPolicy;
+#[cfg(test)]
+use crate::security::ssrf::RedirectDecision;
 use crate::{Error, Result};
 pub(super) use modern_meta::with_modern_meta as modern_listen_params;
 use modern_meta::{finalise_modern_headers, with_modern_meta};
 #[cfg(test)]
 use redirect_policy::evaluate_redirect;
-use redirect_policy::{RedirectDecision, evaluate_redirect_for};
+use redirect_policy::evaluate_redirect_for;
 
 // Names the test modules reach through `use super::*`, which the code split
 // into `requests`, `startup` and `transport_impl` no longer needs here.
@@ -570,6 +572,7 @@ mod extra_headers;
 mod listen;
 mod modern_meta;
 mod redirect_policy;
+pub use redirect_policy::transport_follows_redirect;
 mod requests;
 mod sse_decoder;
 mod startup;

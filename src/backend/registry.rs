@@ -621,11 +621,7 @@ struct Destinations {
 
 impl Destinations {
     fn for_backend(&self, name: &str) -> crate::security::ssrf::DestinationPolicy {
-        if self.private.contains(name) {
-            crate::security::ssrf::DestinationPolicy::Private
-        } else {
-            self.policy
-        }
+        self.policy.for_backend(self.private.contains(name))
     }
 }
 

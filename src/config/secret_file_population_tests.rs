@@ -91,6 +91,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ("src/config/secret_file.rs", "the checked reader itself"),
     ("src/config_persistence.rs", "owner-only atomic writer"),
     (
+        "src/config_persistence_atomic.rs",
+        "the shared atomic writer: creates its own private scratch; opens the target only to probe its ACL, never reads it",
+    ),
+    (
         "src/config_persistence_lock.rs",
         "config lock file; opened only to judge its mode, never read",
     ),
@@ -177,6 +181,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "tokens read through token_file (R2) and written 0600 (W2); client_id is public",
     ),
     (
+        "src/open_nonblocking.rs",
+        "the loader's mode-checked read (config_persistence read_text), the guarded secret-file read and the CLI's gateway.yaml re-read (commands/regular_file.rs); opens with O_NONBLOCK|O_NOCTTY so a FIFO is refused, not waited on",
+    ),
+    (
         "src/personal_accounts/migration_source.rs",
         "own stricter check: fstat, exactly 0600 (R5)",
     ),
@@ -253,6 +261,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/trust/claim_capture.rs",
         "append-only claim log; no secret",
+    ),
+    (
+        "src/trust/provenance_public.rs",
+        "`provenance verify` CLI: the operator-named public-key trust set, receipt and result; public data, read once by an offline command the running gateway never consults",
     ),
     (
         "src/validator/cli_handler.rs",

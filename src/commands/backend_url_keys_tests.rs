@@ -181,6 +181,11 @@ fn a_cli_write_keeps_url_on_a_backend_that_already_had_it() {
 fn a_line_inside_a_multiline_quoted_value_is_never_renamed() {
     // The second line belongs to the quoted description; renaming it would
     // change the operator's text, so the backend is reported instead.
+    // Since MIK-8639 the guard refuses this text (a quoted continuation at
+    // the key's indentation), so `loader_view` returns None and the rewriter
+    // leaves the text whole before any rename; the assertions now pin that.
+    // The rollback path stays as a defence for any shape where a renamed
+    // line would break the parse.
     let text = "backends:\n  fs:\n    description: \"first line\n    http_url: still the description\"\n    command: x\n";
     let out = rewrite_url_aliases(text, None);
     assert_eq!(out.text, text);
@@ -208,6 +213,11 @@ fn one_unsafe_backend_rolls_back_every_rename_in_the_file() {
     // scanner cannot see, while a line inside its quoted description looks
     // like the key. Renaming that line fails the parse check, so the whole
     // file is left as it was and both backends are reported.
+    // Since MIK-8639 the guard refuses this text (a quoted continuation at
+    // the key's indentation), so `loader_view` returns None and the rewriter
+    // leaves the text whole before the rename and rollback steps; the
+    // assertions now pin that. The rollback path stays as a defence for any
+    // shape where a renamed line would break the parse.
     let text = "backends:\n  ok:\n    http_url: \"https://ok.example.com/mcp\"\n  fs:\n    description: \"first line\n    http_url: still the description\"\n    ? http_url\n    : \"https://fs.example.test/mcp\"\n";
     let out = rewrite_url_aliases(text, None);
     assert_eq!(out.text, text);
@@ -226,8 +236,8 @@ fn an_address_that_is_not_a_literal_of_its_key_keeps_its_alias() {
     assert!(out.text.contains("http_url: \"${FS_URL}\""), "{}", out.text);
 }
 
-/// The binary keeps its own copy of the scheme table (the library's is not
-/// public); this holds the copy to what the loader actually does.
+/// The binary compiles the library's scheme table (`src/transport_key.rs`);
+/// this holds it to what the loader actually does with each address.
 #[test]
 fn the_scheme_table_agrees_with_the_loader() {
     use mcp_gateway::config::{Config, TransportConfig};
@@ -262,16 +272,34 @@ fn the_scheme_table_agrees_with_the_loader() {
 }
 
 #[test]
-fn a_line_that_is_not_a_key_is_skipped_while_another_backend_is_rewritten() {
-    // `fs` has no real alias (the line is inside its description), so it is
-    // reported for a hand edit; `ok` is still rewritten in the same pass.
+fn a_file_the_guard_refuses_is_not_rewritten() {
+    // Since MIK-8639 the guard refuses a quoted value whose continuation sits
+    // at the key's indentation, so the rewriter, which never edits a file it
+    // cannot parse, leaves it whole and reports both backends for a hand edit.
     let text = "backends:\n  ok:\n    http_url: \"https://ok.example.test/mcp\"\n  fs:\n    description: \"first line\n    http_url: still the description\"\n    command: x\n";
     let out = rewrite_url_aliases(text, None);
+    assert!(out.changed.is_empty(), "{:?}", out.changed);
+    assert_eq!(out.skipped, vec!["ok".to_string(), "fs".to_string()]);
+    assert!(out.kept.is_empty(), "{:?}", out.kept);
+    assert_eq!(out.text, text);
+}
+
+#[test]
+fn a_quoted_description_indented_deeper_is_not_a_key() {
+    // The continuation sits at 6 spaces, deeper than `description:` at 4, so
+    // both parsers accept it; the line scan reads fields at 4 only, so the
+    // lookalike line is not a key and `ok` is still rewritten.
+    let text = "backends:\n  ok:\n    http_url: \"https://ok.example.test/mcp\"\n  fs:\n    description: \"first line\n      http_url: still the description\"\n    command: x\n";
+    let out = rewrite_url_aliases(text, None);
     assert_eq!(out.changed, vec![3], "{}", out.text);
-    assert_eq!(out.skipped, vec!["fs".to_string()]);
-    assert!(out.kept.is_empty());
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert!(out.kept.is_empty(), "{:?}", out.kept);
+    assert_eq!(
+        out.text.lines().nth(2),
+        Some("    url: \"https://ok.example.test/mcp\"")
+    );
     assert!(
-        out.text.contains("    url: \"https://ok") && out.text.contains("still the description"),
+        out.text.contains("      http_url: still the description"),
         "{}",
         out.text
     );
@@ -370,4 +398,18 @@ fn a_mapping_key_is_read_as_yaml_reads_it() {
         let got = got.as_ref().map(|(k, r)| (k.as_str(), *r));
         assert_eq!(got, *want, "{line:?}");
     }
+}
+
+#[test]
+fn a_rename_that_breaks_the_strict_parse_is_rolled_back() {
+    // Reaches the rollback with YAML the guard accepts: `fs` also holds `url`
+    // as an explicit `? url` key the line scan cannot see, so renaming its
+    // `http_url` makes a duplicate `url` the strict parse refuses. Every
+    // rename in the text, `ok`'s too, is undone and both are reported.
+    let text = "backends:\n  ok:\n    http_url: \"https://ok.example.test/mcp\"\n  fs:\n    http_url: \"https://fs.example.test/mcp\"\n    ? url\n    : \"https://fs2.example.test/mcp\"\n";
+    let out = rewrite_url_aliases(text, None);
+    assert_eq!(out.text, text);
+    assert!(out.changed.is_empty(), "{:?}", out.changed);
+    assert!(out.skipped.contains(&"ok".to_string()), "{:?}", out.skipped);
+    assert!(out.skipped.contains(&"fs".to_string()), "{:?}", out.skipped);
 }

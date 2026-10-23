@@ -553,3 +553,38 @@ async fn a_jwks_redirect_is_followed_only_on_its_own_origin() {
         "the other origin was requested"
     );
 }
+
+/// MIK-8660 guard: a same-origin chain follows five redirects and refuses the sixth.
+#[tokio::test]
+async fn a_same_origin_chain_follows_five_redirects_and_refuses_the_sixth() {
+    use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
+    let served = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&served);
+    let app = axum::Router::new().route(
+        "/{n}",
+        axum::routing::get(move |axum::extract::Path(n): axum::extract::Path<usize>| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            async move { axum::response::Redirect::temporary(&format!("/{}", n + 1)) }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    let client = reqwest::Client::builder()
+        .redirect(remote_redirect_policy())
+        .no_proxy()
+        .build()
+        .expect("client");
+    let result = tokio::time::timeout(
+        crate::test_wait::HANG_BOUND,
+        client.get(format!("http://{addr}/0")).send(),
+    )
+    .await
+    .expect("bounded");
+    // The OIDC policy refuses the sixth redirect with an error, not a stop.
+    let error = result.expect_err("the sixth redirect is refused");
+    assert!(error.is_redirect(), "refused as a redirect error: {error}");
+    assert_eq!(served.load(Ordering::SeqCst) - 1, 5);
+}

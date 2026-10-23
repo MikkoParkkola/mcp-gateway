@@ -26,7 +26,6 @@ use super::super::router::AppState;
 use super::errors::{admin_auth_required, flat_error};
 use super::is_admin;
 use crate::capability::{GeneratedCapability, OpenApiConverter};
-use crate::security::ssrf::{PinningResolver, RedirectDecision, SystemResolver, redirect_decision};
 use crate::security::validate_url_not_ssrf;
 
 // ── Request / response types ────────────────────────────────────────
@@ -227,6 +226,14 @@ async fn resolve_spec(
     }
 }
 
+/// Message for a failed spec fetch from `url`. (MIK-8660 seam)
+fn fetch_error_message(url: &str, e: &reqwest::Error) -> String {
+    crate::security::http_diagnostics::ssrf_refusal(e).map_or_else(
+        || format!("Failed to fetch spec from {url}: {e}"),
+        |refused| format!("Failed to fetch spec from {url}: {refused}"),
+    )
+}
+
 /// Fetch an `OpenAPI` spec from a remote URL.
 async fn fetch_spec(url: &str, ssrf_protection: bool) -> Result<String, (StatusCode, String)> {
     // Validate URL is well-formed.
@@ -260,41 +267,46 @@ async fn fetch_spec(url: &str, ssrf_protection: bool) -> Result<String, (StatusC
     // internal one. When SSRF protection is enabled we therefore also pin DNS
     // resolution (PinningResolver validates every resolved IP, closing the
     // rebinding TOCTOU window — MIK-4019) and re-validate every redirect hop,
-    // stopping at >=5 hops. This mirrors the canonical fetch path in
+    // following at most MAX_REDIRECT_HOPS; with protection off the same budget
+    // applies without the SSRF check. This mirrors the canonical fetch path in
     // `capability::executor::client::build` and `openapi::convert_url`. The
     // guards stay gated on `ssrf_protection` so an operator may deliberately
     // disable them for trusted internal specs.
     // Never an environment proxy: it would resolve the name instead of the
     // pin below (#1881).
-    let mut builder = reqwest::Client::builder()
-        .no_proxy()
+    let policy = if ssrf_protection {
+        crate::security::ssrf::ssrf_redirect_policy()
+    } else {
+        reqwest::redirect::Policy::custom(|attempt| {
+            if crate::security::ssrf::hop_budget_spent(attempt.previous().len()) {
+                attempt.stop()
+            } else {
+                attempt.follow()
+            }
+        })
+    };
+    let base = if ssrf_protection {
+        crate::security::ssrf::pinned_client_builder()
+    } else {
+        reqwest::Client::builder().no_proxy()
+    };
+    let client = base
+        .redirect(policy)
         .timeout(std::time::Duration::from_secs(30))
-        .user_agent("mcp-gateway/openapi-importer");
-    if ssrf_protection {
-        builder = builder
-            .dns_resolver(PinningResolver::new(SystemResolver))
-            .redirect(reqwest::redirect::Policy::custom(
-                |attempt| match redirect_decision(attempt.previous().len(), attempt.url().as_str())
-                {
-                    RedirectDecision::Stop => attempt.stop(),
-                    RedirectDecision::Block(msg) => attempt.error(msg),
-                    RedirectDecision::Follow => attempt.follow(),
-                },
-            ));
-    }
-    let client = builder.build().map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to build HTTP client: {e}"),
-        )
-    })?;
+        .user_agent("mcp-gateway/openapi-importer")
+        .build()
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to build HTTP client: {e}"),
+            )
+        })?;
 
-    let resp = client.get(url).send().await.map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            format!("Failed to fetch spec from {url}: {e}"),
-        )
-    })?;
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, fetch_error_message(url, &e)))?;
 
     if !resp.status().is_success() {
         return Err((
@@ -348,6 +360,8 @@ fn tool_preview_from_cap(cap: &GeneratedCapability) -> ToolPreview {
         if (trimmed.ends_with("}\"") || trimmed.ends_with('}'))
             && let Some(start) = trimmed.find('{')
             && let Some(end) = trimmed.find('}')
+            // A line whose first `}` comes before its first `{` is skipped (MIK-8691).
+            && start < end
         {
             let param_name = &trimmed[start + 1..end];
             if !param_name.is_empty()
@@ -590,4 +604,83 @@ paths:
             "the metadata IP literal must fail the SSRF predicate the gate toggles"
         );
     }
+
+    /// MIK-8691 T1: preview must not panic when `}` precedes `{` in a path line.
+    #[test]
+    fn preview_survives_a_close_brace_before_the_open_one_in_a_path() {
+        let cap = GeneratedCapability {
+            name: "x".into(),
+            yaml: "      path: /a}b/{id}\n".into(),
+        };
+        let preview = tool_preview_from_cap(&cap);
+        assert_eq!(preview.path, "/a}b/{id}");
+        assert!(preview.parameters.is_empty());
+    }
+
+    /// MIK-8691 T1b: preview must not panic when `}` precedes `{` in a description line.
+    #[test]
+    fn preview_survives_a_close_brace_before_the_open_one_in_a_description() {
+        let cap = GeneratedCapability {
+            name: "x".into(),
+            yaml: "      method: GET\n      path: /ok\ndescription: a}b{c}\n".into(),
+        };
+        let preview = tool_preview_from_cap(&cap);
+        assert_eq!(preview.method, "GET");
+        assert_eq!(preview.path, "/ok");
+        assert_eq!(preview.description, "a}b{c}");
+        assert!(preview.parameters.is_empty());
+    }
+
+    /// MIK-8691 T2: an imported path with a stray brace previews without panicking.
+    #[test]
+    fn an_imported_path_with_a_stray_brace_previews_without_panicking() {
+        const SPEC: &str = r#"{
+  "openapi": "3.0.0",
+  "info": {"title": "T", "version": "1"},
+  "servers": [{"url": "https://api.example.com"}],
+  "paths": {
+    "/a}b/{id}": {
+      "get": {
+        "operationId": "getOne",
+        "summary": "Get one",
+        "parameters": [
+          {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "OK"}
+        }
+      }
+    }
+  }
+}"#;
+        let caps = parse_spec(SPEC).expect("valid spec");
+        assert_eq!(caps.len(), 1, "expected one capability");
+        assert!(
+            caps[0].yaml.lines().any(|l| l.trim() == "path: /a}b/{id}"),
+            "{}",
+            caps[0].yaml
+        );
+        let preview = tool_preview_from_cap(&caps[0]);
+        assert_eq!(preview.method, "GET");
+        assert_eq!(preview.path, "/a}b/{id}");
+    }
+
+    /// MIK-8691 T3: well-formed `{param}` references still extract in first-appearance order.
+    #[test]
+    fn preview_parameters_are_unchanged_for_well_formed_references() {
+        let cap = GeneratedCapability {
+            name: "x".into(),
+            yaml: "      path: /users/{user_id}\n        q: \"{query}\"\n        x: {a}\n        y: {a}\n        z: {a-b}\n        w: a{b\n"
+                .into(),
+        };
+        let preview = tool_preview_from_cap(&cap);
+        assert_eq!(
+            preview.parameters,
+            vec!["user_id".to_string(), "query".to_string(), "a".to_string()]
+        );
+    }
 }
+
+#[cfg(test)]
+#[path = "import_redirect_tests.rs"]
+mod redirect_tests;

@@ -35,9 +35,9 @@ pub(in crate::gateway::router) async fn mcp_delete_handler(
     // when authentication is enabled. Their shared anonymous owner is not a
     // credential, so refuse before inspecting any session identifier.
     if state.auth_config.enabled
-        && !client
+        && client
             .as_ref()
-            .is_some_and(|c| c.authenticated && !c.principal.is_empty())
+            .is_none_or(|c| c.credential_principal().is_none())
     {
         return gateway_reply(crate::gateway::middleware::bearer_unauthorized_response(
             "Session termination requires an authenticated credential.",
