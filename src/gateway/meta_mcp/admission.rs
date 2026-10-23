@@ -18,8 +18,14 @@ mod plan;
 #[path = "admission_replay.rs"]
 mod replay;
 pub(crate) use replay::ReplayTarget;
+#[path = "admission_era.rs"]
+mod era;
+#[path = "admission_operation.rs"]
+mod operation;
+pub(crate) use operation::{OPERATION_DEFINING_META, operation_arguments};
 #[path = "admission_stored.rs"]
 mod stored;
+use era::{refuse_another_era, shaped_for_request};
 pub(crate) use stored::{ReplayAudit, StepBinding, note_distinct};
 use stored::{StoredChain, StoredDelivery, stored_response};
 
@@ -37,67 +43,8 @@ pub(crate) struct SyncLease {
     steps: Mutex<Vec<(String, String)>>,
     /// The binding each step ran under (MIK-8407), kept for a replay.
     bindings: Mutex<Vec<stored::StepBinding>>,
-    /// MIK-8747: the era the stored delivery is shaped for, set only on the
-    /// meta path (`/mcp`, stdio), whose delivery is stored shaped. Direct
-    /// stores unshaped bytes and leaves it `None`.
+    /// MIK-8747: the era its stored delivery is shaped for (meta path only).
     era: Option<crate::protocol::meta::Era>,
-}
-
-/// The era a request was classified in, as a stored delivery records it.
-/// `is_modern` is the transport's classification (`MetaMcpCallerContext::era`
-/// on the meta path); this one mapping serves both the stamp and the
-/// comparison, because `admit_operation`, where the comparison runs, is
-/// shared with Direct and receives only `is_modern`.
-fn request_era(is_modern: bool) -> crate::protocol::meta::Era {
-    if is_modern {
-        crate::protocol::meta::Era::Modern
-    } else {
-        crate::protocol::meta::Era::Legacy
-    }
-}
-
-/// MIK-8747/MIK-8748: the refusal of a keyed replay whose stored delivery
-/// was shaped for another era. The call already ran, so the message sends the
-/// client back to the revision it first used, never to a new key (which
-/// would run it again).
-fn era_mismatch(stored: crate::protocol::meta::Era, request: crate::protocol::meta::Era) -> Error {
-    let name = |era| serde_json::to_value(era).unwrap_or(Value::Null);
-    Error::JsonRpc {
-        code: 409,
-        message: "This idempotency key's call already ran for another protocol revision; \
-                  retry it with its original protocol revision"
-            .to_string(),
-        data: Some(json!({
-            "reason": "idempotency_era_mismatch",
-            "stored_era": name(stored),
-            "request_era": name(request),
-            "already_executed": true,
-        })),
-    }
-}
-
-/// MIK-8747: a delivery stored shaped for one era is never served to the
-/// other. Only the era is decoded, so a refusal restores none of the record's
-/// read or write scope.
-fn refuse_another_era(bytes: &[u8], is_modern: bool) -> Result<()> {
-    let era = request_era(is_modern);
-    match stored::stored_era(bytes) {
-        Some(stored_era) if stored_era != era => Err(era_mismatch(stored_era, era)),
-        _ => Ok(()),
-    }
-}
-
-/// MIK-8747: a meta-path lease (`/mcp`, stdio) stores its delivery already
-/// shaped for the request's era, so it records that era; any other
-/// admission passes through unchanged.
-fn shaped_for_request(admission: SyncAdmission, is_modern: bool) -> SyncAdmission {
-    match admission {
-        SyncAdmission::Owned(mut lease) => {
-            lease.era = Some(request_era(is_modern));
-            SyncAdmission::Owned(lease)
-        }
-        other => other,
-    }
 }
 
 impl SyncLease {
@@ -799,37 +746,6 @@ impl MetaMcp {
              clients send _meta \"io.mcp-gateway/idempotency-key\""
         );
     }
-}
-
-/// `_meta` keys that change WHAT a meta-tool call does, and so stay in its
-/// operation fingerprint (MIK-8192). Empty: every request `_meta` key the
-/// gateway reads on `tools/call` is per-request transport (era, declared
-/// capabilities, progress and trace correlation, the key and nonces). The
-/// operation-defining facts (tool, arguments, `params.task`) live outside
-/// `_meta`. A key added here enters the fingerprint; nothing else can.
-pub(crate) const OPERATION_DEFINING_META: &[&str] = &[];
-
-/// A meta-tool's arguments as its operation fingerprint reads them: the
-/// client's `_meta` (merged in by `merge_client_meta`) reduced to `allowed`,
-/// and dropped when nothing allowed remains, so a retry differing only in a
-/// fresh `progressToken` or declared capabilities is the same operation.
-pub(crate) fn operation_arguments(arguments: &Value, allowed: &[&str]) -> Value {
-    let mut operation = arguments.clone();
-    if let Some(object) = operation.as_object_mut()
-        && let Some(meta) = object.remove("_meta")
-    {
-        let kept: serde_json::Map<String, Value> = meta
-            .as_object()
-            .into_iter()
-            .flatten()
-            .filter(|(key, _)| allowed.contains(&key.as_str()))
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect();
-        if !kept.is_empty() {
-            object.insert("_meta".to_string(), Value::Object(kept));
-        }
-    }
-    operation
 }
 
 #[cfg(test)]
