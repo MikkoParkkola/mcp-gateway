@@ -144,12 +144,12 @@ impl Presented {
 fn api_key(
     client: Option<&crate::gateway::auth::AuthenticatedClient>,
 ) -> Option<crate::events::ApiKeyRef> {
-    client
-        .filter(|c| c.authenticated && c.credential_kind == CredentialKind::ApiKey)
-        .map(|c| crate::events::ApiKeyRef {
-            name: c.name.clone(),
+    client.and_then(|c| {
+        c.api_key_identity().map(|name| crate::events::ApiKeyRef {
+            name: name.to_owned(),
             principal: c.principal.clone(),
         })
+    })
 }
 
 /// Answer one `events/*` request.

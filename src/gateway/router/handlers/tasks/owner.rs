@@ -54,17 +54,15 @@ pub(super) const AUTH_DISABLED_TASK_OWNER: &str = "local:auth-disabled:tasks:v1"
 /// when the caller is unauthenticated: that is not an identity by itself, but
 /// `route_task_owner` may still give a validated agent token its own owner.
 fn session_owner_key(client: Option<&crate::gateway::auth::AuthenticatedClient>) -> String {
-    client.map_or_else(String::new, |c| {
-        if c.authenticated && !c.principal.is_empty() {
+    client
+        .and_then(|c| c.credential_principal())
+        .map_or_else(String::new, |principal| {
             format!(
                 "{}{}",
                 crate::gateway::auth::CREDENTIAL_OWNER_PREFIX,
-                c.principal
+                principal
             )
-        } else {
-            String::new()
-        }
-    })
+        })
 }
 
 /// The owner key a task records when the caller has no OIDC identity: the
@@ -177,3 +175,38 @@ fn agent_task_owner(client_id: &str) -> String {
 mod agent_owner_tests;
 #[cfg(test)]
 mod owners_tests;
+
+#[cfg(test)]
+mod mik_8659_owner_tests {
+    fn client(authenticated: bool, principal: &str) -> crate::gateway::auth::AuthenticatedClient {
+        crate::gateway::auth::AuthenticatedClient {
+            name: "k".to_owned(),
+            rate_limit: 0,
+            backends: vec!["*".to_owned()],
+            allowed_tools: None,
+            denied_tools: None,
+            admin: false,
+            // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
+            principal: principal.to_owned(),
+            quota_principal: None,
+            authenticated,
+            credential_kind: crate::security::audit::CredentialKind::ApiKey,
+        }
+    }
+
+    /// MIK-8659 T2 (GREEN): the task owner key needs an authenticated
+    /// non-empty principal; `{false, "p"}` and `{true, ""}` give no key.
+    #[test]
+    fn t2_task_owner_key_needs_a_principal() {
+        assert_eq!(super::session_owner_key(None), "");
+        let unauthenticated = client(false, "p");
+        assert_eq!(super::session_owner_key(Some(&unauthenticated)), "");
+        let empty = client(true, "");
+        assert_eq!(super::session_owner_key(Some(&empty)), "");
+        let ok = client(true, "p");
+        assert_eq!(
+            super::session_owner_key(Some(&ok)),
+            format!("{}{}", crate::gateway::auth::CREDENTIAL_OWNER_PREFIX, "p")
+        );
+    }
+}

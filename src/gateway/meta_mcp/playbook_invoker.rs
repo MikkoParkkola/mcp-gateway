@@ -149,7 +149,7 @@ impl ToolInvoker for MetaMcpInvoker<'_, '_> {
         // may not reach, so it is replaced with a neutral one (A3). Decided
         // from the refusal plus the silent non-authorizer pieces, so the
         // authorizer is consulted once per step, as before.
-        let answered = match outcome {
+        let mut answered = match outcome {
             Err(e)
                 if matches!(e, crate::Error::Forbidden { .. })
                     || self
@@ -160,6 +160,12 @@ impl ToolInvoker for MetaMcpInvoker<'_, '_> {
             }
             other => other,
         };
+        // Sealed at creation: the dispatch above minted this step's receipt in
+        // this request, so this seal consumes that mint before the value is
+        // kept or returned.
+        if let Ok(value) = &mut answered {
+            self.meta.seal_public_provenance(value);
+        }
         // A failed attempt's notes describe nothing the playbook keeps; a tool
         // error is a failed attempt too (MIK-8429), so the kept notes pair
         // with the engine's completed steps.

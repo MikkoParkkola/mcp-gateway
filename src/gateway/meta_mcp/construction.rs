@@ -87,6 +87,7 @@ impl MetaMcp {
             nonce_store: None,
             signing_scope: signing::SigningScope::InvokeOnly,
             provenance_signer: None,
+            public_provenance_signer: None,
             chain_signer: None,
             claim_capture: None,
             require_nonce: false,

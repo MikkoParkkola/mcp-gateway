@@ -6,6 +6,7 @@
 //! `tenant_read` fields in it.
 
 use crate::gateway::meta_mcp::MetaMcp;
+use crate::gateway::meta_mcp::response_security::DeliveryCredential;
 use crate::gateway::outbound::OutboundFrame;
 use crate::protocol::JsonRpcResponse;
 use crate::security::response_policy::ResponseCorrelation;
@@ -19,6 +20,7 @@ pub(in crate::gateway) async fn record_delivery(
     meta: &MetaMcp,
     mut frame: OutboundFrame,
     correlation: &ResponseCorrelation<'_>,
+    credential: DeliveryCredential<'_>,
     finalized: Option<JsonRpcResponse>,
 ) -> (OutboundFrame, Option<JsonRpcResponse>) {
     let read = frame.take_record_fields();
@@ -28,6 +30,7 @@ pub(in crate::gateway) async fn record_delivery(
                 .response()
                 .expect("an answer frame stays an answer through its replacements"),
             correlation,
+            credential,
             read,
         )
         .await;

@@ -140,6 +140,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `init` | 7 |  |  |  |  |
 | `kubernetes` |  |  |  | `mcp-gateway kubernetes`; `mcp-gateway kubernetes --help`; `mcp-gateway kubernetes -h`; `mcp-gateway kubernetes apply-plan`; `mcp-gateway kubernetes apply-plan --approve-apply`; `mcp-gateway kubernetes apply-plan --execute`; `mcp-gateway kubernetes apply-plan --format`; `mcp-gateway kubernetes apply-plan --help`; `mcp-gateway kubernetes apply-plan --namespace`; `mcp-gateway kubernetes apply-plan -f`; `mcp-gateway kubernetes apply-plan -h`; `mcp-gateway kubernetes apply-plan -n`; `mcp-gateway kubernetes apply-plan <RESOURCES>`; `mcp-gateway kubernetes controller`; `mcp-gateway kubernetes controller --cycles`; `mcp-gateway kubernetes controller --format`; `mcp-gateway kubernetes controller --help`; `mcp-gateway kubernetes controller --interval-seconds`; `mcp-gateway kubernetes controller --namespace`; `mcp-gateway kubernetes controller --watch`; `mcp-gateway kubernetes controller -f`; `mcp-gateway kubernetes controller -h`; `mcp-gateway kubernetes controller -n`; `mcp-gateway kubernetes controller <RESOURCES>`; `mcp-gateway kubernetes help`; `mcp-gateway kubernetes plan`; `mcp-gateway kubernetes plan --format`; `mcp-gateway kubernetes plan --help`; `mcp-gateway kubernetes plan --namespace`; `mcp-gateway kubernetes plan -f`; `mcp-gateway kubernetes plan -h`; `mcp-gateway kubernetes plan -n`; `mcp-gateway kubernetes plan <RESOURCES>` |  |
 | `list` | 5 |  |  |  | `mcp-gateway list --config`; `mcp-gateway list -c` |
+| `provenance` | 17 |  |  |  |  |
 | `ranking` |  |  |  | `mcp-gateway ranking`; `mcp-gateway ranking --help`; `mcp-gateway ranking -h`; `mcp-gateway ranking eval`; `mcp-gateway ranking eval --format`; `mcp-gateway ranking eval --help`; `mcp-gateway ranking eval -f`; `mcp-gateway ranking eval -h`; `mcp-gateway ranking eval <FILE>`; `mcp-gateway ranking help` |  |
 | `remove` | 5 |  |  |  | `mcp-gateway remove --config`; `mcp-gateway remove -c` |
 | `runtime` |  |  |  | `mcp-gateway runtime`; `mcp-gateway runtime --help`; `mcp-gateway runtime -h`; `mcp-gateway runtime compile`; `mcp-gateway runtime compile --both`; `mcp-gateway runtime compile --help`; `mcp-gateway runtime compile -h`; `mcp-gateway runtime compile <DESCRIPTOR>`; `mcp-gateway runtime help` |  |
@@ -577,33 +578,33 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `routing_profiles.<name>.deny_tools` | KEEP | `type default` | per-session tool scoping | - | src/routing_profile/mod.rs:73 |
 | `routing_profiles.<name>.description` | KEEP | `type default` | per-session tool scoping | - | src/routing_profile/mod.rs:53 |
 | `runtime` | KEEP | `type default` | sandbox runtime profiles (opt-in) | - | src/config/mod.rs:138 |
-| `runtime.availability` | KEEP | `RuntimeAvailabilityConfig::default()` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:23 |
-| `runtime.availability.docker` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:120 |
-| `runtime.availability.kubernetes` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:128 |
-| `runtime.availability.launchd` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:126 |
-| `runtime.availability.local_process` | KEEP | `true` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:118 |
-| `runtime.availability.podman` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:122 |
-| `runtime.availability.systemd` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:124 |
+| `runtime.availability` | KEEP | `RuntimeAvailability::default()` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:23 |
+| `runtime.availability.docker` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/runtime/provider.rs:82 |
+| `runtime.availability.kubernetes` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/runtime/provider.rs:90 |
+| `runtime.availability.launchd` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/runtime/provider.rs:88 |
+| `runtime.availability.local_process` | KEEP | `true` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/runtime/provider.rs:80 |
+| `runtime.availability.podman` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/runtime/provider.rs:84 |
+| `runtime.availability.systemd` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/runtime/provider.rs:86 |
 | `runtime.default_provider` | KEEP | `RuntimeProviderKind::LocalProcess` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:21 |
 | `runtime.profiles` | KEEP | `HashMap::new()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:25 |
-| `runtime.profiles.<name>.data_class` | KEEP | `RuntimeDataClass::Internal` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:170 |
-| `runtime.profiles.<name>.env_keys` | KEEP | `Vec::new()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:172 |
-| `runtime.profiles.<name>.executable` | KEEP | `None` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:166 |
-| `runtime.profiles.<name>.guarded_env_keys` | KEEP | `Vec::new()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:174 |
-| `runtime.profiles.<name>.image` | KEEP | `None` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:168 |
-| `runtime.profiles.<name>.mounts` | KEEP | `Vec::new()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:178 |
+| `runtime.profiles.<name>.data_class` | KEEP | `RuntimeDataClass::Internal` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:122 |
+| `runtime.profiles.<name>.env_keys` | KEEP | `Vec::new()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:124 |
+| `runtime.profiles.<name>.executable` | KEEP | `None` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:118 |
+| `runtime.profiles.<name>.guarded_env_keys` | KEEP | `Vec::new()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:126 |
+| `runtime.profiles.<name>.image` | KEEP | `None` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:120 |
+| `runtime.profiles.<name>.mounts` | KEEP | `Vec::new()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:130 |
 | `runtime.profiles.<name>.mounts[].mode` | KEEP | — | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:208 |
 | `runtime.profiles.<name>.mounts[].source` | KEEP | — | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:204 |
 | `runtime.profiles.<name>.mounts[].target` | KEEP | — | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:206 |
-| `runtime.profiles.<name>.network_egress` | KEEP | `RuntimeNetworkEgress::None` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:176 |
+| `runtime.profiles.<name>.network_egress` | KEEP | `RuntimeNetworkEgress::None` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:128 |
 | `runtime.profiles.<name>.network_egress.allowlist` | KEEP | — | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:231 |
-| `runtime.profiles.<name>.privileged` | KEEP | `false` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:184 |
-| `runtime.profiles.<name>.provider` | KEEP | `None` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:164 |
-| `runtime.profiles.<name>.resources` | KEEP | `RuntimeResourcePolicy::default()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:180 |
+| `runtime.profiles.<name>.privileged` | KEEP | `false` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:136 |
+| `runtime.profiles.<name>.provider` | KEEP | `None` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:116 |
+| `runtime.profiles.<name>.resources` | KEEP | `RuntimeResourcePolicy::default()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:132 |
 | `runtime.profiles.<name>.resources.cpu_cores` | KEEP | `1` | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:241 |
 | `runtime.profiles.<name>.resources.memory_mb` | KEEP | `512` | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:243 |
 | `runtime.profiles.<name>.resources.timeout_secs` | KEEP | `60` | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:245 |
-| `runtime.profiles.<name>.restart` | KEEP | `RuntimeRestartPolicy::default()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:182 |
+| `runtime.profiles.<name>.restart` | KEEP | `RuntimeRestartPolicy::default()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:134 |
 | `runtime.profiles.<name>.restart.backoff_secs` | KEEP | `5` | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:276 |
 | `runtime.profiles.<name>.restart.max_restarts` | KEEP | `2` | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:274 |
 | `security` | KEEP | `type default` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/mod.rs:115 |
@@ -1071,6 +1072,21 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway list --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/mod.rs:453 |
 | `mcp-gateway list -c` | REMOVE | short alias of `--config` | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/mod.rs:453 |
 | `mcp-gateway list --json` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:453 |
+| `mcp-gateway provenance` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:283 |
+| `mcp-gateway provenance --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:283 |
+| `mcp-gateway provenance -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:283 |
+| `mcp-gateway provenance help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/mod.rs:283 |
+| `mcp-gateway provenance public-key` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:738 |
+| `mcp-gateway provenance public-key --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/subcommands.rs:738 |
+| `mcp-gateway provenance public-key -h` | KEEP | short alias of `--help` | - | src/cli/subcommands.rs:738 |
+| `mcp-gateway provenance verify` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:746 |
+| `mcp-gateway provenance verify --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/subcommands.rs:746 |
+| `mcp-gateway provenance verify -h` | KEEP | short alias of `--help` | - | src/cli/subcommands.rs:746 |
+| `mcp-gateway provenance verify --accept-unbound` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:746 |
+| `mcp-gateway provenance verify --result` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:746 |
+| `mcp-gateway provenance verify --signature-only` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:746 |
+| `mcp-gateway provenance verify --trust` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:746 |
+| `mcp-gateway provenance verify <RECEIPT>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:746 |
 | `mcp-gateway ranking` | INTERNAL | offline evaluation of the adaptive ranker; developer tooling | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:255 |
 | `mcp-gateway ranking --help` | INTERNAL | clap-generated: prints this command's usage | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:255 |
 | `mcp-gateway ranking -h` | INTERNAL | short alias of `--help` | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:255 |

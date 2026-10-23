@@ -16,3 +16,4 @@ mod packaged;
 mod scan;
 mod scan_tests;
 mod shipped_reads;
+mod single_predicate;

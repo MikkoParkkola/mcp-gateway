@@ -190,7 +190,7 @@ impl Harness {
     }
 
     fn stored_access_token(&self) -> Option<String> {
-        let key = crate::personal_accounts::identity::AccountDescriptor {
+        let key = crate::personal_accounts::identity::AccountKeyDescriptor {
             descriptor_id: "workspace-personal".to_owned(),
             provider: "workspace".to_owned(),
             resource: RESOURCE.to_owned(),

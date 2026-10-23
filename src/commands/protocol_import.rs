@@ -208,6 +208,7 @@ async fn apply_plan_to_directory(
         );
     }
 
+    // The write itself always replaces atomically, so this refusal is the only guard.
     if !force {
         if manifest_path.exists() {
             return Err(format!(
@@ -233,7 +234,7 @@ async fn apply_plan_to_directory(
     let mut written = Vec::new();
     for (draft, generated_yaml, path) in writable {
         let body = render_applied_draft_yaml(plan, draft, generated_yaml);
-        write_atomic(&path, &body, force).await?;
+        write_atomic(&path, &body).await?;
         written.push(AppliedDraft {
             draft_id: draft.id.clone(),
             name: draft.name.clone(),
@@ -248,7 +249,7 @@ async fn apply_plan_to_directory(
     let report = build_apply_report(plan, output, &manifest_path, written, skipped);
     let manifest_body = serde_json::to_string_pretty(&report)
         .map_err(|e| format!("failed to serialize apply manifest: {e}"))?;
-    write_atomic(&manifest_path, &format!("{manifest_body}\n"), force).await?;
+    write_atomic(&manifest_path, &format!("{manifest_body}\n")).await?;
 
     Ok(report)
 }
@@ -316,7 +317,7 @@ fn render_applied_draft_yaml(
     )
 }
 
-async fn write_atomic(path: &Path, content: &str, force: bool) -> Result<(), String> {
+async fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -325,27 +326,13 @@ async fn write_atomic(path: &Path, content: &str, force: bool) -> Result<(), Str
         .await
         .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
 
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| format!("invalid output path {}", path.display()))?;
-    let tmp = parent.join(format!(".{file_name}.tmp"));
-
-    tokio::fs::write(&tmp, content)
-        .await
-        .map_err(|e| format!("failed to write temp file {}: {e}", tmp.display()))?;
-    if force && path.exists() {
-        tokio::fs::remove_file(path)
-            .await
-            .map_err(|e| format!("failed to replace {}: {e}", path.display()))?;
-    }
-    tokio::fs::rename(&tmp, path).await.map_err(|e| {
-        format!(
-            "failed to move {} to {}: {e}",
-            tmp.display(),
-            path.display()
-        )
-    })
+    mcp_gateway::config_persistence::write_atomic(
+        path,
+        content.as_bytes(),
+        mcp_gateway::config_persistence::FileMode::Inherit,
+        mcp_gateway::config_persistence::Symlink::Replace,
+    )
+    .map_err(|e| format!("failed to replace {}: {e}", path.display()))
 }
 
 fn manifest_file_name(plan: &ImportPlan) -> String {
