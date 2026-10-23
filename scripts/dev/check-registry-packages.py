@@ -426,6 +426,9 @@ PACKAGE_ENV = {
     "UV_TOOL_DIR": "/work/tools",
     "UV_TOOL_BIN_DIR": "/work/bin",
     "XDG_CACHE_HOME": "/work/.cache",
+    # No install scripts for package code we did not write (lead ruling
+    # 2026-10-23); a pinned server that needs them FAILs to start.
+    "npm_config_ignore_scripts": "true",
     "PATH": "/work/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin",
 }
 # The one root step: no network, no environment, a constant command. Changing
@@ -506,7 +509,7 @@ def bytes_verdict(kind: str, pkg: str, version: str, expected, volume: str, name
             return f"served bytes could not be fetched (npm pack exited {rc}): {tail_text(err)}"
         return None if served == expected else f"served bytes integrity {served} is not the recorded {expected}"
     hashes = " ".join(f"--hash=sha256:{digest}" for digest in sorted(expected.values()))
-    argv = docker_run(kind, volume, ["pip", "download", "-d", "/work", "--no-deps", "--require-hashes", "-r", "/dev/stdin"], name=name, interactive=True)
+    argv = docker_run(kind, volume, ["pip", "download", "-d", "/work", "--no-deps", "--only-binary", ":all:", "--require-hashes", "-r", "/dev/stdin"], name=name, interactive=True)
     rc, _, err = run_container(argv, f"{pkg}=={version} {hashes}\n".encode(), CAPS["fetch"])
     return None if rc == 0 else f"served bytes do not match the recorded sha256 (pip exited {rc}): {tail_text(err)}"
 
@@ -540,8 +543,8 @@ def start_one(entry: dict[str, str], plan: tuple[str, str, str], expected) -> tu
             prime = ["npm", "exec", "--yes", "--package", f"{pkg}@{version}", "--", "true"]
             launcher = ["npx", "--offline", "-y", f"{pkg}@{version}"]
         else:
-            prime = ["uv", "tool", "install", f"{pkg}=={version}"]
-            launcher = ["uvx", "--offline", f"{pkg}@{version}"]
+            prime = ["uv", "tool", "install", "--no-build", f"{pkg}=={version}"]
+            launcher = ["uvx", "--offline", "--no-build", f"{pkg}@{version}"]
         launched.append(names["prime"])
         rc, _, err = run_container(docker_run(kind, volume, prime, name=names["prime"]), None, CAPS["prime"])
         if rc != 0:

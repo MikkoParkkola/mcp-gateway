@@ -192,20 +192,26 @@ it runs as uid 1000.
 
 **Steps.** The first two use the network; the last does not. Fetch runs for every
 pinned entry; prime and start run only for eligible ones, so a `START_SKIP`
-package never runs install scripts or downloads a browser.
+package never downloads a browser.
 
-1. **Fetch and verify:** `npm pack` or `pip download` as above, 120 s cap. This
-   runs for every pinned entry.
+**No package scripts run** (lead ruling 2026-10-23, after review). Every npm step
+gets `npm_config_ignore_scripts=true`, `pip download` takes `--only-binary :all:`,
+and the uv steps take `--no-build`, so no install or build script from a package
+we did not write runs, even inside the container. A pinned server that needs its
+scripts to start FAILs, and that FAIL is a finding to report. Scripts are never
+turned back on to make it pass.
+
+1. **Fetch and verify:** `npm pack` or `pip download --only-binary :all:` as
+   above, 120 s cap. This runs for every pinned entry.
 2. **Prime the launcher users get,** 180 s cap:
    - npm: `npm exec --yes --package <pkg>@<ver> -- true`. This fills the npx
-     cache, runs install scripts as `npx -y` would (the container is the
-     boundary), and does not start the server.
-   - uvx: `uv tool install <pkg>==<ver>`.
+     cache without running install scripts, and does not start the server.
+   - uvx: `uv tool install --no-build <pkg>==<ver>`.
 3. **Start,** in a second container on the same volume with `--network none`,
    60 s cap:
    - npm: `npx --offline -y <pkg>@<ver> <args>`;
-   - uvx: `uvx --offline <pkg>@<ver> <args>`, the launcher users get, served
-     from the primed cache.
+   - uvx: `uvx --offline --no-build <pkg>@<ver> <args>`, the launcher users get,
+     served from the primed cache.
 
    A server that needs the network to start therefore FAILs.
 
