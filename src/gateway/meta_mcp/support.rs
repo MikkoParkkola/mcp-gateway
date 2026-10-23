@@ -607,16 +607,14 @@ pub(super) fn augment_with_provenance(
         receipt = receipt.with_call_id(trace_id);
     }
     let signed_receipt = receipt.sign(signer);
+    let prov_value = serde_json::to_value(&signed_receipt).unwrap_or(Value::Null);
 
     if let Value::Object(ref mut map) = result {
         let meta = map
             .entry("_meta")
             .or_insert_with(|| Value::Object(serde_json::Map::new()));
         if let Value::Object(meta_map) = meta {
-            meta_map.insert(
-                "provenance".to_string(),
-                serde_json::to_value(signed_receipt.clone()).unwrap_or(Value::Null),
-            );
+            meta_map.insert("provenance".to_string(), prov_value);
         }
     }
     note_written(&["_meta", "provenance"], &result);

@@ -25,6 +25,7 @@ mod descriptor;
 mod inference;
 mod kinds;
 pub mod provenance_eval;
+pub(crate) mod provenance_public;
 pub mod result_extractor;
 mod result_provenance;
 mod schema_bounds;
@@ -43,6 +44,7 @@ pub use descriptor::{
     tools_list_result_with_trust_cards, trust_card_digest_sha256,
 };
 pub use kinds::{CbomComponentKind, CbomSubjectKind, TrustEvidenceKind};
+pub use provenance_public::run_provenance_command;
 pub use result_extractor::extract_row_count;
 pub use result_provenance::{CacheOutcome, RuntimeProvenanceReceipt, SignedResultProvenance};
 pub(crate) use schema_bounds::closed_keys;

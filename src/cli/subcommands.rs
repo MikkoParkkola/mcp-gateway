@@ -729,3 +729,38 @@ pub enum AuditCommand {
         path: Option<PathBuf>,
     },
 }
+
+/// Public provenance key export and verification commands.
+///
+/// The configuration comes from the global `--config` (`-c`,
+/// `MCP_GATEWAY_CONFIG`), as for every other 4.0 subcommand — this enum
+/// defines no `--config` of its own.
+#[derive(Subcommand, Debug)]
+pub enum ProvenanceCommand {
+    /// Export the gateway's public provenance key as JWK.
+    #[command(about = "Export the public provenance key")]
+    PublicKey,
+
+    /// Verify a signed provenance receipt against trusted public keys.
+    #[command(about = "Verify a signed provenance receipt")]
+    Verify {
+        /// JSON file holding the trusted public keys (one JWK or a JWKS).
+        #[arg(long)]
+        trust: PathBuf,
+
+        /// Receipt to verify: a `SignedResultProvenance` or a full stamped result.
+        receipt: PathBuf,
+
+        /// Tool result the receipt binds to.
+        #[arg(long)]
+        result: Option<PathBuf>,
+
+        /// Accept a receipt that verifies without its result.
+        #[arg(long)]
+        signature_only: bool,
+
+        /// Accept a receipt whose result digest is absent.
+        #[arg(long)]
+        accept_unbound: bool,
+    },
+}

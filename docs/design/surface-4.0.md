@@ -140,6 +140,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `init` | 7 |  |  |  |  |
 | `kubernetes` |  |  |  | `mcp-gateway kubernetes`; `mcp-gateway kubernetes --help`; `mcp-gateway kubernetes -h`; `mcp-gateway kubernetes apply-plan`; `mcp-gateway kubernetes apply-plan --approve-apply`; `mcp-gateway kubernetes apply-plan --execute`; `mcp-gateway kubernetes apply-plan --format`; `mcp-gateway kubernetes apply-plan --help`; `mcp-gateway kubernetes apply-plan --namespace`; `mcp-gateway kubernetes apply-plan -f`; `mcp-gateway kubernetes apply-plan -h`; `mcp-gateway kubernetes apply-plan -n`; `mcp-gateway kubernetes apply-plan <RESOURCES>`; `mcp-gateway kubernetes controller`; `mcp-gateway kubernetes controller --cycles`; `mcp-gateway kubernetes controller --format`; `mcp-gateway kubernetes controller --help`; `mcp-gateway kubernetes controller --interval-seconds`; `mcp-gateway kubernetes controller --namespace`; `mcp-gateway kubernetes controller --watch`; `mcp-gateway kubernetes controller -f`; `mcp-gateway kubernetes controller -h`; `mcp-gateway kubernetes controller -n`; `mcp-gateway kubernetes controller <RESOURCES>`; `mcp-gateway kubernetes help`; `mcp-gateway kubernetes plan`; `mcp-gateway kubernetes plan --format`; `mcp-gateway kubernetes plan --help`; `mcp-gateway kubernetes plan --namespace`; `mcp-gateway kubernetes plan -f`; `mcp-gateway kubernetes plan -h`; `mcp-gateway kubernetes plan -n`; `mcp-gateway kubernetes plan <RESOURCES>` |  |
 | `list` | 5 |  |  |  | `mcp-gateway list --config`; `mcp-gateway list -c` |
+| `provenance` | 17 |  |  |  |  |
 | `ranking` |  |  |  | `mcp-gateway ranking`; `mcp-gateway ranking --help`; `mcp-gateway ranking -h`; `mcp-gateway ranking eval`; `mcp-gateway ranking eval --format`; `mcp-gateway ranking eval --help`; `mcp-gateway ranking eval -f`; `mcp-gateway ranking eval -h`; `mcp-gateway ranking eval <FILE>`; `mcp-gateway ranking help` |  |
 | `remove` | 5 |  |  |  | `mcp-gateway remove --config`; `mcp-gateway remove -c` |
 | `runtime` |  |  |  | `mcp-gateway runtime`; `mcp-gateway runtime --help`; `mcp-gateway runtime -h`; `mcp-gateway runtime compile`; `mcp-gateway runtime compile --both`; `mcp-gateway runtime compile --help`; `mcp-gateway runtime compile -h`; `mcp-gateway runtime compile <DESCRIPTOR>`; `mcp-gateway runtime help` |  |
@@ -1071,6 +1072,21 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway list --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/mod.rs:453 |
 | `mcp-gateway list -c` | REMOVE | short alias of `--config` | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/mod.rs:453 |
 | `mcp-gateway list --json` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:453 |
+| `mcp-gateway provenance` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:283 |
+| `mcp-gateway provenance --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:283 |
+| `mcp-gateway provenance -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:283 |
+| `mcp-gateway provenance help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/mod.rs:283 |
+| `mcp-gateway provenance public-key` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:738 |
+| `mcp-gateway provenance public-key --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/subcommands.rs:738 |
+| `mcp-gateway provenance public-key -h` | KEEP | short alias of `--help` | - | src/cli/subcommands.rs:738 |
+| `mcp-gateway provenance verify` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:746 |
+| `mcp-gateway provenance verify --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/subcommands.rs:746 |
+| `mcp-gateway provenance verify -h` | KEEP | short alias of `--help` | - | src/cli/subcommands.rs:746 |
+| `mcp-gateway provenance verify --accept-unbound` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:746 |
+| `mcp-gateway provenance verify --result` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:746 |
+| `mcp-gateway provenance verify --signature-only` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:746 |
+| `mcp-gateway provenance verify --trust` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:746 |
+| `mcp-gateway provenance verify <RECEIPT>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:746 |
 | `mcp-gateway ranking` | INTERNAL | offline evaluation of the adaptive ranker; developer tooling | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:255 |
 | `mcp-gateway ranking --help` | INTERNAL | clap-generated: prints this command's usage | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:255 |
 | `mcp-gateway ranking -h` | INTERNAL | short alias of `--help` | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:255 |
