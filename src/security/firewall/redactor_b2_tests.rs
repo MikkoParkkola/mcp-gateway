@@ -367,7 +367,7 @@ fn b6d_many_matches_and_escapes_in_one_literal() {
     use std::fmt::Write as _;
     let mut body = String::new();
     for i in 0..2_000 {
-        write!(body, "{}{i:016} \\n ", "AKIA").unwrap();
+        write!(body, "AKIA{i:016} \\n ").unwrap();
     }
     let text = format!(r#"{{"s":"{body}"}}"#);
     let out = assert_projected(&text);
@@ -693,7 +693,7 @@ fn f1_projection_cost() {
     // escape widening must stay a search, not a rescan per match.
     let mut body = String::new();
     for i in 0..40_000 {
-        write!(body, "{}{i:016} \\n ", "AKIA").unwrap();
+        write!(body, "AKIA{i:016} \\n ").unwrap();
     }
     let text = format!(r#"{{"s":"{body}"}}"#);
     let started = std::time::Instant::now();
