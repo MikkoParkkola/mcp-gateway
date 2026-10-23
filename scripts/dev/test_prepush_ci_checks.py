@@ -281,11 +281,31 @@ class Rows(unittest.TestCase):
     # D8
     def test_d8_chains_split_and_a_pipeline_stays_one_form(self):
         found = workflow_shell.executions(
-            "python3 scripts/a.py && \\\n  python3 scripts/b.py; python3 scripts/c.py || true\n"
+            "python3 scripts/a.py --base \\\n  x && \\\n  python3 scripts/b.py; python3 scripts/c.py || true\n"
             'python3 scripts/g.py "$t" | cmp - f.json\n'
         )
         self.assertEqual([e.script for e in found], ["scripts/a.py", "scripts/b.py", "scripts/c.py", "scripts/g.py"])
+        # A continuation inside one command joins its argument (F14).
+        self.assertEqual(found[0].args, ("--base", "x"))
         self.assertEqual(found[3].pipeline, ('python3 scripts/g.py "$t"', "cmp - f.json"))
+
+    # D17 (impl r1 F2): a script fed by a pipe is an execution, with its pipeline.
+    def test_d17_a_script_after_a_pipe_is_an_execution(self):
+        found = workflow_shell.executions("cat f.json | python3 scripts/p.py --x")
+        self.assertEqual([(e.script, e.args, e.pipeline) for e in found],
+                         [("scripts/p.py", ("--x",), ("cat f.json", "python3 scripts/p.py --x"))])
+
+    # D18 (impl r1 F3): single-quoted text is data, not a substitution.
+    def test_d18_a_single_quoted_substitution_is_not_an_execution(self):
+        self.assertEqual(workflow_shell.executions("echo '$(python3 scripts/q.py)'"), [])
+
+    # D19 (impl r1 F4): a quoted argument with a space stays one argument;
+    # an unbalanced quote fails closed.
+    def test_d19_a_quoted_argument_is_one_word(self):
+        found = workflow_shell.executions('python3 scripts/r.py "two words" x')
+        self.assertEqual([e.args for e in found], [("two words", "x")])
+        with self.assertRaises(workflow_shell.UnsupportedSyntax):
+            workflow_shell.executions('python3 scripts/r.py "open')
 
     # D9
     def test_d9_pull_request_target_counts_as_a_pr_workflow(self):

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import itertools
 import re
+import shlex
 from dataclasses import dataclass, field
 
 # A heredoc opener: `<<EOF`, `<< 'EOF'`, `<<-"EOF"`, `<<~EOF`. What follows is
@@ -172,6 +173,8 @@ def _binding(value):
         return value, "network: the base is a download URL, not a commit"
     if "BEFORE" in value or "github.event.before" in value or "HEAD^" in value:
         return value, "ci-env: push-only event data (github.event.before)"
+    if value.startswith(("$(", "`")):
+        return None  # computed at run time: the variable stays opaque
     return value, ""
 
 
@@ -201,8 +204,42 @@ def _single_value(value):
     return " " not in value
 
 
+def _pipe_stages(pipeline):
+    """`pipeline` split at `|` outside quotes and `$( … )`, stages stripped."""
+    stages, current, quote, depth, i = [], "", None, 0, 0
+    while i < len(pipeline):
+        char = pipeline[i]
+        if quote:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif pipeline.startswith("$(", i):
+            depth += 1
+        elif char == ")" and depth:
+            depth -= 1
+        elif char == "|" and not depth:
+            stages.append(current)
+            current, i = "", i + 1
+            continue
+        current += char
+        i += 1
+    stages.append(current)
+    return [stage.strip() for stage in stages if stage.strip()]
+
+
 def _command_words(piece):
-    words = piece.split()
+    plain = piece.split()
+    while plain and (plain[0] in KEYWORDS or ASSIGN.match(plain[0])):
+        plain = plain[1:]
+    if not plain or plain[0] not in PYTHONS:
+        return plain  # not a Python command: its quoting is never tokenized
+    try:
+        # posix=False keeps quotes on the words (`_token` strips them), so
+        # `"two words"` stays one argument and `$t` stays distinguishable.
+        words = shlex.split(piece, posix=False)
+    except ValueError as err:
+        raise UnsupportedSyntax(f"{err}: {piece}") from None
     while words and (words[0] in KEYWORDS or ASSIGN.match(words[0])):
         words = words[1:]
     return words
@@ -218,9 +255,10 @@ def executions(run_block: str) -> list[Execution]:
         if raw.strip().startswith("#"):
             continue
         for pipeline in _split_keep_pipes(raw):
-            for inner in SUBSTITUTION.findall(pipeline):
+            # Single-quoted text is data: `echo '$(python3 x.py)'` runs nothing.
+            for inner in SUBSTITUTION.findall(re.sub(r"'[^']*'", "''", pipeline)):
                 found += executions(inner[0] or inner[1])
-            stages = [s.strip() for s in pipeline.split("|") if s.strip()]
+            stages = _pipe_stages(pipeline)
             if not stages:
                 continue
             first = stages[0]
@@ -232,38 +270,48 @@ def executions(run_block: str) -> list[Execution]:
             if assign and _single_value(assign.group(2)):
                 # Every assignment is kept: `base="${BASE_SHA:-}"` and its
                 # fallback `base="$(git rev-parse HEAD^)"` are two forms.
-                bound.setdefault(assign.group(1), []).append(_binding(assign.group(2)))
+                name = assign.group(1)
+                bound.setdefault(name, []).append(_binding(assign.group(2)) or ("$" + name, ""))
                 continue
-            words = _command_words(SUBSTITUTION.sub("", first))
-            if not words:
-                continue
-            if words[0] in UNSUPPORTED:
-                raise UnsupportedSyntax(f"`{words[0]}` hides what it executes: {first}")
-            if words[0] not in PYTHONS:
-                continue
-            # Interpreter flags (`-B`, `-I`) come before the script; the
-            # script's own flags after it are arguments and are kept.
-            rest = list(words[1:])
-            while rest and rest[0].startswith("-") and rest[0] != "-":
-                rest.pop(0)
-            if not rest:
-                continue
-            target = rest[0].strip("'\"")
-            for var, pattern in loops.items():
-                if target in ("$" + var, "${" + var + "}"):
-                    target = pattern
-            if not SCRIPT.match(target):
-                continue
-            words_after = _without_redirections(rest[1:])
-            used = [v for v in bound if any(("$" + v) in w for w in words_after)]
-            for combo in itertools.product(*(bound[v] for v in used)):
-                values = {v: value for v, (value, _) in zip(used, combo)}
-                klass = next((k for _, k in combo if k), "")
-                found.append(Execution(
-                    argv0=words[0], script=target, args=tuple(_token(w, values) for w in words_after),
-                    pipeline=tuple(stages) if len(stages) > 1 else (),
-                    auto_class=klass,
-                ))
+            # Every stage is a command: `cat f | python3 scripts/x.py` runs x.py.
+            for stage in stages:
+                found += _stage_execution(stage, stages, bound, loops)
+    return found
+
+
+def _stage_execution(stage, stages, bound, loops):
+    """The script execution forms one pipeline stage runs (none, or one per binding)."""
+    found = []
+    words = _command_words(SUBSTITUTION.sub("", stage))
+    if not words:
+        return found
+    if words[0] in UNSUPPORTED:
+        raise UnsupportedSyntax(f"`{words[0]}` hides what it executes: {stage}")
+    if words[0] not in PYTHONS:
+        return found
+    # Interpreter flags (`-B`, `-I`) come before the script; the
+    # script's own flags after it are arguments and are kept.
+    rest = list(words[1:])
+    while rest and rest[0].startswith("-") and rest[0] != "-":
+        rest.pop(0)
+    if not rest:
+        return found
+    target = rest[0].strip("'\"")
+    for var, pattern in loops.items():
+        if target in ("$" + var, "${" + var + "}"):
+            target = pattern
+    if not SCRIPT.match(target):
+        return found
+    words_after = _without_redirections(rest[1:])
+    used = [v for v in bound if any(("$" + v) in w for w in words_after)]
+    for combo in itertools.product(*(bound[v] for v in used)):
+        values = {v: value for v, (value, _) in zip(used, combo)}
+        klass = next((k for _, k in combo if k), "")
+        found.append(Execution(
+            argv0=words[0], script=target, args=tuple(_token(w, values) for w in words_after),
+            pipeline=tuple(stages) if len(stages) > 1 else (),
+            auto_class=klass,
+        ))
     return found
 
 
