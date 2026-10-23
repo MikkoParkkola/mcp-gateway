@@ -3,6 +3,7 @@
 //! Admission and refusal for the stdio read loop, none of which may wait:
 //! the reader that calls them is the only thing that reads EOF and cancels.
 
+use crate::error::rpc_codes::INVALID_REQUEST;
 use std::sync::Arc;
 
 /// Take a slot for one accepted stdio request, or refuse.
@@ -43,7 +44,7 @@ pub(super) fn stdio_busy_batch_response(batch: &serde_json::Value) -> Option<ser
         serde_json::json!({
             "jsonrpc": "2.0",
             "id": null,
-            "error": {"code": -32600, "message": "Invalid Request"}
+            "error": {"code": INVALID_REQUEST, "message": "Invalid Request"}
         })
     };
     let items = batch.as_array()?;

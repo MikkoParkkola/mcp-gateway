@@ -109,7 +109,7 @@ frozen.
   (MIK-7217.OUTBOUND.2(d)) now exempts `-32601` explicitly: a well-formed,
   id-correlated `method not found` is evidence the peer is alive, not a fault.
 - **Implementation.** `src/backend/lifecycle.rs:1215-1223` resets
-  `unserved_consecutive` to zero on `METHOD_NOT_FOUND_CODE` and returns before
+  `unserved_consecutive` to zero on `rpc_codes::METHOD_NOT_FOUND` and returns before
   the escalation check, so a backend that never serves `ping` can no longer be
   auto-disabled. It resets rather than skips, so a peer alternating `ping`
   refusals with genuine faults cannot accumulate faults across the answers that

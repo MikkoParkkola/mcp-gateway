@@ -3,6 +3,7 @@
 //! Session expiry, re-initialise and retry (MIK-5982), and per-call headers.
 
 use super::*;
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 
 // =========================================================================
 // Session expiry → re-initialize → retry (MIK-5982)
@@ -432,7 +433,7 @@ fn session_expired_detection_matches_known_signatures() {
     }));
     // ...and the narrowness holds: an ordinary refusal is not an expiry.
     assert!(!is_session_expired_error(&Error::JsonRpc {
-        code: crate::protocol::era::METHOD_NOT_FOUND_CODE,
+        code: METHOD_NOT_FOUND,
         message: "Method not found: tools/list".to_string(),
         data: None,
     }));
@@ -447,7 +448,7 @@ fn session_expired_detection_matches_known_signatures() {
         data: None,
     }));
     assert!(!is_session_expired_error(&Error::JsonRpcRetryable {
-        code: crate::protocol::era::METHOD_NOT_FOUND_CODE,
+        code: METHOD_NOT_FOUND,
         message: "Method not found: tools/list".to_string(),
         status: 429,
         data: None,

@@ -9,6 +9,7 @@
 //! whatever its bound, carries a [`FillGuard`] that stamps the cooldown when
 //! the fill ends without storing, and never on a caller cancellation.
 
+use crate::error::rpc_codes::INTERNAL_ERROR;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -242,7 +243,7 @@ pub(super) fn admit_fill(
         // text U). Any other caller keeps the generic fast-fail.
         return Err(match replay {
             Some(replay) if gated => replay.error(),
-            None if gated => Error::json_rpc(-32603, fast_fail),
+            None if gated => Error::json_rpc(INTERNAL_ERROR, fast_fail),
             _ => Error::BackendUnavailable(fast_fail),
         });
     }

@@ -14,6 +14,7 @@
 //! Attestation, nonce, budget and idempotency are about one call rather than
 //! about who may see what, and stay on the call path only.
 
+use crate::error::rpc_codes::{INVALID_REQUEST, METHOD_NOT_FOUND};
 use serde_json::json;
 use tracing::warn;
 
@@ -172,7 +173,7 @@ impl MetaMcp {
             &refusal.to_string(),
         );
         Some(Error::json_rpc(
-            -32601,
+            METHOD_NOT_FOUND,
             format!("Unknown tool: {tool_name}"),
         ))
     }
@@ -379,7 +380,7 @@ impl MetaMcp {
             // A deliberate, permanent refusal: the admin-denial shape admin-only
             // tools answer with (403, -32600), never a retriable internal error.
             return Err(Error::Forbidden {
-                code: -32600,
+                code: INVALID_REQUEST,
                 status: 403,
                 message: format!(
                     "'{tool}' registers a caller-supplied address with a third party, which \

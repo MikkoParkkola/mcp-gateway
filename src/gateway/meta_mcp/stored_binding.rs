@@ -13,6 +13,7 @@
 //! credential, and it is refused. It is never re-run: the key's one
 //! execution is settled, and a second would send the call twice.
 
+use crate::error::rpc_codes::INTERNAL_ERROR;
 use crate::gateway::meta_mcp::admission::StepBinding;
 
 /// Why a stored result is not served. Typed, so each kind keeps one text and
@@ -41,7 +42,7 @@ impl Refusal {
                  not served; re-run the call with a new idempotency key"
             ),
         };
-        crate::Error::json_rpc(-32603, text)
+        crate::Error::json_rpc(INTERNAL_ERROR, text)
     }
 }
 

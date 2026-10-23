@@ -9,6 +9,7 @@
 //! backend whose identity propagation is `required` is refused, exactly as on
 //! an HTTP request that carries no verified identity.
 
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 use serde_json::Value;
 
 use super::{STDIO, STDIO_CREDENTIAL_PRINCIPAL};
@@ -97,7 +98,7 @@ async fn dispatch_catalogue(
         }
         other => JsonRpcResponse::error(
             Some(id),
-            -32601,
+            METHOD_NOT_FOUND,
             format!("stdio: '{other}' is not a catalogue method"),
         ),
     }
