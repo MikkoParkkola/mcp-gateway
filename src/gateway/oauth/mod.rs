@@ -74,9 +74,6 @@ pub struct OAuthAgentIdentity {
     pub quota_principal: Option<QuotaPrincipal>,
 }
 
-/// Old name of [`OAuthAgentIdentity`], removed in the next commit.
-pub use self::OAuthAgentIdentity as AgentIdentity;
-
 impl OAuthAgentIdentity {
     /// The identity a validated agent token proves, built one way for the
     /// middleware and for a stream's per-decision judge (MIK-8377).

@@ -29,9 +29,6 @@ pub enum PeerEra {
     Legacy,
 }
 
-/// Old name of [`PeerEra`], removed in the next commit.
-pub use self::PeerEra as Era;
-
 impl PeerEra {
     /// The wire spelling, shared by the operator read and the `era_probe`
     /// event so the two cannot drift.

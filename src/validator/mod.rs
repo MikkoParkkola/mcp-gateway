@@ -37,9 +37,6 @@ pub enum ValidatorOutputFormat {
     Sarif,
 }
 
-/// Old name of [`ValidatorOutputFormat`], removed in the next commit.
-pub use self::ValidatorOutputFormat as OutputFormat;
-
 /// Minimum severity filter
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 pub enum SeverityFilter {

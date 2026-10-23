@@ -35,9 +35,6 @@ pub enum CatalogTransport {
     },
 }
 
-/// Old name of [`CatalogTransport`], removed in the next commit.
-pub use self::CatalogTransport as Transport;
-
 /// The HTTP dialect of a hosted endpoint, recorded per entry rather than
 /// guessed from its URL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,9 +130,6 @@ pub struct ServerCatalogEntry {
     /// Whether it starts with nothing more than its command.
     pub setup: Setup,
 }
-
-/// Old name of [`ServerCatalogEntry`], removed in the next commit.
-pub use self::ServerCatalogEntry as RegistryEntry;
 
 impl ServerCatalogEntry {
     /// True when the server needs an account, key or login.

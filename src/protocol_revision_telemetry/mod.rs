@@ -132,9 +132,6 @@ pub enum ShadowCacheScope {
     Private,
 }
 
-/// Old name of [`ShadowCacheScope`], removed in the next commit.
-pub use self::ShadowCacheScope as CacheScope;
-
 impl ShadowCacheScope {
     /// Wire string the spec uses.
     pub fn as_str(self) -> &'static str {
