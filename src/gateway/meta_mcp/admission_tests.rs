@@ -431,6 +431,34 @@ fn sub4_a_key_reused_across_the_protocol_transition_is_refused() {
     assert_replay(admit(&meta, &caller, "gateway_invoke", &args, 4), 4);
 }
 
+/// E6: a keyed plan replay is refused across the protocol transition with
+/// the same exact data: a plan's stored answer is shaped for its era too.
+#[test]
+fn e6_a_plan_key_reused_across_the_protocol_transition_is_refused() {
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    install_plan(&meta, original_plan());
+    let policy = MutablePolicy::new(SECOND);
+    let retry = RetryFields {
+        idempotency_key: Some("plan-key".into()),
+        ..RetryFields::default()
+    };
+    let mut caller = context(&policy, &retry);
+    let args = json!({"name":"protected-plan", "arguments":{"record":"original"}});
+    retained_operation(&meta, &caller, "gateway_run_playbook", &args);
+    caller.is_modern = false;
+    let error = refusal(admit(&meta, &caller, "gateway_run_playbook", &args, 3));
+    let Error::JsonRpc { code, data, .. } = &error else {
+        panic!("E6: a cross-era plan replay is the era refusal: {error}");
+    };
+    assert_eq!(*code, 409, "{error}");
+    assert_eq!(
+        data.as_ref()
+            .map(|d| (&d["reason"], &d["already_executed"])),
+        Some((&json!("idempotency_era_mismatch"), &json!(true))),
+        "E6: {error}"
+    );
+}
+
 /// E5 (store level): Direct stores unshaped bytes and reshapes them for the
 /// replaying era (MIK-8022), so its lease records no era and a cross-era
 /// replay of a Direct key is served, never refused (MIK-8747 r3 scope).
