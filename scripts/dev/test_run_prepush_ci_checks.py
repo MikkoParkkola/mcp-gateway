@@ -480,14 +480,15 @@ class Runner(unittest.TestCase):
 
         runner._git = recording
         try:
-            self.f.run([line(py("pass"))], deadline_s=30)
+            self.f.run([line(py("pass"), requires=self.f.head)], deadline_s=30)
         finally:
             runner._git = real
+        setup = ("cat-file", "clone", "checkout", "reset", "clean")
         used = {name for name, _ in calls}
-        self.assertTrue({"clone", "checkout", "reset", "clean"} <= used, calls)
-        unbounded = [(n, t) for n, t in calls if n in ("clone", "checkout", "reset", "clean") and (t is None or t > 30)]
+        self.assertTrue(set(setup) <= used, calls)
+        unbounded = [(n, t) for n, t in calls if n in setup and (t is None or t > 30)]
         self.assertEqual(unbounded, [])
-        timeouts = [t for n, t in calls if n in ("clone", "checkout", "reset", "clean")]
+        timeouts = [t for n, t in calls if n in setup]
         self.assertTrue(all(a > b for a, b in zip(timeouts, timeouts[1:])),
                         f"each call gets the time left, not one captured slice: {timeouts}")
 

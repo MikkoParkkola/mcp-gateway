@@ -213,7 +213,8 @@ def _pool(lines, *, repo, commit, ctx, tmp, workers, executor, line_timeout_s, d
         if left <= 0:
             results[index] = LineResult(line.command, -1, 0.0, status="deadline")
             return clone
-        if line.requires and _git(repo, "cat-file", "-e", f"{line.requires}^{{commit}}").returncode != 0:
+        if line.requires and _git(repo, "cat-file", "-e", f"{line.requires}^{{commit}}",
+                                  timeout=_left(deadline)).returncode != 0:
             results[index] = LineResult(
                 line.command, -1, 0.0, status="missing",
                 output=f"commit {line.requires} is not in the local object store: git fetch origin {line.requires}",
