@@ -619,7 +619,7 @@ mod redirect_tests {
     }
 
     /// The body-read error alone: headers promise more bytes than arrive, so
-    /// `text()` fails after a 200 (MIK-8660; lane-written).
+    /// `text()` fails after a 200 (MIK-8660).
     #[tokio::test]
     async fn skill_body_read_error_hides_typed_url_secrets() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

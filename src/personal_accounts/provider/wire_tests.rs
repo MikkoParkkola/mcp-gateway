@@ -441,7 +441,7 @@ async fn a_dropped_pause_serves_no_metadata_however_valid_the_responder() {
     fixture.stop().await;
 }
 
-// T8a (MIK-8660, lane-written red probe): the typed rustls downcast that
+// MIK-8660 T8a: the typed rustls downcast that
 // `events/client.rs` uses must name a real untrusted-certificate handshake.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_typed_tls_check_names_an_untrusted_certificate() {

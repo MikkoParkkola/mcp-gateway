@@ -353,11 +353,8 @@ impl TokenExchangeStrategy {
 /// exact security-relevant downgrade this strategy exists to prevent. Panicking
 /// at construction is a hard fail-closed at startup and matches the last-resort
 /// `expect` on gateway key generation in `gateway::server`.
-/// A token endpoint has no reason to redirect, and following a 307/308 would re-POST the form, `subject_token` included, to the redirect target.
-fn token_exchange_redirect_policy() -> reqwest::redirect::Policy {
-    reqwest::redirect::Policy::none()
-}
-
+///
+/// It follows no redirect: see [`token_exchange_redirect_policy`].
 fn default_http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .https_only(true)
@@ -365,6 +362,12 @@ fn default_http_client() -> reqwest::Client {
         .redirect(token_exchange_redirect_policy())
         .build()
         .expect("failed to build HTTPS-only token-exchange HTTP client (TLS backend init)")
+}
+
+/// A token endpoint has no reason to redirect, and following a 307/308 would
+/// re-POST the form, `subject_token` included, to the redirect target.
+fn token_exchange_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::none()
 }
 
 #[async_trait::async_trait]

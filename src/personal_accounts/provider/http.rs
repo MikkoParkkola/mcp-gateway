@@ -201,9 +201,9 @@ fn classify(error: &reqwest::Error) -> HttpError {
 mod embedded_userinfo_guard_tests {
     use super::*;
 
-    // T8b (MIK-8660, lane-written red probe): the string markers read the URL
-    // too, so a refused connection to a path named `handshake` is labelled a
-    // certificate failure.
+    // MIK-8660 T8b: the classifier used to match strings in the error, and the
+    // error embeds the URL, so a refused connection to a path named `handshake`
+    // read as a certificate failure. It must not: the check is by type.
     #[tokio::test]
     async fn a_refused_connection_named_handshake_is_not_a_certificate_failure() {
         let error = reqwest::Client::builder()
