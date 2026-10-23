@@ -7,6 +7,7 @@
 //! re-authorized before delivery; both are handed in. Everything an owner
 //! lookup, a round or a cancel says is decided here, once.
 
+use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS};
 use std::future::Future;
 use std::sync::Arc;
 
@@ -75,7 +76,7 @@ pub(crate) fn task_id_param(params: Option<&Value>) -> Option<&str> {
 /// naming the task would let a caller tell "not yours" from "never existed",
 /// which is the whole disclosure the ownership rule exists to prevent.
 pub(crate) fn missing_task_error(id: RequestId) -> JsonRpcResponse {
-    JsonRpcResponse::error(Some(id), -32602, "no such task")
+    JsonRpcResponse::error(Some(id), INVALID_PARAMS, "no such task")
 }
 
 /// A stored task delivered to this request: its holds adopted into the
@@ -100,7 +101,7 @@ fn ack_complete() -> Value {
 }
 
 fn store_unavailable(id: RequestId) -> JsonRpcResponse {
-    JsonRpcResponse::error(Some(id), -32603, "task store unavailable")
+    JsonRpcResponse::error(Some(id), INTERNAL_ERROR, "task store unavailable")
 }
 
 impl TaskRoute<'_> {
@@ -188,7 +189,11 @@ impl TaskRoute<'_> {
             };
         }
         let Some(Value::Object(answers)) = answers.cloned() else {
-            return JsonRpcResponse::error(Some(id), -32602, "inputResponses must be an object");
+            return JsonRpcResponse::error(
+                Some(id),
+                INVALID_PARAMS,
+                "inputResponses must be an object",
+            );
         };
         // Owner-scoped first: a foreign or absent task is answered as absent
         // before anything about a round is said.
@@ -213,16 +218,18 @@ impl TaskRoute<'_> {
             },
             InputOutcome::TooLarge => JsonRpcResponse::error(
                 Some(id),
-                -32602,
+                INVALID_PARAMS,
                 "inputResponses exceed the task record size limit",
             ),
-            InputOutcome::Busy => JsonRpcResponse::error(Some(id), -32603, "task busy, retry"),
+            InputOutcome::Busy => {
+                JsonRpcResponse::error(Some(id), INTERNAL_ERROR, "task busy, retry")
+            }
             InputOutcome::PoolFull => {
-                JsonRpcResponse::error(Some(id), -32603, "task worker pool is full, retry")
+                JsonRpcResponse::error(Some(id), INTERNAL_ERROR, "task worker pool is full, retry")
             }
             InputOutcome::Closed(closed) => JsonRpcResponse::error(
                 Some(id),
-                -32602,
+                INVALID_PARAMS,
                 format!(
                     "inputResponses refused: {}; the round is closed",
                     closed.reason()
@@ -281,7 +288,7 @@ fn settled_or_no_round(id: RequestId, task: &Task) -> JsonRpcResponse {
         .map_or_else(String::new, |message| format!(": {message}"));
     JsonRpcResponse::error(
         Some(id),
-        -32602,
+        INVALID_PARAMS,
         format!("inputResponses refused: the task is {status}{reason}"),
     )
 }
@@ -289,7 +296,7 @@ fn settled_or_no_round(id: RequestId, task: &Task) -> JsonRpcResponse {
 fn no_round(id: RequestId) -> JsonRpcResponse {
     JsonRpcResponse::error(
         Some(id),
-        -32602,
+        INVALID_PARAMS,
         "inputResponses are not accepted until an input round is outstanding",
     )
 }

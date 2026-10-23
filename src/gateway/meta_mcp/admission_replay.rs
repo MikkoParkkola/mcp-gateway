@@ -4,6 +4,7 @@
 //! when nothing per-caller needs proving; otherwise it is deferred to the
 //! live dispatch, whose resolution proves the account before the lift.
 
+use crate::error::rpc_codes::INTERNAL_ERROR;
 use serde_json::Value;
 
 use crate::protocol::JsonRpcResponse;
@@ -261,7 +262,7 @@ impl MetaMcp {
         // caller runs inside a memo, so this is a guard, not a path.
         if !recorded {
             return Some((
-                JsonRpcResponse::error(id, -32603, "stored replay could not be deferred"),
+                JsonRpcResponse::error(id, INTERNAL_ERROR, "stored replay could not be deferred"),
                 None,
             ));
         }
@@ -289,7 +290,7 @@ impl MetaMcp {
         let Some(id) = response.id.clone() else {
             return Some(JsonRpcResponse::error(
                 None,
-                -32603,
+                INTERNAL_ERROR,
                 "stored plan replay has no request id",
             ));
         };

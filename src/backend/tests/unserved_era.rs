@@ -9,7 +9,8 @@
 
 use super::*;
 use crate::error::rpc_codes::INTERNAL_ERROR;
-use crate::protocol::era::{METHOD_NOT_FOUND_CODE, PeerEra, UNSUPPORTED_PROTOCOL_VERSION};
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
+use crate::protocol::era::{PeerEra, UNSUPPORTED_PROTOCOL_VERSION};
 
 fn count_of(methods: &[String], method: &str) -> usize {
     methods.iter().filter(|m| *m == method).count()
@@ -22,7 +23,7 @@ fn count_of(methods: &[String], method: &str) -> usize {
 #[tokio::test]
 async fn row_9d_a_method_not_found_invalidation_resets_then_three_faults_escalate() {
     let mock = Arc::new(
-        ProbeMock::modern_then(vec![ProbeAnswer::InBandError(METHOD_NOT_FOUND_CODE)])
+        ProbeMock::modern_then(vec![ProbeAnswer::InBandError(METHOD_NOT_FOUND)])
             .refusing(INTERNAL_ERROR),
     );
     let backend = probe_backend(Arc::clone(&mock), true).await;
@@ -109,11 +110,11 @@ async fn row_10e_a_method_not_found_between_faults_resets_the_count() {
         ProbeMock::legacy_then(vec![
             ProbeAnswer::InBandError(INTERNAL_ERROR),
             ProbeAnswer::InBandError(INTERNAL_ERROR),
-            ProbeAnswer::InBandError(METHOD_NOT_FOUND_CODE),
+            ProbeAnswer::InBandError(METHOD_NOT_FOUND),
             ProbeAnswer::InBandError(INTERNAL_ERROR),
             ProbeAnswer::InBandError(INTERNAL_ERROR),
         ])
-        .refusing(METHOD_NOT_FOUND_CODE),
+        .refusing(METHOD_NOT_FOUND),
     );
     let backend = probe_backend(Arc::clone(&mock), true).await;
     assert_eq!(backend.cached_era().await, Some(PeerEra::Legacy), "premise");

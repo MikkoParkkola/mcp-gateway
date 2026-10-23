@@ -9,6 +9,7 @@
 //!
 //! Supports OAuth 2.0 with PKCE for authenticated backends.
 
+use crate::error::rpc_codes::INVALID_REQUEST;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -234,7 +235,7 @@ fn peer_refusal(body: &str, id: &RequestId, status: reqwest::StatusCode) -> Opti
 fn is_session_expired_response(resp: &JsonRpcResponse) -> bool {
     resp.error.as_ref().is_some_and(|e| {
         e.code == SESSION_NOT_FOUND_CODE
-            || e.code == -32600
+            || e.code == INVALID_REQUEST
             || e.message.to_lowercase().contains("session not found")
     })
 }

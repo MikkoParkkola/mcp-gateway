@@ -619,3 +619,12 @@ async fn the_timer_cap_judges_every_lease_on_one_reading() {
         .expect_err("no verdict on an unreadable clock");
     assert!(refused.is_clock_unreadable(), "{refused:?}");
 }
+
+/// MIK-8668 X-SHA golden, computed independently (Python hashlib).
+#[test]
+fn a_fired_file_is_named_by_the_hex_sha256_of_the_key() {
+    assert_eq!(
+        super::fired_file("k1"),
+        "6ab9f1eb8f7d3388f4f9d586f66e99fd54080df2c446f0e58668b09c08a16dd0.json"
+    );
+}

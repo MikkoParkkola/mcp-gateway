@@ -8,6 +8,7 @@
 //! `params._meta["io.mcp-gateway/nonce"]` (GH1942.HARDEN.1 row 7). The adapters
 //! capture protocol metadata before any request sanitization.
 
+use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST};
 use serde_json::Value;
 
 use super::refund_witness::RefundWitness;
@@ -251,7 +252,7 @@ impl SigningInvocationContext {
     pub(crate) fn restore(&mut self, request: &mut Value) -> crate::Result<()> {
         if Self::origin_of(request, self.scope) != self.origin {
             return Err(crate::Error::json_rpc(
-                -32600,
+                INVALID_REQUEST,
                 "Invalid signing request origin",
             ));
         }
@@ -260,7 +261,10 @@ impl SigningInvocationContext {
         }
         if let Some(id) = self.request_id.take() {
             if !id.is_string() && id.as_i64().is_none() {
-                return Err(crate::Error::json_rpc(-32600, "Invalid signing request ID"));
+                return Err(crate::Error::json_rpc(
+                    INVALID_REQUEST,
+                    "Invalid signing request ID",
+                ));
             }
             request
                 .as_object_mut()
@@ -298,59 +302,6 @@ impl SigningInvocationContext {
         self.origin != Origin::Unsigned
     }
 
-    #[cfg(test)]
-    pub(crate) fn internal_for_test() -> Self {
-        Self {
-            origin: Origin::Unsigned,
-            scope: SigningScope::InvokeOnly,
-            nonce: CapturedNonce::Missing,
-            request_id: None,
-            prepared_target: None,
-            admitted: false,
-            nonce_stamp: None,
-            refund: NonceRefund::default(),
-        }
-    }
-
-    /// An external `gateway_invoke` context that has passed admission.
-    #[cfg(test)]
-    pub(crate) fn external_for_test(nonce: Option<&str>) -> Self {
-        Self {
-            origin: Origin::GatewayInvoke,
-            scope: SigningScope::InvokeOnly,
-            nonce: captured(nonce.map(|value| Value::String(value.to_owned()))),
-            request_id: None,
-            prepared_target: None,
-            admitted: true,
-            nonce_stamp: None,
-            refund: NonceRefund::default(),
-        }
-    }
-
-    /// [`Self::external_for_test`] that signing already prepared for
-    /// `server`'s `tool`, as `prepare_signing_invocation` leaves it.
-    #[cfg(test)]
-    pub(crate) fn prepared_for_test(server: &str, tool: &str) -> Self {
-        Self {
-            prepared_target: Some((server.to_owned(), tool.to_owned())),
-            ..Self::external_for_test(None)
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn invalid_for_test() -> Self {
-        Self {
-            origin: Origin::GatewayInvoke,
-            scope: SigningScope::InvokeOnly,
-            nonce: CapturedNonce::Invalid,
-            request_id: None,
-            prepared_target: None,
-            admitted: true,
-            nonce_stamp: None,
-            refund: NonceRefund::default(),
-        }
-    }
-
     /// The well-formed `gateway_invoke` `nonce`, if any: the chain's fallback
     /// nonce. Never validates, admits or consumes anything.
     pub(crate) fn invoke_nonce(&self) -> Option<&str> {
@@ -367,8 +318,13 @@ impl SigningInvocationContext {
         match &self.nonce {
             CapturedNonce::Missing => Ok(None),
             CapturedNonce::Value(value) => Ok(Some(value.as_str())),
-            CapturedNonce::Invalid => Err(crate::Error::json_rpc(-32602, "Invalid signing nonce")),
-            CapturedNonce::Conflict => Err(crate::Error::json_rpc(-32602, "two signing nonces")),
+            CapturedNonce::Invalid => Err(crate::Error::json_rpc(
+                INVALID_PARAMS,
+                "Invalid signing nonce",
+            )),
+            CapturedNonce::Conflict => {
+                Err(crate::Error::json_rpc(INVALID_PARAMS, "two signing nonces"))
+            }
         }
     }
 
@@ -436,7 +392,10 @@ pub(crate) fn take_direct_nonce(params: Option<&mut Value>) -> crate::Result<Opt
         CapturedNonce::Value(value) => Ok(Some(value)),
         CapturedNonce::Invalid | CapturedNonce::Conflict => {
             record_nonce_rejection(NONCE_REASON_INVALID);
-            Err(crate::Error::json_rpc(-32602, "Invalid signing nonce"))
+            Err(crate::Error::json_rpc(
+                INVALID_PARAMS,
+                "Invalid signing nonce",
+            ))
         }
     }
 }
@@ -490,7 +449,7 @@ impl super::MetaMcp {
         (self.signing_enabled() && caller.awaits_signing_admission()).then(|| {
             crate::protocol::JsonRpcResponse::error(
                 Some(id.clone()),
-                -32603,
+                INTERNAL_ERROR,
                 "signing admission did not run",
             )
         })
@@ -559,24 +518,6 @@ impl super::MetaMcp {
             (_, None) => {}
         }
         admitted
-    }
-
-    /// [`Self::admit_meta_sync`] for a test that drives admission directly,
-    /// with nothing having acted before it.
-    #[cfg(test)]
-    pub(crate) fn admit_meta_sync_for_test(
-        &self,
-        owner: super::AdmissionOwner<'_>,
-        caller: &super::MetaMcpCallerContext<'_>,
-        tool_name: &str,
-        arguments: &Value,
-        session: Option<&str>,
-        id: &crate::protocol::RequestId,
-    ) -> crate::Result<super::admission::SyncAdmission> {
-        let witness = Some(RefundWitness::at_capture());
-        Self::admit_meta_sync(
-            self, owner, caller, tool_name, arguments, session, id, witness,
-        )
     }
 
     /// Give back the nonce of a call refused before anything acted, proven by
@@ -734,7 +675,7 @@ impl super::MetaMcp {
         {
             *response = crate::protocol::JsonRpcResponse::delivery_refusal_error(
                 response.id.clone(),
-                -32603,
+                INTERNAL_ERROR,
                 "Response signing failed",
             );
         }
@@ -761,10 +702,13 @@ impl super::MetaMcp {
         };
         let result = (|| {
             if self.require_nonce && nonce.is_none() {
-                return Err(crate::Error::json_rpc(-32603, "Signing nonce is required"));
+                return Err(crate::Error::json_rpc(
+                    INTERNAL_ERROR,
+                    "Signing nonce is required",
+                ));
             }
             let timestamp = crate::clock::unix_secs()
-                .map_err(|_| crate::Error::json_rpc(-32603, "Signing clock is invalid"))?;
+                .map_err(|_| crate::Error::json_rpc(INTERNAL_ERROR, "Signing clock is invalid"))?;
             signer.sign_json_rpc_response_at(response, nonce, timestamp)?;
             // MIK-7939: the signature block is the gateway's, never a receipt's.
             if let Some(result) = response.result.as_ref() {
@@ -779,6 +723,12 @@ impl super::MetaMcp {
         })
     }
 }
+
+// Test-only constructors and an admission driver (MIK-8668: moved out of this file
+// to keep it under the line ceiling; a child module keeps the private access).
+#[cfg(test)]
+#[path = "signing_test_seams.rs"]
+mod test_seams;
 
 #[cfg(test)]
 #[path = "signing_delivery_tests.rs"]
