@@ -308,7 +308,7 @@ async fn l9_required_backend_anonymous_caller_sees_none() {
 
 /// L9-servers (guard): `list_servers` already hides a `required` per-user
 /// backend's tools from an anonymous caller (`has_no_view_for`,
-/// `tools_count` 0, `tools_known` false). Green on base; keeps the caller-slot
+/// `tools_count` null, `tools_known` false). Green on base; keeps the caller-slot
 /// change from reopening it.
 #[tokio::test]
 async fn l9_servers_keep_the_required_backend_hidden() {
@@ -323,12 +323,20 @@ async fn l9_servers_keep_the_required_backend_hidden() {
         .meta
         .list_servers(&super::anonymous_caller(), None)
         .await
-        .expect("list_servers answers")
-        .to_string();
-    assert!(
-        servers.contains("\"tools_count\":0") && servers.contains("\"tools_known\":false"),
-        "L9-servers: {servers}"
+        .expect("list_servers answers");
+    let row = servers["servers"]
+        .as_array()
+        .and_then(|rows| {
+            rows.iter()
+                .find(|s| s["name"] == super::slot_verdict_fixture::BACKEND)
+        })
+        .unwrap_or_else(|| panic!("L9-servers: the backend is listed: {servers}"));
+    assert_eq!(
+        row.get("tools_count"),
+        Some(&serde_json::Value::Null),
+        "L9-servers: {row}"
     );
+    assert_eq!(row["tools_known"], false, "L9-servers: {row}");
 }
 
 /// L11a: alpha's slot holds a TRUNCATED list (a paging drain past its

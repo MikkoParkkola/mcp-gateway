@@ -181,6 +181,11 @@ async fn list_servers_fills_a_cold_backend() {
         .await
         .expect("list_servers succeeds");
     assert_eq!(listed["servers"][0]["tools_known"], false, "{listed}");
+    assert_eq!(
+        listed["servers"][0].get("tools_count"),
+        Some(&Value::Null),
+        "a cold backend has no count yet: {listed}"
+    );
     assert!(
         fills(&backend).await,
         "list_servers must ask for a cold backend's tools"
@@ -402,5 +407,32 @@ async fn a_filtered_tools_list_never_fills_a_backend_the_caller_may_not_see() {
         wire.requests.load(Ordering::SeqCst),
         0,
         "a backend the caller may not see was asked for its tools"
+    );
+}
+
+/// MIK-8721: a backend enumerated with an EMPTY list is known, and counts 0:
+/// a number, not null. Only a listing not known yet reads as null.
+#[tokio::test]
+async fn list_servers_counts_a_known_empty_backend_as_zero() {
+    let backend = cold_backend(
+        COLD_BACKEND,
+        Arc::new(ToolsListTestTransport { tools: json!([]) }),
+    );
+    let tools = backend.get_tools().await.expect("enumeration succeeds");
+    assert!(tools.is_empty(), "premise: the backend serves no tools");
+    assert!(
+        backend.cached_tools_known(),
+        "premise: the empty answer is known"
+    );
+    let meta = meta_over(&backend);
+    let listed = meta
+        .list_servers(&crate::gateway::meta_mcp::anonymous_caller(), None)
+        .await
+        .expect("list_servers succeeds");
+    let row = &listed["servers"][0];
+    assert_eq!(row["tools_known"], true, "a known backend: {listed}");
+    assert_eq!(
+        row["tools_count"], 0,
+        "known and empty counts 0, not null: {listed}"
     );
 }

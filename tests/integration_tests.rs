@@ -429,10 +429,20 @@ async fn test_gateway_list_servers() {
             server["transport"].is_string(),
             "transport should be string"
         );
-        assert!(
-            server["tools_count"].is_number(),
-            "tools_count should be number"
-        );
+        // MIK-8721: a count only for a backend whose tools are known; null
+        // until then, so an unenumerated backend never reads as empty.
+        if server["tools_known"] == true {
+            assert!(
+                server["tools_count"].is_number(),
+                "a known backend's tools_count should be a number: {server:?}"
+            );
+        } else {
+            assert_eq!(
+                server.get("tools_count"),
+                Some(&serde_json::Value::Null),
+                "an unenumerated backend's tools_count should be null: {server:?}"
+            );
+        }
         assert!(
             server["circuit_state"].is_string(),
             "circuit_state should be string"
