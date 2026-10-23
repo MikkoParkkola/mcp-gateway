@@ -306,6 +306,8 @@ def run(
     drift=None,
     line_timeout_s=LINE_TIMEOUT_S,
     deadline_s=DEADLINE_S,
+    backstop_s=None,
+    setup_timeout_s=None,
 ) -> Report:
     """Run every line; report failures with their base result.
 
@@ -314,6 +316,10 @@ def run(
     `executor` and `drift` are private test seams (function arguments, never
     environment variables)."""
     repo = Path(repo)
+    # MIK-8787 red commit: the new test seams are accepted before the fix so
+    # unchanged rows keep running; backstop_s stands in for the deadline.
+    if backstop_s is not None:
+        deadline_s = backstop_s
     if drift is not None:
         found = drift()
         if found:
