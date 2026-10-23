@@ -5,7 +5,7 @@
 //! was never read again, for the executor's whole life.
 //!
 //! The stores are sequential: the bound is pinned, not its exactness under
-//! concurrent writers, which may briefly exceed it (lead ruling D4).
+//! concurrent writers, which may exceed it until the next store (lead ruling D4).
 
 use std::sync::Arc;
 use std::time::Duration;

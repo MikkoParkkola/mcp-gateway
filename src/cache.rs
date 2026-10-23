@@ -4,10 +4,11 @@
 //! payloads
 //!
 //! Provides a thread-safe, TTL-based cache. The Meta-MCP response cache keys
-//! tool invocation responses by `server:tool:args_hash`, where `args_hash` is
-//! the SHA-256 digest of the canonical JSON arguments, and stores through
-//! `set_read`. The capability executor keeps its own instance, with its own
-//! bound, for REST, CLI, GraphQL and MCP-protocol capability results, and
+//! tool invocation responses through `ResponseCache::response_key` (server,
+//! tool, a SHA-256 digest of the canonical JSON arguments, the projection, the
+//! principal and the routing context) and stores through `set_read`. The
+//! capability executor keeps its own instance, with its own bound, for REST,
+//! CLI, GraphQL, JSON-RPC and MCP-protocol capability results, and
 //! stores through `set_payload` (MIK-8661). Both instances insert through the
 //! same code, so expiry and eviction behave the same in each.
 
@@ -243,8 +244,9 @@ impl ResponseCache {
     /// Store a capability's REST payload (MIK-8661). The payload is the
     /// upstream's own JSON, so a `resultType` in it is the upstream's field,
     /// not MCP's: only the error refusal applies. The capability executor also
-    /// stores decoded CLI, GraphQL and MCP-protocol capability results here,
-    /// as it always has. Every entry of either cache is inserted here.
+    /// stores decoded CLI, GraphQL, JSON-RPC and MCP-protocol capability
+    /// results here, as it always has. Every entry of either cache is inserted
+    /// here.
     pub(crate) fn set_payload(
         &self,
         key: &str,
@@ -260,7 +262,7 @@ impl ResponseCache {
         }
 
         // ponytail: check, evict and insert are not one atomic step, so
-        // concurrent writers can briefly hold up to `max_entries` + (writers - 1)
+        // concurrent writers can hold up to `max_entries` + (writers - 1)
         // entries; the next store evicts back (lead ruling MIK-8661 D4). Put one
         // admission mutex over these three steps if an exact cap is ever needed.
         if self.max_entries > 0 && self.entries.len() >= self.max_entries {
