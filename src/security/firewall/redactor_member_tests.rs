@@ -202,7 +202,19 @@ fn r2c_member_is_the_only_secret_in_the_leaf() {
 #[test]
 fn r2d_escaped_key_spellings_are_paired_by_their_decoded_name() {
     let v = class_value(24);
-    for key in [r"api_key", r"api_key", r"api_key"] {
+    // Built at run time: a JSON unicode escape written in source was once
+    // decoded by tooling before it reached the file (the row then tested
+    // nothing).
+    let bs = char::from(92);
+    let keys = [
+        format!("{bs}u0061pi_key"),
+        format!("api{bs}u005Fkey"),
+        ["0061", "0070", "0069", "005f", "006b", "0065", "0079"]
+            .iter()
+            .map(|h| format!("{bs}u{h}"))
+            .collect::<String>(),
+    ];
+    for key in &keys {
         let compact = format!(r#"{{"{key}":"{v}"}}"#);
         let pretty = format!("{{\n  \"{key}\": \"{v}\"\n}}");
         for text in [compact, pretty] {
