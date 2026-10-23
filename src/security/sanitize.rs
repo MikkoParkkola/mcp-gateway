@@ -434,7 +434,6 @@ pub fn redact_url_for_diagnostics(raw: &str) -> String {
 /// it. Its path is intentionally visible, as in the parsed branch, so an error
 /// still names the value an operator mistyped. Otherwise it is replaced by
 /// [`UNPARSEABLE_URL`].
-///
 #[must_use]
 pub(crate) fn redact_url_keep_path(raw: &str) -> String {
     if let Ok(mut url) = url::Url::parse(raw)
