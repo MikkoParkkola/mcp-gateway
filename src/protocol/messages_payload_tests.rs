@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8663 T5 (DUPC-6.PR6.5): the strict payload rule, one table for every
-//! reader of "the tool's value inside an MCP result". `structuredContent`
+//! MIK-8663 T5 (DUPC-6.PR6.5): the strict payload rule, one table for the
+//! one reader of "the tool's value inside an MCP result". `structuredContent`
 //! when present, else exactly one `content` block whose text parses as JSON,
 //! else none.
 
@@ -80,16 +80,10 @@ fn check(reader: &str, read: impl Fn(&Value) -> Option<Value>) {
     );
 }
 
+/// MIK-8663 T5 (DUPC-6.PR6.5): the one payload reader follows the strict
+/// rule on every row. Before the consolidation `invoke_value` read the first
+/// of several blocks (row 3).
 #[test]
-fn output_validation_target_follows_the_strict_rule() {
-    check(
-        "extract_output_validation_target",
-        super::output_shape::extract_output_validation_target,
-    );
-}
-
-/// RED on base: `invoke_value` reads the first of several blocks (row 3).
-#[test]
-fn invoke_value_follows_the_strict_rule() {
-    check("invoke_value", super::audit::invoke_value);
+fn tool_result_payload_follows_the_strict_rule() {
+    check("tool_result_payload", super::tool_result_payload);
 }

@@ -341,9 +341,6 @@ mod caller_verdict_label_tests;
 mod session_fp_tests;
 
 #[cfg(test)]
-mod payload_reader_tests;
-
-#[cfg(test)]
 mod response_cache_error_tests;
 
 #[cfg(test)]

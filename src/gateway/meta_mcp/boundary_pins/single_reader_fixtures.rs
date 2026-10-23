@@ -130,14 +130,14 @@ fn fixture_literal_directive_strip_is_flagged() {
 /// Rule A: the shared strip's loop over the list names no literal.
 #[test]
 fn fixture_list_driven_strip_is_not_flagged() {
-    let source = r#"fn execution_arguments(arguments: &mut Value) -> bool {
+    let source = r"fn execution_arguments(arguments: &mut Value) -> bool {
         if let Some(object) = arguments.as_object_mut() {
             for directive in EXECUTION_DIRECTIVES {
                 object.remove(directive);
             }
         }
         false
-    }"#;
+    }";
     assert!(rows_of(ELSEWHERE, source).is_empty());
 }
 

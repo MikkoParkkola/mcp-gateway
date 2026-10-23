@@ -70,12 +70,12 @@ pub(super) const S1_INTAKE_ALLOW: &[&str] = &[
 /// S2 `directives`, from invoke.rs:159-199.
 pub(super) const S2_DIRECTIVES_ALLOW: &[&str] = &[
     "parse_tool_arguments",                     // invoke.rs:159
-    "serde_json::Value::as_bool", // invoke.rs:167 the `_full` read passed as a callback
-    "extract_client_claim",       // invoke.rs:180
+    "admission::execution_arguments",           // MIK-8663: the shared directive strip
+    "extract_client_claim",                     // invoke.rs:180
     "crate::projection::projection_key_suffix", // invoke.rs:193
-    "self.projection_mode",       // invoke.rs:193
-    "tracing::Span::current",     // invoke.rs:195 the span record stays in S2
-    "self.active_profile",        // invoke.rs:197
+    "self.projection_mode",                     // invoke.rs:193
+    "tracing::Span::current",                   // invoke.rs:195 the span record stays in S2
+    "self.active_profile",                      // invoke.rs:197
 ];
 
 /// S3 `resolve`, from invoke.rs:214-252.

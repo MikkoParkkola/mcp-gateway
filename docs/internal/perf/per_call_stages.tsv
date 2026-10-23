@@ -71,7 +71,6 @@ src/gateway/meta_mcp/invoke/audit.rs	audit_settlement	-	test-only shorthand (cfg
 src/gateway/meta_mcp/invoke/audit.rs	audit_settlement_kept	-	upstream task settlement (tasks/get recovery) only, not a live dispatch
 src/gateway/meta_mcp/invoke/audit.rs	delivered_value	-	on-path, untimed: relay receipt rebuilds of delivered answers, with relay detection active; the harness stages no receipt
 src/gateway/meta_mcp/invoke/audit.rs	from_caller	-	on-path, untimed: invocation-record writer, only with a transparency logger, which the harness does not configure
-src/gateway/meta_mcp/invoke/audit.rs	invoke_value	-	on-path, untimed: replayed and relay-rebuilt answers only
 src/gateway/meta_mcp/invoke/audit.rs	note	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/audit.rs	note_cached	-	on-path, untimed: cache hits only; the timed rows dispatch fresh every round
 src/gateway/meta_mcp/invoke/audit.rs	note_cached_failure	-	on-path, untimed: idempotent replays of a stored failure only
@@ -300,7 +299,6 @@ src/gateway/meta_mcp/invoke/nonce_settle.rs	spend_witness	-	on-path, untimed: ga
 src/gateway/meta_mcp/invoke/nonce_settle.rs	take	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/output_shape.rs	apply_validated_output	-	on-path, untimed: tools declaring an output schema, and capability transforms, only; the timed tool declares none
 src/gateway/meta_mcp/invoke/output_shape.rs	enforce_output_schema	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/invoke/output_shape.rs	extract_output_validation_target	-	on-path, untimed: tools declaring an output schema, and capability transforms, only; the timed tool declares none
 src/gateway/meta_mcp/invoke/output_shape.rs	is_mcp_envelope	-	on-path, untimed: tools declaring an output schema, and capability transforms, only; the timed tool declares none
 src/gateway/meta_mcp/invoke/output_shape.rs	json_type	-	on-path, untimed: output-schema mismatch logging only
 src/gateway/meta_mcp/invoke/output_shape.rs	mismatch_shape	-	on-path, untimed: output-schema mismatch logging only
@@ -354,6 +352,7 @@ src/gateway/meta_mcp/invoke/propagation.rs	take	-	on-path, untimed: legacy elici
 src/gateway/meta_mcp/invoke/provenance_stamp.rs	maybe_stamp_provenance	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/provenance_stamp.rs	stamp_direct_result	-	direct /mcp/{backend} route only, not the meta tools/call path
 src/gateway/meta_mcp/invoke/provenance_stamp.rs	stamp_recovered_result	-	upstream task recovery (tasks/get) only, not a live dispatch
+src/gateway/meta_mcp/invoke/provenance_stamp.rs	take_last_client_claim	-	test-only helper (cfg(test))
 src/gateway/meta_mcp/invoke/r2_check.rs	absent_on_slot	-	on-path, untimed: per-user-catalogue backends withholding the tool only
 src/gateway/meta_mcp/invoke/r2_check.rs	account_refused_fill	-	on-path, untimed: cold-slot catalogue fills the failsafe refused only
 src/gateway/meta_mcp/invoke/r2_check.rs	answer_refused_fill	-	on-path, untimed: cold-slot catalogue fills that failed only

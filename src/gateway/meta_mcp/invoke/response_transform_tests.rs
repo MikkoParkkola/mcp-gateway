@@ -315,7 +315,7 @@ fn mrtr_2a_enforce_output_schema_does_not_republish_backend_request_state() {
     );
 
     // The other way to have nothing extractable: more than one content
-    // item. `extract_output_validation_target` requires exactly one, so a
+    // item. `tool_result_payload` requires exactly one, so a
     // multi-item envelope takes the same arm and must be equally untouched.
     let multi = json!({
         "content": [
