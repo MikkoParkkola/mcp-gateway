@@ -296,7 +296,7 @@ fn p2_the_patterns_are_the_reviewed_ones() {
         for token in [r"\b", r"\B", r"\A", r"\z", "$"] {
             assert!(!pattern.contains(token), "{name}: {token} in {pattern}");
         }
-        let (mut class, mut escaped, mut crosses) = (false, false, pattern.contains('"'));
+        let (mut class, mut escaped, mut can_cross) = (false, false, pattern.contains('"'));
         let mut chars = pattern.chars().peekable();
         while let Some(c) = chars.next() {
             match c {
@@ -304,15 +304,15 @@ fn p2_the_patterns_are_the_reviewed_ones() {
                 '\\' => escaped = true,
                 '[' if !class => {
                     class = true;
-                    crosses |= chars.peek() == Some(&'^');
+                    can_cross |= chars.peek() == Some(&'^');
                 }
                 ']' if class => class = false,
                 '^' if !class => panic!("{name}: ^ outside a class in {pattern}"),
-                '.' if !class => crosses = true,
+                '.' if !class => can_cross = true,
                 _ => {}
             }
         }
-        if crosses {
+        if can_cross {
             crossers.push(*name);
         }
     }
