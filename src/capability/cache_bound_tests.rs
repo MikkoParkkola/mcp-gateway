@@ -13,20 +13,26 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::capability::executor::CapabilityExecutor;
+use crate::gateway::gateway_writes::WriteRecord;
 
 /// The capability cache's bound (the Meta-MCP cache's default).
 const CAP: usize = 10_000;
 
 fn store(executor: &CapabilityExecutor, key: &str) {
-    executor.cache.set(key, &json!({"ok": true}), None, 60);
+    executor.cache.set_payload(
+        key,
+        json!({"ok": true}),
+        (None, WriteRecord::default()),
+        Duration::from_secs(60),
+    );
 }
 
 fn cached(executor: &CapabilityExecutor, key: &str) -> bool {
-    executor.cache.get(key).is_some()
+    executor.cache.get_read(key).is_some()
 }
 
 fn entries(executor: &CapabilityExecutor) -> usize {
-    executor.cache.len()
+    executor.cache.stats().size
 }
 
 /// Store `k0`, then `CAP` more distinct keys: the cache holds `CAP`, the oldest

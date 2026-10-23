@@ -51,7 +51,6 @@ mod loader;
 mod openapi;
 mod parser;
 mod read_only_call;
-mod response_cache;
 #[cfg(test)]
 mod schema_shape_load_tests;
 mod schema_validator;
