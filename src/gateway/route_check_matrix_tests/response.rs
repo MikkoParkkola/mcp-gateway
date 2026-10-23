@@ -93,10 +93,6 @@ pub(crate) enum RespTicket {
     Mik8705,
     /// Mcp and stdio fix the receipt's facts before the egress firewall.
     Mik8707,
-    /// The connection-string redaction runs past the URI and eats the
-    /// closing JSON of a compact text, so the delivered text no longer
-    /// parses while a receipt stamped before the scan keeps its count.
-    Mik8745,
 }
 
 /// Why a gap's order difference reaches no delivered outcome today. Closed
@@ -106,10 +102,12 @@ pub(crate) enum Latent {
     /// The receipt's result facts are `row_count` and `backend_ok`. The only
     /// extractor arm reads GitHub's server-reported `total_count`
     /// (`trust/result_extractor.rs:55-80`), redaction never flips `isError`,
-    /// and a Block replaces the whole answer. Once MIK-8745 keeps every
-    /// redaction inside its matched span, the stamp-firewall order changes
-    /// no delivered fact; until then [`AFTER_MIK_8745`] is what the cells
-    /// return to.
+    /// and a Block replaces the whole answer. Since MIK-8745 a redaction
+    /// inside a JSON string value keeps the text parseable, so the count
+    /// survives the scan. Left, each still redacted as a whole value that can
+    /// break the text: a credential that starts inside a JSON key (MIK-8772),
+    /// and a text over 1 MiB (MIK-8774). `github_search_repos` has a fixed
+    /// schema, so no counted answer carries such a key.
     NoExtractedFactRedactionChanges,
 }
 
@@ -348,7 +346,7 @@ pub(crate) const fn expect(
             _,
             ShapeSeal | FirewallSeal | ClampSeal | SealSign | FirewallStamp,
         ) => NotApplicable(RespNa::ReplayMintsNoReceipt),
-        (Mcp | Stdio, _, _, FirewallStamp) => ExpectedGap(RespTicket::Mik8745),
+        (Mcp | Stdio, _, _, FirewallStamp) => AFTER_MIK_8745,
         (_, _, _, JudgeRebuild) => OrderInvisibleByOutcome(JudgeOnlyReplaces),
         (_, _, _, StampShape) => OrderInvisibleByOutcome(StampIgnoresShapedMembers),
         (_, _, _, LinkSeal) => OrderInvisibleByOutcome(SealWritesOnlyExcludedMeta),
@@ -447,16 +445,15 @@ fn every_response_pair_is_listed_exactly_once() {
     }
 }
 
-/// What the Mcp and stdio `FirewallStamp` cells become when MIK-8745 lands:
-/// the stamp still precedes the scan there, but no delivered fact differs.
+/// The Mcp and stdio `FirewallStamp` cells since MIK-8745: the stamp still
+/// precedes the scan there (MIK-8707), but no counted fact differs.
 pub(crate) const AFTER_MIK_8745: RespExpect =
     RespExpect::LatentGap(RespTicket::Mik8707, Latent::NoExtractedFactRedactionChanges);
 
 /// The gap set is exactly MIK-8705, expected (a direct replay is not
-/// resealed, both eras), and MIK-8745, expected (Mcp and stdio stamp before a
-/// scan that can break the counted text, fresh and cache hit, both eras;
-/// [`AFTER_MIK_8745`] once it lands). A new, closed or reclassified gap
-/// moves this pin.
+/// resealed, both eras), and MIK-8707, latent (Mcp and stdio stamp before the
+/// egress scan, fresh and cache hit, both eras: [`AFTER_MIK_8745`]). A new,
+/// closed or reclassified gap moves this pin.
 #[test]
 fn the_response_table_names_its_gaps() {
     let gaps: Vec<_> = cells()
@@ -472,22 +469,11 @@ fn the_response_table_names_its_gaps() {
             .count()
     };
     assert_eq!(of(RespTicket::Mik8705, false), 2, "{gaps:?}");
-    assert_eq!(of(RespTicket::Mik8745, false), 8, "{gaps:?}");
+    assert_eq!(of(RespTicket::Mik8707, true), 8, "{gaps:?}");
     assert_eq!(gaps.len(), 10, "the gap set moved: {gaps:?}");
-    assert_ne!(
-        expect(
-            RespRoute::Mcp,
-            RespCase::Fresh,
-            Era::Modern,
-            RespPair::FirewallStamp
-        ),
-        AFTER_MIK_8745,
-        "MIK-8745 landed: move the Mcp and stdio FirewallStamp cells to {AFTER_MIK_8745:?}"
-    );
 }
 
-/// The order behind the MIK-8745 gap (and MIK-8707 after it), pinned at
-/// source.
+/// The order behind the MIK-8707 latent gap, pinned at source.
 #[path = "response_source_order.rs"]
 mod source_order;
 

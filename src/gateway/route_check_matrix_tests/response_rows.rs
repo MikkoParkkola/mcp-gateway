@@ -361,16 +361,16 @@ async fn r_replay_mcp_reserves_the_stored_delivery() {
     );
 }
 
-/// R-FWSTAMP `redaction_breaks_the_counted_text_gap`, `Mcp`, `Stdio` ×
-/// `Fresh`, `CacheHit` × both eras: `ExpectedGap(MIK-8745)`. Those routes stamp
-/// at dispatch, before the egress scan (`source_order`), so the receipt counts
-/// the backend's text. A compact `github_search_repos` answer carrying a
-/// database URI, scanned under a Warn rule as the egress scan runs it, is
-/// delivered with its closing JSON redacted away: the count the stamp read
-/// (3) is no longer in the delivered text. When MIK-8745 lands this fails:
-/// move the cells to [`super::AFTER_MIK_8745`].
+/// R-FWSTAMP `redaction_keeps_the_counted_text`, `Mcp`, `Stdio` × `Fresh`,
+/// `CacheHit` × both eras: `LatentGap(MIK-8707)`. Those routes stamp at
+/// dispatch, before the egress scan (`source_order`), so the receipt counts
+/// the backend's text. Since MIK-8745 a compact `github_search_repos` answer
+/// carrying a database URI in a string value, scanned under a Warn rule as the
+/// egress scan runs it, is delivered redacted and still parseable: the count
+/// the stamp read (3) is still the count the delivered text states, so the
+/// order changes no counted fact.
 #[test]
-fn r_fwstamp_redaction_breaks_the_counted_text_gap() {
+fn r_fwstamp_redaction_keeps_the_counted_text() {
     use crate::security::firewall::{Firewall, FirewallAction, FirewallConfig, FirewallRule};
     use crate::trust::extract_row_count;
     const TOOL: &str = "github_search_repos";
@@ -414,9 +414,9 @@ fn r_fwstamp_redaction_breaks_the_counted_text_gap() {
     );
     assert_eq!(
         extract_row_count("gh", TOOL, &result, true),
-        None,
-        "R-FWSTAMP: MIK-8745 gap closed? the redacted text still parses \
-         ({delivered}): move the cells to {:?}",
+        Some(3),
+        "R-FWSTAMP: the redacted text no longer states the stamped count \
+         ({delivered}): the cells are no longer {:?}",
         super::AFTER_MIK_8745
     );
 }
