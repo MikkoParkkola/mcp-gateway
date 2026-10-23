@@ -617,10 +617,9 @@ fn overdue(
 /// The stored body as a JSON value, with the SHA-256 of what goes on the
 /// wire: the frame's own serialisation, which is what the audit hashes.
 fn wire_body(stored: &[u8]) -> Option<(serde_json::Value, String)> {
-    use sha2::Digest as _;
     let value: serde_json::Value = serde_json::from_slice(stored).ok()?;
     let sent = serde_json::to_vec(&value).ok()?;
-    Some((value, hex::encode(sha2::Sha256::digest(sent))))
+    Some((value, crate::hashing::sha256_hex(&sent)))
 }
 
 #[cfg(test)]

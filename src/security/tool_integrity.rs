@@ -18,7 +18,6 @@
 use std::collections::HashMap;
 
 use parking_lot::RwLock;
-use sha2::{Digest, Sha256};
 use tracing::warn;
 
 use crate::protocol::Tool;
@@ -72,20 +71,25 @@ impl ToolIntegrityChecker {
     /// Hashes: name + description + `input_schema` (serialized to canonical JSON).
     /// This captures the "shape" of a tool as seen by the LLM.
     fn hash_tool(tool: &Tool) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(tool.name.as_bytes());
-        if let Some(ref desc) = tool.description {
-            hasher.update(desc.as_bytes());
-        }
         // Canonical JSON of input_schema (serde_json serializes keys in order)
         let schema_bytes = serde_json::to_vec(&tool.input_schema).unwrap_or_default();
-        hasher.update(&schema_bytes);
         // Include output_schema if present
-        if let Some(ref output) = tool.output_schema {
-            let output_bytes = serde_json::to_vec(output).unwrap_or_default();
-            hasher.update(&output_bytes);
-        }
-        hex::encode(hasher.finalize())
+        let output_bytes = tool
+            .output_schema
+            .as_ref()
+            .map(|output| serde_json::to_vec(output).unwrap_or_default());
+        // Name, description, input schema, output schema: in this order, with
+        // no separator, exactly as stored fingerprints were computed.
+        crate::hashing::sha256_hex_chunks(
+            [
+                Some(tool.name.as_bytes()),
+                tool.description.as_deref().map(str::as_bytes),
+                Some(schema_bytes.as_slice()),
+                output_bytes.as_deref(),
+            ]
+            .into_iter()
+            .flatten(),
+        )
     }
 
     /// Record tool definitions from a backend and check for mutations.

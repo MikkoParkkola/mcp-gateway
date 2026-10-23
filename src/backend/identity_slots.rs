@@ -19,8 +19,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use sha2::{Digest, Sha256};
-
 use crate::transport::Transport;
 
 /// `PerUser` slots one backend admits.
@@ -65,7 +63,7 @@ pub(crate) fn admission(total: usize, of_principal: usize) -> Result<(), Refusal
 }
 
 fn digest(value: &str) -> String {
-    hex::encode(Sha256::digest(value.as_bytes()))
+    crate::hashing::sha256_hex(value.as_bytes())
 }
 
 /// The slot binding of a passthrough caller: `principal` is the gateway's

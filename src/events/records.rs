@@ -270,9 +270,9 @@ impl std::fmt::Debug for Verified {
 
 /// The file name of a `(principal, url)` verification record.
 pub(crate) fn verified_file(principal: &str, url: &str) -> String {
-    use sha2::Digest as _;
-    let digest = sha2::Sha256::digest(serde_json::to_vec(&[principal, url]).unwrap_or_default());
-    format!("{}.json", hex::encode(digest))
+    let digest =
+        crate::hashing::sha256_hex(&serde_json::to_vec(&[principal, url]).unwrap_or_default());
+    format!("{digest}.json")
 }
 
 /// Create `dir` (and parents) owner-only.

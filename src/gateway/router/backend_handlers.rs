@@ -11,7 +11,6 @@ use axum::{
     http::StatusCode,
 };
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use tracing::warn;
 
 use super::AppState;
@@ -311,9 +310,7 @@ fn backend_security_error_with_status(
 /// hex digest can never collide with the minting path's `idp:`-prefixed bindings
 /// nor with the shared default (`""`) bucket.
 fn passthrough_identity_key(credential: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(credential.as_bytes());
-    hex::encode(hasher.finalize())
+    crate::hashing::sha256_hex(credential.as_bytes())
 }
 
 /// The slot binding of a passthrough credential digest, charged to the

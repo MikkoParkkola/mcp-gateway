@@ -90,11 +90,7 @@ impl Seen {
 }
 
 fn file_name(route: &str) -> String {
-    use sha2::Digest as _;
-    format!(
-        "{}.json",
-        hex::encode(sha2::Sha256::digest(route.as_bytes()))
-    )
+    format!("{}.json", crate::hashing::sha256_hex(route.as_bytes()))
 }
 
 #[cfg(test)]

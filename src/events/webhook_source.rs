@@ -137,15 +137,10 @@ fn dedupe_key(inbound: &Inbound<'_>) -> Option<String> {
             .filter(|v| !v.is_empty())
             // Hashed: the seen-set's bound is a count, so its entries must be
             // fixed-size whatever the sender puts in the header.
-            .map(|v| {
-                use sha2::Digest as _;
-                format!("id:{}", hex::encode(sha2::Sha256::digest(v.as_bytes())))
-            });
+            .map(|v| format!("id:{}", crate::hashing::sha256_hex(v.as_bytes())));
     }
-    (inbound.event.dedupe.as_deref() == Some("body")).then(|| {
-        use sha2::Digest as _;
-        format!("body:{}", hex::encode(sha2::Sha256::digest(inbound.body)))
-    })
+    (inbound.event.dedupe.as_deref() == Some("body"))
+        .then(|| format!("body:{}", crate::hashing::sha256_hex(inbound.body)))
 }
 
 /// The descriptors `registry` currently derives, sorted by name.

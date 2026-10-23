@@ -39,8 +39,6 @@
 //! The recipe assumes the pin line holds only the pin: text after a CR, NEL,
 //! LS or PS on it is hashed by the gateway and dropped by `grep -v`.
 
-use sha2::{Digest, Sha256};
-
 /// Strip the top-level `sha256:` line from a YAML document.
 ///
 /// Only lines that begin at column 0 with `sha256:` are affected — a nested
@@ -85,8 +83,7 @@ pub fn compute_capability_hash(file_content: &str) -> String {
     // capability, and must not break its pin. A lone CR stays: that is content.
     let normalised = file_content.replace("\r\n", "\n");
     let stripped = strip_sha256_line(&normalised);
-    let digest = Sha256::digest(stripped.as_bytes());
-    hex::encode(digest)
+    crate::hashing::sha256_hex(stripped.as_bytes())
 }
 
 /// Rewrite a capability YAML so that it begins with a `sha256:` pin line.
