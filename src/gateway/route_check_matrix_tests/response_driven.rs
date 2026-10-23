@@ -134,7 +134,7 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
         // stamp counted.
         (Mcp | Stdio, Fresh | CacheHit, _, FirewallStamp) => Driven::Shared {
             pin: "response::source_order::stamp_and_egress_scan_order_is_pinned_at_source",
-            rows: &["rows::r_fwstamp_redaction_breaks_the_counted_text_gap"],
+            rows: &["rows::r_fwstamp_redaction_keeps_the_counted_text"],
         },
         (Direct, Fresh, _, FirewallStamp) => {
             Driven::Row("response::source_order::stamp_and_egress_scan_order_is_pinned_at_source")
