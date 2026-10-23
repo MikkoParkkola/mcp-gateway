@@ -53,3 +53,15 @@ jobs:
         with:
           path: ~/mingw-debs
           key: ${{ steps.key.outputs.key }}
+      # The save action reports an upload failure as a warning, so a green
+      # job alone does not prove a filled cache. Look the key up again: it
+      # passes when this run saved it or a concurrent run on another ref won
+      # the race, and fails only when no entry exists.
+      - name: Confirm the cache is filled
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/mingw-debs
+          key: ${{ steps.key.outputs.key }}
+          lookup-only: true
+          fail-on-cache-miss: true

@@ -29,7 +29,12 @@ case "${1:-}" in
     sudo apt-get "${apt_opts[@]}" update
     sudo apt-get "${apt_opts[@]}" -o Dir::Cache::Archives="$scratch" \
       install -y --download-only --no-install-recommends "$pkg"
-    cp "$scratch"/*.deb "$dir"/
+    debs=("$scratch"/*.deb)
+    if [ ! -e "${debs[0]}" ]; then
+      echo "mingw-debs.sh: the download produced no .deb files (is $pkg already installed?)" >&2
+      exit 1
+    fi
+    cp "${debs[@]}" "$dir"/
     ;;
   install)
     dir=${2:?usage: mingw-debs.sh install <dir>}
