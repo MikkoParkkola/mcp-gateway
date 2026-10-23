@@ -47,6 +47,10 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/release/check_tag_manifest.py", ()): "release: needs a tag in GITHUB_REF_NAME",
     ("scripts/release/critical_function_coverage.py", ("$@",)): "artifact: reads a cargo llvm-cov profile",
     ("scripts/release/critical_path_coverage.py", ("art/coverage-linux/cov.json",)): "artifact: reads a CI coverage artifact",
+    ("scripts/dev/test_run_prepush_ci_checks.py", ()): (
+        "budget: tests the runner itself; 22.5 s would put the CI-checks stage at about 114 s of its "
+        "120 s budget on every push; CI runs it on every PR"
+    ),
     ("scripts/release/test_workflow_wiring_mutations.py", ()): "budget: 329 s alone, over the 120 s budget",
 }
 
@@ -502,11 +506,15 @@ class Repository(unittest.TestCase):
             ]),
         )
         self.assertEqual(problems(REPO), [])
-        # The gate's own suites run in CI and in pre-push itself (lead 2026-10-23).
-        already = buckets(REPO)[1]
-        for suite in ("scripts/dev/test_prepush_ci_checks.py", "scripts/dev/test_run_prepush_ci_checks.py"):
-            self.assertIn((suite, ()), already)
-            self.assertIn((suite, ()), scanned_forms(REPO))
+        # The gate's own suites run in CI (lead 2026-10-23): the scanner suite
+        # also in pre-push (ALREADY), the runner suite in CI only (budget).
+        _, already, ci_only = buckets(REPO)
+        scanner, runner_suite = ("scripts/dev/test_prepush_ci_checks.py", ()), ("scripts/dev/test_run_prepush_ci_checks.py", ())
+        self.assertIn(scanner, scanned_forms(REPO))
+        self.assertIn(runner_suite, scanned_forms(REPO))
+        self.assertIn(scanner, already)
+        self.assertNotIn(runner_suite, already)
+        self.assertTrue(ci_only.get(runner_suite, "").startswith("budget:"), ci_only.get(runner_suite))
 
     # R2
     def test_r2_rust_targets_are_derived_from_sources(self):
