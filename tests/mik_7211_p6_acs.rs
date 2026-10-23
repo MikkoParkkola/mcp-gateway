@@ -173,6 +173,10 @@ mod source_checks {
             "src/gateway/meta_mcp/provenance_delivery_tests.rs",
             "src/gateway/meta_mcp/provenance_seal_rules_tests.rs",
             "src/gateway/router/tests/task_execution_adapter/provenance_seal.rs",
+            // MIK-8689 response rows: they read the key from delivered bodies
+            // and write it only into a pre-clamp copy to show the receipt
+            // refuses it.
+            "src/gateway/route_check_matrix_tests/response_rows.rs",
         ];
         let mut offenders = Vec::new();
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
