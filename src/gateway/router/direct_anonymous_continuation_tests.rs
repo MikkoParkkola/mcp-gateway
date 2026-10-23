@@ -186,6 +186,10 @@ async fn a_bound_anonymous_direct_caller_gets_a_continuation() {
     for other in [Some(OTHER), None] {
         let refused = call(&gw, other, retry.clone()).await;
         assert_eq!(refused["error"]["code"], -32602, "{other:?}: {refused}");
+        assert!(
+            !refused.to_string().contains("backend-state-1"),
+            "a refused retry leaked the backend's state: {other:?}: {refused}"
+        );
     }
     assert_eq!(
         gw.calls.lock().len(),
@@ -195,6 +199,10 @@ async fn a_bound_anonymous_direct_caller_gets_a_continuation() {
     let done = call(&gw, Some(CREDENTIAL), retry).await;
     assert!(done.get("error").is_none(), "{done}");
     assert_eq!(done["result"]["content"][0]["text"], "ok", "{done}");
+    assert!(
+        !done.to_string().contains("backend-state-1"),
+        "the completed answer leaked the backend's state: {done}"
+    );
     let calls = gw.calls.lock().clone();
     assert_eq!(calls.len(), 2, "{calls:?}");
     assert!(calls.iter().all(|(slot, _)| *slot == "caller"), "{calls:?}");
