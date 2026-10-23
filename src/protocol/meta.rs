@@ -121,7 +121,8 @@ pub enum RequestShape {
 /// nothing at the call site about what is true. Derived from [`RequestShape`]
 /// and never computed independently — that is the whole point of it existing,
 /// because a second era predicate is the defect [`classify_request`] records.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Era {
     /// Declared the stateless 2026 era, in `_meta` or the mirrored header.
     Modern,

@@ -7,6 +7,7 @@
 //! resume redeems that continuation through the same funnel a client retry
 //! takes (`redeem_retry`). Nothing here talks to a backend directly.
 
+use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -284,7 +285,7 @@ impl<'a> Settling<'a> {
             Err(StoreError::InvalidTransition) => {
                 self.settle(
                     TaskTransition::Fail(JsonRpcError {
-                        code: -32603,
+                        code: INTERNAL_ERROR,
                         message: "the backend's input round is invalid".to_owned(),
                         data: None,
                     }),
@@ -685,10 +686,9 @@ pub(super) fn round_deadline(
 fn rejected_after_expiry(response: &JsonRpcResponse, deadline: u64, now: u64) -> bool {
     let expired = crate::protocol::continuation::ContinuationError::Expired;
     now > deadline.saturating_add(CONTINUATION_DEADLINE_MARGIN_SECS)
-        && response
-            .error
-            .as_ref()
-            .is_some_and(|error| error.code == -32602 && error.message == expired.client_message())
+        && response.error.as_ref().is_some_and(|error| {
+            error.code == INVALID_PARAMS && error.message == expired.client_message()
+        })
 }
 
 impl TaskExecutor {

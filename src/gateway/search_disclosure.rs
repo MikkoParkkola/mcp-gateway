@@ -5,6 +5,7 @@
 //! Search is a selection step. Default L0 answers "is this the tool?"
 //! Ranking diagnostics stay a debug surface (`explain: true`).
 
+use crate::error::rpc_codes::INVALID_PARAMS;
 use serde_json::{Value, json};
 
 use crate::ranking::SearchResult;
@@ -53,7 +54,7 @@ pub(crate) fn resolve_search_disclosure(args: &Value) -> Result<SearchDisclosure
         Some(Value::String(s)) => parse_detail(s)?,
         Some(_) => {
             return Err(Error::json_rpc(
-                -32602,
+                INVALID_PARAMS,
                 "detail must be a string (l0|l1|l2)",
             ));
         }
@@ -67,7 +68,7 @@ fn parse_detail(raw: &str) -> Result<SearchDetail> {
         "l1" => Ok(SearchDetail::L1),
         "l2" => Ok(SearchDetail::L2),
         other => Err(Error::json_rpc(
-            -32602,
+            INVALID_PARAMS,
             format!("Invalid 'detail' '{other}' (expected l0|l1|l2)"),
         )),
     }

@@ -193,3 +193,16 @@ fn authorize_extra_does_not_move_the_revision() {
     );
     assert_eq!(rev(&base()), rev(&with_extra));
 }
+
+/// MIK-8668 X-SHA golden, computed independently (Python hashlib over the
+/// domain `mcp-gateway/descriptor-revision/v1` followed by each field of
+/// `base()` as a u32 big-endian length plus its bytes, in declaration order).
+/// A moved digest fences every stored grant, so the bytes are pinned, not
+/// just the shape.
+#[test]
+fn the_base_revision_matches_its_independent_golden() {
+    assert_eq!(
+        rev(&base()),
+        "fdc222d05f8c97bc2b69a176bface687532c498835c2130d9bebb07d5d554d44"
+    );
+}

@@ -9,6 +9,8 @@ use serde_json::Value;
 use super::super::gateway_writes::Layer;
 use super::RELAY_RECEIPTS;
 use super::{MetaMcp, RelayKey};
+#[cfg(feature = "firewall")]
+use crate::security::firewall::json_literal::{closing_quote, escape_at};
 
 impl MetaMcp {
     /// The relay receipt of `value` as delivered to `who` from `server:tool`,
@@ -424,21 +426,6 @@ fn line_literals(line: &str) -> Vec<(String, bool)> {
     out
 }
 
-/// The byte offset of the first unescaped `"` in `rest`.
-#[cfg(feature = "firewall")]
-fn closing_quote(rest: &str) -> Option<usize> {
-    let mut escaped = false;
-    for (i, c) in rest.char_indices() {
-        match c {
-            _ if escaped => escaped = false,
-            '\\' => escaped = true,
-            '"' => return Some(i),
-            _ => {}
-        }
-    }
-    None
-}
-
 /// The byte offset of the last `"` in `body` that no backslash escapes.
 #[cfg(feature = "firewall")]
 fn last_open_quote(body: &str) -> Option<usize> {
@@ -466,46 +453,6 @@ fn unescape(text: &str) -> String {
     }
     out.push_str(rest);
     out
-}
-
-/// The char the escape at the start of `escape` stands for, and its length
-/// in bytes; `None` keeps those bytes as written.
-#[cfg(feature = "firewall")]
-fn escape_at(escape: &str) -> (Option<char>, usize) {
-    let simple = |c| (Some(c), 2);
-    match escape.as_bytes().get(1) {
-        Some(b'n') => simple('\n'),
-        Some(b't') => simple('\t'),
-        Some(b'r') => simple('\r'),
-        Some(b'"') => simple('"'),
-        Some(b'\\') => simple('\\'),
-        Some(b'/') => simple('/'),
-        Some(b'b') => simple('\u{8}'),
-        Some(b'f') => simple('\u{c}'),
-        Some(b'u') => match hex4(escape, 2) {
-            Some(high @ 0xD800..=0xDBFF) => match (escape.get(6..8), hex4(escape, 8)) {
-                (Some("\\u"), Some(low @ 0xDC00..=0xDFFF)) => (
-                    char::from_u32(0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00)),
-                    12,
-                ),
-                _ => (None, 6),
-            },
-            Some(code) => (char::from_u32(code), 6),
-            None => (None, 1),
-        },
-        _ => (None, 1),
-    }
-}
-
-/// The four hex digits at `at` of `text`, as a number.
-#[cfg(feature = "firewall")]
-fn hex4(text: &str, at: usize) -> Option<u32> {
-    let digits = text.get(at..at + 4)?;
-    digits
-        .bytes()
-        .all(|b| b.is_ascii_hexdigit())
-        .then(|| u32::from_str_radix(digits, 16).ok())
-        .flatten()
 }
 
 /// Which members of a delivered result the gateway wrote on its route.

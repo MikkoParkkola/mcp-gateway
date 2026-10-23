@@ -137,15 +137,10 @@ fn dedupe_key(inbound: &Inbound<'_>) -> Option<String> {
             .filter(|v| !v.is_empty())
             // Hashed: the seen-set's bound is a count, so its entries must be
             // fixed-size whatever the sender puts in the header.
-            .map(|v| {
-                use sha2::Digest as _;
-                format!("id:{}", hex::encode(sha2::Sha256::digest(v.as_bytes())))
-            });
+            .map(|v| format!("id:{}", crate::hashing::sha256_hex(v.as_bytes())));
     }
-    (inbound.event.dedupe.as_deref() == Some("body")).then(|| {
-        use sha2::Digest as _;
-        format!("body:{}", hex::encode(sha2::Sha256::digest(inbound.body)))
-    })
+    (inbound.event.dedupe.as_deref() == Some("body"))
+        .then(|| format!("body:{}", crate::hashing::sha256_hex(inbound.body)))
 }
 
 /// The descriptors `registry` currently derives, sorted by name.
@@ -194,4 +189,52 @@ fn descriptors(registry: &WebhookRegistry) -> Vec<EventDescriptor> {
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Inbound, dedupe_key};
+    use crate::capability::WebhookEvent;
+
+    fn inbound<'a>(
+        event: &'a WebhookEvent,
+        headers: &'a axum::http::HeaderMap,
+        body: &'a [u8],
+    ) -> Inbound<'a> {
+        Inbound {
+            capability: "c",
+            route: "r",
+            backend: "b",
+            event,
+            headers,
+            body,
+            event_type: String::new(),
+            fields: serde_json::Map::new(),
+        }
+    }
+
+    /// MIK-8668 X-SHA goldens, computed independently (Python hashlib): the
+    /// delivery-id key hashes the header value, the body key hashes the body.
+    #[test]
+    fn dedupe_keys_are_prefixed_hex_sha256() {
+        let by_header = WebhookEvent {
+            delivery_id_header: Some("x-delivery".to_string()),
+            ..WebhookEvent::default()
+        };
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-delivery", axum::http::HeaderValue::from_static("d-1"));
+        assert_eq!(
+            dedupe_key(&inbound(&by_header, &headers, b"ignored")).as_deref(),
+            Some("id:0741a320e613baac937e2644e8e96a2832166a3eb222ade3abbfa21a8cff1035")
+        );
+        let by_body = WebhookEvent {
+            dedupe: Some("body".to_string()),
+            ..WebhookEvent::default()
+        };
+        let none = axum::http::HeaderMap::new();
+        assert_eq!(
+            dedupe_key(&inbound(&by_body, &none, b"hello")).as_deref(),
+            Some("body:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+        );
+    }
 }

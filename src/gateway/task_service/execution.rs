@@ -18,6 +18,7 @@ mod settlement;
 mod upstream;
 mod worker;
 
+use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -111,7 +112,7 @@ impl BeginOutcome {
             }
             Self::Mismatch => JsonRpcResponse::error(
                 Some(id),
-                -32602,
+                INVALID_PARAMS,
                 "idempotency key already used with a different request",
             ),
             Self::InFlight => JsonRpcResponse::error(
@@ -122,10 +123,14 @@ impl BeginOutcome {
             // Refused at once, never queued: a pool whose workers all wait
             // (for a backend, or for a host clock that reads before 1970)
             // must not hang new submissions (MIK-8202).
-            Self::Capacity => {
-                JsonRpcResponse::error(Some(id), -32603, "every task worker is busy; retry later")
+            Self::Capacity => JsonRpcResponse::error(
+                Some(id),
+                INTERNAL_ERROR,
+                "every task worker is busy; retry later",
+            ),
+            Self::Unavailable => {
+                JsonRpcResponse::error(Some(id), INTERNAL_ERROR, "task store unavailable")
             }
-            Self::Unavailable => JsonRpcResponse::error(Some(id), -32603, "task store unavailable"),
             // The code the synchronous path gives a sealed call, so a client
             // sees one refusal for it on either path.
             Self::Sealed => {

@@ -6,6 +6,7 @@
 //! firewall refused on `/mcp` without a trace in the chain, while the same
 //! refusals on `/mcp/{name}` were recorded (D2-a).
 
+use crate::error::rpc_codes::INVALID_PARAMS;
 use std::collections::BTreeSet;
 
 use axum::http::StatusCode;
@@ -91,13 +92,20 @@ impl<'a> Refused<'a> {
         message: String,
     ) -> axum::response::Response {
         let refusal = Refusal {
-            outcome: AuditOutcome::Invalid(-32602),
+            outcome: AuditOutcome::Invalid(INVALID_PARAMS),
             server: "",
             tool: None,
             tenants: BTreeSet::new(),
         };
-        self.record(state, refusal, id, -32602, message, StatusCode::BAD_REQUEST)
-            .await
+        self.record(
+            state,
+            refusal,
+            id,
+            INVALID_PARAMS,
+            message,
+            StatusCode::BAD_REQUEST,
+        )
+        .await
     }
 
     /// MIK-8382: record a keyed call with no execution principal refused at

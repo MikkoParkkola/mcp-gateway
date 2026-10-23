@@ -13,6 +13,7 @@
 
 use super::meta::{MODERN_VERSIONS, REMOVED_IN_2026_07_28, RequestFields, required_capability};
 use super::{JsonRpcResponse, RequestId};
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 
 /// Which body-only refusal [`modern_method_refusal`] made, so a caller can map
 /// it to its own status. HTTP answers a missing capability 400 and a removed
@@ -89,7 +90,7 @@ pub fn removed_method_refusal(id: Option<&RequestId>, method: &str) -> Option<Js
     REMOVED_IN_2026_07_28.contains(&method).then(|| {
         JsonRpcResponse::error(
             id.cloned(),
-            super::era::METHOD_NOT_FOUND_CODE,
+            METHOD_NOT_FOUND,
             format!("method '{method}' was removed in MCP 2026-07-28"),
         )
     })

@@ -39,8 +39,3 @@
 id = "RUSTSEC-2024-0449"
 ignoreUntil = 2026-11-05
 reason = "Unmaintained unsafe-libyaml (no patched release; RustSec informational advisory), reached through serde_yaml 0.9.34. MIK-8424. Operator ruling 2026-10-22, option C: a short extension from 2026-10-26 to 2026-11-05, so the v4.0.0 tag and publish complete inside it. Remove this entry when the MIK-8425 MIG.2 backend swap has landed and a real OSV scan passes with this entry removed (MIG.6); the question returns to the operator before 2026-11-05. No silent renewal. Reviewed 2026-10-22."
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0381"
-ignoreUntil = 2026-12-31
-reason = "webpki-roots 0.26.11 only: a re-export shim of webpki-roots 1 (lib.rs is `pub use parent::TLS_SERVER_ROOTS;`, crate sha256 521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9) with no patched 0.26 release, pulled in by tokio-tungstenite 0.30.0 (newest; upstream snapview/tokio-tungstenite#381 open). The roots come from webpki-roots 1.x, held >= 1.0.10 by scripts/ci/check_advisory_exceptions.py. Remove when tokio-tungstenite releases on webpki-roots 1 or MIK-8578 lands. MIK-8577; reviewed 2026-10-20."
