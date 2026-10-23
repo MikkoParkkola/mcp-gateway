@@ -51,6 +51,16 @@ pub struct Redactor {
     member_value: Regex,
 }
 
+/// What [`Redactor::redact_json_text`] did with a leaf.
+enum JsonText {
+    /// Not a JSON document the walk takes: today's whole-leaf path applies.
+    NotJson,
+    /// A document with nothing left to redact: the leaf stays byte-identical.
+    Kept,
+    /// A document with its secret-bearing string values redacted in place.
+    Redacted(String),
+}
+
 /// The replacement every redaction writes.
 const REDACTED: &str = "[REDACTED:credential]";
 
@@ -180,13 +190,22 @@ impl Redactor {
     ) {
         match value {
             Value::String(s) => {
-                if self.set.is_match(s)
-                    && !exempt(s)
-                    && let Some(redacted) = self
-                        .redact_json_text(s, findings)
-                        .or_else(|| self.redact_text(s, Site::Value, findings))
-                {
-                    *s = redacted;
+                if exempt(s) {
+                    return;
+                }
+                // Every JSON document leaf takes the walk, matched or not: a
+                // member's name may be escaped in the raw text, so no raw
+                // precheck can decide (MIK-8756 ruling A).
+                match self.redact_json_text(s, exempt, findings) {
+                    JsonText::Redacted(redacted) => *s = redacted,
+                    JsonText::Kept => {}
+                    JsonText::NotJson => {
+                        if self.set.is_match(s)
+                            && let Some(redacted) = self.redact_text(s, Site::Value, findings)
+                        {
+                            *s = redacted;
+                        }
+                    }
                 }
             }
             Value::Array(arr) => {
@@ -255,10 +274,39 @@ impl Redactor {
     /// still parses (MIK-8745). `None` leaves the leaf to
     /// [`Self::redact_text`]: not a document, over the size cap, or a span
     /// that starts inside a key.
-    fn redact_json_text(&self, text: &str, findings: &mut Vec<Finding>) -> Option<String> {
-        b2_gate(text)?;
-        let spans = self.credential_spans(text);
+    fn redact_json_text(
+        &self,
+        text: &str,
+        exempt: &dyn Fn(&str) -> bool,
+        findings: &mut Vec<Finding>,
+    ) -> JsonText {
+        if b2_gate(text).is_none() {
+            return JsonText::NotJson;
+        }
         let literals = json_literal::string_literals(text);
+        // A value literal whose decoded text is exempt keeps every byte, and a
+        // pattern counts only where it still redacts something (MIK-8756).
+        let exempt_lits: Vec<&Literal> = literals
+            .iter()
+            .filter(|lit| !lit.key && decoded(text, lit).is_some_and(|v| exempt(&v)))
+            .collect();
+        let overlaps_exempt = |&(start, end): &(usize, usize)| {
+            exempt_lits.iter().any(|l| start < l.end && l.start < end)
+        };
+        let mut matched = Vec::new();
+        let mut spans = Vec::new();
+        for idx in &self.set.matches(text) {
+            let kept: Vec<(usize, usize)> = overlapping_spans(&self.regexes[idx], text)
+                .into_iter()
+                .filter(|span| !overlaps_exempt(span))
+                .collect();
+            if !kept.is_empty() {
+                matched.push(idx);
+                spans.extend(kept);
+            }
+        }
+        spans.sort_unstable();
+        let spans = merge_spans(spans);
         let starts_in_value = |at: usize| {
             let after = literals.partition_point(|lit| lit.start <= at);
             after
@@ -269,12 +317,44 @@ impl Redactor {
             tracing::debug!(
                 "a credential span starts outside a string value; redacting the leaf whole"
             );
-            return None;
+            return JsonText::NotJson;
         }
-        let redacted = replace_spans(text, &project(text, &spans, &literals));
-        let matched: Vec<usize> = self.set.matches(text).into_iter().collect();
+        let members = self.member_values(text, &literals, exempt);
+        if spans.is_empty() && members.is_empty() {
+            return JsonText::Kept;
+        }
+        let mut ranges = project(text, &spans, &literals);
+        ranges.extend(members.iter().map(|lit| (lit.start, lit.end)));
+        ranges.sort_unstable();
+        let redacted = replace_spans(text, &merge_spans(ranges));
         self.record_findings(&matched, &redacted, Site::Value, findings);
-        Some(redacted)
+        findings.extend(members.iter().map(|_| Self::member_finding()));
+        JsonText::Redacted(redacted)
+    }
+
+    /// The value literals of `text`'s credential-named members: a key literal
+    /// followed, after `:` and whitespace only, by a string value whose
+    /// decoded text the member rule accepts and `exempt` does not. Keys and
+    /// values are compared decoded, so an escaped name is still a name.
+    fn member_values<'a>(
+        &self,
+        text: &str,
+        literals: &'a [Literal],
+        exempt: &dyn Fn(&str) -> bool,
+    ) -> Vec<&'a Literal> {
+        literals
+            .windows(2)
+            .filter(|pair| pair[0].key && !pair[1].key)
+            .filter(|pair| text[pair[0].end + 1..pair[1].start - 1].trim() == ":")
+            .filter(|pair| {
+                matches!(
+                    (decoded(text, &pair[0]), decoded(text, &pair[1])),
+                    (Some(key), Some(value))
+                        if self.credential_member(&key, &value) && !exempt(&value)
+                )
+            })
+            .map(|pair| &pair[1])
+            .collect()
     }
 
     /// One finding per matched pattern, showing `redacted`.
@@ -394,6 +474,12 @@ fn overlapping_spans(re: &Regex, text: &str) -> Vec<(usize, usize)> {
         at = next.max(floor);
     }
     spans
+}
+
+/// `lit`'s content decoded, quotes included in the parse, so JSON escapes
+/// read as the characters they stand for.
+fn decoded(text: &str, lit: &Literal) -> Option<String> {
+    serde_json::from_str::<String>(&text[lit.start - 1..lit.end + 1]).ok()
 }
 
 /// The parsed document when `text` is JSON whose credential spans can be
