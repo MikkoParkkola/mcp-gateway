@@ -61,6 +61,10 @@ if [[ -f Cargo.toml ]]; then
   step "public repo hygiene"
   scripts/dev/check-public-repo-hygiene.sh
 
+  # MIK-8410: CI's cargo-free PR-workflow checks, before any cargo step.
+  step "CI script checks"
+  bash scripts/dev/prepush_ci_step.sh "$base"
+
   # Cargo's own exit code decides, never a pipe's: the full output goes to a
   # log, a failure prints its tail and keeps the log, and every `test result:`
   # summary line is shown either way.
@@ -102,6 +106,11 @@ if [[ -f Cargo.toml ]]; then
 
   step "cargo test --lib"
   run_cargo "cargo test --lib" test --lib --quiet
+
+  # MIK-8410 RUST.1: the integration tests that read docs/ or the CLI
+  # definition, --all-features, as CI runs them.
+  step "doc/CLI Rust tests (--all-features)"
+  CARGO="${CARGO:-cargo}" python3 scripts/dev/run_prepush_ci_checks.py --rust --merge-base "$base"
 fi
 
 step "commit metadata"
