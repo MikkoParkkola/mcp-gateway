@@ -1,0 +1,90 @@
+# pre-push CI script checks (MIK-8410). Generated from the PR workflows' executions;
+# scripts/dev/test_prepush_ci_checks.py fails when this list and the workflows disagree.
+# command<TAB>recorded seconds<TAB>direction[<TAB>requires=<sha>]. Placeholders: <BASE_TIP> <MERGE_BASE> <HEAD> <TMP>.
+tree=$(mktemp -d) && git archive f241b464acf6007a88ebc2b576c0825350b018a1 capabilities | tar -x -C "$tree" && python3 benchmarks/ranking-baseline/gen_corpus.py "$tree" | cmp - benchmarks/ranking-baseline/corpus.json	2	closed	requires=f241b464acf6007a88ebc2b576c0825350b018a1
+python3 benchmarks/token_savings.py --scenario readme --json	0	closed
+python3 benchmarks/workload/test_eval_workload.py	19	closed
+python3 benchmarks/workload/test_schedule.py	7	closed
+python3 scripts/ci/check-gateway-spawns.py	0	closed
+python3 scripts/ci/check-gateway-spawns.py --self-test	0	closed
+python3 scripts/ci/check-pick-then-bind.py	13	closed
+python3 scripts/ci/check-pick-then-bind.py --self-test	0	closed
+python3 scripts/ci/check-pipefail-grep-q.py	0	closed
+python3 scripts/ci/check_advisory_exceptions.py	0	closed
+python3 scripts/ci/check_advisory_exceptions.py --self-test	0	closed
+python3 scripts/ci/check_needs.py --self-test	0	closed
+python3 scripts/ci/check_per_call_stages.py	0	closed
+python3 scripts/ci/mutants/run_mutants.py --self-test	2	closed
+python3 scripts/ci/shard_tests.py --self-test	0	closed
+python3 scripts/ci/test_check_per_call_stages.py	0	closed
+python3 scripts/ci/test_docker_pr_scope.py	0	closed
+python3 scripts/ci/test_docs_only_gating.py	1	closed
+python3 scripts/ci/test_feature_shards.py	0	closed
+python3 scripts/ci/test_os_shards.py	1	closed
+python3 scripts/ci/test_throwaway_routing.py	1	closed
+python3 scripts/dev/check-event-source-scope.py <BASE_TIP>	1	closed
+python3 scripts/dev/check-file-size.py --base <BASE_TIP>	1	closed
+python3 scripts/dev/check-orphan-test-modules.py	22	closed
+python3 scripts/dev/check-registry-packages.py --offline	1	closed
+python3 scripts/dev/check-timing-asserts.py --base <BASE_TIP>	1	closed
+python3 scripts/dev/cwe532-leak-lint.py src crates	5	closed
+python3 scripts/dev/test_check_control_drift.py	7	closed
+python3 scripts/dev/test_check_event_source_scope.py	3	closed
+python3 scripts/dev/test_check_file_size.py	4	closed
+python3 scripts/dev/test_check_orphan_test_modules.py	22	closed
+python3 scripts/dev/test_check_owasp_citations.py	38	closed
+python3 scripts/dev/test_check_registry_packages.py	0	closed
+python3 scripts/dev/test_check_timing_asserts.py	10	closed
+python3 scripts/dev/test_cwe532_leak_lint.py	1	closed
+python3 scripts/dev/test_events8_run.py	8	closed
+python3 scripts/dev/test_mcp_events_failfast.py	1	closed
+python3 scripts/dev/test_mcp_events_oauth_shim.py	1	closed
+python3 scripts/dev/test_pipefail_quiet_grep.py	2	closed
+python3 scripts/perf/test_per_call_gate.py	1	closed
+python3 scripts/release/changelog_fragments.py assemble --dry-run > /dev/null	1	closed
+python3 scripts/release/changelog_fragments.py check --base <BASE_TIP> --head <HEAD>	1	closed
+python3 scripts/release/check_burndown_summary.py	2	closed
+python3 scripts/release/check_identity_sources.py	47	closed
+python3 scripts/release/check_inventory_rows.py --all	35	closed
+python3 scripts/release/check_inventory_rows.py <BASE_TIP>	1	closed
+python3 scripts/release/check_known_issues.py --check	1	closed
+python3 scripts/release/check_macos_exclusions.py	4	closed
+python3 scripts/release/check_nfr_demo_1_recordings.py	1	closed
+python3 scripts/release/check_security_fragments.py changelog.d	1	closed
+python3 scripts/release/count-release-criteria.py --check	0	closed
+python3 scripts/release/test_botreview_sweep.py	0	closed
+python3 scripts/release/test_build1_pass_check.py	0	closed
+python3 scripts/release/test_c6_killer_drift.py	2	closed
+python3 scripts/release/test_c6_mutation_sample.py	1	closed
+python3 scripts/release/test_c6_resolve.py	26	closed
+python3 scripts/release/test_changelog_fragments.py	2	closed
+python3 scripts/release/test_check_burndown_summary.py	0	closed
+python3 scripts/release/test_check_identity_sources.py	73	closed
+python3 scripts/release/test_check_inventory_rows.py	21	closed
+python3 scripts/release/test_check_keyless_read_only.py	1	closed
+python3 scripts/release/test_check_known_issues.py	1	closed
+python3 scripts/release/test_check_macos_exclusions.py	4	closed
+python3 scripts/release/test_check_nfr_demo_1_recordings.py	1	closed
+python3 scripts/release/test_check_release_assets.py	1	closed
+python3 scripts/release/test_check_security_fragments.py	1	closed
+python3 scripts/release/test_check_surface_inventory.py	99	closed
+python3 scripts/release/test_check_tag_manifest.py	9	closed
+python3 scripts/release/test_count_release_criteria.py	0	closed
+python3 scripts/release/test_critical_function_coverage.py	4	closed
+python3 scripts/release/test_critical_path_coverage.py	1	closed
+python3 scripts/release/test_entrypoint_full.py	4	closed
+python3 scripts/release/test_grep_no_test_hook.py	2	closed
+python3 scripts/release/test_inventory_ledger.py	11	closed
+python3 scripts/release/test_prune_coverage_grades.py	1	closed
+python3 scripts/release/test_publish_pinned_chart.py	11	closed
+python3 scripts/release/test_refuse_published_release.py	2	closed
+python3 scripts/release/test_scope_acceptance.py	14	closed
+python3 scripts/release/test_scope_contract_interface.py	10	closed
+python3 scripts/release/test_sign_release_assets.py	4	closed
+python3 scripts/release/test_surface_docs.py	0	closed
+python3 scripts/release/test_surface_upgrading.py	0	closed
+python3 scripts/release/test_upgrading_fragments.py	4	closed
+python3 scripts/release/test_windows_job_scope.py	0	closed
+python3 scripts/release/upgrading_fragments.py assemble --dry-run > <TMP>/UPGRADING-4.0.md	1	closed
+python3 scripts/release/upgrading_fragments.py check	1	closed
+python3 scripts/release/upgrading_fragments.py check --base <BASE_TIP> --head <HEAD>	1	closed

@@ -12,10 +12,13 @@ SKELETON: the scanner functions return nothing yet.
 from __future__ import annotations
 
 import pathlib
+import re
 import sys
 import tempfile
 import textwrap
 import unittest
+
+import yaml
 
 HERE = pathlib.Path(__file__).resolve().parent
 REPO = HERE.parents[1]
@@ -25,28 +28,148 @@ import workflow_shell  # noqa: E402
 
 RUN_LIST = pathlib.Path("scripts/dev/prepush-ci-checks.txt")
 CI_ONLY_CLASSES = ("cargo", "binary", "artifact", "release", "ci-env", "network", "budget", "windows")
-# form (script, args) -> "class: free text"
-CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {}
+# form (script, args) -> "class: free text". Forms whose own step makes them
+# CI-only (a pwsh step, a base bound to a URL or to push-only event data) are
+# classified by the walker and are not listed here.
+CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
+    ("scripts/ci/check-codeql-ignore.py", ()): "cargo: runs cargo metadata/build; Spark only",
+    ("scripts/ci/check_docker_hub_pulls.py", ()): "network: queries Docker Hub",
+    ("scripts/ci/check_needs.py", ("macos-shards",)): "ci-env: reads NEEDS from ${{ toJSON(needs) }}",
+    ("scripts/ci/check_needs.py", ("test-shards",)): "ci-env: reads NEEDS from ${{ toJSON(needs) }}",
+    ("scripts/ci/check_needs.py", ("windows-shards", "windows-clippy")): "ci-env: reads NEEDS from ${{ toJSON(needs) }}",
+    ("scripts/ci/shard_tests.py", ("run", "linux", "${{matrix.shard}}")): "cargo: runs cargo test shards",
+    ("scripts/ci/shard_tests.py", ("run", "macos", "${{matrix.shard}}")): "cargo: runs cargo test shards",
+    ("scripts/dev/check-registry-packages.py", ()): "network: live npm/PyPI/HTTP lookups",
+    ("scripts/dev/check-registry-packages.py", ("scripts/dev/testdata/registry-dead.rs",)): "network: live lookups, CI expects exit 1 (registry-packages.yml:52-57)",
+    ("scripts/release/check_known_issues.py", ("--release",)): "release: tag-time form",
+    ("scripts/release/check_release_assets.py", ("sbom", "--version", "$version", "--sbom-only", "${{matrix.artifact}}${{matrix.suffix}}")): "binary: needs a built release binary and syft",
+    ("scripts/release/check_scope_acceptance.py", ("--publish-check",)): "release: publish-time form",
+    ("scripts/release/check_tag_manifest.py", ()): "release: needs a tag in GITHUB_REF_NAME",
+    ("scripts/release/critical_function_coverage.py", ("$@",)): "artifact: reads a cargo llvm-cov profile",
+    ("scripts/release/critical_path_coverage.py", ("art/coverage-linux/cov.json",)): "artifact: reads a CI coverage artifact",
+    ("scripts/release/test_workflow_wiring_mutations.py", ()): "budget: 329 s alone, over the 120 s budget",
+}
+
+
+
+PR_EVENTS = ("pull_request", "pull_request_target")
+NON_POSIX_SHELLS = ("pwsh", "powershell", "cmd")
+RUST_READS = re.compile(r'"[^"\n]*\bdocs/|include_str!\("\.\./docs|Cli::command\(\)|Cli::(?:try_)?parse_from\(')
+
+
+def _load(path):
+    return yaml.safe_load(path.read_text()) or {}
+
+
+def _is_pr(doc) -> bool:
+    on = doc.get(True, doc.get("on"))  # PyYAML reads a bare `on:` key as True
+    if isinstance(on, str):
+        return on in PR_EVENTS
+    if isinstance(on, (list, dict)):
+        return any(event in on for event in PR_EVENTS)
+    return False
 
 
 def pr_workflows(root: pathlib.Path) -> list[pathlib.Path]:
-    return []
+    """Workflows triggered by pull_request or pull_request_target, any YAML form."""
+    return sorted(p for p in (root / ".github/workflows").glob("*.yml") if _is_pr(_load(p)))
+
+
+def _steps(root, path, seen):
+    """(workflow name, step) for every step, following local reusable-workflow calls."""
+    if path in seen:
+        return
+    seen.add(path)
+    for job in (_load(path).get("jobs") or {}).values():
+        uses = job.get("uses", "") if isinstance(job, dict) else ""
+        if uses.startswith("./.github/workflows/"):
+            yield from _steps(root, root / uses[2:], seen)
+            continue
+        for step in (job.get("steps") or []) if isinstance(job, dict) else []:
+            yield path.name, step
+
+
+def _scan(root):
+    """(form -> [workflows], form -> automatic CI_ONLY reason, problems)."""
+    forms, auto, found = {}, {}, []
+    seen = set()
+    for workflow in pr_workflows(root):
+        for name, step in _steps(root, workflow, seen):
+            run = step.get("run") if isinstance(step, dict) else None
+            if not run:
+                continue
+            try:
+                executed = workflow_shell.executions(run)
+            except workflow_shell.UnsupportedSyntax as err:
+                found.append(f"unsupported execution syntax in {name} step {step.get('name', '?')!r}: {err}")
+                continue
+            windows = str(step.get("shell", "")).split()[:1] in ([s] for s in NON_POSIX_SHELLS)
+            for ex in executed:
+                scripts = sorted(str(p.relative_to(root)) for p in root.glob(ex.script)) if "*" in ex.script else [ex.script]
+                for script in scripts:
+                    form = (script, ex.args)
+                    forms.setdefault(form, []).append(name)
+                    if windows:
+                        auto[form] = "windows: runs under a non-POSIX shell step"
+                    elif ex.auto_class:
+                        auto[form] = ex.auto_class
+    return forms, auto, found
+
+
+def _forms_of(text):
+    forms = set()
+    for command in text.splitlines():
+        command = command.split("\t")[0].strip()
+        if command and not command.startswith("#"):
+            forms |= {(e.script, e.args) for e in workflow_shell.executions(command)}
+    return forms
 
 
 def scanned_forms(root: pathlib.Path) -> dict:
-    return {}
+    return _scan(root)[0]
 
 
 def buckets(root: pathlib.Path, *, ci_only=None):
-    return set(), set(), {}
+    """(RUN forms, ALREADY forms, CI_ONLY form -> reason)."""
+    table = CI_ONLY if ci_only is None else ci_only
+    run = _forms_of((root / RUN_LIST).read_text()) if (root / RUN_LIST).exists() else set()
+    pre_push = root / "scripts/dev/pre-push.sh"
+    already = {(e.script, e.args) for e in workflow_shell.executions(pre_push.read_text())} if pre_push.exists() else set()
+    return run, already, {**table, **_scan(root)[1]}
 
 
 def problems(root: pathlib.Path, *, ci_only=None) -> list[str]:
-    return []
+    """Every drift problem, each naming its form and, when scanned, its workflows."""
+    table = CI_ONLY if ci_only is None else ci_only
+    forms, auto, found = _scan(root)
+    run, already, ci = buckets(root, ci_only=table)
+    for form, workflows in sorted(forms.items()):
+        label = " ".join((form[0], *form[1])) + f" ({', '.join(sorted(set(workflows)))})"
+        homes = [b for b, members in (("RUN", run), ("ALREADY", already), ("CI_ONLY", ci)) if form in members]
+        if not homes:
+            found.append(f"in no bucket: {label}")
+        elif len(homes) > 1:
+            found.append(f"in two buckets {homes}: {label}")
+        if form not in ci and any("${{" in a or "$RUNNER_" in a for a in form[1]):
+            found.append(f"untranslated CI token in {label}")
+    for form in sorted(run - set(forms)):
+        found.append(f"stale RUN line (no PR workflow runs it): {' '.join((form[0], *form[1]))}")
+    for form, reason in sorted(table.items()):
+        if form not in forms:
+            found.append(f"stale CI_ONLY entry: {form[0]}")
+        if reason.split(":")[0].strip() not in CI_ONLY_CLASSES:
+            found.append(f"CI_ONLY reason names no class from {CI_ONLY_CLASSES}: {form[0]}: {reason!r}")
+    return found
 
 
 def rust_targets(root: pathlib.Path) -> list[str]:
-    return []
+    """Test targets whose sources read docs/ or the CLI definition (§7)."""
+    names = []
+    for target in sorted((root / "tests").glob("*.rs")):
+        sources = [target, *sorted((root / "tests" / target.stem).rglob("*.rs"))]
+        if any(RUST_READS.search(s.read_text(errors="replace")) for s in sources):
+            names.append(target.stem)
+    return names
 
 
 # ---------------------------------------------------------------- fixtures

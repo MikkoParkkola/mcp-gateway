@@ -9,6 +9,7 @@ workflow shell text instead of two that can diverge.
 """
 from __future__ import annotations
 
+import itertools
 import re
 from dataclasses import dataclass, field
 
@@ -124,18 +125,169 @@ def segments(command):
 
 @dataclass(frozen=True)
 class Execution:
-    """One program a `run:` block executes, as an invocation form."""
+    """One program a `run:` block executes, as an invocation form.
+
+    `auto_class` is set when the form's own step makes it CI-only whatever any
+    table says (a base bound to a URL or to push-only event data, §5.2)."""
 
     argv0: str
     script: str
     args: tuple[str, ...] = ()
     pipeline: tuple[str, ...] = field(default=())
+    auto_class: str = ""
 
 
 class UnsupportedSyntax(Exception):
     """Execution syntax the walker cannot classify; the drift test fails closed on it."""
 
 
+KEYWORDS = {"if", "then", "else", "elif", "fi", "for", "do", "done", "while", "until", "case", "esac", "!"}
+PYTHONS = {"python", "python3"}
+SCRIPT = re.compile(r"^(?:scripts|benchmarks)/[\w./*-]+\.py$")
+SUBSTITUTION = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
+ASSIGN = re.compile(r"^([A-Za-z_]\w*)=(.*)$")
+FOR_GLOB = re.compile(r"^for\s+(\w+)\s+in\s+(\S+)\s*$")
+UNSUPPORTED = ("eval", "source", ".")
+
+
+def _token(word, bound):
+    """`word` with CI tokens replaced by placeholders (§5.2), quotes stripped."""
+    word = word.strip("'\"")
+    for name, value in bound.items():
+        word = word.replace("${" + name + "}", value).replace("$" + name, value)
+    word = re.sub(r"\$\{?BASE_SHA\}?", "<BASE_TIP>", word)
+    word = re.sub(r"\$\{?HEAD_SHA\}?", "<HEAD>", word)
+    word = word.replace("origin/${{github.base_ref}}", "<BASE_TIP>").replace("${{github.base_ref}}", "<BASE_TIP>")
+    return re.sub(r"\$\{?RUNNER_TEMP\}?", "<TMP>", word)
+
+
+def _binding(value):
+    """What an assignment's right-hand side binds a variable to (§5.2)."""
+    value = value.strip("'\"")
+    if "git merge-base" in value:
+        return "<MERGE_BASE>", ""
+    if "BASE_SHA" in value or "github.base_ref" in value:
+        return "<BASE_TIP>", ""
+    if re.match(r"https?://", value):
+        return value, "network: the base is a download URL, not a commit"
+    if "BEFORE" in value or "github.event.before" in value or "HEAD^" in value:
+        return value, "ci-env: push-only event data (github.event.before)"
+    return value, ""
+
+
+def _without_redirections(words):
+    """`words` with shell redirections (`> f`, `2>&1`, `>/dev/null`) removed."""
+    kept, skip = [], False
+    for word in words:
+        if skip:
+            skip = False
+            continue
+        if re.fullmatch(r"\d*>>?|<", word):
+            skip = True
+            continue
+        if re.match(r"^\d*>>?|^\d*>&", word):
+            continue
+        kept.append(word)
+    return kept
+
+
+def _single_value(value):
+    """Whether `value` is one shell word: quoted, a substitution, or space-free."""
+    value = value.strip()
+    if value[:1] in "'\"" and value.endswith(value[:1]) and len(value) > 1:
+        return True
+    if value.startswith("$(") and value.endswith(")"):
+        return True
+    return " " not in value
+
+
+def _command_words(piece):
+    words = piece.split()
+    while words and (words[0] in KEYWORDS or ASSIGN.match(words[0])):
+        words = words[1:]
+    return words
+
+
 def executions(run_block: str) -> list[Execution]:
-    """Every script execution in one `run:` block. SKELETON: returns nothing yet."""
-    return []
+    """Every script execution in one `run:` block, in order."""
+    # One word per `${{ … }}` expression, so whitespace splitting keeps it whole.
+    run_block = re.sub(r"\$\{\{\s*(.*?)\s*\}\}", lambda m: "${{" + m.group(1).replace(" ", "") + "}}", run_block)
+    lines = heredocs_dropped(run_block.replace("\\\n", " ").splitlines())
+    found, bound, loops = [], {}, {}
+    for raw in lines:
+        if raw.strip().startswith("#"):
+            continue
+        for pipeline in _split_keep_pipes(raw):
+            for inner in SUBSTITUTION.findall(pipeline):
+                found += executions(inner[0] or inner[1])
+            stages = [s.strip() for s in pipeline.split("|") if s.strip()]
+            if not stages:
+                continue
+            first = stages[0]
+            loop = FOR_GLOB.match(first)
+            if loop:
+                loops[loop.group(1)] = loop.group(2)
+                continue
+            assign = ASSIGN.match(first)
+            if assign and _single_value(assign.group(2)):
+                # Every assignment is kept: `base="${BASE_SHA:-}"` and its
+                # fallback `base="$(git rev-parse HEAD^)"` are two forms.
+                bound.setdefault(assign.group(1), []).append(_binding(assign.group(2)))
+                continue
+            words = _command_words(SUBSTITUTION.sub("", first))
+            if not words:
+                continue
+            if words[0] in UNSUPPORTED:
+                raise UnsupportedSyntax(f"`{words[0]}` hides what it executes: {first}")
+            if words[0] not in PYTHONS:
+                continue
+            # Interpreter flags (`-B`, `-I`) come before the script; the
+            # script's own flags after it are arguments and are kept.
+            rest = list(words[1:])
+            while rest and rest[0].startswith("-") and rest[0] != "-":
+                rest.pop(0)
+            if not rest:
+                continue
+            target = rest[0].strip("'\"")
+            for var, pattern in loops.items():
+                if target in ("$" + var, "${" + var + "}"):
+                    target = pattern
+            if not SCRIPT.match(target):
+                continue
+            words_after = _without_redirections(rest[1:])
+            used = [v for v in bound if any(("$" + v) in w for w in words_after)]
+            for combo in itertools.product(*(bound[v] for v in used)):
+                values = {v: value for v, (value, _) in zip(used, combo)}
+                klass = next((k for _, k in combo if k), "")
+                found.append(Execution(
+                    argv0=words[0], script=target, args=tuple(_token(w, values) for w in words_after),
+                    pipeline=tuple(stages) if len(stages) > 1 else (),
+                    auto_class=klass,
+                ))
+    return found
+
+
+def _split_keep_pipes(command):
+    """`command` split at `;`, `&&`, `||` and newlines, keeping `|` pipelines whole."""
+    pieces, current, quote, i = [], "", None, 0
+    while i < len(command):
+        char = command[i]
+        two = command[i:i + 2]
+        if quote:
+            if char == quote:
+                quote = None
+            current += char
+        elif char in "'\"":
+            quote, current = char, current + char
+        elif two in ("&&", "||"):
+            pieces.append(current)
+            current, i = "", i + 2
+            continue
+        elif char in ";\n":
+            pieces.append(current)
+            current = ""
+        else:
+            current += char
+        i += 1
+    pieces.append(current)
+    return [p.strip() for p in pieces if p.strip()]
