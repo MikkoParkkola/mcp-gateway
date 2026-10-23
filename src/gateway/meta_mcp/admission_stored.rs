@@ -187,7 +187,13 @@ pub(super) fn dispatched_steps(bytes: &[u8]) -> Option<Vec<(String, String)>> {
 /// restoring the record's read and write scope, so a refusal restores none.
 /// `None` for Direct's records, for older records and for a bare response.
 pub(super) fn stored_era(bytes: &[u8]) -> Option<crate::protocol::meta::Era> {
-    serde_json::from_slice::<StoredDelivery>(bytes)
+    /// The one member a refusal reads; every other member is ignored.
+    #[derive(serde::Deserialize)]
+    struct EraOnly {
+        #[serde(default)]
+        era: Option<crate::protocol::meta::Era>,
+    }
+    serde_json::from_slice::<EraOnly>(bytes)
         .ok()
         .and_then(|stored| stored.era)
 }

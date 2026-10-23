@@ -44,6 +44,10 @@ pub(crate) struct SyncLease {
 }
 
 /// The era a request was classified in, as a stored delivery records it.
+/// `is_modern` is the transport's classification (`MetaMcpCallerContext::era`
+/// on the meta path); this one mapping serves both the stamp and the
+/// comparison, because `admit_operation`, where the comparison runs, is
+/// shared with Direct and receives only `is_modern`.
 fn request_era(is_modern: bool) -> crate::protocol::meta::Era {
     if is_modern {
         crate::protocol::meta::Era::Modern
