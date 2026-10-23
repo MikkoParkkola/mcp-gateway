@@ -133,7 +133,8 @@ impl SkillsWatcher {
     /// to coalesce rapid saves.  Changed paths collect in a set, so a burst
     /// larger than any buffer, or an edit made during a regeneration pass, is
     /// regenerated on the next pass, and a pass which leaves changes behind
-    /// warns once.  `agent_paths` follows the same semantics as
+    /// warns once. Paths still pending at shutdown are abandoned, and a steady
+    /// stream of edits postpones the pass until it goes quiet, as before.  `agent_paths` follows the same semantics as
     /// [`install_bundle`](super::installer::install_bundle).
     ///
     /// # Errors

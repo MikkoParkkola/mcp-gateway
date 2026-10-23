@@ -224,6 +224,7 @@ fn a_path_pushed_twice_is_taken_once() {
     changes.push(PathBuf::from("b.yaml"));
     changes.push(PathBuf::from("a.yaml"));
     changes.push(PathBuf::from("b.yaml"));
+    assert_eq!(changes.pending_count(), 2, "the repeated path is held once");
     assert_eq!(
         changes.take_if_quiet(Duration::ZERO),
         [PathBuf::from("a.yaml"), PathBuf::from("b.yaml")]
