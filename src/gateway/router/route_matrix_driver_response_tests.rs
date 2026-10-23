@@ -339,3 +339,65 @@ pub(crate) async fn read_then_relay_rebuilt(route: HttpRoute) -> Rebuilt {
         stuffing,
     }
 }
+
+/// The chain nonce the R-LINK calls carry.
+pub(crate) const CHAIN_NONCE: &str = "resp-nonce";
+
+/// One legacy `read` on `route` with the chain signer emitting on request
+/// and the call carrying [`CHAIN_NONCE`], the backend claiming
+/// `cacheScope: "public"` (`/mcp` by the surfaced name, so the backend
+/// envelope is the result the link covers).
+pub(crate) async fn chained_public_scope(route: HttpRoute) -> Value {
+    use crate::gateway::chain_test_support::{NONCE_KEY, signer};
+    let fx = fixture::fixture_built(Answer::PublicScope, |meta| {
+        let mut meta = surfacing(meta);
+        meta.set_chain_signer(signer(), crate::config::ChainEmit::OnRequest);
+        meta
+    })
+    .await;
+    let params = json!({ "name": "read", "arguments": {}, "_meta": { NONCE_KEY: CHAIN_NONCE } });
+    fixture::send(&fx, route.uri(), "k-std", "tools/call", params, None)
+        .await
+        .1
+}
+
+/// The reviewed Node verifier's verdict on a delivered, message-signed body
+/// (`tests/common/signing_verifier.mjs`, independent of the Rust signer).
+/// A process failure is not a rejection.
+// MIK-8701: migrate to the shared helper.
+pub(crate) fn node_verifies(body: &Value, nonce: &str) -> Result<Value, String> {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+    let now = crate::clock::unix_secs().expect("clock after epoch");
+    let id = body.get("id").cloned().unwrap_or(Value::Null);
+    let input = json!({"wire": body.to_string(), "options": {
+        "key": fixture::SIGNING_KEY, "keyId": "hardened",
+        "expectedId": {"kind": "number", "value": id.to_string()},
+        "expectedNonce": nonce, "now": now
+    }});
+    let mut child = Command::new("node")
+        .arg(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/common/signing_verifier.mjs"),
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Node verifier must be installed");
+    child
+        .stdin
+        .take()
+        .expect("the verifier's stdin")
+        .write_all(&serde_json::to_vec(&input).expect("the input serializes"))
+        .expect("the verifier reads its input");
+    let output = child.wait_with_output().expect("the verifier exits");
+    match output.status.code() {
+        Some(0) => Ok(serde_json::from_slice(&output.stdout).expect("verified diagnostic JSON")),
+        Some(1) => Err(String::from_utf8_lossy(&output.stderr).into_owned()),
+        code => panic!(
+            "Node verifier infrastructure failure {code:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ),
+    }
+}

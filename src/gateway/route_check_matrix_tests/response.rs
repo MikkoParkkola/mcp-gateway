@@ -457,8 +457,8 @@ pub(crate) enum Driven {
 const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> Driven {
     use RespCase::{CacheHit, Fresh, IdempotentReplay};
     use RespPair::{
-        ClampSeal, FirewallSeal, FirewallStamp, JudgeCommit, JudgeRecord, RecordCommit, ShapeSeal,
-        SignRebuild, SignRecord, StampSeal,
+        ClampLink, ClampSeal, FirewallSeal, FirewallStamp, JudgeCommit, JudgeRecord, RecordCommit,
+        SealSign, ShapeSeal, SignRebuild, SignRecord, StampSeal,
     };
     use RespRoute::{Direct, Mcp, Stdio};
     match (route, case, era, pair) {
@@ -477,6 +477,12 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
         (Mcp | Stdio, Fresh | CacheHit | IdempotentReplay, _, FirewallStamp)
         | (Direct, Fresh | IdempotentReplay, _, FirewallStamp) => {
             Driven::Row("response::source_order::stamp_and_egress_scan_order_is_pinned_at_source")
+        }
+        (Mcp | Direct, Fresh, Era::Legacy, ClampLink) => {
+            Driven::Row("rows::r_link_scope_clamp_precedes_origin_link")
+        }
+        (Mcp | Direct, Fresh, Era::Modern, SealSign) => {
+            Driven::Row("rows::r_sign_seal_precedes_sign")
         }
         (Mcp | Direct, Fresh, Era::Modern, SignRebuild) => {
             Driven::Row("rows::r_rebuild_relay_receipt_reflects_the_delivered_bytes")

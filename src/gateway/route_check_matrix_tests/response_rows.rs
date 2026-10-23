@@ -9,9 +9,9 @@
 use serde_json::Value;
 
 use crate::gateway::router::route_matrix_driver_tests::response::{
-    BackendAnswer, DELIVERED_PROSE, HttpRoute, STUFFED_SCOPE, planted_credential, read_then_relay,
-    read_then_relay_rebuilt, signed_call, signed_recorded_call, signed_redacted_call,
-    signed_replay, trust_set,
+    BackendAnswer, CHAIN_NONCE, DELIVERED_PROSE, HttpRoute, STUFFED_SCOPE, chained_public_scope,
+    node_verifies, planted_credential, read_then_relay, read_then_relay_rebuilt, signed_call,
+    signed_recorded_call, signed_redacted_call, signed_replay, trust_set,
 };
 use crate::protocol::meta::Era;
 use crate::trust::provenance_public::{VerifyRefusal, VerifyStatus, verify_public};
@@ -233,6 +233,69 @@ async fn r_rebuild_relay_receipt_reflects_the_delivered_bytes() {
             seen.stuffing.get("error").is_none(),
             "{row}: the undelivered stuffing is not receipted, so its send runs: {}",
             seen.stuffing
+        );
+    }
+}
+
+/// R-LINK `scope_clamp_precedes_origin_link` (`ScopeClamp` < `OriginLink`;
+/// `Mcp`, `Direct` × `Fresh` × `Legacy`). The backend claims
+/// `cacheScope: "public"` on a chained call; the clamp delivers `private`,
+/// and the origin link verifies over the delivered content's digest and
+/// refuses the pre-clamp body's, so a link signed before the clamp fails.
+#[tokio::test]
+async fn r_link_scope_clamp_precedes_origin_link() {
+    use crate::gateway::chain_test_support::{chain_of, verify_self};
+    use crate::security::signature_chain::content_digest;
+    for route in [HttpRoute::Mcp, HttpRoute::Direct] {
+        let row = format!("R-LINK {route:?}");
+        let body = chained_public_scope(route).await;
+        let result = delivered(&body);
+        assert_eq!(
+            result.get("cacheScope").and_then(Value::as_str),
+            Some("private"),
+            "{row}: the clamp delivers private: {result}"
+        );
+        let chain = chain_of(result)
+            .unwrap_or_else(|| panic!("{row}: the answer carries an origin link: {body}"));
+        let digest = content_digest(result).expect("a hashable result");
+        verify_self(chain, &digest, CHAIN_NONCE)
+            .unwrap_or_else(|e| panic!("{row}: the link verifies over the delivered bytes: {e:?}"));
+        let mut pre_clamp = result.clone();
+        pre_clamp["cacheScope"] = Value::from("public");
+        let pre_digest = content_digest(&pre_clamp).expect("a hashable result");
+        assert!(
+            verify_self(chain, &pre_digest, CHAIN_NONCE).is_err(),
+            "{row}: the link does not cover the pre-clamp body"
+        );
+    }
+}
+
+/// R-SIGN `seal_precedes_sign` (`Seal` < `Sign`; `Mcp`, `Direct` × `Fresh` ×
+/// `Modern`). A message-signed call delivers a result carrying both the public
+/// seal and `_signature`; the reviewed Node verifier accepts the signature,
+/// and rejects it once `public_signature` is removed, so the MAC covers the
+/// seal: a signature taken before the seal would not.
+#[tokio::test]
+async fn r_sign_seal_precedes_sign() {
+    for route in [HttpRoute::Mcp, HttpRoute::Direct] {
+        let row = format!("R-SIGN {route:?}");
+        let body = signed_recorded_call(route).await.body;
+        assert!(
+            receipt(delivered(&body)).get("public_signature").is_some(),
+            "{row}: the delivered receipt is sealed: {body}"
+        );
+        node_verifies(&body, "n1")
+            .unwrap_or_else(|e| panic!("{row}: the Node verifier accepts the signature: {e}"));
+        let mut unsealed = body.clone();
+        if let Some(prov) = unsealed
+            .pointer_mut("/result/_meta/provenance")
+            .and_then(Value::as_object_mut)
+        {
+            prov.remove("public_signature");
+        }
+        assert!(
+            node_verifies(&unsealed, "n1").is_err(),
+            "{row}: the signature covers the public seal"
         );
     }
 }
