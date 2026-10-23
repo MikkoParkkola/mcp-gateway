@@ -196,7 +196,6 @@ impl Gateway {
                 cap_backend,
                 announcer.shutdown(),
                 Some(self.backends.catalogue_hook()),
-                self.config.capabilities.stale_check_secs,
             )
             .inspect_err(|error| warn!(%error, "stdio: capability hot-reload disabled"))
             .ok()

@@ -4672,7 +4672,7 @@ These need no action and have no startup notice.
   `page_cap` (32 pages), `cursor_repeat` (the backend repeated a `nextCursor`),
   `fill_budget` (120 s spent) or `unreadable_page` (a page had no `tools` array; the
   drain reads on, but the catalogue is never treated as complete).
-- **Capability hot-reload heals a silent file watcher.** Every `capabilities.stale_check_secs` (default 60, `0` turns it off) the gateway re-checks the watched trees and reloads on drift; a slow reload and a lost event source now warn instead of hanging silently.
+- **Capability hot-reload heals a silent file watcher.** Every 60 s (the gateway's own interval, not a setting; MIK-8782) the gateway re-checks the watched trees and reloads on drift; a slow reload and a lost event source now warn instead of hanging silently.
 
 ## Rolling back
 

@@ -279,7 +279,6 @@ async fn ac_confirm_1a_a_refusal_is_excluded_from_both_accounting_arms() {
         ],
         public_paths: Vec::new(),
         client_circuit_breaker: Some(mcp_gateway::config::CircuitBreakerConfig {
-            enabled: true,
             failure_threshold: 2,
             success_threshold: 1,
             reset_timeout: std::time::Duration::from_secs(60),

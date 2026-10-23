@@ -275,10 +275,7 @@ impl ResolvedAuthConfig {
         let Some(config) = self.client_circuit_breaker.as_ref() else {
             return true;
         };
-        if !config.enabled {
-            return true;
-        }
-
+        // The section's presence is the switch (MIK-8783).
         self.client_circuit_breaker_for(client, config)
             .can_proceed()
     }
@@ -310,9 +307,6 @@ impl ResolvedAuthConfig {
         client: &AuthenticatedClient,
     ) -> Option<Arc<CircuitBreaker>> {
         let config = self.client_circuit_breaker.as_ref()?;
-        if !config.enabled {
-            return None;
-        }
         Some(self.client_circuit_breaker_for(client, config))
     }
 

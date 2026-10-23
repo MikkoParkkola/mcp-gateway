@@ -41,18 +41,14 @@ fn the_surface_inventory_retires_the_seven_settings() {
         assert_eq!(cells[6], "src/config/strict_keys.rs", "{key}: defined-at");
     }
     for id in [
-        "--protocol-revision-window",
+        "mcp-gateway --protocol-revision-window",
         "MCP_GATEWAY_PROTOCOL_REVISION_WINDOW",
     ] {
-        let cells = surface
+        let line = surface
             .lines()
-            .find(|l| l.starts_with("| `") && l.contains(id))
-            .map(|l| {
-                l.split('|')
-                    .map(|c| c.trim().to_owned())
-                    .collect::<Vec<_>>()
-            })
+            .find(|l| l.starts_with(&format!("| `{id}` |")))
             .unwrap_or_else(|| panic!("{id}: no surface row"));
+        let cells: Vec<String> = line.split('|').map(|c| c.trim().to_owned()).collect();
         assert_eq!(cells[2], "INTERNAL", "{id}: class");
     }
 }
@@ -63,7 +59,8 @@ fn the_surface_inventory_retires_the_seven_settings() {
 fn the_upgrade_notes_stop_advertising_the_retired_settings() {
     for (file, stale) in [
         ("upgrading.d/8651.md", "stale_check_secs"),
-        ("changelog.d/8651.added.md", "stale_check_secs"),
+        // changelog.d is not shipped in the crate (PACKED.2), so its fragment
+        // is checked by hand, not here.
         (
             "upgrading.d/3920.md",
             "New setting `server.protocol_revision_window`",

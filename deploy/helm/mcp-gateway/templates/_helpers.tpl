@@ -170,13 +170,17 @@ sizeLimit. Quantities: plain bytes, or Ki/Mi/Gi/Ti, or k/M/G/T.
      MCP_GATEWAY_AUTH__ENABLED=false reaches auth.enabled). extraEnv may not
      set one, in any case, nor a chart-owned name; every envFrom entry needs a
      prefix that neither starts MCP_GATEWAY_ nor is a leading part of it, or a
-     Secret key could complete the name (prefix MCP_ + key GATEWAY_AUTH__...). */}}
+     Secret key could complete the name (prefix MCP_ + key GATEWAY_AUTH__...).
+     One exception: MCP_GATEWAY_PROTOCOL_REVISION_WINDOW is a CLI-owned switch
+     (the operator's measurement window, MIK-8783), never a config overlay, and
+     extraEnv is the only way a chart deployment can set it. */}}
 {{- define "mcp-gateway.envGuards" -}}
 {{- $reserved := "MCP_GATEWAY_" -}}
+{{- $cliOwned := list "MCP_GATEWAY_PROTOCOL_REVISION_WINDOW" -}}
 {{- range .Values.extraEnv -}}
 {{- $n := upper (toString .name) -}}
-{{- if or (hasPrefix $reserved $n) (has $n (list "HOME" "GATEWAY_KS_ADMIN_TOKEN")) (hasPrefix "GATEWAY_API_KEY_" $n) -}}
-{{- fail (printf "extraEnv name %q is reserved: MCP_GATEWAY_* variables override gateway config, and HOME, GATEWAY_API_KEY_* and GATEWAY_KS_ADMIN_TOKEN belong to the chart." .name) -}}
+{{- if or (and (hasPrefix $reserved $n) (not (has $n $cliOwned))) (has $n (list "HOME" "GATEWAY_KS_ADMIN_TOKEN")) (hasPrefix "GATEWAY_API_KEY_" $n) -}}
+{{- fail (printf "extraEnv name %q is reserved: MCP_GATEWAY_* variables override gateway config (MCP_GATEWAY_PROTOCOL_REVISION_WINDOW excepted), and HOME, GATEWAY_API_KEY_* and GATEWAY_KS_ADMIN_TOKEN belong to the chart." .name) -}}
 {{- end -}}
 {{- end -}}
 {{- range .Values.envFrom -}}

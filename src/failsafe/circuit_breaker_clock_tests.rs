@@ -10,7 +10,6 @@ fn one_failure_trips(reset_timeout: Duration) -> CircuitBreaker {
     CircuitBreaker::new(
         "clock",
         &CircuitBreakerConfig {
-            enabled: true,
             failure_threshold: 1,
             success_threshold: 1,
             reset_timeout,

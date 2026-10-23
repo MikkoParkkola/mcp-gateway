@@ -20,8 +20,9 @@ fn help_of(cmd: &mut clap::Command, flag: &str) -> String {
 fn verify_receipt_flags_name_their_own_case() {
     let mut root = mcp_gateway::cli::Cli::command();
     let verify = root
-        .find_subcommand_mut("verify")
-        .expect("verify subcommand");
+        .find_subcommand_mut("provenance")
+        .and_then(|p| p.find_subcommand_mut("verify"))
+        .expect("provenance verify subcommand");
     let signature_only = help_of(verify, "signature-only");
     let accept_unbound = help_of(verify, "accept-unbound");
     assert_ne!(signature_only, accept_unbound);

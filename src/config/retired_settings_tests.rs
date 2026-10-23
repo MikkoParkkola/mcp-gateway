@@ -75,10 +75,11 @@ fn every_retired_setting_loads_and_warns_once() {
     }
 }
 
-/// T1.9: the compiled UPGRADING guide quotes each retired setting's warning.
+/// T1.9: the UPGRADING fragment (folded into the guide at release, as
+/// `upgrading_fragments.py assemble` does) quotes each retired setting's warning.
 #[test]
 fn upgrading_quotes_every_retired_setting_warning() {
-    let guide = include_str!("../../docs/UPGRADING-4.0.md");
+    let guide = include_str!("../../upgrading.d/8783.md");
     for (key, _) in retired_settings() {
         let path: Vec<&str> = key.split('.').collect();
         let why = RETIRED_KEYS

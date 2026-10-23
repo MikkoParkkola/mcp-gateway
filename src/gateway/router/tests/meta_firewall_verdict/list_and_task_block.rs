@@ -475,7 +475,6 @@ async fn a_blocked_direct_tool_list_is_not_a_client_success() {
             kind: crate::config::ApiKeyKind::Shared,
         }],
         client_circuit_breaker: Some(crate::config::CircuitBreakerConfig {
-            enabled: true,
             failure_threshold: 2,
             success_threshold: 1,
             reset_timeout: std::time::Duration::from_secs(60),

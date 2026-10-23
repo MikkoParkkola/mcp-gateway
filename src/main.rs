@@ -596,6 +596,9 @@ fn apply_cli_overrides(config: &mut Config, cli: &Cli) {
     if let Some(ref host) = cli.host {
         config.server.host.clone_from(host);
     }
+    if let Some(window) = cli.protocol_revision_window {
+        config.server.protocol_revision_window = window;
+    }
     if cli.no_meta_mcp {
         config.meta_mcp.enabled = false;
     }

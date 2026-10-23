@@ -373,7 +373,6 @@ fn test_client_circuit_breaker_is_per_client() {
         ],
         public_paths: vec![],
         client_circuit_breaker: Some(CircuitBreakerConfig {
-            enabled: true,
             failure_threshold: 2,
             success_threshold: 1,
             reset_timeout: Duration::from_secs(60),
@@ -423,7 +422,6 @@ fn test_client_circuit_breaker_recovers_after_successful_probe() {
         }],
         public_paths: vec![],
         client_circuit_breaker: Some(CircuitBreakerConfig {
-            enabled: true,
             failure_threshold: 1,
             success_threshold: 1,
             // Zero: the next check is the half-open probe, with no real time

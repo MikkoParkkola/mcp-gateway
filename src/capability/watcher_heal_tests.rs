@@ -159,7 +159,7 @@ async fn a_missing_directory_warns_at_start() {
         .into_owned();
     backend.register_directories(&[missing]);
     let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
-    let _watcher = CapabilityWatcher::start(Arc::clone(&backend), shutdown_rx, None, 60)
+    let _watcher = CapabilityWatcher::start(Arc::clone(&backend), shutdown_rx, None)
         .expect("start with a missing dir succeeds");
     tokio::time::timeout(crate::test_wait::HANG_BOUND, counts.wait_for(|v| v[0] >= 1))
         .await

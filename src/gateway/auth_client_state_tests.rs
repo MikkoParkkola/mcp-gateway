@@ -92,7 +92,6 @@ fn a_key_named_bearer_cannot_open_the_bearer_circuit() {
         bearer_token: Some("the-bearer-secret".to_string()),
         api_keys: vec![key("the-key-secret", "bearer", 0)],
         client_circuit_breaker: Some(CircuitBreakerConfig {
-            enabled: true,
             failure_threshold: 2,
             success_threshold: 1,
             reset_timeout: Duration::from_secs(60),
@@ -258,7 +257,6 @@ fn same_named_keys_keep_separate_breakers() {
 /// Trips after two failures and stays open for the test's lifetime.
 fn breaker() -> CircuitBreakerConfig {
     CircuitBreakerConfig {
-        enabled: true,
         failure_threshold: 2,
         success_threshold: 1,
         reset_timeout: Duration::from_secs(60),

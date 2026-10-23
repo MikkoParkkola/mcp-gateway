@@ -411,7 +411,6 @@ async fn control_5_a_modern_caller_whose_circuit_is_open_is_refused() {
     let (app, _store_dir) = state(Fixture {
         auth: AuthConfig {
             client_circuit_breaker: Some(CircuitBreakerConfig {
-                enabled: true,
                 failure_threshold: 2,
                 // Long enough that the open circuit cannot half-open under us
                 // mid-test and turn a refusal back into a 200.

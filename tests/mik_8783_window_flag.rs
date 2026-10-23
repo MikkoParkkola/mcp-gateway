@@ -192,7 +192,9 @@ fn the_env_var_turns_the_window_on_on_both_start_paths() {
 /// T2.10, T1.4: neither the retired key nor its old overlay spelling turns it on.
 #[test]
 fn the_retired_key_and_its_old_overlay_leave_the_window_off() {
-    let cases: [(&[(&str, &str)], &str, &str); 2] = [
+    // (extra env, extra config lines, what the row is)
+    type Case<'a> = (&'a [(&'a str, &'a str)], &'a str, &'a str);
+    let cases: [Case; 2] = [
         (&[], "  protocol_revision_window: record\n", "file key"),
         (
             &[("MCP_GATEWAY_SERVER__PROTOCOL_REVISION_WINDOW", "record")],

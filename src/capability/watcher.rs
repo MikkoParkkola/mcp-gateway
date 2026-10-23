@@ -15,7 +15,7 @@
 //! ## Stale check (MIK-8651 HEAL.1)
 //!
 //! File events can stop arriving without any error (a dead event source), so
-//! every `stale_check_secs` (default 60; `0` turns the check off) the loop
+//! every 60 s (the gateway's own interval, MIK-8782; not a setting) the loop
 //! fingerprints the watched trees and compares the result with the
 //! fingerprint taken before the last complete reload. On drift, with no reload
 //! pending or in flight, it warns and reloads through the normal debounced
@@ -65,10 +65,8 @@ pub struct CapabilityWatcher {
     _watcher: Mutex<Option<RecommendedWatcher>>,
 }
 
-/// Timing knobs for the reload task. Production builds them from
-/// `capabilities.stale_check_secs` via
-/// [`ReloadTuning::from_config_secs`] in [`CapabilityWatcher::start`];
-/// tests build their own.
+/// Timing knobs for the reload task. Production uses the defaults (the
+/// gateway picks every interval, MIK-8782); tests build their own.
 #[derive(Clone, Copy, Debug)]
 struct ReloadTuning {
     /// Stale-catalogue check interval; `None` = off.
@@ -92,22 +90,6 @@ impl Default for ReloadTuning {
             reload_slow: Duration::from_secs(60),
             debounce: Duration::from_millis(500),
             walk: fingerprint::fingerprint,
-        }
-    }
-}
-
-impl ReloadTuning {
-    /// Production tuning from config: `0` turns the stale check off, any
-    /// other value is its interval in seconds. Restart-only, like the key.
-    fn from_config_secs(stale_check_secs: u64) -> Self {
-        let stale_check = if stale_check_secs == 0 {
-            None
-        } else {
-            Some(Duration::from_secs(stale_check_secs))
-        };
-        Self {
-            stale_check,
-            ..Self::default()
         }
     }
 }
@@ -252,17 +234,12 @@ impl CapabilityWatcher {
     /// `changes` hears the backend's name once its startup scan completes and
     /// after every successful reload, so listeners get `tools/list_changed`
     /// when the catalogue they see changed (F24).
-    ///
-    /// `stale_check_secs` tunes the stale-catalogue check: the check runs
-    /// every that many seconds, and `0` turns it off. Restart-only, like
-    /// the key.
     pub fn start(
         backend: Arc<CapabilityBackend>,
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
         changes: Option<CatalogueChanged>,
-        stale_check_secs: u64,
     ) -> Result<Self> {
-        let tuning = ReloadTuning::from_config_secs(stale_check_secs);
+        let tuning = ReloadTuning::default();
         if let Some(changes) = &changes {
             // Before any early return: without a file watcher the catalogue
             // can still change (a manual reload), so its baseline is needed.

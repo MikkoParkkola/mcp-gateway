@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8783.AUTO.7, the family guard for settings-automatic-first: the
-//! loader's retired and removed key lists (src/config/strict_keys.rs) and the
-//! list `mcp-gateway upgrade` deletes (src/commands/retired_config_keys.rs)
+//! loader's retired and removed key lists (`src/config/strict_keys.rs`) and the
+//! list `mcp-gateway upgrade` deletes (`src/commands/retired_config_keys.rs`)
 //! name the same keys. The two live in different crates (the library and the
 //! binary), so the guard reads both sources rather than widening either.
 
@@ -64,7 +64,7 @@ fn loader() -> (BTreeSet<String>, BTreeSet<String>, BTreeSet<String>) {
 /// `upgrade`'s list, split by what the loader does with each key.
 fn upgrade() -> (BTreeSet<String>, BTreeSet<String>) {
     let text = source("src/commands/retired_config_keys.rs");
-    let row = Regex::new(r"\((&\[[^\]]+\]),\s*OnLoad::(Warns|Refuses)\)").expect("regex");
+    let row = Regex::new(r"\(\s*(&\[[^\]]+\]),\s*OnLoad::(Warns|Refuses),?\s*\)").expect("regex");
     let (mut warns, mut refuses) = (BTreeSet::new(), BTreeSet::new());
     for c in row.captures_iter(block(&text, "REMOVED")) {
         let key = paths(&c[1]).into_iter().next().expect("one path per row");

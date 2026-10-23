@@ -92,7 +92,7 @@ pub(super) fn url_report(path: &Path, rewrite: &UrlRewrite, mode: RewriteMode) -
                     .map(|h| format!(" and the `{section}:` (line {h}) it was alone under"))
                     .unwrap_or_default();
                 out.push(format!(
-                    "{at}: {verb} `{key}` (line {line}){block}; it never had an effect."
+                    "{at}: {verb} `{key}` (line {line}){block}; it is ignored in 4.0."
                 ));
             }
             Retired::Left if removal.blocks_load() => out.push(format!(
@@ -100,9 +100,15 @@ pub(super) fn url_report(path: &Path, rewrite: &UrlRewrite, mode: RewriteMode) -
                  without touching anything else. It never had an effect; the config will not \
                  load until it is deleted by hand."
             )),
+            Retired::Left if key == "auth.client_circuit_breaker.enabled" => out.push(format!(
+                "{at}: kept `{key}`: it is ignored in 4.0, but it is the only key in the \
+                 section whose presence turns the client breaker on. To keep the breaker on, \
+                 replace the block with `client_circuit_breaker: {{}}`; to turn it off, delete \
+                 the section."
+            )),
             Retired::Left => out.push(format!(
                 "{at}: kept `{key}`: upgrade removes it only as its own line under a \
-                 block-style section. Nothing reads it; delete it by hand."
+                 block-style section. It is ignored in 4.0; delete it by hand."
             )),
             Retired::Absent => {}
         }

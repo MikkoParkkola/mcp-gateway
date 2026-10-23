@@ -92,14 +92,13 @@ fn test_config_defaults() {
     assert_eq!(config.server.host, "127.0.0.1");
     assert_eq!(config.server.port, 39400);
     assert!(config.meta_mcp.enabled);
-    assert!(config.failsafe.circuit_breaker.enabled);
-    assert!(config.failsafe.retry.enabled);
+    // The breaker and retry have no off switch (MIK-8783): only their tuning.
+    assert!(config.failsafe.retry.max_attempts > 1);
 }
 
 #[test]
 fn test_circuit_breaker_starts_closed() {
     let config = CircuitBreakerConfig {
-        enabled: true,
         failure_threshold: 5,
         success_threshold: 3,
         reset_timeout: Duration::from_secs(30),
@@ -111,7 +110,6 @@ fn test_circuit_breaker_starts_closed() {
 #[test]
 fn test_circuit_breaker_opens_after_failures() {
     let config = CircuitBreakerConfig {
-        enabled: true,
         failure_threshold: 3,
         success_threshold: 2,
         reset_timeout: Duration::from_secs(30),
@@ -127,26 +125,9 @@ fn test_circuit_breaker_opens_after_failures() {
     assert_eq!(cb.state(), CircuitState::Open); // Now open
 }
 
-#[test]
-fn test_circuit_breaker_disabled() {
-    let config = CircuitBreakerConfig {
-        enabled: false, // Disabled
-        failure_threshold: 1,
-        success_threshold: 1,
-        reset_timeout: Duration::from_secs(1),
-    };
-    let cb = CircuitBreaker::new("test", &config);
-
-    // Even with failures, it stays closed when disabled
-    cb.record_failure("test", Duration::ZERO);
-    cb.record_failure("test", Duration::ZERO);
-    assert!(cb.can_proceed());
-}
-
 #[tokio::test]
 async fn test_retry_policy_retries_on_failure() {
     let config = RetryConfig {
-        enabled: true,
         max_attempts: 3,
         initial_backoff: Duration::from_millis(1), // Fast for tests
         max_backoff: Duration::from_millis(10),
@@ -173,14 +154,16 @@ async fn test_retry_policy_retries_on_failure() {
 
 #[tokio::test]
 async fn test_retry_policy_disabled() {
+    // `failsafe.retry.enabled` is retired (MIK-8783); the policy's own
+    // `enabled` is the per-call gate a denied resend clears.
     let config = RetryConfig {
-        enabled: false, // Disabled
         max_attempts: 3,
         initial_backoff: Duration::from_millis(1),
         max_backoff: Duration::from_millis(10),
         multiplier: 2.0,
     };
-    let policy = RetryPolicy::new(&config);
+    let mut policy = RetryPolicy::new(&config);
+    policy.enabled = false;
 
     let attempts = std::sync::atomic::AtomicU32::new(0);
     let result: Result<(), mcp_gateway::Error> = with_retry(&policy, "test", || {

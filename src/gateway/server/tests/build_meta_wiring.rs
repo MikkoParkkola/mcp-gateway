@@ -175,7 +175,6 @@ async fn the_response_contract_reaches_the_meta_mcp_in_observe_mode() {
 async fn an_unbounded_response_cache_is_installed() {
     let _log = info_logging();
     let mut config = Config::default();
-    config.cache.enabled = true;
     config.cache.max_entries = 0;
 
     assert!(

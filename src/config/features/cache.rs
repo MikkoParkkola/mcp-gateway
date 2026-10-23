@@ -13,12 +13,11 @@ const DEFAULT_MAX_ENTRIES: usize = 10_000;
 
 // ── Cache ──────────────────────────────────────────────────────────────────────
 
-/// Cache configuration for response caching.
+/// Cache configuration for response caching. The cache is always on and
+/// stores only results of tools their annotations mark read-only (MIK-8783).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CacheConfig {
-    /// Enable response caching.
-    pub enabled: bool,
     /// Default TTL for cached responses.
     #[serde(with = "crate::config::humantime_serde")]
     pub default_ttl: Duration,
@@ -29,7 +28,6 @@ pub struct CacheConfig {
 impl Default for CacheConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
             default_ttl: Duration::from_secs(DEFAULT_TTL_SECS),
             max_entries: DEFAULT_MAX_ENTRIES,
         }

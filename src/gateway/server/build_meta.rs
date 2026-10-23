@@ -95,18 +95,15 @@ impl Gateway {
             .message_signing
             .resolve_with_env(&self.env.get())?;
         // ── Response cache ───────────────────────────────────────────────────
-        let cache = if self.config.cache.enabled {
-            let cache = if self.config.cache.max_entries > 0 {
-                Arc::new(ResponseCache::with_max_entries(
-                    self.config.cache.max_entries,
-                ))
-            } else {
-                Arc::new(ResponseCache::new())
-            };
-            Some(cache)
+        // Always on (MIK-8783): what it stores is gated per tool by the
+        // read-only annotations, so no switch is needed.
+        let cache = Some(if self.config.cache.max_entries > 0 {
+            Arc::new(ResponseCache::with_max_entries(
+                self.config.cache.max_entries,
+            ))
         } else {
-            None
-        };
+            Arc::new(ResponseCache::new())
+        });
 
         // ── Security policies ────────────────────────────────────────────────
         let tool_policy = Arc::new(ToolPolicy::from_config(&self.config.security.tool_policy));
@@ -241,7 +238,11 @@ impl Gateway {
             meta_mcp_builder.set_chain_signer(chain.resolve_with_env(&self.env.get())?, chain.emit);
             let keys = security.remote_server_signing.trusted_keys.clone();
             let window = security.message_signing.replay_window;
-            meta_mcp_builder.set_chain_trust(chain.max_links, keys, window);
+            meta_mcp_builder.set_chain_trust(
+                crate::security::signature_chain::MAX_CHAIN_LINKS,
+                keys,
+                window,
+            );
         }
 
         let mut meta_mcp = Arc::new(meta_mcp_builder);

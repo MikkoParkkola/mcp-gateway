@@ -66,7 +66,7 @@ fn test_watcher_creation() {
     let backend = Arc::new(crate::capability::CapabilityBackend::new("test", executor));
 
     // Should not panic with empty directories
-    let watcher = CapabilityWatcher::start(backend, rx, None, 60);
+    let watcher = CapabilityWatcher::start(backend, rx, None);
     assert!(watcher.is_ok());
 }
 
@@ -583,7 +583,7 @@ async fn a_lagged_startup_scan_wait_does_not_drop_the_baseline_report() {
     );
     let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
     let changes: CatalogueChanged = Arc::new(|_name: &str| {});
-    let _watcher = CapabilityWatcher::start(backend, shutdown_rx, Some(changes), 60)
+    let _watcher = CapabilityWatcher::start(backend, shutdown_rx, Some(changes))
         .expect("start with no directories succeeds");
     // No await between spawn and sends: on a current-thread runtime the report
     // task cannot run until the wait below, so both sends land first and the

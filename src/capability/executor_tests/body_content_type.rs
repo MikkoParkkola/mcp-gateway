@@ -471,7 +471,6 @@ async fn a_real_capability_429_is_excluded_by_the_shared_rate_limit_predicate() 
 
     let failsafe_config = FailsafeConfig {
         circuit_breaker: CircuitBreakerConfig {
-            enabled: true,
             failure_threshold: 1,
             ..Default::default()
         },

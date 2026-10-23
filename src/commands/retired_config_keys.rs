@@ -40,7 +40,38 @@ const REMOVED: &[(&[&str], OnLoad)] = &[
     (&["server", "request_timeout"], OnLoad::Refuses),
     (&["server", "ws_port"], OnLoad::Refuses),
     (&["cost_governance", "currency"], OnLoad::Refuses),
+    // Settings the gateway picks itself (MIK-8782, MIK-8783).
+    (&["capabilities", "stale_check_secs"], OnLoad::Warns),
+    (&["cache", "enabled"], OnLoad::Warns),
+    (&["failsafe", "retry", "enabled"], OnLoad::Warns),
+    (&["failsafe", "circuit_breaker", "enabled"], OnLoad::Warns),
+    (
+        &["auth", "client_circuit_breaker", "enabled"],
+        OnLoad::Warns,
+    ),
+    (&["security", "signature_chain", "max_links"], OnLoad::Warns),
+    (&["server", "protocol_revision_window"], OnLoad::Warns),
 ];
+
+/// Sections whose presence is itself a switch: `upgrade` never deletes the
+/// last key in one, since that would delete the section and turn the
+/// feature off (MIK-8783). The key stays, and the report says what to write.
+const SWITCH_SECTIONS: &[&[&str]] = &[&["auth", "client_circuit_breaker"]];
+
+/// Whether removing the key at `path` would empty a switch section in `doc`.
+fn empties_a_switch(doc: &crate::yaml::Value, path: &[String]) -> bool {
+    let Some((_, parent)) = path.split_last() else {
+        return false;
+    };
+    SWITCH_SECTIONS
+        .iter()
+        .any(|s| s.iter().copied().eq(parent.iter().map(String::as_str)))
+        && parent
+            .iter()
+            .try_fold(doc, |node, name| node.as_mapping()?.get(name.as_str()))
+            .and_then(crate::yaml::Value::as_mapping)
+            .is_some_and(|section| section.len() == 1)
+}
 
 /// One removed key the file set, by dotted path, and what became of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +135,14 @@ pub(crate) fn drop_removed_keys(text: &str) -> (Option<String>, Vec<Removal>) {
             .map(|doc| concrete(&doc, pattern))
             .unwrap_or_default();
         for path in paths {
+            if loose(&current).is_some_and(|doc| empties_a_switch(&doc, &path)) {
+                report.push(Removal {
+                    key: path.join("."),
+                    outcome: Retired::Left,
+                    on_load: *on_load,
+                });
+                continue;
+            }
             let (after, outcome) = drop_key(&current, &path);
             if let Some(after) = after {
                 current = after;
