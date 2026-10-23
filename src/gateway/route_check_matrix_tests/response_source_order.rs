@@ -197,9 +197,9 @@ fn the_tail_takes_no_case_or_era() {
 fn replay_and_cache_hit_reach_the_tail() {
     let mcp = "src/gateway/router/handlers/dispatch_tools_call.rs";
     let text = source(mcp);
-    let screened = only(
+    let branch = only(
         &text,
-        "// Screened at delivery, in `finalize_content`, with every other frame.",
+        "let response = if let Some((response, audit)) = replay {",
         mcp,
     );
     let replayed = only(
@@ -208,8 +208,25 @@ fn replay_and_cache_hit_reach_the_tail() {
         mcp,
     );
     assert!(
-        screened < replayed,
-        "{mcp}: the replay is returned to the route tail"
+        branch < replayed,
+        "{mcp}: the replay is the call's response, returned to the route tail"
+    );
+    let handlers = "src/gateway/router/handlers.rs";
+    let text = source(handlers);
+    let call_arm = only(&text, "\"tools/call\" => {", handlers);
+    let shaped = only(
+        &text,
+        "shape_modern_response(&mut response, method)",
+        handlers,
+    );
+    let finalized = only(
+        &text,
+        "(state.meta_mcp).finalize_routed(response, &delivery, router);",
+        handlers,
+    );
+    assert!(
+        call_arm < shaped && shaped < finalized,
+        "{handlers}: every tools/call answer, a replay included, is shaped and finalized"
     );
     let direct = "src/gateway/router/backend_handlers/direct_idempotency.rs";
     only(
@@ -222,8 +239,11 @@ fn replay_and_cache_hit_reach_the_tail() {
         "Ok((None, Some((response, bindings))))",
         direct,
     );
-    let tail = "src/gateway/router/backend_handlers/direct_dispatch.rs";
-    only(&source(tail), "a cached replay included", tail);
+    only(
+        &source(direct),
+        "super::direct_dispatch::finish_tail(scope, envelope, preflight, auth, response);",
+        direct,
+    );
     let stdio = "src/gateway/server/stdio_dispatch.rs";
     let text = source(stdio);
     let broke = only(&text, "break 'tool_call meta_mcp\n", stdio);
