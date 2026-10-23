@@ -182,8 +182,7 @@ fn unwrap_pat(pat: &syn::Pat) -> &syn::Pat {
 /// element or a `Pat::Struct` with `rest` counts as a catch-all.
 fn pat_has_wildcard_or_binding(pat: &syn::Pat) -> bool {
     match pat {
-        syn::Pat::Wild(_) => true,
-        syn::Pat::Rest(_) => true,
+        syn::Pat::Wild(_) | syn::Pat::Rest(_) => true,
         syn::Pat::Ident(binding) => {
             if is_binding_ident(binding) {
                 return true;
@@ -276,25 +275,25 @@ fn cand_has_unmodeled_at_position(api: &syn::Pat, cand: &syn::Pat) -> bool {
     if matches!(cand_unwrapped, syn::Pat::Struct(_) | syn::Pat::Slice(_)) {
         return true;
     }
-    if let syn::Pat::Tuple(tuple) = cand_unwrapped {
-        if has_rest(&tuple.elems) {
-            return true;
-        }
+    if let syn::Pat::Tuple(tuple) = cand_unwrapped
+        && has_rest(&tuple.elems)
+    {
+        return true;
     }
-    if let syn::Pat::TupleStruct(ts) = cand_unwrapped {
-        if has_rest(&ts.elems) {
-            return true;
-        }
+    if let syn::Pat::TupleStruct(ts) = cand_unwrapped
+        && has_rest(&ts.elems)
+    {
+        return true;
     }
-    if let syn::Pat::Ident(binding) = api_unwrapped {
-        if let Some((_, sub)) = &binding.subpat {
-            return cand_has_unmodeled_at_position(sub, cand_unwrapped);
-        }
+    if let syn::Pat::Ident(binding) = api_unwrapped
+        && let Some((_, sub)) = &binding.subpat
+    {
+        return cand_has_unmodeled_at_position(sub, cand_unwrapped);
     }
-    if let syn::Pat::Ident(binding) = cand_unwrapped {
-        if let Some((_, sub)) = &binding.subpat {
-            return cand_has_unmodeled_at_position(api_unwrapped, sub);
-        }
+    if let syn::Pat::Ident(binding) = cand_unwrapped
+        && let Some((_, sub)) = &binding.subpat
+    {
+        return cand_has_unmodeled_at_position(api_unwrapped, sub);
     }
     if let syn::Pat::Or(or) = api_unwrapped {
         return or
@@ -319,10 +318,10 @@ fn cand_has_unmodeled_at_position(api: &syn::Pat, cand: &syn::Pat) -> bool {
             if !pat_mentions_api_key(api_elem) {
                 continue;
             }
-            if let Some(cand_elem) = cand_tuple.elems.iter().nth(index) {
-                if cand_has_unmodeled_at_position(api_elem, cand_elem) {
-                    return true;
-                }
+            if let Some(cand_elem) = cand_tuple.elems.iter().nth(index)
+                && cand_has_unmodeled_at_position(api_elem, cand_elem)
+            {
+                return true;
             }
         }
         return false;
@@ -337,10 +336,10 @@ fn cand_has_unmodeled_at_position(api: &syn::Pat, cand: &syn::Pat) -> bool {
             if !pat_mentions_api_key(api_elem) {
                 continue;
             }
-            if let Some(cand_elem) = cand_ts.elems.iter().nth(index) {
-                if cand_has_unmodeled_at_position(api_elem, cand_elem) {
-                    return true;
-                }
+            if let Some(cand_elem) = cand_ts.elems.iter().nth(index)
+                && cand_has_unmodeled_at_position(api_elem, cand_elem)
+            {
+                return true;
             }
         }
         return false;
@@ -365,21 +364,21 @@ fn is_catch_all_for(api: &syn::Pat, cand: &syn::Pat) -> bool {
         return pat_has_wildcard_or_binding(cand);
     }
     let api_unwrapped = unwrap_pat(api);
-    if let syn::Pat::Ident(binding) = api_unwrapped {
-        if let Some((_, sub)) = &binding.subpat {
-            return is_catch_all_for(sub, cand_unwrapped);
-        }
+    if let syn::Pat::Ident(binding) = api_unwrapped
+        && let Some((_, sub)) = &binding.subpat
+    {
+        return is_catch_all_for(sub, cand_unwrapped);
     }
-    if let syn::Pat::Ident(binding) = cand_unwrapped {
-        if let Some((_, sub)) = &binding.subpat {
-            return is_catch_all_for(api_unwrapped, sub);
-        }
+    if let syn::Pat::Ident(binding) = cand_unwrapped
+        && let Some((_, sub)) = &binding.subpat
+    {
+        return is_catch_all_for(api_unwrapped, sub);
     }
     if let syn::Pat::Or(or) = api_unwrapped {
         return or
             .cases
             .iter()
-            .filter(|case| pat_mentions_api_key(*case))
+            .filter(|case| pat_mentions_api_key(case))
             .any(|case| is_catch_all_for(case, cand_unwrapped));
     }
     if let syn::Pat::Or(or) = cand_unwrapped {
@@ -395,10 +394,10 @@ fn is_catch_all_for(api: &syn::Pat, cand: &syn::Pat) -> bool {
             if !pat_mentions_api_key(api_elem) {
                 continue;
             }
-            if let Some(cand_elem) = cand_tuple.elems.iter().nth(index) {
-                if is_catch_all_for(api_elem, cand_elem) {
-                    return true;
-                }
+            if let Some(cand_elem) = cand_tuple.elems.iter().nth(index)
+                && is_catch_all_for(api_elem, cand_elem)
+            {
+                return true;
             }
         }
         return false;
@@ -410,10 +409,10 @@ fn is_catch_all_for(api: &syn::Pat, cand: &syn::Pat) -> bool {
             if !pat_mentions_api_key(api_elem) {
                 continue;
             }
-            if let Some(cand_elem) = cand_ts.elems.iter().nth(index) {
-                if is_catch_all_for(api_elem, cand_elem) {
-                    return true;
-                }
+            if let Some(cand_elem) = cand_ts.elems.iter().nth(index)
+                && is_catch_all_for(api_elem, cand_elem)
+            {
+                return true;
             }
         }
         return false;
@@ -612,10 +611,10 @@ fn detected_stmt_kind(stmt: &syn::Stmt) -> Option<&'static str> {
     let syn::Stmt::Local(local) = stmt else {
         return None;
     };
-    if !local
+    if local
         .init
         .as_ref()
-        .is_some_and(|init| init.diverge.is_some())
+        .is_none_or(|init| init.diverge.is_none())
     {
         return None;
     }

@@ -305,3 +305,14 @@ fn fixture_tuple_rest_catch_all_is_flagged() {
         "a tuple `(..)` catch-all was not flagged"
     );
 }
+
+/// MIK-8659: a tuple-struct `C(..)` arm is a catch-all, so the `match` is flagged.
+#[test]
+fn fixture_tuple_struct_rest_catch_all_is_flagged() {
+    let source = "fn other(c: C) -> u32 { match c { C(Kind::ApiKey) => 1, C(..) => 0 } }";
+    let found = fixture_offences("fixture.rs", source);
+    assert!(
+        found.iter().any(|kind| kind == "ApiKey"),
+        "a tuple-struct `C(..)` catch-all was not flagged"
+    );
+}
