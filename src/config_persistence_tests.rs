@@ -152,6 +152,12 @@ fn the_shared_writer_syncs_no_directory_and_the_journal_keeps_its_two() {
         !writer.iter().any(|l| l.contains(".parent()")),
         "the writer opens the parent directory"
     );
+    // The ACL probe opens the target without waiting (a FIFO swapped in after
+    // the stat must not block a save), so no plain blocking open may return.
+    assert!(
+        !writer.iter().any(|l| l.contains("File::open(")),
+        "the writer opens a file with a blocking open"
+    );
     let journal = include_str!("identity_grants/journal.rs");
     let calls = journal
         .lines()
