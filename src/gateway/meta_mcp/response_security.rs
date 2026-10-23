@@ -586,7 +586,7 @@ impl<'a> DeliveryCredential<'a> {
 }
 
 mod delivery_record;
-pub(crate) use delivery_record::record_answer_delivery;
+pub(in crate::gateway) use delivery_record::record_answer_delivery;
 
 #[path = "chain_receipt.rs"]
 pub(crate) mod chain_receipt;

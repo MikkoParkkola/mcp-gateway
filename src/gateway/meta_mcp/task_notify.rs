@@ -29,7 +29,7 @@ use crate::gateway::task_service::CommittedTask;
 use crate::protocol::subscriptions::SubscriptionId;
 
 /// Who a frame is for, as the delivery log names it.
-pub(crate) struct Reader<'a> {
+pub(in crate::gateway) struct Reader<'a> {
     pub caller: &'a str,
     pub session_id: &'a str,
     /// The reader's verified grant subject, when one resolved (MIK-7938).
@@ -142,7 +142,7 @@ impl MetaMcp {
     /// it is on record and the frame carried no refused output, the relay
     /// receipts. `false` withholds the frame (a fail-closed log that could not
     /// record it).
-    pub(crate) async fn finish_task_frame(
+    pub(in crate::gateway) async fn finish_task_frame(
         &self,
         pending: PendingTaskFrame,
         sent: &Value,

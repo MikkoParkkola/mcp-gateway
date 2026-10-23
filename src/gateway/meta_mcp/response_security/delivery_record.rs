@@ -11,7 +11,7 @@ impl super::super::MetaMcp {
     /// by the audit-unavailable refusal. Test-only since stdio records after
     /// its judge (MIK-7920).
     #[cfg(test)]
-    pub(crate) async fn record_delivery(
+    pub(in crate::gateway) async fn record_delivery(
         &self,
         response: crate::protocol::JsonRpcResponse,
         correlation: &ResponseCorrelation<'_>,
@@ -29,7 +29,7 @@ impl super::super::MetaMcp {
 
     /// [`Self::record_delivery`] without taking the response: `false` when
     /// the log refused the record and the answer must be withheld.
-    pub(crate) async fn record_delivery_of(
+    pub(in crate::gateway) async fn record_delivery_of(
         &self,
         response: &crate::protocol::JsonRpcResponse,
         correlation: &ResponseCorrelation<'_>,
@@ -131,7 +131,7 @@ impl super::super::MetaMcp {
 /// MIK-7669): same event, stage, hash and failure policy. `outcome` is the
 /// route's own classification, which reads the HTTP status as well as the
 /// body (L1254). `false` means the answer must be withheld.
-pub(crate) async fn record_answer_delivery(
+pub(in crate::gateway) async fn record_answer_delivery(
     logger: Option<&std::sync::Arc<crate::security::TransparencyLogger>>,
     answer: serde_json::Result<serde_json::Value>,
     outcome: crate::security::audit::AuditOutcome,

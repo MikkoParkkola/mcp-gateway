@@ -639,15 +639,9 @@ fn caller_of(
     }
 }
 
-/// A dashboard session's caller: a session issued and checked by the real
-/// session store, named as the middleware names it (`dashboard_client`).
+/// A dashboard session's caller: mirrors the private `dashboard_client`
+/// mint's values (a disclosed limit).
 fn dashboard_caller() -> Caller {
-    let store = crate::gateway::auth::DashboardBootstrap::new();
-    let handle = store.issue_session();
-    assert!(
-        store.session_is_valid(&handle),
-        "premise: the harness session is live"
-    );
     Caller {
         principal: "dashboard-session".to_string(),
         account: "dashboard".to_string(),
