@@ -216,7 +216,14 @@ fn p1_every_key_a_match_starts_in_is_redacted() {
         for lead in [None, Some(&greedy)] {
             for before in [0, 250, 255, 256, 257, 300] {
                 for after in [0, 63, 64, 65, 255, 400] {
-                    let (b, a) = ("b".repeat(before), "a".repeat(after));
+                    // At 64 the value is four-byte characters, so the cut
+                    // past the key lands inside one and must back up.
+                    let a = if after == 64 {
+                        "\u{1f600}".repeat(16)
+                    } else {
+                        "a".repeat(after)
+                    };
+                    let b = "b".repeat(before);
                     let head = lead.map_or(String::new(), |g| format!(r#"{g}:{{"p":"{b}"}},"#));
                     let compact = format!(r#"{{{head}{quoted}:{{"v":"{a}"}},"n":3}}"#);
                     // Every fourth case also as `wrap_tool_success` prints it.
@@ -334,7 +341,9 @@ fn f2_many_overlapped_keys_cost() {
     // One redactor built and warmed before timing, as production reuses one;
     // the median of five samples of each path.
     let r = redactor();
-    let leaf = || json!({ "content": [{ "type": "text", "text": text }] });
+    // Built once, so the clock times the redaction, not building the leaf.
+    let proto = json!({ "content": [{ "type": "text", "text": text }] });
+    let leaf = || proto.clone();
     let mut warm = leaf();
     r.scan_and_redact(&mut warm);
     let median = |f: &dyn Fn()| {
@@ -386,7 +395,9 @@ fn g1_a_second_pass_still_changes_these_until_mik_8794() {
     let rows = [
         format!("redis://{bearer}"),
         format!(r#"{{"redis://":"{bearer}"}}"#),
-        format!(r#"{{"a":"redis://","b":"{bearer}"}}"#),
+        // An array, not an object: `","b":"Bearer` would already be ten
+        // characters, so the first pass would match there and redact both.
+        format!(r#"["redis://","{bearer}"]"#),
     ];
     for text in rows {
         let (once, _) = deliver(&text);
