@@ -8,8 +8,9 @@
 //! written apart from the product walk: its own literal scan, its own escape
 //! widening. It encodes the rule of the MIK-8745 design: today's spans
 //! (`credential_spans` over the raw leaf), projected onto every value
-//! literal they overlap; keys, quotes, punctuation, numbers and keywords are
-//! kept; a span that starts in a key sends the leaf down today's path.
+//! literal they overlap and onto each key a match starts in (MIK-8772), a
+//! redacted key taking the first free `#n` in its object; other keys,
+//! quotes, punctuation, numbers and keywords are kept.
 
 use super::*;
 use serde_json::json;
@@ -80,24 +81,35 @@ fn base_findings(text: &str) -> Vec<String> {
 }
 
 /// Oracle: each string literal's content range (quotes excluded) in valid
-/// JSON text, and whether it is an object key.
-fn literals(text: &str) -> Vec<(usize, usize, bool)> {
+/// JSON text, whether it is an object key, and the container it sits in.
+fn literals(text: &str) -> Vec<(usize, usize, bool, usize)> {
     let b = text.as_bytes();
     let mut out = Vec::new();
+    let (mut stack, mut next) = (vec![usize::MAX], 0);
     let mut i = 0;
     while i < b.len() {
-        if b[i] == b'"' {
-            let start = i + 1;
-            let mut j = start;
-            while b[j] != b'"' {
-                j += if b[j] == b'\\' { 2 } else { 1 };
+        match b[i] {
+            b'"' => {
+                let start = i + 1;
+                let mut j = start;
+                while b[j] != b'"' {
+                    j += if b[j] == b'\\' { 2 } else { 1 };
+                }
+                let is_key = text[j + 1..].trim_start().starts_with(':');
+                out.push((start, j, is_key, *stack.last().expect("root")));
+                i = j + 1;
+                continue;
             }
-            let is_key = text[j + 1..].trim_start().starts_with(':');
-            out.push((start, j, is_key));
-            i = j + 1;
-        } else {
-            i += 1;
+            b'{' | b'[' => {
+                stack.push(next);
+                next += 1;
+            }
+            b'}' | b']' => {
+                stack.pop();
+            }
+            _ => {}
         }
+        i += 1;
     }
     out
 }
@@ -142,16 +154,16 @@ fn expected(text: &str) -> String {
         return today(text);
     }
     let lits = literals(text);
-    let in_key = |at: usize| {
-        lits.iter()
-            .any(|&(start, end, key)| key && start <= at && at < end)
-    };
-    if spans.iter().any(|&(start, _)| in_key(start)) {
+    let start_lit = |at: usize| lits.iter().position(|&(s, e, _, _)| s <= at && at < e);
+    if spans.iter().any(|&(start, _)| start_lit(start).is_none()) {
         return today(text);
     }
-    let mut ranges = Vec::new();
-    for &(lit_start, lit_end, key) in &lits {
-        if key {
+    // Per literal: the ranges to replace. A value takes every span over it; a
+    // key takes them only when some single match starts inside it (MIK-8772).
+    let starts: Vec<usize> = redactor().match_spans(text).iter().map(|m| m.0).collect();
+    let mut per_lit: Vec<Vec<(usize, usize)>> = vec![Vec::new(); lits.len()];
+    for (index, &(lit_start, lit_end, key, _)) in lits.iter().enumerate() {
+        if key && !starts.iter().any(|&at| lit_start <= at && at < lit_end) {
             continue;
         }
         let escs = escapes(text, lit_start, lit_end);
@@ -168,18 +180,64 @@ fn expected(text: &str) -> String {
                     to = esc_end;
                 }
             }
-            ranges.push((from, to));
+            per_lit[index].push((from, to));
+        }
+        per_lit[index].sort_unstable();
+        let mut merged: Vec<(usize, usize)> = Vec::new();
+        for (from, to) in per_lit[index].drain(..) {
+            match merged.last_mut() {
+                Some(last) if from <= last.1 => last.1 = last.1.max(to),
+                _ => merged.push((from, to)),
+            }
+        }
+        per_lit[index] = merged;
+    }
+    // Each literal's new raw content; keys then take redact_keys' collision
+    // rule per object: clean names reserved first, then the first free `#n`.
+    let decode =
+        |raw: &str| serde_json::from_str::<String>(&format!("\"{raw}\"")).expect("decodes");
+    let mut contents: Vec<String> = lits
+        .iter()
+        .enumerate()
+        .map(|(index, &(s, e, _, _))| {
+            let shifted: Vec<(usize, usize)> = per_lit[index]
+                .iter()
+                .map(|&(f, t)| (f - s, t - s))
+                .collect();
+            splice(&text[s..e], &shifted)
+        })
+        .collect();
+    let mut taken: std::collections::HashSet<(usize, String)> = lits
+        .iter()
+        .enumerate()
+        .filter(|&(index, &(_, _, key, _))| key && per_lit[index].is_empty())
+        .map(|(_, &(s, e, _, object))| (object, decode(&text[s..e])))
+        .collect();
+    for (index, &(_, _, key, object)) in lits.iter().enumerate() {
+        if !key || per_lit[index].is_empty() {
+            continue;
+        }
+        let candidate = decode(&contents[index]);
+        let (mut name, mut n) = (candidate.clone(), 1);
+        while taken.contains(&(object, name.clone())) {
+            n += 1;
+            name = format!("{candidate}#{n}");
+        }
+        taken.insert((object, name.clone()));
+        if name != candidate {
+            let quoted = serde_json::to_string(&name).expect("encodes");
+            contents[index] = quoted[1..quoted.len() - 1].to_owned();
         }
     }
-    ranges.sort_unstable();
-    let mut merged: Vec<(usize, usize)> = Vec::new();
-    for (from, to) in ranges {
-        match merged.last_mut() {
-            Some(last) if from <= last.1 => last.1 = last.1.max(to),
-            _ => merged.push((from, to)),
-        }
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0;
+    for (index, &(s, e, _, _)) in lits.iter().enumerate() {
+        out.push_str(&text[cursor..s]);
+        out.push_str(&contents[index]);
+        cursor = e;
     }
-    splice(text, &merged)
+    out.push_str(&text[cursor..]);
+    out
 }
 
 /// Every row: delivered as the oracle says, findings as base records, and a
@@ -432,12 +490,11 @@ fn b11_an_escaped_lookalike_is_copied_raw() {
 // ── C: structure and fallback ─────────────────────────────────────────────
 
 #[test]
-fn c1_a_span_starting_in_a_key_takes_todays_path() {
+fn c1_a_span_starting_in_a_key_redacts_that_key() {
     let key = format!("ghp_{}", "k".repeat(36));
     let text = format!(r#"{{"inner":{{"{key}":1}},"n":2}}"#);
-    let (out, _) = deliver(&text);
-    assert_eq!(out, today(&text));
-    assert_eq!(out, expected(&text));
+    let out = assert_projected(&text);
+    assert_eq!(out, format!(r#"{{"inner":{{"{MARK}":1}},"n":2}}"#));
 }
 
 #[test]
@@ -451,14 +508,14 @@ fn c1b_a_span_running_over_later_keys_keeps_them() {
 }
 
 #[test]
-fn c2_two_credential_shaped_keys_take_todays_path() {
+fn c2_two_credential_shaped_keys_take_the_first_free_suffix() {
     let (a, b) = (
         format!("ghp_{}", "a".repeat(36)),
         format!("gho_{}", "b".repeat(36)),
     );
     let text = format!(r#"{{"o":{{"{a}":1,"{b}":2}}}}"#);
-    let (out, _) = deliver(&text);
-    assert_eq!(out, today(&text));
+    let out = assert_projected(&text);
+    assert_eq!(out, format!(r#"{{"o":{{"{MARK}":1,"{MARK}#2":2}}}}"#));
 }
 
 #[test]
@@ -494,6 +551,11 @@ fn c7_depth_is_one_level() {
     // Inside the decoded content the span still runs to the end (stated bound).
     assert_eq!(outer, format!(r#"{{"dsn":"{MARK}"#));
 }
+
+// ── K: a span that starts in a key (MIK-8772) ─────────────────────────────
+
+#[path = "redactor_b2_key_tests.rs"]
+mod key_rows;
 
 // ── D: properties ─────────────────────────────────────────────────────────
 
