@@ -9,5 +9,5 @@ index 30bdf9120..96e454434 100644
 -        if let Err(mismatch) = check.validate() {
 +        if false && let Err(mismatch) = check.validate() {
              return Some((
-                 JsonRpcResponse::error(id.cloned(), -32020, mismatch.to_string()),
+                 JsonRpcResponse::error(id.cloned(), HEADER_MISMATCH, mismatch.to_string()),
                  StatusCode::BAD_REQUEST,
