@@ -337,6 +337,7 @@ src/gateway/meta_mcp/invoke/projection.rs	extract_client_claim	http_invoke_tiny	
 src/gateway/meta_mcp/invoke/projection.rs	json_is_populated	-	on-path, untimed: capability response transforms only; the timed rows dispatch to an MCP backend
 src/gateway/meta_mcp/invoke/projection.rs	principal_source	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/projection.rs	quota_key	-	on-path, untimed: interim continuation mints only; the timed backend answers at once
+src/gateway/meta_mcp/invoke/projection.rs	quota_key_of	-	on-path, untimed: the one quota rule quota_key and direct_quota_key share; interim continuation mints only; the timed backend answers at once
 src/gateway/meta_mcp/invoke/propagation.rs	audit_minted_credential	-	on-path, untimed: minted propagation credentials only; the timed backend has no propagation config
 src/gateway/meta_mcp/invoke/propagation.rs	caller_principal	-	on-path, untimed: identity-propagation backends only; the timed backend has no propagation config
 src/gateway/meta_mcp/invoke/propagation.rs	into_parts	http_invoke_tiny	on the HTTP gateway_invoke path, once per dispatch: moves the resolved fields into a tuple, no allocation and no lock (MIK-8407)
@@ -354,6 +355,11 @@ src/gateway/meta_mcp/invoke/propagation.rs	take	-	on-path, untimed: legacy elici
 src/gateway/meta_mcp/invoke/provenance_stamp.rs	maybe_stamp_provenance	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/provenance_stamp.rs	stamp_direct_result	-	direct /mcp/{backend} route only, not the meta tools/call path
 src/gateway/meta_mcp/invoke/provenance_stamp.rs	stamp_recovered_result	-	upstream task recovery (tasks/get) only, not a live dispatch
+src/gateway/meta_mcp/invoke/provenance_stamp.rs	lift_receipt	http_invoke_tiny	on the HTTP gateway_invoke path (wrapped meta reply); borrows without a receipt
+src/gateway/meta_mcp/invoke/provenance_stamp.rs	seal_public_provenance	http_invoke_tiny	on the HTTP gateway_invoke path (finalize_routed); returns at once without a public signer
+src/gateway/meta_mcp/invoke/provenance_stamp.rs	seal_receipt	-	on-path, untimed: runs only with a public provenance signer installed, which the harness does not configure
+src/gateway/meta_mcp/invoke/provenance_stamp.rs	with_minted_receipts	http_invoke_tiny	wraps every HTTP request's dispatch (opens the minted-receipt scope, or reuses an open one)
+src/gateway/meta_mcp/invoke/provenance_stamp.rs	note_unsealed	-	on-path, untimed: runs only when a public seal is refused, and only with a public provenance signer installed, which the harness does not configure
 src/gateway/meta_mcp/invoke/r2_check.rs	absent_on_slot	-	on-path, untimed: per-user-catalogue backends withholding the tool only
 src/gateway/meta_mcp/invoke/r2_check.rs	account_refused_fill	-	on-path, untimed: cold-slot catalogue fills the failsafe refused only
 src/gateway/meta_mcp/invoke/r2_check.rs	answer_refused_fill	-	on-path, untimed: cold-slot catalogue fills that failed only

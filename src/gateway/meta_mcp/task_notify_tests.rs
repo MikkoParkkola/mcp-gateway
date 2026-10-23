@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use super::MetaMcp;
 use super::grant_audit_fixture::{entries, logger};
+use super::response_security::DeliveryCredential;
 use super::task_notify::Reader;
 use crate::backend::BackendRegistry;
 use crate::protocol::RequestId;
@@ -27,6 +28,7 @@ fn reader() -> Reader<'static> {
         caller: "key-a",
         session_id: "s-1",
         subject: None,
+        credential: DeliveryCredential::of(None),
     }
 }
 

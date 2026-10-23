@@ -77,6 +77,23 @@ async fn l6a_cold_caller_list_servers_withholds() {
         !listed.contains("\"tools_count\":2"),
         "L6a: a cold caller is counted the shared tools: {listed}"
     );
+    let parsed: serde_json::Value = serde_json::from_str(&listed).expect("list_servers is JSON");
+    let row = parsed["servers"]
+        .as_array()
+        .and_then(|rows| {
+            rows.iter()
+                .find(|s| s["name"] == super::slot_verdict_fixture::BACKEND)
+        })
+        .unwrap_or_else(|| panic!("L6a: the backend is listed: {listed}"));
+    assert_eq!(
+        row.get("tools_count"),
+        Some(&serde_json::Value::Null),
+        "L6a: a cold caller has no count: {row}"
+    );
+    assert_eq!(
+        row["tools_known"], false,
+        "L6a: a cold caller's row is not known: {row}"
+    );
 }
 
 /// L6a, spec-preview: a cold caller's filtered `tools/list` does not name the

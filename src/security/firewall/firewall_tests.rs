@@ -3,6 +3,7 @@
 //! Unit tests of the unified firewall.
 
 use super::*;
+use crate::security::Severity;
 use serde_json::json;
 
 fn default_firewall() -> Firewall {

@@ -11,6 +11,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::security::Severity;
+
 mod kernel;
 pub use kernel::ContextIntegrityKernel;
 
@@ -146,20 +148,6 @@ pub enum ContextIntegrityClassifier {
     ToolPoisoning,
     /// Local regex matched exfiltration-shaped content.
     DataExfiltration,
-}
-
-/// Severity assigned to a context-integrity finding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ContextIntegritySeverity {
-    /// Informational evidence.
-    Low,
-    /// Suspicious but not independently blocking.
-    Medium,
-    /// Likely unsafe for automatic privileged promotion.
-    High,
-    /// Deterministic block-worthy evidence.
-    Critical,
 }
 
 /// Provenance for the content evaluated by the kernel.
@@ -344,7 +332,7 @@ pub struct ContextIntegrityFinding {
     /// Classifier that produced the finding.
     pub classifier: ContextIntegrityClassifier,
     /// Finding severity.
-    pub severity: ContextIntegritySeverity,
+    pub severity: Severity,
     /// Data class associated with the finding.
     pub data_class: ContextDataClass,
     /// Human-readable description.
@@ -362,7 +350,7 @@ pub struct ContextIntegrityClassification {
     pub findings: Vec<ContextIntegrityFinding>,
     /// Highest severity in `findings`, or `None` when clean.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_severity: Option<ContextIntegritySeverity>,
+    pub max_severity: Option<Severity>,
 }
 
 /// Policy verdict emitted for the evaluated content.

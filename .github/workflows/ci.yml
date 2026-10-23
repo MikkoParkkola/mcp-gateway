@@ -1220,6 +1220,13 @@ jobs:
         run: python3 scripts/release/test_surface_upgrading.py
       - name: Every pending UPGRADING fragment is well formed, and no new item is numbered (MIK-8185)
         run: python3 scripts/release/upgrading_fragments.py check
+      # The pre-push gate's own tests (MIK-8410.DRIFT.1): the workflow scanner
+      # and its drift buckets, and the runner's fail-closed rows. Above the
+      # wiring-mutation step, which the harness anchors as the job's last.
+      - name: Test the pre-push CI-check scanner and its drift buckets (MIK-8410)
+        run: python3 scripts/dev/test_prepush_ci_checks.py
+      - name: Test the pre-push CI-check runner (MIK-8410)
+        run: python3 scripts/dev/test_run_prepush_ci_checks.py
       # Proves the workflow-wiring assertions still discriminate: each case
       # breaks one rule, or restates it in an equivalent spelling, and the
       # suite has to return the stated verdict. Runs against a copy of the
@@ -1400,6 +1407,36 @@ jobs:
       - name: Check the tree and the allowlist against the base
         if: github.event_name == 'pull_request'
         run: python3 scripts/dev/check-timing-asserts.py --base "origin/${{ github.base_ref }}"
+
+  request-panics:
+    name: No new request-path panic site without an invariant (MIK-8691)
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    # Release builds abort on panic, so an unwrap a request can reach takes the
+    # whole gateway down. A new unwrap/expect/panic-family site in product code
+    # carries an `// invariant:` comment; existing ones are in a baseline the
+    # scanner writes, which only shrinks against the base.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Check the guard refuses what it claims to
+        run: python3 scripts/ci/check-request-panics.py --self-test
+      - name: No new panic site without an invariant
+        run: python3 scripts/ci/check-request-panics.py
+      - name: The baseline only shrinks against the previous tip
+        if: github.event_name != 'pull_request'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          base="$BEFORE"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base="HEAD^"
+          fi
+          python3 scripts/ci/check-request-panics.py --base "$base"
+      - name: The baseline only shrinks against the base
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/ci/check-request-panics.py --base "origin/${{ github.base_ref }}"
 
   orphan-test-modules:
     name: Orphan test modules (MIK-7538)

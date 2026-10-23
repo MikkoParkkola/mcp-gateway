@@ -111,7 +111,10 @@ fn only_transient_rename_errors_are_retried() {
 fn the_write_path_never_parks_the_thread_it_runs_on() {
     // Split so this needle does not match the line that defines it.
     let needle = concat!("thread::", "sleep");
-    let source = include_str!("config_persistence.rs");
+    let source = concat!(
+        include_str!("config_persistence.rs"),
+        include_str!("config_persistence_atomic.rs")
+    );
     let sleeps: Vec<&str> = source
         .lines()
         .map(str::trim)
@@ -122,6 +125,47 @@ fn the_write_path_never_parks_the_thread_it_runs_on() {
         sleeps.is_empty(),
         "the config write path blocks its executor thread: {sleeps:?}"
     );
+}
+
+/// DUPC-7.PR7.8 (T16): the shared writer syncs the scratch file and never a
+/// directory (a directory fsync that fails after a committed rename would
+/// report the save as lost), while the grant journal keeps both of its own
+/// directory syncs.
+#[test]
+fn the_shared_writer_syncs_no_directory_and_the_journal_keeps_its_two() {
+    let code = |source: &'static str| -> Vec<&'static str> {
+        source
+            .lines()
+            .map(str::trim)
+            .take_while(|line| !line.starts_with("#[cfg(all(test"))
+            .filter(|line| !line.starts_with("//"))
+            .collect()
+    };
+    let writer = code(include_str!("config_persistence_atomic.rs"));
+    let syncs: Vec<&str> = writer
+        .iter()
+        .copied()
+        .filter(|l| l.contains("sync_all") || l.contains("sync_data") || l.contains("sync_dir"))
+        .collect();
+    assert_eq!(syncs.len(), 1, "one scratch sync only: {syncs:?}");
+    assert!(
+        !writer.iter().any(|l| l.contains(".parent()")),
+        "the writer opens the parent directory"
+    );
+    // The ACL probe opens the target without waiting (a FIFO swapped in after
+    // the stat must not block a save), so no plain blocking open may return.
+    assert!(
+        !writer.iter().any(|l| l.contains("File::open(")),
+        "the writer opens a file with a blocking open"
+    );
+    let journal = include_str!("identity_grants/journal.rs");
+    let calls = journal
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with("//") && !l.starts_with("fn sync_dir"))
+        .filter(|l| l.contains("sync_dir("))
+        .count();
+    assert_eq!(calls, 2, "the grant journal lost a directory sync");
 }
 
 #[test]

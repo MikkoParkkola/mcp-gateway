@@ -10,8 +10,9 @@ use std::collections::BTreeSet;
 use serde_json::{Value, json};
 use tempfile::NamedTempFile;
 
-use super::super::{Finding, FindingLocation, FirewallAction, FirewallVerdict, ScanType, Severity};
+use super::super::{Finding, FindingLocation, FirewallAction, FirewallVerdict, ScanType};
 use super::AuditLogger;
+use crate::security::Severity;
 use crate::security::response_policy::{
     ResponseArtifactKind, ResponseCorrelation, ResponsePolicyTarget,
 };
