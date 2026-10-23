@@ -265,3 +265,30 @@ fn a_missing_kid_is_refused() {
         Err(TrustSetRefusal::MissingKid)
     ));
 }
+
+/// With both a seed of the wrong length and a malformed key id, the key id
+/// refusal is the one reported (57b74df7b moved the length check into the
+/// key constructor, after the key id checks), still value-free.
+#[test]
+fn a_bad_kid_is_reported_before_a_bad_seed_length() {
+    let seed = vec![7u8; 31];
+    let encoded = seed_b64(&seed);
+    let (_dir, env) = overlay_with(&[
+        (PROVENANCE_SEED_ENV, encoded.as_str()),
+        (PROVENANCE_KEY_ID_ENV, "\"has space\""),
+    ]);
+    assert_eq!(
+        env.resolve(PROVENANCE_KEY_ID_ENV).as_deref(),
+        Some("has space"),
+        "the env file must transport the kid under test"
+    );
+    let error = resolve_public_signer(&env, ATTESTATION_ID).expect_err("both are refused");
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "Configuration validation error: {PROVENANCE_KEY_ID_ENV} must be 1-64 bytes of 0x21..=0x7E"
+        ),
+        "the key id refusal wins"
+    );
+    assert_value_free(&error, &seed);
+}
