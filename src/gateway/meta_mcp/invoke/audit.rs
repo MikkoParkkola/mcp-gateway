@@ -93,6 +93,10 @@ pub(crate) fn note_process(process: ProcessNote) {
 #[path = "audit_settlement_tests.rs"]
 mod settlement_tests;
 
+#[cfg(all(test, feature = "firewall"))]
+#[path = "audit_delivered_value_tests.rs"]
+mod delivered_value_tests;
+
 tokio::task_local! {
     /// The notes of the call running in this scope, for this call only.
     static NOTES: RefCell<DispatchNotes>;

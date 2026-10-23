@@ -5,6 +5,7 @@
 //! it, on every route, once. It decides which parts a frame has and how each
 //! is screened, so no caller picks a method list or a mutation policy.
 
+use crate::error::rpc_codes::INVALID_REQUEST;
 use serde_json::Value;
 
 use super::super::MetaMcp;
@@ -100,7 +101,8 @@ impl MetaMcp {
             outcome = outcome.max(self.scan_error(error, at));
         }
         if outcome == EgressOutcome::Refused {
-            *frame = JsonRpcResponse::delivery_refusal_error(frame.id.take(), -32600, REFUSAL);
+            *frame =
+                JsonRpcResponse::delivery_refusal_error(frame.id.take(), INVALID_REQUEST, REFUSAL);
         }
         frame.egress_scanned = true;
         outcome
@@ -423,7 +425,9 @@ impl Egressed {
         }
         tracing::error!("a frame that skipped the egress scan reached a writer; refused");
         Self(JsonRpcResponse::delivery_refusal_error(
-            frame.id, -32600, REFUSAL,
+            frame.id,
+            INVALID_REQUEST,
+            REFUSAL,
         ))
     }
 
@@ -502,7 +506,8 @@ impl MetaMcp {
             .as_mut()
             .is_some_and(|value| self.scan_stored_task(task, value) == EgressOutcome::Refused);
         if refused {
-            *frame = JsonRpcResponse::delivery_refusal_error(frame.id.take(), -32600, REFUSAL);
+            *frame =
+                JsonRpcResponse::delivery_refusal_error(frame.id.take(), INVALID_REQUEST, REFUSAL);
         }
         frame.egress_scanned = true;
     }

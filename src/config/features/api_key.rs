@@ -22,7 +22,7 @@ const DIGEST_PREFIX: &str = "sha256:";
 /// the format with the loader instead of re-deriving it.
 #[must_use]
 pub fn api_key_digest_spec(key: &[u8]) -> String {
-    format!("{DIGEST_PREFIX}{}", crate::hashing::sha256_hex(key))
+    crate::hashing::sha256_tagged(key)
 }
 
 /// Parse `sha256:` followed by exactly 64 lowercase hex characters.

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Playbook execution engine.
 
+use crate::error::rpc_codes::INTERNAL_ERROR;
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
@@ -391,7 +392,7 @@ fn tool_error(step: &PlaybookStep, result: &Value) -> crate::Error {
         crate::truncate::Suffix::After,
     );
     crate::Error::JsonRpc {
-        code: -32603,
+        code: INTERNAL_ERROR,
         message: format!("step '{}' failed: the tool reported an error", step.name),
         data: Some(json!({ TOOL_TEXT_DATA_KEY: capped })),
     }

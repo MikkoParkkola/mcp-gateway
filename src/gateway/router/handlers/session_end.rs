@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `DELETE /mcp` session termination, and the retired `/sse` endpoint's answer.
 
+use crate::error::rpc_codes::INVALID_REQUEST;
 use std::sync::Arc;
 
 use axum::{
@@ -75,7 +76,7 @@ pub(in crate::gateway::router) async fn sse_deprecated_handler() -> impl IntoRes
     build_http_response(
         &Egressed::gateway_own(JsonRpcResponse::error_with_data(
             None,
-            -32600,
+            INVALID_REQUEST,
             "SSE transport is deprecated. Use Streamable HTTP (POST /mcp) instead.",
             json!({
                 "migration": "In settings.json, change: \"type\": \"sse\" -> \"type\": \"http\" and \"url\": \"http://localhost:39400/sse\" -> \"url\": \"http://localhost:39400/mcp\"",

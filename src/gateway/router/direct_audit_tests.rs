@@ -35,6 +35,9 @@ mod lost_round;
 mod meta_malformed_retry;
 mod meta_refusal;
 mod meta_replay;
+/// MIK-8689 R-RECJUDGE: the judge's verdict rides the delivery record.
+#[cfg(feature = "firewall")]
+mod response_judge;
 #[cfg(feature = "firewall")]
 mod session_less;
 #[cfg(feature = "firewall")]
