@@ -416,7 +416,11 @@ def o11_argv_isolation():
     for step, argv, _, _ in package_steps:
         uv_at = next((i for i, a in enumerate(argv) if a in ("uv", "uvx")), None)
         if step in ("prime", "start") and uv_at is not None:
-            expect("--no-build" in argv[uv_at:], f"{step} pypi without --no-build: {argv[uv_at:]}")
+            # An option only before the package operand: after it, uvx hands it to the server.
+            operand = next(i for i, a in enumerate(argv) if i > uv_at and a.startswith("q"))
+            expect("--no-build" in argv[uv_at:operand], f"{step} pypi without --no-build before {argv[operand]}: {argv[uv_at:]}")
+        if step == "prime" and "npm" in argv:
+            expect(argv[-2:] == ["--", "/usr/bin/true"], f"npm prime must run /usr/bin/true, not a PATH lookup: {argv[-2:]}")
     uv_steps = [c[0] for c in package_steps if c[0] in ("prime", "start") and ({"uv", "uvx"} & set(c[1]))]
     expect(sorted(uv_steps) == ["prime", "start"], f"pypi prime and start not both seen: {uv_steps}")
     hostile_start = [c[1] for c in package_steps if c[0] == "start" and "p@1.0.0" in " ".join(c[1])]

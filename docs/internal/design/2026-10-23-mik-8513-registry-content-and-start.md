@@ -100,7 +100,7 @@ value:
 
 - **npm:** `npm pack --json --pack-destination /work <pkg>@<ver>` reports the `integrity` it computed
   from the downloaded tarball, which must equal the sidecar.
-- **PyPI:** `pip download -d /work --no-deps --require-hashes -r /dev/stdin`.
+- **PyPI:** `pip download -d /work --no-deps --only-binary :all: --require-hashes -r /dev/stdin`.
   The driver writes one requirement line to stdin: `<pkg>==<ver>` followed by
   `--hash=sha256:<v>` for every recorded file. pip accepts `--hash` only per
   requirement. pip refuses a download whose
@@ -166,7 +166,7 @@ environment and no host path:
 - **Environment:** only `-e HOME=/work -e npm_config_cache=/work/.npm
   -e UV_CACHE_DIR=/work/.uv -e UV_TOOL_DIR=/work/tools
   -e UV_TOOL_BIN_DIR=/work/bin -e PATH=/work/bin:<image PATH>
-  -e XDG_CACHE_HOME=/work/.cache`.
+  -e XDG_CACHE_HOME=/work/.cache -e npm_config_ignore_scripts=true`.
 - **No secret** is ever passed.
 
 **Images, pinned by digest:**
@@ -204,8 +204,10 @@ turned back on to make it pass.
 1. **Fetch and verify:** `npm pack` or `pip download --only-binary :all:` as
    above, 120 s cap. This runs for every pinned entry.
 2. **Prime the launcher users get,** 180 s cap:
-   - npm: `npm exec --yes --package <pkg>@<ver> -- true`. This fills the npx
-     cache without running install scripts, and does not start the server.
+   - npm: `npm exec --yes --package <pkg>@<ver> -- /usr/bin/true`. This fills the
+     npx cache without running install scripts, and does not start the server.
+     The absolute path stops a package `bin` named `true` from running here,
+     on the one networked step that installs it.
    - uvx: `uv tool install --no-build <pkg>==<ver>`.
 3. **Start,** in a second container on the same volume with `--network none`,
    60 s cap:

@@ -540,7 +540,8 @@ def start_one(entry: dict[str, str], plan: tuple[str, str, str], expected) -> tu
         if skip:
             return None, skip
         if kind == "npm":
-            prime = ["npm", "exec", "--yes", "--package", f"{pkg}@{version}", "--", "true"]
+            # An absolute path: a package `bin` named `true` must not run on this networked step.
+            prime = ["npm", "exec", "--yes", "--package", f"{pkg}@{version}", "--", "/usr/bin/true"]
             launcher = ["npx", "--offline", "-y", f"{pkg}@{version}"]
         else:
             prime = ["uv", "tool", "install", "--no-build", f"{pkg}=={version}"]
