@@ -129,8 +129,10 @@ pub(crate) enum Invisible {
     /// `_signature` is no tenant-attribution key, so the judge reads nothing
     /// signing adds.
     JudgeReadsNothingSigningAdds,
-    /// On `/mcp` and stdio a replay's stored bytes were clamped when first
-    /// delivered, so its clamp changes nothing before the fresh link it mints (the stored link
+    /// A replay's stored bytes are already clamped on every route: a stored
+    /// delivery's result is serialized through the `cacheScope` clamp
+    /// (`protocol/messages.rs:54`), and `/mcp` and stdio clamp before storing
+    /// too. So a replay's clamp changes nothing before the fresh link it mints (the stored link
     /// is stripped: "a replay mints its own", `meta_mcp/admission.rs:147`).
     StoredBytesAlreadyClamped,
 }
@@ -154,10 +156,10 @@ pub(crate) enum RespNa {
     /// `rows::r_replay_mcp_reserves_the_stored_delivery` (red-check record
     /// red-A1-record.md: the earlier re-stamp premise was wrong).
     ReplayReservesTheStoredDelivery,
-    /// A keyed replay on Direct runs `finish_tail` over bytes stored before
-    /// the clamp and seal (`direct_idempotency.rs` `deliver_replay`), but it
-    /// mints no receipt, so nothing is stamped or sealed (the stored receipt
-    /// arrives unsealed: MIK-8705, `rows::r_replayseal_direct_replay_seal_gap`).
+    /// A keyed replay on Direct runs `finish_tail` over a stored delivery that
+    /// was stored before the seal (`direct_idempotency.rs` `deliver_replay`),
+    /// and it mints no receipt, so nothing is stamped or sealed (the stored
+    /// receipt arrives unsealed: MIK-8705, `rows::r_replayseal_direct_replay_seal_gap`).
     ReplayMintsNoReceipt,
     /// The stored task tail is the clamp and the seal over the worker's mint;
     /// the delivery stages run on the `tasks/get` route that reads it.
@@ -329,8 +331,9 @@ pub(crate) const fn expect(
         // sealed bytes: no mint, so nothing is sealed anew; it does mint a
         // fresh link, after a clamp that changes nothing (lead rulings, MIK-8689
         // phase C and R3). Its tail still shapes a legacy-stored answer for a
-        // modern caller. Direct stores before its clamp and seal, so its replay
-        // clamps and links as fresh (round 2, F2) and mints nothing to seal.
+        // modern caller. Every route's stored result is already clamped (its
+        // serialization clamps), so no replay's clamp changes anything; Direct
+        // stores before its seal and mints nothing to seal (delta check).
         (Mcp | Stdio, IdempotentReplay, Era::Modern, ShapeSeal) => ExpectedGap(RespTicket::Mik8747),
         (
             Mcp | Stdio,
@@ -338,7 +341,7 @@ pub(crate) const fn expect(
             _,
             FirewallSeal | ClampSeal | SealSign | StampSeal | FirewallStamp,
         ) => NotApplicable(RespNa::ReplayReservesTheStoredDelivery),
-        (Mcp | Stdio, IdempotentReplay, _, ClampLink) => {
+        (Mcp | Stdio | Direct, IdempotentReplay, _, ClampLink) => {
             OrderInvisibleByOutcome(StoredBytesAlreadyClamped)
         }
         (Direct, IdempotentReplay, _, StampSeal) => ExpectedGap(RespTicket::Mik8705),

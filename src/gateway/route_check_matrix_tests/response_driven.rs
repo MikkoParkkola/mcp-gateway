@@ -210,7 +210,10 @@ const fn stdio_fresh_row(era: Era, pair: RespPair) -> Option<Driven> {
         // the same rebuild the HTTP row drives.
         (Era::Legacy, SignRebuild) => Driven::Shared {
             pin: "response::source_order::stdio_rebuilds_after_finalize_content",
-            rows: &["rows::r_signrebuild_sign_precedes_relay_rebuild"],
+            rows: &[
+                "response::source_order::stdio_finalizes_through_finalize_routed",
+                "rows::r_signrebuild_sign_precedes_relay_rebuild",
+            ],
         },
         _ => return None,
     })
@@ -274,7 +277,8 @@ fn sources_under(dir: &std::path::Path, out: &mut Vec<(std::path::PathBuf, Strin
 }
 
 /// Whether `text` defines `needle` (`fn <name>(`) under a `#[test]` or
-/// `#[tokio::test]` attribute: the attribute lines directly above the fn.
+/// `#[tokio::test]` attribute: the attribute, doc and blank lines directly
+/// above the fn.
 fn is_test_fn(text: &str, needle: &str) -> bool {
     text.match_indices(needle).any(|(at, _)| {
         let line_start = text[..at].rfind('\n').map_or(0, |n| n + 1);
@@ -282,7 +286,7 @@ fn is_test_fn(text: &str, needle: &str) -> bool {
             .lines()
             .rev()
             .map(str::trim)
-            .take_while(|line| line.starts_with("#["))
+            .take_while(|line| line.starts_with("#[") || line.starts_with("///") || line.is_empty())
             .any(|line| line == "#[test]" || line.starts_with("#[tokio::test"))
     })
 }
