@@ -1,6 +1,6 @@
 # MIK-8513: the registry check verifies content and that entries start
 
-Status: draft for review (r4: r1 to r3 seat findings folded, see the end). Scope: `scripts/dev/check-registry-packages.py`,
+Status: FINAL (r4, scoped final round folded; lead ruling: no r5, later findings fold into the implementation and its review). Scope: `scripts/dev/check-registry-packages.py`,
 its self-test, its testdata, `.github/workflows/registry-packages.yml`. No
 product code, no user-visible change.
 
@@ -154,8 +154,10 @@ environment and no host path:
   classified `(launcher, pkg, ver, args)`, so a crafted `command` in a fork PR
   cannot inject into the host.
 - **Flags:**
-  - `--rm --read-only --log-driver none -w /work`, plus `-i` on the start
-    container so the driver can write to its stdin;
+  - `--rm --read-only --log-driver none -w /work`, plus `-i` on the fetch
+    container (pip reads its hash requirement from stdin) and on the start
+    container (the driver writes `initialize`); the driver closes stdin after
+    writing;
   - `--cap-drop ALL --security-opt no-new-privileges --user 1000:1000`;
   - `--memory 1g --pids-limit 256 --cpus 1`;
   - `--tmpfs /tmp:exec,size=256m,uid=1000,gid=1000,mode=1777`.
@@ -176,8 +178,16 @@ environment and no host path:
   Hub content. The implementation confirms `pip` is present in it.
 
 **Volume setup.** A root container with no package code and no network, from
-the same pinned image, runs one fixed command: `chown 1000:1000 /work` and
-`mkdir /work/bin`. It is never built from entry data. Every package step after
+the same pinned image, runs one fixed command: create `/work/bin` first, then
+give all of `/work` (recursively) to uid 1000, in that order, so `/work/bin`
+ends up owned by uid 1000. Its flags:
+
+- `--rm --read-only --network none --log-driver none`;
+- no `-e` at all;
+- argv fixed in the checker, never built from entry data.
+
+It cannot reach the runner token or cache URLs, and cannot write host paths
+outside the named volume (r4, both reviewers). Every package step after
 it runs as uid 1000.
 
 **Steps.** The first two use the network; the last does not. Fetch runs for every
@@ -310,3 +320,17 @@ sequential-thinking.
   - the offline falsifier also forbids process launches.
 - **Declined:** `uv pip download` does not exist in uv 0.13.1 (`error:
   unrecognized subcommand 'download'`, checked 2026-10-23), so `pip` stays.
+
+## r4 (final, scoped) folded (gpt SWF, grok SWF)
+
+- **Q1, an r3 fold was wrong:**
+  - `-i` was missing on the fetch container, so pip would read no requirement
+    from stdin;
+  - the ownership change ran before the directory was created, leaving
+    `/work/bin` owned by root.
+
+  Both are fixed above.
+- **Q2, the setup container as a trust step:** both reviewers find it cannot
+  reach the runner token or the cache URLs and cannot write host paths outside
+  the named volume. A later uid-1000 step only writes that volume. Its flags
+  are now listed explicitly, so nothing is filled in ad hoc.
