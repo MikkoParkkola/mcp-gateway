@@ -113,10 +113,8 @@ use ranges::{is_private_ipv4, is_private_ipv6};
 use crate::{Error, Result};
 use std::net::IpAddr;
 
-pub use resolver::{HostResolver, PinningResolver, SystemResolver, resolve_and_validate_host};
+pub use resolver::{HostResolver, PinningResolver, SystemResolver};
 pub(crate) use resolver::{SsrfDenied, in_allowed, ssrf_denial};
-
-pub use redirect::validate_redirect_chain;
 
 /// How every destination-policy refusal starts. Writer and reader stay a
 /// pair: each refusal is built from it, and [`is_ssrf_refusal`] and the
@@ -175,8 +173,7 @@ pub(crate) fn pinned_client_builder_for(policy: DestinationPolicy) -> reqwest::C
 ///
 /// IP-literal hosts are blocked immediately. Domain names pass through this
 /// synchronous check — to close the DNS-rebinding TOCTOU window, wire
-/// [`PinningResolver`] as the `dns_resolver` on the reqwest client (MIK-4019),
-/// or call [`resolve_and_validate_host`] before the request.
+/// [`PinningResolver`] as the `dns_resolver` on the reqwest client (MIK-4019).
 ///
 /// # Errors
 ///
@@ -218,7 +215,7 @@ pub fn validate_url_not_ssrf(url_str: &str) -> Result<()> {
 /// # Errors
 ///
 /// Returns `Error::Protocol` if the host is a blocked IP address.
-pub fn check_host_not_ssrf(host: &str) -> Result<()> {
+fn check_host_not_ssrf(host: &str) -> Result<()> {
     // Direct parse (covers plain IPv4 and unbracketed IPv6)
     if let Ok(addr) = host.parse::<IpAddr>() {
         if is_private_or_reserved(addr) {

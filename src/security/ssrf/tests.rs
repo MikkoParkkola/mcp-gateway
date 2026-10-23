@@ -431,43 +431,6 @@ fn url_rejects_missing_host() {
     assert!(validate_url_not_ssrf("file:///etc/passwd").is_err());
 }
 
-// ── validate_redirect_chain ───────────────────────────────────────────────
-
-#[test]
-fn redirect_chain_all_public_passes() {
-    let chain = &[
-        "https://api.example.com/redirect",
-        "https://cdn.example.com/resource",
-    ];
-    assert!(validate_redirect_chain(chain).is_ok());
-}
-
-#[test]
-fn redirect_chain_blocks_internal_hop() {
-    let chain = &[
-        "https://api.example.com/redirect",
-        "http://10.0.0.1/internal", // redirect to internal
-    ];
-    let err = validate_redirect_chain(chain).unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        msg.contains("hop 1"),
-        "error should name the hop index: {msg}"
-    );
-}
-
-#[test]
-fn redirect_chain_blocks_first_hop() {
-    let chain = &["http://127.0.0.1/api"];
-    let err = validate_redirect_chain(chain).unwrap_err();
-    assert!(err.to_string().contains("hop 0"));
-}
-
-#[test]
-fn redirect_chain_empty_passes() {
-    assert!(validate_redirect_chain(&[]).is_ok());
-}
-
 // ── check_host_not_ssrf ───────────────────────────────────────────────────
 
 #[test]
@@ -492,7 +455,7 @@ fn check_host_allows_public_ipv4() {
     assert!(check_host_not_ssrf("8.8.8.8").is_ok());
 }
 
-// ── DNS pinning: resolve_and_validate_host / PinningResolver (MIK-4019) ──
+// ── DNS pinning: PinningResolver (MIK-4019) ──
 
 /// Minimal mock resolver for unit tests: returns a fixed IP list.
 struct MockResolver {
@@ -515,49 +478,6 @@ impl HostResolver for MockResolver {
     }
 }
 
-/// AC2: allowed public domain: mock returns a public IP, passes.
-#[tokio::test]
-async fn pinning_public_domain_passes() {
-    let resolver = MockResolver::returning(vec!["8.8.8.8".parse().unwrap()]);
-    let result = resolve_and_validate_host("public.test.invalid", &resolver).await;
-    assert!(result.is_ok(), "public domain should pass: {result:?}");
-    assert_eq!(result.unwrap(), vec!["8.8.8.8".parse::<IpAddr>().unwrap()]);
-}
-
-/// AC2: private-rebinding: mock returns 127.0.0.1, blocked.
-#[tokio::test]
-async fn pinning_loopback_rebinding_blocked() {
-    let resolver = MockResolver::returning(vec!["127.0.0.1".parse().unwrap()]);
-    let err = resolve_and_validate_host("evil.test.invalid", &resolver)
-        .await
-        .unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        !msg.contains("127.0.0.1"),
-        "a host name's refusal must not name what it resolves to: {msg}"
-    );
-    assert!(
-        msg.contains("SSRF blocked"),
-        "error must say SSRF blocked: {msg}"
-    );
-}
-
-/// AC2: metadata-IP rebinding: mock returns 169.254.169.254, blocked.
-#[tokio::test]
-async fn pinning_metadata_rebinding_blocked() {
-    let resolver = MockResolver::returning(vec!["169.254.169.254".parse().unwrap()]);
-    let err = resolve_and_validate_host("rebind.test.invalid", &resolver)
-        .await
-        .unwrap_err();
-    let msg = err.to_string();
-    // A name's refusal names neither what it resolved to nor its kind: that
-    // would answer internal DNS for whoever sees the error.
-    assert!(
-        msg.contains("SSRF blocked") && !msg.contains("169.254") && !msg.contains("metadata"),
-        "a host name's refusal must not name what it resolves to: {msg}"
-    );
-}
-
 /// MIK-7633 AC7: the standard literal check names a cloud metadata address
 /// as one; any other private literal keeps the generic text.
 #[test]
@@ -578,16 +498,6 @@ fn metadata_host_refusal_names_the_metadata_service() {
         msg.contains("private/reserved address 10.0.0.1") && !msg.contains("metadata"),
         "{msg}"
     );
-}
-
-/// AC2: private RFC-1918 rebinding: mock returns 10.0.0.1, blocked.
-#[tokio::test]
-async fn pinning_private_rfc1918_rebinding_blocked() {
-    let resolver = MockResolver::returning(vec!["10.0.0.1".parse().unwrap()]);
-    let err = resolve_and_validate_host("corp.test.invalid", &resolver)
-        .await
-        .unwrap_err();
-    assert!(err.to_string().contains("SSRF blocked"));
 }
 
 /// AC2: `PinningResolver` blocks private IP via `reqwest::dns::Resolve`.
@@ -619,30 +529,8 @@ async fn pinning_resolver_allows_public_via_reqwest_trait() {
     assert!(result.is_ok(), "PinningResolver must allow public IP");
 }
 
-/// AC2: redirect handling: `validate_redirect_chain` blocks loopback redirect hop.
-#[test]
-fn redirect_to_loopback_is_blocked() {
-    let chain = &[
-        "https://api.test.invalid/step1",
-        "http://127.0.0.1/internal",
-    ];
-    let err = validate_redirect_chain(chain).unwrap_err();
-    assert!(err.to_string().contains("hop 1"));
-}
-
-/// AC2: redirect handling: `validate_redirect_chain` blocks metadata IP redirect.
-#[test]
-fn redirect_to_metadata_ip_is_blocked() {
-    let chain = &[
-        "https://public.test.invalid/redirect",
-        "http://169.254.169.254/latest/meta-data/",
-    ];
-    let err = validate_redirect_chain(chain).unwrap_err();
-    assert!(err.to_string().contains("hop 1"));
-}
-
-// ── MIK-8670 guards: the live paths that replace `resolve_and_validate_host`
-// and `validate_redirect_chain` keep every assertion their tests make ──
+// ── MIK-8670 guards: the live paths that replaced `resolve_and_validate_host`
+// and `validate_redirect_chain` keep every assertion their tests made ──
 
 /// A resolver that counts lookups, so a guard can pin one lookup per resolve.
 struct CountingResolver {

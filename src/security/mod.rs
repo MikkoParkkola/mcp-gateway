@@ -82,9 +82,6 @@ pub use sanitize::{
     sanitize_resource_metadata,
 };
 pub use scope_collision::validate_tool_name;
-pub use ssrf::{
-    HostResolver, PinningResolver, SystemResolver, check_host_not_ssrf, resolve_and_validate_host,
-    validate_redirect_chain, validate_url_not_ssrf,
-};
+pub use ssrf::{HostResolver, PinningResolver, SystemResolver, validate_url_not_ssrf};
 pub use tool_integrity::ToolIntegrityChecker;
 pub use transparency_log::{TransparencyLogConfig, TransparencyLogger};
