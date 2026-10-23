@@ -5,10 +5,9 @@
 
 use serde_json::Value;
 
-use super::{
-    Finding, FindingLocation, Firewall, FirewallAction, FirewallVerdict, ScanType, Severity,
-};
+use super::{Finding, FindingLocation, Firewall, FirewallAction, FirewallVerdict, ScanType};
 use crate::protocol::continuation::Keyring;
+use crate::security::Severity;
 use crate::security::response_policy::{
     InvalidResponseTargets, ResponseArtifactKind, ResponseCorrelation, ResponseMutationPolicy,
     ResponsePolicyTarget,

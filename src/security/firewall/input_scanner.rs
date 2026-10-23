@@ -17,7 +17,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use regex::RegexSet;
 use serde_json::{Map, Value};
 
-use super::{Finding, FindingLocation, ScanType, Severity};
+use super::{Finding, FindingLocation, ScanType};
+use crate::security::Severity;
 
 /// A free-text key list and the published overlay it was parsed from.
 type ParsedKeys = (Arc<crate::config::EnvOverlay>, Arc<[String]>);

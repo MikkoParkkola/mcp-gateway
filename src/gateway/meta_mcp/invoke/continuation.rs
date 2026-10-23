@@ -521,23 +521,20 @@ pub(crate) type DirectCaller<'a> = (
     Option<&'a crate::gateway::auth::AuthenticatedClient>,
 );
 
-/// Who the slot cap charges a direct-route caller to (MIK-8293): the meta
+/// Who the slot cap charges a direct-route caller to (MIK-8293): it now shares the meta
 /// route's rule (`MetaMcpCallerContext::quota_key`) on the direct caller's
 /// inputs, without the propagated binding, so one credential has one cap
-/// across every backend it reaches. `None` names no one.
+/// across every backend it reaches, including the key-name fallback. `None` names no one.
 fn direct_quota_key(
     (identity, (_, subject), client): DirectCaller<'_>,
 ) -> Option<crate::protocol::continuation::QuotaKey> {
-    use crate::protocol::continuation::{QuotaKey, QuotaSource};
-    let source = if let Some(identity) = identity {
-        QuotaSource::Identity(identity)
-    } else if let Some(subject) = subject {
-        QuotaSource::Subject(subject)
-    } else {
-        let client = client.filter(|c| c.authenticated && !c.principal.is_empty())?;
-        QuotaSource::Credential(client.principal.storage_form())
-    };
-    Some(QuotaKey::new(source))
+    super::projection::quota_key_of(&super::projection::QuotaInputs {
+        stdio: None,
+        identity,
+        subject,
+        credential_principal: client.and_then(|c| c.credential_principal()),
+        key_name: client.map(|c| c.name.as_str()),
+    })
 }
 
 /// What a direct-route continuation binds its caller to: the meta route's
@@ -727,3 +724,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
 #[cfg(test)]
 #[path = "continuation_clock_tests.rs"]
 mod clock_before_epoch_tests;
+
+#[cfg(test)]
+#[path = "continuation_quota_tests.rs"]
+mod quota_tests;

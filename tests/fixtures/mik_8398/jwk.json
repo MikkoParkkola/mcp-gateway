@@ -1,0 +1,6 @@
+{
+  "crv": "Ed25519",
+  "kid": "prov-test-1",
+  "kty": "OKP",
+  "x": "6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw"
+}

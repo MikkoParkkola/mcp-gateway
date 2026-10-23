@@ -38,6 +38,7 @@ fn services_with(log: Option<Arc<TransparencyLogger>>) -> Services {
         firewall: None,
         audit: log,
         provenance: None,
+        public_provenance: None,
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: LiveCredentials::default(),

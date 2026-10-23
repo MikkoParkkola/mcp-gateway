@@ -106,8 +106,6 @@ impl EnforcerSaveSnapshot {
 /// be written.
 #[cfg(feature = "cost-governance")]
 pub fn save(path: &Path, costs: &PersistedCosts) -> crate::Result<()> {
-    // Numbers each save's scratch file within this process (see below).
-    static SAVES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| crate::Error::Config(format!("Failed to create cost dir: {e}")))?;
@@ -116,34 +114,14 @@ pub fn save(path: &Path, costs: &PersistedCosts) -> crate::Result<()> {
         .map_err(|e| crate::Error::Config(format!("Failed to serialize costs: {e}")))?;
     // Write then rename, so a crash mid-write leaves the previous file, not a
     // truncated one that fails to parse and restarts the budgets at zero. The
-    // scratch name is unique per save: gateways sharing a data directory (and
-    // one gateway's periodic and final saves) must never write one file.
-    // A name already taken (a file left by a killed process whose id this
-    // one reuses) is skipped, never reused or removed: it is not ours.
-    let (tmp, mut file) = loop {
-        let n = SAVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let tmp = path.with_extension(format!("json.{}.{n}.tmp", std::process::id()));
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)
-        {
-            Ok(file) => break (tmp, file),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(crate::Error::Config(format!("Failed to save costs: {e}"))),
-        }
-    };
-    // Synced and closed before the rename: the renamed file holds the whole
-    // snapshot after a power loss, and Windows renames only a closed file.
-    let written =
-        std::io::Write::write_all(&mut file, json.as_bytes()).and_then(|()| file.sync_all());
-    drop(file);
-    let saved = written.and_then(|()| std::fs::rename(&tmp, path));
-    if let Err(e) = saved {
-        // This save created the scratch file, so it is ours to remove.
-        let _ = std::fs::remove_file(&tmp);
-        return Err(crate::Error::Config(format!("Failed to save costs: {e}")));
-    }
+    // file keeps the mode the operator gave it, never wider.
+    crate::config_persistence::write_atomic(
+        path,
+        json.as_bytes(),
+        crate::config_persistence::FileMode::Inherit,
+        crate::config_persistence::Symlink::Replace,
+    )
+    .map_err(|e| crate::Error::Config(format!("Failed to save costs: {e}")))?;
     tracing::info!(path = %path.display(), "Saved cost data");
     Ok(())
 }
@@ -297,8 +275,9 @@ mod tests {
     }
 
     /// A scratch name already on disk (left by a killed process whose id this
-    /// one reuses) is skipped: the save still succeeds and the leftover is
-    /// neither overwritten nor removed.
+    /// one reuses) is never written to or removed. The names are the shared
+    /// writer's (`config_persistence::scratch_candidate`); a save whose whole
+    /// window is taken is refused rather than clobbering one.
     #[test]
     fn a_leftover_scratch_file_is_neither_reused_nor_deleted() {
         let dir = tempfile::tempdir().unwrap();
@@ -306,17 +285,25 @@ mod tests {
         // Every name this process can reach before the test's save, with
         // room for the saves other tests make in parallel.
         let leftovers: Vec<_> = (0..5_000)
-            .map(|n| path.with_extension(format!("json.{}.{n}.tmp", std::process::id())))
+            .map(|n| path.with_extension(format!("json.tmp.{}.{n}", std::process::id())))
             .collect();
         for leftover in &leftovers {
             std::fs::write(leftover, b"left by an earlier process").unwrap();
         }
-        save(&path, &PersistedCosts::default()).expect("a free scratch name is used instead");
+        let saved = save(&path, &PersistedCosts::default());
         assert!(
             leftovers
                 .iter()
                 .all(|l| std::fs::read(l).is_ok_and(|b| b == b"left by an earlier process")),
             "a leftover scratch file was overwritten or removed"
+        );
+        // The shared seed counter is process-wide, so a run with many earlier
+        // saves can start past the planted window: either outcome is allowed,
+        // a clobbered leftover never is.
+        assert_eq!(
+            saved.is_ok(),
+            path.exists(),
+            "the target exists only after a save"
         );
     }
 

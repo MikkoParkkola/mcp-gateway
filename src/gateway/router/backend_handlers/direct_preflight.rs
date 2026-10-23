@@ -506,11 +506,71 @@ fn a2a_round_binding(caller: &Caller) -> Option<String> {
         caller
             .client
             .as_ref()
-            .filter(|client| client.authenticated)
-            .map(|client| {
-                crate::hashing::sha256_hex(
-                    format!("a2a-client:{}", client.principal.storage_form()).as_bytes(),
-                )
+            .and_then(|client| client.credential_principal())
+            .map(|principal| {
+                crate::hashing::sha256_hex(format!("a2a-client:{principal}").as_bytes())
             })
     })
+}
+
+#[cfg(test)]
+mod mik_8659_preflight_tests {
+    use super::super::direct_caller::Caller;
+
+    fn caller_with(client: Option<crate::gateway::auth::AuthenticatedClient>) -> Caller {
+        Caller {
+            client,
+            cert_identity: None,
+            oauth_agent_identity: None,
+            proven: None,
+            slot: None,
+            verified_identity: None,
+            inbound_headers: axum::http::HeaderMap::new(),
+            grant_subject: None,
+            spend_key: String::new(),
+            agent_identity: None,
+        }
+    }
+
+    fn client(authenticated: bool, principal: &str) -> crate::gateway::auth::AuthenticatedClient {
+        crate::gateway::auth::AuthenticatedClient {
+            name: "k".to_owned(),
+            rate_limit: 0,
+            backends: vec!["*".to_owned()],
+            allowed_tools: None,
+            denied_tools: None,
+            admin: false,
+            // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
+            principal: crate::gateway::record_principal::InternalPrincipal::new(
+                principal.to_owned(),
+            ),
+            quota_principal: None,
+            authenticated,
+            credential_kind: crate::security::audit::CredentialKind::ApiKey,
+        }
+    }
+
+    /// MIK-8659 T2 (RED): `{authenticated: true, principal: ""}` binds to
+    /// nothing. Today only `authenticated` is checked, so an empty principal
+    /// still mints a binding.
+    #[test]
+    fn t2_empty_principal_binds_to_nothing() {
+        let caller = caller_with(Some(client(true, "")));
+        assert_eq!(super::a2a_round_binding(&caller), None);
+    }
+
+    /// MIK-8659 T2 controls (GREEN): `{true, "p"}` binds, `{false, "p"}`
+    /// does not.
+    #[test]
+    fn t2_binding_controls() {
+        assert!(
+            super::a2a_round_binding(&caller_with(Some(client(true, "p")))).is_some(),
+            "authenticated non-empty binds"
+        );
+        assert_eq!(
+            super::a2a_round_binding(&caller_with(Some(client(false, "p")))),
+            None,
+            "unauthenticated binds to nothing"
+        );
+    }
 }

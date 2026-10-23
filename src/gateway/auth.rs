@@ -189,6 +189,31 @@ mod resolved;
 
 pub use crate::security::audit::CredentialKind;
 
+/// The one API-key predicate (MIK-8659): a caller's API-key name iff it authenticated with an API key.
+pub(in crate::gateway) fn api_key_name(
+    authenticated: bool,
+    kind: CredentialKind,
+    name: Option<&str>,
+) -> Option<&str> {
+    if authenticated && kind == CredentialKind::ApiKey {
+        name
+    } else {
+        None
+    }
+}
+
+/// The one caller-principal predicate (MIK-8659): the principal iff the caller authenticated and it is non-empty.
+pub(in crate::gateway) fn authenticated_principal(
+    authenticated: bool,
+    principal: Option<&str>,
+) -> Option<&str> {
+    if authenticated {
+        principal.filter(|p| !p.is_empty())
+    } else {
+        None
+    }
+}
+
 /// Information about an authenticated client
 #[derive(Debug, Clone)]
 pub struct AuthenticatedClient {
@@ -238,8 +263,13 @@ impl AuthenticatedClient {
     /// else `None`: the identity-grant fallback subject (MIK-8518).
     #[must_use]
     pub(crate) fn api_key_identity(&self) -> Option<&str> {
-        (self.authenticated && self.credential_kind == CredentialKind::ApiKey)
-            .then_some(self.name.as_str())
+        api_key_name(self.authenticated, self.credential_kind, Some(&self.name))
+    }
+
+    /// The validated credential principal iff this client authenticated with a non-empty one (MIK-8659).
+    #[must_use]
+    pub(in crate::gateway) fn credential_principal(&self) -> Option<&str> {
+        authenticated_principal(self.authenticated, Some(self.principal.storage_form()))
     }
 
     /// The refusal text when this client may not reach `backend`.
@@ -709,3 +739,9 @@ mod client_state_tests;
 #[cfg(test)]
 #[path = "auth_signing_dashboard_quota_tests.rs"]
 mod signing_dashboard_quota_tests;
+
+#[cfg(test)]
+#[path = "auth_caller_agreement_tests.rs"]
+mod caller_agreement_tests;
+#[cfg(test)]
+pub(crate) use caller_agreement_tests::{expected_api_key, mints};

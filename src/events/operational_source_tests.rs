@@ -72,6 +72,7 @@ fn hub_with(
         firewall: None,
         audit: None,
         provenance: None,
+        public_provenance: None,
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials,

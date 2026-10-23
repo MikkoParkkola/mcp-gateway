@@ -14,10 +14,8 @@
 //! default to PEM).
 
 use std::fs;
-use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -301,55 +299,16 @@ impl CertGenerator {
 }
 
 fn write_private_file(path: &Path, pem: &str, what: &str) -> Result<()> {
-    // `OpenOptions::mode` applies only to a file it creates. Writing over an
-    // existing key would reuse that file's inode and its original mode, so the
-    // new key would sit in a possibly world-readable file until the chmod that
-    // followed the write. Create a fresh owner-only file and rename it over the
-    // destination instead, so the key is never readable at a wider mode.
-    static TMP_NONCE: AtomicU64 = AtomicU64::new(0);
-
-    let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let stem = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("private");
-
-    let mut tmp_path = None;
-    for _ in 0..8 {
-        let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
-        let candidate = dir.join(format!("{stem}.tmp.{}.{nonce}", std::process::id()));
-        match crate::config_persistence::create_new_private(&candidate) {
-            Ok(mut file) => {
-                if let Err(e) = file
-                    .write_all(pem.as_bytes())
-                    .and_then(|()| file.sync_all())
-                {
-                    // Close first: Windows will not remove a file still open here.
-                    drop(file);
-                    let _ = fs::remove_file(&candidate);
-                    return Err(Error::Config(format!("Cannot write {what}: {e}")));
-                }
-                tmp_path = Some(candidate);
-                break;
-            }
-            // Stale temp collided; try the next nonce.
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(Error::Config(format!("Cannot write {what}: {e}"))),
-        }
-    }
-
-    let tmp_path = tmp_path.ok_or_else(|| {
-        Error::Config(format!(
-            "Cannot write {what}: no unique temp file after 8 attempts"
-        ))
-    })?;
-
-    fs::rename(&tmp_path, path).map_err(|e| {
-        let _ = fs::remove_file(&tmp_path);
-        Error::Config(format!("Cannot write {what}: {e}"))
-    })?;
-
-    Ok(())
+    // A fresh owner-only file renamed over the destination, so the key is
+    // never readable at a wider mode — not even while an older file's wider
+    // mode is still on the path.
+    crate::config_persistence::write_atomic(
+        path,
+        pem.as_bytes(),
+        crate::config_persistence::FileMode::Private,
+        crate::config_persistence::Symlink::Replace,
+    )
+    .map_err(|e| Error::Config(format!("Cannot write {what}: {e}")))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

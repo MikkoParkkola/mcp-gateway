@@ -1,0 +1,118 @@
+src/attestation/signer.rs	.expect("32 bytes is well within HKDF-SHA256's 8160-byte max output");	1
+src/attestation/signer.rs	let mut mac = HmacSha256::new_from_slice(&self.key).expect("HMAC accepts any key length");	2
+src/backend/pool.rs	.expect("PoolKey::Shared is inserted at construction and never evicted")	1
+src/backend/pool.rs	.expect("the shared slot is never refused admission")	1
+src/capability/discovery/html_scanner.rs	.expect("static regex")	3
+src/capability/discovery/html_scanner.rs	RE.get_or_init(|| Regex::new(r#"<redoc[^>]+spec-url=["']([^"']+)["']"#).expect("static regex"))	1
+src/capability/discovery/mod.rs	.expect("Failed to create HTTP client");	1
+src/capability/executor/cli_run.rs	self.0.as_mut().expect("child present until drop")	1
+src/capability/executor/client.rs	.expect("Failed to create HTTP client")	1
+src/capability/executor/client.rs	.expect("Failed to create HTTP client"),	1
+src/capability/executor/client.rs	.expect("capabilities.egress_proxy validated at load")	1
+src/capability/executor/client.rs	unreachable!("send_with_retry exhausted attempts without returning")	1
+src/capability/executor/graphql.rs	.expect("static content-type is valid"),	1
+src/capability/executor/jsonrpc.rs	.expect("static content-type is valid"),	1
+src/capability/executor/mcp.rs	let child = map.get_mut(&key).expect("present: inserted above");	1
+src/config/mod.rs	dict.insert(leaf.clone(), value.parse().expect("infallible"));	1
+src/config/secret_ref.rs	Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}").expect("constant template pattern")	1
+src/config/secret_ref.rs	let whole = caps.get(0).expect("group 0 always matches");	1
+src/config_reload/watcher.rs	let trigger = pending_trigger.take().unwrap();	1
+src/context_integrity/kernel.rs	.expect("destructive action patterns must compile")	1
+src/context_integrity/kernel.rs	.expect("exfiltration patterns must compile")	1
+src/context_integrity/kernel.rs	.expect("financial data patterns must compile")	1
+src/context_integrity/kernel.rs	.expect("personal data patterns must compile")	1
+src/context_integrity/kernel.rs	.expect("tool access escalation patterns must compile")	1
+src/control_plane/export.rs	self.entries.lock().expect("collecting sink mutex").clone()	1
+src/discovery/client_entry.rs	LazyLock::new(|| Regex::new(r"\$\{env:([^}]*)\}").expect("constant pattern"));	1
+src/duration_bound.rs	None => panic!(	1
+src/events/client.rs	let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");	1
+src/events/store.rs	let count = per_principal.get_mut(principal).expect("counted above");	1
+src/gateway/auth_resolved.rs	.expect("auth config secret references should resolve")	1
+src/gateway/meta_mcp/grant_audit.rs	.expect("grant slot lock")	1
+src/gateway/meta_mcp/grant_audit.rs	.try_with(|slot| slot.notes.lock().expect("grant slot lock").len())	1
+src/gateway/meta_mcp/grant_audit.rs	let mut held = slot.notes.lock().expect("grant slot lock");	1
+src/gateway/meta_mcp/grant_audit.rs	let mut notes = slot.notes.lock().expect("grant slot lock");	1
+src/gateway/meta_mcp/grant_audit.rs	let notes = std::mem::take(&mut *guard.slot.notes.lock().expect("grant slot lock"));	1
+src/gateway/meta_mcp/grant_audit.rs	let notes = std::mem::take(&mut *slot.notes.lock().expect("grant slot lock"));	1
+src/gateway/meta_mcp/grant_audit.rs	let pending = std::mem::take(&mut *self.slot.notes.lock().expect("grant slot lock"));	1
+src/gateway/meta_mcp/invoke/legacy_bridge.rs	let refused = parked.take().expect("the arm's guard checked it");	1
+src/gateway/meta_mcp/signing.rs	.expect("a signed request is an object")	1
+src/gateway/oauth/jwks.rs	let guard = self.inner.read().expect("RwLock poisoned");	1
+src/gateway/oauth/jwks.rs	self.inner.read().expect("RwLock poisoned").clone()	1
+src/gateway/openwebui_adapter.rs	.unwrap_or_else(|| unreachable!()),	1
+src/gateway/proxy.rs	let entry = pending.remove(id).expect("entry present");	1
+src/gateway/router/backend_handlers.rs	.expect("id should exist for non-notification requests");	1
+src/gateway/router/backend_handlers/direct_list.rs	let list = NonToolMethod::new("tools/list").expect("tools/list is not tools/call");	1
+src/gateway/router/handlers.rs	.expect("an answer frame stays an answer through its replacements");	1
+src/gateway/router/handlers.rs	let hub = std::sync::Arc::clone(state.meta_mcp.events().expect("guarded above"));	1
+src/gateway/router/handlers/dispatch_intake_run.rs	let id = id.expect("id should exist for non-notification requests");	1
+src/gateway/router/helpers.rs	Some(RequestId::Number(value.as_i64().unwrap()))	1
+src/gateway/router/helpers.rs	Some(RequestId::String(value.as_str().unwrap().to_string()))	1
+src/gateway/router/judged_answer.rs	.expect("an answer frame stays an answer through its replacements"),	1
+src/gateway/server/build_meta.rs	.expect("no other Arc references at this point")	8
+src/gateway/server/identity_grants.rs	.expect("the sink was just built")	2
+src/gateway/server/run_steps.rs	GatewayKeyPair::generate().expect("RSA key pair generation failed twice")	1
+src/gateway/server/stdio_loop.rs	.expect("the admission semaphore is never closed");	2
+src/gateway/server/stdio_loop.rs	let slot = slot.expect("a spawned request holds the slot it was admitted on");	1
+src/gateway/server/stdio_nonce.rs	.expect("the OS RNG must yield 32 bytes");	1
+src/gateway/server/stdio_tasks.rs	.expect("the default auth configuration holds no secret to resolve");	1
+src/gateway/server/support.rs	.expect("Failed to install Ctrl+C handler");	1
+src/gateway/server/support.rs	.expect("Failed to install SIGTERM handler")	1
+src/gateway/task_service/execution.rs	_ => unreachable!("matched above"),	1
+src/gateway/task_service/execution/operations.rs	.expect("worker semaphore is never closed");	1
+src/gateway/task_service/execution/worker.rs	let job = job.expect("a handle is captured only for an armed job");	1
+src/gateway/ui/backends.rs	.expect("checked above")	1
+src/idempotency.rs	unreachable!("live completed status must hold a completed value");	2
+src/idempotency.rs	unreachable!("live failed status must hold a failed value");	2
+src/idempotency.rs	unreachable!("missing entries cannot be terminal")	1
+src/idempotency/admission.rs	.expect("owner checked under this guard")	1
+src/identity_grants/journal.rs	let bytes = serde_json::to_vec(grant).expect("an identity grant always serialises");	1
+src/identity_propagation/token_exchange.rs	.expect("failed to build HTTPS-only token-exchange HTTP client (TLS backend init)")	1
+src/oauth/callback.rs	let ipv6_addr: SocketAddr = format!("[::1]:{actual_port}").parse().unwrap();	1
+src/oauth/client/mod.rs	let auth_base = self.oauth_base_url.as_ref().unwrap();	1
+src/personal_accounts/mod.rs	.expect("custody start blocking worker")?;	1
+src/personal_accounts/worker.rs	.expect("custody blocking worker")	3
+src/protocol/continuation/ledger.rs	.expect("platform RNG must produce a continuation key");	1
+src/protocol/continuation/ledger.rs	keyring: Keyring::new(&[(1, key)]).expect("a single 32-byte key is a valid keyring"),	1
+src/protocol/messages.rs	.expect("internal JSON-RPC fallback must serialize")	1
+src/protocol_revision_telemetry/mod.rs	.expect("writing to a String cannot fail");	3
+src/secrets.rs	std::sync::LazyLock::new(|| regex::Regex::new(r"\{([^{}]*)\}").unwrap());	1
+src/security/data_flow.rs	write!(s, "{b:02x}").expect("write to String is infallible");	1
+src/security/firewall/collusion_sketch.rs	unreachable!("the word count reaches MAX_WORDS")	1
+src/security/firewall/input_scanner.rs	.expect("Path traversal patterns must compile"),	1
+src/security/firewall/input_scanner.rs	shell: RegexSet::new(SHELL_PATTERNS).expect("Shell injection patterns must compile"),	1
+src/security/firewall/input_scanner.rs	sql: RegexSet::new(SQL_PATTERNS).expect("SQL injection patterns must compile"),	1
+src/security/firewall/memory_scanner.rs	.expect("exfiltration patterns must compile"),	1
+src/security/firewall/memory_scanner.rs	.expect("instruction injection patterns must compile"),	1
+src/security/firewall/memory_scanner.rs	.expect("role confusion patterns must compile"),	1
+src/security/firewall/redactor.rs	.map(|p| Regex::new(p).expect("Credential pattern must compile"))	1
+src/security/firewall/redactor.rs	set: RegexSet::new(&patterns).expect("Credential pattern set must compile"),	1
+src/security/firewall/verdict.rs	.unwrap_or_else(|_| glob::Pattern::new("*").expect("fallback pattern compiles"));	1
+src/security/message_signing.rs	.expect("matching live nonce entry");	1
+src/security/message_signing.rs	let (at, nonce) = state.expiries.pop_front().expect("elapsed queue head");	1
+src/security/message_signing.rs	let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");	1
+src/security/response_inspect.rs	RegexSet::new(patterns).expect("All response inspection patterns must compile")	1
+src/security/response_scanner.rs	let regex_set = RegexSet::new(&patterns).expect("Default injection patterns must compile");	1
+src/security/transparency_log.rs	let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");	1
+src/security/transparency_log.rs	let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");	1
+src/security/transparency_log_rotation.rs	let hw = hw.expect("hw_counter > 0");	1
+src/security/transparency_log_segments.rs	let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");	1
+src/tracing_context/mod.rs	write!(s, "{b:02x}").expect("write to String is infallible");	2
+src/transform/pipeline/mod.rs	let re = Regex::new(r"\{\{(\w[\w.]*)\}\}").expect("static regex");	1
+src/transport/http/requests.rs	"application/json, text/event-stream".parse().unwrap(),	1
+src/transport/http/requests.rs	headers.insert("MCP-Protocol-Version", version.parse().unwrap());	1
+src/transport/http/requests.rs	headers.insert("MCP-Session-Id", session_id.parse().unwrap());	2
+src/transport/http/requests.rs	headers.insert(header::ACCEPT, "text/event-stream".parse().unwrap());	1
+src/transport/http/requests.rs	headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());	1
+src/transport/stdio_stderr_sanitize.rs	.expect("valid")	1
+src/transport/stdio_stderr_sanitize.rs	LazyLock::new(|| Regex::new(r"(?i)\b([a-z][a-z0-9+.-]*:)\S*@").expect("valid"));	1
+src/transport/stdio_stderr_sanitize.rs	LazyLock::new(|| Regex::new(r"[A-Za-z0-9+/]{40,}={0,2}").expect("valid"));	1
+src/transport/stdio_stderr_sanitize.rs	LazyLock::new(|| Regex::new(r"[A-Za-z0-9_-]{24,}").expect("valid"));	1
+src/transport/stdio_stderr_sanitize.rs	LazyLock::new(|| Regex::new(r#"(?i)\b(bearer|basic)\s+[^\s"',;]+"#).expect("valid"));	1
+src/transport/upstream_tap.rs	let (id, requested) = listen.expect("guarded");	1
+src/trust/descriptor.rs	.expect("present: inserted above when absent")	1
+src/validator/rules/mod.rs	let separator_re = SEPARATOR_RE.get_or_init(|| Regex::new(r"[_-]").unwrap());	1
+src/validator/rules/tool_poisoning.rs	.expect("base64_re must be a valid regex")	1
+src/validator/rules/tool_poisoning.rs	.expect("before_tool_directive_re must be a valid regex")	1
+src/validator/rules/tool_poisoning.rs	.expect("curl_http_re must be a valid regex")	1
+src/validator/rules/tool_poisoning.rs	Regex::new(r"(?i)\b(passwd|shadow)\b").expect("passwd_shadow_re must be a valid regex")	1

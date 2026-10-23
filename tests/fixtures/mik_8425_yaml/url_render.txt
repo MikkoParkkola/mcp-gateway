@@ -92,6 +92,7 @@ capabilities:
   name: gateway
   directories:
   - capabilities
+  stale_check_secs: 60
   egress_proxy: null
   process_execution: enabled
   process_commands: null
@@ -430,6 +431,7 @@ capabilities:
   name: gateway
   directories:
   - capabilities
+  stale_check_secs: 60
   egress_proxy: null
   process_execution: enabled
   process_commands: null

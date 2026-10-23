@@ -259,9 +259,12 @@ fn read_stamp(path: &Path) -> std::io::Result<Option<String>> {
 
 /// Atomically write `version` to `path` via a sibling temp file.
 fn write_stamp(path: &Path, version: &str) -> std::io::Result<()> {
-    let tmp = path.with_extension("stamp.tmp");
-    std::fs::write(&tmp, version)?;
-    std::fs::rename(tmp, path)
+    mcp_gateway::config_persistence::write_atomic(
+        path,
+        version.as_bytes(),
+        mcp_gateway::config_persistence::FileMode::Inherit,
+        mcp_gateway::config_persistence::Symlink::Replace,
+    )
 }
 
 // ── Config backup ─────────────────────────────────────────────────────────────
