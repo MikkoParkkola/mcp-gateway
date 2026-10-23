@@ -287,7 +287,8 @@ fn a3_family_table_every_rule_in_three_carriers() {
 #[test]
 fn b1_a_value_the_greedy_span_covers_stays_hidden() {
     let url = db_url("postgres", "u", "h");
-    let text = json!({ "url": url, "password": "xyz" }).to_string();
+    // Built by hand: `json!` sorts keys and would put the URL last.
+    let text = format!(r#"{{"url":"{url}","password":"xyz"}}"#);
     let out = assert_projected(&text);
     assert_eq!(out, format!(r#"{{"url":"{MARK}","password":"{MARK}"}}"#));
 }
@@ -346,7 +347,9 @@ fn b6_surrogate_pair_inside_a_span_is_replaced_whole() {
 
 #[test]
 fn b7_short_url_in_compact_json() {
-    let text = json!({ "u": db_url("redis", ":pw", "h/0"), "n": 1 }).to_string();
+    // Built by hand so the URL comes first: alone at the end it is under the
+    // rule's 10-character floor, on base too.
+    let text = format!(r#"{{"u":"{}","n":1}}"#, db_url("redis", ":pw", "h/0"));
     let out = assert_projected(&text);
     assert_eq!(out, format!(r#"{{"u":"{MARK}","n":1}}"#));
 }
