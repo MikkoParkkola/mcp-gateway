@@ -255,6 +255,9 @@ impl MetaMcp {
     /// it could invoke over the warm cache; a cold cache does not hide a server.
     /// A `required` backend this caller has no view of reads as unenumerated:
     /// its shared-slot cache is not this caller's catalogue (#2346).
+    /// `tools_count` is null whenever `tools_known` is false, so a backend whose
+    /// tools are not known to this caller yet never reads as an empty one
+    /// (MIK-8721, from #4040).
     #[allow(clippy::unnecessary_wraps)]
     pub(super) async fn list_servers(
         &self,
@@ -297,8 +300,8 @@ impl MetaMcp {
                 "name": status.name,
                 "running": status.running,
                 "transport": status.transport,
-                "tools_count": admitted,
-                // Consult this before reading tools_count == 0 as "empty".
+                // Null until this caller's tools are known; tools_known says the same.
+                "tools_count": known.then_some(admitted),
                 "tools_known": known,
                 "circuit_breaker": status.circuit_state,
                 "status": if killed { "disabled" } else { "active" }

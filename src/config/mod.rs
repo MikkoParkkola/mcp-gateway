@@ -70,10 +70,9 @@ pub use features::{
     HealthCheckConfig, IdempotencyConfig, IdempotencyReadOnlyTool, IdentityGrantsConfig,
     KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig,
     PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig, ProcessCommand, ProcessExecution,
-    RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig, RetryConfig,
-    RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig, SecurityConfig,
-    SignatureChainConfig, StreamingConfig, TasksConfig, ToolContractConfig, WebhookConfig,
-    api_key_digest_spec,
+    RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig, RetryConfig, RuntimeConfig,
+    RuntimeProfileConfig, SecurityConfig, SignatureChainConfig, StreamingConfig, TasksConfig,
+    ToolContractConfig, WebhookConfig, api_key_digest_spec,
 };
 pub use features::{
     EventsConfig, EventsRateLimit, EventsScheduleConfig, EventsSourcesConfig, EventsWatchConfig,
@@ -218,6 +217,7 @@ pub(crate) const CLI_OWNED_ENV: &[&str] = &[
     "MCP_GATEWAY_CLIENT_KEY",
     "MCP_GATEWAY_CONFIG",
     "MCP_GATEWAY_CONFIG_DIR",
+    "MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK",
     "MCP_GATEWAY_HOST",
     "MCP_GATEWAY_LOG_FORMAT",
     "MCP_GATEWAY_LOG_LEVEL",
@@ -542,7 +542,10 @@ impl Config {
 
         let mut overlay = EnvOverlay::none();
         let mut paths = Vec::with_capacity(spec.env_files.len());
-        let tilde = spec.env_files.iter().any(|e| e.starts_with('~'));
+        let tilde = spec
+            .env_files
+            .iter()
+            .any(|e| crate::home_dir::tilde_rest(e).is_some());
         for entry in &spec.env_files {
             let resolved = Self::expand_home(entry, &overlay, home);
             match tolerance {
@@ -563,11 +566,11 @@ impl Config {
     /// sequence. A home that cannot be determined leaves the entry verbatim,
     /// which then simply does not exist and is skipped.
     fn expand_home(entry: &str, so_far: &EnvOverlay, home: &dyn HomeResolver) -> PathBuf {
-        let Some(rest) = entry.strip_prefix('~') else {
+        let Some(rest) = crate::home_dir::tilde_rest(entry) else {
             return PathBuf::from(entry);
         };
         match home.home_dir(so_far) {
-            Some(dir) => PathBuf::from(format!("{}{rest}", dir.display())),
+            Some(dir) => dir.join(rest),
             None => PathBuf::from(entry),
         }
     }

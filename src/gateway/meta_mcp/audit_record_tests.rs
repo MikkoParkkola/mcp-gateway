@@ -117,13 +117,15 @@ fn meta(reply: Result<Value, String>, dir: &tempfile::TempDir) -> MetaMcp {
     meta
 }
 
-/// Invocation records only: entries naming a `tool`.
+/// Invocation records only: entries naming a `tool` that are not delivery
+/// attempts (a delivery names its tool too, MIK-8672).
 fn records(dir: &tempfile::TempDir) -> Vec<Value> {
     std::fs::read_to_string(dir.path().join("audit.jsonl"))
         .unwrap_or_default()
         .lines()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
         .filter(|e| e.get("tool").is_some())
+        .filter(|e| e["event"] != "response_delivery_attempt")
         .collect()
 }
 
@@ -448,6 +450,7 @@ async fn a_replay_whose_record_fails_is_withheld() {
 // MIK-7116.MIN.1 attribution, which reads the firewall's `arg_keys`.
 #[cfg(feature = "firewall")]
 mod chain_replay;
+mod delivery_credential;
 #[cfg(feature = "firewall")]
 mod tenants;
 

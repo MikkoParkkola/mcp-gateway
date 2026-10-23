@@ -16,12 +16,13 @@ mod signing_gateway;
 #[path = "common/yaml.rs"]
 mod yaml;
 
-use std::process::Stdio;
+#[path = "common/signing_oracle.rs"]
+mod signing_oracle;
+
 use std::time::Duration;
 
 use serde_json::{Value, json};
 use signing_gateway::{BACKEND, BackendFixture, HttpGateway, KEY, TOOL, fixture_config, invoke};
-use tokio::io::AsyncWriteExt as _;
 
 fn backend_result() -> serde_json::Value {
     json!({"content": [{"type": "text", "text": "signing delivery sentinel"}]})
@@ -148,29 +149,16 @@ async fn call_wire(gateway: &HttpGateway, session: &str, request: &Value) -> Str
 /// Whether the independent ECMAScript oracle (`tests/common/signing_verifier.mjs`,
 /// no gateway code) accepts `wire` as signed with [`KEY`] for `id` and `nonce`.
 async fn oracle_accepts(wire: &str, id: &Value, nonce: &str) -> bool {
-    let verifier =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/common/signing_verifier.mjs");
-    let mut child = tokio::process::Command::new("node")
-        .arg(verifier)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("node is required for the independent signing oracle");
     let input = json!({"wire": wire, "options": {"key": KEY, "keyId": "signing-test-current",
         "expectedId": id, "expectedNonce": nonce, "now": chrono::Utc::now().timestamp()}});
-    let mut stdin = child.stdin.take().expect("oracle stdin");
-    stdin
-        .write_all(input.to_string().as_bytes())
-        .await
-        .expect("write oracle stdin");
-    drop(stdin);
-    tokio::time::timeout(Duration::from_secs(30), child.wait())
-        .await
-        .expect("bounded oracle")
-        .expect("oracle process")
-        .success()
+    let run = signing_oracle::verify(&input, Duration::from_secs(30)).await;
+    let Some(status) = run.status else {
+        panic!("{}", run.timeout_message());
+    };
+    if !status.success() {
+        eprintln!("signing oracle refused ({status}): {}", run.stderr);
+    }
+    status.success()
 }
 
 #[tokio::test]

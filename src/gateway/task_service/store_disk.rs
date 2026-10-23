@@ -555,6 +555,7 @@ pub(super) enum Fault {
 /// Write one record durably: private temp, payload, file sync, rename, directory
 /// sync. Failure before the rename is a clean refusal; failure at or after it
 /// leaves durability uncertain, which is the caller's cue to poison readiness.
+// Not `config_persistence::write_atomic`: its `AfterRename` outcome and commit hook.
 pub(super) fn write_record(
     dir: &Path,
     name: &str,

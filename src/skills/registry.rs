@@ -103,7 +103,8 @@ impl SkillRegistry {
 
     /// Persist the registry to disk atomically.
     ///
-    /// Writes to `<path>.tmp` and renames over the target on success.
+    /// Replaces the target through a scratch file and a rename, keeping the
+    /// file's existing mode.
     ///
     /// # Errors
     ///
@@ -114,18 +115,15 @@ impl SkillRegistry {
             std::fs::create_dir_all(parent)
                 .map_err(|e| Error::Config(format!("Cannot create '{}': {e}", parent.display())))?;
         }
-        let tmp = path.with_extension("json.tmp");
         let bytes = serde_json::to_vec_pretty(self)
             .map_err(|e| Error::Config(format!("Serialize skill registry: {e}")))?;
-        std::fs::write(&tmp, &bytes)
-            .map_err(|e| Error::Config(format!("Write '{}': {e}", tmp.display())))?;
-        std::fs::rename(&tmp, path).map_err(|e| {
-            Error::Config(format!(
-                "Rename '{}' -> '{}': {e}",
-                tmp.display(),
-                path.display()
-            ))
-        })?;
+        crate::config_persistence::write_atomic(
+            path,
+            &bytes,
+            crate::config_persistence::FileMode::Inherit,
+            crate::config_persistence::Symlink::Replace,
+        )
+        .map_err(|e| Error::Config(format!("Write '{}': {e}", path.display())))?;
         Ok(())
     }
 

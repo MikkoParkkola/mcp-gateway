@@ -583,6 +583,7 @@ async fn meta_mcp_dispatch(
         &state.meta_mcp,
         frame,
         &delivery.correlation,
+        crate::gateway::meta_mcp::response_security::DeliveryCredential::of(client.as_ref()),
         finalized,
     )
     .await;

@@ -157,7 +157,7 @@ fn a_syntax_error_does_not_print_it() {
         "syntax error",
         &err,
         SENTINEL,
-        "while scanning a quoted scalar",
+        "quoted text is not closed, or continues with too little indentation",
     );
     let control = yaml::from_str::<yaml::Value>("a: \"closed\"\n").expect("control loads");
     assert_eq!(
@@ -184,7 +184,12 @@ fn a_depth_refusal_does_not_print_it() {
     let Err(err) = yaml::from_str::<yaml::Value>(&deep) else {
         panic!("accepted 129-deep nesting; expected a recursion refusal");
     };
-    assert_redacted("depth refusal", &err, SENTINEL, "recursion limit exceeded");
+    assert_redacted(
+        "depth refusal",
+        &err,
+        SENTINEL,
+        "nesting deeper than 128 levels",
+    );
     let shallow = format!("{}{}{}", "[".repeat(128), SENTINEL, "]".repeat(128));
     let control = yaml::from_str::<yaml::Value>(&shallow).expect("128-deep control loads");
     assert!(control.is_sequence());
@@ -248,7 +253,7 @@ fn every_reader_redacts() {
         "from_str_loose",
         &err,
         SENTINEL,
-        "while scanning a quoted scalar",
+        "quoted text is not closed, or continues with too little indentation",
     );
 
     let Some(err) = yaml::documents(&syntax_text).find_map(Result::err) else {
@@ -258,7 +263,7 @@ fn every_reader_redacts() {
         "documents",
         &err,
         SENTINEL,
-        "while scanning a quoted scalar",
+        "quoted text is not closed, or continues with too little indentation",
     );
 
     let control = yaml::from_str::<Port>("port: 8080\n").expect("typed control loads");

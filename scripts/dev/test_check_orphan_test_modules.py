@@ -169,6 +169,18 @@ class TestOnlyFiles(unittest.TestCase):
         )
         self.assertEqual(found, ["src/a.rs"])
 
+class Blank(unittest.TestCase):
+    def test_a_c_raw_string_with_an_inner_quote_blanks_only_itself(self):
+        # MIK-8691: `cr#"…"#` read as a plain string ran to the end of the
+        # file and blanked every later line, hiding them from the guards.
+        guard = load_guard(Path("."))
+        text = 'let s = cr#"a"b"#;\nx.unwrap();\n'
+        out, literals = guard.blank(text)
+        self.assertEqual(len(out), len(text))
+        self.assertEqual(out.splitlines()[1], "x.unwrap();")
+        self.assertIn('a"b', literals.values())
+
+
 class OrphanGuard(unittest.TestCase):
     def orphans_of(self, files: dict[str, str]) -> list[str]:
         # A crate root that declares each top-level module, unless the case

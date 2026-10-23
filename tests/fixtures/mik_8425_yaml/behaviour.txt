@@ -87,16 +87,16 @@ doc/explicit-start	OK {s:"a"=>n:1}
 doc/two	ERR deserializing from YAML containing more than one document is not supported
 stream/two	2 docs: OK {s:"a"=>n:1} ; OK {s:"b"=>n:2}
 stream/empty-middle	3 docs: OK {s:"a"=>n:1} ; OK ~ ; OK {s:"b"=>n:2}
-stream/malformed-later	2 docs: OK {s:"a"=>n:1} ; ERR did not find expected ',' or ']' at line 4 column 1, while parsing a flow sequence at line 3 column 4
+stream/malformed-later	1 docs: ERR YAML refused: unclosed bracket at line 3 column 4
 limit/depth 64	OK sha256:b3ff3b51ce17ef2a2a68203329ff0e73738c07df874044149c283b28841a0035
 limit/depth 127	OK sha256:0d0ce008686806cefb2386af80bbb495dc8279da83466a8fc0bb25faa9660142
 limit/depth 128	OK sha256:dbaec29ce2fb52a1a372e1da31b0d434d257fe11bebee2d31c6649710e3052a6
-limit/depth 129	ERR recursion limit exceeded at line 1 column 129
+limit/depth 129	ERR YAML refused: nesting deeper than 128 levels at line 1
 limit/alias-fanout-10 levels 2	OK sha256:4b9b36b85e83476abadc1a06f7731f3f9069a15c7618ef13fd6658b5fc84706c
 limit/alias-fanout-10 levels 3	OK sha256:acc372e24eb09234aed5a5c1b1a2bf7752776e54023c49476d02a69151163258
 limit/alias-fanout-10 levels 4	ERR repetition limit exceeded
-limit/alias-fanout-10 levels 5	ERR repetition limit exceeded
-limit/alias-fanout-10 levels 6	ERR repetition limit exceeded
+limit/alias-fanout-10 levels 5	ERR YAML refused: alias expansion over the limit
+limit/alias-fanout-10 levels 6	ERR YAML refused: alias expansion over the limit
 grant/any	OK {"schema_version":"identity_grants.v1","grants":[{"grant_id":"g1","subject":{"authority":"api_key","subject":"alice"},"agent":"any","capability":"calendar_read","scope":"read","owner":{"authority":"api_key","subject":"alice"},"provenance":"mcp-gateway identity grants grant","reason":"r"}]}
 grant/tag-qualified	OK {"schema_version":"identity_grants.v1","grants":[{"grant_id":"g1","subject":{"authority":"api_key","subject":"alice"},"agent":{"exact":{"source":"mtls","id":"spiffe://x"}},"capability":"calendar_read","scope":"read","owner":{"authority":"api_key","subject":"alice"},"provenance":"mcp-gateway identity grants grant","reason":"r"}]}
 grant/tag-bare-3x	ERR grants[0].agent: invalid type: string, expected struct GrantAgentKey at line 7 column 10
