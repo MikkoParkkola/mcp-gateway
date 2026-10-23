@@ -6,8 +6,6 @@ MCP Gateway sits between your AI client and your tools. Instead of loading hundr
 
 ## Install
 
-Until 4.0.0 is released, Homebrew installs the current 3.x release; the 4.0 behaviour described here needs the 4.0.0 release or a pinned 4.0 pre-release.
-
 brew install MikkoParkkola/tap/mcp-gateway
 
 ## Configure
