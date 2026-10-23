@@ -237,7 +237,15 @@ impl Redactor {
             );
             return None;
         }
-        let ranges = project(text, &spans, &starts, &literals);
+        // A key is redacted when a match starts in it, or when its own text
+        // matches: past a greedy match the scan restarts only near its end
+        // (OVERLAP_WINDOW), so a later key's start can go unseen.
+        let redact_key = |lit: &Literal| {
+            let after = starts.partition_point(|&at| at < lit.start);
+            starts.get(after).is_some_and(|&at| at < lit.end)
+                || self.set.is_match(&text[lit.start..lit.end])
+        };
+        let ranges = project(text, &spans, redact_key, &literals);
         let redacted = if literals.iter().any(|lit| lit.key && covers(&ranges, lit)) {
             rename_keys(text, &ranges, &literals)
         } else {
@@ -280,25 +288,56 @@ impl Redactor {
     /// keeps n colliding keys linear rather than re-probing from `#2`.
     fn redact_keys(&self, map: &mut Map<String, Value>, findings: &mut Vec<Finding>) {
         let entries = std::mem::take(map);
-        let mut taken: HashSet<String> = entries
-            .keys()
-            .filter(|key| !self.set.is_match(key))
-            .cloned()
-            .collect();
-        let mut next: HashMap<String, usize> = HashMap::new();
+        let mut names = KeyNames::reserving(
+            entries
+                .keys()
+                .filter(|key| !self.set.is_match(key))
+                .cloned(),
+        );
         for (key, value) in entries {
             let Some(candidate) = self.redact_text(&key, Site::Key, findings) else {
                 map.insert(key, value);
                 continue;
             };
-            let n = next.entry(candidate.clone()).or_insert(1);
-            let mut name = candidate.clone();
-            while taken.contains(&name) {
-                *n += 1;
-                name = format!("{candidate}#{n}");
-            }
-            taken.insert(name.clone());
+            let name = match names.claim(&candidate) {
+                Some(n) => format!("{candidate}#{n}"),
+                None => candidate,
+            };
             map.insert(name, value);
+        }
+    }
+}
+
+/// The names one object's keys hold, for giving a redacted key a free name.
+/// A per-name counter keeps n colliding keys linear rather than re-probing
+/// from `#2`.
+#[derive(Default)]
+struct KeyNames {
+    taken: HashSet<String>,
+    next: HashMap<String, usize>,
+}
+
+impl KeyNames {
+    /// The clean keys' names, reserved before any redacted key is named.
+    fn reserving(clean: impl Iterator<Item = String>) -> Self {
+        Self {
+            taken: clean.collect(),
+            next: HashMap::new(),
+        }
+    }
+
+    /// Claim `candidate`, or else the first free `<candidate>#n`: `None`
+    /// when `candidate` itself was free, else the `n`.
+    fn claim(&mut self, candidate: &str) -> Option<usize> {
+        if self.taken.insert(candidate.to_owned()) {
+            return None;
+        }
+        let n = self.next.entry(candidate.to_owned()).or_insert(1);
+        loop {
+            *n += 1;
+            if self.taken.insert(format!("{candidate}#{n}")) {
+                return Some(*n);
+            }
         }
     }
 }
@@ -366,15 +405,15 @@ fn b2_gate(text: &str) -> Option<Value> {
 }
 
 /// `spans` (merged, in order) clipped to every value literal they overlap
-/// and to every key a match starts in (`starts`, in order: one merged span
-/// can hold the matches of several keys), each piece widened to whole
-/// escapes so no escape is cut, then merged. A key no match starts in stays
-/// as sent. Spans and literals are both in order, so this is one pass over
-/// each, and each end is widened by a binary search of its literal's escapes.
+/// and to every key `redact_key` takes (one merged span can cover several
+/// keys), each piece widened to whole escapes so no escape is cut, then
+/// merged. Any other key stays as sent. Spans and literals are both in
+/// order, so this is one pass over each, and each end is widened by a binary
+/// search of its literal's escapes.
 fn project(
     text: &str,
     spans: &[(usize, usize)],
-    starts: &[usize],
+    redact_key: impl Fn(&Literal) -> bool,
     literals: &[Literal],
 ) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
@@ -384,11 +423,8 @@ fn project(
             first += 1;
         }
         let mut lit_escapes = None;
-        if lit.key {
-            let after = starts.partition_point(|&at| at < lit.start);
-            if starts.get(after).is_none_or(|&at| at >= lit.end) {
-                continue; // a key spans only cross
-            }
+        if lit.key && !redact_key(lit) {
+            continue; // a key spans only cross
         }
         for &(start, end) in spans[first..].iter().take_while(|span| span.0 < lit.end) {
             let (mut from, mut to) = (start.max(lit.start), end.min(lit.end));
@@ -420,16 +456,17 @@ fn covers(ranges: &[(usize, usize)], lit: &Literal) -> bool {
 /// [`Redactor::redact_keys`] renames one: within its object every clean key
 /// keeps its name, and each redacted key takes its redacted name or the first
 /// free `<name>#n`. Names compare decoded, so an escaped spelling of a taken
-/// name collides too.
+/// name collides too; the suffix is appended to the raw text, so escapes the
+/// redaction left are written as sent.
 fn rename_keys(text: &str, ranges: &[(usize, usize)], literals: &[Literal]) -> String {
     let decode = |raw: &str| serde_json::from_str::<String>(&format!("\"{raw}\"")).ok();
     let keys = literals.iter().filter(|lit| lit.key);
-    let mut taken: HashSet<(usize, String)> = keys
-        .clone()
-        .filter(|lit| !covers(ranges, lit))
-        .filter_map(|lit| Some((lit.container, decode(&text[lit.start..lit.end])?)))
-        .collect();
-    let mut next: HashMap<(usize, String), usize> = HashMap::new();
+    let mut objects: HashMap<usize, KeyNames> = HashMap::new();
+    for lit in keys.clone().filter(|lit| !covers(ranges, lit)) {
+        if let Some(name) = decode(&text[lit.start..lit.end]) {
+            objects.entry(lit.container).or_default().taken.insert(name);
+        }
+    }
     let mut renamed: Vec<(usize, usize, String)> = Vec::new();
     for lit in keys.filter(|lit| covers(ranges, lit)) {
         let (lo, hi) = (
@@ -440,28 +477,12 @@ fn rename_keys(text: &str, ranges: &[(usize, usize)], literals: &[Literal]) -> S
             .iter()
             .map(|range| (range.0 - lit.start, range.1 - lit.start))
             .collect();
-        let raw = replace_spans(&text[lit.start..lit.end], &inside);
-        let Some(candidate) = decode(&raw) else {
-            renamed.push((lit.start, lit.end, raw));
-            continue;
-        };
-        let n = next.entry((lit.container, candidate.clone())).or_insert(1);
-        let mut name = candidate.clone();
-        while taken.contains(&(lit.container, name.clone())) {
-            *n += 1;
-            name = format!("{candidate}#{n}");
+        let mut raw = replace_spans(&text[lit.start..lit.end], &inside);
+        if let Some(candidate) = decode(&raw)
+            && let Some(n) = objects.entry(lit.container).or_default().claim(&candidate)
+        {
+            raw = format!("{raw}#{n}");
         }
-        taken.insert((lit.container, name.clone()));
-        let raw = if name == candidate {
-            raw
-        } else {
-            // A JSON string's encoding: its content between the two quotes.
-            let quoted = serde_json::to_string(&name).unwrap_or_default();
-            quoted
-                .get(1..quoted.len().saturating_sub(1))
-                .unwrap_or_default()
-                .to_owned()
-        };
         renamed.push((lit.start, lit.end, raw));
     }
     let mut out = String::with_capacity(text.len());
