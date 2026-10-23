@@ -221,16 +221,10 @@ const fn stdio_fresh_row(era: Era, pair: RespPair) -> Option<Driven> {
 
 /// The row behind a stated `IdempotentReplay` cell that is not its Fresh twin.
 const fn replay_row(route: RespRoute, era: Era, pair: RespPair) -> Option<Driven> {
-    use RespPair::{ShapeSeal, StampSeal};
-    use RespRoute::{Direct, Mcp, Stdio};
+    use RespPair::StampSeal;
+    use RespRoute::Direct;
     Some(match (route, era, pair) {
         (Direct, _, StampSeal) => Driven::Row("rows::r_replayseal_direct_replay_seal_gap"),
-        (Mcp, Era::Modern, ShapeSeal) => {
-            Driven::Row("rows::r_erareplay_cross_era_replay_reshapes_after_the_seal_gap")
-        }
-        (Stdio, Era::Modern, ShapeSeal) => Driven::Row(
-            "rows::stdio::r_erareplay_stdio_cross_era_replay_reshapes_after_the_seal_gap",
-        ),
         _ => return None,
     })
 }
@@ -257,6 +251,8 @@ const fn na_pins(reason: RespNa) -> &'static [&'static str] {
         RespNa::ReplayReservesTheStoredDelivery => &[
             "rows::r_replay_mcp_reserves_the_stored_delivery",
             "rows::stdio::r_replay_stdio_reserves_the_stored_delivery",
+            "rows::r_erareplay_cross_era_replay_is_refused",
+            "rows::stdio::r_erareplay_stdio_cross_era_replay_is_refused",
         ],
         RespNa::ReplayMintsNoReceipt => &["rows::r_replayseal_direct_replay_seal_gap"],
         RespNa::NoModernShapeOnLegacy

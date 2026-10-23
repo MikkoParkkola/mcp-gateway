@@ -123,7 +123,7 @@ async fn modern_keyed_invoke(fx: &fixture::Fx) -> Value {
 }
 
 /// Two calls with one key on `/mcp`: a legacy call stores the answer, then a
-/// modern call with the same key is served it. Returns (first, second,
+/// modern call with the same key (refused since MIK-8747). Returns (first, second,
 /// backend `tools/call` count).
 pub(crate) async fn signed_legacy_then_modern_replay(answer: Answer) -> (Value, Value, usize) {
     let fx = fixture::fixture_built(answer, dual_signed).await;

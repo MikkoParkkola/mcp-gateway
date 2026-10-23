@@ -97,9 +97,6 @@ pub(crate) enum RespTicket {
     /// closing JSON of a compact text, so the delivered text no longer
     /// parses while a receipt stamped before the scan keeps its count.
     Mik8745,
-    /// The replay key takes no era, so a modern call can be served a legacy
-    /// call's stored answer, which its tail then shapes after the seal.
-    Mik8747,
 }
 
 /// Why a gap's order difference reaches no delivered outcome today. Closed
@@ -330,16 +327,16 @@ pub(crate) const fn expect(
         // On /mcp and stdio a replay runs the tail on the stored, already
         // sealed bytes: no mint, so nothing is sealed anew; it does mint a
         // fresh link, after a clamp that changes nothing (lead rulings, MIK-8689
-        // phase C and R3). Its tail still shapes a legacy-stored answer for a
-        // modern caller. Every route's stored result is already clamped (its
+        // phase C and R3). A replay from the other era is refused (MIK-8747),
+        // so no stored answer is shaped for an era it was not stored in.
+        // Every route's stored result is already clamped (its
         // serialization clamps), so no replay's clamp changes anything; Direct
         // stores before its seal and mints nothing to seal (delta check).
-        (Mcp | Stdio, IdempotentReplay, Era::Modern, ShapeSeal) => ExpectedGap(RespTicket::Mik8747),
         (
             Mcp | Stdio,
             IdempotentReplay,
             _,
-            FirewallSeal | ClampSeal | SealSign | StampSeal | FirewallStamp,
+            ShapeSeal | FirewallSeal | ClampSeal | SealSign | StampSeal | FirewallStamp,
         ) => NotApplicable(RespNa::ReplayReservesTheStoredDelivery),
         (Mcp | Stdio | Direct, IdempotentReplay, _, ClampLink) => {
             OrderInvisibleByOutcome(StoredBytesAlreadyClamped)
@@ -458,9 +455,8 @@ pub(crate) const AFTER_MIK_8745: RespExpect =
 /// The gap set is exactly MIK-8705, expected (a direct replay is not
 /// resealed, both eras), and MIK-8745, expected (Mcp and stdio stamp before a
 /// scan that can break the counted text, fresh and cache hit, both eras;
-/// [`AFTER_MIK_8745`] once it lands), and MIK-8747, expected (a modern replay
-/// of a legacy-stored answer is shaped after its seal, /mcp and stdio). A new, closed
-/// or reclassified gap moves this pin.
+/// [`AFTER_MIK_8745`] once it lands). A new, closed or reclassified gap
+/// moves this pin.
 #[test]
 fn the_response_table_names_its_gaps() {
     let gaps: Vec<_> = cells()
@@ -477,8 +473,7 @@ fn the_response_table_names_its_gaps() {
     };
     assert_eq!(of(RespTicket::Mik8705, false), 2, "{gaps:?}");
     assert_eq!(of(RespTicket::Mik8745, false), 8, "{gaps:?}");
-    assert_eq!(of(RespTicket::Mik8747, false), 2, "{gaps:?}");
-    assert_eq!(gaps.len(), 12, "the gap set moved: {gaps:?}");
+    assert_eq!(gaps.len(), 10, "the gap set moved: {gaps:?}");
     assert_ne!(
         expect(
             RespRoute::Mcp,

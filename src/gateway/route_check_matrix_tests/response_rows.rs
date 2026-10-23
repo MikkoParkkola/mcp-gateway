@@ -421,34 +421,30 @@ fn r_fwstamp_redaction_breaks_the_counted_text_gap() {
     );
 }
 
-/// R-ERAREPLAY `cross_era_replay_reshapes_after_the_seal_gap`, `Mcp` ×
-/// `IdempotentReplay` × `Modern` × `ShapeSeal`: `ExpectedGap(MIK-8747)`. The
-/// replay key takes no era, so a modern call is served the answer a legacy
-/// call stored, and the replay's tail shapes it (adding `resultType`) after
-/// it was sealed: the receipt no longer verifies. When MIK-8747 lands this
-/// fails: the cell returns to `NotApplicable(ReplayReservesTheStoredDelivery)`.
+/// R-ERAREPLAY `cross_era_replay_is_refused`, `Mcp` × `IdempotentReplay` ×
+/// `Modern` × `ShapeSeal`: `NotApplicable(ReplayReservesTheStoredDelivery)`.
+/// A legacy call stores its sealed answer; a modern call with the same key is
+/// refused (MIK-8747), so the stored answer is never shaped for an era it was
+/// not stored in, and the backend ran once.
 #[tokio::test]
-async fn r_erareplay_cross_era_replay_reshapes_after_the_seal_gap() {
+async fn r_erareplay_cross_era_replay_is_refused() {
     let (first, second, calls) = signed_legacy_then_modern_replay(BackendAnswer::Ok).await;
-    assert_eq!(
-        calls, 1,
-        "R-ERAREPLAY: the modern call was a replay: {second}"
-    );
+    assert_eq!(calls, 1, "R-ERAREPLAY: the backend ran once: {second}");
     assert_sealed_bound("R-ERAREPLAY legacy first", delivered(&first));
-    assert!(
-        second.get("error").is_none(),
-        "R-ERAREPLAY: MIK-8747 gap closed? the cross-era replay is refused: flip the cell: {second}"
-    );
-    let result = delivered(&second);
+    assert_era_refusal("R-ERAREPLAY", &second);
+}
+
+/// The MIK-8747 refusal of a keyed replay from the other era.
+fn assert_era_refusal(row: &str, reply: &Value) {
     assert_eq!(
-        result.get("resultType").and_then(Value::as_str),
-        Some("complete"),
-        "R-ERAREPLAY: the replay's tail shaped the stored legacy answer: {result}"
+        reply.pointer("/error/code").and_then(Value::as_i64),
+        Some(409),
+        "{row}: a cross-era replay is refused: {reply}"
     );
     assert_eq!(
-        verify_public(receipt(result), &trust_set(), Some(result)).err(),
-        Some(VerifyRefusal::ResultMismatch),
-        "R-ERAREPLAY: MIK-8747 gap closed? the cross-era replay's receipt verifies: flip the cell"
+        reply.pointer("/error/data/reason").and_then(Value::as_str),
+        Some("idempotency_era_mismatch"),
+        "{row}: {reply}"
     );
 }
 
@@ -617,35 +613,18 @@ mod stdio {
         );
     }
 
-    /// R-ERAREPLAY-Stdio `stdio_cross_era_replay_reshapes_after_the_seal_gap`,
-    /// `Stdio` × `IdempotentReplay` × `Modern` × `ShapeSeal`:
-    /// `ExpectedGap(MIK-8747)`, as on `/mcp`. A modern stdio call is served
-    /// the answer a legacy call stored under its key, and the stdio tail
-    /// shapes it (`stdio_dispatch.rs:177`) after it was sealed. When MIK-8747
-    /// lands this fails: the cell returns to `NotApplicable`.
+    /// R-ERAREPLAY-Stdio `stdio_cross_era_replay_is_refused`, `Stdio` ×
+    /// `IdempotentReplay` × `Modern` × `ShapeSeal`: as on `/mcp`, a modern
+    /// stdio call reusing a legacy call's key is refused (MIK-8747).
     #[tokio::test]
-    async fn r_erareplay_stdio_cross_era_replay_reshapes_after_the_seal_gap() {
+    async fn r_erareplay_stdio_cross_era_replay_is_refused() {
         let (first, second, calls) = stdio_legacy_then_modern_replay().await;
         assert_eq!(
             calls, 1,
-            "R-ERAREPLAY-Stdio: the modern call was a replay: {second}"
+            "R-ERAREPLAY-Stdio: the backend ran once: {second}"
         );
         assert_sealed_bound("R-ERAREPLAY-Stdio legacy first", delivered(&first));
-        assert!(
-            second.get("error").is_none(),
-            "R-ERAREPLAY-Stdio: MIK-8747 gap closed? the cross-era replay is refused: flip the cell: {second}"
-        );
-        let result = delivered(&second);
-        assert_eq!(
-            result.get("resultType").and_then(Value::as_str),
-            Some("complete"),
-            "R-ERAREPLAY-Stdio: the replay's tail shaped the stored legacy answer: {result}"
-        );
-        assert_eq!(
-            verify_public(receipt(result), &trust_set(), Some(result)).err(),
-            Some(VerifyRefusal::ResultMismatch),
-            "R-ERAREPLAY-Stdio: MIK-8747 gap closed? the cross-era replay's receipt verifies: flip the cell"
-        );
+        super::assert_era_refusal("R-ERAREPLAY-Stdio", &second);
     }
 
     /// R-RECSIGN-Stdio `stdio_sign_precedes_delivery_record` (`Sign` <
