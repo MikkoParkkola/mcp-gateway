@@ -429,6 +429,9 @@ PACKAGE_ENV = {
     # No install scripts for package code we did not write (lead ruling
     # 2026-10-23); a pinned server that needs them FAILs to start.
     "npm_config_ignore_scripts": "true",
+    # npm exec runs its command through a shell found on a PATH that puts
+    # package bins first, so a package bin named `sh` would run; pin the shell.
+    "npm_config_script_shell": "/bin/sh",
     "PATH": "/work/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin",
 }
 # The one root step: no network, no environment, a constant command. Changing

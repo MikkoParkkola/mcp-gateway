@@ -340,6 +340,8 @@ ALLOWED_ENV = {
     "XDG_CACHE_HOME": "/work/.cache",
     # Lead ruling 2026-10-23: no install scripts for package code we did not write.
     "npm_config_ignore_scripts": "true",
+    # A package bin named `sh` must not become npm exec's shell.
+    "npm_config_script_shell": "/bin/sh",
 }
 COMMON_FLAGS = [
     "--rm", "--read-only", "--log-driver", "none", "-w", "/work", "--cap-drop", "ALL",
@@ -417,8 +419,9 @@ def o11_argv_isolation():
         uv_at = next((i for i, a in enumerate(argv) if a in ("uv", "uvx")), None)
         if step in ("prime", "start") and uv_at is not None:
             # An option only before the package operand: after it, uvx hands it to the server.
-            operand = next(i for i, a in enumerate(argv) if i > uv_at and a.startswith("q"))
+            operand = argv.index("q==1.0" if step == "prime" else "q@1.0", uv_at)
             expect("--no-build" in argv[uv_at:operand], f"{step} pypi without --no-build before {argv[operand]}: {argv[uv_at:]}")
+            expect("--no-build" not in argv[operand:], f"{step} pypi passes --no-build to the server: {argv[uv_at:]}")
         if step == "prime" and "npm" in argv:
             expect(argv[-2:] == ["--", "/usr/bin/true"], f"npm prime must run /usr/bin/true, not a PATH lookup: {argv[-2:]}")
     uv_steps = [c[0] for c in package_steps if c[0] in ("prime", "start") and ({"uv", "uvx"} & set(c[1]))]
