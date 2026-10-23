@@ -17,6 +17,8 @@ use crate::hashing::{hmac_sha256_hex, sha256_hex};
 pub(crate) const KEY_FILE: &str = "record-principal.key";
 /// The config field that names the key.
 pub(crate) const KEY_FIELD: &str = "security.record_principal_key";
+/// The shortest key accepted, in bytes of key text.
+const MIN_KEY_BYTES: usize = 32;
 
 /// Domain label of the record-principal derivation.
 const RECORD_DOMAIN: &[u8] = b"mcp-gateway/record-principal/v1";
@@ -48,10 +50,13 @@ impl RecordPrincipalKey {
     ///
     /// A key shorter than 32 bytes, naming [`KEY_FIELD`].
     pub(crate) fn from_text(text: &str) -> crate::Result<Self> {
-        // SKELETON (MIK-8697 1b red): no length check, still strips.
-        Ok(Self(
-            text.strip_suffix('\n').unwrap_or(text).as_bytes().to_vec(),
-        ))
+        if text.len() < MIN_KEY_BYTES {
+            return Err(crate::Error::ConfigValidation(format!(
+                "{KEY_FIELD} must be at least {MIN_KEY_BYTES} bytes; generate one with \
+                 `openssl rand -hex 32`"
+            )));
+        }
+        Ok(Self(text.as_bytes().to_vec()))
     }
 
     /// Lowercase hex SHA-256 of the key bytes: names the key without being it.
@@ -72,11 +77,13 @@ pub(crate) fn resolve_key(
     overlay: &crate::config::EnvOverlay,
     data_dir: &Path,
 ) -> crate::Result<RecordPrincipalKey> {
-    let _ = (configured, overlay, data_dir);
-    // SKELETON (MIK-8697 1b red).
-    Err(crate::Error::ConfigValidation(
-        "record key resolution is not built yet".into(),
-    ))
+    let text = crate::config::resolve_record_key_text(
+        configured,
+        overlay,
+        &data_dir.join(KEY_FILE),
+        KEY_FIELD,
+    )?;
+    RecordPrincipalKey::from_text(&text)
 }
 
 /// A caller's internal principal: never printed, never serialized.

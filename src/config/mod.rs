@@ -23,6 +23,7 @@ mod input_schema;
 pub(crate) mod log_once;
 mod meta_mcp_config;
 mod pattern_grammar;
+mod record_key;
 mod remote_provenance_posture;
 mod secret_file;
 mod secret_ref;
@@ -53,6 +54,7 @@ use config_file::ConfigFile;
 pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvFiles, SystemHome};
 use env_overlay::{SecretFileDigests, SecretRefsRead, digest};
 pub use input_schema::InputSchemaEnforcement;
+pub(crate) use record_key::resolve_record_key_text;
 use secret_ref::SecretRef;
 pub(crate) use secret_ref::is_template_syntax;
 
