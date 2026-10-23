@@ -351,6 +351,49 @@ class Runner(unittest.TestCase):
             f.close()
 
 
+    # X18 (lead 2026-10-23): a listed line can never reach a real cargo or
+    # rustc on the Mac. A recording `cargo`/`rustc` first on the caller's PATH
+    # stays untouched; the line fails naming the guard.
+    def test_x18_a_listed_line_never_reaches_cargo_or_rustc(self):
+        fake = self.f.dir / "bin"
+        fake.mkdir()
+        for tool in ("cargo", "rustc"):
+            (fake / tool).write_text(f"#!/bin/sh\ntouch {self.f.marker(tool)}\n")
+            (fake / tool).chmod(0o755)
+        path = os.environ["PATH"]
+        os.environ["PATH"] = f"{fake}:{path}"
+        try:
+            report = self.f.run([line("cargo build"), line("rustc -vV")])
+        finally:
+            os.environ["PATH"] = path
+        self.assertFalse(self.f.marker("cargo").exists(), "the real cargo ran")
+        self.assertFalse(self.f.marker("rustc").exists(), "the real rustc ran")
+        self.assertEqual(sorted((r.command, r.status) for r in report.failures),
+                         [("cargo build", "failed"), ("rustc -vV", "failed")])
+        for r in report.failures:
+            self.assertIn("never runs cargo on the Mac", r.output)
+
+    # X19: a line whose worker raises is a failure, never a silent pass; the
+    # worker goes on with the queue (2026-10-23: a crashed thread read "87 passed").
+    def test_x19_a_crashing_line_fails_the_step_and_the_rest_still_run(self):
+        ran, dirs = [], {}
+
+        def executor(command, workdir, budget):
+            dirs[command] = workdir
+            if command == "boom":
+                raise OSError("injected")
+            ran.append(command)
+            return 0, ""
+
+        report = self.f.run([line("boom", seconds=9), line("a"), line("b")], workers=1, executor=executor)
+        self.assertNotEqual(report.rc, 0)
+        self.assertEqual([(r.command, r.status) for r in report.failures], [("boom", "crashed")])
+        self.assertIn("injected", report.failures[0].output)
+        self.assertEqual(sorted(ran), ["a", "b"])
+        # One worker, slowest first: "a" is the line right after the crash.
+        self.assertNotEqual(dirs["boom"], dirs["a"], "the line after a crash reuses the crashed clone")
+
+
 class Step(unittest.TestCase):
     # P1: the step script fails when the runner fails, naming the step. Its
     # unconditional call from pre-push.sh is a text check (the weaker half).
@@ -381,6 +424,29 @@ class Step(unittest.TestCase):
             self.assertEqual(calls[0], "test --all-features --test a --test b")
             self.assertNotEqual(report.rc, 0)
             self.assertIn("MERGE-BASE", report.text)
+        finally:
+            f.close()
+
+    # P3 (lead 2026-10-23, D-RUST): a failing Rust target is not rerun on the
+    # merge-base; the step fails, says NOT COMPARABLE, and prints the exact
+    # command that checks the base by hand.
+    def test_p3_a_failing_rust_target_is_not_comparable_and_names_the_base_command(self):
+        f = Fixture()
+        try:
+            rec = f.marker("cargo")
+            cargo = f.dir / "cargo"
+            cargo.write_text(f"#!/bin/sh\necho \"$@\" >> {rec}\nexit 1\n")
+            cargo.chmod(0o755)
+            report = runner.run_rust(["a", "b"], cargo=str(cargo), repo=f.repo, merge_base=f.merge_base, base_tip=f.base_tip)
+            self.assertEqual(len(rec.read_text().splitlines()), 1, "no rerun on the merge-base")
+            self.assertNotEqual(report.rc, 0)
+            self.assertIn(f"NOT COMPARABLE ON MERGE-BASE {f.merge_base}", report.text)
+            wt = f"../base-{f.merge_base[:12]}"
+            self.assertIn(
+                f"git worktree add --detach {wt} {f.merge_base} && "
+                f"(cd {wt} && CARGO=spark-cargo spark-cargo test --all-features --test a --test b)",
+                report.text,
+            )
         finally:
             f.close()
 

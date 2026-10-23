@@ -20,6 +20,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -30,6 +31,9 @@ LINE_TIMEOUT_S = 300
 DEADLINE_S = 300
 BASE_BRANCH = "docs/ranking-1-release-line"
 TAIL_LINES = 20
+# Stubs first on every line's PATH: a listed line never reaches a real Rust
+# toolchain on the Mac (X18). Cargo-running checks are CI_ONLY or Spark work.
+NO_CARGO = ("cargo", "rustc", "rustup", "rustdoc")
 
 
 @dataclass
@@ -47,7 +51,7 @@ class LineResult:
     rc: int
     seconds: float
     log: Path | None = None
-    status: str = ""  # "" passed; failed | timeout | deadline | skipped | missing
+    status: str = ""  # "" passed; failed | timeout | deadline | skipped | missing | crashed
     output: str = ""
 
 
@@ -78,8 +82,9 @@ def _git(cwd, *args, timeout=None):
 
 def _clone(repo, commit, dest):
     """A `--shared` clone of `repo` checked out at `commit` (no objects copied)."""
-    _git(repo, "clone", "-q", "--shared", "--no-checkout", str(repo), str(dest))
-    done = _git(dest, "checkout", "-q", "--detach", commit)
+    done = _git(repo, "clone", "-q", "--shared", "--no-checkout", str(repo), str(dest))
+    if done.returncode == 0:
+        done = _git(dest, "checkout", "-q", "--detach", commit)
     if done.returncode != 0:
         raise RuntimeError(f"cannot check out {commit} in a scratch clone: {done.stderr.strip()}")
     return dest
@@ -99,9 +104,25 @@ def _substitute(command, *, head, merge_base, base_tip, tmp):
     )
 
 
+def _no_cargo(tmp):
+    """Write the failing `cargo`/`rustc`/... stubs under `tmp` (X18). Called once,
+    before any worker starts; `_execute` only puts the directory on PATH."""
+    stubs = tmp / "no-cargo"
+    stubs.mkdir()
+    for tool in NO_CARGO:
+        stub = stubs / tool
+        stub.write_text(
+            "#!/bin/sh\n"
+            f"echo 'MIK-8410: `{tool}` blocked: pre-push never runs cargo on the Mac; "
+            "classify this line CI_ONLY or run it under spark-cargo' >&2\n"
+            "exit 97\n"
+        )
+        stub.chmod(0o755)
+
+
 def _execute(command, workdir, timeout_s, tmp):
     """(rc, output, timed_out): `command` under bash -o pipefail in its own process group."""
-    env = {**os.environ, "TMPDIR": str(tmp)}
+    env = {**os.environ, "TMPDIR": str(tmp), "PATH": f"{tmp / 'no-cargo'}{os.pathsep}{os.environ.get('PATH', '')}"}
     proc = subprocess.Popen(
         ["bash", "-o", "pipefail", "-c", command],
         cwd=workdir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -160,44 +181,53 @@ def _pool(lines, *, repo, commit, ctx, tmp, workers, executor, line_timeout_s, d
                 index, line = work.get_nowait()
             except queue.Empty:
                 return
-            command = _substitute(line.command, tmp=tmp, **ctx)
-            left = deadline - time.monotonic()
-            if left <= 0:
-                results[index] = LineResult(line.command, -1, 0.0, status="deadline")
-                continue
-            if line.requires and _git(repo, "cat-file", "-e", f"{line.requires}^{{commit}}").returncode != 0:
-                results[index] = LineResult(
-                    line.command, -1, 0.0, status="missing",
-                    output=f"commit {line.requires} is not in the local object store: git fetch origin {line.requires}",
-                )
-                continue
-            if clone is None:
-                clone = _clone(repo, commit, tmp / f"w{n}-{commit[:12]}")
-            start = time.monotonic()
-            budget = min(line_timeout_s, left)
-            if executor is not None:
-                rc, out = executor(command, clone, budget)
-                timed_out = False
-            else:
-                rc, out, timed_out = _execute(command, clone, budget, tmp)
-            _reset(clone)
-            log = logs / f"{commit[:12]}-{index:03d}.log"
-            log.write_text(out)
-            status = ""
-            if timed_out:
-                status = "timeout" if budget == line_timeout_s else "deadline"
-            elif rc != 0:
-                status = "failed"
-            elif line.direction == "open" and line.marker and line.marker in out:
-                status = "skipped"
-            results[index] = LineResult(line.command, rc, time.monotonic() - start, log, status, out)
+            try:
+                clone = one(n, index, line, clone)
+            except Exception:  # fail closed: a line whose worker raises is a failure (X19)
+                results[index] = LineResult(line.command, -1, 0.0, status="crashed", output=traceback.format_exc())
+                clone = None  # a crash leaves the clone dirty: the next line gets a fresh one
+
+    def one(n, index, line, clone):
+        command = _substitute(line.command, tmp=tmp, **ctx)
+        left = deadline - time.monotonic()
+        if left <= 0:
+            results[index] = LineResult(line.command, -1, 0.0, status="deadline")
+            return clone
+        if line.requires and _git(repo, "cat-file", "-e", f"{line.requires}^{{commit}}").returncode != 0:
+            results[index] = LineResult(
+                line.command, -1, 0.0, status="missing",
+                output=f"commit {line.requires} is not in the local object store: git fetch origin {line.requires}",
+            )
+            return clone
+        if clone is None:
+            clone = _clone(repo, commit, tmp / f"w{n}-{index:03d}-{commit[:12]}")
+        start = time.monotonic()
+        budget = min(line_timeout_s, left)
+        if executor is not None:
+            rc, out = executor(command, clone, budget)
+            timed_out = False
+        else:
+            rc, out, timed_out = _execute(command, clone, budget, tmp)
+        _reset(clone)
+        log = logs / f"{commit[:12]}-{index:03d}.log"
+        log.write_text(out)
+        status = ""
+        if timed_out:
+            status = "timeout" if budget == line_timeout_s else "deadline"
+        elif rc != 0:
+            status = "failed"
+        elif line.direction == "open" and line.marker and line.marker in out:
+            status = "skipped"
+        results[index] = LineResult(line.command, rc, time.monotonic() - start, log, status, out)
+        return clone
 
     threads = [threading.Thread(target=worker, args=(n,)) for n in range(max(1, workers))]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
-    return results
+    return [r or LineResult(l.command, -1, 0.0, status="crashed", output="no result recorded")
+            for r, l in zip(results, lines)]
 
 
 def _paths_missing_at(command, head_clone, base_clone):
@@ -259,6 +289,7 @@ def run(
             return Report(rc=1, text="CI script checks: the drift test failed; no check ran\n" + "\n".join(found))
     parsed = sorted((parse(l) for l in lines), key=lambda l: -l.seconds)
     tmp = Path(tempfile.mkdtemp(prefix="prepush-ci-"))
+    _no_cargo(tmp)
     deadline = time.monotonic() + deadline_s
     ctx = {"head": head, "merge_base": merge_base, "base_tip": base_tip}
     results = _pool(parsed, repo=repo, commit=head, ctx=ctx, tmp=tmp, workers=workers,
@@ -288,7 +319,11 @@ def run_rust(targets, *, cargo, repo, merge_base, base_tip) -> Report:
     tail = (done.stdout + done.stderr).splitlines()[-TAIL_LINES:]
     # ponytail: no Rust rerun on the merge-base (a fresh clone is a cold Spark
     # build); reported as not comparable instead. Upgrade: a persistent base mirror.
-    note = f"NOT COMPARABLE ON MERGE-BASE {merge_base}: Rust targets are not rerun on the merge-base (cold build)"
+    wt = f"../base-{merge_base[:12]}"
+    by_hand = (f"git worktree add --detach {wt} {merge_base} && "
+               f"(cd {wt} && CARGO=spark-cargo spark-cargo {' '.join(args[1:])})")
+    note = (f"NOT COMPARABLE ON MERGE-BASE {merge_base}: Rust targets are not rerun on the merge-base (cold build)\n"
+            f"  to check the merge-base by hand: {by_hand}")
     return Report(rc=1, failures=[LineResult(" ".join(args), done.returncode, 0.0, status="failed")],
                   text="\n".join(["doc/CLI Rust tests failed:", *tail, note]))
 
