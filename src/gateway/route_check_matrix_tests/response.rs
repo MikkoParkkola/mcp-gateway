@@ -671,9 +671,92 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
     }
 }
 
+/// The rows that show a `NotApplicable` reason holds, where a row can.
+const fn na_pins(reason: RespNa) -> &'static [&'static str] {
+    match reason {
+        RespNa::ReplayReservesTheStoredDelivery => &[
+            "rows::r_replay_mcp_reserves_the_stored_delivery",
+            "rows::stdio::r_replay_stdio_reserves_the_stored_delivery",
+        ],
+        RespNa::NoModernShapeOnLegacy
+        | RespNa::NoCacheOnDirect
+        | RespNa::TaskHasNoOriginLink
+        | RespNa::TaskIsItsOwnRoute
+        | RespNa::TaskTailIsClampAndSeal => &[],
+    }
+}
+
+/// Every test name `driven` gives for `driven`, pins included.
+fn cited(driven: Driven) -> Vec<&'static str> {
+    match driven {
+        Driven::Row(name) => vec![name],
+        Driven::Rows(names) => names.to_vec(),
+        Driven::Shared { pin, rows } => std::iter::once(pin).chain(rows.iter().copied()).collect(),
+        Driven::SameAs { pin, .. } => vec![pin],
+        Driven::NotStated => Vec::new(),
+    }
+}
+
+/// Every `.rs` file under `dir`, read.
+fn sources_under(dir: &std::path::Path, out: &mut Vec<(std::path::PathBuf, String)>) {
+    let entries = std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+    for entry in entries {
+        let path = entry.expect("a directory entry").path();
+        if path.is_dir() {
+            sources_under(&path, out);
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            out.push((path, text));
+        }
+    }
+}
+
+/// Every name the map cites is a test this tree defines: its last segment is
+/// a `fn` (in `response_rows.rs` or `response_source_order.rs` for the
+/// matrix's own `rows::` and `source_order::` names), so a rename or a typo
+/// fails here and not only in an external `--list` check. A `NotApplicable`
+/// reason's rows ([`na_pins`]) are checked the same way.
+#[test]
+fn every_cited_response_row_is_a_test_in_the_tree() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    sources_under(&root, &mut files);
+    let mut names = std::collections::BTreeSet::new();
+    for (route, case, era, pair) in cells() {
+        names.extend(cited(driven(route, case, era, pair)));
+        if let RespExpect::NotApplicable(reason) = expect(route, case, era, pair) {
+            names.extend(na_pins(reason).iter().copied());
+        }
+    }
+    let mut missing = Vec::new();
+    for name in &names {
+        let seg = name.rsplit("::").next().unwrap_or(name);
+        let needle = format!("fn {seg}(");
+        let home = if name.starts_with("rows::") {
+            Some("route_check_matrix_tests/response_rows.rs")
+        } else if name.starts_with("response::source_order::") {
+            Some("route_check_matrix_tests/response_source_order.rs")
+        } else {
+            None
+        };
+        let found = files.iter().any(|(path, text)| {
+            home.is_none_or(|home| path.ends_with(home)) && text.contains(&needle)
+        });
+        if !found {
+            missing.push(*name);
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "cited rows with no test fn: {missing:?}"
+    );
+}
+
 /// Every stated cell resolves to a named row, directly or through a
 /// `SameAs` twin, within two hops; a twin only from a case that reaches the
-/// tail; and no cell that states nothing names a row.
+/// tail; and no cell that states nothing names a row. The rows compile only
+/// with `firewall` (`mod rows`), so coverage is claimed for that build.
+#[cfg(feature = "firewall")]
 #[test]
 fn every_stated_response_cell_is_driven_or_explained() {
     let mut wrong = Vec::new();
