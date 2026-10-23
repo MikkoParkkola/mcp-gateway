@@ -7,7 +7,7 @@ use serde_json::Value;
 use super::{AppState, IntoResponse, SessionId};
 use crate::gateway::router::hardened_elicitation;
 use crate::gateway::session_id::SessionOwner;
-use crate::gateway::streaming::{MintKind, SessionCapacity, SessionHold};
+use crate::gateway::streaming::{InFlightHold, MintKind, SessionCapacity};
 
 /// Open or resume the request's session, held while the request runs. A
 /// 2026-era request by header opens none. `initialize` mints an ordinary
@@ -23,7 +23,7 @@ pub(super) fn open_request_session(
     existing: Option<&str>,
     caller_owner: &SessionOwner,
     (declared_version, declares_modern_by_header): (Option<&str>, bool),
-) -> Result<(Option<SessionId>, Option<SessionHold>, bool), Box<axum::response::Response>> {
+) -> Result<(Option<SessionId>, Option<InFlightHold>, bool), Box<axum::response::Response>> {
     if declares_modern_by_header {
         // No session, and none minted. Minting one per request grew a table of
         // sessions nothing could reach, and handed the sequence-anomaly

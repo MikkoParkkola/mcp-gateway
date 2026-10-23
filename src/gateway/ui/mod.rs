@@ -35,7 +35,7 @@ use serde_json::{Value, json};
 use self::errors::{admin_auth_required, auth_required, flat_error};
 use super::auth::AuthenticatedClient;
 use super::router::AppState;
-use crate::stats::StatsSnapshot;
+use crate::stats::{StatsSnapshot, TopTool};
 
 pub use self::dashboard::dashboard_handler;
 
@@ -156,19 +156,6 @@ pub struct SessionSummary {
     pub avg_latency_ms: Option<u64>,
 }
 
-/// One row of the dashboard's tools table: a tool and how many calls it has
-/// had since the gateway started. The stats behind it count attempts and carry
-/// no outcome, timestamp or latency, so neither does this row (MIK-8370).
-#[derive(Debug, Clone, Serialize)]
-pub struct ToolCallCount {
-    /// Tool name.
-    pub tool: String,
-    /// Backend server name.
-    pub server: String,
-    /// Calls to this tool since the gateway started, whatever their outcome.
-    pub count: u64,
-}
-
 /// Full aggregated state used to render the operator dashboard.
 #[derive(Debug, Clone, Serialize)]
 pub struct DashboardState<'a> {
@@ -177,8 +164,9 @@ pub struct DashboardState<'a> {
     /// Session / call summary.
     pub session_summary: SessionSummary,
     /// Calls per tool since start, most-called first (`UsageStats::snapshot`
-    /// keeps the top 10).
-    pub tool_counts: Vec<ToolCallCount>,
+    /// keeps the top 10). The stats count attempts and carry no outcome,
+    /// timestamp or latency, so neither does a row (MIK-8370).
+    pub tool_counts: Vec<TopTool>,
     /// Cache statistics.
     pub cache_stats: CacheStats,
     /// Gateway uptime in seconds.
@@ -331,7 +319,7 @@ tr:hover td{{background:var(--bg3);}}
     }
 
     #[allow(clippy::format_collect)] // format! inside collect is intentional for HTML row building
-    fn render_tool_rows(counts: &[ToolCallCount]) -> String {
+    fn render_tool_rows(counts: &[TopTool]) -> String {
         if counts.is_empty() {
             return r#"<tr><td colspan="3" style="color:var(--fg2)">No tool calls recorded yet</td></tr>"#
                 .to_string();

@@ -13,7 +13,7 @@ use url::Url;
 use super::super::sanitize_url_for_diagnostics;
 use super::{HTTP_TARGET, HeaderMode, HttpTransport, same_origin};
 use crate::oauth::OAuthClient;
-use crate::protocol::era::Era;
+use crate::protocol::era::PeerEra;
 use crate::protocol::meta::MODERN_VERSIONS;
 use crate::protocol::{
     JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId, Selectable, checked_selection,
@@ -249,9 +249,9 @@ impl HttpTransport {
     ///
     /// Returns an error if the legacy handshake fails. The modern branch has
     /// nothing left to fail at.
-    pub(crate) async fn finish_startup(&self, era: Era) -> Result<()> {
+    pub(crate) async fn finish_startup(&self, era: PeerEra) -> Result<()> {
         match era {
-            Era::Modern => {
+            PeerEra::Modern => {
                 // A modern answer came over a POST: the peer is streamable.
                 let mut flavour = self.streamable_http.write();
                 if flavour.is_none() {
@@ -265,7 +265,7 @@ impl HttpTransport {
                 );
                 Ok(())
             }
-            Era::Legacy => self.handshake().await,
+            PeerEra::Legacy => self.handshake().await,
         }
     }
 
@@ -497,7 +497,7 @@ impl HttpTransport {
         use futures::StreamExt;
 
         let mut headers = self.build_mcp_headers(HeaderMode::Sse, None).await?;
-        if self.outbound_era() == Some(Era::Modern) {
+        if self.outbound_era() == Some(PeerEra::Modern) {
             headers.insert(
                 "MCP-Protocol-Version",
                 header::HeaderValue::from_static(MODERN_VERSIONS[0]),

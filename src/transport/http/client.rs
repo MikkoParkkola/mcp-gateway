@@ -9,8 +9,8 @@ use std::time::Duration;
 use reqwest::Client;
 use url::Url;
 
-use super::{RedirectDecision, evaluate_redirect_for};
-use crate::security::ssrf::DestinationPolicy;
+use super::evaluate_redirect_for;
+use crate::security::ssrf::{DestinationPolicy, RedirectDecision};
 use crate::{Error, Result};
 
 /// A pooled client whose every redirect passes [`evaluate_redirect_for`].

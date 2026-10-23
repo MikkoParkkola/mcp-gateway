@@ -425,7 +425,7 @@ fn a_late_round_for_a_moved_row_is_not_retried_or_logged() {
 fn a_late_round_whose_first_close_write_fails_is_closed_by_the_retry() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use crate::gateway::task_service::store::CommitStage;
+    use crate::gateway::task_service::store::StoreWriteStage;
 
     let failed_once = Arc::new(AtomicBool::new(false));
     let seen = Arc::clone(&failed_once);
@@ -435,7 +435,7 @@ fn a_late_round_whose_first_close_write_fails_is_closed_by_the_retry() {
         fx.service
             .store
             .set_hook(Some(Arc::new(move |stage| {
-                if stage == CommitStage::Write && !seen.swap(true, Ordering::SeqCst) {
+                if stage == StoreWriteStage::Write && !seen.swap(true, Ordering::SeqCst) {
                     return Err(std::io::Error::other("injected first-write failure"));
                 }
                 Ok(())
@@ -461,13 +461,13 @@ impl TaskExecutor {
     pub(crate) async fn fail_next_record_write_for_test(&self) {
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        use crate::gateway::task_service::store::CommitStage;
+        use crate::gateway::task_service::store::StoreWriteStage;
 
         let armed = Arc::new(AtomicBool::new(true));
         self.service
             .store
             .set_hook(Some(Arc::new(move |stage| {
-                if stage == CommitStage::Write && armed.swap(false, Ordering::SeqCst) {
+                if stage == StoreWriteStage::Write && armed.swap(false, Ordering::SeqCst) {
                     return Err(std::io::Error::other("injected record-write failure"));
                 }
                 Ok(())

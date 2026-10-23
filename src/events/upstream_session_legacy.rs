@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use tracing::warn;
 
-use super::{Era, OPEN_LIMIT, RELEASE_LIMIT, State};
+use super::{OPEN_LIMIT, PeerEra, RELEASE_LIMIT, State};
 use crate::backend::Backend;
 use crate::events::upstream_listener::Shared;
 use crate::events::upstream_need::ledger::{drive, holder_of};
@@ -38,7 +38,7 @@ impl State<'_> {
         backend: &Backend,
         handle: &Weak<dyn UpstreamListen>,
     ) {
-        if self.era == Era::Modern || self.resource_interest_unsupported {
+        if self.era == PeerEra::Modern || self.resource_interest_unsupported {
             return;
         }
         let ledger = self.shared.ledger();
@@ -77,7 +77,7 @@ impl State<'_> {
     /// release, in order, all within `RELEASE_LIMIT`. Keys not reached stay
     /// charged; a later task's passes reconcile them.
     pub(super) async fn release(&mut self, backend: &Backend) {
-        if self.era == Era::Modern {
+        if self.era == PeerEra::Modern {
             return;
         }
         let ledger = self.shared.ledger();

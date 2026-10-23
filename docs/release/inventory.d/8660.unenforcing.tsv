@@ -1,0 +1,1 @@
+src/transport/http/redirect_policy.rs	transport_follows_redirect	1	Reports, for the doctor command only, whether the transport would follow one redirect, by calling evaluate_redirect_for under the backend's policy; no request goes through it, so it enforces nothing at runtime (MIK-8660).

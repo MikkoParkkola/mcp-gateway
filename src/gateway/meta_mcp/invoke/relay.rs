@@ -575,7 +575,7 @@ impl MetaMcp {
         // A `gateway_invoke` answer wraps the tool's value as JSON text: stage
         // that value, verdict slot included, as a live call stages it.
         let unwrapped = if tool_name == "gateway_invoke" {
-            super::audit::invoke_value(result)
+            crate::protocol::tool_result_payload(result)
         } else {
             None
         };

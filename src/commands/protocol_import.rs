@@ -519,15 +519,12 @@ fn print_json<T: Serialize + ?Sized>(value: &T) {
 }
 
 fn truncate(value: &str, max_len: usize) -> String {
-    if value.chars().count() <= max_len {
-        value.to_string()
-    } else {
-        let prefix = value
-            .chars()
-            .take(max_len.saturating_sub(3))
-            .collect::<String>();
-        format!("{prefix}...")
-    }
+    crate::truncate::truncate(
+        value,
+        crate::truncate::Budget::Chars(max_len),
+        "...",
+        crate::truncate::Suffix::Within,
+    )
 }
 
 #[cfg(test)]

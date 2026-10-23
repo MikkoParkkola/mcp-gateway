@@ -49,3 +49,72 @@ pub(crate) async fn within<T>(what: &str, step: impl std::future::Future<Output 
         .await
         .unwrap_or_else(|_| panic!("{what} did not finish within 30 s"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn slot_pause_is_one_shot() {
+        let slot = Arc::new(Slot::default());
+        let (reached, release) = slot.arm();
+        let parked = Arc::clone(&slot);
+        let a = tokio::spawn(async move { parked.pause().await });
+        within("A reached", reached.notified()).await;
+        within("second pause passes", slot.pause()).await;
+        // Release has not been sent, so the first caller must still be parked.
+        assert!(
+            !a.is_finished(),
+            "the armed caller must stay parked until release"
+        );
+        release.notify_one();
+        let done = within("A finishes", a).await;
+        assert!(done.is_ok(), "parked task panicked: {done:?}");
+        within("third pause passes", slot.pause()).await;
+    }
+
+    #[tokio::test]
+    async fn slot_rearms_after_a_take() {
+        let slot = Arc::new(Slot::default());
+        let (reached, release) = slot.arm();
+        let parked = Arc::clone(&slot);
+        let a = tokio::spawn(async move { parked.pause().await });
+        within("first reached", reached.notified()).await;
+        release.notify_one();
+        let done = within("first finishes", a).await;
+        assert!(done.is_ok(), "first parked task panicked: {done:?}");
+        let (reached, release) = slot.arm();
+        let parked = Arc::clone(&slot);
+        let b = tokio::spawn(async move { parked.pause().await });
+        within("second reached", reached.notified()).await;
+        release.notify_one();
+        let done = within("second finishes", b).await;
+        assert!(done.is_ok(), "second parked task panicked: {done:?}");
+    }
+
+    #[tokio::test]
+    async fn slot_unarmed_pause_passes() {
+        let slot = Slot::default();
+        within("unarmed", slot.pause()).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn slot_pause_blocking_is_one_shot() {
+        let slot = Arc::new(Slot::default());
+        let (reached, release) = slot.arm();
+        let parked = Arc::clone(&slot);
+        let first = tokio::task::spawn_blocking(move || parked.pause_blocking());
+        within("blocking reached", reached.notified()).await;
+        let second_caller = Arc::clone(&slot);
+        let second = tokio::task::spawn_blocking(move || second_caller.pause_blocking());
+        let passed = within("second blocking passes", second).await;
+        assert!(
+            passed.is_ok(),
+            "pass-through blocking task panicked: {passed:?}"
+        );
+        release.notify_one();
+        let done = within("first blocking finishes", first).await;
+        assert!(done.is_ok(), "parked blocking task panicked: {done:?}");
+    }
+}

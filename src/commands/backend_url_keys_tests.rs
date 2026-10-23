@@ -236,8 +236,8 @@ fn an_address_that_is_not_a_literal_of_its_key_keeps_its_alias() {
     assert!(out.text.contains("http_url: \"${FS_URL}\""), "{}", out.text);
 }
 
-/// The binary keeps its own copy of the scheme table (the library's is not
-/// public); this holds the copy to what the loader actually does.
+/// The binary compiles the library's scheme table (`src/transport_key.rs`);
+/// this holds it to what the loader actually does with each address.
 #[test]
 fn the_scheme_table_agrees_with_the_loader() {
     use mcp_gateway::config::{Config, TransportConfig};
