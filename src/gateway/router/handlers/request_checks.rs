@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use super::unsupported_version_error;
 use crate::gateway::router::AppState;
+use crate::protocol::era::HEADER_MISMATCH;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
 /// The protocol checks a request faces before anything acts on it: a revision
@@ -93,7 +94,7 @@ pub(in crate::gateway::router) fn request_check_refusal(
             Some((
                 JsonRpcResponse::error(
                     id.cloned(),
-                    -32020,
+                    HEADER_MISMATCH,
                     format!("{name} appears more than once"),
                 ),
                 StatusCode::BAD_REQUEST,
@@ -125,7 +126,7 @@ pub(in crate::gateway::router) fn request_check_refusal(
         };
         if let Err(mismatch) = check.validate() {
             return Some((
-                JsonRpcResponse::error(id.cloned(), -32020, mismatch.to_string()),
+                JsonRpcResponse::error(id.cloned(), HEADER_MISMATCH, mismatch.to_string()),
                 StatusCode::BAD_REQUEST,
             ));
         }
