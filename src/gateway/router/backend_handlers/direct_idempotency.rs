@@ -298,14 +298,14 @@ pub(crate) mod seams {
     use tokio::sync::Notify;
 
     thread_local! {
-        static HOLD: std::cell::RefCell<Option<(Arc<Notify>, Arc<Notify>)>> =
-            const { std::cell::RefCell::new(None) };
+        // One-shot: the first arrival parks until released; later arrivals pass (test_pause::Slot).
+        static HOLD: Arc<crate::test_pause::Slot> = Arc::new(crate::test_pause::Slot::default());
     }
 
     /// The next call on this thread to reach the mark signals `entered`, then
-    /// waits for `gate`. One call only.
-    pub(crate) fn hold_before_mark(entered: Arc<Notify>, gate: Arc<Notify>) {
-        HOLD.with(|hold| *hold.borrow_mut() = Some((entered, gate)));
+    /// waits for `gate`. One call only. Returns `(entered, gate)`.
+    pub(crate) fn hold_before_mark() -> (Arc<Notify>, Arc<Notify>) {
+        HOLD.with(|hold| hold.arm())
     }
 
     thread_local! {
@@ -323,10 +323,7 @@ pub(crate) mod seams {
     }
 
     pub(in crate::gateway::router::backend_handlers) async fn before_mark() {
-        let held = HOLD.with(|hold| hold.borrow_mut().take());
-        if let Some((entered, gate)) = held {
-            entered.notify_one();
-            gate.notified().await;
-        }
+        let hold = HOLD.with(Arc::clone);
+        hold.pause().await;
     }
 }

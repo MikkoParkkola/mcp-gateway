@@ -185,12 +185,12 @@ fn render_tool_rows_empty_shows_fallback() {
 #[test]
 fn render_tool_rows_with_counts() {
     let counts = vec![
-        ToolCallCount {
+        TopTool {
             tool: "search".to_string(),
             server: "brave".to_string(),
             count: 7,
         },
-        ToolCallCount {
+        TopTool {
             tool: "query".to_string(),
             server: "db".to_string(),
             count: 2,
@@ -235,7 +235,7 @@ fn render_xss_escaped_in_backend_name() {
 
 #[test]
 fn render_xss_escaped_in_tool_name() {
-    let counts = vec![ToolCallCount {
+    let counts = vec![TopTool {
         tool: "<script>alert(1)</script>".to_string(),
         server: "s".to_string(),
         count: 1,

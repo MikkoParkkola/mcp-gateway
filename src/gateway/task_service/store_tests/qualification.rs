@@ -13,7 +13,7 @@ use std::sync::{Arc, LazyLock};
 use serde_json::{Value, json};
 
 use super::super::record::PreparedTask;
-use super::super::store::{CommitStage, StoreError, TaskStore};
+use super::super::store::{StoreError, StoreWriteStage, TaskStore};
 use super::support::*;
 use crate::idempotency::admission::{
     ExecutionAdmission, Mode, RETENTION_SECS, Request, RestoredBinding, TaskAdmission, TaskBinding,
@@ -369,7 +369,7 @@ async fn task_q_expiry_refusals_leave_durable_and_admission_capacity() {
                 let (id, _) = settled_task(&store, &admission, "k-1").await;
                 store
                     .set_hook(Some(Arc::new(|stage| {
-                        if stage == CommitStage::DirectorySync {
+                        if stage == StoreWriteStage::DirectorySync {
                             return Err(std::io::Error::other("injected poison"));
                         }
                         Ok(())

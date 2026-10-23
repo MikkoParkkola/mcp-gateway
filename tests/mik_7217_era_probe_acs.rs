@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use mcp_gateway::backend::Backend;
 use mcp_gateway::config::{BackendConfig, FailsafeConfig, TransportConfig};
-use mcp_gateway::protocol::era::Era;
+use mcp_gateway::protocol::era::PeerEra;
 use tempfile::TempDir;
 
 /// A recorder, not a peer: every received line is appended to the log **before** any answer is
@@ -330,7 +330,7 @@ async fn discover_4_a_peer_that_rejects_the_probe_is_classified_legacy() {
 
     assert_eq!(
         backend.cached_era().await,
-        Some(Era::Legacy),
+        Some(PeerEra::Legacy),
         "a peer that answered server/discover with -32601 must be classified Legacy and that \
          verdict cached; recorded frames were:\n{}",
         fixture.frames()
@@ -448,7 +448,7 @@ async fn discover_5b_a_failing_modern_assumption_is_re_probed() {
     backend.ensure_started().await.expect("backend starts");
     assert_eq!(
         backend.cached_era().await,
-        Some(Era::Modern),
+        Some(PeerEra::Modern),
         "the start probe answered with a 2026 discovery document, so the peer must be cached \
          Modern before the contradiction; recorded frames were:\n{}",
         fixture.frames()
@@ -460,7 +460,7 @@ async fn discover_5b_a_failing_modern_assumption_is_re_probed() {
     // re-probe is *sent*; the cache is written when its answer comes back, so waiting on the
     // count alone would leave the verdict assertion below racing the store that satisfies it.
     let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline && backend.cached_era().await != Some(Era::Legacy) {
+    while Instant::now() < deadline && backend.cached_era().await != Some(PeerEra::Legacy) {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
@@ -474,7 +474,7 @@ async fn discover_5b_a_failing_modern_assumption_is_re_probed() {
     );
     assert_eq!(
         backend.cached_era().await,
-        Some(Era::Legacy),
+        Some(PeerEra::Legacy),
         "the re-probe was itself answered `method not found`, which is the honest legacy answer, \
          so the corrected verdict must be Legacy; recorded frames were:\n{}",
         fixture.frames()
@@ -511,7 +511,7 @@ async fn discover_5b_method_not_found_on_an_ordinary_method_does_not_re_probe() 
     );
     assert_eq!(
         backend.cached_era().await,
-        Some(Era::Modern),
+        Some(PeerEra::Modern),
         "the cached Modern verdict must survive an unimplemented ordinary method; recorded \
          frames were:\n{}",
         fixture.frames()
@@ -534,7 +534,7 @@ async fn discover_4_a_slow_but_answering_peer_is_classified() {
 
     assert_eq!(
         backend.cached_era().await,
-        Some(Era::Legacy),
+        Some(PeerEra::Legacy),
         "a peer that answers the probe after 3 s must still be classified; recorded frames \
          were:\n{}",
         fixture.frames()

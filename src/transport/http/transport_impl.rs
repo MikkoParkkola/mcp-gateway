@@ -16,7 +16,7 @@ use super::modern_meta::{
 use super::{
     HTTP_TARGET, HeaderMode, HttpTransport, is_session_expired_error, is_session_expired_response,
 };
-use crate::protocol::era::Era;
+use crate::protocol::era::PeerEra;
 use crate::protocol::{JsonRpcRequest, JsonRpcResponse};
 use crate::{Error, Result};
 
@@ -65,12 +65,12 @@ impl Transport for HttpTransport {
         // verdict is Legacy. Its own probe goes out in the dialect the probe
         // exists in. A started transport keeps the rule above.
         let era = if is_era_probe(method) && !self.connected.load(Ordering::Relaxed) {
-            Some(Era::Modern)
+            Some(PeerEra::Modern)
         } else {
             self.outbound_era()
-                .or_else(|| is_era_probe(method).then_some(Era::Modern))
+                .or_else(|| is_era_probe(method).then_some(PeerEra::Modern))
         };
-        let params = if era == Some(Era::Modern) {
+        let params = if era == Some(PeerEra::Modern) {
             with_modern_meta(method, params)?
         } else {
             params
@@ -210,7 +210,7 @@ impl Transport for HttpTransport {
                 allowed = TASK_CAPABILITY_METHODS.join(", "),
             )));
         }
-        if self.outbound_era() != Some(Era::Modern) {
+        if self.outbound_era() != Some(PeerEra::Modern) {
             return Err(Error::Protocol(format!(
                 "refusing to send `{method}` with the upstream tasks capability: the peer is not \
                  known to speak a 2026 revision, which is the only dialect that can carry the \
@@ -232,7 +232,7 @@ impl Transport for HttpTransport {
             crate::transport::submit_mark::arm();
         }
         let result = self
-            .send_request_with_headers(&request, extra_headers, identity_key, Some(Era::Modern))
+            .send_request_with_headers(&request, extra_headers, identity_key, Some(PeerEra::Modern))
             .await;
         if submission {
             crate::transport::submit_mark::disarm();

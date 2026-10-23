@@ -18,7 +18,7 @@
 //!   where such a compare would return the other entry.
 
 use super::{
-    AccountKey, AccountSlot, Keyed, Pair, TargetKey, account_slot, slot, target, target_key,
+    AccountSlot, DescriptorId, Keyed, Pair, TargetKey, account_slot, slot, target, target_key,
 };
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hash};
@@ -52,7 +52,7 @@ fn borrowed_and_owned_keys_hash_alike() {
     let state = RandomState::new();
     for &(first, second) in PAIRS {
         let owned_target: TargetKey = target_key(first, second);
-        let account = AccountKey(second.to_owned());
+        let account = DescriptorId(second.to_owned());
         let owned_slot: AccountSlot = account_slot(first, &account);
         let borrowed = target(first, second);
         let target_dyn: &dyn Pair = &owned_target;
@@ -152,7 +152,7 @@ fn borrowed_lookups_find_owned_keys_in_keyed_maps() {
     for &(first, second) in PAIRS {
         value += 1;
         targets.set(target_key(first, second), value);
-        let account = AccountKey(second.to_owned());
+        let account = DescriptorId(second.to_owned());
         slots.set(account_slot(first, &account), value);
     }
     let mut expected = 0;
@@ -163,7 +163,7 @@ fn borrowed_lookups_find_owned_keys_in_keyed_maps() {
             Some(expected),
             "a borrowed lookup finds its own target entry: ({first:?}, {second:?})"
         );
-        let account = AccountKey(second.to_owned());
+        let account = DescriptorId(second.to_owned());
         assert_eq!(
             slots.get(&slot(first, &account) as &(dyn Pair + '_)),
             Some(expected),
@@ -175,7 +175,7 @@ fn borrowed_lookups_find_owned_keys_in_keyed_maps() {
         None,
         "no entry is held under a split neither asymmetric key uses"
     );
-    let missing = AccountKey("missing".to_owned());
+    let missing = DescriptorId("missing".to_owned());
     assert_eq!(
         slots.get(&slot("alpha", &missing) as &(dyn Pair + '_)),
         None,

@@ -361,7 +361,7 @@ pub enum Command {
 
         /// Output format
         #[arg(short, long, default_value = "text", value_enum)]
-        format: crate::validator::OutputFormat,
+        format: crate::validator::ValidatorOutputFormat,
 
         /// Minimum severity to report
         #[arg(short, long, default_value = "info", value_enum)]

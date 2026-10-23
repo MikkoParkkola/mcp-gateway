@@ -97,13 +97,20 @@ section, so that the release leaves exactly one `[4.0.0]` heading. Before the fo
 every pull request that `docs/release/v4.0.0-release-notes-DRAFT.md` cites must be merged,
 or its mention removed from the draft.
 
+0. Give `[4.0.0-beta.3]` its section, if it still has none. beta.3 was tagged without a
+   fold, so its entries are the 43 `[Unreleased]` bullets of the `v4.0.0-beta.3` tree plus the
+   fragments in that tree. Render them with that tree's own
+   `scripts/release/changelog_fragments.py assemble --dry-run` and add the section, as history,
+   above `[4.0.0-beta.2]`, with the preface line "Included again in 4.0.0, which is
+   cumulative; this section is history." Delete no fragment: `[4.0.0]` collects them again.
 1. Rename `## [Unreleased]` to `## [4.0.0] - <date>`.
 2. Move every bullet of `## [4.0.0] - Unreleased`, and its upgrading and performance-numbers
    notes, into the matching subsection of the new heading. Copy (don't move) into the new heading every
-   bullet that appears only in `[4.0.0-beta.1]` or `[4.0.0-beta.2]`. The beta sections keep their bullets as
+   bullet that appears only in `[4.0.0-beta.1]` or `[4.0.0-beta.2]` (beta.3's entries are already in
+   `[Unreleased]` and the fragments, so nothing is copied from `[4.0.0-beta.3]`). The beta sections keep their bullets as
    history. Create a missing subsection in the order Added, Changed, Removed, Fixed, Security.
 3. Delete the old heading and its "Not tagged yet" note.
-4. Reword the beta prefaces so each one says what that beta was, in the past tense, and points to
+4. Reword the beta prefaces (beta.1, beta.2 and beta.3) so each one says what that beta was, in the past tense, and points to
    the `[4.0.0]` section above as the complete list. Remove any text under `[4.0.0]` that calls
    criteria open or lists known gaps.
 5. Give every Security entry in the new heading the versions it affects and what an operator

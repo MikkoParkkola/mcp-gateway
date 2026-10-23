@@ -5,27 +5,27 @@
 // release, 404 URL, a header endpoint that serves without a credential, an
 // OAuth endpoint without dynamic registration). The live workflow requires
 // this file to fail.
-static REGISTRY: &[RegistryEntry] = &[
-    RegistryEntry {
+static REGISTRY: &[ServerCatalogEntry] = &[
+    ServerCatalogEntry {
         name: "missing-npm",
         command: "npx -y @anthropic/mcp-server-tavily@1.0.0",
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "deprecated-npm",
         command: "npx -y @modelcontextprotocol/server-github@2025.4.8",
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "missing-pypi",
         command: "uvx mcp-server-time@9999.1.1",
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "missing-url",
         command: "",
         transport: Transport::Http {
             default_url: "https://mcp.context7.com/does-not-exist-mik-7787",
         },
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "open-header",
         command: "",
         transport: Transport::Http {
@@ -36,7 +36,7 @@ static REGISTRY: &[RegistryEntry] = &[
             value: "Bearer ${NONE}",
         },
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "oauth-without-dcr",
         command: "",
         transport: Transport::Http {

@@ -57,7 +57,11 @@ async fn make_modern_transport(url: &str) -> Arc<HttpTransport> {
             }))
         })
         .await;
-    assert_eq!(resolved, Era::Modern, "test fixture must pin a modern peer");
+    assert_eq!(
+        resolved,
+        PeerEra::Modern,
+        "test fixture must pin a modern peer"
+    );
 
     let transport = make_transport(url);
     transport.attach_era(era);

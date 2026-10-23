@@ -11,7 +11,7 @@ use axum::http::HeaderMap;
 use axum::response::IntoResponse as _;
 use serde_json::{Value, json};
 
-use crate::protocol::era::Era;
+use crate::protocol::era::PeerEra;
 use crate::protocol::{JsonRpcRequest, RequestId};
 
 /// How long a row watches for a cancel that must NOT arrive, or for a second
@@ -102,7 +102,7 @@ async fn run_exchange(
     (seen, arrived): (&Seen, &Arrived),
     request: &JsonRpcRequest,
     identity: Option<&str>,
-    (era, exchange): (Option<Era>, Exchange),
+    (era, exchange): (Option<PeerEra>, Exchange),
 ) {
     let send = transport.send_request_with_headers(request, &[], identity, era);
     match exchange {
@@ -126,7 +126,7 @@ async fn cancels_after(
     url: &str,
     (seen, arrived): (&Seen, &Arrived),
     request: &JsonRpcRequest,
-    (era, exchange): (Option<Era>, Exchange),
+    (era, exchange): (Option<PeerEra>, Exchange),
 ) -> Vec<(Value, Option<String>)> {
     let transport = super::make_transport(url);
     super::set_default_session(&transport, "session-a");
@@ -215,7 +215,7 @@ async fn a_dropped_modern_request_sends_no_notification() {
         &url,
         (&seen, &arrived),
         &request(44, "slow"),
-        (Some(Era::Modern), Exchange::DroppedOnceReceived),
+        (Some(PeerEra::Modern), Exchange::DroppedOnceReceived),
     )
     .await;
     assert!(received(&seen, "slow"), "precondition: it was sent");

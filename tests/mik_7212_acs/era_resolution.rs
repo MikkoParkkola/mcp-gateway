@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
-use mcp_gateway::protocol::era::{Era, EraCache, ProbeOutcome, classify};
+use mcp_gateway::protocol::era::{EraCache, PeerEra, ProbeOutcome, classify};
 use serde_json::json;
 
 fn discovery(versions: &serde_json::Value) -> serde_json::Value {
@@ -16,13 +16,13 @@ fn a_result_that_is_not_a_discovery_document_is_not_modern() {
     let impostor = json!({ "supportedVersions": ["2026-07-28"] });
     assert_eq!(
         classify(&ProbeOutcome::Result(impostor)),
-        Era::Legacy,
+        PeerEra::Legacy,
         "a document without capabilities is not a discovery document"
     );
 
     assert_eq!(
         classify(&ProbeOutcome::Result(discovery(&json!(["2026-07-28"])))),
-        Era::Modern,
+        PeerEra::Modern,
         "a complete document still resolves modern"
     );
 }
@@ -38,14 +38,14 @@ async fn a_probe_that_never_answered_is_not_remembered() {
     let first = cache
         .resolve_with(|| async { ProbeOutcome::NoAnswer })
         .await;
-    assert_eq!(first, Era::Legacy, "silence is served as legacy");
+    assert_eq!(first, PeerEra::Legacy, "silence is served as legacy");
 
     let second = cache
         .resolve_with(|| async { ProbeOutcome::Result(discovery(&json!(["2026-07-28"]))) })
         .await;
     assert_eq!(
         second,
-        Era::Modern,
+        PeerEra::Modern,
         "a recovered peer must be re-probed, not served from a cached failure"
     );
 }
@@ -57,10 +57,10 @@ async fn a_conclusive_answer_is_remembered() {
     let first = cache
         .resolve_with(|| async { ProbeOutcome::Result(discovery(&json!(["2026-07-28"]))) })
         .await;
-    assert_eq!(first, Era::Modern);
+    assert_eq!(first, PeerEra::Modern);
 
     let second = cache
         .resolve_with(|| async { panic!("the cached era must be reused") })
         .await;
-    assert_eq!(second, Era::Modern);
+    assert_eq!(second, PeerEra::Modern);
 }

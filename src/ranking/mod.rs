@@ -330,14 +330,6 @@ pub struct SearchRanker {
     usage_counts: DashMap<String, AtomicU64>,
 }
 
-/// Usage entry for serialization
-#[derive(Debug, Serialize, Deserialize)]
-struct UsageEntry {
-    server: String,
-    tool: String,
-    count: u64,
-}
-
 /// Convert a JSON search result to a `SearchResult`
 #[must_use]
 pub fn json_to_search_result(value: &Value) -> Option<SearchResult> {
@@ -559,3 +551,6 @@ fn count_as_metric(value: usize) -> f64 {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod usage_file_tests;

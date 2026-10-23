@@ -157,7 +157,14 @@ fn test_cache() {
     let cache = ResponseCache::new();
     let value = serde_json::json!({"test": true});
 
-    cache.set("key1", &value, None, 60);
+    // MIK-8661: the capability executor stores through the shared cache's
+    // payload door.
+    assert!(cache.set_payload(
+        "key1",
+        value.clone(),
+        (None, crate::gateway::gateway_writes::WriteRecord::default()),
+        std::time::Duration::from_secs(60),
+    ));
     assert_eq!(cache.get("key1"), Some(value));
 
     assert_eq!(cache.get("nonexistent"), None);

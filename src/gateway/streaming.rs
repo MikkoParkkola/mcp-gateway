@@ -38,7 +38,7 @@ mod provisional;
 mod session;
 #[cfg(test)]
 pub(crate) use provisional::MAX_PROVISIONAL_SESSIONS;
-pub(crate) use provisional::{MintKind, PROVISIONAL_SESSION_TTL, SessionCapacity, SessionHold};
+pub(crate) use provisional::{InFlightHold, MintKind, PROVISIONAL_SESSION_TTL, SessionCapacity};
 use session::ClientSession;
 #[path = "streaming_copy.rs"]
 mod copy;
@@ -523,7 +523,7 @@ impl NotificationMultiplexer {
         owner: &SessionOwner,
         credential: Option<HeldCredential>,
         kind: MintKind,
-    ) -> std::result::Result<(SessionId, SessionHold), SessionCapacity> {
+    ) -> std::result::Result<(SessionId, InFlightHold), SessionCapacity> {
         let (session, hold) = match kind {
             MintKind::Ordinary => {
                 let session = self.open_session_for(session_id, owner);

@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use mcp_gateway::mtls::{CaParams, CertGenerator, GeneratedCert, LeafCertParams, MtlsConfig};
 
-use super::dashboard_link::{LinkTls, LinkTlsFlags, dashboard_link_base, fetch_link};
+use super::dashboard_link::{LinkTls, dashboard_link_base, fetch_link};
+use mcp_gateway::cli::dashboard_link::DashboardLinkTls;
 
 const LINK: &str = "https://127.0.0.1:1/dashboard?bootstrap=abc";
 
@@ -231,8 +232,8 @@ fn mtls_config(require_client_cert: bool) -> mcp_gateway::config::Config {
     config
 }
 
-fn flags(cert: Option<&str>, key: Option<&str>, ca: Option<&str>) -> LinkTlsFlags {
-    LinkTlsFlags {
+fn flags(cert: Option<&str>, key: Option<&str>, ca: Option<&str>) -> DashboardLinkTls {
+    DashboardLinkTls {
         client_cert: cert.map(PathBuf::from),
         client_key: key.map(PathBuf::from),
         ca_cert: ca.map(PathBuf::from),

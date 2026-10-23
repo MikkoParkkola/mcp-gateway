@@ -15,16 +15,20 @@ use tokio::sync::Notify;
 struct Pause {
     reached: AtomicBool,
     reached_notify: Notify,
-    release: Notify,
 }
 
-/// An armed pause. Dropping it releases the answer, so a failing row cannot
-/// leave it parked.
-pub(crate) struct PauseHandle(Arc<Pause>);
+/// An armed pause: the `(reached, release)` pair from [`crate::test_pause::Slot::arm`].
+/// Dropping it releases the answer, so a failing row cannot leave it parked.
+pub(crate) struct PauseHandle {
+    reached: Arc<Notify>,
+    release: Arc<Notify>,
+}
 
 impl PauseHandle {
+    /// Wait until the answer is parked. Await it once per handle: the slot
+    /// signals `reached` with a single stored permit.
     pub(crate) async fn reached(&self) {
-        Self::reached_on(&self.0).await;
+        self.reached.notified().await;
     }
 
     async fn reached_on(pause: &Pause) {
@@ -38,7 +42,7 @@ impl PauseHandle {
     }
 
     pub(crate) fn release(&self) {
-        self.0.release.notify_one();
+        self.release.notify_one();
     }
 }
 
@@ -49,7 +53,8 @@ impl Drop for PauseHandle {
 }
 
 thread_local! {
-    static ARMED: RefCell<Option<Arc<Pause>>> = const { RefCell::new(None) };
+    // One-shot: the first arrival parks until released; later arrivals pass (test_pause::Slot).
+    static ARMED: Arc<crate::test_pause::Slot> = Arc::new(crate::test_pause::Slot::default());
     static CANCEL: RefCell<Option<Arc<Pause>>> = const { RefCell::new(None) };
 }
 
@@ -79,19 +84,14 @@ pub(crate) fn cancel_recorded() {
 
 /// Park the next answer that has settled and is about to be queued.
 pub(crate) fn pause_after_commit_for_test() -> PauseHandle {
-    let pause = Arc::new(Pause::default());
-    ARMED.with(|a| *a.borrow_mut() = Some(Arc::clone(&pause)));
-    PauseHandle(pause)
+    let (reached, release) = ARMED.with(|slot| slot.arm());
+    PauseHandle { reached, release }
 }
 
 /// Called by the serve loop between settlement and the enqueue.
 pub(crate) async fn after_commit() {
-    let Some(pause) = ARMED.with(|a| a.borrow_mut().take()) else {
-        return;
-    };
-    pause.reached.store(true, Ordering::SeqCst);
-    pause.reached_notify.notify_waiters();
-    pause.release.notified().await;
+    let slot = ARMED.with(Arc::clone);
+    slot.pause().await;
 }
 
 thread_local! {

@@ -10,7 +10,7 @@ use super::AppState;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::invoke::audit::{DispatchNotes, SettledTask};
 use crate::gateway::meta_mcp::response_security::DeliveryCredential;
-use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
+use crate::gateway::oauth::OAuthAgentIdentity;
 use crate::gateway::router::OwnedRouterAuthorizer;
 use crate::gateway::task_route::{TaskOwnerText, TaskRoute, is_task_dispatchable};
 use crate::gateway::task_service::{OwnedCallerContext, TaskIntent};

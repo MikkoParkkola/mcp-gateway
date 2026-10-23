@@ -125,14 +125,14 @@ impl ListFilters {
 
 /// `cacheScope` the 2026-07-28 list result would advertise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CacheScope {
+pub enum ShadowCacheScope {
     /// Unfiltered meta-tool skeleton only.
     Public,
     /// Anything assembled under principal, profile, or session state.
     Private,
 }
 
-impl CacheScope {
+impl ShadowCacheScope {
     /// Wire string the spec uses.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -157,7 +157,7 @@ pub struct ToolsListShadow {
     /// Whether request-local input changed the assembled list.
     pub request: bool,
     /// Scope the decision table would emit. Not sent to the client in this spike.
-    pub would_emit_cache_scope: CacheScope,
+    pub would_emit_cache_scope: ShadowCacheScope,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -415,7 +415,7 @@ fn all_filter_combinations() -> impl Iterator<Item = ListFilters> {
     })
 }
 
-fn shadow_key(filters: ListFilters, scope: CacheScope) -> String {
+fn shadow_key(filters: ListFilters, scope: ShadowCacheScope) -> String {
     format!(
         "principal={},profile={},session={},request={},would_emit_cache_scope={}",
         filters.principal,
@@ -526,17 +526,17 @@ fn request_meta_value<'a>(
 }
 
 /// Decision table from RFC-0060: public only for the unfiltered skeleton.
-pub fn cache_scope_decision(filters: ListFilters) -> CacheScope {
+pub fn cache_scope_decision(filters: ListFilters) -> ShadowCacheScope {
     if filters.any() {
-        CacheScope::Private
+        ShadowCacheScope::Private
     } else {
-        CacheScope::Public
+        ShadowCacheScope::Public
     }
 }
 
 /// Hazard the ticket wants raised: `public` advertised over filtered assembly.
-pub fn public_over_filtered(filters: ListFilters, scope: CacheScope) -> bool {
-    scope == CacheScope::Public && filters.any()
+pub fn public_over_filtered(filters: ListFilters, scope: ShadowCacheScope) -> bool {
+    scope == ShadowCacheScope::Public && filters.any()
 }
 
 /// Attributed requests / total. Empty window is 0.0, not NaN.
