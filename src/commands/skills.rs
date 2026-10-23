@@ -617,4 +617,47 @@ mod redirect_tests {
             }
         }
     }
+
+    /// The body-read error alone: headers promise more bytes than arrive, so
+    /// `text()` fails after a 200 (MIK-8660; lane-written).
+    #[tokio::test]
+    async fn skill_body_read_error_hides_typed_url_secrets() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut request = [0u8; 4096];
+                let _ = socket.read(&mut request).await;
+                let _ = socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nshort")
+                    .await;
+            }
+        });
+        let typed = format!(
+            "http://user:hunter2@127.0.0.1:{port}/hooks/sekret-path-78/skill.md?token=sekret-q-78#frag-78"
+        );
+        let client = skill_fetch_client().expect("client");
+        let outcome = tokio::time::timeout(HANG_BOUND, fetch_skill_from_url(&client, &typed))
+            .await
+            .expect("bounded");
+        let Err(msg) = outcome else {
+            panic!("expected Err, got Ok")
+        };
+        assert!(
+            msg.starts_with("Failed to read body from"),
+            "the body-read path: {msg}"
+        );
+        for secret in [
+            "hunter2",
+            "sekret-path-78",
+            "/hooks/",
+            "sekret-q-78",
+            "frag-78",
+        ] {
+            assert!(!msg.contains(secret), "{secret} in: {msg}");
+        }
+    }
 }
