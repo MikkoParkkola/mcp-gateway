@@ -22,7 +22,10 @@ jobs:
   feature-combos:
     name: Feature combinations (${{ matrix.shard }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 45, not 20: the windows target shard first installs mingw from the
+    # Ubuntu mirror, and on a slow mirror day that alone took the whole 20
+    # minutes, twice, before any clippy ran (MIK-8761).
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -85,10 +88,15 @@ jobs:
         with:
           components: clippy
           targets: ${{ matrix.target }}
-      # ring and aws-lc-sys build C for the target.
+      # ring and aws-lc-sys build C for the target. Each fetch is bounded and
+      # retried, so a stalled mirror connection is retried, not waited out
+      # (MIK-8761).
       - name: Install the mingw C toolchain
         if: matrix.target == 'x86_64-pc-windows-gnu'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+        run: |
+          apt_opts=(-o Acquire::Retries=5 -o Acquire::http::Timeout=60)
+          sudo apt-get "${apt_opts[@]}" update
+          sudo apt-get "${apt_opts[@]}" install -y --no-install-recommends gcc-mingw-w64-x86-64
       # One shared cache for the Linux shards (saved by the first to finish),
       # not one per shard: extra entries would crowd the 10 GB repository
       # cache the required jobs depend on. The Windows-target shard keeps its
