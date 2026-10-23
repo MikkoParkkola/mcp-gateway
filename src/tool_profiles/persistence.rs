@@ -32,31 +32,9 @@ pub struct PersistedUserProfile {
     /// when undated (MIK-8202 P4b).
     #[serde(default)]
     pub created_at: Option<u64>,
-    /// Per-tool usage records.
-    pub tools: Vec<PersistedToolUsage>,
-}
-
-/// Usage data for one tool belonging to a user.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PersistedToolUsage {
-    /// Tool name.
-    pub tool_name: String,
-    /// Number of invocations.
-    pub call_count: u64,
-    /// Unix timestamp (seconds) of the last invocation, null when undated
-    /// (MIK-8202 P4b).
-    #[serde(default)]
-    pub last_used_secs: Option<u64>,
-}
-
-impl From<ToolSuggestion> for PersistedToolUsage {
-    fn from(s: ToolSuggestion) -> Self {
-        Self {
-            tool_name: s.tool_name,
-            call_count: s.call_count,
-            last_used_secs: s.last_used_secs,
-        }
-    }
+    /// Per-tool usage records: the same row the live profile reports, so the
+    /// file holds `tool_name`, `call_count` and `last_used_secs` (MIK-8667).
+    pub tools: Vec<ToolSuggestion>,
 }
 
 // ── I/O ───────────────────────────────────────────────────────────────────────
@@ -122,12 +100,12 @@ mod tests {
                 user_id: "alice".to_string(),
                 created_at: Some(1_699_000_000),
                 tools: vec![
-                    PersistedToolUsage {
+                    ToolSuggestion {
                         tool_name: "search".to_string(),
                         call_count: 42,
                         last_used_secs: Some(1_700_000_000),
                     },
-                    PersistedToolUsage {
+                    ToolSuggestion {
                         tool_name: "summarise".to_string(),
                         call_count: 7,
                         last_used_secs: Some(1_699_900_000),
@@ -208,24 +186,6 @@ mod tests {
 
         // THEN: the file exists
         assert!(path.exists());
-    }
-
-    #[test]
-    fn persisted_tool_usage_converts_from_suggestion() {
-        // GIVEN: a ToolSuggestion
-        let suggestion = crate::tool_profiles::ToolSuggestion {
-            tool_name: "read_file".to_string(),
-            call_count: 5,
-            last_used_secs: Some(1_700_000_000),
-        };
-
-        // WHEN: converted
-        let usage: PersistedToolUsage = suggestion.into();
-
-        // THEN: all fields are preserved
-        assert_eq!(usage.tool_name, "read_file");
-        assert_eq!(usage.call_count, 5);
-        assert_eq!(usage.last_used_secs, Some(1_700_000_000));
     }
 
     /// DUPC-10.PR10.4: a profiles file this build writes round-trips to the
