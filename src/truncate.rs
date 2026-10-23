@@ -134,6 +134,19 @@ mod tests {
     }
 
     #[test]
+    fn a_multi_byte_marker_counts_in_the_budget_s_own_unit() {
+        // `…` is 3 bytes and 1 character.
+        assert_eq!(
+            truncate("abcdef", Budget::Bytes(5), "…", Suffix::Within),
+            "ab…"
+        );
+        assert_eq!(
+            truncate("abcdef", Budget::Chars(4), "…", Suffix::Within),
+            "abc…"
+        );
+    }
+
+    #[test]
     fn a_marker_longer_than_the_budget_is_returned_whole_when_cut() {
         assert_eq!(
             truncate("abcdef", Budget::Chars(2), "...", Suffix::Within),

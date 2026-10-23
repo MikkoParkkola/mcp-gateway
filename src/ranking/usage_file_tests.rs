@@ -54,6 +54,12 @@ fn a_row_cut_by_an_older_build_keeps_its_count_on_the_cut_name() {
     ranker.load(&path).unwrap();
     assert_eq!(ranker.usage_count("s", "a"), 5);
     assert_eq!(ranker.usage_count("s", "a:b"), 0);
+    // A save after the load writes the row back as it was read.
+    ranker.save(&path).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "[\n  {\n    \"server\": \"s\",\n    \"tool\": \"a\",\n    \"count\": 5\n  }\n]"
+    );
 }
 
 /// Two tools that differ only past the colon keep separate counts through a
