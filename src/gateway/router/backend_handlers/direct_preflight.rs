@@ -540,6 +540,7 @@ mod mik_8659_preflight_tests {
             allowed_tools: None,
             denied_tools: None,
             admin: false,
+            // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
             principal: principal.to_owned(),
             quota_principal: None,
             authenticated,

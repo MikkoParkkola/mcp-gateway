@@ -332,6 +332,9 @@ mod mik_8659_dashboard_tests {
             .expect("admin key validates");
         let unauthenticated = crate::gateway::auth::AuthenticatedClient {
             authenticated: false,
+            // MIK-6704.IDENT.1a: the validated client's own principal, copied so
+            // only the authenticated flag differs.
+            principal: real.principal.clone(),
             ..real
         };
         let store_dir = tempfile::tempdir().expect("task store dir");

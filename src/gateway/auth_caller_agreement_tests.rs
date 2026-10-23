@@ -64,6 +64,7 @@ pub(crate) fn mints() -> Vec<(&'static str, AuthenticatedClient)> {
                 allowed_tools: None,
                 denied_tools: None,
                 admin: false,
+                // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
                 principal: "p".to_owned(),
                 quota_principal: None,
                 authenticated: false,

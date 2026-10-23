@@ -100,7 +100,11 @@ fn fixture_principal_conjunct_multiline_is_flagged() {
 /// T1c: a struct literal minting `ApiKey` is not a comparison.
 #[test]
 fn fixture_struct_literal_is_not_flagged() {
-    let source = "fn mint(base: Client) -> Client { AuthenticatedClient { credential_kind: CredentialKind::ApiKey, ..base } }";
+    // Split over lines with an empty principal, so the MIK-6704 literal scan
+    // reads this fixture as the anonymous identity it is.
+    let source = "fn mint(base: Client) -> Client { AuthenticatedClient {
+        principal: String::new(),
+        credential_kind: CredentialKind::ApiKey, ..base } }";
     let found = fixture_offences("fixture.rs", source);
     assert!(found.is_empty(), "a struct literal was flagged: {found:?}");
 }

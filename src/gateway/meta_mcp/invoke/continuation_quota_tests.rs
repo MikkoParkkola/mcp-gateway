@@ -174,6 +174,7 @@ fn t4_oidc_gives_identity_quota_when_an_identity_is_passed() {
         allowed_tools: None,
         denied_tools: None,
         admin: false,
+        // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
         principal: "oidc-principal".to_owned(),
         quota_principal: None,
         authenticated: true,

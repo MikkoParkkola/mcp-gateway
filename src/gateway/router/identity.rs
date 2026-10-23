@@ -506,6 +506,7 @@ mod mik_8659_caller_tests {
             allowed_tools: None,
             denied_tools: None,
             admin: false,
+            // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
             principal: "ab12".to_owned(),
             quota_principal: None,
             authenticated: true,
@@ -525,6 +526,7 @@ mod mik_8659_caller_tests {
             allowed_tools: None,
             denied_tools: None,
             admin: false,
+            // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
             principal: "p".to_owned(),
             quota_principal: None,
             authenticated: false,
@@ -575,6 +577,7 @@ mod mik_8659_caller_tests {
             allowed_tools: None,
             denied_tools: None,
             admin: false,
+            // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
             principal: "p".to_owned(),
             quota_principal: None,
             authenticated: true,
