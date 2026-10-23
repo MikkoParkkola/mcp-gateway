@@ -23,7 +23,7 @@ pub(crate) fn canonical_json(value: &Value) -> String {
 /// MIK-8697's record principals).
 pub(crate) fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
     use hmac::{KeyInit as _, Mac as _};
-    // HMAC accepts any key length; the `expect` here cannot panic.
+    // invariant: HMAC accepts any key length, so this cannot panic.
     let mut mac = hmac::Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(message);
     hex::encode(mac.finalize().into_bytes())

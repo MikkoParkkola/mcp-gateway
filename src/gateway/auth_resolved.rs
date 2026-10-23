@@ -121,7 +121,7 @@ impl ResolvedAuthConfig {
     #[must_use]
     pub fn from_config(config: &AuthConfig, record_key: &str) -> Self {
         Self::try_from_config(config, &crate::config::EnvOverlay::none(), record_key)
-            .expect("auth config secret references and the record key should resolve")
+            .expect("auth config secret references should resolve")
     }
 
     /// The record key clients minted here are keyed with (MIK-8697 §16.11).

@@ -99,6 +99,7 @@ impl Services {
         // passes the MetaMcp key that build_meta_mcp installs (row G-META).
         self.record_key
             .as_deref()
+            // invariant: events_services hands every Services the MetaMcp key.
             .expect("events services carry the MetaMcp record key")
     }
 }

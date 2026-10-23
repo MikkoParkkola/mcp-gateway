@@ -218,10 +218,11 @@ impl MetaMcp {
     /// When `build_meta_mcp` did not install one: writing the record unkeyed
     /// would be the leak MIK-8697 closes, so the write fails instead.
     pub(crate) fn record_key(&self) -> &crate::gateway::record_principal::RecordPrincipalKey {
-        // invariant: the one non-test MetaMcp construction is build_meta_mcp,
-        // which calls set_record_key unconditionally (row G-META pins both).
+        // The one non-test MetaMcp construction is build_meta_mcp, which calls
+        // set_record_key unconditionally (row G-META pins both).
         self.record_key
             .as_deref()
+            // invariant: build_meta_mcp installed the key (G-META).
             .expect("the record key is installed by build_meta_mcp before any record is written")
     }
 }
