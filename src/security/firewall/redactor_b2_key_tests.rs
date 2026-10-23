@@ -180,7 +180,22 @@ fn key_cases() -> Vec<String> {
     for n in 1..10 {
         keys.push(format!("redis://{}", "q".repeat(n)));
         keys.push(db_url("postgres", ":pw", &"h".repeat(n)));
+        // Multibyte characters: the rule counts characters, not bytes.
+        keys.push(format!("redis://{}", "\u{e9}".repeat(n)));
     }
+    // One under each rule's minimum, so only bytes after the key can complete it.
+    let b64 = "A".repeat(19);
+    keys.extend([
+        format!("AKIA{}", "Z".repeat(15)),
+        format!("ghp_{}", "a".repeat(35)),
+        format!("xoxb-{}", "1".repeat(9)),
+        format!("{}='{b64}", "api_key"),
+        format!("{}='{b64}A", "api_key"),
+        format!("eyJ{0}.eyJ{0}.{1}", "x".repeat(12), "x".repeat(9)),
+        format!("{} {}", "Bearer", "t".repeat(19)),
+        format!("sk-proj-{}", "p".repeat(39)),
+        format!("0x{}", "e".repeat(63)),
+    ]);
     keys
 }
 
@@ -194,11 +209,19 @@ fn p1_every_key_a_match_starts_in_is_redacted() {
     for key in key_cases() {
         let quoted = serde_json::to_string(&key).expect("encodes");
         for lead in [None, Some(&greedy)] {
-            for before in [0, 250, 256, 300] {
-                for after in [0, 255, 400] {
+            for before in [0, 250, 255, 256, 257, 300] {
+                for after in [0, 63, 64, 65, 255, 400] {
                     let (b, a) = ("b".repeat(before), "a".repeat(after));
                     let head = lead.map_or(String::new(), |g| format!(r#"{g}:{{"p":"{b}"}},"#));
-                    let text = format!(r#"{{{head}{quoted}:{{"v":"{a}"}},"n":3}}"#);
+                    let compact = format!(r#"{{{head}{quoted}:{{"v":"{a}"}},"n":3}}"#);
+                    // Every fourth case also as `wrap_tool_success` prints it.
+                    let pretty = checked % 4 == 0;
+                    let text = if pretty {
+                        let value: Value = serde_json::from_str(&compact).expect("valid");
+                        serde_json::to_string_pretty(&value).expect("prints")
+                    } else {
+                        compact
+                    };
                     let out = assert_projected(&text);
                     assert!(parses(&out), "P1(a) parses: {out}");
                     let (input, output) = (literals(&text), literals(&out));
@@ -225,20 +248,79 @@ fn p1_every_key_a_match_starts_in_is_redacted() {
             }
         }
     }
-    assert!(checked > 1000, "P1 ran {checked} cases");
+    assert!(checked > 5000, "P1 ran {checked} cases");
 }
 
-/// P2, half of the precondition `match_starts_in` rests on: no credential
-/// pattern has an anchor or a word boundary, so a cut haystack cannot invent
-/// a match. The other half, every shortest match within `OVERLAP_WINDOW`, is
-/// the bound that window's doc states for the existing scan.
+/// P2, the precondition `match_starts_in` rests on. No credential pattern
+/// has an anchor or a word boundary, so a cut haystack cannot invent a match.
+/// And only the API-key and connection-string rules can match a `"` (a quote
+/// in the pattern, a negated class, or a bare `.`), so only they can run past
+/// a key's closing quote, by the amounts `KEY_MATCH_TAIL` states.
 #[test]
-fn p2_no_pattern_has_an_anchor_or_a_word_boundary() {
+fn p2_only_two_patterns_can_cross_a_quote_and_none_is_anchored() {
+    let mut crossers = Vec::new();
     for (pattern, name) in CREDENTIAL_PATTERNS {
-        let outside_classes = pattern.replace("[^", "[");
         for token in [r"\b", r"\B", r"\A", r"\z", "$"] {
             assert!(!pattern.contains(token), "{name}: {token} in {pattern}");
         }
-        assert!(!outside_classes.contains('^'), "{name}: ^ in {pattern}");
+        let (mut class, mut escaped, mut crosses) = (false, false, pattern.contains('"'));
+        let mut chars = pattern.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '[' if !class => {
+                    class = true;
+                    crosses |= chars.peek() == Some(&'^');
+                }
+                ']' if class => class = false,
+                '^' if !class => panic!("{name}: ^ outside a class in {pattern}"),
+                '.' if !class => crosses = true,
+                _ => {}
+            }
+        }
+        if crosses {
+            crossers.push(*name);
+        }
     }
+    assert_eq!(
+        crossers,
+        ["Generic API Key in key=value", "Database Connection String"],
+        "a pattern that can match a quote needs its bound in KEY_MATCH_TAIL"
+    );
+}
+
+/// F2: an object near the size cap whose first key starts a greedy match
+/// over every later key, so each one runs the key check, against base's
+/// whole-leaf path. Timing, so run by hand on Spark:
+/// `cargo test --lib -- --ignored f2_many_overlapped_keys_cost --nocapture`.
+#[test]
+#[ignore = "timing; run by hand"]
+fn f2_many_overlapped_keys_cost() {
+    use std::fmt::Write as _;
+    let mut text = format!(r#"{{"{}":0"#, pg_url());
+    let mut i = 0_usize;
+    while text.len() < CAP - 200 {
+        write!(text, r#","k{i}":0"#).unwrap();
+        i += 1;
+    }
+    text.push('}');
+    let started = std::time::Instant::now();
+    let (out, _) = deliver(&text);
+    let projected = started.elapsed();
+    let started = std::time::Instant::now();
+    let whole = today(&text);
+    let base = started.elapsed();
+    assert!(
+        parses(&out) && out != whole,
+        "many keys: the projection must have run"
+    );
+    let ratio = projected.as_secs_f64() / base.as_secs_f64();
+    println!(
+        "{i} overlapped keys: projection {projected:?}, whole leaf {base:?}, ratio {ratio:.2}"
+    );
+    assert!(
+        ratio < 3.0,
+        "many keys: ratio {ratio:.2} over the plan's 3x"
+    );
 }

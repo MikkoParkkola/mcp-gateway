@@ -250,10 +250,11 @@ impl Redactor {
     /// after it. The spans cannot tell: past a greedy match the scan restarts
     /// only near its end, so a later key's own start goes unseen, and a short
     /// key may match only together with the bytes after its quote. No pattern
-    /// has an anchor or a word boundary, and every one's shortest match fits
-    /// in [`OVERLAP_WINDOW`], so the key plus that window decides it.
+    /// has an anchor or a word boundary, so cutting the text after
+    /// [`KEY_MATCH_TAIL`] cannot invent a match, and that tail holds every
+    /// match a key can start.
     fn match_starts_in(&self, text: &str, lit: &Literal) -> bool {
-        let mut end = (lit.end + OVERLAP_WINDOW).min(text.len());
+        let mut end = (lit.end + KEY_MATCH_TAIL).min(text.len());
         while !text.is_char_boundary(end) {
             end -= 1;
         }
@@ -371,6 +372,15 @@ impl Default for Redactor {
 /// pattern takes a whole chain of segments for the same reason: a JWT starting
 /// at another's second segment ends with that chain.
 const OVERLAP_WINDOW: usize = 256;
+
+/// How far past a key's closing quote a match starting in the key can need
+/// to read before it is complete. Only two patterns can match a `"`, so only
+/// they can cross that quote: the API-key rule ends on it (`['"]`), one byte
+/// past, and the connection-string rule needs at most its 10 `[^\s]`
+/// characters, 40 bytes in UTF-8. Every other pattern's classes exclude `"`,
+/// so its match ends inside the key. The b2 tests pin which patterns can
+/// match a quote.
+const KEY_MATCH_TAIL: usize = 64;
 
 /// Every match of `re` in `text`, including matches that overlap one another:
 /// `find_iter` resumes after a match's end, so a second credential starting
