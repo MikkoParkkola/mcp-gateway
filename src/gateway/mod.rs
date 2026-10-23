@@ -6,12 +6,12 @@ pub mod auth;
 mod change_feed;
 pub(crate) use change_feed::ChangeFeed;
 pub(crate) mod authz;
-pub(crate) mod record_principal;
 pub mod destructive_confirmation;
 mod differential;
 mod http_error;
 pub mod input_bridge;
 mod meta_mcp;
+pub(crate) mod record_principal;
 
 /// The nonce fields every entry route validates before taking them off a
 /// request (MIK-8154 S2'): the signing nonce and the chain nonce.

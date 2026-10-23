@@ -7,11 +7,26 @@
 //! `InternalPrincipal` therefore has exactly two doors: `storage_form` (the
 //! unchanged bytes, for stores) and `record_form` (an HMAC under the gateway's
 //! record key, for records, logs and anything else that leaves the box).
-//!
-//! SKELETON: the derivations below are placeholders that keep the unkeyed
-//! value, so the rows compile and fail on their assertions.
 
-use sha2::{Digest as _, Sha256};
+use std::fmt;
+
+use crate::hashing::{hmac_sha256_hex, sha256_hex};
+
+/// Domain label of the record-principal derivation.
+const RECORD_DOMAIN: &[u8] = b"mcp-gateway/record-principal/v1";
+/// Domain label of the subscription-alias derivation.
+const SUBSCRIPTION_DOMAIN: &[u8] = b"mcp-gateway/subscription/v1";
+
+/// `HMAC(key, domain || 0x00 || value)`, truncated to `hex_len` hex digits.
+fn keyed(key: &RecordPrincipalKey, domain: &[u8], value: &str, hex_len: usize) -> String {
+    let mut message = Vec::with_capacity(domain.len() + 1 + value.len());
+    message.extend_from_slice(domain);
+    message.push(0);
+    message.extend_from_slice(value.as_bytes());
+    let mut digest = hmac_sha256_hex(&key.0, &message);
+    digest.truncate(hex_len);
+    digest
+}
 
 /// The gateway-held key for record principals and subscription aliases.
 ///
@@ -23,18 +38,24 @@ pub(crate) struct RecordPrincipalKey(Vec<u8>);
 impl RecordPrincipalKey {
     /// The key from its text form.
     pub(crate) fn from_text(text: &str) -> Self {
-        Self(text.as_bytes().to_vec())
+        Self(text.strip_suffix('\n').unwrap_or(text).as_bytes().to_vec())
     }
 
     /// Lowercase hex SHA-256 of the key bytes: names the key without being it.
     pub(crate) fn identity(&self) -> String {
-        hex::encode(Sha256::digest(&self.0))
+        sha256_hex(&self.0)
     }
 }
 
 /// A caller's internal principal: never printed, never serialized.
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) struct InternalPrincipal(String);
+
+impl fmt::Debug for InternalPrincipal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("InternalPrincipal(<redacted>)")
+    }
+}
 
 impl InternalPrincipal {
     /// Wrap the internal principal string.
@@ -49,8 +70,8 @@ impl InternalPrincipal {
     }
 
     /// The keyed form for records and logs.
-    pub(crate) fn record_form(&self, _key: &RecordPrincipalKey) -> RecordPrincipal {
-        RecordPrincipal(self.0.clone())
+    pub(crate) fn record_form(&self, key: &RecordPrincipalKey) -> RecordPrincipal {
+        RecordPrincipal(keyed(key, RECORD_DOMAIN, &self.0, 12))
     }
 }
 
@@ -66,8 +87,8 @@ impl RecordPrincipal {
 }
 
 /// The keyed alias of a stored subscription id: the client-facing handle.
-pub(crate) fn subscription_alias(_key: &RecordPrincipalKey, stored_id: &str) -> String {
-    stored_id.to_owned()
+pub(crate) fn subscription_alias(key: &RecordPrincipalKey, stored_id: &str) -> String {
+    keyed(key, SUBSCRIPTION_DOMAIN, stored_id, 16)
 }
 
 #[cfg(test)]
@@ -101,8 +122,14 @@ mod tests {
             let got = InternalPrincipal::new(internal.to_owned()).record_form(&key);
             assert_eq!(got.as_str(), want, "{internal}");
         }
-        assert_eq!(subscription_alias(&RecordPrincipalKey::from_text(KEY_ZERO), SUB), "eaacd857ae5332fc");
-        assert_eq!(subscription_alias(&RecordPrincipalKey::from_text(KEY_A5), SUB), "a91545474dd38b41");
+        assert_eq!(
+            subscription_alias(&RecordPrincipalKey::from_text(KEY_ZERO), SUB),
+            "eaacd857ae5332fc"
+        );
+        assert_eq!(
+            subscription_alias(&RecordPrincipalKey::from_text(KEY_A5), SUB),
+            "a91545474dd38b41"
+        );
     }
 
     // D2: the file form (`<hex>\n`) and the literal form are one key.
@@ -113,6 +140,10 @@ mod tests {
         assert_eq!(file.identity(), literal.identity());
         let p = InternalPrincipal::new("3f2a9c0d1e7b".to_owned());
         assert_eq!(p.record_form(&file), p.record_form(&literal));
-        assert_ne!(p.record_form(&literal).as_str(), p.storage_form(), "keyed, not the storage form");
+        assert_ne!(
+            p.record_form(&literal).as_str(),
+            p.storage_form(),
+            "keyed, not the storage form"
+        );
     }
 }
