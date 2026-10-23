@@ -230,6 +230,42 @@ fn chrome_devtools_names_its_chrome_prerequisite() {
     );
 }
 
+/// MIK-8511: the three reference servers move to 2.0.0 (operator ruling
+/// 2026-10-22), whose packages recommend Node 24. `init` writes memory and
+/// sequential-thinking enabled, so the descriptions carry the floor where
+/// users list servers.
+const REFERENCE_SERVERS_2_0_0: [(&str, &str); 3] = [
+    (
+        "filesystem",
+        "npx -y @modelcontextprotocol/server-filesystem@2.0.0",
+    ),
+    ("memory", "npx -y @modelcontextprotocol/server-memory@2.0.0"),
+    (
+        "sequential-thinking",
+        "npx -y @modelcontextprotocol/server-sequential-thinking@2.0.0",
+    ),
+];
+
+#[test]
+fn the_reference_servers_are_pinned_to_2_0_0() {
+    for (name, command) in REFERENCE_SERVERS_2_0_0 {
+        let entry = lookup(name).expect("a reference server is listed");
+        assert_eq!(entry.command, command, "{name}");
+    }
+}
+
+#[test]
+fn the_reference_servers_recommend_node_24_in_their_description() {
+    for (name, _) in REFERENCE_SERVERS_2_0_0 {
+        let entry = lookup(name).expect("a reference server is listed");
+        assert!(
+            entry.description.ends_with("(Node 24+)"),
+            "{name}: {}",
+            entry.description
+        );
+    }
+}
+
 /// What the gateway acts on in a pinned upstream package, read from the
 /// package itself at review time (MIK-8510): the version, and the
 /// `readOnlyHint` / `idempotentHint` of its one tool. The gateway reads the
