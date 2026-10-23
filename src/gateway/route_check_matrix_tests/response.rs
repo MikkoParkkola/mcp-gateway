@@ -332,9 +332,12 @@ pub(crate) const fn expect(
         // modern caller. Direct stores before its clamp and seal, so its replay
         // clamps and links as fresh (round 2, F2) and mints nothing to seal.
         (Mcp | Stdio, IdempotentReplay, Era::Modern, ShapeSeal) => ExpectedGap(RespTicket::Mik8747),
-        (Mcp | Stdio, IdempotentReplay, _, ShapeSeal | FirewallSeal | ClampSeal | SealSign) => {
-            NotApplicable(RespNa::ReplayReservesTheStoredDelivery)
-        }
+        (
+            Mcp | Stdio,
+            IdempotentReplay,
+            _,
+            FirewallSeal | ClampSeal | SealSign | StampSeal | FirewallStamp,
+        ) => NotApplicable(RespNa::ReplayReservesTheStoredDelivery),
         (Mcp | Stdio, IdempotentReplay, _, ClampLink) => {
             OrderInvisibleByOutcome(StoredBytesAlreadyClamped)
         }
@@ -345,9 +348,6 @@ pub(crate) const fn expect(
             _,
             ShapeSeal | FirewallSeal | ClampSeal | SealSign | FirewallStamp,
         ) => NotApplicable(RespNa::ReplayMintsNoReceipt),
-        (Mcp | Stdio, IdempotentReplay, _, StampSeal | FirewallStamp) => {
-            NotApplicable(RespNa::ReplayReservesTheStoredDelivery)
-        }
         (Mcp | Stdio, _, _, FirewallStamp) => ExpectedGap(RespTicket::Mik8745),
         (_, _, _, JudgeRebuild) => OrderInvisibleByOutcome(JudgeOnlyReplaces),
         (_, _, _, StampShape) => OrderInvisibleByOutcome(StampIgnoresShapedMembers),
