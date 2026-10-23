@@ -559,3 +559,12 @@ mod direct_signing_edge_tests;
 
 #[path = "normalize_annotation_tests.rs"]
 mod normalize_annotation_tests;
+
+/// MIK-8668 X-SHA golden, computed independently (Python hashlib).
+#[test]
+fn a_passthrough_identity_key_is_the_hex_sha256_of_the_credential() {
+    assert_eq!(
+        passthrough_identity_key("cred-1"),
+        "d9b90742146dc28626b7ac4ea88a3e2edfa2ad73830cf226e4b327375a13dcf1"
+    );
+}

@@ -122,4 +122,13 @@ mod tests {
             "cap evicts oldest"
         );
     }
+
+    /// MIK-8668 X-SHA golden, computed independently (Python hashlib).
+    #[test]
+    fn a_route_file_is_named_by_the_hex_sha256_of_the_route() {
+        assert_eq!(
+            file_name("route-1"),
+            "84fa41f7398a43079ab3a5a3e0ca80ab8286e363e28e85707f39b5c4e08622c6.json"
+        );
+    }
 }

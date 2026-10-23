@@ -792,3 +792,17 @@ mod clock_rows;
 
 #[path = "watch_source_charge_tests.rs"]
 mod charge;
+
+/// MIK-8668 X-SHA golden, computed independently (Python hashlib over the
+/// compact JSON bytes `{"a":1}`).
+#[test]
+fn a_projection_digest_is_sha256_tagged_hex() {
+    let projection: std::collections::BTreeMap<String, serde_json::Value> =
+        [("a".to_string(), serde_json::json!(1))]
+            .into_iter()
+            .collect();
+    assert_eq!(
+        super::shape::digest(&projection),
+        "sha256:015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862"
+    );
+}

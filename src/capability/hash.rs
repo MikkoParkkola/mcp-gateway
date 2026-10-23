@@ -265,4 +265,30 @@ mod tests {
             compute_capability_hash(with_cr)
         );
     }
+
+    /// MIK-8668 X-SHA golden, computed independently (Python hashlib): a file
+    /// with no `sha256:` line hashes as is, and CRLF reads as LF.
+    #[test]
+    fn the_capability_hash_of_a_fixed_file_is_its_hex_sha256() {
+        let expected = "f06370f809d9469b8ba65af0ff5a8676a6bc6ef2c0e751ea44a4916dfe0d4022";
+        assert_eq!(compute_capability_hash("name: x\nversion: 1\n"), expected);
+        assert_eq!(
+            compute_capability_hash("name: x\r\nversion: 1\r\n"),
+            expected
+        );
+    }
+
+    /// MIK-8668: a shipped capability's committed `sha256:` pin still matches
+    /// its own bytes, so a change in what the hash covers shows up against a
+    /// stored digest, not only against a golden computed by the same code.
+    #[test]
+    fn a_shipped_capability_still_matches_its_committed_pin() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("capabilities/automation/bus_announce.yaml");
+        let content = std::fs::read_to_string(path).expect("the shipped capability reads");
+        assert_eq!(
+            compute_capability_hash(&content),
+            "86d79716a495b5d5784d4764bf26b7cd5916d7d9fcc366d02e84f400af99fc5e"
+        );
+    }
 }

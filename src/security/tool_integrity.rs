@@ -336,4 +336,21 @@ mod tests {
             ToolIntegrityChecker::hash_tool(&t2),
         );
     }
+
+    /// MIK-8668 X-SHA golden, computed independently (Python hashlib over the
+    /// bytes name, description, input schema JSON and output schema JSON, in
+    /// that order with no separators).
+    #[test]
+    fn a_tool_fingerprint_is_the_hex_sha256_of_its_parts_in_order() {
+        let mut tool = make_tool("t", "d", json!({"type": "object"}));
+        assert_eq!(
+            ToolIntegrityChecker::hash_tool(&tool),
+            "8fcae922764174a28f151ed28dd652a19425c776fda9e34f665ac568c25c8787"
+        );
+        tool.output_schema = Some(json!({"type": "string"}));
+        assert_eq!(
+            ToolIntegrityChecker::hash_tool(&tool),
+            "bc3f0b1d3e72b9a7cf6db5b1b15312a31c850f9c1b47290c8c91f15f680abe52"
+        );
+    }
 }

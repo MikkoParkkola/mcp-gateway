@@ -443,3 +443,13 @@ async fn the_commit_admits_no_silent_start_after_its_check() {
     );
     assert!(first("backend.gone.tools_changed").await.is_ok());
 }
+
+/// MIK-8668 X-SHA golden, computed independently (Python hashlib over the
+/// canonical bytes `["p","u","n",{}]`, first 32 hex digits).
+#[test]
+fn a_subscription_id_is_sub_and_32_hex_of_the_canonical_sha256() {
+    assert_eq!(
+        subscription_id("p", "u", "n", &json!({})),
+        "sub_4df49ec120b47e6e06713638c5e82342"
+    );
+}
