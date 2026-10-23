@@ -45,7 +45,9 @@ async fn a_task_frame_record_names_the_listener_subject() {
         denied_tools: None,
         admin: false,
         // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
-        principal: "anonymous".to_string(),
+        principal: crate::gateway::record_principal::InternalPrincipal::new(
+            "anonymous".to_string(),
+        ),
         authenticated: false,
         credential_kind: crate::security::audit::CredentialKind::ApiKey,
     };
@@ -170,7 +172,7 @@ async fn a_task_frame_delivery_names_the_api_key_credential() {
     assert_eq!(record["who"]["credential_kind"], "api_key", "{record}");
     assert_eq!(
         record["who"]["principal"],
-        reader.principal.as_str(),
+        reader.principal.storage_form(),
         "{record}"
     );
 }

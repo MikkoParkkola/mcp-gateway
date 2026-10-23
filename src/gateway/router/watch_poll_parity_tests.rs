@@ -104,7 +104,9 @@ async fn the_watch_host_poll_refuses_a_gone_key_and_a_blocked_pattern() {
         principal: "subscriber".into(),
         api_key: ApiKeyRef {
             name: name.into(),
-            principal: crate::gateway::auth::principal_of(name),
+            principal: crate::gateway::auth::principal_of(name)
+                .storage_form()
+                .to_owned(),
         },
     };
     let fx = fixture_firewalled(Answer::Ok).await;
@@ -279,7 +281,10 @@ async fn a_poll_runs_only_what_the_executor_finds_read_only() {
         let client = fx
             .state
             .auth_config
-            .client_for_key("k-budget", &crate::gateway::auth::principal_of("k-budget"))
+            .client_for_key(
+                "k-budget",
+                crate::gateway::auth::principal_of("k-budget").storage_form(),
+            )
             .expect("the fixture key is live");
         let polled = super::super::watch_poll::poll_capability(
             &fx.state,
@@ -317,7 +322,14 @@ async fn the_watch_host_admits_only_a_live_granted_key() {
             principal,
         },
     };
-    let live = |name: &str| holder(name, crate::gateway::auth::principal_of(name));
+    let live = |name: &str| {
+        holder(
+            name,
+            crate::gateway::auth::principal_of(name)
+                .storage_form()
+                .to_owned(),
+        )
+    };
     let now = crate::clock::utc_now().expect("a readable clock");
     let fx = fixture(Answer::Ok, |_| {}).await;
     let host = GatewayWatchHost::new(&fx.state);

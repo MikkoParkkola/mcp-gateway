@@ -73,9 +73,13 @@ fn digest_itself_is_not_a_credential() {
 #[test]
 fn principal_unchanged_across_migration() {
     let expected = hex_of(KEY)[..12].to_string();
-    assert_eq!(super::principal_of(KEY), expected, "today's formula");
+    assert_eq!(
+        super::principal_of(KEY).storage_form(),
+        expected,
+        "today's formula"
+    );
     let client = digest_key(None).validate_token(KEY).expect("authenticates");
-    assert_eq!(client.principal, expected);
+    assert_eq!(client.principal.storage_form(), expected);
 }
 
 /// Drive the real middleware on a protected path. Returns the status and

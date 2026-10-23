@@ -138,7 +138,9 @@ async fn meta_mcp_dispatch(
         caller: crate::identity_propagation::CallerProof::new(
             verified_identity.as_ref(),
             crate::identity_propagation::CallerProvenance::classify(
-                client.as_ref().map(|client| client.principal.as_str()),
+                client
+                    .as_ref()
+                    .map(|client| client.principal.storage_form()),
             ),
         ),
     };

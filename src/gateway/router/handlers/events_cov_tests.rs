@@ -62,7 +62,7 @@ async fn a_key_server_subscription_binds_the_token_jti_and_keeps_its_expiry() {
         credential,
         crate::events::Credential {
             kind: CredentialKind::KeyServerToken,
-            principal: caller.principal.clone(),
+            principal: caller.principal.storage_form().to_owned(),
             api_key: None,
             expires_at: with.expires_at,
             binding: Some(LiveBinding::KeyServerToken {
@@ -95,7 +95,7 @@ async fn a_dashboard_subscription_binds_the_session_and_expires_one_idle_timeout
     let after = crate::clock::utc_now().expect("the test host's clock reads after 1970");
     // THEN
     assert_eq!(credential.kind, CredentialKind::DashboardSession);
-    assert_eq!(credential.principal, caller.principal);
+    assert_eq!(credential.principal, caller.principal.storage_form());
     assert_eq!(credential.api_key, None);
     assert_eq!(
         credential.binding,

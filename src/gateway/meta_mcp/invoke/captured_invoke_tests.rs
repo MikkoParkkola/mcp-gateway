@@ -214,7 +214,7 @@ async fn call_alpha(
     let context = MetaMcpCallerContext {
         signing: None,
         execution: None,
-        credential_principal: Some(principal.as_str()),
+        credential_principal: Some(principal.storage_form()),
         authentication: Authentication::Authenticated,
         credential_kind: CredentialKind::OidcBearer,
         is_modern: false,

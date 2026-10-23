@@ -314,8 +314,9 @@ impl CustodyFixture {
             caller.client.authenticated && !caller.client.principal.is_empty(),
             "VOID: custody bearer did not authenticate"
         );
-        let owner =
-            crate::gateway::session_id::SessionOwner::Credential(caller.client.principal.clone());
+        let owner = crate::gateway::session_id::SessionOwner::Credential(
+            caller.client.principal.storage_form().to_owned(),
+        );
         let mux = Arc::new(NotificationMultiplexer::new(
             Arc::new(crate::backend::BackendRegistry::new()),
             crate::config::StreamingConfig::default(),

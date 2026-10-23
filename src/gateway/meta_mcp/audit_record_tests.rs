@@ -186,7 +186,9 @@ fn context<'a>(
 
 fn api_key_caller() -> Caller {
     Caller {
-        principal: crate::gateway::auth::principal_of("k-SECRET-123"),
+        principal: crate::gateway::auth::principal_of("k-SECRET-123")
+            .storage_form()
+            .to_owned(),
         account: "ci".to_string(),
         authenticated: true,
         grant: None,
@@ -205,7 +207,9 @@ fn oidc_caller() -> Caller {
     };
     let actor = identity.stable_actor_id();
     Caller {
-        principal: crate::gateway::auth::principal_of(&actor),
+        principal: crate::gateway::auth::principal_of(&actor)
+            .storage_form()
+            .to_owned(),
         account: actor,
         authenticated: true,
         grant: Some(GrantSubject::new(

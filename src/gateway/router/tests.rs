@@ -343,7 +343,9 @@ pub(crate) async fn audience_owner(
     let auth = super::build_auth_state(state);
     match crate::gateway::auth::live::current_client(&auth, held).await {
         Some(c) if c.authenticated && !c.principal.is_empty() => {
-            crate::gateway::session_id::SessionOwner::Credential(c.principal)
+            crate::gateway::session_id::SessionOwner::Credential(
+                c.principal.storage_form().to_owned(),
+            )
         }
         _ => crate::gateway::session_id::SessionOwner::Anonymous,
     }
@@ -551,7 +553,9 @@ fn scoped_client(
         allowed_tools,
         denied_tools: None,
         admin: false,
-        principal: format!("principal-{name}"),
+        principal: crate::gateway::record_principal::InternalPrincipal::new(format!(
+            "principal-{name}"
+        )),
         authenticated: true,
         credential_kind: crate::security::audit::CredentialKind::ApiKey,
     }

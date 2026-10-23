@@ -537,7 +537,7 @@ fn stdio_principal_admits_a_keyed_mutation_and_anonymous_http_still_cannot() {
     for (label, principal) in [
         (
             "an unauthenticated HTTP caller",
-            Some(anonymous.principal.as_str()),
+            Some(anonymous.principal.storage_form()),
         ),
         ("a caller with no credential at all", None),
     ] {

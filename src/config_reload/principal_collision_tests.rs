@@ -181,7 +181,7 @@ fn the_principal_encoding_is_unchanged() {
     // MIK-7973.COLLIDE.4: known answer, computed outside the gateway
     // (first 12 hex characters of SHA-256 of the token).
     const TOKEN: &str = "mik7973-known-answer";
-    assert_eq!(principal_of(TOKEN), "07635921daa7");
+    assert_eq!(principal_of(TOKEN).storage_form(), "07635921daa7");
     let config: crate::config::AuthConfig = crate::yaml::from_str(&format!(
         "enabled: true\napi_keys:\n  - name: alpha\n    key_sha256: \"{}\"\n    backends: [\"*\"]\n",
         digest_of(TOKEN)
@@ -190,5 +190,5 @@ fn the_principal_encoding_is_unchanged() {
     let resolved = ResolvedAuthConfig::try_from_config(&config, &crate::config::EnvOverlay::none())
         .expect("one key resolves");
     let client = resolved.validate_token(TOKEN).expect("the key validates");
-    assert_eq!(client.principal, "07635921daa7");
+    assert_eq!(client.principal.storage_form(), "07635921daa7");
 }

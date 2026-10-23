@@ -51,7 +51,11 @@ impl LiveCredentials {
     /// the full digest the re-check compares.
     pub(crate) fn static_bearer(bearer: Option<&str>) -> (Option<String>, Option<String>) {
         (
-            bearer.map(crate::gateway::auth::principal_of),
+            bearer.map(|token| {
+                crate::gateway::auth::principal_of(token)
+                    .storage_form()
+                    .to_owned()
+            }),
             bearer.map(|token| crate::hashing::sha256_hex(token.as_bytes())),
         )
     }

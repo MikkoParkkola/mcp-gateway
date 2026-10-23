@@ -218,7 +218,7 @@ fn policy_context<'a>(
         is_modern: true,
         // This context checks authorization only; it never accesses a cache.
         protocol_revision: None,
-        credential_principal: caller.client.map(|client| client.principal.as_str()),
+        credential_principal: caller.client.map(|client| client.principal.storage_form()),
         authentication: crate::gateway::meta_mcp::Authentication::of(caller.client),
         credential_kind: crate::security::audit::CredentialKind::of(caller.client),
         execution: None,
@@ -529,7 +529,9 @@ pub(super) fn task_frames(
         verified_identity: caller.verified_identity.cloned(),
         input_capabilities: caller.input_capabilities,
         session_id: caller.session_id.map(str::to_owned),
-        principal: caller.client.map(|client| client.principal.clone()),
+        principal: caller
+            .client
+            .map(|client| client.principal.storage_form().to_owned()),
         // What cannot be re-proven at delivery is not trusted at delivery: an
         // agent token, or a grant subject that is not the API key, the
         // connection's certificate, or the verified bearer identity (whose
@@ -563,7 +565,7 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
                     && self
                         .principal
                         .as_ref()
-                        .is_none_or(|opened_as| *opened_as == reader.principal)
+                        .is_none_or(|opened_as| *opened_as == reader.principal.storage_form())
             })
             .and_then(|id| self.state.tasks.get_held(&self.owner, id).ok());
         let live = RecoveryCaller {

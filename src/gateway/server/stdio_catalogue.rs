@@ -43,7 +43,9 @@ fn stdio_client() -> AuthenticatedClient {
         denied_tools: None,
         admin: false,
         // MIK-6704.IDENT.1a: the stdio transport constant; spawning the process is the credential.
-        principal: STDIO_CREDENTIAL_PRINCIPAL.to_string(),
+        principal: crate::gateway::record_principal::InternalPrincipal::new(
+            STDIO_CREDENTIAL_PRINCIPAL.to_string(),
+        ),
         quota_principal: None,
         authenticated: true,
         credential_kind: crate::security::audit::CredentialKind::LocalTransport,

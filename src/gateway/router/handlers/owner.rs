@@ -28,7 +28,7 @@ pub(super) fn session_owner(client: Option<&AuthenticatedClient>) -> SessionOwne
         // The validated principal, a digest of the secret: two API keys
         // configured with the same display name are different owners.
         Some(c) if c.authenticated && !c.principal.is_empty() => {
-            SessionOwner::Credential(c.principal.clone())
+            SessionOwner::Credential(c.principal.storage_form().to_owned())
         }
         // Every other caller, named or not, is one class: an unvalidated name is
         // not a credential. Only the minted session id separates them (F9).

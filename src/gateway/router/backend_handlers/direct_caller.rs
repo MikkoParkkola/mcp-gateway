@@ -52,7 +52,9 @@ impl Caller {
         crate::identity_propagation::CallerProof::new(
             self.verified_identity.as_ref(),
             crate::identity_propagation::CallerProvenance::classify(
-                self.client.as_ref().map(|client| client.principal.as_str()),
+                self.client
+                    .as_ref()
+                    .map(|client| client.principal.storage_form()),
             ),
         )
     }
@@ -564,7 +566,7 @@ fn intake_refusal(state: &AppState, request: &Value, caller: &Caller) -> Option<
         caller
             .client
             .as_ref()
-            .map(|client| client.principal.as_str()),
+            .map(|client| client.principal.storage_form()),
         caller.grant_subject.as_ref(),
         Some(caller.spend_key.as_str()).filter(|key| !key.is_empty()),
     )?;

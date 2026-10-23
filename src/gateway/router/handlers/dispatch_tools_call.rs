@@ -383,7 +383,9 @@ pub(super) async fn tools_call(
         signing: None,
         is_modern,
         protocol_revision: protocol_revision_owned.as_deref(),
-        credential_principal: client.as_ref().map(|client| client.principal.as_str()),
+        credential_principal: client
+            .as_ref()
+            .map(|client| client.principal.storage_form()),
         authentication: crate::gateway::meta_mcp::Authentication::of(client.as_ref()),
         credential_kind: crate::security::audit::CredentialKind::of(client.as_ref()),
         authorizer: router_authorizer,

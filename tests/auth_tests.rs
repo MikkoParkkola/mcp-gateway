@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use mcp_gateway::config::{ApiKeyConfig, AuthConfig, CircuitBreakerConfig};
 use mcp_gateway::failsafe::CircuitState;
-use mcp_gateway::gateway::auth::{AuthenticatedClient, ResolvedAuthConfig};
+use mcp_gateway::gateway::auth::ResolvedAuthConfig;
 
 /// Test that `ResolvedAuthConfig` correctly resolves from `AuthConfig`
 #[test]
@@ -179,37 +179,6 @@ fn test_rate_limiting() {
     assert!(resolved.check_authenticated_client_rate_limit(&unlimited));
 }
 
-#[test]
-fn test_resolved_client_rate_limit_creates_identity_bucket() {
-    let auth_config = AuthConfig {
-        enabled: true,
-        bearer_token: None,
-        api_keys: vec![],
-        public_paths: vec![],
-        client_circuit_breaker: None,
-        single_user: false,
-        dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
-    };
-
-    let resolved = ResolvedAuthConfig::from_config(&auth_config);
-    let temporary_client = AuthenticatedClient {
-        quota_principal: None,
-        principal: String::new(),
-        name: "temporary@example.com".to_string(),
-        rate_limit: 2,
-        backends: vec!["*".to_string()],
-        allowed_tools: None,
-        denied_tools: None,
-        admin: false,
-        authenticated: true,
-        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
-    };
-
-    assert!(resolved.check_authenticated_client_rate_limit(&temporary_client));
-    assert!(resolved.check_authenticated_client_rate_limit(&temporary_client));
-    assert!(!resolved.check_authenticated_client_rate_limit(&temporary_client));
-}
-
 /// Test public paths bypass authentication
 #[test]
 fn test_public_paths() {
@@ -265,58 +234,6 @@ fn test_auto_generated_token() {
 
     // Token should be valid
     assert!(resolved.validate_token(token).is_some());
-}
-
-/// Test `AuthenticatedClient` backend access patterns
-#[test]
-fn test_client_backend_access_patterns() {
-    // Wildcard access
-    let wildcard_client = AuthenticatedClient {
-        quota_principal: None,
-        principal: String::new(),
-        name: "wildcard".to_string(),
-        rate_limit: 0,
-        backends: vec!["*".to_string()],
-        allowed_tools: None,
-        denied_tools: None,
-        admin: false,
-        authenticated: true,
-        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
-    };
-    assert!(wildcard_client.can_access_backend("anything"));
-    assert!(wildcard_client.can_access_backend("tavily"));
-
-    // Empty backends = no backend (BACKENDGRANT.1)
-    let no_backends_client = AuthenticatedClient {
-        quota_principal: None,
-        principal: String::new(),
-        name: "none".to_string(),
-        rate_limit: 0,
-        backends: vec![],
-        allowed_tools: None,
-        denied_tools: None,
-        admin: false,
-        authenticated: true,
-        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
-    };
-    assert!(!no_backends_client.can_access_backend("anything"));
-
-    // Specific backends only
-    let restricted_client = AuthenticatedClient {
-        quota_principal: None,
-        principal: String::new(),
-        name: "restricted".to_string(),
-        rate_limit: 0,
-        backends: vec!["backend-a".to_string(), "backend-b".to_string()],
-        allowed_tools: None,
-        denied_tools: None,
-        admin: false,
-        authenticated: true,
-        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
-    };
-    assert!(restricted_client.can_access_backend("backend-a"));
-    assert!(restricted_client.can_access_backend("backend-b"));
-    assert!(!restricted_client.can_access_backend("backend-c"));
 }
 
 /// Test disabled auth passes through

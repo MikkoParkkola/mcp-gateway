@@ -119,7 +119,7 @@ fn fixtures() -> Fixtures {
         credential_owner: format!(
             "{}{}",
             crate::gateway::auth::CREDENTIAL_OWNER_PREFIX,
-            crate::gateway::auth::principal_of("alpha")
+            crate::gateway::auth::principal_of("alpha").storage_form()
         ),
         actor,
     }

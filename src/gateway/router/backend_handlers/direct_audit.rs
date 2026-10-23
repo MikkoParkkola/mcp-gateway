@@ -196,7 +196,7 @@ async fn audited_call_judged(
         });
     let (credential_kind, principal) = presented.unwrap_or((
         crate::security::audit::CredentialKind::of(None),
-        String::new(),
+        Default::default(),
     ));
     let mut call = None;
     let mut reads = DirectReads::default();
@@ -268,7 +268,7 @@ async fn audited_call_judged(
                 &correlation,
                 DeliveryCredential {
                     kind: credential_kind,
-                    principal: &principal,
+                    principal: principal.storage_form(),
                 },
                 read,
             )

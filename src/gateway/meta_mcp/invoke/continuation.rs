@@ -535,7 +535,7 @@ fn direct_quota_key(
         QuotaSource::Subject(subject)
     } else {
         let client = client.filter(|c| c.authenticated && !c.principal.is_empty())?;
-        QuotaSource::Credential(&client.principal)
+        QuotaSource::Credential(client.principal.storage_form())
     };
     Some(QuotaKey::new(source))
 }
@@ -552,7 +552,7 @@ fn direct_source(
     }
     crate::gateway::meta_mcp::support::key_binding(
         guard,
-        client.map(|client| client.principal.as_str()),
+        client.map(|client| client.principal.storage_form()),
         crate::gateway::meta_mcp::Authentication::of(client),
     )
 }

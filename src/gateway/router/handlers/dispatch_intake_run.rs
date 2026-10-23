@@ -284,7 +284,9 @@ pub(in crate::gateway::router::handlers) async fn intake(
             caller: crate::identity_propagation::CallerProof::new(
                 verified_identity.as_ref(),
                 crate::identity_propagation::CallerProvenance::classify(
-                    client.as_ref().map(|client| client.principal.as_str()),
+                    client
+                        .as_ref()
+                        .map(|client| client.principal.storage_form()),
                 ),
             ),
         };
@@ -696,7 +698,9 @@ pub(super) fn intake_judgement(
     crate::gateway::meta_mcp::intake_refusal(
         request,
         crate::gateway::meta_mcp::AdmissionOwner::routed(&owners.admission),
-        task_caller.client.map(|client| client.principal.as_str()),
+        task_caller
+            .client
+            .map(|client| client.principal.storage_form()),
         task_caller.subject,
         Some(caller_key.as_str()).filter(|key| !key.is_empty()),
     )

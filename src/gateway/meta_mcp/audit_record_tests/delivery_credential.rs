@@ -10,6 +10,7 @@ use super::{Caller, args, context, meta, ok_result, only_record};
 use crate::gateway::authz::AllowAll;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::response_security::DeliveryCredential;
+use crate::gateway::record_principal::InternalPrincipal;
 use crate::identity_grants::GrantSubject;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::audit::CredentialKind;
@@ -108,7 +109,7 @@ fn caller_of(
     identity: crate::key_server::oidc::VerifiedIdentity,
 ) -> Caller {
     Caller {
-        principal: client.principal.clone(),
+        principal: client.principal.storage_form().to_owned(),
         account: client.name.clone(),
         authenticated: true,
         grant: Some(GrantSubject::new(
@@ -196,7 +197,7 @@ async fn meta_delivery_records_name_the_harness_credentials() {
         let client = crate::gateway::auth::AuthenticatedClient {
             quota_principal: Some(crate::gateway::auth::QuotaPrincipal::dashboard_session()),
             name: "dashboard".to_string(),
-            principal: "dashboard-session".to_string(),
+            principal: InternalPrincipal::new("dashboard-session".to_string()),
             rate_limit: 0,
             backends: vec!["*".to_string()],
             allowed_tools: None,

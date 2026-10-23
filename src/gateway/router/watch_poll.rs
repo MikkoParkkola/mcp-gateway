@@ -204,7 +204,7 @@ impl WatchHost for GatewayWatchHost {
             caller: crate::identity_propagation::CallerProof::new(
                 None,
                 crate::identity_propagation::CallerProvenance::classify(Some(
-                    client.principal.as_str(),
+                    client.principal.storage_form(),
                 )),
             ),
         };

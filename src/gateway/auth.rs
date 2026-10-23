@@ -24,6 +24,7 @@ use super::middleware::{
 };
 use crate::config::CircuitBreakerConfig;
 use crate::failsafe::CircuitBreaker;
+use crate::gateway::record_principal::InternalPrincipal;
 use crate::key_server::KeyServer;
 
 #[path = "auth_live.rs"]
@@ -60,8 +61,8 @@ type ClientRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 ///
 /// Returns the first 12 hex chars of the SHA-256 digest — enough to correlate
 /// which credential is active across logs, useless as a credential itself.
-pub(crate) fn principal_of(token: &str) -> String {
-    bearer_token_fingerprint(token)
+pub(crate) fn principal_of(token: &str) -> InternalPrincipal {
+    InternalPrincipal::new(bearer_token_fingerprint(token))
 }
 
 fn bearer_token_fingerprint(token: &str) -> String {
@@ -73,8 +74,8 @@ fn bearer_token_fingerprint(token: &str) -> String {
 /// Persisted as the key of sessions, grants, journals and task owners, so it
 /// is never lengthened; two credentials that share one are refused instead
 /// ([`refuse_shared_principals`], MIK-7973).
-pub(crate) fn principal_of_digest(digest: &[u8; 32]) -> String {
-    hex::encode(&digest[..6])
+pub(crate) fn principal_of_digest(digest: &[u8; 32]) -> InternalPrincipal {
+    InternalPrincipal::new(hex::encode(&digest[..6]))
 }
 
 /// The prefix of a credential caller's owner key, `credential:<principal>`: a
@@ -209,7 +210,7 @@ pub struct AuthenticatedClient {
     /// operator-chosen and two API keys may share one, which would let them
     /// attach to each other's sessions. Empty for an identity that presented
     /// no credential.
-    pub principal: String,
+    pub(crate) principal: InternalPrincipal,
     /// Authenticated nonce-quota authority; never derived from audit labels.
     pub quota_principal: Option<QuotaPrincipal>,
     /// Whether a credential was actually presented and validated.

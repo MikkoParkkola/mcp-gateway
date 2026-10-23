@@ -573,7 +573,7 @@ impl<'a> DeliveryCredential<'a> {
     ) -> Self {
         Self {
             kind: crate::security::audit::CredentialKind::of(client),
-            principal: client.map_or("", |c| c.principal.as_str()),
+            principal: client.map_or("", |c| c.principal.storage_form()),
         }
     }
     /// The stdio transport.

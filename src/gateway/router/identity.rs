@@ -400,7 +400,8 @@ pub(super) fn caller_key(
     client
         .filter(|c| c.authenticated && !c.principal.is_empty())
         .map_or_else(String::new, |c| {
-            format!("credential:{}:{}", c.principal.len(), c.principal)
+            let principal = c.principal.storage_form();
+            format!("credential:{}:{}", principal.len(), principal)
         })
 }
 

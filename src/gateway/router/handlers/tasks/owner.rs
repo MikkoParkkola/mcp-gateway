@@ -59,7 +59,7 @@ fn session_owner_key(client: Option<&crate::gateway::auth::AuthenticatedClient>)
             format!(
                 "{}{}",
                 crate::gateway::auth::CREDENTIAL_OWNER_PREFIX,
-                c.principal
+                c.principal.storage_form()
             )
         } else {
             String::new()

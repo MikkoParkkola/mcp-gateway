@@ -75,7 +75,7 @@ fn client(principal: &str) -> AuthenticatedClient {
         denied_tools: None,
         admin: false,
         // MIK-6704.IDENT.1a: test fixture standing in for the router's digest.
-        principal: principal.to_string(),
+        principal: crate::gateway::record_principal::InternalPrincipal::new(principal.to_string()),
         quota_principal: None,
         authenticated: !principal.is_empty(),
         credential_kind: crate::security::audit::CredentialKind::ApiKey,

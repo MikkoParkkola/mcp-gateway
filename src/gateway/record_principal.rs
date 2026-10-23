@@ -48,7 +48,9 @@ impl RecordPrincipalKey {
 }
 
 /// A caller's internal principal: never printed, never serialized.
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+///
+/// `Default` is the empty principal of an identity that presented no credential.
+#[derive(Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) struct InternalPrincipal(String);
 
 impl fmt::Debug for InternalPrincipal {
@@ -61,6 +63,11 @@ impl InternalPrincipal {
     /// Wrap the internal principal string.
     pub(crate) fn new(value: String) -> Self {
         Self(value)
+    }
+
+    /// Whether this is the empty principal (no credential presented).
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     /// The exact stored bytes: for stores only (sessions, grants, journals,

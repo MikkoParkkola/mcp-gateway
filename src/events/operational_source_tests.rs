@@ -49,6 +49,8 @@ fn keys(ops_admin: bool) -> Vec<ApiKeyConfig> {
 
 fn principal(secret: &str) -> String {
     crate::gateway::auth::principal_of(secret)
+        .storage_form()
+        .to_owned()
 }
 
 /// A hub whose controls read `keys` from a live config the test can swap.

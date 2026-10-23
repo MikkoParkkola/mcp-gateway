@@ -157,7 +157,7 @@ fn key_holder(principal: &str) -> AuthenticatedClient {
         denied_tools: None,
         admin: false,
         // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
-        principal: principal.to_string(),
+        principal: crate::gateway::record_principal::InternalPrincipal::new(principal.to_string()),
         authenticated: true,
         credential_kind: crate::security::audit::CredentialKind::ApiKey,
     }
@@ -229,7 +229,7 @@ async fn s3b1_premise_a_key_holders_task_worker_carries_the_prefixed_owner() {
         format!(
             "{}{}",
             crate::gateway::auth::CREDENTIAL_OWNER_PREFIX,
-            client.principal
+            client.principal.storage_form()
         ),
         "the task worker's principal is not the prefixed owner S3b1 assumes"
     );

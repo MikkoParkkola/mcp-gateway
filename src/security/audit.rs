@@ -230,7 +230,7 @@ impl AuditWho {
     ) -> Self {
         Self::from_parts(
             CredentialKind::of(client),
-            client.map(|c| c.principal.as_str()),
+            client.map(|c| c.principal.storage_form()),
             client.map(|c| c.name.as_str()),
             grant_subject,
         )
