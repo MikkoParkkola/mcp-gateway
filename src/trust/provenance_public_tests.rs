@@ -267,17 +267,39 @@ fn a_blank_seed_resolves_to_no_signer() {
     }
 }
 
+/// Every seed length but 32 is refused, value-free. The refusal is ring's own
+/// (`Ed25519KeyPair::from_seed_unchecked` converts the slice to `[u8; 32]`),
+/// so this pins the dependency's behaviour, not only two lengths. A 0-byte
+/// seed encodes to an empty value, which resolves to no signer.
 #[test]
 fn a_short_or_long_seed_is_refused() {
-    for seed in [vec![7u8; 31], vec![7u8; 33]] {
+    for seed in [vec![7u8; 1], vec![7u8; 31], vec![7u8; 33], vec![7u8; 64]] {
         let encoded = seed_b64(&seed);
         let (_dir, env) = overlay_with(&[
             (PROVENANCE_SEED_ENV, encoded.as_str()),
             (PROVENANCE_KEY_ID_ENV, KID_ONE),
         ]);
         let error = resolve_public_signer(&env, ATTESTATION_ID).expect_err("length is refused");
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Configuration validation error: {PROVENANCE_SEED_ENV} must be standard base64 of exactly 32 bytes"
+            ),
+            "the refusal text is unchanged for {} bytes",
+            seed.len()
+        );
         assert_value_free(&error, &seed);
     }
+    let (_dir, env) = overlay_with(&[
+        (PROVENANCE_SEED_ENV, seed_b64(&[]).as_str()),
+        (PROVENANCE_KEY_ID_ENV, KID_ONE),
+    ]);
+    assert!(
+        resolve_public_signer(&env, ATTESTATION_ID)
+            .expect("an empty seed is not an error")
+            .is_none(),
+        "a 0-byte seed resolves to no signer"
+    );
 }
 
 #[test]

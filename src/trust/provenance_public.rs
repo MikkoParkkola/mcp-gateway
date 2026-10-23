@@ -156,11 +156,6 @@ pub(crate) fn resolve_public_signer(
             "{PROVENANCE_SEED_ENV} must be standard base64 of exactly 32 bytes"
         ))
     })?;
-    if seed.len() != 32 {
-        return Err(crate::Error::ConfigValidation(format!(
-            "{PROVENANCE_SEED_ENV} must be standard base64 of exactly 32 bytes"
-        )));
-    }
     let kid = env.resolve(PROVENANCE_KEY_ID_ENV).ok_or_else(|| {
         crate::Error::ConfigValidation(format!(
             "{PROVENANCE_KEY_ID_ENV} is required when {PROVENANCE_SEED_ENV} is set"
@@ -176,6 +171,8 @@ pub(crate) fn resolve_public_signer(
             "{PROVENANCE_KEY_ID_ENV} must not equal the attestation key id or its bnaut/ form"
         )));
     }
+    // The seed's length is the only thing `from_seed_unchecked` rejects, so
+    // its refusal is the length check (a short or long seed lands here).
     let key_pair = ring::signature::Ed25519KeyPair::from_seed_unchecked(&seed).map_err(|_| {
         crate::Error::ConfigValidation(format!(
             "{PROVENANCE_SEED_ENV} must be standard base64 of exactly 32 bytes"
