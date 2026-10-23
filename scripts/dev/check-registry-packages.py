@@ -372,9 +372,13 @@ def judge_reply(line: bytes) -> str | None:
         return "answered initialize without a result"
     if not isinstance(result.get("protocolVersion"), str) or not result["protocolVersion"]:
         return "answered initialize without protocolVersion"
+    if not isinstance(result.get("capabilities"), dict):
+        return "answered initialize without capabilities"
     info = result.get("serverInfo")
-    if not isinstance(info, dict) or not isinstance(info.get("name"), str):
+    if not isinstance(info, dict) or not isinstance(info.get("name"), str) or not info["name"]:
         return "answered initialize without serverInfo"
+    if not isinstance(info.get("version"), str):
+        return "answered initialize without serverInfo.version"
     return None
 
 
@@ -548,9 +552,13 @@ def start_one(entry: dict[str, str], plan: tuple[str, str, str], expected) -> tu
     except subprocess.TimeoutExpired as e:
         return f"timed out after {e.timeout} s", None
     finally:
-        for name in launched:
-            run_container(["docker", "rm", "-f", name], None, 30)
-        run_container(["docker", "volume", "rm", "-f", volume], None, 30)
+        for argv in [["docker", "rm", "-f", name] for name in launched] + [["docker", "volume", "rm", "-f", volume]]:
+            try:
+                rc, _, err = run_container(argv, None, 30)
+                if rc != 0:
+                    print(f"WARN cleanup {' '.join(argv)} exited {rc}: {tail_text(err)}")
+            except subprocess.TimeoutExpired:
+                print(f"WARN cleanup {' '.join(argv)} timed out")
 
 
 def start_all(entries: list[dict[str, str]], records: dict, missing: dict) -> int:
@@ -558,7 +566,10 @@ def start_all(entries: list[dict[str, str]], records: dict, missing: dict) -> in
     failed, passed, eligible = 0, 0, 0
     kinds = {p[0] for p in map(classify, entries) if not isinstance(p, str) and p[0] in IMAGE}
     for kind in sorted(kinds):
-        rc, _, err = run_container(["docker", "pull", IMAGE[kind]], None, 600)
+        try:
+            rc, _, err = run_container(["docker", "pull", IMAGE[kind]], None, 600)
+        except subprocess.TimeoutExpired:
+            rc, err = -1, b"timed out after 600 s"
         if rc != 0:
             print(f"FAIL image {IMAGE[kind]}: pull failed: {tail_text(err)}")
             return 1
@@ -622,7 +633,9 @@ def main(argv: list[str]) -> int:
     for line in errors + orphans:
         print(f"FAIL {line}")
     if mode == "start":
-        return start_all(entries, records, missing) or (1 if errors or orphans else 0)
+        if errors:
+            return 1
+        return start_all(entries, records, missing) or (1 if orphans else 0)
     failures = []
     for entry in entries:
         plan = classify(entry)

@@ -391,6 +391,7 @@ def o11_argv_isolation():
         expect(not any(a.startswith("/") and ":" in a and not a.endswith(":/work") for a in argv if a != COMMON_FLAGS[-1]),
                f"{step} has a host bind mount")
         if step == "setup":
+            expect(has_seq(argv, ["--user", "0:0"]), "setup must run as root explicitly (--user 0:0)")
             caps_added = [argv[i + 1] for i, a in enumerate(argv) if a == "--cap-add"]
             expect(caps_added == ["CHOWN"], f"setup may get back CHOWN only, got {caps_added}")
             expect(env_of(argv) == {}, f"setup passes environment: {env_of(argv)}")
@@ -473,6 +474,11 @@ ok_request = (
 def send(obj):
     sys.stdout.write(json.dumps(obj) + "\\n"); sys.stdout.flush()
 GOOD = {"protocolVersion": "2025-06-18", "capabilities": {}, "serverInfo": {"name": "fake", "version": "1"}}
+def without(*path):
+    import copy
+    r = copy.deepcopy(GOOD); d = r
+    for k in path[:-1]: d = d[k]
+    d.pop(path[-1]); return r
 """
 
 FAKES = {
@@ -483,14 +489,17 @@ FAKES = {
     "error_reply": "send({'jsonrpc': '2.0', 'id': 1, 'error': {'code': -32600, 'message': 'no'}}); time.sleep(30)",
     "exit3": "sys.exit(3)",
     "no_result": "send({'jsonrpc': '2.0', 'id': 1}); time.sleep(30)",
-    "no_protocol": "send({'jsonrpc': '2.0', 'id': 1, 'result': {'serverInfo': GOOD['serverInfo']}}); time.sleep(30)",
-    "no_server_info": "send({'jsonrpc': '2.0', 'id': 1, 'result': {'protocolVersion': '2025-06-18'}}); time.sleep(30)",
+    "no_protocol": "send({'jsonrpc': '2.0', 'id': 1, 'result': without('protocolVersion')}); time.sleep(30)",
+    "no_server_info": "send({'jsonrpc': '2.0', 'id': 1, 'result': without('serverInfo')}); time.sleep(30)",
     "huge_line": "sys.stdout.write('x' * (2 * 1024 * 1024)); sys.stdout.flush(); time.sleep(30)",
     "many_frames": "[sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'method': 'notifications/message', 'params': {'pad': 'y' * 1000}}) + '\\n') for _ in range(1200)]; sys.stdout.flush(); time.sleep(30)",
     "id_true": "send({'jsonrpc': '2.0', 'id': True, 'result': GOOD}); time.sleep(30)",
     "no_envelope": "send({'id': 1, 'result': GOOD}); time.sleep(30)",
-    "null_protocol": "send({'jsonrpc': '2.0', 'id': 1, 'result': {'protocolVersion': None, 'serverInfo': GOOD['serverInfo']}}); time.sleep(30)",
-    "null_server_info": "send({'jsonrpc': '2.0', 'id': 1, 'result': {'protocolVersion': '2025-06-18', 'serverInfo': None}}); time.sleep(30)",
+    "null_protocol": "send({'jsonrpc': '2.0', 'id': 1, 'result': dict(GOOD, protocolVersion=None)}); time.sleep(30)",
+    "null_server_info": "send({'jsonrpc': '2.0', 'id': 1, 'result': dict(GOOD, serverInfo=None)}); time.sleep(30)",
+    "no_capabilities": "send({'jsonrpc': '2.0', 'id': 1, 'result': without('capabilities')}); time.sleep(30)",
+    "no_version": "send({'jsonrpc': '2.0', 'id': 1, 'result': without('serverInfo', 'version')}); time.sleep(30)",
+    "empty_name": "r = dict(GOOD, serverInfo={'name': '', 'version': '1'}); send({'jsonrpc': '2.0', 'id': 1, 'result': r}); time.sleep(30)",
     "stderr_flood": "sys.stderr.write('E' * (1024 * 1024) + 'TAIL-MARKER'); sys.stderr.flush(); sys.exit(4)",
 }
 
@@ -520,6 +529,7 @@ def o14_handshake_fails():
         "huge_line": "budget", "many_frames": "budget",
         "id_true": "id", "no_envelope": "JSON-RPC 2.0", "null_protocol": "protocolVersion",
         "null_server_info": "serverInfo",
+        "no_capabilities": "capabilities", "no_version": "serverInfo.version", "empty_name": "serverInfo",
     }
     with tempfile.TemporaryDirectory() as tmp:
         for name, word in expected.items():
@@ -607,13 +617,50 @@ def o23_images_pulled_first():
     expect(all(rec.calls.index(c) < first_setup for c in pulls), "images must be pulled before the first setup step")
 
 
+def o24_cleanup_and_pull_survive_timeouts():
+    crp = load_checker()
+    rec = Recorder(npm_served=NPM_A)
+    base = rec.run_container
+    seen_rm = []
+
+    def run(argv, stdin=None, timeout=None):
+        if argv[:3] == ["docker", "rm", "-f"]:
+            seen_rm.append(argv[3])
+            if len(seen_rm) == 1:
+                raise subprocess.TimeoutExpired(argv, timeout)
+        return base(argv, stdin, timeout)
+
+    rec.run_container = run
+    with tempfile.TemporaryDirectory() as tmp:
+        rc, out = live_case(crp, tmp, [entry_block("a", "npx -y p@1.0.0")],
+                            {"npm": {"p@1.0.0": NPM_A}, "pypi": {}}, {NPM_URL: npm_doc(NPM_A)}, rec)
+    vol_rm = [c for c in rec.calls if c[1][:3] == ["docker", "volume", "rm"]]
+    expect(len(seen_rm) >= 2 and vol_rm, f"a timed-out removal stopped the rest: rm={seen_rm}, volume rm={len(vol_rm)}")
+    expect("WARN cleanup" in out, out)
+
+    crp = load_checker()
+    rec = Recorder(npm_served=NPM_A)
+    base = rec.run_container
+
+    def pull_hangs(argv, stdin=None, timeout=None):
+        if argv[:2] == ["docker", "pull"]:
+            raise subprocess.TimeoutExpired(argv, timeout)
+        return base(argv, stdin, timeout)
+
+    rec.run_container = pull_hangs
+    with tempfile.TemporaryDirectory() as tmp:
+        rc, out = live_case(crp, tmp, [entry_block("a", "npx -y p@1.0.0")],
+                            {"npm": {"p@1.0.0": NPM_A}, "pypi": {}}, {NPM_URL: npm_doc(NPM_A)}, rec)
+    expect(rc == 1 and "FAIL image" in out and "timed out" in out, out)
+
+
 ROWS = [
     o1_sidecar_required, o2_sidecar_orphan, o3_sidecar_format, o4_offline_is_offline,
     o5_npm_metadata, o6_pypi_fileset, o7_npm_served_bytes, o8_pypi_served_bytes,
     o9_eligibility, o10_real_registry_eligible, o17_skip_pipeline, o11_argv_isolation,
     o18_caps, o12_cleanup, o13_handshake_pass, o14_handshake_fails, o19_stderr_tail,
     o15_summary, o16_frame, o20_run_container_bounds, o21_offline_start_exclusive,
-    o22_sidecar_types, o23_images_pulled_first,
+    o22_sidecar_types, o23_images_pulled_first, o24_cleanup_and_pull_survive_timeouts,
 ]
 
 
