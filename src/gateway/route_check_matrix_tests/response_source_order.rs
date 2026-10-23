@@ -92,3 +92,27 @@ fn a_new_extractor_arm_reopens_mik_8707() {
          could change row_count): re-check Latent::NoExtractedFactRedactionChanges"
     );
 }
+
+/// Stdio's finalize step is `/mcp`'s with no router firewall: `finalize_content`
+/// only calls `finalize_routed(.., None)` (`response_security.rs:224-230`), so
+/// stdio's seal-then-sign and sign-then-record order is the one R-SIGN and
+/// R-RECSIGN drive on `/mcp`. A stdio tail that stops delegating fails here.
+#[test]
+fn stdio_finalizes_through_finalize_routed() {
+    let file = "src/gateway/meta_mcp/response_security.rs";
+    let text = source(file);
+    let start = only(&text, "pub(crate) fn finalize_content(", file);
+    let body_end = start
+        + text[start..]
+            .find("\n    }\n")
+            .unwrap_or_else(|| panic!("{file}: finalize_content's body ends"));
+    let body = &text[start..body_end];
+    assert_eq!(
+        body.matches("self.finalize_routed(response, context, None)")
+            .count(),
+        1,
+        "{file}: finalize_content delegates to finalize_routed(.., None): {body}"
+    );
+    let stdio = "src/gateway/server/stdio_dispatch.rs";
+    only(&source(stdio), "meta_mcp.finalize_content(", stdio);
+}

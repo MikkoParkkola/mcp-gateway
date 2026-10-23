@@ -448,6 +448,13 @@ mod rows;
 pub(crate) enum Driven {
     /// The named row test(s).
     Row(&'static str),
+    /// A route that runs the same function as another: a source-order `pin`
+    /// that the route still delegates to it, and the `rows` that drive that
+    /// function on the other route (lead ruling, MIK-8689 phase B).
+    Shared {
+        pin: &'static str,
+        rows: &'static [&'static str],
+    },
     /// Rows the next phase adds (MIK-8689 phases A2, B, C). Removed with the
     /// last phase, so a cell left here then fails to compile.
     Pending,
@@ -473,6 +480,25 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
         (Stdio, Fresh, _, FirewallSeal) => {
             Driven::Row("rows::stdio::r_fwseal_stdio_firewall_precedes_seal")
         }
+        (Stdio, Fresh, _, SealSign | SignRecord) => Driven::Shared {
+            pin: "response::source_order::stdio_finalizes_through_finalize_routed",
+            rows: &[
+                "rows::r_sign_seal_precedes_sign",
+                "rows::r_recsign_sign_precedes_delivery_record",
+            ],
+        },
+        (Stdio, Fresh, Era::Legacy, JudgeRecord) => {
+            Driven::Row("server::tests::stdio_tenant_reads::stdio_judged_read_is_one_record")
+        }
+        (Stdio, Fresh, Era::Legacy, JudgeCommit) => {
+            Driven::Row("server::tests::collusion_stdio::stdio_judged_out_read_records_no_receipt")
+        }
+        (Stdio, Fresh, Era::Legacy, RecordCommit) => Driven::Row(
+            "server::tests::collusion_stdio::stdio_audit_withheld_read_records_no_receipt",
+        ),
+        (Stdio, Fresh, Era::Legacy, SignRebuild) => Driven::Row(
+            "server::tests::collusion_stdio_delivered::a_stdio_answer_is_receipted_as_delivered",
+        ),
         (Stdio, Fresh, Era::Legacy, ClampLink) => {
             Driven::Row("rows::stdio::r_link_stdio_scope_clamp_precedes_origin_link")
         }
@@ -539,7 +565,12 @@ fn every_stated_response_cell_is_driven_or_explained() {
         );
         match driven(route, case, era, pair) {
             Driven::Row(name) if stated && name.trim().is_empty() => empty.push(cell),
-            Driven::Row(_) if !stated => empty.push(cell),
+            Driven::Shared { pin, rows }
+                if stated && (pin.trim().is_empty() || rows.is_empty()) =>
+            {
+                empty.push(cell);
+            }
+            Driven::Row(_) | Driven::Shared { .. } if !stated => empty.push(cell),
             _ => {}
         }
     }
