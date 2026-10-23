@@ -14,7 +14,7 @@ use crate::gateway::authz::{AllowAll, DenyAll, ToolAuthorizer};
 use crate::gateway::meta_mcp::{Authentication, MetaMcp, MetaMcpCallerContext};
 use crate::identity_grants::GrantSubject;
 use crate::key_server::oidc::VerifiedIdentity;
-use crate::protocol::{JsonRpcResponse, RequestId};
+use crate::protocol::RequestId;
 use crate::security::audit::CredentialKind;
 use crate::security::transparency_log::TransparencyLogConfig;
 use crate::transport::Transport;

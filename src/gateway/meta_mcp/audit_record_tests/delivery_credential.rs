@@ -6,12 +6,11 @@
 
 use serde_json::{Value, json};
 
-use super::{Caller, args, context, meta, ok_result, only_record, records};
+use super::{Caller, args, context, meta, ok_result, only_record};
 use crate::gateway::authz::AllowAll;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::response_security::DeliveryCredential;
 use crate::identity_grants::GrantSubject;
-use crate::key_server::oidc::VerifiedIdentity;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::audit::CredentialKind;
 
