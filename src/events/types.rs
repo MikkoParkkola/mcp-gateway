@@ -3,6 +3,7 @@
 //! Wire errors and descriptor types of the events extension (draft at
 //! `28ec35e9`; design §6).
 
+use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND};
 use serde_json::{Value, json};
 
 /// A JSON-RPC error answer of an `events/*` method.
@@ -24,12 +25,16 @@ impl RpcError {
 
     /// `-32601`: events are off, or the transport does not serve them.
     pub(crate) fn method_not_found() -> Self {
-        Self::new(-32601, "Method not found", None)
+        Self::new(METHOD_NOT_FOUND, "Method not found", None)
     }
 
     /// `-32602` naming the offending field, never its value.
     pub(crate) fn invalid(field: &str) -> Self {
-        Self::new(-32602, "Invalid params", Some(json!({ "field": field })))
+        Self::new(
+            INVALID_PARAMS,
+            "Invalid params",
+            Some(json!({ "field": field })),
+        )
     }
 
     /// `-32011`: unknown, or invisible to this caller (indistinguishable).
@@ -87,7 +92,7 @@ impl RpcError {
 
     /// `-32603`: the store could not commit.
     pub(crate) fn internal() -> Self {
-        Self::new(-32603, "Internal error", None)
+        Self::new(INTERNAL_ERROR, "Internal error", None)
     }
 
     /// `-32603` for a verdict the host clock could not judge (before 1970,
@@ -95,7 +100,7 @@ impl RpcError {
     /// no caller reads it as an admission or as a refusal.
     pub(crate) fn clock_unreadable() -> Self {
         Self::new(
-            -32603,
+            INTERNAL_ERROR,
             "Internal error",
             Some(json!({ "reason": "clock_unreadable" })),
         )
@@ -103,7 +108,7 @@ impl RpcError {
 
     /// Whether this is [`Self::clock_unreadable`].
     pub(crate) fn is_clock_unreadable(&self) -> bool {
-        self.code == -32603
+        self.code == INTERNAL_ERROR
             && self
                 .data
                 .as_ref()

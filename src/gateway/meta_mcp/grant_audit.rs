@@ -21,6 +21,7 @@
 //! the HTTP `/mcp` handler, stdio `tools/call`) selects and writes the
 //! records before the answer leaves, failing closed under `FailClosed`.
 
+use crate::error::rpc_codes::INTERNAL_ERROR;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -639,7 +640,7 @@ impl super::MetaMcp {
                     (Some(value), _) => Ok(value),
                     (None, Some(error)) => Err(Error::json_rpc(error.code, error.message)),
                     (None, None) => Err(Error::json_rpc(
-                        -32603,
+                        INTERNAL_ERROR,
                         "stored replay carried neither result nor error",
                     )),
                 }

@@ -10,6 +10,7 @@
 //! is kept. The direct route keeps no session at all, so it serves no legacy
 //! request other than a declaring `initialize`.
 
+use crate::error::rpc_codes::{INVALID_PARAMS, INVALID_REQUEST};
 use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use axum::Json;
 use axum::http::{HeaderMap, StatusCode};
@@ -44,7 +45,7 @@ pub(super) fn declares_elicitation(request: &Value) -> bool {
 
 /// The 403 a legacy client without elicitation gets.
 pub(super) fn refusal() -> (StatusCode, Json<Value>) {
-    build_http_error_response(None, -32600, REFUSAL, StatusCode::FORBIDDEN)
+    build_http_error_response(None, INVALID_REQUEST, REFUSAL, StatusCode::FORBIDDEN)
 }
 
 /// `/mcp`'s refusal of a request with no session under `hardened`. One that
@@ -64,7 +65,7 @@ pub(super) fn refuse(request: &Value, declared_version: Option<&str>) -> axum::r
             .and_then(super::helpers::extract_request_id);
         return build_http_error_response(
             id,
-            -32602,
+            INVALID_PARAMS,
             format!("missing required request metadata: {}", missing.join(", ")),
             StatusCode::BAD_REQUEST,
         )
@@ -113,7 +114,7 @@ pub(super) fn direct_refusal(
     if let RequestShape::Malformed { missing } = shape {
         return Some(build_http_error_response(
             id.cloned(),
-            -32602,
+            INVALID_PARAMS,
             format!("missing required request metadata: {}", missing.join(", ")),
             StatusCode::BAD_REQUEST,
         ));

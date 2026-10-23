@@ -19,8 +19,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use sha2::{Digest, Sha256};
-
 use crate::transport::Transport;
 
 /// `PerUser` slots one backend admits.
@@ -65,7 +63,7 @@ pub(crate) fn admission(total: usize, of_principal: usize) -> Result<(), Refusal
 }
 
 fn digest(value: &str) -> String {
-    hex::encode(Sha256::digest(value.as_bytes()))
+    crate::hashing::sha256_hex(value.as_bytes())
 }
 
 /// The slot binding of a passthrough caller: `principal` is the gateway's
@@ -289,5 +287,14 @@ mod tests {
         drop(leases);
         assert_eq!(slots.in_use(), 0);
         assert!(slots.reserve(&passthrough_binding("p", "x")).is_ok());
+    }
+
+    /// MIK-8668 X-SHA golden, computed independently (Python hashlib).
+    #[test]
+    fn a_slot_digest_is_the_hex_sha256_of_the_value() {
+        assert_eq!(
+            digest("alice"),
+            "2bd806c97f0e00af1a1fc3328fa763a9269723c8db8fac4f93af71db186d6e90"
+        );
     }
 }

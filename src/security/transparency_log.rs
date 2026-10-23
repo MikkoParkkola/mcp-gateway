@@ -640,8 +640,7 @@ pub fn recompute_entry_hash(entry: &serde_json::Value) -> io::Result<String> {
 
     let core_json = serde_json::to_string(&core).map_err(io::Error::other)?;
 
-    let hash_bytes = sha256_raw(core_json.as_bytes());
-    Ok(format!("sha256:{}", hex::encode(hash_bytes)))
+    Ok(crate::hashing::sha256_tagged(core_json.as_bytes()))
 }
 
 /// Verify one entry's HMAC `sig` against `secret`, given the entry's

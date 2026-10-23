@@ -39,8 +39,6 @@
 //! The recipe assumes the pin line holds only the pin: text after a CR, NEL,
 //! LS or PS on it is hashed by the gateway and dropped by `grep -v`.
 
-use sha2::{Digest, Sha256};
-
 /// Strip the top-level `sha256:` line from a YAML document.
 ///
 /// Only lines that begin at column 0 with `sha256:` are affected — a nested
@@ -85,8 +83,7 @@ pub fn compute_capability_hash(file_content: &str) -> String {
     // capability, and must not break its pin. A lone CR stays: that is content.
     let normalised = file_content.replace("\r\n", "\n");
     let stripped = strip_sha256_line(&normalised);
-    let digest = Sha256::digest(stripped.as_bytes());
-    hex::encode(digest)
+    crate::hashing::sha256_hex(stripped.as_bytes())
 }
 
 /// Rewrite a capability YAML so that it begins with a `sha256:` pin line.
@@ -263,6 +260,32 @@ mod tests {
         assert_ne!(
             compute_capability_hash(clean),
             compute_capability_hash(with_cr)
+        );
+    }
+
+    /// MIK-8668 X-SHA golden, computed independently (Python hashlib): a file
+    /// with no `sha256:` line hashes as is, and CRLF reads as LF.
+    #[test]
+    fn the_capability_hash_of_a_fixed_file_is_its_hex_sha256() {
+        let expected = "f06370f809d9469b8ba65af0ff5a8676a6bc6ef2c0e751ea44a4916dfe0d4022";
+        assert_eq!(compute_capability_hash("name: x\nversion: 1\n"), expected);
+        assert_eq!(
+            compute_capability_hash("name: x\r\nversion: 1\r\n"),
+            expected
+        );
+    }
+
+    /// MIK-8668: a shipped capability's committed `sha256:` pin still matches
+    /// its own bytes, so a change in what the hash covers shows up against a
+    /// stored digest, not only against a golden computed by the same code.
+    #[test]
+    fn a_shipped_capability_still_matches_its_committed_pin() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("capabilities/automation/bus_announce.yaml");
+        let content = std::fs::read_to_string(path).expect("the shipped capability reads");
+        assert_eq!(
+            compute_capability_hash(&content),
+            "86d79716a495b5d5784d4764bf26b7cd5916d7d9fcc366d02e84f400af99fc5e"
         );
     }
 }
