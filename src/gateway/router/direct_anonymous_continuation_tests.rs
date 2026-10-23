@@ -82,7 +82,8 @@ struct Gateway {
 }
 
 /// A single-user gateway with one optional-passthrough backend, `ledger`: its
-/// shared slot, and the slot an anonymous caller forwarding `CREDENTIAL` is
+/// shared slot, and the slots anonymous callers forwarding `CREDENTIAL` or
+/// `OTHER` are
 /// bound to, both ask once.
 async fn gateway() -> Gateway {
     use sha2::Digest as _;
@@ -100,10 +101,12 @@ async fn gateway() -> Gateway {
         })
     };
     backend.set_transport_for_test(slot("shared"));
-    let digest = hex::encode(sha2::Sha256::digest(CREDENTIAL.as_bytes()));
     let principal = crate::identity_propagation::audit_subject(None);
-    let binding = crate::backend::passthrough_binding(&principal, &digest);
-    backend.set_pooled_transport_for_test(&PoolKey::PerUser { binding }, slot("caller"));
+    for (credential, name) in [(CREDENTIAL, "caller"), (OTHER, "other")] {
+        let digest = hex::encode(sha2::Sha256::digest(credential.as_bytes()));
+        let binding = crate::backend::passthrough_binding(&principal, &digest);
+        backend.set_pooled_transport_for_test(&PoolKey::PerUser { binding }, slot(name));
+    }
     let (mut state, store) =
         direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
     let audit = tempfile::NamedTempFile::new().expect("tempfile");
@@ -127,11 +130,13 @@ async fn gateway() -> Gateway {
 }
 
 const CREDENTIAL: &str = "Bearer caller-own";
+/// Another anonymous caller's passthrough credential.
+const OTHER: &str = "Bearer someone-else";
 
 /// `tools/call read` on `/mcp/ledger` with no API key, a modern request
-/// declaring form elicitation, forwarding `CREDENTIAL` when `bound`, with
-/// `extra` merged into the params.
-async fn call(gw: &Gateway, bound: bool, extra: Value) -> Value {
+/// declaring form elicitation, forwarding `credential` when one is given,
+/// with `extra` merged into the params.
+async fn call(gw: &Gateway, credential: Option<&str>, extra: Value) -> Value {
     let mut params = json!({"name": "read", "arguments": {}, "_meta": modern_meta()});
     if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
         params.extend(extra.clone());
@@ -143,8 +148,8 @@ async fn call(gw: &Gateway, bound: bool, extra: Value) -> Value {
         .header("mcp-protocol-version", "2026-07-28")
         .header("mcp-method", "tools/call")
         .header("mcp-name", "read");
-    if bound {
-        builder = builder.header(PASSTHROUGH, CREDENTIAL);
+    if let Some(credential) = credential {
+        builder = builder.header(PASSTHROUGH, credential);
     }
     let request = builder
         .body(axum::body::Body::from(
@@ -154,35 +159,47 @@ async fn call(gw: &Gateway, bound: bool, extra: Value) -> Value {
         .unwrap();
     let response = gw.router.clone().oneshot(request).await.unwrap();
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    serde_json::from_slice(&body).unwrap_or(Value::Null)
+    serde_json::from_slice(&body).expect("the route answers with JSON")
 }
 
 /// G30 bound row: the bound anonymous caller gets a gateway continuation, never
-/// the backend's state, and its retry reaches its own slot with the backend's
-/// state. Base refused the mint: the direct route had no key-name quota for an
+/// the backend's state; only its own credential redeems it, and that retry
+/// reaches its own slot with the backend's state and the answers. Base refused the mint: the direct route had no key-name quota for an
 /// anonymous caller.
 #[tokio::test]
 async fn a_bound_anonymous_direct_caller_gets_a_continuation() {
     let gw = gateway().await;
-    let asked = call(&gw, true, json!({})).await;
+    let asked = call(&gw, Some(CREDENTIAL), json!({})).await;
     assert_eq!(asked["result"]["resultType"], "input_required", "{asked}");
     let state = asked["result"]["requestState"]
         .as_str()
         .unwrap_or_else(|| panic!("a continuation: {asked}"))
         .to_owned();
-    assert_ne!(state, "backend-state-1", "{asked}");
+    assert!(
+        !asked.to_string().contains("backend-state-1"),
+        "the backend's state leaked: {asked}"
+    );
     let answers = json!({"k1": {"action": "accept", "content": {"account": "work"}}});
-    let done = call(
-        &gw,
-        true,
-        json!({"requestState": state, "inputResponses": answers}),
-    )
-    .await;
+    let retry = json!({"requestState": state, "inputResponses": answers.clone()});
+    // Only the credential the continuation was minted for redeems it: another
+    // passthrough credential, or none, is refused before the backend.
+    for other in [Some(OTHER), None] {
+        let refused = call(&gw, other, retry.clone()).await;
+        assert_eq!(refused["error"]["code"], -32602, "{other:?}: {refused}");
+    }
+    assert_eq!(
+        gw.calls.lock().len(),
+        1,
+        "a refused retry reached the backend"
+    );
+    let done = call(&gw, Some(CREDENTIAL), retry).await;
     assert!(done.get("error").is_none(), "{done}");
+    assert_eq!(done["result"]["content"][0]["text"], "ok", "{done}");
     let calls = gw.calls.lock().clone();
     assert_eq!(calls.len(), 2, "{calls:?}");
     assert!(calls.iter().all(|(slot, _)| *slot == "caller"), "{calls:?}");
     assert_eq!(calls[1].1["requestState"], "backend-state-1", "{calls:?}");
+    assert_eq!(calls[1].1["inputResponses"], answers, "{calls:?}");
 }
 
 /// G30 unbound row: an anonymous caller forwarding nothing has no binding to
@@ -191,8 +208,13 @@ async fn a_bound_anonymous_direct_caller_gets_a_continuation() {
 #[tokio::test]
 async fn an_unbound_anonymous_direct_caller_gets_no_continuation() {
     let gw = gateway().await;
-    let asked = call(&gw, false, json!({})).await;
+    let asked = call(&gw, None, json!({})).await;
     assert_eq!(asked["error"]["code"], -32003, "{asked}");
+    let message = asked["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("cannot be continued for this caller"),
+        "{asked}"
+    );
     assert!(
         !asked.to_string().contains("backend-state-1"),
         "the backend's state leaked: {asked}"
