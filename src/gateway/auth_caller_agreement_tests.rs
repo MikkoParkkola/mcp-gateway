@@ -41,6 +41,7 @@ pub(crate) fn mints() -> Vec<(&'static str, AuthenticatedClient)> {
     let resolved = super::ResolvedAuthConfig::try_from_config(
         &auth_config,
         &crate::config::EnvOverlay::none(),
+        crate::gateway::record_principal::TEST_RECORD_KEY,
     )
     .expect("fixture auth resolves");
     let bearer = resolved

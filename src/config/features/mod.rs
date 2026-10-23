@@ -46,8 +46,8 @@ pub use playbooks::PlaybooksConfig;
 pub use runtime::{RuntimeConfig, RuntimeProfileConfig};
 pub use security::{
     AgentIdentityConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig,
-    IdentityGrantsConfig, RemoteServerSigningConfig, ResponseContractConfig, SecurityConfig,
-    ToolContractConfig,
+    IdentityGrantsConfig, RecordPrincipalKeyRef, RemoteServerSigningConfig, ResponseContractConfig,
+    SecurityConfig, ToolContractConfig,
 };
 pub(crate) use signature_chain::validate_backend_chains;
 pub use signature_chain::{ChainEmit, ChainMode, SignatureChainConfig};

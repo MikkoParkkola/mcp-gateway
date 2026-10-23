@@ -8,6 +8,9 @@
 //! - Rate limiting
 //! - Backend access control
 
+#[path = "common/record_key.rs"]
+mod record_key;
+
 use std::time::Duration;
 
 use mcp_gateway::config::{ApiKeyConfig, AuthConfig, CircuitBreakerConfig};
@@ -40,7 +43,7 @@ fn test_auth_config_resolution() {
         dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
-    let resolved = ResolvedAuthConfig::from_config(&auth_config);
+    let resolved = ResolvedAuthConfig::from_config(&auth_config, crate::record_key::RECORD_KEY);
 
     assert!(resolved.enabled);
     assert_eq!(resolved.bearer_token, Some("test-token".to_string()));
@@ -63,7 +66,7 @@ fn test_bearer_token_auth() {
         dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
-    let resolved = ResolvedAuthConfig::from_config(&auth_config);
+    let resolved = ResolvedAuthConfig::from_config(&auth_config, crate::record_key::RECORD_KEY);
 
     // Valid bearer token
     let client = resolved.validate_token("secret-bearer-token");
@@ -118,7 +121,7 @@ fn test_api_key_auth_with_restrictions() {
         dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
-    let resolved = ResolvedAuthConfig::from_config(&auth_config);
+    let resolved = ResolvedAuthConfig::from_config(&auth_config, crate::record_key::RECORD_KEY);
 
     // Restricted client
     let client = resolved.validate_token("restricted-key").unwrap();
@@ -161,7 +164,7 @@ fn test_rate_limiting() {
         dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
-    let resolved = ResolvedAuthConfig::from_config(&auth_config);
+    let resolved = ResolvedAuthConfig::from_config(&auth_config, crate::record_key::RECORD_KEY);
 
     let client = resolved
         .validate_token("rate-limited-key")
@@ -196,7 +199,7 @@ fn test_public_paths() {
         dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
-    let resolved = ResolvedAuthConfig::from_config(&auth_config);
+    let resolved = ResolvedAuthConfig::from_config(&auth_config, crate::record_key::RECORD_KEY);
 
     // Exact matches
     assert!(resolved.is_public_path("/health"));
@@ -225,7 +228,7 @@ fn test_auto_generated_token() {
         dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
-    let resolved = ResolvedAuthConfig::from_config(&auth_config);
+    let resolved = ResolvedAuthConfig::from_config(&auth_config, crate::record_key::RECORD_KEY);
 
     // Auto-generated token should start with "mcp_" and be 47 chars
     let token = resolved.bearer_token.as_ref().unwrap();
@@ -249,7 +252,7 @@ fn test_disabled_auth() {
         dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
-    let resolved = ResolvedAuthConfig::from_config(&auth_config);
+    let resolved = ResolvedAuthConfig::from_config(&auth_config, crate::record_key::RECORD_KEY);
     assert!(!resolved.enabled);
 }
 
@@ -299,7 +302,7 @@ fn test_client_circuit_breaker_is_per_client() {
         dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
-    let resolved = ResolvedAuthConfig::from_config(&auth_config);
+    let resolved = ResolvedAuthConfig::from_config(&auth_config, crate::record_key::RECORD_KEY);
     let client_a = resolved.validate_token("client-a-key").expect("client-a");
     let client_b = resolved.validate_token("client-b-key").expect("client-b");
 
@@ -352,7 +355,7 @@ fn test_client_circuit_breaker_recovers_after_successful_probe() {
         dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
-    let resolved = ResolvedAuthConfig::from_config(&auth_config);
+    let resolved = ResolvedAuthConfig::from_config(&auth_config, crate::record_key::RECORD_KEY);
     let client = resolved
         .validate_token("client-key")
         .expect("the configured key");

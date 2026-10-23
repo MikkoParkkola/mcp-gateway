@@ -13,6 +13,9 @@
 //! That last part is why this increment carries a safety rule rather than only
 //! a shape: re-issuing a side-effecting call is how one booking becomes two.
 
+#[path = "common/record_key.rs"]
+mod record_key;
+
 use mcp_gateway::protocol::RequestId;
 use mcp_gateway::protocol::subscriptions::{ListenRequest, NotificationKind, SubscriptionId};
 use serde_json::json;

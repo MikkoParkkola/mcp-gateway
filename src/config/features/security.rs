@@ -574,6 +574,29 @@ pub struct SecurityConfig {
     pub claim_capture: ClaimCaptureConfig,
     /// Signature-chain origin emission (ASI07). Absent means the feature is off.
     pub signature_chain: Option<SignatureChainConfig>,
+    /// Secret reference to the key that keys `who.principal` and subscription
+    /// handles in records (MIK-8697). Unset: `<data dir>/record-principal.key`,
+    /// created on first start. Restart-only.
+    pub record_principal_key: Option<RecordPrincipalKeyRef>,
+}
+
+/// `security.record_principal_key`: a secret reference (a literal, `env:` or
+/// `file:`). Its `Debug` never prints it, since it may be the key itself (CWE-532).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct RecordPrincipalKeyRef(String);
+
+impl RecordPrincipalKeyRef {
+    /// The reference text, for the resolver.
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for RecordPrincipalKeyRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RecordPrincipalKeyRef(<redacted>)")
+    }
 }
 
 impl SecurityConfig {
@@ -619,6 +642,7 @@ impl Default for SecurityConfig {
             provenance_stamping: false,
             claim_capture: ClaimCaptureConfig::default(),
             signature_chain: None,
+            record_principal_key: None,
         }
     }
 }

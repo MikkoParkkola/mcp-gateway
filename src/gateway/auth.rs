@@ -133,6 +133,9 @@ pub struct ResolvedAuthConfig {
     client_circuit_breaker: Option<CircuitBreakerConfig>,
     /// Circuit breakers per client, keyed by credential (`client_state_key`).
     client_circuit_breakers: DashMap<String, Arc<CircuitBreaker>>,
+    /// The record key every client minted here computes its record principal
+    /// with (MIK-8697 §16): resolved once at startup and injected, never picked.
+    record_key: Arc<crate::gateway::record_principal::RecordPrincipalKey>,
 }
 
 // Manual `Debug` that redacts resolved secrets (CWE-532, mirrors MIK-6733).
@@ -151,6 +154,7 @@ impl std::fmt::Debug for ResolvedAuthConfig {
             )
             .field("api_keys", &self.api_keys)
             .field("public_paths", &self.public_paths)
+            .field("record_key", &"<redacted>")
             .finish_non_exhaustive()
     }
 }

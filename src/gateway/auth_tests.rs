@@ -15,8 +15,12 @@ fn empty_bearer_refused_by_try_from_config() {
         bearer_token: Some(String::new()),
         ..AuthConfig::default()
     };
-    let err = ResolvedAuthConfig::try_from_config(&config, &crate::config::EnvOverlay::none())
-        .expect_err("an empty bearer would match an empty presented token");
+    let err = ResolvedAuthConfig::try_from_config(
+        &config,
+        &crate::config::EnvOverlay::none(),
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    )
+    .expect_err("an empty bearer would match an empty presented token");
     assert!(err.to_string().contains("empty"), "got: {err}");
 }
 
@@ -52,6 +56,12 @@ fn bearer_client_remains_admin() {
         rate_limiters: DashMap::new(),
         client_circuit_breaker: None,
         client_circuit_breakers: DashMap::new(),
+        record_key: std::sync::Arc::new(
+            crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )
+            .expect("test key"),
+        ),
     };
     let bearer = config.validate_token("bearer-ADMIN").expect("bearer valid");
     assert!(bearer.admin, "an explicit credential still grants admin");
@@ -88,6 +98,12 @@ fn test_public_path_check() {
         rate_limiters: DashMap::new(),
         client_circuit_breaker: None,
         client_circuit_breakers: DashMap::new(),
+        record_key: std::sync::Arc::new(
+            crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )
+            .expect("test key"),
+        ),
     };
 
     assert!(config.is_public_path("/health"));
@@ -122,6 +138,12 @@ fn debug_output_redacts_bearer_and_api_keys() {
         rate_limiters: DashMap::new(),
         client_circuit_breaker: None,
         client_circuit_breakers: DashMap::new(),
+        record_key: std::sync::Arc::new(
+            crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )
+            .expect("test key"),
+        ),
     };
     let dbg = format!("{config:?}");
     assert!(
@@ -162,6 +184,12 @@ fn test_bearer_token_validation() {
         rate_limiters: DashMap::new(),
         client_circuit_breaker: None,
         client_circuit_breakers: DashMap::new(),
+        record_key: std::sync::Arc::new(
+            crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )
+            .expect("test key"),
+        ),
     };
 
     let client = config.validate_token("secret123");
@@ -197,6 +225,12 @@ fn constant_time_token_comparison_accepts_correct_rejects_wrong() {
         rate_limiters: DashMap::new(),
         client_circuit_breaker: None,
         client_circuit_breakers: DashMap::new(),
+        record_key: std::sync::Arc::new(
+            crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )
+            .expect("test key"),
+        ),
     };
 
     // Correct bearer authenticates as the admin "bearer" client.
@@ -263,6 +297,12 @@ fn test_api_key_validation() {
         rate_limiters: DashMap::new(),
         client_circuit_breaker: None,
         client_circuit_breakers: DashMap::new(),
+        record_key: std::sync::Arc::new(
+            crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )
+            .expect("test key"),
+        ),
     };
 
     let client_a = config.validate_token("key1").unwrap();
@@ -540,6 +580,12 @@ fn bootstrap_state(bearer: Option<&str>, keys: Vec<ResolvedApiKey>) -> (AuthStat
         rate_limiters: DashMap::new(),
         client_circuit_breaker: None,
         client_circuit_breakers: DashMap::new(),
+        record_key: std::sync::Arc::new(
+            crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )
+            .expect("test key"),
+        ),
     };
     let bootstrap = Arc::new(DashboardBootstrap::new());
     let printed = bootstrap.peek().expect("a value is issued at startup");
@@ -658,7 +704,10 @@ fn test_resolved_client_rate_limit_creates_identity_bucket() {
         dashboard_session: crate::config::DashboardSessionConfig::default(),
     };
 
-    let resolved = ResolvedAuthConfig::from_config(&auth_config);
+    let resolved = ResolvedAuthConfig::from_config(
+        &auth_config,
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    );
     let temporary_client = AuthenticatedClient {
         quota_principal: None,
         principal: InternalPrincipal::new(String::new()),

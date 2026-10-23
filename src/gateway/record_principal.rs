@@ -17,6 +17,9 @@ use crate::hashing::{hmac_sha256_hex, sha256_hex};
 pub(crate) const KEY_FILE: &str = "record-principal.key";
 /// The config field that names the key.
 pub(crate) const KEY_FIELD: &str = "security.record_principal_key";
+/// The record key unit tests pass to `ResolvedAuthConfig::from_config`.
+#[cfg(test)]
+pub(crate) const TEST_RECORD_KEY: &str = "test-record-key-not-a-secret-0123456789abcdef";
 /// The shortest key accepted, in bytes of key text.
 const MIN_KEY_BYTES: usize = 32;
 

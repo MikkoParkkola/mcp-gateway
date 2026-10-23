@@ -30,6 +30,7 @@ fn custody_auth(token: &str) -> AuthState {
     AuthState {
         auth_config: Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
             &config,
+            crate::gateway::record_principal::TEST_RECORD_KEY,
         )),
         ..super::decision_tests::auth()
     }

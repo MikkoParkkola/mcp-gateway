@@ -555,6 +555,7 @@ fn authorizer(
     crate::gateway::auth::AuthState {
         auth_config: Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
             &config,
+            crate::gateway::record_principal::TEST_RECORD_KEY,
         )),
         key_server,
         dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),

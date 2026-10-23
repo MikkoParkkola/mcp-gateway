@@ -231,3 +231,43 @@ fn d2_the_key_file_promoted_to_a_secret_ref_keeps_every_value() {
     let p = InternalPrincipal::new("3f2a9c0d1e7b".to_owned());
     assert_eq!(p.record_form(&from_file), p.record_form(&from_ref));
 }
+
+// G-KEY (lead, 2026-10-23): no fixed record key ships. A `const …RECORD_KEY`
+// or the fixture value outside test code would be a secret-shaped constant
+// in the release crate, so each hit in src/ must be test-only: a `_tests.rs`
+// or `/tests/` file, or an item under `#[cfg(test)]` on the line above.
+#[test]
+fn g_key_no_fixed_record_key_ships_outside_test_code() {
+    fn walk(dir: &Path, hits: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).expect("src readable").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, hits);
+                continue;
+            }
+            let rel = path.to_string_lossy().replace('\\', "/");
+            if !rel.ends_with(".rs") || rel.ends_with("_tests.rs") || rel.contains("/tests/") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("source readable");
+            let lines: Vec<&str> = text.lines().collect();
+            for (n, line) in lines.iter().enumerate() {
+                let shaped = (line.contains("const ") && line.contains("RECORD_KEY"))
+                    || line.contains("test-record-key-");
+                let test_only = n > 0 && lines[n - 1].trim() == "#[cfg(test)]";
+                if shaped && !test_only && !line.trim_start().starts_with("//") {
+                    hits.push(format!("{rel}:{}", n + 1));
+                }
+            }
+        }
+    }
+    let mut hits = Vec::new();
+    walk(
+        Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
+        &mut hits,
+    );
+    assert!(
+        hits.is_empty(),
+        "a fixed record key outside test code: {hits:?}"
+    );
+}

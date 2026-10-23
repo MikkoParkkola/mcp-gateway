@@ -32,6 +32,7 @@ fn resolved(keys: Vec<ApiKeyConfig>) -> ResolvedAuthConfig {
             ..AuthConfig::default()
         },
         &no_env(),
+        crate::gateway::record_principal::TEST_RECORD_KEY,
     )
     .expect("literal keys resolve")
 }
@@ -72,8 +73,12 @@ fn api_key_with_backends_omitted_from_yaml_reaches_no_backend() {
     )
     .expect("auth YAML parses");
     assert!(auth.api_keys[0].backends.is_empty());
-    let config =
-        ResolvedAuthConfig::try_from_config(&auth, &no_env()).expect("literal key resolves");
+    let config = ResolvedAuthConfig::try_from_config(
+        &auth,
+        &no_env(),
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    )
+    .expect("literal key resolves");
     let client = config
         .validate_token("omitted-secret")
         .expect("key is valid");

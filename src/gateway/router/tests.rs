@@ -166,7 +166,10 @@ async fn test_router_app_state_with(
         streaming_config.clone(),
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
-    let auth_config = Arc::new(ResolvedAuthConfig::from_config(&AuthConfig::default()));
+    let auth_config = Arc::new(ResolvedAuthConfig::from_config(
+        &AuthConfig::default(),
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    ));
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
@@ -225,7 +228,10 @@ async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, temp
         streaming_config.clone(),
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
-    let auth_config = Arc::new(ResolvedAuthConfig::from_config(&AuthConfig::default()));
+    let auth_config = Arc::new(ResolvedAuthConfig::from_config(
+        &AuthConfig::default(),
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    ));
     let agent_auth = AgentAuthState::new(true, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
@@ -372,7 +378,10 @@ pub(super) async fn test_router_app_state_with_auth_and_config(
         streaming_config.clone(),
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
-    let auth_config = Arc::new(ResolvedAuthConfig::from_config(auth));
+    let auth_config = Arc::new(ResolvedAuthConfig::from_config(
+        auth,
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    ));
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 

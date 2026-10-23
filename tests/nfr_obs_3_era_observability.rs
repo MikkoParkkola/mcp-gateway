@@ -16,6 +16,9 @@
 //! serialisation gap is exactly what `NFR.OBS.1` and `NFR.OBS.2` were re-opened
 //! for.
 
+#[path = "common/record_key.rs"]
+mod record_key;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;

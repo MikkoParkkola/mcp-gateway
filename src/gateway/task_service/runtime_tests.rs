@@ -29,7 +29,10 @@ use crate::gateway::subscription_registry::{DEFAULT_MAX_LISTENERS, SubscriptionR
 fn test_subscriptions() -> Arc<SubscriptionRegistry> {
     Arc::new(SubscriptionRegistry::new(
         DEFAULT_MAX_LISTENERS,
-        crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+        crate::gateway::test_helpers::auth_state(
+            &crate::config::AuthConfig::default(),
+            crate::gateway::record_principal::TEST_RECORD_KEY,
+        ),
     ))
 }
 

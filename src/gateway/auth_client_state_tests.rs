@@ -34,10 +34,13 @@ fn key(secret: &str, name: &str, rate_limit: u32) -> ApiKeyConfig {
 /// Built the way `try_from_config` sees a config: without `Config::validate`,
 /// so the state maps must hold the invariant themselves.
 fn resolved(config: AuthConfig) -> ResolvedAuthConfig {
-    ResolvedAuthConfig::from_config(&AuthConfig {
-        enabled: true,
-        ..config
-    })
+    ResolvedAuthConfig::from_config(
+        &AuthConfig {
+            enabled: true,
+            ..config
+        },
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    )
 }
 
 fn client(cfg: &ResolvedAuthConfig, secret: &str) -> AuthenticatedClient {

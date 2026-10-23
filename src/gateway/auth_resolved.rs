@@ -17,18 +17,32 @@ use super::{
 use crate::Result;
 use crate::config::{AuthConfig, CircuitBreakerConfig};
 use crate::failsafe::{CircuitBreaker, CircuitState};
+use crate::gateway::record_principal::RecordPrincipalKey;
 
 impl ResolvedAuthConfig {
-    /// Create resolved config from `AuthConfig`.
+    /// Create resolved config from `AuthConfig`, keyed by the resolved record
+    /// key text (MIK-8697: `security.record_principal_key` or its fallback file).
     ///
     /// # Errors
     ///
     /// Returns an error if any `env:VAR_NAME` secret reference cannot be
     /// resolved in `overlay` (the env files the config was loaded with, then
-    /// the process environment).
+    /// the process environment), or if `record_key` is shorter than 32 bytes.
     pub fn try_from_config(
         config: &AuthConfig,
         overlay: &crate::config::EnvOverlay,
+        record_key: &str,
+    ) -> Result<Self> {
+        let key = RecordPrincipalKey::from_text(record_key)?;
+        Self::try_from_config_keyed(config, overlay, Arc::new(key))
+    }
+
+    /// [`Self::try_from_config`] with the process's one resolved key, shared
+    /// with every other record writer. Takes the key given; never picks one.
+    pub(crate) fn try_from_config_keyed(
+        config: &AuthConfig,
+        overlay: &crate::config::EnvOverlay,
+        record_key: Arc<RecordPrincipalKey>,
     ) -> Result<Self> {
         // An empty credential compares equal to an empty presented token; the
         // resolvers refuse one (C4, `SecretRef::resolve`), so every caller that
@@ -95,17 +109,19 @@ impl ResolvedAuthConfig {
             rate_limiters: DashMap::new(),
             client_circuit_breaker: config.client_circuit_breaker.clone(),
             client_circuit_breakers: DashMap::new(),
+            record_key,
         })
     }
 
     /// Create resolved config from `AuthConfig`.
     ///
-    /// Panics if a configured environment-backed secret is missing. Runtime startup
-    /// paths should prefer [`Self::try_from_config`] so the error is returned.
+    /// Panics if a configured environment-backed secret is missing, or if
+    /// `record_key` is shorter than 32 bytes. Runtime startup paths should
+    /// prefer [`Self::try_from_config`] so the error is returned.
     #[must_use]
-    pub fn from_config(config: &AuthConfig) -> Self {
-        Self::try_from_config(config, &crate::config::EnvOverlay::none())
-            .expect("auth config secret references should resolve")
+    pub fn from_config(config: &AuthConfig, record_key: &str) -> Self {
+        Self::try_from_config(config, &crate::config::EnvOverlay::none(), record_key)
+            .expect("auth config secret references and the record key should resolve")
     }
 
     /// Check if a path is public (bypasses auth)

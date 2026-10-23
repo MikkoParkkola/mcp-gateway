@@ -8,6 +8,7 @@ pub(super) fn auth() -> AuthState {
     AuthState {
         auth_config: Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
             &crate::config::AuthConfig::default(),
+            crate::gateway::record_principal::TEST_RECORD_KEY,
         )),
         key_server: None,
         dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
@@ -324,6 +325,7 @@ fn narrow_auth() -> AuthState {
     AuthState {
         auth_config: Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
             &config,
+            crate::gateway::record_principal::TEST_RECORD_KEY,
         )),
         ..auth()
     }

@@ -36,15 +36,18 @@ fn key(name: &str, secret: &str) -> ApiKeyConfig {
 }
 
 fn resolved(bearer: Option<&str>, keys: Vec<ApiKeyConfig>) -> ResolvedAuthConfig {
-    ResolvedAuthConfig::from_config(&AuthConfig {
-        enabled: true,
-        bearer_token: bearer.map(str::to_string),
-        api_keys: keys,
-        public_paths: vec![],
-        client_circuit_breaker: None,
-        single_user: false,
-        dashboard_session: crate::config::DashboardSessionConfig::default(),
-    })
+    ResolvedAuthConfig::from_config(
+        &AuthConfig {
+            enabled: true,
+            bearer_token: bearer.map(str::to_string),
+            api_keys: keys,
+            public_paths: vec![],
+            client_circuit_breaker: None,
+            single_user: false,
+            dashboard_session: crate::config::DashboardSessionConfig::default(),
+        },
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    )
 }
 
 #[test]

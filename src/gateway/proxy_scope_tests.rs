@@ -38,7 +38,10 @@ api_keys:
 fn authorizer(yaml: &str, key_server: Option<Arc<KeyServer>>) -> AuthState {
     let config: AuthConfig = crate::yaml::from_str(yaml).unwrap();
     AuthState {
-        auth_config: Arc::new(ResolvedAuthConfig::from_config(&config)),
+        auth_config: Arc::new(ResolvedAuthConfig::from_config(
+            &config,
+            crate::gateway::record_principal::TEST_RECORD_KEY,
+        )),
         key_server,
         dashboard_bootstrap: Arc::new(DashboardBootstrap::new()),
         tls_enabled: false,

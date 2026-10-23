@@ -141,6 +141,12 @@ pub(crate) async fn fixture_on_with(
         &crate::config::EnvOverlay::default(),
         &built.meta_mcp,
         &tool_policy,
+        &std::sync::Arc::new(
+            crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )
+            .expect("test key"),
+        ),
     )
     .await
     .expect("the stdio store opens");
@@ -567,6 +573,7 @@ pub(super) async fn reopen(
     let auth_config = crate::gateway::auth::ResolvedAuthConfig::try_from_config(
         &config.auth,
         &crate::config::EnvOverlay::default(),
+        crate::gateway::record_principal::TEST_RECORD_KEY,
     )
     .expect("auth config");
     crate::gateway::task_service::open_runtime(
@@ -748,7 +755,8 @@ async fn an_unresolvable_auth_config_leaves_the_stdio_store_open() {
     assert!(
         crate::gateway::auth::ResolvedAuthConfig::try_from_config(
             &config.auth,
-            &crate::config::EnvOverlay::default()
+            &crate::config::EnvOverlay::default(),
+            crate::gateway::record_principal::TEST_RECORD_KEY
         )
         .is_err(),
         "premise: the fixture's auth secret must not resolve"
@@ -758,6 +766,12 @@ async fn an_unresolvable_auth_config_leaves_the_stdio_store_open() {
         &crate::config::EnvOverlay::default(),
         &fixture.meta,
         &fixture.policy,
+        &std::sync::Arc::new(
+            crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )
+            .expect("test key"),
+        ),
     )
     .await;
     assert!(

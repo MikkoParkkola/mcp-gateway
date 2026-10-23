@@ -44,6 +44,9 @@ pub(super) struct BuiltMetaMcp {
     pub(super) transition_path: std::path::PathBuf,
     /// Data directory used by cost-governance persistence.
     pub(super) data_dir: std::path::PathBuf,
+    /// The process's record key (MIK-8697 §16): resolved once here, fail-closed,
+    /// and injected into every record writer.
+    pub(super) record_key: Arc<crate::gateway::record_principal::RecordPrincipalKey>,
     /// Transparency log handle, `None` when disabled (issue #133, D3).
     /// Threaded into `AppState` so the direct backend route
     /// (`backend_handlers::backend_handler`), which does not go through
@@ -120,6 +123,15 @@ impl Gateway {
         #[cfg(not(test))]
         let data_dir = persistence::standard_data_dir();
         persistence::ensure_data_dir(&data_dir);
+        let record_key = Arc::new(crate::gateway::record_principal::resolve_key(
+            self.config
+                .security
+                .record_principal_key
+                .as_ref()
+                .map(crate::config::RecordPrincipalKeyRef::as_str),
+            &self.env.get(),
+            &data_dir,
+        )?);
 
         let ranker_path = data_dir.join("usage.json");
         let ranker = Arc::new(SearchRanker::new());
@@ -473,6 +485,7 @@ impl Gateway {
             transition_tracker,
             transition_path,
             data_dir,
+            record_key,
             transparency_log,
         })
     }

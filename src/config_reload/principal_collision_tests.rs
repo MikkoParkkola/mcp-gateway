@@ -168,9 +168,11 @@ fn the_resolved_credentials_are_checked_at_startup() {
         colliding(&bearer_prefix, 'f')
     ))
     .expect("auth section parses");
-    let Err(error) =
-        ResolvedAuthConfig::try_from_config(&config, &crate::config::EnvOverlay::none())
-    else {
+    let Err(error) = ResolvedAuthConfig::try_from_config(
+        &config,
+        &crate::config::EnvOverlay::none(),
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    ) else {
         panic!("a key sharing the bearer's principal must not resolve");
     };
     assert_collision_message(&error.to_string(), "bearer_token", "alpha", &bearer_prefix);
@@ -187,8 +189,12 @@ fn the_principal_encoding_is_unchanged() {
         digest_of(TOKEN)
     ))
     .expect("auth section parses");
-    let resolved = ResolvedAuthConfig::try_from_config(&config, &crate::config::EnvOverlay::none())
-        .expect("one key resolves");
+    let resolved = ResolvedAuthConfig::try_from_config(
+        &config,
+        &crate::config::EnvOverlay::none(),
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    )
+    .expect("one key resolves");
     let client = resolved.validate_token(TOKEN).expect("the key validates");
     assert_eq!(client.principal.storage_form(), "07635921daa7");
 }

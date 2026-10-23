@@ -324,6 +324,7 @@ mod mik_8659_dashboard_tests {
             crate::gateway::auth::ResolvedAuthConfig::try_from_config(
                 &auth,
                 &crate::config::EnvOverlay::none(),
+                crate::gateway::record_principal::TEST_RECORD_KEY,
             )
             .expect("fixture auth resolves"),
         );
