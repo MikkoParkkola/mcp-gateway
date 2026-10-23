@@ -643,9 +643,6 @@ async fn an_oauth_transport_shares_one_gate_with_its_client() {
     );
 }
 
-/// MIK-8660 G4 cases for `transport_follows_redirect`, as
-/// (`hardened`, `private_backends`, status, base, target, followed). A listing
-/// matters only under hardened and only for the backend it names ("b").
 /// One row of [`FOLLOW_CASES`].
 type FollowCase = (
     bool,
@@ -656,6 +653,9 @@ type FollowCase = (
     bool,
 );
 
+/// MIK-8660 G4 cases for `transport_follows_redirect`, as
+/// (`hardened`, `private_backends`, status, base, target, followed). A listing
+/// matters only under hardened and only for the backend it names ("b").
 const FOLLOW_CASES: &[FollowCase] = &[
     (
         false,
