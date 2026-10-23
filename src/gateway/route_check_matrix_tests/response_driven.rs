@@ -191,6 +191,25 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
         (Direct, IdempotentReplay, _, StampSeal) => {
             Driven::Row("rows::r_replayseal_direct_replay_seal_gap")
         }
+        // A replayed receipt takes its own rebuild branch (`Kind::Replayed`,
+        // `keep_replayed_receipts`, invoke/relay_delivered.rs:205-219): kept to
+        // the answer as delivered now. These rows drive that branch on each
+        // route (legacy keyed calls); the modern twin runs the same tail.
+        (Mcp, IdempotentReplay, Era::Legacy, SignRebuild) => Driven::Rows(&[
+            "router::collusion_direct_tests::meta::writes::meta_replay_leaves_the_gateway_hint_out_of_the_receipt",
+            "router::collusion_direct_tests::meta::meta_replay_renews_the_receipt",
+        ]),
+        (Direct, IdempotentReplay, Era::Legacy, SignRebuild) => Driven::Row(
+            "router::collusion_direct_tests::writes::a_replayed_direct_provenance_stamp_stays_out_of_the_receipt",
+        ),
+        (Stdio, IdempotentReplay, Era::Legacy, SignRebuild) => Driven::Row(
+            "server::signing_allocation_tests::collusion_stdio::stdio_replay_leaves_the_cost_suggestion_out_of_the_receipt",
+        ),
+        (Mcp | Direct | Stdio, IdempotentReplay, Era::Modern, SignRebuild) => Driven::SameAs {
+            pin: NO_CASE_OR_ERA,
+            case: IdempotentReplay,
+            era: Era::Legacy,
+        },
         (Mcp, IdempotentReplay, Era::Modern, ShapeSeal) => {
             Driven::Row("rows::r_erareplay_cross_era_replay_reshapes_after_the_seal_gap")
         }
