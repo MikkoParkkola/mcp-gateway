@@ -67,6 +67,7 @@ impl From<ToolSuggestion> for PersistedToolUsage {
 ///
 /// Returns an error if the directory cannot be created or the file
 /// cannot be written.
+// In-place on purpose: keeps the inode, owner, group and ACLs; atomic replace is MIK-8700.
 pub fn save(path: &Path, profiles: &PersistedProfiles) -> crate::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
