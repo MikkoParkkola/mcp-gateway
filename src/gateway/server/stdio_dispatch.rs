@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Stdio request dispatch: the relay, tools/call, signing, parsing and the caller context (moved from `server/mod.rs`, MIK-8144).
 
+use crate::error::rpc_codes::{INVALID_PARAMS, METHOD_NOT_FOUND};
 use std::sync::Arc;
 
 use tracing::debug;
@@ -166,7 +167,7 @@ impl Gateway {
                     other => {
                         debug!(method = %other, "stdio: unknown method");
                         let message = format!("Method not found: {other}");
-                        JsonRpcResponse::error(Some(id), -32601, message)
+                        JsonRpcResponse::error(Some(id), METHOD_NOT_FOUND, message)
                     }
                 },
                 None,
@@ -532,7 +533,7 @@ impl Gateway {
             ) {
                 break 'tool_call JsonRpcResponse::error(
                     Some(id),
-                    -32602,
+                    INVALID_PARAMS,
                     "Malformed protocol metadata",
                 );
             }
@@ -544,7 +545,7 @@ impl Gateway {
             if retry.is_malformed() {
                 break 'tool_call JsonRpcResponse::error(
                     Some(id),
-                    -32602,
+                    INVALID_PARAMS,
                     format!("malformed request fields: {}", retry.malformed.join(", ")),
                 );
             }
@@ -713,6 +714,19 @@ impl Gateway {
                     }
                 }
                 Err(error) => {
+                    // MIK-8747: gateway-authored refusal data (the cross-era
+                    // replay refusal) stays on the frame.
+                    if let crate::Error::JsonRpc {
+                        data: Some(data), ..
+                    } = &error
+                    {
+                        break 'tool_call JsonRpcResponse::error_with_data(
+                            Some(id),
+                            error.to_rpc_code(),
+                            error.to_string(),
+                            data.clone(),
+                        );
+                    }
                     break 'tool_call JsonRpcResponse::error(
                         Some(id),
                         error.to_rpc_code(),

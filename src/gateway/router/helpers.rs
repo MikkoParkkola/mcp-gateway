@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Pure utility functions shared by router handlers.
 
+use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, PARSE_ERROR};
 use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use axum::{
     Json,
@@ -132,7 +133,7 @@ pub(super) fn build_error_response_with_data(
 pub(super) fn session_capacity_refusal(id: Option<RequestId>) -> axum::response::Response {
     let mut response = build_error_response_with_data(
         id,
-        -32603,
+        INTERNAL_ERROR,
         "session capacity reached; retry later",
         serde_json::json!({"reason": "session_capacity"}),
         "",
@@ -234,14 +235,18 @@ pub(super) fn parse_sampling_params(
 ) -> Result<SamplingCreateMessageParams, axum::response::Response> {
     let Some(p) = params else {
         return Err(build_response(
-            JsonRpcResponse::error(Some(id), -32602, "Missing sampling params"),
+            JsonRpcResponse::error(Some(id), INVALID_PARAMS, "Missing sampling params"),
             session_id,
             StatusCode::BAD_REQUEST,
         ));
     };
     serde_json::from_value(p).map_err(|e| {
         build_response(
-            JsonRpcResponse::error(Some(id), -32602, format!("Invalid sampling params: {e}")),
+            JsonRpcResponse::error(
+                Some(id),
+                INVALID_PARAMS,
+                format!("Invalid sampling params: {e}"),
+            ),
             session_id,
             StatusCode::BAD_REQUEST,
         )
@@ -258,7 +263,7 @@ pub(super) fn parse_elicitation_params(
 ) -> Result<ElicitationCreateParams, axum::response::Response> {
     let Some(p) = params else {
         return Err(build_response(
-            JsonRpcResponse::error(Some(id), -32602, "Missing elicitation params"),
+            JsonRpcResponse::error(Some(id), INVALID_PARAMS, "Missing elicitation params"),
             session_id,
             StatusCode::BAD_REQUEST,
         ));
@@ -266,7 +271,11 @@ pub(super) fn parse_elicitation_params(
 
     serde_json::from_value(p).map_err(|e| {
         build_response(
-            JsonRpcResponse::error(Some(id), -32602, format!("Invalid elicitation params: {e}")),
+            JsonRpcResponse::error(
+                Some(id),
+                INVALID_PARAMS,
+                format!("Invalid elicitation params: {e}"),
+            ),
             session_id,
             StatusCode::BAD_REQUEST,
         )
@@ -495,7 +504,7 @@ pub(crate) fn parse_request_ref(
     if jsonrpc != Some("2.0") {
         return Err(JsonRpcResponse::error(
             None,
-            -32600,
+            INVALID_REQUEST,
             "Invalid JSON-RPC version",
         ));
     }
@@ -507,7 +516,7 @@ pub(crate) fn parse_request_ref(
     let method = value
         .get("method")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| JsonRpcResponse::error(id.clone(), -32600, "Missing method"))?;
+        .ok_or_else(|| JsonRpcResponse::error(id.clone(), INVALID_REQUEST, "Missing method"))?;
 
     // Get params (optional)
     let params = value.get("params");
@@ -515,7 +524,7 @@ pub(crate) fn parse_request_ref(
     // For notifications (methods starting with "notifications/"), id is optional
     // For requests, id is required
     if !is_notification_method(method) && id.is_none() {
-        return Err(JsonRpcResponse::error(None, -32600, "Missing id"));
+        return Err(JsonRpcResponse::error(None, INVALID_REQUEST, "Missing id"));
     }
 
     Ok((id, method, params))
@@ -540,14 +549,14 @@ pub(super) async fn read_body(
             if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
                 build_http_error_response(
                     None,
-                    -32600,
+                    INVALID_REQUEST,
                     "Request body exceeds server.max_body_size",
                     StatusCode::PAYLOAD_TOO_LARGE,
                 )
             } else {
                 build_http_error_response(
                     None,
-                    -32700,
+                    PARSE_ERROR,
                     format!("Failed to read body: {}", rejection.body_text()),
                     StatusCode::BAD_REQUEST,
                 )

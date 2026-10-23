@@ -6,6 +6,7 @@
 //! serialized like every other response) is `Ok`; a refusal that already
 //! carries the status it must be sent with is `Err`, returned unchanged.
 
+use crate::error::rpc_codes::INVALID_REQUEST;
 use std::sync::Arc;
 
 use axum::http::StatusCode;
@@ -25,7 +26,8 @@ use crate::gateway::router::authorization::{
     RouterAuthorizer, backend_tool_targets_for_call, is_admin_meta_tool, require_admin_tool_access,
 };
 use crate::gateway::router::helpers::{
-    build_error_response, build_response, extract_tools_call_params_ref, merge_client_meta_ref,
+    build_error_response, build_error_response_with_data, build_response,
+    extract_tools_call_params_ref, merge_client_meta_ref,
 };
 use crate::gateway::router::meta_refusal_audit::Refused;
 use crate::protocol::{JsonRpcResponse, RequestId};
@@ -67,7 +69,7 @@ pub(super) async fn tools_call(
         // Same code and shape the meta layer's no-session refusal uses.
         return Ok(JsonRpcResponse::error(
             Some(id),
-            -32600,
+            INVALID_REQUEST,
             refusal.to_string(),
         ));
     }
@@ -707,6 +709,21 @@ pub(super) async fn tools_call(
                 _ if error.to_rpc_code() == 409 => StatusCode::CONFLICT,
                 _ => StatusCode::BAD_REQUEST,
             };
+            // MIK-8747: an admission refusal that carries gateway-authored
+            // data (the cross-era replay refusal) keeps it on the wire.
+            if let crate::Error::JsonRpc {
+                data: Some(data), ..
+            } = &error
+            {
+                return Err(build_error_response_with_data(
+                    Some(id),
+                    error.to_rpc_code(),
+                    error.to_string(),
+                    data.clone(),
+                    session_id,
+                    status,
+                ));
+            }
             return Err(build_error_response(
                 Some(id),
                 error.to_rpc_code(),

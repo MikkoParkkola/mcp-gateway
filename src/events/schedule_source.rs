@@ -176,8 +176,7 @@ struct Fired {
 }
 
 fn fired_file(key: &str) -> String {
-    use sha2::Digest as _;
-    format!("{}.json", hex::encode(sha2::Sha256::digest(key.as_bytes())))
+    format!("{}.json", crate::hashing::sha256_hex(key.as_bytes()))
 }
 
 /// Whether `key` is among the earliest-granted `cap` of the timers `held`.

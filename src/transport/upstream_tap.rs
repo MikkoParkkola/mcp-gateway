@@ -6,6 +6,7 @@
 //! channel; the producer classifies and projects it first, so a queued note
 //! is bounded whatever the backend sends.
 
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 use serde_json::Value;
 
 /// The `_meta` key a modern peer tags every frame of a listen with.
@@ -58,9 +59,6 @@ impl UpstreamNote {
         matches!(self, Self::End | Self::Unsupported)
     }
 }
-
-/// JSON-RPC "method not found": the peer has no `subscriptions/listen`.
-const METHOD_NOT_FOUND: i32 = -32601;
 
 /// Why a frame was not turned into a note.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

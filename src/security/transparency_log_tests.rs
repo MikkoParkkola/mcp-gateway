@@ -607,3 +607,15 @@ fn without_a_tilde_a_missing_home_warns_nothing() {
         crate::test_log_capture::count(&records, "WARN", "no home directory could be determined");
     assert_eq!(warns, 0);
 }
+
+/// MIK-8668 X-SHA golden, computed independently (Python hashlib): the hash
+/// leaves out `entry_hash`, `sig` and `key_id` and covers the compact sorted
+/// JSON of the rest.
+#[test]
+fn a_recomputed_entry_hash_is_sha256_tagged_hex_of_the_core() {
+    let entry = serde_json::json!({"a": 1, "entry_hash": "x", "sig": "y", "key_id": "k"});
+    assert_eq!(
+        recompute_entry_hash(&entry).expect("an object"),
+        "sha256:015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862"
+    );
+}
