@@ -37,8 +37,29 @@ fn collect_yaml_files(root: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Whether `root` is the unpacked published crate, where the packaged suite
+/// runs the tests: the repo YAML walked below is not published there
+/// (Cargo.toml `include`). Same rule as the lib's `packaged_crate_at`
+/// (`src/gateway/meta_mcp/boundary_pins/packaged.rs`): `cargo package` writes
+/// `Cargo.toml.orig`, and an unpacked crate has no `.git`.
+fn is_packaged_crate(root: &Path) -> bool {
+    root.join("Cargo.toml.orig").exists() && !root.join(".git").exists()
+}
+
+/// The package root: cargo runs an integration test from it, and the walk
+/// below reads its paths relative to it.
+fn package_root() -> PathBuf {
+    std::env::current_dir().expect("the test's working directory")
+}
+
 #[test]
 fn shipped_yaml_accepted_by_backend_stays_accepted() {
+    if is_packaged_crate(&package_root()) {
+        eprintln!(
+            "mik-8639 shipped-yaml: skipped in the packaged crate: the repo YAML it checks is not published; the full-checkout CI job runs it"
+        );
+        return;
+    }
     let mut files = Vec::new();
     for root in [
         "capabilities",
@@ -101,5 +122,33 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
     assert!(
         refused.is_empty(),
         "seam refused shipped files: {refused:?}"
+    );
+}
+
+/// The packaged-crate switch both ways. A root with `Cargo.toml.orig` and no
+/// `.git` is the unpacked crate (skip); without the marker, or with a `.git`
+/// beside a stray `Cargo.toml.orig`, the strict check runs. On the live root
+/// the skip may fire only where the walked YAML is missing.
+#[test]
+fn packaged_marker_skips_and_its_absence_stays_strict() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    assert!(
+        !is_packaged_crate(dir.path()),
+        "without the marker the strict check runs"
+    );
+    std::fs::write(dir.path().join("Cargo.toml.orig"), "").expect("write the marker");
+    assert!(
+        is_packaged_crate(dir.path()),
+        "with the marker and no .git the check is skipped"
+    );
+    std::fs::create_dir(dir.path().join(".git")).expect("create .git");
+    assert!(
+        !is_packaged_crate(dir.path()),
+        "a checkout with a stray marker keeps the strict check"
+    );
+    let root = package_root();
+    assert!(
+        !is_packaged_crate(&root) || !root.join("playbooks").exists(),
+        "the skip fires only where the repo YAML it checks is absent"
     );
 }
