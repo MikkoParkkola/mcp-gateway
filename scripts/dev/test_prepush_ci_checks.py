@@ -54,6 +54,16 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
 
 PR_EVENTS = ("pull_request", "pull_request_target")
 NON_POSIX_SHELLS = ("pwsh", "powershell", "cmd")
+# The doc/CLI-reading Rust targets (§7). Derived on every push and checked
+# against this set (R3): a new reader is pinned here, a lost one is a regression.
+RUST_TARGETS = frozenset({
+    "capability_pin_policy", "cli_debug_assert", "cli_surface_inventory", "client_matrix_claims",
+    "e2e_quickstart_minimal_config", "kubernetes_manifest_tests", "mik_5226_acs", "mik_6550_roadmap",
+    "mik_6556_trust_cbom", "mik_6977_acs", "mik_7272_conformance", "public_claims_validation",
+    "registry_doc_counts", "shadow_scan_docs", "stdio_tests", "team_deployment_guide_claims",
+    "upgrading_summary_rows", "webui_management_tests",
+})
+UNTRANSLATED = re.compile(r"\$\{\{|\$\{?RUNNER_")
 RUST_READS = re.compile(r'"[^"\n]*\bdocs/|include_str!\("\.\./docs|Cli::command\(\)|Cli::(?:try_)?parse_from\(')
 
 
@@ -72,7 +82,8 @@ def _is_pr(doc) -> bool:
 
 def pr_workflows(root: pathlib.Path) -> list[pathlib.Path]:
     """Workflows triggered by pull_request or pull_request_target, any YAML form."""
-    return sorted(p for p in (root / ".github/workflows").glob("*.yml") if _is_pr(_load(p)))
+    found = [*(root / ".github/workflows").glob("*.yml"), *(root / ".github/workflows").glob("*.yaml")]
+    return sorted(p for p in found if _is_pr(_load(p)))
 
 
 def _steps(root, path, seen):
@@ -106,8 +117,10 @@ def _scan(root):
             windows = str(step.get("shell", "")).split()[:1] in ([s] for s in NON_POSIX_SHELLS)
             for ex in executed:
                 scripts = sorted(str(p.relative_to(root)) for p in root.glob(ex.script)) if "*" in ex.script else [ex.script]
+                if not scripts:
+                    found.append(f"glob matches no file: {ex.script} ({name})")
                 for script in scripts:
-                    form = (script, ex.args)
+                    form = _form(script, ex)
                     forms.setdefault(form, []).append(name)
                     if windows:
                         auto[form] = "windows: runs under a non-POSIX shell step"
@@ -116,12 +129,21 @@ def _scan(root):
     return forms, auto, found
 
 
+def _form(script, ex):
+    """A form's identity: script and args, plus the whole pipeline when it has one (F5)."""
+    return (script, ex.args, ex.pipeline) if ex.pipeline else (script, ex.args)
+
+
+def _label(form):
+    return " ".join((form[0], *form[1])) + (f" [pipeline: {' | '.join(form[2])}]" if len(form) > 2 else "")
+
+
 def _forms_of(text):
     forms = set()
     for command in text.splitlines():
         command = command.split("\t")[0].strip()
         if command and not command.startswith("#"):
-            forms |= {(e.script, e.args) for e in workflow_shell.executions(command)}
+            forms |= {_form(e.script, e) for e in workflow_shell.executions(command)}
     return forms
 
 
@@ -134,7 +156,7 @@ def buckets(root: pathlib.Path, *, ci_only=None):
     table = CI_ONLY if ci_only is None else ci_only
     run = _forms_of((root / RUN_LIST).read_text()) if (root / RUN_LIST).exists() else set()
     pre_push = root / "scripts/dev/pre-push.sh"
-    already = {(e.script, e.args) for e in workflow_shell.executions(pre_push.read_text())} if pre_push.exists() else set()
+    already = {_form(e.script, e) for e in workflow_shell.executions(pre_push.read_text())} if pre_push.exists() else set()
     return run, already, {**table, **_scan(root)[1]}
 
 
@@ -144,16 +166,16 @@ def problems(root: pathlib.Path, *, ci_only=None) -> list[str]:
     forms, auto, found = _scan(root)
     run, already, ci = buckets(root, ci_only=table)
     for form, workflows in sorted(forms.items()):
-        label = " ".join((form[0], *form[1])) + f" ({', '.join(sorted(set(workflows)))})"
+        label = _label(form) + f" ({', '.join(sorted(set(workflows)))})"
         homes = [b for b, members in (("RUN", run), ("ALREADY", already), ("CI_ONLY", ci)) if form in members]
         if not homes:
             found.append(f"in no bucket: {label}")
         elif len(homes) > 1:
             found.append(f"in two buckets {homes}: {label}")
-        if form not in ci and any("${{" in a or "$RUNNER_" in a for a in form[1]):
+        if form not in ci and any(UNTRANSLATED.search(a) for a in form[1]):
             found.append(f"untranslated CI token in {label}")
     for form in sorted(run - set(forms)):
-        found.append(f"stale RUN line (no PR workflow runs it): {' '.join((form[0], *form[1]))}")
+        found.append(f"stale RUN line (no PR workflow runs it): {_label(form)}")
     for form, reason in sorted(table.items()):
         if form not in forms:
             found.append(f"stale CI_ONLY entry: {form[0]}")
@@ -162,14 +184,43 @@ def problems(root: pathlib.Path, *, ci_only=None) -> list[str]:
     return found
 
 
+PATH_ATTR = re.compile(r'#\[path\s*=\s*"([^"]+)"\]')
+MOD_DECL = re.compile(r"^\s*(?:pub\s+)?mod\s+(\w+)\s*;", re.M)
+
+
+def _sources(target):
+    """`target` and every file it pulls in: tests/<stem>/**, `#[path]` files
+    (followed transitively) and `mod x;` siblings of the target."""
+    tests = target.parent
+    todo = [target, *sorted((tests / target.stem).rglob("*.rs"))]
+    seen = []
+    while todo:
+        source = todo.pop()
+        if source in seen or not source.is_file():
+            continue
+        seen.append(source)
+        text = source.read_text(errors="replace")
+        todo += [(source.parent / rel).resolve() for rel in PATH_ATTR.findall(text)]
+        if source == target:
+            todo += [c for m in MOD_DECL.findall(text) for c in (tests / f"{m}.rs", tests / m / "mod.rs")]
+    return seen
+
+
 def rust_targets(root: pathlib.Path) -> list[str]:
     """Test targets whose sources read docs/ or the CLI definition (§7)."""
     names = []
     for target in sorted((root / "tests").glob("*.rs")):
-        sources = [target, *sorted((root / "tests" / target.stem).rglob("*.rs"))]
-        if any(RUST_READS.search(s.read_text(errors="replace")) for s in sources):
+        if any(RUST_READS.search(s.read_text(errors="replace")) for s in _sources(target)):
             names.append(target.stem)
     return names
+
+
+def rust_drift(root: pathlib.Path) -> list[str]:
+    """The derived Rust target set against RUST_TARGETS, run on the push path (R3)."""
+    derived = set(rust_targets(root))
+    return [f"Rust target reads docs/CLI but is not pinned in RUST_TARGETS: {t}" for t in sorted(derived - RUST_TARGETS)] + [
+        f"Rust target pinned in RUST_TARGETS is no longer derived: {t}" for t in sorted(RUST_TARGETS - derived)
+    ]
 
 
 # ---------------------------------------------------------------- fixtures
@@ -329,7 +380,10 @@ class Rows(unittest.TestCase):
         self.assertEqual([e.args[:2] for e in found], [("<BASE_TIP>", "<TMP>/x")])
         self.t.script("scripts/k.py")
         self.t.workflow("ci.yml", pr_job('python3 scripts/k.py "${{ secrets.X }}"'))
-        self.assertTrue(any("secrets.X" in p for p in problems(self.t.root, ci_only={})))
+        self.t.run_list("python3 scripts/k.py ${{secrets.X}}\t1\tclosed")
+        found = problems(self.t.root, ci_only={})
+        self.assertFalse(any(p.startswith("in no bucket") for p in found), found)
+        self.assertTrue(any(p.startswith("untranslated CI token") and "secrets.X" in p for p in found), found)
 
     # D12
     def test_d12_substitutions_are_executions_and_unknown_syntax_fails_closed(self):
@@ -348,6 +402,11 @@ class Rows(unittest.TestCase):
             pr_job("python3 - <<'PY'\nprint('python3 scripts/h.py')\nPY\nif true; then echo x; fi", extra=pwsh),
         )
         self.assertNotIn("scripts/h.py", scripts_of(scanned_forms(self.t.root)))
+        found = workflow_shell.executions(
+            "if python3 scripts/i.py; then python3 scripts/j.py; fi\n"
+            "while python3 scripts/k.py; do break; done\n! python3 scripts/l.py\n"
+        )
+        self.assertEqual([e.script for e in found], ["scripts/i.py", "scripts/j.py", "scripts/k.py", "scripts/l.py"])
         ci_only = buckets(self.t.root, ci_only={})[2]
         self.assertTrue(any(f[0] == "scripts/w.py" and r.startswith("windows") for f, r in ci_only.items()), ci_only)
 
@@ -399,6 +458,38 @@ class Rows(unittest.TestCase):
         self.assertTrue(problems(self.t.root, ci_only={("scripts/z.py", ()): "because"}))
 
 
+    # D20 (impl r1 F13): a `.yaml` workflow is scanned like a `.yml` one.
+    def test_d20_a_yaml_extension_workflow_is_scanned(self):
+        self.t.script("scripts/y.py")
+        self.t.workflow("other.yaml", pr_job("python3 scripts/y.py"))
+        self.assertEqual(scripts_of(scanned_forms(self.t.root)), {"scripts/y.py"})
+
+    # D21 (impl r1 F5): a pipeline is part of the form; dropping a stage is drift.
+    def test_d21_a_run_line_missing_the_ci_pipeline_stage_is_drift(self):
+        self.t.script("scripts/g.py")
+        self.t.workflow("ci.yml", pr_job("python3 scripts/g.py | cmp - f.json"))
+        self.t.run_list("python3 scripts/g.py | cmp - f.json\t1\tclosed")
+        self.assertEqual(problems(self.t.root, ci_only={}), [])
+        self.t.run_list("python3 scripts/g.py\t1\tclosed")
+        found = problems(self.t.root, ci_only={})
+        self.assertTrue(any(p.startswith("in no bucket") and "cmp - f.json" in p for p in found), found)
+        self.assertTrue(any(p.startswith("stale RUN line") for p in found), found)
+
+    # D22 (impl r1 F12): a braced runner variable is an untranslated token.
+    def test_d22_a_braced_runner_variable_is_untranslated(self):
+        self.t.script("scripts/v.py")
+        self.t.workflow("ci.yml", pr_job('python3 scripts/v.py "${RUNNER_OS}"'))
+        self.t.run_list("python3 scripts/v.py ${RUNNER_OS}\t1\tclosed")
+        found = problems(self.t.root, ci_only={})
+        self.assertTrue(any(p.startswith("untranslated CI token") and "RUNNER_OS" in p for p in found), found)
+
+    # D24 (grok I3): a `for x in <glob>` loop matching no file is drift, not zero suites.
+    def test_d24_a_suite_glob_matching_nothing_is_drift(self):
+        self.t.workflow("ci.yml", pr_job('for s in scripts/none/test_*.py; do python3 "$s"; done'))
+        found = problems(self.t.root, ci_only={})
+        self.assertTrue(any(p.startswith("glob matches no file") and "scripts/none/test_*.py" in p for p in found), found)
+
+
 class Repository(unittest.TestCase):
     # R1
     def test_r1_every_executed_form_has_one_bucket(self):
@@ -414,20 +505,38 @@ class Repository(unittest.TestCase):
 
     # R2
     def test_r2_rust_targets_are_derived_from_sources(self):
-        expected = {
-            "capability_pin_policy", "cli_debug_assert", "cli_surface_inventory", "client_matrix_claims",
-            "e2e_quickstart_minimal_config", "kubernetes_manifest_tests", "mik_5226_acs", "mik_6550_roadmap",
-            "mik_6556_trust_cbom", "mik_6977_acs", "mik_7272_conformance", "public_claims_validation",
-            "registry_doc_counts", "shadow_scan_docs", "stdio_tests", "team_deployment_guide_claims",
-            "upgrading_summary_rows", "webui_management_tests",
-        }
-        self.assertEqual(set(rust_targets(REPO)), expected)
+        self.assertEqual(set(rust_targets(REPO)), RUST_TARGETS)
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             (root / "tests").mkdir()
             (root / "tests/only_parse_from.rs").write_text('fn t(){ let _ = Cli::parse_from(["x"]); }\n')
             (root / "tests/unrelated.rs").write_text("fn t(){}\n")
             self.assertEqual(rust_targets(root), ["only_parse_from"])
+
+    # D23 (impl r1 F9): a target whose docs read sits in a `#[path]` or `mod`
+    # file outside tests/<stem>/ is derived.
+    def test_d23_path_and_mod_sources_outside_the_stem_dir_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "tests/common").mkdir(parents=True)
+            (root / "tests/common/reads.rs").write_text('pub fn r(){ let _ = std::fs::read("docs/x.md"); }\n')
+            (root / "tests/helper.rs").write_text('pub fn h(){ let _ = std::fs::read("docs/y.md"); }\n')
+            (root / "tests/via_path.rs").write_text('#[path = "common/reads.rs"]\nmod reads;\nfn t(){}\n')
+            (root / "tests/via_mod.rs").write_text("mod helper;\nfn t(){}\n")
+            (root / "tests/plain.rs").write_text("fn t(){}\n")
+            self.assertEqual(rust_targets(root), ["helper", "via_mod", "via_path"])
+
+    # R3 (impl r1 F10): the push path checks the derived Rust set against the
+    # pinned one, so a derivation regression stops the push, not only this suite.
+    def test_r3_the_rust_target_set_is_checked_on_the_push_path(self):
+        self.assertEqual(rust_drift(REPO), [])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "tests").mkdir()
+            (root / "tests/new_doc_reader.rs").write_text('fn t(){ let _ = std::fs::read("docs/z.md"); }\n')
+            found = rust_drift(root)
+            self.assertTrue(any("new_doc_reader" in p for p in found), found)
+            self.assertTrue(any("cli_surface_inventory" in p for p in found), found)
 
 
 if __name__ == "__main__":

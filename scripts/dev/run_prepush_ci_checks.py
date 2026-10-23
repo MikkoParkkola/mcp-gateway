@@ -356,7 +356,7 @@ def main(argv=None) -> int:
              if l.strip() and not l.startswith("#")]
     start = time.monotonic()
     report = run(lines, repo=repo, head=head, merge_base=args.merge_base, base_tip=base_tip,
-                 drift=lambda: drift_test.problems(repo))
+                 drift=lambda: drift_test.problems(repo) + drift_test.rust_drift(repo))
     load = os.getloadavg()[0] if hasattr(os, "getloadavg") else float("nan")
     print(report.text)
     print(f"CI script checks: {time.monotonic() - start:.0f} s wall, load {load:.1f}")
