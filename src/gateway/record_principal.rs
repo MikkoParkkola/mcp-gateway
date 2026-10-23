@@ -342,3 +342,6 @@ mod tests {
 #[cfg(test)]
 #[path = "record_principal_key_tests.rs"]
 mod key_tests;
+#[cfg(test)]
+#[path = "record_principal_scan_tests.rs"]
+mod scan_tests;
