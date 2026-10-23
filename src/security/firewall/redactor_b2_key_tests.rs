@@ -91,3 +91,45 @@ fn k6_suffixes_are_per_object_and_skip_taken_names() {
         format!(r#"{{"{MARK}":0,"{MARK}#2":0,"{MARK}#3":1}}"#)
     );
 }
+
+#[test]
+fn k7_a_key_past_the_scans_restart_window_is_still_redacted() {
+    // A greedy match from the first key runs to the end; the scan restarts
+    // only near that end, so it never sees the later keys' own starts.
+    let pad = "p".repeat(400);
+    let urls: Vec<String> = (1..=3)
+        .map(|n| db_url("redis", "u:pw", &format!("10.0.0.{n}:6379")))
+        .collect();
+    let two = format!(
+        r#"{{"{}":{{"role":"master"}},"{}":{{"role":"replica","note":"{pad}"}}}}"#,
+        urls[0], urls[1]
+    );
+    let three = format!(
+        r#"{{"{}":{{"n":1}},"{}":{{"n":2}},"{}":{{"n":3,"note":"{pad}"}}}}"#,
+        urls[0], urls[1], urls[2]
+    );
+    for (text, nodes) in [(two, 2), (three, 3)] {
+        let out = assert_projected(&text);
+        assert!(!out.contains("pw@"), "{out}");
+        assert_eq!(parsed(&out).as_object().map(Map::len), Some(nodes), "{out}");
+    }
+}
+
+#[test]
+fn k8_a_suffixed_key_keeps_the_escapes_it_was_sent_with() {
+    // `\u0061` splits the token's run, so neither key matches as sent; the
+    // clean key decodes to the redacted key's name, so the redacted one takes
+    // `#2`. Written decoded, its tail would become a raw 36-char token.
+    let head = format!("ghp_{}", "k".repeat(36));
+    let tail = format!("ghp_{}\\u0061{}", "a".repeat(18), "a".repeat(17));
+    let text = format!(r#"{{"{MARK} {tail}":0,"{head} {tail}":1}}"#);
+    let out = assert_projected(&text);
+    assert_eq!(out, format!(r#"{{"{MARK} {tail}":0,"{MARK} {tail}#2":1}}"#));
+    let decoded: Value = serde_json::from_str(&out).expect("parses");
+    assert!(
+        decoded
+            .as_object()
+            .is_some_and(|map| map.keys().all(|key| key.contains(&"a".repeat(36)))),
+        "the escape decodes into the token run: {out}"
+    );
+}

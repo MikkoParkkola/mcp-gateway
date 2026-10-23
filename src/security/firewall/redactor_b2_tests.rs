@@ -159,11 +159,16 @@ fn expected(text: &str) -> String {
         return today(text);
     }
     // Per literal: the ranges to replace. A value takes every span over it; a
-    // key takes them only when some single match starts inside it (MIK-8772).
+    // key takes them only when some single match starts inside it, or its own
+    // text matches a pattern (MIK-8772).
     let starts: Vec<usize> = redactor().match_spans(text).iter().map(|m| m.0).collect();
+    let patterns = redactor().set;
     let mut per_lit: Vec<Vec<(usize, usize)>> = vec![Vec::new(); lits.len()];
     for (index, &(lit_start, lit_end, key, _)) in lits.iter().enumerate() {
-        if key && !starts.iter().any(|&at| lit_start <= at && at < lit_end) {
+        if key
+            && !starts.iter().any(|&at| lit_start <= at && at < lit_end)
+            && !patterns.is_match(&text[lit_start..lit_end])
+        {
             continue;
         }
         let escs = escapes(text, lit_start, lit_end);
@@ -225,8 +230,8 @@ fn expected(text: &str) -> String {
         }
         taken.insert((object, name.clone()));
         if name != candidate {
-            let quoted = serde_json::to_string(&name).expect("encodes");
-            contents[index] = quoted[1..quoted.len() - 1].to_owned();
+            // The suffix goes on the raw text, so escapes stay as sent.
+            contents[index] = format!("{}#{n}", contents[index]);
         }
     }
     let mut out = String::with_capacity(text.len());
@@ -574,7 +579,10 @@ impl Gen {
         &items[self.next() % items.len()]
     }
     fn string(&mut self, secret: bool) -> String {
+        // The long one carries a document past the scan's restart window.
+        let pad = "p".repeat(300);
         let plain = [
+            pad.as_str(),
             "word",
             "two words",
             "line\nbreak",
@@ -606,7 +614,12 @@ impl Gen {
             0 | 1 => {
                 let mut map = Map::new();
                 for i in 0..=self.next() % 3 {
-                    let key = format!("{}{i}", self.pick(&["k", "name", "rows", "e\u{e9}"]));
+                    // A credential in a key too, the shape MIK-8772 fixes.
+                    let key = if secret && self.next().is_multiple_of(3) {
+                        self.string(true)
+                    } else {
+                        format!("{}{i}", self.pick(&["k", "name", "rows", "e\u{e9}"]))
+                    };
                     map.insert(key, self.value(depth - 1, secret && i == 0));
                 }
                 Value::Object(map)
