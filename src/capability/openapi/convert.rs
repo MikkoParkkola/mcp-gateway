@@ -12,7 +12,6 @@ use std::fs;
 use serde_json::Value;
 use tracing::{debug, info, warn};
 
-use crate::security::ssrf::{RedirectDecision, redirect_decision};
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
 
@@ -37,6 +36,14 @@ pub struct OpenApiConverter {
     /// (e.g. `/api/v3`).  Set automatically by `convert_url` to the host of
     /// the fetched spec.
     host_override: Option<String>,
+}
+
+/// Message for a failed `OpenAPI` spec fetch. (MIK-8660 seam)
+fn fetch_error_message(e: &reqwest::Error) -> String {
+    crate::security::http_diagnostics::ssrf_refusal(e).map_or_else(
+        || format!("Failed to fetch OpenAPI spec: {e}"),
+        |refused| format!("Failed to fetch OpenAPI spec: {refused}"),
+    )
 }
 
 impl OpenApiConverter {
@@ -154,20 +161,13 @@ impl OpenApiConverter {
 
         let response = crate::security::ssrf::pinned_client_builder()
             .user_agent(format!("mcp-gateway/{}", env!("CARGO_PKG_VERSION")))
-            .redirect(reqwest::redirect::Policy::custom(
-                |attempt| match redirect_decision(attempt.previous().len(), attempt.url().as_str())
-                {
-                    RedirectDecision::Stop => attempt.stop(),
-                    RedirectDecision::Block(msg) => attempt.error(msg),
-                    RedirectDecision::Follow => attempt.follow(),
-                },
-            ))
+            .redirect(crate::security::ssrf::ssrf_redirect_policy())
             .build()
             .map_err(|e| Error::Config(format!("Failed to build HTTP client: {e}")))?
             .get(url)
             .send()
             .await
-            .map_err(|e| Error::Config(format!("Failed to fetch OpenAPI spec: {e}")))?;
+            .map_err(|e| Error::Config(fetch_error_message(&e)))?;
 
         if !response.status().is_success() {
             return Err(Error::Config(format!(
@@ -692,5 +692,44 @@ impl OpenApiConverter {
 impl Default for OpenApiConverter {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod fetch_error_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_blocked_redirect_names_its_ssrf_reason() {
+        // Nothing listens on a reserved test port (src/test_ports.rs).
+        let closed = crate::test_ports::reserved_port();
+        let app = axum::Router::new().route(
+            "/spec",
+            axum::routing::get(move || async move {
+                axum::response::Redirect::temporary(&format!("http://127.0.0.1:{closed}/"))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(crate::security::ssrf::ssrf_redirect_policy())
+            .build()
+            .expect("client");
+        let result = tokio::time::timeout(
+            crate::test_wait::HANG_BOUND,
+            client.get(format!("http://127.0.0.1:{port}/spec")).send(),
+        )
+        .await
+        .expect("bounded");
+        let error = result.expect_err("the SSRF-blocked redirect must fail");
+        let message = fetch_error_message(&error);
+        assert!(
+            message.contains("SSRF blocked"),
+            "expected SSRF reason in: {message}"
+        );
     }
 }

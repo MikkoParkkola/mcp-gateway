@@ -606,19 +606,14 @@ fn validate_signature(
         signature_value
     };
 
-    if constant_time_eq(computed_hex.as_bytes(), expected.as_bytes()) {
+    if bool::from(subtle::ConstantTimeEq::ct_eq(
+        computed_hex.as_bytes(),
+        expected.as_bytes(),
+    )) {
         Ok(())
     } else {
         Err("Signature mismatch".to_string())
     }
-}
-
-/// Constant-time comparison to prevent timing attacks.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 // ============================================================================

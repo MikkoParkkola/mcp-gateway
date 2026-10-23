@@ -130,6 +130,19 @@ pub struct DiscoveryEngine {
     options: DiscoveryOptions,
 }
 
+/// Discovery HTTP client: timeout, redirect policy and user agent. (MIK-8660 seam)
+fn discovery_client(
+    builder: reqwest::ClientBuilder,
+    timeout: std::time::Duration,
+) -> reqwest::Client {
+    builder
+        .timeout(timeout)
+        .redirect(crate::security::ssrf::ssrf_redirect_policy())
+        .user_agent("mcp-gateway/2.5 capability-discovery")
+        .build()
+        .expect("Failed to create HTTP client")
+}
+
 impl DiscoveryEngine {
     /// Create a new `DiscoveryEngine` with a configured reqwest client.
     ///
@@ -138,7 +151,7 @@ impl DiscoveryEngine {
     ///   loopback or reserved address is refused at connect (#2027)
     /// - no proxy from `HTTP(S)_PROXY` in the environment (#1881)
     /// - SSRF validation on every redirect hop
-    /// - Max 5 redirects
+    /// - at most `MAX_REDIRECT_HOPS` redirects followed; a blocked hop is an SSRF error
     /// - Configurable timeout from `options.timeout`
     ///
     /// # Panics
@@ -150,20 +163,10 @@ impl DiscoveryEngine {
         // The pinned builder never uses an environment proxy (#1881) and pins
         // every name this client connects to, probes and redirect targets
         // alike; the base-URL check sees IP literals only (#2027).
-        let client = crate::security::ssrf::pinned_client_builder()
-            .timeout(options.timeout)
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                let ssrf_blocked = validate_url_not_ssrf(attempt.url().as_str()).is_err();
-                let too_many_hops = attempt.previous().len() >= 5;
-                if ssrf_blocked || too_many_hops {
-                    attempt.stop()
-                } else {
-                    attempt.follow()
-                }
-            }))
-            .user_agent("mcp-gateway/2.5 capability-discovery")
-            .build()
-            .expect("Failed to create HTTP client");
+        let client = discovery_client(
+            crate::security::ssrf::pinned_client_builder(),
+            options.timeout,
+        );
         Self { client, options }
     }
 
