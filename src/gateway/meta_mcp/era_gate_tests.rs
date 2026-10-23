@@ -10,6 +10,7 @@
 //! backend wired to a recording transport whose era is resolved from its own
 //! answer to `server/discover`, so no row asserts an era it also sets.
 
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -70,7 +71,7 @@ impl Transport for EraMock {
                 let code = if self.modern {
                     crate::protocol::era::UNSUPPORTED_PROTOCOL_VERSION
                 } else {
-                    crate::protocol::era::METHOD_NOT_FOUND_CODE
+                    METHOD_NOT_FOUND
                 };
                 Ok(JsonRpcResponse::error(Some(id), code, "declined"))
             }

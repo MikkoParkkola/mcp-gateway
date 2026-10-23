@@ -3,6 +3,7 @@
 //! One spawned owner: admit/create, dispatch, settle, drop permit, drop
 //! ownership — in that order, and on every path including the ones that unwind.
 
+use crate::error::rpc_codes::INVALID_REQUEST;
 use std::sync::Arc;
 
 use tokio::sync::{OwnedSemaphorePermit, oneshot, watch};
@@ -611,7 +612,7 @@ pub(super) fn inspect_settled(
     if refused {
         response = crate::protocol::JsonRpcResponse::delivery_refusal_error(
             response.id,
-            -32600,
+            INVALID_REQUEST,
             "Response blocked by security firewall",
         );
     }

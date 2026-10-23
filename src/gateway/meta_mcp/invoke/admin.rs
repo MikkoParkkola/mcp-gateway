@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Operator controls: cost report, stats, kill/revive, reload, playbooks.
 
+use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST};
 use serde_json::{Value, json};
 use tracing::debug;
 
@@ -126,10 +127,9 @@ impl MetaMcp {
         #[cfg_attr(not(feature = "cost-governance"), allow(unused_variables))]
         caller_is_admin: bool,
     ) -> Result<Value> {
-        let stats = self
-            .stats
-            .as_ref()
-            .ok_or_else(|| Error::json_rpc(-32603, "Statistics not enabled for this gateway"))?;
+        let stats = self.stats.as_ref().ok_or_else(|| {
+            Error::json_rpc(INTERNAL_ERROR, "Statistics not enabled for this gateway")
+        })?;
 
         let all_backends = self
             .backends
@@ -279,7 +279,10 @@ impl MetaMcp {
     /// `gateway_reload_config` — trigger an immediate config reload from disk.
     pub(in crate::gateway::meta_mcp) async fn reload_config(&self) -> Result<Value> {
         let ctx = self.get_reload_context().ok_or_else(|| {
-            Error::json_rpc(-32603, "Config reload is not enabled on this gateway")
+            Error::json_rpc(
+                INTERNAL_ERROR,
+                "Config reload is not enabled on this gateway",
+            )
         })?;
 
         match ctx.reload_outcome().await {
@@ -293,8 +296,8 @@ impl MetaMcp {
             // admin API's 409 says (MIK-8058); anything else stays -32603.
             Err(e) => Err(Error::json_rpc(
                 match crate::config_reload::reload_failure(&e) {
-                    crate::config_reload::ReloadFailure::PostureRefused => -32600,
-                    _ => -32603,
+                    crate::config_reload::ReloadFailure::PostureRefused => INVALID_REQUEST,
+                    _ => INTERNAL_ERROR,
                 },
                 e,
             )),
@@ -314,7 +317,10 @@ impl MetaMcp {
             guard.clone()
         };
         let backend = backend.ok_or_else(|| {
-            Error::json_rpc(-32603, "Capability backend is not enabled on this gateway")
+            Error::json_rpc(
+                INTERNAL_ERROR,
+                "Capability backend is not enabled on this gateway",
+            )
         })?;
 
         match backend.reload().await {
@@ -330,7 +336,7 @@ impl MetaMcp {
                     "total_capabilities": total,
                 }))
             }
-            Err(e) => Err(Error::json_rpc(-32603, format!("{e}"))),
+            Err(e) => Err(Error::json_rpc(INTERNAL_ERROR, format!("{e}"))),
         }
     }
 
@@ -338,7 +344,10 @@ impl MetaMcp {
     #[allow(clippy::unnecessary_wraps)]
     pub(in crate::gateway::meta_mcp) fn webhook_status(&self) -> Result<Value> {
         let registry = self.get_webhook_registry().ok_or_else(|| {
-            Error::json_rpc(-32603, "Webhook receiver is not enabled on this gateway")
+            Error::json_rpc(
+                INTERNAL_ERROR,
+                "Webhook receiver is not enabled on this gateway",
+            )
         })?;
 
         let endpoints = registry.read().list_endpoints();
@@ -385,7 +394,7 @@ impl MetaMcp {
         } else {
             let engine = self.playbook_engine.read();
             let found = engine.get(name).cloned();
-            let missing = || Error::json_rpc(-32602, format!("Playbook not found: {name}"));
+            let missing = || Error::json_rpc(INVALID_PARAMS, format!("Playbook not found: {name}"));
             asking(caller, found.ok_or_else(missing))?
         };
         // MIK-8154 C2e: intake judged the sanitize exemption on one definition;

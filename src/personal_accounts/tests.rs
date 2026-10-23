@@ -626,3 +626,20 @@ pub(super) mod private_io {
         }
     }
 }
+
+/// MIK-8668 X-SHA golden, computed independently (Python hashlib over the
+/// account-key domain and the five u32-big-endian length-prefixed fields).
+#[test]
+fn the_account_key_digest_is_the_hex_sha256_of_the_encoded_tuple() {
+    let key = AccountKey {
+        principal_authority: "auth".to_string(),
+        principal_subject: "subj".to_string(),
+        backend_id: "be".to_string(),
+        resource: "https://r".to_string(),
+        oauth_issuer: "https://iss".to_string(),
+    };
+    assert_eq!(
+        key.digest().as_deref(),
+        Ok("db3556591f6a6f235d1bb8ccf6e13f0e60b75f478b81ce8d115130bac506fd17")
+    );
+}

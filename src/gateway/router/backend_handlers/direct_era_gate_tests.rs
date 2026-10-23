@@ -1,12 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crate::backend::Backend;
 use crate::config::BackendConfig;
-use crate::protocol::era::{METHOD_NOT_FOUND_CODE, UNSUPPORTED_PROTOCOL_VERSION};
+use crate::protocol::era::UNSUPPORTED_PROTOCOL_VERSION;
 use crate::transport::Transport;
 
 use super::*;
@@ -55,7 +56,7 @@ impl Transport for EraMock {
             let code = if self.modern {
                 UNSUPPORTED_PROTOCOL_VERSION
             } else {
-                METHOD_NOT_FOUND_CODE
+                METHOD_NOT_FOUND
             };
             return Ok(JsonRpcResponse::error(Some(id), code, "declined"));
         }
@@ -117,7 +118,7 @@ async fn dispatch_in_scope_refuses_a_removed_method_to_a_modern_backend() {
         .as_ref()
         .unwrap_or_else(|| panic!("a removed method must be refused, got: {response:?}"));
     assert_eq!(
-        error.code, METHOD_NOT_FOUND_CODE,
+        error.code, METHOD_NOT_FOUND,
         "the gateway's refusal carries the code the peer would have sent"
     );
     assert_eq!(

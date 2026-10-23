@@ -719,3 +719,13 @@ fn a_partial_scan_leaves_what_a_complete_one_does() {
         );
     }
 }
+
+/// MIK-8668 X-SHA golden, computed independently (Python hashlib over each
+/// part followed by a NUL byte; `evt_` and the first 32 hex digits).
+#[test]
+fn an_event_id_is_evt_and_32_hex_of_the_separated_parts() {
+    assert_eq!(
+        event_id(SourceKind::Webhook, "up-1", "sub_1"),
+        "evt_cf0dffc69c8671340a9b0fad9233489d"
+    );
+}

@@ -5,6 +5,7 @@
 //! These are stateless functions with no async or backend dependencies.
 //! Tool schema definitions live in [`super::meta_mcp_tool_defs`].
 
+use crate::error::rpc_codes::INVALID_PARAMS;
 use serde_json::{Value, json};
 
 use crate::failsafe::CircuitBreakerStats;
@@ -124,7 +125,7 @@ pub(crate) fn extract_nested_optional_str<'a>(
 pub(crate) fn missing_parameter_response(id: &RequestId, key: &str) -> JsonRpcResponse {
     JsonRpcResponse::error(
         Some(id.clone()),
-        -32602,
+        INVALID_PARAMS,
         format!("Missing '{key}' parameter"),
     )
 }
@@ -619,7 +620,7 @@ pub(crate) fn extract_search_limit(args: &Value) -> usize {
 /// Extract a required string parameter from JSON arguments.
 pub(crate) fn extract_required_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
     extract_optional_str(args, key)
-        .ok_or_else(|| Error::json_rpc(-32602, format!("Missing '{key}' parameter")))
+        .ok_or_else(|| Error::json_rpc(INVALID_PARAMS, format!("Missing '{key}' parameter")))
 }
 
 /// Parse and validate tool invocation arguments.
@@ -639,7 +640,10 @@ pub(crate) fn parse_tool_arguments_cow(args: &Value) -> Result<std::borrow::Cow<
         // Accept OpenAI-style tool arguments passed as a JSON string.
         Some(Value::String(raw)) => {
             std::borrow::Cow::Owned(serde_json::from_str(raw).map_err(|e| {
-                Error::json_rpc(-32602, format!("Invalid 'arguments' JSON string: {e}"))
+                Error::json_rpc(
+                    INVALID_PARAMS,
+                    format!("Invalid 'arguments' JSON string: {e}"),
+                )
             })?)
         }
         Some(present) => std::borrow::Cow::Borrowed(present),
@@ -647,7 +651,7 @@ pub(crate) fn parse_tool_arguments_cow(args: &Value) -> Result<std::borrow::Cow<
 
     if !arguments.is_object() {
         return Err(Error::json_rpc(
-            -32602,
+            INVALID_PARAMS,
             "Invalid 'arguments': expected object or JSON object string",
         ));
     }

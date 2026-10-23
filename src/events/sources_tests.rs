@@ -419,3 +419,13 @@ fn a_resource_update_matches_only_its_uri() {
 
 #[path = "reconcile_table_backend_tests.rs"]
 mod reconcile_table;
+
+/// MIK-8668 X-SHA golden, computed independently (Python hashlib over the
+/// compact JSON bytes `["p","u"]`).
+#[test]
+fn a_verification_record_is_named_by_the_hex_sha256_of_principal_and_url() {
+    assert_eq!(
+        super::records::verified_file("p", "u"),
+        "56db466a5f824ac6b41c874188a1db56792806c372e734629f116d787a063cc7.json"
+    );
+}

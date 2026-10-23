@@ -145,6 +145,15 @@ async fn a_redacted_plan_answer_keeps_each_steps_delivered_text() {
     );
 }
 
+/// True when `block` is exactly the pretty print of the JSON it holds: the
+/// wrapper the gateway wrote, which a receipt reads decoded.
+fn is_own_print(block: &str) -> bool {
+    serde_json::from_str::<Value>(block)
+        .ok()
+        .and_then(|value| serde_json::to_string_pretty(&value).ok())
+        .is_some_and(|print| print == block)
+}
+
 /// A note whose lines are each shorter than a k-gram: only the text as the
 /// caller reads it, real newlines included, matches it.
 fn note() -> String {
@@ -164,9 +173,10 @@ const SUGGEST: &str =
     "Check the tool's input schema, correct the offending parameter(s), and retry.";
 
 /// `MIK-7998.DECODE.1`: the redactor's database-URL match runs to the next
-/// whitespace, so in the wrapper's pretty print it takes the note's closing
-/// quote with it and the block is no longer JSON. The receipt still holds
-/// the note as the caller reads it, and not the redacted URL (I3).
+/// whitespace; since MIK-8745 it is redacted only inside the note's string, so
+/// the block stays the gateway's print and is read decoded. The receipt holds
+/// the note as the caller reads it, and not the redacted URL (I3). The
+/// rewritten-block reader keeps its own unit rows in `relay_delivered.rs`.
 #[tokio::test]
 async fn a_rewritten_invoke_wrapper_keeps_its_decoded_receipt() {
     let note = note();
@@ -179,8 +189,8 @@ async fn a_rewritten_invoke_wrapper_keeps_its_decoded_receipt() {
         .as_str()
         .unwrap_or_default();
     assert!(
-        block.contains("REDACTED") && serde_json::from_str::<Value>(block).is_err(),
-        "base: the redaction broke the wrapper's JSON: {read}"
+        block.contains("REDACTED") && is_own_print(block),
+        "the redaction kept the wrapper the gateway's own print (MIK-8745): {read}"
     );
 
     let control = post(&state, "key-a", sync_invoke(2, json!({"text": note}))).await;
@@ -197,6 +207,38 @@ async fn a_rewritten_invoke_wrapper_keeps_its_decoded_receipt() {
     assert!(
         secret.get("error").is_none(),
         "the redacted URL was never delivered, so no receipt holds it: {secret}"
+    );
+}
+
+/// `MIK-7887.JOIN.4` after MIK-8745: a credential span that starts in a key
+/// still takes the redactor's whole-leaf path, so a backend member keyed by a
+/// database URL leaves the wrapper unparseable. The rewritten-block reader
+/// then reads it, and the receipt still holds the note as the caller reads it.
+#[tokio::test]
+async fn a_url_in_a_key_still_rewrites_the_wrapper_and_keeps_the_note_receipted() {
+    let note = note();
+    let mut keyed = serde_json::Map::new();
+    keyed.insert(DSN.to_owned(), json!("v"));
+    let answer = json!({
+        "content": [{"type": "text", "text": note}],
+        "structuredContent": keyed,
+        "isError": false
+    });
+    let mock = MockBackend::answering(Answer::Sequence(vec![answer, text("ok"), text("ok")]));
+    let (state, _store) = plan_state(&mock).await;
+
+    let read = post(&state, "key-a", sync_invoke(1, json!({}))).await;
+    let block = read["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        block.contains("REDACTED") && serde_json::from_str::<Value>(block).is_err(),
+        "a span starting in a key still breaks the wrapper's JSON: {read}"
+    );
+    let relayed = post(&state, "key-b", sync_invoke(2, json!({"text": note}))).await;
+    assert_eq!(
+        relayed["error"]["code"], -32002,
+        "the receipt read the rewritten wrapper's note: {relayed}"
     );
 }
 
@@ -218,10 +260,8 @@ async fn a_rewritten_tool_error_keeps_the_gateways_advice_out_of_its_receipt() {
         .as_str()
         .unwrap_or_default();
     assert!(
-        block.contains("REDACTED")
-            && block.contains(SUGGEST)
-            && serde_json::from_str::<Value>(block).is_err(),
-        "base: the advice was delivered in a wrapper the redaction broke: {read}"
+        block.contains("REDACTED") && block.contains(SUGGEST) && is_own_print(block),
+        "the advice was delivered in a redacted wrapper that is still the gateway's print: {read}"
     );
 
     let relayed = post(&state, "key-b", sync_invoke(2, json!({"text": note}))).await;
@@ -243,8 +283,9 @@ const FIELD_Y: &str = "south terrace rows one to six, quinces";
 
 /// `MIK-8043.JOIN.4`: a rewritten wrapper is read member by member, so two
 /// short backend fields the caller got intact keep the receipt across them.
-/// The third block's URL is redacted with its closing quote, so the wrapper
-/// no longer parses; bob relaying the two fields is refused, alice is not.
+/// The third block's URL is redacted inside its string (MIK-8745), so the
+/// wrapper is still the gateway's print; bob relaying the two fields is
+/// refused, alice is not.
 #[tokio::test]
 async fn a_rewritten_wrapper_keeps_its_fields_receipted_across_them() {
     let answer = json!({"content": [
@@ -260,8 +301,8 @@ async fn a_rewritten_wrapper_keeps_its_fields_receipted_across_them() {
         .as_str()
         .unwrap_or_default();
     assert!(
-        block.contains("REDACTED") && serde_json::from_str::<Value>(block).is_err(),
-        "base: the redaction broke the wrapper's JSON: {read}"
+        block.contains("REDACTED") && is_own_print(block),
+        "the redaction kept the wrapper the gateway's own print (MIK-8745): {read}"
     );
     let parts = json!({"parts": ["text", FIELD_X, "text", FIELD_Y]});
     let control = post(&state, "key-a", sync_invoke(2, parts.clone())).await;

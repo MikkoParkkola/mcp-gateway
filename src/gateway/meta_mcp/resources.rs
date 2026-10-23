@@ -17,6 +17,7 @@
 //! control characters in these fields.  [`crate::security::sanitize_resource_metadata`]
 //! escapes all such vectors before the data reaches the client prompt.
 
+use crate::error::rpc_codes::INVALID_PARAMS;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -37,9 +38,6 @@ use crate::security::sanitize_resource_metadata;
 use super::super::meta_mcp_helpers::{extract_nested_optional_str, missing_parameter_response};
 use super::MetaMcp;
 use super::caller_forward::ForwardCredential;
-
-/// JSON-RPC 2.0 standard "Invalid params" code.
-const INVALID_PARAMS: i32 = -32602;
 
 /// Error response for a URI no backend owns, shared by every resource route.
 ///

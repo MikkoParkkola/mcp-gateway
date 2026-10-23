@@ -5,6 +5,7 @@
 //! Implements `gateway_search` (Code Mode), `gateway_execute` (Code Mode),
 //! `gateway_list_tools`, `gateway_search_tools`, and the chain executor.
 
+use crate::error::rpc_codes::INVALID_PARAMS;
 use serde_json::{Value, json};
 
 use crate::autotag;
@@ -370,7 +371,7 @@ impl MetaMcp {
             return asking(
                 caller,
                 Err(Error::json_rpc(
-                    -32602,
+                    INVALID_PARAMS,
                     format!("'query' is longer than {MAX_SEARCH_QUERY_CHARS} characters"),
                 )),
             );
@@ -465,7 +466,7 @@ impl MetaMcp {
             caller,
             server_opt.ok_or_else(|| {
                 Error::json_rpc(
-                    -32602,
+                    INVALID_PARAMS,
                     format!(
                         "Tool reference '{tool_ref}' is missing server prefix. \
                      Use format 'server:tool_name' from gateway_search results."

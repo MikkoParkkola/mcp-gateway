@@ -9,6 +9,7 @@
 //! without forwarding to any backend, prepended to every `prompts/list`
 //! response so clients always find them first.
 
+use crate::error::rpc_codes::INVALID_PARAMS;
 use futures::future::join_all;
 use serde_json::{Value, json};
 use tracing::{debug, warn};
@@ -244,7 +245,7 @@ impl MetaMcp {
         let Some((backend_name, original_name)) = name.split_once('/') else {
             return JsonRpcResponse::error(
                 Some(id),
-                -32602,
+                INVALID_PARAMS,
                 format!(
                     "Invalid prompt name format: '{name}'. Expected 'backend_name/prompt_name'"
                 ),
@@ -318,14 +319,14 @@ impl MetaMcp {
                 Some(Err(e)) => {
                     return JsonRpcResponse::error(
                         Some(id),
-                        -32602,
+                        INVALID_PARAMS,
                         format!("Invalid logging/setLevel params: {e}"),
                     );
                 }
                 None => {
                     return JsonRpcResponse::error(
                         Some(id),
-                        -32602,
+                        INVALID_PARAMS,
                         "Missing params for logging/setLevel",
                     );
                 }
