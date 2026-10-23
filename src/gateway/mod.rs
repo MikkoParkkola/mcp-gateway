@@ -6,6 +6,7 @@ pub mod auth;
 mod change_feed;
 pub(crate) use change_feed::ChangeFeed;
 pub(crate) mod authz;
+pub(crate) mod record_principal;
 pub mod destructive_confirmation;
 mod differential;
 mod http_error;
