@@ -468,10 +468,11 @@ fn evaluate_redirect_cross_origin_rejected_mid_chain() {
     }
 }
 
-/// The `same_origin` truth table, also held by `src/commands/doctor_tests.rs`;
-/// change them together.
+/// The `same_origin` truth table: the transport's origin rule, including a
+/// default port against an explicit one. `doctor` reports through
+/// `transport_follows_redirect`, which uses this same rule.
 #[test]
-fn same_origin_truth_table_matches_doctor_copy() {
+fn same_origin_truth_table() {
     let cases = [
         ("https://h.test/a", "https://h.test/b", true),
         ("https://h.test/", "https://h.test:443/", true),
@@ -634,4 +635,87 @@ async fn an_oauth_transport_shares_one_gate_with_its_client() {
         Arc::ptr_eq(&t.login_gate, &client_gate),
         "an ungated client is given the transport's own gate"
     );
+}
+
+/// MIK-8660 G4: `transport_follows_redirect` is the transport's decision under
+/// the backend's own destination policy, plus the statuses reqwest follows.
+#[test]
+fn transport_follows_redirect_matches_the_runtime_decision() {
+    use crate::config::Config;
+    use crate::security::SecurityPosture;
+    let u = |s: &str| Url::parse(s).expect("case URL parses");
+    let standard = Config::default();
+    let mut hardened = Config::default();
+    hardened.security.posture = SecurityPosture::Hardened;
+    let mut listed = hardened.clone();
+    listed.security.hardened.private_backends = vec!["b".to_string()];
+    let cases = [
+        // (config, status, base, target, followed)
+        (&standard, 301, "https://h.test/a", "https://h.test/b", true),
+        (
+            &standard,
+            308,
+            "https://h.test/a",
+            "https://h.test:443/b",
+            true,
+        ),
+        (
+            &standard,
+            302,
+            "https://h.test/a",
+            "https://g.test/b",
+            false,
+        ),
+        (
+            &standard,
+            300,
+            "https://h.test/a",
+            "https://h.test/b",
+            false,
+        ),
+        (
+            &standard,
+            304,
+            "https://h.test/a",
+            "https://h.test/b",
+            false,
+        ),
+        (
+            &standard,
+            301,
+            "http://127.0.0.1:9/a",
+            "http://127.0.0.1:9/b",
+            false,
+        ),
+        (
+            &hardened,
+            301,
+            "http://127.0.0.1:9/a",
+            "http://127.0.0.1:9/b",
+            false,
+        ),
+        (
+            &listed,
+            307,
+            "http://127.0.0.1:9/a",
+            "http://127.0.0.1:9/b",
+            true,
+        ),
+        (
+            &listed,
+            301,
+            "http://127.0.0.1:9/a",
+            "http://127.0.0.1:10/b",
+            false,
+        ),
+    ];
+    for (config, status, base, target, followed) in cases {
+        assert_eq!(
+            super::transport_follows_redirect(config, "b", status, &u(base), &u(target)),
+            followed,
+            "{status} {base} -> {target}, posture {:?}, private {:?}",
+            config.security.posture,
+            config.security.hardened.private_backends
+        );
+    }
 }

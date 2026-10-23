@@ -308,9 +308,12 @@ async fn http_backend_probe_reports_a_redirect_without_following_it() {
         streamable_http: None,
         protocol_version: None,
     };
-    let outcome = tokio::time::timeout(HANG_BOUND, check_http_backend("b", &transport))
-        .await
-        .expect("bounded");
+    let outcome = tokio::time::timeout(
+        HANG_BOUND,
+        check_http_backend(&Config::default(), "b", &transport),
+    )
+    .await
+    .expect("bounded");
     let Some(result) = outcome else {
         panic!("an Http transport must produce a result");
     };
@@ -322,7 +325,7 @@ async fn http_backend_probe_reports_a_redirect_without_following_it() {
         result.detail
     );
     assert!(
-        result.detail.contains("another origin"),
+        result.detail.contains("would refuse"),
         "detail: {}",
         result.detail
     );
@@ -359,9 +362,12 @@ async fn http_backend_probe_redacts_credentials_in_a_redirect_location() {
         streamable_http: None,
         protocol_version: None,
     };
-    let outcome = tokio::time::timeout(HANG_BOUND, check_http_backend("b", &transport))
-        .await
-        .expect("bounded");
+    let outcome = tokio::time::timeout(
+        HANG_BOUND,
+        check_http_backend(&Config::default(), "b", &transport),
+    )
+    .await
+    .expect("bounded");
     let Some(result) = outcome else {
         panic!("an Http transport must produce a result");
     };
@@ -429,9 +435,12 @@ async fn http_backend_probe_hides_a_secret_carrying_redirect_path() {
         streamable_http: None,
         protocol_version: None,
     };
-    let outcome = tokio::time::timeout(HANG_BOUND, check_http_backend("b", &transport))
-        .await
-        .expect("bounded");
+    let outcome = tokio::time::timeout(
+        HANG_BOUND,
+        check_http_backend(&Config::default(), "b", &transport),
+    )
+    .await
+    .expect("bounded");
     let Some(result) = outcome else {
         panic!("an Http transport must produce a result");
     };
@@ -476,12 +485,17 @@ async fn http_backend_probe_resolves_a_relative_redirect_location() {
         streamable_http: None,
         protocol_version: None,
     };
-    let outcome = tokio::time::timeout(HANG_BOUND, check_http_backend("b", &transport))
-        .await
-        .expect("bounded");
+    let outcome = tokio::time::timeout(
+        HANG_BOUND,
+        check_http_backend(&Config::default(), "b", &transport),
+    )
+    .await
+    .expect("bounded");
     let Some(result) = outcome else {
         panic!("an Http transport must produce a result");
     };
+    // Loopback under the default posture: the gateway refuses the hop.
+    assert_eq!(result.status, CheckStatus::Fail);
     assert!(result.detail.contains(&stub), "detail: {}", result.detail);
     assert!(
         result.detail.contains("path hidden"),
@@ -495,10 +509,12 @@ async fn http_backend_probe_resolves_a_relative_redirect_location() {
     );
 }
 
-/// MIK-8660 G4: a same-origin redirect is a WARN — the gateway follows it —
-/// and the probe still does not follow it.
-#[tokio::test]
-async fn http_backend_probe_warns_on_a_same_origin_redirect_without_following_it() {
+/// MIK-8660 G4: the backend probe reports the gateway's own decision. A
+/// same-origin redirect on loopback is refused under the default posture (the
+/// SSRF check runs on every hop), and under `hardened` with the backend listed
+/// in `private_backends` it is followed: FAIL, then WARN. The probe follows
+/// neither.
+async fn same_origin_loopback_redirect(config: &Config) -> (CheckResult, String, usize) {
     let hits = Arc::new(AtomicUsize::new(0));
     let seen = Arc::clone(&hits);
     let app = axum::Router::new()
@@ -527,20 +543,78 @@ async fn http_backend_probe_warns_on_a_same_origin_redirect_without_following_it
         streamable_http: None,
         protocol_version: None,
     };
-    let outcome = tokio::time::timeout(HANG_BOUND, check_http_backend("b", &transport))
+    let outcome = tokio::time::timeout(HANG_BOUND, check_http_backend(config, "b", &transport))
         .await
         .expect("bounded");
     let Some(result) = outcome else {
         panic!("an Http transport must produce a result");
     };
-    assert_eq!(result.status, CheckStatus::Warn);
+    (result, stub, hits.load(Ordering::SeqCst))
+}
+
+#[tokio::test]
+async fn http_backend_probe_fails_on_a_same_origin_loopback_redirect_by_default() {
+    let (result, stub, hits) = same_origin_loopback_redirect(&Config::default()).await;
+    assert_eq!(result.status, CheckStatus::Fail);
     assert!(result.detail.contains(&stub), "detail: {}", result.detail);
     assert!(
-        result.detail.contains("same-origin"),
+        result.detail.contains("would refuse"),
         "detail: {}",
         result.detail
     );
-    assert_eq!(hits.load(Ordering::SeqCst), 0);
+    assert_eq!(hits, 0);
+}
+
+#[tokio::test]
+async fn http_backend_probe_warns_on_a_same_origin_redirect_to_a_listed_private_backend() {
+    let mut config = Config::default();
+    config.security.posture = mcp_gateway::security::SecurityPosture::Hardened;
+    config.security.hardened.private_backends = vec!["b".to_string()];
+    let (result, stub, hits) = same_origin_loopback_redirect(&config).await;
+    assert_eq!(result.status, CheckStatus::Warn);
+    assert!(result.detail.contains(&stub), "detail: {}", result.detail);
+    assert!(
+        result.detail.contains("first hop"),
+        "detail: {}",
+        result.detail
+    );
+    assert_eq!(hits, 0);
+}
+
+/// MIK-8660 G4: reqwest does not follow a 300, so neither does the gateway.
+#[tokio::test]
+async fn http_backend_probe_fails_on_a_300_even_with_a_same_origin_location() {
+    let app = axum::Router::new().route(
+        "/x",
+        axum::routing::get(|| async {
+            (
+                axum::http::StatusCode::MULTIPLE_CHOICES,
+                [(axum::http::header::LOCATION, "/y")],
+            )
+        }),
+    );
+    let stub = serve(app).await;
+    let transport = TransportConfig::Http {
+        http_url: format!("{stub}/x"),
+        streamable_http: None,
+        protocol_version: None,
+    };
+    let mut config = Config::default();
+    config.security.posture = mcp_gateway::security::SecurityPosture::Hardened;
+    config.security.hardened.private_backends = vec!["b".to_string()];
+    let outcome = tokio::time::timeout(HANG_BOUND, check_http_backend(&config, "b", &transport))
+        .await
+        .expect("bounded");
+    let Some(result) = outcome else {
+        panic!("an Http transport must produce a result");
+    };
+    assert_eq!(result.status, CheckStatus::Fail);
+    assert!(result.detail.contains("300"), "detail: {}", result.detail);
+    assert!(
+        result.detail.contains("would refuse or not follow"),
+        "detail: {}",
+        result.detail
+    );
 }
 
 /// MIK-8660 G4: a redirect to another loopback listener (another port, hence
@@ -569,9 +643,12 @@ async fn http_backend_probe_fails_on_a_cross_origin_redirect_without_following_i
         streamable_http: None,
         protocol_version: None,
     };
-    let outcome = tokio::time::timeout(HANG_BOUND, check_http_backend("b", &transport))
-        .await
-        .expect("bounded");
+    let outcome = tokio::time::timeout(
+        HANG_BOUND,
+        check_http_backend(&Config::default(), "b", &transport),
+    )
+    .await
+    .expect("bounded");
     let Some(result) = outcome else {
         panic!("an Http transport must produce a result");
     };
@@ -582,7 +659,7 @@ async fn http_backend_probe_fails_on_a_cross_origin_redirect_without_following_i
         result.detail
     );
     assert!(
-        result.detail.contains("another origin"),
+        result.detail.contains("would refuse"),
         "detail: {}",
         result.detail
     );
@@ -607,42 +684,20 @@ async fn http_backend_probe_fails_on_a_redirect_to_an_unreachable_origin() {
         streamable_http: None,
         protocol_version: None,
     };
-    let outcome = tokio::time::timeout(HANG_BOUND, check_http_backend("b", &transport))
-        .await
-        .expect("bounded");
+    let outcome = tokio::time::timeout(
+        HANG_BOUND,
+        check_http_backend(&Config::default(), "b", &transport),
+    )
+    .await
+    .expect("bounded");
     let Some(result) = outcome else {
         panic!("an Http transport must produce a result");
     };
     assert_eq!(result.status, CheckStatus::Fail);
     assert!(result.detail.contains("301"), "detail: {}", result.detail);
     assert!(
-        result.detail.contains("another origin"),
+        result.detail.contains("would refuse"),
         "detail: {}",
         result.detail
     );
-}
-
-/// The `same_origin` truth table, also held by `src/transport/http/tests.rs`;
-/// change them together.
-#[test]
-fn same_origin_truth_table_matches_transport() {
-    let cases = [
-        ("https://h.test/a", "https://h.test/b", true),
-        ("https://h.test/", "https://h.test:443/", true),
-        ("http://h.test/", "http://h.test:80/x", true),
-        ("https://h.test/", "http://h.test/", false),
-        ("https://h.test/", "https://h.test:8443/", false),
-        ("https://h.test/", "https://g.test/", false),
-        ("http://127.0.0.1:8080/", "http://127.0.0.1:8081/", false),
-        ("http://127.0.0.1:8080/", "http://localhost:8080/", false),
-    ];
-    for (a, b, expected) in cases {
-        let left = url::Url::parse(a).expect("case URL parses");
-        let right = url::Url::parse(b).expect("case URL parses");
-        assert_eq!(
-            same_origin(&left, &right),
-            expected,
-            "same_origin({a}, {b})"
-        );
-    }
 }

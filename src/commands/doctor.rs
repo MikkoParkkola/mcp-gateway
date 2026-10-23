@@ -202,7 +202,7 @@ pub async fn run_doctor_command(
 
     // ── 4. HTTP backends reachability ──────────────────────────────────────
     for (name, backend) in config.enabled_backends() {
-        let result = match check_http_backend(name, &backend.transport).await {
+        let result = match check_http_backend(&config, name, &backend.transport).await {
             None => ws_reach::check_ws_backend(name, &backend.transport).await,
             some => some,
         };
@@ -408,15 +408,11 @@ fn backend_probe_client() -> reqwest::Result<reqwest::Client> {
         .build()
 }
 
-/// Copy of `transport::http::same_origin` (src/transport/http/mod.rs); the binary cannot call
-/// that private fn. Both are pinned by the same table of cases in their tests; change them together.
-fn same_origin(a: &url::Url, b: &url::Url) -> bool {
-    a.scheme() == b.scheme()
-        && a.host_str() == b.host_str()
-        && a.port_or_known_default() == b.port_or_known_default()
-}
-
-async fn check_http_backend(name: &str, transport: &TransportConfig) -> Option<CheckResult> {
+async fn check_http_backend(
+    config: &Config,
+    name: &str,
+    transport: &TransportConfig,
+) -> Option<CheckResult> {
     let TransportConfig::Http { http_url, .. } = transport else {
         return None;
     };
@@ -431,46 +427,42 @@ async fn check_http_backend(name: &str, transport: &TransportConfig) -> Option<C
             let status = resp.status();
             if status.is_redirection() {
                 let phrase = mcp_gateway::security::http_diagnostics::redirect_target_phrase(&resp);
+                // Decoded as reqwest does, so a UTF-8 Location is not misread.
                 let target = resp
                     .headers()
                     .get(reqwest::header::LOCATION)
-                    .and_then(|raw| raw.to_str().ok())
+                    .and_then(|raw| std::str::from_utf8(raw.as_bytes()).ok())
                     .and_then(|location| resp.url().join(location).ok());
-                match target {
-                    Some(resolved) if same_origin(resp.url(), &resolved) => {
-                        return Some(
-                            CheckResult::warn(
-                                label,
-                                format!(
-                                    "HTTP {status} redirect to {phrase}; the gateway follows same-origin redirects, so this works, but point the backend at the final URL"
-                                ),
-                            )
-                            .with_category("backend_http"),
-                        );
-                    }
-                    Some(_) => {
-                        return Some(
-                            CheckResult::fail(
-                                label,
-                                format!(
-                                    "HTTP {status} redirect to {phrase} (the gateway refuses a redirect to another origin; point doctor at the final URL)"
-                                ),
-                            )
-                            .with_category("backend_http"),
-                        );
-                    }
-                    None => {
-                        return Some(
-                            CheckResult::fail(
-                                label,
-                                format!(
-                                    "HTTP {status} redirect to {phrase} (not followed; point doctor at the final URL)"
-                                ),
-                            )
-                            .with_category("backend_http"),
-                        );
-                    }
-                }
+                // The gateway's own decision for this backend, not a copy of it.
+                let (followed, verdict) = match &target {
+                    Some(resolved) => (
+                        mcp_gateway::transport::transport_follows_redirect(
+                            config,
+                            name,
+                            status.as_u16(),
+                            resp.url(),
+                            resolved,
+                        ),
+                        "the gateway would refuse or not follow this redirect",
+                    ),
+                    None => (false, "not followed"),
+                };
+                let result = if followed {
+                    CheckResult::warn(
+                        label,
+                        format!(
+                            "HTTP {status} redirect to {phrase}; the gateway follows this first hop at runtime, but point the backend at the final URL"
+                        ),
+                    )
+                } else {
+                    CheckResult::fail(
+                        label,
+                        format!(
+                            "HTTP {status} redirect to {phrase} ({verdict}; point the backend at the final URL)"
+                        ),
+                    )
+                };
+                return Some(result.with_category("backend_http"));
             }
             // MCP servers often return 4xx on GET / — we just care they're reachable.
             if status.is_server_error() {

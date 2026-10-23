@@ -270,7 +270,8 @@ pub fn redirect_target_phrase(response: &reqwest::Response) -> String {
     let Some(raw) = response.headers().get(reqwest::header::LOCATION) else {
         return "no Location".to_string();
     };
-    let Ok(location) = raw.to_str() else {
+    // UTF-8, as reqwest decodes a Location it follows (not `to_str`, which is ASCII-only).
+    let Ok(location) = std::str::from_utf8(raw.as_bytes()) else {
         return "an unreadable Location".to_string();
     };
     match response.url().join(location) {

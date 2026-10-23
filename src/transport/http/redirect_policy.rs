@@ -57,3 +57,36 @@ pub(super) fn evaluate_redirect_for(
     }
     RedirectDecision::Follow
 }
+
+/// Whether the gateway's HTTP transport would follow this redirect: a
+/// response with `status` from `base` pointing at `target`, for the backend
+/// `backend_name` under `config`. One hop only, as `doctor` sees it; the
+/// chain after it is not followed here.
+///
+/// The verdict is [`evaluate_redirect_for`] under the backend's own
+/// destination policy ([`DestinationPolicy::for_backend`]), plus the statuses
+/// reqwest follows at all (301, 302, 303, 307, 308; any other 3xx is returned
+/// as the final response). Public only for the binary's `doctor` command, so
+/// that it reports the gateway's decision instead of a copy of it; not a
+/// stable API.
+#[doc(hidden)]
+#[must_use]
+pub fn transport_follows_redirect(
+    config: &crate::config::Config,
+    backend_name: &str,
+    status: u16,
+    base: &Url,
+    target: &Url,
+) -> bool {
+    if !matches!(status, 301 | 302 | 303 | 307 | 308) {
+        return false;
+    }
+    let listed = config
+        .security
+        .hardened
+        .private_backends
+        .iter()
+        .any(|name| name == backend_name);
+    let policy = DestinationPolicy::for_posture(config.security.posture).for_backend(listed);
+    evaluate_redirect_for(policy, base, target, 0) == RedirectDecision::Follow
+}
