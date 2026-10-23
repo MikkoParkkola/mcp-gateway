@@ -400,6 +400,10 @@ async fn r_erareplay_cross_era_replay_reshapes_after_the_seal_gap() {
         "R-ERAREPLAY: the modern call was a replay: {second}"
     );
     assert_sealed_bound("R-ERAREPLAY legacy first", delivered(&first));
+    assert!(
+        second.get("error").is_none(),
+        "R-ERAREPLAY: MIK-8747 gap closed? the cross-era replay is refused: flip the cell: {second}"
+    );
     let result = delivered(&second);
     assert_eq!(
         result.get("resultType").and_then(Value::as_str),
@@ -592,6 +596,10 @@ mod stdio {
             "R-ERAREPLAY-Stdio: the modern call was a replay: {second}"
         );
         assert_sealed_bound("R-ERAREPLAY-Stdio legacy first", delivered(&first));
+        assert!(
+            second.get("error").is_none(),
+            "R-ERAREPLAY-Stdio: MIK-8747 gap closed? the cross-era replay is refused: flip the cell: {second}"
+        );
         let result = delivered(&second);
         assert_eq!(
             result.get("resultType").and_then(Value::as_str),
