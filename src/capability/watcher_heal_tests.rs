@@ -360,13 +360,18 @@ fn a_tree_without_loops_keeps_its_logical_names() {
 /// MIK-8651: a cycle between two directories whose every hop resolves
 /// through 21 links (`next` plus 20 hidden hops) still ends the walk at its
 /// first repeat. Reading through the accumulated path would cost 42 links at
-/// `a/next/next`, past Linux's 40, and skip the entry silently; reading each
-/// directory through its canonical path costs only one hop's 21.
+/// `a/next/next`, past Linux's 40 and macOS's 32, and skip the entry
+/// silently; reading each directory through its canonical path costs only
+/// one hop's 21.
 #[cfg(unix)]
 #[test]
 fn a_two_directory_cycle_of_long_link_chains_ends_the_walk_as_a_bound() {
     let root = tempfile::tempdir().expect("a tempdir for the root");
-    let r = root.path();
+    // The links target the root's canonical path: macOS's tempdir sits under
+    // the `/var` link, which would add a link to every hop and push one hop
+    // past macOS's 32 on its own.
+    let root_path = root.path().canonicalize().expect("canonicalize the root");
+    let r = root_path.as_path();
     for dir in ["a", "b"] {
         std::fs::create_dir(r.join(dir)).expect("make a hop directory");
     }
