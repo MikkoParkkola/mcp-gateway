@@ -1,10 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Response caching with TTL for `gateway_invoke` results
+//! Response caching with TTL, for `gateway_invoke` results and capability
+//! payloads
 //!
-//! Provides a thread-safe, TTL-based cache for tool invocation responses.
-//! Cache keys are computed from `server:tool:args_hash` where `args_hash`
-//! is the SHA-256 digest of the canonical JSON arguments.
+//! Provides a thread-safe, TTL-based cache. The Meta-MCP response cache keys
+//! tool invocation responses by `server:tool:args_hash`, where `args_hash` is
+//! the SHA-256 digest of the canonical JSON arguments, and stores through
+//! `set_read`. The capability executor keeps its own instance, with its own
+//! bound, for REST, CLI, GraphQL and MCP-protocol capability results, and
+//! stores through `set_payload` (MIK-8661). Both instances insert through the
+//! same code, so expiry and eviction behave the same in each.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
