@@ -415,7 +415,7 @@ def o11_argv_isolation():
 
 
 def o12_cleanup():
-    outcomes = ("success", "nonzero", "handshake", "timeout-fetch", "timeout-prime", "timeout-start")
+    outcomes = ("success", "nonzero", "handshake", "timeout-setup", "timeout-fetch", "timeout-prime", "timeout-start")
     for outcome in outcomes:
         crp = load_checker()
         rec = Recorder(npm_served=NPM_A)
@@ -448,10 +448,11 @@ def o12_cleanup():
         admin = [" ".join(c[1]) for c in rec.calls if c[0] == "admin"]
         for vol in mounted:
             expect(any(a.startswith("docker volume rm") and vol in a for a in admin), f"{outcome}: volume {vol} not removed: {admin}")
-        starts = [c[1] for c in rec.calls if c[0] == "start"]
-        for argv in starts:
+        launched = [c for c in rec.calls if c[0] in ("setup", "fetch-npm", "prime", "start")]
+        for step, argv, _, _ in launched:
             name = argv[argv.index("--name") + 1] if "--name" in argv else None
-            expect(name and any(a.startswith("docker rm -f") and name in a for a in admin), f"{outcome}: start container not removed: {admin}")
+            expect(name, f"{outcome}: the {step} container has no name, so cleanup cannot remove it")
+            expect(any(a.startswith("docker rm -f") and name in a for a in admin), f"{outcome}: {step} container {name} not removed: {admin}")
 
 
 # ── CONTENT.2: the initialize handshake, against local fake servers ─────────
@@ -486,6 +487,10 @@ FAKES = {
     "no_server_info": "send({'jsonrpc': '2.0', 'id': 1, 'result': {'protocolVersion': '2025-06-18'}}); time.sleep(30)",
     "huge_line": "sys.stdout.write('x' * (2 * 1024 * 1024)); sys.stdout.flush(); time.sleep(30)",
     "many_frames": "[sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'method': 'notifications/message', 'params': {'pad': 'y' * 1000}}) + '\\n') for _ in range(1200)]; sys.stdout.flush(); time.sleep(30)",
+    "id_true": "send({'jsonrpc': '2.0', 'id': True, 'result': GOOD}); time.sleep(30)",
+    "no_envelope": "send({'id': 1, 'result': GOOD}); time.sleep(30)",
+    "null_protocol": "send({'jsonrpc': '2.0', 'id': 1, 'result': {'protocolVersion': None, 'serverInfo': GOOD['serverInfo']}}); time.sleep(30)",
+    "null_server_info": "send({'jsonrpc': '2.0', 'id': 1, 'result': {'protocolVersion': '2025-06-18', 'serverInfo': None}}); time.sleep(30)",
     "stderr_flood": "sys.stderr.write('E' * (1024 * 1024) + 'TAIL-MARKER'); sys.stderr.flush(); sys.exit(4)",
 }
 
@@ -513,6 +518,8 @@ def o14_handshake_fails():
         "error_reply": "error", "exit3": "exited 3", "no_result": "result",
         "no_protocol": "protocolVersion", "no_server_info": "serverInfo",
         "huge_line": "budget", "many_frames": "budget",
+        "id_true": "id", "no_envelope": "JSON-RPC 2.0", "null_protocol": "protocolVersion",
+        "null_server_info": "serverInfo",
     }
     with tempfile.TemporaryDirectory() as tmp:
         for name, word in expected.items():
@@ -554,12 +561,59 @@ def o15_summary():
     expect("SKIP skipped:" in out, out)
 
 
+def o20_run_container_bounds():
+    crp = load_checker()
+    py = [sys.executable, "-I", "-c"]
+    rc, out, err = crp.run_container(py + ["import sys; sys.stdout.write('x' * (2 * 1024 * 1024)); sys.stdout.flush()"], None, 20)
+    expect(rc != 0 and len(out) <= crp.STDOUT_BUDGET and b"budget" in err, f"stdout over budget: rc={rc} len={len(out)}")
+    rc, out, err = crp.run_container(py + ["import sys; sys.stderr.write('E' * (1024 * 1024) + 'TAIL'); sys.exit(5)"], None, 20)
+    expect(rc == 5 and err.endswith(b"TAIL") and len(err) <= crp.STDERR_TAIL, f"stderr tail: rc={rc} len={len(err)}")
+    try:
+        crp.run_container(py + ["import time; time.sleep(30)"], None, 1)
+        raise AssertionError("a timeout must raise TimeoutExpired")
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def o21_offline_start_exclusive():
+    crp = load_checker()
+    crp.fetch = raiser("fetch")
+    crp.run_container = raiser("run_container")
+    try:
+        run_main(crp, "--offline", "--start", REGISTRY, "--integrity", SIDECAR)
+        raise AssertionError("--offline with --start must be refused")
+    except SystemExit as e:
+        expect("mutually exclusive" in str(e), str(e))
+
+
+def o22_sidecar_types():
+    crp = load_checker()
+    with tempfile.TemporaryDirectory() as tmp:
+        src, side = write_case(tmp, [entry_block("a", "npx -y p@1.0.0")], {"npm": ["p@1.0.0"], "pypi": {}})
+        rc, out = run_main(crp, "--offline", src, "--integrity", side)
+    expect(rc == 1 and "expected" in out, out)
+
+
+def o23_images_pulled_first():
+    crp = load_checker()
+    rec = Recorder(npm_served=NPM_A)
+    with tempfile.TemporaryDirectory() as tmp:
+        live_case(crp, tmp, [entry_block("a", "npx -y p@1.0.0"), entry_block("b", "uvx q@1.0")],
+                  {"npm": {"p@1.0.0": NPM_A}, "pypi": {"q==1.0": PYPI_FILES}},
+                  {NPM_URL: npm_doc(NPM_A), PYPI_URL: pypi_doc(PYPI_FILES)}, rec)
+    pulls = [c for c in rec.calls if c[1][:2] == ["docker", "pull"]]
+    first_setup = next(i for i, c in enumerate(rec.calls) if c[0] == "setup")
+    expect(len(pulls) == 2 and all(c[3] >= 300 for c in pulls), f"pulls: {[(c[1], c[3]) for c in pulls]}")
+    expect(all(rec.calls.index(c) < first_setup for c in pulls), "images must be pulled before the first setup step")
+
+
 ROWS = [
     o1_sidecar_required, o2_sidecar_orphan, o3_sidecar_format, o4_offline_is_offline,
     o5_npm_metadata, o6_pypi_fileset, o7_npm_served_bytes, o8_pypi_served_bytes,
     o9_eligibility, o10_real_registry_eligible, o17_skip_pipeline, o11_argv_isolation,
     o18_caps, o12_cleanup, o13_handshake_pass, o14_handshake_fails, o19_stderr_tail,
-    o15_summary, o16_frame,
+    o15_summary, o16_frame, o20_run_container_bounds, o21_offline_start_exclusive,
+    o22_sidecar_types, o23_images_pulled_first,
 ]
 
 

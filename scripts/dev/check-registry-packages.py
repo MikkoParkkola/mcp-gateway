@@ -18,11 +18,19 @@ Anything else, including an unpinned package or an unknown launcher, fails.
 Network: one request per entry, retried; a registry outage fails the job
 rather than passing it.
 
-Usage: check-registry-packages.py [--offline] [path-to-server_registry_entries.rs]
+Usage: check-registry-packages.py [--offline | --start] [--integrity SIDECAR]
+       [path-to-server_registry_entries.rs]
 
---offline applies the pin and launcher rules without any network lookup; it
-runs on every pull request. The live lookups run where the registry changes,
-on pushes and daily (.github/workflows/registry-packages.yml).
+--offline applies the pin, launcher and sidecar rules without any network
+lookup; it runs on every pull request. The live lookups run where the
+registry changes, on pushes and daily (.github/workflows/registry-packages.yml).
+
+MIK-8513: every pinned artifact has its reviewed digest in the sidecar
+(default scripts/dev/registry-integrity.json); the live lookup compares it
+with what npm or PyPI publishes. --start (needs Docker) has the package
+manager fetch each artifact in a locked-down container and check its real
+bytes, then starts every eligible stdio entry with its network off and
+requires an answer to `initialize`.
 """
 
 from __future__ import annotations
@@ -136,6 +144,8 @@ def load_integrity(path: Path) -> tuple[dict, list[str]]:
         data = json.loads(path.read_text())
     except (OSError, ValueError) as e:
         return {"npm": {}, "pypi": {}}, [f"integrity file {path}: {e}"]
+    if not isinstance(data, dict) or not all(isinstance(data.get(k, {}), dict) for k in ("npm", "pypi")):
+        return {"npm": {}, "pypi": {}}, [f"integrity file {path}: expected {{\"npm\": {{...}}, \"pypi\": {{...}}}}"]
     records = {"npm": data.get("npm") or {}, "pypi": data.get("pypi") or {}}
     errors = []
     for key, digest in records["npm"].items():
@@ -298,8 +308,11 @@ def handshake(argv: list[str], timeout: float) -> str | None:
     proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     sel = selectors.DefaultSelector()
     try:
-        proc.stdin.write(UNAUTHENTICATED_INITIALIZE + b"\n")
-        proc.stdin.flush()
+        try:
+            proc.stdin.write(UNAUTHENTICATED_INITIALIZE + b"\n")
+            proc.stdin.flush()
+        except OSError as e:
+            return f"closed its input before the initialize request was written ({e.__class__.__name__})"
         sel.register(proc.stdout, selectors.EVENT_READ, "out")
         sel.register(proc.stderr, selectors.EVENT_READ, "err")
         out, err, seen = b"", b"", 0
@@ -347,16 +360,21 @@ def judge_reply(line: bytes) -> str | None:
         return "answered with malformed JSON"
     if "id" not in msg:
         return "notification"
-    if msg["id"] != 1:
+    if msg.get("jsonrpc") != "2.0":
+        return "answered without a JSON-RPC 2.0 envelope"
+    # `True == 1` in Python: the id must be the integer 1, not a boolean.
+    if type(msg["id"]) is not int or msg["id"] != 1:
         return f"answered with id {msg['id']!r}, not 1"
     if "error" in msg:
         return f"answered initialize with an error: {str(msg['error'])[:200]}"
     result = msg.get("result")
     if not isinstance(result, dict):
         return "answered initialize without a result"
-    for field in ("protocolVersion", "serverInfo"):
-        if field not in result:
-            return f"answered initialize without {field}"
+    if not isinstance(result.get("protocolVersion"), str) or not result["protocolVersion"]:
+        return "answered initialize without protocolVersion"
+    info = result.get("serverInfo")
+    if not isinstance(info, dict) or not isinstance(info.get("name"), str):
+        return "answered initialize without serverInfo"
     return None
 
 
@@ -412,12 +430,44 @@ SETUP_COMMAND = ["sh", "-c", "mkdir -p /work/bin && chown -R 1000:1000 /work"]
 
 
 def run_container(argv: list[str], stdin: bytes | None = None, timeout: float | None = None) -> tuple[int, bytes, bytes]:
-    """The one seam for every non-streaming Docker call."""
-    done = subprocess.run(argv, input=stdin or b"", capture_output=True, timeout=timeout)
-    return done.returncode, done.stdout[-STDOUT_BUDGET:], done.stderr[-STDERR_TAIL:]
+    """The one seam for every non-streaming Docker call. Output is read as it
+    arrives: stdout up to the budget (the process is killed past it), stderr
+    as a 4 KiB tail. A timeout kills the process and raises TimeoutExpired."""
+    proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    sel = selectors.DefaultSelector()
+    try:
+        try:
+            proc.stdin.write(stdin or b"")
+            proc.stdin.close()
+        except OSError:
+            pass  # the process exited before reading; its rc says why
+        sel.register(proc.stdout, selectors.EVENT_READ, "out")
+        sel.register(proc.stderr, selectors.EVENT_READ, "err")
+        out, err = b"", b""
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while sel.get_map():
+            left = None if deadline is None else deadline - time.monotonic()
+            if left is not None and left <= 0:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            for key, _ in sel.select(left):
+                chunk = os.read(key.fileobj.fileno(), 65536)
+                if not chunk:
+                    sel.unregister(key.fileobj)
+                elif key.data == "err":
+                    err = (err + chunk)[-STDERR_TAIL:]
+                elif len(out) + len(chunk) > STDOUT_BUDGET:
+                    return -1, out, err + f" [stdout over the {STDOUT_BUDGET} byte budget]".encode()
+                else:
+                    out += chunk
+        return proc.wait(timeout=30), out, err
+    finally:
+        sel.close()
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
 
 
-def docker_run(kind: str, volume: str, command: list[str], *, interactive=False, offline=False, name=None) -> list[str]:
+def docker_run(kind: str, volume: str, command: list[str], *, name: str, interactive=False, offline=False) -> list[str]:
     """A package step: uid 1000, the fixed environment, the entry's volume."""
     argv = ["docker", "run", *BASE_FLAGS, "--user", "1000:1000"]
     for key, value in PACKAGE_ENV.items():
@@ -427,8 +477,7 @@ def docker_run(kind: str, volume: str, command: list[str], *, interactive=False,
         argv.append("-i")
     if offline:
         argv += ["--network", "none"]
-    if name:
-        argv += ["--name", name]
+    argv += ["--name", name]
     return argv + [IMAGE[kind], *command]
 
 
@@ -442,10 +491,10 @@ def tail_text(err: bytes) -> str:
     return err.decode(errors="replace")[-300:].strip()
 
 
-def bytes_verdict(kind: str, pkg: str, version: str, expected, volume: str) -> str | None:
+def bytes_verdict(kind: str, pkg: str, version: str, expected, volume: str, name: str) -> str | None:
     """The package manager fetches the artifact and checks its real bytes."""
     if kind == "npm":
-        argv = docker_run(kind, volume, ["npm", "pack", "--json", "--pack-destination", "/work", f"{pkg}@{version}"], interactive=True)
+        argv = docker_run(kind, volume, ["npm", "pack", "--json", "--pack-destination", "/work", f"{pkg}@{version}"], name=name, interactive=True)
         rc, out, err = run_container(argv, None, CAPS["fetch"])
         try:
             served = json.loads(out)[0]["integrity"]
@@ -453,25 +502,31 @@ def bytes_verdict(kind: str, pkg: str, version: str, expected, volume: str) -> s
             return f"served bytes could not be fetched (npm pack exited {rc}): {tail_text(err)}"
         return None if served == expected else f"served bytes integrity {served} is not the recorded {expected}"
     hashes = " ".join(f"--hash=sha256:{digest}" for digest in sorted(expected.values()))
-    argv = docker_run(kind, volume, ["pip", "download", "-d", "/work", "--no-deps", "--require-hashes", "-r", "/dev/stdin"], interactive=True)
+    argv = docker_run(kind, volume, ["pip", "download", "-d", "/work", "--no-deps", "--require-hashes", "-r", "/dev/stdin"], name=name, interactive=True)
     rc, _, err = run_container(argv, f"{pkg}=={version} {hashes}\n".encode(), CAPS["fetch"])
     return None if rc == 0 else f"served bytes do not match the recorded sha256 (pip exited {rc}): {tail_text(err)}"
 
 
 def start_one(entry: dict[str, str], plan: tuple[str, str, str], expected) -> tuple[str | None, str | None]:
-    """(failure, skip): fetch and verify every pinned entry; prime and start the eligible."""
+    """(failure, skip): fetch and verify every pinned entry; prime and start the eligible.
+
+    Every container is named, and every name is removed on every exit path:
+    killing a timed-out docker client does not stop its container."""
     kind, pkg, version = plan
     tag = uuid.uuid4().hex[:12]
-    volume, name = f"mcpg-registry-{tag}", f"mcpg-registry-start-{tag}"
-    started = False
+    volume = f"mcpg-registry-{tag}"
+    names = {step: f"mcpg-registry-{step}-{tag}" for step in ("setup", "fetch", "prime", "start")}
+    launched = []
     try:
         run_container(["docker", "volume", "create", volume], None, 30)
-        setup = ["docker", "run", *BASE_FLAGS, "--cap-add", "CHOWN", "--network", "none",
-                 "-v", f"{volume}:/work", IMAGE[kind], *SETUP_COMMAND]
+        setup = ["docker", "run", *BASE_FLAGS, "--user", "0:0", "--cap-add", "CHOWN", "--network", "none",
+                 "-v", f"{volume}:/work", "--name", names["setup"], IMAGE[kind], *SETUP_COMMAND]
+        launched.append(names["setup"])
         rc, _, err = run_container(setup, None, 30)
         if rc != 0:
             return f"volume setup failed: {tail_text(err)}", None
-        failure = bytes_verdict(kind, pkg, version, expected, volume)
+        launched.append(names["fetch"])
+        failure = bytes_verdict(kind, pkg, version, expected, volume, names["fetch"])
         if failure:
             return failure, None
         skip = eligibility(entry)
@@ -483,17 +538,17 @@ def start_one(entry: dict[str, str], plan: tuple[str, str, str], expected) -> tu
         else:
             prime = ["uv", "tool", "install", f"{pkg}=={version}"]
             launcher = ["uvx", "--offline", f"{pkg}@{version}"]
-        rc, _, err = run_container(docker_run(kind, volume, prime), None, CAPS["prime"])
+        launched.append(names["prime"])
+        rc, _, err = run_container(docker_run(kind, volume, prime, name=names["prime"]), None, CAPS["prime"])
         if rc != 0:
             return f"install failed (exit {rc}): {tail_text(err)}", None
-        started = True
-        argv = docker_run(kind, volume, launcher + launch_args(entry), interactive=True, offline=True, name=name)
+        launched.append(names["start"])
+        argv = docker_run(kind, volume, launcher + launch_args(entry), name=names["start"], interactive=True, offline=True)
         return handshake(argv, CAPS["start"]), None
     except subprocess.TimeoutExpired as e:
         return f"timed out after {e.timeout} s", None
     finally:
-        # Killing the docker client does not stop the container: remove it by name.
-        if started:
+        for name in launched:
             run_container(["docker", "rm", "-f", name], None, 30)
         run_container(["docker", "volume", "rm", "-f", volume], None, 30)
 
@@ -501,6 +556,12 @@ def start_one(entry: dict[str, str], plan: tuple[str, str, str], expected) -> tu
 def start_all(entries: list[dict[str, str]], records: dict, missing: dict) -> int:
     """`--start`: every pinned entry's bytes; every eligible entry's initialize."""
     failed, passed, eligible = 0, 0, 0
+    kinds = {p[0] for p in map(classify, entries) if not isinstance(p, str) and p[0] in IMAGE}
+    for kind in sorted(kinds):
+        rc, _, err = run_container(["docker", "pull", IMAGE[kind]], None, 600)
+        if rc != 0:
+            print(f"FAIL image {IMAGE[kind]}: pull failed: {tail_text(err)}")
+            return 1
     for entry in entries:
         plan = classify(entry)
         if isinstance(plan, str) or plan[0] not in ("npm", "pypi"):
@@ -534,6 +595,8 @@ def parse_args(argv: list[str]) -> tuple[str, Path, Path]:
         integrity = Path(args[i + 1])
         del args[i : i + 2]
     mode = "live"
+    if "--offline" in args and "--start" in args:
+        raise SystemExit("--offline and --start are mutually exclusive")
     for flag in ("--offline", "--start"):
         if flag in args:
             args.remove(flag)
