@@ -418,7 +418,7 @@ impl<'f> FnVisitor<'f> {
     }
 }
 
-impl<'ast, 'f> Visit<'ast> for FnVisitor<'f> {
+impl<'ast> Visit<'ast> for FnVisitor<'_> {
     fn visit_item_fn(&mut self, _: &'ast syn::ItemFn) {}
     fn visit_impl_item_fn(&mut self, _: &'ast syn::ImplItemFn) {}
 
@@ -756,7 +756,7 @@ struct StartFinder<'f> {
     found: bool,
 }
 
-impl<'ast, 'f> Visit<'ast> for StartFinder<'f> {
+impl<'ast> Visit<'ast> for StartFinder<'_> {
     fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
         if let syn::Expr::Path(p) = &*node.func
             && is_start_path(&p.path, self.factories)
