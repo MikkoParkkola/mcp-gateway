@@ -102,12 +102,10 @@ pub(crate) enum Latent {
     /// The receipt's result facts are `row_count` and `backend_ok`. The only
     /// extractor arm reads GitHub's server-reported `total_count`
     /// (`trust/result_extractor.rs:55-80`), redaction never flips `isError`,
-    /// and a Block replaces the whole answer. Since MIK-8745 a redaction
-    /// inside a JSON string value keeps the text parseable, so the count
-    /// survives the scan. Left, each still redacted as a whole value that can
-    /// break the text: a credential that starts inside a JSON key (MIK-8772),
-    /// and a text over 1 MiB (MIK-8774). `github_search_repos` has a fixed
-    /// schema, so no counted answer carries such a key.
+    /// and a Block replaces the whole answer. Since MIK-8745 and MIK-8772 a
+    /// redaction inside a JSON string value or key keeps the text parseable,
+    /// so the count survives the scan; for texts over 1 MiB the count can
+    /// still be lost (MIK-8774).
     NoExtractedFactRedactionChanges,
 }
 
