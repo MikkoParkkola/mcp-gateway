@@ -421,6 +421,45 @@ async fn a_replayed_refusal_records_only_the_delivered_tenants() {
     assert_eq!(hit["tenants"], sorted(&["cust-1"]), "{hit}");
 }
 
+/// MIK-8663 T7 (attribution half): a replayed `gateway_invoke` answer is
+/// attributed from the tool value it wraps, as a live call is. The wrap is
+/// the one text block `wrap_tool_success` builds, so the reader that unwraps
+/// it is the strict payload reader. Characterisation: the tenant extractor
+/// also parses the envelope's text, so this pins the delivered tenants, not
+/// which reader produced them (the T5 table and T6 scan pin the reader). The
+/// relay-receipt half is `collusion_direct_tests::meta::meta_replay_renews_the_receipt`.
+#[tokio::test]
+async fn a_replayed_invoke_answer_is_attributed_from_its_tool_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let meta = attributing(meta(Ok(reply_naming("cust-1", "")), &dir));
+    let who = api_key_caller();
+    let value = json!({"rows": [{"customer_id": "cust-7"}]});
+    let wrapped = json!({
+        "content": [{"type": "text", "text": serde_json::to_string_pretty(&value).unwrap()}],
+        "isError": false,
+    });
+    let replay =
+        crate::protocol::JsonRpcResponse::success(crate::protocol::RequestId::Number(7), wrapped);
+    let answer = meta
+        .audit_replay(
+            "gateway_invoke",
+            &args_for(None),
+            None,
+            &context(&AllowAll, &who),
+            replay,
+            None,
+        )
+        .await;
+    assert!(
+        answer.error.is_none(),
+        "the replay was withheld: {answer:?}"
+    );
+    let record = only_record(&dir);
+    assert_eq!(record["attribution"], json!("cached_delivery"), "{record}");
+    let tenants = record["tenants"].as_array().cloned().unwrap_or_default();
+    assert!(tenants.contains(&json!(h("cust-7"))), "{record}");
+}
+
 /// MIK-7647 AC1. The `CachedError` arm: a chained backend (`require`) whose
 /// successful reply carries no chain is a refused receipt, so the first keyed call
 /// settles its key as a terminal failure (`reservation.fail`, `invoke.rs`).

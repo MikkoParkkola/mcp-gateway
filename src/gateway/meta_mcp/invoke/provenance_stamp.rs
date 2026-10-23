@@ -8,6 +8,22 @@ use serde_json::Value;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::support::{augment_with_provenance, strip_backend_provenance};
 
+// MIK-8663 T3: the client claim the last provenance stamp on this thread was
+// handed, so a row can check it is bound to its call. It records only; the
+// stamp below behaves the same with and without it.
+#[cfg(test)]
+thread_local! {
+    static LAST_CLIENT_CLAIM: std::cell::RefCell<Option<crate::trust::ClientClaim>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Take the client claim the last provenance stamp on this thread was handed
+/// (MIK-8663 T3).
+#[cfg(test)]
+pub(super) fn take_last_client_claim() -> Option<crate::trust::ClientClaim> {
+    LAST_CLIENT_CLAIM.with(|last| last.borrow_mut().take())
+}
+
 impl MetaMcp {
     /// Stamp a signed runtime-provenance receipt into `value._meta` when
     /// provenance stamping is enabled (MIK-6905). No-op when the signer is
@@ -39,6 +55,8 @@ impl MetaMcp {
         cache: crate::trust::CacheOutcome,
         client_claim: Option<&crate::trust::ClientClaim>,
     ) -> Value {
+        #[cfg(test)]
+        LAST_CLIENT_CLAIM.with(|last| *last.borrow_mut() = client_claim.cloned());
         // Only this gateway may put a signature chain on a result (ASI07).
         crate::security::signature_chain::strip_chain(&mut value);
         let Some(ref signer) = self.provenance_signer else {
