@@ -363,4 +363,17 @@ mod tests {
         assert_eq!(snap.total_cached_tokens, 0);
         assert!(snap.cached_tokens_by_server.is_empty());
     }
+
+    /// DUPC-10.PR10.3: the key splits at its first colon only, so a tool
+    /// name with a colon is reported whole.
+    #[test]
+    fn a_tool_name_with_a_colon_keeps_its_full_name() {
+        let stats = UsageStats::new();
+        stats.record_invocation("s", "a:b");
+        let top = &stats.snapshot(1).top_tools[0];
+        assert_eq!(
+            (top.server.as_str(), top.tool.as_str(), top.count),
+            ("s", "a:b", 1)
+        );
+    }
 }

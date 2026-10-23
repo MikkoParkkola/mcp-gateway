@@ -227,4 +227,33 @@ mod tests {
         assert_eq!(usage.call_count, 5);
         assert_eq!(usage.last_used_secs, Some(1_700_000_000));
     }
+
+    /// DUPC-10.PR10.4: a profiles file this build writes round-trips to the
+    /// same bytes. One user only: the profiles live in a map.
+    #[test]
+    fn a_saved_profiles_file_is_byte_identical() {
+        const ONE_USER: &str = "{\n  \"saved_at\": 7,\n  \"profiles\": {\n    \"u\": {\n      \"user_id\": \"u\",\n      \"created_at\": 5,\n      \"tools\": [\n        {\n          \"tool_name\": \"search\",\n          \"call_count\": 2,\n          \"last_used_secs\": 9\n        }\n      ]\n    }\n  }\n}";
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("profiles.json");
+        std::fs::write(&path, ONE_USER).unwrap();
+        save(&path, &load(&path).unwrap()).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), ONE_USER);
+    }
+
+    /// DUPC-10.PR10.4: a tool row written before the timestamp existed loads,
+    /// with no timestamp.
+    #[test]
+    fn a_tool_row_without_last_used_secs_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("profiles.json");
+        std::fs::write(
+            &path,
+            r#"{"saved_at":1,"profiles":{"u":{"user_id":"u","tools":[{"tool_name":"t","call_count":3}]}}}"#,
+        )
+        .unwrap();
+        let loaded = load(&path).unwrap();
+        let tool = &loaded.profiles["u"].tools[0];
+        assert_eq!((tool.tool_name.as_str(), tool.call_count), ("t", 3));
+        assert_eq!(tool.last_used_secs, None);
+    }
 }

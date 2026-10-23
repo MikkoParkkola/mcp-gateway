@@ -559,3 +559,6 @@ fn count_as_metric(value: usize) -> f64 {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod usage_file_tests;
