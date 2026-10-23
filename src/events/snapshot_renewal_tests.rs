@@ -167,12 +167,7 @@ async fn t34_a_read_begun_before_a_renewal_does_not_revoke_it() {
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: crate::events::LiveCredentials::default(),
-        record_key: Some(std::sync::Arc::new(
-            crate::gateway::record_principal::RecordPrincipalKey::from_text(
-                crate::gateway::record_principal::TEST_RECORD_KEY,
-            )
-            .expect("test key"),
-        )),
+        record_key: crate::gateway::record_principal::test_key_slot(),
         public_provenance: None,
     };
     hub.fan_out(&services, &event).await;
@@ -284,12 +279,7 @@ async fn t34_a_cached_list_from_before_a_renewal_does_not_revoke_it() {
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: crate::events::LiveCredentials::default(),
-        record_key: Some(std::sync::Arc::new(
-            crate::gateway::record_principal::RecordPrincipalKey::from_text(
-                crate::gateway::record_principal::TEST_RECORD_KEY,
-            )
-            .expect("test key"),
-        )),
+        record_key: crate::gateway::record_principal::test_key_slot(),
         public_provenance: None,
     };
     hub.fan_out(&services, &event).await;

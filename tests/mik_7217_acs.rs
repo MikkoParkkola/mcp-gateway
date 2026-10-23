@@ -13,7 +13,6 @@
 
 #[path = "common/record_key.rs"]
 mod record_key;
-
 use std::sync::Arc;
 
 use mcp_gateway::backend::BackendRegistry;
@@ -322,6 +321,7 @@ fn ac_discover_3_initialize_result_is_unchanged() {
 mod http {
     use std::sync::Arc;
 
+    use crate::record_key::RECORD_KEY as KEY;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use mcp_gateway::backend::BackendRegistry;
@@ -350,12 +350,8 @@ mod http {
         ));
         let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
         let agent_registry = Arc::new(AgentRegistry::new());
-
         // One registry, shared with the executor that publishes through it.
-        let subscriptions = Arc::new(SubscriptionRegistry::new(
-            64,
-            auth_state(&config.auth, crate::record_key::RECORD_KEY),
-        ));
+        let subscriptions = Arc::new(SubscriptionRegistry::new(64, auth_state(&config.auth, KEY)));
         let store_dir = tempfile::tempdir().expect("a private task-store directory");
         let (tasks, task_executor) = open_runtime(
             &store_dir.path().join("tasks"),
@@ -378,10 +374,7 @@ mod http {
             streaming_config: config.streaming.clone(),
             // Authentication disabled: this criterion is about discovery needing
             // no credential exchange beyond the transport's own.
-            auth_config: Arc::new(ResolvedAuthConfig::from_config(
-                &config.auth,
-                crate::record_key::RECORD_KEY,
-            )),
+            auth_config: Arc::new(ResolvedAuthConfig::from_config(&config.auth, KEY)),
             key_server: None,
             tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
             mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),

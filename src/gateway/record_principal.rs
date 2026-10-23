@@ -28,6 +28,11 @@ pub(crate) const NO_CREDENTIAL_RECORD: &str = "";
 pub(crate) fn test_record_key() -> RecordPrincipalKey {
     RecordPrincipalKey::from_text(TEST_RECORD_KEY).expect("the test key is long enough")
 }
+/// [`test_record_key`] as the `Option<Arc<_>>` slot a service holds.
+#[cfg(test)]
+pub(crate) fn test_key_slot() -> Option<std::sync::Arc<RecordPrincipalKey>> {
+    Some(std::sync::Arc::new(test_record_key()))
+}
 /// The shortest key accepted, in bytes of key text.
 const MIN_KEY_BYTES: usize = 32;
 

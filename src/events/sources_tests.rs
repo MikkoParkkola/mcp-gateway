@@ -290,12 +290,7 @@ async fn an_expired_tasks_event_reaches_named_and_all_task_subscribers() {
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: LiveCredentials::default(),
-        record_key: Some(std::sync::Arc::new(
-            crate::gateway::record_principal::RecordPrincipalKey::from_text(
-                crate::gateway::record_principal::TEST_RECORD_KEY,
-            )
-            .expect("test key"),
-        )),
+        record_key: crate::gateway::record_principal::test_key_slot(),
     };
     hub.fan_out(&services, &event).await;
     let queued = std::fs::read_dir(events_dir.path().join("outbox")).map_or(0, Iterator::count);

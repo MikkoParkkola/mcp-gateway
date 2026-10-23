@@ -42,12 +42,7 @@ fn services_with(log: Option<Arc<TransparencyLogger>>) -> Services {
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: LiveCredentials::default(),
-        record_key: Some(std::sync::Arc::new(
-            crate::gateway::record_principal::RecordPrincipalKey::from_text(
-                crate::gateway::record_principal::TEST_RECORD_KEY,
-            )
-            .expect("test key"),
-        )),
+        record_key: crate::gateway::record_principal::test_key_slot(),
     }
 }
 

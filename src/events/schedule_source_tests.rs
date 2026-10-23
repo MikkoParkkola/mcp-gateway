@@ -454,12 +454,7 @@ async fn a_blocked_label_is_dead_lettered() {
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: super::super::LiveCredentials::default(),
-        record_key: Some(std::sync::Arc::new(
-            crate::gateway::record_principal::RecordPrincipalKey::from_text(
-                crate::gateway::record_principal::TEST_RECORD_KEY,
-            )
-            .expect("test key"),
-        )),
+        record_key: crate::gateway::record_principal::test_key_slot(),
     };
     hub.fan_out(&services, &tick).await;
     let count = |sub: &str| std::fs::read_dir(dir.path().join(sub)).map_or(0, Iterator::count);
