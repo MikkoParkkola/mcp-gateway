@@ -20,6 +20,9 @@ pub(crate) const KEY_FIELD: &str = "security.record_principal_key";
 /// The record key unit tests pass to `ResolvedAuthConfig::from_config`.
 #[cfg(test)]
 pub(crate) const TEST_RECORD_KEY: &str = "test-record-key-not-a-secret-0123456789abcdef";
+/// The record principal of a caller that presented no credential (§16.6): the
+/// shape records already carry for it (src/security/audit.rs `from_parts`).
+pub(crate) const NO_CREDENTIAL_RECORD: &str = "";
 /// The shortest key accepted, in bytes of key text.
 const MIN_KEY_BYTES: usize = 32;
 
@@ -119,7 +122,15 @@ impl InternalPrincipal {
     }
 
     /// The keyed form for records and logs.
+    ///
+    /// The empty principal of a caller with no credential is the sentinel
+    /// [`NO_CREDENTIAL_RECORD`], not an HMAC: an HMAC of "" would be one
+    /// constant shared by every anonymous caller, an identity that carries none
+    /// (MIK-8697 §16.8).
     pub(crate) fn record_form(&self, key: &RecordPrincipalKey) -> RecordPrincipal {
+        if self.0.is_empty() {
+            return RecordPrincipal(NO_CREDENTIAL_RECORD.to_owned());
+        }
         RecordPrincipal(keyed(key, RECORD_DOMAIN, &self.0, 12))
     }
 }
@@ -188,6 +199,19 @@ mod tests {
         let with = RecordPrincipalKey::from_text(&format!("{KEY_A5}\n")).expect("key");
         let without = RecordPrincipalKey::from_text(KEY_A5).expect("key");
         assert_ne!(with.identity(), without.identity());
+    }
+
+    // S1: no credential records the "" sentinel, never an HMAC of "", and no
+    // real principal's record form is the sentinel.
+    #[test]
+    fn s1_no_credential_records_the_empty_sentinel() {
+        let key = RecordPrincipalKey::from_text(KEY_A5).expect("key");
+        let none = InternalPrincipal::default().record_form(&key);
+        assert_eq!(none.as_str(), NO_CREDENTIAL_RECORD);
+        assert_ne!(none.as_str(), keyed(&key, RECORD_DOMAIN, "", 12));
+        let real = InternalPrincipal::new("3f2a9c0d1e7b".to_owned()).record_form(&key);
+        assert_ne!(real.as_str(), NO_CREDENTIAL_RECORD);
+        assert_eq!(real.as_str().len(), 12);
     }
 
     // §16.6 #1: fewer than 32 bytes is refused, naming the field.
