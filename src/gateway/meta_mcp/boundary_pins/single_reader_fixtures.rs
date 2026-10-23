@@ -157,16 +157,23 @@ fn fixture_impl_method_decoder_is_flagged() {
     );
 }
 
-/// grok impl r1: a function that reads both fields but parses something
-/// else (a config string) is not a decoder: the parse must take content text.
+/// gpt confirm round F1: a copy that binds the text with `if let` and parses
+/// it is a decoder; the reviewed rule must flag it (MIK-8744's baseline).
 #[test]
-fn fixture_unrelated_parse_is_not_flagged() {
-    let source = r#"fn shape(result: &Value, config: &str) -> Option<Value> {
-        let has = result.get("structuredContent").is_some() || result.get("content").is_some();
-        let parsed: Value = serde_json::from_str(config).ok()?;
-        has.then_some(parsed)
+fn fixture_if_let_bound_decoder_is_flagged() {
+    let source = r#"fn copy(result: &Value) -> Option<Value> {
+        if let Some(structured) = result.get("structuredContent") {
+            return Some(structured.clone());
+        }
+        if let Some(text) = result.pointer("/content/0/text").and_then(Value::as_str) {
+            return serde_json::from_str(text).ok();
+        }
+        None
     }"#;
-    assert!(rows_of(ELSEWHERE, source).is_empty());
+    assert_eq!(
+        rows_of(ELSEWHERE, source),
+        ["src/elsewhere.rs:copy: payload decoder"]
+    );
 }
 
 /// grok impl r1: a copy that parses the text through a closure parameter is
@@ -179,25 +186,6 @@ fn fixture_closure_fed_decoder_is_flagged() {
                 .pointer("/content/0/text")
                 .and_then(Value::as_str)
                 .and_then(|t| serde_json::from_str(t).ok())
-        })
-    }"#;
-    assert_eq!(
-        rows_of(ELSEWHERE, source),
-        ["src/elsewhere.rs:copy: payload decoder"]
-    );
-}
-
-/// grok impl r1: a copy that passes the parse by path along a chain fed the
-/// content text is still a decoder.
-#[test]
-fn fixture_path_passed_parse_is_flagged() {
-    let source = r#"fn copy(result: &Value) -> Option<Value> {
-        result.get("structuredContent").cloned().or_else(|| {
-            result
-                .pointer("/content/0/text")
-                .and_then(Value::as_str)
-                .map(serde_json::from_str::<Value>)
-                .and_then(Result::ok)
         })
     }"#;
     assert_eq!(

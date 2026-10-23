@@ -12,12 +12,14 @@
 //! decoder is the rule (`tool_result_payload`); a second copy fails here.
 //!
 //! Syntax scan, per function body. Reaching a field means a `get`, `get_mut`
-//! or `pointer` call, or an index, with that string literal. The parse must
-//! take content text: a `from_str` / `from_value` call whose input reads a
-//! `content` or `text` field or a binding that holds one (a `let`, or a
-//! closure parameter fed one), or such a parse passed by path along a chain
-//! that reads one. Test-only statements inside a production body are
-//! skipped.
+//! or `pointer` call, or an index, with that string literal; parsing means a
+//! call to a path ending in `from_str` or `from_value`. Test-only statements
+//! inside a production body are skipped.
+//!
+//! The rule is deliberately coarse (lead ruling 2026-10-23): it may flag a
+//! function that reads both fields and parses unrelated JSON, and it misses
+//! a parse passed by path (`.map(serde_json::from_str)`). A precise rule is
+//! MIK-8744, which must not lose any catch this one makes.
 //!
 //! ## Decoders that are not payload readers (MIK-8734)
 //!
@@ -61,11 +63,8 @@ const DECODER_ALLOW: &[(&str, &str, &str)] = &[
 #[derive(Default)]
 struct Body {
     structured: bool,
-    /// Bindings that hold a `content` or `text` value (a `let`, or a
-    /// closure parameter fed one), so a parse of them parses content text.
-    text_vars: std::collections::HashSet<String>,
-    /// A `from_str` / `from_value` whose input is content text.
-    content_parse: bool,
+    content_text: bool,
+    parses: bool,
     removes: Vec<String>,
 }
 
@@ -81,70 +80,7 @@ fn literal(expr: &syn::Expr) -> Option<String> {
     }
 }
 
-fn is_content_field(name: &str) -> bool {
-    name == "content" || name == "text" || name.starts_with("/content")
-}
-
-fn is_parse_path(expr: &syn::Expr) -> bool {
-    matches!(expr, syn::Expr::Path(path)
-    if path.path.segments.last().is_some_and(|segment| {
-        segment.ident == "from_str" || segment.ident == "from_value"
-    }))
-}
-
-/// Whether `expr` reads a `content`/`text` field, or names a binding that
-/// holds one.
-struct Mentions<'v> {
-    vars: &'v std::collections::HashSet<String>,
-    found: bool,
-}
-
-impl<'ast> Visit<'ast> for Mentions<'_> {
-    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
-        let method = call.method.to_string();
-        if matches!(method.as_str(), "get" | "get_mut" | "pointer")
-            && call
-                .args
-                .first()
-                .and_then(literal)
-                .is_some_and(|name| is_content_field(&name))
-        {
-            self.found = true;
-        }
-        syn::visit::visit_expr_method_call(self, call);
-    }
-
-    fn visit_expr_index(&mut self, index: &'ast syn::ExprIndex) {
-        if literal(&index.index).is_some_and(|name| is_content_field(&name)) {
-            self.found = true;
-        }
-        syn::visit::visit_expr_index(self, index);
-    }
-
-    fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
-        if path
-            .path
-            .get_ident()
-            .is_some_and(|ident| self.vars.contains(&ident.to_string()))
-        {
-            self.found = true;
-        }
-        syn::visit::visit_expr_path(self, path);
-    }
-}
-
-fn pattern_idents(pat: &syn::Pat, out: &mut Vec<String>) {
-    struct Idents<'o>(&'o mut Vec<String>);
-    impl<'ast> Visit<'ast> for Idents<'_> {
-        fn visit_pat_ident(&mut self, binding: &'ast syn::PatIdent) {
-            self.0.push(binding.ident.to_string());
-            syn::visit::visit_pat_ident(self, binding);
-        }
-    }
-    Idents(out).visit_pat(pat);
-}
-
-/// Whether a statement or expression is test-only code (`#[cfg(test)]`).
+/// Whether a statement is test-only code (`#[cfg(test)]`).
 fn stmt_is_test_only(stmt: &syn::Stmt) -> bool {
     match stmt {
         syn::Stmt::Local(local) => test_only(&local.attrs),
@@ -155,17 +91,17 @@ fn stmt_is_test_only(stmt: &syn::Stmt) -> bool {
 }
 
 impl Body {
-    fn mentions(&self, expr: &syn::Expr) -> bool {
-        let mut probe = Mentions {
-            vars: &self.text_vars,
-            found: false,
-        };
-        probe.visit_expr(expr);
-        probe.found
+    fn field(&mut self, name: &str) {
+        if name == "structuredContent" || name.starts_with("/structuredContent") {
+            self.structured = true;
+        }
+        if name == "content" || name.starts_with("/content") {
+            self.content_text = true;
+        }
     }
 
     fn decodes(&self) -> bool {
-        self.structured && self.content_parse
+        self.structured && self.content_text && self.parses
     }
 }
 
@@ -178,58 +114,35 @@ impl<'ast> Visit<'ast> for Body {
         }
     }
 
-    fn visit_local(&mut self, local: &'ast syn::Local) {
-        if let Some(init) = &local.init
-            && self.mentions(&init.expr)
-        {
-            let mut names = Vec::new();
-            pattern_idents(&local.pat, &mut names);
-            self.text_vars.extend(names);
-        }
-        syn::visit::visit_local(self, local);
-    }
-
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         let method = call.method.to_string();
         if let Some(name) = call.args.first().and_then(literal) {
-            if matches!(method.as_str(), "get" | "get_mut" | "pointer")
-                && (name == "structuredContent" || name.starts_with("/structuredContent"))
-            {
-                self.structured = true;
+            if matches!(method.as_str(), "get" | "get_mut" | "pointer") {
+                self.field(&name);
             }
             if method == "remove" && EXECUTION_DIRECTIVES.contains(&name.as_str()) {
                 self.removes.push(name);
-            }
-        }
-        // A chain fed content text hands it on: to a parse passed by path
-        // (`.and_then(serde_json::from_str)`), or to a closure's parameters.
-        if self.mentions(&call.receiver) {
-            for arg in &call.args {
-                if is_parse_path(arg) {
-                    self.content_parse = true;
-                }
-                if let syn::Expr::Closure(closure) = arg {
-                    let mut names = Vec::new();
-                    for input in &closure.inputs {
-                        pattern_idents(input, &mut names);
-                    }
-                    self.text_vars.extend(names);
-                }
             }
         }
         syn::visit::visit_expr_method_call(self, call);
     }
 
     fn visit_expr_index(&mut self, index: &'ast syn::ExprIndex) {
-        if literal(&index.index).is_some_and(|name| name == "structuredContent") {
-            self.structured = true;
+        if let Some(name) = literal(&index.index) {
+            self.field(&name);
         }
         syn::visit::visit_expr_index(self, index);
     }
 
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
-        if is_parse_path(&call.func) && call.args.first().is_some_and(|arg| self.mentions(arg)) {
-            self.content_parse = true;
+        if let syn::Expr::Path(path) = call.func.as_ref()
+            && path
+                .path
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "from_str" || segment.ident == "from_value")
+        {
+            self.parses = true;
         }
         syn::visit::visit_expr_call(self, call);
     }
