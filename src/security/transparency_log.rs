@@ -699,7 +699,7 @@ fn chain_line(
     // key_id is bound INTO the signed message (MIK-6700 review).
     if !config.shared_secret.is_empty() {
         let msg = sig_message(&entry_hash_bytes, &config.key_id);
-        let sig_hex = hmac_sha256_hex(config.shared_secret.as_bytes(), &msg);
+        let sig_hex = crate::hashing::hmac_sha256_hex(config.shared_secret.as_bytes(), &msg);
         fields.insert("sig".into(), format!("hmac-sha256:{sig_hex}").into());
         fields.insert("key_id".into(), config.key_id.clone().into());
     }
@@ -727,13 +727,6 @@ fn sha256_raw(data: &[u8]) -> [u8; 32] {
     h.finalize().into()
 }
 
-/// Compute `HMAC-SHA256(key, message)` and return lowercase hex.
-fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
-    // HMAC accepts any key length; the `expect` here cannot panic.
-    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
-    mac.update(message);
-    hex::encode(mac.finalize().into_bytes())
-}
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 

@@ -13,6 +13,17 @@ pub(crate) fn canonical_json(value: &Value) -> String {
     serde_json::to_string(value).unwrap_or_default()
 }
 
+/// Compute `HMAC-SHA256(key, message)` and return lowercase hex: the one
+/// keyed-hashing helper (the transparency log's segment signatures and
+/// MIK-8697's record principals).
+pub(crate) fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
+    use hmac::{KeyInit as _, Mac as _};
+    // HMAC accepts any key length; the `expect` here cannot panic.
+    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(message);
+    hex::encode(mac.finalize().into_bytes())
+}
+
 /// Compute a SHA-256 digest over a single byte slice and return lowercase hex.
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     sha256_hex_chunks([bytes])
