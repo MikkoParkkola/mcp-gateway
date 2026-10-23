@@ -336,8 +336,6 @@ fn overlapping_spans(re: &Regex, text: &str) -> Vec<(usize, usize)> {
     spans
 }
 
-/// Merge sorted spans that overlap or touch, so no character between two
-/// matched spans can survive and touching tokens share one marker.
 /// The parsed document when `text` is JSON whose credential spans can be
 /// redacted inside its string values: an object, an array or a string, within
 /// the size cap. One function, so MIK-8756 can widen the entry.
@@ -356,7 +354,8 @@ fn b2_gate(text: &str) -> Option<Value> {
 
 /// `spans` (merged, in order) clipped to every value literal they overlap,
 /// each piece widened to whole escapes so no escape is cut, then merged.
-/// Spans and literals are both in order, so this is one pass over each.
+/// Spans and literals are both in order, so this is one pass over each, and
+/// each end is widened by a binary search of its literal's escapes.
 fn project(text: &str, spans: &[(usize, usize)], literals: &[Literal]) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     let mut first = 0;
@@ -367,21 +366,32 @@ fn project(text: &str, spans: &[(usize, usize)], literals: &[Literal]) -> Vec<(u
         let mut lit_escapes = None;
         for &(start, end) in spans[first..].iter().take_while(|span| span.0 < lit.end) {
             let (mut from, mut to) = (start.max(lit.start), end.min(lit.end));
+            if from >= to {
+                continue; // an empty value: the span covers none of its bytes
+            }
             let escapes = lit_escapes
                 .get_or_insert_with(|| json_literal::escapes(&text[lit.start..lit.end], lit.start));
-            for &(esc_from, esc_to) in escapes.iter() {
-                if esc_from < from && from < esc_to {
-                    from = esc_from;
-                }
-                if esc_from < to && to < esc_to {
-                    to = esc_to;
-                }
+            if let Some(escape) = escape_around(escapes, from) {
+                from = escape.0;
+            }
+            if let Some(escape) = escape_around(escapes, to) {
+                to = escape.1;
             }
             ranges.push((from, to));
         }
     }
     ranges.sort_unstable();
     merge_spans(ranges)
+}
+
+/// The escape in `escapes` (in order, disjoint) that `at` falls strictly
+/// inside, if any.
+fn escape_around(escapes: &[(usize, usize)], at: usize) -> Option<(usize, usize)> {
+    let after = escapes.partition_point(|escape| escape.0 < at);
+    after
+        .checked_sub(1)
+        .map(|i| escapes[i])
+        .filter(|escape| at < escape.1)
 }
 
 /// `text` with every range in `ranges` (merged, in order) replaced by the
@@ -398,6 +408,8 @@ fn replace_spans(text: &str, ranges: &[(usize, usize)]) -> String {
     out
 }
 
+/// Merge sorted spans that overlap or touch, so no character between two
+/// matched spans can survive and touching tokens share one marker.
 fn merge_spans(spans: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
     let mut merged: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
     for (start, end) in spans {

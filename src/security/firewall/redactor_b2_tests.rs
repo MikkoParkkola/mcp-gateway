@@ -346,6 +346,35 @@ fn b6_surrogate_pair_inside_a_span_is_replaced_whole() {
 }
 
 #[test]
+fn b6b_span_starting_in_a_low_surrogate_takes_the_whole_pair() {
+    // The pair's last hex digit is `0`, so the raw text holds `0x` from
+    // inside the low surrogate; widening to that escape alone would leave a
+    // lone high surrogate, which no longer parses.
+    let text = format!(r#"{{"s":"\ud83d\ude00x{}"}}"#, "e".repeat(64));
+    let out = assert_projected(&text);
+    assert_eq!(out, format!(r#"{{"s":"{MARK}"}}"#));
+}
+
+#[test]
+fn b6c_an_empty_value_the_span_crosses_stays_empty() {
+    let text = format!(r#"{{"a":"{}","b":"","c":1}}"#, pg_url());
+    let out = assert_projected(&text);
+    assert_eq!(out, format!(r#"{{"a":"{MARK}","b":"","c":1}}"#));
+}
+
+#[test]
+fn b6d_many_matches_and_escapes_in_one_literal() {
+    use std::fmt::Write as _;
+    let mut body = String::new();
+    for i in 0..2_000 {
+        write!(body, "{}{i:016} \\n ", "AKIA").unwrap();
+    }
+    let text = format!(r#"{{"s":"{body}"}}"#);
+    let out = assert_projected(&text);
+    assert_eq!(out.matches(MARK).count(), 2_000);
+}
+
+#[test]
 fn b7_short_url_in_compact_json() {
     // Built by hand so the URL comes first: alone at the end it is under the
     // rule's 10-character floor, on base too.
@@ -660,4 +689,26 @@ fn f1_projection_cost() {
             "every {every}: ratio {ratio:.2} over the plan's 3x"
         );
     }
+    // One literal near the cap with 40 000 matches, each beside an escape: the
+    // escape widening must stay a search, not a rescan per match.
+    let mut body = String::new();
+    for i in 0..40_000 {
+        write!(body, "{}{i:016} \\n ", "AKIA").unwrap();
+    }
+    let text = format!(r#"{{"s":"{body}"}}"#);
+    let started = std::time::Instant::now();
+    let (out, _) = deliver(&text);
+    let projected = started.elapsed();
+    let started = std::time::Instant::now();
+    let whole = today(&text);
+    let base = started.elapsed();
+    assert_eq!(out, whole, "matches inside one literal redact as base");
+    let ratio = projected.as_secs_f64() / base.as_secs_f64();
+    println!(
+        "one literal, 40000 matches: projection {projected:?}, whole leaf {base:?}, ratio {ratio:.2}"
+    );
+    assert!(
+        ratio < 3.0,
+        "dense escapes: ratio {ratio:.2} over the plan's 3x"
+    );
 }
