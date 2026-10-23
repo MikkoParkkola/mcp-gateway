@@ -67,9 +67,14 @@ pub enum RuntimeLicenseTier {
     Enterprise,
 }
 
-/// Locally detected runtime availability.
+/// Which runtimes may run here: detected locally, or declared by the operator as
+/// `runtime.availability` (whose missing keys take the `Default` below, so
+/// `local_process` stays on).
 #[allow(clippy::struct_excessive_bools)] // Availability is a flat capability bitmap exposed in docs and tests.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// `runtime.availability` in the config file: a missing key takes the `Default`
+// below, so `local_process` stays on unless the operator turns it off.
+#[serde(default)]
 pub struct RuntimeAvailability {
     /// Existing local process execution is available.
     pub local_process: bool,

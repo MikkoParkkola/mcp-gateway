@@ -39,8 +39,8 @@ fn seeded_revision() -> String {
 /// RFC 6749's default scheme, as `vault::authorization_value` emits it.
 const SCHEME: &str = "Bearer";
 
-fn descriptor() -> AccountDescriptor {
-    AccountDescriptor {
+fn descriptor() -> AccountKeyDescriptor {
+    AccountKeyDescriptor {
         descriptor_id: DESCRIPTOR_ID.into(),
         provider: "google".into(),
         resource: RESOURCE.into(),

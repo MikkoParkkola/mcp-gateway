@@ -578,33 +578,33 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `routing_profiles.<name>.deny_tools` | KEEP | `type default` | per-session tool scoping | - | src/routing_profile/mod.rs:73 |
 | `routing_profiles.<name>.description` | KEEP | `type default` | per-session tool scoping | - | src/routing_profile/mod.rs:53 |
 | `runtime` | KEEP | `type default` | sandbox runtime profiles (opt-in) | - | src/config/mod.rs:138 |
-| `runtime.availability` | KEEP | `RuntimeAvailabilityConfig::default()` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:23 |
-| `runtime.availability.docker` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:120 |
-| `runtime.availability.kubernetes` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:128 |
-| `runtime.availability.launchd` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:126 |
-| `runtime.availability.local_process` | KEEP | `true` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:118 |
-| `runtime.availability.podman` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:122 |
-| `runtime.availability.systemd` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:124 |
+| `runtime.availability` | KEEP | `RuntimeAvailability::default()` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:23 |
+| `runtime.availability.docker` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/runtime/provider.rs:82 |
+| `runtime.availability.kubernetes` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/runtime/provider.rs:90 |
+| `runtime.availability.launchd` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/runtime/provider.rs:88 |
+| `runtime.availability.local_process` | KEEP | `true` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/runtime/provider.rs:80 |
+| `runtime.availability.podman` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/runtime/provider.rs:84 |
+| `runtime.availability.systemd` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/runtime/provider.rs:86 |
 | `runtime.default_provider` | KEEP | `RuntimeProviderKind::LocalProcess` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:21 |
 | `runtime.profiles` | KEEP | `HashMap::new()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:25 |
-| `runtime.profiles.<name>.data_class` | KEEP | `RuntimeDataClass::Internal` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:170 |
-| `runtime.profiles.<name>.env_keys` | KEEP | `Vec::new()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:172 |
-| `runtime.profiles.<name>.executable` | KEEP | `None` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:166 |
-| `runtime.profiles.<name>.guarded_env_keys` | KEEP | `Vec::new()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:174 |
-| `runtime.profiles.<name>.image` | KEEP | `None` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:168 |
-| `runtime.profiles.<name>.mounts` | KEEP | `Vec::new()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:178 |
+| `runtime.profiles.<name>.data_class` | KEEP | `RuntimeDataClass::Internal` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:122 |
+| `runtime.profiles.<name>.env_keys` | KEEP | `Vec::new()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:124 |
+| `runtime.profiles.<name>.executable` | KEEP | `None` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:118 |
+| `runtime.profiles.<name>.guarded_env_keys` | KEEP | `Vec::new()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:126 |
+| `runtime.profiles.<name>.image` | KEEP | `None` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:120 |
+| `runtime.profiles.<name>.mounts` | KEEP | `Vec::new()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:130 |
 | `runtime.profiles.<name>.mounts[].mode` | KEEP | — | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:208 |
 | `runtime.profiles.<name>.mounts[].source` | KEEP | — | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:204 |
 | `runtime.profiles.<name>.mounts[].target` | KEEP | — | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:206 |
-| `runtime.profiles.<name>.network_egress` | KEEP | `RuntimeNetworkEgress::None` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:176 |
+| `runtime.profiles.<name>.network_egress` | KEEP | `RuntimeNetworkEgress::None` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:128 |
 | `runtime.profiles.<name>.network_egress.allowlist` | KEEP | — | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:231 |
-| `runtime.profiles.<name>.privileged` | KEEP | `false` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:184 |
-| `runtime.profiles.<name>.provider` | KEEP | `None` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:164 |
-| `runtime.profiles.<name>.resources` | KEEP | `RuntimeResourcePolicy::default()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:180 |
+| `runtime.profiles.<name>.privileged` | KEEP | `false` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:136 |
+| `runtime.profiles.<name>.provider` | KEEP | `None` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:116 |
+| `runtime.profiles.<name>.resources` | KEEP | `RuntimeResourcePolicy::default()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:132 |
 | `runtime.profiles.<name>.resources.cpu_cores` | KEEP | `1` | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:241 |
 | `runtime.profiles.<name>.resources.memory_mb` | KEEP | `512` | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:243 |
 | `runtime.profiles.<name>.resources.timeout_secs` | KEEP | `60` | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:245 |
-| `runtime.profiles.<name>.restart` | KEEP | `RuntimeRestartPolicy::default()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:182 |
+| `runtime.profiles.<name>.restart` | KEEP | `RuntimeRestartPolicy::default()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:134 |
 | `runtime.profiles.<name>.restart.backoff_secs` | KEEP | `5` | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:276 |
 | `runtime.profiles.<name>.restart.max_restarts` | KEEP | `2` | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:274 |
 | `security` | KEEP | `type default` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/mod.rs:115 |

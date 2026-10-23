@@ -43,7 +43,7 @@ pub use key_server::{
     PolicyMatchConfig, PolicyScopesConfig,
 };
 pub use playbooks::PlaybooksConfig;
-pub use runtime::{RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig};
+pub use runtime::{RuntimeConfig, RuntimeProfileConfig};
 pub use security::{
     AgentIdentityConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig,
     IdentityGrantsConfig, RemoteServerSigningConfig, ResponseContractConfig, SecurityConfig,
