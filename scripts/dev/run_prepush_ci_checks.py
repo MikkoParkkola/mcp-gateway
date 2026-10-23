@@ -356,6 +356,14 @@ def run_rust(targets, *, cargo, repo, merge_base, base_tip) -> Report:
                   text="\n".join(["doc/CLI Rust tests failed:", *tail, note]))
 
 
+def drift_problems(repo) -> list[str]:
+    """Every drift problem the push path checks before the pool (§6.1, R3):
+    workflow forms against the buckets, and the Rust set against RUST_TARGETS."""
+    import test_prepush_ci_checks as drift_test
+
+    return drift_test.problems(repo) + drift_test.rust_drift(repo)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--merge-base", required=True)
@@ -384,7 +392,7 @@ def main(argv=None) -> int:
              if l.strip() and not l.startswith("#")]
     start = time.monotonic()
     report = run(lines, repo=repo, head=head, merge_base=args.merge_base, base_tip=base_tip,
-                 drift=lambda: drift_test.problems(repo) + drift_test.rust_drift(repo))
+                 drift=lambda: drift_problems(repo))
     load = os.getloadavg()[0] if hasattr(os, "getloadavg") else float("nan")
     print(report.text)
     print(f"CI script checks: {time.monotonic() - start:.0f} s wall, load {load:.1f}")

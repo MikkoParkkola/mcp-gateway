@@ -188,25 +188,28 @@ def problems(root: pathlib.Path, *, ci_only=None) -> list[str]:
     return found
 
 
-PATH_ATTR = re.compile(r'#\[path\s*=\s*"([^"]+)"\]')
-MOD_DECL = re.compile(r"^\s*(?:pub\s+)?mod\s+(\w+)\s*;", re.M)
+def _module_resolver():
+    """scripts/dev/check-orphan-test-modules.py's Rust module resolver: one
+    reading of `mod` and `#[path]`, shared with the orphan-module check."""
+    import importlib.util
+
+    path = pathlib.Path(__file__).with_name("check-orphan-test-modules.py")
+    spec = importlib.util.spec_from_file_location("orphan_test_modules", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.declarations
 
 
 def _sources(target):
-    """`target` and every file it pulls in: tests/<stem>/**, `#[path]` files
-    (followed transitively) and `mod x;` siblings of the target."""
-    tests = target.parent
-    todo = [target, *sorted((tests / target.stem).rglob("*.rs"))]
-    seen = []
-    while todo:
-        source = todo.pop()
+    """`target` and every file its module tree pulls in, resolved as rustc does."""
+    declarations = _module_resolver()
+    pending, seen = [(target, True)], []
+    while pending:
+        source, owns_dir = pending.pop()
         if source in seen or not source.is_file():
             continue
         seen.append(source)
-        text = source.read_text(errors="replace")
-        todo += [(source.parent / rel).resolve() for rel in PATH_ATTR.findall(text)]
-        if source == target:
-            todo += [c for m in MOD_DECL.findall(text) for c in (tests / f"{m}.rs", tests / m / "mod.rs")]
+        pending += sorted(declarations(source, owns_dir))
     return seen
 
 
@@ -537,7 +540,12 @@ class Repository(unittest.TestCase):
             (root / "tests/via_path.rs").write_text('#[path = "common/reads.rs"]\nmod reads;\nfn t(){}\n')
             (root / "tests/via_mod.rs").write_text("mod helper;\nfn t(){}\n")
             (root / "tests/plain.rs").write_text("fn t(){}\n")
-            self.assertEqual(rust_targets(root), ["helper", "via_mod", "via_path"])
+            # A plain `mod` inside a `#[path]` file resolves beside it (r2 gpt).
+            (root / "tests/lib2").mkdir()
+            (root / "tests/lib2/outer.rs").write_text("mod deeper;\n")
+            (root / "tests/lib2/deeper.rs").write_text('pub fn d(){ let _ = std::fs::read("docs/w.md"); }\n')
+            (root / "tests/via_deep.rs").write_text('#[path = "lib2/outer.rs"]\nmod outer;\nfn t(){}\n')
+            self.assertEqual(rust_targets(root), ["helper", "via_deep", "via_mod", "via_path"])
 
     # R3 (impl r1 F10): the push path checks the derived Rust set against the
     # pinned one, so a derivation regression stops the push, not only this suite.

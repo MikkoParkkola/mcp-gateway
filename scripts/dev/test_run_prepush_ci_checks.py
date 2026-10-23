@@ -482,6 +482,19 @@ class Runner(unittest.TestCase):
         self.assertGreaterEqual(float(slow.split()[2]), 0.3)
         self.assertTrue(any(r.startswith("  rc 4 ") and "SystemExit(4)" in r for r in rows), rows)
 
+    # R3b (r2 gpt + grok): the push path's drift check includes the Rust set,
+    # so dropping rust_drift from it fails here, not only in the scanner suite.
+    def test_r3b_the_push_paths_drift_check_includes_the_rust_set(self):
+        import test_prepush_ci_checks as drift_test
+
+        real = drift_test.problems, drift_test.rust_drift
+        drift_test.problems, drift_test.rust_drift = (lambda repo: []), (lambda repo: ["RUST-DRIFT-MARK"])
+        try:
+            found = runner.drift_problems(self.f.repo)
+        finally:
+            drift_test.problems, drift_test.rust_drift = real
+        self.assertEqual(found, ["RUST-DRIFT-MARK"])
+
 
 class Step(unittest.TestCase):
     # P1: the step script fails when the runner fails, naming the step. Its
