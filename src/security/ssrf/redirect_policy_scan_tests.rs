@@ -679,8 +679,8 @@ fn analyze_builder_expr(
     }
 }
 
-#[path = "redirect_policy_scan_walk.rs"]
+#[path = "redirect_policy_scan_walk_tests.rs"]
 mod walk;
 
-#[path = "redirect_policy_scan_cases.rs"]
+#[path = "redirect_policy_scan_cases_tests.rs"]
 mod cases;
