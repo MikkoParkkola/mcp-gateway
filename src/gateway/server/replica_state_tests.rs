@@ -16,6 +16,7 @@ use crate::config_reload::LiveConfig;
 const KEY_SERVER: &str = "InMemoryTokenStore";
 const ACCOUNTS: &str = "single_process";
 const TASKS: &str = "task store";
+const RECORD_KEY: &str = "security.record_principal_key";
 
 /// A structurally valid, enabled `accounts` block. Nothing here resolves it:
 /// the refusal reads `enabled`, never the keys.
@@ -35,10 +36,17 @@ fn config(replicas: u32, key_server: bool, accounts: bool, modern: bool) -> Conf
     c.server.replicas = replicas;
     c.server.modern_protocol = modern;
     c.key_server.enabled = key_server;
+    // Every case declares a shared record key unless it is the one under test
+    // (MIK-8697 K9), so the other holders are judged alone.
+    c.security.record_principal_key = Some(shared_record_key());
     if accounts {
         c.accounts = Some(crate::yaml::from_str(ACCOUNTS_BLOCK).expect("accounts fixture"));
     }
     c
+}
+
+fn shared_record_key() -> crate::config::RecordPrincipalKeyRef {
+    crate::yaml::from_str("\"env:REPLICA_TEST_RECORD_KEY\"").expect("record key reference")
 }
 
 fn refused(c: &Config) -> String {
@@ -85,6 +93,28 @@ fn every_applying_reason_is_reported() {
     for expected in [KEY_SERVER, ACCOUNTS, TASKS] {
         assert!(reason.contains(expected), "missing {expected}: {reason}");
     }
+}
+
+/// MIK-8697 K9: with every other holder off, an unset record key alone refuses
+/// two replicas, and a shared one is what lets them start.
+#[test]
+fn k9_an_unset_record_key_refuses_two_replicas() {
+    let mut c = config(2, false, false, false);
+    c.security.record_principal_key = None;
+    let reason = refused(&c);
+    assert!(reason.contains(RECORD_KEY), "{reason}");
+    for other in [KEY_SERVER, ACCOUNTS, TASKS] {
+        assert!(!reason.contains(other), "{other}: {reason}");
+    }
+    c.security.record_principal_key = Some(shared_record_key());
+    assert_eq!(replica_state_refusal(&c), None);
+    c.security.record_principal_key = None;
+    c.server.replicas = 1;
+    assert_eq!(
+        replica_state_refusal(&c),
+        None,
+        "one replica needs no shared key"
+    );
 }
 
 /// Positive control: one replica holds every feature.

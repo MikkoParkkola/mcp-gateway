@@ -656,6 +656,14 @@ pub fn replica_state_refusal(config: &Config) -> Option<String> {
              another. Set replicas: 1, or server.modern_protocol: false.",
         );
     }
+    if config.security.record_principal_key.is_none() {
+        reasons.push(
+            "security.record_principal_key is unset, and each replica would generate \
+             its own record key in its own data directory: one credential's records \
+             and subscription handles would differ per replica. Set \
+             security.record_principal_key from a secret every replica shares.",
+        );
+    }
     (!reasons.is_empty()).then(|| {
         format!(
             "refusing to start with server.replicas: {replicas}: {}",
