@@ -242,29 +242,6 @@ fn resolved_off_wiring_is_a_pure_no_op() {
 
 // ── Runtime provenance stamping (MIK-6905, rung 1.2/1.4/1.5) ──────────────
 
-fn provenance_test_backend() -> Arc<BackendRegistry> {
-    use crate::backend::Backend;
-    use crate::config::{BackendConfig, FailsafeConfig};
-    use crate::transport::Transport;
-
-    let registry = Arc::new(BackendRegistry::new());
-    let backend = Arc::new(Backend::new(
-        "remote_docs",
-        BackendConfig::r2_off(),
-        &FailsafeConfig::default(),
-        Duration::from_secs(300),
-    ));
-    let transport: Arc<dyn Transport> = Arc::new(ToolCallTestTransport {
-        result: json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
-    });
-    backend.set_transport_for_test(transport);
-    // MIK-8393: only a declared read is cached; `search` is declared
-    // read-only so the cache-hit receipt case has a hit to stamp.
-    backend.set_read_only_declared_for_test(&["search"]);
-    let _ = registry.register(backend);
-    registry
-}
-
 async fn invoke_docs_search(meta: &MetaMcp) -> serde_json::Value {
     meta.invoke_tool(
         &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),

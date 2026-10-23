@@ -21,6 +21,9 @@ mod commands;
 #[path = "debug_trust_roots.rs"]
 mod debug_trust_roots;
 mod home_dir;
+mod open_nonblocking;
+mod transport_key;
+mod truncate;
 
 use std::{path::Path, process::ExitCode};
 
@@ -30,6 +33,7 @@ use mcp_gateway::{
     config::{Config, EnvOverlay},
     gateway::Gateway,
     setup_tracing,
+    trust::run_provenance_command,
     validator::ValidateConfig,
 };
 use tracing::{error, info};
@@ -100,6 +104,7 @@ async fn run(cli: Cli) -> ExitCode {
         Some(Command::Ranking(ranking_cmd)) => commands::run_ranking_command(ranking_cmd),
         Some(Command::Tls(tls_cmd)) => commands::run_tls_command(tls_cmd),
         Some(Command::Trust(trust_cmd)) => commands::run_trust_command(trust_cmd).await,
+        Some(Command::Provenance(cmd)) => run_provenance_command(&cmd, config_path.as_deref()),
         Some(Command::Identity(identity_cmd)) => commands::run_identity_command(identity_cmd).await,
         // Offline and synchronous on purpose: initializing custody state must
         // not share a dispatch path with anything that starts the gateway.
@@ -312,12 +317,20 @@ async fn run(cli: Cli) -> ExitCode {
             shadow_format,
             start_stdio,
             show_stderr,
+            no_registry_check,
         }) => {
             if shadow {
                 commands::run_doctor_shadow_command(&shadow_format)
             } else {
                 let probe = commands::StdioProbe::from_flags(start_stdio, show_stderr);
-                commands::run_doctor_command(fix, config.as_deref(), format, probe).await
+                commands::run_doctor_command(
+                    fix,
+                    config.as_deref(),
+                    format,
+                    probe,
+                    no_registry_check,
+                )
+                .await
             }
         }
         Some(Command::Upgrade {

@@ -290,9 +290,12 @@ impl LogExporter {
     fn persist_cursor(&self, cursor: &ExportCursor) -> Result<(), ExportError> {
         let bytes =
             serde_json::to_vec_pretty(cursor).map_err(|e| ExportError::Corrupt(e.to_string()))?;
-        let tmp = self.cursor_path.with_extension("json.tmp");
-        std::fs::write(&tmp, &bytes)?;
-        std::fs::rename(&tmp, &self.cursor_path)?;
+        crate::config_persistence::write_atomic(
+            &self.cursor_path,
+            &bytes,
+            crate::config_persistence::FileMode::Inherit,
+            crate::config_persistence::Symlink::Replace,
+        )?;
         Ok(())
     }
 }

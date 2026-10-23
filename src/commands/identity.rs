@@ -398,16 +398,13 @@ fn grant_scope(scope: IdentityGrantScopeArg) -> GrantScope {
 }
 
 fn expand_home_path(path: &Path) -> PathBuf {
-    let text = path.to_string_lossy();
-    if text == "~" {
-        return crate::home_dir::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let Some(text) = path.to_str() else {
+        return path.to_path_buf();
+    };
+    if crate::home_dir::tilde_rest(text).is_none() {
+        return path.to_path_buf();
     }
-    if let Some(rest) = text.strip_prefix("~/") {
-        return crate::home_dir::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(rest);
-    }
-    path.to_path_buf()
+    crate::home_dir::expand_or_cwd(text)
 }
 
 fn grant_status(grant: &IdentityGrant, now: DateTime<Utc>) -> &'static str {
@@ -464,12 +461,14 @@ fn trim_optional(value: Option<String>) -> Option<String> {
     })
 }
 
+/// `value` cut to fit a `width`-character column, `...` included.
 fn truncate(value: &str, width: usize) -> String {
-    if value.chars().count() <= width {
-        return value.to_string();
-    }
-    let take = width.saturating_sub(1);
-    format!("{}...", value.chars().take(take).collect::<String>())
+    crate::truncate::truncate(
+        value,
+        crate::truncate::Budget::Chars(width),
+        "...",
+        crate::truncate::Suffix::Within,
+    )
 }
 
 #[cfg(test)]

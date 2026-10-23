@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use serde_json::json;
 
+use super::DeliveryCredential;
 use super::ResponseCorrelation;
 use crate::gateway::alloc_meter::measure;
 
@@ -34,8 +35,14 @@ fn record_bytes(meta: &crate::gateway::meta_mcp::MetaMcp, size: usize) -> u64 {
         json!({"content": [{"type": "text", "text": "x".repeat(size)}]}),
     );
     let correlation = correlation();
-    let (delivered, measured) =
-        measure(|| runtime.block_on(meta.record_delivery_of(&response, &correlation, None)));
+    let (delivered, measured) = measure(|| {
+        runtime.block_on(meta.record_delivery_of(
+            &response,
+            &correlation,
+            DeliveryCredential::of(None),
+            None,
+        ))
+    });
     assert!(delivered, "with no log a delivery is never withheld");
     measured.bytes
 }
@@ -89,7 +96,12 @@ async fn t5_a_delivery_record_on_an_unreadable_clock_is_written_undated() {
     // WHEN: recorded on a clock before 1970
     let clock = crate::clock::test_clock::before_epoch();
     let recorded = meta
-        .record_delivery_of(&response, &correlation(), None)
+        .record_delivery_of(
+            &response,
+            &correlation(),
+            DeliveryCredential::of(None),
+            None,
+        )
         .await;
     drop(clock);
     // THEN

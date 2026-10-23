@@ -17,7 +17,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use regex::RegexSet;
 use serde_json::{Map, Value};
 
-use super::{Finding, FindingLocation, ScanType, Severity};
+use super::{Finding, FindingLocation, ScanType};
+use crate::security::Severity;
+use crate::truncate::{Budget, Suffix, truncate};
 
 /// A free-text key list and the published overlay it was parsed from.
 type ParsedKeys = (Arc<crate::config::EnvOverlay>, Arc<[String]>);
@@ -223,7 +225,7 @@ impl InputScanner {
         free_text: &[String],
         findings: &mut Vec<Finding>,
     ) {
-        let fragment = truncate(value, 200);
+        let fragment = truncate(value, Budget::Bytes(200), "...", Suffix::After);
         let key_lc = key.to_lowercase();
         let in_free_text = free_text.iter().any(|k| k == &key_lc);
 
@@ -269,18 +271,6 @@ impl Default for InputScanner {
     fn default() -> Self {
         Self::new()
     }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_string();
-    }
-
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}...", &s[..end])
 }
 
 #[cfg(test)]
@@ -687,6 +677,8 @@ mod tests {
             .find(|f| f.scan_type == ScanType::ShellInjection)
             .expect("expected shell injection finding");
         assert!(finding.matched.ends_with("..."));
+        // MIK-8667: exact, the 3-byte dash straddling byte 200 is dropped whole.
+        assert_eq!(finding.matched, format!("{}...", "a".repeat(199)));
     }
 
     #[test]

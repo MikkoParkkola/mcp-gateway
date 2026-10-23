@@ -219,7 +219,11 @@ async fn list_servers_counts_a_required_backend_only_for_a_caller_with_a_view() 
         .list_servers(&caller_as(None, Some("")), None)
         .await
         .expect("list_servers answers"));
-    assert_eq!(anonymous["tools_count"], 0, "anonymous: {anonymous}");
+    assert_eq!(
+        anonymous.get("tools_count"),
+        Some(&serde_json::Value::Null),
+        "anonymous: {anonymous}"
+    );
     assert_eq!(anonymous["tools_known"], false, "anonymous: {anonymous}");
 
     // The operator's view is its own catalogue (MIK-8356), as its own fill
@@ -267,7 +271,11 @@ async fn list_servers_does_not_count_a_required_backend_for_an_operator_without_
         .as_array()
         .and_then(|servers| servers.iter().find(|s| s["name"] == REQUIRED).cloned())
         .expect("the required backend is still named");
-    assert_eq!(row["tools_count"], 0, "no grant, no view: {row}");
+    assert_eq!(
+        row.get("tools_count"),
+        Some(&serde_json::Value::Null),
+        "no grant, no view: {row}"
+    );
     assert_eq!(row["tools_known"], false, "no grant, no view: {row}");
 }
 
@@ -342,7 +350,11 @@ async fn list_servers_hides_a_required_backend_behind_a_stale_descriptor_revisio
         "premise: the stored revision is not the configured one"
     );
     let (row, custody) = operator_row(stale).await;
-    assert_eq!(row["tools_count"], 0, "a fenced grant is no view: {row}");
+    assert_eq!(
+        row.get("tools_count"),
+        Some(&serde_json::Value::Null),
+        "a fenced grant is no view: {row}"
+    );
     assert_eq!(
         row["tools_known"], false,
         "a fenced grant is no view: {row}"

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::*;
+use crate::security::Severity;
 use serde_json::json;
 
 fn redactor() -> Redactor {
@@ -46,6 +47,8 @@ fn unicode_fragment_truncation_does_not_panic() {
         .find(|f| f.scan_type == ScanType::Credentials)
         .expect("expected credential finding");
     assert!(finding.matched.ends_with("..."));
+    // MIK-8667: exact, the 3-byte dash straddling byte 40 is dropped whole.
+    assert_eq!(finding.matched, format!("{}...", "a".repeat(39)));
 }
 
 #[test]

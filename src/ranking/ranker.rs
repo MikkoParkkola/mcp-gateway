@@ -3,10 +3,11 @@
 
 use super::{
     AtomicU64, DashMap, Ordering, Path, RankingEvalCase, RankingEvalCaseResult, RankingEvalReport,
-    RankingExplanation, SearchRanker, SearchResult, UsageEntry, backend_name_score,
-    baseline_top_tool, build_eval_case_result, exclusion_for, explanation_for,
-    improvement_targets_for, json_to_search_result, ratio, score_text_relevance, sort_by_rank,
+    RankingExplanation, SearchRanker, SearchResult, backend_name_score, baseline_top_tool,
+    build_eval_case_result, exclusion_for, explanation_for, improvement_targets_for,
+    json_to_search_result, ratio, score_text_relevance, sort_by_rank,
 };
+use crate::stats::TopTool;
 
 impl SearchRanker {
     /// Create a new ranker
@@ -138,18 +139,14 @@ impl SearchRanker {
     /// # Errors
     ///
     /// Returns an error if serialization fails or the file cannot be written.
+    // In-place on purpose: keeps the inode, owner, group and ACLs; atomic replace is MIK-8700.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        let counts: Vec<UsageEntry> = self
+        // The same row and key split as the stats snapshot, so a tool name
+        // with a colon is saved whole.
+        let counts: Vec<TopTool> = self
             .usage_counts
             .iter()
-            .map(|entry| {
-                let parts: Vec<&str> = entry.key().split(':').collect();
-                UsageEntry {
-                    server: parts.first().unwrap_or(&"").to_string(),
-                    tool: parts.get(1).unwrap_or(&"").to_string(),
-                    count: entry.value().load(Ordering::Relaxed),
-                }
-            })
+            .map(|entry| TopTool::from_key(entry.key(), entry.value().load(Ordering::Relaxed)))
             .collect();
 
         let json = serde_json::to_string_pretty(&counts)?;
@@ -163,7 +160,7 @@ impl SearchRanker {
     /// Returns an error if the file cannot be read or JSON is invalid.
     pub fn load(&self, path: &Path) -> std::io::Result<()> {
         let content = std::fs::read_to_string(path)?;
-        let entries: Vec<UsageEntry> = serde_json::from_str(&content)?;
+        let entries: Vec<TopTool> = serde_json::from_str(&content)?;
 
         for entry in entries {
             let key = format!("{}:{}", entry.server, entry.tool);

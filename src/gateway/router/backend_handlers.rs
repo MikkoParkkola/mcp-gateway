@@ -448,8 +448,11 @@ pub(super) async fn backend_handler(
 
     // The request's scope for what intake judges (MIK-8154 F2: the exempt
     // instance the send compares), boxed so the scope wraps a pointer.
-    crate::gateway::meta_mcp::visible::memo::with_visibility_memo(Box::pin(
-        direct_audit::audited_call(Arc::clone(&state), name, request),
+    // The minted-receipt scope rides outside the memo.
+    crate::gateway::meta_mcp::invoke::with_minted_receipts(Box::pin(
+        crate::gateway::meta_mcp::visible::memo::with_visibility_memo(Box::pin(
+            direct_audit::audited_call(Arc::clone(&state), name, request),
+        )),
     ))
     .await
 }

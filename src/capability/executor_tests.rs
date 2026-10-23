@@ -3,8 +3,8 @@
 //! Tests for `CapabilityExecutor` and `ResponseCache`
 
 use super::*;
+use crate::cache::ResponseCache;
 use crate::capability::CapabilityExecutionContext;
-use crate::capability::response_cache::ResponseCache;
 use crate::identity_grants::GrantSubject;
 use axum::{
     Json, Router,

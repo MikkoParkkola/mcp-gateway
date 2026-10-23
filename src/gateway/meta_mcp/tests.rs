@@ -197,6 +197,29 @@ fn make_meta_mcp_with_profiles() -> MetaMcp {
     MetaMcp::new(backends).with_profile_registry(registry)
 }
 
+fn provenance_test_backend() -> Arc<BackendRegistry> {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig};
+    use crate::transport::Transport;
+
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(Backend::new(
+        "remote_docs",
+        BackendConfig::r2_off(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let transport: Arc<dyn Transport> = Arc::new(ToolCallTestTransport {
+        result: json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+    });
+    backend.set_transport_for_test(transport);
+    // MIK-8393: only a declared read is cached; `search` is declared
+    // read-only so the cache-hit receipt case has a hit to stamp.
+    backend.set_read_only_declared_for_test(&["search"]);
+    let _ = registry.register(backend);
+    registry
+}
+
 // ── Per-action attestation wiring (MIK-5223, B1-IDENT) ────────────────────
 //
 // These exercise the `gateway_invoke` attestation seam directly via the
@@ -207,6 +230,10 @@ fn make_meta_mcp_with_profiles() -> MetaMcp {
 #[cfg(test)]
 #[path = "attestation_wiring_tests.rs"]
 mod attestation_wiring;
+
+#[cfg(test)]
+#[path = "provenance_delivery_tests.rs"]
+mod provenance_delivery;
 
 #[cfg(test)]
 #[path = "attestation_plan_tests.rs"]

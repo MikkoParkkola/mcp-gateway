@@ -25,3 +25,30 @@ async fn a_method_outside_the_catalogue_is_refused() {
         assert_eq!(error.code, -32601, "{method}");
     }
 }
+
+/// MIK-8659 T1a (GREEN): the stdio caller is no API key on any F0 reader,
+/// and its quota is the stdio nonce.
+#[test]
+fn t1a_stdio_caller_has_no_api_key_identity() {
+    let policy =
+        crate::security::ToolPolicy::from_config(&crate::security::ToolPolicyConfig::default());
+    let authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
+        tool_policy: &policy,
+    };
+    let caller = super::super::stdio_single::stdio_caller_context(
+        &authorizer,
+        crate::protocol::meta::Era::Modern,
+    );
+    assert_eq!(caller.cost_key(), None, "stdio has no cost key");
+    assert_eq!(caller.scope().grant_key, None, "stdio has no grant key");
+    let expected = crate::protocol::continuation::QuotaKey::new(
+        crate::protocol::continuation::QuotaSource::Stdio(
+            super::super::StdioNonce::process().bytes(),
+        ),
+    );
+    assert_eq!(
+        caller.quota_key(),
+        Some(expected),
+        "stdio charges its nonce"
+    );
+}

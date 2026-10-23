@@ -106,9 +106,10 @@ async fn assert_given_back_to(
     );
 }
 
-/// K8-R search: `gateway_search` refuses a call with no `query` and one with
-/// an unknown `detail` level before it collects anything. Red on base at send
-/// 2. Mutant mK8-search: the asks at the two parses removed.
+/// K8-R search: `gateway_search` refuses a call with no `query`, one with
+/// an unknown `detail` level, and one with a query over the 256-character cap
+/// (MIK-8683) before it collects anything. Red on base at send 2. Mutant
+/// mK8-search: the asks at the parses removed.
 #[tokio::test]
 async fn a_search_parse_refusal_gives_the_nonce_back() {
     let fx = fixture_hardened_signed(Answer::Ok, true).await;
@@ -116,6 +117,7 @@ async fn a_search_parse_refusal_gives_the_nonce_back() {
     let cases = [
         (json!({}), "Missing 'query' parameter", "k8s-n1"),
         (json!({"query": "read", "detail": "l9"}), "l9", "k8s-n2"),
+        (json!({"query": "q".repeat(257)}), "256", "k8s-n3"),
     ];
     for (bad, needle, nonce) in cases {
         let pair = (bad, good.clone());

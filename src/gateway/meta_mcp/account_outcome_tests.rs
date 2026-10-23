@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use super::view_outcome;
 use crate::gateway::meta_mcp::visible::memo::AccountOutcome;
 use crate::key_server::oidc::VerifiedIdentity;
-use crate::personal_accounts::identity::{AccountDescriptor, Principal};
+use crate::personal_accounts::identity::{AccountKeyDescriptor, Principal};
 use crate::personal_accounts::{
     AccountCustody, AccountError, AccountKey, AccountServiceError, CredentialLease, CustodyError,
     RejectionOutcome, ReleasedCredentials, VaultStrategy, ViewBinding,
@@ -88,7 +88,7 @@ fn vault(answer: Answer) -> (VaultStrategy, Arc<Scripted>) {
         answer,
         reads: AtomicUsize::new(0),
     });
-    let descriptor = AccountDescriptor {
+    let descriptor = AccountKeyDescriptor {
         descriptor_id: "work-gmail".into(),
         provider: "google".into(),
         resource: "https://gmail.googleapis.com".into(),

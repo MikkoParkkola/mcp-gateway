@@ -28,6 +28,11 @@ pub(crate) mod posture;
 #[cfg(all(test, feature = "firewall"))]
 mod tenant_read_corpus_tests;
 pub(crate) mod tenant_reads;
+/// The calls one delivery dispatched, `(label, server, tool)` each
+/// (`MIK-8408` H2): the one spelling relay replay and the firewall's replay
+/// store share, defined outside the `firewall` gate because relay keeps a
+/// call list in both builds (MIK-8662).
+pub(crate) type ReplayCalls = Vec<(Option<u32>, String, String)>;
 /// The `security.posture` value and the multi-user warning `doctor` shows;
 /// the rest of the posture module is crate-private.
 pub use posture::{HardenedConfig, SecurityPosture, unhardened_multi_user_warning};
@@ -39,6 +44,7 @@ pub mod response_scanner;
 pub mod sanitize;
 pub mod scope_collision;
 pub(crate) mod security_metrics;
+mod severity;
 // Emission and strip are wired (ASI07 increment 2); chain verification has
 // no caller until increment 3, which removes this `expect`.
 #[cfg_attr(
@@ -82,6 +88,7 @@ pub use sanitize::{
     sanitize_resource_metadata,
 };
 pub use scope_collision::validate_tool_name;
+pub use severity::Severity;
 pub use ssrf::{
     HostResolver, PinningResolver, SystemResolver, check_host_not_ssrf, resolve_and_validate_host,
     validate_redirect_chain, validate_url_not_ssrf,

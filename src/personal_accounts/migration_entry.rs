@@ -39,7 +39,7 @@ use crate::personal_accounts::config::AccountDescriptor;
 /// name.
 pub(in crate::personal_accounts) struct MigrationRequest<'a> {
     /// The four-field descriptor the account key is built from.
-    pub(in crate::personal_accounts) key_descriptor: &'a identity::AccountDescriptor,
+    pub(in crate::personal_accounts) key_descriptor: &'a identity::AccountKeyDescriptor,
     /// The full declared descriptor, for the rules the key descriptor cannot
     /// answer: scopes and `client_id`.
     pub(in crate::personal_accounts) descriptor: &'a AccountDescriptor,

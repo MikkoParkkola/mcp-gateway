@@ -20,7 +20,7 @@ pub struct RuntimeConfig {
     /// Provider used when a profile does not select one explicitly.
     pub default_provider: RuntimeProviderKind,
     /// Operator-declared local runtime availability.
-    pub availability: RuntimeAvailabilityConfig,
+    pub availability: RuntimeAvailability,
     /// Named runtime profiles referenced by servers, `TrustCards`, or operators.
     pub profiles: HashMap<String, RuntimeProfileConfig>,
 }
@@ -29,7 +29,7 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             default_provider: RuntimeProviderKind::LocalProcess,
-            availability: RuntimeAvailabilityConfig::default(),
+            availability: RuntimeAvailability::default(),
             profiles: HashMap::new(),
         }
     }
@@ -39,7 +39,7 @@ impl RuntimeConfig {
     /// Convert configured availability into the planner's runtime availability bitmap.
     #[must_use]
     pub fn runtime_availability(&self) -> RuntimeAvailability {
-        self.availability.runtime_availability()
+        self.availability.clone()
     }
 
     /// Compile a named profile into a runtime intent.
@@ -105,54 +105,6 @@ impl RuntimeConfig {
 
     fn provider_for(&self, profile: &RuntimeProfileConfig) -> RuntimeProviderKind {
         profile.provider.unwrap_or(self.default_provider)
-    }
-}
-
-/// Operator-declared runtime availability.
-#[allow(clippy::struct_excessive_bools)] // Mirrors RuntimeAvailability for config ergonomics.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default)]
-pub struct RuntimeAvailabilityConfig {
-    /// Local direct process execution is available.
-    #[serde(default = "default_true")]
-    pub local_process: bool,
-    /// Docker CLI/daemon is available.
-    pub docker: bool,
-    /// Podman CLI/service is available.
-    pub podman: bool,
-    /// systemd user service manager is available.
-    pub systemd: bool,
-    /// macOS launchd is available.
-    pub launchd: bool,
-    /// Kubernetes target is configured.
-    pub kubernetes: bool,
-}
-
-impl Default for RuntimeAvailabilityConfig {
-    fn default() -> Self {
-        Self {
-            local_process: true,
-            docker: false,
-            podman: false,
-            systemd: false,
-            launchd: false,
-            kubernetes: false,
-        }
-    }
-}
-
-impl RuntimeAvailabilityConfig {
-    /// Convert to planner availability.
-    #[must_use]
-    pub fn runtime_availability(&self) -> RuntimeAvailability {
-        RuntimeAvailability {
-            local_process: self.local_process,
-            docker: self.docker,
-            podman: self.podman,
-            systemd: self.systemd,
-            launchd: self.launchd,
-            kubernetes: self.kubernetes,
-        }
     }
 }
 
@@ -314,6 +266,6 @@ fn config_error(message: impl Into<String>) -> Error {
     Error::ConfigValidation(message.into())
 }
 
-fn default_true() -> bool {
-    true
-}
+#[cfg(test)]
+#[path = "runtime_tests.rs"]
+mod tests;

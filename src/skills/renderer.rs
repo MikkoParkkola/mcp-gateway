@@ -266,6 +266,7 @@ fn capitalize(s: &str) -> String {
     }
 }
 
+// Not `crate::truncate`: this returns a borrowed slice with no marker (MIK-8667).
 fn truncate(s: &str, max: usize) -> &str {
     if s.len() <= max {
         s

@@ -688,7 +688,9 @@ async fn t3c_a_bridged_round_and_a_direct_call_share_one_budget() {
             .declared_capabilities();
             let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
                 api_key_name: Some("k-budget"),
-                // An API key: its budget is shared with the direct call below.
+                // An authenticated API key: its budget is shared with the direct
+                // call below (only an authenticated API key has one, MIK-8659).
+                authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
                 credential_kind: crate::security::audit::CredentialKind::ApiKey,
                 era: crate::protocol::meta::Era::Legacy,
                 input_capabilities: declared,

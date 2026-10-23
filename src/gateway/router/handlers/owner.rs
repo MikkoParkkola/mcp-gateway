@@ -24,15 +24,13 @@ use crate::mtls::CertIdentity;
 /// records whether a credential was actually validated, so an API key named
 /// "anonymous" cannot claim the unauthenticated identity's sessions.
 pub(super) fn session_owner(client: Option<&AuthenticatedClient>) -> SessionOwner {
-    match client {
+    match client.and_then(|c| c.credential_principal()) {
         // The validated principal, a digest of the secret: two API keys
         // configured with the same display name are different owners.
-        Some(c) if c.authenticated && !c.principal.is_empty() => {
-            SessionOwner::Credential(c.principal.clone())
-        }
+        Some(principal) => SessionOwner::Credential(principal.to_owned()),
         // Every other caller, named or not, is one class: an unvalidated name is
         // not a credential. Only the minted session id separates them (F9).
-        _ => SessionOwner::Anonymous,
+        None => SessionOwner::Anonymous,
     }
 }
 
@@ -254,6 +252,42 @@ mod tests {
         different_owner_direction(
             &subject_owner(&headers(Some("Basic x"))),
             &subject_owner(&headers(None)),
+        );
+    }
+
+    /// MIK-8659 T2 (GREEN): the session owner needs an authenticated
+    /// non-empty principal; `{false, "p"}` and `{true, ""}` are anonymous.
+    #[test]
+    fn t2_session_owner_needs_a_principal() {
+        fn client(
+            authenticated: bool,
+            principal: &str,
+        ) -> crate::gateway::auth::AuthenticatedClient {
+            crate::gateway::auth::AuthenticatedClient {
+                name: "k".to_owned(),
+                rate_limit: 0,
+                backends: vec!["*".to_owned()],
+                allowed_tools: None,
+                denied_tools: None,
+                admin: false,
+                // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
+                principal: principal.to_owned(),
+                quota_principal: None,
+                authenticated,
+                credential_kind: crate::security::audit::CredentialKind::ApiKey,
+            }
+        }
+        let unauthenticated = client(false, "p");
+        assert_eq!(
+            session_owner(Some(&unauthenticated)),
+            SessionOwner::Anonymous
+        );
+        let empty = client(true, "");
+        assert_eq!(session_owner(Some(&empty)), SessionOwner::Anonymous);
+        let ok = client(true, "p");
+        assert_eq!(
+            session_owner(Some(&ok)),
+            SessionOwner::Credential("p".to_owned())
         );
     }
 }

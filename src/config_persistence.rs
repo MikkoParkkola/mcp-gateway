@@ -93,6 +93,10 @@ pub(crate) mod lock;
 #[path = "config_persistence_comments.rs"]
 pub(crate) mod comments;
 
+#[path = "config_persistence_atomic.rs"]
+mod atomic;
+pub use atomic::{FileMode, Symlink, write_atomic};
+
 /// Take the config lock for a CLI write, waiting up to [`CLI_LOCK_WAIT`].
 fn cli_lock(path: &Path) -> Result<ExclusiveFileLock, String> {
     lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |lock| {
@@ -362,7 +366,7 @@ fn read_config(path: &Path) -> Result<Option<(Config, String)>, String> {
 fn read_text(path: &Path) -> Result<Option<String>, String> {
     use std::io::Read as _;
     let failed = |e: &dyn std::fmt::Display| format!("Failed to read {}: {e}", path.display());
-    let mut file = match open_nonblocking(path) {
+    let mut file = match crate::open_nonblocking::open_nonblocking(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         // Windows refuses to open a directory at all: name the cause the same.
         Err(_) if std::fs::metadata(path).is_ok_and(|m| !m.is_file()) => {
@@ -377,24 +381,6 @@ fn read_text(path: &Path) -> Result<Option<String>, String> {
     let mut text = String::new();
     file.read_to_string(&mut text).map_err(|e| failed(&e))?;
     Ok(Some(text))
-}
-
-#[cfg(unix)]
-fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(
-            (rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOCTTY)
-                .bits()
-                .cast_signed(),
-        )
-        .open(path)
-}
-
-#[cfg(not(unix))]
-fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::File::open(path)
 }
 
 /// How many backends one splice may change.
@@ -647,23 +633,44 @@ pub(crate) fn create_private_replacing(path: &Path) -> std::io::Result<std::fs::
 /// Returns an error when every candidate name is taken, or on any I/O failure
 /// other than a collision.
 fn create_scratch_exclusive(path: &Path, first: u64) -> Result<(std::fs::File, PathBuf), String> {
+    // Private AT CREATION, not on the finished file. A config can hold a
+    // bearer token, and the scratch file sits next to it for the whole
+    // write; creating it wide and tightening afterwards leaves the window
+    // open. `rename` preserves the descriptor, so the config inherits it.
+    claim_scratch(path, first, create_new_private).map_err(|e| match e {
+        ScratchClaimError::AllTaken => format!(
+            "Failed to create temp config: {SCRATCH_ATTEMPTS} scratch names next to the config were all in use"
+        ),
+        ScratchClaimError::Io(e) => format!("Failed to create temp config: {e}"),
+    })
+}
+
+/// Why no scratch name could be claimed.
+enum ScratchClaimError {
+    /// All [`SCRATCH_ATTEMPTS`] candidate names were in use.
+    AllTaken,
+    /// An I/O failure other than a collision.
+    Io(std::io::Error),
+}
+
+/// The one candidate loop behind every rename-based writer here: try
+/// [`SCRATCH_ATTEMPTS`] names from `first`, creating each with `create`
+/// (which must be exclusive). A name already in use is someone else's
+/// scratch file: not ours to write to, and not ours to delete either.
+fn claim_scratch(
+    path: &Path,
+    first: u64,
+    create: impl Fn(&Path) -> std::io::Result<std::fs::File>,
+) -> Result<(std::fs::File, PathBuf), ScratchClaimError> {
     for seed in first..first.wrapping_add(SCRATCH_ATTEMPTS) {
         let candidate = scratch_candidate(path, seed);
-        // Private AT CREATION, not on the finished file. A config can hold a
-        // bearer token, and the scratch file sits next to it for the whole
-        // write; creating it wide and tightening afterwards leaves the window
-        // open. `rename` preserves the descriptor, so the config inherits it.
-        match create_new_private(&candidate) {
+        match create(&candidate) {
             Ok(file) => return Ok((file, candidate)),
-            // Someone else's scratch file. Not ours to write to, and not ours
-            // to delete either.
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(format!("Failed to create temp config: {e}")),
+            Err(e) => return Err(ScratchClaimError::Io(e)),
         }
     }
-    Err(format!(
-        "Failed to create temp config: {SCRATCH_ATTEMPTS} scratch names next to the config were all in use"
-    ))
+    Err(ScratchClaimError::AllTaken)
 }
 
 /// Rename `from` over `to`, retrying while the OS reports a transient refusal.

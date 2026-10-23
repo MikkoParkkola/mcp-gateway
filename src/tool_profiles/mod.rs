@@ -157,7 +157,9 @@ pub struct ToolSuggestion {
     /// Number of times the user has called this tool.
     pub call_count: u64,
     /// Unix timestamp (seconds) of the most recent call, `None` when the
-    /// clock could not date it (MIK-8202 P4b).
+    /// clock could not date it (MIK-8202 P4b). A row saved before the field
+    /// existed loads as `None`.
+    #[serde(default)]
     pub last_used_secs: Option<u64>,
 }
 

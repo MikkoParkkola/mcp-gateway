@@ -68,7 +68,8 @@ pub fn extract_row_count(
     if !backend_ok {
         return None;
     }
-    let payload = unwrap_payload(result)?;
+    // The strict payload rule: several blocks or non-JSON text abstain.
+    let payload = crate::protocol::tool_result_payload(result)?;
     // Closed per-backend dispatch table: a backend is extracted only when its
     // result shape carries a genuine authoritative count. Kept as a `match` (not
     // an `if`) because it grows one arm per qualifying backend; the single-arm
@@ -78,24 +79,6 @@ pub fn extract_row_count(
         "github_search_repos" => github_search_row_count(&payload),
         _ => None,
     }
-}
-
-/// Unwrap the inner capability payload from the MCP result envelope, mirroring
-/// the gateway's own `extract_output_validation_target`: prefer
-/// `structuredContent`, else a single `content[0].text` that parses as JSON.
-///
-/// Anything else (multi-part content, non-JSON text, a bare envelope) yields
-/// [`None`] — the extractor then abstains rather than guess.
-fn unwrap_payload(result: &Value) -> Option<Value> {
-    if let Some(structured) = result.get("structuredContent") {
-        return Some(structured.clone());
-    }
-    let content = result.get("content")?.as_array()?;
-    if content.len() != 1 {
-        return None;
-    }
-    let text = content[0].get("text")?.as_str()?;
-    serde_json::from_str::<Value>(text).ok()
 }
 
 /// Read GitHub's authoritative `total_count` from a search payload.
@@ -167,6 +150,25 @@ mod tests {
             "total_count": 42, "incomplete_results": false, "items": [{}, {}]
         }));
         assert_eq!(extract_row_count("caps", GH, &result, true), Some(42));
+    }
+
+    /// MIK-8663: a search payload split over two text blocks is not counted.
+    /// The extractor reads through the strict payload rule, so a multi-part
+    /// answer abstains instead of being judged by its first block.
+    #[test]
+    fn github_two_block_result_is_not_counted() {
+        let payload = json!({"total_count": 42, "incomplete_results": false, "items": []});
+        let mut result = text_result(&payload);
+        result["content"]
+            .as_array_mut()
+            .expect("content blocks")
+            .push(json!({"type": "text", "text": "and more"}));
+        assert_eq!(extract_row_count("caps", GH, &result, true), None);
+        assert_eq!(
+            extract_row_count("caps", GH, &text_result(&payload), true),
+            Some(42),
+            "control: the one-block form is counted"
+        );
     }
 
     /// `total_count == 0` is an *authoritative empty*: the search ran and

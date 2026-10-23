@@ -324,13 +324,13 @@ impl TokenStorage {
         // the destination that mode, so no moment exists at which the token is
         // world-readable. A refresh has to overwrite, so this replaces rather
         // than linking first-writer-wins the way `save_client_id` does.
-        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("token");
-        let tmp = self.create_secret_tmp(file_name)?;
-        let tmp = Self::write_secret_tmp(tmp, &content)?;
-        if let Err(e) = fs::rename(&tmp, &path) {
-            let _ = fs::remove_file(&tmp);
-            return Err(Error::OAuth(format!("Failed to write token file: {e}")));
-        }
+        crate::config_persistence::write_atomic(
+            &path,
+            content.as_bytes(),
+            crate::config_persistence::FileMode::Private,
+            crate::config_persistence::Symlink::Replace,
+        )
+        .map_err(|e| Error::OAuth(format!("Failed to write token file: {e}")))?;
 
         super::token_file::forget(&path);
         info!(backend = %backend_name, "Saved OAuth token");
@@ -412,16 +412,13 @@ impl TokenStorage {
         let path = self.refresh_state_path(backend_name, resource_url);
         let content = serde_json::to_string(state)
             .map_err(|e| Error::OAuth(format!("Failed to serialize refresh state: {e}")))?;
-        let file_name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("refresh");
-        let tmp = self.create_secret_tmp(file_name)?;
-        let tmp = Self::write_secret_tmp(tmp, &content)?;
-        if let Err(e) = fs::rename(&tmp, &path) {
-            let _ = fs::remove_file(&tmp);
-            return Err(Error::OAuth(format!("Failed to write refresh state: {e}")));
-        }
+        crate::config_persistence::write_atomic(
+            &path,
+            content.as_bytes(),
+            crate::config_persistence::FileMode::Private,
+            crate::config_persistence::Symlink::Replace,
+        )
+        .map_err(|e| Error::OAuth(format!("Failed to write refresh state: {e}")))?;
         Ok(())
     }
 
@@ -569,6 +566,7 @@ impl TokenStorage {
 
     /// Persist `client_id` first-writer-wins, up to the point that needs the
     /// repair lock: a corrupt final is handed back with its validated temp.
+    // Not `config_persistence::write_atomic`: hard_link first-writer-wins.
     fn link_client_id(
         &self,
         backend_name: &str,
