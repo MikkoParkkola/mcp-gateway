@@ -163,3 +163,82 @@ fn k9_a_short_dsn_key_that_matches_only_past_its_quote() {
     assert!(!out.contains("pw@"), "{out}");
     assert_eq!(parsed(&out).as_object().map(Map::len), Some(2), "{out}");
 }
+
+/// The keys P1 places: every family's secret whole and cut short (a cut
+/// may still match together with the bytes after the key's quote), plus
+/// connection strings of every length below the rule's 10.
+fn key_cases() -> Vec<String> {
+    let mut keys = Vec::new();
+    for (_, secret) in secrets() {
+        let len = secret.len();
+        for cut in [len, len - 1, len / 2, 6.min(len)] {
+            if secret.is_char_boundary(cut) {
+                keys.push(secret[..cut].to_owned());
+            }
+        }
+    }
+    for n in 1..10 {
+        keys.push(format!("redis://{}", "q".repeat(n)));
+        keys.push(db_url("postgres", ":pw", &"h".repeat(n)));
+    }
+    keys
+}
+
+/// P1, the MIK-8772 invariant over generated documents: every credential
+/// match whose leftmost start lies inside a key redacts that key, and no
+/// output key holds the start of one.
+#[test]
+fn p1_every_key_a_match_starts_in_is_redacted() {
+    let greedy = serde_json::to_string(&pg_url()).expect("encodes");
+    let mut checked = 0;
+    for key in key_cases() {
+        let quoted = serde_json::to_string(&key).expect("encodes");
+        for lead in [None, Some(&greedy)] {
+            for before in [0, 250, 256, 300] {
+                for after in [0, 255, 400] {
+                    let (b, a) = ("b".repeat(before), "a".repeat(after));
+                    let head = lead.map_or(String::new(), |g| format!(r#"{g}:{{"p":"{b}"}},"#));
+                    let text = format!(r#"{{{head}{quoted}:{{"v":"{a}"}},"n":3}}"#);
+                    let out = assert_projected(&text);
+                    assert!(parses(&out), "P1(a) parses: {out}");
+                    let (input, output) = (literals(&text), literals(&out));
+                    assert_eq!(input.len(), output.len(), "literal count: {out}");
+                    for (&(s, e, is_key, _), &(os, oe, _, _)) in input.iter().zip(&output) {
+                        if !is_key {
+                            continue;
+                        }
+                        if a_match_starts_in(&text, s, e) {
+                            assert!(
+                                out[os..oe].contains(MARK),
+                                "P1(b) key {:?} kept: {out}",
+                                &text[s..e]
+                            );
+                        }
+                        assert!(
+                            !a_match_starts_in(&out, os, oe),
+                            "P1(c) key {:?} holds a match: {out}",
+                            &out[os..oe]
+                        );
+                    }
+                    checked += 1;
+                }
+            }
+        }
+    }
+    assert!(checked > 1000, "P1 ran {checked} cases");
+}
+
+/// P2, half of the precondition `match_starts_in` rests on: no credential
+/// pattern has an anchor or a word boundary, so a cut haystack cannot invent
+/// a match. The other half, every shortest match within `OVERLAP_WINDOW`, is
+/// the bound that window's doc states for the existing scan.
+#[test]
+fn p2_no_pattern_has_an_anchor_or_a_word_boundary() {
+    for (pattern, name) in CREDENTIAL_PATTERNS {
+        let outside_classes = pattern.replace("[^", "[");
+        for token in [r"\b", r"\B", r"\A", r"\z", "$"] {
+            assert!(!pattern.contains(token), "{name}: {token} in {pattern}");
+        }
+        assert!(!outside_classes.contains('^'), "{name}: ^ in {pattern}");
+    }
+}
