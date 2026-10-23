@@ -384,31 +384,6 @@ fn key_for_alpha(denied_tools: Option<Vec<String>>) -> AuthConfig {
 /// an equal token classifies only as the static bearer.
 const BEARER_TOKEN: &str = "mik-8672-static-bearer";
 
-/// MIK-8672 C1/C2: auth with a static bearer and an API key named `bearer`,
-/// holding different secrets, both reaching `alpha`.
-fn bearer_auth() -> AuthConfig {
-    AuthConfig {
-        enabled: true,
-        bearer_token: Some(BEARER_TOKEN.to_string()),
-        api_keys: vec![ApiKeyConfig {
-            key: None,
-            key_sha256: Some(crate::config::api_key_digest_spec(b"k")),
-            expires_at: None,
-            name: "bearer".to_string(),
-            rate_limit: 0,
-            backends: vec!["alpha".to_string()],
-            allowed_tools: None,
-            denied_tools: None,
-            admin: false,
-            kind: crate::config::ApiKeyKind::Shared,
-        }],
-        public_paths: vec!["/health".to_string()],
-        client_circuit_breaker: None,
-        single_user: false,
-        dashboard_session: crate::config::DashboardSessionConfig::default(),
-    }
-}
-
 /// How a cell presents itself to the gateway.
 enum Caller {
     Anonymous,
