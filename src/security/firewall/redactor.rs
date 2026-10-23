@@ -479,7 +479,7 @@ fn overlapping_spans(re: &Regex, text: &str) -> Vec<(usize, usize)> {
 /// `lit`'s content decoded, quotes included in the parse, so JSON escapes
 /// read as the characters they stand for.
 fn decoded(text: &str, lit: &Literal) -> Option<String> {
-    serde_json::from_str::<String>(&text[lit.start - 1..lit.end + 1]).ok()
+    serde_json::from_str::<String>(&text[lit.start - 1..=lit.end]).ok()
 }
 
 /// The parsed document when `text` is JSON whose credential spans can be

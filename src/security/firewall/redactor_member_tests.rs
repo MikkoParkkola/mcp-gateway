@@ -31,12 +31,12 @@ fn class_value(n: usize) -> String {
 
 /// An AWS-shaped access key id: it matches the AWS rule and the member class.
 fn aws_value() -> String {
-    format!("{}{}", "AK", "IA") + &"Q7RZ2XW4PL9MBN6K".to_owned()
+    format!("{}{}", "AK", "IA") + "Q7RZ2XW4PL9MBN6K"
 }
 
 /// A GitHub PAT: it matches its own rule, and `_` keeps it out of the class.
 fn pat_value() -> String {
-    format!("{}{}", "gh", "p_") + &"a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
+    format!("{}{}", "gh", "p_") + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
 }
 
 /// Redact `value` with nothing exempt; return the findings.
@@ -211,7 +211,7 @@ fn r2d_escaped_key_spellings_are_paired_by_their_decoded_name() {
         format!("api{bs}u005Fkey"),
         ["0061", "0070", "0069", "005f", "006b", "0065", "0079"]
             .iter()
-            .map(|h| format!("{bs}u{h}"))
+            .flat_map(|h| [bs, 'u'].into_iter().chain(h.chars()))
             .collect::<String>(),
     ];
     for key in &keys {
@@ -281,7 +281,7 @@ fn s1_member_and_pat_in_one_splice() {
     assert_eq!(got["pat"], MARK);
     assert_eq!(
         descriptions(&findings),
-        vec![PAT.to_owned(), MEMBER.to_owned()]
+        vec![MEMBER.to_owned(), PAT.to_owned()]
     );
     for f in &findings {
         assert!(
