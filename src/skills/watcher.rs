@@ -47,7 +47,10 @@ use crate::Result;
 use crate::capability::parse_capability_file;
 
 /// Changed capability paths waiting for the regen task: a set, so a burst or
-/// an edit during a pass is kept, never dropped (MIK-8690).
+/// an edit during a pass is kept, never dropped (MIK-8690). Two limits stay
+/// as they were: paths still pending at shutdown are abandoned, and a steady
+/// stream of edits keeps postponing the pass until it goes quiet for the
+/// debounce.
 struct ChangeSet {
     state: Mutex<Dirty>,
 }

@@ -215,3 +215,34 @@ fn a_single_quiet_edit_warns_nothing() {
         assert_eq!(*warned.borrow(), 0, "a single quiet edit warns nothing");
     });
 }
+
+/// The set coalesces: a path pushed twice is taken once, and the batch comes
+/// back sorted.
+#[test]
+fn a_path_pushed_twice_is_taken_once() {
+    let (changes, _source) = change_set();
+    changes.push(PathBuf::from("b.yaml"));
+    changes.push(PathBuf::from("a.yaml"));
+    changes.push(PathBuf::from("b.yaml"));
+    assert_eq!(
+        changes.take_if_quiet(Duration::ZERO),
+        [PathBuf::from("a.yaml"), PathBuf::from("b.yaml")]
+    );
+    assert_eq!(changes.pending_count(), 0, "the take empties the set");
+}
+
+/// A batch that is not yet quiet stays pending; it is not taken and not lost.
+#[test]
+fn a_change_inside_the_quiet_window_stays_pending() {
+    let (changes, _source) = change_set();
+    changes.push(PathBuf::from("a.yaml"));
+    assert!(
+        changes.take_if_quiet(Duration::from_secs(3600)).is_empty(),
+        "nothing is due inside the quiet window"
+    );
+    assert_eq!(changes.pending_count(), 1, "the path is still pending");
+    assert_eq!(
+        changes.take_if_quiet(Duration::ZERO),
+        [PathBuf::from("a.yaml")]
+    );
+}
