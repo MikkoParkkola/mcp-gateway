@@ -156,3 +156,86 @@ fn fixture_impl_method_decoder_is_flagged() {
         ["src/elsewhere.rs:read: payload decoder"]
     );
 }
+
+/// grok impl r1: a function that reads both fields but parses something
+/// else (a config string) is not a decoder: the parse must take content text.
+#[test]
+fn fixture_unrelated_parse_is_not_flagged() {
+    let source = r#"fn shape(result: &Value, config: &str) -> Option<Value> {
+        let has = result.get("structuredContent").is_some() || result.get("content").is_some();
+        let parsed: Value = serde_json::from_str(config).ok()?;
+        has.then_some(parsed)
+    }"#;
+    assert!(rows_of(ELSEWHERE, source).is_empty());
+}
+
+/// grok impl r1: a copy that parses the text through a closure parameter is
+/// still a decoder.
+#[test]
+fn fixture_closure_fed_decoder_is_flagged() {
+    let source = r#"fn copy(result: &Value) -> Option<Value> {
+        result.get("structuredContent").cloned().or_else(|| {
+            result
+                .pointer("/content/0/text")
+                .and_then(Value::as_str)
+                .and_then(|t| serde_json::from_str(t).ok())
+        })
+    }"#;
+    assert_eq!(
+        rows_of(ELSEWHERE, source),
+        ["src/elsewhere.rs:copy: payload decoder"]
+    );
+}
+
+/// grok impl r1: a copy that passes the parse by path along a chain fed the
+/// content text is still a decoder.
+#[test]
+fn fixture_path_passed_parse_is_flagged() {
+    let source = r#"fn copy(result: &Value) -> Option<Value> {
+        result.get("structuredContent").cloned().or_else(|| {
+            result
+                .pointer("/content/0/text")
+                .and_then(Value::as_str)
+                .map(serde_json::from_str::<Value>)
+                .and_then(Result::ok)
+        })
+    }"#;
+    assert_eq!(
+        rows_of(ELSEWHERE, source),
+        ["src/elsewhere.rs:copy: payload decoder"]
+    );
+}
+
+/// gpt impl r1: a test-only statement inside a production body (the T3
+/// probe's shape) is not production behaviour, for either rule.
+#[test]
+fn fixture_test_only_statements_are_not_flagged() {
+    let source = r#"fn stamp(mut value: Value, arguments: &mut Value) -> Value {
+        #[cfg(test)]
+        if let Some(obj) = arguments.as_object_mut() {
+            obj.remove("_full");
+        }
+        #[cfg(test)]
+        let _copy: Option<Value> = value.get("structuredContent").cloned().or_else(|| {
+            serde_json::from_str(value.pointer("/content/0/text")?.as_str()?).ok()
+        });
+        value
+    }"#;
+    assert!(rows_of(ELSEWHERE, source).is_empty());
+}
+
+/// Control for the row above: the same strip outside `cfg(test)` is flagged.
+#[test]
+fn fixture_production_statement_beside_test_only_is_flagged() {
+    let source = r#"fn stamp(arguments: &mut Value) {
+        #[cfg(test)]
+        let _seen = ();
+        if let Some(obj) = arguments.as_object_mut() {
+            obj.remove("_claim");
+        }
+    }"#;
+    assert_eq!(
+        rows_of(ELSEWHERE, source),
+        ["src/elsewhere.rs:stamp: strip `_claim`"]
+    );
+}

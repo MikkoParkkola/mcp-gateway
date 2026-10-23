@@ -427,7 +427,8 @@ async fn a_replayed_refusal_records_only_the_delivered_tenants() {
 /// it is the strict payload reader. Characterisation: the tenant extractor
 /// also parses the envelope's text, so this pins the delivered tenants, not
 /// which reader produced them (the T5 table and T6 scan pin the reader). The
-/// relay-receipt half is `collusion_direct_tests::meta::meta_replay_renews_the_receipt`.
+/// relay-receipt half is
+/// `invoke::relay::tests::a_replayed_invoke_answer_stages_its_unwrapped_value`.
 #[tokio::test]
 async fn a_replayed_invoke_answer_is_attributed_from_its_tool_value() {
     let dir = tempfile::tempdir().unwrap();

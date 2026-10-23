@@ -393,6 +393,18 @@ async fn t1b_full_bypasses_projection_through_intake() {
         !projected(&full_body),
         "a `_full: true` call was projected: {full_body}"
     );
+    // gpt impl r1: delivered whole and successfully, not merely unprojected.
+    let full_result = &delivered(&full_body)["result"];
+    assert_ne!(
+        full_result["isError"],
+        json!(true),
+        "a `_full: true` call came back as a tool error: {full_body}"
+    );
+    let full_text = full_result.to_string();
+    assert!(
+        full_text.contains("2026-09-27") && full_text.contains("events"),
+        "a `_full: true` call lost the backend's own payload: {full_body}"
+    );
     let plain = json!({
         "server": PROJ_CAPS,
         "tool": PROJ_DAY,
