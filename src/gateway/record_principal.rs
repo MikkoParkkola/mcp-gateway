@@ -9,8 +9,14 @@
 //! record key, for records, logs and anything else that leaves the box).
 
 use std::fmt;
+use std::path::Path;
 
 use crate::hashing::{hmac_sha256_hex, sha256_hex};
+
+/// The fallback key file, in the gateway data directory.
+pub(crate) const KEY_FILE: &str = "record-principal.key";
+/// The config field that names the key.
+pub(crate) const KEY_FIELD: &str = "security.record_principal_key";
 
 /// Domain label of the record-principal derivation.
 const RECORD_DOMAIN: &[u8] = b"mcp-gateway/record-principal/v1";
@@ -30,21 +36,47 @@ fn keyed(key: &RecordPrincipalKey, domain: &[u8], value: &str, hex_len: usize) -
 
 /// The gateway-held key for record principals and subscription aliases.
 ///
-/// Built from the key *text* (a SecretRef value or the fallback file's
-/// contents): the HMAC key is the UTF-8 bytes after one trailing newline is
-/// stripped, so a fallback file promoted to a SecretRef keeps every value.
+/// Built from the resolved key *text*: the HMAC key is its UTF-8 bytes, taken
+/// as given. The one trailing newline of a file is stripped by whichever reader
+/// resolved it, so the fallback file and the same text as a SecretRef agree.
 pub(crate) struct RecordPrincipalKey(Vec<u8>);
 
 impl RecordPrincipalKey {
-    /// The key from its text form.
-    pub(crate) fn from_text(text: &str) -> Self {
-        Self(text.strip_suffix('\n').unwrap_or(text).as_bytes().to_vec())
+    /// The key from its resolved text.
+    ///
+    /// # Errors
+    ///
+    /// A key shorter than 32 bytes, naming [`KEY_FIELD`].
+    pub(crate) fn from_text(text: &str) -> crate::Result<Self> {
+        // SKELETON (MIK-8697 1b red): no length check, still strips.
+        Ok(Self(
+            text.strip_suffix('\n').unwrap_or(text).as_bytes().to_vec(),
+        ))
     }
 
     /// Lowercase hex SHA-256 of the key bytes: names the key without being it.
     pub(crate) fn identity(&self) -> String {
         sha256_hex(&self.0)
     }
+}
+
+/// The record key: `configured` (a SecretRef) when set, else the fallback file
+/// in `data_dir`, created on first use. Fails closed: there is no unkeyed path.
+///
+/// # Errors
+///
+/// An unresolvable or short SecretRef, naming [`KEY_FIELD`]; a key file that
+/// cannot be created or read, or is malformed or too permissive, naming its path.
+pub(crate) fn resolve_key(
+    configured: Option<&str>,
+    overlay: &crate::config::EnvOverlay,
+    data_dir: &Path,
+) -> crate::Result<RecordPrincipalKey> {
+    let _ = (configured, overlay, data_dir);
+    // SKELETON (MIK-8697 1b red).
+    Err(crate::Error::ConfigValidation(
+        "record key resolution is not built yet".into(),
+    ))
 }
 
 /// A caller's internal principal: never printed, never serialized.
@@ -125,32 +157,40 @@ mod tests {
             (KEY_A5, "credential-xyz", "0bb522665692"),
         ];
         for (key, internal, want) in cases {
-            let key = RecordPrincipalKey::from_text(key);
+            let key = RecordPrincipalKey::from_text(key).expect("key");
             let got = InternalPrincipal::new(internal.to_owned()).record_form(&key);
             assert_eq!(got.as_str(), want, "{internal}");
         }
         assert_eq!(
-            subscription_alias(&RecordPrincipalKey::from_text(KEY_ZERO), SUB),
+            subscription_alias(&RecordPrincipalKey::from_text(KEY_ZERO).expect("key"), SUB),
             "eaacd857ae5332fc"
         );
         assert_eq!(
-            subscription_alias(&RecordPrincipalKey::from_text(KEY_A5), SUB),
+            subscription_alias(&RecordPrincipalKey::from_text(KEY_A5).expect("key"), SUB),
             "a91545474dd38b41"
         );
     }
 
-    // D2: the file form (`<hex>\n`) and the literal form are one key.
+    // D2b: from_text takes the resolved text as given; the readers strip the
+    // file's newline once (MIK-8697 §16.6 #3).
     #[test]
-    fn d2_key_text_with_its_trailing_newline_is_the_same_key() {
-        let file = RecordPrincipalKey::from_text(&format!("{KEY_A5}\n"));
-        let literal = RecordPrincipalKey::from_text(KEY_A5);
-        assert_eq!(file.identity(), literal.identity());
-        let p = InternalPrincipal::new("3f2a9c0d1e7b".to_owned());
-        assert_eq!(p.record_form(&file), p.record_form(&literal));
-        assert_ne!(
-            p.record_form(&literal).as_str(),
-            p.storage_form(),
-            "keyed, not the storage form"
-        );
+    fn d2b_from_text_keeps_a_trailing_newline() {
+        let with = RecordPrincipalKey::from_text(&format!("{KEY_A5}\n")).expect("key");
+        let without = RecordPrincipalKey::from_text(KEY_A5).expect("key");
+        assert_ne!(with.identity(), without.identity());
+    }
+
+    // §16.6 #1: fewer than 32 bytes is refused, naming the field.
+    #[test]
+    fn k0_a_short_key_is_refused_naming_the_field() {
+        let Err(err) = RecordPrincipalKey::from_text(&"a".repeat(31)) else {
+            panic!("a 31-byte key was accepted");
+        };
+        assert!(err.to_string().contains(KEY_FIELD), "{err}");
+        assert!(RecordPrincipalKey::from_text(&"a".repeat(32)).is_ok());
     }
 }
+
+#[cfg(test)]
+#[path = "record_principal_key_tests.rs"]
+mod key_tests;
