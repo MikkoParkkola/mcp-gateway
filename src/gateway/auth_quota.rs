@@ -4,8 +4,6 @@
 
 use std::sync::Arc;
 
-use sha2::{Digest, Sha256};
-
 /// A verified credential's quota bucket, independent of display/audit names.
 ///
 /// Derived only from something authentication has already validated — a
@@ -84,13 +82,17 @@ impl QuotaPrincipal {
     }
 
     fn credential(kind: &[u8], secret: &[u8]) -> Self {
-        let mut hash = Sha256::new();
-        hash.update(b"mcp-gateway/nonce-quota/v1\0");
-        for component in [kind, secret] {
-            hash.update((component.len() as u64).to_be_bytes());
-            hash.update(component);
-        }
-        Self(Arc::from(hex::encode(hash.finalize())))
+        let (kind_len, secret_len) = (
+            (kind.len() as u64).to_be_bytes(),
+            (secret.len() as u64).to_be_bytes(),
+        );
+        Self(Arc::from(crate::hashing::sha256_hex_chunks([
+            b"mcp-gateway/nonce-quota/v1\0".as_slice(),
+            &kind_len,
+            kind,
+            &secret_len,
+            secret,
+        ])))
     }
 
     pub(crate) fn as_store_key(&self) -> &str {

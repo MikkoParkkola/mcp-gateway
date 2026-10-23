@@ -73,16 +73,16 @@ pub(crate) fn descriptor_digest(tool: &Tool) -> String {
             );
         }
     }
-    let mut hasher = Sha256::new();
-    for field in fields {
-        hasher.update((field.len() as u64).to_be_bytes());
-        hasher.update(field.as_bytes());
-    }
-    hasher.finalize().iter().fold(String::new(), |mut hex, b| {
-        use std::fmt::Write as _;
-        let _ = write!(hex, "{b:02x}");
-        hex
-    })
+    let lengths: Vec<[u8; 8]> = fields
+        .iter()
+        .map(|f| (f.len() as u64).to_be_bytes())
+        .collect();
+    crate::hashing::sha256_hex_chunks(
+        fields
+            .iter()
+            .zip(&lengths)
+            .flat_map(|(field, len)| [len.as_slice(), field.as_bytes()]),
+    )
 }
 
 /// Drop every tool whose descriptor fails the rule at blocking severity,
@@ -133,7 +133,7 @@ pub(crate) fn parse_listed(raw: &[serde_json::Value]) -> (Vec<Tool>, Vec<(String
             Err(_) => {
                 if let Some(name) = entry.get("name").and_then(serde_json::Value::as_str) {
                     let bytes = serde_json::to_vec(entry).unwrap_or_default();
-                    unparseable.push((name.to_string(), hex(&Sha256::digest(bytes))));
+                    unparseable.push((name.to_string(), crate::hashing::sha256_hex(&bytes)));
                 }
             }
         }
@@ -147,16 +147,6 @@ type NameKey = [u8; 32];
 
 fn name_key(name: &str) -> NameKey {
     Sha256::digest(name.as_bytes()).into()
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .fold(String::with_capacity(bytes.len() * 2), |mut out, b| {
-            use std::fmt::Write as _;
-            let _ = write!(out, "{b:02x}");
-            out
-        })
 }
 
 /// Whether [`super::prepare_tool_metadata`] judges the descriptors it is given.
