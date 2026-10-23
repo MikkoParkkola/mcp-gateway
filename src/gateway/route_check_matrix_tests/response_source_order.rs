@@ -116,3 +116,137 @@ fn stdio_finalizes_through_finalize_routed() {
     let stdio = "src/gateway/server/stdio_dispatch.rs";
     only(&source(stdio), "meta_mcp.finalize_content(", stdio);
 }
+
+/// The identifiers in the text from `needle` to the first `{`.
+fn signature_words(text: &str, needle: &str, file: &str) -> Vec<String> {
+    let start = only(text, needle, file);
+    let end = start + text[start..].find('{').expect("a body follows");
+    text[start..end]
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|word| !word.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// An era twin's pin: the response tail cannot branch on the era or the
+/// case, because nothing it runs receives either. `finalize_routed`, the
+/// delivery context, `/mcp`'s record step, stdio's judge-record-commit and
+/// the direct route's judged call take no era, case, replay or cache input.
+#[test]
+fn the_tail_takes_no_case_or_era() {
+    const BANNED: [&str; 7] = [
+        "era",
+        "Era",
+        "case",
+        "replay",
+        "cached",
+        "cache_hit",
+        "CacheOutcome",
+    ];
+    for (file, needle) in [
+        (
+            "src/gateway/meta_mcp/response_security.rs",
+            "pub(crate) fn finalize_routed(",
+        ),
+        (
+            "src/gateway/meta_mcp/response_security.rs",
+            "pub(crate) struct ResponseDeliveryContext<'a>",
+        ),
+        (
+            "src/gateway/router/judged_answer.rs",
+            "pub(in crate::gateway) async fn record_delivery(",
+        ),
+        (
+            "src/gateway/server/stdio_delivery.rs",
+            "pub(super) async fn judge_and_commit(",
+        ),
+        (
+            "src/gateway/router/backend_handlers/direct_audit.rs",
+            "async fn audited_call_judged(",
+        ),
+    ] {
+        let text = source(file);
+        let words = if needle.contains("struct") {
+            let start = only(&text, needle, file);
+            let end = start + text[start..].find("\n}\n").expect("the struct closes");
+            text[start..end]
+                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .filter(|word| !word.is_empty())
+                .map(str::to_owned)
+                .collect()
+        } else {
+            signature_words(&text, needle, file)
+        };
+        let hits: Vec<&String> = words
+            .iter()
+            .filter(|w| BANNED.contains(&w.as_str()))
+            .collect();
+        assert!(
+            hits.is_empty(),
+            "{file}: `{needle}` now takes {hits:?}: an era or case twin may no longer share its row"
+        );
+    }
+}
+
+/// A replay or cache-hit twin's pin: each route hands a replayed answer back
+/// into its own response tail, and a cache hit is re-stamped inside dispatch,
+/// so both run the same tail as a fresh answer.
+#[test]
+fn replay_and_cache_hit_reach_the_tail() {
+    let mcp = "src/gateway/router/handlers/dispatch_tools_call.rs";
+    let text = source(mcp);
+    let screened = only(
+        &text,
+        "// Screened at delivery, in `finalize_content`, with every other frame.",
+        mcp,
+    );
+    let replayed = only(
+        &text,
+        ".audit_replay(tool_name, &arguments, session, &caller, response, audit)",
+        mcp,
+    );
+    assert!(
+        screened < replayed,
+        "{mcp}: the replay is returned to the route tail"
+    );
+    let direct = "src/gateway/router/backend_handlers/direct_idempotency.rs";
+    only(
+        &source(direct),
+        "Ok(SyncAdmission::Replay(response, _, _, _, bindings)) => {",
+        direct,
+    );
+    only(
+        &source(direct),
+        "Ok((None, Some((response, bindings))))",
+        direct,
+    );
+    let tail = "src/gateway/router/backend_handlers/direct_dispatch.rs";
+    only(&source(tail), "a cached replay included", tail);
+    let stdio = "src/gateway/server/stdio_dispatch.rs";
+    let text = source(stdio);
+    let broke = only(&text, "break 'tool_call meta_mcp\n", stdio);
+    let audited = only(
+        &text,
+        ".audit_replay(&tool_name, args, session, &caller, response, audit)",
+        stdio,
+    );
+    assert!(
+        broke < audited,
+        "{stdio}: the replay leaves the tool-call block into the tail"
+    );
+    let hit = "src/gateway/meta_mcp/invoke/pre_dispatch.rs";
+    let text = source(hit);
+    let served = only(
+        &text,
+        "return Some(GuardedValue::from_cache(cached).augment(|v| {",
+        hit,
+    );
+    let stamped = served
+        + text[served..]
+            .find("crate::trust::CacheOutcome::Hit,")
+            .expect("the cache hit is re-stamped");
+    assert!(
+        text[served..stamped].contains("self.maybe_stamp_provenance("),
+        "{hit}: a cache hit is re-stamped inside dispatch"
+    );
+}

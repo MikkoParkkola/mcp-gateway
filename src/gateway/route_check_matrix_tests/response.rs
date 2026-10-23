@@ -306,6 +306,14 @@ pub(crate) const fn expect(
         ) => NotApplicable(RespNa::TaskTailIsClampAndSeal),
         (Direct, CacheHit, _, _) => NotApplicable(RespNa::NoCacheOnDirect),
         (_, _, Era::Legacy, ShapeSeal | StampShape) => NotApplicable(RespNa::NoModernShapeOnLegacy),
+        // A replay runs the tail on the stored, already sealed bytes: no mint,
+        // so nothing is sealed or linked anew (lead ruling, MIK-8689 phase C).
+        (
+            Mcp | Stdio | Direct,
+            IdempotentReplay,
+            _,
+            ShapeSeal | FirewallSeal | ClampSeal | SealSign | ClampLink,
+        ) => NotApplicable(RespNa::ReplayReservesTheStoredDelivery),
         (Direct, IdempotentReplay, _, StampSeal) => ExpectedGap(RespTicket::Mik8705),
         (Mcp | Stdio, IdempotentReplay, _, StampSeal) => {
             NotApplicable(RespNa::ReplayReservesTheStoredDelivery)
@@ -455,20 +463,83 @@ pub(crate) enum Driven {
         pin: &'static str,
         rows: &'static [&'static str],
     },
-    /// Rows the next phase adds (MIK-8689 phases A2, B, C). Removed with the
-    /// last phase, so a cell left here then fails to compile.
-    Pending,
+    /// The same pair on this route in another case or era, which runs the
+    /// same tail: `pin` is the source-order row that keeps that true.
+    SameAs {
+        pin: &'static str,
+        case: RespCase,
+        era: Era,
+    },
+    /// The cell states nothing (`NotApplicable` or `OrderInvisibleByOutcome`).
+    NotStated,
+}
+
+/// The pin behind an era twin: the tail takes no era or case.
+const NO_CASE_OR_ERA: &str = "response::source_order::the_tail_takes_no_case_or_era";
+/// The pin behind a replay or cache-hit twin: each reaches its route's tail.
+const REACHES_THE_TAIL: &str = "response::source_order::replay_and_cache_hit_reach_the_tail";
+
+/// Whether an answer of `case` on `route` runs that route's response tail.
+/// A replay and a cache hit both do (`dispatch_tools_call.rs:721-727`,
+/// `direct_idempotency.rs:141`, `stdio_dispatch.rs:681`, and the cache-hit
+/// re-stamp at `invoke/pre_dispatch.rs:430`); a stored task is sealed at the
+/// worker instead. Pinned by `source_order::replay_and_cache_hit_reach_the_tail`.
+const fn reaches_tail(route: RespRoute, case: RespCase) -> bool {
+    !matches!(route, RespRoute::Task) && !matches!(case, RespCase::Task)
+}
+
+/// Whether `expect` states an order to drive.
+const fn stated(expect: RespExpect) -> bool {
+    matches!(
+        expect,
+        RespExpect::Ordered | RespExpect::ExpectedGap(_) | RespExpect::LatentGap(..)
+    )
+}
+
+/// Phase C's case and era twins (lead ruling): a replay or a cache hit runs
+/// the Fresh tail on its own route, and the other era runs the same tail,
+/// which takes no era.
+const fn twin(case: RespCase, era: Era) -> Driven {
+    match (case, era) {
+        (RespCase::IdempotentReplay | RespCase::CacheHit, _) => Driven::SameAs {
+            pin: REACHES_THE_TAIL,
+            case: RespCase::Fresh,
+            era,
+        },
+        (_, Era::Modern) => Driven::SameAs {
+            pin: NO_CASE_OR_ERA,
+            case,
+            era: Era::Legacy,
+        },
+        (_, Era::Legacy) => Driven::SameAs {
+            pin: NO_CASE_OR_ERA,
+            case,
+            era: Era::Modern,
+        },
+    }
 }
 
 /// The row behind every `Ordered`, `ExpectedGap` or `LatentGap` cell.
 const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> Driven {
-    use RespCase::{CacheHit, Fresh, IdempotentReplay};
+    use RespCase::{CacheHit, Fresh, IdempotentReplay, Task as TaskCase};
     use RespPair::{
         ClampLink, ClampSeal, FirewallSeal, FirewallStamp, JudgeCommit, JudgeRecord, RecordCommit,
         SealSign, ShapeSeal, SignRebuild, SignRecord, StampSeal,
     };
-    use RespRoute::{Direct, Mcp, Stdio};
+    use RespRoute::{Direct, Mcp, Stdio, Task};
     match (route, case, era, pair) {
+        _ if !stated(expect(route, case, era, pair)) => Driven::NotStated,
+        // Phase C: a task's stored result is clamped, then sealed, at the
+        // worker (input_round.rs:109-110), whatever era submitted it; the rows
+        // drive a real task through `/mcp` (MIK-8398 R14, R19). The recovered
+        // task (upstream.rs:554) is the same pair, pinned by MIK-8398's
+        // `tasks_get_with_a_public_scope_is_sealed_as_delivered`.
+        (Task, TaskCase, _, ClampSeal) => Driven::Row(
+            "router::tests::task_execution_adapter::provenance_seal::a_worker_task_with_a_public_scope_is_sealed_as_delivered",
+        ),
+        (Task, TaskCase, _, StampSeal) => Driven::Row(
+            "router::tests::task_execution_adapter::provenance_seal::a_task_run_by_the_worker_stores_a_sealed_result",
+        ),
         (Stdio, Fresh, Era::Modern, ShapeSeal) => {
             Driven::Row("rows::stdio::r_shape_stdio_shape_precedes_seal")
         }
@@ -487,17 +558,17 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
                 "rows::r_recsign_sign_precedes_delivery_record",
             ],
         },
-        (Stdio, Fresh, Era::Legacy, JudgeRecord) => {
-            Driven::Row("server::tests::stdio_tenant_reads::stdio_judged_read_is_one_record")
-        }
-        (Stdio, Fresh, Era::Legacy, JudgeCommit) => {
-            Driven::Row("server::tests::collusion_stdio::stdio_judged_out_read_records_no_receipt")
-        }
+        (Stdio, Fresh, Era::Legacy, JudgeRecord) => Driven::Row(
+            "server::signing_allocation_tests::stdio_tenant_reads::stdio_judged_read_is_one_record",
+        ),
+        (Stdio, Fresh, Era::Legacy, JudgeCommit) => Driven::Row(
+            "server::signing_allocation_tests::collusion_stdio::stdio_judged_out_read_records_no_receipt",
+        ),
         (Stdio, Fresh, Era::Legacy, RecordCommit) => Driven::Row(
-            "server::tests::collusion_stdio::stdio_audit_withheld_read_records_no_receipt",
+            "server::signing_allocation_tests::collusion_stdio::stdio_audit_withheld_read_records_no_receipt",
         ),
         (Stdio, Fresh, Era::Legacy, SignRebuild) => Driven::Row(
-            "server::tests::collusion_stdio_delivered::a_stdio_answer_is_receipted_as_delivered",
+            "server::signing_allocation_tests::collusion_stdio_delivered::a_stdio_answer_is_receipted_as_delivered",
         ),
         (Stdio, Fresh, Era::Legacy, ClampLink) => {
             Driven::Row("rows::stdio::r_link_stdio_scope_clamp_precedes_origin_link")
@@ -545,37 +616,53 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
         (Direct, Fresh, Era::Legacy, JudgeRecord) => Driven::Row(
             "router::direct_audit_tests::response_judge::r_recjudge_direct_verdict_rides_the_delivery_record",
         ),
-        (Direct, IdempotentReplay, Era::Legacy, StampSeal) => {
+        (Direct, IdempotentReplay, _, StampSeal) => {
             Driven::Row("rows::r_replayseal_direct_replay_seal_gap")
         }
-        _ => Driven::Pending,
+        _ => twin(case, era),
     }
 }
 
-/// Every stated cell names a row or a reason, and the rows named exist in
-/// this module (the red check also lists them with `cargo test -- --list`).
+/// Every stated cell resolves to a named row, directly or through a
+/// `SameAs` twin, within two hops; a twin only from a case that reaches the
+/// tail; and no cell that states nothing names a row.
 #[test]
 fn every_stated_response_cell_is_driven_or_explained() {
-    let mut empty = Vec::new();
+    let mut wrong = Vec::new();
     for cell in cells() {
         let (route, case, era, pair) = cell;
-        let stated = matches!(
-            expect(route, case, era, pair),
-            RespExpect::Ordered | RespExpect::ExpectedGap(_) | RespExpect::LatentGap(..)
-        );
-        match driven(route, case, era, pair) {
-            Driven::Row(name) if stated && name.trim().is_empty() => empty.push(cell),
-            Driven::Shared { pin, rows }
-                if stated && (pin.trim().is_empty() || rows.is_empty()) =>
-            {
-                empty.push(cell);
+        let is_stated = stated(expect(route, case, era, pair));
+        let mut at = (case, era);
+        let mut resolved = false;
+        for _ in 0..3 {
+            match driven(route, at.0, at.1, pair) {
+                Driven::Row(name) => {
+                    resolved = !name.trim().is_empty();
+                    break;
+                }
+                Driven::Shared { pin, rows } => {
+                    resolved = !pin.trim().is_empty() && !rows.is_empty();
+                    break;
+                }
+                Driven::SameAs {
+                    pin,
+                    case: to,
+                    era: to_era,
+                } => {
+                    if pin.trim().is_empty() || !reaches_tail(route, at.0) {
+                        break;
+                    }
+                    at = (to, to_era);
+                }
+                Driven::NotStated => break,
             }
-            Driven::Row(_) | Driven::Shared { .. } if !stated => empty.push(cell),
-            _ => {}
+        }
+        if is_stated != resolved {
+            wrong.push((cell, is_stated, resolved));
         }
     }
     assert!(
-        empty.is_empty(),
-        "cells with no row or reason, or a row on a cell that states nothing: {empty:?}"
+        wrong.is_empty(),
+        "(cell, stated, resolves to a row): {wrong:?}"
     );
 }
