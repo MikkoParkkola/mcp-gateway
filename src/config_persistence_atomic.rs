@@ -129,10 +129,8 @@ fn scratch_create_for(mode: FileMode, target: Option<&std::fs::Metadata>) -> Scr
 }
 
 /// Claim a scratch file next to `path` that no other writer holds, created
-/// per `create`.
-///
-/// The same candidate loop as [`create_scratch_exclusive`], but with
-/// `io::Error`s for the shared atomic writer.
+/// per `create`, through the parent's one candidate loop
+/// ([`super::claim_scratch`]), with `io::Error`s for the shared atomic writer.
 ///
 /// # Errors
 ///
@@ -143,28 +141,21 @@ fn create_scratch(
     first: u64,
     create: ScratchCreate,
 ) -> std::io::Result<(std::fs::File, PathBuf)> {
-    for seed in first..first.wrapping_add(super::SCRATCH_ATTEMPTS) {
-        let candidate = super::scratch_candidate(path, seed);
-        let opened = match create {
-            ScratchCreate::Private => super::create_new_private(&candidate),
-            ScratchCreate::Default => std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&candidate),
-        };
-        match opened {
-            Ok(file) => return Ok((file, candidate)),
-            // Someone else's scratch file. Not ours to write to, and not ours
-            // to delete either.
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(e),
-        }
-    }
-    Err(std::io::Error::other(format!(
-        "{} scratch names next to {} were all in use",
-        super::SCRATCH_ATTEMPTS,
-        path.display()
-    )))
+    super::claim_scratch(path, first, |candidate| match create {
+        ScratchCreate::Private => super::create_new_private(candidate),
+        ScratchCreate::Default => std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(candidate),
+    })
+    .map_err(|e| match e {
+        super::ScratchClaimError::AllTaken => std::io::Error::other(format!(
+            "{} scratch names next to {} were all in use",
+            super::SCRATCH_ATTEMPTS,
+            path.display()
+        )),
+        super::ScratchClaimError::Io(e) => e,
+    })
 }
 
 /// Whether the scratch ended up in the target's group.

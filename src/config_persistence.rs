@@ -633,23 +633,44 @@ pub(crate) fn create_private_replacing(path: &Path) -> std::io::Result<std::fs::
 /// Returns an error when every candidate name is taken, or on any I/O failure
 /// other than a collision.
 fn create_scratch_exclusive(path: &Path, first: u64) -> Result<(std::fs::File, PathBuf), String> {
+    // Private AT CREATION, not on the finished file. A config can hold a
+    // bearer token, and the scratch file sits next to it for the whole
+    // write; creating it wide and tightening afterwards leaves the window
+    // open. `rename` preserves the descriptor, so the config inherits it.
+    claim_scratch(path, first, create_new_private).map_err(|e| match e {
+        ScratchClaimError::AllTaken => format!(
+            "Failed to create temp config: {SCRATCH_ATTEMPTS} scratch names next to the config were all in use"
+        ),
+        ScratchClaimError::Io(e) => format!("Failed to create temp config: {e}"),
+    })
+}
+
+/// Why no scratch name could be claimed.
+enum ScratchClaimError {
+    /// All [`SCRATCH_ATTEMPTS`] candidate names were in use.
+    AllTaken,
+    /// An I/O failure other than a collision.
+    Io(std::io::Error),
+}
+
+/// The one candidate loop behind every rename-based writer here: try
+/// [`SCRATCH_ATTEMPTS`] names from `first`, creating each with `create`
+/// (which must be exclusive). A name already in use is someone else's
+/// scratch file: not ours to write to, and not ours to delete either.
+fn claim_scratch(
+    path: &Path,
+    first: u64,
+    create: impl Fn(&Path) -> std::io::Result<std::fs::File>,
+) -> Result<(std::fs::File, PathBuf), ScratchClaimError> {
     for seed in first..first.wrapping_add(SCRATCH_ATTEMPTS) {
         let candidate = scratch_candidate(path, seed);
-        // Private AT CREATION, not on the finished file. A config can hold a
-        // bearer token, and the scratch file sits next to it for the whole
-        // write; creating it wide and tightening afterwards leaves the window
-        // open. `rename` preserves the descriptor, so the config inherits it.
-        match create_new_private(&candidate) {
+        match create(&candidate) {
             Ok(file) => return Ok((file, candidate)),
-            // Someone else's scratch file. Not ours to write to, and not ours
-            // to delete either.
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(format!("Failed to create temp config: {e}")),
+            Err(e) => return Err(ScratchClaimError::Io(e)),
         }
     }
-    Err(format!(
-        "Failed to create temp config: {SCRATCH_ATTEMPTS} scratch names next to the config were all in use"
-    ))
+    Err(ScratchClaimError::AllTaken)
 }
 
 /// Rename `from` over `to`, retrying while the OS reports a transient refusal.
