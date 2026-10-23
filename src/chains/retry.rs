@@ -20,6 +20,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::debug;
 
+use crate::jitter::full_jitter;
 use crate::{Error, Result};
 
 // ============================================================================
@@ -139,7 +140,7 @@ where
                 // instant. Spreading each sleep uniformly over [0, bound] is
                 // what breaks that synchronisation; `backoff_for` remains the
                 // deterministic ceiling, which is what its own tests pin.
-                let delay = jittered(bound);
+                let delay = full_jitter(bound);
                 debug!(
                     step = step_name,
                     attempt,
@@ -152,24 +153,6 @@ where
             }
         }
     }
-}
-
-/// Spread a delay uniformly over `[0, bound]` -- the "full jitter" this module
-/// has always claimed.
-///
-/// Without it, N callers backing off from the same failure wake together and
-/// hit the recovering service as one burst, which is the herd the exponential
-/// growth alone does not prevent.
-fn jittered(bound: Duration) -> Duration {
-    if bound.is_zero() {
-        return bound;
-    }
-    // NANOSECONDS, not milliseconds. Rounding to whole milliseconds collapses
-    // any sub-millisecond backoff to zero, so a policy built with a 100us
-    // initial delay would busy-retry with no wait at all -- a regression the
-    // exact-exponential code did not have.
-    let nanos = u64::try_from(bound.as_nanos()).unwrap_or(u64::MAX);
-    Duration::from_nanos(rand::random_range(0..=nanos))
 }
 
 /// Classify whether an error warrants a retry attempt.

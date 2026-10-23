@@ -162,6 +162,7 @@ impl Gateway {
                 Arc::clone(&cap_backend),
                 shutdown_tx.subscribe(),
                 Some(self.backends.catalogue_hook()),
+                self.config.capabilities.stale_check_secs,
             ) {
                 Ok(w) => {
                     info!("Capability hot-reload enabled");

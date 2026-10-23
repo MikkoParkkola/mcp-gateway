@@ -14,7 +14,7 @@ use crate::events::upstream_need::Interest;
 fn a_failed_refill_is_retried_once_after_the_cooldown() {
     let shared = shared();
     let due = || shared.tools.lock().due;
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, PeerEra::Modern);
     // A notice the hub has not heard of, due now.
     *shared.tools.lock() = ToolsDebt {
         due: Some(Instant::now()),
@@ -37,7 +37,7 @@ fn a_failed_refill_is_retried_once_after_the_cooldown() {
         "retried a cooldown after the failure"
     );
     // A new session keeps the retry and its time.
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, PeerEra::Modern);
     assert!(!state.take_due_refill(), "no retry inside the cooldown");
     shared.tools.lock().due = Some(Instant::now());
     assert!(state.take_due_refill());
@@ -71,7 +71,7 @@ async fn a_silent_retry_keeps_a_readers_fill() {
     reload.to(true).await;
     let backend = reload.registry.get("b").expect("b registered");
     let shared = shared();
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, PeerEra::Modern);
     for (unannounced, kept) in [(false, true), (true, false)] {
         backend.fill_tools_for_test().await;
         assert!(backend.has_cached_tools(), "the reader's fill is cached");
@@ -100,7 +100,7 @@ fn a_tools_notice_owes_a_refill_due_within_a_tick() {
         .lock()
         .add(&Interest::ToolsChanged)
         .expect("room");
-    let mut state = State::new(&shared, Era::Legacy);
+    let mut state = State::new(&shared, PeerEra::Legacy);
     let noted = Instant::now();
     state.note(changed(NoteKind::ToolsChanged), false);
     let debt = shared.tools.lock();
@@ -149,7 +149,7 @@ async fn a_due_refill_waits_for_the_last_change_to_be_announced() {
     reload.to(true).await;
     let backend = reload.registry.get("b").expect("b registered");
     let shared = shared();
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, PeerEra::Modern);
     backend.fill_tools_for_test().await;
     *shared.tools.lock() = ToolsDebt {
         due: Some(Instant::now()),

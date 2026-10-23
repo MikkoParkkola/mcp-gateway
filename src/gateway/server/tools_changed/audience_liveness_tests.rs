@@ -399,8 +399,8 @@ fn r_live_1_queued_get_a_change_parked_past_not_after_is_not_written() {
 // resume the session), and `trusted_proxies` is build-time only.
 
 /// The attach-time snapshot of `client_id`, as the agent middleware builds it.
-fn attached(client_id: &str) -> crate::gateway::oauth::AgentIdentity {
-    crate::gateway::oauth::AgentIdentity {
+fn attached(client_id: &str) -> crate::gateway::oauth::OAuthAgentIdentity {
+    crate::gateway::oauth::OAuthAgentIdentity {
         client_id: client_id.to_string(),
         agent_name: client_id.to_string(),
         scopes: Vec::new(),

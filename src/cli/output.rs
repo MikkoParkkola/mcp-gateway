@@ -8,6 +8,7 @@
 //! - `plain` — minimal text for scripting
 
 use crate::cli::stdout::println;
+use crate::truncate::{Budget, Suffix, truncate};
 use serde_json::Value;
 
 /// Output format selection for CLI commands.
@@ -229,13 +230,9 @@ fn print_row(obj: &serde_json::Map<String, Value>, keys: &[&str], widths: &[usiz
     println!("{}", cols.join("  "));
 }
 
+/// `s` cut to at most `max` bytes, `...` included.
 fn truncate_str(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        // A byte cut inside a multi-byte character would panic: back off to its start.
-        format!("{}...", &s[..s.floor_char_boundary(max.saturating_sub(3))])
-    }
+    truncate(s, Budget::Bytes(max), "...", Suffix::Within)
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────

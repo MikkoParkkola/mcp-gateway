@@ -16,7 +16,7 @@ use super::platform::{
     open_record, rename, sync_dir, sync_file,
 };
 use super::{
-    CommitHook, CommitStage, Entry, LEASE, RECORD_MODE, STORE_MODE, StoreError, StoreLimits,
+    CommitHook, Entry, LEASE, RECORD_MODE, STORE_MODE, StoreError, StoreLimits, StoreWriteStage,
     TEMP_ATTEMPTS, fits, is_record_name, record_name,
 };
 use crate::fs_lock::{DirPin, ExclusiveFileLock};
@@ -555,6 +555,7 @@ pub(super) enum Fault {
 /// Write one record durably: private temp, payload, file sync, rename, directory
 /// sync. Failure before the rename is a clean refusal; failure at or after it
 /// leaves durability uncertain, which is the caller's cue to poison readiness.
+// Not `config_persistence::write_atomic`: its `AfterRename` outcome and commit hook.
 pub(super) fn write_record(
     dir: &Path,
     name: &str,
@@ -566,13 +567,13 @@ pub(super) fn write_record(
     // earlier attempt and is stepped over, never deleted.
     let (file, temp) = create_temp(dir, name, counter).map_err(Fault::BeforeRename)?;
     let staged = stage_temp(file, bytes, hook)
-        .and_then(|()| fire(hook, CommitStage::Rename))
+        .and_then(|()| fire(hook, StoreWriteStage::Rename))
         .and_then(|()| rename(&temp, dir.join(name)));
     if let Err(error) = staged {
         let _ = fs::remove_file(&temp);
         return Err(Fault::BeforeRename(error));
     }
-    fire(hook, CommitStage::DirectorySync)
+    fire(hook, StoreWriteStage::DirectorySync)
         .and_then(|()| sync_dir(dir))
         .map_err(Fault::AfterRename)
 }
@@ -601,14 +602,14 @@ fn create_temp(dir: &Path, name: &str, counter: &AtomicU64) -> io::Result<(fs::F
 fn stage_temp(mut file: fs::File, bytes: &[u8], hook: Option<&CommitHook>) -> io::Result<()> {
     use std::io::Write as _;
 
-    fire(hook, CommitStage::Write)?;
+    fire(hook, StoreWriteStage::Write)?;
     file.write_all(bytes)?;
-    fire(hook, CommitStage::Flush)?;
+    fire(hook, StoreWriteStage::Flush)?;
     sync_file(&file)?;
-    fire(hook, CommitStage::FileSync)
+    fire(hook, StoreWriteStage::FileSync)
 }
 
-pub(super) fn fire(hook: Option<&CommitHook>, stage: CommitStage) -> io::Result<()> {
+pub(super) fn fire(hook: Option<&CommitHook>, stage: StoreWriteStage) -> io::Result<()> {
     hook.map_or(Ok(()), |hook| hook(stage))
 }
 

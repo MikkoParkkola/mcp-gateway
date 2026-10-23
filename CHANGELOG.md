@@ -277,6 +277,1018 @@ Evidence for each highlight, file and test: `src/config/mod.rs` and `tests/mik_7
   token is stripped before telemetry. A surfaced tool run as a task carries its
   `_meta` token to dispatch. See UPGRADING-4.0 item 46.
 
+## [4.0.0-beta.3] - 2026-10-06
+
+> **Pre-release.** The third 4.0 beta, tagged without a changelog section and reconstructed
+> from the `v4.0.0-beta.3` tree's own fragment assembly. Included again in 4.0.0, which is
+> cumulative; this section is history.
+
+### Highlights
+
+The 4.0 line serves MCP protocol revision 2026-07-28 by default beside 2025-11-25 and earlier:
+stateless `POST /mcp` with no handshake, `server/discover`, retry-based input requests, a
+caller-scoped `subscriptions/listen`, the tasks extension and optional idempotency keys, with
+one replica while it is on. For teams, each caller now sees and invokes only what it was granted,
+and cached results, notifications and subscriptions stay per caller. SSO `role_mapping` admin
+rules grant full gateway admin, key-server OIDC rules need an issuer and a verified email, and
+with auth on the tool-call audit log is required and fails closed. API keys are SHA-256 digests
+with an optional expiry that is enforced, and `/metrics` has its own token. The gateway refuses to start on an
+unrecognised config key, a config file other users can read (Unix by file mode, Windows by the file's access list), an unresolved secret
+(except `server.metrics_token`, which warns and keeps `/metrics` closed, and a personal-account `client_secret_ref`, which is read only when a token is requested) or, with auth on, cleartext
+HTTP on a network bind. The Helm chart now installs with its defaults and serves once the `mcp-gateway-auth` Secret exists. What is still open for 4.0.0 is under *Known gaps* in the beta.2 notes.
+
+Evidence for each highlight, file and test: `src/config/mod.rs` and `tests/mik_7214_acs.rs` (MCP 2026-07-28); `src/gateway/router/authorization.rs` and `tests/a0_per_caller_cache.rs` (per-caller access); `src/control_plane/role_mapping.rs` and `src/gateway/router/sso_admin_tests.rs` (SSO admins); `tests/d1_audit_required.rs` (audit); `src/config/features/api_key.rs` and `tests/e4_hash_key_cli.rs` (keys); `tests/c1_unrecognised_config_keys.rs`, `src/config/secret_file_windows_tests.rs` and `src/gateway/server/cleartext_tests.rs` (refusing to start); `deploy/helm/mcp-gateway/values.yaml` (Helm chart).
+
+### Added
+
+- **The task store and the personal-account store run on Windows.** Directories and files are
+  created owner-only and checked on every open (owner, grants, inheritance, junctions, network
+  and non-ACL volumes), the directories are held open while the store runs, and custody uses a
+  Windows file lock. A 3.x token file other accounts can read is refused with the `icacls` lines
+  that fix it. One Windows-only module uses `unsafe` for the Win32 security calls (ADR-016).
+  (#1473)
+- `mcp-gateway doctor --start-stdio`: starts each stdio backend through the gateway's own
+  launch (env, cwd) and reports why one that dies before `initialize` died: its exit status
+  and a bounded, redacted stderr tail. Opt-in, since it runs the configured commands; a
+  backend under a runtime profile is skipped. (#526)
+- **The 3.5.1 upgrade rehearsal runs in CI.** A new `upgrade-rehearsal` job upgrades the
+  v3.5.1 release binary to the pull request's build, turns the modern protocol off, rolls back,
+  and fails when config, credentials, permissions, mounts or active callers do not survive.
+  `scripts/release/nfr_upgrade_1_rehearsal.sh` now exits 1 when any check fails.
+
+- **WebSocket is a backend transport (`ws_url`).** `WebSocketTransport` existed but no config
+  reached it. A `ws_url` backend now connects with its static `headers` on the upgrade, is bounded
+  by the backend `timeout` (the upgrade included), fails in-flight calls at once when the socket
+  drops, and never logs more of its URL than the origin. `mcp-gateway add`, the admin UI and
+  discovery store a `ws://`/`wss://` URL as `ws_url`. Refused on `ws_url`: cleartext `ws://`
+  credentials off-host (without `allow_cleartext_credentials`), `oauth`, identity propagation,
+  header or query `secrets`, and a stateless (2026-07-28+) `protocol_version`. UPGRADING-4.0 §47.
+
+- `mcp_backend_rate_limited_total{backend}` counts requests and notifications refused by a
+  backend's own `failsafe.rate_limit` before dispatch. Those refusals are excluded from the
+  error budgets and the circuit gauge (F23), so this is where operators see them. See
+  `docs/UPGRADING-4.0.md` item 53 (F23b).
+
+- `file:/absolute/path` secret references wherever `env:NAME` is accepted. The file is held to the
+  item 35 mode rule, capped at 64 KiB, and has one trailing newline stripped. An empty file fails
+  the load. A reload reports a rotated file as needing a restart. Capability YAMLs are unchanged.
+  A literal secret starting with `file:` is now a reference (breaking; UPGRADING-4.0 item 44).
+  (C9, MIK-7570.SECRET.2)
+- A per-call-id ledger for stdio bursts against a client that never answers its asks: every call
+  must reach exactly one terminal response, and one client's silence must not disable the capability
+  for other callers. 194 calls run per PR; the ticket's 1026-call
+  burst (about 8 minutes) runs nightly and on a PR labelled `mrtr7b-full-burst`. (MIK-7479.STDIO.1)
+- `/metrics` counts the MCP protocol revision each inbound request asks for: `mcp_protocol_revision_observations_total{requested_revision,client,transport}` and `mcp_protocol_revision_unattributed_observations_total{client,transport}`, with revisions and client names folded into a fixed label set (`other` for the rest). A stdio gateway also keeps a restart-safe, labels-only aggregate in `protocol-revision-telemetry/window.json` under its data directory. (#480)
+- **A stdio backend's progress reaches the client while the call is running.** 3.x dropped every notification a stdio backend sent. `notifications/progress` is now delivered to the call whose request carried that `progressToken`, as it arrives and under the client's own token. Only progress is routed this way, a token must belong to a live call, and a second call cannot claim a token that is already in use. (#600)
+- **Container images are published for `linux/arm64` as well as `linux/amd64`.** A release tag's image, its `-full` variant and the image built from `main` are each a multi-platform list, built natively on each architecture and started once per architecture before publishing. 3.x published amd64 only. (#568, #602)
+- **A single-user HTTP gateway serves the operator's own managed accounts.** With `auth.enabled: true`, `auth.single_user: true`, at most one API key, no key-server OIDC issuer and no `accounts.adapters`, a caller that authenticated with the bearer token or the one API key is treated as the sole operator, so the operator's `personal_managed` accounts (including credentials migrated from 3.x) serve its calls. A caller admitted anonymously through `public_paths` never gets them, and any other auth setup keeps requiring a verified end-user identity. This is an assertion by the operator, not a proof: people who share that credential share its stored accounts. (#661)
+- **A backend with `identity_propagation` lists its tools, resources, resource templates and prompts per caller.** In 3.x these lists were fetched once without any caller's credential and every caller was shown the same catalogue. A caller with a verified identity now gets the lists the backend returns for that caller's own credential, on its own backend session, with `session_mode: per_user` and `session_mode: stateless` alike; a caller with no verified identity still sees the shared list, and a `required` backend is left out of a list whenever the fetch would not carry the caller's own credential. A caller's cached tool list is refetched once it expires, and a caller's backend session, with its cached lists, is dropped when a grant reload revokes that caller's grant. Backends without `identity_propagation` are unchanged. (#666, #672, #707, #727, #731, #734)
+- **`mcp-gateway accounts migrate-credentials` keeps a 3.x OAuth credential instead of re-authorizing.** Run offline, once per backend, as `mcp-gateway accounts migrate-credentials --config PATH --descriptor-id ID --legacy-issuer URL` (add `--legacy-backend-name NAME` when the backend was renamed since 3.x); it reads the 3.x token file and writes the credential into the per-principal account store under the `accounts.descriptors` entry named. It needs an explicit `--config`, refuses rather than guesses when the issuer does not match the descriptor or the credential could not be used, and never modifies, renames or deletes the 3.x file, so a refusal leaves the deployment as it was. Without it, each OAuth backend asks for authorization once on its next use. (#680)
+- **Grant changes apply to a running gateway on reload.** In 3.x the identity-grants file was read only at startup, so `mcp-gateway identity grants grant` or `revoke` took effect at the next restart. A running gateway now re-reads the file on every config reload: the `gateway_reload_config` meta-tool, the admin UI reload, and the automatic reload after `config.yaml` or an env file changes (editing the grants file alone does not trigger one). The reload report carries an `identity grants reloaded (...)` line with the added, removed and revoked counts, even when the config half is refused. A file that cannot be read or parsed is refused and the grants in force stay; a `busy` refusal means another grant reload was running. Restoring an older grants file re-grants what was revoked since, shown as a negative `revoked` count. See `docs/identity_grants.md`. (#755)
+- `security.posture: standard | hardened` (default `standard`, which changes nothing). As of
+  this release `hardened` enforces only: the context-integrity preset is raised to at least
+  `team_shared` (`enterprise_strict` is kept) with `non_bypassable` on; the firewall and
+  anomaly detection are on and an anomaly score at the block threshold blocks (1.0 unless set
+  within `[0.9, 1.0]`; below 0.9 refuses start); a call whose transition cannot be learned
+  because the learned-pair map is full is refused; and startup is refused on a build without
+  the `firewall` feature. Changing the posture needs a restart; a reload that changes it is
+  refused. A multi-user deployment running `standard` logs one startup warning and gets a
+  `doctor` `security-posture` finding (advisory; the exit code is unchanged).
+- security: core of multi-gateway Ed25519 signature chaining (ASI07): link signing, and chain verification pinned to the origin gateway and last signer; not yet wired into the invoke paths (#1954)
+- The `identity grants` CLI now appends one line per successful add, `--replace` and revoke to a journal beside the grant file (`<grant file>.journal.jsonl`, mode 0600), recording the verb, grant id, row digests before and after, expiry, time and the OS account as an unauthenticated hint. A lock file beside the grant file spans the write and the append.
+- Identity grant changes are now governance audit records: the gateway ingests the `identity grants` CLI journal exactly once, across crashes, at every start and grant reload (the file watcher included), records direct grant-file edits as `out_of_band` and lost history as `indeterminate`, and records the active grants each start serves (`loaded`, then `loaded_complete` with the count) before accepting a request. Audit events gain an optional `grant_change` field.
+- **Remote backends without signed provenance are named.** Signed provenance for remote backends is opt-in. With it off, an enabled HTTP, A2A or WebSocket backend that has no signed metadata now appears in one startup warning, on HTTP and stdio starts, and in `doctor` as a `remote_provenance` warning. Provenance stays off by default. See `docs/UPGRADING-4.0.md` item 89. (#2195)
+- The Helm chart renders API-key and OIDC auth: `auth.mode: api_keys` renders one `auth.api_keys` entry per `auth.apiKeys` item, and the Secret holds each key's `hash-key` digest. `auth.mode: oidc` renders the key server from `auth.oidc`. Neither gets the master bearer. `extraEnv` and `envFrom` carry backend secrets and refuse `MCP_GATEWAY_*` and chart-owned names. `persistence` keeps the state volume on a claim, with one replica and `Recreate`. Existing `credential` and `mesh` values render byte for byte as before. (MIK-7570.CHART.2)
+- security: core of verbatim cross-principal relay detection (ASI10, partial): winnowed fingerprints, bounded per-process state and the relay predicate; not yet wired into the request or response paths (#2433)
+- Under `security.posture: hardened`, an HTTP MCP request with no per-caller identity is refused with 403 (`-32600 "per-caller identity required (security.posture=hardened)"`) before its body is read, on `/mcp` and `/mcp/{name}`. A proven subject (IdP, trusted proxy, Access, mTLS, agent JWT) or an API key configured with the new `kind: personal` identifies a caller; a shared key, the static bearer and a dashboard session do not. `auth.api_keys[].kind` is `shared` by default. Upgrade guide item 106. (#2465)
+- **Invocation records name the tenants a call touched.** With `security.firewall.tenant_guard.arg_keys`
+  set (the guard itself may stay off), each transparency-log `invocation` record carries `tenants`:
+  the tenant ids named by the request and by the tool result (text-JSON included), each as the 16-hex
+  argument hash, sorted, never raw. Beside it is `data_classes` from the context-integrity kernel.
+  Cache hits and idempotent replays are marked `attribution: "cached_delivery"`. At most 1024 tenants
+  are kept per record, with `tenants_total` past that. The firewall audit `request` line carries the
+  same hashed `tenants`. Records of calls that name no tenant are unchanged. (#2475, MIK-7116.MIN.1)
+- stdio honours `notifications/cancelled`. The gateway stops its own handling of a cancelled `tools/call` at once, including one waiting for the client's answer to an elicitation, and never answers it; a backend that already received the call may still finish its work. A keyed call cancelled after it started is refused on retry rather than run twice. Ids that are not in flight, and `initialize`, are ignored. At end of input, stdio mode gives in-flight calls and its output writer 30 seconds together, even when the client has stopped reading its output; the shutdown steps after that are not yet bounded. (#2519)
+- A stdio gateway keeps durable tasks for its local operator in `<tasks.store_dir>/stdio`: it serves `tasks/get`, `tasks/update` and `tasks/cancel`, a task survives a restart or a moved store directory, and no HTTP caller can read, cancel or update it. If that store cannot be opened, for example because another stdio gateway holds it, stdio serves without tasks and does not advertise them.
+- **A recovered upstream task is recorded when it settles.** When a backend answers a task-augmented call with its own task, the gateway now writes a `task_recovery` invocation record as it settles that task, from the worker or from the owner's `tasks/get`, carrying the tenants and data classes the response gates saw. The submission record gains the same `task_id`. Under `FailClosed` a failed write settles the task `-32005` with no backend content. See UPGRADING-4.0 #113. (#2545)
+- **MCP compatibility layer, documented.** `docs/PROTOCOL_COMPATIBILITY.md` lists which client and backend revision pairings work, which mid-call requests the gateway translates, and which it refuses, with the test behind each row. (#2585)
+- MCP Events (opt-in, `events.enabled`): `events/list`, `events/subscribe` and `events/unsubscribe` over HTTP, with callback verification through an SSRF-pinned client, durable subscriptions and per-principal caps (MIK-7630).
+- security: verbatim cross-principal relay detection on the direct backend route (`/mcp/{backend}`), off by default. New `security.firewall.collusion` section (`action: off | observe | block`, `window_secs`, `min_matches`, `common_principals`, `sources`, `non_egress`), checked at load. Under `block`, a call that sends out content another caller was delivered is refused with `-32002` (HTTP 403) before dispatch; under `observe` it is logged and audited. Known limits: the meta-MCP route follows in a later change; only the first and last 3 KiB of each delivered result are compared, so content from the rest of a larger result is not detected; verbatim text only (#2644)
+- MCP Events delivery (MIK-7630 I2): subscribed events now reach their callback through a durable outbox with signed, retried, rate-limited and audited delivery, dead letters with caps, inbound webhook dedupe, and the firewall, tenant guard, budget and access checks applied to every attempt (#2651).
+- security: verbatim cross-principal relay detection now also covers the meta-MCP route (`gateway_invoke`, surfaced tools, chains, playbooks, tasks, stdio and bridged input rounds), under the same `security.firewall.collusion` settings. Under `block`, a call that sends out content another caller was delivered is refused with `-32002` before dispatch, and its idempotency key is released. Prompt and resource reads are not covered on either route (#2678)
+- **CLI capabilities run.** A capability with `service: cli` used to load and never run. It now runs its command with no shell, from arguments built out of validated parameters (a parameter is always exactly one argument and can never become an option), in a private directory with a cleared environment, an output cap, a timeout and whole-tree teardown. Only pinned capabilities whose command is on `capabilities.process_commands` run; `capabilities.process_execution: disabled` turns it off. See UPGRADING-4.0 item 127. (#2697)
+- MCP Events deliveries carry the gateway's provenance receipt in `_meta`, inside the signed body, signed with the gateway's provenance key when provenance stamping is on (#2704).
+- `mcp-gateway add <name>` now writes a built-in server's env or header references, its OAuth stanza and its HTTP dialect, and writes it disabled (with the reason) when a reference does not resolve or the server can reach any address; `mcp-gateway init` enables the servers that need no account; `mcp-gateway list --available` browses the library (MIK-7787).
+- MCP Events dead letters (MIK-7630 I6): admins can list and replay dead-lettered deliveries through `/ui/api/events/dead-letters` or `mcp-gateway events dead-letters`; a replay re-checks access and re-scans the payload, and `gateway_search_tools` and `gateway_search` now return visible event types (#2709).
+- Events: `task.settled` and `backend.<server>.tools_changed` are subscribable event types (owner-only and backend-visible respectively), started and stopped with their first and last subscriber. Gated by `events.sources`.
+- `mcp-gateway add` knows seven more servers (time, git, chrome-devtools, grafana, mongodb, supabase, hubspot), 35 in all; documented counts are now checked against the registry (MIK-7787).
+- Eight REST capabilities for Brave, Tavily, Firecrawl and Sentry join the bundled catalogue; each is listed once its API key is set (MIK-7787).
+- MCP Events: a subscription to a backend upstream-notification event on a backend that cannot offer it (SSE-handshake HTTP, A2A, identity propagation or a personal account, per-user OAuth on a multi-user gateway) answers `-32014` naming the reason instead of subscribing silently (MIK-7630, #2691).
+- **MCP capabilities run, and the catalogue is executable.** A capability with `service: mcp` now starts its declared stdio server for the call. The `gws_*` Google Workspace capabilities run through the `gws` tool, `cloudflare_manage` is replaced by Cloudflare API v4 REST capabilities, `gmail_save_attachment` saves into `capabilities.files.downloads`, and `metacognition_verify` is removed. `trawl_extract` and `cisco_scanner` `scan_mcp_server` stay held until their network access can be confined. See UPGRADING items 132 to 136.
+- **Event subscriptions are audited, and an event delivery names the firewall verdict.** Subscribe, refresh, verification, unsubscribe, dead-letter and replay each write one governance record to the audit log; every attempt record carries the firewall verdict of its payload; an attempt with no audit logger is not sent. (#2759)
+- MCP Events: a backend's `resources/updated`, `resources/list_changed` and `prompts/list_changed` notifications become the events `backend.<name>.resource_updated`, `resources_changed` and `prompts_changed` for stdio, WebSocket and streamable HTTP backends, listened for only while an event subscription needs them (MIK-7630, #2767).
+- **MCP capabilities: operation requirements, a bounded wait, and pyghidra.** An operation can list the parameters it needs (refused before a process starts), a tool call can wait for background work to finish, and `pyghidra_reverse` now runs (eleven operations, ten of them read-only; import waits for analysis). Calls from before a capability unload or reload no longer start a process. The public capability count is 136; `trawl_extract` stays held.
+- MCP Events: a backend's own `notifications/tools/list_changed` now produces `backend.<name>.tools_changed` for stdio, WebSocket and streamable HTTP backends, as well as the gateway's own tool-set announcements (MIK-7630, #2797).
+- Tasks on `POST /mcp` now carry an input round: a backend that asks for input parks the task as `input_required`, `tasks/update` supplies the answers, and the gateway resumes the same call (MIK-7311).
+
+### Changed
+
+- **One gateway writes an audit log path.** The transparency log takes a writer lease on
+  `<path>.lock` at startup and holds it; a second gateway on the same path is refused with an
+  error naming the path, whatever the auth setting. A restart overlap waits up to
+  10 seconds (not configurable). Appends no longer take a file lock.
+  `audit show` and the SIEM exporter rescan once when the log rotates under them, and I/O errors
+  from the log name the operation and the path. See UPGRADING item 49.
+- A `tools/call` carrying `inputResponses` without the `requestState` this gateway issued is
+  refused with `-32602` before dispatch instead of being forwarded as a fresh call. The
+  idempotency key is released. UPGRADING-4.0 item 55. (MIK-7325.RETRY.1)
+
+- **UPGRADING-4.0 item 50:** the invocation, delivery-attempt, direct-route and
+  identity-propagation audit appends run off the request threads and are bounded (5 s waiting,
+  5 s writing). A stalled audit disk answers 503 and marks the log stalled (`/readyz` 503
+  `stalled`, `mcp_audit_append_timeouts_total`) instead of exhausting the workers.
+- **Readiness waits for the capability catalogue.** `/readyz` and `/health` answer 503 until
+  the startup capability scan has read every directory, so a pod or container is no longer
+  sent traffic while its catalogue is empty; the admin `/health` view adds
+  `capability_backend.loaded`. The compose healthcheck probes `/readyz`, and the example
+  `Gateway` runtime profile probes `/readyz` and `/livez`. UPGRADING-4.0 §65.
+
+- **BREAKING (UPGRADING-4.0 item 49):** the audit (transparency) log rotates at 64 MiB and keeps
+  12 sealed segments, recording each deletion as a signed `audit_segment_expired` record.
+  `security.transparency_log.rotation` sets `max_segment_bytes`, `max_segment_age_secs`,
+  `retain_segments` and `on_disk_full` (`expire_oldest` or `refuse`). `audit verify` reads every
+  segment, detects a deleted or truncated active file through `transparency.jsonl.hwm`, and gains
+  `--archive`. The SIEM exporter and the governance audit view follow segments; the governance
+  log rotates at 16 MiB x 4. Helm: `audit.rotation.*`, with a render guard on the emptyDir size.
+- **Contributors: the 800-line file-size gate no longer counts a module declaration.** A
+  `mod child;` line and the inert attributes directly above it (`#[cfg(test)]`,
+  `#[path = "..."]` and the like) do not count toward a file's size, so attaching code
+  extracted out of an over-ceiling file is not scored as growth. An inline `mod x { ... }`,
+  a macro attribute and a `cfg_attr` still count. The baseline is re-recorded under the new count, with
+  every row lower or equal. (#609)
+- **The file-mode check covers every secret-bearing file (breaking).** An mTLS key, an OAuth
+  token file, a capability `file:` credential or a `tls issue-*` `--ca-key` that other users can
+  read is refused. The mTLS certs and CRL, the identity-grants file and the control-plane
+  collections may be read by others but not changed by them. `config export` writes the client
+  config it edits as `0600`. UPGRADING-4.0 item 54. (F18)
+
+- **Breaking: a backend that fails to start counts toward its circuit breaker, on every
+  transport.** `Error::CircuitOpen(String)` becomes `CircuitOpen { backend, last_failure }`, and
+  the refusal reads `...; last failure: <start error>`. UPGRADING-4.0 §48.
+- **tungstenite's handshake logging is capped at DEBUG**, even under `RUST_LOG=trace`: its TRACE
+  line prints the upgrade request with its query string and headers.
+- **Admin actions write an `admin_action` audit record and are refused while the
+  audit log is down.** Admin meta-tool calls, allowed or refused, and every
+  `/ui/api/*` request other than `GET` or `HEAD`, control-plane POSTs included,
+  record who acted (issuer and subject for an SSO admin), the tool or route
+  template, and the outcome; bodies and queries are never logged. With auth on
+  they answer 503 while the log cannot be written. See `docs/UPGRADING-4.0.md`
+  item 51.
+- **A backend that refuses a managed personal account's token (HTTP 401) forces one refresh of
+  that token**, then answers with the reconnect offer when the provider has revoked the grant,
+  or with `recovery.error_code` `UPSTREAM_AUTH_REJECTED` (`retry: true`) or
+  `UPSTREAM_AUTH_REJECTED_PERSISTENT` (`retry: false`). At most one forced refresh per token
+  revision, recorded durably. A 401 or 403 from an HTTP backend is no longer retried. A downgrade
+  to an earlier 4.0 beta after a forced refresh is unsupported. See UPGRADING-4.0 item 61.
+  (A11, MIK-7570.RECONNECT.1)
+- The MCP registry record (`server.json`) lists a `cargo` package beside the container image and declares the environment variables the gateway reads (`MCP_GATEWAY_CONFIG_DIR`, the `GATEWAY_ATTESTATION_*` trio, `SYMPHONY_PLUS_ATTESTATION`, `MCP_GATEWAY_FIREWALL_SKIP_KEYS`, `NO_COLOR`), none required and only the attestation signing key marked secret. The crate's documentation link points at docs.rs. (#518)
+- A tool listed in `meta_mcp.surfaced_tools` whose backend reports a structurally invalid input schema (not a JSON object, or failing the capability loader's schema checks) is withheld from `tools/list` with a warning in the log, and a call to it by name is refused as `-32601 Unknown tool`; the backend's other tools stay listed. (#554)
+- **A bridged input exchange that runs out of rounds is resumable.** Instead of `-32003`, the
+  caller gets the backend's last question with a sealed continuation of that round, and
+  resending with the answers resumes where the backend stopped. The last round is held to the
+  client's declared capabilities first. `BridgeError` in the library's `input_bridge` module is
+  now `#[non_exhaustive]` and gains an `Undeclared` variant. See UPGRADING-4.0 item 62. (#569)
+- **A POST whose `MCP-Protocol-Version` header names a revision the gateway does not serve is refused.** 3.x ignored this header on `POST /mcp` and answered anyway. The gateway now answers HTTP 400 with JSON-RPC error `-32022` ("unsupported protocol version") and lists the stateless revisions it serves in `data.supportedVersions`, which is empty when `server.modern_protocol` is off. `2024-10-07` counts as unserved. A request without the header, or with a served revision, is unchanged. (#574)
+- **Tool search understands common abbreviations and puts an exact name first.** `gateway_search_tools` now matches a short form against its full word and back (`k8s`/`kubernetes`, `cfg`/`config`/`configuration`, `msg`, `svc`, `pkg`, `db`, `img`, `perms`, `creds`), scored at the same discount as a synonym match; the added matches can only add tools to a query's results, never remove one. A tool whose name equals the query, ignoring case, now ranks above every other result, and among equal scores a name the query meets on a word boundary ranks higher. (#607)
+- CI: the container image build and CodeQL scanning run once per merge to the release branch instead of on every pull-request push (image inputs still build on the pull request; pull requests into `main` are unchanged). Maintainer `throwaway/` test runs need only one test job (hosted for now; a dedicated self-hosted arm64 runner that admits only same-repository branches is prepared). Mutation proofs run as one batched workflow per pull request, with a per-mutant RED / SURVIVED / VOID result.
+- **`DiscoveredServer` carries `env` and `headers` and is `#[non_exhaustive]`.** Library code builds it with `DiscoveredServer::new`; the new fields are `SecretMap`s whose `Debug` and `Serialize` show keys only (UPGRADING-4.0 item 80).
+- With auth on and identity grants on, a governance store that cannot open now refuses the start (HTTP and `serve --stdio`) instead of starting without it. A grant reload whose audit plan cannot be written is refused and keeps the live grants; a change applied but not recorded stays applied and the reload outcome says `UNRECORDED`. See UPGRADING-4.0 item 79.
+- CI: a pull request that changes only documentation (`docs/`, or Markdown/text at the repository root) skips the non-test jobs (clippy, feature matrix, Kani, Helm/kind, smokes, image build); every test job and the doc, claims and secret checks still run, and a failed decision runs everything (#2091)
+- Library API: `MigratedCredential` gains a public `reachability` field and is `#[non_exhaustive]`; build it only through `migrate_legacy_credential_offline`, and destructure it with a trailing `..`.
+- **`kubernetes controller --watch --format json` prints JSON Lines.** Each reconcile cycle prints one compact JSON document on its own line, so a reader can parse the stream line by line. It used to print indented JSON over many lines. Without `--watch` the output is unchanged. See `docs/UPGRADING-4.0.md` item 86. (#2135)
+- **The 4.0.0 upgrade notice names four more changes**: the `-32022` refusal of an unserved `MCP-Protocol-Version` header, agent identity that needs a proven principal, the six meta-tools that leave the default `tools/list`, and the key server's refusal of a token request outside its policy. Each is now an UPGRADING-4.0 item (88-91). (#2205)
+- Added a stdio test showing a legacy client whose `initialize` handshake omits `elicitation` is never sent an `elicitation/create` by the input bridge (#1991).
+- Windows integration fixtures no longer share one task store, so spawned test gateways stop refusing each other (#1142).
+- Single-quote Windows paths in YAML `env_files` test fixtures so `C:\Users` is not read as an escape (#1142).
+- Check out text files as LF on every platform so byte-exact docs and claims tests pass on Windows (#1142).
+- Test fixtures: `HttpGateway` children default to their own task store, fixing Windows store contention (Part of #1142).
+- **BREAKING (library API):** `Backend::evict_identity_slots` and `Backend::evict_idle_per_user_entries` are now synchronous; callers drop `.await` (#2245).
+- **BREAKING (library API):** `Error` has a new variant, `IdentitySlotsExhausted`; exhaustive matches on `Error` need an arm (#2300).
+- Retired config keys load again, with one warning each (once per key per config file), instead of refusing the whole config: `backends.<name>.idle_timeout`, `backends.<name>.circuit_breaker`, `server.ws_port` (no listener opens) and `server.request_timeout`. A config key whose own name starts with `_` or `x-` is an annotation: it loads and is never read. Entries of maps you name yourself, such as `env`, `headers` and backend names, are data and are unaffected. Every other unread key still fails the load. UPGRADING items 29, 34 and 39 are updated. (#2360)
+- Document the signed response surface, sender-only key rotation and the restart that every message-signing setting needs (#2412).
+- Docker image builds and feature-combination jobs now run after merge to the release line, main and tags, not on every pull request into the release line; the published image is built and checked exactly as before.
+- Breaking (library API), cache: a delivered `cacheScope` is never `public`. Every result the gateway sends is clamped to `private`, including a backend's own `public` on the direct route, task envelopes and webhook `message` events; `CacheScope::Public` is now uninhabited and `CacheScope::for_list` is removed. Task results stored before 4.0 with `public` are delivered as `private` (MIK-7211.PARENT.6, item 108 of the 4.0 upgrade guide). (#2474)
+- Retained stdio results (the admission ledger and the idempotency cache) are now keyed by the stdio transport itself rather than by its principal name, so a context that only shares that name gets separate entries (MIK-7272.OWNER.3).
+- Added stdio tests showing that keyless and legacy writes execute on every call, that each management tool keeps its keyed behaviour, and that a denied tool is refused before any retained result is replayed (MIK-7272.OWNER.1, OWNER.4).
+- Every capability, meta tool and backend tool is classified read-only or side-effecting as data: an explicit `metadata.read_only` in each capability YAML, a meta-tool effects table, and the declared rule for backend tools (an annotation or the operator list, else side-effecting). No client-visible change. (MIK-7216)
+- The binary crate root is back under the 800-line file ceiling (#2514).
+- The 4.0 highlights in the README, release notes and multi-user guide each cite the file or test behind the claim: `src/config/mod.rs` and `tests/mik_7214_acs.rs` (MCP 2026-07-28); `src/gateway/router/authorization.rs` and `tests/a0_per_caller_cache.rs` (per-caller access); `src/control_plane/role_mapping.rs` and `src/gateway/router/sso_admin_tests.rs` (SSO admins); `tests/d1_audit_required.rs` (audit); `src/config/features/api_key.rs` and `tests/e4_hash_key_cli.rs` (keys); `tests/c1_unrecognised_config_keys.rs` and `src/gateway/server/cleartext_tests.rs` (refusing to start; Windows by file access list: `src/config/secret_file_windows_tests.rs`); `deploy/helm/mcp-gateway/values.yaml` (Helm chart) (#2518).
+- The release workflow test suite now fails if the published-release re-check is deleted or moved before publication (#2520).
+- test: a 2026-speaking backend that refuses `initialize` and `ping` is visible to `gateway_search` and leaves its circuit breaker closed (MIK-7217)
+- **A response too large to inspect for tenants says so.** When tenant attribution is configured
+  (`tenant_guard.arg_keys`), a response whose text block exceeds the 1 MiB parse bound is still
+  not parsed, and a reply refused for its signature chain is never read. The invocation record now
+  carries `attribution: "uninspected"` for either, or
+  `"cached_delivery_uninspected"` on a cache hit or replay, rather than naming no tenant. A new
+  value of the existing field; see UPGRADING item 110. (MIK-7116.MIN.1)
+- test: the mTLS listener, the stdio chain-nonce refusal and the anomaly-blocking firewall build are covered end to end; the coverage contract records tiers and counts integration tests (MIK-7324)
+- A stdio gateway's `server/discover` answer lists `2026-07-28` in `supportedVersions` when `server.modern_protocol` is on, as an HTTP gateway's does. The setting is read once, at stdio start.
+- docs: the 4.0.0 coverage contract assigns a tier to every critical path, inventories its security-enforcing functions, and grades them with `scripts/release/critical_function_coverage.py` (MIK-7324)
+- test: the OAuth authorization-code flow, token refresh and callback telemetry are covered end to end against a mock authorization server (MIK-7324)
+- An HTTP start with anomaly detection on and no source of a caller key is refused, naming both settings.
+- Docs: the 4.0 upgrade guide states that legacy sessions expire on idle time and release their per-session state when they end (item 115). (#2563)
+- **`ReloadContext::new` returns a `Result`.** It fails when it cannot pair the registry with
+  the running config's destination policy; `ConfigWatcher::start` reports the same error. (#2597)
+- **Transport tests.** The legacy SSE handshake, session capture on responses, the OAuth bearer on the wire and stdio start refusals are now covered by tests. Three transport trace events keep their fields on one line; their output is unchanged. (MIK-7324)
+- Tests: each per-session store returns to empty once its sessions expire, and a call still running when its session ends leaves nothing after the grace pass (MIK-7681, MIK-7682). (#2601)
+- **Coverage grader.** The Critical-function grader now counts a call in a tracing macro's head-line arguments as missed and lists it as unverifiable. The stdio response debug event now reports `pending_count` in place of `pending_keys`. (MIK-7725)
+- **Task tests.** Upstream capture, read-time recovery and the descriptor preflight are now covered by tests that assert each refusal. (MIK-7324)
+- Release tooling: the bot-review sweep also requires a ledger link for any bot review whose summary body may carry a finding no inline thread does. (#2618)
+- **Bridge tests.** Tests now cover the input bridge's round-start deadline and its pass-through of gate refusals on both gate calls. (MIK-7324)
+- Tests: the account router's sign-in, unavailable, expired and retry paths are asserted for the connections page, disconnect, start and connect offer (MIK-7324). (#2623)
+- Tests: five personal-accounts functions reach the 95% coverage line, covering the forced-refresh claim, the rotated-revision mark, key-literal refusal, revocation without a client secret and a refused code exchange (MIK-7324). (#2624)
+- **Task store refusal test.** The test of a store opened under an unwritable home now requires the store's own refusal with nothing created, and checks that its permission setup blocks directory creation as well as files. (MIK-7749)
+- Release tooling: CI fails when the burndown tracker summary disagrees with the two ledger checks (MIK-7730). (#2628)
+- **Router log fields.** Six router log events (backend request, SSE connect, session delete, meta request, refused caller identity) compute their call-shaped fields before the event. Their output is unchanged. (MIK-7725)
+- **Router guard tests.** Tests cover the origin guard's numeric-origin checks on a public bind and the response pass's refusal when a result has no policy target; seven guard log events (one in the direct guard, three in the origin guard, three in the response pass) compute their counts and values before the event. (MIK-7324)
+- **Coverage runs no longer leave corrupt profiles.** Test children that run under a zero file-size limit write their profiles to a private temp directory outside the measured set. Probe children get time to finish writing their profiles before they are reaped. (#2639)
+Router guards: the direct-route response firewall reads the tool name from the validated call and the origin check folds a hostless URL into its numeric-host refusal. No behaviour change (#2642).
+- **Windows trusts SYSTEM and Administrators by SID value, not by SDDL text.** The Integrity-class check compared a rendered string per owner and per ACE; it now compares against two SIDs built once. No behaviour change. (#2643)
+- A pull request into the release line that changes an image input (Dockerfile, `docker/**`, the smoke scripts, Cargo manifests, the Helm chart, `docker.yml`) builds and smoke-tests the image before merge again. Other release-line pull requests still build only after merge.
+- **A refused grant-journal append on Windows now prints the PowerShell repair.**
+  When the journal file's access list failed the integrity check, the error named the file but
+  not the fix. It now prints the same icacls/PowerShell repair the secret-file check prints.
+  (#2652)
+- Tests: identity, task-intent, cost view, refusal-audit and direct-route router rows reach their coverage line; the tools/list result is built without an unreachable failure arm (MIK-7324). (#2657)
+- **Lighter tool lookups on each call.** Header mirroring and the output-schema fallback read the cached tool in place instead of cloning it, and an empty withheld-name map answers without hashing the tool name. No behaviour change. (MIK-7536)
+- **No payload copy for a call sent once.** A backend call that will not be resent moves its parameters and headers into its one send instead of copying them. No behaviour change. (MIK-7536)
+- **Legacy POSTs no longer allocate a notification channel.** A session opens its broadcast channel and buffer only when a stream subscribes. A POST that mints or resumes a session allocates no channel; only a mint allocates the session record. Peak memory under a session-less legacy client drops sharply. No behaviour change. (MIK-7536)
+- Tests: the Windows task-store and account-store custody helpers reach their coverage line, covering absent, shared, wrong-kind and unnameable store paths and a parent that refuses creation (MIK-7324). (#2673)
+- Tests: the Windows child-environment allowlist test passes under coverage, and the coverage contract requires a failure-free Windows run and names the task SDK setup (MIK-7780, MIK-7781). (#2686)
+- Tests: the stdio transport's handling of an id-less response is covered, and its parse log line is measurable by the coverage grader (MIK-7324). (#2694)
+- Tests: the OAuth redirect hop reads the destination policy's refusal as an option, with no unreachable error arm (MIK-7324). (#2699)
+- A capability that declares `auth.required: true` is listed only once its key is set or its `oauth:` provider has a login; calls to a hidden capability by name are unchanged (MIK-7787).
+- docs: the release scope status grades verbatim relay detection (GH1945.COLLUDE.1) met on the meta and direct routes; ASI10 stays PARTIAL (#2722)
+- Tests: an installed account holds its minter as one enum and revalidation is one ordered match, with the revalidate refusals covered (MIK-7324). (#2724)
+- Tests: the journey owner API and the offer attach refusals are covered, and journey create binds its limits with the bridge check (MIK-7324). (#2734)
+- tests: the upstream-followed task result is pinned as a relay source for verbatim relay detection (#2739)
+- MCP Events search entries (MIK-7630 I6): the event entries now join the finished `gateway_search_tools` and `gateway_search` answer in one place; the answers are unchanged (#2744).
+- Internal: Code Mode chain execution moved to its own file; no behaviour change (MIK-7787).
+- Tests: the task store refuses as unavailable when its lease cannot be created (MIK-7324). (#2746)
+- `mcp-gateway cap list` marks a capability the gateway would not list with `off: needs <KEY>` or `off: needs a <provider> login` (MIK-7787).
+- Refactor: the direct backend route is split into ordered stages with the same behaviour and the same refusal order; the t8 guard scans every direct-route file and pins the stage order (MIK-7324). (#2752)
+- Tests: the C6 mutation sample draws from a frozen sampling frame, and the direct route stages are graded as Critical rows (MIK-7324). (#2756)
+- MIK-7799: an answer's cross-tenant read verdict rides its `response_delivery_attempt` record on `POST /mcp`, cutting the extra audit record per judged answer.
+- performance: the gateway binary now uses mimalloc as its global allocator. On the workload benchmark, in two same-run interleaved runs of 30 repetitions on a shared host (not graded runs), p50 per call dropped by 9.7 and 6.6 microseconds; p99 dropped by 17.3 microseconds in the first run, and in the second the change could not be told apart from none (its interval spans zero); peak memory grew by about 5 to 6 MB (#2762)
+- performance: the HTTP dispatch reads a request's params in place instead of copying the whole payload per call (#2763)
+- **Stdio backend messages are limited to 16 MiB by default.** Before this, there was no limit. A backend that legitimately sends larger single messages sets `backends.<name>.max_frame_bytes` (64 KiB to 1 GiB). See UPGRADING item 137.
+- **Public capability counts only capabilities that run.** The count is 135, not 137: `pyghidra_reverse` and `trawl_extract` load but are held, and `cisco_scanner`'s `scan_mcp_server` operation is not offered. They are named, with reasons, in `capabilities/README.md`.
+- Refactor: task creates and transitions have separate commits, so no caller keeps an arm for an outcome that cannot happen (MIK-7324). (#2780)
+- test: the shutdown-race backend test waits for the child's pid file instead of a fixed sleep, so it no longer fails on a loaded or instrumented host (#2794)
+- firewall: the observed-relay warning ("Firewall: relay observed") now always logs `server` and `tool` (the direct route logged `backend`, a catalogue read logged `method`); alerts keyed on the old field names need updating (#2795)
+- test: the signing stdio coverage probe recognises a child's profile when Windows reuses its process id (#2807)
+- **`OidcError` has three new variants.** `mcp_gateway::key_server::oidc::OidcError` gained `InsecureIssuer`, `InsecureFetch` and `ClientUnavailable` since 3.5, and the enum is not `#[non_exhaustive]`: an embedder's exhaustive `match` on it no longer compiles. Add the three arms or a wildcard arm (UPGRADING-4.0 item 138).
+- test: the shutdown-race backend test gates its child on a release file instead of a timed sleep, and the Windows coverage fallback uses PowerShell syntax (#2813)
+- **Hardened signing now covers stdio.** Under `security.posture: hardened`, `serve --stdio` signs and nonce-checks every `tools/call`, not only `gateway_invoke`, as HTTP does; send a fresh nonce in `params._meta["io.mcp-gateway/nonce"]` per call (UPGRADING-4.0 item 112).
+- test: the bounded audit-log contention test now holds the stalled write inside its bound and asserts the contenders queued on the permit instead of being refused (#2845)
+- test: the bounded audit-log contention test releases its callers through one barrier on a paused clock, so every caller queues on the permit before any deadline passes and the test no longer depends on runner speed (#2863)
+- Tests: stdio delivers a response or a progress frame only to its own caller, and a frame carrying any method is never taken as a reply (MIK-7324). (#2879)
+- test: the T32 retry test kills the gateway while the receiver holds an attempt open, so it sees exactly five deliveries every run, and store tests pin that a crash after a claim spends that attempt (#2881)
+- tasks: a failed upstream task whose error is the peer's own is stored as task record version 6, written only on such rows; a gateway that reads versions up to 5 refuses a task store holding one, so back up `tasks.store_dir` before upgrading; a backup taken after holds version 6 rows too (UPGRADING-4.0 item 105) (MIK-7887)
+- **Shadow-rule exports cite the operator guide.** The header of `mcp-gateway doctor --shadow`
+  output in every format (`grep`, `nginx`, `yaml`) now reads
+  `# Source: docs/SHADOW_SCAN.md (static network-detection rules)` instead of naming a design
+  document that is no longer published. The rules themselves are unchanged. A tool that matched
+  the old header line needs updating. (#2995)
+- **The README leads with why to use the gateway, in the 3.5.1 voice.** It opens with
+  connecting an unlimited number of MCP servers, tools and APIs at a fixed context cost, the
+  problem it removes and the flow diagram, then the Quick Start and a short *What's new in 4.0*.
+  *Why use MCP Gateway?* returns with current facts. The full 4.0 change list moved to
+  `docs/whats-new-4.0.md`. Package, registry and Homebrew descriptions carry the same lead.
+  (#2998)
+- A capability whose declared output root is not object-shaped (an array, a string, a type list such as `["object", "null"]`, or a typeless root without `properties`) now advertises an object `outputSchema` and publishes `structuredContent` under `items`, as MCP requires; the text content is unchanged. Nine shipped capabilities are affected, among them `sentry_list_issues`, `hackernews_top` and `number_facts` (MIK-7959).
+- test: a killed response stream re-issued under a new id executes a side-effecting call once, and leaves a read-only call unaffected (MIK-7216)
+- **Windows test gates state their reason.** Every test-side `cfg(unix)` gate now carries a one-line comment naming why the test is unix-only (mode bits, uid or inode identity, symlinks, process reaping, child environment). One cross-platform test (OAuth temp-file cleanup) lost its Unix gate and now runs on Windows; no product change. (MIK-7587)
+- **A task notification carries the full task.** `notifications/tasks` now carries the task as `tasks/get` would return it to that reader, built at delivery: output states are re-authorized per reader against the reader's current credential, grant decisions and relay receipts are recorded as a read records them, and the frame is written to the transparency log as sent. A reader refused, or whose task cannot be read, gets the task id and status only. (MIK-7778)
+
+### Removed
+
+- **MITRE Fight Fraud Framework mapping removed.** `docs/compliance/MITRE-F3-MAPPING.md` and its README badge and links are gone. F3 models financial-fraud actors (card schemes, payment rails, cash-out); 108 of its 123 techniques fall outside a tool-call gateway, and the controls it rated are covered by the OWASP Agentic AI self-assessment. The one open finding, failed authentication with no throttle or lockout, is now listed under OWASP ASI03. (#2191)
+- Removed 18 built-in registry names that had no maintained server (list and reasons in UPGRADING-4.0 item 124); `jira` is now `atlassian` (MIK-7787).
+- **`mcp-gateway plugin` removed.** `plugin search`, `install`, `uninstall` and `list` are gone, with the marketplace module and `MarketplaceConfig`: nothing ever loaded what `install` wrote, and the default marketplace host does not resolve. A `marketplace:` block in the config now loads and warns once; delete it, and add tools as `backends:` entries or capability files instead (UPGRADING-4.0 item 145). (#2953)
+
+### Fixed
+
+- **Zed export and import use Zed's real settings file and format.** `setup export --target zed` now writes to Zed's config directory (`~/.config/zed/settings.json` on macOS, `$XDG_CONFIG_HOME/zed` on Linux, `%APPDATA%\Zed` on Windows); on macOS it previously wrote to Zed's data directory, which Zed never reads, so remove a `gateway` entry left there. Discovery now imports Zed's flat `command`/`args` and `url` entries, which it previously skipped (#1811).
+
+- The 4.0.0 upgrade notice now includes `--config PATH` in the `accounts migrate-credentials`
+  command it prints; without it the command stops unless `MCP_GATEWAY_CONFIG` is set.
+- **Cost budgets survive a stdio gateway restart.** A stdio gateway loaded `costs.json` at
+  startup but never wrote it, so every restart gave the daily budgets back. It now saves when
+  the client closes stdin (after in-flight calls finish) and every 5 minutes while it runs, as
+  the HTTP gateway does. Each save writes its own scratch file, so gateways sharing a data
+  directory no longer write one scratch file between them.
+- **A failed release or image-manifest job can be re-run for 14 days, not one.** The build
+  binaries and image digests handed between jobs expired after a day, so a later re-run
+  published a release with no binaries or failed to find the digests. They now last the
+  repository's 14-day artifact retention, and a CI check keeps every such handoff there.
+- **The release scope gate refuses a waived criterion that is still marked blocked.** Such a
+  row let a release pass while the burnup still listed it as held. A test also pins the
+  approved-waiver list to the ledger's waived criteria, so a waiver removed from the ledger
+  cannot leave its approval behind.
+- **A stdio backend that dies before `initialize` is reported at once, with its exit status.**
+  It used to wait out the request timeout and report a timeout, with the child's stderr already
+  discarded. The error now names the exit status and points at the gateway log, where one record
+  carries the last 20 stderr lines (2 KiB at most) with argv, `env:` values and credential-shaped
+  text redacted. The stderr never goes to MCP clients. A build without the `firewall` feature has
+  no credential recogniser, so it logs a withheld marker instead of the text. `doctor
+  --start-stdio` caps a whole start at 15 s. (#526, #1568)
+- **A debug build of the gateway starts on Windows.** Clap's generated argument parser needs
+  about 900 KB of stack in an unoptimized build, over the 1 MiB Windows gives a process's main
+  thread, so even `--version` overflowed. The gateway now runs on a thread with an 8 MiB stack.
+  Release builds were not affected.
+- **On Windows, file locks now actually lock.** The advisory lock the control-plane store, the
+  durable protocol-revision telemetry and the OAuth `client_id` self-heal rely on did nothing on
+  non-unix platforms, so concurrent writers could lose each other's updates, and a caller could be
+  handed a `client_id` that another writer then replaced on disk. The lock is now `LockFileEx`.
+- **An error result is never replayed from a cache.** The response cache and the capability
+  cache stored `isError: true` results, including the gateway's own rate-limit and open-breaker
+  refusals, and served them to every call with the same key for the whole TTL (60 s by default).
+  One throttle could answer hundreds of later calls with a stale refusal. Errors are now never
+  cached; successes are cached as before. See `docs/UPGRADING-4.0.md` item 63 (F26, GH #1158).
+
+- **A WebSocket backend's progress reaches the call that asked for it.** `WebSocketTransport`
+  dropped every inbound notification. It now delivers `notifications/progress` to the call whose
+  request carried that `progressToken`, under the stdio transport's rules: progress only, the
+  token must belong to a live call, and a frame it cannot attribute is dropped. The caller gets
+  its own token back through the request-scoped translation, as on stdio.
+- **One caller's burst no longer disables a tool for every caller.** A refusal by a
+  backend's own rate limiter was reported as "Circuit breaker open" and counted as a
+  backend failure, so a burst past the limit could auto-disable the capability or kill
+  the backend for all tenants. It is now `Rate limit exceeded for backend 'x'` (code
+  still -32000, recovery hint `RATE_LIMITED`), is not sampled by the error budgets, and leaves
+  `mcp_backend_circuit_state` alone. See `docs/UPGRADING-4.0.md` item 53 (F23).
+- **Config reload follows a symlinked config across directories.** A link retargeted to a
+  file in a directory the gateway was not watching reloaded once and then missed every later
+  write, serving the old config silently; a directory the link left stayed watched forever. The
+  watcher now follows the whole link chain on every change, including a Kubernetes ConfigMap's
+  `..data` swap, a Capistrano-style `current` directory link retargeted by rename or by
+  `rm` and `ln -s`, and reads the new release on reload. Limits are listed in DEPLOYMENT
+  under "What triggers a config reload". (#453)
+- **BREAKING: only delivered change notifications are advertised.** `resources.subscribe`,
+  `resources.listChanged` and `prompts.listChanged` were advertised and never delivered.
+  They are now `false`, and `resources/subscribe`/`unsubscribe` are refused with `-32601`.
+  `tools.listChanged` is announced for every tool-set change over HTTP (config reload,
+  capability reload, admin UI, revive), as a standard `message` event on the 2025 GET
+  stream rather than the gateway's envelope, and is `false` over stdio. See UPGRADING-4.0
+  item 52.
+- **Capability pins survive CRLF line endings.** The `sha256:` pin now reads CRLF as LF, so
+  a pinned capability that a Windows checkout or editor converted to CRLF is no longer
+  refused as tampered. A lone CR still changes the hash. Capability YAML is checked out
+  with LF on every platform (`capabilities/.gitattributes`), so the Windows binary embeds
+  the same starter capabilities as the others. A pin made over CRLF bytes must be re-made: see
+  UPGRADING-4.0 item 60. (#524)
+- **`doctor` finds stdio commands on Windows.** It split `PATH` on `:`, which takes
+  `C:\...` apart, so it reported every stdio backend's command missing. It now uses the
+  platform separator and, on Windows, also the `.exe` name a spawn resolves a bare
+  command to. (#524)
+- **The `Windows check` CI job runs tests.** It compiles every test target for Windows
+  and runs the library and binary unit tests, except `gateway::` and
+  `personal_accounts::`, whose fixtures open stores that refuse on non-unix (#1142). Before,
+  it ran `cargo check` only. (#524)
+- **A config file that fails to load is no longer replaced with defaults.** `mcp-gateway add`, `mcp-gateway setup` and the admin UI's backend edits read an unparseable or invalid config file as an empty default and wrote that back, which wiped the configured backends. They now stop with `Failed to load <path>` and leave the file untouched; a missing file still starts from defaults. (#462)
+- `mcp-gateway tls init-ca` marks the CA certificate for certificate and CRL signing, and `tls issue-server` and `tls issue-client` add an Authority Key Identifier, so strict X.509 clients (Python 3.13's default TLS context, `openssl verify -x509_strict`) accept the chain. Certificates issued earlier are not replaced; `docs/DEPLOYMENT.md` describes rolling to a new generation. (#487)
+- "Did you mean" suggestions for an unknown tool name measure edit distance in characters, not bytes. A candidate name with non-ASCII characters (for example `café`) got a wrong distance, so a close match could be missed and a distant one offered. (#573)
+- **A tool search with no results no longer panics on a non-ASCII query.** In 3.x, building tag suggestions for an empty result cut a query word at three bytes, which panicked when the cut fell inside a multi-byte character. It now cuts at three characters. (#607)
+- **A backend `tools/call` no longer rebuilds the argument-key check on every call.** When the backend's tool list is already cached, the gateway now judges the call's argument keys against the cached schema in place. Before, it built the whole list-fill machinery and copied the cached tool definition on every call, which added fixed latency to each `tools/call`. The check itself is unchanged: a stale or missing list still refreshes before judging. (#613)
+- **Env files follow a retargeted link.** An env file reached through a link (`current/.env` after
+  a release switch, or an env file that is itself a symlink) kept reloading from the old target,
+  because its directory watch was fixed at startup. A gateway serving HTTP from a config file,
+  named or found by discovery, now re-reads env files every 2 seconds and reloads when their
+  content differs from what is loaded, which also works on NFS and FUSE mounts; a stdio gateway
+  watches no files, as before. A file that fails
+  to load keeps the running values and is retried, with at most one warning a minute per file
+  unless the error changes. A lookup error on an env file (a link loop, a directory the gateway
+  cannot search) now fails the load instead of reading as a missing file. After a failed reload
+  the gateway retries every 2 seconds until one succeeds, so a config edit that failed alongside a
+  broken env file still applies once the env file is fixed. See `docs/DEPLOYMENT.md` and
+  `docs/UPGRADING-4.0.md` item 72. (#1286)
+- Firewall anomaly detection learns from real traffic: it scored every call a neutral 0.5 because nothing fed its transition record. It now learns from admitted calls on every route (one shared model; each call is scored against its caller's previous call), warms up before scoring (`anomaly_min_observations`, default 20), scores never-seen transitions 1.0, and its blocks cannot be downgraded by a rule and carry error -32002 on every route, the per-backend `/mcp/{name}` route included. Out-of-range thresholds refuse to load when detection is on. See UPGRADING-4.0 item 76. (#1756)
+- **The published crate's tests build and pass.** Some tests read documentation, deploy
+  manifests and release records that the crate did not include, so `cargo test` on the
+  published crate failed to compile. Those files are now packaged, and CI builds the tests
+  from the packaged crate on every pull request and runs them after each merge.
+- `tls issue-server --san-dns` writes an IP literal (`127.0.0.1`, `::1`, `[::1]`) as an IP SAN instead of a DNS SAN, so a client dialling that address can verify the certificate; entries are trimmed. Only newly issued certificates change. An mTLS policy's `san_dns` pattern matches DNS SANs only (#1955).
+- **Discovery keeps a server's `env`, `headers` and argument boundaries, and reads commented Zed settings.** `cap discover --write-config` writes them into the owner-only config; discovery's JSON, YAML and `Debug` output show the keys only. A client's `${env:NAME}` becomes `${NAME}`; a key using a client-only variable such as `${input:…}` is skipped with a warning. `setup export --target zed` into a commented file prints the entry to paste instead of failing (#1876).
+- **Per-tool visibility checks no longer copy the capability definition.** 4.0's per-caller visibility checks each tool on `initialize` and `tools/list`, and each check cloned the full capability definition, which raised `tools/call` p99 latency under load. The checks now read the definition in place. (#2110)
+- A stdio gateway serves its `personal_managed` accounts to its local operator whatever the `auth` block says; before, a stdio gateway with auth off refused every account-bound REST call with "the request carries no verified end-user identity". HTTP is unchanged: it serves the sole-operator account only under the single-user settings. `accounts migrate` now states where each migrated grant is reachable, and that an account-bound MCP backend still needs a verified end-user identity (#1961).
+- A config reload reads the config file and env files on a thread of its own, so a read stalled on an NFS or FUSE mount no longer holds an async worker or blocks shutdown; at most one such read runs at a time (#1808).
+- **Dashboard sign-in by link works behind a TLS-terminating proxy.** With an HTTPS `server.public_url` on a plain-HTTP listener, opening the link at the gateway's loopback URL no longer answers 409: it shows a one-time code, valid for 60 seconds, to enter at `<public_url>/dashboard/handoff`, which sets the session cookie on the public origin. The code never appears in a URL. `mcp-gateway dashboard-link` and the startup banner give the link in this shape. See UPGRADING-4.0 item 70. (#2130)
+- **`cap discover --format json|yaml` stdout is one document.** The `--write-config` hint, progress lines and "No MCP servers found" text went to stdout after the listing, so piping the output into a JSON or YAML parser failed. In json/yaml mode those lines now go to stderr, and an empty result prints `[]`. Table mode is unchanged. (#2135)
+- A plain-HTTP gateway no longer waits without limit for open requests after SIGTERM: the listener gives them `server.shutdown_timeout`, then cuts them. The mTLS listener uses the same bound instead of a fixed 30 s (#2147).
+- Firewall per-caller limits (call budget, tenant guard, anomaly detection) key on the caller on every route: its resolved identity (OIDC, trusted proxy or Access, mTLS subject, OAuth agent), else its API key. OAuth-agent and mTLS callers on a modern `POST /mcp` are scored instead of refused as unidentified, and callers of the per-backend `/mcp/{name}` route no longer share one bucket per backend. Limits start fresh once at deploy. See UPGRADING-4.0 item 94. (#2155, #1785)
+- A gateway that found its config by discovery (no `--config` or `MCP_GATEWAY_CONFIG`) now watches that file and polls its env files like a named config, and offers `gateway_reload_config` over HTTP and stdio; its governance store location and admin config edits are unchanged (#1868).
+- **VS Code discovery reads `mcp.servers`.** Discovery read each key under `mcp` in a VS Code or Cursor `settings.json` as a server, so the shape VS Code documents (`"mcp": { "servers": { ... } }`) imported nothing. It now reads the servers under `mcp.servers`, with their command, args, env, URL and headers. A settings file with comments or trailing commas is read. (#2177)
+- A `personal_managed` account bound to an MCP backend is now served to the sole operator (stdio, or a single-user HTTP gateway) through `gateway_invoke`, as it already was for REST capabilities; multi-user gateways still require a verified identity. (#2188)
+- List fills for discovery, `gateway_search`, resources, resource templates and prompts now pass the backend's circuit breaker and spend rate-limit tokens, and their outcomes count toward the breaker. Startup warm-up fills are recorded but never refused (#1300).
+- Unit tests compile on macOS again: the FIFO test fixtures no longer call an API that has no Apple implementation, and a new CI job compiles every test target on macOS.
+- A bridged exchange whose retry round returns a malformed `input_required` result now fails as an upstream fault instead of being recorded as the completed call under the caller's idempotency key.
+- A client that disconnects while its `tools/call` is in flight no longer frees the idempotency key: a retry under the same key is told the outcome is uncertain instead of running the call again. This covers `gateway_invoke`, its bridged input rounds and the direct `/mcp/{name}` route. (#2223)
+- **A warm-up fill no longer reopens a backend the health probe shut off.** When the probe tripped a backend's circuit breaker after a run of answers that served nothing, a startup warm-up fill that listed successfully could reset the breaker and undo that decision. The probe's trip now counts as one a warm-up did not cause, so only the normal half-open probe closes it. (#2219)
+- On Windows the transparency log now tells its active file apart by the file id instead of the creation time, so a file replaced within the NTFS tunnelling window is detected.
+- A bridged round dispatched after an operator disabled the server is now refused before it reaches the backend, and the caller's idempotency key stays retryable.
+- **Meta-MCP listings and reads serve the sole operator's connected accounts.** On a
+  single-user gateway or over stdio, `gateway_invoke` served an account-bound backend while
+  `gateway_list_tools`, search, `prompts/list`, `resources/list` and `resources/templates/list`
+  omitted it and `prompts/get` and `resources/read` refused it. Every read path now resolves the
+  credential for the caller its credential established, through the same sole-operator check.
+  Multi-key and anonymous callers are still refused. (#2231)
+- **`POST /mcp/{name}` serves the sole operator's connected accounts.** On a single-user
+  gateway, an account-bound backend refused the operator on the per-backend route with "no
+  verified end-user identity", while `gateway_invoke` served them. The route now resolves the
+  credential, notification session and audit subject for the caller its credential established.
+  Multi-key and anonymous callers are still refused. (#2190)
+- **A tool call racing a capability reload no longer returns a config error, and a removed tool is refused, never admitted.** The identity-grant check and the dispatch path each looked the tool up twice; if a reload removed it in between, the call failed with `Capability not found`. Each now looks the tool up once, and a tool absent at the grant check gets the ordinary not-found refusal, so a reload that re-adds it before dispatch cannot skip its grant. (#2236)
+- Live `verify` now reports a missing `.hwm` when disk-full expiry removed the last sealed segment and the active file opens with a segment-open record. A tail cut in that state used to verify clean.
+- Agent identity config faults now fail at load: `require_id` with no proof source (`agent_auth`, `mtls`, or `allow_unverified_agent_identity`) and duplicate `principal_labels` keys are refused, and the gateway warns whenever `allow_unverified_agent_identity` is set.
+- An `accounts` block that is disabled and configures no adapter no longer has its `file:` secrets read at load, and every account secret is read for the rotation report only after the block validates (#2248).
+- **Rotating the `/metrics` token file is now reported on reload.** A `server.metrics_token` given as `file:` or `env:` was never recorded, so a reload stayed silent while the route kept serving the token it was built with. The reload now reports the rotation as needing a restart. (#2251)
+- **A hung audit write found by the readiness probe now marks the log stalled.** When the audit log was degraded and its probe write hung, the probe's 2-second bound cancelled the append before it could record the stall or count `mcp_audit_append_timeouts_total`, so every call kept waiting 2 seconds for its 503. The bound now runs inside the append: the first probe timeout marks the log stalled and counts the timeout, and later calls fail at once. (#2252)
+- **Every tool now refuses `inputResponses` that arrive without the `requestState` the gateway issued.** Before, only `gateway_invoke` and the chain form of `gateway_execute` did; other meta-tools accepted and ignored the answers. The refusal (-32602) now happens at the shared `tools/call` entry. (#2254)
+- **Migration refuses an expired 3.x credential that has no refresh token.** It used to
+  migrate as Connected and then fail on every call. A managed grant with no refresh token
+  now asks the user to reconnect when it expires, instead of reporting the provider as
+  unavailable forever. (#2255)
+- `linear_attach_url` no longer sends `createAsUser`. Linear accepts that field only from OAuth applications, so under the capability's personal API key it failed the attachment. (#2256)
+- **Backend names that differ only in punctuation or case no longer share a package cache, and bunx and yarn get their own.** `team.alpha` and `team_alpha` mapped to one cache directory, and `bunx` and `yarn` were given `npm_config_cache`, which they do not read. The cache directory name now carries a hash of the full name, and `bunx` gets `BUN_INSTALL_CACHE_DIR`, `yarn` gets `YARN_CACHE_FOLDER`, and `pnpm` gets `pnpm_config_store_dir` (and `npm_config_store_dir` for older pnpm). Package caches are downloaded once more after the upgrade. (#2258)
+- **Chain steps and task-executed calls audit the caller's declared agent label.** The
+  `X-Agent-ID` (or query) label was dropped from the audit record of every `gateway_run_chain`
+  step and every call a background task made. (#2259)
+- **The gateway's tool-change announcer now stops at shutdown.** The background task that announces tool-set changes had no shutdown branch, so it kept the whole application state alive after the HTTP server stopped. It now exits when shutdown fires, which matters to embedders and in-process tests; a process that exits was never affected. (#2260)
+- A request whose idle per-caller slot was evicted just before it claimed the slot now records its start or dispatch failure on the live slot's circuit breaker, not on the evicted one (#2261).
+- **Offline migration finds a 3.x credential when the account resource differs from the
+  backend URL.** 3.x named its token file after the backend's `http_url`; migration looked it
+  up under the descriptor `resource` and reported no credential when the two differed. It now
+  uses the backend URL. (#2262)
+- **An account descriptor's `client_secret_ref` must name an absolute path.** `file:` with an
+  empty or relative path used to load and then fail at the first token refresh. The config is
+  now refused at load. (#2263)
+- **`mcp-gateway dashboard-link` reaches an mTLS listener.** New `--client-cert` and `--client-key` flags (or `MCP_GATEWAY_CLIENT_CERT` and `MCP_GATEWAY_CLIENT_KEY`) present a client certificate, and `--ca-cert` (or `MCP_GATEWAY_CA_CERT`) names the only CA the server certificate may chain to. Without `--url`, an mTLS config supplies `mtls.ca_cert` as that CA and a listener requiring a client certificate is refused up front when none is given. The `curl` workaround is gone from DEPLOYMENT. (#1832)
+- A new audit log now begins with an `audit_segment_opened` record, so live `verify` reports a missing `.hwm` on a log that never rotated. A tail cut on such a log used to verify clean; a cut back to the open record alone still reads as a fresh log. Caller records in a new log start at counter 2 (UPGRADING item 98).
+- `setup` no longer prints URL credentials or query tokens for HTTP and WebSocket backends in the import list (#2246).
+- **A failed audit write on a refused direct call now keeps the caller's request id.** With the audit failure policy set to fail-closed, a scope refusal or an unrecognised backend answered the replacement 503 with `id: null`. The 503 now echoes the id of the request that was sent. (#2283)
+- **The identity grant CLI keeps an mTLS SAN URI subject whole.** `--subject mtls:spiffe://…`
+  was split at its last colon, writing a grant for authority `mtls:spiffe` that matched no
+  caller. A built-in authority (`api_key`, `mtls`, `agent_oauth`) now ends at the first colon;
+  an issuer-URL authority still ends at the last one. (#2291)
+- WebSocket backend requests now time out when the outbound queue is full, instead of waiting past the configured timeout (#2253).
+- A debug build can hold a task create between its commit and its ack, so a process test kills the real binary in that window; release builds do not carry the hook. (#2298)
+- The child-reap tests no longer count a zombie as reaped. They now require the child to be gone from the process table, and a fixed 50 ms wait in a pool test is a bounded poll. (#2301)
+- Closing a WebSocket backend now fails its in-flight requests at once instead of after their timeouts (#2257).
+- `gateway_execute` refuses `inputResponses` sent without the `requestState` it issued, instead of re-running the chain (#2254).
+- `gateway_search_tools` and `gateway_search` match a query against the name of the backend that serves each tool, so searching for a backend by name returns its tools instead of zero matches. Direct tool-name and description matches still rank first ([@terafin](https://github.com/terafin), [#2317](https://github.com/MikkoParkkola/mcp-gateway/pull/2317)).
+- **A notification refused because its transport cannot carry the caller's credential is now audited.** On a stdio or websocket backend, such a refusal wrote no `idp_refuse` row, and a minting backend had already recorded `idp_mint` for a notification that was never sent. The refusal is now decided before minting and writes one `idp_refuse` row. A caller with no principal keeps the static path, as before. (#2310)
+- **Tool listing and search omit a `required` backend for a caller without identity.** On a
+  single-user gateway, an anonymous caller could list or search the tools of an account-bound or
+  other `required` identity-propagation backend from its shared slot, while `gateway_invoke`
+  refused the same caller. Tool discovery now applies the rule the prompt and resource catalogues
+  use: such a backend is omitted, and naming it answers "backend not found". (#2326)
+- **The account connections page no longer lists a descriptor-fenced grant as connected.** A
+  grant from before an account descriptor change is refused at use and needs a reconnect; the
+  page now shows it as not connected. (#2327)
+- Windows process discovery no longer relies on `wmic` (removed from Windows 11 24H2 and Server 2025): it lists processes through PowerShell `Get-CimInstance Win32_Process` and reports a failed listing as an error. (#2328)
+- A config file watched through a plain (non-symlink) path no longer fails to start on Windows: `read_link` on a regular file is os error 4390 there, and the watcher now checks the file type first. (#2329)
+- **`initialize` and `tools/list` count visible capabilities by name.** Counting what a caller may invoke cloned every capability's tool, schemas included, on each listing. It now reads names only. (#2110)
+- **`gateway_list_servers` no longer counts a `required` backend's cached tools for a caller
+  with no identity.** The backend is still named, with `tools_count` 0 and `tools_known` false,
+  matching the tool listings that omit it for that caller. (#2346)
+- AX-010 no longer withholds a tool for ordinary usage guidance. "Before calling this tool" on its own now only warns, and the tool is still served. It still withholds when a read-like directive follows: read, include, copy, load, cat, fetch or open. "Encoded as base64" is a format note, not exfiltration; base64 blocks only next to send, upload, post or exfiltrate. Linear `prepare_attachment_upload` and `create_attachment`, Netdata Cloud `trigger_report` and axterminator `ax_visual_diff` are served again. (#2356)
+- **Discovery responses are inspected once.** `gateway_list_tools`, `gateway_search_tools` and `gateway_search` were scanned twice by the response firewall: on their raw value, then again on the served copy, writing two audit entries. The served copy is no longer scanned again; a server-owned marker, which no backend or retried call can set, records that the raw value was inspected. (#2358, MIK-7407)
+- The readiness test now holds the startup capability scan until it has seen "capabilities loading", so it no longer depends on timing. A debug build reads a gate file for this; release builds do not carry it. (#2376)
+- Test: the 3.x grants refusal test reads an owner-only copy of its fixture, so it passes on Windows checkouts.
+- **Secret-file fix commands are copy-safe and complete.** The `chown`/`chmod` line a refused file prints now quotes the path and ends options with `--`. A trust file owned by another user also gets `chmod go-w`, because `chown` keeps a group- or world-write bit the rule still refuses. The unreadable-config error names the process read-access requirement. See `docs/UPGRADING-4.0.md` item 96. (#2391)
+- **WebSocket `close()` no longer waits behind a blocked send.** A full outbound queue held the sender slot while awaiting, so closing a stalled backend hung until the peer drained. The send now releases the slot first. (#2393)
+- **An embedded capability backend no longer keeps `/readyz` and `/health` at 503.** A backend built and loaded through the public API had no way to report its startup scan complete. It now counts as loaded from creation; only the gateway's own background startup waits. (#2397)
+- One load now lists every unset variable in a config field, and capability `env:` credential failures name the listed env files that were not found. The removed `mcp_gateway::session_sandbox` and `mcp_gateway::tunnel` library modules are documented in the upgrade guide. (#2400)
+- Add a route test that two legacy sessions of one credential share one tenant bucket and another credential is unaffected (#2403).
+- **An unkeyed `tools/call` no longer builds an idempotency representation it never uses.** Admission now builds the representation, which embeds the active routing profile's description, only when the call carries an idempotency key. Unkeyed calls skip that work on every call. (#613)
+- **Refusals on `/mcp` reach the audit log.** A `gateway_invoke` refused by the router's scope
+  check or by the request firewall, before the meta layer runs, now writes one `invocation` record
+  with `outcome: denied` and the returned code, as the same refusal on `/mcp/{name}` already did.
+  With auth on, a failed write answers 503/-32005 instead. (#2420)
+- **The response firewall no longer searches well-known MCP field names on every call.** A tool result's own protocol keys, such as `content`, `type`, `text` and `isError`, are fixed names that match no injection pattern, and the gateway now skips them. Every string value and every other object key is still scanned, including near-miss spellings of protocol names. (#613)
+- Make the era-probe tests wait for a slow peer instead of racing a fixed 2 s probe cap on a stalled runner (#2425).
+- Tasks: an input round now closes at its stored continuation's deadline (about five minutes). A late `tasks/update` gets -32602 naming the deadline, and the task settles `cancelled` with that reason instead of resuming and then failing. A `tasks/update` to a settled task says how it settled. (#2429)
+- Tasks: a resumed call's audit record now carries the updating request's declared agent label. (#2430)
+- **Stateless calls get their own audit correlation key.** On the modern HTTP route a call without an OpenTelemetry trace id in `_meta` was logged under one shared correlation key, because the route carries "no session" as an empty session id. Such a call is now keyed on the trace id minted for that invocation (`correlation_source: trace_id`). Legacy sessions and `_meta` trace ids are unchanged. (#2464)
+- **Idempotent replays on `/mcp` reach the audit log.** A `gateway_invoke` (or surfaced tool) call
+  re-issuing a completed execution's idempotency key is answered from the stored result and now
+  writes one `invocation` record with the original's request hash, as a first execution does. With
+  auth on, a failed write withholds the replay with -32005. (#2472)
+- Refuse a re-probe answer that arrives over a transport since replaced, and record `era_probe_discarded` with the reason (#2489).
+- Windows test coverage: test fixtures that were skipped on Windows because of the home directory, symlink creation or a legacy lock helper now run there, and the gates that remain are listed under "Windows limitations" in CONTRIBUTING.md. Debug builds read `MCP_GATEWAY_TEST_HOME_DIR` for the home directory; release builds do not (#2368).
+- A retried `gateway_set_profile` with the same idempotency key now replays its first result. The retry was refused as a key conflict, because the stored result was bound to the profile the call itself had just changed. (#2501)
+- Task input-round tests no longer assume a free worker permit or an unbounded producer wait, which made them fail intermittently on Windows (#2506).
+- **Idempotent replays on stdio reach the audit log.** A stdio `gateway_invoke` (or surfaced
+  tool) call re-issuing a completed execution's idempotency key now writes one `invocation` record
+  with the first execution's outcome and hashes, as on `/mcp`. A replayed `gateway_invoke` record
+  also names the tenants of the value it delivers, marked `attribution: "cached_delivery"`. (#2480)
+- **A direct-route refusal records the tenants it was refused for.** A `tools/call` on
+  `/mcp/{name}` with no `arguments` member is scanned by the firewall over `params` itself; its
+  invocation record now names those tenants too (MIK-7116.MIN.1). (#2523)
+- stdio: a request id reused right after its answer can be cancelled, and a late cancel for the answered call no longer silences the next call that reuses the id (#2557)
+- A disconnect or a reaped legacy session now reclaims its per-session profile, state and cost entries, and the stream reaper goes by last activity, not age (#2563, #2567).
+- Under `security.posture: hardened`, a `tools/call` with a malformed signing nonce is refused `-32602` before the task-augmented gate can answer it.
+- OAuth: with `callback_host` set to a loopback IP, the redirect URI names that address (IPv6 in brackets) and the callback server listens there, instead of advertising `localhost` a browser may resolve to the other address family (#2578). If your provider app registers the redirect as `http://localhost:...` while `callback_host` is a loopback IP, register the literal address instead, or leave `callback_host` unset
+- The projection A/B arm and the prefetch hints key on the caller, not on the empty id every modern caller shared (#2591).
+- A caller with no caller key gets the control shape, no A/B event and no hints; a legacy or stdio session still keys on its session.
+- Arms are re-derived per caller on upgrade: restart or split an A/B measurement window at the deploy.
+- The unread per-session cached-token counter is removed.
+- A refused cloud metadata address (169.254.169.254, fd00:ec2::254) is named as a cloud metadata address instead of a private/reserved one; a refused host name still names no address (MIK-7633).
+- A task's calls key their A/B arm and prefetch hints on the caller that created or resumed the task, as a direct call does (#2607).
+- Tests: the cacheScope drift check reads whole source files and excuses only listed files, so a production writer after a test-gated item is no longer hidden. (#2616)
+- Dev tooling: the MCP Events fail-fast stub refuses a malformed, negative or oversized Content-Length. (#2621)
+- On stdio EOF, `run_stdio_on` returns within the 30 s drain plus a 10 s teardown window, even when a backend stop, the custody store or a task never finishes; an abandoned step is logged by name (MIK-7685).
+- stdio and WebSocket backends negotiate the protocol revision like HTTP: a selection outside the revisions the gateway speaks fails the start, the stdio fallback retry adopts the revision the backend selects, and WebSocket retries a version rejection once at the highest shared revision (MIK-7721).
+- A shutdown whose task drain runs out of time cancels the task workers still running before the task store closes, on HTTP shutdown and stdio EOF; their records are settled as interrupted on the next start, except tasks a configured upstream recovery adapter manages (MIK-7757).
+- A capability that declares `providers.fallback` now logs a CAP-011 warning at load: fallback providers are not executed, and the capability is served from its primary. A malformed fallback entry fails the load instead of being dropped silently (#2677).
+- `subscriptions/listen` opens its stream with `notifications/subscriptions/acknowledged`, naming the honoured filter, instead of a JSON-RPC response, which the 2026-07-28 specification defines as the end of a subscription; a subscription the gateway ends gracefully closes with that response, and one whose reader fell behind just closes (MIK-7766).
+- **An accepted notification or client response over HTTP is answered 202 with no body.** It carried `{}` with a JSON content type, which MCP Streamable HTTP forbids; the session header is kept. Both the meta route and the direct `/mcp/{name}` route. (#2682, MIK-7759)
+- A key under a capability provider that this gateway version does not read (a misspelling, for one) now logs a CAP-012 warning naming its path instead of being dropped silently. `mcp-gateway cap validate` runs the same structural checks as the loader: warnings print and a structural error fails the command (#2683).
+- `mcp-gateway add <name>` now uses a pinned package that exists, or the vendor-hosted endpoint, for every built-in server; 30 of the 45 npm packages it named did not exist and 7 were deprecated. CI checks every entry (MIK-7787).
+- **An event delivery is on the audit log before it is sent, and a retry stays inside 15 minutes.** The attributed record of each attempt is written first; if the log refuses it, nothing is POSTed and the attempt retries. `events.retry_window` above 15 minutes is refused at load. The `throttled` field of a subscribe refresh now follows the bucket and the waiting deliveries instead of a flag cleared on every send. (#2718)
+- **A webhook route without a `method` accepts POST, a `transform.data` mapping without braces is a literal, and a restart drops subscriptions to routes that no longer exist.** A route that named no `method` accepted only GET, so a sender that POSTs got 405; it now accepts POST (see UPGRADING-4.0 item 131). The documented mapping grammar is a template or a literal, never a raw payload path. After the startup capability scan, subscriptions to webhook event types nothing offers are withdrawn with their pending retries. (#2732)
+- Internal: a build without the dashboard feature no longer warns about an unused helper (MIK-7787).
+- **Input validation reads array limits.** The input validator now enforces `minItems` and `maxItems`; the Cloudflare WAF capability requires its ruleset phase again.
+- **An event replay is audited under the admin who triggered it.** The `events.replay` audit record now carries the admin credential instead of the gateway, for a single and a bulk replay. (#2774)
+- fix: the relay receipt helpers build clean without the firewall feature (#2778)
+- Events: a settled task's event reaches its owner after the task expired, `capabilities.events` advertises `listChanged: false` (nothing pushes catalogue changes), and a backend removed while the gateway was down loses its event subscriptions at the next start.
+- audit: the stalled-write test waits on the stall gate instead of a poll budget, so a loaded runner no longer fails it (#2787)
+- gateway: the catalogue read arms of meta dispatch are boxed, so a chain step no longer overflows a 2 MiB test thread stack (#2788)
+- `/.well-known/oauth-protected-resource` now lists the OIDC issuers of an enabled key server with `delegated_bearer` in `authorization_servers`, so OAuth clients such as ChatGPT can find where to sign in.
+- audit: a peer's own `-32001` or `-32004` is no longer recorded as a gateway `denied`: a settled upstream task, and a replay with no stored class, record `error` with the peer's code; a refusal a gateway gate noted, and a replay of one, stay `denied` (#2803)
+- capability reload: an edited capability now revokes the in-flight calls that read its earlier definition, as a removed one already did (#2811)
+- A capability reload that arrives before the startup scan completes is applied when the scan completes, instead of being dropped from the webhook routes (MIK-7862, #2818).
+- **Concurrent calls can no longer overspend a budget.** With cost governance on, the budget check and the spend record were separate steps, so calls (or event deliveries) that ran at the same time could each pass the check against the same remaining allowance and overspend by up to one call's cost per extra caller. An allowed check now reserves its cost until the call settles, so later checks count it. Refusals, reasons and warnings are unchanged when calls do not overlap. (#2823)
+- **`cap list` reports a config it cannot load.** A missing or malformed `--config` made `cap list` list readiness against the process environment and exit 0; it now prints the load error and exits non-zero.
+- credential substitution is one pass: a secret that contains a placeholder such as `{q}` reaches the provider as written, and a caller value is never expanded. A caller can no longer supply the value of a key a credential rule owns when that credential resolves empty (#2827)
+- **The lazy notification channel entry now states what a POST allocates.** Minting a session still allocates the session record; only the notification channel and its buffer wait for a stream to subscribe. A test now covers several streams subscribing to a new session at once. No behaviour change. (MIK-7853)
+- capabilities: `sentry_list_issues` takes and sends `limit` (it sent an undocumented `per_page`), `sentry_get_issue` takes its issue ID as a string, both ask for the `event:read` scope only, and the Brave and Tavily output schemas accept the extra fields upstream sends (#2836)
+- fix: the EVENTS.8 operator evidence script now fails a run whose subscription named another event or repo, and one whose unsubscribe the gateway did not apply to that subscription (#2838)
+- capabilities: `cloudflare_purge_cache` needs exactly one of `purge_everything: true` or `files`, `cloudflare_update_dns_record` needs a field to change, and `cloudflare_get_waf_rules` works without `ruleset_phase` (it defaults to `http_request_firewall_custom`). The schema validator now reads `anyOf` and `oneOf` lists of required parameters on an object schema (#2849)
+- A request body field filled from a caller value or a secret is sent as written even when it looks like a placeholder such as `{x}`, and a filled query template that contains literal braces such as `{}` is no longer dropped; a field whose placeholder nothing filled is still left out (#2854)
+- Live audit-log verify now reports a high-water-mark hash mismatch at the mark's counter, not after the tail (#2855).
+- Repeat suppression of identity grant decision records keys on stable caller fields, so relabelling a subject no longer writes a fresh record (#2857).
+- A whole number outside the i64 range (such as 1e20) for a parameter declared `type: integer` is passed on as sent instead of being clamped to the largest or smallest 64-bit integer (#2858)
+- `openpencil_design` opens files inside `capabilities.files.projects` (new `root_env` key for `mcp` capabilities), and `cisco_scanner` says why `scan_mcp_server` is held (#2862).
+- `gateway_search_tools` publishes an output schema that event rows fit, and `limit` caps tool and event rows together (#2865).
+- Adding a server from the registry: an OAuth server added with its login note now closes the form and shows the note as information; a server that needs arguments appended to its command is added disabled with what to append; and an empty `-e VAR=` for a required variable no longer counts as a value, so the server is added disabled until the variable resolves (#2871)
+- events: a backend's resource_updated authorization is also refused when the backend leaves the registry while its catalogue lookup waits, as it already was when the backend turned ineligible (MIK-7894)
+- The 4.0.0 upgrade notice (item 1) now says every OAuth backend re-authenticates once after the upgrade, and that `accounts migrate-credentials` applies only to backends bound to a personal account: it cannot keep an ordinary `backends.<name>.oauth` credential. 3.x token files are left untouched.
+- `gateway_search_tools`, Code Mode search and `gateway_list_tools` now fill a backend's tool cache in the background when it was never filled, so a backend left out of a non-empty `meta_mcp.warm_start`, or one whose warm-start gave up, becomes searchable instead of staying invisible. The first search returns nothing for that backend and later ones match. A backend that is down is not asked once per search: concurrent fills share one `tools/list`, a failed fill holds further fills off for the fill cooldown, and I/O, HTTP and TLS failures, which do not start that cooldown, are bounded by the circuit breaker ([@terafin](https://github.com/terafin), [#3036](https://github.com/MikkoParkkola/mcp-gateway/pull/3036)).
+- Add tests that a modern-era backend is searchable without any request to it, and that the meta-tool band matches public_claims.json (MIK-7217).
+- Add an end-to-end test that `mcp-gateway upgrade` from 3.x emits the 4.0.0 notice once, stays silent on rerun and leaves the config untouched (MIK-7394).
+- **Discovered-config reload tests no longer race for a port.** The tests start the gateway on `server.port: 0` and read the port it logs, and the `/livez` start-up probe has a per-request timeout. Tests only. (MIK-7634, MIK-7656)
+- `POST /mcp/{name}/<sub-path>` now answers 404 instead of 500: the sub-path alias of the per-backend route never served, and is removed (MIK-7650).
+- Answers on the per-backend route `/mcp/{name}` now write the `response_delivery_attempt` audit record that `POST /mcp` and stdio write. The record has the same fields, carries the read verdict, and withholds the answer under `FailClosed` when it cannot be written (MIK-7669).
+- **Release matrix citations are current.** The supported matrix cites the live lines for the modern protocol constant, the `modern_protocol` default and the default protocol version, and the MRTR.7 stdio test header names the production caller of the input bridge. Docs and comments only. (MIK-7723)
+- **Windows mutant rows run under pwsh.** The mutants workflow launches its Windows rows from pwsh, as the Windows check does, and a step fails the job if the shell holds an enabled backup or restore privilege, so an ACL-refusal mutant is judged in the same environment as CI. CI harness only. (MIK-7753)
+- **A listen names its tasks where the tasks extension puts them.** `subscriptions/listen` reads the task filter from `notifications.taskIds` as well as the params root, as one filter. The ownership narrowing and the direct-route guard cover both placements, and the acknowledgement names the narrowed ids. (MIK-7778)
+- Events: governance audit records name the real failure code of a refused verification, take the callback host stamped at fan-out, are labelled subscribe or refresh by the commit itself, and a dead letter the caps evict at once still leaves its record.
+- Events: `task.settled` is published for tasks the startup recovery settles, because the task event source is installed before recovery runs instead of after (MIK-7840).
+- Events: an attempt ending (revoked or overdue) that the audit log refuses is retried instead of being removed unrecorded; pre-upgrade records are documented as `unrecorded` and an attempt with no body as an empty body hash (MIK-7842).
+- Fixed: task shutdown bounds the expiry join and store close, keeps the store open under a task that did not stop, and refuses a task started after the drain (MIK-7844).
+- A backend start refused before it could connect (an OAuth and identity-propagation clash, an invalid URL or WebSocket header) no longer makes a later `hardened` registry pairing refuse that backend, and an HTTP start that read its destination policy before a pairing stamped one now refuses instead of connecting unpinned, with its OAuth client built under the same policy as its transport (MIK-7855).
+- **An OAuth capability with an expired, unrefreshable or unreadable token is not listed.** `tools/list` and search no longer offer a capability whose login cannot be used. (MIK-7856)
+- A provenance receipt's `backend_ok` is now optional and an event receipt carries none, where it used to sign `true` unobserved; scoring abstains on an event receipt (MIK-7859, UPGRADING-4.0 item 140).
+- **A confirmation question that never reached the client no longer spends the signing nonce.** Under hardened signing, a destructive call refused because no session could carry its question gives its nonce back, so a retry carries the same nonce. A question that was delivered and then timed out or was cancelled keeps the nonce spent, since the operator may have seen it. (MIK-7869)
+- **A server-ended listen names the server.** The terminal `subscriptions/listen` result now carries `io.modelcontextprotocol/serverInfo` in `_meta`, as every other result does. (MIK-7878)
+- A startup subscription reconcile that cannot finish now logs a warning on every failed attempt and every 30 s of waiting for the capability scan, so a stalled start names its cause (MIK-7891).
+- The EVENTS.8 evidence script now fails a run whose unsubscribe named another subscription than the verified subscribe (another callback URL or arguments), or whose subscribe or unsubscribe was batched with other calls; the dev shim records a digest of each call's event, callback URL and arguments instead of the URL itself (MIK-7892).
+- events: authorization of a backend's upstream events now consults the live eligibility check, so a subscription or a queued event for a backend a reload made ineligible is refused at subscribe, fan-out and delivery alike; the delivery worker asks again after the audit waits, just before the send (MIK-7894)
+- **A backend's `null` result reaches the client.** A backend that answered with `"result": null`
+  over HTTP or WebSocket, or a replayed idempotent answer with a `null` result, reached the client
+  as a frame with neither `result` nor `error`, which JSON-RPC 2.0 forbids. The `null` result is
+  now delivered as sent; an error response still carries no `result`. Where response signing or
+  signature-chain emission applies, a `null` result is refused like any other non-object result.
+  (MIK-7924)
+- **A call that races a reload can be retried under its idempotency key.** A backend that a reload or
+  shutdown had stopped refused the call before sending anything, but the refusal settled the call's
+  idempotency key as a failure, so a retry under the same key got that failure back for work that
+  never ran. The refusal now frees the key, and a retry reaches the backend that replaced it. This
+  refusal now answers `-32001` ("not found") instead of a backend-unavailable error, and is audited as
+  `invalid` rather than `error`; it occurs only when a call races a reload or a shutdown. Warm start
+  still retries such a backend after a reload. (MIK-7936)
+- **A backend's slow tool list no longer delays its other event notices.** When a backend announced a
+  tools change, the gateway refilled its cached tool list before handling anything else from that
+  backend, so a `tools/list` that hung delayed every other notice on the session (resource and prompt
+  changes, resource updates) for up to 30 seconds. The refill now runs alongside the session, which
+  keeps delivering other notices; the `tools_changed` event still waits for the refreshed list.
+  (MIK-7937)
+
+### Security
+
+- **R2 checks a tool call even when the caller never listed the backend** (F13, MIK-7586,
+  #1141). A `tools/call` on a cold catalogue slot now lists that backend's tools once, as the
+  caller, before judging the call's argument keys, instead of forwarding it unchecked. Under
+  `closed`, a list that cannot be read, a tool outside a truncated list and a tool a complete
+  list lacks are refused; `standard` forwards and counts each case. The list is single-flight
+  per slot, bounded by the backend's `timeout`, held off for 10 s after a failure, and obeys
+  the slot's circuit breaker and rate limiter. A backend that cannot be reached answers, and
+  is charged to the error budget, as a failed call to it would. New
+  `mcp_input_schema_events_total` kinds; see UPGRADING §59.
+- **Secrets stay out of the request URI and its trace.** The HTTP trace span records the method and
+  route template, never the full URI, so a session id or a dashboard link value no longer reaches
+  DEBUG logs. `/api/costs` takes a session id in the `X-Cost-Session-Id` header (`?session=` is 400),
+  and a dashboard link presented from another machine is used up. UPGRADING-4.0 §70. (#1529)
+
+- **The OWASP self-assessment matches the shipped controls.** It had claimed a
+  tool-descriptor validator and a grant-collision check that never run on a request, a removed
+  SSRF module path, and blocking by controls that are opt-in or observe-only. It now cites
+  request-path and config-load controls (plus release-time supply-chain controls for ASI04),
+  states which are on by default, adds the 4.0 multi-user controls, uses the 2026 OWASP ASI
+  risk names, and reads 2/10 COVERED, 8/10 PARTIAL.
+  CI fails when it cites a path or test that no longer exists.
+  Withholding poisoned tool descriptors is tracked in #1441.
+
+- **Task calls on `POST /mcp/{name}` are refused instead of forwarded.** The route passed
+  `tasks/*` (and `subscriptions/listen` naming `taskIds`) to the backend with no owner check,
+  so callers sharing a backend could read or cancel each other's tasks. These methods now
+  answer JSON-RPC -32601 and never reach the backend; `POST /mcp` still serves tasks.
+  See UPGRADING-4.0 item 67 (#1442).
+
+- **A non-admin call to a callback-registering capability is refused as a denial.** It was
+  answered as a configuration error (HTTP 400, JSON-RPC -32603). It is now HTTP 403,
+  JSON-RPC -32600, the shape admin-only tools answer with, and logs the "refused by
+  authorization" warning. See UPGRADING-4.0 item 66 for when the invocation audit log
+  records it.
+
+- **Capability pins cover text after a line break inside the pin line.** The pin hash
+  excluded the whole `sha256:` line, but YAML also ends a line at a lone CR, NEL, LS or PS,
+  so text after one was parsed yet not hashed. Only the pin value is excluded now; re-pinning
+  a pinned CRLF file still verifies. See UPGRADING-4.0 item 64. (#1212)
+
+- **Legacy HTTP session ids are minted by the gateway and never adopted** (F9, MIK-7585,
+  #1140). A client-chosen `Mcp-Session-Id` that names no live session gets a fresh `gw-` id
+  instead of becoming the session's id, so an unauthenticated caller can no longer pick an id
+  ahead of another caller and receive or answer its elicitation prompts. Every
+  unauthenticated caller is one owner class, separated only by holding the minted id. An
+  empty or whitespace id is treated as absent (DELETE answers 400, was 404). Session ids in logs, the
+  firewall audit log and the transparency log are 8-hex fingerprints; `audit show --session` finds
+  entries by the raw id or its fingerprint (a fingerprint can collide). Breaking for library users: `first_session_id` is removed from
+  `NotificationMultiplexer` and `ProxyManager`, and `get_or_create_session_for` is no
+  longer public. See UPGRADING-4.0 item 58.
+- **The direct route `POST /mcp/{name}` writes the audit log's invocation record**
+  (MIK-7570.AUDIT.2). Every `tools/call` on it, refused, failed or malformed included,
+  now writes the same `schema_version: 2` record as `gateway_invoke`, with `route:
+  "direct"`; meta-route records carry `route: "meta"`. With auth on, a failed append
+  withholds the result (503, -32005). The backend-scope check now runs after the body is
+  parsed, so its refusal names the tool; it still answers 403 for an unknown backend.
+  A direct-route `tools/call` naming no tool is refused (400, -32602) instead of being
+  forwarded without the per-tool authorization check.
+  See UPGRADING-4.0 item 43.
+- **Attestation `enforce` covers every method on the direct route (breaking)**
+  (MIK-7570.ATTEST.1). `POST /mcp/{name}` now refuses, with -32002 and HTTP 403,
+  any forwarded method whose token is missing or does not grant its target:
+  `resources/read`, `resources/subscribe` and `resources/unsubscribe` match the
+  URI, `prompts/get` the prompt name, list methods need an authentic token, and
+  a method outside the table needs a `"*"` token. `initialize`, `ping` and
+  notifications are exempt. The check runs before identity minting, and the
+  token is stripped before telemetry. A surfaced tool run as a task carries its
+  `_meta` token to dispatch. See UPGRADING-4.0 item 46.
+- **Container builds apply current Debian security updates.** The image's `apt-get upgrade` layer was restored from the build cache while the base image stayed unchanged, so published images, 3.x included, could ship Debian packages whose security fixes were already available. Every image build now re-runs the upgrade. Operators on a published image move to a 4.0 image; a 3.x deployment that stays on 3.x rebuilds its image from source with `docker build --no-cache`. No config change. (#535)
+  Affects: published container images of 2.12.2 up to 3.5.1; the 4.0.0 pre-release images re-ran the upgrade. Operator action: move to a 4.0 image, or rebuild a 3.x image from source with `docker build --no-cache`.
+- The key server no longer issues a full-access token for a scope request that misses its policy. From 2.4.0 (the first release with the key server) through 3.5.1, a token request whose requested backends or tools overlapped nothing in the matching policy rule got empty scope lists, and an empty list means "all": the token reached every backend, or every tool. The exchange now answers 403 and issues no token (UPGRADING item 93). Affected: 2.4.0 through 3.5.1, with the key server enabled; 4.0.0-beta.1 and later carry the fix. Action: upgrade. Then, in the key server's audit log, check each issued token whose `backends` or `tools` list is empty against the policy rule that matched: an empty list is expected only where the rule grants everything. Revoke any such token still live with `DELETE /auth/token/{jti}`. (#757)
+  Affects: 2.4.0 through 3.5.1 with the key server enabled; the 4.0.0 pre-releases carry the fix. Operator action: check each key-server token issued with an empty backends or tools list against its matched policy rule and revoke any still-live mis-scoped token with DELETE /auth/token/{jti}.
+- **Task calls to surfaced tools are confirmed unless the gateway knows they are harmless.**
+  The destructive-call confirmation read the shared tool list, which on a backend with
+  `identity_propagation` does not describe the caller's session, so a destructive task call
+  could run unconfirmed. Such calls are now always confirmed there, and elsewhere whenever the
+  tool is missing from the tool list. See UPGRADING-4.0 item 73. (#1623)
+  Affects: 4.0.0 pre-releases only; 3.x unaffected. Operator action: a client that makes such task calls authenticates (the confirmation is bound to a caller the gateway can name) and declares the `elicitation` capability, or calls without `task`; otherwise none.
+- **Windows checks secret and trust files, and creates them owner-only.** The config file, OAuth token and client files, and generated mTLS certificates and keys are created with one grant to the gateway's account. Those files, and the inputs the gateway only reads (env files, `file:` targets, TLS keys and credential files), are refused on read when another account can read or change them. Trust files (TLS certificate and CRL, identity grants and journal, control-plane grants and policies) may be read by others but are refused when another account can change them. The refusal names every broken rule and prints the PowerShell repair for the file's class. A create on a FAT or exFAT volume, which would discard its ACL, is refused: no secret is written; the empty file is removed, and a refusal that could not remove it says so. A pipe or device is refused as not a regular file. See UPGRADING-4.0 item 99. (#1718)
+  Affects: 2.0.0 up to 3.5.1 and the 4.0.0 pre-releases. Operator action: on Windows, run the PowerShell repair printed for any secret or trust file refused at startup (UPGRADING-4.0 item 99), and keep secret files on an NTFS or ReFS volume, since FAT and exFAT keep no ACLs.
+- Capability calls, OpenAPI/UI spec imports and capability discovery no longer follow `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`, which let a proxy bypass the gateway's SSRF checks; a new `capabilities.egress_proxy` key names a proxy explicitly (UPGRADING item 77). (#1881)
+  Affects: 2.6.0 up to 3.5.1 and the 4.0.0 pre-releases. Operator action: set `capabilities.egress_proxy` (under `security.posture: standard`; `hardened` refuses it) if capability calls must go through a proxy, since `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` no longer apply; a spec import that could only reach its spec through a proxy is downloaded and imported from a file instead (UPGRADING-4.0 item 77).
+- A destination the SSRF guard refuses after DNS resolution now answers `-32600 "SSRF blocked: ..."` after one attempt, in every posture, instead of three attempts and `-32000`. Under `security.posture: hardened`, `ssrf_protection` is forced on and `trust_configured_backends` off, and HTTP and WebSocket backends reach only public addresses: names are resolved once and pinned (a WebSocket keeps its SNI and `Host`), IP literals are refused before connecting, proxy environment variables are ignored, and an OAuth backend's authorization server, token and registration endpoints and redirect hops are checked the same way. Upgrade guide item 109. (#1942)
+  Affects: the hardened posture is in no released version; the single `-32600` SSRF refusal replaces the retried `-32000` of 3.x and the pre-releases. Operator action: match SSRF refusals on `-32600`; to opt in to the posture, set `security.posture: hardened`.
+- **Tools with a poisoned description are withheld.** Every backend tool list is checked with the
+  tool-poisoning rule (AX-010). A tool that fails at blocking severity is left out of every list
+  the gateway serves and refused by name, for every caller, once any listing has shown it. Each
+  withheld description is logged once with a digest; `allow_flagged_tools` serves a reviewed tool,
+  pinned to that digest. A tool entry that cannot be parsed is withheld, including every copy of
+  a name the backend also lists unparseable; a tool-call notification for a withheld tool is
+  refused; past 4,096 withheld names a backend has every tool withheld until restart. The unused
+  `detect_collisions` is removed. UPGRADING-4.0 §75. (#1441)
+  Affects: 2.0.0 up to 3.5.1 and the 4.0.0 pre-releases. Operator action: read the `Tool withheld` warnings and list any reviewed tool, with its digest, under that backend's `allow_flagged_tools`.
+- **CI installs cosign 2.6.5.** The jobs that sign and verify release images and Helm charts
+  installed cosign 2.5.2, which is affected by GHSA-fx35-mq7g-6g98 and GHSA-whqx-f9j3-ch6m. A CI
+  check now fails any cosign pin below 2.6.5. Verify images with cosign 2.6.5 or later on 2.x, or 3.1.3 or later on 3.x.
+  Affects: release-image and Helm-chart signing and verification jobs in CI for 3.x up to 3.5.1 and the 4.0.0 pre-releases; the gateway binary is unaffected. Operator action: verify images and charts with cosign 2.6.5 or later on 2.x, or 3.1.3 or later on 3.x.
+- A capability's OAuth token refresh no longer sends the refresh token or client secret to an unchecked `token_endpoint`: the endpoint gets the capability's destination check, and URL-validation errors no longer echo userinfo, query or fragment (UPGRADING item 84). (#2113)
+  Affects: 2.5.0 up to 3.5.1 and the 4.0.0 pre-releases. Operator action: if a capability's identity provider is on a private network, name it by hostname and set `capabilities.egress_proxy` to a proxy that reaches it, under `security.posture: standard` (UPGRADING-4.0 item 84); otherwise none.
+- The response firewall scans JSON object keys as well as values. A credential-shaped key in a tool result is renamed to `[REDACTED:credential]` (with a `#n` suffix on collision), and one in a question the client must echo refuses the response (UPGRADING item 85). (#2132)
+  Affects: 2.6.0 up to 3.5.1 and the 4.0.0 pre-releases. Operator action: if a backend uses credential-shaped strings as object keys, use other key names; clients see such keys renamed (UPGRADING-4.0 item 85); otherwise none.
+- **Release jobs build without a cache.** The release verify job and the task SDK recovery
+  workflow restored a Rust build cache, so an earlier run's saved output could be built into a
+  release. Both now build cold, npm publishing turns setup-node's cache off, and a CI check fails
+  any cache restored in a release job.
+  Affects: release-gating CI jobs of 2.10.0 up to 3.5.1 and the 4.0.0 pre-releases (verify, and in the pre-releases the task SDK recovery check); the published binaries and crate were built in jobs that restored no cache. Operator action: none.
+- **The control-plane store refuses a collection of another format version.** `grants.json` and `policies.json` are read only at the format version this build writes. A file at any other `schema_version` is refused, and the error names the file, the version found and the version supported; a write against it is refused and leaves the file as it is. Before, such a file loaded silently and the next write rewrote it in this build's format, dropping fields this build does not know. (#2142)
+  Affects: 3.x up to 3.5.1 and the 4.0.0 pre-releases. Operator action: none.
+- **Credential redaction covers overlapping matches.** When two credential patterns matched overlapping text, or one pattern matched twice with an overlap, the redactor could leave part of the credential in the response. Every match is now found in the original text and each overlapping run is replaced once. A credential finding's excerpt in the firewall audit log is the redacted text. (#2145)
+  Affects: 2.6.0 up to 3.5.1 and the 4.0.0 pre-releases. Operator action: treat credential-finding excerpts in firewall audit logs written before the upgrade as sensitive.
+- `mcp-gateway cap import-url` pins every host name it resolves and refuses one that resolves to a private, loopback or reserved address, in the base URL or a redirect (UPGRADING item 87). (#2160)
+  Affects: 2.6.0 up to 3.5.1 and the 4.0.0 pre-releases. Operator action: to build capabilities from an internal API, download its spec and run `mcp-gateway cap import <file>` (UPGRADING-4.0 item 87); otherwise none.
+- **Per-backend routes run the same dispatch controls as `gateway_invoke`.** `POST /mcp/{name}`
+  `tools/call` skipped the kill switch, capability auto-disable, the session's routing profile,
+  cost budgets, the error budget, response gates and a response-firewall Block. Each control now
+  exists once and both routes call it; with message signing on, direct `tools/call` is refused outside `security.posture: hardened`.
+  See UPGRADING-4.0 item 69. (#2194)
+  Affects: 2.4.0 up to 3.5.1 and the 4.0.0 pre-releases. Operator action: move direct `tools/call` callers to `gateway_invoke` where message signing is on outside `security.posture: hardened` (hardened signs direct results).
+- **Agent identity rests on proof, not on a label the caller sends.** From 2.10.1 through 3.5.1, with `security.agent_identity.enabled`, a caller's own `X-Agent-ID` header, `agent_id` query parameter or unsigned JWT `agent_id` claim satisfied `require_id` and `known_agents`, so any client could name itself onto the allowlist. Only a proven principal now satisfies them: the mTLS client-certificate subject (first SAN URI, else CN) or the `sub` of an agent token the gateway validated. The unsigned JWT claim is no longer read, and the header or query label is kept for telemetry and cost attribution. A label that differs from the proven principal is refused unless `security.agent_identity.principal_labels` lists it for that principal. Operators who relied on labels move their callers to mTLS or validated agent tokens, or set `security.agent_identity.allow_unverified_agent_identity: true` to let a label satisfy `require_id` and `known_agents` again; `known_agents` entries name their source (UPGRADING-4.0 item 27). With mTLS, a label that differs from the certificate subject is refused the same way; where subjects cannot be compared with short labels, list the source in `security.agent_identity.incomparable_proof_sources` (for example `[mtls]`) to accept and audit the mismatch for that source only. (#684, #692)
+  Affects: 2.10.1 up to 3.5.1; the 4.0.0 pre-releases carry the fix. Operator action: move label-identified callers to mTLS or validated agent tokens, or set security.agent_identity.allow_unverified_agent_identity: true; give each known_agents entry its source (UPGRADING-4.0 item 27).
+- With context integrity enforcing, a withheld or rewritten result no longer returns the matched injection text in `_context_integrity.classification.findings[].evidence` (it reads `"withheld"`); the gateway log records the original evidence. (#2213)
+  Affects: 3.x up to 3.5.1 and the 4.0.0 pre-releases. Operator action: none.
+- **Dashboard sessions expire, and logout ends them.** A session opened from the dashboard
+  link lasted until the gateway restarted, and a copied cookie kept working. It now ends after
+  30 minutes idle or 8 hours total (`auth.dashboard_session`), and the dashboard's own refresh
+  does not count as activity. `POST /dashboard/logout` and a Log out button end it on the
+  server. `mcp-gateway dashboard-link` prints a fresh single-use link without a restart. See
+  UPGRADING-4.0 item 71. (#1618)
+  Affects: 3.5.0 up to 3.5.1 and the 4.0.0 pre-releases. Operator action: none; the defaults apply, and `auth.dashboard_session` adjusts the limits.
+- A proven identifier (agent JWT `sub`, mTLS SAN URI or CN) is now used verbatim for agent identity, grant subjects and per-caller firewall keys, so a padded subject such as `" admin "` no longer resolves as the principal `admin`, and a SAN longer than 512 characters is no longer truncated onto another certificate's key. Grants and per-caller firewall keys now pick a certificate's subject by the same rule as agent identity (first non-empty SAN URI, else CN).
+  Affects: 3.x up to 3.5.1 and the 4.0.0 pre-releases (grant subjects; agent identity from a proven identifier is new in 4.0). Operator action: reissue any credential whose JWT `sub` or certificate subject carries padding, move grants that named a certificate's CN when its first SAN URI is empty and a later SAN URI is not, and write out in full any grant subject that was cut to 512 characters.
+- The response firewall no longer refuses about 1 in 20,000 input-required continuations: a continuation token this gateway minted, which still opens under its own keys, is delivered unchanged instead of being read as a credential, while any other string of the same shape is still redacted (#2210).
+  Affects: 4.0.0 pre-releases only; 3.x unaffected. Operator action: none.
+- **A managed account grant stops serving when its account descriptor changes.** A grant
+  connected or migrated under one descriptor kept serving after the operator changed that
+  descriptor's scopes or client and restarted. The gateway now compares the grant's stored
+  descriptor revision with the configured one before any refresh or release, and asks the
+  user to reconnect on a mismatch. Reverting the edit restores the grant. (#2249)
+  Affects: 4.0.0 pre-releases only; 3.x unaffected. Operator action: after changing an account descriptor's scopes or client, have each user reconnect that account, or revert the edit.
+- **Legacy credential import checks the file's owner, not only its mode.** A 3.x credential
+  file that is mode 0600 but owned by another user is refused. Before, a migration run as
+  root could import a file another local user had planted as the operator's credential. (#2250)
+  Affects: 4.0.0 pre-releases only; 3.x unaffected. Operator action: if a pre-release ran the legacy import as root or with permission to read other users' files (such as `CAP_DAC_READ_SEARCH`), confirm the imported personal accounts are the operator's own; otherwise none.
+- **Unix secret and trust files must belong to the gateway's user or root.** A config, env, key, token, credential, certificate, CRL, grants or control-plane file owned by any other account is refused, whatever its mode. The error names the owner uid and the `chown` fix; root-owned Kubernetes projections still load. See UPGRADING-4.0 item 96. (#2266)
+  Affects: 2.0.0 up to 3.5.1 and the 4.0.0 pre-releases. Operator action: `chown` each such file to the gateway's uid (`chown 1001` in the container), then `chmod 600` a secret or `chmod go-w` a trust file.
+- **A notification on `/mcp/{name}` is refused where its caller's request would be.** Notifications used to fall back to the shared upstream session whenever the caller's credential could not be resolved, so a caller refused on a `required` identity-propagation, passthrough or account-bound backend, or on a gateway-held personal login behind a multi-user gateway, could still deliver `notifications/*` to it. Such a notification now gets `403` and reaches no upstream session; a passthrough refusal is audited as `idp_refuse`. Backends with no personal binding still take notifications on the shared session. (#2240)
+  Affects: 3.x up to 3.5.1 and the 4.0.0 pre-releases. Operator action: none.
+- **The identity grant CLI writes proven ids as given.** `mcp-gateway identity` trimmed the
+  subject id and the `--agent` id, so a grant for a padded certificate or token subject was
+  written for the bare id, which is a different principal. Ids are now stored verbatim; empty
+  and whitespace-only ids are still refused. (#2284)
+  Affects: 4.0.0 pre-releases only, for OIDC subjects (their grant check used the subject verbatim while the CLI trimmed it); 3.x unaffected (it trimmed both). Operator action: re-create with the exact subject any grant written by a pre-release CLI for a padded subject.
+- **A bearer token and an API key are two users, even with `auth.single_user`.** A gateway with
+  both counted as single-user, so both credentials were served the sole operator's personal
+  accounts and the per-user OAuth isolation guard stayed off. The bearer token now counts as a
+  credential. See UPGRADING-4.0 item 97. (#2241)
+  Affects: 3.x up to 3.5.1 and the 4.0.0 pre-releases. Operator action: a personal gateway that needs to stay single-user keeps one credential, removing either `auth.bearer_token` or the extra API key.
+- **A restart no longer launders a cut audit-log tail.** When `.hwm` was missing at startup, the gateway wrote a fresh mark from the surviving tail, so deleting `.hwm`, cutting the tail and restarting made `audit verify` pass. On a log that went through segment handling it now first chains an `audit_segment_hwm_missing` record; live verify fails on it, archive mode warns, and every later segment-open record carries it, so retention cannot erase it. (#2294)
+  Affects: no released version. Operator action: none.
+- A backend whose transport close never completes no longer stalls grant-reload revocation or the idle reaper: eviction closes each slot's transport in the background, bounded by `close_stage`, and shutdown waits for those closes (#2245).
+  Affects: the idle reaper of 3.2.0 up to 3.5.1 and the 4.0.0 pre-releases; the grant-reload eviction of the 4.0.0 pre-releases only. Operator action: none.
+- A backend with identity propagation admits at most 64 per-caller slots, and one caller at most 8; every anonymous caller counts as one. A passthrough caller could mint a new slot, with its own upstream connection, for each header value it sent. Past a limit the caller is refused (`mcp_backend_identity_slots_refused_total`), never served on the shared slot. Metadata probes no longer create slots (#2300).
+  Affects: 3.2.0 up to 3.5.1 and the 4.0.0 pre-releases. Operator action: with auth off, expect at most 8 passthrough credentials served at once per backend; turn auth on to give each user their own budget (UPGRADING-4.0 item 102).
+- At most 64 closes of evicted slots run at once per backend. A close that finds no free permit, or runs out of its `close_stage` budget is dropped and counted in `mcp_backend_eviction_close_abandoned_total` (#2300).
+  Affects: no released version. Operator action: none.
+- **A notification on `/mcp/{name}` carries its caller's credential, never the backend's static one.** A direct-route notification kept only the caller's session and went out under the backend's configured static headers. On a required-passthrough backend, any non-empty `x-mcp-passthrough-authorization` could deliver notifications under the gateway's own credential. Notifications now carry the resolved passthrough or minted credential with the same override rule as requests. They are refused when the transport cannot carry it, and forwarding one is audited as `idp_mint`. A caller header value that cannot be sent now withholds the static header of that name on requests and notifications alike. (#2292)
+  Affects: 3.x up to 3.5.1 and the 4.0.0 pre-releases. Operator action: none.
+- **A response-firewall Block on a tool listing or a task result is now refused, never served.** The direct route (`/mcp/{name}` `tools/list`) logged a blocking verdict and served the list; `gateway_list_tools` and `gateway_search_tools` redacted a blocked list and served it as a success; task results passed no firewall at all. The listing tools are now inspected on their raw value before it is serialised (so a quoted key or a split injection phrase is still seen), task results at settlement, and a Block answers with the JSON-RPC -32600 refusal; a task settles on that refusal, so `tasks/get` never serves the result. A list with any blocking finding (by default, credential material in a tool description) is refused whole. (#2349, #2350, #2351)
+  Affects: 2.6.0 up to 3.5.1 and the 4.0.0 pre-releases (the task-result path: the pre-releases only). Operator action: none; a backend whose tool listing is now refused needs the flagged description fixed at the backend.
+- `security.signature_chain`: the gateway can sign an origin link over each backend result, and a signature chain sent by a backend is now stripped (#2381).
+  Affects: no released version (no release gave the chain key a meaning). Operator action: none unless a client trusted a chain a backend sent; to have the gateway sign origin links, set `security.signature_chain` (UPGRADING-4.0 item 82).
+- **`dashboard-link` no longer echoes URL credentials.** A `--url` carrying userinfo or a query token was printed back in its error messages, along with the request URL inside the transport error. Errors now show only scheme, host and port. (#2394)
+  Affects: no released version. Operator action: none.
+- Every call to a personal capability now writes an `identity_grant_decision` record to the audit log for each grant decision, allow and deny, paired with the call by `trace_id`; under `FailClosed` a record that cannot be written answers `-32005` (MIK-7570.AUDIT.3).
+  Affects: 3.x up to 3.5.1 and the 4.0.0 pre-releases. Operator action: where a SIEM rule or script counts audit records per call, filter on `kind` (UPGRADING-4.0 item 103); otherwise none.
+- Security counters: `mcp_auth_failures_total{kind}` counts refused credentials (missing, invalid, expired API key, expired dashboard session, refused bootstrap link, token-exchange refusals) and `mcp_authz_denials_total{route, reason}` counts refused calls on the meta, direct, admin, admin-UI and control-plane routes, with auth on or off. Labels are fixed words and never name a caller, backend, tool or path. `docs/MULTI_USER.md` has example alerts. (MIK-7570.METRICS.2, #2401)
+  Affects: no released version. Operator action: none; example alerts are in docs/MULTI_USER.md.
+- A streaming session now belongs to the caller's proven subject and the credential it presented, not the credential alone. Two agents behind one shared API key, or two callers with authentication off, could resume and delete each other's sessions and read each other's notifications by presenting the session id. Now a different subject, or the same subject with another credential, gets a new session; POST, GET and DELETE apply one rule. Callers that prove no subject keep the old behaviour. (#2411)
+  Affects: 2.0.1 up to 3.5.1 and the 4.0.0 pre-releases. Operator action: a client that proves a subject and renews its bearer token mid-session re-initializes with the new token and uses the new `Mcp-Session-Id` (UPGRADING-4.0 item 104); otherwise none.
+- **A tool blocked after a keyed call is refused on the re-issue.** A tool withheld by the tool-poisoning check (AX-010) after a caller's first keyed call used to be answered from the idempotency cache when the caller repeated the key. The block is now checked before any replay on `/mcp`, `/mcp/{name}` and stdio. On `/mcp/{name}` the whole security gate (tool policy, per-tool scope, firewall) now runs before the cache, so a replayed call also counts toward firewall budgets. (#2445)
+  Affects: 4.0.0 pre-releases only (their `/mcp/{name}` route answered a repeated key from the cache before the security gate; the AX-010 withholding itself is new in 4.0.0); 3.x unaffected. Operator action: none.
+- A cost report covers only the caller's own spend. A request without a session (the 2026-07-28 protocol) opens no per-session cost bucket and gets no session report; per-key accounting and budgets are unchanged, and admins still see every key. A prompt cache key is derived only from a real session. (#2448)
+  Affects: 4.0.0 pre-releases only; 3.x unaffected. Operator action: none.
+- **A repeated task call and `tasks/get` are checked against current policy.** A task-augmented `tools/call` repeated with the same idempotency key and body, and `tasks/get` on a finished task, used to return the stored result without the invocation policy (identity grants, attestation, kill switch, capability disable, profile, withheld tools). Both now re-check the calls that produced the result first, on every repeat or read; a fresh task is still checked by its worker. A read of a finished task whose target is a personal capability also writes an `identity_grant_decision` audit record (an unchanged decision is usually suppressed for 10 minutes), so a SIEM rule counting decision records per call sees more for polled tasks (`docs/UPGRADING-4.0.md` items 105 and 117). Task records name those calls (record version 5); see `docs/UPGRADING-4.0.md` item 105 for rollback. (#2450)
+  Affects: 4.0.0 pre-releases only; 3.x unaffected. Operator action: back up `tasks.store_dir` before upgrading if a rollback to a pre-release may be needed; under attestation `enforce`, a client reading a finished task sends a fresh token in `_meta["io.mcp-gateway/recovery"].attestation`.
+- **The `-full` image no longer ships npm's vulnerable `brace-expansion` and `undici`.**
+  The image's Trivy gate flagged brace-expansion 5.0.9 (CVE-2026-102276, CVE-2026-102278) and
+  undici 6.27.0 (CVE-2026-19534) inside npm's vendored tree. Both are now overlaid with
+  hash-pinned brace-expansion 5.0.12 and undici 6.29.0, the latest releases on the same majors.
+  Affects: the `-full` image of the 4.0.0 pre-releases; 3.x unaffected (it had no `-full` image). Operator action: none.
+- **A task waiting for input faces current policy before its pending requests are shown.** `tasks/get` and a repeated task-augmented call re-authorize the task's recorded calls before returning an `input_required` task, as they already did for a finished task's result. Once a tool is withheld, a grant revoked or a backend disabled, the backend's pending input requests are no longer delivered. The task itself is left unchanged, and it can be read and answered again once policy admits its calls. (#2466)
+  Affects: 4.0.0 pre-releases only; 3.x unaffected. Operator action: none.
+- On `/mcp/{name}`, a presented `mcp-session-id` is used only when the caller owns that session, by the same owner rule `/mcp` uses; otherwise the call runs with no session. (#2468)
+  Affects: no released version. Operator action: none.
+- A backend can verify or require an upstream gateway's signature chain; this gateway preserves it and appends its own link, so a client can verify every hop (#2483).
+  Affects: no released version. Operator action: none; to opt in, set a backend's `signature_chain` to `verify` or `require`.
+- Under `security.posture: hardened`, a set `capabilities.egress_proxy` refuses load: capability traffic through a proxy would bypass the destination policy. `standard` keeps the proxy. (#2491)
+  Affects: no released version. Operator action: under `security.posture: hardened`, remove `capabilities.egress_proxy` or keep `security.posture: standard`; otherwise none.
+- Keyed legacy `gateway_set_state` retries are now bound to the calling session, preventing one session of a principal from replaying another session's retained result when they reuse an idempotency key ([@blackmore-technology-group](https://github.com/blackmore-technology-group), [#2670](https://github.com/MikkoParkkola/mcp-gateway/pull/2670), fixes [#2505](https://github.com/MikkoParkkola/mcp-gateway/issues/2505)).
+  Affects: 4.0.0 pre-releases only; 3.x unaffected. Operator action: none.
+- Under `security.posture: hardened`, message signing is forced on, so a start without a signing secret of at least 32 bytes is refused, and every successful `tools/call` result on `/mcp` and on `/mcp/{backend}` carries the v2 `_signature` over the nonce in `params._meta["io.mcp-gateway/nonce"]`, admitted once before dispatch in one replay store for both routes. A legacy client must declare elicitation: only an `initialize` that declares it opens a session on `/mcp`, the direct route serves no other legacy request, and a legacy destructive call nobody can confirm is refused. A reload that changes the posture is now refused with the posture's own reason. Upgrade guide item 112. (#1942, #2544)
+  Affects: no released version. Operator action: under `security.posture: hardened`, set `security.message_signing.shared_secret` to at least 32 bytes, send one fresh nonce per `tools/call`, and make legacy clients declare elicitation on `/mcp`, or move them to 2026-07-28; on `/mcp/{backend}` a legacy client gets only its `initialize`, so it moves to 2026-07-28 (Upgrade guide item 112).
+- Under `security.posture: hardened`, backends named in the new `security.hardened.private_backends` may reach loopback, RFC 1918 and unique-local addresses, by literal, by pinned name, through redirects and OAuth endpoints; link-local (including 169.254.169.254) and the AWS IPv6 metadata address `fd00:ec2::254` stay refused for every backend, and unlisted backends stay public-only. A listed name that is not a configured backend refuses start, and the list is restart-only. Upgrade guide item 114. (#1942, #2559)
+  Affects: no released version. Operator action: under `security.posture: hardened`, list each backend that must reach a private address in `security.hardened.private_backends` and restart; otherwise none.
+- **Key-server OIDC URLs must be HTTPS off this machine.** A `key_server.oidc` issuer,
+  `jwks_uri` or `discovery_url` that is `http://` to a non-loopback host refuses to start, and
+  a token naming such an issuer is refused; before, the issuer only logged a warning. The key and
+  discovery fetches already refused `http://` URLs and redirects to `http://`, so the warning did
+  not open a cleartext key swap. Loopback `http://` is allowed and now works.
+  See UPGRADING-4.0 item 116. (#2590)
+  Affects: 2.4.0 through 3.5.1 and the 4.0.0 pre-releases, as a warning only (no cleartext key swap was reachable). Operator action: use `https://` for every `key_server.oidc` URL, or a loopback host for local testing.
+- With `tenant_guard.arg_keys` set, an invocation record is marked `attribution: "uninspected"` whenever any JSON-shaped part of the response could not be parsed (too deep, malformed, or encoded past three layers); JSON carried inside strings, double-encoded text included, is now read for tenants.
+  Affects: no released version. Operator action: none.
+- **A hardened pairing refuses backends that connected unpinned.** An embedder that started an
+  HTTP or WebSocket backend before pairing its registry with a hardened config kept a connection
+  with no SSRF pin. `ReloadContext::new` (and registering such a backend into a hardened
+  registry) now refuses, naming the backend; a start racing the pairing is refused when it
+  publishes. The shipped binary pairs before any backend starts and is unaffected. (#2597)
+  Affects: no released version. Operator action: none.
+- **The OAuth authorization code is no longer logged.** The gateway wrote the authorization code it received on the OAuth callback to the debug log (`Received authorization code`). Releases since v2.0.1, v3.5.1 included, did this; anyone running with debug logging enabled may have authorization codes in stored logs. A code is single-use and short-lived, and PKCE binds it to its verifier, but it is still a credential. (MIK-7725)
+  Affects: 2.0.1 through 3.5.1 and the 4.0.0 pre-releases. Operator action: delete or restrict access to stored debug logs that may contain `Received authorization code` entries.
+- **OIDC refusals no longer echo the issuer.** A load-time refusal names only the issuer's
+  origin, and a token refused for a cleartext issuer carries no part of it, so userinfo, a
+  tenant path or a query never reaches logs or support threads. (#2615)
+  Affects: no released version. Operator action: none.
+- An audit replay after a failed fail-closed invocation record no longer records the withheld value as delivered (MIK-7718).
+  Affects: no released version. Operator action: none.
+- A finished task polled with an unchanged grant decision writes one decision record per 10 minutes instead of one per poll, except after a restart, or for a new key once 4,096 live keys are tracked; a changed decision is written at once (MIK-7692).
+  Affects: no released version. Operator action: none.
+- An audit log cut below its signed high-water mark, or interrupted between the torn-tail repair and the missing-mark marker, keeps the finding; verify checks the hash at the mark (MIK-7712).
+  Affects: no released version. Operator action: none.
+- **A task stored before targets were recorded is re-checked or refused.** Such a row (written
+  by a 4.0.0 beta) recorded no call targets. Its one call is recovered from its upstream
+  descriptor when it has a consistent one, and `tasks/get` and a repeated keyed call check that
+  call against current policy. A legacy row without recoverable provenance, including a legacy plan, is
+  refused `-32003` rather than judged by its backend alone when it would deliver backend output (a
+  finished result or pending input requests); a working or cancelled one delivers none and is
+  answered as before. (#2620)
+  Affects: 4.0.0 pre-releases only; 3.x unaffected. Operator action: re-run a refused call under a new idempotency key, after checking whether its first run already had an external effect (UPGRADING-4.0 item 120); otherwise none.
+- **Passthrough slot budgets key on the credential.** Two OAuth agents or two client
+  certificates that share a display name no longer share one passthrough slot budget. (#2622)
+  Affects: no released version. Operator action: none.
+- **A firewall-refused direct `tools/list` is not a client success.** It no longer resets the
+  caller's consecutive-failure count. (#2622)
+  Affects: no released version. Operator action: none.
+- **The handed-back input round counts against the request budget.** A last round that would
+  take a bridged call past `BridgeBounds::requests` is refused instead of handed back. (#2622)
+  Affects: no released version. Operator action: none.
+- **`gateway_list_servers` counts a `required` account backend only for a caller with a view.**
+  A caller whose stored grant is missing, unusable or fenced by a changed descriptor (the sole
+  operator included) now sees `tools_count` 0 and `tools_known` false instead of the shared
+  slot's count. The grant is read without refreshing or minting. (#2631)
+  Affects: 4.0.0 pre-releases only; 3.x unaffected. Operator action: none.
+- **The relay detector respects time order.** A copy delivered after an egress no longer
+  excuses that egress or counts as evidence against it, when concurrent calls reach the
+  detector out of order. (#2633)
+  Affects: no released version. Operator action: none.
+- **A refused OAuth redirect is reported as SSRF blocked.** A redirect hop the destination
+  policy refuses during OAuth discovery, token or registration requests now answers
+  `-32600 SSRF blocked` instead of a generic OAuth failure, so a policy refusal is told apart
+  from an unreachable authorization server. (#2637)
+  Affects: no released version. Operator action: none.
+- **Cross-tenant reads are checked on every frame a caller receives.** With
+  `tenant_guard.arg_keys` set, results, errors, notifications, server requests and webhook deliveries
+  are judged against one per-process read history keyed on the caller. A caller whose
+  frames name more than one tenant inside `window_secs` is marked `cross_tenant_read: flagged`;
+  the new `tenant_guard.cross_tenant_reads` key takes `off|observe|block` and defaults to
+  `observe`. (MIK-7116 MIN.2)
+  Affects: 4.0.0 pre-releases only; 3.x unaffected. Operator action: none; set `security.firewall.tenant_guard.cross_tenant_reads: block` to refuse flagged callers instead of observing them.
+- **A refused call no longer spends its hardened signing nonce.** Under `security.posture: hardened`,
+  a meta tool call refused before the tool acts (hidden tool, answers to no question, admin-only,
+  destructive with no way to ask) and a direct call refused by its idempotency key leave the nonce
+  for the retry. The in-band confirmation challenge still spends it. (#2675)
+  Affects: no released version. Operator action: none.
+- **An agent-only or certificate-only caller can use idempotency keys.** A keyed `tools/call` from a
+  caller proven only by an OAuth agent token or a client certificate is owned by that proven
+  subject (the agent's client id; the certificate's SAN URI, else its CN) instead of being refused
+  `-32003`. Callers with a credential keep their existing keys. (#2692)
+  Affects: 4.0.0 pre-releases only; 3.x unaffected. Operator action: none.
+- MCP Events re-checks a subscription's credential before every delivery: a revoked key-server token, a delegated bearer no longer granted, a rotated static bearer or a logged-out dashboard session stops delivery at the next attempt (#2695).
+  Affects: no released version. Operator action: none.
+- **No delivered error data or task envelope claims a `cacheScope` other than `private`.** Error
+  data and the retained result of a task envelope whose `taskId` is not a string are clamped like
+  results; nested tool data is untouched. (#2702)
+  Affects: 4.0.0 pre-releases only; 3.x unaffected. Operator action: none.
+- A capability argument such as `{env.NAME}` is no longer expanded to the gateway's own secret: references are resolved in the capability template before caller values are substituted (MIK-7787).
+  Affects: 2.0.1 up to 3.5.1 and the 4.0.0 pre-releases (`{keychain.*}` from 2.1.0). Operator action: where untrusted callers could call capabilities, rotate every secret the gateway process can read through `{env.*}` or `{keychain.*}`, including ones no capability template referenced.
+- security: relay detection gains an `allowed_flows` allowlist under `security.firewall.collusion` (up to 64 `{source, egress}` `server:tool` glob pairs; a matching flow is not reported or refused) and the counters `mcp_gateway_collusion_relay_total{action}` and `mcp_gateway_collusion_unkeyed_egress_total{action}` (#2731)
+  Affects: no released version. Operator action: none.
+- security: verbatim relay detection records a stdio receipt only after the answer passed the cross-tenant read judge and the audit write, so a withheld read leaves no receipt (#2748)
+  Affects: no released version. Operator action: none.
+- MIK-7116 MIN.2 typing: every handler on an MCP path returns a sealed `OutboundReply` naming its origin (judged answer, judged stream, gateway refusal); a source test pins the registered handlers.
+  Affects: no released version. Operator action: none.
+- MIK-7116 MIN.4: a fixture corpus of outbound frames measures the cross-tenant read verdict per principal-session (test only).
+  Affects: no released version; test-only change. Operator action: none.
+- security: verbatim relay detection records a direct-route receipt only after the answer passed the read judge, the fail-closed audit write and the read record, so a withheld read leaves no receipt (#2757)
+  Affects: no released version. Operator action: none.
+- security: verbatim relay detection records a meta HTTP receipt only after the grant slot and the read record have let the answer go out, so an answer either replaces leaves no receipt (#2768)
+  Affects: no released version. Operator action: none.
+- security: verbatim relay detection now covers `prompts/get` arguments, `resources/read` URIs and the results of both on the meta, direct and stdio routes, keyed as `tools/call` is; the stdio catalogue is the local operator (#2771)
+  Affects: no released version. Operator action: none.
+- The direct route decides credential resolution and the OAuth-isolation guard on the backend it captured, not a by-name lookup a reload can swap (MIK-7804). (#2772)
+  Affects: 3.0.0 up to 3.5.1 and the 4.0.0 pre-releases. Operator action: none.
+- Test: a block-mode test proves the audit entries for the read and the block of a cross-tenant read (MIK-7116 MIN.2 grading).
+  Affects: no released version; test-only change. Operator action: none.
+- **The default process list no longer admits `mcp-scanner remote`.** No shipped capability runs it, and the tool cannot refuse private addresses at connect time, so an operator-pinned capability using it would have run unguarded. List it under `capabilities.process_commands` to opt in; setting that key replaces the shipped list. See UPGRADING-4.0 item 135. (#2801)
+  Affects: no released version. Operator action: none.
+- relay: catalogue reads (prompts and resources) audit the caller's own session, answer a relay refusal with HTTP 403 on the meta route (was 200), record receipts in the delivered form, keep the context-integrity verdict of string and array results, skip classification with relay detection off, and the direct route's relay scan skips the substituted progress token (#2810)
+  Affects: no released version. Operator action: a client that reads the HTTP status of a meta-route catalogue read handles 403 as a refusal and reads the JSON-RPC error from the body (UPGRADING-4.0 item 139); otherwise none.
+- cli and mcp capability results no longer carry a credential the gateway injected into the child; see UPGRADING item 141 (#2819)
+  Affects: no released version. Operator action: a capability whose tool must return an injected value reads it from its own source instead; a client comparing results byte for byte expects `[redacted]` there (UPGRADING-4.0 item 141); otherwise none.
+- security: the cross-tenant read judge scans the document that is emitted: a configured `arg_keys` name equal to a wrapper member (`message`, `method`, `source`, `event_id`) now attributes, for responses, notifications and non-message stream events (#2846)
+  Affects: no released version. Operator action: none.
+- The daily cost budget no longer loses spend recorded at the UTC day boundary: the reset and every add are serialized (#2856).
+  Affects: 2.6.0 up to 3.5.1 and the 4.0.0 pre-releases. Operator action: none.
+- An audit-log restart now checks the record the high-water mark names even when it is the newest record, so an edit made under its stored hash or a forged signature there is recorded as a finding instead of carried forward (MIK-7884).
+  Affects: no released version. Operator action: none.
+- A prompt a backend sends through the gateway to the client is delivered and recorded in the same form: a backend copy of the reserved signature-chain member is dropped from both, so the relay receipt and audit record describe the bytes sent, and the firewall judges the prompt as the client receives it (MIK-7910).
+  Affects: no released version. Operator action: none.
+- relay detection: a bridged prompt is receipted only once it reached the client, so no session or a send cancelled first leaves no receipt, and an answer's receipt is built from what the caller finally receives (MIK-7887)
+  Affects: no released version; relay detection first landed after v4.0.0-beta.2. Operator action: none.
+- relay detection: a followed upstream task's failure is receipted at settlement only when it is the peer's own error, unchanged by every screen and by the audit; gateway errors, substitutes and errors of unknown author on older rows are never receipted (MIK-7887)
+  Affects: no released version; relay detection on task routes first landed after v4.0.0-beta.2. Operator action: back up `tasks.store_dir` before upgrading if a rollback to a build that reads task records only up to version 5 may be needed (UPGRADING-4.0 item 105).
+- relay detection: a change to a plan's answer keeps each step's receipt for the text the caller still got, a plan receipt is never rebuilt from engine-written text, and no receipt fingerprint crosses a cap cut or a removed leaf (MIK-7887)
+  Affects: no released version; relay detection first landed after v4.0.0-beta.2. Operator action: none.
+- The release procedure now cosign-signs the published Helm chart by its OCI digest and verifies the signature against a pinned signer identity and issuer before the publish counts as passed; before, the chart was pushed unsigned (RFC-0133 HELM.6).
+  Affects: no released version; the chart is first published with 4.0.0. Operator action: verify the chart before installing with cosign verify against the chart digest reference, using the chart reference, signer identity and issuer published on the v4.0.0 GitHub release.
+- An audit-log restart now records a finding when the active file ends on the high-water mark's own record but opens an older segment than the mark names, as a file rebuilt from an older sealed segment plus genuine later records does; before, it resumed as the older segment and the next rotation overwrote that sealed segment with nothing recorded.
+  Affects: no released version. Operator action: none.
+- a credential a cli or mcp capability child printed but the gateway never injected now reaches the response firewall whole, so it raises a finding, a Block and an audit entry instead of passing as a bare marker; see UPGRADING item 141 (#2993)
+  Affects: no released version; 4.0 pre-release builds that include #2697 or #2819. Operator action: none with the default firewall settings; with the firewall or credential_redaction off, such a value in a cli or mcp result or error excerpt now reaches the caller unchanged, as a REST capability result already does, so turn the firewall on to have it redacted.
+- the warning logged when a tool result does not match its declared output schema no longer quotes the result: it names each violation's path and its expected and actual type, and an undeclared key only as "undeclared key", since a value or key there can be a credential and the log is written before the response firewall runs (#2993)
+  Affects: 3.5.1 and the 4.0 betas, for any capability with an output schema whose result breaks it. Operator action: treat gateway logs from those versions that contain "did not match its declared output schema" as possibly holding backend-returned secrets; a log pipeline that parsed the old mismatch text sees the new path-and-type form.
+- An audit-log restart no longer renames an active file that ends in a seal record onto a segment that is already sealed; such a file is a copy, not an interrupted rotation, and is now recorded as a finding and sealed under a fresh name instead of replacing the genuine segment, and a restart refuses a sealed segment numbered at the last value instead of sealing onto it (MIK-7949).
+  Affects: no released version. Operator action: none.
+- the MCP events fail-fast harness (`scripts/dev/mcp_events_failfast.py`) now refuses to deliver a signed webhook over TLS below 1.2, instead of leaving the floor to the host's OpenSSL policy (#3003)
+  Affects: the developer harness only, never the shipped gateway or its packages. Operator action: none.
+- an `http://` backend on a loopback host is no longer sent through `HTTP_PROXY`/`ALL_PROXY` from the environment: cleartext to loopback, an OAuth bearer included, is allowed only because it never leaves the machine, and a proxy carried it off in cleartext (#3007)
+  Affects: 2.0.0 through 3.5.1 and the 4.0 betas, for OAuth or static credentials on an `http://localhost`/`127.0.0.1`/`[::1]` backend, run with a proxy variable set and no `NO_PROXY` entry for that host. Operator action: none to upgrade; if such a gateway ran with a remote proxy configured, treat the loopback backend's bearer tokens as exposed to that proxy and rotate them.
+- A direct-route delivery audit record now takes its outcome from the HTTP status as well as the body, so a notification refused with 403 or 429 is no longer recorded as delivered (`ok`); it matches the call's invocation record. A delivered answer with `result.isError: true` is now recorded as a tool error there too, not as `ok`.
+  Affects: no released version. Operator action: none.
+- An audit-log restart that repairs a torn line above the high-water mark now records the loss from the first dropped counter, not from the mark, so the full range of lost committed records stays on record after retention removes the segment that showed the gap.
+  Affects: no released version. Operator action: none.
+- an OAuth backend no longer sends its client secret, authorization code or refresh token over cleartext `http://` to a host off this machine. The authorization server and the authorization, token and registration endpoints that discovery returns, and every redirect from an OAuth request, must be `https://` or `http://` on a loopback host, under every destination policy. A loopback `http://` authorization server is reached directly, never through `HTTP_PROXY`/`ALL_PROXY`. A capability that sends a credential (`auth.required`) is held to the same rule: at load for a literal `base_url`/`endpoint`, and at send time for REST, GraphQL, JSON-RPC and its OAuth refresh; a capability request that started on TLS or loopback follows no redirect to cleartext off this machine, and a loopback one bypasses `capabilities.egress_proxy` (#3013)
+  Affects: 2.0.1 through 3.5.1 and the 4.0 betas, for OAuth backends whose authorization server or its advertised endpoints are `http://` off this machine, and for capabilities with `auth.required: true` whose API URL is `http://` off this machine; also any capability (with or without a credential) whose request is redirected from `https://` or loopback to `http://` off this machine, or that targets loopback with `capabilities.egress_proxy` set. Operator action: such a backend now fails at connect, and such a capability file now fails to load (the warning names `providers.<name>.config.base_url` or `endpoint`). Move it to `https://`, or serve it on a loopback host (`localhost`, `127.0.0.1`, `[::1]`; `localhost.` with a trailing dot is not loopback). `allow_cleartext_credentials` does not cover either. If one ran over cleartext before, rotate the client secrets, refresh tokens and API keys it sent. A capability that relied on such a redirect now fails the call; a loopback capability now bypasses the egress proxy. A secret placed directly in a header or param template of a capability with `auth.required: false` is not yet covered (MIK-7958, 4.0.1). See UPGRADING-4.0 item 146.
+- `serve --stdio` now exits even when its client stopped reading stdout: once the session has ended, the runtime waits at most 10 s for a stuck stdout write instead of hanging the process (MIK-7683).
+  Affects: 3.x and earlier stdio mode. Operator action: none.
+- A stdio client that stops reading stdout can no longer wedge the gateway with batches or malformed lines: the reader keeps reading, so EOF and cancels are still handled and the session ends within its drain deadline (MIK-7684).
+  Affects: 3.x and earlier stdio mode. Operator action: none.
+- Under the `standard` posture, a `gateway_invoke` that the caller is not allowed to make now gets its policy refusal even when it carries a malformed signing nonce, and no nonce rejection is counted for it; the nonce is judged after the invocation policy, as `UPGRADING-4.0.md` now states (MIK-7736).
+  Affects: no released version. Operator action: none.
+- Security: attestation tokens carry a required `audience` claim and a gateway accepts only its own; `enforce` needs `GATEWAY_ATTESTATION_AUDIENCE` (MIK-7795).
+  Affects: 3.x up to 3.5.1 and the 4.0.0 pre-releases. Operator action: set `GATEWAY_ATTESTATION_AUDIENCE` on each gateway running attestation in `enforce` mode and mint tokens with that audience.
+- Security: `gateway_invoke` judges and dispatches a call on the backend it captured, not a by-name lookup a reload can swap (MIK-7810).
+  Affects: 3.x up to 3.5.1 and the 4.0.0 pre-releases. Operator action: none.
+- **Only the capability loader can mark a definition pinned.** A program built on the crate could
+  set `ProvidersConfig::integrity` to `Verified` on a definition it built, so a `cli` or `mcp`
+  process provider ran without the `sha256:` pin check. `process` and `integrity` are now
+  crate-private, read through `process()` and `integrity()`, and a process runs only while the
+  definition matches the fingerprint taken when its pin was checked, so a verified definition
+  copied and edited is refused. The response cache of a process provider keys on that fingerprint, and replacing a
+  definition through `register_capability` stops its `mcp` children. See UPGRADING-4.0 item 144.
+  (MIK-7814)
+  Affects: no released version. Operator action: none; an embedder that read the fields calls the getters, and one that edits a loaded definition loads the edited one through the capability loader.
+- **A `message` webhook's top-level `id` is judged as content by the cross-tenant read check.** The session-stream judge skips a `message` document's top-level `id` as JSON-RPC framing, and a webhook body was judged only on its raw form, so a `data` mapping that wrote another tenant's identifier into `id` reached the caller unflagged and, under `cross_tenant_reads: block`, unwithheld. The written `id` is now judged with its member name (MIK-7822).
+  Affects: deployments with `tenant_guard.cross_tenant_reads` on, `id` listed in `tenant_guard.arg_keys`, and a webhook with `transform.event_type: message` whose `transform.data` maps a field into `id`.
+  Operator action: none; upgrade. To check exposure before upgrading, look for `id` in `arg_keys` alongside such a webhook mapping.
+- audit log: a restart no longer advances `.hwm` over a tail that contradicts it. A tail behind the mark in any segment (an older active file restored) or a record at the mark replaced by another is now recorded as a loss and the counters are never reused, in signed and unsigned logs (MIK-7884)
+  Affects: no released version. Operator action: none.
+- Security: a direct-route notification is charged to its credential, not its display label, so two keys with one label no longer share a notification budget (MIK-7885).
+  Affects: no released version. Operator action: none.
+- relay detection: receipts follow the delivered result. A redaction rebuilds the call's receipt from what goes out and keeps its sensitivity verdict, reading a failed task receipts the backend's error, and a stdio answer whose result is null delivers a result; the known limits are stated in the design doc (MIK-7887)
+  Affects: no released version. Operator action: none.
+- events: a static-bearer subscription is re-checked against the full SHA-256 of the bearer, not the 12-hex log fingerprint; older rows keep the fingerprint check (MIK-7889)
+  Affects: no released version. Operator action: none.
+- tasks: a stored task row older than the upstream-descriptor version no longer yields backend targets from a descriptor it could not have captured (MIK-7889)
+  Affects: no released version. Operator action: none.
+- capabilities: an MCP capability reload revokes under the lock that admits a call, so it cannot land between the epoch check and the lease; the path-confinement swap residual is stated for every root (MIK-7889)
+  Affects: no released version. Operator action: none.
+- The MCP events OAuth dev shim marks its token and registration answers no-store and refuses an oversize request body before reading it, and the EVENTS.8 run script empties its directory only when that directory's state.json names the script as its owner (MIK-7893).
+  Affects: no released version. Operator action: none.
+- events: a backend that becomes ineligible for upstream events after a reload stops delivering them: the listener rechecks eligibility at every delivery and reconnect, ends, and its upstream subscriptions are withdrawn; a tools notice also clears the resend-permitted set (MIK-7894)
+  Affects: no released version. Operator action: none.
+- The HTTP events listener no longer repeats the request URL, which can carry credentials in its query, in its error messages (MIK-7895).
+  Affects: no released version. Operator action: none.
+- A successful `cli` or `mcp` result no longer leaks an injected all-digit credential with
+  leading zeros when the child prints it as a JSON number, which drops the zeros (`012345`
+  came back as `12345`): numbers are now compared to such a credential by value as well as by
+  text, with the sign ignored, and a credential past u64 is parsed by the same JSON parser that
+  read the result, so both sides round alike. See UPGRADING-4.0 item 141. (MIK-7908)
+  Affects: 4.0.0 pre-releases only; 3.x has no injected-value scrubbing (its firewall credential redaction is pattern-based and unchanged). Operator action: none.
+- audit: on stdio, the `response_delivery_attempt` record is now written after the cross-tenant read judge, over the frame the client receives. A refused read is recorded as the refusal, and its read verdict rides that one record instead of a separate `tenant_read` event, as on `POST /mcp` and `/mcp/{name}` (MIK-7920).
+  Affects: no released version; the cross-tenant read judge first landed after v4.0.0-beta.2. Operator action: none; a SIEM rule that reads stdio answers from `event: tenant_read` reads the same fields on `response_delivery_attempt` instead: `tenants` or `attribution` to count reads, `cross_tenant_read` to flag one (UPGRADING-4.0 item 130).
+- A successful `cli` or `mcp` result no longer leaks an injected credential written in another
+  number form, such as `+12345` or `1.5e10`, when the child prints it as a JSON number
+  (`12345`, `15000000000.0`): such a credential is now compared to numbers by value. Any number
+  equal in value to it is redacted, even one printed for another reason. Credentials shorter
+  than 4 characters as injected (for example `1e5`) are still not looked for in numbers.
+  (MIK-7954)
+  Affects: 4.0.0 pre-releases only; 3.x has no injected-value scrubbing. Operator action: none.
+
 ## [4.0.0-beta.2] - 2026-09-25
 
 > **Pre-release.** The second 4.0 beta. It is the first beta with container images:

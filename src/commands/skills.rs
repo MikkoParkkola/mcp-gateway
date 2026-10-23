@@ -374,14 +374,12 @@ async fn fetch_skill_from_url(
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_owned();
-    }
-    let mut end = max;
-    while !s.is_char_boundary(end) && end > 0 {
-        end -= 1;
-    }
-    format!("{}…", &s[..end])
+    crate::truncate::truncate(
+        s,
+        crate::truncate::Budget::Bytes(max),
+        "…",
+        crate::truncate::Suffix::After,
+    )
 }
 
 fn print_dry_run_summary(bundles: &[mcp_gateway::skills::SkillBundle]) {
@@ -659,5 +657,17 @@ mod redirect_tests {
         ] {
             assert!(!msg.contains(secret), "{secret} in: {msg}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// MIK-8667: a description keeps at most `max` bytes, cut on a character
+    /// boundary, and gains `…` after them.
+    #[test]
+    fn a_cut_description_keeps_max_bytes_and_adds_an_ellipsis() {
+        assert_eq!(super::truncate("abcd", 4), "abcd");
+        assert_eq!(super::truncate("abcdef", 4), "abcd…");
+        assert_eq!(super::truncate("abcé", 4), "abc…");
     }
 }

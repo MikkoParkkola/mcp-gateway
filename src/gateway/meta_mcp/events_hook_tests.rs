@@ -750,3 +750,32 @@ async fn a_reload_reading_a_file_mid_write_withdraws_nothing() {
     assert_eq!(routes(&registry), ["beta.push"]);
     assert!(subscribed(store.path(), "beta"));
 }
+
+/// MIK-8398: a `MetaMcp` with a public signer hands event `Services` carrying
+/// the SAME signer instance.
+#[test]
+fn public_provenance_reaches_event_services() {
+    use crate::trust::provenance_public::ProvenancePublicSigner;
+
+    let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    meta.enable_public_provenance(ProvenancePublicSigner::from_seed_for_test(
+        [7u8; 32],
+        "prov-test-1",
+    ));
+    let live = Arc::new(crate::config_reload::LiveConfig::new(
+        crate::config::Config::default(),
+    ));
+    let services = meta.events_services(live, crate::events::LiveCredentials::default());
+    let installed = meta
+        .public_provenance_signer
+        .as_ref()
+        .expect("a public signer was installed on MetaMcp");
+    let handed = services
+        .public_provenance
+        .as_ref()
+        .expect("a MetaMcp with a public signer must hand Services carrying it");
+    assert!(
+        Arc::ptr_eq(installed, handed),
+        "event Services must carry the SAME public signer instance installed on MetaMcp"
+    );
+}

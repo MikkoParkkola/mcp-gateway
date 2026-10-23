@@ -90,7 +90,9 @@ pub(crate) fn rewrite_url_aliases_in(path: &Path, mode: RewriteMode) -> Result<U
 /// of keys: saying "nothing changed" would let `upgrade` pass on it
 /// (MIK-8044). An empty or comments-only file reads as an empty mapping,
 /// loads as the defaults, and passes. The reason names a line and column, never the parser's own
-/// message, which can quote a value from the file (a secret, say).
+/// message, which can quote a value from the file (a secret, say), except a
+/// MIK-8639 guard refusal, which is value-free by construction and is reported
+/// in the guard's own words.
 fn refuse_unreadable(path: &Path, text: &str) -> Result<(), String> {
     if super::retired_config_keys::loose(text).is_some() {
         return Ok(());
@@ -98,16 +100,22 @@ fn refuse_unreadable(path: &Path, text: &str) -> Result<(), String> {
     let why = match crate::yaml::from_str::<crate::yaml::Value>(text) {
         Ok(doc) if doc.is_mapping() => "it has a key the gateway's loader cannot read".to_owned(),
         Ok(_) => "its top level is not a mapping of keys".to_owned(),
-        Err(e) => e.location().map_or_else(
-            || "it is not valid YAML".to_owned(),
-            |at| {
-                format!(
-                    "it is not valid YAML at line {}, column {}",
-                    at.line(),
-                    at.column()
+        Err(e) => {
+            if e.limit().is_some() {
+                e.to_string()
+            } else {
+                e.location().map_or_else(
+                    || "it is not valid YAML".to_owned(),
+                    |at| {
+                        format!(
+                            "it is not valid YAML at line {}, column {}",
+                            at.line(),
+                            at.column()
+                        )
+                    },
                 )
-            },
-        ),
+            }
+        }
     };
     Err(format!(
         "{} could not be read as a config: {why}; nothing was upgraded.",

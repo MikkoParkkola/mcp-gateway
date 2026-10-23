@@ -11,8 +11,8 @@ use crate::mtls::CertIdentity;
 const SUBJECT_KEY: &str = "subject:5:proxy:5:alice";
 const MTLS_SUBJECT_KEY: &str = "subject:4:mtls:10:spiffe://a";
 
-fn agent(client_id: &str) -> crate::gateway::oauth::AgentIdentity {
-    crate::gateway::oauth::AgentIdentity {
+fn agent(client_id: &str) -> crate::gateway::oauth::OAuthAgentIdentity {
+    crate::gateway::oauth::OAuthAgentIdentity {
         client_id: client_id.to_string(),
         agent_name: client_id.to_string(),
         scopes: Vec::new(),
@@ -98,7 +98,7 @@ fn nameless_cert() -> CertIdentity {
 }
 
 struct Fixtures {
-    agent: crate::gateway::oauth::AgentIdentity,
+    agent: crate::gateway::oauth::OAuthAgentIdentity,
     subject: GrantSubject,
     client: AuthenticatedClient,
     verified: VerifiedIdentity,
@@ -127,7 +127,7 @@ fn fixtures() -> Fixtures {
 
 fn caller<'a>(
     verified_identity: Option<&'a VerifiedIdentity>,
-    agent: Option<&'a crate::gateway::oauth::AgentIdentity>,
+    agent: Option<&'a crate::gateway::oauth::OAuthAgentIdentity>,
     subject: Option<&'a GrantSubject>,
     client: Option<&'a AuthenticatedClient>,
 ) -> TaskCaller<'a> {

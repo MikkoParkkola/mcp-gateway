@@ -23,7 +23,7 @@ use super::{
 use crate::gateway::trace;
 use crate::oauth::OAuthClient;
 use crate::oauth::login_gate::{self, Provenance};
-use crate::protocol::era::Era;
+use crate::protocol::era::PeerEra;
 use crate::protocol::meta::MODERN_VERSIONS;
 use crate::protocol::{
     JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
@@ -133,7 +133,7 @@ impl HttpTransport {
         // `finalise_modern_headers` outranks one on the POST paths. A `None`
         // era (not yet probed, or legacy) leaves the handshake version alone.
         if matches!(mode, HeaderMode::Sse)
-            && self.outbound_era() == Some(crate::protocol::era::Era::Modern)
+            && self.outbound_era() == Some(crate::protocol::era::PeerEra::Modern)
         {
             headers.insert(
                 "MCP-Protocol-Version",
@@ -237,7 +237,7 @@ impl HttpTransport {
         request: &JsonRpcRequest,
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
-        era: Option<Era>,
+        era: Option<PeerEra>,
     ) -> Result<JsonRpcResponse> {
         let message_url = self.get_message_url();
 
@@ -252,7 +252,7 @@ impl HttpTransport {
         merge_extra_headers(&mut headers, extra_headers);
         // AFTER every merge this path runs. Placed inside `build_mcp_headers`
         // it would be overridden by the loop just above.
-        if era == Some(Era::Modern) {
+        if era == Some(PeerEra::Modern) {
             finalise_modern_headers(&mut headers, &request.method, request.params.as_ref())?;
         }
 
@@ -474,10 +474,10 @@ impl HttpTransport {
         params: Option<Value>,
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
-        era: Option<Era>,
+        era: Option<PeerEra>,
     ) -> Result<()> {
         let message_url = self.get_message_url();
-        let params = if era == Some(Era::Modern) {
+        let params = if era == Some(PeerEra::Modern) {
             with_modern_meta(method, params)?
         } else {
             params
@@ -494,7 +494,7 @@ impl HttpTransport {
             .await?;
         // The caller's credential, as on a request (#2292).
         merge_extra_headers(&mut headers, extra_headers);
-        if era == Some(Era::Modern) {
+        if era == Some(PeerEra::Modern) {
             finalise_modern_headers(&mut headers, method, notification.params.as_ref())?;
         }
 

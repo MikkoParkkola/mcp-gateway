@@ -144,6 +144,8 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
 serde_json_canonicalizer = "0.3.2"
 serde_yaml = "0.9"
+# MIK-8639 pre-parse guard: exact pin, no comment buffer (MIK-8425 backend family).
+granit-parser = { version = "=2.0.0", default-features = false, features = ["std", "error_messages"] }
 # Collects the config keys serde skipped, so an unrecognised key is a load
 # error (C1) without a strict attribute on every config struct.
 serde_ignored = "0.1.14"
@@ -225,6 +227,9 @@ time = { version = "0.3.47", default-features = false }
 x509-parser = "0.18"
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 tokio-rustls = "0.26"
+# MIK-8512: the doctor npm lookup's own roots, so it never consults the
+# platform verifier (already in Cargo.lock through tokio-tungstenite).
+webpki-roots = "1"
 
 # XML parsing (for APIs that return XML, e.g. ECB exchange rates)
 quick-xml = "0.42"
@@ -266,6 +271,8 @@ tempfile = "3.14"
 tracing-log = "=0.2.0"
 log = "=0.4.34"
 serde_urlencoded = "0.7"
+# MIK-8512: a compressed-body row for the doctor npm lookup (already in Cargo.lock).
+flate2 = "1.1"
 criterion = { version = "0.8", features = ["html_reports"] }
 jsonschema = { version = "0.56.0", default-features = false }
 # MIK-8387 boundary pins: parse the crate's own source (already in Cargo.lock).

@@ -1,10 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Response caching with TTL for `gateway_invoke` results
+//! Response caching with TTL, for `gateway_invoke` results and capability
+//! payloads
 //!
-//! Provides a thread-safe, TTL-based cache for tool invocation responses.
-//! Cache keys are computed from `server:tool:args_hash` where `args_hash`
-//! is the SHA-256 digest of the canonical JSON arguments.
+//! Provides a thread-safe, TTL-based cache. The Meta-MCP response cache keys
+//! tool invocation responses through `ResponseCache::response_key` (server,
+//! tool, a SHA-256 digest of the canonical JSON arguments, the projection, the
+//! principal and the routing context) and stores through `set_read`. The
+//! capability executor keeps its own instance, with its own bound, for REST,
+//! CLI, GraphQL, JSON-RPC and MCP-protocol capability results, and
+//! stores through `set_payload` (MIK-8661). Both instances insert through the
+//! same code, so expiry and eviction behave the same in each.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -232,6 +238,22 @@ impl ResponseCache {
             debug!(key, "Refused to cache a non-final result");
             return false;
         }
+        self.set_payload(key, value, (read, writes), ttl)
+    }
+
+    /// Store a capability's REST payload (MIK-8661). The payload is the
+    /// upstream's own JSON, so a `resultType` in it is the upstream's field,
+    /// not MCP's: only the error refusal applies. The capability executor also
+    /// stores decoded CLI, GraphQL, JSON-RPC and MCP-protocol capability
+    /// results here, as it always has. Every entry of either cache is inserted
+    /// here.
+    pub(crate) fn set_payload(
+        &self,
+        key: &str,
+        value: Value,
+        (read, writes): (Option<ReadAttribution>, WriteRecord),
+        ttl: Duration,
+    ) -> bool {
         // Nor is an error: replayed, a transient refusal or tool error outlives
         // its cause for the whole TTL (F26).
         if crate::protocol::cacheable::is_error(&value) {
@@ -239,7 +261,10 @@ impl ResponseCache {
             return false;
         }
 
-        // Enforce max_entries before inserting
+        // ponytail: check, evict and insert are not one atomic step, so
+        // concurrent writers can hold up to `max_entries` + (writers - 1)
+        // entries; the next store evicts back (lead ruling MIK-8661 D4). Put one
+        // admission mutex over these three steps if an exact cap is ever needed.
         if self.max_entries > 0 && self.entries.len() >= self.max_entries {
             self.enforce_max_entries();
         }
@@ -638,5 +663,23 @@ mod tests {
         // Should be expired
         assert_eq!(cache.get("key"), None);
         assert_eq!(cache.stats().evictions, 1);
+    }
+
+    /// MIK-8661 T4b (PR4.4): finality is the MCP door's rule, not the shared
+    /// store's. The same non-final value is refused by `set_read` and stored by
+    /// the capability payload door.
+    #[test]
+    fn finality_is_refused_only_on_the_mcp_door() {
+        let cache = ResponseCache::new();
+        let pending = json!({"resultType": "input_required"});
+        let ttl = Duration::from_secs(60);
+        assert!(!cache.set_read("mcp", pending.clone(), (None, WriteRecord::default()), ttl));
+        assert!(
+            cache.get_read("mcp").is_none(),
+            "a refused result is not stored"
+        );
+        assert!(cache.set_payload("rest", pending.clone(), (None, WriteRecord::default()), ttl));
+        let (stored, _, _) = cache.get_read("rest").expect("the payload is stored");
+        assert_eq!(stored, pending);
     }
 }

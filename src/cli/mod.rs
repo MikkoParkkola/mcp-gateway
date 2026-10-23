@@ -50,7 +50,8 @@ pub use setup::SetupCommand;
 pub use skills::SkillsCommand;
 pub use subcommands::{
     AuditCommand, CapCommand, KubernetesCommand, ProtocolImportCommand, ProtocolImportKind,
-    RankingCommand, RuntimeProviderArg, TlsCommand, TrustCommand, TrustLabCommand,
+    ProvenanceCommand, RankingCommand, RuntimeProviderArg, TlsCommand, TrustCommand,
+    TrustLabCommand,
 };
 
 // ── Config-export CLI types ───────────────────────────────────────────────────
@@ -215,6 +216,16 @@ pub enum AccountsCommand {
     },
 }
 
+/// The value of an off switch read from a flag or its environment
+/// variable: `false` only for "0" or "false" (trimmed, any case), `true`
+/// for anything else, empty included. An off switch that is set at all is
+/// read as on, so a misspelled value cannot silently re-enable what the
+/// operator meant to turn off.
+fn parse_off_switch(value: &str) -> bool {
+    let value = value.trim();
+    !(value == "0" || value.eq_ignore_ascii_case("false"))
+}
+
 /// Top-level subcommands
 #[derive(Subcommand, Debug)]
 pub enum Command {
@@ -276,6 +287,10 @@ pub enum Command {
         about = "TrustCard and CBOM metadata commands"
     )]
     Trust(TrustCommand),
+
+    /// Export and verify public provenance keys
+    #[command(subcommand, about = "Export and verify public provenance keys")]
+    Provenance(ProvenanceCommand),
 
     /// Manage caller identity and local personal-capability grants.
     #[command(subcommand, about = "Identity and local grant administration")]
@@ -346,7 +361,7 @@ pub enum Command {
 
         /// Output format
         #[arg(short, long, default_value = "text", value_enum)]
-        format: crate::validator::OutputFormat,
+        format: crate::validator::ValidatorOutputFormat,
 
         /// Minimum severity to report
         #[arg(short, long, default_value = "info", value_enum)]
@@ -531,6 +546,16 @@ pub enum Command {
         /// With `--start-stdio`: also show a failed start's masked stderr tail.
         #[arg(long, requires = "start_stdio")]
         show_stderr: bool,
+        /// Skip the npm registry lookup. The lookup is on by default: for each stdio
+        /// backend pinning an npm package from the gateway's own registry, doctor asks
+        /// registry.npmjs.org whether that version is deprecated. Only package names
+        /// from the gateway's own registry leave the machine (never your backend
+        /// names, versions or settings), and npm sees this host's IP address.
+        /// `security.posture: hardened` also skips it.
+        /// This skips the gateway's own npm registry lookup; it does not stop npx or other servers started by --start-stdio from contacting npm, so air-gapped hosts should not use --start-stdio.
+        /// The variable takes `0` or `false` to keep the lookup on; any other value skips it.
+        #[arg(long, env = "MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK", num_args = 0..=1, default_missing_value = "true", default_value = "false", value_parser = |value: &str| Ok::<bool, std::convert::Infallible>(parse_off_switch(value)))]
+        no_registry_check: bool,
     },
 
     /// Apply pending post-upgrade migrations and update the version stamp

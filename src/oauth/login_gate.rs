@@ -42,6 +42,10 @@ pub(crate) enum LoginOutcome {
     /// The gateway's own destination policy refused a step of it (the
     /// message of the `Protocol` error), kept as that variant.
     Refused(String),
+    /// The credential lock was busy (the lead's marked `BackendUnavailable`,
+    /// its inner text kept): joiners get the same typed busy, so it frees the
+    /// key and never starts a login (MIK-8658).
+    Busy(String),
 }
 
 impl LoginOutcome {
@@ -53,6 +57,11 @@ impl LoginOutcome {
             Error::AuthorizationCancelled { .. } => Self::Cancelled,
             Error::OAuth(message) => Self::Failed(message.clone()),
             Error::Protocol(message) => Self::Refused(message.clone()),
+            Error::BackendUnavailable(text)
+                if crate::oauth::client::is_credential_lock_busy(error) =>
+            {
+                Self::Busy(text.clone())
+            }
             other => Self::Failed(other.to_string()),
         }
     }
@@ -68,6 +77,7 @@ impl LoginOutcome {
             Self::Cancelled => Error::AuthorizationCancelled { backend },
             Self::Failed(message) => Error::OAuth(message.clone()),
             Self::Refused(message) => Error::Protocol(message.clone()),
+            Self::Busy(text) => Error::BackendUnavailable(text.clone()),
         }
     }
 }
@@ -546,6 +556,70 @@ mod tests {
         assert!(matches!(failed.to_error("b"), Error::OAuth(m) if m == "invalid_grant"));
         let refused = LoginOutcome::of(&Error::Protocol("ssrf".into()));
         assert!(matches!(refused.to_error("b"), Error::Protocol(m) if m == "ssrf"));
+    }
+
+    /// MIK-8658 (K3): a joiner's replayed provider text is no busy lock.
+    #[test]
+    fn a_joiner_does_not_read_provider_text_as_a_busy_lock() {
+        let provider = Error::OAuth("OAuth error: access_denied - credential lock busy: x".into());
+        let joined = LoginOutcome::of(&provider).to_error("b");
+        let busy = crate::oauth::client::is_credential_lock_busy(&joined);
+        assert!(!busy, "{joined}");
+        assert!(
+            matches!(
+                &joined,
+                Error::OAuth(m) if m == "OAuth error: access_denied - credential lock busy: x"
+            ),
+            "{joined:?}"
+        );
+        assert!(!joined.is_pre_dispatch(), "{joined:?}");
+    }
+
+    /// MIK-8658 (K3): a joiner waiting on the attempt, and detached work
+    /// classified against the cohort, both get the lead's typed busy.
+    #[tokio::test]
+    async fn a_marked_busy_replays_typed_through_finished_and_classify() {
+        let gate = Arc::new(LoginGate::default());
+        let cohort = gate.cohort();
+        let Begin::Lead(lead) = gate.begin(None, None) else {
+            panic!("no login in flight, so the first caller leads");
+        };
+        let Begin::Join(attempt) = gate.begin(None, None) else {
+            panic!("a login is in flight, so the second caller joins");
+        };
+        let marked = Error::BackendUnavailable("credential lock busy: x".into());
+        lead.end(Some(&marked));
+
+        let outcome = attempt.finished().await.expect("the lead failed");
+        assert_eq!(
+            outcome,
+            LoginOutcome::Busy("credential lock busy: x".into())
+        );
+        let timeout = Error::BackendTimeout("b".into());
+        for joined in [outcome.to_error("b"), gate.classify(&cohort, "b", timeout)] {
+            assert!(
+                matches!(&joined, Error::BackendUnavailable(m) if m == "credential lock busy: x"),
+                "{joined:?}"
+            );
+            assert_eq!(joined.to_rpc_code(), marked.to_rpc_code(), "{joined:?}");
+            assert!(joined.is_pre_dispatch(), "{joined:?}");
+        }
+    }
+
+    /// MIK-8658 (K3): only a marked busy lock becomes typed; any other lead failure still replays as its text.
+    #[test]
+    fn an_unmarked_backend_unavailable_still_replays_as_oauth_text() {
+        let lead = Error::BackendUnavailable("x".into());
+        let joined = LoginOutcome::of(&lead).to_error("b");
+        assert!(
+            matches!(&joined, Error::OAuth(m) if m == "Backend unavailable: x"),
+            "{joined:?}"
+        );
+        assert!(!joined.is_pre_dispatch(), "{joined:?}");
+        assert!(
+            !crate::oauth::client::is_credential_lock_busy(&joined),
+            "{joined:?}"
+        );
     }
 
     /// MIK-7982 (delta review): an abandoned lead whose callback listeners

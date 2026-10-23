@@ -3,56 +3,58 @@
 //! The curated entries behind `mcp-gateway add <name>`. Every entry is checked
 //! live by `scripts/dev/check-registry-packages.py` (MIK-7787).
 
-use super::{ARBITRARY_REACH_REASON, Auth, HttpFlavor, Reach, RegistryEntry, Setup, Transport};
+use super::{
+    ARBITRARY_REACH_REASON, Auth, CatalogTransport, HttpFlavor, Reach, ServerCatalogEntry, Setup,
+};
 
-pub(super) static REGISTRY: &[RegistryEntry] = &[
+pub(super) static REGISTRY: &[ServerCatalogEntry] = &[
     // ── search ──────────────────────────────────────────────────────────────────────
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "tavily",
         description: "Web search and content extraction via the Tavily AI search API",
         command: "npx -y tavily-mcp@0.2.22",
         required_env: &["TAVILY_API_KEY"],
         optional_env: &[],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "search",
         homepage: "https://github.com/tavily-ai/tavily-mcp",
         auth: Auth::EnvVars,
         reach: Reach::Bounded,
         setup: Setup::Ready,
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "brave-search",
         description: "Web, news, image and local search using the Brave Search API",
         command: "npx -y @brave/brave-search-mcp-server@2.1.4",
         required_env: &["BRAVE_API_KEY"],
         optional_env: &[],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "search",
         homepage: "https://github.com/brave/brave-search-mcp-server",
         auth: Auth::EnvVars,
         reach: Reach::Bounded,
         setup: Setup::Ready,
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "exa",
         description: "Neural web search and content crawling via Exa AI",
         command: "npx -y exa-mcp-server@3.4.1",
         required_env: &["EXA_API_KEY"],
         optional_env: &[],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "search",
         homepage: "https://github.com/exa-labs/exa-mcp-server",
         auth: Auth::EnvVars,
         reach: Reach::Bounded,
         setup: Setup::Ready,
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "perplexity",
         description: "AI-powered research search via Perplexity API",
         command: "npx -y @perplexity-ai/mcp-server@1.3.0",
         required_env: &["PERPLEXITY_API_KEY"],
         optional_env: &[],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "search",
         homepage: "https://github.com/perplexityai/modelcontextprotocol",
         auth: Auth::EnvVars,
@@ -60,13 +62,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         setup: Setup::Ready,
     },
     // ── filesystem ──────────────────────────────────────────────────────────────────
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "filesystem",
         description: "Read, write, and navigate the local file system (append the allowed directories)",
         command: "npx -y @modelcontextprotocol/server-filesystem@1.0.0",
         required_env: &[],
         optional_env: &[],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "filesystem",
         homepage: "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
         auth: Auth::None,
@@ -76,13 +78,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         },
     },
     // ── database ────────────────────────────────────────────────────────────────────
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "postgres",
         description: "Query, explain and tune PostgreSQL databases",
         command: "uvx postgres-mcp@0.3.0",
         required_env: &["DATABASE_URI"],
         optional_env: &[],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "database",
         homepage: "https://github.com/crystaldba/postgres-mcp",
         auth: Auth::EnvVars,
@@ -91,13 +93,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
             hint: "a PostgreSQL server (DATABASE_URI)",
         },
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "mysql",
         description: "Query MySQL and MariaDB databases",
         command: "npx -y @benborla29/mcp-server-mysql@2.0.9",
         required_env: &["MYSQL_HOST", "MYSQL_USER", "MYSQL_PASS", "MYSQL_DB"],
         optional_env: &["MYSQL_PORT"],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "database",
         homepage: "https://github.com/benborla/mcp-server-mysql",
         auth: Auth::EnvVars,
@@ -106,13 +108,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
             hint: "a MySQL or MariaDB server",
         },
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "redis",
         description: "Interact with Redis key-value stores",
         command: "uvx redis-mcp-server@0.5.1",
         required_env: &[],
         optional_env: &["REDIS_HOST", "REDIS_PORT", "REDIS_PWD", "REDIS_DB"],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "database",
         homepage: "https://github.com/redis/mcp-redis",
         auth: Auth::None,
@@ -122,13 +124,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         },
     },
     // ── dev-tools ───────────────────────────────────────────────────────────────────
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "github",
         description: "GitHub repos, issues, PRs, code search, and Actions (GitHub-hosted)",
         command: "",
         required_env: &["GITHUB_TOKEN"],
         optional_env: &[],
-        transport: Transport::Http {
+        transport: CatalogTransport::Http {
             default_url: "https://api.githubcopilot.com/mcp/",
             flavor: HttpFlavor::Streamable,
         },
@@ -141,13 +143,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         reach: Reach::Bounded,
         setup: Setup::Ready,
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "gitlab",
         description: "GitLab projects, issues, merge requests, and pipelines (GitLab-hosted, OAuth)",
         command: "",
         required_env: &[],
         optional_env: &[],
-        transport: Transport::Http {
+        transport: CatalogTransport::Http {
             default_url: "https://gitlab.com/api/v4/mcp",
             flavor: HttpFlavor::Streamable,
         },
@@ -157,13 +159,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         reach: Reach::Bounded,
         setup: Setup::Ready,
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "linear",
         description: "Linear issues, projects, and cycles (Linear-hosted, OAuth)",
         command: "",
         required_env: &[],
         optional_env: &[],
-        transport: Transport::Http {
+        transport: CatalogTransport::Http {
             default_url: "https://mcp.linear.app/mcp",
             flavor: HttpFlavor::Streamable,
         },
@@ -173,13 +175,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         reach: Reach::Bounded,
         setup: Setup::Ready,
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "sentry",
         description: "Sentry issues, errors, and releases (Sentry-hosted, OAuth)",
         command: "",
         required_env: &[],
         optional_env: &[],
-        transport: Transport::Http {
+        transport: CatalogTransport::Http {
             default_url: "https://mcp.sentry.dev/mcp",
             flavor: HttpFlavor::Streamable,
         },
@@ -189,13 +191,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         reach: Reach::Bounded,
         setup: Setup::Ready,
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "atlassian",
         description: "Jira and Confluence issues, pages, and search (Atlassian-hosted, OAuth)",
         command: "",
         required_env: &[],
         optional_env: &[],
-        transport: Transport::Http {
+        transport: CatalogTransport::Http {
             default_url: "https://mcp.atlassian.com/v1/mcp",
             flavor: HttpFlavor::Streamable,
         },
@@ -205,13 +207,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         reach: Reach::Bounded,
         setup: Setup::Ready,
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "asana",
         description: "Asana tasks, projects, and workspaces (Asana-hosted, OAuth)",
         command: "",
         required_env: &[],
         optional_env: &[],
-        transport: Transport::Http {
+        transport: CatalogTransport::Http {
             default_url: "https://mcp.asana.com/sse",
             flavor: HttpFlavor::Sse,
         },
@@ -222,13 +224,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         setup: Setup::Ready,
     },
     // ── cloud ───────────────────────────────────────────────────────────────────────
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "aws",
         description: "AWS resource management through the AWS CLI command surface",
         command: "uvx awslabs.aws-api-mcp-server@1.5.6",
         required_env: &[],
         optional_env: &["AWS_PROFILE", "AWS_REGION"],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "cloud",
         homepage: "https://github.com/awslabs/mcp/tree/main/src/aws-api-mcp-server",
         auth: Auth::None,
@@ -237,13 +239,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
             hint: "AWS credentials in ~/.aws (the default chain; AWS_PROFILE picks a profile)",
         },
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "cloudflare-workers",
         description: "Cloudflare Workers bindings: KV, D1, R2, and Workers (Cloudflare-hosted, OAuth)",
         command: "",
         required_env: &[],
         optional_env: &[],
-        transport: Transport::Http {
+        transport: CatalogTransport::Http {
             default_url: "https://bindings.mcp.cloudflare.com/mcp",
             flavor: HttpFlavor::Streamable,
         },
@@ -254,13 +256,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         setup: Setup::Ready,
     },
     // ── memory ──────────────────────────────────────────────────────────────────────
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "memory",
         description: "Persistent knowledge-graph memory for agents",
         command: "npx -y @modelcontextprotocol/server-memory@1.0.0",
         required_env: &[],
         optional_env: &[],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "memory",
         homepage: "https://github.com/modelcontextprotocol/servers/tree/main/src/memory",
         auth: Auth::None,
@@ -268,13 +270,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         setup: Setup::Ready,
     },
     // ── communication ───────────────────────────────────────────────────────────────
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "slack",
         description: "Read channels, threads, and search Slack workspaces (community server)",
         command: "npx -y slack-mcp-server@1.3.0",
         required_env: &["SLACK_MCP_XOXP_TOKEN"],
         optional_env: &[],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "communication",
         homepage: "https://github.com/korotovsky/slack-mcp-server",
         auth: Auth::EnvVars,
@@ -282,13 +284,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         setup: Setup::Ready,
     },
     // ── knowledge ───────────────────────────────────────────────────────────────────
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "context7",
         description: "Up-to-date library documentation via Context7 (HTTP)",
         command: "",
         required_env: &[],
         optional_env: &[],
-        transport: Transport::Http {
+        transport: CatalogTransport::Http {
             default_url: "https://mcp.context7.com/mcp",
             flavor: HttpFlavor::Streamable,
         },
@@ -298,13 +300,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         reach: Reach::Bounded,
         setup: Setup::Ready,
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "fetch",
         description: "Fetch any HTTP URL and return its contents as markdown",
         command: "uvx mcp-server-fetch@2026.8.18",
         required_env: &[],
         optional_env: &[],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "knowledge",
         homepage: "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch",
         auth: Auth::None,
@@ -314,26 +316,26 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         setup: Setup::Ready,
     },
     // ── code ────────────────────────────────────────────────────────────────────────
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "sequential-thinking",
         description: "Structured multi-step reasoning and problem decomposition",
         command: "npx -y @modelcontextprotocol/server-sequential-thinking@1.0.0",
         required_env: &[],
         optional_env: &[],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "code",
         homepage: "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
         auth: Auth::None,
         reach: Reach::Bounded,
         setup: Setup::Ready,
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "semgrep",
         description: "Static analysis and security scanning via Semgrep",
         command: "uvx semgrep-mcp@0.9.0",
         required_env: &[],
         optional_env: &["SEMGREP_APP_TOKEN"],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "code",
         homepage: "https://github.com/semgrep/mcp",
         auth: Auth::None,
@@ -342,13 +344,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
             hint: "the Semgrep engine: first use downloads it (~100 MB)",
         },
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "playwright",
         description: "Browser automation via Playwright: navigate, click, fill, and snapshot pages",
         command: "npx -y @playwright/mcp@0.0.83 --headless --isolated",
         required_env: &[],
         optional_env: &[],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "code",
         homepage: "https://github.com/microsoft/playwright-mcp",
         auth: Auth::None,
@@ -358,13 +360,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         setup: Setup::Ready,
     },
     // ── productivity ────────────────────────────────────────────────────────────────
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "notion",
         description: "Read and write Notion pages and databases (Notion-hosted, OAuth)",
         command: "",
         required_env: &[],
         optional_env: &[],
-        transport: Transport::Http {
+        transport: CatalogTransport::Http {
             default_url: "https://mcp.notion.com/mcp",
             flavor: HttpFlavor::Streamable,
         },
@@ -374,13 +376,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         reach: Reach::Bounded,
         setup: Setup::Ready,
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "airtable",
         description: "Query and update Airtable bases and tables (community server)",
         command: "npx -y airtable-mcp-server@1.14.0",
         required_env: &["AIRTABLE_API_KEY"],
         optional_env: &[],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "productivity",
         homepage: "https://github.com/domdomegg/airtable-mcp-server",
         auth: Auth::EnvVars,
@@ -388,13 +390,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         setup: Setup::Ready,
     },
     // ── finance ─────────────────────────────────────────────────────────────────────
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "stripe",
         description: "Stripe payments, customers, invoices, and subscriptions (Stripe-hosted, restricted API key)",
         command: "",
         required_env: &["STRIPE_SECRET_KEY"],
         optional_env: &[],
-        transport: Transport::Http {
+        transport: CatalogTransport::Http {
             default_url: "https://mcp.stripe.com",
             flavor: HttpFlavor::Streamable,
         },
@@ -408,26 +410,26 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         setup: Setup::Ready,
     },
     // ── vector-db ───────────────────────────────────────────────────────────────────
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "pinecone",
         description: "Pinecone vector database: indexes, search, and documentation",
         command: "npx -y @pinecone-database/mcp@0.3.0",
         required_env: &["PINECONE_API_KEY"],
         optional_env: &[],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "vector-db",
         homepage: "https://github.com/pinecone-io/pinecone-mcp",
         auth: Auth::EnvVars,
         reach: Reach::Bounded,
         setup: Setup::Ready,
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "qdrant",
         description: "Qdrant vector search engine: store and find memories",
         command: "uvx mcp-server-qdrant@0.8.1",
         required_env: &["QDRANT_URL", "COLLECTION_NAME"],
         optional_env: &["QDRANT_API_KEY"],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "vector-db",
         homepage: "https://github.com/qdrant/mcp-server-qdrant",
         auth: Auth::EnvVars,
@@ -435,26 +437,26 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         setup: Setup::Ready,
     },
     // ── MIK-7787 additions (top-15 research, 2026-10-02) ─────────────────────────
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "time",
         description: "Current time and time-zone conversion",
         command: "uvx mcp-server-time@2026.8.18",
         required_env: &[],
         optional_env: &[],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "utility",
         homepage: "https://github.com/modelcontextprotocol/servers/tree/main/src/time",
         auth: Auth::None,
         reach: Reach::Bounded,
         setup: Setup::Ready,
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "git",
         description: "Read and change a local git repository: status, diff, log, commit (append --repository <path>)",
         command: "uvx mcp-server-git@2026.8.18",
         required_env: &[],
         optional_env: &[],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "dev-tools",
         homepage: "https://github.com/modelcontextprotocol/servers/tree/main/src/git",
         auth: Auth::None,
@@ -467,13 +469,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
             hint: "--repository <path>; it can write commits there",
         },
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "chrome-devtools",
         description: "Drive and debug Chrome through DevTools: navigate, inspect, trace performance",
         command: "npx -y chrome-devtools-mcp@1.10.1 --headless --isolated --no-usage-statistics --no-performance-crux",
         required_env: &[],
         optional_env: &[],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "code",
         homepage: "https://github.com/ChromeDevTools/chrome-devtools-mcp",
         auth: Auth::None,
@@ -484,26 +486,26 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
             hint: "a local Chrome install, current stable or newer",
         },
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "grafana",
         description: "Grafana dashboards, Prometheus and Loki queries, alerts, and incidents (read-only)",
         command: "uvx mcp-grafana@2.0.0 --disable-write",
         required_env: &["GRAFANA_URL", "GRAFANA_SERVICE_ACCOUNT_TOKEN"],
         optional_env: &["GRAFANA_ORG_ID"],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "monitoring",
         homepage: "https://github.com/grafana/mcp-grafana",
         auth: Auth::EnvVars,
         reach: Reach::Bounded,
         setup: Setup::Ready,
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "mongodb",
         description: "Query MongoDB databases and Atlas clusters (read-only; uses only the configured connection string)",
         command: "npx -y mongodb-mcp-server@3.0.5 --readOnly --disabledTools connect",
         required_env: &["MDB_MCP_CONNECTION_STRING"],
         optional_env: &[],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "database",
         homepage: "https://github.com/mongodb-js/mongodb-mcp-server",
         auth: Auth::EnvVars,
@@ -512,26 +514,26 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
             hint: "a MongoDB server or Atlas cluster (MDB_MCP_CONNECTION_STRING)",
         },
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "supabase",
         description: "Supabase projects, databases, and edge functions (read-only; personal access token)",
         command: "npx -y @supabase/mcp-server-supabase@0.13.0 --read-only",
         required_env: &["SUPABASE_ACCESS_TOKEN"],
         optional_env: &[],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "database",
         homepage: "https://supabase.com/docs/guides/getting-started/mcp",
         auth: Auth::EnvVars,
         reach: Reach::Bounded,
         setup: Setup::Ready,
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "hubspot",
         description: "HubSpot CRM contacts, companies, and deals (use a private app scoped read-only)",
         command: "npx -y @hubspot/mcp-server@0.4.0",
         required_env: &["PRIVATE_APP_ACCESS_TOKEN"],
         optional_env: &[],
-        transport: Transport::Stdio,
+        transport: CatalogTransport::Stdio,
         category: "crm",
         homepage: "https://developers.hubspot.com/mcp",
         auth: Auth::EnvVars,

@@ -1,2 +1,4 @@
-src/yaml.rs
-tests/mik_8425_yaml_adapter.rs
+src/yaml.rs # the adapter itself, the one seam allowed to name the backend
+tests/mik_8425_yaml_adapter.rs # serde_yaml and figment are the oracles the adapter is compared against
+tests/mik_8639_shipped_yaml.rs # serde_yaml is the oracle the guard is compared against
+tests/mik_8639_yaml_guard_bounds.rs # serde_yaml's document count is the oracle for the 1100-document row

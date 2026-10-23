@@ -7,7 +7,7 @@
 //! resolution to build one.
 
 use super::{
-    AccountKey, AccountOutcome, Visibility, Withholding, account_binding, account_outcome,
+    AccountOutcome, DescriptorId, Visibility, Withholding, account_binding, account_outcome,
     account_transient, denial_code, has_resolution_error, note_denial_code, record_absent,
     record_account_binding, record_account_outcome, record_account_refusal,
     record_account_transient, record_resolution_error, record_visibility, recorded_visibility,
@@ -18,8 +18,8 @@ use super::{
 const SCHEMA: Visibility = Visibility::Withheld(Withholding::Schema);
 const ABSENT: Visibility = Visibility::Withheld(Withholding::Absent);
 
-fn account(name: &str) -> AccountKey {
-    AccountKey(name.to_owned())
+fn account(name: &str) -> DescriptorId {
+    DescriptorId(name.to_owned())
 }
 
 fn error(code: i32, text: &str) -> crate::Error {

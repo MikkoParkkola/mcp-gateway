@@ -14,7 +14,7 @@ use tracing::warn;
 
 use crate::config::KeyServerOidcConfig;
 use crate::gateway::auth::AuthenticatedClient;
-use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
+use crate::gateway::oauth::OAuthAgentIdentity;
 use crate::identity_grants::GrantSubject;
 use crate::key_server::OidcVerifier;
 use crate::key_server::TokenAgeCap;
@@ -398,9 +398,9 @@ pub(super) fn caller_key(
         return key;
     }
     client
-        .filter(|c| c.authenticated && !c.principal.is_empty())
-        .map_or_else(String::new, |c| {
-            format!("credential:{}:{}", c.principal.len(), c.principal)
+        .and_then(|c| c.credential_principal())
+        .map_or_else(String::new, |principal| {
+            format!("credential:{}:{}", principal.len(), principal)
         })
 }
 
@@ -489,3 +489,208 @@ mod admission_tests;
 #[cfg(all(test, feature = "firewall"))]
 #[path = "caller_key_tests.rs"]
 mod caller_key_tests;
+
+#[cfg(test)]
+mod mik_8659_caller_tests {
+    use super::caller_key;
+    use crate::security::audit::CredentialKind;
+
+    /// MIK-8659 T3 (GREEN): `caller_key` golden. An authenticated `ab12`
+    /// principal keys as `credential:4:ab12`.
+    #[test]
+    fn t3_caller_key_golden() {
+        let client = crate::gateway::auth::AuthenticatedClient {
+            name: "k".to_owned(),
+            rate_limit: 0,
+            backends: vec!["*".to_owned()],
+            allowed_tools: None,
+            denied_tools: None,
+            admin: false,
+            // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
+            principal: "ab12".to_owned(),
+            quota_principal: None,
+            authenticated: true,
+            credential_kind: CredentialKind::ApiKey,
+        };
+        assert_eq!(caller_key(None, None, Some(&client)), "credential:4:ab12");
+    }
+
+    /// MIK-8659 T2 (GREEN): `caller_key` gives no credential for
+    /// `{false, "p"}` and `{true, ""}`: empty, never pooled.
+    #[test]
+    fn t2_caller_key_refuses_bad_principals() {
+        let unauthenticated = crate::gateway::auth::AuthenticatedClient {
+            name: "k".to_owned(),
+            rate_limit: 0,
+            backends: vec!["*".to_owned()],
+            allowed_tools: None,
+            denied_tools: None,
+            admin: false,
+            // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
+            principal: "p".to_owned(),
+            quota_principal: None,
+            authenticated: false,
+            credential_kind: CredentialKind::ApiKey,
+        };
+        assert_eq!(
+            caller_key(None, None, Some(&unauthenticated)),
+            "",
+            "unauthenticated gives no key"
+        );
+        let empty = crate::gateway::auth::AuthenticatedClient {
+            principal: String::new(),
+            authenticated: true,
+            ..unauthenticated
+        };
+        assert_eq!(
+            caller_key(None, None, Some(&empty)),
+            "",
+            "empty gives no key"
+        );
+    }
+
+    /// MIK-8659 T2 (GREEN): `DELETE /mcp` refuses `{false, "p"}` and
+    /// `{true, ""}` at the credential gate (401), while `{true, "p"}`
+    /// passes it (400 for no session id, not 401).
+    #[tokio::test]
+    async fn t2_session_end_refuses_bad_principals() {
+        use axum::response::IntoResponse as _;
+        let auth = crate::config::AuthConfig {
+            enabled: true,
+            ..crate::config::AuthConfig::default()
+        };
+        let (state, _dir) = super::super::tests::test_router_app_state_with_auth(&auth).await;
+        let call = |client: Option<crate::gateway::auth::AuthenticatedClient>| async {
+            let reply = super::super::handlers::mcp_delete_handler(
+                axum::extract::State(std::sync::Arc::clone(&state)),
+                client.map(axum::Extension),
+                axum::http::HeaderMap::new(),
+                axum::http::Extensions::default(),
+            )
+            .await;
+            reply.into_response().status()
+        };
+        let base = crate::gateway::auth::AuthenticatedClient {
+            name: "k".to_owned(),
+            rate_limit: 0,
+            backends: vec!["*".to_owned()],
+            allowed_tools: None,
+            denied_tools: None,
+            admin: false,
+            // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
+            principal: "p".to_owned(),
+            quota_principal: None,
+            authenticated: true,
+            credential_kind: CredentialKind::ApiKey,
+        };
+        let unauthenticated = crate::gateway::auth::AuthenticatedClient {
+            authenticated: false,
+            ..base.clone()
+        };
+        assert_eq!(
+            call(Some(unauthenticated)).await,
+            axum::http::StatusCode::UNAUTHORIZED,
+            "unauthenticated is refused"
+        );
+        let empty = crate::gateway::auth::AuthenticatedClient {
+            principal: String::new(),
+            ..base.clone()
+        };
+        assert_eq!(
+            call(Some(empty)).await,
+            axum::http::StatusCode::UNAUTHORIZED,
+            "empty is refused"
+        );
+        assert_eq!(
+            call(Some(base)).await,
+            axum::http::StatusCode::BAD_REQUEST,
+            "authenticated non-empty passes the gate"
+        );
+    }
+
+    async fn post_dashboard_link(
+        state: &std::sync::Arc<super::super::AppState>,
+        bearer: &str,
+    ) -> (axum::http::StatusCode, serde_json::Value) {
+        use tower::ServiceExt as _;
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/ui/api/dashboard-link")
+            .header("authorization", format!("Bearer {bearer}"))
+            .body(axum::body::Body::empty())
+            .expect("dashboard-link request builds");
+        let response = super::super::create_router(std::sync::Arc::clone(state))
+            .oneshot(request)
+            .await
+            .expect("router answers");
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("readable body");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    fn auth_with_api_key(secret: &str, name: &str, admin: bool) -> crate::config::AuthConfig {
+        crate::config::AuthConfig {
+            enabled: true,
+            bearer_token: None,
+            api_keys: vec![crate::config::ApiKeyConfig {
+                key: None,
+                key_sha256: Some(crate::config::api_key_digest_spec(secret.as_bytes())),
+                expires_at: None,
+                name: name.to_owned(),
+                rate_limit: 0,
+                backends: vec!["*".to_owned()],
+                allowed_tools: None,
+                denied_tools: None,
+                admin,
+                kind: crate::config::ApiKeyKind::Shared,
+            }],
+            ..crate::config::AuthConfig::default()
+        }
+    }
+
+    /// MIK-8659 T1f control (GREEN): an authenticated admin API key whose
+    /// digest is in the config mints a dashboard link.
+    #[tokio::test]
+    async fn t1f_admin_api_key_mints_a_dashboard_link() {
+        let secret = "mik-8659-t1f-admin-secret";
+        let auth = auth_with_api_key(secret, "k-admin", true);
+        let (state, _dir) = super::super::tests::test_router_app_state_with_auth(&auth).await;
+        let (status, body) = post_dashboard_link(&state, secret).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert!(
+            body.get("link")
+                .and_then(serde_json::Value::as_str)
+                .is_some(),
+            "a link is minted: {body}"
+        );
+    }
+
+    /// MIK-8659 T1f non-admin (GREEN): a non-admin API key is refused a
+    /// dashboard link, while the F0 readers still report its name.
+    #[tokio::test]
+    async fn t1f_non_admin_api_key_is_refused_but_named() {
+        let secret = "mik-8659-t1f-user-secret";
+        let auth = auth_with_api_key(secret, "k-user", false);
+        let (state, _dir) = super::super::tests::test_router_app_state_with_auth(&auth).await;
+        let (status, body) = post_dashboard_link(&state, secret).await;
+        assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "{body}");
+        let client = state
+            .auth_config
+            .validate_token(secret)
+            .expect("the refused key still validates");
+        assert_eq!(client.api_key_identity(), Some("k-user"));
+        let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            api_key_name: Some(client.name.as_str()),
+            credential_principal: Some(client.principal.as_str()),
+            authentication: crate::gateway::meta_mcp::Authentication::of(Some(&client)),
+            credential_kind: CredentialKind::of(Some(&client)),
+            ..crate::gateway::meta_mcp::anonymous_caller()
+        };
+        assert_eq!(ctx.cost_key(), Some("k-user"));
+        assert_eq!(ctx.scope().grant_key, Some("k-user"));
+    }
+}

@@ -14,6 +14,7 @@ use crate::backend::tools_nudge::NudgeKind;
 use crate::backend::{Backend, BackendRegistry};
 use crate::config::Config;
 use crate::config_reload::{OnRegistered, RegisteredChange};
+use crate::jitter::full_jitter;
 
 /// Schedule for retrying warm-start until a backend's tools are cached.
 ///
@@ -230,19 +231,6 @@ fn effective_attempt_timeout(floor: Duration, backend_timeout: Duration) -> Dura
     floor.max(backend_timeout.saturating_mul(ATTEMPT_REQUEST_BUDGET))
 }
 
-/// Spread a gap uniformly over `[0, bound]`.
-///
-/// Every warm-start task is spawned in the same instant, so without this they
-/// retry in lockstep and hit a machine that is already busy booting with a
-/// synchronised burst.
-fn jittered(bound: Duration) -> Duration {
-    if bound.is_zero() {
-        return bound;
-    }
-    let millis = u64::try_from(bound.as_millis()).unwrap_or(u64::MAX);
-    Duration::from_millis(rand::random_range(0..=millis))
-}
-
 /// Call `attempt` until it caches tools or fails permanently.
 ///
 /// Returns the number of tools cached, or `None` when the backend failed in a
@@ -270,7 +258,7 @@ where
 
     loop {
         n += 1;
-        let gap = jittered(gap_before_attempt(policy, n, started.elapsed()));
+        let gap = full_jitter(gap_before_attempt(policy, n, started.elapsed()));
         if !gap.is_zero() {
             tokio::time::sleep(gap).await;
         }

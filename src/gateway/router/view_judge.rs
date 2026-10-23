@@ -131,7 +131,7 @@ async fn resolve_caller(
         agent: current
             .agent
             .as_ref()
-            .map(crate::gateway::oauth::AgentIdentity::from_validated),
+            .map(crate::gateway::oauth::OAuthAgentIdentity::from_validated),
         client: current.client,
         identity: current.identity,
     })
@@ -259,7 +259,7 @@ pub(super) fn get_view_subject(
     ViewSubject {
         grant_subject,
         oauth_agent: extensions
-            .get::<crate::gateway::oauth::AgentIdentity>()
+            .get::<crate::gateway::oauth::OAuthAgentIdentity>()
             .cloned(),
         cert: extensions.get::<crate::mtls::CertIdentity>().cloned(),
         code_mode_url: code_mode_requested(query),

@@ -42,12 +42,10 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use hmac::{Hmac, KeyInit, Mac};
+use hmac::{KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
-// ── Type aliases ──────────────────────────────────────────────────────────────
-
-type HmacSha256 = Hmac<Sha256>;
+use crate::hashing::HmacSha256;
 
 // ── Read bounds (MIK-6710 memory-DoS mitigation) ───────────────────────────────
 
@@ -201,6 +199,8 @@ struct Inner {
 pub struct TransparencyLogger {
     inner: Mutex<Inner>,
     config: Arc<TransparencyLogConfig>,
+    /// The path resolved at open.
+    path: PathBuf,
     /// The writer lease on `<path>.lock`, held for the logger's lifetime.
     lease: crate::fs_lock::ExclusiveFileLock,
     #[cfg(test)]
@@ -283,7 +283,23 @@ impl TransparencyLogger {
         config: Arc<TransparencyLogConfig>,
         wait: std::time::Duration,
     ) -> io::Result<Self> {
-        let path = expand_tilde(&config.path);
+        Self::open_resolving(config, wait, crate::home_dir::home_dir().as_deref())
+    }
+
+    fn open_resolving(
+        config: Arc<TransparencyLogConfig>,
+        wait: std::time::Duration,
+        home: Option<&Path>,
+    ) -> io::Result<Self> {
+        let path = resolved_path(&config.path, home.map(Path::to_path_buf));
+        if home.is_none() && crate::home_dir::tilde_rest(&config.path).is_some() {
+            let abs = std::path::absolute(&path).unwrap_or_else(|_| path.clone());
+            tracing::warn!(
+                configured = %config.path,
+                resolved = %abs.display(),
+                "no home directory could be determined; the transparency log is written relative to the working directory"
+            );
+        }
 
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
@@ -307,6 +323,7 @@ impl TransparencyLogger {
                 seg: recovered.seg,
             }),
             config,
+            path,
             lease,
             #[cfg(test)]
             hooks: rotation::TestHooks::default(),
@@ -342,7 +359,7 @@ impl TransparencyLogger {
     /// (e.g. the control-plane audit view) read the governance log back.
     #[must_use]
     pub fn path(&self) -> PathBuf {
-        expand_tilde(&self.config.path)
+        self.path.clone()
     }
 
     /// Append one entry covering the completed `request → response` pair.
@@ -525,14 +542,10 @@ impl TransparencyLogger {
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
-/// Expand a leading `~/` in `s` to the user's home directory.
-fn expand_tilde(s: &str) -> PathBuf {
-    if let Some(rest) = s.strip_prefix("~/")
-        && let Some(home) = crate::home_dir::home_dir()
-    {
-        return home.join(rest);
-    }
-    PathBuf::from(s)
+/// `configured` with `~` resolved against `home`: the one resolution the
+/// writer and the exporter share.
+pub(crate) fn resolved_path(configured: &str, home: Option<PathBuf>) -> PathBuf {
+    crate::home_dir::expand_or_cwd_with(configured, home)
 }
 
 /// Read `path` into a `String`, failing closed rather than allocating an

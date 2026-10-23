@@ -56,7 +56,7 @@ pub use scopes::{Action, Scope, check_scopes};
 /// Downstream handlers use this to know which agent is calling and what
 /// scopes it holds.
 #[derive(Debug, Clone)]
-pub struct AgentIdentity {
+pub struct OAuthAgentIdentity {
     /// Agent `client_id` (also the JWT `sub`).
     pub client_id: String,
     /// Agent display name.
@@ -74,7 +74,7 @@ pub struct AgentIdentity {
     pub quota_principal: Option<QuotaPrincipal>,
 }
 
-impl AgentIdentity {
+impl OAuthAgentIdentity {
     /// The identity a validated agent token proves, built one way for the
     /// middleware and for a stream's per-decision judge (MIK-8377).
     pub(crate) fn from_validated(validated: &ValidatedToken) -> Self {
@@ -106,7 +106,7 @@ impl AgentAuthState {
     }
 }
 
-/// Axum middleware: validate agent JWT and populate [`AgentIdentity`] extension.
+/// Axum middleware: validate agent JWT and populate [`OAuthAgentIdentity`] extension.
 ///
 /// This middleware is additive — it runs after the existing [`auth_middleware`]
 /// and enriches the request with agent scope information.  When agent auth is
@@ -160,7 +160,7 @@ pub async fn agent_auth_middleware(
             }
             request
                 .extensions_mut()
-                .insert(AgentIdentity::from_validated(&validated));
+                .insert(OAuthAgentIdentity::from_validated(&validated));
             next.run(request).await
         }
         Err(JwtError::UnknownAgent(id)) => {
@@ -174,14 +174,14 @@ pub async fn agent_auth_middleware(
     }
 }
 
-/// Check whether the [`AgentIdentity`] in `extensions` grants access to
+/// Check whether the [`OAuthAgentIdentity`] in `extensions` grants access to
 /// `(backend, tool, action)` and emit an audit log entry.
 ///
 /// Returns `Ok(())` on success or a denial reason on failure.
 ///
 /// Call this from tool dispatch handlers, **after** the middleware has run.
 pub fn check_agent_scope_and_audit_reason(
-    identity: &AgentIdentity,
+    identity: &OAuthAgentIdentity,
     backend: &str,
     tool: &str,
     action: &Action,
@@ -196,7 +196,7 @@ pub fn check_agent_scope_and_audit_reason(
 /// Split from the check so a caller that must not leave an invocation trail
 /// (discovery, which asks the same question) can take the verdict alone.
 pub fn record_agent_scope_decision(
-    identity: &AgentIdentity,
+    identity: &OAuthAgentIdentity,
     backend: &str,
     tool: &str,
     action: &Action,
@@ -242,7 +242,7 @@ pub fn record_agent_scope_decision(
 // `Response` is inherently large in axum; boxing it would complicate caller code.
 #[allow(clippy::result_large_err)]
 pub fn check_agent_scope_and_audit(
-    identity: &AgentIdentity,
+    identity: &OAuthAgentIdentity,
     backend: &str,
     tool: &str,
     action: &Action,
@@ -273,13 +273,13 @@ pub async fn jwks_handler(State(key_pair): State<Arc<GatewayKeyPair>>) -> impl I
 mod tests {
     use super::*;
 
-    fn make_agent_identity(scopes: &[&str]) -> AgentIdentity {
+    fn make_agent_identity(scopes: &[&str]) -> OAuthAgentIdentity {
         let parsed: Vec<Scope> = scopes.iter().filter_map(|s| Scope::parse(s)).collect();
         let raw: Vec<String> = scopes
             .iter()
             .map(std::string::ToString::to_string)
             .collect();
-        AgentIdentity {
+        OAuthAgentIdentity {
             client_id: "test-agent".to_string(),
             agent_name: "Test Agent".to_string(),
             scopes: parsed,

@@ -16,7 +16,7 @@
 
 use super::{TOOL, state_with_firewalls_and_auth};
 use crate::config::{ApiKeyConfig, AuthConfig};
-use crate::gateway::oauth::{AgentIdentity as OAuthAgentIdentity, Scope};
+use crate::gateway::oauth::{OAuthAgentIdentity, Scope};
 use crate::gateway::router::create_router;
 use crate::mtls::identity::CertIdentity;
 use crate::security::firewall::{Firewall, FirewallConfig, budget_guard::BudgetGuardConfig};

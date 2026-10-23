@@ -19,7 +19,7 @@ use super::direct_guards::refusal;
 use super::helpers::{bodiless_accepted, build_http_error_response};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::invoke::relay::GatewayStamps;
-use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
+use crate::gateway::oauth::OAuthAgentIdentity;
 use crate::mtls::CertIdentity;
 use crate::protocol::{JsonRpcResponse, RequestId};
 #[cfg(feature = "firewall")]
@@ -448,8 +448,11 @@ pub(super) async fn backend_handler(
 
     // The request's scope for what intake judges (MIK-8154 F2: the exempt
     // instance the send compares), boxed so the scope wraps a pointer.
-    crate::gateway::meta_mcp::visible::memo::with_visibility_memo(Box::pin(
-        direct_audit::audited_call(Arc::clone(&state), name, request),
+    // The minted-receipt scope rides outside the memo.
+    crate::gateway::meta_mcp::invoke::with_minted_receipts(Box::pin(
+        crate::gateway::meta_mcp::visible::memo::with_visibility_memo(Box::pin(
+            direct_audit::audited_call(Arc::clone(&state), name, request),
+        )),
     ))
     .await
 }

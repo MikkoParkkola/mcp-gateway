@@ -32,10 +32,9 @@
 //! what it asked for. Requesting no specific scopes grants everything the policy
 //! allows (the common case).
 
-use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use crate::config::KeyServerPolicyConfig;
+use crate::config::{KeyServerPolicyConfig, PolicyMatchConfig, PolicyScopesConfig};
 
 use super::oidc::{VerifiedIdentity, email_domain};
 use super::store::TokenScopes;
@@ -79,24 +78,13 @@ impl PolicyEngine {
         requested: &RequestedScopes,
     ) -> Result<TokenScopes, ScopeRefusal> {
         for rule in &self.rules {
-            let criteria = MatchCriteria {
-                domain: rule.match_criteria.domain.clone(),
-                issuer: rule.match_criteria.issuer.clone(),
-                email: rule.match_criteria.email.clone(),
-                group: rule.match_criteria.group.clone(),
-            };
-            let policy_scopes = PolicyScopes {
-                backends: rule.scopes.backends.clone(),
-                tools: rule.scopes.tools.clone(),
-                rate_limit: rule.scopes.rate_limit,
-            };
-            if matches_rule(&criteria, identity) {
+            if matches_rule(&rule.match_criteria, identity) {
                 debug!(
                     email = %identity.email,
                     issuer = %identity.issuer,
                     "Policy rule matched"
                 );
-                return apply_intersection(&policy_scopes, requested);
+                return apply_intersection(&rule.scopes, requested);
             }
         }
         debug!(email = %identity.email, "No policy rule matched");
@@ -127,7 +115,7 @@ pub struct RequestedScopes {
 }
 
 /// Evaluate whether an identity matches the rule's match criteria.
-fn matches_rule(criteria: &MatchCriteria, identity: &VerifiedIdentity) -> bool {
+fn matches_rule(criteria: &PolicyMatchConfig, identity: &VerifiedIdentity) -> bool {
     // The issuer always applies; every other present criterion must match.
     if identity.issuer != criteria.issuer {
         return false;
@@ -164,7 +152,7 @@ fn matches_rule(criteria: &MatchCriteria, identity: &VerifiedIdentity) -> bool {
 /// = all, so a tool request that intersects to nothing is refused instead of
 /// widened.
 fn apply_intersection(
-    policy: &PolicyScopes,
+    policy: &PolicyScopesConfig,
     requested: &RequestedScopes,
 ) -> Result<TokenScopes, ScopeRefusal> {
     let backends = intersect_scope_list(&policy.backends, &requested.backends);
@@ -230,38 +218,6 @@ fn scope_matches(policy_item: &str, request_item: &str) -> bool {
     } else {
         policy_item == request_item
     }
-}
-
-/// Match criteria for a policy rule.
-///
-/// The issuer and every non-`None` field must match.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct MatchCriteria {
-    /// Exact email domain (e.g., `"company.com"`)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub domain: Option<String>,
-    /// OIDC issuer URL
-    pub issuer: String,
-    /// Exact email address
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub email: Option<String>,
-    /// Group membership
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub group: Option<String>,
-}
-
-/// Scopes granted by a policy rule.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct PolicyScopes {
-    /// Allowed backends (`["*"]` = all; empty = none).
-    #[serde(default)]
-    pub backends: Vec<String>,
-    /// Allowed tools (empty or `["*"]` = all).
-    #[serde(default)]
-    pub tools: Vec<String>,
-    /// Rate limit (requests per minute; 0 = unlimited).
-    #[serde(default)]
-    pub rate_limit: u32,
 }
 
 #[cfg(test)]

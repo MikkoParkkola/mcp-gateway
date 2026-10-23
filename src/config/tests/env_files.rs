@@ -703,3 +703,28 @@ fn the_cli_owned_list_is_exactly_the_clis_env_names() {
     );
     assert_eq!(listed, clap_names);
 }
+
+/// MIK-8664 (DUPC-7.PR7.6): `~user/x` names ANOTHER user's home, which this
+/// gateway does not resolve; it stays verbatim (and so is absent and skipped)
+/// rather than becoming `<home>user/x`, and it does not count as a tilde entry.
+#[test]
+fn a_tilde_user_entry_stays_verbatim_and_is_not_a_tilde_entry() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg_dir = tempfile::tempdir().unwrap();
+    let cfg_path = cfg_dir.path().join("gateway.yaml");
+    write_owner_only(&cfg_path, "env_files:\n  - \"~user/x.env\"\n").unwrap();
+
+    let startup =
+        Config::load_evaluated_with_home(Some(&cfg_path), &FixedHome(home.path().to_path_buf()))
+            .unwrap();
+
+    assert_eq!(
+        startup.env_paths.as_paths(),
+        [std::path::PathBuf::from("~user/x.env")],
+        "`~user/x` must not expand into the gateway user's home"
+    );
+    assert!(
+        !startup.env_paths.has_tilde_entry(),
+        "`~user/x` is not a home-relative entry"
+    );
+}

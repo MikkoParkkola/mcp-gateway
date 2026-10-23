@@ -378,6 +378,8 @@ async fn a_long_tool_text_is_capped_and_kept_out_of_the_message() {
         "D3: the data is not capped at 256 characters and marked cut: {} chars",
         text.chars().count()
     );
+    // MIK-8667: exact, 256 characters kept and the marker after them.
+    assert_eq!(text, format!("{}…", "q".repeat(256)));
     let invoker = Scripted::new(&[("first", Answer::LongToolError)]);
     let result = run(ErrorStrategy::Continue, &["first"], &invoker)
         .await

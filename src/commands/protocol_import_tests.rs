@@ -4,42 +4,9 @@ use mcp_gateway::protocol_imports::{ImportRiskKind, ImportSourceKind};
 
 use super::*;
 
-#[test]
-fn guard_rejects_yaml_alias_bomb() {
-    // A billion-laughs-style alias amplification must be rejected before
-    // the YAML parser expands it.
-    use std::fmt::Write as _;
-    let mut bomb = String::from("a: &a [x, x, x, x, x, x, x, x, x]\n");
-    for (i, prev) in ('b'..='z').zip('a'..='y') {
-        let _ = writeln!(
-            bomb,
-            "{i}: &{i} [*{prev}, *{prev}, *{prev}, *{prev}, *{prev}, *{prev}, *{prev}, *{prev}, *{prev}]"
-        );
-    }
-    let err = guard_untrusted_yaml(&bomb).expect_err("alias bomb must be rejected");
-    assert!(err.contains("alias"), "got: {err}");
-}
-
-#[test]
-fn guard_allows_normal_yaml_without_aliases() {
-    let ok = "openapi: 3.0.0\ninfo:\n  title: x\npaths: {}\n";
-    assert!(guard_untrusted_yaml(ok).is_ok());
-}
-
-#[test]
-fn guard_rejects_oversized_document() {
-    let big = "x".repeat(MAX_SPEC_BYTES + 1);
-    let err = guard_untrusted_yaml(&big).expect_err("oversized doc must be rejected");
-    assert!(err.contains("exceeds"), "got: {err}");
-}
-
-#[test]
-fn count_yaml_aliases_ignores_scalar_stars() {
-    // `*` inside scalar text (not in node position) must not be counted.
-    assert_eq!(count_yaml_aliases("note: see 2 * 3 for math\n"), 0);
-    assert_eq!(count_yaml_aliases("ref: *anchor\n"), 1);
-    assert_eq!(count_yaml_aliases("list:\n  - *a\n  - *b\n"), 2);
-}
+// MIK-8639: the old `guard_untrusted_yaml` rows (alias bomb, 16 MiB, alias
+// count) moved to `tests/mik_8639_yaml_guard.rs`, which pins the same limits
+// on the seam that now guards every caller.
 
 const OPENAPI_SPEC: &str = r#"
 openapi: 3.0.0
@@ -351,4 +318,83 @@ tools:
 
     assert!(err.contains("no reversible capability YAML drafts"));
     assert!(!dir.path().join("drafts").exists());
+}
+
+/// MIK-8639 DEPTH.2: an unread `probe` field nesting 10,000 flow sequences.
+fn deep_probe_line() -> String {
+    format!("probe: {}1{}\n", "[".repeat(10_000), "]".repeat(10_000))
+}
+
+#[tokio::test]
+async fn preview_graphql_deep_unread_field_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let spec = dir.path().join("deep.yaml");
+    let content = format!(
+        "endpoint: https://api.example.test/graphql\noperations:\n  - name: Viewer\n    operation_type: query\n    query: \"query {{ viewer {{ login }} }}\"\n{}",
+        deep_probe_line()
+    );
+    tokio::fs::write(&spec, content).await.expect("write spec");
+
+    let err = preview_plan_from_file(
+        ProtocolImportKind::Graphql,
+        &spec,
+        None,
+        "imported_tool_baseline".to_string(),
+    )
+    .await
+    .expect_err("10k-deep GraphQL spec must be refused");
+    assert!(err.contains("nesting deeper than 128"), "got: {err}");
+}
+
+#[tokio::test]
+async fn preview_oci_package_deep_unread_field_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let spec = dir.path().join("package.yaml");
+    let content = format!(
+        "name: demo-tools\nimage_ref: ghcr.io/example/demo-tools:latest\ntools:\n  - name: export_data\n    description: Export account data\n{}",
+        deep_probe_line()
+    );
+    tokio::fs::write(&spec, content)
+        .await
+        .expect("write package");
+
+    let err = preview_plan_from_file(
+        ProtocolImportKind::OciMcpPackage,
+        &spec,
+        None,
+        "imported_tool_baseline".to_string(),
+    )
+    .await
+    .expect_err("10k-deep OCI package metadata must be refused");
+    assert!(err.contains("nesting deeper than 128"), "got: {err}");
+}
+
+#[tokio::test]
+async fn preview_openapi_deep_unread_field_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let spec = dir.path().join("deep.yaml");
+    let content = format!(
+        "openapi: 3.0.0\ninfo:\n  title: probe\n  version: \"1\"\npaths: {{}}\n{}",
+        deep_probe_line()
+    );
+    tokio::fs::write(&spec, content).await.expect("write spec");
+
+    let err = preview_plan_from_file(
+        ProtocolImportKind::OpenApi,
+        &spec,
+        Some("deep-probe".to_string()),
+        "imported_tool_baseline".to_string(),
+    )
+    .await
+    .expect_err("10k-deep OpenAPI spec must be refused");
+    assert!(err.contains("nesting deeper than 128"), "got: {err}");
+}
+
+/// MIK-8667: a cut cell keeps the result within the width by characters,
+/// `...` included.
+#[test]
+fn a_cut_cell_fits_its_width_by_characters() {
+    assert_eq!(truncate("abcdef", 6), "abcdef");
+    assert_eq!(truncate("abcdefgh", 6), "abc...");
+    assert_eq!(truncate("éééééééé", 6), "ééé...");
 }

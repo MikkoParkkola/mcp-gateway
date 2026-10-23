@@ -221,40 +221,96 @@ async fn callback_flow_success() {
 
 #[tokio::test]
 async fn callback_flow_state_mismatch() {
-    let server = start_callback_server("expected_state".to_string(), None, None, None)
+    let server = start_callback_server("expected_state".to_string(), Some("127.0.0.1"), None, None)
         .await
-        .unwrap();
-    let callback_url = server.callback_url.clone();
+        .expect("the callback server binds");
+    let url = server.callback_url.replace("localhost", "127.0.0.1");
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("a loopback client builds");
 
-    let client = reqwest::Client::new();
-    let _resp = client
-        .get(format!("{callback_url}?code=code123&state=wrong_state"))
-        .send()
+    let resp = tokio::time::timeout(
+        crate::test_wait::HANG_BOUND,
+        client
+            .get(format!("{url}?code=code123&state=wrong_state"))
+            .send(),
+    )
+    .await
+    .expect("the mismatched callback is answered")
+    .expect("the mismatched callback sends");
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+    let body = tokio::time::timeout(crate::test_wait::HANG_BOUND, resp.text())
         .await
-        .unwrap();
+        .expect("the refusal body arrives")
+        .expect("the refusal body reads");
+    assert!(
+        body.contains("State mismatch"),
+        "the refusal names the state: {body}"
+    );
 
-    let result = server.wait_for_callback().await;
-    assert!(result.is_err());
+    let valid = format!("{url}?code=ok&state=expected_state");
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, client.get(valid).send())
+        .await
+        .expect("the valid callback is answered")
+        .expect("the valid callback sends");
+
+    let outcome = tokio::time::timeout(crate::test_wait::HANG_BOUND, server.wait_for_callback())
+        .await
+        .expect("the login answers after a refusal");
+    match outcome {
+        Ok((_, result)) => assert_eq!(result.code, "ok"),
+        Err(err) => panic!("the login continues after a refusal, got: {err:?}"),
+    }
 }
 
 #[tokio::test]
 async fn callback_flow_error_from_provider() {
     let server = start_callback_server("some_state".to_string(), None, None, None)
         .await
-        .unwrap();
+        .expect("the callback server binds");
     let callback_url = server.callback_url.clone();
 
     let client = reqwest::Client::new();
-    let _resp = client
+    let _resp = tokio::time::timeout(
+        crate::test_wait::HANG_BOUND,
+        client
+            .get(format!(
+                "{callback_url}?error=access_denied&error_description=User+denied&state=some_state"
+            ))
+            .send(),
+    )
+    .await
+    .expect("the provider error is answered")
+    .expect("the provider error sends");
+
+    let result = tokio::time::timeout(crate::test_wait::HANG_BOUND, server.wait_for_callback())
+        .await
+        .expect("the login answers the provider error");
+    assert!(result.is_err());
+}
+
+/// MIK-8658 (K3): provider text holding the busy marker is no busy lock.
+#[tokio::test]
+async fn provider_error_text_with_the_busy_marker_is_not_a_busy_lock() {
+    let server = start_callback_server("s".to_string(), None, None, None)
+        .await
+        .expect("callback server starts");
+    let callback_url = server.callback_url.clone();
+    reqwest::Client::new()
         .get(format!(
-            "{callback_url}?error=access_denied&error_description=User+denied"
+            "{callback_url}?error=access_denied&error_description=credential+lock+busy%3A+x&state=s"
         ))
         .send()
         .await
-        .unwrap();
-
-    let result = server.wait_for_callback().await;
-    assert!(result.is_err());
+        .expect("callback answers");
+    let error = server.wait_for_callback().await.expect_err("login ended");
+    let busy = crate::oauth::client::is_credential_lock_busy(&error);
+    assert!(
+        matches!(&error, Error::OAuth(m) if m == "OAuth error: access_denied - credential lock busy: x"),
+        "{error:?}"
+    );
+    assert!(!busy, "{error}");
 }
 
 #[tokio::test]
@@ -265,14 +321,28 @@ async fn callback_flow_missing_code() {
     let callback_url = server.callback_url.clone();
 
     let client = reqwest::Client::new();
-    let _resp = client
-        .get(format!("{callback_url}?state=state123"))
-        .send()
+    let resp = tokio::time::timeout(
+        crate::test_wait::HANG_BOUND,
+        client.get(format!("{callback_url}?state=state123")).send(),
+    )
+    .await
+    .expect("the missing-code callback is answered")
+    .expect("the missing-code callback sends");
+    let page = tokio::time::timeout(crate::test_wait::HANG_BOUND, resp.text())
         .await
-        .unwrap();
+        .expect("the missing-code page arrives")
+        .expect("the missing-code page reads");
+    assert!(page.contains("No code received"), "{page}");
 
-    let result = server.wait_for_callback().await;
-    assert!(result.is_err());
+    // The right state with no code ends the login through the missing-code
+    // branch, not the state refusal the fix moved ahead of it.
+    let result = tokio::time::timeout(crate::test_wait::HANG_BOUND, server.wait_for_callback())
+        .await
+        .expect("the login answers the missing code");
+    assert!(
+        matches!(result, Err(crate::Error::OAuth(ref t)) if t == "No authorization code received"),
+        "{result:?}"
+    );
 }
 
 /// A log capture for the current thread. A process-wide registry keeps
@@ -306,44 +376,54 @@ pub(in crate::oauth) fn capture() -> (
 
 /// MIK-7324.COV.3: the operator's log names a forged state as a possible
 /// CSRF attempt, and a good callback as a success, each by its event name.
-#[tokio::test]
+// Current-thread on purpose: `capture()` is thread-local.
+#[tokio::test(flavor = "current_thread")]
 async fn callback_outcomes_are_logged_by_event_name() {
     let (guard, buffer) = capture();
 
-    let forged = start_callback_server("expected".to_string(), Some("127.0.0.1"), None, None)
+    let server = start_callback_server("expected".to_string(), Some("127.0.0.1"), None, None)
         .await
-        .unwrap();
-    let url = forged.callback_url.replace("localhost", "127.0.0.1");
-    let client = reqwest::Client::builder().no_proxy().build().unwrap();
-    let (outcome, _) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        tokio::join!(
-            forged.wait_for_callback(),
-            client.get(format!("{url}?code=c&state=forged")).send()
-        )
-    })
-    .await
-    .expect("the forged callback is answered");
-    assert!(outcome.is_err(), "a forged state yields no code");
+        .expect("the callback server binds");
+    let url = server.callback_url.replace("localhost", "127.0.0.1");
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("a loopback client builds");
 
-    let good = start_callback_server("expected".to_string(), Some("127.0.0.1"), None, None)
-        .await
-        .unwrap();
-    let url = good.callback_url.replace("localhost", "127.0.0.1");
-    let (outcome, _) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        tokio::join!(
-            good.wait_for_callback(),
-            client.get(format!("{url}?code=c&state=expected")).send()
-        )
-    })
+    let resp = tokio::time::timeout(
+        crate::test_wait::HANG_BOUND,
+        client.get(format!("{url}?code=c&state=forged")).send(),
+    )
     .await
-    .expect("the good callback is answered");
-    assert_eq!(
-        outcome.expect("a matching state yields the code").1.code,
-        "c"
+    .expect("the forged callback is answered")
+    .expect("the forged callback sends");
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+    let body = tokio::time::timeout(crate::test_wait::HANG_BOUND, resp.text())
+        .await
+        .expect("the refusal body arrives")
+        .expect("the refusal body reads");
+    assert!(
+        body.contains("State mismatch"),
+        "the refusal names the state: {body}"
     );
 
+    let valid = format!("{url}?code=c&state=expected");
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, client.get(valid).send())
+        .await
+        .expect("the good callback is answered")
+        .expect("the good callback sends");
+    let outcome = tokio::time::timeout(crate::test_wait::HANG_BOUND, server.wait_for_callback())
+        .await
+        .expect("the login answers after a refusal");
+    let code = match outcome {
+        Ok((_, result)) => result.code,
+        Err(err) => panic!("a matching state yields the code, got: {err:?}"),
+    };
+    assert_eq!(code, "c");
+
     drop(guard);
-    let log = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+    let bytes = buffer.lock().expect("the log buffer locks").clone();
+    let log = String::from_utf8_lossy(&bytes).into_owned();
     for event in [
         "oauth.callback.received",
         "oauth.callback.state_mismatch",
@@ -352,4 +432,245 @@ async fn callback_outcomes_are_logged_by_event_name() {
         assert!(log.contains(event), "{event} missing from:\n{log}");
     }
     assert!(log.contains("possible CSRF attempt"), "{log}");
+}
+
+// =========================================================================
+// MIK-8674: state is checked before the login ends
+// =========================================================================
+
+/// Start a callback server for the state-first rows: loopback host, the URL as
+/// the browser sees it, and a client that never proxies loopback.
+async fn start_test_server(expected_state: &str) -> (CallbackServer, String, reqwest::Client) {
+    let server = start_callback_server(expected_state.to_string(), Some("127.0.0.1"), None, None)
+        .await
+        .expect("the callback server binds");
+    let url = server.callback_url.replace("localhost", "127.0.0.1");
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("a loopback client builds");
+    (server, url, client)
+}
+
+/// GET `full_url` and assert the state-first refusal: 400 with "State mismatch".
+/// Returns the refusal page for callers that check what it leaves out.
+async fn assert_refused(client: &reqwest::Client, full_url: String) -> String {
+    let resp = tokio::time::timeout(crate::test_wait::HANG_BOUND, client.get(full_url).send())
+        .await
+        .expect("the refused request is answered")
+        .expect("the refused request sends");
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+    let body = tokio::time::timeout(crate::test_wait::HANG_BOUND, resp.text())
+        .await
+        .expect("the refusal body arrives")
+        .expect("the refusal body reads");
+    assert!(
+        body.contains("State mismatch"),
+        "the refusal names the state: {body}"
+    );
+    body
+}
+
+/// CBSTATE.1: a wrong or missing state with an error is refused and the login
+/// continues to a later valid callback.
+#[tokio::test]
+async fn a_wrong_or_missing_state_with_an_error_is_refused_and_the_login_continues() {
+    for refused_query in [
+        "?error=access_denied&error_description=x&state=wrong",
+        "?error=access_denied&error_description=x",
+    ] {
+        let (server, url, client) = start_test_server("expected").await;
+        assert_refused(&client, format!("{url}{refused_query}")).await;
+        let valid = format!("{url}?code=good&state=expected");
+        tokio::time::timeout(crate::test_wait::HANG_BOUND, client.get(valid).send())
+            .await
+            .expect("the valid callback is answered")
+            .expect("the valid callback sends");
+        let outcome =
+            tokio::time::timeout(crate::test_wait::HANG_BOUND, server.wait_for_callback())
+                .await
+                .expect("the login answers after a refusal");
+        match outcome {
+            Ok((_, result)) => assert_eq!(result.code, "good", "case {refused_query}"),
+            Err(err) => panic!("case {refused_query}: the login continues, got: {err:?}"),
+        }
+    }
+}
+
+/// CBSTATE.2: a wrong or missing state without an error is refused and the
+/// login continues to a later valid callback.
+#[tokio::test]
+async fn a_wrong_or_missing_state_without_an_error_is_refused_and_the_login_continues() {
+    for refused_query in [
+        "?code=c&state=wrong",
+        "?code=c",
+        "",
+        "?state=wrong",
+        "?code=c&state=expectedX",
+        "?code=c&state=expecte",
+    ] {
+        let (server, url, client) = start_test_server("expected").await;
+        assert_refused(&client, format!("{url}{refused_query}")).await;
+        let valid = format!("{url}?code=good&state=expected");
+        tokio::time::timeout(crate::test_wait::HANG_BOUND, client.get(valid).send())
+            .await
+            .expect("the valid callback is answered")
+            .expect("the valid callback sends");
+        let outcome =
+            tokio::time::timeout(crate::test_wait::HANG_BOUND, server.wait_for_callback())
+                .await
+                .expect("the login answers after a refusal");
+        match outcome {
+            Ok((_, result)) => assert_eq!(result.code, "good", "case {refused_query}"),
+            Err(err) => panic!("case {refused_query}: the login continues, got: {err:?}"),
+        }
+    }
+}
+
+/// CBSTATE.3: a provider error with the right state ends the login with it.
+/// (Passes today; pins the branch the fix reorders.)
+#[tokio::test]
+async fn a_provider_error_with_the_right_state_ends_the_login_with_it() {
+    let (server, url, client) = start_test_server("expected").await;
+    let full = format!("{url}?error=access_denied&error_description=User+denied&state=expected");
+    let resp = tokio::time::timeout(crate::test_wait::HANG_BOUND, client.get(full).send())
+        .await
+        .expect("the provider error is answered")
+        .expect("the provider error sends");
+    let page = tokio::time::timeout(crate::test_wait::HANG_BOUND, resp.text())
+        .await
+        .expect("the provider error page arrives")
+        .expect("the provider error page reads");
+    assert!(
+        page.contains("Authorization Failed")
+            && page.contains("access_denied")
+            && page.contains("User denied"),
+        "the right-state error keeps the provider's failure page: {page}"
+    );
+    let outcome = tokio::time::timeout(crate::test_wait::HANG_BOUND, server.wait_for_callback())
+        .await
+        .expect("the login answers the provider error");
+    let err = match outcome {
+        Err(err) => err,
+        Ok((_, result)) => panic!("a provider error ends the login, got code: {}", result.code),
+    };
+    assert!(
+        matches!(err, crate::Error::OAuth(ref t) if t.contains("access_denied") && t.contains("User denied")),
+        "the login ends with the provider error: {err:?}"
+    );
+}
+
+/// LOG.1: a refused request logs only the mismatch (with `state_len`) and no
+/// attacker text, and no `provider_error` event.
+// Current-thread on purpose: `capture()` is thread-local, so the axum
+// handler must run on this thread for its events to be captured.
+#[tokio::test(flavor = "current_thread")]
+async fn a_refused_request_logs_only_the_mismatch_and_no_attacker_text() {
+    let (guard, buffer) = capture();
+    let (server, url, client) = start_test_server("expected").await;
+    let page = assert_refused(
+        &client,
+        format!("{url}?state=STATEMARK7f3&error=ERRMARK7f3&error_description=DESCMARK7f3"),
+    )
+    .await;
+    for marker in ["STATEMARK7f3", "ERRMARK7f3", "DESCMARK7f3"] {
+        assert!(
+            !page.contains(marker),
+            "{marker} must not reach the page: {page}"
+        );
+    }
+    let valid = format!("{url}?code=c&state=expected");
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, client.get(valid).send())
+        .await
+        .expect("the valid callback is answered")
+        .expect("the valid callback sends");
+    let outcome = tokio::time::timeout(crate::test_wait::HANG_BOUND, server.wait_for_callback())
+        .await
+        .expect("the login answers after a refusal");
+    match outcome {
+        Ok((_, result)) => assert_eq!(result.code, "c"),
+        Err(err) => panic!("the login continues after a refusal, got: {err:?}"),
+    }
+    drop(guard);
+    let bytes = buffer.lock().expect("the log buffer locks").clone();
+    let log = String::from_utf8_lossy(&bytes).into_owned();
+    assert!(
+        log.contains("oauth.callback.state_mismatch"),
+        "the mismatch is logged:\n{log}"
+    );
+    assert!(
+        log.contains(&format!("state_len={}", "STATEMARK7f3".len())),
+        "the state length is logged:\n{log}"
+    );
+    for absent in [
+        "oauth.callback.provider_error",
+        "STATEMARK7f3",
+        "ERRMARK7f3",
+        "DESCMARK7f3",
+    ] {
+        assert!(!log.contains(absent), "{absent} must not be logged:\n{log}");
+    }
+}
+
+/// REPEAT.1(a): three refusals then a valid callback completes the login.
+#[tokio::test]
+async fn three_refusals_then_a_valid_callback_completes_the_login() {
+    let (server, url, client) = start_test_server("expected").await;
+    for refused_query in ["?error=x&state=wrong1", "?code=c&state=wrong2", "?code=c"] {
+        assert_refused(&client, format!("{url}{refused_query}")).await;
+    }
+    let valid = format!("{url}?code=good&state=expected");
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, client.get(valid).send())
+        .await
+        .expect("the valid callback is answered")
+        .expect("the valid callback sends");
+    let outcome = tokio::time::timeout(crate::test_wait::HANG_BOUND, server.wait_for_callback())
+        .await
+        .expect("the login answers after refusals");
+    match outcome {
+        Ok((_, result)) => assert_eq!(result.code, "good"),
+        Err(err) => panic!("the login completes after refusals, got: {err:?}"),
+    }
+}
+
+/// REPEAT.1(b): three refusals then the window ends the wait.
+#[tokio::test]
+async fn three_refusals_then_the_window_ends_the_wait() {
+    let (server, url, client) = start_test_server("expected").await;
+    for refused_query in ["?error=x&state=wrong1", "?code=c&state=wrong2", "?code=c"] {
+        assert_refused(&client, format!("{url}{refused_query}")).await;
+    }
+    tokio::time::pause();
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let outcome = tokio::time::timeout(
+        crate::test_wait::HANG_BOUND,
+        server.wait_within(std::time::Duration::from_secs(1), &cancel),
+    )
+    .await
+    .expect("the window ends the wait");
+    assert!(
+        matches!(outcome, Err(Unanswered::Window)),
+        "the window ends the wait after refusals: {outcome:?}"
+    );
+}
+
+/// REPEAT.1(c): three refusals then cancellation ends the wait.
+#[tokio::test]
+async fn three_refusals_then_cancellation_ends_the_wait() {
+    let (server, url, client) = start_test_server("expected").await;
+    for refused_query in ["?error=x&state=wrong1", "?code=c&state=wrong2", "?code=c"] {
+        assert_refused(&client, format!("{url}{refused_query}")).await;
+    }
+    let cancel = tokio_util::sync::CancellationToken::new();
+    cancel.cancel();
+    let outcome = tokio::time::timeout(
+        crate::test_wait::HANG_BOUND,
+        server.wait_within(crate::test_wait::HANG_BOUND, &cancel),
+    )
+    .await
+    .expect("cancellation ends the wait");
+    assert!(
+        matches!(outcome, Err(Unanswered::Cancelled)),
+        "cancellation ends the wait after refusals: {outcome:?}"
+    );
 }
