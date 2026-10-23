@@ -93,6 +93,10 @@ pub(crate) enum RespTicket {
     Mik8705,
     /// Mcp and stdio fix the receipt's facts before the egress firewall.
     Mik8707,
+    /// The connection-string redaction runs past the URI and eats the
+    /// closing JSON of a compact text, so the delivered text no longer
+    /// parses while a receipt stamped before the scan keeps its count.
+    Mik8745,
 }
 
 /// Why a gap's order difference reaches no delivered outcome today. Closed
@@ -101,10 +105,11 @@ pub(crate) enum RespTicket {
 pub(crate) enum Latent {
     /// The receipt's result facts are `row_count` and `backend_ok`. The only
     /// extractor arm reads GitHub's server-reported `total_count`
-    /// (`trust/result_extractor.rs:55-80`), the redactor rewrites a matched
-    /// span inside a string (`security/firewall/redactor.rs:182`), redaction
-    /// never flips `isError`, and a Block replaces the whole answer, so the
-    /// stamp-firewall order changes no delivered fact.
+    /// (`trust/result_extractor.rs:55-80`), redaction never flips `isError`,
+    /// and a Block replaces the whole answer. Once MIK-8745 keeps every
+    /// redaction inside its matched span, the stamp-firewall order changes
+    /// no delivered fact; until then [`AFTER_MIK_8745`] is what the cells
+    /// return to.
     NoExtractedFactRedactionChanges,
 }
 
@@ -136,7 +141,9 @@ pub(crate) enum RespNa {
     TaskIsItsOwnRoute,
     /// A keyed replay on `/mcp` or stdio re-serves the stored, already sealed
     /// delivery (`router/handlers.rs:571`, `stdio_delivery.rs:83`, served by
-    /// `admission.rs:394`): it mints and seals nothing. Pinned by
+    /// `admission.rs:394`): it mints no receipt, so nothing is stamped or
+    /// sealed anew (`seal_receipt` seals only a receipt this request minted,
+    /// `invoke/provenance_stamp.rs:181`). Pinned by
     /// `rows::r_replay_mcp_reserves_the_stored_delivery` (red-check record
     /// red-A1-record.md: the earlier re-stamp premise was wrong).
     ReplayReservesTheStoredDelivery,
@@ -286,7 +293,7 @@ pub(crate) const fn expect(
         StampIgnoresShapedMembers,
     };
     use RespCase::{CacheHit, Fresh, IdempotentReplay, Task as TaskCase};
-    use RespExpect::{ExpectedGap, LatentGap, NotApplicable, OrderInvisibleByOutcome, Ordered};
+    use RespExpect::{ExpectedGap, NotApplicable, OrderInvisibleByOutcome, Ordered};
     use RespPair::{
         ClampLink, ClampSeal, FirewallSeal, FirewallStamp, JudgeCommit, JudgeRebuild, JudgeRecord,
         LinkSeal, RecordCommit, SealSign, ShapeSeal, SignJudge, SignRebuild, SignRecord, StampSeal,
@@ -318,9 +325,10 @@ pub(crate) const fn expect(
         (Mcp | Stdio, IdempotentReplay, _, StampSeal) => {
             NotApplicable(RespNa::ReplayReservesTheStoredDelivery)
         }
-        (Mcp | Stdio, _, _, FirewallStamp) => {
-            LatentGap(RespTicket::Mik8707, Latent::NoExtractedFactRedactionChanges)
+        (Mcp | Stdio | Direct, IdempotentReplay, _, FirewallStamp) => {
+            NotApplicable(RespNa::ReplayReservesTheStoredDelivery)
         }
+        (Mcp | Stdio, _, _, FirewallStamp) => ExpectedGap(RespTicket::Mik8745),
         (_, _, _, JudgeRebuild) => OrderInvisibleByOutcome(JudgeOnlyReplaces),
         (_, _, _, StampShape) => OrderInvisibleByOutcome(StampIgnoresShapedMembers),
         (_, _, _, LinkSeal) => OrderInvisibleByOutcome(SealWritesOnlyExcludedMeta),
@@ -419,10 +427,16 @@ fn every_response_pair_is_listed_exactly_once() {
     }
 }
 
+/// What the Mcp and stdio `FirewallStamp` cells become when MIK-8745 lands:
+/// the stamp still precedes the scan there, but no delivered fact differs.
+pub(crate) const AFTER_MIK_8745: RespExpect =
+    RespExpect::LatentGap(RespTicket::Mik8707, Latent::NoExtractedFactRedactionChanges);
+
 /// The gap set is exactly MIK-8705, expected (a direct replay is not
-/// resealed, both eras), and MIK-8707, latent (Mcp and stdio stamp before the
-/// firewall, every case and era; no delivered fact differs today). A new,
-/// closed or reclassified gap moves this pin.
+/// resealed, both eras), and MIK-8745, expected (Mcp and stdio stamp before a
+/// scan that can break the counted text, fresh and cache hit, both eras;
+/// [`AFTER_MIK_8745`] once it lands). A new, closed or reclassified gap moves
+/// this pin.
 #[test]
 fn the_response_table_names_exactly_two_gaps() {
     let gaps: Vec<_> = cells()
@@ -438,11 +452,22 @@ fn the_response_table_names_exactly_two_gaps() {
             .count()
     };
     assert_eq!(of(RespTicket::Mik8705, false), 2, "{gaps:?}");
-    assert_eq!(of(RespTicket::Mik8707, true), 12, "{gaps:?}");
-    assert_eq!(gaps.len(), 14, "the gap set moved: {gaps:?}");
+    assert_eq!(of(RespTicket::Mik8745, false), 8, "{gaps:?}");
+    assert_eq!(gaps.len(), 10, "the gap set moved: {gaps:?}");
+    assert_ne!(
+        expect(
+            RespRoute::Mcp,
+            RespCase::Fresh,
+            Era::Modern,
+            RespPair::FirewallStamp
+        ),
+        AFTER_MIK_8745,
+        "MIK-8745 landed: move the Mcp and stdio FirewallStamp cells to {AFTER_MIK_8745:?}"
+    );
 }
 
-/// The order behind the MIK-8707 latent gap, pinned at source.
+/// The order behind the MIK-8745 gap (and MIK-8707 after it), pinned at
+/// source.
 #[path = "response_source_order.rs"]
 mod source_order;
 
@@ -585,8 +610,13 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
         (Mcp | Direct, Fresh, Era::Modern, SignRecord) => {
             Driven::Row("rows::r_recsign_sign_precedes_delivery_record")
         }
-        (Mcp | Stdio, Fresh | CacheHit | IdempotentReplay, _, FirewallStamp)
-        | (Direct, Fresh | IdempotentReplay, _, FirewallStamp) => {
+        // The order is read at source; the row shows the scan breaks what the
+        // stamp counted.
+        (Mcp | Stdio, Fresh | CacheHit, _, FirewallStamp) => Driven::Shared {
+            pin: "response::source_order::stamp_and_egress_scan_order_is_pinned_at_source",
+            rows: &["rows::r_fwstamp_redaction_breaks_the_counted_text_gap"],
+        },
+        (Direct, Fresh, _, FirewallStamp) => {
             Driven::Row("response::source_order::stamp_and_egress_scan_order_is_pinned_at_source")
         }
         (Mcp | Direct, Fresh, Era::Legacy, ClampLink) => {

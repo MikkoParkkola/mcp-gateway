@@ -325,6 +325,66 @@ async fn r_replay_mcp_reserves_the_stored_delivery() {
     );
 }
 
+/// R-FWSTAMP `redaction_breaks_the_counted_text_gap`, `Mcp`, `Stdio` ×
+/// `Fresh`, `CacheHit` × both eras: `ExpectedGap(MIK-8745)`. Those routes stamp
+/// at dispatch, before the egress scan (`source_order`), so the receipt counts
+/// the backend's text. A compact `github_search_repos` answer carrying a
+/// database URI, scanned under a Warn rule as the egress scan runs it, is
+/// delivered with its closing JSON redacted away: the count the stamp read
+/// (3) is no longer in the delivered text. When MIK-8745 lands this fails:
+/// move the cells to [`super::AFTER_MIK_8745`].
+#[test]
+fn r_fwstamp_redaction_breaks_the_counted_text_gap() {
+    use crate::security::firewall::{Firewall, FirewallAction, FirewallConfig, FirewallRule};
+    use crate::trust::extract_row_count;
+    const TOOL: &str = "github_search_repos";
+    let text = r#"{"total_count":3,"incomplete_results":false,"items":[{"clone_url":"postgres://user:secret@db.internal/prod"}]}"#;
+    let mut result = serde_json::json!({
+        "content": [{"type": "text", "text": text}],
+        "isError": false
+    });
+    assert_eq!(
+        extract_row_count("gh", TOOL, &result, true),
+        Some(3),
+        "R-FWSTAMP: the stamp counts the backend's text"
+    );
+    let firewall = Firewall::from_config(
+        FirewallConfig {
+            enabled: true,
+            scan_responses: true,
+            credential_redaction: true,
+            rules: vec![FirewallRule {
+                tool_match: TOOL.to_string(),
+                action: FirewallAction::Warn,
+                reason: None,
+                scan: Vec::new(),
+            }],
+            ..FirewallConfig::default()
+        },
+        None,
+    );
+    let verdict = firewall.check_response("s", "gh", TOOL, &mut result, "c");
+    assert!(
+        verdict.allowed && verdict.action == FirewallAction::Warn,
+        "R-FWSTAMP: a Warn rule redacts and still delivers: {verdict:?}"
+    );
+    let delivered = result
+        .pointer("/content/0/text")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("R-FWSTAMP: the answer keeps its text: {result}"));
+    assert!(
+        !delivered.contains("secret"),
+        "R-FWSTAMP: the URI was redacted: {delivered}"
+    );
+    assert_eq!(
+        extract_row_count("gh", TOOL, &result, true),
+        None,
+        "R-FWSTAMP: MIK-8745 gap closed? the redacted text still parses \
+         ({delivered}): move the cells to {:?}",
+        super::AFTER_MIK_8745
+    );
+}
+
 /// R-REPLAYSEAL `direct_replay_seal_gap`, `Direct` × `IdempotentReplay`:
 /// `ExpectedGap(MIK-8705)`. The first call is sealed (the control); the replay
 /// serves its stored receipt unsealed: the route stores the answer

@@ -1,11 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The MIK-8707 latent gap, pinned at source (lead ruling, 2026-10-23). The
-//! receipt's facts are fixed when it is stamped. On `/mcp` and stdio the stamp
-//! is minted at dispatch, before the route's egress scan; on `/mcp/{name}` the
-//! scan runs first. No delivered fact differs today ([`super::Latent`]), so the
-//! order is read off the source: fixing MIK-8707 flips the first test, and a
-//! second extractor arm fails the second, which names the ticket.
+//! The stamp-scan order behind MIK-8745 and MIK-8707, pinned at source (lead
+//! rulings, 2026-10-23). The receipt's facts are fixed when it is stamped. On
+//! `/mcp` and stdio the stamp is minted at dispatch, before the route's egress
+//! scan; on `/mcp/{name}` the scan runs first. Until MIK-8745 a redaction can
+//! break the counted text (`rows::r_fwstamp_redaction_breaks_the_counted_text_gap`);
+//! after it no delivered fact differs ([`super::Latent`]). The order is read off
+//! the source: fixing MIK-8707 flips the first test, and a second extractor arm
+//! fails the second, which names the ticket.
 
 /// One source file of this crate.
 fn source(path: &str) -> String {
