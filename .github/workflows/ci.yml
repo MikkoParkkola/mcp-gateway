@@ -1401,6 +1401,36 @@ jobs:
         if: github.event_name == 'pull_request'
         run: python3 scripts/dev/check-timing-asserts.py --base "origin/${{ github.base_ref }}"
 
+  request-panics:
+    name: No new request-path panic site without an invariant (MIK-8691)
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    # Release builds abort on panic, so an unwrap a request can reach takes the
+    # whole gateway down. A new unwrap/expect/panic-family site in product code
+    # carries an `// invariant:` comment; existing ones are in a baseline the
+    # scanner writes, which only shrinks against the base.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Check the guard refuses what it claims to
+        run: python3 scripts/ci/check-request-panics.py --self-test
+      - name: No new panic site without an invariant
+        run: python3 scripts/ci/check-request-panics.py
+      - name: The baseline only shrinks against the previous tip
+        if: github.event_name != 'pull_request'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          base="$BEFORE"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base="HEAD^"
+          fi
+          python3 scripts/ci/check-request-panics.py --base "$base"
+      - name: The baseline only shrinks against the base
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/ci/check-request-panics.py --base "origin/${{ github.base_ref }}"
+
   orphan-test-modules:
     name: Orphan test modules (MIK-7538)
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
