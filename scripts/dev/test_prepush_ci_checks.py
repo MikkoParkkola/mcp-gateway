@@ -365,6 +365,35 @@ class Rows(unittest.TestCase):
         with self.assertRaises(workflow_shell.UnsupportedSyntax):
             workflow_shell.executions('python3 scripts/r.py "open')
 
+    # D25 (impl r2, gpt + grok): one quote-aware reading of the shell. Each
+    # case is a form the r2 seats reproduced as missed or merged.
+    def test_d25_the_walker_reads_quotes_escapes_and_substitutions_as_the_shell_does(self):
+        def forms(text):
+            return [(e.script, e.args) for e in workflow_shell.executions(text)]
+
+        cases = {
+            # adjacent quoted text is one word; separate words stay two
+            'python3 scripts/a.py "foo"bar': [("scripts/a.py", ("foobar",))],
+            "python3 scripts/a.py foo bar": [("scripts/a.py", ("foo", "bar"))],
+            # a single quote inside double quotes does not hide a substitution
+            "echo \"it's $(python3 scripts/b.py) here's\"": [("scripts/b.py", ())],
+            # an escaped double quote does not end the quoted word
+            "printf '%s' \"a\\\"b\" | python3 scripts/c.py": [("scripts/c.py", ())],
+            # nested substitutions: the outer and the inner command both run
+            'echo "$(python3 scripts/outer.py $(python3 scripts/inner.py))"':
+                [("scripts/inner.py", ()), ("scripts/outer.py", ())],
+            # `env` and quoted assignment prefixes are peeled off
+            "env FOO=x python3 scripts/d.py": [("scripts/d.py", ())],
+            'FOO="a b" python3 scripts/e.py': [("scripts/e.py", ())],
+            # a chain operator inside a substitution does not split the command
+            'v="$(true && python3 scripts/f.py)"': [("scripts/f.py", ())],
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(sorted(forms(text)), sorted(expected))
+        with self.assertRaises(workflow_shell.UnsupportedSyntax):
+            workflow_shell.executions("env -i python3 scripts/g.py")
+
     # D9
     def test_d9_pull_request_target_counts_as_a_pr_workflow(self):
         self.t.script("scripts/t.py")

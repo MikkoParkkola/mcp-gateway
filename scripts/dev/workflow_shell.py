@@ -145,7 +145,6 @@ class UnsupportedSyntax(Exception):
 KEYWORDS = {"if", "then", "else", "elif", "fi", "for", "do", "done", "while", "until", "case", "esac", "!"}
 PYTHONS = {"python", "python3"}
 SCRIPT = re.compile(r"^(?:scripts|benchmarks)/[\w./*-]+\.py$")
-SUBSTITUTION = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
 ASSIGN = re.compile(r"^([A-Za-z_]\w*)=(.*)$")
 FOR_GLOB = re.compile(r"^for\s+(\w+)\s+in\s+(\S+)\s*$")
 UNSUPPORTED = ("eval", "source", ".")
@@ -195,53 +194,119 @@ def _without_redirections(words):
 
 
 def _single_value(value):
-    """Whether `value` is one shell word: quoted, a substitution, or space-free."""
+    """Whether `value` is one shell word (`x="a b"` is; `x=a b` is a prefix)."""
     value = value.strip()
-    if value[:1] in "'\"" and value.endswith(value[:1]) and len(value) > 1:
+    if not value:
         return True
-    if value.startswith("$(") and value.endswith(")"):
-        return True
-    return " " not in value
+    top, _ = _lex(value)
+    return not any(flag and char.isspace() for flag, char in zip(top, value))
+
+
+def _lex(text):
+    """One reading of shell quoting for `text`: (top, spans).
+
+    `top[i]` is True where the shell would see an operator at index i: outside
+    quotes, escapes and command substitutions. `spans` are the outermost
+    command substitutions as (start, end, body): `$( … )` and backticks,
+    nested ones included in their parent's body, single-quoted ones never.
+    A context stack, not a set of regexes, so `"it's $(x)"`, `"a\\"b"` and
+    `$(a $(b))` read as the shell reads them.
+    """
+    top, spans, stack, escaped, i, start = [False] * len(text), [], [], False, 0, None
+    while i < len(text):
+        frame = stack[-1] if stack else None
+        char, width = text[i], 1
+        if escaped:
+            escaped = False
+        elif frame == "'":
+            if char == "'":
+                stack.pop()
+        elif char == "\\":
+            escaped = True
+        elif frame == '"' and char == '"':
+            stack.pop()
+        elif text.startswith("$(", i):
+            if not any(f in ("$(", "`") for f in stack):
+                start = i
+            stack.append("$(")
+            width = 2
+        elif char == "`" and frame == "`":
+            stack.pop()
+        elif char == "`":
+            if not any(f in ("$(", "`") for f in stack):
+                start = i
+            stack.append("`")
+        elif char == ")" and frame == "$(":
+            stack.pop()
+        elif char in "'\"" and frame != '"':
+            stack.append(char)
+        else:
+            top[i] = not stack
+        if start is not None and not any(f in ("$(", "`") for f in stack):
+            body = text[start + (2 if text.startswith("$(", start) else 1):i]
+            spans.append((start, i + width, body))
+            start = None
+        i += width
+    # An unterminated quote leaves the rest non-top: a Python stage then fails
+    # to tokenize (fail closed); any other command runs nothing seen here.
+    return top, spans
+
+
+def _split_top(text, separators):
+    """`text` split at the `separators` the shell sees (top-level only), stripped."""
+    top, _ = _lex(text)
+    pieces, current, i = [], "", 0
+    while i < len(text):
+        sep = next((s for s in separators if top[i] and text.startswith(s, i)
+                    and all(top[i + k] for k in range(len(s)))), None)
+        if sep == "|" and text.startswith("||", i):
+            sep = None if "||" not in separators else "||"
+        if sep:
+            pieces.append(current)
+            current, i = "", i + len(sep)
+            continue
+        current += text[i]
+        i += 1
+    pieces.append(current)
+    return [piece.strip() for piece in pieces if piece.strip()]
+
+
+def _chains(command):
+    """`command` split at `;`, `&&`, `||` and newlines, keeping `|` pipelines whole."""
+    return _split_top(command, ("&&", "||", ";", "\n"))
 
 
 def _pipe_stages(pipeline):
-    """`pipeline` split at `|` outside quotes and `$( … )`, stages stripped."""
-    stages, current, quote, depth, i = [], "", None, 0, 0
-    while i < len(pipeline):
-        char = pipeline[i]
-        if quote:
-            if char == quote:
-                quote = None
-        elif char in "'\"":
-            quote = char
-        elif pipeline.startswith("$(", i):
-            depth += 1
-        elif char == ")" and depth:
-            depth -= 1
-        elif char == "|" and not depth:
-            stages.append(current)
-            current, i = "", i + 1
-            continue
-        current += char
-        i += 1
-    stages.append(current)
-    return [stage.strip() for stage in stages if stage.strip()]
+    """`pipeline` split at the `|` the shell sees, stages stripped."""
+    return _split_top(pipeline, ("|",))
+
+
+def _without_substitutions(text):
+    """`text` with its outermost command substitutions removed (they run separately)."""
+    _, spans = _lex(text)
+    for start, end, _ in reversed(spans):
+        text = text[:start] + text[end:]
+    return text
 
 
 def _command_words(piece):
-    plain = piece.split()
-    while plain and (plain[0] in KEYWORDS or ASSIGN.match(plain[0])):
-        plain = plain[1:]
-    if not plain or plain[0] not in PYTHONS:
-        return plain  # not a Python command: its quoting is never tokenized
+    """The words of a simple command, prefixes peeled: keywords, `VAR=value`
+    assignments and `env [VAR=value…]`. Python commands must tokenize; other
+    commands whose quoting shlex cannot read run nothing this check sees."""
     try:
-        # posix=False keeps quotes on the words (`_token` strips them), so
-        # `"two words"` stays one argument and `$t` stays distinguishable.
-        words = shlex.split(piece, posix=False)
+        words = shlex.split(piece)
     except ValueError as err:
+        if not PYTHONS & set(re.split(r"[\s\"'/]+", piece)):
+            return []
         raise UnsupportedSyntax(f"{err}: {piece}") from None
     while words and (words[0] in KEYWORDS or ASSIGN.match(words[0])):
         words = words[1:]
+    if words and words[0] == "env":
+        words = words[1:]
+        while words and ASSIGN.match(words[0]):
+            words = words[1:]
+        if words and words[0].startswith("-"):
+            raise UnsupportedSyntax(f"`env {words[0]}` changes what runs: {piece}")
     return words
 
 
@@ -254,10 +319,11 @@ def executions(run_block: str) -> list[Execution]:
     for raw in lines:
         if raw.strip().startswith("#"):
             continue
-        for pipeline in _split_keep_pipes(raw):
-            # Single-quoted text is data: `echo '$(python3 x.py)'` runs nothing.
-            for inner in SUBSTITUTION.findall(re.sub(r"'[^']*'", "''", pipeline)):
-                found += executions(inner[0] or inner[1])
+        for pipeline in _chains(raw):
+            # A substitution runs its own commands (nested ones recursively);
+            # single-quoted text is data and holds none.
+            for _, _, body in _lex(pipeline)[1]:
+                found += executions(body)
             stages = _pipe_stages(pipeline)
             if not stages:
                 continue
@@ -282,7 +348,7 @@ def executions(run_block: str) -> list[Execution]:
 def _stage_execution(stage, stages, bound, loops):
     """The script execution forms one pipeline stage runs (none, or one per binding)."""
     found = []
-    words = _command_words(SUBSTITUTION.sub("", stage))
+    words = _command_words(_without_substitutions(stage))
     if not words:
         return found
     if words[0] in UNSUPPORTED:
@@ -313,29 +379,3 @@ def _stage_execution(stage, stages, bound, loops):
             auto_class=klass,
         ))
     return found
-
-
-def _split_keep_pipes(command):
-    """`command` split at `;`, `&&`, `||` and newlines, keeping `|` pipelines whole."""
-    pieces, current, quote, i = [], "", None, 0
-    while i < len(command):
-        char = command[i]
-        two = command[i:i + 2]
-        if quote:
-            if char == quote:
-                quote = None
-            current += char
-        elif char in "'\"":
-            quote, current = char, current + char
-        elif two in ("&&", "||"):
-            pieces.append(current)
-            current, i = "", i + 2
-            continue
-        elif char in ";\n":
-            pieces.append(current)
-            current = ""
-        else:
-            current += char
-        i += 1
-    pieces.append(current)
-    return [p.strip() for p in pieces if p.strip()]
