@@ -24,6 +24,9 @@ pub(crate) use super::signing_allocation_tests::route_matrix_stdio_tasks::{
     stdio_x14_consumed_then_refused, stdio_x14_signed_round,
 };
 
+/// MIK-8747: keyed stdio calls across eras on one key.
+#[path = "route_matrix_driver_era_tests.rs"]
+pub(crate) mod era;
 mod playbook_drivers;
 pub(crate) use playbook_drivers::{
     playbook_of, stdio_params_counted, stdio_params_over, stdio_playbook_flaky, stdio_playbook_runs,
