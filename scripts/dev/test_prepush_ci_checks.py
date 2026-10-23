@@ -306,7 +306,7 @@ class Rows(unittest.TestCase):
         found = workflow_shell.executions(
             'python3 scripts/k.py "origin/${{ github.base_ref }}" "$RUNNER_TEMP/x" "${{ secrets.X }}"'
         )
-        self.assertEqual(found[0].args[:2], ("<BASE_TIP>", "<TMP>/x"))
+        self.assertEqual([e.args[:2] for e in found], [("<BASE_TIP>", "<TMP>/x")])
         self.t.script("scripts/k.py")
         self.t.workflow("ci.yml", pr_job('python3 scripts/k.py "${{ secrets.X }}"'))
         self.assertTrue(any("secrets.X" in p for p in problems(self.t.root, ci_only={})))
