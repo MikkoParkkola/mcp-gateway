@@ -5,11 +5,11 @@
 
 use super::slot_principal;
 use crate::gateway::auth::QuotaPrincipal;
-use crate::gateway::oauth::AgentIdentity;
+use crate::gateway::oauth::OAuthAgentIdentity;
 use crate::mtls::CertIdentity;
 
-fn agent(client_id: &str) -> AgentIdentity {
-    AgentIdentity {
+fn agent(client_id: &str) -> OAuthAgentIdentity {
+    OAuthAgentIdentity {
         quota_principal: Some(QuotaPrincipal::oauth_client(client_id)),
         client_id: client_id.to_string(),
         agent_name: "same display name".to_string(),

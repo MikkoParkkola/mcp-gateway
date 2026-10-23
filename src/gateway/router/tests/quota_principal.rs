@@ -7,11 +7,11 @@
 use super::*;
 use crate::gateway::auth::{AuthenticatedClient, QuotaPrincipal, anonymous_client};
 use crate::gateway::authz::ToolAuthorizer;
-use crate::gateway::oauth::{AgentIdentity, Scope};
+use crate::gateway::oauth::{OAuthAgentIdentity, Scope};
 use crate::mtls::CertIdentity;
 
-fn agent(quota: &str) -> AgentIdentity {
-    AgentIdentity {
+fn agent(quota: &str) -> OAuthAgentIdentity {
+    OAuthAgentIdentity {
         quota_principal: Some(QuotaPrincipal::configured_bearer(quota)),
         client_id: "agent-1".to_string(),
         agent_name: "runner".to_string(),

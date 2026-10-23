@@ -799,3 +799,6 @@ mod delivery;
 
 #[path = "relay_plan_tests.rs"]
 mod plan;
+
+#[path = "relay_replay_receipt_tests.rs"]
+mod replay_receipt;

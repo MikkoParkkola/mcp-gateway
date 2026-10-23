@@ -21,7 +21,6 @@ use crate::personal_accounts::{
     AccountError, AccountKey, Authority, AuthorityEntry, FenceOutcome, ForceClaim, GrantRecord,
     GrantState, GrantVersion, RefreshOutcome, StoreConfig,
 };
-use sha2::{Digest as _, Sha256};
 use std::fs;
 use std::io::Write as _;
 use std::path::Path;
@@ -382,7 +381,7 @@ fn stage_publication(
             authorization_epoch: record.authorization_epoch,
             descriptor_revision: record.descriptor_revision.clone(),
             record_basename: Some(basename.clone()),
-            record_sha256: Some(hex::encode(Sha256::digest(bytes.as_bytes()))),
+            record_sha256: Some(crate::hashing::sha256_hex(bytes.as_bytes())),
             state: GrantState::Connected,
             legacy_migration,
             // A new or reconnected grant has never been force-tried.

@@ -250,19 +250,23 @@ fn the_slot_reads_its_installed_transport_live() {
 /// probed, or discarded with its re-probe in flight).
 #[tokio::test]
 async fn a_listener_reads_only_a_settled_era() {
-    use crate::protocol::era::{Era, EraCache, ProbeOutcome};
+    use crate::protocol::era::{EraCache, PeerEra, ProbeOutcome};
     let cache = EraCache::for_backend("b");
     assert_eq!(cache.settled().await, None, "never probed");
     cache
         .resolve_with(|| async { ProbeOutcome::NoAnswer })
         .await;
-    assert_eq!(cache.settled().await, Some(Era::Legacy), "a silent peer");
+    assert_eq!(
+        cache.settled().await,
+        Some(PeerEra::Legacy),
+        "a silent peer"
+    );
     let cache = EraCache::for_backend("b");
     let modern = serde_json::json!({"capabilities": {}, "supportedVersions": ["2026-07-28"]});
     cache
         .resolve_with(|| async { ProbeOutcome::Result(modern) })
         .await;
-    assert_eq!(cache.settled().await, Some(Era::Modern));
+    assert_eq!(cache.settled().await, Some(PeerEra::Modern));
     assert!(cache.discard_if(|_| true).await);
     assert_eq!(cache.settled().await, None, "discarded, re-probe pending");
 }

@@ -188,19 +188,16 @@ pub(crate) fn undeclared_key_refusal(
         violations: key_violations(&faults, input_schema),
         coerced: Value::Null,
     };
-    let mut text = result.format_error(input_schema);
+    let text = result.format_error(input_schema);
     // The footer lists a backend's own parameters; a schema with hundreds of
     // them must not make one refusal a huge payload. The violations come
     // first, so the cut only ever shortens the list.
-    if text.len() > MAX_REFUSAL_BYTES {
-        let mut cut = MAX_REFUSAL_BYTES;
-        while !text.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        text.truncate(cut);
-        text.push_str(TRUNCATION_SUFFIX);
-    }
-    Some(text)
+    Some(crate::truncate::truncate(
+        &text,
+        crate::truncate::Budget::Bytes(MAX_REFUSAL_BYTES),
+        TRUNCATION_SUFFIX,
+        crate::truncate::Suffix::After,
+    ))
 }
 
 /// Bounded, escaped violations: at most five, each path cut to 64 characters

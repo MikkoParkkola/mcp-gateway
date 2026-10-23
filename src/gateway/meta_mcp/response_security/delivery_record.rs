@@ -165,8 +165,6 @@ async fn append_delivery_attempt(
 ) -> bool {
     use crate::security::audit::{AuditEnvelope, AuditFailurePolicy, AuditWho};
 
-    use sha2::{Digest, Sha256};
-
     let Some(logger) = logger else {
         return true;
     };
@@ -176,7 +174,7 @@ async fn append_delivery_attempt(
         tracing::warn!("Failed to encode response delivery attempt for transparency log");
         return !fail_closed;
     };
-    let hash = format!("sha256:{}", hex::encode(Sha256::digest(encoded)));
+    let hash = crate::hashing::sha256_tagged(&encoded);
     let mut fields = serde_json::Map::new();
     fields.insert("event".into(), "response_delivery_attempt".into());
     fields.insert("response_stage".into(), stage.into());

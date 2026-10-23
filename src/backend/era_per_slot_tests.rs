@@ -8,6 +8,7 @@
 //! one, a verdict about one peer must not decide the dialect spoken to the
 //! other.
 
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -22,7 +23,7 @@ use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
 use crate::identity_propagation::{
     IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
 };
-use crate::protocol::era::Era;
+use crate::protocol::era::PeerEra;
 use crate::transport::Transport;
 
 const USER: &str = "u:alpha";
@@ -161,11 +162,11 @@ async fn the_backend_view_follows_the_shared_slot_not_the_last_prober() {
         .ensure_started()
         .await
         .expect("the Shared slot starts");
-    assert_eq!(backend.cached_era().await, Some(Era::Legacy), "premise");
+    assert_eq!(backend.cached_era().await, Some(PeerEra::Legacy), "premise");
 
     per_user_slot_resolved(&backend, Answer::Modern).await;
 
-    assert_eq!(backend.cached_era().await, Some(Era::Legacy));
+    assert_eq!(backend.cached_era().await, Some(PeerEra::Legacy));
     assert_eq!(backend.liveness_method().await, "ping");
 }
 
@@ -179,11 +180,11 @@ async fn a_per_user_legacy_verdict_does_not_demote_the_shared_slot() {
     backend.set_pooled_transport_for_test(&super::pool::PoolKey::Shared, Arc::clone(&shared));
     let entry = backend.shared_entry();
     backend.resolve_era_for_entry_test(&shared, &entry).await;
-    assert_eq!(backend.cached_era().await, Some(Era::Modern), "premise");
+    assert_eq!(backend.cached_era().await, Some(PeerEra::Modern), "premise");
 
     per_user_slot_resolved(&backend, Answer::MethodNotFound).await;
 
-    assert_eq!(backend.cached_era().await, Some(Era::Modern));
+    assert_eq!(backend.cached_era().await, Some(PeerEra::Modern));
 }
 
 /// PERSLOT.3a, the other start order: the per-user slot resolves first, the
@@ -199,8 +200,8 @@ async fn each_slot_keeps_its_own_verdict_whichever_starts_first() {
         .expect("the Shared slot starts");
 
     let per_user = Arc::clone(backend.pool.get(&slot(USER)).expect("the slot").value());
-    assert_eq!(per_user.era.cached().await, Some(Era::Modern));
-    assert_eq!(backend.cached_era().await, Some(Era::Legacy));
+    assert_eq!(per_user.era.cached().await, Some(PeerEra::Modern));
+    assert_eq!(backend.cached_era().await, Some(PeerEra::Legacy));
 }
 
 /// PERSLOT.3a: a contradiction-driven re-probe on one slot drops and
@@ -220,16 +221,12 @@ async fn a_reprobe_on_one_slot_leaves_the_other_slots_verdict() {
     backend.resolve_era_for_entry_test(&peer, &per_user).await;
 
     backend
-        .reprobe_if_code_contradicts(
-            "server/discover",
-            crate::protocol::era::METHOD_NOT_FOUND_CODE,
-            &peer,
-        )
+        .reprobe_if_code_contradicts("server/discover", METHOD_NOT_FOUND, &peer)
         .await;
     // The re-probe holds the slot's era lock while it runs: this read waits for it.
     let _ = tokio::time::timeout(Duration::from_secs(20), per_user.era.cached()).await;
 
-    assert_eq!(backend.cached_era().await, Some(Era::Legacy));
+    assert_eq!(backend.cached_era().await, Some(PeerEra::Legacy));
 }
 
 /// PERSLOT.3c: a removed method is judged by the era of the slot the request
@@ -362,11 +359,7 @@ async fn a_per_user_reprobe_does_not_resolve_a_cold_shared_slot() {
     // slot's era lock) before anything is read.
     held.hold.store(true, std::sync::atomic::Ordering::SeqCst);
     backend
-        .reprobe_if_code_contradicts(
-            "server/discover",
-            crate::protocol::era::METHOD_NOT_FOUND_CODE,
-            &peer,
-        )
+        .reprobe_if_code_contradicts("server/discover", METHOD_NOT_FOUND, &peer)
         .await;
     tokio::time::timeout(Duration::from_secs(20), &mut handles.started)
         .await
@@ -377,6 +370,6 @@ async fn a_per_user_reprobe_does_not_resolve_a_cold_shared_slot() {
         .await
         .expect("the re-probe decided in time");
 
-    assert_eq!(era, Some(Era::Modern), "re-resolved");
+    assert_eq!(era, Some(PeerEra::Modern), "re-resolved");
     assert_eq!(backend.cached_era().await, None);
 }

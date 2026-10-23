@@ -389,3 +389,12 @@ async fn preview_openapi_deep_unread_field_refused() {
     .expect_err("10k-deep OpenAPI spec must be refused");
     assert!(err.contains("nesting deeper than 128"), "got: {err}");
 }
+
+/// MIK-8667: a cut cell keeps the result within the width by characters,
+/// `...` included.
+#[test]
+fn a_cut_cell_fits_its_width_by_characters() {
+    assert_eq!(truncate("abcdef", 6), "abcdef");
+    assert_eq!(truncate("abcdefgh", 6), "abc...");
+    assert_eq!(truncate("éééééééé", 6), "ééé...");
+}

@@ -28,6 +28,11 @@ pub(crate) mod posture;
 #[cfg(all(test, feature = "firewall"))]
 mod tenant_read_corpus_tests;
 pub(crate) mod tenant_reads;
+/// The calls one delivery dispatched, `(label, server, tool)` each
+/// (`MIK-8408` H2): the one spelling relay replay and the firewall's replay
+/// store share, defined outside the `firewall` gate because relay keeps a
+/// call list in both builds (MIK-8662).
+pub(crate) type ReplayCalls = Vec<(Option<u32>, String, String)>;
 /// The `security.posture` value and the multi-user warning `doctor` shows;
 /// the rest of the posture module is crate-private.
 pub use posture::{HardenedConfig, SecurityPosture, unhardened_multi_user_warning};

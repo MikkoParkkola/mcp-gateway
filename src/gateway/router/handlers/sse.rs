@@ -3,6 +3,7 @@
 //! `GET /mcp`: the legacy server-to-client notification stream, and the
 //! refusal a caller declaring the 2026 era gets instead.
 
+use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_REQUEST};
 use std::sync::Arc;
 
 use axum::{
@@ -23,7 +24,7 @@ use crate::gateway::router::helpers::{
 };
 use crate::gateway::session_id::SessionId;
 use crate::gateway::streaming::{
-    MintKind, SessionCapacity, SessionHold, create_sse_response_with_view,
+    InFlightHold, MintKind, SessionCapacity, create_sse_response_with_view,
 };
 use crate::mtls::CertIdentity;
 
@@ -100,7 +101,7 @@ fn stream_request_refusal(
     if !state.streaming_config.enabled {
         return Some(build_http_error_response(
             None,
-            -32600,
+            INVALID_REQUEST,
             "Streaming not enabled. Use POST to send JSON-RPC requests to /mcp",
             StatusCode::METHOD_NOT_ALLOWED,
         ));
@@ -112,7 +113,7 @@ fn stream_request_refusal(
     (!accept.contains("text/event-stream")).then(|| {
         build_http_error_response(
             None,
-            -32600,
+            INVALID_REQUEST,
             "Must accept text/event-stream for SSE notifications",
             StatusCode::NOT_ACCEPTABLE,
         )
@@ -128,7 +129,7 @@ fn open_stream_session(
     existing: Option<&str>,
     owner: &crate::gateway::session_id::SessionOwner,
     credential: Option<crate::gateway::auth::live::HeldCredential>,
-) -> Result<(SessionId, Option<SessionHold>), Box<axum::response::Response>> {
+) -> Result<(SessionId, Option<InFlightHold>), Box<axum::response::Response>> {
     if crate::gateway::router::hardened_elicitation::is_hardened(state) {
         return state
             .multiplexer
@@ -151,7 +152,7 @@ fn open_stream_session(
 
 /// `body`, holding `hold` until it is dropped: a provisional session is never
 /// reaped under an open stream, and the drop starts its idle clock (MIK-8504).
-fn held_body(body: axum::body::Body, hold: Option<SessionHold>) -> axum::body::Body {
+fn held_body(body: axum::body::Body, hold: Option<InFlightHold>) -> axum::body::Body {
     axum::body::Body::from_stream(futures::StreamExt::map(
         body.into_data_stream(),
         move |chunk| {
@@ -275,7 +276,7 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
         }
         None => gateway_reply(build_http_error_response(
             None,
-            -32603,
+            INTERNAL_ERROR,
             "Failed to create SSE stream",
             StatusCode::INTERNAL_SERVER_ERROR,
         )),

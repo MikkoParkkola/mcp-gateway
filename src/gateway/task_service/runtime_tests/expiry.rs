@@ -39,7 +39,7 @@ use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
-use super::super::store::{CommitHook, CommitStage};
+use super::super::store::{CommitHook, StoreWriteStage};
 use super::test_subscriptions;
 use crate::gateway::task_service::{
     CreateOutcome, ServiceError, StoreLimits, Task, TaskOptions, TaskService, TaskStatus,
@@ -221,7 +221,7 @@ fn assert_retained(service: &Arc<TaskService>, dir: &std::path::Path, row: &Seed
 /// `store_tests/admission.rs`: a bounded wait, and a dropped sender ends it, so
 /// a failed assertion cannot strand the blocking thread.
 fn paused_at(
-    stage: CommitStage,
+    stage: StoreWriteStage,
 ) -> (
     std::sync::mpsc::Receiver<()>,
     std::sync::mpsc::Sender<()>,

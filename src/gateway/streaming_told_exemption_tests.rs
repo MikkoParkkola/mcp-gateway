@@ -136,7 +136,7 @@ async fn a_subject_with_only_an_adapter_assertion_is_refused_at_attach() {
 #[tokio::test]
 async fn a_subject_with_only_an_oauth_agent_is_refused_at_attach() {
     let subject = ViewSubject {
-        oauth_agent: Some(crate::gateway::oauth::AgentIdentity {
+        oauth_agent: Some(crate::gateway::oauth::OAuthAgentIdentity {
             client_id: "agent".to_owned(),
             agent_name: "agent".to_owned(),
             scopes: Vec::new(),

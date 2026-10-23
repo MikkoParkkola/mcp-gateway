@@ -40,6 +40,10 @@ pub mod budget_guard;
 mod collusion;
 mod collusion_digest;
 mod collusion_gate;
+/// The one replay key: relay replay builds it at capture and lookup, and the
+/// store indexes by it (MIK-8662; the crate-wide path is decision
+/// `mik-8662-vis`).
+pub(crate) use collusion::replay::StoredKey;
 #[cfg(test)]
 pub(crate) use collusion_digest::{note_walk_for_test, walks_built};
 pub use collusion_gate::{AllowedFlow, CollusionAction, CollusionConfig};
@@ -49,6 +53,7 @@ pub(crate) use collusion_gate::{
 mod config;
 pub use config::{FirewallAction, FirewallConfig, FirewallRule, ScanType};
 pub mod input_scanner;
+pub(crate) mod json_literal;
 pub mod memory_scanner;
 pub mod principal_window;
 pub mod redactor;

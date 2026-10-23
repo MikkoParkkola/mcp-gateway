@@ -9,6 +9,7 @@
 //! cannot name `tools/call`. The raw send is private to this module, so a
 //! sibling cannot reach the backend without one of the two.
 
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 use serde_json::Value;
 
 use crate::gateway::meta_mcp::invoke::DirectPermit;
@@ -101,7 +102,7 @@ async fn send_in_scope(
     {
         return Ok(JsonRpcResponse::error(
             Some(id.clone()),
-            crate::protocol::era::METHOD_NOT_FOUND_CODE,
+            METHOD_NOT_FOUND,
             message.to_string(),
         ));
     }

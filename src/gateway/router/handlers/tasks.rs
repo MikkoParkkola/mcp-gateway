@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Task eligibility, the task intent, and the HTTP glue of the three `tasks/*` arms.
 
+use crate::error::rpc_codes::{INVALID_PARAMS, INVALID_REQUEST};
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -10,7 +11,7 @@ use super::AppState;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::invoke::audit::{DispatchNotes, SettledTask};
 use crate::gateway::meta_mcp::response_security::DeliveryCredential;
-use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
+use crate::gateway::oauth::OAuthAgentIdentity;
 use crate::gateway::router::OwnedRouterAuthorizer;
 use crate::gateway::task_route::{TaskOwnerText, TaskRoute, is_task_dispatchable};
 use crate::gateway::task_service::{OwnedCallerContext, TaskIntent};
@@ -95,14 +96,14 @@ pub(super) fn task_intent_for_call(
     if state.auth_config.enabled && req.owner.is_empty() {
         return Err(Box::new(JsonRpcResponse::error(
             Some(id),
-            -32600,
+            INVALID_REQUEST,
             "task creation requires an authenticated caller",
         )));
     }
     let Some(key) = req.retry.idempotency_key.as_deref() else {
         return Err(Box::new(JsonRpcResponse::error(
             Some(id),
-            -32602,
+            INVALID_PARAMS,
             "task creation requires an idempotency key",
         )));
     };

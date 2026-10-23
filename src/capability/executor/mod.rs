@@ -46,16 +46,21 @@ use reqwest::{
 };
 use serde_json::Value;
 
-use super::response_cache::ResponseCache;
 use super::{
     CapabilityDefinition, CapabilityExecutionContext, ProviderConfig, RestConfig,
     validate_capability_url_for_context, validate_personal_capability_identity,
 };
+use crate::cache::ResponseCache;
+use crate::gateway::gateway_writes::WriteRecord;
 use crate::oauth::{TokenInfo, TokenStorage};
 use crate::secrets::SecretResolver;
 use crate::transform::TransformPipeline;
 use crate::{Error, Result};
 use client::send_with_retry;
+
+/// The capability response cache's bound: the Meta-MCP cache's default
+/// (`cache.max_entries`), which does not govern this cache yet (MIK-8740).
+const CAPABILITY_CACHE_MAX_ENTRIES: usize = 10_000;
 
 /// Executor for capability REST calls
 pub struct CapabilityExecutor {
@@ -121,7 +126,7 @@ impl CapabilityExecutor {
         Self {
             client: client::build(None),
             refresh: client::build_refresh(None),
-            cache: ResponseCache::new(),
+            cache: ResponseCache::with_max_entries(CAPABILITY_CACHE_MAX_ENTRIES),
             token_storage,
             oauth_tokens: RwLock::new(DashMap::new()),
             secret_resolver: Arc::new(SecretResolver::new()),
@@ -282,7 +287,7 @@ impl CapabilityExecutor {
         Self {
             client: client::build(None),
             refresh: client::build_refresh(None),
-            cache: ResponseCache::new(),
+            cache: ResponseCache::with_max_entries(CAPABILITY_CACHE_MAX_ENTRIES),
             token_storage: Some(token_storage),
             oauth_tokens: RwLock::new(DashMap::new()),
             secret_resolver: Arc::new(SecretResolver::new()),
@@ -390,8 +395,12 @@ impl CapabilityExecutor {
             None
         };
         if let Some(ref cache_key) = cache_key
-            && let Some(cached) = self.cache.get(cache_key)
+            && let Some((cached, read, _writes)) = self.cache.get_read(cache_key)
         {
+            // A hit restores, into the caller's read scope, the attribution
+            // stored beside the value; an entry without one counts as unread
+            // (MIK-7116.MIN.2 F2). A plain `get` would drop it.
+            crate::security::tenant_reads::note_restored(read.as_ref());
             tracing::debug!("Cache hit");
             return Ok(cached);
         }
@@ -432,7 +441,13 @@ impl CapabilityExecutor {
         );
 
         if let Some(key) = &cache_key {
-            self.cache.set(key, &response, read, capability.cache.ttl);
+            // The capability path records no gateway write into a payload.
+            self.cache.set_payload(
+                key,
+                response.clone(),
+                (read, WriteRecord::default()),
+                Duration::from_secs(capability.cache.ttl),
+            );
         }
 
         Ok(response)
@@ -788,6 +803,8 @@ impl Default for CapabilityExecutor {
     }
 }
 
+#[cfg(test)]
+mod redirect_tests;
 #[cfg(test)]
 mod ssrf_denial_tests;
 

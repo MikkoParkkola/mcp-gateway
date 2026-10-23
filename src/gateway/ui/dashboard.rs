@@ -4,8 +4,7 @@
 use super::{
     AppState, Arc, AuthenticatedClient, BackendHealth, CacheStats, DashboardRenderer,
     DashboardState, Extension, HealthStatus, IntoResponse, SessionSummary, State, StatsSnapshot,
-    StatusCode, ToolCallCount, avg_latency_from_backends, compute_error_rate, is_admin,
-    uptime_secs,
+    StatusCode, avg_latency_from_backends, compute_error_rate, is_admin, uptime_secs,
 };
 
 /// Served in place of the dashboard when the caller holds no admin credential.
@@ -104,15 +103,7 @@ pub async fn dashboard_handler(
 
     // Cumulative counts per tool. The stats count attempts and carry no
     // outcome, so the table shows none (MIK-8370).
-    let tool_counts: Vec<ToolCallCount> = snap
-        .top_tools
-        .iter()
-        .map(|t| ToolCallCount {
-            tool: t.tool.clone(),
-            server: t.server.clone(),
-            count: t.count,
-        })
-        .collect();
+    let tool_counts = snap.top_tools.clone();
 
     let ds = DashboardState {
         backends: backend_healths,

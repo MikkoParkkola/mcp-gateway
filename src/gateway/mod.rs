@@ -72,6 +72,9 @@ mod proxy_scope_tests;
 #[cfg(test)]
 mod proxy_session_tests;
 pub mod recovery;
+/// MIK-8747 / MIK-8748: a keyed replay is never served across protocol eras.
+#[cfg(all(test, feature = "firewall"))]
+mod replay_era_tests;
 #[cfg(test)]
 mod route_check_matrix_tests;
 mod router;
@@ -127,7 +130,7 @@ pub use auth::{AuthState, ResolvedAuthConfig, auth_middleware};
 // without this line — and the alternative to the line is a second copy of the
 // rule, which is what it exists to prevent. Crate-internal: no public surface.
 pub use oauth::{
-    AgentAuthState, AgentIdentity, AgentRegistry, GatewayKeyPair, agent_auth_middleware,
+    AgentAuthState, AgentRegistry, GatewayKeyPair, OAuthAgentIdentity, agent_auth_middleware,
 };
 pub use proxy::ProxyManager;
 pub(crate) use router::is_loopback_bind as is_loopback_host;

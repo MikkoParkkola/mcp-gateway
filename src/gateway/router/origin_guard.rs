@@ -16,6 +16,7 @@
 //! This gate stops browsers. It does nothing about a process running as the
 //! same user, which needs a credential to stop; see [`super::super::auth::anonymous_client`].
 
+use crate::error::rpc_codes::INVALID_REQUEST;
 use std::sync::Arc;
 
 use tracing::warn;
@@ -426,7 +427,7 @@ fn forbidden(message: &str) -> impl IntoResponse + use<> {
         StatusCode::FORBIDDEN,
         axum::Json(serde_json::json!({
             "jsonrpc": "2.0",
-            "error": { "code": -32600, "message": message },
+            "error": { "code": INVALID_REQUEST, "message": message },
             "id": serde_json::Value::Null,
         })),
     )

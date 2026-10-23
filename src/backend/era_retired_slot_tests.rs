@@ -9,6 +9,7 @@
 //! probe is the barrier: reading the era blocks until the detached re-probe has
 //! decided, never a sleep.
 
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -17,7 +18,7 @@ use super::era_stale_probe_tests::{Answer, DISCOVER, Handles, Peer, WAIT, run};
 use super::pool::PooledEntry;
 use super::slot_eviction_tests::{per_user_backend, slot};
 use super::*;
-use crate::protocol::era::{Era, METHOD_NOT_FOUND_CODE};
+use crate::protocol::era::PeerEra;
 use crate::transport::Transport;
 
 const BINDING: &str = "rev:alpha";
@@ -34,12 +35,12 @@ async fn busy_slot_probing(
     backend.set_pooled_transport_for_test(&slot(BINDING), Arc::clone(&transport));
     let entry = entry_of(backend, BINDING);
     backend.resolve_era_for_entry_test(&transport, &entry).await;
-    assert_eq!(entry.era.cached().await, Some(Era::Modern), "primed");
+    assert_eq!(entry.era.cached().await, Some(PeerEra::Modern), "primed");
     entry.in_flight.fetch_add(1, Ordering::SeqCst);
 
     peer.hold.store(true, Ordering::SeqCst);
     backend
-        .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND_CODE, &transport)
+        .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND, &transport)
         .await;
     tokio::time::timeout(WAIT, &mut handles.started)
         .await
@@ -85,12 +86,16 @@ async fn a_reprobe_answer_before_the_revocation_is_stored() {
     let era = tokio::time::timeout(WAIT, entry.era.cached())
         .await
         .expect("the re-probe decided in time");
-    assert_eq!(era, Some(Era::Modern), "a pooled slot's answer is stored");
+    assert_eq!(
+        era,
+        Some(PeerEra::Modern),
+        "a pooled slot's answer is stored"
+    );
 
     assert_eq!(backend.evict_identity_slots("rev:"), 1);
     assert_eq!(
         entry.era.cached().await,
-        Some(Era::Modern),
+        Some(PeerEra::Modern),
         "a later revocation leaves the stored era alone"
     );
 }
@@ -183,7 +188,7 @@ async fn a_contradiction_from_a_revoked_slot() {
     backend.set_pooled_transport_for_test(&slot(BINDING), Arc::clone(&transport));
     let entry = entry_of(&backend, BINDING);
     backend.resolve_era_for_entry_test(&transport, &entry).await;
-    assert_eq!(entry.era.cached().await, Some(Era::Modern), "primed");
+    assert_eq!(entry.era.cached().await, Some(PeerEra::Modern), "primed");
     entry.in_flight.fetch_add(1, Ordering::SeqCst);
 
     let (reached, release) = backend.after_reprobe_lookup.arm();
@@ -191,7 +196,7 @@ async fn a_contradiction_from_a_revoked_slot() {
         let backend = Arc::clone(&backend);
         async move {
             backend
-                .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND_CODE, &transport)
+                .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND, &transport)
                 .await;
         }
     });
@@ -208,7 +213,7 @@ async fn a_contradiction_from_a_revoked_slot() {
 
     assert_eq!(
         entry.era.cached().await,
-        Some(Era::Modern),
+        Some(PeerEra::Modern),
         "a contradiction from a slot the pool no longer serves keeps the verdict"
     );
 }
@@ -235,7 +240,7 @@ async fn revoked_primed_slot(backend: &Arc<Backend>) -> Arc<PooledEntry> {
     backend.set_pooled_transport_for_test(&slot(BINDING), Arc::clone(&primed));
     let entry = entry_of(backend, BINDING);
     backend.resolve_era_for_entry_test(&primed, &entry).await;
-    assert_eq!(entry.era.cached().await, Some(Era::Modern), "primed");
+    assert_eq!(entry.era.cached().await, Some(PeerEra::Modern), "primed");
     entry
 }
 
@@ -265,7 +270,7 @@ async fn a_start_era_step_for_a_revoked_slot_keeps_the_era() {
 
     assert_eq!(
         entry.era.cached().await,
-        Some(Era::Modern),
+        Some(PeerEra::Modern),
         "a revoked slot's start must not replace its verdict"
     );
 }

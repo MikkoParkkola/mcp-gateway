@@ -638,3 +638,13 @@ async fn a_change_on_a_clock_before_1970_is_refused_with_nothing_written() {
     );
     assert_eq!(journal_bytes(&path), journal_before, "no line appended");
 }
+
+/// MIK-8668 X-SHA golden, captured on the base before the hashing change:
+/// a fixed grant's digest keeps its exact bytes (existing journals compare it).
+#[test]
+fn a_fixed_grants_digest_keeps_its_bytes() {
+    assert_eq!(
+        grant_digest(&row("g1", "r")),
+        "sha256:0231855e2a31a21765ad5776324622ddf380b69e6d2910c301c321f0b57dd0bf"
+    );
+}

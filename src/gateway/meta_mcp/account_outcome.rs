@@ -13,7 +13,7 @@ use crate::identity_propagation::CallerProof;
 use crate::personal_accounts::ViewBinding;
 
 use super::MetaMcp;
-use super::visible::{self, memo::AccountKey, memo::AccountOutcome};
+use super::visible::{self, memo::AccountOutcome, memo::DescriptorId};
 
 /// What a mint-free account judgement writes besides its outcome.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -42,7 +42,7 @@ impl MetaMcp {
         view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
         server: &str,
         tool: &str,
-    ) -> Option<AccountKey> {
+    ) -> Option<DescriptorId> {
         if view.absence(server).is_some() {
             return None;
         }
@@ -50,14 +50,14 @@ impl MetaMcp {
             && backend.identity_propagation_config().is_some()
             && let Some(descriptor) = backend.account_descriptor_id()
         {
-            return Some(AccountKey(descriptor.to_owned()));
+            return Some(DescriptorId(descriptor.to_owned()));
         }
         let capabilities = self.get_capabilities()?;
         if server != capabilities.name {
             return None;
         }
         let account = capabilities.get(tool)?.auth.account.clone()?;
-        Some(AccountKey(account))
+        Some(DescriptorId(account))
     }
 
     /// Record each target's account outcome in the open request's memo.
@@ -160,7 +160,7 @@ impl MetaMcp {
         &self,
         scope_view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
         (server, tool): (&str, &str),
-        account: &AccountKey,
+        account: &DescriptorId,
         caller: CallerProof<'_>,
         writes: AccountWrites,
     ) -> AccountOutcome {

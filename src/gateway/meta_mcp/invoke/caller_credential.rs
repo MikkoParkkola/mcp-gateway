@@ -36,7 +36,7 @@ pub(super) struct CallerCredential {
 
 /// Headers, cache binding and, for a managed account, the lease they were
 /// released under (A11-e′).
-pub(crate) type HeldCredential = (
+pub(crate) type DispatchCredential = (
     Vec<(String, String)>,
     Option<String>,
     Option<crate::personal_accounts::ManagedLease>,

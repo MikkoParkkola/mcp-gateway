@@ -204,7 +204,7 @@ pub async fn run_doctor_command(
 
     // ── 4. HTTP backends reachability ──────────────────────────────────────
     for (name, backend) in config.enabled_backends() {
-        let result = match check_http_backend(name, &backend.transport).await {
+        let result = match check_http_backend(&config, name, &backend.transport).await {
             None => ws_reach::check_ws_backend(name, &backend.transport).await,
             some => some,
         };
@@ -412,22 +412,70 @@ fn check_backend_env(name: &str, backend: &mcp_gateway::config::BackendConfig) -
     results
 }
 
-async fn check_http_backend(name: &str, transport: &TransportConfig) -> Option<CheckResult> {
+/// HTTP-backend probe client with a 5 s timeout.
+fn backend_probe_client() -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+}
+
+async fn check_http_backend(
+    config: &Config,
+    name: &str,
+    transport: &TransportConfig,
+) -> Option<CheckResult> {
     let TransportConfig::Http { http_url, .. } = transport else {
         return None;
     };
 
     let label = format!("{name}: HTTP");
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .ok()?;
+    let client = backend_probe_client().ok()?;
 
     let start = Instant::now();
     match client.get(http_url).send().await {
         Ok(resp) => {
             let ms = start.elapsed().as_millis();
             let status = resp.status();
+            if status.is_redirection() {
+                let phrase = mcp_gateway::security::http_diagnostics::redirect_target_phrase(&resp);
+                // Decoded as reqwest does, so a UTF-8 Location is not misread.
+                let target = resp
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|raw| std::str::from_utf8(raw.as_bytes()).ok())
+                    .and_then(|location| resp.url().join(location).ok());
+                // The gateway's own decision for this backend, not a copy of it.
+                let (followed, verdict) = match &target {
+                    Some(resolved) => (
+                        mcp_gateway::transport::transport_follows_redirect(
+                            config,
+                            name,
+                            status.as_u16(),
+                            resp.url(),
+                            resolved,
+                        ),
+                        "the gateway would refuse or not follow this redirect",
+                    ),
+                    None => (false, "not followed"),
+                };
+                let result = if followed {
+                    CheckResult::warn(
+                        label,
+                        format!(
+                            "HTTP {status} redirect to {phrase}; the gateway follows this first hop at runtime, but point the backend at the final URL"
+                        ),
+                    )
+                } else {
+                    CheckResult::fail(
+                        label,
+                        format!(
+                            "HTTP {status} redirect to {phrase} ({verdict}; point the backend at the final URL)"
+                        ),
+                    )
+                };
+                return Some(result.with_category("backend_http"));
+            }
             // MCP servers often return 4xx on GET / — we just care they're reachable.
             if status.is_server_error() {
                 Some(

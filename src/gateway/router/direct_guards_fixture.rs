@@ -44,6 +44,9 @@ pub(crate) enum Answer {
     /// Success, `isError: false`, whose text is the given payload (response
     /// inspection and context-integrity cells).
     Text(&'static str),
+    /// Success whose whole result the function builds (MIK-8689: a result
+    /// carrying backend members the gateway overwrites).
+    Built(fn() -> Value),
     /// The first `tools/call` asks the client a question (`input_required`);
     /// every later call succeeds. Drives a bridged input round (T3c).
     AskOnce,
@@ -205,6 +208,16 @@ pub(crate) async fn sanitizing<T, F: std::future::Future<Output = T>>(on: bool, 
     fx
 }
 
+/// Run `build` with the input-schema check off on both backends and nothing
+/// else armed (unsigned), so a directive-named argument reaches dispatch
+/// (MIK-8663 T2). [`fixture_hardened_signed_schema_off`] also arms signing.
+pub(crate) async fn schema_off<T, F: std::future::Future<Output = T>>(build: F) -> T {
+    SCHEMA_OFF.with(|s| s.set(true));
+    let fx = build.await;
+    SCHEMA_OFF.with(|s| s.set(false));
+    fx
+}
+
 /// [`fixture`], for arming that needs the owned builder methods
 /// (`with_profile_registry`, `with_cost_governance`).
 pub(crate) async fn fixture_built(answer: Answer, build: impl FnOnce(MetaMcp) -> MetaMcp) -> Fx {
@@ -291,6 +304,20 @@ pub(crate) async fn fixture_firewalled_with(
     fx
 }
 
+/// [`fixture_firewalled_with`], with no breaker, arming the `MetaMcp` with
+/// `build` (MIK-8689: a redacting rule beside the provenance signers).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_firewalled_with_built(
+    answer: Answer,
+    rule: Option<crate::security::firewall::FirewallAction>,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    FIREWALL_RULE.with(|r| r.set(rule));
+    let fx = fixture_inner(answer, true, build).await;
+    FIREWALL_RULE.with(|r| r.set(None));
+    fx
+}
+
 #[path = "direct_guards_fixture_answers.rs"]
 mod answers;
 #[path = "direct_guards_fixture_egress.rs"]
@@ -340,6 +367,20 @@ pub(crate) async fn fixture_hardened_signed_built(
     fx
 }
 
+/// [`fixture_hardened_signed_built`] with `log` as the state's transparency
+/// log; `build` arms the same log on the `MetaMcp`, so both routes record
+/// their deliveries in one file (MIK-8689).
+pub(crate) async fn fixture_hardened_signed_logged(
+    answer: Answer,
+    log: Arc<crate::security::TransparencyLogger>,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    STATE_LOG.with(|l| *l.borrow_mut() = Some(log));
+    let fx = fixture_hardened_signed_built(answer, false, build).await;
+    STATE_LOG.with(|l| *l.borrow_mut() = None);
+    fx
+}
+
 /// `meta` with message signing armed under [`SIGNING_KEY`].
 fn signing(mut meta: MetaMcp, require_nonce: bool) -> MetaMcp {
     meta.enable_message_signing(
@@ -363,6 +404,25 @@ pub(crate) async fn fixture_signed_relayed(answer: Answer) -> Fx {
     let fx = fixture_inner(answer, true, |meta| signing(meta, false)).await;
     HARDENED.with(|h| h.set(false));
     RELAY.with(|r| r.set(false));
+    fx
+}
+
+/// [`fixture_signed_relayed`] with `log` as the state's transparency log,
+/// `build` arming the signed `MetaMcp` (MIK-8689: a delivery-record failure
+/// meets the relay commit).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_signed_relayed_logged(
+    answer: Answer,
+    log: Arc<crate::security::TransparencyLogger>,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    HARDENED.with(|h| h.set(true));
+    RELAY.with(|r| r.set(true));
+    STATE_LOG.with(|l| *l.borrow_mut() = Some(log));
+    let fx = fixture_inner(answer, true, |meta| build(signing(meta, false))).await;
+    HARDENED.with(|h| h.set(false));
+    RELAY.with(|r| r.set(false));
+    STATE_LOG.with(|l| *l.borrow_mut() = None);
     fx
 }
 
@@ -451,6 +511,10 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
     /// Both backends run `input_schema_enforcement = "off"` (MIK-8353 3a).
     static SCHEMA_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The state's transparency log, so the direct route records deliveries
+    /// (MIK-8689: a row reads them back).
+    static STATE_LOG: std::cell::RefCell<Option<Arc<crate::security::TransparencyLogger>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// [`fixture_hardened_signed_built`] with the input-schema check off on both
@@ -571,6 +635,9 @@ async fn fixture_inner(
     // (MIK-6740), so a propagating fixture gets a transparency log.
     if PROPAGATING.with(std::cell::Cell::get) {
         state_mut.transparency_log = Some(leaked_transparency_log());
+    }
+    if let Some(log) = STATE_LOG.with(|l| l.borrow().clone()) {
+        state_mut.transparency_log = Some(log);
     }
     for (name, passthrough) in [("alpha", false), ("alpha-pt", true)] {
         let backend = Arc::new(Backend::new(

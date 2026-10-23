@@ -5,6 +5,7 @@
 //! `schema_version`, `trace_id`, `outcome`, `error_code` and `who` are written
 //! by the logger, not by each writer, so no writer can leave them out.
 
+use crate::error::rpc_codes::INVALID_PARAMS;
 use serde::{Deserialize, Serialize};
 
 /// How the caller's credential was presented. Never any part of the secret.
@@ -82,7 +83,10 @@ impl AuditOutcome {
                 | Error::BackendNotFound(_)
                 | Error::ToolNotFound(_)),
             ) => Self::Invalid(e.to_rpc_code()),
-            Err(Error::JsonRpc { code: -32602, .. }) => Self::Invalid(-32602),
+            Err(Error::JsonRpc {
+                code: INVALID_PARAMS,
+                ..
+            }) => Self::Invalid(INVALID_PARAMS),
             Err(e) => Self::Error(e.to_rpc_code()),
         })
     }

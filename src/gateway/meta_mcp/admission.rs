@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Request-owned synchronous admission and secured HTTP settlement.
 
+use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 
@@ -18,8 +19,14 @@ mod plan;
 #[path = "admission_replay.rs"]
 mod replay;
 pub(crate) use replay::ReplayTarget;
+#[path = "admission_era.rs"]
+mod era;
+#[path = "admission_operation.rs"]
+mod operation;
+pub(crate) use operation::{OPERATION_DEFINING_META, operation_arguments};
 #[path = "admission_stored.rs"]
 mod stored;
+use era::{refuse_another_era, shaped_for_request};
 pub(crate) use stored::{ReplayAudit, StepBinding, note_distinct};
 use stored::{StoredChain, StoredDelivery, stored_response};
 
@@ -37,6 +44,8 @@ pub(crate) struct SyncLease {
     steps: Mutex<Vec<(String, String)>>,
     /// The binding each step ran under (MIK-8407), kept for a replay.
     bindings: Mutex<Vec<stored::StepBinding>>,
+    /// MIK-8747: the era its stored delivery is shaped for (meta path only).
+    era: Option<crate::protocol::meta::Era>,
 }
 
 impl SyncLease {
@@ -122,6 +131,7 @@ impl SyncLease {
             crate::gateway::gateway_writes::WriteRecord,
         ),
     ) -> bool {
+        let era = self.era;
         let (lease, dispatches) = self.state.into_inner();
         let audit = self.audit.into_inner();
         let steps = self.steps.into_inner();
@@ -162,6 +172,7 @@ impl SyncLease {
             read,
             writes,
             dispatched: Some(steps),
+            era,
             bindings,
         };
         let retained = lease.complete_secured(&serde_json::to_value(stored).unwrap_or(Value::Null))
@@ -324,7 +335,7 @@ impl MetaMcp {
     ) -> Result<SyncAdmission> {
         if retry.is_malformed() {
             return Err(Error::json_rpc(
-                -32602,
+                INVALID_PARAMS,
                 "Malformed execution retry metadata",
             ));
         }
@@ -338,7 +349,7 @@ impl MetaMcp {
                 && *self.unkeyed.mode.read() == crate::config::IdempotencyKeyMode::Required
             {
                 return Err(Error::json_rpc(
-                    -32602,
+                    INVALID_PARAMS,
                     format!(
                         "An explicit idempotency key is required: set _meta \"{}\" \
                          (server.idempotency_key: required)",
@@ -389,6 +400,7 @@ impl MetaMcp {
                     audit: Mutex::new(None),
                     steps: Mutex::new(Vec::new()),
                     bindings: Mutex::new(Vec::new()),
+                    era: None,
                 }))
             }
             Ok(Admission::Replay(bytes)) => {
@@ -397,6 +409,7 @@ impl MetaMcp {
                 // fails the admission without touching the retained bytes it
                 // must never serve (E1).
                 let single_target = replay_target()?;
+                refuse_another_era(&bytes, is_modern)?;
                 let (mut response, audit) = stored_response(&bytes).ok_or_else(|| {
                     Error::json_rpc(409, "Secured execution result is unavailable")
                 })?;
@@ -422,7 +435,7 @@ impl MetaMcp {
             )),
             Err(Refusal::Mismatch) => Err(Error::json_rpc(409, KEY_MISMATCH)),
             Err(Refusal::InvalidIdentity | Refusal::MetadataTooLarge) => Err(Error::json_rpc(
-                -32602,
+                INVALID_PARAMS,
                 "Invalid execution admission metadata",
             )),
             Err(Refusal::Capacity | Refusal::ExpiryOverflow) => Err(Error::json_rpc(
@@ -547,17 +560,19 @@ impl MetaMcp {
             self.check_target_policy(caller, tool_name, arguments, session)?
         {
             let full = execution_arguments_cow(&mut operation_arguments);
-            return self.admit_sync(
-                caller.is_modern,
-                verified_identity,
-                owner_principal,
-                retry,
-                server,
-                tool,
-                &operation_arguments,
-                || self.meta_representation(tool_name, full, session, arm_key),
-                id,
-            );
+            return self
+                .admit_sync(
+                    caller.is_modern,
+                    verified_identity,
+                    owner_principal,
+                    retry,
+                    server,
+                    tool,
+                    &operation_arguments,
+                    || self.meta_representation(tool_name, full, session, arm_key),
+                    id,
+                )
+                .map(|admission| shaped_for_request(admission, caller.is_modern));
         }
         // These compiled discovery/reporting tools do not execute external work.
         // Backend annotations and operator target strings cannot add built-ins.
@@ -575,7 +590,7 @@ impl MetaMcp {
             "retry": retry.key_discriminator()});
         if let Some(definition) = &playbook {
             let value = serde_json::to_value(definition)
-                .map_err(|_| Error::json_rpc(-32603, "Invalid playbook definition"))?;
+                .map_err(|_| Error::json_rpc(INTERNAL_ERROR, "Invalid playbook definition"))?;
             // Keep the bounded admission envelope independent of plan size.
             operation["playbook"] = json!(crate::hashing::canonical_json_sha256(&value));
         }
@@ -616,7 +631,7 @@ impl MetaMcp {
         if let SyncAdmission::Owned(lease) = &mut admission {
             lease.playbook = playbook;
         }
-        Ok(admission)
+        Ok(shaped_for_request(admission, caller.is_modern))
     }
 
     pub(crate) fn meta_representation(
@@ -682,7 +697,7 @@ impl MetaMcp {
             "gateway_reload_config" => {
                 if self.get_reload_context().is_none() {
                     return Err(Error::json_rpc(
-                        -32603,
+                        INTERNAL_ERROR,
                         "Config reload is not enabled on this gateway",
                     ));
                 }
@@ -690,7 +705,7 @@ impl MetaMcp {
             "gateway_reload_capabilities" => {
                 if self.get_capabilities().is_none() {
                     return Err(Error::json_rpc(
-                        -32603,
+                        INTERNAL_ERROR,
                         "Capability backend is not enabled on this gateway",
                     ));
                 }
@@ -732,37 +747,6 @@ impl MetaMcp {
              clients send _meta \"io.mcp-gateway/idempotency-key\""
         );
     }
-}
-
-/// `_meta` keys that change WHAT a meta-tool call does, and so stay in its
-/// operation fingerprint (MIK-8192). Empty: every request `_meta` key the
-/// gateway reads on `tools/call` is per-request transport (era, declared
-/// capabilities, progress and trace correlation, the key and nonces). The
-/// operation-defining facts (tool, arguments, `params.task`) live outside
-/// `_meta`. A key added here enters the fingerprint; nothing else can.
-pub(crate) const OPERATION_DEFINING_META: &[&str] = &[];
-
-/// A meta-tool's arguments as its operation fingerprint reads them: the
-/// client's `_meta` (merged in by `merge_client_meta`) reduced to `allowed`,
-/// and dropped when nothing allowed remains, so a retry differing only in a
-/// fresh `progressToken` or declared capabilities is the same operation.
-pub(crate) fn operation_arguments(arguments: &Value, allowed: &[&str]) -> Value {
-    let mut operation = arguments.clone();
-    if let Some(object) = operation.as_object_mut()
-        && let Some(meta) = object.remove("_meta")
-    {
-        let kept: serde_json::Map<String, Value> = meta
-            .as_object()
-            .into_iter()
-            .flatten()
-            .filter(|(key, _)| allowed.contains(&key.as_str()))
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect();
-        if !kept.is_empty() {
-            object.insert("_meta".to_string(), Value::Object(kept));
-        }
-    }
-    operation
 }
 
 #[cfg(test)]

@@ -146,23 +146,6 @@ fn extract_template_value_no_placeholders_returned_as_is() {
     assert_eq!(result, "static.event.type");
 }
 
-// ── constant_time_eq ──────────────────────────────────────────────────
-
-#[test]
-fn constant_time_eq_equal_slices_returns_true() {
-    assert!(constant_time_eq(b"hello", b"hello"));
-}
-
-#[test]
-fn constant_time_eq_different_content_returns_false() {
-    assert!(!constant_time_eq(b"hello", b"world"));
-}
-
-#[test]
-fn constant_time_eq_different_length_returns_false() {
-    assert!(!constant_time_eq(b"hello", b"hell"));
-}
-
 // ── transform_payload ─────────────────────────────────────────────────
 
 #[test]

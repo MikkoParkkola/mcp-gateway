@@ -19,6 +19,7 @@ use super::{
 };
 use super::{StdioNonce, identity_grants, spawn_health_loop, spawn_idle_reaper, stdio_dispatches};
 use crate::Result;
+use crate::error::rpc_codes::PARSE_ERROR;
 use crate::gateway::outbound::OutboundFrame;
 
 impl Gateway {
@@ -300,7 +301,7 @@ impl Gateway {
                     let parse_error = serde_json::json!({
                         "jsonrpc": "2.0",
                         "id": null,
-                        "error": {"code": -32700, "message": format!("Parse error: {e}")}
+                        "error": {"code": PARSE_ERROR, "message": format!("Parse error: {e}")}
                     });
                     if writer
                         .try_send(OutboundFrame::gateway_stdio(parse_error))

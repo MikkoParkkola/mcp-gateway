@@ -28,7 +28,7 @@ use mcp_gateway::config::{
 };
 use mcp_gateway::gateway::auth::ResolvedAuthConfig;
 use mcp_gateway::gateway::oauth::{
-    AgentAuthState, AgentIdentity, AgentRegistry, GatewayKeyPair, Scope,
+    AgentAuthState, AgentRegistry, GatewayKeyPair, OAuthAgentIdentity, Scope,
 };
 use mcp_gateway::gateway::proxy::ProxyManager;
 use mcp_gateway::gateway::streaming::NotificationMultiplexer;
@@ -281,7 +281,7 @@ async fn gateway(setup: Setup, calls: &Arc<AtomicUsize>) -> (Arc<AppState>, temp
 struct Caller {
     bearer: Option<&'static str>,
     cert: Option<CertIdentity>,
-    agent: Option<AgentIdentity>,
+    agent: Option<OAuthAgentIdentity>,
     headers: Vec<(&'static str, &'static str)>,
     /// The TCP peer the serve path would install as `ConnectInfo`.
     peer: Option<SocketAddr>,
@@ -307,7 +307,7 @@ fn mtls(san: &str) -> Caller {
 
 fn agent(client_id: &str) -> Caller {
     Caller {
-        agent: Some(AgentIdentity {
+        agent: Some(OAuthAgentIdentity {
             client_id: client_id.to_string(),
             agent_name: "cosmetic".to_string(),
             scopes: vec![Scope::parse("tools:*:*:*").expect("wildcard scope")],

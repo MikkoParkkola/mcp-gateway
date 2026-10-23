@@ -13,7 +13,6 @@ use super::{
     StoreConfig,
 };
 use super::{AuthorityEntry, GrantState, GrantVersion};
-use sha2::{Digest as _, Sha256};
 use std::fs;
 #[cfg(unix)]
 use std::fs::File;
@@ -669,7 +668,7 @@ fn connected_record(
         .ok_or(AccountError::NotAuthentic)?;
     accepted_basename(basename, digest)?;
     let encoded = read_record(config, &config.store_dir.join(basename))?;
-    if hex::encode(Sha256::digest(&encoded)) != accepted {
+    if crate::hashing::sha256_hex(&encoded) != accepted {
         return Err(AccountError::NotAuthentic);
     }
     let envelope: TokenEnvelope =

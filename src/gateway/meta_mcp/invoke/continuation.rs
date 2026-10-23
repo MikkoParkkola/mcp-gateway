@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Continuation minting and retry redemption (MRTR).
 
+use crate::error::rpc_codes::INVALID_PARAMS;
 use serde_json::{Value, json};
 use tracing::warn;
 
@@ -208,7 +209,7 @@ pub(super) fn rejected_continuation(
     reason: &crate::protocol::continuation::ContinuationError,
 ) -> Error {
     Error::JsonRpc {
-        code: -32602,
+        code: INVALID_PARAMS,
         message: reason.client_message().to_string(),
         data: None,
     }

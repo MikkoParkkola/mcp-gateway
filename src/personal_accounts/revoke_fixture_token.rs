@@ -32,7 +32,8 @@ pub(crate) struct TokenScript {
     log: Mutex<Vec<BTreeMap<String, String>>>,
     queued: Mutex<VecDeque<(u16, Value)>>,
     minted: AtomicU32,
-    hold: Mutex<Option<Hold>>,
+    // One-shot: the first arrival parks until released; later arrivals pass (test_pause::Slot).
+    hold: crate::test_pause::Slot,
     hook: Mutex<Option<Hook>>,
 }
 
@@ -60,11 +61,7 @@ pub(crate) async fn token_endpoint(
     if let Some(hook) = hook {
         hook();
     }
-    let hold = script.hold.lock().unwrap().take();
-    if let Some(hold) = hold {
-        hold.entered.notify_one();
-        hold.release.notified().await;
-    }
+    script.hold.pause().await;
     let queued = script.queued.lock().unwrap().pop_front();
     let (status, body) = queued.unwrap_or_else(|| {
         let n = script.minted.fetch_add(1, Ordering::SeqCst) + 1;
@@ -83,12 +80,8 @@ impl TokenScript {
     }
 
     pub(crate) fn hold(&self) -> Hold {
-        let hold = Hold {
-            entered: Arc::new(Notify::new()),
-            release: Arc::new(Notify::new()),
-        };
-        *self.hold.lock().unwrap() = Some(hold.clone());
-        hold
+        let (entered, release) = self.hold.arm();
+        Hold { entered, release }
     }
 
     pub(crate) fn on_next_request(&self, hook: impl FnOnce() + Send + 'static) {

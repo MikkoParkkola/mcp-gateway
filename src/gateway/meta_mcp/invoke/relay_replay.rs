@@ -21,21 +21,13 @@ use crate::gateway::task_service::CommittedTask;
 /// The stored entry a delivery's answer is retained under, or a replay
 /// serves (`MIK-8408` F1): carried beside the receipts so a commit
 /// captures them under it, without changing `SyncAdmission::Replay`.
-/// Only the firewall build reads a key (at capture and at replay), so
-/// without it the key is the unit placeholder the `Staging` alias in
-/// `relay` uses for the same split, and the notes below discard theirs.
+/// It is the firewall store's own key (MIK-8662), so capture and replay
+/// cannot disagree on its shape. Only the firewall build reads a key (at
+/// capture and at replay), so without it the key is the unit placeholder
+/// the `Staging` alias in `relay` uses for the same split, and the notes
+/// below discard theirs.
 #[cfg(feature = "firewall")]
-#[derive(Clone)]
-pub(super) enum CaptureKey {
-    /// A retained sync delivery: admission identity, round, operation.
-    Sync {
-        identity: String,
-        round: String,
-        operation: String,
-    },
-    /// A stored task row, at one revision of it.
-    Task { id: String, revision: u64 },
-}
+pub(super) use crate::security::firewall::StoredKey as CaptureKey;
 #[cfg(not(feature = "firewall"))]
 pub(super) type CaptureKey = ();
 
@@ -69,7 +61,7 @@ tokio::task_local! {
 }
 
 /// The calls one delivery dispatched, `(label, server, tool)` each (H2).
-pub(super) type ReplayCallList = Vec<(Option<u32>, String, String)>;
+pub(super) use crate::security::ReplayCalls as ReplayCallList;
 
 /// Run `delivery` with only a gateway-writes record: a delivery with
 /// relay detection off stages no receipt, but what the gateway writes

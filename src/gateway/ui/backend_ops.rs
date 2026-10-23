@@ -286,7 +286,7 @@ pub struct ResolvedBackend {
     /// The whole backend `add` writes.
     pub backend: BackendConfig,
     /// The registry entry it was built from; `None` for `--command`/`--url`.
-    pub entry: Option<&'static server_registry::RegistryEntry>,
+    pub entry: Option<&'static server_registry::ServerCatalogEntry>,
 }
 
 /// Build the backend `add` writes, from explicit flags or the built-in registry.
@@ -356,11 +356,11 @@ pub fn resolve_backend<S: std::hash::BuildHasher>(
 /// from `backend.env`. Enabled unless its reach is arbitrary; readiness of the
 /// references is decided later, in [`add_backend`], against the target config.
 fn registry_backend(
-    entry: &server_registry::RegistryEntry,
+    entry: &server_registry::ServerCatalogEntry,
     desc: Option<&str>,
     mut env: HashMap<String, String>,
 ) -> BackendConfig {
-    use server_registry::{Auth, HttpFlavor, Transport};
+    use server_registry::{Auth, CatalogTransport, HttpFlavor};
 
     // An empty `-e VAR=` for a required variable is no value: the reference
     // stays, so the unresolved check in `add_backend` sees it (MIK-7816).
@@ -372,7 +372,7 @@ fn registry_backend(
         ..Default::default()
     };
     match entry.transport {
-        Transport::Stdio => {
+        CatalogTransport::Stdio => {
             backend.transport = TransportConfig::Stdio {
                 command: entry.command.to_string(),
                 cwd: None,
@@ -384,7 +384,7 @@ fn registry_backend(
             }
             backend.env = env;
         }
-        Transport::Http {
+        CatalogTransport::Http {
             default_url,
             flavor,
         } => {

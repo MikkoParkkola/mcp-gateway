@@ -5,8 +5,8 @@
 //! published.
 
 use super::{
-    Era, EraCache, EraObservation, EraSource, ProbeOutcome, ProbeTrigger, classify, determination,
-    install_always,
+    EraCache, EraObservation, EraSource, PeerEra, ProbeOutcome, ProbeTrigger, classify,
+    determination, install_always,
 };
 
 impl EraCache {
@@ -50,7 +50,7 @@ impl EraCache {
         trigger: ProbeTrigger,
         probe: DetachedProbe,
         install: I,
-    ) -> Era
+    ) -> PeerEra
     where
         I: FnOnce(&mut dyn FnMut()) -> bool,
     {
@@ -116,7 +116,7 @@ pub(crate) struct DetachedProbe {
 
 impl DetachedProbe {
     /// The era this probe decided, for the start's own handshake decision.
-    pub(crate) fn era(&self) -> Era {
+    pub(crate) fn era(&self) -> PeerEra {
         classify(&self.outcome)
     }
 }
@@ -140,7 +140,7 @@ impl EraInstall<'_> {
     /// and keeps `self` (the lock) until the candidate is in the slot: an old
     /// transport's contradiction queued on the lock then finds its transport
     /// replaced and discards nothing.
-    pub(crate) fn install(&mut self, probe: DetachedProbe) -> Era {
+    pub(crate) fn install(&mut self, probe: DetachedProbe) -> PeerEra {
         let cache = self.cache;
         if self.guard.source == EraSource::Probed {
             tracing::info!(

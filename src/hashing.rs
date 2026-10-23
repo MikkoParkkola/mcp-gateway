@@ -1,9 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Shared canonical JSON hashing helpers.
+//! Shared canonical JSON hashing helpers, and the one HMAC-SHA256 type the
+//! signers and the transparency log share (MIK-8662).
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+
+/// The shared HMAC-SHA256 type of the attestation signer, message signing
+/// and the transparency log.
+pub(crate) type HmacSha256 = hmac::Hmac<Sha256>;
 
 /// Serialize JSON using the crate's canonical representation.
 ///
@@ -38,6 +43,12 @@ pub(crate) fn sha256_hex_chunks<'a>(chunks: impl IntoIterator<Item = &'a [u8]>) 
     hex::encode(hasher.finalize())
 }
 
+/// `sha256:` followed by [`sha256_hex`] of `bytes`, the tagged form stored in
+/// digests that name their algorithm.
+pub(crate) fn sha256_tagged(bytes: &[u8]) -> String {
+    format!("sha256:{}", sha256_hex(bytes))
+}
+
 /// Hash a JSON value after canonical serialization.
 pub(crate) fn canonical_json_sha256(value: &Value) -> String {
     let canonical = canonical_json(value);
@@ -62,5 +73,14 @@ mod tests {
         let combined = b"prefix\0payload";
         let chunked = sha256_hex_chunks([&combined[..6], &combined[6..7], &combined[7..]]);
         assert_eq!(chunked, sha256_hex(combined));
+    }
+
+    /// MIK-8668: the FIPS 180-2 `abc` vector, tagged.
+    #[test]
+    fn sha256_tagged_prefixes_the_algorithm() {
+        assert_eq!(
+            sha256_tagged(b"abc"),
+            "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 }

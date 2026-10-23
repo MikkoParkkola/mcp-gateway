@@ -6,6 +6,7 @@
 //! passthrough, propagation or idempotency work. The order of every check and
 //! every early return is the order `backend_handler_inner` always had.
 
+use crate::error::rpc_codes::{INVALID_REQUEST, PARSE_ERROR};
 use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use axum::{Json, http::HeaderMap, http::StatusCode};
 use serde_json::Value;
@@ -14,7 +15,7 @@ use super::super::AppState;
 use super::super::authorization::{refusal_principal, slot_principal};
 use super::super::hardened_identity::hardened_identity_refusal;
 use crate::gateway::auth::AuthenticatedClient;
-use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
+use crate::gateway::oauth::OAuthAgentIdentity;
 use crate::gateway::router::helpers::build_http_error_response;
 use crate::identity_grants::GrantSubject;
 use crate::key_server::oidc::VerifiedIdentity;
@@ -103,7 +104,7 @@ fn validate_agent(
             );
             Err(build_http_error_response(
                 None,
-                -32600,
+                INVALID_REQUEST,
                 reason,
                 StatusCode::FORBIDDEN,
             ))
@@ -228,7 +229,7 @@ pub(super) async fn read_envelope(
         Err(e) => {
             return Err(build_http_error_response(
                 None,
-                -32700,
+                PARSE_ERROR,
                 format!("Invalid JSON: {e}"),
                 StatusCode::BAD_REQUEST,
             ));

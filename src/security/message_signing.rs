@@ -27,25 +27,22 @@
 //! 2. **Message tampering** — MAC covers the entire canonical response body.
 //! 3. **Replay attacks** — monotonic nonces rejected within the replay window.
 
+use crate::error::rpc_codes::INVALID_PARAMS;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use hmac::{Hmac, KeyInit, Mac};
+use hmac::{KeyInit, Mac};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
-use sha2::Sha256;
 use tracing::debug;
 
+use crate::hashing::HmacSha256;
 use crate::{Error, Result};
 
 #[path = "message_signing_v2.rs"]
 mod v2;
 pub(crate) use v2::has_interoperable_numbers;
-
-// ── Type alias ───────────────────────────────────────────────────────────────
-
-type HmacSha256 = Hmac<Sha256>;
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -246,7 +243,7 @@ impl NonceStore {
             // Decided before the lock, so there is no occupancy to publish: the
             // store has not been consulted and cannot have changed.
             record_nonce_rejection(NONCE_REASON_INVALID);
-            return Err(Error::json_rpc(-32602, "Invalid signing nonce"));
+            return Err(Error::json_rpc(INVALID_PARAMS, "Invalid signing nonce"));
         }
         let mut state = self.state.lock();
         #[cfg(test)]

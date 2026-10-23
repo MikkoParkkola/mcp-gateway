@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Current authorization and definition snapshots for keyed orchestration.
 
+use crate::error::rpc_codes::INVALID_PARAMS;
 use serde_json::{Value, json};
 
 use crate::gateway::meta_mcp_helpers::{
@@ -91,7 +92,7 @@ impl MetaMcp {
                         .get(name)
                         .cloned()
                         .ok_or_else(|| {
-                            Error::json_rpc(-32602, format!("Playbook not found: {name}"))
+                            Error::json_rpc(INVALID_PARAMS, format!("Playbook not found: {name}"))
                         })?;
                 // Check even conditional steps: a cached orchestration result
                 // cannot bypass a now-revoked target. The invoker still checks
@@ -136,13 +137,16 @@ impl MetaMcp {
         let chain = arguments.get("chain").and_then(Value::as_array);
         let steps = chain.map_or_else(|| std::slice::from_ref(arguments), Vec::as_slice);
         if steps.is_empty() {
-            return Err(Error::json_rpc(-32602, "Chain must not be empty"));
+            return Err(Error::json_rpc(INVALID_PARAMS, "Chain must not be empty"));
         }
         for step in steps {
             let tool_ref = extract_required_str(step, "tool")?;
             let (tool, server) = parse_code_mode_tool_ref(tool_ref);
             let server = server.ok_or_else(|| {
-                Error::json_rpc(-32602, "Tool reference requires a server:tool_name prefix")
+                Error::json_rpc(
+                    INVALID_PARAMS,
+                    "Tool reference requires a server:tool_name prefix",
+                )
             })?;
             let arguments = if chain.is_some() {
                 step.get("arguments").cloned().unwrap_or_else(|| json!({}))

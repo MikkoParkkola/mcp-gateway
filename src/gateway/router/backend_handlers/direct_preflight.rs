@@ -7,6 +7,8 @@
 //! and it is security-relevant: attestation precedes the propagation mint, so
 //! an unattested call mints nothing and writes no mint audit row.
 
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
+use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use axum::http::StatusCode;
 
@@ -149,7 +151,7 @@ pub(super) fn preflight(
     if super::is_task_method(&envelope.method, envelope.params.as_ref()) {
         return Err(build_http_error_response(
             Some(id.clone()),
-            crate::protocol::era::METHOD_NOT_FOUND_CODE,
+            METHOD_NOT_FOUND,
             format!(
                 "{} is not served on /mcp/{{name}}; use /mcp",
                 envelope.method
@@ -165,7 +167,7 @@ pub(super) fn preflight(
     if retry.is_malformed() {
         return Err(build_http_error_response(
             Some(id.clone()),
-            -32602,
+            INVALID_PARAMS,
             format!("malformed request fields: {}", retry.malformed.join(", ")),
             StatusCode::BAD_REQUEST,
         ));
@@ -340,7 +342,7 @@ fn unforwarded_refusal(name: &str) -> crate::Error {
 fn audit_unavailable(id: &RequestId) -> Rejection {
     build_http_error_response(
         Some(id.clone()),
-        -32603,
+        INTERNAL_ERROR,
         "identity-propagation audit unavailable".to_string(),
         StatusCode::INTERNAL_SERVER_ERROR,
     )

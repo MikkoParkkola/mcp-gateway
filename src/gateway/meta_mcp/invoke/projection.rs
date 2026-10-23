@@ -4,7 +4,7 @@
 
 use serde_json::Value;
 
-use super::output_shape::{apply_validated_output, extract_output_validation_target};
+use super::output_shape::apply_validated_output;
 use crate::Result;
 
 pub(super) async fn call_capability_tool_with_identity(
@@ -47,7 +47,7 @@ pub(super) fn extract_client_claim(
 ///    backend output schema, so projection must follow schema validation.
 ///
 /// It operates on the inner capability payload (unwrapping the MCP envelope via
-/// [`extract_output_validation_target`]) and re-wraps via
+/// [`crate::protocol::tool_result_payload`]) and re-wraps via
 /// [`apply_validated_output`] — projecting the outer envelope is bug #167.
 /// `want_full` (the `_full: true` directive) bypasses projection, mirroring
 /// `response_transform`. Error envelopes are never projected. When the spec
@@ -74,7 +74,7 @@ pub(super) fn apply_capability_projection(
     {
         return response;
     }
-    let inner = extract_output_validation_target(&response).unwrap_or_else(|| response.clone());
+    let inner = crate::protocol::tool_result_payload(&response).unwrap_or_else(|| response.clone());
     let projected = crate::projection::project(&inner, spec);
     // Fail-fast: `project` resolved no fields and returned `inner` verbatim
     // (a successful projection always adds `_raw`, so it never equals `inner`).

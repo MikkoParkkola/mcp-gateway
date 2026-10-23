@@ -21,7 +21,7 @@ use super::{
 };
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::signing::SigningInvocationContext;
-use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
+use crate::gateway::oauth::OAuthAgentIdentity;
 use crate::gateway::recovery::SurfaceRequest;
 use crate::gateway::router::AppState;
 use crate::gateway::router::helpers::{
@@ -81,7 +81,7 @@ pub(super) struct Intake<'r> {
     _inflight_permit: Result<tokio::sync::SemaphorePermit<'r>, tokio::sync::AcquireError>,
     // Held, never read: while the request runs its provisional session is
     // not reaped, and the drop starts its idle clock (MIK-8504).
-    _session_hold: Option<crate::gateway::streaming::SessionHold>,
+    _session_hold: Option<crate::gateway::streaming::InFlightHold>,
     /// Served without a session because the provisional POST cap was
     /// full (MIK-8533). A keyless legacy caller still scores under the
     /// shared anonymous key, never as an unattributed modern request.

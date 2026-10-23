@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use super::account_mint;
-use super::{CallerCredential, HeldCredential};
+use super::{CallerCredential, DispatchCredential};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::identity_propagation::{CallerProof, CallerProvenance, audit_subject};
 use crate::personal_accounts::identity::Principal;
@@ -76,7 +76,7 @@ impl MetaMcp {
         server: &str,
         backend: Option<&crate::backend::Backend>,
         caller: CallerProof<'_>,
-    ) -> Result<HeldCredential> {
+    ) -> Result<DispatchCredential> {
         self.resolve_propagation_credential_attempted_for(server, backend, caller)
             .await
             .map(|(held, _attempted, _unproven)| held)
@@ -97,7 +97,7 @@ impl MetaMcp {
         server: &str,
         backend: Option<&crate::backend::Backend>,
         caller: CallerProof<'_>,
-    ) -> Result<(HeldCredential, bool, Option<Error>)> {
+    ) -> Result<(DispatchCredential, bool, Option<Error>)> {
         let Some(idp_cfg) = backend.and_then(|b| b.identity_propagation_config().cloned()) else {
             Self::refuse_unbound_account_backend(server, backend)?;
             return Ok(((Vec::new(), None, None), false, None));

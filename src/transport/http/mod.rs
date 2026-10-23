@@ -9,6 +9,7 @@
 //!
 //! Supports OAuth 2.0 with PKCE for authenticated backends.
 
+use crate::error::rpc_codes::INVALID_REQUEST;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -27,12 +28,14 @@ use crate::protocol::meta::KEY_PROTOCOL_VERSION;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::http_diagnostics::SESSION_EXPIRED_MARKER;
 use crate::security::ssrf::DestinationPolicy;
+#[cfg(test)]
+use crate::security::ssrf::RedirectDecision;
 use crate::{Error, Result};
 pub(super) use modern_meta::with_modern_meta as modern_listen_params;
 use modern_meta::{finalise_modern_headers, with_modern_meta};
 #[cfg(test)]
 use redirect_policy::evaluate_redirect;
-use redirect_policy::{RedirectDecision, evaluate_redirect_for};
+use redirect_policy::evaluate_redirect_for;
 
 // Names the test modules reach through `use super::*`, which the code split
 // into `requests`, `startup` and `transport_impl` no longer needs here.
@@ -41,7 +44,7 @@ use super::{ResendPermission, Transport};
 #[cfg(test)]
 use crate::protocol::PROTOCOL_VERSION;
 #[cfg(test)]
-use crate::protocol::era::Era;
+use crate::protocol::era::PeerEra;
 #[cfg(test)]
 use crate::protocol::meta::MODERN_VERSIONS;
 #[cfg(test)]
@@ -232,7 +235,7 @@ fn peer_refusal(body: &str, id: &RequestId, status: reqwest::StatusCode) -> Opti
 fn is_session_expired_response(resp: &JsonRpcResponse) -> bool {
     resp.error.as_ref().is_some_and(|e| {
         e.code == SESSION_NOT_FOUND_CODE
-            || e.code == -32600
+            || e.code == INVALID_REQUEST
             || e.message.to_lowercase().contains("session not found")
     })
 }
@@ -531,7 +534,7 @@ impl HttpTransport {
     /// is itself a request through this transport.
     /// Non-blocking on purpose: see `EraCache::cached_now`. This runs on the
     /// path the probe itself takes.
-    fn outbound_era(&self) -> Option<crate::protocol::era::Era> {
+    fn outbound_era(&self) -> Option<crate::protocol::era::PeerEra> {
         self.era.get().and_then(|era| era.cached_now())
     }
 
@@ -570,6 +573,7 @@ mod extra_headers;
 mod listen;
 mod modern_meta;
 mod redirect_policy;
+pub use redirect_policy::transport_follows_redirect;
 mod requests;
 mod sse_decoder;
 mod startup;

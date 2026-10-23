@@ -519,7 +519,7 @@ mod http {
 
 mod era {
     use mcp_gateway::protocol::era::{
-        Era, HEADER_MISMATCH, MISSING_REQUIRED_CLIENT_CAPABILITY, ProbeOutcome,
+        HEADER_MISMATCH, MISSING_REQUIRED_CLIENT_CAPABILITY, PeerEra, ProbeOutcome,
         UNSUPPORTED_PROTOCOL_VERSION, classify,
     };
     use serde_json::json;
@@ -531,7 +531,7 @@ mod era {
             "capabilities": {},
             "serverInfo": { "name": "peer", "version": "1.0.0" }
         }));
-        assert_eq!(classify(&outcome), Era::Modern);
+        assert_eq!(classify(&outcome), PeerEra::Modern);
     }
 
     #[test]
@@ -548,7 +548,7 @@ mod era {
         ] {
             assert_eq!(
                 classify(&ProbeOutcome::Error(code)),
-                Era::Modern,
+                PeerEra::Modern,
                 "error {code} is defined by 2026-07-28, so only a modern peer emits it"
             );
         }
@@ -557,7 +557,7 @@ mod era {
     #[test]
     fn ac_discover_4_method_not_found_means_legacy() {
         // The honest legacy answer: the method does not exist there.
-        assert_eq!(classify(&ProbeOutcome::Error(-32601)), Era::Legacy);
+        assert_eq!(classify(&ProbeOutcome::Error(-32601)), PeerEra::Legacy);
     }
 
     #[test]
@@ -568,7 +568,7 @@ mod era {
         for code in [-32603, -32000, -1, 42] {
             assert_eq!(
                 classify(&ProbeOutcome::Error(code)),
-                Era::Legacy,
+                PeerEra::Legacy,
                 "error {code} is not defined by 2026-07-28, so it is no evidence of modernity"
             );
         }
@@ -579,7 +579,7 @@ mod era {
         // The common answer, and the one that makes this asymmetric. A peer we
         // could not reach is not thereby modern; treating it as modern would
         // send it requests it cannot parse.
-        assert_eq!(classify(&ProbeOutcome::NoAnswer), Era::Legacy);
+        assert_eq!(classify(&ProbeOutcome::NoAnswer), PeerEra::Legacy);
     }
 
     #[test]
@@ -597,7 +597,7 @@ mod era {
             "supportedVersions": ["2025-11-25", "2025-06-18"],
             "capabilities": {},
         }));
-        assert_eq!(classify(&legacy_only), Era::Legacy);
+        assert_eq!(classify(&legacy_only), PeerEra::Legacy);
 
         // And the mixed case: a dual-era peer listing both is modern, because
         // there is a modern revision we can agree on.
@@ -608,7 +608,7 @@ mod era {
             "supportedVersions": ["2026-07-28", "2025-11-25"],
             "capabilities": {},
         }));
-        assert_eq!(classify(&both), Era::Modern);
+        assert_eq!(classify(&both), PeerEra::Modern);
     }
 
     #[test]
@@ -624,7 +624,7 @@ mod era {
         ] {
             assert_eq!(
                 classify(&ProbeOutcome::Result(shape.clone())),
-                Era::Legacy,
+                PeerEra::Legacy,
                 "an unusable version list is not evidence of modernity: {shape}"
             );
         }
@@ -636,9 +636,9 @@ mod era {
         // alone is not evidence; the document has to say what it speaks.
         assert_eq!(
             classify(&ProbeOutcome::Result(json!({ "hello": "world" }))),
-            Era::Legacy
+            PeerEra::Legacy
         );
-        assert_eq!(classify(&ProbeOutcome::Result(json!({}))), Era::Legacy);
+        assert_eq!(classify(&ProbeOutcome::Result(json!({}))), PeerEra::Legacy);
     }
 }
 
@@ -656,7 +656,7 @@ mod era_cache {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use mcp_gateway::protocol::era::{Era, EraCache, ProbeOutcome};
+    use mcp_gateway::protocol::era::{EraCache, PeerEra, ProbeOutcome};
     use serde_json::json;
 
     fn modern_doc() -> ProbeOutcome {
@@ -682,7 +682,7 @@ mod era_cache {
                     modern_doc()
                 })
                 .await;
-            assert_eq!(era, Era::Modern);
+            assert_eq!(era, PeerEra::Modern);
         }
 
         // THEN: the peer was probed once
@@ -709,14 +709,14 @@ mod era_cache {
                 modern_doc()
             }
         };
-        assert_eq!(cache.resolve_with(counted()).await, Era::Modern);
+        assert_eq!(cache.resolve_with(counted()).await, PeerEra::Modern);
 
         // WHEN: acting on that assumption fails, and the caller says so
         cache.invalidate().await;
 
         // THEN: the next resolution probes again rather than trusting a belief
         // that has already been contradicted
-        assert_eq!(cache.resolve_with(counted()).await, Era::Modern);
+        assert_eq!(cache.resolve_with(counted()).await, PeerEra::Modern);
         assert_eq!(
             probes.load(Ordering::SeqCst),
             2,
@@ -748,7 +748,7 @@ mod era_cache {
             }));
         }
         for h in handles {
-            assert_eq!(h.await.expect("task must not panic"), Era::Modern);
+            assert_eq!(h.await.expect("task must not panic"), PeerEra::Modern);
         }
 
         // THEN: the peer was probed once, not eight times. A cache that only

@@ -132,7 +132,8 @@ pub(crate) fn sanitize_description(raw: &str) -> String {
         }
     }
 
-    // Pass 4: trim and truncate.
+    // Pass 4: trim and truncate. Not `crate::truncate`: the kept text is
+    // trimmed again before the marker (MIK-8667).
     let trimmed = collapsed.trim();
     if trimmed.chars().count() > MAX_LEN {
         let truncated: String = trimmed.chars().take(MAX_LEN).collect();

@@ -16,7 +16,7 @@ use super::upstream::Kind;
 use super::upstream_listener::Shared;
 use super::upstream_need::Coalescer;
 use crate::backend::{Backend, BackendRegistry};
-use crate::protocol::era::Era;
+use crate::protocol::era::PeerEra;
 use crate::transport::upstream_tap::{
     FrameStream, KindSet, NoteKind, Refused, Requested, UpstreamListen, UpstreamNote, Watched,
 };
@@ -289,8 +289,15 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
         }
     };
     let started = Instant::now();
-    let modern = target.era == Era::Modern;
-    let mut state = State::new(shared, if modern { Era::Modern } else { Era::Legacy });
+    let modern = target.era == PeerEra::Modern;
+    let mut state = State::new(
+        shared,
+        if modern {
+            PeerEra::Modern
+        } else {
+            PeerEra::Legacy
+        },
+    );
     // The first catalogue read doubles as the legacy HTTP session's first
     // request on the shared bucket (§3).
     state.read_snapshot(backend, hub, false).await;
@@ -457,7 +464,7 @@ struct Pending {
 #[allow(clippy::struct_excessive_bools)] // Each flag is an independent fact about the current stream.
 struct State<'a> {
     shared: &'a Arc<Shared>,
-    era: Era,
+    era: PeerEra,
     current: Option<(FrameStream, Requested)>,
     pending: Option<Pending>,
     opening: Option<Opening>,
@@ -492,7 +499,7 @@ struct State<'a> {
 }
 
 impl<'a> State<'a> {
-    fn new(shared: &'a Arc<Shared>, era: Era) -> Self {
+    fn new(shared: &'a Arc<Shared>, era: PeerEra) -> Self {
         let now = Instant::now();
         Self {
             shared,

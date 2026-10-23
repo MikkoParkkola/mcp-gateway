@@ -200,7 +200,7 @@ class Runner(unittest.TestCase):
         self.assertFalse(queued.exists(), "the queued line was never dispatched")
         self.assertTrue(any(r.status == "deadline" for r in report.failures))
         child = int(pid.read_text())
-        self.assertFalse(alive(child), "the deadline killed the whole process group")
+        self.assertTrue(dead_within(child), "the deadline killed the whole process group")
 
     # X7b
     def test_x7b_base_reruns_share_the_deadline(self):
@@ -262,7 +262,22 @@ class Runner(unittest.TestCase):
         report = self.f.run([line(spawn)], line_timeout_s=2)
         self.assertLess(time.monotonic() - start, 2 + 10, "the timeout path blocked after the kill")
         self.assertEqual([r.status for r in report.failures], ["timeout"])
-        self.assertFalse(alive(int(pid.read_text())))
+        self.assertTrue(dead_within(int(pid.read_text())), "the timeout killed the whole process group")
+
+    # X12b: the liveness probe the kill rows use counts a zombie as dead.
+    def test_x12b_a_killed_unreaped_child_is_not_alive(self):
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+        try:
+            self.assertTrue(alive(child.pid))
+            child.kill()
+            deadline = time.monotonic() + 2
+            while process_state(child.pid) != "Z" and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertEqual(process_state(child.pid), "Z", "an unreaped killed child is a zombie")
+            os.kill(child.pid, 0)  # still in the table: the case the old probe misread
+            self.assertFalse(alive(child.pid))
+        finally:
+            child.wait()
 
     # X13
     def test_x13_concurrent_lines_do_not_see_each_others_files(self):
@@ -427,11 +442,7 @@ class Runner(unittest.TestCase):
         report = self.f.run([line(f"sleep 30 > /dev/null 2>&1 & echo $! > {pid_file}")])
         self.assertEqual(report.rc, 0, report.text)
         pid = int(pid_file.read_text())
-        for _ in range(40):  # bounded: SIGKILL delivery is asynchronous
-            if not alive(pid):
-                break
-            time.sleep(0.05)
-        self.assertFalse(alive(pid), "the background child outlived its line")
+        self.assertTrue(dead_within(pid), "the background child outlived its line")
 
     # X21 (impl r1 F8): a failed reset is a failure, and the next line gets a
     # fresh clone instead of the dirty one.
@@ -640,10 +651,37 @@ class Step(unittest.TestCase):
 
 
 def alive(pid):
+    """Whether `pid` is a running process. A zombie is not: it has died and
+    waits for its reaper, which for a killed line's grandchild is init, after
+    the line itself was reaped; `kill(pid, 0)` still succeeds on it."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
+    return process_state(pid) not in (None, "Z")
+
+
+def process_state(pid):
+    """The pid's one-letter state, or None once it has left the process table
+    (it can be reaped between any two reads, so every read may find it gone)."""
+    if pathlib.Path("/proc/self/stat").exists():
+        try:
+            stat = pathlib.Path(f"/proc/{pid}/stat").read_text()
+        except (FileNotFoundError, ProcessLookupError):
+            return None
+        return stat.rsplit(")", 1)[1].split()[0]
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    return state[:1] or None
+
+
+def dead_within(pid, timeout_s=2.0):
+    """Wait up to `timeout_s` for `pid` to stop running: SIGKILL delivery and
+    reaping are asynchronous, so one immediate check races them."""
+    deadline = time.monotonic() + timeout_s
+    while alive(pid):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
     return True
 
 

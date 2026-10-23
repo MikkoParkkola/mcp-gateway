@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use super::{
-    AgentUxValidator, ConflictDetectionRule, NamingConsistencyRule, OutputFormat, Severity,
-    ValidateConfig,
+    AgentUxValidator, ConflictDetectionRule, NamingConsistencyRule, Severity, ValidateConfig,
+    ValidatorOutputFormat,
 };
 use crate::capability::parse_capability_file;
 use crate::cli::stdout::{print, println};
@@ -202,7 +202,7 @@ pub async fn run_validate_command(paths: &[PathBuf], config: &ValidateConfig) ->
 
     // Phase 3: Output
     match config.format {
-        OutputFormat::Text => {
+        ValidatorOutputFormat::Text => {
             let refs: Vec<(&str, &super::ValidationReport)> =
                 file_reports.iter().map(|(p, r)| (p.as_str(), r)).collect();
 
@@ -250,7 +250,7 @@ pub async fn run_validate_command(paths: &[PathBuf], config: &ValidateConfig) ->
             }
         }
 
-        OutputFormat::Json => {
+        ValidatorOutputFormat::Json => {
             let json_output: Vec<serde_json::Value> = file_reports
                 .iter()
                 .map(|(path, report)| {
@@ -278,7 +278,7 @@ pub async fn run_validate_command(paths: &[PathBuf], config: &ValidateConfig) ->
             );
         }
 
-        OutputFormat::Sarif => {
+        ValidatorOutputFormat::Sarif => {
             let file_result_refs: Vec<(&str, &[super::ValidationResult])> = file_reports
                 .iter()
                 .map(|(p, r)| (p.as_str(), r.results.as_slice()))

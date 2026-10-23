@@ -10,6 +10,7 @@ use super::{
     parse_request_ref, reaches_tasks_extension, request_checks, request_session_owner,
     session_id_header, tasks, validate_agent_identity, view_facts, warn,
 };
+use crate::error::rpc_codes::{INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR};
 
 /// The prelude, run once per request. `Err` is a finished answer the
 /// dispatcher returns as it is.
@@ -78,10 +79,13 @@ pub(in crate::gateway::router::handlers) async fn intake(
                 crate::security::IdentityAudit::Clean,
                 Some(&reason),
             );
-            return Err(
-                build_http_error_response(None, -32600, reason, StatusCode::FORBIDDEN)
-                    .into_response(),
-            );
+            return Err(build_http_error_response(
+                None,
+                INVALID_REQUEST,
+                reason,
+                StatusCode::FORBIDDEN,
+            )
+            .into_response());
         }
     }
 
@@ -123,7 +127,7 @@ pub(in crate::gateway::router::handlers) async fn intake(
         Err(e) => {
             return Err(build_http_error_response(
                 None,
-                -32700,
+                PARSE_ERROR,
                 format!("Invalid JSON: {e}"),
                 StatusCode::BAD_REQUEST,
             )
@@ -139,7 +143,12 @@ pub(in crate::gateway::router::handlers) async fn intake(
                 axum::http::header::HeaderName::from_static("content-type"),
                 axum::http::header::HeaderValue::from_static("application/json"),
             )],
-            build_http_error_response(None, -32600, "Meta-MCP disabled", StatusCode::FORBIDDEN),
+            build_http_error_response(
+                None,
+                INVALID_REQUEST,
+                "Meta-MCP disabled",
+                StatusCode::FORBIDDEN,
+            ),
         )
             .into_response());
     }
@@ -180,7 +189,7 @@ pub(in crate::gateway::router::handlers) async fn intake(
     {
         return Err(build_error_response(
             None,
-            -32600,
+            INVALID_REQUEST,
             e.to_string(),
             "",
             StatusCode::BAD_REQUEST,
@@ -416,7 +425,7 @@ pub(in crate::gateway::router::handlers) async fn intake(
         // and 400 on HTTP.
         return Err(build_error_response(
             id,
-            -32602,
+            INVALID_PARAMS,
             format!("missing required request metadata: {}", missing.join(", ")),
             &session_id,
             StatusCode::BAD_REQUEST,
@@ -530,7 +539,7 @@ pub(in crate::gateway::router::handlers) async fn intake(
         // client the gateway speaks a revision it cannot hold up its end of.
         return Err(build_error_response(
             Some(id.clone()),
-            -32601,
+            METHOD_NOT_FOUND,
             format!("method '{method}' requires MCP 2026-07-28"),
             &session_id,
             StatusCode::NOT_FOUND,

@@ -5,6 +5,7 @@
 
 pub(crate) use crate::security::response_policy::{ResponseCorrelation, ResponsePolicyTarget};
 
+use crate::error::rpc_codes::INTERNAL_ERROR;
 use std::sync::Arc;
 
 use super::MetaMcp;
@@ -334,7 +335,7 @@ impl super::MetaMcp {
             if signed.is_err() {
                 response = JsonRpcResponse::delivery_refusal_error(
                     response.id,
-                    -32603,
+                    INTERNAL_ERROR,
                     "Response signing failed",
                 );
             }
@@ -587,7 +588,7 @@ pub(super) fn shape_meta_result(
                     super::interim_promotion::Promotion::UpstreamFault(message) => {
                         super::error_response_preserving_status(
                             id,
-                            &crate::Error::json_rpc(-32603, message),
+                            &crate::Error::json_rpc(INTERNAL_ERROR, message),
                         )
                     }
                 }
@@ -717,7 +718,7 @@ pub(crate) fn recovered_result_error(error: &crate::Error) -> crate::protocol::J
         return refusal;
     }
     crate::protocol::JsonRpcError {
-        code: -32603,
+        code: INTERNAL_ERROR,
         message: error.to_string(),
         data: None,
     }

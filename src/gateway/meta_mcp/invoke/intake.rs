@@ -145,27 +145,20 @@ impl MetaMcp {
             step: Step { server, tool },
         } = input;
         let mut arguments = parse_tool_arguments(args)?;
-        // `_full` is a gateway directive (opt out of response projection), not
-        // an upstream parameter. Capture and strip it BEFORE the argument hash
-        // and idempotency key are computed, so toggling it cannot bypass
-        // idempotency or pollute the cache key, and it never reaches a backend
-        // (MIK-3533).
-        let want_full = arguments
-            .get("_full")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        if let Some(obj) = arguments.as_object_mut() {
-            obj.remove("_full");
-        }
-
-        // MIK-6914 Option B: the caller may attach an untrusted claim-under-test
-        // (`_claim`) about the result it will render. Like `_full` it is a
-        // gateway directive, stripped here — before the argument hash and cache
-        // key are computed — so it never reaches a backend and never fragments
-        // the cache. Bound to this call's `trace_id`, it is threaded to the
-        // provenance chokepoint and (with capture enabled) recorded as the claim
-        // under scrutiny. It is never the ground-truth leg.
+        // `_full` (opt out of response projection, MIK-3533) and `_claim` (the
+        // MIK-6914 Option B claim-under-test) are gateway directives, not
+        // upstream parameters. Both are stripped BEFORE the argument hash and
+        // idempotency key are computed, so toggling one cannot bypass
+        // idempotency or fragment the cache, and neither reaches a backend.
+        //
+        // The claim is read first, because the shared strip removes it too.
+        // It is untrusted client input bound to this call's `trace_id`,
+        // threaded to the provenance chokepoint and (with capture enabled)
+        // recorded as the claim under scrutiny; never the ground-truth leg.
         let client_claim = extract_client_claim(&mut arguments, trace_id);
+        // The one strip both routes use (MIK-8663): it reads `_full` and
+        // removes every listed directive.
+        let want_full = crate::gateway::meta_mcp::admission::execution_arguments(&mut arguments);
 
         // MIK-5877: in `experimental` mode the projected (treatment) and raw
         // (control) arms must NOT share response-cache / idempotency entries, or

@@ -35,6 +35,9 @@ mod lost_round;
 mod meta_malformed_retry;
 mod meta_refusal;
 mod meta_replay;
+/// MIK-8689 R-RECJUDGE: the judge's verdict rides the delivery record.
+#[cfg(feature = "firewall")]
+mod response_judge;
 #[cfg(feature = "firewall")]
 mod session_less;
 #[cfg(feature = "firewall")]
@@ -420,7 +423,7 @@ fn insert_identity(request: &mut axum::http::Request<axum::body::Body>, caller: 
             });
         }
         Caller::Agent => {
-            extensions.insert(crate::gateway::oauth::AgentIdentity {
+            extensions.insert(crate::gateway::oauth::OAuthAgentIdentity {
                 client_id: "agent-7938".to_string(),
                 agent_name: "Agent 7938".to_string(),
                 scopes: vec![],

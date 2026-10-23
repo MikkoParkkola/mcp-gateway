@@ -8,6 +8,7 @@
 //! opened, stdio serves exactly as before: no `tasks/*`, task-augmented calls
 //! answered synchronously, and no Tasks in its handshake or discover answer.
 
+use crate::error::rpc_codes::{INVALID_PARAMS, METHOD_NOT_FOUND};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -250,7 +251,7 @@ impl StdioTasks {
         let Some(key) = req.retry.idempotency_key.as_deref() else {
             return Err(Box::new(crate::protocol::JsonRpcResponse::error(
                 Some(req.id.clone()),
-                -32602,
+                INVALID_PARAMS,
                 "task creation requires an idempotency key",
             )));
         };
@@ -343,7 +344,7 @@ impl StdioTasks {
             // as one of the three it does.
             other => crate::protocol::JsonRpcResponse::error(
                 Some(id),
-                -32601,
+                METHOD_NOT_FOUND,
                 format!("Method not found: {other}"),
             ),
         }
@@ -432,14 +433,14 @@ pub(super) async fn serve(
     let Some(tasks) = tasks else {
         return crate::protocol::JsonRpcResponse::error(
             Some(id),
-            -32601,
+            METHOD_NOT_FOUND,
             format!("Method not found: {method}"),
         );
     };
     if !matches!(shape, crate::protocol::meta::RequestShape::Modern(_)) {
         return crate::protocol::JsonRpcResponse::error(
             Some(id),
-            -32601,
+            METHOD_NOT_FOUND,
             format!("method '{method}' requires MCP 2026-07-28"),
         );
     }

@@ -19,7 +19,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::super::record::PreparedTask;
-use super::super::store::{CommitHook, CommitStage, StoreError, TaskStore};
+use super::super::store::{CommitHook, StoreError, StoreWriteStage, TaskStore};
 use super::support::*;
 use crate::idempotency::admission::{
     ExecutionAdmission, Mode, Request, TaskAdmission, TaskBinding,
@@ -50,7 +50,7 @@ pub(super) fn task_request<'a>(principal: &'a str, key: &'a str) -> Request<'a> 
 /// `paused_at_final_sync`. Every wait is bounded, so a stage that never fires
 /// makes the row fail at its own assertion instead of hanging the worker.
 fn paused_at(
-    stage: CommitStage,
+    stage: StoreWriteStage,
 ) -> (
     std::sync::mpsc::Receiver<()>,
     std::sync::mpsc::Sender<()>,
@@ -89,7 +89,7 @@ async fn wait_for(entered: std::sync::mpsc::Receiver<()>, stage: &str) {
 fn failing_sync_once() -> CommitHook {
     let armed = AtomicUsize::new(0);
     Arc::new(move |stage| {
-        if stage == CommitStage::DirectorySync && armed.fetch_add(1, Ordering::SeqCst) == 0 {
+        if stage == StoreWriteStage::DirectorySync && armed.fetch_add(1, Ordering::SeqCst) == 0 {
             return Err(std::io::Error::other("directory sync refused once"));
         }
         Ok(())
@@ -143,7 +143,7 @@ async fn task_15_a_discoverable_task_is_already_readable() {
     let dir = tempfile::tempdir().unwrap();
     let admission = services();
     let store = open(&dir.path().join("tasks")).await;
-    let (entered, release, hook) = paused_at(CommitStage::Published);
+    let (entered, release, hook) = paused_at(StoreWriteStage::Published);
     store.set_hook(Some(hook)).await;
 
     let lease = match admission.admit_task(task_request("oidc:acme:alice", "k-1")) {
@@ -159,7 +159,7 @@ async fn task_15_a_discoverable_task_is_already_readable() {
         tokio::spawn(async move { writer.create(prepared).await })
     };
 
-    wait_for(entered, "CommitStage::Published").await;
+    wait_for(entered, "StoreWriteStage::Published").await;
     let readable = store.get(binding.principal_digest(), &id).is_ok();
     let retry_in_flight = matches!(
         admission.admit_task(task_request("oidc:acme:alice", "k-1")),
@@ -237,7 +237,7 @@ async fn task_17_a_cancellation_after_hand_off_still_publishes() {
     let path = dir.path().join("tasks");
     let admission = services();
     let store = open(&path).await;
-    let (entered, release, hook) = paused_at(CommitStage::DirectorySync);
+    let (entered, release, hook) = paused_at(StoreWriteStage::DirectorySync);
     store.set_hook(Some(hook)).await;
 
     let lease = match admission.admit_task(task_request("oidc:acme:alice", "k-1")) {
@@ -253,7 +253,7 @@ async fn task_17_a_cancellation_after_hand_off_still_publishes() {
         tokio::spawn(async move { writer.create(prepared).await })
     };
 
-    wait_for(entered, "CommitStage::DirectorySync").await;
+    wait_for(entered, "StoreWriteStage::DirectorySync").await;
     // The caller goes away while the writer is still inside the commit, and the
     // abort is proved to have landed BEFORE the write was allowed to finish.
     pending.abort();
@@ -328,7 +328,7 @@ async fn task_18b_no_admission_path_runs_inside_the_expiry_transaction() {
     let admission = services();
     let store = open(&dir.path().join("tasks")).await;
     let (id, binding) = settled_task(&store, &admission, "k-1").await;
-    let (entered, release, hook) = paused_at(CommitStage::Deleted);
+    let (entered, release, hook) = paused_at(StoreWriteStage::Deleted);
     store.set_hook(Some(hook)).await;
 
     let expiring = {
@@ -346,7 +346,7 @@ async fn task_18b_no_admission_path_runs_inside_the_expiry_transaction() {
                 .await
         })
     };
-    wait_for(entered, "CommitStage::Deleted").await;
+    wait_for(entered, "StoreWriteStage::Deleted").await;
 
     // The witness fires INSIDE `admit_task`, immediately before it takes the
     // admission mutex. Signalling from the test thread would only prove the
@@ -504,7 +504,7 @@ async fn task_published_hook_error_retry_is_existing() {
     let store = open(&dir.path().join("tasks")).await;
     store
         .set_hook(Some(Arc::new(|stage| {
-            if stage == CommitStage::Published {
+            if stage == StoreWriteStage::Published {
                 return Err(std::io::Error::other("published hook refused"));
             }
             Ok(())

@@ -3,6 +3,7 @@
 
 //! MCP JSON-RPC message types
 
+use crate::error::rpc_codes::INTERNAL_ERROR;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::warn;
@@ -138,7 +139,7 @@ impl JsonRpcResponse {
     /// Create a standard internal error response.
     #[must_use]
     pub fn internal_error(id: Option<RequestId>) -> Self {
-        Self::error(id, -32603, "Internal error")
+        Self::error(id, INTERNAL_ERROR, "Internal error")
     }
 
     /// Serialize this response into a JSON value, falling back to a standard
@@ -576,9 +577,41 @@ pub struct SamplingCreateMessageResult {
 }
 
 // ============================================================================
+// Tool result payload
+// ============================================================================
+
+/// The tool's value inside an MCP tool result: its `structuredContent` when
+/// present (even `null`), else its one `content` block's text parsed as JSON.
+///
+/// This is the strict reader, the one rule the output-schema gate, response
+/// projection, response transforms, the trust extractor and the audit replay
+/// share (MIK-8663). Several content blocks, non-JSON text, or neither field
+/// yield `None`: the caller then judges the envelope itself, never a guess
+/// from part of a multi-part answer.
+///
+/// Two decoders keep other contracts on purpose (MIK-8734): the watch
+/// source's total reader (`router/watch_poll.rs` `application_value`) and
+/// the capability executor's MCP process path. They are not unfinished
+/// consolidation; change them only through that ticket.
+pub(crate) fn tool_result_payload(result: &Value) -> Option<Value> {
+    if let Some(structured) = result.get("structuredContent") {
+        return Some(structured.clone());
+    }
+    let content = result.get("content")?.as_array()?;
+    if content.len() != 1 {
+        return None;
+    }
+    let text = content[0].get("text")?.as_str()?;
+    serde_json::from_str::<Value>(text).ok()
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
+#[cfg(test)]
+#[path = "messages_payload_tests.rs"]
+mod payload_tests;
 #[cfg(test)]
 #[path = "messages_tests.rs"]
 mod tests;

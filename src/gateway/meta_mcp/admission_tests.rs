@@ -271,10 +271,11 @@ fn revoked_replay(
         ..RetryFields::default()
     };
     let mut caller = context(&policy, &retry);
-    // Seed in modern mode; the legacy case must reuse this same owner's key
-    // across the protocol transition rather than merely replay legacy work.
-    retained_operation(&meta, &caller, tool, args);
+    // Seeded and replayed in one era: a key reused across the protocol
+    // transition is refused before any policy runs (MIK-8747), which
+    // `sub4_a_key_reused_across_the_protocol_transition_is_refused` pins.
     caller.is_modern = is_modern;
+    retained_operation(&meta, &caller, tool, args);
     policy.revoked.store(true, Ordering::SeqCst);
     for request in [args, changed_args] {
         policy.seen.lock().clear();
@@ -629,6 +630,7 @@ fn replay_facts_round_trip_and_older_records_decode() {
             read: None,
             writes: crate::gateway::gateway_writes::WriteRecord::default(),
             dispatched: None,
+            era: None,
             bindings: Vec::new(),
         };
         let bytes = serde_json::to_vec(&stored).unwrap();
@@ -668,6 +670,7 @@ fn a_stored_delivery_with_any_write_record_still_decodes() {
         read: None,
         writes: crate::gateway::gateway_writes::WriteRecord::default(),
         dispatched: None,
+        era: None,
         bindings: Vec::new(),
     };
     for writes in [
@@ -721,6 +724,7 @@ async fn a_replay_restores_the_stored_reading() {
         read: Some(b.clone()),
         writes: crate::gateway::gateway_writes::WriteRecord::default(),
         dispatched: None,
+        era: None,
         bindings: Vec::new(),
     };
     let bytes = serde_json::to_vec(&stored).unwrap();
@@ -772,3 +776,6 @@ fn a_withdrawn_dispatch_frees_the_key_unless_an_earlier_step_acted() {
 
 #[path = "admission_profile_tests.rs"]
 mod profile;
+
+#[path = "admission_era_tests.rs"]
+mod era;
