@@ -462,7 +462,7 @@ pub(crate) fn build_code_mode_search_tool() -> Tool {
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Search query: keyword, multi-word, or glob pattern (e.g. \"file_*\", \"*search*\")"
+                    "description": "Search query: keyword, multi-word, or glob pattern (e.g. \"file_*\", \"*search*\"); at most 256 characters"
                 },
                 "limit": {
                     "type": "integer",
