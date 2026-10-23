@@ -175,9 +175,9 @@ async fn a_refused_answer_settles_its_key_so_a_retry_does_not_run_again() {
     );
 }
 
-/// S2 (mutant m20): `_full` is a gateway directive. It is stripped before the
-/// keys and the dispatch, so the backend receives the caller's own arguments
-/// and never the directive (MIK-3533).
+/// S2 (mutant m20): `_full` and `_claim` are gateway directives. They are
+/// stripped before the keys and the dispatch, so the backend receives the
+/// caller's own arguments and never a directive (MIK-3533; MIK-8663 T1).
 #[tokio::test]
 async fn the_full_directive_never_reaches_the_backend() {
     let probe = Arc::new(Probe {
@@ -188,7 +188,11 @@ async fn the_full_directive_never_reaches_the_backend() {
     });
     let meta = gateway(&probe);
     let caller = crate::gateway::meta_mcp::anonymous_caller();
-    let args = json!({"server": "svc", "tool": "act", "arguments": {"q": 1, "_full": true}});
+    let args = json!({"server": "svc", "tool": "act", "arguments": {
+        "q": 1,
+        "_full": true,
+        "_claim": {"kind": "found_rows", "count": 1},
+    }});
     let outcome = meta.invoke_tool(&args, Some("session-8488"), &caller).await;
     assert!(outcome.is_ok(), "the control call failed: {outcome:?}");
     let sent = probe.sent.lock().expect("probe lock").clone();
@@ -233,6 +237,62 @@ async fn toggling_full_under_one_key_replays_the_first_answer() {
         probe.calls.load(Ordering::SeqCst),
         1,
         "the retry ran the call again"
+    );
+}
+
+/// MIK-8663 T4: every gateway directive the shared list names, sent at once,
+/// is stripped before dispatch, so a directive added to the list can never
+/// reach a backend through `gateway_invoke`.
+#[tokio::test]
+async fn no_listed_directive_reaches_the_backend() {
+    let probe = Arc::new(Probe {
+        signing: None,
+        witness_at_dispatch: AtomicBool::new(false),
+        calls: AtomicUsize::new(0),
+        sent: std::sync::Mutex::new(None),
+    });
+    let meta = gateway(&probe);
+    let caller = crate::gateway::meta_mcp::anonymous_caller();
+    let mut arguments = json!({"q": 1});
+    for directive in crate::gateway::meta_mcp::admission::EXECUTION_DIRECTIVES {
+        arguments[directive] = json!(true);
+    }
+    let args = json!({"server": "svc", "tool": "act", "arguments": arguments});
+    let outcome = meta.invoke_tool(&args, Some("session-8663"), &caller).await;
+    assert!(outcome.is_ok(), "the call failed: {outcome:?}");
+    let sent = probe.sent.lock().expect("probe lock").clone();
+    assert_eq!(sent, Some(json!({"q": 1})), "the backend received {sent:?}");
+}
+
+/// MIK-8663 T3 (DUPC-6.PR6.3): `_claim` is read before the shared strip
+/// removes it, so the provenance chokepoint is handed the caller's claim,
+/// bound to this call's trace id. Mutant: the strip moved ahead of the claim
+/// read leaves no claim.
+#[tokio::test]
+async fn the_client_claim_is_read_before_the_strip() {
+    let probe = Arc::new(Probe {
+        signing: None,
+        witness_at_dispatch: AtomicBool::new(false),
+        calls: AtomicUsize::new(0),
+        sent: std::sync::Mutex::new(None),
+    });
+    let meta = gateway(&probe);
+    let caller = crate::gateway::meta_mcp::anonymous_caller();
+    let args = json!({"server": "svc", "tool": "act", "arguments": {
+        "q": 1,
+        "_claim": {"kind": "found_rows", "count": 1},
+    }});
+    super::provenance_stamp::take_last_client_claim();
+    let outcome = meta
+        .invoke_tool_traced(&args, Some("session-8663"), &caller, "trace-8663")
+        .await;
+    assert!(outcome.is_ok(), "the call failed");
+    let claim = super::provenance_stamp::take_last_client_claim()
+        .expect("the provenance chokepoint was handed the client claim");
+    assert_eq!(claim.call_id(), "trace-8663");
+    assert_eq!(
+        claim.claim(),
+        &crate::trust::provenance_eval::Claim::FoundRows { count: 1 }
     );
 }
 
