@@ -4,8 +4,6 @@
 //! Sync-only filter, and the empty commit's removal with relay detection
 //! off), split from `relay_replay_tests` for the file-size ceiling.
 
-use std::sync::Arc;
-
 use super::super::super::{REPLAY_LOOKUP, RelayKey, collecting, commit_with};
 use super::super::{note_task_capture, stage_plan_replay};
 use super::{PROSE, completed, digest_for, relay_meta, staged_summaries, store_entry};
