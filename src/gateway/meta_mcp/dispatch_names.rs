@@ -8,6 +8,7 @@
 use super::super::meta_mcp_helpers::did_you_mean;
 use super::{MetaMcp, MetaMcpCallerContext};
 use crate::Error;
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 use crate::gateway::router::CallerStanding;
 
 macro_rules! meta_arms {
@@ -83,7 +84,7 @@ impl MetaMcp {
             Some(hint) => format!("Unknown tool: {tool_name}. {hint}"),
             None => format!("Unknown tool: {tool_name}"),
         };
-        Error::json_rpc(-32601, msg)
+        Error::json_rpc(METHOD_NOT_FOUND, msg)
     }
 
     /// Whether a meta-tool result is one of the three discovery arms, which

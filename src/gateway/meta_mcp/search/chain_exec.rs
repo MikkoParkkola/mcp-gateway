@@ -3,6 +3,7 @@
 //! `execute_chain`: Code Mode's sequential `{tool, arguments}` steps, split out
 //! of `search.rs` to keep that file under its size ceiling.
 
+use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND};
 use serde_json::{Value, json};
 
 use super::super::MetaMcp;
@@ -24,12 +25,15 @@ impl MetaMcp {
         use crate::gateway::meta_mcp::invoke::relay::plan_step;
 
         if chain.is_empty() {
-            let empty = Err(Error::json_rpc(-32602, "Chain must not be empty"));
+            let empty = Err(Error::json_rpc(INVALID_PARAMS, "Chain must not be empty"));
             return super::asking(caller, empty);
         }
 
         let now = crate::protocol::continuation::clock_now().map_err(|_| {
-            Error::json_rpc(-32603, "system clock reads before 1970; chain refused")
+            Error::json_rpc(
+                INTERNAL_ERROR,
+                "system clock reads before 1970; chain refused",
+            )
         })?;
         // A presented resume decides where the chain starts and how many rounds
         // this exchange has already spent. Both are sealed, so neither is a
@@ -71,7 +75,7 @@ impl MetaMcp {
             let (tool_name, server_opt) = parse_code_mode_tool_ref(&tool_ref);
             let server = server_opt.ok_or_else(|| {
                 Error::json_rpc(
-                    -32602,
+                    INVALID_PARAMS,
                     format!(
                         "Chain step {idx}: tool reference '{tool_ref}' is missing server prefix. \
                          Use format 'server:tool_name'."
@@ -115,7 +119,7 @@ impl MetaMcp {
             // that envelope as a chain resume rather than minting a second one.
             let token = round.request_state.as_deref().ok_or_else(|| {
                 Error::json_rpc(
-                    -32603,
+                    INTERNAL_ERROR,
                     format!("Chain step {idx} asked without a continuation to seal"),
                 )
             })?;
@@ -123,7 +127,7 @@ impl MetaMcp {
                 .continuation
                 .keyring()
                 .open(token, now)
-                .map_err(|reason| Error::json_rpc(-32603, reason.client_message()))?;
+                .map_err(|reason| Error::json_rpc(INTERNAL_ERROR, reason.client_message()))?;
             // The step's envelope counts the step's own rounds, which is zero on
             // every mint. The bound belongs to the chain exchange, so the count
             // carried by the resume is what gets incremented.
@@ -143,7 +147,7 @@ impl MetaMcp {
             self.continuation
                 .keyring()
                 .mint(&payload)
-                .map_err(|error| Error::json_rpc(-32603, error.to_string()))
+                .map_err(|error| Error::json_rpc(INTERNAL_ERROR, error.to_string()))
         };
 
         super::super::chain_interim::drive_chain(&chain, start_step, &mut run_step, seal_stop)
@@ -267,7 +271,7 @@ fn chain_step_result(idx: usize, tool_ref: &str, result: Value) -> Result<Value>
         .take(2048)
         .collect();
     Err(Error::json_rpc(
-        -32603,
+        INTERNAL_ERROR,
         format!("Chain step {idx} ({tool_ref}) failed: {detail}"),
     ))
 }
@@ -291,21 +295,27 @@ fn step_failure(idx: usize, tool_ref: &str, error: Error) -> Error {
             message: format!("Chain step {idx} ({tool_ref}) refused: {message}"),
         },
         Error::JsonRpc {
-            code: -32602,
+            code: INVALID_PARAMS,
             message,
             data,
         } => Error::JsonRpc {
-            code: -32602,
+            code: INVALID_PARAMS,
             message: format!("Chain step {idx} ({tool_ref}) refused: {message}"),
             data,
         },
         // A step naming a tool this caller cannot see answers exactly as an
         // absent name, unchanged (MIK-8356 fold F5).
-        e @ Error::JsonRpc { code: -32601, .. } => e,
+        e @ Error::JsonRpc {
+            code: METHOD_NOT_FOUND,
+            ..
+        } => e,
         // The content gate's delivery refusal keeps its type, and so its
         // -32600 and its audit projection, like a denial (MIK-8325).
         Error::ResponseFirewallRefused => Error::ResponseFirewallRefused,
-        e => Error::json_rpc(-32603, format!("Chain step {idx} ({tool_ref}) failed: {e}")),
+        e => Error::json_rpc(
+            INTERNAL_ERROR,
+            format!("Chain step {idx} ({tool_ref}) failed: {e}"),
+        ),
     }
 }
 

@@ -4,6 +4,7 @@
 //! a playbook or code-mode program actually made, recorded before the task
 //! settles so a stored result can be re-authorized against what produced it.
 
+use crate::error::rpc_codes::INTERNAL_ERROR;
 use std::sync::Arc;
 
 use chrono::{DateTime, Timelike as _, Utc};
@@ -356,7 +357,7 @@ impl Shared {
 /// outcome does not fit the record budget.
 fn bounded() -> TaskTransition {
     TaskTransition::Fail(JsonRpcError {
-        code: -32603,
+        code: INTERNAL_ERROR,
         message: "the task's result exceeds the record size limit".to_owned(),
         data: None,
     })

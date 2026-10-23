@@ -53,6 +53,7 @@ pub(crate) use collusion_gate::{
 mod config;
 pub use config::{FirewallAction, FirewallConfig, FirewallRule, ScanType};
 pub mod input_scanner;
+pub(crate) mod json_literal;
 pub mod memory_scanner;
 pub mod principal_window;
 pub mod redactor;

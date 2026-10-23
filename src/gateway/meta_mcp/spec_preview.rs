@@ -6,6 +6,7 @@
 //! Every item in this file is compiled only when the `spec-preview` feature is
 //! enabled.  This ensures zero leakage into default builds.
 
+use crate::error::rpc_codes::{INVALID_PARAMS, METHOD_NOT_FOUND};
 use serde_json::{Value, json};
 use tracing::debug;
 
@@ -181,7 +182,7 @@ impl MetaMcp {
         let Some(name) = tool_name else {
             return JsonRpcResponse::error(
                 Some(id),
-                -32602,
+                INVALID_PARAMS,
                 "tools/resolve requires a 'name' parameter".to_string(),
             );
         };
@@ -195,7 +196,7 @@ impl MetaMcp {
             // by the same lookup `handle_tools_list_filtered` makes.
             let profile = self.active_profile(session_id);
             let msg = self.build_tool_not_found_message(name, &profile, scope, session_id);
-            JsonRpcResponse::error(Some(id), -32601, msg)
+            JsonRpcResponse::error(Some(id), METHOD_NOT_FOUND, msg)
         }
     }
 
