@@ -47,13 +47,12 @@ pub(crate) struct SourceEvent {
 /// `evt_` + 32 hex of SHA-256 over kind, upstream id and subscription id:
 /// stable across retries and restarts, distinct per subscription.
 pub(crate) fn event_id(kind: SourceKind, upstream_id: &str, subscription_id: &str) -> String {
-    use sha2::Digest as _;
-    let mut hasher = sha2::Sha256::new();
-    for part in [kind.as_str(), upstream_id, subscription_id] {
-        hasher.update(part.as_bytes());
-        hasher.update([0_u8]);
-    }
-    format!("evt_{}", &hex::encode(hasher.finalize())[..32])
+    let digest = crate::hashing::sha256_hex_chunks(
+        [kind.as_str(), upstream_id, subscription_id]
+            .into_iter()
+            .flat_map(|part| [part.as_bytes(), &[0_u8][..]]),
+    );
+    format!("evt_{}", &digest[..32])
 }
 
 /// The `_meta` key the gateway's provenance receipt rides under: inside the

@@ -184,6 +184,9 @@ mod rows;
 /// The stored task-read matrix (MIK-8392).
 mod stored_read;
 
+/// The response-stage matrix (MIK-8689).
+mod response;
+
 #[cfg(feature = "firewall")]
 #[path = "route_check_matrix_keyed_tests.rs"]
 mod keyed;

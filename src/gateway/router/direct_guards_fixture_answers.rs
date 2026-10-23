@@ -106,6 +106,7 @@ pub(super) fn call_answer(answer: Answer, id: RequestId) -> crate::Result<JsonRp
             id,
             json!({"content": [{"type": "text", "text": text}], "isError": false}),
         )),
+        Answer::Built(build) => Ok(JsonRpcResponse::success(id, build())),
     }
 }
 

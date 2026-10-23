@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Invocation policy, attestation and response gates.
 
+use crate::error::rpc_codes::INTERNAL_ERROR;
 use serde_json::Value;
 use tracing::warn;
 
@@ -451,7 +452,7 @@ impl MetaMcp {
         }
         if inspection.should_block {
             return Err(Error::json_rpc(
-                -32603,
+                INTERNAL_ERROR,
                 format!(
                     "Tool '{tool}' on server '{server}' returned a response blocked \
                      by anomaly screening (HIGH/CRITICAL security finding detected). \
@@ -497,7 +498,7 @@ impl MetaMcp {
             );
             if effective_action_mode {
                 return Err(Error::json_rpc(
-                    -32603,
+                    INTERNAL_ERROR,
                     format!(
                         "Tool '{tool}' on server '{server}' response blocked by contract gate: \
                          no contract declared and fail_closed is enabled."
@@ -560,7 +561,7 @@ impl MetaMcp {
                 );
                 if violation.should_block {
                     return Err(Error::json_rpc(
-                        -32603,
+                        INTERNAL_ERROR,
                         format!(
                             "Tool '{tool}' on server '{server}' response blocked by contract gate: \
                              {} — {}",

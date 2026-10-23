@@ -9,6 +9,7 @@
 //! gateway that then dropped every `resources/updated` left the client waiting.
 
 use super::*;
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 // Both the glob and the prelude bring an `assert_eq`; name the one we mean.
 use pretty_assertions::assert_eq;
 
@@ -33,7 +34,7 @@ impl Transport for RecordingPeer {
             let code = if self.modern {
                 crate::protocol::era::UNSUPPORTED_PROTOCOL_VERSION
             } else {
-                crate::protocol::era::METHOD_NOT_FOUND_CODE
+                METHOD_NOT_FOUND
             };
             return Ok(JsonRpcResponse::error(Some(id), code, "declined"));
         }

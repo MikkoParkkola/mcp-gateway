@@ -10,6 +10,7 @@
 //!
 //! Design: `docs/design/2026-09-16-mrtr-12-chain-interim-stop.md`.
 
+use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS};
 use std::future::Future;
 
 use serde_json::{Value, json};
@@ -101,7 +102,10 @@ where
             .get("tool")
             .and_then(Value::as_str)
             .ok_or_else(|| {
-                Error::json_rpc(-32602, format!("Chain step {idx}: missing 'tool' field"))
+                Error::json_rpc(
+                    INVALID_PARAMS,
+                    format!("Chain step {idx}: missing 'tool' field"),
+                )
             })?
             .to_string();
         // An empty object, not `null`: the live loop this replaces defaults the
@@ -167,7 +171,7 @@ pub(crate) fn chain_digest(chain: &[Value]) -> String {
 /// the backend-input domain: the client learns it cannot redeem, never which
 /// binding told us so.
 fn refused(reason: &ContinuationError) -> Error {
-    Error::json_rpc(-32602, reason.client_message())
+    Error::json_rpc(INVALID_PARAMS, reason.client_message())
 }
 
 /// What a validated resume is allowed to do.
@@ -246,7 +250,7 @@ pub async fn plan_chain_resume(
     // exactly what a generic refusal would leave it retrying.
     if payload.rounds_used >= MAX_CHAIN_ROUNDS {
         return Err(Error::json_rpc(
-            -32602,
+            INVALID_PARAMS,
             format!(
                 "This chain exchange has used its {MAX_CHAIN_ROUNDS} interim rounds; \
                  start it again rather than answering once more"
@@ -313,7 +317,10 @@ pub async fn presented_resume(
         return Ok(None);
     };
     let fingerprint = fingerprint.ok_or_else(|| {
-        crate::Error::json_rpc(-32602, "A chain resume requires an authenticated caller")
+        crate::Error::json_rpc(
+            INVALID_PARAMS,
+            "A chain resume requires an authenticated caller",
+        )
     })?;
     plan_chain_resume(state, token, chain, &fingerprint, now)
         .await
@@ -353,20 +360,20 @@ pub fn step_retry_for(
     // spelled out rather than assumed.
     let pending = chain.get(step).ok_or_else(|| {
         crate::Error::json_rpc(
-            -32602,
+            INVALID_PARAMS,
             format!("Chain step {step} is outside the chain being resumed"),
         )
     })?;
     let tool_ref = pending.get("tool").and_then(Value::as_str).ok_or_else(|| {
         crate::Error::json_rpc(
-            -32602,
+            INVALID_PARAMS,
             format!("Chain step {step} has no tool reference to resume"),
         )
     })?;
     let (tool_name, server) = crate::gateway::meta_mcp_helpers::parse_code_mode_tool_ref(tool_ref);
     let server = server.ok_or_else(|| {
         crate::Error::json_rpc(
-            -32602,
+            INVALID_PARAMS,
             format!("Chain step {step}: tool reference is missing server prefix"),
         )
     })?;
@@ -430,7 +437,7 @@ pub fn mint_step_resume(
     state
         .keyring()
         .mint(&payload)
-        .map_err(|error| Error::json_rpc(-32603, error.to_string()))
+        .map_err(|error| Error::json_rpc(INTERNAL_ERROR, error.to_string()))
 }
 
 /// Seal the envelope a chain stop hands back, from the one the step already has.
@@ -479,7 +486,7 @@ pub fn seal_chain_stop(
 #[must_use]
 pub fn malformed_interim_error(idx: usize, tool_ref: &str) -> Error {
     Error::json_rpc(
-        -32603,
+        INTERNAL_ERROR,
         format!(
             "Chain step {idx} ({tool_ref}) returned a malformed interim result: \
              resultType 'input_required' with no usable inputRequests or requestState"

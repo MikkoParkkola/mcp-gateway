@@ -9,6 +9,7 @@
 //! Agent Card advertises is agent-supplied and must share the configured
 //! origin, so configured credentials never leave it.
 
+use crate::error::rpc_codes::INTERNAL_ERROR;
 use serde_json::{Value, json};
 use url::Url;
 
@@ -353,7 +354,7 @@ fn decode_envelope(envelope: &Value) -> Result<Reply<Value>> {
             .get("code")
             .and_then(Value::as_i64)
             .and_then(|code| i32::try_from(code).ok())
-            .unwrap_or(-32603);
+            .unwrap_or(INTERNAL_ERROR);
         let message = error
             .get("message")
             .and_then(Value::as_str)

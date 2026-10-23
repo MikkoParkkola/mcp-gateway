@@ -18,7 +18,6 @@
 use std::collections::HashMap;
 
 use parking_lot::RwLock;
-use sha2::{Digest, Sha256};
 use tracing::warn;
 
 use crate::protocol::Tool;
@@ -72,20 +71,25 @@ impl ToolIntegrityChecker {
     /// Hashes: name + description + `input_schema` (serialized to canonical JSON).
     /// This captures the "shape" of a tool as seen by the LLM.
     fn hash_tool(tool: &Tool) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(tool.name.as_bytes());
-        if let Some(ref desc) = tool.description {
-            hasher.update(desc.as_bytes());
-        }
         // Canonical JSON of input_schema (serde_json serializes keys in order)
         let schema_bytes = serde_json::to_vec(&tool.input_schema).unwrap_or_default();
-        hasher.update(&schema_bytes);
         // Include output_schema if present
-        if let Some(ref output) = tool.output_schema {
-            let output_bytes = serde_json::to_vec(output).unwrap_or_default();
-            hasher.update(&output_bytes);
-        }
-        hex::encode(hasher.finalize())
+        let output_bytes = tool
+            .output_schema
+            .as_ref()
+            .map(|output| serde_json::to_vec(output).unwrap_or_default());
+        // Name, description, input schema, output schema: in this order, with
+        // no separator, exactly as stored fingerprints were computed.
+        crate::hashing::sha256_hex_chunks(
+            [
+                Some(tool.name.as_bytes()),
+                tool.description.as_deref().map(str::as_bytes),
+                Some(schema_bytes.as_slice()),
+                output_bytes.as_deref(),
+            ]
+            .into_iter()
+            .flatten(),
+        )
     }
 
     /// Record tool definitions from a backend and check for mutations.
@@ -334,6 +338,23 @@ mod tests {
         assert_ne!(
             ToolIntegrityChecker::hash_tool(&t1),
             ToolIntegrityChecker::hash_tool(&t2),
+        );
+    }
+
+    /// MIK-8668 X-SHA golden, computed independently (Python hashlib over the
+    /// bytes name, description, input schema JSON and output schema JSON, in
+    /// that order with no separators).
+    #[test]
+    fn a_tool_fingerprint_is_the_hex_sha256_of_its_parts_in_order() {
+        let mut tool = make_tool("t", "d", json!({"type": "object"}));
+        assert_eq!(
+            ToolIntegrityChecker::hash_tool(&tool),
+            "8fcae922764174a28f151ed28dd652a19425c776fda9e34f665ac568c25c8787"
+        );
+        tool.output_schema = Some(json!({"type": "string"}));
+        assert_eq!(
+            ToolIntegrityChecker::hash_tool(&tool),
+            "bc3f0b1d3e72b9a7cf6db5b1b15312a31c850f9c1b47290c8c91f15f680abe52"
         );
     }
 }

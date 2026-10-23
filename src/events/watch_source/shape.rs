@@ -76,10 +76,9 @@ pub(super) fn projection(value: &Value, fields: Option<&[String]>) -> BTreeMap<S
 
 /// SHA-256 over the JCS of a projection, `sha256:` + hex.
 pub(super) fn digest(projection: &BTreeMap<String, Value>) -> String {
-    use sha2::Digest as _;
     let map: Map<String, Value> = projection.clone().into_iter().collect();
     let bytes = serde_json::to_vec(&Value::Object(map)).unwrap_or_default();
-    format!("sha256:{}", hex::encode(sha2::Sha256::digest(bytes)))
+    crate::hashing::sha256_tagged(&bytes)
 }
 
 /// The pointers whose values differ between two projections.

@@ -38,7 +38,6 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 
 /// An exact verified principal/backend/resource/issuer binding.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -55,7 +54,7 @@ impl AccountKey {
     pub(crate) fn digest(&self) -> Result<String, AccountError> {
         let fields = self.fields()?;
         let encoded = storage::encode_fields(b"mcp-gateway/account-key/v1", &fields)?;
-        Ok(hex::encode(Sha256::digest(encoded)))
+        Ok(crate::hashing::sha256_hex(&encoded))
     }
 
     fn fields(&self) -> Result<[&str; 5], AccountError> {

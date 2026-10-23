@@ -3,6 +3,7 @@
 //! The outbound half over HTTP, and status-carried JSON-RPC errors.
 
 use super::*;
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 
 // =============================================================================
 // MIK-7272.SUB.2b — the outbound half over HTTP.
@@ -154,8 +155,7 @@ async fn row_16_a_status_carried_json_rpc_error_reaches_the_caller_as_json_rpc()
     match &err {
         Error::JsonRpc { code, message, .. } => {
             assert_eq!(
-                *code,
-                crate::protocol::era::METHOD_NOT_FOUND_CODE,
+                *code, METHOD_NOT_FOUND,
                 "the peer's own code must survive the status carriage"
             );
             assert!(
@@ -208,8 +208,7 @@ async fn row_16e_a_404_carrying_a_refusal_is_terminal_and_does_not_reinitialize(
 
     match &err {
         Error::JsonRpc { code, .. } => assert_eq!(
-            *code,
-            crate::protocol::era::METHOD_NOT_FOUND_CODE,
+            *code, METHOD_NOT_FOUND,
             "a 404 is the spec's refusal carriage; the peer's code must survive it"
         ),
         other => panic!(
