@@ -331,3 +331,7 @@ mod tests;
 #[cfg(test)]
 #[path = "redactor_b2_tests.rs"]
 mod b2_tests;
+
+#[cfg(test)]
+#[path = "redactor_member_tests.rs"]
+mod member_tests;
