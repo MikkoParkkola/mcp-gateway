@@ -12,12 +12,11 @@ use serde_json::Value;
 
 use super::super::collusion::replay::{StoredKey, count_replay_skipped};
 use super::{Delivered, DeliveryDigest, Firewall, delivery_parts};
+use crate::security::ReplayCalls;
 
 /// One committed receipt to snapshot: its digest, its plan step label
 /// (`None` for a seam) and the source it was recorded under.
 pub(crate) type ReplaySource<'a> = (&'a DeliveryDigest, Option<u32>, &'a str, &'a str);
-
-use crate::security::ReplayCalls;
 
 /// One fresh digest built from a stored snapshot (F2), with the label and
 /// source it stages under and, for a composite seam, its contributing

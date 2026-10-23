@@ -6,7 +6,8 @@
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-/// HMAC-SHA256, as every keyed signature in the crate computes it.
+/// The shared HMAC-SHA256 type of the attestation signer, message signing
+/// and the transparency log.
 pub(crate) type HmacSha256 = hmac::Hmac<Sha256>;
 
 /// Serialize JSON using the crate's canonical representation.
