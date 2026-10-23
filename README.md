@@ -173,7 +173,8 @@ mcp-gateway add -e API_KEY=xxx my-server -- npx my-mcp-server
 ```
 
 The registry is a library. `mcp-gateway init` turns on the servers that need no account (memory,
-sequential-thinking, context7, time); every other server is off until you `add` it:
+sequential-thinking, context7, time); every other server is off until you `add` it. Memory and
+sequential-thinking, like filesystem, recommend Node.js 24 or later:
 
 - A server that needs a key gets `${VAR}` references in `gateway.yaml`. If a variable is not set (in
   the environment or an `env_files` entry), `add` writes the server disabled and names the variable;
@@ -461,7 +462,7 @@ Any MCP-compliant server works. All three transport types are supported:
 
 | Transport | Examples |
 |-----------|---------|
-| **stdio** | `tavily-mcp@0.2.22`, `@modelcontextprotocol/server-filesystem`, `@playwright/mcp` |
+| **stdio** | `tavily-mcp@0.2.22`, `@modelcontextprotocol/server-filesystem` (Node.js 24+ recommended), `@playwright/mcp` |
 | **HTTP** | Any Streamable HTTP server |
 | **SSE** | Pieces, LangChain, [GitMCP](https://gitmcp.io) (free remote docs and code search for any GitHub repo) |
 

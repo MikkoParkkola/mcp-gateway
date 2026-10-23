@@ -273,7 +273,15 @@ fn the_reference_servers_recommend_node_24_in_their_description() {
 /// response-cache eligibility, so a
 /// bump that flips it changes visible behaviour (it did, between the date-based
 /// `2026.8.31`, `true` / `true`, and `1.0.0`, `false` / `false`).
-const SEQUENTIAL_THINKING_REVIEWED: (&str, bool, bool) = ("1.0.0", false, false);
+const SEQUENTIAL_THINKING_REVIEWED: (&str, bool, bool) = ("2.0.0", false, false);
+
+/// MIK-8511: 2.0.0's `dist/index.js` keeps `readOnlyHint: false` and
+/// `idempotentHint: false`, the same as 1.0.0, so the move changes nothing the
+/// gateway acts on.
+#[test]
+fn the_reviewed_sequential_thinking_hints_are_those_of_2_0_0() {
+    assert_eq!(SEQUENTIAL_THINKING_REVIEWED, ("2.0.0", false, false));
+}
 
 /// A later bump of the `sequential-thinking` pin must come with a fresh read of
 /// the tool annotations in the new package (`dist/index.js`, the `annotations`
