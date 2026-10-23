@@ -7,8 +7,8 @@ line runs in a scratch clone, one clone per worker reset after every command,
 slowest first, on a worker count chosen from the CPU count. Each line has its
 own hang timeout, and each setup git call its own; a busy machine never fails
 a line (MIK-8787). One step backstop guards against hangs, not slowness. A
-failing line is rerun on the merge-base and the result is printed on its own
-line; every failure still fails the push.
+line that ran and failed is rerun on the merge-base and the result is printed
+on its own line; every failure still fails the push.
 """
 from __future__ import annotations
 
@@ -261,6 +261,10 @@ def _pool(lines, *, repo, commit, ctx, tmp, workers, executor, line_timeout_s, s
             return clone
         if clone is None:
             clone = _clone(repo, commit, tmp / f"w{n}-{index:03d}-{commit[:12]}", **setup)
+        if _past(backstop_at):  # the backstop expired during setup: never start the command
+            results[index] = LineResult(line.command, -1, 0.0, status="backstop",
+                                        note=_backstop_note(backstop_s, True))
+            return None
         # The line's own timer starts here: setup never counts against it (MIK-8787 GATE.2).
         start = time.monotonic()
         budget = _cap(line_timeout_s, backstop_at)
@@ -288,10 +292,12 @@ def _pool(lines, *, repo, commit, ctx, tmp, workers, executor, line_timeout_s, s
         try:
             _reset(clone, **setup)
         except (RuntimeError, SetupTimeout) as err:
-            if status:  # the line already has its own verdict: keep it, note the reset, drop the clone
-                result.output += f"\nreset failed after the check ran: {err}"
-                return None
-            raise  # a passing line whose reset fails is a crash or a setup-timeout (X21)
+            # The verdict, log and duration stay; the reset failure is noted and
+            # the clone dropped. A passing line becomes a failure (X21).
+            result.output += f"\nreset failed after the check ran: {err}"
+            if not status:
+                result.status = "setup-timeout" if isinstance(err, SetupTimeout) else "crashed"
+            return None
         return clone
 
     threads = [threading.Thread(target=worker, args=(n,)) for n in range(max(1, workers))]
@@ -332,6 +338,8 @@ def _base_rerun(result, line, *, repo, ctx, tmp, n, line_timeout_s, setup_s, bac
     if missing:
         return f"NOT COMPARABLE ON MERGE-BASE {mb}: {', '.join(missing)} not on the merge-base; {line.command}"
     command = _substitute(line.command, tmp=tmp, **{**ctx, "head": mb})
+    if _past(backstop_at):  # expired during the base clones: never start the rerun
+        return f"NOT COMPARABLE ON MERGE-BASE {mb}: backstop, {_backstop_note(backstop_s, False)}; {line.command}"
     rc, _, timed_out = _execute(command, base, _cap(line_timeout_s, backstop_at), tmp)
     if timed_out:
         if _past(backstop_at):

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -646,12 +647,17 @@ class Runner(unittest.TestCase):
         summary = next(l for l in report.text.splitlines() if "slowest:" in l)
         self.assertIn("1 workers", summary)
         self.assertLess(summary.index("# B"), summary.index("# A"), summary)
+        seconds = [float(s) for s in re.findall(r" ([0-9]+\.[0-9]) s", summary)]
+        self.assertEqual(len(seconds), 2, summary)
+        self.assertGreater(seconds[0], seconds[1])
+        self.assertGreaterEqual(seconds[0], 0.6)
 
     # N6a (MIK-8787 A4/R3): a reset that fails after a check timed out keeps
     # the timeout, its log and a note, and the next check gets a fresh clone.
     def test_n6a_a_failed_reset_after_a_timeout_keeps_the_timeout(self):
-        where = self.f.marker("where")
-        locker = py("import time; open('.git/index.lock','w').write(''); time.sleep(60)")
+        where, first = self.f.marker("where"), self.f.marker("first")
+        locker = py(f"import os, time; open({str(first)!r},'w').write(os.getcwd()); "
+                    "open('.git/index.lock','w').write(''); time.sleep(60)")
         report = self.f.run([line(locker, 9), line(py(f"import os; open({str(where)!r},'w').write(os.getcwd())"), 1)],
                             line_timeout_s=2, workers=1)
         self.assertEqual([r.status for r in report.failures], ["timeout"])
@@ -659,12 +665,18 @@ class Runner(unittest.TestCase):
         self.assertIn("reset failed after the check ran", failure.output)
         self.assertTrue(failure.log is not None and failure.log.exists())
         self.assertTrue(where.exists(), "the next check ran")
-        self.assertNotEqual(pathlib.Path(where.read_text()).name, "", "it recorded its clone")
+        self.assertNotEqual(where.read_text(), first.read_text(), "the next check reused the dirty clone")
 
-    # N6b (A4): a reset that fails after a PASSING check is still a crash (X21).
+    # N6b (A4): a reset that fails after a PASSING check is still a crash
+    # (X21), and the result keeps the check's log and duration.
     def test_n6b_a_failed_reset_after_a_pass_is_a_crash(self):
-        report = self.f.run([line(py("open('.git/index.lock','w').write('')"))], workers=1)
+        report = self.f.run([line(py("import time; time.sleep(0.2); open('.git/index.lock','w').write('')"))],
+                            workers=1)
         self.assertEqual([r.status for r in report.failures], ["crashed"])
+        failure = report.failures[0]
+        self.assertTrue(failure.log is not None and failure.log.exists())
+        self.assertGreaterEqual(failure.seconds, 0.2)
+        self.assertIn("crashed, the check gave no verdict on HEAD", report.text)
 
     # N7 (MIK-8787 A1-A3): the step backstop interrupts a running check (its
     # group dies) and leaves the queued one undispatched; the push fails.
@@ -705,9 +717,30 @@ class Runner(unittest.TestCase):
             "import subprocess,sys,time; "
             f"c=subprocess.Popen([sys.executable,'-c','import time; time.sleep(600)']); open({str(p)!r},'w').write(str(c.pid)); time.sleep(600)"
         ) for p in pids]
+        start = time.monotonic()
         report = self.f.run([line(s, 9) for s in spawns], backstop_s=2, line_timeout_s=30, workers=2)
+        self.assertLess(time.monotonic() - start, 2 + 5)
         self.assertEqual([r.status for r in report.failures], ["backstop", "backstop"])
         self.assertTrue(all(dead_within(int(p.read_text())) for p in pids))
+
+    # N7d (impl review): a backstop that expires during setup never starts the
+    # command; the line reads backstop.
+    def test_n7d_a_backstop_expiring_during_setup_never_starts_the_command(self):
+        started, real_clone = [], runner._clone
+
+        def slow_clone(*args, **kwargs):  # the clone succeeds; the backstop passes after it
+            dest = real_clone(*args, **kwargs)
+            time.sleep(1.5)
+            return dest
+
+        runner._clone = slow_clone
+        try:
+            report = self.f.run([line("a")], backstop_s=1, workers=1,
+                                executor=lambda c, w, b: (started.append(c), (0, ""))[1])
+        finally:
+            runner._clone = real_clone
+        self.assertEqual(started, [], "the command started after the backstop")
+        self.assertEqual([r.status for r in report.failures], ["backstop"])
 
     # N8 (MIK-8787 D6/R2): a check that gave no verdict on HEAD is not rerun
     # on the merge-base; it is NOT COMPARABLE and still fails the push.
