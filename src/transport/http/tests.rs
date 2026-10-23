@@ -643,115 +643,157 @@ async fn an_oauth_transport_shares_one_gate_with_its_client() {
     );
 }
 
+/// MIK-8660 G4 cases for `transport_follows_redirect`, as
+/// (hardened, private_backends, status, base, target, followed). A listing
+/// matters only under hardened and only for the backend it names ("b").
+const FOLLOW_CASES: &[(bool, &[&str], u16, &str, &str, bool)] = &[
+    (
+        false,
+        &[],
+        301,
+        "https://h.test/a",
+        "https://h.test/b",
+        true,
+    ),
+    (
+        false,
+        &[],
+        302,
+        "https://h.test/a",
+        "https://h.test/b",
+        true,
+    ),
+    (
+        false,
+        &[],
+        303,
+        "https://h.test/a",
+        "https://h.test/b",
+        true,
+    ),
+    (
+        false,
+        &[],
+        307,
+        "https://h.test/a",
+        "https://h.test/b",
+        true,
+    ),
+    (
+        false,
+        &[],
+        308,
+        "https://h.test/a",
+        "https://h.test:443/b",
+        true,
+    ),
+    (
+        false,
+        &[],
+        300,
+        "https://h.test/a",
+        "https://h.test/b",
+        false,
+    ),
+    (
+        false,
+        &[],
+        304,
+        "https://h.test/a",
+        "https://h.test/b",
+        false,
+    ),
+    (
+        false,
+        &[],
+        302,
+        "https://h.test/a",
+        "https://g.test/b",
+        false,
+    ),
+    (
+        false,
+        &[],
+        301,
+        "http://127.0.0.1:9/a",
+        "http://127.0.0.1:9/b",
+        false,
+    ),
+    (
+        false,
+        &["b"],
+        301,
+        "http://127.0.0.1:9/a",
+        "http://127.0.0.1:9/b",
+        false,
+    ),
+    (
+        true,
+        &[],
+        301,
+        "http://127.0.0.1:9/a",
+        "http://127.0.0.1:9/b",
+        false,
+    ),
+    (
+        true,
+        &["c"],
+        301,
+        "http://127.0.0.1:9/a",
+        "http://127.0.0.1:9/b",
+        false,
+    ),
+    (
+        true,
+        &["b"],
+        307,
+        "http://127.0.0.1:9/a",
+        "http://127.0.0.1:9/b",
+        true,
+    ),
+    (
+        true,
+        &["b"],
+        301,
+        "http://127.0.0.1:9/a",
+        "http://127.0.0.1:10/b",
+        false,
+    ),
+    (
+        true,
+        &["b"],
+        301,
+        "http://[::1]:9/a",
+        "http://[::1]:9/b",
+        true,
+    ),
+    (
+        false,
+        &[],
+        301,
+        "http://[::1]:9/a",
+        "http://[::1]:9/b",
+        false,
+    ),
+];
+
 /// MIK-8660 G4: `transport_follows_redirect` is the transport's decision under
 /// the backend's own destination policy, plus the statuses reqwest follows.
 #[test]
 fn transport_follows_redirect_matches_the_runtime_decision() {
-    use crate::config::Config;
-    use crate::security::SecurityPosture;
-    let u = |s: &str| Url::parse(s).expect("case URL parses");
-    let standard = Config::default();
-    let mut hardened = Config::default();
-    hardened.security.posture = SecurityPosture::Hardened;
-    let mut listed = hardened.clone();
-    listed.security.hardened.private_backends = vec!["b".to_string()];
-    // A listing only matters under hardened, and only for the backend it names.
-    let mut standard_listed = Config::default();
-    standard_listed.security.hardened.private_backends = vec!["b".to_string()];
-    let mut listed_other = hardened.clone();
-    listed_other.security.hardened.private_backends = vec!["c".to_string()];
-    let cases = [
-        // (config, status, base, target, followed)
-        (&standard, 301, "https://h.test/a", "https://h.test/b", true),
-        (
-            &standard,
-            308,
-            "https://h.test/a",
-            "https://h.test:443/b",
-            true,
-        ),
-        (
-            &standard,
-            302,
-            "https://h.test/a",
-            "https://g.test/b",
-            false,
-        ),
-        (
-            &standard,
-            300,
-            "https://h.test/a",
-            "https://h.test/b",
-            false,
-        ),
-        (
-            &standard,
-            304,
-            "https://h.test/a",
-            "https://h.test/b",
-            false,
-        ),
-        (
-            &standard,
-            301,
-            "http://127.0.0.1:9/a",
-            "http://127.0.0.1:9/b",
-            false,
-        ),
-        (
-            &hardened,
-            301,
-            "http://127.0.0.1:9/a",
-            "http://127.0.0.1:9/b",
-            false,
-        ),
-        (
-            &listed,
-            307,
-            "http://127.0.0.1:9/a",
-            "http://127.0.0.1:9/b",
-            true,
-        ),
-        (
-            &listed,
-            301,
-            "http://127.0.0.1:9/a",
-            "http://127.0.0.1:10/b",
-            false,
-        ),
-        (&standard, 302, "https://h.test/a", "https://h.test/b", true),
-        (&standard, 303, "https://h.test/a", "https://h.test/b", true),
-        (&standard, 307, "https://h.test/a", "https://h.test/b", true),
-        (
-            &standard_listed,
-            301,
-            "http://127.0.0.1:9/a",
-            "http://127.0.0.1:9/b",
-            false,
-        ),
-        (
-            &listed_other,
-            301,
-            "http://127.0.0.1:9/a",
-            "http://127.0.0.1:9/b",
-            false,
-        ),
-        (&listed, 301, "http://[::1]:9/a", "http://[::1]:9/b", true),
-        (
-            &standard,
-            301,
-            "http://[::1]:9/a",
-            "http://[::1]:9/b",
-            false,
-        ),
-    ];
-    for (config, status, base, target, followed) in cases {
+    for &(hardened, private, status, base, target, followed) in FOLLOW_CASES {
+        let mut config = crate::config::Config::default();
+        if hardened {
+            config.security.posture = crate::security::SecurityPosture::Hardened;
+        }
+        config.security.hardened.private_backends =
+            private.iter().map(|name| (*name).to_string()).collect();
+        let base_url = Url::parse(base).expect("case URL parses");
+        let target_url = Url::parse(target).expect("case URL parses");
         assert_eq!(
-            super::transport_follows_redirect(config, "b", status, &u(base), &u(target)),
+            super::transport_follows_redirect(&config, "b", status, &base_url, &target_url),
             followed,
-            "{status} {base} -> {target}, posture {:?}, private {:?}",
-            config.security.posture,
-            config.security.hardened.private_backends
+            "{status} {base} -> {target}, hardened {hardened}, private {private:?}"
         );
     }
 }
