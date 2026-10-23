@@ -1,15 +1,20 @@
 # MIK-8511: repin filesystem, memory and sequential-thinking to 2.0.0
 
-Status: draft for review (r1). Operator ruling 2026-10-22: repin all three to
+Status: draft for review (r2: r1 seat findings folded, see the end). Operator ruling 2026-10-22: repin all three to
 2.0.0 in 4.0.0. The code lands after MIK-8513 (its integrity sidecar and checks,
 final design at b63ace710), which itself lands after #4061 (the
 `RegistryEntry` → `ServerCatalogEntry` rename).
 
 ## What changes for a user
 
-`mcp-gateway add filesystem|memory|sequential-thinking` writes `@2.0.0` instead
-of `@1.0.0`. **Configs already written keep 1.0.0**, because the registry is
-read only at `add` time.
+The registry is read when a config is written, never while the gateway serves.
+
+- `mcp-gateway add filesystem|memory|sequential-thinking` writes `@2.0.0`.
+- **`mcp-gateway init` writes memory and sequential-thinking enabled by
+  default**, because `default_enabled` holds: no login, a bounded reach, and
+  `Setup::Ready`. So every new init gets those two at 2.0.0.
+- filesystem stays add-only (`Setup::NeedsArgs`).
+- **Configs already written keep 1.0.0.**
 
 ## Facts the design rests on (verified 2026-10-23)
 
@@ -39,15 +44,26 @@ command-line directories. The tightened behaviour (#5095, #5098, #5102)
 applies only after a client's roots are in force, which a gateway backend
 never reaches.
 
-On 2026-07-28 (modern era) Roots does not exist, and the server serves its
-command-line directories. Startup (`dist/index.js`) is unchanged in shape:
+The packages ask for roots only from `oninitialized`, and only when
+`clientCapabilities.roots` is set. The modern-era input bridge relays
+`roots/list` only as a question inside a tool call (multi-round tool results),
+a path these servers do not take. stdio refuses an unsolicited
+server-to-client request. `initialize_params` takes only the version and no
+client input, so a Roots-capable frontend client cannot change what a backend
+is offered. (Corrected in r2: "Roots does not exist on 2026-07-28" was wrong.
+That revision removed `notifications/roots/list_changed`; `roots/list` remains
+capability-gated.) Startup (`dist/index.js`) is unchanged in shape:
 missing or non-directory arguments are dropped with a warning, and the server
 exits 1 when none remain, as in 1.0.0.
 
 **Node 22 does not hang or refuse at start.** Probe on Spark, 2026-10-23: Docker
 `node:22-slim` and `node:24-slim`, `npx -y @modelcontextprotocol/server-memory@2.0.0`,
 one `initialize` on stdin. Both returned a `result`. Node 22 printed only `npm
-warn EBADENGINE … required: { node: '>=24' }` to stderr. Tool calls on Node 22
+warn EBADENGINE … required: { node: '>=24' }` to stderr. **That warning never
+reaches a user through the gateway:** a stdio child's stderr goes to neither
+the MCP client nor the gateway log (MIK-7978,
+`src/transport/stdio_early_exit.rs:9`). It is only matched against fixed
+needles. Tool calls on Node 22
 are still unverified (see the plan).
 
 **sequential-thinking hints are unchanged.** 2.0.0 `dist/index.js` has
@@ -75,6 +91,10 @@ move for a deprecated pin; the upgrading note reuses them.
    forces the replacement, its live job verifies the served bytes, and its
    `starts` job proves memory and sequential-thinking answer `initialize`.
    filesystem is skipped there as `needs arguments`.
+3a. **Doctor test.** `src/commands/doctor/npm_pin_tests.rs:158` asserts
+    `current_version(MEMORY_PACKAGE) == "1.0.0"` and moves to `"2.0.0"`. The
+    copy-first hint names the current version. The other `1.0.0` strings in
+    that file are parse fixtures and stay.
 3. **Reviewed hints.** `SEQUENTIAL_THINKING_REVIEWED` becomes `("2.0.0", false,
    false)`, read from 2.0.0 `dist/index.js` and cited in the PR.
 4. **Roots pin (new test).** A unit test asserts that `initialize_params`
@@ -114,13 +134,18 @@ For each backend, the proof records:
   - filesystem: `list_allowed_directories` returns both folders, and a
     `read_file` inside one succeeds while one outside is refused;
   - memory: `create_entities` then `read_graph` returns it;
-  - sequential-thinking: one `sequentialthinking` step.
+  - sequential-thinking: one `sequentialthinking` step;
+- memory migration, the documented path: on 1.0.0 with the default path,
+  create an entity; copy its `memory.jsonl` to a mounted folder; start 2.0.0
+  with an absolute `MEMORY_FILE_PATH` pointing at it; `read_graph` returns the
+  entity. This proves the upgrading note's steps keep existing data.
 
 Everything goes into a log with rc lines. The same run on `node:22-slim`
 records what Node 22 users see for each call:
 
-- **if every call works,** the floor is documented and the EBADENGINE warning is
-  stated as the only signal;
+- **if every call works,** the floor is documented. The PR states that Node 22
+  works and that the gateway shows no warning; it does not claim EBADENGINE as
+  a user-visible signal;
 - **if any call fails,** the failure text the gateway surfaces is quoted;
 - **if any call hangs past the gateway's request timeout,** stop and report: a
   hang is the case the AC's "clear message" covers, and it would need its own
@@ -136,7 +161,7 @@ records what Node 22 users see for each call:
 | REPLACE.2 Node 24 floor | step 5 docs, plus the Node 22 run. See deviation 2 |
 | REPLACE.2 notes | step 6 |
 | REPLACE.2 revert | step 7 |
-| REPLACE.3 | the due date of 2026-12-01 stays until merge, then is re-graded as answered by the repin |
+| REPLACE.3 | the due date of 2026-12-01 stays until merge. After that, the standing reminder is MIK-8513's live job, which runs on every merge and daily and fails on a deprecated or yanked pin or changed bytes, so the next drift fails CI rather than disappearing |
 
 ## Deviations from the AC text, for the lead and the operator
 
@@ -153,7 +178,22 @@ records what Node 22 users see for each call:
    proposed: it would be product code reading `engines` per package, and the
    floor is upstream's.
 
-## Questions for review
+## Open for the lead (r2)
+
+**How users see the Node floor.** EBADENGINE is invisible through the gateway,
+so the floor is visible only where we write it:
+
+- **A (recommended):** the docs, the upgrading note, and "(Node 24+)" in the
+  three registry descriptions. `add` prints no description today, so the
+  suffix shows only where descriptions are listed.
+- **B:** a gateway-owned pre-launch Node major check scoped to these three pins
+  (gpt). This is new product code; it fits only if the Node 22 run shows a
+  failure.
+
+REPLACE.5's wording, "an EBADENGINE warning only", should become "works on
+Node 22; the gateway shows no warning". It is still pending ratify.
+
+## Questions for review (r1)
 
 1. Is the roots reading (deviation 1) sound, or is there a gateway path where a
    backend does see client Roots? For example, the modern-era input bridge
@@ -162,3 +202,22 @@ records what Node 22 users see for each call:
    floor at `add` time, or are the docs and the upgrading note enough?
 3. Does the Spark proof prove enough "through the gateway", or should the
    memory graph location change (a new npx directory) also be shown?
+
+## r1 review folded (gpt SWF, grok SWF)
+
+- **Adopted:**
+  - EBADENGINE is invisible through the gateway; claims are corrected and the
+    floor options are put to the lead;
+  - `init` also writes memory and sequential-thinking;
+  - the modern-era roots sentence is corrected, and the reasoning folded into
+    the step-4 pin;
+  - REPLACE.3 maps to MIK-8513's live job after merge;
+  - the doctor test that pins `1.0.0` is named;
+  - a memory migration proof.
+- **Not adopted:** a Roots-capable frontend client run (gpt). The step-4 test
+  pins `initialize_params`, which takes no client input, so a frontend's Roots
+  cannot reach a backend's `initialize`. The pin covers the regression gpt
+  names.
+- **Settled:** the reviewers disagreed on a memory demo (grok: none; gpt: a
+  migration proof). The migration proof is adopted because it checks the
+  upgrading note's own steps.
