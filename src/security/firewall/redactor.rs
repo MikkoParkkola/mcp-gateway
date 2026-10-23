@@ -40,7 +40,28 @@ pub struct Redactor {
     regexes: Vec<Regex>,
     /// Human-readable description for each pattern (same index as the regex vec).
     descriptions: Vec<&'static str>,
+    /// A JSON member name the generic API-key rule names (MIK-8756).
+    member_key: Regex,
+    /// A whole JSON member value in the generic API-key rule's class.
+    member_value: Regex,
 }
+
+/// The replacement every redaction writes.
+const REDACTED: &str = "[REDACTED:credential]";
+
+// The generic API-key rule's two halves, shared by its text pattern and by the
+// JSON-member pairing, so the two cannot drift apart (MIK-8756).
+macro_rules! api_key_names {
+    () => {
+        "api[_-]?key|apikey|secret[_-]?key"
+    };
+}
+macro_rules! api_key_value {
+    () => {
+        "[A-Za-z0-9+/=]{20,}"
+    };
+}
+const API_KEY_DESCRIPTION: &str = "Generic API Key in key=value";
 
 /// (pattern, description) pairs.
 ///
@@ -62,8 +83,14 @@ const CREDENTIAL_PATTERNS: &[(&str, &str)] = &[
     (r"xox[bprs]-[A-Za-z0-9-]{10,}", "Slack Token"),
     // Generic API key in key=value / key: value form
     (
-        r#"(?i)(?:api[_-]?key|apikey|secret[_-]?key)\s*[:=]\s*['"][A-Za-z0-9+/=]{20,}['"]"#,
-        "Generic API Key in key=value",
+        concat!(
+            "(?i)(?:",
+            api_key_names!(),
+            r#")\s*[:=]\s*['"]"#,
+            api_key_value!(),
+            r#"['"]"#
+        ),
+        API_KEY_DESCRIPTION,
     ),
     // JWT — base64url segments separated by dots. The whole chain of segments
     // is one match: a JWT that starts at another's second segment then ends
@@ -106,6 +133,12 @@ impl Redactor {
 
         Self {
             set: RegexSet::new(&patterns).expect("Credential pattern set must compile"),
+            // invariant: a constant pattern, compiled once at construction.
+            member_key: Regex::new(concat!("(?i)(?:^|[_-])(?:", api_key_names!(), ")$"))
+                .expect("member key pattern must compile"),
+            // invariant: a constant pattern, compiled once at construction.
+            member_value: Regex::new(concat!("^", api_key_value!(), "$"))
+                .expect("member value pattern must compile"),
             regexes,
             descriptions,
         }
@@ -155,8 +188,17 @@ impl Redactor {
                 }
             }
             Value::Object(map) => {
-                for val in map.values_mut() {
+                for (key, val) in map.iter_mut() {
+                    // Judged on the value as sent, before the recursion below
+                    // rewrites any span in it: a member that also matches a raw
+                    // rule keeps that rule's finding and gets one replacement.
+                    let member = matches!(&*val, Value::String(s)
+                        if self.credential_member(key, s) && !exempt(s));
                     self.scan_recursive(val, exempt, findings);
+                    if member {
+                        *val = Value::String(REDACTED.to_owned());
+                        findings.push(Self::member_finding());
+                    }
                 }
                 // Keys are backend-controlled text the client sees too (#2114).
                 if map.keys().any(|key| self.set.is_match(key)) {
@@ -198,7 +240,7 @@ impl Redactor {
         let mut cursor = 0;
         for (start, end) in merge_spans(spans) {
             redacted.push_str(&text[cursor..start]);
-            redacted.push_str("[REDACTED:credential]");
+            redacted.push_str(REDACTED);
             cursor = end;
         }
         redacted.push_str(&text[cursor..]);
@@ -220,6 +262,24 @@ impl Redactor {
             });
         }
         Some(redacted)
+    }
+
+    /// A JSON member the generic API-key rule describes: the key is one of its
+    /// names (any case, alone or after `_`/`-`) and the whole value is in its
+    /// class (MIK-8756). The rule itself needs both halves in one string, which a
+    /// parsed member never is.
+    fn credential_member(&self, key: &str, value: &str) -> bool {
+        self.member_key.is_match(key) && self.member_value.is_match(value)
+    }
+
+    fn member_finding() -> Finding {
+        Finding {
+            scan_type: ScanType::Credentials,
+            severity: Severity::High,
+            description: format!("Credential detected: {API_KEY_DESCRIPTION} (object member)"),
+            matched: REDACTED.to_owned(),
+            location: FindingLocation::ResponseContent,
+        }
     }
 
     /// Rename credential-bearing keys without losing an entry. Clean keys keep
