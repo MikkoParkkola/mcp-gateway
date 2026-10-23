@@ -41,6 +41,8 @@ fn entries(executor: &CapabilityExecutor) -> usize {
 /// strictly older than every later key; ties among the later keys do not matter.
 fn assert_bounded(executor: &CapabilityExecutor) {
     store(executor, "k0");
+    // The sleep orders `k0` before every later key; nothing is timed.
+    // timing: precondition
     std::thread::sleep(Duration::from_millis(20));
     for i in 1..=CAP {
         store(executor, &format!("k{i}"));
