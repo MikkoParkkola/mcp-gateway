@@ -14,7 +14,7 @@ use tracing::warn;
 
 use crate::config::KeyServerOidcConfig;
 use crate::gateway::auth::AuthenticatedClient;
-use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
+use crate::gateway::oauth::OAuthAgentIdentity;
 use crate::identity_grants::GrantSubject;
 use crate::key_server::OidcVerifier;
 use crate::key_server::TokenAgeCap;

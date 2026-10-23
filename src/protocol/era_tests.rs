@@ -27,7 +27,7 @@ fn modern_document() -> ProbeOutcome {
 async fn a_restart_probes_the_new_peer_rather_than_reporting_the_old_verdict() {
     let cache = Arc::new(EraCache::for_backend("swapped-peer"));
     cache.resolve_with(|| async { modern_document() }).await;
-    assert_eq!(cache.cached().await, Some(Era::Modern));
+    assert_eq!(cache.cached().await, Some(PeerEra::Modern));
 
     let probes = AtomicUsize::new(0);
     let era = cache
@@ -40,11 +40,11 @@ async fn a_restart_probes_the_new_peer_rather_than_reporting_the_old_verdict() {
     assert_eq!(probes.load(Ordering::SeqCst), 1, "the restart must probe");
     assert_eq!(
         era,
-        Era::Legacy,
+        PeerEra::Legacy,
         "the restart must report what the peer now on the wire answered, not the \
          determination made about the process it replaced"
     );
-    assert_eq!(cache.cached().await, Some(Era::Legacy));
+    assert_eq!(cache.cached().await, Some(PeerEra::Legacy));
 }
 
 /// Exactly one caller may discard a given determination.
@@ -64,9 +64,9 @@ async fn only_the_caller_that_discards_a_verdict_is_told_it_did() {
         !cache.discard_if(|_| false).await,
         "a verdict its observer does not contradict must survive"
     );
-    assert_eq!(cache.cached().await, Some(Era::Modern));
+    assert_eq!(cache.cached().await, Some(PeerEra::Modern));
 
-    assert!(cache.discard_if(|era| era == Era::Modern).await);
+    assert!(cache.discard_if(|era| era == PeerEra::Modern).await);
     assert_eq!(cache.cached().await, None);
     assert!(
         !cache.discard_if(|_| true).await,
@@ -120,8 +120,8 @@ async fn an_accepting_install_stores_the_answer() {
             },
         )
         .await;
-    assert_eq!(era, Era::Modern);
-    assert_eq!(cache.cached().await, Some(Era::Modern));
+    assert_eq!(era, PeerEra::Modern);
+    assert_eq!(cache.cached().await, Some(PeerEra::Modern));
 }
 
 /// MIK-8218 ERASNAP.1 and ERASNAP.3: the outbound path's non-blocking read
@@ -138,7 +138,7 @@ async fn a_held_lock_still_reads_the_determined_verdict() {
         let _held = cache.observation.lock().await;
         assert_eq!(
             cache.cached_now(),
-            Some(Era::Modern),
+            Some(PeerEra::Modern),
             "a held lock hid the determined verdict from the outbound path"
         );
     }
@@ -150,7 +150,7 @@ async fn a_held_lock_still_reads_the_determined_verdict() {
             modern_document()
         })
         .await;
-    assert_eq!(cache.cached_now(), Some(Era::Modern));
+    assert_eq!(cache.cached_now(), Some(PeerEra::Modern));
 
     cache.invalidate().await;
     let _held = cache.observation.lock().await;
@@ -166,11 +166,15 @@ async fn the_lock_free_read_follows_every_transition() {
     cache
         .resolve_with(|| async { ProbeOutcome::Error(METHOD_NOT_FOUND_CODE) })
         .await;
-    assert_eq!(cache.cached_now(), Some(Era::Legacy));
+    assert_eq!(cache.cached_now(), Some(PeerEra::Legacy));
     assert_eq!(cache.cached_now(), cache.cached().await);
 
     assert!(!cache.discard_if(|_| false).await);
-    assert_eq!(cache.cached_now(), Some(Era::Legacy), "a declined discard");
+    assert_eq!(
+        cache.cached_now(),
+        Some(PeerEra::Legacy),
+        "a declined discard"
+    );
     assert!(cache.discard_if(|_| true).await);
     assert_eq!(cache.cached_now(), None, "a discard");
 
@@ -200,20 +204,20 @@ fn an_observation_on_a_clock_before_1970_is_undated() {
     let _clock = crate::clock::test_clock::before_epoch();
     let observed = EraObservation::observed_now(&modern_document(), ProbeTrigger::Start);
     assert_eq!(observed.probed_at, None);
-    assert_eq!(observed.era, Era::Modern);
+    assert_eq!(observed.era, PeerEra::Modern);
     assert!(!observed.render().contains_key("era_probed_at"));
 }
 
 #[test]
 fn era_labels_are_the_wire_spellings() {
-    assert_eq!(Era::Modern.as_str(), "modern");
-    assert_eq!(Era::Legacy.as_str(), "legacy");
+    assert_eq!(PeerEra::Modern.as_str(), "modern");
+    assert_eq!(PeerEra::Legacy.as_str(), "legacy");
     assert_eq!(
-        serde_json::to_value(Era::Modern).ok(),
+        serde_json::to_value(PeerEra::Modern).ok(),
         Some(serde_json::Value::from("modern"))
     );
     assert_eq!(
-        serde_json::to_value(Era::Legacy).ok(),
+        serde_json::to_value(PeerEra::Legacy).ok(),
         Some(serde_json::Value::from("legacy"))
     );
 }

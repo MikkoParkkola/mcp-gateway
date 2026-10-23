@@ -35,7 +35,7 @@ fn next_open_in(state: &State<'_>) -> Duration {
 #[test]
 fn unacknowledged_ends_back_off_and_an_ack_resets() {
     let shared = shared();
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, PeerEra::Modern);
     let mut gaps = Vec::new();
     for _ in 0..3 {
         state.pending_ended();
@@ -56,7 +56,7 @@ fn unacknowledged_ends_back_off_and_an_ack_resets() {
 #[tokio::test]
 async fn a_replacement_past_its_ack_deadline_backs_off() {
     let (shared, (backend, handle)) = (shared(), offline());
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, PeerEra::Modern);
     state.pending = Some(Pending {
         stream: stream(),
         requested: Requested::default(),
@@ -72,7 +72,7 @@ async fn a_replacement_past_its_ack_deadline_backs_off() {
 #[tokio::test]
 async fn an_unacknowledged_first_listen_backs_off_once() {
     let (shared, (backend, handle)) = (shared(), offline());
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, PeerEra::Modern);
     state.current = Some((stream(), Requested::default()));
     state.opened = Instant::now().checked_sub(ACK_DEADLINE * 2).expect("past");
     for _ in 0..3 {
@@ -86,7 +86,7 @@ async fn an_unacknowledged_first_listen_backs_off_once() {
 #[tokio::test]
 async fn a_failed_open_backs_off() {
     let (shared, (backend, handle)) = (shared(), offline());
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, PeerEra::Modern);
     shared
         .need
         .lock()
@@ -130,7 +130,7 @@ async fn an_aged_stream_is_replaced_make_before_break() {
     let (backend, handle) = offline();
     let mut shared = shared();
     Arc::get_mut(&mut shared).expect("sole owner").recycle = Duration::ZERO;
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, PeerEra::Modern);
     state.current = Some((stream(), Requested::default()));
     state.acked = Some(Instant::now());
     state.maintain(&backend, &Weak::new(), &handle, true).await;
@@ -151,7 +151,7 @@ fn the_old_streams_queued_notes_are_delivered_at_the_cutover() {
         .lock()
         .add(&Interest::PromptsChanged)
         .expect("room");
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, PeerEra::Modern);
     let (old_tx, old_rx) = tokio::sync::mpsc::channel(4);
     state.current = Some((FrameStream::new(old_rx), Requested::default()));
     let old = KindSet {

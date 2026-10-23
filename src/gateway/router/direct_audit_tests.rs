@@ -413,7 +413,7 @@ fn insert_identity(request: &mut axum::http::Request<axum::body::Body>, caller: 
             });
         }
         Caller::Agent => {
-            extensions.insert(crate::gateway::oauth::AgentIdentity {
+            extensions.insert(crate::gateway::oauth::OAuthAgentIdentity {
                 client_id: "agent-7938".to_string(),
                 agent_name: "Agent 7938".to_string(),
                 scopes: vec![],

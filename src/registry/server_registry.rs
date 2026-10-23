@@ -23,7 +23,7 @@
 
 /// Transport type for a registry entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Transport {
+pub enum CatalogTransport {
     /// Launched via a child process (npx / binary).
     Stdio,
     /// Connected via HTTP; carries a default URL that works out of the box.
@@ -34,6 +34,9 @@ pub enum Transport {
         flavor: HttpFlavor,
     },
 }
+
+/// Old name of [`CatalogTransport`], removed in the next commit.
+pub use self::CatalogTransport as Transport;
 
 /// The HTTP dialect of a hosted endpoint, recorded per entry rather than
 /// guessed from its URL.
@@ -106,7 +109,7 @@ pub const ARBITRARY_REACH_REASON: &str = "This server can open any address it is
 
 /// A single entry in the curated MCP server registry.
 #[derive(Debug, Clone, Copy)]
-pub struct RegistryEntry {
+pub struct ServerCatalogEntry {
     /// Short identifier used to look up this entry (e.g. `"tavily"`).
     pub name: &'static str,
     /// Human-readable description shown in `add` and `setup` output.
@@ -118,7 +121,7 @@ pub struct RegistryEntry {
     /// Environment variables that are optional but may enhance functionality.
     pub optional_env: &'static [&'static str],
     /// Transport mechanism for this server.
-    pub transport: Transport,
+    pub transport: CatalogTransport,
     /// Functional category (e.g. `"search"`, `"filesystem"`, `"database"`).
     pub category: &'static str,
     /// Project homepage or npm registry URL.
@@ -131,7 +134,10 @@ pub struct RegistryEntry {
     pub setup: Setup,
 }
 
-impl RegistryEntry {
+/// Old name of [`ServerCatalogEntry`], removed in the next commit.
+pub use self::ServerCatalogEntry as RegistryEntry;
+
+impl ServerCatalogEntry {
     /// True when the server needs an account, key or login.
     #[must_use]
     pub fn needs_login(&self) -> bool {
@@ -164,7 +170,7 @@ use entries::REGISTRY;
 ///
 /// Lookup is case-insensitive and checks exact name matches only.
 #[must_use]
-pub fn lookup(name: &str) -> Option<&'static RegistryEntry> {
+pub fn lookup(name: &str) -> Option<&'static ServerCatalogEntry> {
     let lower = name.to_lowercase();
     REGISTRY
         .iter()
@@ -176,7 +182,7 @@ pub fn lookup(name: &str) -> Option<&'static RegistryEntry> {
 /// The comparison is case-insensitive substring matching. Results are returned
 /// in registry definition order.
 #[must_use]
-pub fn search(query: &str) -> Vec<&'static RegistryEntry> {
+pub fn search(query: &str) -> Vec<&'static ServerCatalogEntry> {
     let lower = query.to_lowercase();
     REGISTRY
         .iter()
@@ -190,7 +196,7 @@ pub fn search(query: &str) -> Vec<&'static RegistryEntry> {
 
 /// Return all registry entries in definition order.
 #[must_use]
-pub fn all() -> &'static [RegistryEntry] {
+pub fn all() -> &'static [ServerCatalogEntry] {
     REGISTRY
 }
 

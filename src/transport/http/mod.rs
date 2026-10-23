@@ -41,7 +41,7 @@ use super::{ResendPermission, Transport};
 #[cfg(test)]
 use crate::protocol::PROTOCOL_VERSION;
 #[cfg(test)]
-use crate::protocol::era::Era;
+use crate::protocol::era::PeerEra;
 #[cfg(test)]
 use crate::protocol::meta::MODERN_VERSIONS;
 #[cfg(test)]
@@ -531,7 +531,7 @@ impl HttpTransport {
     /// is itself a request through this transport.
     /// Non-blocking on purpose: see `EraCache::cached_now`. This runs on the
     /// path the probe itself takes.
-    fn outbound_era(&self) -> Option<crate::protocol::era::Era> {
+    fn outbound_era(&self) -> Option<crate::protocol::era::PeerEra> {
         self.era.get().and_then(|era| era.cached_now())
     }
 

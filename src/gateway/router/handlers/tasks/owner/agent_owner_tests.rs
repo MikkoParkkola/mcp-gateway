@@ -43,8 +43,8 @@ fn a_long_client_id_still_owns_tasks() {
 }
 
 /// A validated agent's identity as `agent_auth_middleware` inserts it.
-fn agent(client_id: &str) -> crate::gateway::oauth::AgentIdentity {
-    crate::gateway::oauth::AgentIdentity {
+fn agent(client_id: &str) -> crate::gateway::oauth::OAuthAgentIdentity {
+    crate::gateway::oauth::OAuthAgentIdentity {
         client_id: client_id.to_string(),
         agent_name: client_id.to_string(),
         scopes: Vec::new(),

@@ -125,8 +125,10 @@ pub use auth::{AuthState, ResolvedAuthConfig, auth_middleware};
 // private, so config validation and shadow discovery cannot spell the classifier
 // without this line — and the alternative to the line is a second copy of the
 // rule, which is what it exists to prevent. Crate-internal: no public surface.
+/// Old name of [`OAuthAgentIdentity`], removed in the next commit.
+pub use oauth::OAuthAgentIdentity as AgentIdentity;
 pub use oauth::{
-    AgentAuthState, AgentIdentity, AgentRegistry, GatewayKeyPair, agent_auth_middleware,
+    AgentAuthState, AgentRegistry, GatewayKeyPair, OAuthAgentIdentity, agent_auth_middleware,
 };
 pub use proxy::ProxyManager;
 pub(crate) use router::is_loopback_bind as is_loopback_host;

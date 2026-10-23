@@ -21,7 +21,7 @@ use super::{
 };
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::signing::SigningInvocationContext;
-use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
+use crate::gateway::oauth::OAuthAgentIdentity;
 use crate::gateway::recovery::SurfaceRequest;
 use crate::gateway::router::AppState;
 use crate::gateway::router::helpers::{
