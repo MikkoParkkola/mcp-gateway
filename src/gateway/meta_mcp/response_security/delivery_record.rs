@@ -210,7 +210,7 @@ async fn append_delivery_attempt(
     // only its verified grant subject says who it was.
     let mut who = AuditWho::from_actor_id(correlation.caller);
     who.credential_kind = Some(credential.kind);
-    who.principal = credential.principal.to_owned();
+    credential.principal.clone_into(&mut who.principal);
     if let Some(grant) = correlation.subject {
         who.authority = Some(grant.authority.clone());
         who.subject = Some(grant.subject.clone());
