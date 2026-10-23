@@ -22,7 +22,9 @@ on:
       - "src/registry/**"
       - "scripts/dev/check-registry-packages.py"
       - "scripts/dev/test_check_registry_packages.py"
-      - "scripts/dev/testdata/registry-dead.rs"
+      - "scripts/dev/test_check_registry_content.py"
+      - "scripts/dev/registry-integrity.json"
+      - "scripts/dev/testdata/**"
       - ".github/workflows/registry-packages.yml"
   push:
     branches: [main, docs/ranking-1-release-line]
@@ -49,7 +51,7 @@ jobs:
       - name: Check the live lookup refuses known-dead entries
         run: |
           set +e
-          out="$(python3 scripts/dev/check-registry-packages.py scripts/dev/testdata/registry-dead.rs)"
+          out="$(python3 scripts/dev/check-registry-packages.py scripts/dev/testdata/registry-dead.rs --integrity scripts/dev/testdata/registry-dead.integrity.json)"
           rc=$?
           set -e
           printf '%s\n' "$out"
@@ -62,5 +64,65 @@ jobs:
           grep -q '^FAIL missing-url: .*HTTP 404' <<<"$out"
           grep -q '^FAIL open-header: .*without a credential' <<<"$out"
           grep -q '^FAIL oauth-without-dcr: .*no dynamic client registration' <<<"$out"
+      # MIK-8513 CONTENT.1: a recorded digest that differs from the one served
+      # must be the only failure, for that reason.
+      - name: Check a wrong recorded digest is refused
+        run: |
+          set +e
+          out="$(python3 scripts/dev/check-registry-packages.py scripts/dev/testdata/registry-integrity.rs --integrity scripts/dev/testdata/registry-integrity.integrity.json)"
+          rc=$?
+          set -e
+          printf '%s\n' "$out"
+          [ "$rc" -eq 1 ] || { echo "expected exit 1, got $rc"; exit 1; }
+          grep -qx '1/2 registry entries resolve' <<<"$out"
+          [ "$(grep -c '^FAIL' <<<"$out")" -eq 1 ] || { echo "expected exactly one FAIL"; exit 1; }
+          grep -q '^FAIL wrong-digest-memory: .*integrity' <<<"$out"
       - name: Check every registry entry resolves
         run: python3 scripts/dev/check-registry-packages.py
+
+  # MIK-8513 CONTENT.1 bytes and CONTENT.2: the package manager fetches every
+  # pinned artifact and checks its real bytes, and every eligible stdio entry
+  # must answer initialize. All package code runs in containers that get no
+  # runner environment and no host path (see the checker's `--start` section).
+  starts:
+    name: Every pinned artifact verifies and every eligible entry starts (live)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check served bytes that differ from the record are refused
+        run: |
+          set +e
+          out="$(python3 scripts/dev/check-registry-packages.py --start scripts/dev/testdata/registry-integrity.rs --integrity scripts/dev/testdata/registry-integrity.integrity.json)"
+          rc=$?
+          set -e
+          printf '%s\n' "$out"
+          [ "$rc" -eq 1 ] || { echo "expected exit 1, got $rc"; exit 1; }
+          [ "$(grep -c '^FAIL wrong-digest-memory: served bytes' <<<"$out")" -eq 1 ] || { echo "expected one served-bytes FAIL"; exit 1; }
+          ! grep -q '^FAIL right-digest-time' <<<"$out"
+      - name: Check a package that is not an MCP server fails to start
+        run: |
+          set +e
+          out="$(python3 scripts/dev/check-registry-packages.py --start scripts/dev/testdata/registry-wont-start.rs --integrity scripts/dev/testdata/registry-wont-start.integrity.json)"
+          rc=$?
+          set -e
+          printf '%s\n' "$out"
+          [ "$rc" -eq 1 ] || { echo "expected exit 1, got $rc"; exit 1; }
+          grep -qx 'PASS starts-time' <<<"$out"
+          grep -q '^FAIL not-mcp-semver: exited .* before answering initialize' <<<"$out"
+          grep -qx '1/2 eligible entries start' <<<"$out"
+      - name: Check every pinned artifact verifies and every eligible entry starts
+        run: |
+          set +e
+          out="$(python3 scripts/dev/check-registry-packages.py --start)"
+          rc=$?
+          set -e
+          printf '%s\n' "$out"
+          [ "$rc" -eq 0 ] || { echo "expected exit 0, got $rc"; exit 1; }
+          # A parser miss that made every entry ineligible must not pass.
+          for name in memory sequential-thinking fetch time; do
+            grep -qx "PASS $name" <<<"$out" || { echo "missing PASS $name"; exit 1; }
+          done
+          grep -qx '4/4 eligible entries start' <<<"$out"
