@@ -617,10 +617,9 @@ fn overdue(
 /// The stored body as a JSON value, with the SHA-256 of what goes on the
 /// wire: the frame's own serialisation, which is what the audit hashes.
 fn wire_body(stored: &[u8]) -> Option<(serde_json::Value, String)> {
-    use sha2::Digest as _;
     let value: serde_json::Value = serde_json::from_slice(stored).ok()?;
     let sent = serde_json::to_vec(&value).ok()?;
-    Some((value, hex::encode(sha2::Sha256::digest(sent))))
+    Some((value, crate::hashing::sha256_hex(&sent)))
 }
 
 #[cfg(test)]
@@ -641,6 +640,17 @@ mod wire_tests {
     #[test]
     fn a_body_that_is_not_json_has_no_wire_form() {
         assert!(wire_body(b"not json").is_none());
+    }
+
+    /// MIK-8668 X-SHA golden, computed independently (Python hashlib over
+    /// the compact bytes `{"a":1}`).
+    #[test]
+    fn the_wire_hash_of_a_fixed_body_is_its_hex_sha256() {
+        let (_, hash) = wire_body(br#"{ "a" : 1 }"#).expect("a JSON body");
+        assert_eq!(
+            hash,
+            "015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862"
+        );
     }
 }
 

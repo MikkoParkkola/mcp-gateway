@@ -10,6 +10,7 @@
 //! construction. A name the caller may see and the catalogue lists passes on
 //! untouched.
 
+use crate::error::rpc_codes::INVALID_REQUEST;
 use serde_json::{Value, json};
 
 use super::{GuardedValue, MetaMcp};
@@ -96,7 +97,7 @@ impl MetaMcp {
             // `authorize_invocation` answers and audits it: the policy this
             // call skipped would have, and so does a missing name.
             let refusal = Error::Forbidden {
-                code: -32600,
+                code: INVALID_REQUEST,
                 status: axum::http::StatusCode::FORBIDDEN.as_u16(),
                 message: reason,
             };

@@ -3,6 +3,7 @@
 //! The input round's clock waits (MIK-8202): a worker neither parks, resumes,
 //! mints nor redeems on a time it cannot read.
 
+use crate::error::rpc_codes::INTERNAL_ERROR;
 use std::time::Duration;
 
 use tokio::sync::watch;
@@ -39,7 +40,7 @@ pub(in crate::gateway::task_service::execution) enum ClockWait {
 /// whole retention (MIK-8202).
 pub(super) fn clock_expired() -> crate::protocol::JsonRpcError {
     crate::protocol::JsonRpcError {
-        code: -32603,
+        code: INTERNAL_ERROR,
         message: "host clock reads before 1970; the task's ttl ran out while waiting for it"
             .to_owned(),
         data: None,

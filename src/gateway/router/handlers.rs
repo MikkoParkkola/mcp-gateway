@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Axum request handlers for the MCP gateway.
 
+use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND};
 use std::sync::Arc;
 
 use axum::{
@@ -177,7 +178,7 @@ async fn meta_mcp_dispatch(
                 // what it wanted.
                 return build_error_response(
                     Some(id),
-                    -32602,
+                    INVALID_PARAMS,
                     "subscriptions/listen requires a 'notifications' filter",
                     session_id,
                     StatusCode::BAD_REQUEST,
@@ -253,7 +254,7 @@ async fn meta_mcp_dispatch(
             let session = Some(session_id.as_str());
             let credential = match presented.credential(client.as_ref(), &state) {
                 Ok(credential) => credential,
-                Err(why) => break 'events JsonRpcResponse::error(Some(id), -32603, why),
+                Err(why) => break 'events JsonRpcResponse::error(Some(id), INTERNAL_ERROR, why),
             };
             let caller = crate::events::Caller {
                 principal: events::principal(events_owner, state.auth_config.enabled),
@@ -428,7 +429,7 @@ async fn meta_mcp_dispatch(
         // subscription it accepted would wait forever. Refuse it outright.
         "resources/subscribe" | "resources/unsubscribe" => JsonRpcResponse::error(
             Some(id),
-            crate::protocol::era::METHOD_NOT_FOUND_CODE,
+            METHOD_NOT_FOUND,
             format!("{method} is not supported: this gateway does not deliver resources/updated"),
         ),
 
@@ -537,7 +538,11 @@ async fn meta_mcp_dispatch(
             }
         }
         "tasks/cancel" => tasks::tasks_cancel(&state, owner, id.clone(), params).await,
-        _ => JsonRpcResponse::error(Some(id), -32601, format!("Method not found: {method}")),
+        _ => JsonRpcResponse::error(
+            Some(id),
+            METHOD_NOT_FOUND,
+            format!("Method not found: {method}"),
+        ),
     };
 
     let stamps = if is_modern {
@@ -639,7 +644,7 @@ async fn meta_mcp_dispatch(
         let status = if response
             .error
             .as_ref()
-            .is_some_and(|error| error.code == -32601)
+            .is_some_and(|error| error.code == METHOD_NOT_FOUND)
         {
             StatusCode::NOT_FOUND
         } else {

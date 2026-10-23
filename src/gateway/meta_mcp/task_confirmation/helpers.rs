@@ -6,6 +6,7 @@ use super::{
     DIGEST_DOMAIN, JsonRpcResponse, OwnedAdmissionRequest, Payload, RetryFields, TaskConfirmation,
     TaskConfirmationRequest, Value, canonical_json, json, sha256_hex,
 };
+use crate::error::rpc_codes::INVALID_PARAMS;
 
 /// The principal an execution is admitted under (`MIK-8193`). The synchronous
 /// lease and task admission share one store keyed `(principal, key)`, so they
@@ -130,7 +131,7 @@ pub(super) fn refuse_grant(
     refuse(
         request,
         reason,
-        -32602,
+        INVALID_PARAMS,
         "this destructive call was not confirmed by a grant this gateway will honour",
     )
 }

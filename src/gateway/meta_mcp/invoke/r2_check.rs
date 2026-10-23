@@ -4,6 +4,7 @@
 //! its F13 cold-slot fill: the refusal, the miss hint pool, and the
 //! accounting of a fill the slot's failsafe refused.
 
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 use serde_json::{Value, json};
 
 use super::super::super::meta_mcp_helpers::did_you_mean;
@@ -125,7 +126,9 @@ impl MetaMcp {
         let tools = backend.get_cached_tools_snapshot_for(binding);
         let candidates = self.miss_hint_pool((&names, &tools), server, (scope, session_id));
         match did_you_mean(tool, &candidates, 3, 3) {
-            Some(hint) => Error::json_rpc(-32601, format!("Unknown tool: {tool}. {hint}")),
+            Some(hint) => {
+                Error::json_rpc(METHOD_NOT_FOUND, format!("Unknown tool: {tool}. {hint}"))
+            }
             None => super::super::visible::absent::absent_name(tool),
         }
     }

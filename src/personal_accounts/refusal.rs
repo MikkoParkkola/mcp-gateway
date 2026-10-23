@@ -17,6 +17,7 @@
 //! that seal and strips it, so the seal never leaves the process and a
 //! backend cannot produce data that passes.
 
+use crate::error::rpc_codes::INTERNAL_ERROR;
 use std::sync::LazyLock;
 
 use serde_json::{Value, json};
@@ -65,7 +66,7 @@ static SEAL: LazyLock<Option<String>> = LazyLock::new(|| super::storage::random_
 
 /// The marked code: the `Config` code, so a refusal nobody decorates still
 /// reports it.
-const MARKED: i32 = -32603;
+const MARKED: i32 = INTERNAL_ERROR;
 
 /// A marked refusal as a dispatch site reads it.
 pub(crate) struct Marked<'a> {
@@ -169,7 +170,7 @@ pub(crate) fn transient_retry_error(after: Option<std::time::Duration>) -> Error
         data[SEAL_KEY] = Value::String(seal.clone());
     }
     Error::JsonRpc {
-        code: -32603,
+        code: INTERNAL_ERROR,
         message: "temporarily unavailable, retry".to_owned(),
         data: Some(data),
     }
