@@ -364,7 +364,7 @@ pub(crate) async fn chained_public_scope(route: HttpRoute) -> Value {
 /// The reviewed Node verifier's verdict on a delivered, message-signed body
 /// (`tests/common/signing_verifier.mjs`, independent of the Rust signer).
 /// A process failure is not a rejection.
-// MIK-8701: migrate to the shared helper.
+// Spawned as signing_delivery_tests.rs does; MIK-8738 moves both lib suites to one oracle.
 pub(crate) fn node_verifies(body: &Value, nonce: &str) -> Result<Value, String> {
     use std::io::Write as _;
     use std::process::{Command, Stdio};
