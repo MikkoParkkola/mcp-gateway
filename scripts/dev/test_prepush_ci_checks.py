@@ -660,6 +660,13 @@ class Rows(unittest.TestCase):
             with self.subTest(lookup):
                 self.assertEqual(workflow_shell.executions(lookup), [])
         self.assertEqual(workflow_shell.executions('echo "see scripts/x.py"'), [])
+        # DATA_COMMANDS exempts only the path class: python words in or after
+        # echo text still count, so piping echo into python or bash still raises.
+        for piped in ("echo scripts/x.py | xargs python3", "echo 'python3 scripts/x.py' | bash"):
+            with self.subTest(piped):
+                with self.assertRaises(workflow_shell.UnsupportedSyntax) as caught:
+                    workflow_shell.executions(piped)
+                self.assertIn("python command(s)", str(caught.exception))
         for not_a_lookup in ("whereis python3", "command python3 -V", "ls python3"):
             with self.subTest(not_a_lookup):
                 with self.assertRaises(workflow_shell.UnsupportedSyntax):
