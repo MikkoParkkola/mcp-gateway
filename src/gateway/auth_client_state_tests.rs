@@ -283,3 +283,37 @@ fn oidc_client(actor: &str, token: &str) -> AuthenticatedClient {
         credential_kind: CredentialKind::KeyServerToken,
     }
 }
+
+/// MIK-8783.AUTO.5 (T2.6): the section's presence is the switch. A section
+/// that still carries the retired `enabled: false` turns the breaker ON, and
+/// no section leaves it off.
+#[test]
+fn a_present_client_breaker_section_is_on_whatever_its_retired_enabled_says() {
+    let section: CircuitBreakerConfig = serde_json::from_value(serde_json::json!({
+        "enabled": false, "failure_threshold": 2, "success_threshold": 1, "reset_timeout": "60s"
+    }))
+    .expect("a section with the retired key still parses");
+    let on = resolved(AuthConfig {
+        api_keys: vec![key("secret-on", "on", 0)],
+        client_circuit_breaker: Some(section),
+        ..AuthConfig::default()
+    });
+    let caller = client(&on, "secret-on");
+    on.record_client_failure(&caller);
+    on.record_client_failure(&caller);
+    assert!(
+        !on.check_client_circuit_breaker(&caller),
+        "two failures open a present section's breaker, `enabled: false` notwithstanding"
+    );
+    let off = resolved(AuthConfig {
+        api_keys: vec![key("secret-off", "off", 0)],
+        ..AuthConfig::default()
+    });
+    let caller = client(&off, "secret-off");
+    off.record_client_failure(&caller);
+    off.record_client_failure(&caller);
+    assert!(
+        off.check_client_circuit_breaker(&caller),
+        "no section: no client breaker"
+    );
+}
