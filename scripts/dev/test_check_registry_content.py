@@ -391,6 +391,8 @@ def o11_argv_isolation():
         expect(not any(a.startswith("/") and ":" in a and not a.endswith(":/work") for a in argv if a != COMMON_FLAGS[-1]),
                f"{step} has a host bind mount")
         if step == "setup":
+            caps_added = [argv[i + 1] for i, a in enumerate(argv) if a == "--cap-add"]
+            expect(caps_added == ["CHOWN"], f"setup may get back CHOWN only, got {caps_added}")
             expect(env_of(argv) == {}, f"setup passes environment: {env_of(argv)}")
             expect(has_seq(argv, ["--network", "none"]), "setup must have no network")
             expect("pwn" not in " ".join(argv) and "p@1.0.0" not in " ".join(argv), "setup argv carries entry data")
@@ -398,6 +400,7 @@ def o11_argv_isolation():
             expect(text.index("mkdir") < text.index("chown"), "setup must mkdir before chown")
         else:
             expect(has_seq(argv, ["--user", "1000:1000"]), f"{step} not uid 1000")
+            expect("--cap-add" not in argv, f"{step} gets a capability back; only setup may")
             env = env_of(argv)
             expect({k: v for k, v in env.items() if k != "PATH"} == ALLOWED_ENV, f"{step} env {env}")
             expect(env.get("PATH", "").startswith("/work/bin:"), f"{step} PATH {env.get('PATH')}")
