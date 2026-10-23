@@ -166,6 +166,12 @@ mod source_checks {
             "src/gateway/webhooks/message_clamp_tests.rs",
             "src/protocol/cacheable/clamp_tests.rs",
             "src/protocol/tasks/scope_clamp_tests.rs",
+            // MIK-8398 seal rows: they write the key only into backend
+            // fixtures (a `public` claim) and read it back from the delivered
+            // result to show the clamp ran before the seal.
+            "src/gateway/meta_mcp/provenance_delivery_tests.rs",
+            "src/gateway/meta_mcp/provenance_seal_rules_tests.rs",
+            "src/gateway/router/tests/task_execution_adapter/provenance_seal.rs",
         ];
         let mut offenders = Vec::new();
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
