@@ -36,6 +36,13 @@ pub(super) struct StoredDelivery {
     /// every step counts as served.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) dispatched: Option<Vec<(String, String)>>,
+    /// MIK-8747: the era the delivery was shaped and sealed for, written by
+    /// the meta path (`/mcp` and stdio), whose stored bytes are already
+    /// shaped. Absent for Direct, which stores unshaped bytes and reshapes
+    /// them per replaying era, and in records from before the field: no
+    /// comparison is made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) era: Option<crate::protocol::meta::Era>,
     /// MIK-8407: the binding each dispatched step ran under, which a replay
     /// is judged against. Every entry is new: this store does not outlive the
     /// process.
@@ -174,6 +181,21 @@ pub(super) fn dispatched_steps(bytes: &[u8]) -> Option<Vec<(String, String)>> {
     serde_json::from_slice::<StoredDelivery>(bytes)
         .ok()
         .and_then(|stored| stored.dispatched)
+}
+
+/// The era the stored delivery was shaped for (MIK-8747), read without
+/// restoring the record's read and write scope, so a refusal restores none.
+/// `None` for Direct's records, for older records and for a bare response.
+pub(super) fn stored_era(bytes: &[u8]) -> Option<crate::protocol::meta::Era> {
+    /// The one member a refusal reads; every other member is ignored.
+    #[derive(serde::Deserialize)]
+    struct EraOnly {
+        #[serde(default)]
+        era: Option<crate::protocol::meta::Era>,
+    }
+    serde_json::from_slice::<EraOnly>(bytes)
+        .ok()
+        .and_then(|stored| stored.era)
 }
 
 /// Decode a stored delivery; a bare response is a record from before the

@@ -7,18 +7,7 @@
 # passes and holds the patched floors the ignore relies on (MIK-8577).
 
 [advisories]
-ignore = [
-    # RUSTSEC-2026-0381 on webpki-roots 0.26.11 only. That version is a
-    # re-export shim with no patched 0.26 release: its whole lib.rs is
-    # `pub use parent::TLS_SERVER_ROOTS;` with parent = webpki-roots 1, and it
-    # bundles no certificates (crate sha256
-    # 521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9, as in
-    # Cargo.lock). The roots it serves come from webpki-roots 1.x, held at or
-    # above the patched 1.0.10 by check_advisory_exceptions.py. It is pulled in
-    # by tokio-tungstenite 0.30.0 (feature rustls-tls-webpki-roots), whose
-    # newest release still depends on 0.26; upstream
-    # snapview/tokio-tungstenite#381 is open. Remove this entry when
-    # tokio-tungstenite releases on webpki-roots 1, or when MIK-8578 builds the
-    # WebSocket TLS config itself; it expires with the osv entry on 2026-12-31.
-    "RUSTSEC-2026-0381",
-]
+# RUSTSEC-2026-0381 was ignored here until its OSV record (modified
+# 2026-10-21) marked webpki-roots 0.26.11 and 1.0.10, the locked versions, as
+# fixed; `cargo audit` with no ignores is clean on the lock.
+ignore = []
