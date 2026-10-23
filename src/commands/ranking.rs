@@ -125,12 +125,12 @@ fn print_ranking_eval_report(report: &RankingEvalCliReport, format: OutputFormat
 }
 
 fn truncate(value: &str, max_chars: usize) -> String {
-    if value.chars().count() <= max_chars {
-        return value.to_string();
-    }
-    let mut s: String = value.chars().take(max_chars.saturating_sub(3)).collect();
-    s.push_str("...");
-    s
+    crate::truncate::truncate(
+        value,
+        crate::truncate::Budget::Chars(max_chars),
+        "...",
+        crate::truncate::Suffix::Within,
+    )
 }
 
 #[cfg(test)]

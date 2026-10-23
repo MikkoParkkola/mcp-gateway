@@ -437,16 +437,13 @@ fn cluster_step_label(step: KubernetesClusterStepKind) -> &'static str {
 }
 
 fn truncate(value: &str, width: usize) -> String {
-    // Count/slice by char, not byte: `value` carries manifest- and path-derived
-    // strings, so a byte-index slice would panic on a multi-byte UTF-8 boundary.
-    if value.chars().count() <= width {
-        value.to_string()
-    } else if width <= 1 {
-        ".".to_string()
-    } else {
-        let prefix: String = value.chars().take(width - 1).collect();
-        format!("{prefix}.")
-    }
+    // By char, not byte: `value` carries manifest- and path-derived strings.
+    crate::truncate::truncate(
+        value,
+        crate::truncate::Budget::Chars(width),
+        ".",
+        crate::truncate::Suffix::Within,
+    )
 }
 
 #[cfg(test)]

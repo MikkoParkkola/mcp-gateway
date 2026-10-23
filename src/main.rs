@@ -22,6 +22,7 @@ mod commands;
 mod debug_trust_roots;
 mod home_dir;
 mod open_nonblocking;
+mod truncate;
 
 use std::{path::Path, process::ExitCode};
 

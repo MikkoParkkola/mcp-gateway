@@ -346,14 +346,12 @@ async fn fetch_skill_from_url(url: &str) -> Result<ImportedSkill, String> {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_owned();
-    }
-    let mut end = max;
-    while !s.is_char_boundary(end) && end > 0 {
-        end -= 1;
-    }
-    format!("{}…", &s[..end])
+    crate::truncate::truncate(
+        s,
+        crate::truncate::Budget::Bytes(max),
+        "…",
+        crate::truncate::Suffix::After,
+    )
 }
 
 fn print_dry_run_summary(bundles: &[mcp_gateway::skills::SkillBundle]) {
