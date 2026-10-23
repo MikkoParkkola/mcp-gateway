@@ -436,8 +436,8 @@ async fn test_gateway_list_servers() {
             .unwrap_or_else(|| panic!("tools_known should be a boolean: {server:?}"));
         if known {
             assert!(
-                server["tools_count"].is_number(),
-                "a known backend's tools_count should be a number: {server:?}"
+                server["tools_count"].as_u64().is_some(),
+                "a known backend's tools_count should be a whole, non-negative number: {server:?}"
             );
         } else {
             assert_eq!(

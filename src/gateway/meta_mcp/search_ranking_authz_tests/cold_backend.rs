@@ -61,8 +61,8 @@ fn assert_count_pairing(listed: &Value) {
             .unwrap_or_else(|| panic!("tools_known is a boolean: {row}"));
         if known {
             assert!(
-                row["tools_count"].is_number(),
-                "known row has a count: {row}"
+                row["tools_count"].as_u64().is_some(),
+                "known row has a whole, non-negative count: {row}"
             );
         } else {
             assert_eq!(
