@@ -20,6 +20,7 @@
 //! `accounted_dispatch` takes by value: only this module can construct one, so
 //! a send that skipped the chokepoint does not compile (MX).
 
+#[cfg(feature = "firewall")]
 use crate::error::rpc_codes::{INVALID_PARAMS, INVALID_REQUEST};
 use serde_json::Value;
 
