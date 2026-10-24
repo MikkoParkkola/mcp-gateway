@@ -187,7 +187,7 @@ impl HttpTransport {
     }
 
     /// SSE mode: GET the SSE endpoint to receive the message endpoint.
-    async fn connect_sse(&self) -> Result<()> {
+    pub(super) async fn connect_sse(&self) -> Result<()> {
         let message_endpoint = self.establish_sse_connection().await?;
         let full_message_url = self.resolve_message_url(&message_endpoint)?;
         *self.message_url.write() = Some(full_message_url.clone());
