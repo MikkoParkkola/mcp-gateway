@@ -24,7 +24,6 @@ src/context_integrity/kernel.rs	.expect("tool access escalation patterns must co
 src/control_plane/export.rs	self.entries.lock().expect("collecting sink mutex").clone()	1
 src/discovery/client_entry.rs	LazyLock::new(|| Regex::new(r"\$\{env:([^}]*)\}").expect("constant pattern"));	1
 src/duration_bound.rs	None => panic!(	1
-src/events/client.rs	let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");	1
 src/events/store.rs	let count = per_principal.get_mut(principal).expect("counted above");	1
 src/gateway/auth_resolved.rs	.expect("auth config secret references should resolve")	1
 src/gateway/meta_mcp/grant_audit.rs	.expect("grant slot lock")	1

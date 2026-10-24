@@ -560,7 +560,7 @@ async fn a_test_source_event_reaches_a_receiver() {
     let key = base64::engine::general_purpose::STANDARD
         .decode(whsec().trim_start_matches("whsec_"))
         .expect("secret decodes");
-    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(&key).expect("key");
+    let mut mac = crate::hashing::HmacSha256::new_from_slice(&key).expect("key");
     mac.update(format!("{id}.{timestamp}.").as_bytes());
     mac.update(&posts[0].1);
     let expected = base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());

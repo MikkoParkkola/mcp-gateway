@@ -130,7 +130,7 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
         (Mcp | Direct, Fresh, Era::Modern, SignRecord) => {
             Driven::Row("rows::r_recsign_sign_precedes_delivery_record")
         }
-        // The order is read at source; the row shows the scan breaks what the
+        // The order is read at source; the row shows the scan keeps what the
         // stamp counted.
         (Mcp | Stdio, Fresh | CacheHit, _, FirewallStamp) => Driven::Shared {
             pin: "response::source_order::stamp_and_egress_scan_order_is_pinned_at_source",
