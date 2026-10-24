@@ -100,6 +100,10 @@ fn i6_a_parsed_collision_suffix_does_not_lengthen_the_run() {
     assert_eq!(value, once, "a second pass renamed a key of {once}");
     let keys: Vec<&String> = once.as_object().expect("object").keys().collect();
     assert_eq!(keys.len(), 2, "no entry is lost: {once}");
+    assert!(
+        keys.iter().all(|key| key.contains(tail)),
+        "the short tail is not redacted: {once}"
+    );
 }
 
 #[test]
@@ -116,7 +120,12 @@ fn i7_a_json_text_collision_suffix_does_not_lengthen_the_run() {
     let once = assert_stable(&text, &"t".repeat(20));
     assert!(!once.contains(&"u".repeat(20)), "{once}");
     let parsed: Value = serde_json::from_str(&once).expect("still parses");
-    assert_eq!(parsed.as_object().expect("object").len(), 2, "{once}");
+    let keys = parsed.as_object().expect("object");
+    assert_eq!(keys.len(), 2, "{once}");
+    assert!(
+        keys.keys().all(|key| key.contains(tail)),
+        "the short tail is not redacted: {once}"
+    );
 }
 
 /// The barrier's inputs, built in code and checked against literal
@@ -152,6 +161,10 @@ fn i9_only_the_connection_string_rule_runs_through_the_marker() {
             .iter()
             .find(|(name, _)| name == description)
             .unwrap_or_else(|| panic!("a sample for {description}"));
+        assert!(
+            r.regexes[index].is_match(sample),
+            "{description}: its sample must match"
+        );
         let crosses = (1..sample.len())
             .filter(|&at| sample.is_char_boundary(at))
             .any(|at| {
@@ -188,7 +201,7 @@ fn i11_many_insertions_in_one_run_stay_linear() {
     let r = redactor();
     let time = |n: usize| {
         let text = format!("x:{}", vec![token.as_str(); n].join(":"));
-        (0..3)
+        (0..5)
             .map(|_| {
                 let mut value = Value::String(text.clone());
                 let started = std::time::Instant::now();
@@ -196,12 +209,57 @@ fn i11_many_insertions_in_one_run_stay_linear() {
                 started.elapsed()
             })
             .min()
-            .expect("three runs")
+            .expect("five runs")
     };
-    let (small, large) = (time(2_000), time(8_000));
-    // Four times the input: about 4x when linear, 16x when quadratic.
+    let (small, large) = (time(500), time(8_000));
+    // Sixteen times the input: about 16x when linear, 256x when quadratic,
+    // so a busy runner has a wide margin either way.
     assert!(
-        large < small * 10,
-        "8000 took {large:?}, 2000 took {small:?}"
+        large < small * 64,
+        "8000 took {large:?}, 500 took {small:?}"
     );
+}
+
+/// The writer's run state, tracked as text arrives, agrees with a full
+/// rescan of the output at every split of every pinned input.
+#[test]
+fn i12_the_tracked_run_agrees_with_a_rescan() {
+    let prefix = Regex::new(connection_prefix!()).expect("compiles");
+    let rescan = |text: &str| {
+        let run = text
+            .char_indices()
+            .rev()
+            .find(|(_, c)| c.is_whitespace())
+            .map_or(0, |(at, c)| at + c.len_utf8());
+        prefix.is_match(&text[run..])
+    };
+    let long = format!("{}redis://{}", "x".repeat(60), "\u{e9}".repeat(20));
+    for text in [
+        "redis://",
+        "REDIS:// x",
+        "a\u{a0}postgres://",
+        "mongodb://\u{b}y",
+        r#"{"redis://":""#,
+        "\u{e9}\u{e9}mysql://\u{1f600}",
+        long.as_str(),
+    ] {
+        for split in (0..=text.len()).filter(|&at| text.is_char_boundary(at)) {
+            let mut out = Spliced::with_capacity(text.len());
+            out.push(&text[..split]);
+            out.push(&text[split..]);
+            assert_eq!(out.barrier(), rescan(text), "{text:?} split at {split}");
+        }
+    }
+}
+
+/// A spaced and an unspaced suffix never collide, so each spelling takes
+/// its own first free number (two keys can decode to one name while only
+/// one's raw text ends in an open prefix, e.g. an escaped `redis://`).
+#[test]
+fn i13_each_suffix_spelling_takes_its_first_free_number() {
+    let mut names = KeyNames::default();
+    assert_eq!(names.claim("k", true), None);
+    assert_eq!(names.claim("k", true), Some(2));
+    assert_eq!(names.claim("k", false), Some(2));
+    assert_eq!(names.claim("k", false), Some(3));
 }

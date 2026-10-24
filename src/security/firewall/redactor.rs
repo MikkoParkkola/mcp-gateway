@@ -334,7 +334,9 @@ impl Redactor {
 #[derive(Default)]
 struct KeyNames {
     taken: HashSet<String>,
-    next: HashMap<String, usize>,
+    /// Per candidate and spacing: the two spellings of a suffix never
+    /// collide, so each keeps its own first free `n`.
+    next: HashMap<(String, bool), usize>,
 }
 
 impl KeyNames {
@@ -353,7 +355,7 @@ impl KeyNames {
         if self.taken.insert(candidate.to_owned()) {
             return None;
         }
-        let n = self.next.entry(candidate.to_owned()).or_insert(1);
+        let n = self.next.entry((candidate.to_owned(), spaced)).or_insert(1);
         loop {
             *n += 1;
             if self
