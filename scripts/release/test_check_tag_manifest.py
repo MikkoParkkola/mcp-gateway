@@ -1942,7 +1942,7 @@ class VariantStage(unittest.TestCase):
         cases = {
             "the published key": ([pub, f"fpr:::::::::{pinned}:", uid, sub, f"fpr:::::::::{subkey}:"], True),
             "another primary key": ([pub, f"fpr:::::::::{other}:", uid], False),
-            "two primary keys": ([pub, f"fpr:::::::::{pinned}:", pub, f"fpr:::::::::{other}:"], False),
+            "two primary keys": ([pub, f"fpr:::::::::{other}:", pub, f"fpr:::::::::{pinned}:"], False),
             "NodeSource's key as a subkey": ([pub, f"fpr:::::::::{other}:", uid, sub, f"fpr:::::::::{pinned}:"], False),
             "an empty key file": ([], False),
         }
@@ -1955,6 +1955,17 @@ class VariantStage(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(run.returncode == 0, accepted, f"{label}: exit {run.returncode}")
+
+    def test_apt_trusts_only_the_pinned_nodesource_key(self):
+        # `gpg --show-keys` leaves out a primary key that has no user ID, while
+        # `gpg --dearmor` keeps every key in the file, so the guard above cannot
+        # see everything apt would trust. A fingerprint in Signed-By makes apt
+        # itself select only that key (and its subkeys) from the keyring.
+        self.assertRegex(
+            self.variant_stage(),
+            r"Signed-By: /usr/share/keyrings/nodesource\.gpg 6F71F525282841EEDAF851B42F59B5F99B1BE0B4'",
+            "apt trusts every key in the NodeSource keyring, not only the pinned one",
+        )
 
     def test_the_node_and_npm_assertions_are_at_build_time(self):
         self.assertRegex(

@@ -117,7 +117,7 @@ RUN echo "apt cache bust: ${APT_CACHE_BUST}" \
     && gpg --dearmor -o /usr/share/keyrings/nodesource.gpg /tmp/nodesource.key \
     && rm -f /tmp/nodesource.key \
     && printf '%s\n' 'Types: deb' 'URIs: https://deb.nodesource.com/node_24.x' 'Suites: nodistro' \
-       'Components: main' 'Signed-By: /usr/share/keyrings/nodesource.gpg' \
+       'Components: main' 'Signed-By: /usr/share/keyrings/nodesource.gpg 6F71F525282841EEDAF851B42F59B5F99B1BE0B4' \
        > /etc/apt/sources.list.d/nodesource.sources \
     && apt-get update && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \
