@@ -4,8 +4,6 @@
 
 use std::sync::Arc;
 
-use sha2::{Digest, Sha256};
-
 /// A verified credential's quota bucket, independent of display/audit names.
 ///
 /// Derived only from something authentication has already validated — a
@@ -84,16 +82,40 @@ impl QuotaPrincipal {
     }
 
     fn credential(kind: &[u8], secret: &[u8]) -> Self {
-        let mut hash = Sha256::new();
-        hash.update(b"mcp-gateway/nonce-quota/v1\0");
-        for component in [kind, secret] {
-            hash.update((component.len() as u64).to_be_bytes());
-            hash.update(component);
-        }
-        Self(Arc::from(hex::encode(hash.finalize())))
+        let (kind_len, secret_len) = (
+            (kind.len() as u64).to_be_bytes(),
+            (secret.len() as u64).to_be_bytes(),
+        );
+        Self(Arc::from(crate::hashing::sha256_hex_chunks([
+            b"mcp-gateway/nonce-quota/v1\0".as_slice(),
+            &kind_len,
+            kind,
+            &secret_len,
+            secret,
+        ])))
     }
 
     pub(crate) fn as_store_key(&self) -> &str {
         &self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::QuotaPrincipal;
+
+    /// MIK-8762 SHAFU.1 goldens, computed independently (Python hashlib): the
+    /// domain `mcp-gateway/nonce-quota/v1\0`, then kind and secret, each
+    /// prefixed by its byte length as u64 big-endian, hex SHA-256.
+    #[test]
+    fn quota_principal_keys_match_their_independent_goldens() {
+        assert_eq!(
+            QuotaPrincipal::api_key(b"k").as_store_key(),
+            "4673bf1750f2b6c6e9812161f33fdeffbce42f8aedacf19cf3ed793e913b44d6"
+        );
+        assert_eq!(
+            QuotaPrincipal::dashboard_session().as_store_key(),
+            "444ff181ef357714106823b586cd706db5a92038ed4aa9b887f5d0a0f2a98952"
+        );
     }
 }

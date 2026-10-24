@@ -174,11 +174,7 @@ pub fn grant_digest(grant: &IdentityGrant) -> String {
     // Plain fields and string-keyed data only, so serialisation cannot fail;
     // an empty preimage would be a digest that matches nothing real.
     let bytes = serde_json::to_vec(grant).expect("an identity grant always serialises");
-    sha256_tag(&bytes)
-}
-
-fn sha256_tag(bytes: &[u8]) -> String {
-    crate::hashing::sha256_tagged(bytes)
+    crate::hashing::sha256_tagged(&bytes)
 }
 
 /// A change the CLI applies to the grant file: mutate it and name what it did.
@@ -533,7 +529,7 @@ pub(crate) fn parse_journal(bytes: &[u8]) -> ParsedJournal {
             // A later format may change what a line means: refuse it like a
             // damaged line (reported, never consumed) rather than guess.
             Ok(entry) if entry.v == JOURNAL_VERSION => parsed.entries.push(entry),
-            Ok(_) | Err(_) => parsed.torn.push(sha256_tag(line)),
+            Ok(_) | Err(_) => parsed.torn.push(crate::hashing::sha256_tagged(line)),
         }
     }
     parsed
