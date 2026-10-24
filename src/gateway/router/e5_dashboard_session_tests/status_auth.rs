@@ -124,3 +124,25 @@ async fn s6_an_anonymous_caller_is_refused_when_status_is_not_public() {
     let reply = send(&state, get(STATUS, None)).await;
     assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "S6: {}", reply.body);
 }
+
+/// S7 (MIK-8821.FOLLOW.2): auth on with a public path covering the status
+/// route, and a valid key without the admin role presented. A public path
+/// skips the credential requirement, not the credential, so the caller is
+/// stated as signed in, not as the anonymous public identity.
+#[tokio::test]
+async fn s7_a_standard_key_on_a_public_status_path_is_stated_as_signed_in() {
+    let (state, _dir) = fixture_with(&["/health", STATUS]).await;
+    let reply = send(
+        &state,
+        request("GET", STATUS, None, Some(STANDARD_KEY), false),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "S7: {}", reply.body);
+    assert_redacted("S7", &reply);
+    assert_eq!(
+        auth_facts(&reply),
+        json!({"enabled": true, "signed_in": true, "admin": false}),
+        "S7: {}",
+        reply.body
+    );
+}
