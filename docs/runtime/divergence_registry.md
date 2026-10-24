@@ -47,8 +47,8 @@ if registry.has_divergence() {
     for record in registry.get_all() {
         eprintln!("DIVERGENCE: {} ({} vs {}): {}",
             record.descriptor_name,
-            record.substrate_a,
-            record.substrate_b,
+            record.substrate_a.name(),
+            record.substrate_b.name(),
             record.description,
         );
     }

@@ -38,7 +38,7 @@ use std::collections::HashMap;
 use mcp_gateway::runtime::{
     AttestationConfig, CheckpointPolicy, CompiledBundle, Compiler, DivergenceRegistry,
     HebbBridgeConfig, MountSpec, MountType, NetworkEgressPolicy, OciBundle, ResourceSpec,
-    SandboxDescriptor, Substrate, SubstrateTag,
+    SandboxDescriptor, Substrate,
 };
 
 // ── helpers ───────────────────────────────────────────────────────────────
@@ -387,8 +387,8 @@ fn ac_4_mik_new_runtime_d_4_substrate_divergence_detecti() {
     // Each record must carry substrate-id tags (AC.4)
     for record in &records {
         assert_eq!(record.descriptor_name, "divergence-test");
-        assert_eq!(record.substrate_a, SubstrateTag::GVisor);
-        assert_eq!(record.substrate_b, SubstrateTag::AppleVm);
+        assert_eq!(record.substrate_a, Substrate::GVisor);
+        assert_eq!(record.substrate_b, Substrate::AppleVm);
         assert!(
             !record.description.is_empty(),
             "divergence description must not be empty"

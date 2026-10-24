@@ -21,6 +21,7 @@ use chrono::{DateTime, Utc};
 
 use super::token::TokenClaims;
 use super::validator::{AttestationRejection, AttestationValidator};
+use crate::runtime::Substrate;
 
 /// Rollback feature flag: `0` disables boot-time attestation enforcement.
 pub const ATTESTATION_FLAG_ENV: &str = "SYMPHONY_PLUS_ATTESTATION";
@@ -31,33 +32,6 @@ pub const TOKEN_ENV_VAR: &str = "SYMPHONY_ATTESTATION_TOKEN";
 
 /// Boundary label used for boot-time validations in the audit ring buffer.
 pub const BOOT_BOUNDARY: &str = "sandbox_boot";
-
-/// Sandbox substrate (MIK-NEW.RUNTIME-A.6).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Substrate {
-    /// gVisor (`runsc`) on Ubuntu.
-    GvisorLinux,
-    /// Apple containerization framework on macOS.
-    AppleContainerization,
-}
-
-impl Substrate {
-    /// OCI runtime label for diagnostics; not part of the token flow.
-    #[must_use]
-    pub fn runtime_label(self) -> &'static str {
-        match self {
-            Self::GvisorLinux => "runsc",
-            Self::AppleContainerization => "apple-containerization",
-        }
-    }
-
-    /// OCI hook at which the token is injected — the same lifecycle point on
-    /// both substrates, keeping the flow identical.
-    #[must_use]
-    pub fn token_injection_hook(self) -> &'static str {
-        "createRuntime"
-    }
-}
 
 /// Whether boot-time attestation is enforced (the default) or bypassed by
 /// the rollback flag.
@@ -308,7 +282,7 @@ mod tests {
     fn enforced_boot_without_token_is_denied() {
         let l = launcher(AttestationEnforcement::Enforced);
         let err = l
-            .boot(spec(Substrate::GvisorLinux), None, Utc::now())
+            .boot(spec(Substrate::GVisor), None, Utc::now())
             .unwrap_err();
         assert_eq!(err, BootDenial::MissingToken);
         assert_eq!(l.boots_attested_total(), 0);
@@ -320,7 +294,7 @@ mod tests {
         let l = launcher(AttestationEnforcement::Enforced);
         let now = Utc::now();
         let t = token(now);
-        let handle = l.boot(spec(Substrate::GvisorLinux), Some(&t), now).unwrap();
+        let handle = l.boot(spec(Substrate::GVisor), Some(&t), now).unwrap();
         assert!(handle.attested);
         assert_eq!(handle.env.get(TOKEN_ENV_VAR), Some(&t));
         assert_eq!(l.boots_attested_total(), 1);
@@ -329,9 +303,7 @@ mod tests {
     #[test]
     fn bypassed_boot_starts_without_token_and_counts_separately() {
         let l = launcher(AttestationEnforcement::BypassedByFlag);
-        let handle = l
-            .boot(spec(Substrate::AppleContainerization), None, Utc::now())
-            .unwrap();
+        let handle = l.boot(spec(Substrate::AppleVm), None, Utc::now()).unwrap();
         assert!(!handle.attested);
         assert!(handle.claims.is_none());
         assert_eq!(l.boots_bypassed_total(), 1);
@@ -340,17 +312,11 @@ mod tests {
 
     #[test]
     fn substrates_share_one_injection_hook() {
-        assert_eq!(
-            Substrate::GvisorLinux.token_injection_hook(),
-            "createRuntime"
-        );
-        assert_eq!(
-            Substrate::AppleContainerization.token_injection_hook(),
-            "createRuntime"
-        );
+        assert_eq!(Substrate::GVisor.token_injection_hook(), "createRuntime");
+        assert_eq!(Substrate::AppleVm.token_injection_hook(), "createRuntime");
         assert_ne!(
-            Substrate::GvisorLinux.runtime_label(),
-            Substrate::AppleContainerization.runtime_label()
+            Substrate::GVisor.runtime_label(),
+            Substrate::AppleVm.runtime_label()
         );
     }
 }
