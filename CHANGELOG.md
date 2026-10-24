@@ -34,6 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error) and fails the image's Trivy gate. The new pin carries the registry's
   `dist.integrity`, which the downloaded tarball also hashes to.
 
+- **The `-full` image no longer runs a downloaded installer script as root.** Node.js
+  comes from NodeSource's apt repository, trusted through a signing key whose
+  fingerprint is pinned and checked at build time, and `uv` is copied from its
+  official image pinned by version and digest, instead of piping NodeSource's setup
+  script and uv's `install.sh` into a root shell.
+
 - **The `-full` image's bundled npm packages are past the new HIGH CVEs, and verified by hash.** `brace-expansion` (CVE-2026-102276, CVE-2026-102278) and `undici` (CVE-2026-19534) in npm's own tree are replaced with fixed releases, and every npm tarball the image fetches is checked against a pinned sha512 before use.
 
 - **The `-full` variant's smoke gate bounds every probe.** Four of its six probes
