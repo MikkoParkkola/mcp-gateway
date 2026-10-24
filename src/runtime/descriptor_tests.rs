@@ -451,3 +451,43 @@ fn mount_type_json_serde() {
     assert_eq!(serde_json::to_string(&ro).unwrap(), r#""read_only""#);
     assert_eq!(serde_json::to_string(&wo).unwrap(), r#""writable_overlay""#);
 }
+
+// ── MIK-8670 guard: the operator's substrate spelling is config ───────────
+
+#[test]
+fn yaml_substrate_override_spellings_parse_through_the_provision_loader() {
+    for (spelling, want) in [
+        ("gvisor", Substrate::GVisor),
+        ("apple_vm", Substrate::AppleVm),
+    ] {
+        let yaml = format!(
+            "name: guard\nimage: docker.io/library/alpine:3\nresources:\n  cpu_cores: 1.0\n  memory_mb: 128\nsubstrate_override: {spelling}\n"
+        );
+        let parsed: Result<SandboxDescriptor, _> = crate::yaml::from_str(&yaml);
+        assert!(
+            matches!(&parsed, Ok(d) if d.substrate_override == Some(want)),
+            "{spelling}: {parsed:?}"
+        );
+    }
+}
+
+#[test]
+fn yaml_substrate_override_refuses_type_and_variant_spellings() {
+    for spelling in ["GVisor", "AppleVm", "GvisorLinux", "AppleContainerization"] {
+        let yaml = format!(
+            "name: guard\nimage: docker.io/library/alpine:3\nresources:\n  cpu_cores: 1.0\n  memory_mb: 128\nsubstrate_override: {spelling}\n"
+        );
+        let parsed: Result<SandboxDescriptor, _> = crate::yaml::from_str(&yaml);
+        // The loader names the field and the accepted values (it leaves the
+        // refused value out), so a fixture that fails to parse for another
+        // reason cannot satisfy this guard.
+        assert!(
+            matches!(&parsed, Err(e) if {
+                let msg = e.to_string();
+                msg.starts_with("substrate_override:")
+                    && msg.contains("expected `gvisor` or `apple_vm`")
+            }),
+            "{spelling} must be refused as a substrate name: {parsed:?}"
+        );
+    }
+}

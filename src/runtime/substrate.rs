@@ -56,6 +56,22 @@ impl Substrate {
             Self::AppleVm => "apple_vm",
         }
     }
+
+    /// OCI runtime label for diagnostics; not part of the token flow.
+    #[must_use]
+    pub fn runtime_label(self) -> &'static str {
+        match self {
+            Self::GVisor => "runsc",
+            Self::AppleVm => "apple-containerization",
+        }
+    }
+
+    /// OCI hook at which the token is injected — the same lifecycle point on
+    /// both substrates, keeping the flow identical.
+    #[must_use]
+    pub fn token_injection_hook(self) -> &'static str {
+        "createRuntime"
+    }
 }
 
 #[cfg(test)]
@@ -91,6 +107,14 @@ mod tests {
         assert_eq!(json, r#""apple_vm""#);
         let restored: Substrate = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, Substrate::AppleVm);
+    }
+
+    #[test]
+    fn runtime_labels_and_token_hook_are_the_launcher_values() {
+        assert_eq!(Substrate::GVisor.runtime_label(), "runsc");
+        assert_eq!(Substrate::AppleVm.runtime_label(), "apple-containerization");
+        assert_eq!(Substrate::GVisor.token_injection_hook(), "createRuntime");
+        assert_eq!(Substrate::AppleVm.token_injection_hook(), "createRuntime");
     }
 
     #[test]
