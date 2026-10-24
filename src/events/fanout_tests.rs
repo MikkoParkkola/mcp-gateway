@@ -420,7 +420,7 @@ async fn an_occurrence_with_a_lifecycle_key_reaches_only_its_holders() {
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: super::super::LiveCredentials::default(),
-        record_key: crate::gateway::record_principal::test_key_slot(),
+        record_key: Some(crate::gateway::record_principal::test_key_arc()),
     };
     let event = |upstream_id: &str, lifecycle_key: Option<String>| SourceEvent {
         kind: SourceKind::RestWatch,
@@ -500,7 +500,7 @@ async fn an_operator_record_asks_no_backend_grant() {
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: super::super::LiveCredentials::default(),
-        record_key: crate::gateway::record_principal::test_key_slot(),
+        record_key: Some(crate::gateway::record_principal::test_key_arc()),
     };
     let event = SourceEvent {
         kind: SourceKind::GatewayOperational,
@@ -570,7 +570,7 @@ async fn a_clock_before_the_epoch_delivers_nothing_on_a_live_lease() {
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: super::super::LiveCredentials::default(),
-        record_key: crate::gateway::record_principal::test_key_slot(),
+        record_key: Some(crate::gateway::record_principal::test_key_arc()),
     };
     let event = |upstream_id: &str| SourceEvent {
         kind: SourceKind::RestWatch,

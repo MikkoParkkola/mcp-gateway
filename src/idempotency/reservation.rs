@@ -145,7 +145,7 @@ impl Drop for IdempotencyReservation {
                 debug!(
                     // The pre-split module path, kept as the log target.
                     target: "mcp_gateway::idempotency",
-                    key = %self.key,
+                    // Not the key: it ends in the caller's stored principal.
                     "Released abandoned idempotency reservation"
                 );
             }
@@ -157,7 +157,6 @@ impl Drop for IdempotencyReservation {
                     debug!(
                         // The pre-split module path, kept as the log target.
                         target: "mcp_gateway::idempotency",
-                        key = %self.key,
                         "Settled abandoned idempotency reservation"
                     );
                 } else {

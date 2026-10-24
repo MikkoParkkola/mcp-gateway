@@ -151,13 +151,14 @@ async fn unexpired_key_is_accepted() {
 fn resolved_auth_config_debug_shows_no_digest() {
     let printed = format!("{:?}", digest_key(None));
     assert!(!printed.contains(KEY), "{printed}");
-    assert!(printed.contains("<redacted:"), "{printed}");
+    assert!(printed.contains("<redacted>"), "{printed}");
     let longest_hex_run = printed
         .split(|c: char| !c.is_ascii_hexdigit())
         .map(str::len)
         .max()
         .unwrap_or(0);
-    assert!(longest_hex_run < 64, "a digest leaked: {printed}");
+    // Not even the 12-hex stored principal (MIK-8697).
+    assert!(longest_hex_run < 12, "a digest leaked: {printed}");
     assert!(!printed.contains(&hex_of(KEY)[..13]), "{printed}");
 }
 

@@ -167,7 +167,7 @@ async fn t34_a_read_begun_before_a_renewal_does_not_revoke_it() {
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: crate::events::LiveCredentials::default(),
-        record_key: crate::gateway::record_principal::test_key_slot(),
+        record_key: Some(crate::gateway::record_principal::test_key_arc()),
         public_provenance: None,
     };
     hub.fan_out(&services, &event).await;
@@ -279,7 +279,7 @@ async fn t34_a_cached_list_from_before_a_renewal_does_not_revoke_it() {
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: crate::events::LiveCredentials::default(),
-        record_key: crate::gateway::record_principal::test_key_slot(),
+        record_key: Some(crate::gateway::record_principal::test_key_arc()),
         public_provenance: None,
     };
     hub.fan_out(&services, &event).await;

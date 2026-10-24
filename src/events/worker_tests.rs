@@ -319,7 +319,7 @@ async fn an_attempt_the_audit_log_refuses_is_not_sent() {
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: crate::events::LiveCredentials::default(),
-        record_key: crate::gateway::record_principal::test_key_slot(),
+        record_key: Some(crate::gateway::record_principal::test_key_arc()),
     };
     let (port, accepted) = counting_callback().await;
     offer(&hub, &["webhook.c.r.received"]);
@@ -397,7 +397,7 @@ async fn a_backend_type_no_source_offers_is_not_sent() {
             #[cfg(feature = "cost-governance")]
             budget: None,
             credentials: crate::events::LiveCredentials::default(),
-            record_key: crate::gateway::record_principal::test_key_slot(),
+            record_key: Some(crate::gateway::record_principal::test_key_arc()),
         };
         let (port, accepted) = counting_callback().await;
         offer(&hub, &["webhook.c.r.received"]);
@@ -448,7 +448,7 @@ async fn an_overdue_ending_the_audit_log_refuses_is_retried_not_buried() {
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: crate::events::LiveCredentials::default(),
-        record_key: crate::gateway::record_principal::test_key_slot(),
+        record_key: Some(crate::gateway::record_principal::test_key_arc()),
     };
     offer(&hub, &["webhook.c.r.received"]);
     queued(&hub, 9, "evt_overdue");
@@ -508,7 +508,7 @@ fn logged_services(dir: &std::path::Path) -> Services {
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: crate::events::LiveCredentials::default(),
-        record_key: crate::gateway::record_principal::test_key_slot(),
+        record_key: Some(crate::gateway::record_principal::test_key_arc()),
     }
 }
 

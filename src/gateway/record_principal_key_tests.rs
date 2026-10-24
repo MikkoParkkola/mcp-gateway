@@ -246,7 +246,10 @@ fn g_key_no_fixed_record_key_ships_outside_test_code() {
                 continue;
             }
             let rel = path.to_string_lossy().replace('\\', "/");
-            if !rel.ends_with(".rs") || rel.ends_with("_tests.rs") || rel.contains("/tests/") {
+            if path.extension().is_none_or(|e| e != "rs")
+                || rel.ends_with("_tests.rs")
+                || rel.contains("/tests/")
+            {
                 continue;
             }
             let text = std::fs::read_to_string(&path).expect("source readable");

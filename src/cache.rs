@@ -235,7 +235,7 @@ impl ResponseCache {
         // `is_final` defaults a missing `resultType` to complete, so every
         // pre-2026 backend's result stays cacheable.
         if !crate::protocol::cacheable::is_final(&value) {
-            debug!(key, "Refused to cache a non-final result");
+            debug!("Refused to cache a non-final result");
             return false;
         }
         self.set_payload(key, value, (read, writes), ttl)
@@ -257,7 +257,7 @@ impl ResponseCache {
         // Nor is an error: replayed, a transient refusal or tool error outlives
         // its cause for the whole TTL (F26).
         if crate::protocol::cacheable::is_error(&value) {
-            debug!(key, "Refused to cache an error result");
+            debug!("Refused to cache an error result");
             return false;
         }
 

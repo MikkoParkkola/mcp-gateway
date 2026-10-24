@@ -21,6 +21,7 @@
 
 #[path = "common/record_key.rs"]
 mod record_key;
+use record_key::RECORD_KEY as KEY;
 
 use std::sync::Arc;
 
@@ -122,10 +123,7 @@ async fn app_state_with_log() -> (Arc<AppState>, std::path::PathBuf, tempfile::T
     let subscriptions = Arc::new(
         mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(
             64,
-            mcp_gateway::gateway::test_helpers::auth_state(
-                &config.auth,
-                crate::record_key::RECORD_KEY,
-            ),
+            mcp_gateway::gateway::test_helpers::auth_state(&config.auth, KEY),
         ),
     );
     let store_dir = tempfile::tempdir().expect("a private task-store directory");
@@ -147,10 +145,7 @@ async fn app_state_with_log() -> (Arc<AppState>, std::path::PathBuf, tempfile::T
         multiplexer,
         proxy_manager,
         streaming_config: config.streaming.clone(),
-        auth_config: Arc::new(ResolvedAuthConfig::from_config(
-            &config.auth,
-            crate::record_key::RECORD_KEY,
-        )),
+        auth_config: Arc::new(ResolvedAuthConfig::from_config(&config.auth, KEY)),
         key_server: None,
         tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),

@@ -412,7 +412,7 @@ impl IdempotencyCache {
         if evict {
             drop(entry);
             self.entries.remove(key);
-            debug!(key, "Evicted stale idempotency entry");
+            debug!("Evicted stale idempotency entry");
             return CheckOutcome::Proceed;
         }
 
@@ -486,7 +486,7 @@ impl IdempotencyCache {
                         // Replacing in place keeps the entry count flat, so a
                         // stale entry never costs a caller its admission.
                         occupied.insert(Entry::in_flight(fingerprint, owner, now));
-                        debug!(key, "Replaced stale idempotency entry");
+                        debug!("Replaced stale idempotency entry");
                         AdmitOutcome::Proceed
                     }
                 }
@@ -558,7 +558,7 @@ impl IdempotencyCache {
     ) -> bool {
         if !crate::protocol::cacheable::is_final(&result) {
             self.entries.remove(key);
-            debug!(key, "Refused to cache a non-final result");
+            debug!("Refused to cache a non-final result");
             return false;
         }
         let mut entry = Entry::new(IdempotencyState::Completed(result, self.now()), fingerprint);

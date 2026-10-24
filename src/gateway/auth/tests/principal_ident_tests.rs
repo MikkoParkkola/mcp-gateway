@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-6704.IDENT.1a rows, moved from tests/mik_6704_acs.rs when
+//! MIK-6704.IDENT.1a rows, moved from `tests/mik_6704_acs.rs` when
 //! `AuthenticatedClient.principal` became crate-private (MIK-8697).
 
 // ===========================================================================

@@ -43,7 +43,7 @@ fn services(keys: Vec<ApiKeyConfig>) -> Services {
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: LiveCredentials::default(),
-        record_key: crate::gateway::record_principal::test_key_slot(),
+        record_key: Some(crate::gateway::record_principal::test_key_arc()),
     }
 }
 
@@ -237,7 +237,7 @@ fn bound(
 fn with(credentials: LiveCredentials) -> Services {
     Services {
         credentials,
-        record_key: crate::gateway::record_principal::test_key_slot(),
+        record_key: Some(crate::gateway::record_principal::test_key_arc()),
         ..services(Vec::new())
     }
 }

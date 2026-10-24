@@ -574,8 +574,8 @@ pub struct SecurityConfig {
     pub claim_capture: ClaimCaptureConfig,
     /// Signature-chain origin emission (ASI07). Absent means the feature is off.
     pub signature_chain: Option<SignatureChainConfig>,
-    /// Override for the key that keys `who.principal` and subscription handles
-    /// in records (MIK-8697). Unset, the default: the gateway creates and uses
+    /// Override for the key that keys credential principals in records
+    /// (`who.principal`, credential owners; MIK-8697). Unset, the default: the gateway creates and uses
     /// `<data dir>/record-principal.key`, one per data directory. Set it only
     /// to make one credential's records match across replicas, or survive the
     /// loss of a data directory; no secret every deployment has is held by the

@@ -11,6 +11,7 @@
 
 #[path = "common/record_key.rs"]
 mod record_key;
+use record_key::RECORD_KEY as KEY;
 
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
@@ -88,10 +89,7 @@ async fn test_stdio_initialize_produces_valid_response() {
         config.streaming.clone(),
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
-    let auth_config = Arc::new(ResolvedAuthConfig::from_config(
-        &config.auth,
-        crate::record_key::RECORD_KEY,
-    ));
+    let auth_config = Arc::new(ResolvedAuthConfig::from_config(&config.auth, KEY));
     let tool_policy = Arc::new(ToolPolicy::from_config(&config.security.tool_policy));
     let mtls_policy = Arc::new(MtlsPolicy::from_config(&config.mtls));
     let agent_registry = Arc::new(AgentRegistry::new());
@@ -104,10 +102,7 @@ async fn test_stdio_initialize_produces_valid_response() {
     // test holds for its own lifetime: the store leases the directory while the
     // service lives, so `store_dir` stays bound to the end of the test rather
     // than being dropped once the runtime is open.
-    let subscriptions = Arc::new(SubscriptionRegistry::new(
-        64,
-        auth_state(&config.auth, crate::record_key::RECORD_KEY),
-    ));
+    let subscriptions = Arc::new(SubscriptionRegistry::new(64, auth_state(&config.auth, KEY)));
     let store_dir = tempfile::tempdir().expect("a private task-store directory");
     let (tasks, task_executor) = open_runtime(
         &store_dir.path().join("tasks"),

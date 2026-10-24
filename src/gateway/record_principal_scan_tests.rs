@@ -203,7 +203,7 @@ fn g_meta_every_production_meta_mcp_gets_the_record_key() {
                 .expect("under root")
                 .to_string_lossy()
                 .replace('\\', "/");
-            if !rel.ends_with(".rs")
+            if path.extension().is_none_or(|e| e != "rs")
                 || rel.contains("_tests")
                 || rel.contains("/tests/")
                 || rel.ends_with("tests.rs")
@@ -247,6 +247,17 @@ fn g_meta_every_production_meta_mcp_gets_the_record_key() {
     );
 }
 
+/// Whether any source under `dir` mentions `caller_key`.
+fn mentions_caller_key(dir: &Path) -> bool {
+    std::fs::read_dir(dir).expect("dir").flatten().any(|e| {
+        let p = e.path();
+        if p.is_dir() {
+            return mentions_caller_key(&p);
+        }
+        std::fs::read_to_string(&p).is_ok_and(|t| t.contains("caller_key"))
+    })
+}
+
 // G-LOGSITES (lead, 2026-10-23): a logger opened in test code starts keyed,
 // so this proves the production openers by source. Outside test code the
 // logger is opened in two places: build_meta_mcp, which installs the record
@@ -280,7 +291,7 @@ fn g_logsites_every_production_logger_is_keyed_or_never_keys() {
                 .expect("under root")
                 .to_string_lossy()
                 .replace('\\', "/");
-            if !rel.ends_with(".rs")
+            if path.extension().is_none_or(|e| e != "rs")
                 || rel.contains("_tests")
                 || rel.contains("/tests/")
                 || rel.ends_with("tests.rs")
@@ -309,15 +320,6 @@ fn g_logsites_every_production_logger_is_keyed_or_never_keys() {
         build_meta.contains(".with_record_key(Arc::clone(&record_key))"),
         "build_meta_mcp keys the logger it opens"
     );
-    fn mentions_caller_key(dir: &Path) -> bool {
-        std::fs::read_dir(dir).expect("dir").flatten().any(|e| {
-            let p = e.path();
-            if p.is_dir() {
-                return mentions_caller_key(&p);
-            }
-            std::fs::read_to_string(&p).is_ok_and(|t| t.contains("caller_key"))
-        })
-    }
     assert!(
         !mentions_caller_key(&root.join("src/control_plane")),
         "a governance record now carries caller_key, so its logger needs the record key"
@@ -358,6 +360,10 @@ const CENSUS_TEST_ONLY: &[&str] = &[
 /// builds a `credential:` owner, as `(file, line substring, lines, class,
 /// reason)`. A line is covered by the matching row with the longest
 /// substring; a tie is ambiguous.
+///
+/// A Store row's reason covers every value built from its line (a cache or
+/// idempotency key, a Debug placeholder), traced to its sinks, not only the
+/// line itself (§16.15). The credential canary tests catch what a row misses.
 #[rustfmt::skip]
 const CENSUS: &[(&str, &str, usize, Class, &str)] = &[
     ("src/events/rpc.rs", "credential_principal: Some(caller.credential.principal.clone())", 1, Store, "subscription row field: the store's owner binding"),
@@ -400,7 +406,7 @@ const CENSUS: &[(&str, &str, usize, Class, &str)] = &[
     ("src/gateway/meta_mcp/direct_route.rs", "(credential_principal, grant_subject, caller_key): (", 1, Decl, "parameter"),
     ("src/gateway/meta_mcp/direct_route.rs", "support::execution_principal(owner, credential_principal", 1, Store, "admission owner key"),
     ("src/gateway/router/backend_handlers/direct_preflight.rs", ".and_then(|client| client.credential_principal())", 1, Decl, "feeds the A2A slot binding below"),
-    ("src/gateway/router/backend_handlers/direct_preflight.rs", "format!(\"a2a-client:{}\", principal.storage_form())", 1, Store, "A2A identity_key: an in-process backend slot binding, hashed, never recorded"),
+    ("src/gateway/router/backend_handlers/direct_preflight.rs", "format!(\"a2a-client:{}\", principal.storage_form())", 1, Store, "A2A identity_key: an in-process backend slot binding; its pool-key logs dropped (§16.15)"),
     ("src/gateway/router/backend_handlers/direct_idempotency.rs", ".map(|client| client.principal.storage_form())", 2, Store, "idempotency and admission owner key arguments"),
     ("src/gateway/router/handlers.rs", ".map(|client| client.principal.storage_form())", 1, Store, "presence classification only"),
     ("src/gateway/router/identity.rs", ".and_then(|c| c.credential_principal())", 1, Decl, "feeds caller_key below"),
@@ -469,7 +475,7 @@ fn g_census_every_way_to_the_stored_principal_is_classified() {
                 .expect("under root")
                 .to_string_lossy()
                 .replace('\\', "/");
-            if !rel.ends_with(".rs")
+            if path.extension().is_none_or(|e| e != "rs")
                 || rel.contains("_tests")
                 || rel.contains("/tests/")
                 || rel.ends_with("tests.rs")
@@ -644,7 +650,7 @@ fn g_span_no_production_span_records_a_principal() {
                 .expect("under root")
                 .to_string_lossy()
                 .replace('\\', "/");
-            if !rel.ends_with(".rs")
+            if path.extension().is_none_or(|e| e != "rs")
                 || rel.contains("_tests")
                 || rel.contains("/tests/")
                 || rel.ends_with("tests.rs")

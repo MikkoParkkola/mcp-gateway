@@ -204,7 +204,7 @@ pub struct TransparencyLogger {
     /// The writer lease on `<path>.lock`, held for the logger's lifetime.
     lease: crate::fs_lock::ExclusiveFileLock,
     /// The record key a `caller_key` field is keyed with at append (MIK-8697
-    /// §16.12): every tenant_read writer funnels through this logger.
+    /// §16.12): every `tenant_read` writer funnels through this logger.
     record_key: Option<std::sync::Arc<crate::gateway::record_principal::RecordPrincipalKey>>,
     #[cfg(test)]
     fail_next_append: std::sync::atomic::AtomicBool,

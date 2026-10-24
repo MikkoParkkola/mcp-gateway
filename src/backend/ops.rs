@@ -303,7 +303,7 @@ impl Backend {
 
         // Check THIS slot's failsafe, not the backend's.
         entry.failsafe.admit(&self.name).inspect_err(|e| {
-            tracing::warn!(backend = %self.name, ?key, "Request rejected: {e}");
+            tracing::warn!(backend = %self.name, "Request rejected: {e}");
         })?;
 
         // Acquire semaphore
@@ -567,7 +567,7 @@ impl Backend {
         let entry = self.pooled_entry(&key)?;
 
         entry.failsafe.admit(&self.name).inspect_err(|e| {
-            tracing::warn!(backend = %self.name, ?key, "Notification rejected: {e}");
+            tracing::warn!(backend = %self.name, "Notification rejected: {e}");
         })?;
 
         let _permit = self.semaphore.acquire().await.map_err(|_| {

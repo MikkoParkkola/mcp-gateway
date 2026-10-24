@@ -459,6 +459,8 @@ async fn a_replay_whose_record_fails_is_withheld() {
 #[cfg(feature = "firewall")]
 mod chain_replay;
 mod delivery_credential;
+// MIK-8697: the credential canary over the meta route's request paths.
+mod canary;
 #[cfg(feature = "firewall")]
 mod tenants;
 

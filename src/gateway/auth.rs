@@ -147,10 +147,7 @@ impl std::fmt::Debug for ResolvedAuthConfig {
             .field("enabled", &self.enabled)
             .field(
                 "bearer_token",
-                &self
-                    .bearer_token
-                    .as_deref()
-                    .map(|t| format!("<redacted:{}>", bearer_token_fingerprint(t))),
+                &self.bearer_token.as_deref().map(|_| "<redacted>"),
             )
             .field("api_keys", &self.api_keys)
             .field("public_paths", &self.public_paths)

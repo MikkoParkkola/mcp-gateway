@@ -197,7 +197,7 @@ async fn audited_call_judged(
         });
     let (credential_kind, principal) = presented.unwrap_or((
         crate::security::audit::CredentialKind::of(None),
-        Default::default(),
+        crate::gateway::record_principal::InternalPrincipal::default(),
     ));
     let mut call = None;
     let mut reads = DirectReads::default();

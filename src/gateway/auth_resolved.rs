@@ -12,7 +12,7 @@ use tracing::warn;
 
 use super::{
     AUTH_TARGET, AuthenticatedClient, NamedApiKey, QuotaPrincipal, ResolvedApiKey,
-    ResolvedAuthConfig, bearer_token_fingerprint, principal_of,
+    ResolvedAuthConfig, principal_of,
 };
 use crate::Result;
 use crate::config::{AuthConfig, CircuitBreakerConfig};
@@ -60,9 +60,13 @@ impl ResolvedAuthConfig {
         if config.bearer_token.as_deref() == Some("auto")
             && let Some(ref token) = bearer_token
         {
+            // Its record principal, as the audit records name it (MIK-8697):
+            // operators correlate the token without a stored-principal digest.
             tracing::info!(target: AUTH_TARGET,
-                "Auto-generated bearer token (fingerprint {})",
-                bearer_token_fingerprint(token)
+                "Auto-generated bearer token (record principal {})",
+                principal_of(token)
+                    .record_form(&record_key)
+                    .as_str()
             );
         }
 

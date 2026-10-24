@@ -382,7 +382,7 @@ impl Backend {
                 "backend" => self.name.clone()
             )
             .set(live);
-            tracing::debug!(backend = %self.name, ?key, live_slots = live, "Pool slot created");
+            tracing::debug!(backend = %self.name, live_slots = live, "Pool slot created");
         }
         Ok((entry, out))
     }

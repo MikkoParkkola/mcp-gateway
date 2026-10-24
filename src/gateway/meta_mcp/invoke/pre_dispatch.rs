@@ -151,19 +151,19 @@ impl MetaMcp {
                     ) {
                         debug!(target: INVOKE_TARGET,
                             server,
-                            tool, key, trace_id, "Idempotency cache hit (firewall refusal)"
+                            tool, trace_id, "Idempotency cache hit (firewall refusal)"
                         );
                         return Err(Error::ResponseFirewallRefused);
                     }
                     let (code, message) = crate::idempotency::cached_error_parts(&error);
                     debug!(target: INVOKE_TARGET,
                         server,
-                        tool, key, trace_id, "Idempotency cache hit (failed)"
+                        tool, trace_id, "Idempotency cache hit (failed)"
                     );
                     return Err(Error::json_rpc(code, message));
                 }
                 GuardOutcome::CachedResult(cached) => {
-                    debug!(target: INVOKE_TARGET, server, tool, key, trace_id, "Idempotency cache hit");
+                    debug!(target: INVOKE_TARGET, server, tool, trace_id, "Idempotency cache hit");
                     // A stored side-effect notice is the gateway's own text;
                     // its first call delivered no read either (MIK-7991).
                     // Reached when the sync admission's wall-clock entry has
@@ -207,7 +207,7 @@ impl MetaMcp {
                     *idem_reservation = Some(reservation);
                     debug!(target: INVOKE_TARGET,
                         server,
-                        tool, key, trace_id, "Idempotency key registered as in-flight"
+                        tool, trace_id, "Idempotency key registered as in-flight"
                     );
                 }
             }

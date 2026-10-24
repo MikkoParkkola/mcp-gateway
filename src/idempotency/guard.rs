@@ -52,7 +52,10 @@ pub fn enforce(
         ))),
         AdmitOutcome::InFlight => Err(Error::json_rpc(
             409,
-            format!("Duplicate request in progress for key: {key}"),
+            // Not the key: it ends in the caller's stored principal (MIK-8697).
+            "Duplicate request in progress for key: the earlier call with this \
+             idempotency key has not finished"
+                .to_owned(),
         )),
         AdmitOutcome::Completed(value, read, writes) => {
             // MIN.2 row 14: a replay restores the reading stored with this
@@ -66,16 +69,17 @@ pub fn enforce(
         AdmitOutcome::Failed(error) => Ok(GuardOutcome::CachedError(error)),
         AdmitOutcome::Mismatch => Err(Error::json_rpc(
             409,
-            format!(
-                "Idempotency key is already in use for a different request: {key}. \
-                 A key identifies one call; reuse it only to repeat that same call."
-            ),
+            // Not the key: it ends in the caller's stored principal (MIK-8697).
+            "Idempotency key is already in use for a different request. \
+             A key identifies one call; reuse it only to repeat that same call."
+                .to_owned(),
         )),
         AdmitOutcome::AtCapacity => Err(Error::json_rpc(
             503,
+            // Not the key: it ends in the caller's stored principal (MIK-8697).
             format!(
                 "Idempotency cache at capacity ({MAX_ENTRIES} entries); \
-                 refusing new protected request for key: {key}"
+                 refusing a new protected request"
             ),
         )),
     }

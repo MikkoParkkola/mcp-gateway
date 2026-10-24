@@ -32,7 +32,7 @@ pub(crate) struct Services {
     )>,
     /// What the credentials that are not API keys are re-checked against.
     pub credentials: LiveCredentials,
-    /// The process's record key (MIK-8697 §16.12), from the MetaMcp that
+    /// The process's record key (MIK-8697 §16.12), from the `MetaMcp` that
     /// built these services.
     pub(crate) record_key: Option<Arc<crate::gateway::record_principal::RecordPrincipalKey>>,
 }

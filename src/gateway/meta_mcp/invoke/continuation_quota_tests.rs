@@ -505,7 +505,7 @@ async fn events_search_visible(name: &str, principal: Option<&str>) -> bool {
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: crate::events::LiveCredentials::default(),
-        record_key: crate::gateway::record_principal::test_key_slot(),
+        record_key: Some(crate::gateway::record_principal::test_key_arc()),
     };
     hub.start(services);
     let meta = crate::gateway::meta_mcp::MetaMcp::new(std::sync::Arc::new(

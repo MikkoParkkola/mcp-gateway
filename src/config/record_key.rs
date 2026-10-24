@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The record key's text (MIK-8697): a SecretRef when one is configured, else
+//! The record key's text (MIK-8697): a `SecretRef` when one is configured, else
 //! the fallback key file, created on first use. Fails closed.
 
 use std::io::Write as _;
@@ -9,12 +9,12 @@ use std::path::Path;
 use super::secret_ref::{SecretRef, read_file_ref};
 use crate::{Error, Result};
 
-/// The resolved key text: `configured` resolved as a SecretRef (errors name
+/// The resolved key text: `configured` resolved as a `SecretRef` (errors name
 /// `field`), else the 64 hex digits of `key_file`, which is created when absent.
 ///
 /// # Errors
 ///
-/// An unresolvable SecretRef; a key file that cannot be created or read, is
+/// An unresolvable `SecretRef`; a key file that cannot be created or read, is
 /// too permissive or is not 64 lowercase hex digits, naming its path.
 pub(crate) fn resolve_record_key_text(
     configured: Option<&str>,

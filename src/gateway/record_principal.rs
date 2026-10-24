@@ -11,7 +11,7 @@
 use std::fmt;
 use std::path::Path;
 
-use crate::hashing::{hmac_sha256_hex, sha256_hex};
+use crate::hashing::hmac_sha256_hex;
 
 /// The fallback key file, in the gateway data directory.
 pub(crate) const KEY_FILE: &str = "record-principal.key";
@@ -28,16 +28,19 @@ pub(crate) const NO_CREDENTIAL_RECORD: &str = "";
 pub(crate) fn test_record_key() -> RecordPrincipalKey {
     RecordPrincipalKey::from_text(TEST_RECORD_KEY).expect("the test key is long enough")
 }
-/// [`test_record_key`] as the `Option<Arc<_>>` slot a service holds.
+/// [`test_record_key`] shared, as a service holds it.
 #[cfg(test)]
-pub(crate) fn test_key_slot() -> Option<std::sync::Arc<RecordPrincipalKey>> {
-    Some(std::sync::Arc::new(test_record_key()))
+pub(crate) fn test_key_arc() -> std::sync::Arc<RecordPrincipalKey> {
+    std::sync::Arc::new(test_record_key())
 }
 /// The shortest key accepted, in bytes of key text.
 const MIN_KEY_BYTES: usize = 32;
 
 /// Domain label of the record-principal derivation.
 const RECORD_DOMAIN: &[u8] = b"mcp-gateway/record-principal/v1";
+// Production use lands with MIK-8697 slice 3 (event handles); until then
+// the derivation is pinned by its tests only.
+#[cfg(test)]
 /// Domain label of the subscription-alias derivation.
 const SUBSCRIPTION_DOMAIN: &[u8] = b"mcp-gateway/subscription/v1";
 
@@ -56,7 +59,7 @@ fn keyed(key: &RecordPrincipalKey, domain: &[u8], value: &str, hex_len: usize) -
 ///
 /// Built from the resolved key *text*: the HMAC key is its UTF-8 bytes, taken
 /// as given. The one trailing newline of a file is stripped by whichever reader
-/// resolved it, so the fallback file and the same text as a SecretRef agree.
+/// resolved it, so the fallback file and the same text as a `SecretRef` agree.
 pub(crate) struct RecordPrincipalKey(Vec<u8>);
 
 impl RecordPrincipalKey {
@@ -76,17 +79,18 @@ impl RecordPrincipalKey {
     }
 
     /// Lowercase hex SHA-256 of the key bytes: names the key without being it.
+    #[cfg(test)]
     pub(crate) fn identity(&self) -> String {
-        sha256_hex(&self.0)
+        crate::hashing::sha256_hex(&self.0)
     }
 }
 
-/// The record key: `configured` (a SecretRef) when set, else the fallback file
+/// The record key: `configured` (a `SecretRef`) when set, else the fallback file
 /// in `data_dir`, created on first use. Fails closed: there is no unkeyed path.
 ///
 /// # Errors
 ///
-/// An unresolvable or short SecretRef, naming [`KEY_FIELD`]; a key file that
+/// An unresolvable or short `SecretRef`, naming [`KEY_FIELD`]; a key file that
 /// cannot be created or read, or is malformed or too permissive, naming its path.
 pub(crate) fn resolve_key(
     configured: Option<&str>,
@@ -194,7 +198,7 @@ const KEYED_OWNER_MARK: &str = "rp:";
 /// and a 12-lowercase-hex record form. Matching the whole shape, not only the
 /// prefix, means a raw principal that happened to start with `rp:` would still
 /// be keyed. None can: stored principals are 12 hex (`principal_of`,
-/// `principal_of_digest`), `kst:`/`oidc:` + 64 hex (key_server
+/// `principal_of_digest`), `kst:`/`oidc:` + 64 hex (`key_server`
 /// `runtime_principal`), or fixed constants (stdio, the dashboard session).
 fn is_keyed_owner(rest: &str) -> bool {
     rest.strip_prefix(KEYED_OWNER_MARK).is_some_and(|rf| {
@@ -202,6 +206,9 @@ fn is_keyed_owner(rest: &str) -> bool {
     })
 }
 
+// Production use lands with MIK-8697 slice 3 (event handles); until then
+// the derivation is pinned by its tests only.
+#[cfg(test)]
 /// The keyed alias of a stored subscription id: the client-facing handle.
 pub(crate) fn subscription_alias(key: &RecordPrincipalKey, stored_id: &str) -> String {
     keyed(key, SUBSCRIPTION_DOMAIN, stored_id, 16)
@@ -347,6 +354,9 @@ mod tests {
 #[cfg(test)]
 #[path = "record_principal_key_tests.rs"]
 mod key_tests;
+#[cfg(test)]
+#[path = "record_principal_leak_tests.rs"]
+mod leak_tests;
 #[cfg(test)]
 #[path = "record_principal_scan_tests.rs"]
 mod scan_tests;
