@@ -112,7 +112,7 @@ move for a deprecated pin; the upgrading note reuses them.
    - the init docs, because `init` (and the empty-import wizard, which calls
      it) enables memory and sequential-thinking by default;
    - the README registry table row, if it lists them;
-   - "(Node 24+)" at the end of the three registry descriptions.
+   - "(Node 24+ recommended)" at the end of the three registry descriptions.
 
    It is worded as a recommendation: Node 22 works, and the gateway shows no
    warning.
@@ -126,10 +126,10 @@ move for a deprecated pin; the upgrading note reuses them.
        copy-first steps);
      - the roots change does not apply through the gateway;
      - a copy-paste check, `node -e 'process.exit(+process.versions.node.split(".")[0] >= 24 ? 0 : 1)' && echo "Node 24 or later (recommended for 2.0.0)"`.
-7. **Revert:** `git revert -m 1` of the PR's merge commit, which restores the
-   pins, the sidecar records and the version-dependent tests together (they
-   landed across several commits, so reverting one of them alone leaves tests
-   expecting 2.0.0). The PR states it.
+7. **Revert:** `git revert` of the PR's squash commit on the line, which
+   restores the pins, the sidecar records and the version-dependent tests
+   together (the repository squash-merges, so that one commit holds all of
+   them). The PR states it.
 
 ## Behaviour proof on Spark (AC: through the gateway)
 
@@ -199,7 +199,7 @@ decides REPLACE.5:**
 ## Lead rulings (2026-10-23)
 
 1. **Option A** for the Node floor: docs (including init and quick start), the
-   upgrading note, and "(Node 24+)" in the three descriptions. B, a pre-launch
+   upgrading note, and "(Node 24+ recommended)" in the three descriptions. B, a pre-launch
    check, stays in reserve and is triggered only if the Node 22 run fails.
 2. **REPLACE.5 reworded** to "works on Node 22; the gateway shows no warning"
    (pending the operator's ratify).
@@ -232,7 +232,7 @@ decides REPLACE.5:**
   failure stops the work, restores the original clause, returns to the lead
   and brings option B back.
 - **The doctor hint assertions** at :479, :483, :503 and :525 move with the pin.
-- **The revert** is the whole repin commit, tests included.
+- **The revert** is the PR's squash commit, tests included.
 - **The leftover open sections** are removed.
 - **The wizard paths:** the quick-start wizard path carries the Node note, and
   the empty-import wizard (which calls `init`) is named.
