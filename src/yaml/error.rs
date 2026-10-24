@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The adapter's redacted error and the value-free message rewriting (MIK-8425 B3).
 
-use super::*;
-
 /// The adapter's YAML error; its text never carries the value that caused it
 /// (MIK-8425 B3, CWE-532), keeps the key path, expected type and line/column.
 pub(crate) struct Error(Repr);

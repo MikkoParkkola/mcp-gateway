@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! figment's view of a YAML config: `Dict` with last-wins at every level.
 
-use super::*;
+use super::{Error, guard};
 use figment::Provider as _;
 use figment::providers::{Format as _, Yaml};
 use figment::value::{Dict, Map};

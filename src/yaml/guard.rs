@@ -3,7 +3,7 @@
 //! The MIK-8639 pre-parse guard: budgets and refusals checked on granit-parser's
 //! events before any document is built.
 
-use super::*;
+use super::{Error, Limit};
 use granit_parser::{ErrorKind, Event, Marker, ScanError, Tag, TokenType};
 use std::collections::{HashMap, HashSet};
 
