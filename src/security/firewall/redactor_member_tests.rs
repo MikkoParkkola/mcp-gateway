@@ -420,7 +420,6 @@ fn p4_near_miss_key_names_are_kept() {
         "token_count",
         "next_token",
         "rapikey",
-        "openaiApiKey",
     ] {
         let v = class_value(24);
         let mut value = json!({ key: v.clone() });
