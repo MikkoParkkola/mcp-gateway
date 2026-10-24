@@ -92,9 +92,10 @@ jobs:
       # ring and aws-lc-sys build C for the target. The mingw packages come
       # from the cache the mingw packages workflow (mingw-debs.yml) fills,
       # under the key both compute through scripts/ci/mingw-debs.sh. A miss
-      # (a new runner image not yet filled) falls back to the mirror, as
-      # before the cache, with a warning: failing would turn the line red on
-      # every new image (MIK-8766).
+      # (a runner image the fill has not covered) falls back to the mirror
+      # with a warning, then saves what it fetched: the pool serves several
+      # images at once and the fill covers only its own runner's, so each
+      # image fills itself on its first miss (MIK-8766, MIK-8824).
       - name: Name the mingw package cache
         id: mingw-key
         if: matrix.target == 'x86_64-pc-windows-gnu'
@@ -117,6 +118,14 @@ jobs:
             scripts/ci/mingw-debs.sh download "$HOME/mingw-debs"
           fi
           scripts/ci/mingw-debs.sh install "$HOME/mingw-debs"
+      # After the install, so only a set that installed is cached. A hit saves
+      # nothing; a lost race with another run on the same image only warns.
+      - name: Save the mingw packages
+        if: matrix.target == 'x86_64-pc-windows-gnu' && steps.mingw-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/mingw-debs
+          key: ${{ steps.mingw-key.outputs.key }}
       # One shared cache for the Linux shards (saved by the first to finish),
       # not one per shard: extra entries would crowd the 10 GB repository
       # cache the required jobs depend on. The Windows-target shard keeps its
