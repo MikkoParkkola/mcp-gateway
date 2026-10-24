@@ -21,6 +21,7 @@ IMAGE="${1:?usage: smoke-full-image.sh <image-ref>}"
 PROBE_TIMEOUT=60
 SOLVE_TIMEOUT=180
 REMOTE_TIMEOUT=120
+PULL_TIMEOUT=300
 # The root path's own budget: the install is bounded by INSTALL_TIMEOUT in the
 # entrypoint, and a startup step is as slow as the deployment wrote it.
 STARTUP_TIMEOUT=300
@@ -36,8 +37,22 @@ STOP_CASE="smoke-full-stop-$$"
 ANSWER="${WORKDIR}/smoke-full-answer.$$"
 trap 'rm -f "${ANSWER}"; docker rm -f "${ROOT_CASE}" "${STOP_CASE}" > /dev/null 2>&1 || true' EXIT
 
+# Make the image local before the first probe. On a runner that has not pulled
+# this digest, `docker run` writes its pull progress to stderr, and
+# run_as_gateway captures stderr as the probe's answer, so `node --version` read
+# "Unable to find image ... v24.x" and failed the major check. docker.yml probes
+# a locally loaded `:scan-full` tag that no registry has, so pull only when the
+# image is absent. smoke-image.sh, run last, also expects the image local
+# (`--pull never`). The pull is bounded like every probe, so a registry that
+# stops answering fails the step instead of hanging it.
+if ! docker image inspect "${IMAGE}" > /dev/null 2>&1 \
+  && ! timeout -k 10 "${PULL_TIMEOUT}" docker pull --quiet "${IMAGE}" > /dev/null; then
+  echo "::error::${IMAGE}: not present locally and could not be pulled within ${PULL_TIMEOUT}s"
+  exit 1
+fi
+
 run_as_gateway() {
-  docker run --rm --user 1001:1001 --entrypoint sh "${IMAGE}" \
+  docker run --rm --user 1001:1001 --pull never --entrypoint sh "${IMAGE}" \
     -c "timeout -k 10 ${1} ${2}" > "${ANSWER}" 2>&1
 }
 
@@ -66,7 +81,10 @@ probe() {
 wait_for_gateway() {
   local name="$1"
   for _ in $(seq 1 $((STARTUP_TIMEOUT / 2))); do
-    if ! docker inspect -f '{{.State.Running}}' "${name}" | grep -q true; then
+    # Captured and compared, never piped into `grep -q` (pipefail); a
+    # container already gone reads as not running.
+    running="$(docker inspect -f '{{.State.Running}}' "${name}" 2>/dev/null || true)"
+    if [ "${running}" != "true" ]; then
       docker logs "${name}"
       fail "exited during startup"
     fi
@@ -137,7 +155,11 @@ docker run -d --name "${ROOT_CASE}" --pull never --user root \
   -v "${WORKDIR}/smoke.yaml:/config.yaml:ro" \
   "${IMAGE}" --config /config.yaml > /dev/null
 wait_for_gateway "${ROOT_CASE}"
-docker logs "${ROOT_CASE}" 2>&1 | grep -q 'step: ran as uid 0' \
+# Matched from a captured string, never through a pipe: under pipefail,
+# `grep -q` exits on its first match and the writer's SIGPIPE (141) fails a
+# pipeline that did match, once the output outgrows the pipe buffer.
+ROOT_LOG="$(docker logs "${ROOT_CASE}" 2>&1)"
+grep -q 'step: ran as uid 0' <<< "${ROOT_LOG}" \
   || fail "the startup step did not run as root"
 if ! UID_LINE="$(docker exec "${ROOT_CASE}" sh -c 'grep -m1 "^Uid:" /proc/1/status')"; then
   fail "cannot read the uid of the gateway process"
@@ -163,7 +185,7 @@ if FAIL_LOG="$(docker run --rm --user root \
       "${IMAGE}" --config /config.yaml 2>&1)"; then
   fail "a startup step that fails does not stop the container"
 fi
-printf '%s' "${FAIL_LOG}" | grep -q 'step: refusing to start' \
+grep -q 'step: refusing to start' <<< "${FAIL_LOG}" \
   || fail "the container stopped without running the failing startup step"
 
 # Root path, installed package that does not exist: the install fails and the
@@ -181,7 +203,7 @@ if BAD_LOG="$(docker run --rm --user root \
       "${IMAGE}" --config /config.yaml 2>&1)"; then
   fail "a failed EXTRA_APT_PACKAGES install does not stop the container"
 fi
-printf '%s' "${BAD_LOG}" | grep -q 'EXTRA_APT_PACKAGES install failed' \
+grep -q 'EXTRA_APT_PACKAGES install failed' <<< "${BAD_LOG}" \
   || fail "the container stopped without reporting the failed install"
 
 # Root path, a stop while startup is still running: the entrypoint is PID 1
