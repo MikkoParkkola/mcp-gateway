@@ -217,7 +217,8 @@ impl std::fmt::Debug for ApiKeyRef {
 impl std::fmt::Debug for Subscription {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Subscription")
-            .field("id", &self.id)
+            // The stored id hashes the stored principal (MIK-8697 §13).
+            .field("id", &"<redacted>")
             // The owner names the credential's stored principal (MIK-8697).
             .field("principal", &"<redacted>")
             .field("name", &self.name)
@@ -421,7 +422,9 @@ pub(crate) fn load_records<T: for<'de> Deserialize<'de>>(dir: &Path) -> Vec<(Pat
         if let Some(record) = parsed {
             records.push((path, record));
         } else {
-            tracing::warn!(path = %path.display(), "events store record skipped");
+            // The directory only: a subscription file is named by its stored id
+            // (MIK-8697 §13).
+            tracing::warn!(dir = %dir.display(), "events store record skipped");
         }
     }
     records

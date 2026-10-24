@@ -184,7 +184,7 @@ impl EventsHub {
         let Err(error) = services.audit_attempt(&ctx.attempt(status)).await else {
             return true;
         };
-        tracing::warn!(%error, status, subscription = %ctx.sub.id, "events: attempt record not written; retrying");
+        tracing::warn!(%error, status, subscription = %services.alias(&ctx.sub.id), "events: attempt record not written; retrying");
         self.retry_unsent(services, ctx.record).await;
         false
     }
@@ -316,7 +316,7 @@ impl EventsHub {
         {
             let id = sub.id.clone();
             self.blocking(move |store| store.suspend(&id)).await;
-            tracing::warn!(subscription = %sub.id, "events: sustained delivery failure, subscription suspended");
+            tracing::warn!(subscription = %services.alias(&sub.id), "events: sustained delivery failure, subscription suspended");
         }
         self.settle_at(services, record, outcome, now).await;
     }

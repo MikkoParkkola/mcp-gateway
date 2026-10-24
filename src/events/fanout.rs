@@ -252,7 +252,7 @@ impl EventsHub {
             Some(Enqueued::Written | Enqueued::NoSubscription) => {}
             Some(dropped) => {
                 self.runtime.count_drop();
-                tracing::warn!(?dropped, subscription = %sub.id, "events: outbox full, occurrence dropped");
+                tracing::warn!(?dropped, subscription = %services.alias(&sub.id), "events: outbox full, occurrence dropped");
             }
             None => self.runtime.count_drop(),
         }
@@ -503,7 +503,7 @@ impl EventsHub {
         let Ok(now) = crate::clock::utc_now() else {
             tracing::warn!(
                 clock_unreadable = true,
-                subscription = %refused.id,
+                subscription = %self.handle(&refused.id).unwrap_or_default(),
                 "events: refused subscription kept; the host clock reads before 1970"
             );
             return;
