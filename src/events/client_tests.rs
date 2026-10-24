@@ -30,7 +30,7 @@ fn signature_is_hmac_over_id_timestamp_body_newest_first() {
         let raw = base64::engine::general_purpose::STANDARD
             .decode(part.strip_prefix("v1,").expect("v1 prefix"))
             .expect("base64");
-        let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("key");
+        let mut mac = HmacSha256::new_from_slice(key).expect("key");
         mac.update(b"msg_1.1700000000.{}");
         mac.verify_slice(&raw)
             .expect("signature verifies under its key");
