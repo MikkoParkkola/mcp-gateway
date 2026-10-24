@@ -300,37 +300,55 @@ impl Redactor {
         let literals = json_literal::string_literals(text);
         // A value literal whose decoded text is exempt keeps every byte, and a
         // pattern counts only where it still redacts something (MIK-8756).
-        let exempt_lits: Vec<&Literal> = literals
+        let exempt_contents: Vec<(usize, usize)> = literals
             .iter()
             .filter(|lit| !lit.key && decoded(text, lit).is_some_and(|v| exempt(&v)))
+            .map(|lit| (lit.start, lit.end))
             .collect();
-        let overlaps_exempt = |&(start, end): &(usize, usize)| {
-            exempt_lits.iter().any(|l| start < l.end && l.start < end)
-        };
-        let mut matched = Vec::new();
-        let mut spans = Vec::new();
-        for idx in &self.set.matches(text) {
-            let kept: Vec<(usize, usize)> = overlapping_spans(&self.regexes[idx], text)
-                .into_iter()
-                .filter(|span| !overlaps_exempt(span))
-                .collect();
-            if !kept.is_empty() {
-                matched.push(idx);
-                spans.extend(kept);
-            }
-        }
-        spans.sort_unstable();
-        let spans = merge_spans(spans);
         let starts_in_literal = |at: usize| {
             let after = literals.partition_point(|lit| lit.start <= at);
             after.checked_sub(1).is_some_and(|i| at < literals[i].end)
         };
-        if !spans.iter().all(|&(start, _)| starts_in_literal(start)) {
-            tracing::debug!(
-                "a credential span starts outside a string literal; redacting the leaf whole"
-            );
-            return JsonText::NotJson;
+        let mut matched = Vec::new();
+        let mut spans = Vec::new();
+        for idx in &self.set.matches(text) {
+            let found = overlapping_spans(&self.regexes[idx], text);
+            // Judged on the matches as found: a piece left after an exempt
+            // value is cut out can start on that value's closing quote.
+            if !found.iter().all(|&(start, _)| starts_in_literal(start)) {
+                tracing::debug!(
+                    "a credential span starts outside a string literal; redacting the leaf whole"
+                );
+                return JsonText::NotJson;
+            }
+            // An exempt value loses only its own bytes from a span that
+            // crosses it; dropping the whole span delivered the credential
+            // beside it (MIK-8832).
+            let crossed = found
+                .iter()
+                .any(|&(start, end)| exempt_contents.iter().any(|&(a, b)| a < end && start < b));
+            let mut kept = without(&found, &exempt_contents);
+            kept.sort_unstable();
+            let kept = merge_spans(kept);
+            // A pattern counts only where what is left still redacts.
+            let redacts = if crossed {
+                !project(
+                    text,
+                    &kept,
+                    |lit| self.match_starts_in(text, lit),
+                    &literals,
+                )
+                .is_empty()
+            } else {
+                !kept.is_empty()
+            };
+            if redacts {
+                matched.push(idx);
+            }
+            spans.extend(kept);
         }
+        spans.sort_unstable();
+        let spans = merge_spans(spans);
         let members = self.member_values(text, &literals, exempt);
         if spans.is_empty() && members.is_empty() {
             return JsonText::Kept;
@@ -756,6 +774,27 @@ fn replace_spans(text: &str, ranges: &[(usize, usize)]) -> String {
 
 /// Merge sorted spans that overlap or touch, so no character between two
 /// matched spans can survive and touching tokens share one marker.
+/// `spans` (in order) with every byte of `holes` (in order, disjoint) cut
+/// out, so a span crossing a hole leaves the pieces on either side of it.
+fn without(spans: &[(usize, usize)], holes: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    let mut out = Vec::with_capacity(spans.len());
+    for &(mut start, end) in spans {
+        for &(hole_start, hole_end) in holes {
+            if hole_start >= end || hole_end <= start {
+                continue;
+            }
+            if start < hole_start {
+                out.push((start, hole_start));
+            }
+            start = start.max(hole_end);
+        }
+        if start < end {
+            out.push((start, end));
+        }
+    }
+    out
+}
+
 fn merge_spans(spans: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
     let mut merged: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
     for (start, end) in spans {
