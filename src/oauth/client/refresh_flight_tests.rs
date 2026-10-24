@@ -767,3 +767,27 @@ async fn an_oversized_expires_in_is_refused() {
 
 #[path = "refresh_flight_renewal_tests.rs"]
 mod renewal;
+
+/// MIK-8762 SHAFU.1 golden, computed independently (Python hashlib): the
+/// persisted marker's fingerprint is the lowercase hex SHA-256 of the token.
+#[test]
+fn a_refresh_token_fingerprint_matches_its_independent_golden() {
+    assert_eq!(
+        super::refresh_flight::fingerprint_hex("tok"),
+        "1a7674eb4ee78df7e1ac439a93c3fa8e3c945784d4dec9fd8e3011738b2f1d62"
+    );
+}
+
+/// MIK-8762 (review): the persisted marker and the spent set name a token the
+/// same way. `fingerprint_hex` now hashes on its own, so pin it to the raw
+/// `fingerprint` the spent set stores.
+#[test]
+fn the_marker_fingerprint_is_the_hex_of_the_spent_set_fingerprint() {
+    for token in ["tok", "", "a refresh token with spaces", "ä"] {
+        assert_eq!(
+            super::refresh_flight::fingerprint_hex(token),
+            hex::encode(super::refresh_flight::fingerprint(token)),
+            "{token:?}"
+        );
+    }
+}

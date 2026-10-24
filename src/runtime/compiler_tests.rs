@@ -221,8 +221,8 @@ fn divergence_registry_records_deltas() {
     // Each record has the substrate tags
     for record in &records {
         assert_eq!(record.descriptor_name, "test-sandbox");
-        assert_eq!(record.substrate_a, SubstrateTag::GVisor);
-        assert_eq!(record.substrate_b, SubstrateTag::AppleVm);
+        assert_eq!(record.substrate_a, Substrate::GVisor);
+        assert_eq!(record.substrate_b, Substrate::AppleVm);
         assert!(!record.description.is_empty());
     }
 }
