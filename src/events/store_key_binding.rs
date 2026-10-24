@@ -24,9 +24,15 @@ impl super::Store {
             return;
         };
         let current = key.identity();
-        let recorded = std::fs::read_to_string(root.join(KEY_ID_FILE))
-            .ok()
-            .map(|text| text.trim_end().to_owned());
+        // Mode-checked like the store's records: written owner-only, so a
+        // loosened or foreign-owned file reads as no recorded identity.
+        let recorded = crate::config::read_checked_bytes(
+            &root.join(KEY_ID_FILE),
+            crate::config::CheckedFile::EventsRecord,
+        )
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .map(|text| text.trim_end().to_owned());
         if recorded.as_deref() == Some(current.as_str()) {
             return;
         }

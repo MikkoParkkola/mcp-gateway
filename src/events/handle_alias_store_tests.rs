@@ -124,7 +124,7 @@ fn s3_a_key_mismatch_adopts_the_new_key_with_one_warning_and_delivery_continues(
             .ok();
         runtime.block_on(subscribe_at(&hub, "p", &url("p")));
     }
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         dir.path().join(SIDECAR),
         format!("{}\n", other_key().identity()),
     )
@@ -265,7 +265,8 @@ fn s4_a_matching_sidecar_is_kept_and_nothing_warns() {
     let dir = tempfile::tempdir().expect("dir");
     let hub = non_empty_hub(dir.path());
     let bytes = format!("{}\n", test_record_key().identity());
-    std::fs::write(dir.path().join(SIDECAR), &bytes).expect("bound to A");
+    crate::gateway::test_helpers::write_owner_only(dir.path().join(SIDECAR), &bytes)
+        .expect("bound to A");
     let warnings = start_capturing(&hub, test_record_key(), async {});
     assert_eq!(
         std::fs::read_to_string(dir.path().join(SIDECAR)).expect("kept"),
@@ -313,7 +314,7 @@ fn s7_the_adoption_warning_names_fingerprints_never_key_material() {
             .set(Arc::new(services_with(other_key())))
             .ok();
     }
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         dir.path().join(SIDECAR),
         format!("{}\n", other_key().identity()),
     )
