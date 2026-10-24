@@ -1279,9 +1279,10 @@ ever needs the key's hash, so 4.0 stores the digest instead.
 - **For `env:` keys, store the digest in the variable or secret instead of the key.** A
   variable that still holds the key fails the load, and the error names the variable, never
   its value. Nothing is silently hashed.
-- **Clients keep the same key.** Only the config changes. `principal` values, session owners
-  and log lines are unchanged: the principal is the first 12 hex characters of the digest,
-  which is what 3.x derived from the key.
+- **Clients keep the same key.** Only the config changes. Session owners and the other
+  stored owner keys are unchanged: the stored principal is the first 12 hex characters of
+  the digest, which is what 3.x derived from the key. Records and logs no longer show it:
+  they carry a keyed form (see `upgrading.d/8697.md`, MIK-8697).
 - **Optional `expires_at`** (RFC 3339, for example `"2027-01-01T00:00:00Z"`). After it, a
   matching key is refused with 401 and a `warn` naming the key. An expired key does not stop
   the gateway from starting; it logs a `warn` at startup instead. Omitting `expires_at` keeps
@@ -1348,7 +1349,8 @@ named an API-key label rather than a person and skipped every refused or failed 
   `audit.existingClaim` is unset.
 - **Every record carries `schema_version: 2`**, plus `trace_id`, `outcome`
   (`ok`, `tool_error`, `denied`, `invalid`, `error`), `error_code` for the last three, and
-  `who`: `credential_kind`, `principal` (12 hex characters of the credential's sha256),
+  `who`: `credential_kind`, `principal` (12 hex of an HMAC-SHA256, under the gateway's
+  record key, of the stored principal; never the credential's sha256: MIK-8697),
   `account`, and for a verified caller `authority` and `subject`, the `(issuer, sub)`.
   An email or a display label is never written. `caller` stays for one major version as a
   copy of `who.account`. Entries without `schema_version` are v1; both verify in one file.
