@@ -127,3 +127,47 @@ fn l3_auth_diagnostics_name_no_credential_digest() {
     assert!(!text.contains(token_principal.storage_form()), "{text}");
     assert!(!text.contains(&token), "{text}");
 }
+
+/// L4 (gpt confirmation round): the Debug output of the types holding a
+/// stored principal, or a key or binding built from one, names none of it.
+#[test]
+fn l4_debug_output_names_no_principal_or_derived_key() {
+    let api_key = crate::events::ApiKeyRef {
+        name: "c".to_owned(),
+        principal: P.to_owned(),
+    };
+    let credential = crate::events::Credential {
+        kind: crate::security::audit::CredentialKind::StaticBearer,
+        principal: P.to_owned(),
+        api_key: Some(api_key.clone()),
+        expires_at: None,
+        binding: Some(crate::events::LiveBinding::StaticBearerSha256 {
+            bearer_sha256: format!("{P}{P}"),
+        }),
+    };
+    let evidence = crate::security::tenant_reads::RejectionEvidence {
+        caller_key: Some(key()),
+        verdict: crate::security::tenant_reads::ReadVerdict::Blocked,
+        attribution: crate::security::tenant_reads::ReadAttribution::of(
+            std::collections::BTreeSet::new(),
+            false,
+        ),
+    };
+    let cache = Arc::new(IdempotencyCache::new());
+    let GuardOutcome::Proceed(held) = enforce(&cache, &key(), "fp").expect("first") else {
+        panic!("the first caller is admitted");
+    };
+    for shown in [
+        format!("{api_key:?}"),
+        format!("{credential:?}"),
+        format!("{evidence:?}"),
+        format!("{held:?}"),
+        format!("{cache:?}"),
+    ] {
+        assert!(
+            shown.contains("<redacted>") || shown.contains("entries"),
+            "premise: {shown}"
+        );
+        assert!(!shown.contains(P), "Debug names the principal: {shown}");
+    }
+}

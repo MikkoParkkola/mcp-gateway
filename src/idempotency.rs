@@ -155,13 +155,22 @@ impl IdempotencyState {
 /// let result = cache.check(key);
 /// assert!(matches!(result, CheckOutcome::Completed(_)));
 /// ```
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct IdempotencyCache {
     entries: DashMap<String, Entry>,
     /// Seconds the cache's clock runs ahead of the process clock (MIK-8070):
     /// tests age entries forward, never by building a past `Instant`.
     #[cfg(test)]
     ahead: std::sync::atomic::AtomicU64,
+}
+
+// Not derived: every key ends in a caller's stored principal (MIK-8697).
+impl std::fmt::Debug for IdempotencyCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IdempotencyCache")
+            .field("entries", &self.entries.len())
+            .finish_non_exhaustive()
+    }
 }
 
 /// The liveness token an in-flight entry is judged against.

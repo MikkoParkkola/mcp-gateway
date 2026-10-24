@@ -418,6 +418,8 @@ const CENSUS: &[(&str, &str, usize, Class, &str)] = &[
     ("src/gateway/meta_mcp/invoke.rs", "mod mcp_credential_principal_tests;", 1, Decl, "a test module's name"),
     ("src/capability/execution_context.rs", "pub(crate) credential_principal: Option<String>", 1, Decl, "MCP child owner key field"),
     ("src/capability/execution_context.rs", "credential_principal: None,", 1, Decl, "anonymous default"),
+    ("src/capability/execution_context.rs", "\"credential_principal\",", 1, Decl, "Debug field name; the value prints <redacted>"),
+    ("src/capability/execution_context.rs", "&self.credential_principal.as_ref().map(|_| \"<redacted>\")", 1, Decl, "Debug value: presence only, never the principal"),
     ("src/capability/executor/mcp.rs", ".credential_principal", 1, Store, "per-owner MCP child key"),
     ("src/gateway/task_service/execution/context.rs", "credential_principal: String,", 2, Decl, "owned snapshot field and constructor parameter"),
     ("src/gateway/task_service/execution/context.rs", "credential_principal,", 1, Decl, "constructor field init"),
@@ -528,6 +530,16 @@ fn g_census_every_way_to_the_stored_principal_is_classified() {
 /// principal, caller, owner or credential.
 fn span_problems(rel: &str, text: &str) -> Vec<String> {
     const SENSITIVE_TYPES: &[&str] = &["Context", "Principal", "Caller", "Owner"];
+    // By name as well as type: an `identity_key: Option<&str>` names no
+    // sensitive type and still carries a credential binding (MIK-8697).
+    const SENSITIVE_NAMES: &[&str] = &[
+        "key",
+        "principal",
+        "owner",
+        "caller",
+        "credential",
+        "binding",
+    ];
     const SENSITIVE_FIELDS: &[&str] = &["principal", "caller", "owner", "credential"];
     let lines = production_lines(text);
     let mut problems = Vec::new();
@@ -603,10 +615,9 @@ fn span_problems(rel: &str, text: &str) -> Vec<String> {
                 continue;
             };
             let name = name.trim().trim_start_matches("mut ").trim();
-            if SENSITIVE_TYPES.iter().any(|s| ty.contains(s))
-                && !skip_all
-                && !skipped.contains(&name)
-            {
+            let sensitive = SENSITIVE_TYPES.iter().any(|s| ty.contains(s))
+                || SENSITIVE_NAMES.iter().any(|s| name.contains(s));
+            if sensitive && !skip_all && !skipped.contains(&name) {
                 problems.push(format!("{rel}:{}: `{name}` is recorded on the span", n + 1));
             }
         }
@@ -629,6 +640,9 @@ fn span_problems_names_an_unskipped_context_and_a_principal_field() {
     assert!(span_problems("f.rs", &skipped).is_empty());
     let named = skipped.replace("cap = %c.name", "principal = %p");
     assert_eq!(span_problems("f.rs", &named).len(), 1);
+    // A credential binding behind a plain type is caught by its name.
+    let by_name = skipped.replace("context: &ExecutionContext", "identity_key: Option<&str>");
+    assert_eq!(span_problems("f.rs", &by_name).len(), 1, "{by_name}");
 }
 
 /// G-SPAN over the source: no production span records a context, principal,

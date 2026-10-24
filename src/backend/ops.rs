@@ -538,8 +538,10 @@ impl Backend {
     ///
     /// Returns an error if the backend is unavailable, the concurrency limit
     /// is reached, or the notification cannot be sent.
+    // `identity_key` is the caller's pool binding, for an A2A caller an
+    // unkeyed hash of its principal: never a span field (MIK-8697).
     #[tracing::instrument(
-        skip(self, params, extra_headers),
+        skip(self, params, extra_headers, identity_key),
         fields(
             backend = %self.name,
             method = %method,
