@@ -128,6 +128,18 @@ fn upgrade_reports_a_retired_setting_as_ignored() {
     );
 }
 
+/// T1.8b: `meta_mcp.cache_tools` also warns, but never did anything, so its
+/// report does not send the operator to the seven-settings notes.
+#[test]
+fn upgrade_reports_cache_tools_as_never_having_an_effect() {
+    let s = setup("meta_mcp:\n  enabled: true\n  cache_tools: false\n");
+    let out = upgrade(&s);
+    let report = text(&out);
+    assert!(out.status.success(), "{report}");
+    assert!(report.contains("never had an effect"), "{report}");
+    assert!(!report.contains("Seven settings"), "{report}");
+}
+
 /// T1.6b: a flow-style client breaker with a tuning key beside `enabled` is
 /// left as written, and the advice keeps the sibling: delete only `enabled`.
 #[test]
@@ -136,6 +148,7 @@ fn upgrade_keeps_a_flow_style_client_breaker_and_its_tuning() {
     let s = setup(before);
     let out = upgrade(&s);
     let report = text(&out);
+    assert!(out.status.success(), "{report}");
     assert_eq!(
         read(&s),
         before,

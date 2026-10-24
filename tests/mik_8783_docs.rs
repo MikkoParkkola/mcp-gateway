@@ -98,6 +98,11 @@ fn the_upgrade_notes_stop_advertising_the_retired_settings() {
         fragment.contains("--protocol-revision-window"),
         "the fragment names the flag"
     );
+    // `upgrade`'s report names this heading; a retitle must update both.
+    assert!(
+        fragment.contains("Seven settings are now the gateway's own choice"),
+        "the UPGRADING entry keeps the heading the upgrade report names"
+    );
     assert!(
         fragment.contains("client_circuit_breaker: {}"),
         "the fragment gives the keep-on edit"
