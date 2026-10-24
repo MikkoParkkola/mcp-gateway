@@ -34,53 +34,22 @@ pub(crate) struct ReplayedDigest {
 }
 
 impl Firewall {
-    /// Store the committed in-plan `receipts` of a retained sync plan
-    /// delivery under its admission key (F1: identity, round,
-    /// operation), with its `calls` and the
-    /// digest of the delivered answer they were committed against (F4),
-    /// live for `retention` (the retained result's own retention).
-    pub(crate) fn store_sync_replay(
-        &self,
-        (identity, round, operation): (&str, &str, &str),
-        receipts: &[ReplaySource<'_>],
-        calls: ReplayCalls,
-        answer_digest: &str,
-        retention: Duration,
-    ) {
-        let key = StoredKey::Sync {
-            identity: identity.to_owned(),
-            round: round.to_owned(),
-            operation: operation.to_owned(),
-        };
-        self.store_replay(key, receipts, calls, answer_digest, retention);
-    }
-
-    /// [`Self::store_sync_replay`] for a task's settled result, under
-    /// `(task id, revision)`, live for the task's remaining retention.
-    pub(crate) fn store_task_replay(
-        &self,
-        id: &str,
-        revision: u64,
-        receipts: &[ReplaySource<'_>],
-        calls: ReplayCalls,
-        answer_digest: &str,
-        retention: Duration,
-    ) {
-        let key = StoredKey::Task {
-            id: id.to_owned(),
-            revision,
-        };
-        self.store_replay(key, receipts, calls, answer_digest, retention);
-    }
-
-    /// Snapshot each of `receipts` (F2), counting a `big_step` drop for
+    /// Store the committed in-plan `receipts` of a stored delivery under
+    /// `key`: a retained sync plan answer under its admission key (F1:
+    /// identity, round, operation), or a task's settled result under
+    /// `(task id, revision)`. The entry keeps its `calls` and the digest of
+    /// the delivered answer they were committed against (F4), live for
+    /// `retention` (the retained result's or the task's own).
+    ///
+    /// Each receipt is snapshotted (F2), counting a `big_step` drop for
     /// each judged big-step receipt that yields no snapshot (F3) and a
-    /// `staged` drop for a step still staged at capture, and insert the
-    /// entry. When
-    /// every candidate yielded no snapshot there is nothing to replay:
-    /// no entry is inserted and any previous entry under the key goes,
-    /// as an overwrite would take it.
-    fn store_replay(
+    /// `staged` drop for a step still staged at capture. When every
+    /// candidate yielded no snapshot there is nothing to replay: no entry
+    /// is inserted and any previous entry under the key goes, as an
+    /// overwrite would take it. With relay detection off nothing is stored
+    /// and nothing is removed, so a commit with no candidates at all goes
+    /// through [`Self::remove_replay`] instead.
+    pub(crate) fn store_replay(
         &self,
         key: StoredKey,
         receipts: &[ReplaySource<'_>],
@@ -113,54 +82,19 @@ impl Firewall {
         );
     }
 
-    /// Drop a retained sync delivery's entry: a non-plan commit under the
-    /// same key (F1).
-    pub(crate) fn remove_sync_replay(&self, identity: &str, round: &str, operation: &str) {
-        self.relay.replay.remove(&StoredKey::Sync {
-            identity: identity.to_owned(),
-            round: round.to_owned(),
-            operation: operation.to_owned(),
-        });
+    /// Drop the entry under `key`: a non-plan commit under a retained sync
+    /// delivery's key (F1), or a settled task's commit with nothing to
+    /// replay. Runs with relay detection off too.
+    pub(crate) fn remove_replay(&self, key: &StoredKey) {
+        self.relay.replay.remove(key);
     }
 
-    /// Drop a settled task's entry under `(task id, revision)`.
-    pub(crate) fn remove_task_replay(&self, id: &str, revision: u64) {
-        self.relay.replay.remove(&StoredKey::Task {
-            id: id.to_owned(),
-            revision,
-        });
-    }
-
-    /// Fresh digests for a retained sync delivery's snapshots, with its
-    /// calls; `None` stages nothing, counted `absent` or `expired` (E2).
-    pub(crate) fn sync_replay_digests(
+    /// Fresh digests for the snapshots stored under `key`, with its calls;
+    /// `None` stages nothing, counted `absent` or `expired` (E2).
+    pub(crate) fn replay_digests(
         &self,
-        identity: &str,
-        round: &str,
-        operation: &str,
+        key: &StoredKey,
     ) -> Option<(Vec<ReplayedDigest>, ReplayCalls)> {
-        let key = StoredKey::Sync {
-            identity: identity.to_owned(),
-            round: round.to_owned(),
-            operation: operation.to_owned(),
-        };
-        self.replay_digests(&key)
-    }
-
-    /// [`Self::sync_replay_digests`] for a stored task at `revision`.
-    pub(crate) fn task_replay_digests(
-        &self,
-        id: &str,
-        revision: u64,
-    ) -> Option<(Vec<ReplayedDigest>, ReplayCalls)> {
-        let key = StoredKey::Task {
-            id: id.to_owned(),
-            revision,
-        };
-        self.replay_digests(&key)
-    }
-
-    fn replay_digests(&self, key: &StoredKey) -> Option<(Vec<ReplayedDigest>, ReplayCalls)> {
         let entry = self.relay.replay.lookup(key, self.relay.now())?;
         let digests = entry
             .receipts

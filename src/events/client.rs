@@ -9,11 +9,11 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 use base64::Engine as _;
-use hmac::{Hmac, KeyInit, Mac};
-use sha2::Sha256;
+use hmac::{KeyInit, Mac};
 use subtle::ConstantTimeEq;
 
 use super::types::CallbackFailure;
+use crate::hashing::HmacSha256;
 use crate::security::http_diagnostics::is_tls_failure;
 use crate::security::ssrf::{PinningResolver, SystemResolver, in_allowed, ssrf_denial};
 
@@ -242,7 +242,8 @@ pub(crate) struct Signing<'a> {
 pub(crate) fn sign(keys: &[&[u8]], id: &str, timestamp: &str, body: &[u8]) -> String {
     keys.iter()
         .map(|key| {
-            let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
+            // invariant: HMAC-SHA256 accepts a key of any length.
+            let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
             mac.update(id.as_bytes());
             mac.update(b".");
             mac.update(timestamp.as_bytes());

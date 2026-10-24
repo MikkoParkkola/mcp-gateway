@@ -25,6 +25,7 @@ use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::task_service::{CommittedTask, Target};
 use crate::security::firewall::{
     CollusionAction, CollusionConfig, DeliveryDigest, Firewall, FirewallConfig, RelayCaller,
+    StoredKey,
 };
 
 const PROSE: &str = "The orchard ledger for the north slope records seven rows of late pears, \
@@ -148,9 +149,11 @@ fn store_entry(
     sources: &[(&DeliveryDigest, Option<u32>, &str, &str)],
     calls: ReplayCallList,
 ) {
-    fw.store_task_replay(
-        stored.task.id(),
-        stored.revision,
+    fw.store_replay(
+        StoredKey::Task {
+            id: stored.task.id().to_owned(),
+            revision: stored.revision,
+        },
         sources,
         calls,
         "",
@@ -269,7 +272,10 @@ async fn g3_g35_sources_outside_the_task_targets_stage_nothing() {
         );
         if seam_stages {
             let (digests, _) = fw
-                .task_replay_digests(stored.task.id(), stored.revision)
+                .replay_digests(&StoredKey::Task {
+                    id: stored.task.id().to_owned(),
+                    revision: stored.revision,
+                })
                 .expect("the entry was just stored: fixture");
             let seam_entry = digests
                 .iter()
@@ -492,8 +498,11 @@ async fn g10_a_non_completed_multi_target_read_stages_nothing() {
             vec![(Some(0), "alpha".to_owned(), "read".to_owned())],
         );
         assert!(
-            fw.task_replay_digests(stored.task.id(), stored.revision)
-                .is_some(),
+            fw.replay_digests(&StoredKey::Task {
+                id: stored.task.id().to_owned(),
+                revision: stored.revision,
+            })
+            .is_some(),
             "premise ({name}): a store entry is present for the key"
         );
         let ((), staged) = meta
@@ -756,3 +765,6 @@ async fn g48_a_plan_task_row_is_written_at_version_9_and_loads() {
 
 #[path = "relay_replay_capture_tests.rs"]
 mod capture;
+
+#[path = "relay_replay_key_tests.rs"]
+mod key;

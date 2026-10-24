@@ -11,7 +11,7 @@ use super::relay_plan_replay::{
     ALPHA, BETA, OTHER_PROSE, PROSE, Rig, SUGGEST, Sensitivity, answering, chain, erring_step,
     keyed_call, playbook, playbook_args, rig, rig_with_mocks, task_call, text,
 };
-use super::relay_plan_replay_guards::{committed, live_invoke, plan_auth, probe_refused};
+use super::relay_plan_replay_guards::{committed, live_invoke, plan_auth, probe_refused, task_key};
 use super::support::*;
 use pretty_assertions::assert_eq;
 
@@ -187,7 +187,7 @@ async fn g18_a_resumed_chain_lists_the_final_rounds_call_and_stages_nothing_unde
     let stored = committed(&rig.state, &task);
     let (digests, calls) = rig
         .relay
-        .task_replay_digests(&task, stored.revision)
+        .replay_digests(&task_key(&task, stored.revision))
         .expect("the settled plan has a replay entry: fixture");
     assert!(
         calls.contains(&(Some(1), BETA.to_string(), TOOL.to_string())),
@@ -240,7 +240,7 @@ async fn g21_a_failed_playbook_step_is_listed_and_replays_as_live() {
     let stored = committed(&rig.state, &task);
     let (_, calls) = rig
         .relay
-        .task_replay_digests(&task, stored.revision)
+        .replay_digests(&task_key(&task, stored.revision))
         .expect("the settled plan has a replay entry: fixture");
     assert!(
         calls.contains(&(Some(1), BETA.to_string(), TOOL.to_string())),
@@ -324,7 +324,7 @@ async fn g26_a_step_refused_before_dispatch_gets_no_receipt() {
     let stored = committed(&rig.state, &task);
     let (digests, calls) = rig
         .relay
-        .task_replay_digests(&task, stored.revision)
+        .replay_digests(&task_key(&task, stored.revision))
         .expect("the settled plan has a replay entry: fixture");
     assert!(
         calls.iter().all(|(_, s, _)| s != FORBIDDEN_BACKEND),

@@ -23,7 +23,6 @@ use serde_json::Value;
 use tracing::{debug, error, info, warn};
 
 use hmac::{KeyInit, Mac as _};
-use sha2::Sha256;
 
 use self::errors::{
     invalid_json, invalid_signature, rate_limited, transformation_failed, webhook_success,
@@ -31,6 +30,7 @@ use self::errors::{
 use super::streaming::{NotificationMultiplexer, TaggedNotification};
 use crate::capability::{CapabilityDefinition, WebhookDefinition};
 use crate::config::WebhookConfig;
+use crate::hashing::HmacSha256;
 use crate::secrets::SecretResolver;
 
 mod errors;
@@ -590,7 +590,7 @@ fn validate_signature(
         .ok_or_else(|| format!("Missing signature header: {signature_header}"))?;
 
     // Compute HMAC-SHA256 against raw body bytes (not re-serialized JSON).
-    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(secret.as_bytes())
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
         .map_err(|e| format!("Invalid secret: {e}"))?;
 
     mac.update(raw_body);

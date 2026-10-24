@@ -274,7 +274,12 @@ pub(super) fn capture_commit(
     receipts: &[Receipt],
     calls: ReplayCallList,
 ) {
-    let Some(capture) = capture else {
+    let Some(Capture {
+        key,
+        retention,
+        answer_digest,
+    }) = capture
+    else {
         return;
     };
     let sources: Vec<crate::security::firewall::ReplaySource<'_>> = receipts
@@ -284,39 +289,13 @@ pub(super) fn capture_commit(
         })
         .map(|r| (&r.digest, r.step, r.server.as_str(), r.tool.as_str()))
         .collect();
-    let answer_digest = capture.answer_digest.as_deref().unwrap_or("");
-    match &capture.key {
-        CaptureKey::Sync {
-            identity,
-            round,
-            operation,
-        } => {
-            if sources.is_empty() {
-                fw.remove_sync_replay(identity, round, operation);
-            } else {
-                fw.store_sync_replay(
-                    (identity.as_str(), round.as_str(), operation.as_str()),
-                    &sources,
-                    calls,
-                    answer_digest,
-                    capture.retention,
-                );
-            }
-        }
-        CaptureKey::Task { id, revision } => {
-            if sources.is_empty() {
-                fw.remove_task_replay(id, *revision);
-            } else {
-                fw.store_task_replay(
-                    id,
-                    *revision,
-                    &sources,
-                    calls,
-                    answer_digest,
-                    capture.retention,
-                );
-            }
-        }
+    // No candidates removes, never stores: `store_replay` returns early
+    // with relay detection off, which would keep the prior entry (F1).
+    if sources.is_empty() {
+        fw.remove_replay(&key);
+    } else {
+        let answer_digest = answer_digest.as_deref().unwrap_or("");
+        fw.store_replay(key, &sources, calls, answer_digest, retention);
     }
 }
 
@@ -333,15 +312,12 @@ pub(super) fn stage_plan_replay(meta: &MetaMcp, who: RelayKey<'_>) {
             .try_with(|slot| slot.borrow().clone())
             .ok()
             .flatten();
-        let Some(CaptureKey::Sync {
-            identity,
-            round,
-            operation,
-        }) = key
-        else {
+        // Sync keys only: a task's stored entry stages through
+        // `stage_task_replay`, never from the sync lookup slot.
+        let Some(key @ CaptureKey::Sync { .. }) = key else {
             return;
         };
-        let Some((digests, calls)) = fw.sync_replay_digests(&identity, &round, &operation) else {
+        let Some((digests, calls)) = fw.replay_digests(&key) else {
             return;
         };
         stage_entries(fw, who, digests, &calls, None);
@@ -361,8 +337,11 @@ pub(crate) fn stage_task_replay(meta: &MetaMcp, who: RelayKey<'_>, stored: &Comm
         let Some(fw) = meta.firewall.as_deref().filter(|fw| fw.relay_active()) else {
             return false;
         };
-        let Some((digests, calls)) = fw.task_replay_digests(stored.task.id(), stored.revision)
-        else {
+        let key = CaptureKey::Task {
+            id: stored.task.id().to_owned(),
+            revision: stored.revision,
+        };
+        let Some((digests, calls)) = fw.replay_digests(&key) else {
             return false;
         };
         let targets: Vec<(&str, &str)> =

@@ -210,12 +210,12 @@ async fn a_rewritten_invoke_wrapper_keeps_its_decoded_receipt() {
     );
 }
 
-/// `MIK-7887.JOIN.4` after MIK-8745: a credential span that starts in a key
-/// still takes the redactor's whole-leaf path, so a backend member keyed by a
-/// database URL leaves the wrapper unparseable. The rewritten-block reader
-/// then reads it, and the receipt still holds the note as the caller reads it.
+/// `MIK-7887.JOIN.4` after MIK-8772: a credential span that starts in a key
+/// is redacted inside that key, so a backend member keyed by a database URL
+/// leaves the wrapper parseable, and the receipt still holds the note as the
+/// caller reads it.
 #[tokio::test]
-async fn a_url_in_a_key_still_rewrites_the_wrapper_and_keeps_the_note_receipted() {
+async fn a_url_in_a_key_is_redacted_in_place_and_keeps_the_note_receipted() {
     let note = note();
     let mut keyed = serde_json::Map::new();
     keyed.insert(DSN.to_owned(), json!("v"));
@@ -232,8 +232,10 @@ async fn a_url_in_a_key_still_rewrites_the_wrapper_and_keeps_the_note_receipted(
         .as_str()
         .unwrap_or_default();
     assert!(
-        block.contains("REDACTED") && serde_json::from_str::<Value>(block).is_err(),
-        "a span starting in a key still breaks the wrapper's JSON: {read}"
+        block.contains("REDACTED")
+            && !block.contains(DSN)
+            && serde_json::from_str::<Value>(block).is_ok(),
+        "a span starting in a key is redacted inside that key (MIK-8772): {read}"
     );
     let relayed = post(&state, "key-b", sync_invoke(2, json!({"text": note}))).await;
     assert_eq!(

@@ -207,33 +207,63 @@ impl Redactor {
         Some(redacted)
     }
 
-    /// `text` redacted inside the string values a credential span overlaps,
+    /// `text` redacted inside the string literals a credential span covers,
     /// when `text` is a JSON document: today's spans, each clipped to the
-    /// value literals it covers and widened to whole escapes. The quotes,
-    /// punctuation, keys and scalars a span crosses stay as sent, so the text
-    /// still parses (MIK-8745). `None` leaves the leaf to
+    /// value literals it covers, or to a key a match starts in, and widened to
+    /// whole escapes. The quotes, punctuation, scalars and other keys a span
+    /// crosses stay as sent, so the text still parses (MIK-8745). A redacted
+    /// key takes the first free name in its object, as [`Self::redact_keys`]
+    /// does, so no entry is lost (MIK-8772). `None` leaves the leaf to
     /// [`Self::redact_text`]: not a document, over the size cap, or a span
-    /// that starts inside a key.
+    /// that starts outside every literal.
     fn redact_json_text(&self, text: &str, findings: &mut Vec<Finding>) -> Option<String> {
         b2_gate(text)?;
         let spans = self.credential_spans(text);
         let literals = json_literal::string_literals(text);
-        let starts_in_value = |at: usize| {
+        let starts_in_literal = |at: usize| {
             let after = literals.partition_point(|lit| lit.start <= at);
-            after
-                .checked_sub(1)
-                .is_some_and(|i| at < literals[i].end && !literals[i].key)
+            after.checked_sub(1).is_some_and(|i| at < literals[i].end)
         };
-        if !spans.iter().all(|&(start, _)| starts_in_value(start)) {
+        if !spans.iter().all(|&(start, _)| starts_in_literal(start)) {
             tracing::debug!(
-                "a credential span starts outside a string value; redacting the leaf whole"
+                "a credential span starts outside a string literal; redacting the leaf whole"
             );
             return None;
         }
-        let redacted = replace_spans(text, &project(text, &spans, &literals));
+        let ranges = project(
+            text,
+            &spans,
+            |lit| self.match_starts_in(text, lit),
+            &literals,
+        );
+        let redacted = if literals.iter().any(|lit| lit.key && covers(&ranges, lit)) {
+            rename_keys(text, &ranges, &literals)
+        } else {
+            replace_spans(text, &ranges)
+        };
         let matched: Vec<usize> = self.set.matches(text).into_iter().collect();
         self.record_findings(&matched, &redacted, Site::Value, findings);
         Some(redacted)
+    }
+
+    /// Whether a credential match starts inside `lit`, read with the text
+    /// after it. The spans cannot tell: past a greedy match the scan restarts
+    /// only near its end, so a later key's own start goes unseen, and a short
+    /// key may match only together with the bytes after its quote. No pattern
+    /// has an anchor or a word boundary, so cutting the text after
+    /// [`KEY_MATCH_TAIL`] cannot invent a match, and that tail holds every
+    /// match a key can start.
+    fn match_starts_in(&self, text: &str, lit: &Literal) -> bool {
+        let mut end = (lit.end + KEY_MATCH_TAIL).min(text.len());
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        let near = &text[..end];
+        self.set.matches_at(near, lit.start).into_iter().any(|idx| {
+            self.regexes[idx]
+                .find_at(near, lit.start)
+                .is_some_and(|found| found.start() < lit.end)
+        })
     }
 
     /// One finding per matched pattern, showing `redacted`.
@@ -268,25 +298,56 @@ impl Redactor {
     /// keeps n colliding keys linear rather than re-probing from `#2`.
     fn redact_keys(&self, map: &mut Map<String, Value>, findings: &mut Vec<Finding>) {
         let entries = std::mem::take(map);
-        let mut taken: HashSet<String> = entries
-            .keys()
-            .filter(|key| !self.set.is_match(key))
-            .cloned()
-            .collect();
-        let mut next: HashMap<String, usize> = HashMap::new();
+        let mut names = KeyNames::reserving(
+            entries
+                .keys()
+                .filter(|key| !self.set.is_match(key))
+                .cloned(),
+        );
         for (key, value) in entries {
             let Some(candidate) = self.redact_text(&key, Site::Key, findings) else {
                 map.insert(key, value);
                 continue;
             };
-            let n = next.entry(candidate.clone()).or_insert(1);
-            let mut name = candidate.clone();
-            while taken.contains(&name) {
-                *n += 1;
-                name = format!("{candidate}#{n}");
-            }
-            taken.insert(name.clone());
+            let name = match names.claim(&candidate) {
+                Some(n) => format!("{candidate}#{n}"),
+                None => candidate,
+            };
             map.insert(name, value);
+        }
+    }
+}
+
+/// The names one object's keys hold, for giving a redacted key a free name.
+/// A per-name counter keeps n colliding keys linear rather than re-probing
+/// from `#2`.
+#[derive(Default)]
+struct KeyNames {
+    taken: HashSet<String>,
+    next: HashMap<String, usize>,
+}
+
+impl KeyNames {
+    /// The clean keys' names, reserved before any redacted key is named.
+    fn reserving(clean: impl Iterator<Item = String>) -> Self {
+        Self {
+            taken: clean.collect(),
+            next: HashMap::new(),
+        }
+    }
+
+    /// Claim `candidate`, or else the first free `<candidate>#n`: `None`
+    /// when `candidate` itself was free, else the `n`.
+    fn claim(&mut self, candidate: &str) -> Option<usize> {
+        if self.taken.insert(candidate.to_owned()) {
+            return None;
+        }
+        let n = self.next.entry(candidate.to_owned()).or_insert(1);
+        loop {
+            *n += 1;
+            if self.taken.insert(format!("{candidate}#{n}")) {
+                return Some(*n);
+            }
         }
     }
 }
@@ -311,6 +372,15 @@ impl Default for Redactor {
 /// pattern takes a whole chain of segments for the same reason: a JWT starting
 /// at another's second segment ends with that chain.
 const OVERLAP_WINDOW: usize = 256;
+
+/// How far past a key's closing quote a match starting in the key can need
+/// to read before it is complete. Only two patterns can match a `"`, so only
+/// they can cross that quote: the API-key rule ends on it (`['"]`), one byte
+/// past, and the connection-string rule needs at most its 10 `[^\s]`
+/// characters, 40 bytes in UTF-8. Every other pattern's classes exclude `"`,
+/// so its match ends inside the key. The b2 tests pin which patterns can
+/// match a quote, and the reviewed pattern text this bound was argued for.
+const KEY_MATCH_TAIL: usize = 64;
 
 /// Every match of `re` in `text`, including matches that overlap one another:
 /// `find_iter` resumes after a match's end, so a second credential starting
@@ -353,18 +423,29 @@ fn b2_gate(text: &str) -> Option<Value> {
         .filter(|value| value.is_object() || value.is_array() || value.is_string())
 }
 
-/// `spans` (merged, in order) clipped to every value literal they overlap,
-/// each piece widened to whole escapes so no escape is cut, then merged.
-/// Spans and literals are both in order, so this is one pass over each, and
-/// each end is widened by a binary search of its literal's escapes.
-fn project(text: &str, spans: &[(usize, usize)], literals: &[Literal]) -> Vec<(usize, usize)> {
+/// `spans` (merged, in order) clipped to every value literal they overlap
+/// and to every overlapped key `redact_key` takes (one merged span can cover
+/// several keys), each piece widened to whole escapes so no escape is cut,
+/// then merged. Any other key stays as sent. Spans and literals are both in
+/// order, so this is one pass over each, and each end is widened by a binary
+/// search of its literal's escapes.
+fn project(
+    text: &str,
+    spans: &[(usize, usize)],
+    redact_key: impl Fn(&Literal) -> bool,
+    literals: &[Literal],
+) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     let mut first = 0;
-    for lit in literals.iter().filter(|lit| !lit.key) {
+    for lit in literals {
         while first < spans.len() && spans[first].1 <= lit.start {
             first += 1;
         }
         let mut lit_escapes = None;
+        let overlapped = spans.get(first).is_some_and(|span| span.0 < lit.end);
+        if lit.key && !(overlapped && redact_key(lit)) {
+            continue; // a key spans only cross, or none reach
+        }
         for &(start, end) in spans[first..].iter().take_while(|span| span.0 < lit.end) {
             let (mut from, mut to) = (start.max(lit.start), end.min(lit.end));
             if from >= to {
@@ -383,6 +464,64 @@ fn project(text: &str, spans: &[(usize, usize)], literals: &[Literal]) -> Vec<(u
     }
     ranges.sort_unstable();
     merge_spans(ranges)
+}
+
+/// Whether any of `ranges` (in order, disjoint) falls inside `lit`.
+fn covers(ranges: &[(usize, usize)], lit: &Literal) -> bool {
+    let after = ranges.partition_point(|range| range.0 < lit.start);
+    ranges.get(after).is_some_and(|range| range.0 < lit.end)
+}
+
+/// `text` with `ranges` replaced, where a key holding a range is renamed as
+/// [`Redactor::redact_keys`] renames one: within its object every clean key
+/// keeps its name, and each redacted key takes its redacted name or the first
+/// free `<name>#n`. Names compare decoded, so an escaped spelling of a taken
+/// name collides too; the suffix is appended to the raw text, so escapes the
+/// redaction left are written as sent.
+fn rename_keys(text: &str, ranges: &[(usize, usize)], literals: &[Literal]) -> String {
+    let decode = |raw: &str| serde_json::from_str::<String>(&format!("\"{raw}\"")).ok();
+    let keys = literals.iter().filter(|lit| lit.key);
+    let mut objects: HashMap<usize, KeyNames> = HashMap::new();
+    for lit in keys.clone().filter(|lit| !covers(ranges, lit)) {
+        if let Some(name) = decode(&text[lit.start..lit.end]) {
+            objects.entry(lit.container).or_default().taken.insert(name);
+        }
+    }
+    let mut renamed: Vec<(usize, usize, String)> = Vec::new();
+    for lit in keys.filter(|lit| covers(ranges, lit)) {
+        let (lo, hi) = (
+            ranges.partition_point(|range| range.0 < lit.start),
+            ranges.partition_point(|range| range.0 < lit.end),
+        );
+        let inside: Vec<(usize, usize)> = ranges[lo..hi]
+            .iter()
+            .map(|range| (range.0 - lit.start, range.1 - lit.start))
+            .collect();
+        let mut raw = replace_spans(&text[lit.start..lit.end], &inside);
+        if let Some(candidate) = decode(&raw)
+            && let Some(n) = objects.entry(lit.container).or_default().claim(&candidate)
+        {
+            raw = format!("{raw}#{n}");
+        }
+        renamed.push((lit.start, lit.end, raw));
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0;
+    let mut keys = renamed.into_iter().peekable();
+    for &(start, end) in ranges {
+        if start < cursor {
+            continue; // inside a key already written whole
+        }
+        let (from, to, with) = match keys.next_if(|key| key.0 <= start && start < key.1) {
+            Some(key) => key,
+            None => (start, end, "[REDACTED:credential]".to_owned()),
+        };
+        out.push_str(&text[cursor..from]);
+        out.push_str(&with);
+        cursor = to;
+    }
+    out.push_str(&text[cursor..]);
+    out
 }
 
 /// The escape in `escapes` (in order, disjoint) that `at` falls strictly
