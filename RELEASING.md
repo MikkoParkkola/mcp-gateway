@@ -340,15 +340,16 @@ its date as release evidence.
 3. **Do not move or delete the `v4.0.0` git tag once anything is published.** crates.io
    and npm hold the tag's contents for good, and Homebrew and the MCP Registry point at
    that tag's assets and images. A fix ships forward as `4.0.1`.
-4. **The build artifacts expire after 90 days.** `release.yml` `build` uploads with
+4. **A failed job can be re-run for 30 days.** GitHub refuses to re-run a workflow
+   run more than 30 days after it started
+   ([re-running workflows](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs)).
+   The build artifacts outlast that: `release.yml` `build` uploads with
    `retention-days: 90`, which is the repository's artifact retention setting and the
-   most that takes effect (a larger value is clamped to it). Re-run a failed `release`
-   job within 90 days of the run. After that it finds nothing to download, and a full
-   re-run (`gh run rerun <run-id>`) is safe only in that situation:
-   `publish`, `npm-publish` and `homebrew-update` all need `release`, so none of them has
-   run yet. `ci.yml` has the same limit: `docker-build` uploads the `image-digests-*`
-   artifacts with `retention-days: 90`. After that, re-running `docker-manifest` alone
-   cannot find the leg digests. Re-running `docker-build` pushes new digests, so the
+   most that takes effect (a larger value is clamped to it). So within 30 days a failed
+   `release` job re-runs against the same binaries. `ci.yml` keeps the same window:
+   `docker-build` uploads the `image-digests-*` artifacts with `retention-days: 90`, and
+   a `docker-manifest` re-run within 30 days finds the leg digests. Re-running
+   `docker-build` instead pushes new digests, so the
    index that gets signed and promoted is a new one, not whatever an earlier attempt
    pushed. If the repository retention setting changes, change these three
    `retention-days` values and `HANDOFF_RETENTION_DAYS` in
