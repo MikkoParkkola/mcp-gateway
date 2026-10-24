@@ -223,6 +223,18 @@ fn product_enums(out: &mut String) {
     }
 }
 
+/// P7: what the figment provider hands `Config::load`, before any merge.
+fn figment_data(out: &mut String) {
+    for (case, doc) in [
+        ("mig2/figment/plain", "a: 1\nb: [x, y]\n"),
+        ("mig2/figment/dup-nested", "a:\n  b: 1\n  b: 2\na: {c: 3}\n"),
+        ("mig2/figment/syntax-error", "a: [1\n"),
+        ("mig2/figment/second-document", "a: 1\n---\nb: 2\n"),
+    ] {
+        row(out, case, &ok_json(yaml::figment_data(doc)));
+    }
+}
+
 pub(super) fn rows(out: &mut String) {
     product_enums(out);
     duplicates(out);
@@ -231,4 +243,5 @@ pub(super) fn rows(out: &mut String) {
     streams(out);
     aliases(out);
     from_value(out);
+    figment_data(out);
 }

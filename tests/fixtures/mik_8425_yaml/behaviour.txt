@@ -160,3 +160,7 @@ mig2/from-value/newtype-tag	OK {"newtype":"hi"}
 mig2/from-value/newtype-map	ERR invalid type: map, expected a Value::Tagged enum
 mig2/from-value/struct-tag	OK {"pair":{"x":1,"y":2}}
 mig2/from-value/struct-map	ERR invalid type: map, expected a Value::Tagged enum
+mig2/figment/plain	OK {"default":{"a":1,"b":["x","y"]}}
+mig2/figment/dup-nested	OK {"default":{"a":{"c":3}}}
+mig2/figment/syntax-error	ERR YAML refused: unclosed bracket at line 1 column 4
+mig2/figment/second-document	ERR deserializing from YAML containing more than one document is not supported
