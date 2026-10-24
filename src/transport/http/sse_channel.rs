@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+use futures::future::BoxFuture;
 use parking_lot::Mutex;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
@@ -238,7 +239,15 @@ impl super::HttpTransport {
     ///
     /// # Errors
     /// The replacement failed; the caller's request is not sent.
-    pub(super) async fn live_sse_channel(&self) -> Result<Option<Arc<SseChannel>>> {
+    ///
+    /// Boxed with an explicit `Send` type: the replacement's handshake sends
+    /// requests, which await this again, and an inferred future type could
+    /// neither be sized nor shown `Send` through that cycle (E0733).
+    pub(super) fn live_sse_channel(&self) -> BoxFuture<'_, Result<Option<Arc<SseChannel>>>> {
+        Box::pin(self.live_sse_channel_inner())
+    }
+
+    async fn live_sse_channel_inner(&self) -> Result<Option<Arc<SseChannel>>> {
         if *self.streamable_http.read() != Some(false) {
             return Ok(None);
         }
@@ -263,13 +272,12 @@ impl super::HttpTransport {
             return Ok(Some(now));
         }
         self.sse_reconnecting.store(true, Ordering::SeqCst);
-        // Boxed: the handshake sends requests, which come back here (E0733).
-        let replaced: futures::future::BoxFuture<'_, Result<()>> = Box::pin(async {
+        let replaced = async {
             self.sessions.write().remove(Self::bucket_key(None));
             self.connect_sse().await?;
             self.legacy_handshake().await
-        });
-        let replaced = replaced.await;
+        }
+        .await;
         self.sse_reconnecting.store(false, Ordering::SeqCst);
         replaced?;
         let now = self.sse_channel.read().clone().filter(|c| !c.is_closed());
