@@ -591,7 +591,10 @@ const PREFIX_REACH: usize = 44;
 
 fn connection_prefix() -> &'static Regex {
     static PREFIX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    PREFIX.get_or_init(|| Regex::new(connection_prefix!()).expect("prefix compiles"))
+    PREFIX.get_or_init(|| {
+        // invariant: a constant pattern the credential rule set also compiles at startup.
+        Regex::new(connection_prefix!()).expect("prefix compiles")
+    })
 }
 
 /// Redacted text being written, and what a second pass will read where it
