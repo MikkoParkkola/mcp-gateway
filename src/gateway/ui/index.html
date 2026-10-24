@@ -645,6 +645,11 @@ authBtn.addEventListener('click', (e) => {
   const key = prompt('Enter API key (Bearer token):');
   if (key !== null) {
     apiKey = key.trim();
+    // MIK-8821: a new key is a new caller. Forget what the old key's answers
+    // rendered and drop any still in flight, before refreshAll starts the new
+    // key's own read (it takes its sequence number synchronously).
+    answered = false;
+    renderedSeq = statusSeq + 1;
     refreshAll();
   }
 });
@@ -675,21 +680,26 @@ async function readStatus(poll = false) {
     return { seq, httpStatus: 0, body: null };
   }
 }
+// MIK-8821: a read with no HTTP answer (a network failure) says nothing about
+// the caller. Once an answer has rendered, it keeps that render; before any,
+// it renders the fail-safe, so the page never sits on "Loading...". It never
+// advances the order, so a slower answer to an earlier read still paints.
 let renderedSeq = 0;
-function isFresh(seq) {
-  if (seq < renderedSeq) return false;
-  renderedSeq = seq;
+let answered = false;
+function shouldRender(s) {
+  if (s.httpStatus === 0) return !answered;
+  if (s.seq < renderedSeq) return false;
+  renderedSeq = s.seq;
+  answered = true;
   return true;
 }
 
-// One shared, in-flight re-read of the auth state after a refusal.
+// One shared, in-flight re-read of the auth state after a refusal. It renders
+// the whole dashboard, so every answer that counts as rendered has repainted
+// the bar, the counts and the Servers table together (MIK-8821).
 let authRead = null;
 function refreshAuth(poll = false) {
-  if (!authRead) {
-    authRead = readStatus(poll).then((s) => {
-      if (isFresh(s.seq)) renderAuth(authStateFrom(s.httpStatus, s.body));
-    }).finally(() => { authRead = null; });
-  }
+  if (!authRead) authRead = refreshDashboard(poll).finally(() => { authRead = null; });
   return authRead;
 }
 
@@ -813,7 +823,7 @@ function actionBadge(action) {
 // Dashboard
 async function refreshDashboard(poll = false) {
   const s = await readStatus(poll);
-  if (!isFresh(s.seq)) return;
+  if (!shouldRender(s)) return;
   const state = authStateFrom(s.httpStatus, s.body);
   renderAuth(state);
   const d = (s.httpStatus === 200 && s.body) || {};
