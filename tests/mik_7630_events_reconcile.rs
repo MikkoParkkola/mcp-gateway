@@ -38,26 +38,35 @@ fn subs_on_disk(root: &Path) -> usize {
     })
 }
 
+/// The retry policy of the rows that only need one retry pending: its first
+/// retry is seconds away.
+fn slow_retry() -> serde_json::Value {
+    json!({"retry_base": "30s", "retry_max_attempts": 5, "retry_window": "15m"})
+}
+
 /// A subscription with one retry pending, the gateway stopped, then started
-/// again with `change` applied to its directory and config.
+/// again with `change` applied to its directory and config. `script` answers
+/// the first deliveries (503 after it); the stop waits for `stop_after` POSTs.
 async fn restart_after(
+    retry: serde_json::Value,
+    script: Vec<EventReply>,
+    stop_after: usize,
     change: impl FnOnce(&mut Gateway),
 ) -> (tempfile::TempDir, Receiver, Gateway, usize) {
     let dir = tempfile::tempdir().expect("root");
     let root = dir.path().to_path_buf();
     let rx = Receiver::start(&root).await;
-    let cfg = delivery_config(
-        &root,
-        &json!({"retry_base": "30s", "retry_max_attempts": 5, "retry_window": "15m"}),
-    );
+    let cfg = delivery_config(&root, &retry);
     let trust = rx.trust_env();
     let env = trust.each_ref().map(|(k, v)| (*k, v.as_str()));
     let mut gw = Gateway::start_with_env(&root, cfg, &env).await;
     gw.event_names(Some(ALICE), Some(gateway::EVENT)).await;
     rx.event_default(EventReply::Status(503));
+    rx.script(script);
     subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;
     fire(&gw, "d-7772", "o/r").await;
     let posts = events_at_least(&rx, 1).await.len();
+    events_at_least(&rx, stop_after).await;
     assert_eq!(subs_on_disk(&root), 1);
     assert!(
         wait_until(DEADLINE, || !records(&root, "outbox").is_empty()).await,
@@ -75,7 +84,7 @@ async fn restart_after(
 /// posted for it.
 #[tokio::test]
 async fn a_route_removed_while_down_holds_its_subscription() {
-    let (_dir, rx, gw, posts) = restart_after(|gw| {
+    let (_dir, rx, gw, posts) = restart_after(slow_retry(), Vec::new(), 1, |gw| {
         std::fs::remove_file(gw.root().join("caps/github.yaml")).expect("remove the route");
     })
     .await;
@@ -91,7 +100,7 @@ async fn a_route_removed_while_down_holds_its_subscription() {
 /// queued record (src/events/admin.rs), which only the unit tests saw before.
 #[tokio::test]
 async fn a_held_subscription_is_listed_with_its_queued_record() {
-    let (_dir, _rx, gw, _posts) = restart_after(|gw| {
+    let (_dir, _rx, gw, _posts) = restart_after(slow_retry(), Vec::new(), 1, |gw| {
         std::fs::remove_file(gw.root().join("caps/github.yaml")).expect("remove the route");
     })
     .await;
@@ -121,7 +130,7 @@ async fn a_held_subscription_is_listed_with_its_queued_record() {
 /// event types, so the subscriptions to them are held until they lapse.
 #[tokio::test]
 async fn webhooks_off_holds_webhook_subscriptions() {
-    let (_dir, _rx, gw, _posts) = restart_after(|gw| {
+    let (_dir, _rx, gw, _posts) = restart_after(slow_retry(), Vec::new(), 1, |gw| {
         let mut cfg = gw.config().clone();
         cfg["webhooks"]["enabled"] = json!(false);
         gw.rewrite_config(cfg);
@@ -183,4 +192,25 @@ async fn a_backend_removed_while_down_takes_its_subscription() {
         names.iter().all(|n| n != name),
         "the type is gone: {names:?}"
     );
+}
+
+/// MIK-8796: a retry the gateway makes before the restart, while the route
+/// still exists, is not a send after it. The first reply is held, so the
+/// baseline is taken before any retry can be scheduled; the stop waits for
+/// the retry itself. Ten attempts at a 1 s base cannot run out first.
+#[tokio::test]
+async fn a_retry_before_the_restart_is_not_counted_as_sent_after_it() {
+    let (_dir, rx, gw, posts) = restart_after(
+        json!({"retry_base": "1s", "retry_max_attempts": 10, "retry_window": "15m"}),
+        vec![EventReply::Hold(Duration::from_secs(8), 503)],
+        2,
+        |gw| {
+            std::fs::remove_file(gw.root().join("caps/github.yaml")).expect("remove the route");
+        },
+    )
+    .await;
+    let root = gw.root().to_path_buf();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(subs_on_disk(&root), 1, "held, not withdrawn");
+    assert_eq!(rx.events().len(), posts, "nothing is sent for it");
 }
