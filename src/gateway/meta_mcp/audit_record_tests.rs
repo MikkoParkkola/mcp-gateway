@@ -463,6 +463,8 @@ mod delivery_credential;
 mod canary;
 #[cfg(feature = "firewall")]
 mod tenants;
+// MIK-8520: a surfaced replay records the server it was admitted for.
+mod surfaced_replay;
 
 /// MIK-7735. A backend's own `-32001` / `-32004` answer is the peer's
 /// refusal, not the gateway's policy: the record says `error`, with the
