@@ -233,3 +233,105 @@ fn time_against_base(label: &str, text: &str) {
     println!("{label}: projection {projected:?}, whole leaf {base:?}, ratio {ratio:.2}");
     assert!(ratio < 3.0, "{label}: ratio {ratio:.2} over the plan's 3x");
 }
+
+/// The member password every M row carries.
+const PASS: &str = "hunter2-long-enough";
+
+/// `doc` delivered over the cap equals its own delivery under the cap,
+/// wrapped: member redaction and its findings do not change at 1 MiB.
+fn assert_as_under_cap(doc: &str, exempt: &dyn Fn(&str) -> bool) {
+    let (small, small_findings) = deliver_unless(doc, exempt);
+    let (large, large_findings) = deliver_unless(&over_cap(doc), exempt);
+    assert_eq!(large, over_cap(&small), "{doc}");
+    assert_eq!(large_findings, small_findings, "findings for {doc}");
+}
+
+fn deliver_unless(text: &str, exempt: &dyn Fn(&str) -> bool) -> (String, Vec<String>) {
+    let mut value = json!({ "content": [{ "type": "text", "text": text }] });
+    let findings = redactor().scan_and_redact_unless(&mut value, exempt);
+    let out = value["content"][0]["text"]
+        .as_str()
+        .expect("text")
+        .to_owned();
+    let mut descriptions: Vec<String> = findings.into_iter().map(|f| f.description).collect();
+    descriptions.sort();
+    (out, descriptions)
+}
+
+/// Base's whole-value replacement with each of `members`' first occurrence
+/// replaced too: what a fallback delivers.
+fn today_with_members(text: &str, members: &[&str]) -> String {
+    let mut ranges = redactor().credential_spans(text);
+    for member in members {
+        let at = text.find(member).expect("member present");
+        ranges.push((at, at + member.len()));
+    }
+    ranges.sort_unstable();
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for (from, to) in ranges {
+        match merged.last_mut() {
+            Some(last) if from <= last.1 => last.1 = last.1.max(to),
+            _ => merged.push((from, to)),
+        }
+    }
+    splice(text, &merged)
+}
+
+/// Members over the cap, MIK-8757's families: redacted as under the cap,
+/// with the same findings, including a raw match over part of a member
+/// value and an AWS-shaped generic member (both findings).
+#[test]
+fn s8_members_over_the_cap_match_under_the_cap() {
+    let aws = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
+    let docs = [
+        format!(r#"{{"password":"{PASS}","n":3}}"#),
+        format!(r#"{{"pass{}ord":"{PASS}","n":3}}"#, esc("0077")),
+        format!(r#"{{"client_secret":"{}","n":1}}"#, "s".repeat(20)),
+        format!(r#"{{"private_key":"{}","n":1}}"#, "k".repeat(40)),
+        format!(r#"{{"authorization":"Bearer {}","n":1}}"#, "a".repeat(12)),
+        format!(r#"{{"api_key":"{aws}","n":1}}"#),
+        format!(r#"{{"password":"prefix-{aws}","n":1}}"#),
+        format!(r#"{{"password":"x\n{aws}","n":1}}"#),
+        format!(r#"{{"password":{{"x":"{PASS}"}},"n":1}}"#),
+        format!(
+            r#"[{{"password":"{PASS}"}},{}]"#,
+            serde_json::to_string(&pg_url()).unwrap()
+        ),
+    ];
+    for doc in docs {
+        assert!(parses(&doc), "{doc}");
+        assert_as_under_cap(&doc, &|_| false);
+    }
+}
+
+/// An exempt literal over the cap: kept when no span crosses it, and when one
+/// does, the leaf falls back to base's replacement with members still
+/// redacted.
+#[test]
+fn s10_an_exempt_literal_over_the_cap() {
+    let exempt = |s: &str| s == "CONT-8774";
+    let url = serde_json::to_string(&pg_url()).unwrap();
+    assert_as_under_cap(&format!(r#"{{"next":"CONT-8774","dsn":{url}}}"#), &exempt);
+    let crossed = over_cap(&format!(
+        r#"{{"password":"{PASS}","dsn":{url},"next":"CONT-8774"}}"#
+    ));
+    let (out, _) = deliver_unless(&crossed, &exempt);
+    assert_eq!(out, today_with_members(&crossed, &[PASS]));
+    assert!(!out.contains(PASS));
+}
+
+/// Every fallback over the cap still redacts members: a match that starts
+/// in a key, and an object led by the raw-value token.
+#[test]
+fn s11_a_fallback_over_the_cap_still_redacts_members() {
+    let key = serde_json::to_string(&pg_url()).unwrap();
+    for doc in [
+        format!(r#"{{"password":"{PASS}",{key}:1}}"#),
+        format!(r#"[{{"password":"{PASS}"}},{{"{RAW_VALUE_TOKEN}":"[1]"}},{key}]"#),
+    ] {
+        let text = over_cap(&doc);
+        let (out, _) = deliver(&text);
+        assert_eq!(out, today_with_members(&text, &[PASS]), "{doc}");
+        assert!(!out.contains(PASS), "{doc}");
+    }
+}
