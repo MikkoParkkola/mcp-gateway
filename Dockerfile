@@ -131,7 +131,7 @@ RUN cd /tmp && mkdir npm-patch && cd npm-patch \
 brace-expansion@5.0.12:sha512-YovQ3rzhaLMIrDjNDMkNS01tea93qhEhG5xy8f6+R0l+dw3Ki+5sCoIoI942iuLZTHWogWktgwVDhU09iNEimQ== \
 ip-address@10.3.1:sha512-1e9d3kb97NHJTIJDZW9rKqW2h6+dFa50Dy0fpPSMQp2ADje5gvKsXmdiK6dwY5t76TaTt5+P5N1Y/LoToIxP6g== \
 tar@7.5.21:sha512-XdhtCvlMywwxpCW8YEq3lOXBJpUPTR2OHHcwLPO3HwsJqOHa2Ok/oJ7ruGzp+JrKoRPVCzJwAdEjqLW/vNRPHA== \
-undici@6.29.0:sha512-R+RODBqp6i2pPflGdq+xIOUkl+RNfGgHwoinecKu/JCuf2uO06cOKoDbI2P7Dn6KcswdKwrczbU6IYJ6K8X+wg==" \
+undici@6.29.1:sha512-EvRlUt/QqAEvXdQeRMYUfwOQsfzpDztykrG2owGEE/rBOBoYv9uF39ZzsNDh4lTFHhTr2XOZjKkYgueD12ZmGA==" \
     && for pin in ${pins}; do \
          spec="${pin%%:*}"; want="${pin#*:}"; \
          npm pack --silent "${spec}" >/dev/null || exit 1; \
