@@ -197,7 +197,7 @@ async fn a3_any_translated_field_counts() {
     let agent = Agent::start().await;
     let gw = start(dir.path(), &receiver, &agent).await;
     let id = sub(&gw, ALICE, TOOLS, &receiver, json!({})).await;
-    polled(&agent, agent.fetches(), 2).await;
+    polled(&agent, agent.fetches(), 3).await;
     agent.set(|card| card["name"] = json!("Renamed Agent"));
     expect_events(&receiver, &id, TOOLS, 1).await;
 }
