@@ -34,10 +34,13 @@ fn key(secret: &str, name: &str, rate_limit: u32) -> ApiKeyConfig {
 /// Built the way `try_from_config` sees a config: without `Config::validate`,
 /// so the state maps must hold the invariant themselves.
 fn resolved(config: AuthConfig) -> ResolvedAuthConfig {
-    ResolvedAuthConfig::from_config(&AuthConfig {
-        enabled: true,
-        ..config
-    })
+    ResolvedAuthConfig::from_config(
+        &AuthConfig {
+            enabled: true,
+            ..config
+        },
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    )
 }
 
 fn client(cfg: &ResolvedAuthConfig, secret: &str) -> AuthenticatedClient {
@@ -273,7 +276,10 @@ fn oidc_client(actor: &str, token: &str) -> AuthenticatedClient {
         name: actor.to_string(),
         // MIK-6704.IDENT.1a: a test fixture minting the key-server shape,
         // `runtime_principal(RuntimeIssuer::KeyServerToken, token)`, which is private.
-        principal: format!("kst:{}", crate::hashing::sha256_hex(token.as_bytes())),
+        principal: crate::gateway::record_principal::InternalPrincipal::new(format!(
+            "kst:{}",
+            crate::hashing::sha256_hex(token.as_bytes())
+        )),
         rate_limit: 1,
         backends: vec!["*".to_string()],
         allowed_tools: None,

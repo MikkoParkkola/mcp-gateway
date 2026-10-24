@@ -48,6 +48,7 @@ fn real_stdio_context_carries_principal_and_no_personal_identity() {
             discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
             sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
+        &crate::gateway::record_principal::test_record_key(),
     );
 
     assert_eq!(

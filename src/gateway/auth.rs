@@ -24,6 +24,7 @@ use super::middleware::{
 };
 use crate::config::CircuitBreakerConfig;
 use crate::failsafe::CircuitBreaker;
+use crate::gateway::record_principal::InternalPrincipal;
 use crate::key_server::KeyServer;
 
 #[path = "auth_live.rs"]
@@ -60,8 +61,8 @@ type ClientRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 ///
 /// Returns the first 12 hex chars of the SHA-256 digest — enough to correlate
 /// which credential is active across logs, useless as a credential itself.
-pub(crate) fn principal_of(token: &str) -> String {
-    bearer_token_fingerprint(token)
+pub(crate) fn principal_of(token: &str) -> InternalPrincipal {
+    InternalPrincipal::new(bearer_token_fingerprint(token))
 }
 
 fn bearer_token_fingerprint(token: &str) -> String {
@@ -73,8 +74,8 @@ fn bearer_token_fingerprint(token: &str) -> String {
 /// Persisted as the key of sessions, grants, journals and task owners, so it
 /// is never lengthened; two credentials that share one are refused instead
 /// ([`refuse_shared_principals`], MIK-7973).
-pub(crate) fn principal_of_digest(digest: &[u8; 32]) -> String {
-    hex::encode(&digest[..6])
+pub(crate) fn principal_of_digest(digest: &[u8; 32]) -> InternalPrincipal {
+    InternalPrincipal::new(hex::encode(&digest[..6]))
 }
 
 /// The prefix of a credential caller's owner key, `credential:<principal>`: a
@@ -132,6 +133,9 @@ pub struct ResolvedAuthConfig {
     client_circuit_breaker: Option<CircuitBreakerConfig>,
     /// Circuit breakers per client, keyed by credential (`client_state_key`).
     client_circuit_breakers: DashMap<String, Arc<CircuitBreaker>>,
+    /// The record key every client minted here computes its record principal
+    /// with (MIK-8697 §16): resolved once at startup and injected, never picked.
+    record_key: Arc<crate::gateway::record_principal::RecordPrincipalKey>,
 }
 
 // Manual `Debug` that redacts resolved secrets (CWE-532, mirrors MIK-6733).
@@ -143,13 +147,11 @@ impl std::fmt::Debug for ResolvedAuthConfig {
             .field("enabled", &self.enabled)
             .field(
                 "bearer_token",
-                &self
-                    .bearer_token
-                    .as_deref()
-                    .map(|t| format!("<redacted:{}>", bearer_token_fingerprint(t))),
+                &self.bearer_token.as_deref().map(|_| "<redacted>"),
             )
             .field("api_keys", &self.api_keys)
             .field("public_paths", &self.public_paths)
+            .field("record_key", &"<redacted>")
             .finish_non_exhaustive()
     }
 }
@@ -201,11 +203,32 @@ pub(in crate::gateway) fn api_key_name(
     }
 }
 
+/// What the caller-principal predicate needs of a principal: whether it is
+/// the empty one. Implemented by the opaque [`InternalPrincipal`] (so its bytes
+/// never leave through the predicate, MIK-8697 §16.6) and by the `&str` the
+/// caller contexts carry.
+pub(in crate::gateway) trait Principal {
+    /// Whether this is the empty principal of a caller with no credential.
+    fn is_empty(&self) -> bool;
+}
+
+impl Principal for str {
+    fn is_empty(&self) -> bool {
+        str::is_empty(self)
+    }
+}
+
+impl Principal for InternalPrincipal {
+    fn is_empty(&self) -> bool {
+        InternalPrincipal::is_empty(self)
+    }
+}
+
 /// The one caller-principal predicate (MIK-8659): the principal iff the caller authenticated and it is non-empty.
-pub(in crate::gateway) fn authenticated_principal(
+pub(in crate::gateway) fn authenticated_principal<P: Principal + ?Sized>(
     authenticated: bool,
-    principal: Option<&str>,
-) -> Option<&str> {
+    principal: Option<&P>,
+) -> Option<&P> {
     if authenticated {
         principal.filter(|p| !p.is_empty())
     } else {
@@ -234,7 +257,7 @@ pub struct AuthenticatedClient {
     /// operator-chosen and two API keys may share one, which would let them
     /// attach to each other's sessions. Empty for an identity that presented
     /// no credential.
-    pub principal: String,
+    pub(crate) principal: InternalPrincipal,
     /// Authenticated nonce-quota authority; never derived from audit labels.
     pub quota_principal: Option<QuotaPrincipal>,
     /// Whether a credential was actually presented and validated.
@@ -265,9 +288,21 @@ impl AuthenticatedClient {
         api_key_name(self.authenticated, self.credential_kind, Some(&self.name))
     }
 
+    /// The record principal of `client`, keyed (MIK-8697 §16.11): what a record
+    /// of its request writes as `who.principal`. No client is no credential.
+    pub(crate) fn record_principal_of(
+        client: Option<&Self>,
+        key: &crate::gateway::record_principal::RecordPrincipalKey,
+    ) -> crate::gateway::record_principal::RecordPrincipal {
+        client.map_or_else(
+            || InternalPrincipal::default().record_form(key),
+            |c| c.principal.record_form(key),
+        )
+    }
+
     /// The validated credential principal iff this client authenticated with a non-empty one (MIK-8659).
     #[must_use]
-    pub(in crate::gateway) fn credential_principal(&self) -> Option<&str> {
+    pub(in crate::gateway) fn credential_principal(&self) -> Option<&InternalPrincipal> {
         authenticated_principal(self.authenticated, Some(&self.principal))
     }
 
@@ -407,8 +442,10 @@ pub(crate) fn cookie_secure(state: &AuthState) -> bool {
 /// Who a dashboard-session action is attributed to in the audit log: the same
 /// identity the middleware gives a valid session.
 #[cfg(feature = "webui")]
-pub(crate) fn dashboard_session_who() -> crate::security::audit::AuditWho {
-    crate::security::audit::AuditWho::from_request(Some(&dashboard_client()), None)
+pub(crate) fn dashboard_session_who(
+    key: &crate::gateway::record_principal::RecordPrincipalKey,
+) -> crate::security::audit::AuditWho {
+    crate::security::audit::AuditWho::from_request(Some(&dashboard_client()), None, key)
 }
 
 #[path = "auth_clients.rs"]

@@ -60,7 +60,7 @@ fn session_owner_key(client: Option<&crate::gateway::auth::AuthenticatedClient>)
             format!(
                 "{}{}",
                 crate::gateway::auth::CREDENTIAL_OWNER_PREFIX,
-                principal
+                principal.storage_form()
             )
         })
 }
@@ -187,7 +187,9 @@ mod mik_8659_owner_tests {
             denied_tools: None,
             admin: false,
             // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
-            principal: principal.to_owned(),
+            principal: crate::gateway::record_principal::InternalPrincipal::new(
+                principal.to_owned(),
+            ),
             quota_principal: None,
             authenticated,
             credential_kind: crate::security::audit::CredentialKind::ApiKey,

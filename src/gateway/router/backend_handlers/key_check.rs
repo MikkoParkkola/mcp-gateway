@@ -72,7 +72,7 @@ pub(super) async fn key_refusal(
         let proof = crate::identity_propagation::CallerProof::new(
             failed.identity,
             crate::identity_propagation::CallerProvenance::classify(
-                failed.client.map(|client| client.principal.as_str()),
+                failed.client.map(|client| client.principal.storage_form()),
             ),
         );
         failed

@@ -11,6 +11,7 @@ mod differential;
 mod http_error;
 pub mod input_bridge;
 mod meta_mcp;
+pub(crate) mod record_principal;
 
 /// The nonce fields every entry route validates before taking them off a
 /// request (MIK-8154 S2'): the signing nonce and the chain nonce.
@@ -182,9 +183,11 @@ pub mod test_helpers {
     /// The authorizer a fixture's `SubscriptionRegistry` re-validates against:
     /// `config` with no key server, as a fixture's `AppState` carries it.
     #[must_use]
-    pub fn auth_state(config: &crate::config::AuthConfig) -> super::AuthState {
+    pub fn auth_state(config: &crate::config::AuthConfig, record_key: &str) -> super::AuthState {
         super::AuthState {
-            auth_config: std::sync::Arc::new(super::ResolvedAuthConfig::from_config(config)),
+            auth_config: std::sync::Arc::new(super::ResolvedAuthConfig::from_config(
+                config, record_key,
+            )),
             key_server: None,
             dashboard_bootstrap: std::sync::Arc::default(),
             tls_enabled: false,

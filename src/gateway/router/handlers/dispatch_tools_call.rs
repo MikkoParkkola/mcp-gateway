@@ -129,6 +129,7 @@ pub(super) async fn tools_call(
         client.as_ref(),
         grant_subject.as_ref(),
         session_id,
+        state.auth_config.record_key(),
     );
     if retry.is_malformed() {
         // Neither a usable retry nor a fresh call. Running it as a fresh
@@ -153,6 +154,7 @@ pub(super) async fn tools_call(
             client.as_ref(),
             grant_subject.as_ref(),
             tool_name,
+            state.auth_config.record_key(),
         )
         .await
     {
@@ -385,7 +387,13 @@ pub(super) async fn tools_call(
         signing: None,
         is_modern,
         protocol_revision: protocol_revision_owned.as_deref(),
-        credential_principal: client.as_ref().map(|client| client.principal.as_str()),
+        credential_principal: client
+            .as_ref()
+            .map(|client| client.principal.storage_form()),
+        record_principal: crate::gateway::auth::AuthenticatedClient::record_principal_of(
+            client.as_ref(),
+            state.auth_config.record_key(),
+        ),
         authentication: crate::gateway::meta_mcp::Authentication::of(client.as_ref()),
         credential_kind: crate::security::audit::CredentialKind::of(client.as_ref()),
         authorizer: router_authorizer,

@@ -547,6 +547,7 @@ async fn a4_a_shared_key_still_separates_callers_the_guard_separates() {
                   retry: &'static crate::protocol::mrtr::RetryFields| {
         crate::gateway::meta_mcp::MetaMcpCallerContext {
             credential_principal: Some("shared-key-principal"),
+            record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
             authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
             grant_subject: grant.clone(),
             input_capabilities: declared,

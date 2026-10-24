@@ -41,6 +41,7 @@ pub(crate) fn mints() -> Vec<(&'static str, AuthenticatedClient)> {
     let resolved = super::ResolvedAuthConfig::try_from_config(
         &auth_config,
         &crate::config::EnvOverlay::none(),
+        crate::gateway::record_principal::TEST_RECORD_KEY,
     )
     .expect("fixture auth resolves");
     let bearer = resolved
@@ -65,7 +66,7 @@ pub(crate) fn mints() -> Vec<(&'static str, AuthenticatedClient)> {
                 denied_tools: None,
                 admin: false,
                 // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
-                principal: "p".to_owned(),
+                principal: crate::gateway::record_principal::InternalPrincipal::new("p".to_owned()),
                 quota_principal: None,
                 authenticated: false,
                 credential_kind: CredentialKind::ApiKey,
@@ -80,7 +81,7 @@ pub(crate) fn mints() -> Vec<(&'static str, AuthenticatedClient)> {
                 allowed_tools: None,
                 denied_tools: None,
                 admin: false,
-                principal: String::new(),
+                principal: crate::gateway::record_principal::InternalPrincipal::new(String::new()),
                 quota_principal: None,
                 authenticated: true,
                 credential_kind: CredentialKind::ApiKey,
@@ -98,7 +99,8 @@ pub(crate) fn mints() -> Vec<(&'static str, AuthenticatedClient)> {
 fn context_for(client: &AuthenticatedClient) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'_> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
         api_key_name: Some(client.name.as_str()),
-        credential_principal: Some(client.principal.as_str()),
+        credential_principal: Some(client.principal.storage_form()),
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         authentication: crate::gateway::meta_mcp::Authentication::of(Some(client)),
         credential_kind: CredentialKind::of(Some(client)),
         ..crate::gateway::meta_mcp::anonymous_caller()

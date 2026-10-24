@@ -120,7 +120,10 @@ async fn seed_capturable_task(
         Arc::clone(&service),
         Arc::new(SubscriptionRegistry::new(
             DEFAULT_MAX_LISTENERS,
-            crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+            crate::gateway::test_helpers::auth_state(
+                &crate::config::AuthConfig::default(),
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            ),
         )),
         1,
     );

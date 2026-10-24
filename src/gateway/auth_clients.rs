@@ -4,8 +4,8 @@
 //! session readers it uses to pick one.
 
 use super::{
-    AuthenticatedClient, Body, QuotaPrincipal, Request, Response, SESSION_COOKIE,
-    bearer_unauthorized_response, session_cookie,
+    AuthenticatedClient, Body, InternalPrincipal, QuotaPrincipal, Request, Response,
+    SESSION_COOKIE, bearer_unauthorized_response, session_cookie,
 };
 
 /// The answer to a dashboard session that has ended: its own message and a
@@ -41,7 +41,7 @@ pub(super) fn dashboard_client() -> AuthenticatedClient {
     AuthenticatedClient {
         quota_principal: Some(QuotaPrincipal::dashboard_session()),
         name: "dashboard".to_string(),
-        principal: "dashboard-session".to_string(),
+        principal: InternalPrincipal::new("dashboard-session".to_string()),
         rate_limit: 0,
         backends: vec!["*".to_string()],
         allowed_tools: None,
@@ -99,7 +99,7 @@ pub fn anonymous_client() -> AuthenticatedClient {
     AuthenticatedClient {
         quota_principal: None,
         name: "anonymous".to_string(),
-        principal: String::new(),
+        principal: InternalPrincipal::new(String::new()),
         rate_limit: 0,
         backends: vec!["*".to_string()],
         allowed_tools: None,
@@ -117,7 +117,7 @@ pub(super) fn public_client() -> AuthenticatedClient {
     AuthenticatedClient {
         quota_principal: None,
         name: "public".to_string(),
-        principal: String::new(),
+        principal: InternalPrincipal::new(String::new()),
         rate_limit: 0,
         backends: vec!["*".to_string()],
         allowed_tools: None,

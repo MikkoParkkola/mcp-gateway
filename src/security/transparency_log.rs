@@ -203,6 +203,9 @@ pub struct TransparencyLogger {
     path: PathBuf,
     /// The writer lease on `<path>.lock`, held for the logger's lifetime.
     lease: crate::fs_lock::ExclusiveFileLock,
+    /// The record key a `caller_key` field is keyed with at append (MIK-8697
+    /// §16.12): every `tenant_read` writer funnels through this logger.
+    record_key: Option<std::sync::Arc<crate::gateway::record_principal::RecordPrincipalKey>>,
     #[cfg(test)]
     fail_next_append: std::sync::atomic::AtomicBool,
     #[cfg(test)]
@@ -325,6 +328,14 @@ impl TransparencyLogger {
             config,
             path,
             lease,
+            // Production installs the resolved key through with_record_key
+            // (build_meta_mcp); a logger opened in test code starts keyed.
+            #[cfg(not(test))]
+            record_key: None,
+            #[cfg(test)]
+            record_key: Some(std::sync::Arc::new(
+                crate::gateway::record_principal::test_record_key(),
+            )),
             #[cfg(test)]
             hooks: rotation::TestHooks::default(),
             #[cfg(test)]
@@ -464,6 +475,37 @@ impl TransparencyLogger {
         self.append_core(fields, envelope, true)
     }
 
+    /// Install the record key (MIK-8697 §16.12), as `build_meta_mcp` does.
+    #[must_use]
+    pub(crate) fn with_record_key(
+        mut self,
+        key: std::sync::Arc<crate::gateway::record_principal::RecordPrincipalKey>,
+    ) -> Self {
+        self.record_key = Some(key);
+        self
+    }
+
+    /// A record's `caller_key` names the caller by a credential digest, so it
+    /// is written keyed (`record_owner`); the in-process lookup keeps the raw
+    /// key. With no record key installed the append fails, closed: the field
+    /// is never written unkeyed and never silently dropped.
+    fn keyed_caller_key(
+        &self,
+        mut fields: serde_json::Map<String, serde_json::Value>,
+    ) -> io::Result<serde_json::Map<String, serde_json::Value>> {
+        let Some(serde_json::Value::String(caller_key)) = fields.get("caller_key") else {
+            return Ok(fields);
+        };
+        let Some(key) = self.record_key.as_deref() else {
+            return Err(io::Error::other(
+                "a caller_key record needs the record key, and this logger has none",
+            ));
+        };
+        let keyed = crate::gateway::record_principal::record_owner(caller_key, key);
+        fields.insert("caller_key".into(), keyed.into());
+        Ok(fields)
+    }
+
     fn reject_reserved_keys(fields: &serde_json::Map<String, serde_json::Value>) -> io::Result<()> {
         let chain = ["counter", "prev_entry_hash", "entry_hash", "sig", "key_id"];
         // D6: only the logger writes segment records, so a caller cannot
@@ -504,6 +546,7 @@ impl TransparencyLogger {
         envelope: &AuditEnvelope,
         resync: bool,
     ) -> io::Result<String> {
+        let fields = self.keyed_caller_key(fields)?;
         let result = self.append_chained(fields, envelope, resync);
         // An oversized record is refused for that call only: it is an
         // invalid record, not a log failure, so it never degrades (D6 2.1).
@@ -711,7 +754,7 @@ fn chain_line(
     // key_id is bound INTO the signed message (MIK-6700 review).
     if !config.shared_secret.is_empty() {
         let msg = sig_message(&entry_hash_bytes, &config.key_id);
-        let sig_hex = hmac_sha256_hex(config.shared_secret.as_bytes(), &msg);
+        let sig_hex = crate::hashing::hmac_sha256_hex(config.shared_secret.as_bytes(), &msg);
         fields.insert("sig".into(), format!("hmac-sha256:{sig_hex}").into());
         fields.insert("key_id".into(), config.key_id.clone().into());
     }
@@ -737,14 +780,6 @@ fn sha256_raw(data: &[u8]) -> [u8; 32] {
     let mut h = Sha256::new();
     h.update(data);
     h.finalize().into()
-}
-
-/// Compute `HMAC-SHA256(key, message)` and return lowercase hex.
-fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
-    // HMAC accepts any key length; the `expect` here cannot panic.
-    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
-    mac.update(message);
-    hex::encode(mac.finalize().into_bytes())
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

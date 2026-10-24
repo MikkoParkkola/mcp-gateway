@@ -326,6 +326,7 @@ async fn s3b1_one_key_has_one_cap_live_and_in_a_task_worker() {
     let fresh: &'static crate::protocol::mrtr::RetryFields = Box::leak(Box::default());
     let caller = |principal: &'static str| crate::gateway::meta_mcp::MetaMcpCallerContext {
         credential_principal: Some(principal),
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
         input_capabilities: declared,
         retry: fresh,
@@ -381,6 +382,7 @@ async fn s3e_one_stdio_process_has_one_cap_live_and_in_a_task_worker() {
         |stdio: bool, principal: &'static str| crate::gateway::meta_mcp::MetaMcpCallerContext {
             stdio_nonce: stdio.then_some(nonce),
             credential_principal: Some(principal),
+            record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
             authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
             input_capabilities: declared,
             retry: fresh,

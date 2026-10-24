@@ -155,6 +155,7 @@ fn resuming_ctx<'a>(
         signing: None,
         execution: None,
         credential_principal: None,
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
         // `test-caller` is an authenticated API key, so its per-key budget
         // applies (MIK-8507); only an authenticated API key has one (MIK-8659).

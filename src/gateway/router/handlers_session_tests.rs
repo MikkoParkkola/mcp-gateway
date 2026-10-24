@@ -19,7 +19,7 @@ use crate::gateway::session_id::log_capture::{assert_fingerprinted, capture_debu
 fn unauthenticated(name: &str) -> AuthenticatedClient {
     AuthenticatedClient {
         name: name.to_string(),
-        principal: String::new(),
+        principal: crate::gateway::record_principal::InternalPrincipal::new(String::new()),
         ..anonymous_client()
     }
 }

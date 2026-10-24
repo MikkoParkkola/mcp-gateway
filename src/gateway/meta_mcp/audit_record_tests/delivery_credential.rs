@@ -10,6 +10,7 @@ use super::{Caller, args, context, meta, ok_result, only_record};
 use crate::gateway::authz::AllowAll;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::response_security::DeliveryCredential;
+use crate::gateway::record_principal::InternalPrincipal;
 use crate::identity_grants::GrantSubject;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::audit::CredentialKind;
@@ -53,7 +54,10 @@ async fn record_delivery_for(
         meta.record_delivery_of(
             &response,
             &correlation,
-            DeliveryCredential::of(Some(client)),
+            DeliveryCredential::of(
+                Some(client),
+                &crate::gateway::record_principal::test_record_key()
+            ),
             None,
         )
         .await,
@@ -71,7 +75,10 @@ fn assert_delivery_matches_invocation(dir: &tempfile::TempDir, kind: &str, princ
         json!(kind),
         "{delivery}"
     );
-    assert_eq!(delivery["who"]["principal"], json!(principal), "{delivery}");
+    // The record carries the keyed form, never the stored principal (MIK-8697).
+    let keyed = crate::gateway::record_principal::InternalPrincipal::new(principal.to_owned())
+        .record_form(&crate::gateway::record_principal::test_record_key());
+    assert_eq!(delivery["who"]["principal"], json!(keyed), "{delivery}");
     assert_eq!(
         delivery["who"]["credential_kind"], invocation["who"]["credential_kind"],
         "{invocation}"
@@ -108,7 +115,7 @@ fn caller_of(
     identity: crate::key_server::oidc::VerifiedIdentity,
 ) -> Caller {
     Caller {
-        principal: client.principal.clone(),
+        principal: client.principal.storage_form().to_owned(),
         account: client.name.clone(),
         authenticated: true,
         grant: Some(GrantSubject::new(
@@ -196,7 +203,7 @@ async fn meta_delivery_records_name_the_harness_credentials() {
         let client = crate::gateway::auth::AuthenticatedClient {
             quota_principal: Some(crate::gateway::auth::QuotaPrincipal::dashboard_session()),
             name: "dashboard".to_string(),
-            principal: "dashboard-session".to_string(),
+            principal: InternalPrincipal::new("dashboard-session".to_string()),
             rate_limit: 0,
             backends: vec!["*".to_string()],
             allowed_tools: None,
@@ -247,7 +254,9 @@ async fn two_tokens_for_one_actor_name_different_principals() {
     );
     for principal in &principals {
         assert!(
-            principal.as_str().is_some_and(|p| p.starts_with("kst:")),
+            principal
+                .as_str()
+                .is_some_and(|p| p.len() == 12 && !p.starts_with("kst:")),
             "{principal}"
         );
     }

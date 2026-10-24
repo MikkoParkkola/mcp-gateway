@@ -49,6 +49,8 @@ fn keys(ops_admin: bool) -> Vec<ApiKeyConfig> {
 
 fn principal(secret: &str) -> String {
     crate::gateway::auth::principal_of(secret)
+        .storage_form()
+        .to_owned()
 }
 
 /// A hub whose controls read `keys` from a live config the test can swap.
@@ -74,6 +76,7 @@ fn hub_with(
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials,
+        record_key: Some(crate::gateway::record_principal::test_key_arc()),
     };
     let _ = hub.runtime.services.set(Arc::new(services));
     (hub, live)

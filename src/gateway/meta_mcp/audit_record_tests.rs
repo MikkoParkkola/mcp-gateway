@@ -157,6 +157,10 @@ fn context<'a>(
         signing: None,
         execution: None,
         credential_principal: Some(who.principal.as_str()),
+        record_principal: crate::gateway::record_principal::InternalPrincipal::new(
+            who.principal.clone(),
+        )
+        .record_form(&crate::gateway::record_principal::test_record_key()),
         authentication: if who.authenticated {
             Authentication::Authenticated
         } else {
@@ -186,7 +190,9 @@ fn context<'a>(
 
 fn api_key_caller() -> Caller {
     Caller {
-        principal: crate::gateway::auth::principal_of("k-SECRET-123"),
+        principal: crate::gateway::auth::principal_of("k-SECRET-123")
+            .storage_form()
+            .to_owned(),
         account: "ci".to_string(),
         authenticated: true,
         grant: None,
@@ -205,7 +211,9 @@ fn oidc_caller() -> Caller {
     };
     let actor = identity.stable_actor_id();
     Caller {
-        principal: crate::gateway::auth::principal_of(&actor),
+        principal: crate::gateway::auth::principal_of(&actor)
+            .storage_form()
+            .to_owned(),
         account: actor,
         authenticated: true,
         grant: Some(GrantSubject::new(
@@ -451,6 +459,8 @@ async fn a_replay_whose_record_fails_is_withheld() {
 #[cfg(feature = "firewall")]
 mod chain_replay;
 mod delivery_credential;
+// MIK-8697: the credential canary over the meta route's request paths.
+mod canary;
 #[cfg(feature = "firewall")]
 mod tenants;
 

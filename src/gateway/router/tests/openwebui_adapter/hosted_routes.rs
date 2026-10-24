@@ -117,7 +117,10 @@ async fn gateway(shape: Shape) -> Gateway {
     )
     .unwrap();
     let config = config(&env, shape);
-    let auth = Arc::new(ResolvedAuthConfig::from_config(&config.auth));
+    let auth = Arc::new(ResolvedAuthConfig::from_config(
+        &config.auth,
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    ));
     let (mut state, _store) = test_router_app_state_with(StreamingConfig::default(), config).await;
     Arc::get_mut(&mut state).unwrap().auth_config = auth;
     let fixture =

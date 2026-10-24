@@ -14,7 +14,10 @@ async fn test_router_app_state_with_code_mode(enabled: bool) -> (Arc<AppState>, 
         streaming_config.clone(),
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
-    let auth_config = Arc::new(ResolvedAuthConfig::from_config(&AuthConfig::default()));
+    let auth_config = Arc::new(ResolvedAuthConfig::from_config(
+        &AuthConfig::default(),
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    ));
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
