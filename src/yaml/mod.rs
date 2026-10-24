@@ -28,14 +28,14 @@
 )]
 
 mod error;
-mod provider;
 mod guard;
+mod provider;
 
 pub(crate) use error::{Error, Limit, Location, redact_message};
-pub(crate) use provider::{figment_data, from_str_loose};
+use guard::guard;
 #[cfg(test)]
 pub(crate) use guard::guard_work;
-use guard::guard;
+pub(crate) use provider::{figment_data, from_str_loose};
 
 use figment::Provider as _;
 use figment::providers::{Format as _, Yaml};
