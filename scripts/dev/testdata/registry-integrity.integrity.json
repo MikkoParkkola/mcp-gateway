@@ -1,0 +1,11 @@
+{
+  "npm": {
+    "@modelcontextprotocol/server-memory@1.0.0": "sha512-VDMtMrw2xeI16mcn7O4fesp9Pf3hYh91thuU5KSz0BxKqwnTwEytZKjHfkrqxxmKp0r4QHoiEkMV99UmadmODw=="
+  },
+  "pypi": {
+    "mcp-server-time==2026.8.18": {
+      "mcp_server_time-2026.8.18-py3-none-any.whl": "1407583af42dc0163909d855c9ef20114a12b4981c3975033721a7906cdd212a",
+      "mcp_server_time-2026.8.18.tar.gz": "ec1313feb558a848838217d922bd218e9f7ca217cb0f7b890ee75ab94bf962e0"
+    }
+  }
+}

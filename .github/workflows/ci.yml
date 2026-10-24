@@ -1502,6 +1502,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check the guard refuses what it claims to
         run: python3 scripts/dev/test_check_registry_packages.py
+      # MIK-8513: the digest and start checks' offline rows (no network, no Docker).
+      - name: Check the content and start guards refuse what they claim to
+        run: python3 scripts/dev/test_check_registry_content.py
       - name: Check every registry entry is pinned
         run: python3 scripts/dev/check-registry-packages.py --offline
 

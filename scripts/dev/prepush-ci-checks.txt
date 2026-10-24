@@ -37,6 +37,7 @@ python3 scripts/dev/test_check_file_size.py	4	closed
 python3 scripts/dev/test_check_orphan_test_modules.py	22	closed
 python3 scripts/dev/test_check_owasp_citations.py	38	closed
 python3 scripts/dev/test_check_registry_packages.py	0	closed
+python3 scripts/dev/test_check_registry_content.py	0	closed
 python3 scripts/dev/test_check_timing_asserts.py	10	closed
 python3 scripts/dev/test_cwe532_leak_lint.py	1	closed
 python3 scripts/dev/test_events8_run.py	8	closed
