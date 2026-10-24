@@ -10,7 +10,7 @@
 #   key             print the cache key (it names the runner image, so a new
 #                   image fetches afresh rather than reuse another base's debs)
 #   download <dir>  fetch the debs into <dir>; nothing is installed
-#   install <dir>   install the debs in <dir>, never from the mirror
+#   install <dir>   install the debs in <dir>
 set -euo pipefail
 
 pkg=gcc-mingw-w64-x86-64
@@ -39,8 +39,11 @@ case "${1:-}" in
   install)
     dir=${2:?usage: mingw-debs.sh install <dir>}
     # apt, not a batch dpkg -i: it orders pre-dependencies across the debs.
-    # --no-download: a deb the folder lacks fails here, never fetches.
-    sudo apt-get install -y --no-install-recommends --no-download "$dir"/*.deb
+    # No --no-download: apt counts installing local .deb files as a fetch,
+    # so that flag failed every install, hit or miss (MIK-8766, run
+    # 40044830590). The folder holds the image's full dependency set, so a
+    # hit fetches nothing from the mirror.
+    sudo apt-get install -y --no-install-recommends "$dir"/*.deb
     x86_64-w64-mingw32-gcc --version
     ;;
   *)
