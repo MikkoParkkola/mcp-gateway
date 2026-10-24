@@ -558,6 +558,11 @@ fn c7_depth_is_one_level() {
 #[path = "redactor_b2_key_tests.rs"]
 mod key_rows;
 
+// ── I: redacting twice changes nothing (MIK-8794) ─────────────────────────
+
+#[path = "redactor_idem_tests.rs"]
+mod idem_rows;
+
 // ── D: properties ─────────────────────────────────────────────────────────
 
 /// A small deterministic generator (no new dependency).
@@ -591,9 +596,12 @@ impl Gen {
         if secret {
             let all = secrets();
             let (_, s) = self.pick(&all).clone();
+            // A connection-string prefix right before the secret (MIK-8794):
+            // under ten more non-space characters, so only the marker could
+            // carry the run past the rule's floor on a second pass.
             format!(
                 "{}{s}{}",
-                self.pick(&["", "x ", "pre-"]),
+                self.pick(&["", "x ", "pre-", "redis://", "Postgres://"]),
                 self.pick(&["", " y", "/tail"])
             )
         } else {
