@@ -21,7 +21,7 @@ use std::net::Ipv4Addr;
 use serde::{Deserialize, Serialize};
 
 use super::descriptor::{NetworkEgressPolicy, SandboxDescriptor};
-use super::divergence::{DivergenceRegistry, SubstrateTag};
+use super::divergence::DivergenceRegistry;
 use super::substrate::Substrate;
 
 // ── OCI OCI bundle types ─────────────────────────────────────────────────
@@ -687,12 +687,7 @@ impl Compiler {
         // If divergence registry is present, log each divergence
         if let Some(ref registry) = self.divergence_registry {
             for d in &divergences {
-                registry.log(
-                    &descriptor.name,
-                    SubstrateTag::GVisor,
-                    SubstrateTag::AppleVm,
-                    d,
-                );
+                registry.log(&descriptor.name, Substrate::GVisor, Substrate::AppleVm, d);
             }
         }
 
