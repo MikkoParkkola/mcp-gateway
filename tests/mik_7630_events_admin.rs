@@ -250,6 +250,7 @@ async fn bulk_replay_replays_only_the_named_subscription() {
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["replayed"], 3, "{body}");
     let posts = events_at_least(&rx, 8).await;
+    // timing: absence
     tokio::time::sleep(SETTLE).await;
     let again = rx.events();
     assert_eq!(again.len(), 8, "no delivery to S2");
