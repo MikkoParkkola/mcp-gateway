@@ -13,7 +13,7 @@ mcp-gateway doctor                           # 4. verify
 
 The wizard scans Claude Desktop, Claude Code, Cursor, Windsurf, Zed, Continue.dev, and Codex for existing MCP servers, imports them into `gateway.yaml`, previews the gateway client entry, writes it into detected clients, verifies the write, and prints any backup/rollback paths.
 
-> **Nothing to import yet?** `mcp-gateway setup wizard --configure-client` now bootstraps the local starter profile when no existing MCP servers are found. You can still run `mcp-gateway init --profile local` directly if you only want to create `gateway.yaml` plus zero-key sample capability files.
+> **Nothing to import yet?** `mcp-gateway setup wizard --configure-client` now bootstraps the local starter profile when no existing MCP servers are found. You can still run `mcp-gateway init --profile local` directly if you only want to create `gateway.yaml` plus zero-key sample capability files. The starter profile turns on the memory and sequential-thinking servers, which recommend Node.js 24 or later.
 
 ## The manual way (learn what's happening)
 
@@ -23,7 +23,7 @@ The wizard scans Claude Desktop, Claude Code, Cursor, Windsurf, Zed, Continue.de
 ### Prerequisites
 
 - **Rust toolchain** (1.95+): [rustup.rs](https://rustup.rs), or use Homebrew
-- **Node.js with `npx`**, for the manual config's example backend. Its first start downloads the package, so it needs network access once.
+- **Node.js with `npx`**, for the manual config's example backend. Its first start downloads the package, so it needs network access once. The built-in filesystem, memory and sequential-thinking servers (2.0.0) recommend Node.js 24 or later; they run on Node 22 too.
 
 ### 1. Install
 

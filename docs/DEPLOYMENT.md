@@ -11,7 +11,7 @@ For quick-start and development usage, see the [README](../README.md). For every
 | **Memory** | 64 MB | 256 MB+ (scales with backends) |
 | **Disk** | 50 MB (binary + config) | 200 MB (with capabilities) |
 
-The gateway is a single binary with no runtime dependencies beyond libc. Rustls is compiled in. Node.js is only required for stdio backends that use `npx`.
+The gateway is a single binary with no runtime dependencies beyond libc. Rustls is compiled in. Node.js is only required for stdio backends that use `npx`; the built-in filesystem, memory and sequential-thinking servers (2.0.0) recommend Node.js 24 or later.
 
 ## Building from Source
 
