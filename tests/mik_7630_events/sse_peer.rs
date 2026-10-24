@@ -3,9 +3,8 @@
 //! A legacy (2024-11-05) HTTP+SSE MCP peer for the SOURCE.1 P3 rows. Each
 //! `GET /sse` opens a session, names it in the `endpoint` event and keeps the
 //! stream; `POST /messages?session_id=<n>` is answered 202 with the response
-//! on that session's stream, as the spec transport does. Session 1 is the
-//! gateway's calls session, whose path reads only the POST body, so it is
-//! answered in the body; `answer_in_body` makes every session answer so.
+//! on that session's stream, as the spec transport does; `answer_in_body`
+//! makes every session answer in the POST body instead.
 //! Each answer on a stream follows a wrong-id error, so a reader that takes
 //! the next response instead of its own fails.
 //! A session refuses `resources/subscribe` before its
@@ -221,8 +220,7 @@ fn open(state: &State) -> Response {
 }
 
 /// `POST /messages`: a notification is 202; a request's response goes on
-/// the session's stream (202 here), or in the body for session 1 and
-/// under `answer_in_body`.
+/// the session's stream (202 here), or in the body under `answer_in_body`.
 fn message(
     state: &State,
     query: &BTreeMap<String, String>,
@@ -259,7 +257,7 @@ fn message(
             json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
         }
     };
-    if session == 1 || state.answer_in_body.load(Ordering::SeqCst) {
+    if state.answer_in_body.load(Ordering::SeqCst) {
         return axum::Json(response).into_response();
     }
     // A wrong-id error first: only a listener that pairs by id ignores it.
