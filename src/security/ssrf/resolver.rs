@@ -12,7 +12,6 @@ use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 
 use super::SSRF_BLOCKED;
-use super::is_private_or_reserved;
 use crate::{Error, Result};
 
 /// Trait for DNS name resolution used by [`PinningResolver`].
@@ -202,32 +201,4 @@ pub(crate) fn ssrf_denial<'a>(
         next = current.source();
     }
     None
-}
-
-/// Resolve a domain name and validate all returned IPs against SSRF deny lists.
-///
-/// Async counterpart to `check_host_not_ssrf` for domain names.  Call this
-/// before any outbound request to a tool-supplied hostname to detect
-/// DNS-rebinding attempts.
-///
-/// Returns the validated `Vec<IpAddr>` so the caller can connect to a specific
-/// address.
-///
-/// # Errors
-///
-/// Returns `Error::Protocol` if resolution fails, no addresses are returned,
-/// or any returned address falls in a blocked range.
-pub async fn resolve_and_validate_host<R: HostResolver>(
-    host: &str,
-    resolver: &R,
-) -> Result<Vec<IpAddr>> {
-    let ips = resolver.lookup(host).await?;
-    for ip in &ips {
-        if is_private_or_reserved(*ip) {
-            return Err(Error::Protocol(format!(
-                "{SSRF_BLOCKED}: '{host}' resolves to a private/reserved address"
-            )));
-        }
-    }
-    Ok(ips)
 }

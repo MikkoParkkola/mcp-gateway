@@ -59,6 +59,7 @@ pub(super) fn authorizer(key_server: Arc<crate::key_server::KeyServer>) -> AuthS
     AuthState {
         auth_config: Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
             &config,
+            crate::gateway::record_principal::TEST_RECORD_KEY,
         )),
         key_server: Some(key_server),
         dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),

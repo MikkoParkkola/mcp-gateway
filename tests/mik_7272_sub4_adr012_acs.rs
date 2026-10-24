@@ -22,6 +22,9 @@
 //! `#[ignore]`d, with a comment naming what it waits on, rather than faked
 //! green or faked red.
 
+#[path = "common/record_key.rs"]
+mod record_key;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -325,7 +328,10 @@ async fn route_state() -> (Arc<AppState>, tempfile::TempDir) {
     // One registry, shared between the state the router reads and the executor
     // that publishes: two would send a task's notifications to a listener set
     // no client here is on.
-    let subscriptions = Arc::new(SubscriptionRegistry::new(64, auth_state(&config.auth)));
+    let subscriptions = Arc::new(SubscriptionRegistry::new(
+        64,
+        auth_state(&config.auth, crate::record_key::RECORD_KEY),
+    ));
     let store_dir = tempfile::tempdir().expect("a private task-store directory");
     let (tasks, task_executor) = open_runtime(
         &store_dir.path().join("tasks"),
@@ -345,7 +351,10 @@ async fn route_state() -> (Arc<AppState>, tempfile::TempDir) {
         multiplexer,
         proxy_manager,
         streaming_config: config.streaming.clone(),
-        auth_config: Arc::new(ResolvedAuthConfig::from_config(&config.auth)),
+        auth_config: Arc::new(ResolvedAuthConfig::from_config(
+            &config.auth,
+            crate::record_key::RECORD_KEY,
+        )),
         key_server: None,
         tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),

@@ -217,7 +217,7 @@ impl super::MetaMcp {
         self.record_delivery(
             response,
             &context.correlation,
-            DeliveryCredential::of(None),
+            DeliveryCredential::of(None, self.record_key()),
             None,
         )
         .await
@@ -599,26 +599,34 @@ pub(crate) fn chain_after_gates(
 
 /// The credential a delivery record names (MIK-8672): the same `credential_kind` and `principal` the
 /// invocation record of the same caller carries (`AuditWho::from_request`, security/audit.rs:227).
-#[derive(Clone, Copy, Debug)]
-pub(in crate::gateway) struct DeliveryCredential<'a> {
+/// Its principal is the keyed record form (MIK-8697 §16.11), typed so an
+/// unkeyed string cannot reach the record.
+#[derive(Clone, Debug)]
+pub(in crate::gateway) struct DeliveryCredential {
     pub(in crate::gateway) kind: crate::security::audit::CredentialKind,
-    pub(in crate::gateway) principal: &'a str,
+    pub(in crate::gateway) principal: crate::gateway::record_principal::RecordPrincipal,
 }
-impl<'a> DeliveryCredential<'a> {
+impl DeliveryCredential {
     /// Exactly `AuditWho::from_request`'s two fields for `client`.
     pub(in crate::gateway) fn of(
-        client: Option<&'a crate::gateway::auth::AuthenticatedClient>,
+        client: Option<&crate::gateway::auth::AuthenticatedClient>,
+        key: &crate::gateway::record_principal::RecordPrincipalKey,
     ) -> Self {
         Self {
             kind: crate::security::audit::CredentialKind::of(client),
-            principal: client.map_or("", |c| c.principal.as_str()),
+            principal: crate::gateway::auth::AuthenticatedClient::record_principal_of(client, key),
         }
     }
     /// The stdio transport.
-    pub(in crate::gateway) const fn stdio() -> Self {
+    pub(in crate::gateway) fn stdio(
+        key: &crate::gateway::record_principal::RecordPrincipalKey,
+    ) -> Self {
         Self {
             kind: crate::security::audit::CredentialKind::LocalTransport,
-            principal: crate::gateway::server::STDIO_CREDENTIAL_PRINCIPAL,
+            principal: crate::gateway::record_principal::InternalPrincipal::new(
+                crate::gateway::server::STDIO_CREDENTIAL_PRINCIPAL.to_owned(),
+            )
+            .record_form(key),
         }
     }
 }

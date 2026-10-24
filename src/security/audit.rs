@@ -168,8 +168,10 @@ pub struct AuditWho {
     #[serde(skip_serializing_if = "Option::is_none")]
     // ci-allow-secret-debug: an enum naming how a credential was presented; it holds no secret bytes.
     pub(crate) credential_kind: Option<CredentialKind>,
-    /// 12 hex characters of `sha256(secret)`; empty when none was presented.
-    pub(crate) principal: String,
+    /// The keyed record principal (MIK-8697): 12 hex of an HMAC under the
+    /// gateway's record key; empty when no credential was presented. Typed, so
+    /// an unkeyed string cannot be written here.
+    pub(crate) principal: crate::gateway::record_principal::RecordPrincipal,
     /// The configured key name, `bearer`, or the OIDC stable actor id.
     pub(crate) account: String,
     /// Identity authority (the OIDC issuer).
@@ -188,7 +190,7 @@ impl AuditWho {
         let (authority, subject) = parse_oidc_actor(actor_id).unzip();
         Self {
             credential_kind: None,
-            principal: String::new(),
+            principal: crate::gateway::record_principal::RecordPrincipal::none(),
             account: actor_id.to_string(),
             authority,
             subject,
@@ -200,7 +202,7 @@ impl AuditWho {
     pub fn from_subject(subject: &str) -> Self {
         Self {
             credential_kind: None,
-            principal: String::new(),
+            principal: crate::gateway::record_principal::RecordPrincipal::none(),
             account: subject.to_string(),
             authority: None,
             subject: Some(subject.to_string()),
@@ -212,7 +214,7 @@ impl AuditWho {
     pub fn gateway() -> Self {
         Self {
             credential_kind: None,
-            principal: String::new(),
+            principal: crate::gateway::record_principal::RecordPrincipal::none(),
             account: "gateway".to_string(),
             authority: None,
             subject: None,
@@ -228,13 +230,14 @@ impl AuditWho {
     /// The caller of a direct-route request (D2-d): its credential and
     /// verified subject, never a label or an email.
     #[must_use]
-    pub fn from_request(
+    pub(crate) fn from_request(
         client: Option<&crate::gateway::auth::AuthenticatedClient>,
         grant_subject: Option<&crate::identity_grants::GrantSubject>,
+        key: &crate::gateway::record_principal::RecordPrincipalKey,
     ) -> Self {
         Self::from_parts(
             CredentialKind::of(client),
-            client.map(|c| c.principal.as_str()),
+            crate::gateway::auth::AuthenticatedClient::record_principal_of(client, key),
             client.map(|c| c.name.as_str()),
             grant_subject,
         )
@@ -244,13 +247,13 @@ impl AuditWho {
     /// `authority` and `subject` come only from the verified grant subject.
     pub(crate) fn from_parts(
         credential_kind: CredentialKind,
-        principal: Option<&str>,
+        principal: crate::gateway::record_principal::RecordPrincipal,
         account: Option<&str>,
         grant_subject: Option<&crate::identity_grants::GrantSubject>,
     ) -> Self {
         Self {
             credential_kind: Some(credential_kind),
-            principal: principal.unwrap_or_default().to_string(),
+            principal,
             account: account.unwrap_or("anonymous").to_string(),
             authority: grant_subject.map(|g| g.authority.clone()),
             subject: grant_subject.map(|g| g.subject.clone()),

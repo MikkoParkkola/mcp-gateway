@@ -340,12 +340,25 @@ tr:hover td{{background:var(--bg3);}}
 
 // ── Existing handlers (status / tools / config / reload) ────────────
 
+/// MIK-8786: the auth facts the page decides from, stated in both views of
+/// `GET /ui/api/status`: whether authentication is on, and whether this caller
+/// is signed in and is an admin. Three booleans about the caller, none about
+/// backends; an anonymous caller already learns on/off from 401 versus 200.
+fn auth_facts(state: &AppState, client: Option<&AuthenticatedClient>) -> Value {
+    json!({
+        "enabled": state.auth_config.enabled,
+        "signed_in": client.is_some_and(|c| c.authenticated),
+        "admin": is_admin(client),
+    })
+}
+
 /// `GET /ui/api/status` — JSON snapshot of gateway health.
 async fn status(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
 ) -> Json<Value> {
     let client = client.map(|Extension(c)| c);
+    let auth = auth_facts(&state, client.as_ref());
     #[allow(
         clippy::disallowed_methods,
         reason = "Admin: the operator dashboard behind admin auth; not a tenant read"
@@ -365,6 +378,7 @@ async fn status(
             "degraded_count": total - healthy,
             "uptime_secs": uptime_secs(),
             "version": env!("CARGO_PKG_VERSION"),
+            "auth": auth,
         }));
     }
 
@@ -417,6 +431,7 @@ async fn status(
             "half_open": cb_half_open,
         },
         "servers": servers,
+        "auth": auth,
     }))
 }
 

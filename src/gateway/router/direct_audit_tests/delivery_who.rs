@@ -143,7 +143,7 @@ async fn a_record_without_a_subject_is_unchanged() {
             Setup::default(),
             "anonymous",
             crate::security::audit::CredentialKind::None,
-            String::new(),
+            crate::gateway::record_principal::RecordPrincipal::none(),
         ),
         (
             Caller::Key,
@@ -153,7 +153,10 @@ async fn a_record_without_a_subject_is_unchanged() {
             },
             "alpha-client",
             crate::security::audit::CredentialKind::ApiKey,
-            crate::gateway::auth::principal_of("k"),
+            // Keyed with the fixture's record key (MIK-8697): never the
+            // unkeyed digest.
+            crate::gateway::auth::principal_of("k")
+                .record_form(&crate::gateway::record_principal::test_record_key()),
         ),
     ] {
         let fx = fixture(setup).await;
@@ -384,7 +387,9 @@ async fn a_key_named_bearer_and_the_static_bearer_name_their_own_credentials() {
         assert_eq!(delivery["who"]["credential_kind"], kind, "{delivery}");
         assert_eq!(
             delivery["who"]["principal"],
-            principal.as_str(),
+            principal
+                .record_form(&crate::gateway::record_principal::test_record_key())
+                .as_str(),
             "{delivery}"
         );
         assert_eq!(
@@ -425,7 +430,9 @@ async fn a_key_named_bearer_and_the_static_bearer_name_their_own_credentials_on_
         assert_eq!(delivery["who"]["credential_kind"], kind, "{delivery}");
         assert_eq!(
             delivery["who"]["principal"],
-            principal.as_str(),
+            principal
+                .record_form(&crate::gateway::record_principal::test_record_key())
+                .as_str(),
             "{delivery}"
         );
         assert_eq!(
@@ -462,7 +469,9 @@ async fn direct_delivery_records_name_every_stageable_credential() {
         },
         Caller::Key,
         "api_key",
-        &key_principal,
+        key_principal
+            .record_form(&crate::gateway::record_principal::test_record_key())
+            .as_str(),
     )
     .await;
     assert_direct_cell(
@@ -472,7 +481,9 @@ async fn direct_delivery_records_name_every_stageable_credential() {
         },
         Caller::Bearer,
         "static_bearer",
-        &bearer_principal,
+        bearer_principal
+            .record_form(&crate::gateway::record_principal::test_record_key())
+            .as_str(),
     )
     .await;
 }
@@ -497,7 +508,9 @@ async fn meta_delivery_records_name_every_stageable_credential() {
         },
         Caller::Key,
         "api_key",
-        &key_principal,
+        key_principal
+            .record_form(&crate::gateway::record_principal::test_record_key())
+            .as_str(),
     )
     .await;
     assert_meta_cell(
@@ -507,7 +520,9 @@ async fn meta_delivery_records_name_every_stageable_credential() {
         },
         Caller::Bearer,
         "static_bearer",
-        &bearer_principal,
+        bearer_principal
+            .record_form(&crate::gateway::record_principal::test_record_key())
+            .as_str(),
     )
     .await;
 }
@@ -538,7 +553,9 @@ async fn an_api_key_call_refused_in_resolve_caller_names_its_credential() {
     assert_eq!(delivery["who"]["credential_kind"], "api_key", "{delivery}");
     assert_eq!(
         delivery["who"]["principal"],
-        crate::gateway::auth::principal_of("k").as_str(),
+        crate::gateway::auth::principal_of("k")
+            .record_form(&crate::gateway::record_principal::test_record_key())
+            .as_str(),
         "{delivery}"
     );
 }

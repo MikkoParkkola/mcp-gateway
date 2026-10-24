@@ -156,7 +156,10 @@ async fn gateway_seeded(
     )
     .unwrap();
     let config = config(&env, shape);
-    let auth = Arc::new(ResolvedAuthConfig::from_config(&config.auth));
+    let auth = Arc::new(ResolvedAuthConfig::from_config(
+        &config.auth,
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    ));
     let (mut state, store) =
         test_router_app_state_with(StreamingConfig::default(), config.clone()).await;
     // A per-user mint needs a durable audit record; a seeded grant mints.

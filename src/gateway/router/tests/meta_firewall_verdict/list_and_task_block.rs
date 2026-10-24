@@ -404,6 +404,7 @@ async fn a_task_mode_discovery_settles_with_one_inspection() {
             None,
             None,
             OWNER.to_owned(),
+            crate::gateway::record_principal::RecordPrincipal::none(),
             crate::gateway::meta_mcp::Authentication::Anonymous,
             crate::security::audit::CredentialKind::None,
             false,

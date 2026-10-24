@@ -104,7 +104,9 @@ async fn the_watch_host_poll_refuses_a_gone_key_and_a_blocked_pattern() {
         principal: "subscriber".into(),
         api_key: ApiKeyRef {
             name: name.into(),
-            principal: crate::gateway::auth::principal_of(name),
+            principal: crate::gateway::auth::principal_of(name)
+                .storage_form()
+                .to_owned(),
         },
     };
     let fx = fixture_firewalled(Answer::Ok).await;
@@ -189,10 +191,15 @@ async fn a_poll_writes_an_audit_record_for_its_subscriber() {
         .filter(|entry: &serde_json::Value| entry.get("request_hash").is_some())
         .collect();
     assert_eq!(records.len(), 1, "{records:?}");
-    let who = records[0]["who"].to_string();
-    assert!(
-        who.contains("subscriber"),
-        "attributed to the subscriber: {who}"
+    // Attributed to the subscriber's key, by its keyed principal: never the
+    // stored owner string (MIK-8697).
+    let subscriber = crate::gateway::auth::principal_of("k-std")
+        .record_form(&crate::gateway::record_principal::test_record_key());
+    assert_eq!(
+        records[0]["who"]["principal"],
+        subscriber.as_str(),
+        "attributed to the subscriber: {}",
+        records[0]["who"]
     );
     assert_eq!(records[0]["who"]["credential_kind"], "api_key");
 }
@@ -279,7 +286,10 @@ async fn a_poll_runs_only_what_the_executor_finds_read_only() {
         let client = fx
             .state
             .auth_config
-            .client_for_key("k-budget", &crate::gateway::auth::principal_of("k-budget"))
+            .client_for_key(
+                "k-budget",
+                crate::gateway::auth::principal_of("k-budget").storage_form(),
+            )
             .expect("the fixture key is live");
         let polled = super::super::watch_poll::poll_capability(
             &fx.state,
@@ -317,7 +327,14 @@ async fn the_watch_host_admits_only_a_live_granted_key() {
             principal,
         },
     };
-    let live = |name: &str| holder(name, crate::gateway::auth::principal_of(name));
+    let live = |name: &str| {
+        holder(
+            name,
+            crate::gateway::auth::principal_of(name)
+                .storage_form()
+                .to_owned(),
+        )
+    };
     let now = crate::clock::utc_now().expect("a readable clock");
     let fx = fixture(Answer::Ok, |_| {}).await;
     let host = GatewayWatchHost::new(&fx.state);

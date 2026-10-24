@@ -65,7 +65,7 @@ fn admitted(
         .map(|Extension(id)| id)
         .and_then(|id| GrantSubject::checked(id.issuer, id.subject, None));
     let actor = client.map(|c| Actor {
-        who: AuditWho::from_request(Some(&c), subject.as_ref()),
+        who: AuditWho::from_request(Some(&c), subject.as_ref(), state.auth_config.record_key()),
     });
     let (Some(actor), Some(hub)) = (actor, state.meta_mcp.events()) else {
         return Err(Box::new(

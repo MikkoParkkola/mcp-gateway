@@ -318,7 +318,6 @@ impl Backend {
 
         warn!(
             backend = %self.name,
-            ?key,
             "Pooled entry evicted mid-start; closing the orphaned transport \
              we just built to avoid a connection leak"
         );
@@ -446,14 +445,14 @@ impl Backend {
         // a caller that starts a backend after `stop()` has already returned
         // would otherwise leave a child running for the length of a handshake.
         if self.replaced_transport_cleanups.lock().stopping {
-            debug!(backend = %self.name, ?key, "Not starting: backend is stopped");
+            debug!(backend = %self.name, "Not starting: backend is stopped");
             // NotFound, not Unavailable: the stopped instance is retired and a
             // retry re-resolves through the registry, so nothing was sent and
             // the refusal is pre-dispatch (it frees an idempotency key).
             return Err(Error::BackendNotFound(self.name.clone()));
         }
 
-        info!(backend = %self.name, ?key, "Starting backend transport");
+        info!(backend = %self.name, "Starting backend transport");
         // The policy this start builds under. The backend is marked for a
         // pairing to refuse only once the start can connect (`mark_connecting`,
         // `begin_connecting`): a start refused before that built nothing that

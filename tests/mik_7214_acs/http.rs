@@ -37,7 +37,10 @@ async fn state() -> (Arc<AppState>, tempfile::TempDir) {
     let agent_registry = Arc::new(AgentRegistry::new());
 
     // One registry, shared with the executor that publishes through it.
-    let subscriptions = Arc::new(SubscriptionRegistry::new(64, auth_state(&config.auth)));
+    let subscriptions = Arc::new(SubscriptionRegistry::new(
+        64,
+        auth_state(&config.auth, crate::record_key::RECORD_KEY),
+    ));
     let store_dir = tempfile::tempdir().expect("a private task-store directory");
     let (tasks, task_executor) = open_runtime(
         &store_dir.path().join("tasks"),
@@ -58,7 +61,10 @@ async fn state() -> (Arc<AppState>, tempfile::TempDir) {
         multiplexer,
         proxy_manager,
         streaming_config: config.streaming.clone(),
-        auth_config: Arc::new(ResolvedAuthConfig::from_config(&config.auth)),
+        auth_config: Arc::new(ResolvedAuthConfig::from_config(
+            &config.auth,
+            crate::record_key::RECORD_KEY,
+        )),
         key_server: None,
         tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),

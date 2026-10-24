@@ -44,6 +44,9 @@ pub(super) struct BuiltMetaMcp {
     pub(super) transition_path: std::path::PathBuf,
     /// Data directory used by cost-governance persistence.
     pub(super) data_dir: std::path::PathBuf,
+    /// The process's record key (MIK-8697 §16): resolved once here, fail-closed,
+    /// and injected into every record writer.
+    pub(super) record_key: Arc<crate::gateway::record_principal::RecordPrincipalKey>,
     /// Transparency log handle, `None` when disabled (issue #133, D3).
     /// Threaded into `AppState` so the direct backend route
     /// (`backend_handlers::backend_handler`), which does not go through
@@ -117,6 +120,15 @@ impl Gateway {
         #[cfg(not(test))]
         let data_dir = persistence::standard_data_dir();
         persistence::ensure_data_dir(&data_dir);
+        let record_key = Arc::new(crate::gateway::record_principal::resolve_key(
+            self.config
+                .security
+                .record_principal_key
+                .as_ref()
+                .map(crate::config::RecordPrincipalKeyRef::as_str),
+            &self.env.get(),
+            &data_dir,
+        )?);
 
         let ranker_path = data_dir.join("usage.json");
         let ranker = Arc::new(SearchRanker::new());
@@ -234,6 +246,8 @@ impl Gateway {
             ));
         }
         let security = &self.config.security;
+        // MIK-8697 §16.11: every record MetaMcp writes is keyed with this.
+        meta_mcp_builder.set_record_key(Arc::clone(&record_key));
         if let Some(chain) = &security.signature_chain {
             meta_mcp_builder.set_chain_signer(chain.resolve_with_env(&self.env.get())?, chain.emit);
             let keys = security.remote_server_signing.trusted_keys.clone();
@@ -301,7 +315,11 @@ impl Gateway {
             };
             match crate::security::TransparencyLogger::open(tl_cfg) {
                 Ok(logger) => {
-                    let logger = Arc::new(logger.with_failure_policy(policy));
+                    let logger = Arc::new(
+                        logger
+                            .with_failure_policy(policy)
+                            .with_record_key(Arc::clone(&record_key)),
+                    );
                     Arc::get_mut(&mut meta_mcp)
                         .expect("no other Arc references at this point")
                         .enable_transparency_log(Arc::clone(&logger));
@@ -474,6 +492,7 @@ impl Gateway {
             transition_tracker,
             transition_path,
             data_dir,
+            record_key,
             transparency_log,
         })
     }

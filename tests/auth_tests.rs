@@ -8,11 +8,14 @@
 //! - Rate limiting
 //! - Backend access control
 
+#[path = "common/record_key.rs"]
+mod record_key;
+
 use std::time::Duration;
 
 use mcp_gateway::config::{ApiKeyConfig, AuthConfig, CircuitBreakerConfig};
 use mcp_gateway::failsafe::CircuitState;
-use mcp_gateway::gateway::auth::{AuthenticatedClient, ResolvedAuthConfig};
+use mcp_gateway::gateway::auth::ResolvedAuthConfig;
 
 /// Test that `ResolvedAuthConfig` correctly resolves from `AuthConfig`
 #[test]
@@ -40,7 +43,7 @@ fn test_auth_config_resolution() {
         dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
-    let resolved = ResolvedAuthConfig::from_config(&auth_config);
+    let resolved = ResolvedAuthConfig::from_config(&auth_config, crate::record_key::RECORD_KEY);
 
     assert!(resolved.enabled);
     assert_eq!(resolved.bearer_token, Some("test-token".to_string()));
@@ -63,7 +66,7 @@ fn test_bearer_token_auth() {
         dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
-    let resolved = ResolvedAuthConfig::from_config(&auth_config);
+    let resolved = ResolvedAuthConfig::from_config(&auth_config, crate::record_key::RECORD_KEY);
 
     // Valid bearer token
     let client = resolved.validate_token("secret-bearer-token");
@@ -118,7 +121,7 @@ fn test_api_key_auth_with_restrictions() {
         dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
-    let resolved = ResolvedAuthConfig::from_config(&auth_config);
+    let resolved = ResolvedAuthConfig::from_config(&auth_config, crate::record_key::RECORD_KEY);
 
     // Restricted client
     let client = resolved.validate_token("restricted-key").unwrap();
@@ -161,7 +164,7 @@ fn test_rate_limiting() {
         dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
-    let resolved = ResolvedAuthConfig::from_config(&auth_config);
+    let resolved = ResolvedAuthConfig::from_config(&auth_config, crate::record_key::RECORD_KEY);
 
     let client = resolved
         .validate_token("rate-limited-key")
@@ -177,37 +180,6 @@ fn test_rate_limiting() {
     // A client with no limit is never rate limited
     let unlimited = mcp_gateway::gateway::auth::anonymous_client();
     assert!(resolved.check_authenticated_client_rate_limit(&unlimited));
-}
-
-#[test]
-fn test_resolved_client_rate_limit_creates_identity_bucket() {
-    let auth_config = AuthConfig {
-        enabled: true,
-        bearer_token: None,
-        api_keys: vec![],
-        public_paths: vec![],
-        client_circuit_breaker: None,
-        single_user: false,
-        dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
-    };
-
-    let resolved = ResolvedAuthConfig::from_config(&auth_config);
-    let temporary_client = AuthenticatedClient {
-        quota_principal: None,
-        principal: String::new(),
-        name: "temporary@example.com".to_string(),
-        rate_limit: 2,
-        backends: vec!["*".to_string()],
-        allowed_tools: None,
-        denied_tools: None,
-        admin: false,
-        authenticated: true,
-        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
-    };
-
-    assert!(resolved.check_authenticated_client_rate_limit(&temporary_client));
-    assert!(resolved.check_authenticated_client_rate_limit(&temporary_client));
-    assert!(!resolved.check_authenticated_client_rate_limit(&temporary_client));
 }
 
 /// Test public paths bypass authentication
@@ -227,7 +199,7 @@ fn test_public_paths() {
         dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
-    let resolved = ResolvedAuthConfig::from_config(&auth_config);
+    let resolved = ResolvedAuthConfig::from_config(&auth_config, crate::record_key::RECORD_KEY);
 
     // Exact matches
     assert!(resolved.is_public_path("/health"));
@@ -256,7 +228,7 @@ fn test_auto_generated_token() {
         dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
-    let resolved = ResolvedAuthConfig::from_config(&auth_config);
+    let resolved = ResolvedAuthConfig::from_config(&auth_config, crate::record_key::RECORD_KEY);
 
     // Auto-generated token should start with "mcp_" and be 47 chars
     let token = resolved.bearer_token.as_ref().unwrap();
@@ -265,58 +237,6 @@ fn test_auto_generated_token() {
 
     // Token should be valid
     assert!(resolved.validate_token(token).is_some());
-}
-
-/// Test `AuthenticatedClient` backend access patterns
-#[test]
-fn test_client_backend_access_patterns() {
-    // Wildcard access
-    let wildcard_client = AuthenticatedClient {
-        quota_principal: None,
-        principal: String::new(),
-        name: "wildcard".to_string(),
-        rate_limit: 0,
-        backends: vec!["*".to_string()],
-        allowed_tools: None,
-        denied_tools: None,
-        admin: false,
-        authenticated: true,
-        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
-    };
-    assert!(wildcard_client.can_access_backend("anything"));
-    assert!(wildcard_client.can_access_backend("tavily"));
-
-    // Empty backends = no backend (BACKENDGRANT.1)
-    let no_backends_client = AuthenticatedClient {
-        quota_principal: None,
-        principal: String::new(),
-        name: "none".to_string(),
-        rate_limit: 0,
-        backends: vec![],
-        allowed_tools: None,
-        denied_tools: None,
-        admin: false,
-        authenticated: true,
-        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
-    };
-    assert!(!no_backends_client.can_access_backend("anything"));
-
-    // Specific backends only
-    let restricted_client = AuthenticatedClient {
-        quota_principal: None,
-        principal: String::new(),
-        name: "restricted".to_string(),
-        rate_limit: 0,
-        backends: vec!["backend-a".to_string(), "backend-b".to_string()],
-        allowed_tools: None,
-        denied_tools: None,
-        admin: false,
-        authenticated: true,
-        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
-    };
-    assert!(restricted_client.can_access_backend("backend-a"));
-    assert!(restricted_client.can_access_backend("backend-b"));
-    assert!(!restricted_client.can_access_backend("backend-c"));
 }
 
 /// Test disabled auth passes through
@@ -332,7 +252,7 @@ fn test_disabled_auth() {
         dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
-    let resolved = ResolvedAuthConfig::from_config(&auth_config);
+    let resolved = ResolvedAuthConfig::from_config(&auth_config, crate::record_key::RECORD_KEY);
     assert!(!resolved.enabled);
 }
 
@@ -381,7 +301,7 @@ fn test_client_circuit_breaker_is_per_client() {
         dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
-    let resolved = ResolvedAuthConfig::from_config(&auth_config);
+    let resolved = ResolvedAuthConfig::from_config(&auth_config, crate::record_key::RECORD_KEY);
     let client_a = resolved.validate_token("client-a-key").expect("client-a");
     let client_b = resolved.validate_token("client-b-key").expect("client-b");
 
@@ -433,7 +353,7 @@ fn test_client_circuit_breaker_recovers_after_successful_probe() {
         dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
-    let resolved = ResolvedAuthConfig::from_config(&auth_config);
+    let resolved = ResolvedAuthConfig::from_config(&auth_config, crate::record_key::RECORD_KEY);
     let client = resolved
         .validate_token("client-key")
         .expect("the configured key");

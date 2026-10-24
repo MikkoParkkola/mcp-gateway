@@ -83,9 +83,10 @@ pub(super) async fn open(
     overlay: &crate::config::EnvOverlay,
     meta_mcp: &Arc<MetaMcp>,
     tool_policy: &Arc<ToolPolicy>,
+    record_key: &Arc<crate::gateway::record_principal::RecordPrincipalKey>,
 ) -> Option<(Arc<StdioTasks>, ExpirySweep)> {
     let dir = store_dir(config);
-    let subscriptions = subscriptions(config, overlay);
+    let subscriptions = subscriptions(config, overlay, record_key);
     // No upstream adapter on stdio: every interrupted row it holds is settled
     // on open, and none is kept for an upstream read (D6 rev 5 item 4).
     let opened = super::task_runtime::open(config, &dir, subscriptions, meta_mcp, &[]).await;
@@ -134,11 +135,15 @@ pub(super) async fn open(
 fn subscriptions(
     config: &Config,
     overlay: &crate::config::EnvOverlay,
+    record_key: &Arc<crate::gateway::record_principal::RecordPrincipalKey>,
 ) -> Arc<crate::gateway::subscription_registry::SubscriptionRegistry> {
     use crate::gateway::auth::{AuthState, DashboardBootstrap, ResolvedAuthConfig};
-    let auth_config =
-        ResolvedAuthConfig::try_from_config(&crate::config::AuthConfig::default(), overlay)
-            .expect("the default auth configuration holds no secret to resolve");
+    let auth_config = ResolvedAuthConfig::try_from_config_keyed(
+        &crate::config::AuthConfig::default(),
+        overlay,
+        Arc::clone(record_key),
+    )
+    .expect("the default auth configuration holds no secret to resolve");
     Arc::new(
         crate::gateway::subscription_registry::SubscriptionRegistry::new(
             0,
@@ -287,6 +292,10 @@ impl StdioTasks {
             None,
             None,
             super::STDIO_CREDENTIAL_PRINCIPAL.to_owned(),
+            crate::gateway::record_principal::InternalPrincipal::new(
+                super::STDIO_CREDENTIAL_PRINCIPAL.to_owned(),
+            )
+            .record_form(self.host.meta_mcp.record_key()),
             crate::gateway::meta_mcp::Authentication::Authenticated,
             crate::security::audit::CredentialKind::LocalTransport,
             // As every stdio call: the client spawned this process.

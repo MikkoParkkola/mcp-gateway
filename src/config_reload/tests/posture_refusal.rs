@@ -605,3 +605,27 @@ async fn the_override_is_reported_as_a_file_a_restart_accepts() {
          revert: {err}"
     );
 }
+
+/// MIK-8697 K8: the record key is restart-only; a reload that sets or
+/// changes `security.record_principal_key` is refused, naming the field.
+#[tokio::test]
+async fn k8_a_reload_changing_the_record_key_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.yaml");
+    write_owner_only(
+        &path,
+        "security:\n  record_principal_key: \"a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5\"\n",
+    )
+    .unwrap();
+    let ctx = posture_context(&path, clean_running());
+
+    let err = ctx
+        .reload_outcome()
+        .await
+        .expect_err("a changed record key was applied live");
+
+    assert!(
+        err.contains("security.record_principal_key requires restart"),
+        "{err}"
+    );
+}

@@ -441,8 +441,11 @@ async fn key_server_still_enforces_iat_cap() {
     // MIK-8006 RTPRIN.2: an API key configured with key_sha256 = sha256(actor)
     // has principal hex(digest[..6]); this caller must not share it.
     let digest = <sha2::Sha256 as sha2::Digest>::digest(identity.stable_actor_id().as_bytes());
-    assert_ne!(client.principal, hex::encode(&digest[..6]));
-    assert_eq!(client.principal, format!("oidc:{}", hex::encode(digest)));
+    assert_ne!(client.principal.storage_form(), hex::encode(&digest[..6]));
+    assert_eq!(
+        client.principal.storage_form(),
+        format!("oidc:{}", hex::encode(digest))
+    );
     assert!(
         key_server
             .verify_bearer_identity(&token(600))

@@ -15,8 +15,12 @@ fn empty_bearer_refused_by_try_from_config() {
         bearer_token: Some(String::new()),
         ..AuthConfig::default()
     };
-    let err = ResolvedAuthConfig::try_from_config(&config, &crate::config::EnvOverlay::none())
-        .expect_err("an empty bearer would match an empty presented token");
+    let err = ResolvedAuthConfig::try_from_config(
+        &config,
+        &crate::config::EnvOverlay::none(),
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    )
+    .expect_err("an empty bearer would match an empty presented token");
     assert!(err.to_string().contains("empty"), "got: {err}");
 }
 
@@ -52,6 +56,12 @@ fn bearer_client_remains_admin() {
         rate_limiters: DashMap::new(),
         client_circuit_breaker: None,
         client_circuit_breakers: DashMap::new(),
+        record_key: std::sync::Arc::new(
+            crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )
+            .expect("test key"),
+        ),
     };
     let bearer = config.validate_token("bearer-ADMIN").expect("bearer valid");
     assert!(bearer.admin, "an explicit credential still grants admin");
@@ -88,6 +98,12 @@ fn test_public_path_check() {
         rate_limiters: DashMap::new(),
         client_circuit_breaker: None,
         client_circuit_breakers: DashMap::new(),
+        record_key: std::sync::Arc::new(
+            crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )
+            .expect("test key"),
+        ),
     };
 
     assert!(config.is_public_path("/health"));
@@ -122,6 +138,12 @@ fn debug_output_redacts_bearer_and_api_keys() {
         rate_limiters: DashMap::new(),
         client_circuit_breaker: None,
         client_circuit_breakers: DashMap::new(),
+        record_key: std::sync::Arc::new(
+            crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )
+            .expect("test key"),
+        ),
     };
     let dbg = format!("{config:?}");
     assert!(
@@ -162,6 +184,12 @@ fn test_bearer_token_validation() {
         rate_limiters: DashMap::new(),
         client_circuit_breaker: None,
         client_circuit_breakers: DashMap::new(),
+        record_key: std::sync::Arc::new(
+            crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )
+            .expect("test key"),
+        ),
     };
 
     let client = config.validate_token("secret123");
@@ -197,6 +225,12 @@ fn constant_time_token_comparison_accepts_correct_rejects_wrong() {
         rate_limiters: DashMap::new(),
         client_circuit_breaker: None,
         client_circuit_breakers: DashMap::new(),
+        record_key: std::sync::Arc::new(
+            crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )
+            .expect("test key"),
+        ),
     };
 
     // Correct bearer authenticates as the admin "bearer" client.
@@ -263,6 +297,12 @@ fn test_api_key_validation() {
         rate_limiters: DashMap::new(),
         client_circuit_breaker: None,
         client_circuit_breakers: DashMap::new(),
+        record_key: std::sync::Arc::new(
+            crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )
+            .expect("test key"),
+        ),
     };
 
     let client_a = config.validate_token("key1").unwrap();
@@ -283,7 +323,7 @@ fn test_api_key_validation() {
 fn test_tool_scope_no_restrictions() {
     let client = AuthenticatedClient {
         quota_principal: None,
-        principal: String::new(),
+        principal: crate::gateway::record_principal::InternalPrincipal::new(String::new()),
         name: "unrestricted".to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
@@ -303,7 +343,7 @@ fn test_tool_scope_no_restrictions() {
 fn test_tool_scope_allowlist_exact_match() {
     let client = AuthenticatedClient {
         quota_principal: None,
-        principal: String::new(),
+        principal: crate::gateway::record_principal::InternalPrincipal::new(String::new()),
         name: "restricted".to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
@@ -327,7 +367,7 @@ fn test_tool_scope_allowlist_exact_match() {
 fn test_tool_scope_allowlist_glob_pattern() {
     let client = AuthenticatedClient {
         quota_principal: None,
-        principal: String::new(),
+        principal: crate::gateway::record_principal::InternalPrincipal::new(String::new()),
         name: "search_only".to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
@@ -357,7 +397,7 @@ fn test_tool_scope_allowlist_glob_pattern() {
 fn test_tool_scope_denylist_exact_match() {
     let client = AuthenticatedClient {
         quota_principal: None,
-        principal: String::new(),
+        principal: crate::gateway::record_principal::InternalPrincipal::new(String::new()),
         name: "no_writes".to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
@@ -381,7 +421,7 @@ fn test_tool_scope_denylist_exact_match() {
 fn test_tool_scope_denylist_glob_pattern() {
     let client = AuthenticatedClient {
         quota_principal: None,
-        principal: String::new(),
+        principal: crate::gateway::record_principal::InternalPrincipal::new(String::new()),
         name: "no_filesystem".to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
@@ -415,7 +455,7 @@ fn test_tool_scope_denylist_glob_pattern() {
 fn test_tool_scope_qualified_name_match() {
     let client = AuthenticatedClient {
         quota_principal: None,
-        principal: String::new(),
+        principal: crate::gateway::record_principal::InternalPrincipal::new(String::new()),
         name: "specific_server".to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
@@ -441,7 +481,7 @@ fn test_tool_scope_qualified_name_match() {
 fn test_tool_scope_both_allow_and_deny() {
     let client = AuthenticatedClient {
         quota_principal: None,
-        principal: String::new(),
+        principal: crate::gateway::record_principal::InternalPrincipal::new(String::new()),
         name: "complex".to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
@@ -483,7 +523,7 @@ fn test_tool_scope_both_allow_and_deny() {
 fn test_tool_scope_error_messages() {
     let client_allow = AuthenticatedClient {
         quota_principal: None,
-        principal: String::new(),
+        principal: crate::gateway::record_principal::InternalPrincipal::new(String::new()),
         name: "frontend".to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
@@ -504,7 +544,7 @@ fn test_tool_scope_error_messages() {
 
     let client_deny = AuthenticatedClient {
         quota_principal: None,
-        principal: String::new(),
+        principal: crate::gateway::record_principal::InternalPrincipal::new(String::new()),
         name: "restricted_bot".to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
@@ -540,6 +580,12 @@ fn bootstrap_state(bearer: Option<&str>, keys: Vec<ResolvedApiKey>) -> (AuthStat
         rate_limiters: DashMap::new(),
         client_circuit_breaker: None,
         client_circuit_breakers: DashMap::new(),
+        record_key: std::sync::Arc::new(
+            crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )
+            .expect("test key"),
+        ),
     };
     let bootstrap = Arc::new(DashboardBootstrap::new());
     let printed = bootstrap.peek().expect("a value is issued at startup");
@@ -592,6 +638,10 @@ fn redeem(state: &AuthState, printed: &str) -> axum::http::StatusCode {
 
 #[path = "auth/tests/bootstrap_spend_tests.rs"]
 mod bootstrap_spend_tests;
+#[path = "auth/tests/principal_ident_tests.rs"]
+mod principal_ident_tests;
+#[path = "auth/tests/tool_scope_tests.rs"]
+mod tool_scope_tests;
 #[test]
 fn an_admin_api_key_is_an_admin_credential_for_the_bootstrap_link() {
     let (state, printed) = bootstrap_state(None, vec![admin_key(true)]);
@@ -623,9 +673,107 @@ fn a_restricted_api_key_does_not_open_the_dashboard() {
 fn a_key_reissued_under_the_same_name_is_another_caller() {
     let stored = principal_of("key-value");
     let (state, _) = bootstrap_state(None, vec![admin_key(false)]);
-    assert!(state.auth_config.client_for_key("ops", &stored).is_some());
+    assert!(
+        state
+            .auth_config
+            .client_for_key("ops", stored.storage_form())
+            .is_some()
+    );
     let mut reissued = admin_key(false);
     reissued.digest = test_digest("new-value");
     let (state, _) = bootstrap_state(None, vec![reissued]);
-    assert!(state.auth_config.client_for_key("ops", &stored).is_none());
+    assert!(
+        state
+            .auth_config
+            .client_for_key("ops", stored.storage_form())
+            .is_none()
+    );
+}
+
+// Moved from tests/auth_tests.rs when `AuthenticatedClient.principal` became
+// crate-private (MIK-8697).
+#[test]
+fn test_resolved_client_rate_limit_creates_identity_bucket() {
+    let auth_config = AuthConfig {
+        enabled: true,
+        bearer_token: None,
+        api_keys: vec![],
+        public_paths: vec![],
+        client_circuit_breaker: None,
+        single_user: false,
+        dashboard_session: crate::config::DashboardSessionConfig::default(),
+    };
+
+    let resolved = ResolvedAuthConfig::from_config(
+        &auth_config,
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    );
+    let temporary_client = AuthenticatedClient {
+        quota_principal: None,
+        principal: InternalPrincipal::new(String::new()),
+        name: "temporary@example.com".to_string(),
+        rate_limit: 2,
+        backends: vec!["*".to_string()],
+        allowed_tools: None,
+        denied_tools: None,
+        admin: false,
+        authenticated: true,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
+    };
+
+    assert!(resolved.check_authenticated_client_rate_limit(&temporary_client));
+    assert!(resolved.check_authenticated_client_rate_limit(&temporary_client));
+    assert!(!resolved.check_authenticated_client_rate_limit(&temporary_client));
+}
+
+/// Test `AuthenticatedClient` backend access patterns
+#[test]
+fn test_client_backend_access_patterns() {
+    // Wildcard access
+    let wildcard_client = AuthenticatedClient {
+        quota_principal: None,
+        principal: InternalPrincipal::new(String::new()),
+        name: "wildcard".to_string(),
+        rate_limit: 0,
+        backends: vec!["*".to_string()],
+        allowed_tools: None,
+        denied_tools: None,
+        admin: false,
+        authenticated: true,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
+    };
+    assert!(wildcard_client.can_access_backend("anything"));
+    assert!(wildcard_client.can_access_backend("tavily"));
+
+    // Empty backends = no backend (BACKENDGRANT.1)
+    let no_backends_client = AuthenticatedClient {
+        quota_principal: None,
+        principal: InternalPrincipal::new(String::new()),
+        name: "none".to_string(),
+        rate_limit: 0,
+        backends: vec![],
+        allowed_tools: None,
+        denied_tools: None,
+        admin: false,
+        authenticated: true,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
+    };
+    assert!(!no_backends_client.can_access_backend("anything"));
+
+    // Specific backends only
+    let restricted_client = AuthenticatedClient {
+        quota_principal: None,
+        principal: InternalPrincipal::new(String::new()),
+        name: "restricted".to_string(),
+        rate_limit: 0,
+        backends: vec!["backend-a".to_string(), "backend-b".to_string()],
+        allowed_tools: None,
+        denied_tools: None,
+        admin: false,
+        authenticated: true,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
+    };
+    assert!(restricted_client.can_access_backend("backend-a"));
+    assert!(restricted_client.can_access_backend("backend-b"));
+    assert!(!restricted_client.can_access_backend("backend-c"));
 }

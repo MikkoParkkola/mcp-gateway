@@ -72,7 +72,7 @@ pub(crate) enum ReadVerdict {
 
 /// What a blocked frame leaves behind for the rejection audit: the verdict
 /// and the hashed denied tenants, never the content.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct RejectionEvidence {
     /// The caller the frame was judged for.
     pub(crate) caller_key: Option<String>,
@@ -80,6 +80,20 @@ pub(crate) struct RejectionEvidence {
     pub(crate) verdict: ReadVerdict,
     /// The hashed tenants of the withheld frame.
     pub(crate) attribution: ReadAttribution,
+}
+
+// Not derived: the caller key ends in a stored principal (MIK-8697).
+impl std::fmt::Debug for RejectionEvidence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RejectionEvidence")
+            .field(
+                "caller_key",
+                &self.caller_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field("verdict", &self.verdict)
+            .field("attribution", &self.attribution)
+            .finish()
+    }
 }
 
 impl ReadAttribution {
@@ -164,7 +178,7 @@ pub(crate) struct Reservation {
 /// The lock a frame takes is the principal's map shard, and only for a frame
 /// that names a tenant or is unread; a principal's first frame also takes
 /// `admitting`.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct ReadHistory {
     principals: DashMap<String, Principal>,
     /// Held to admit a new principal: every insert into `principals` and every
@@ -176,6 +190,16 @@ pub(crate) struct ReadHistory {
     /// Test clock: milliseconds added to `Instant::now()` (MIN.4 corpus).
     #[cfg(test)]
     skew_ms: AtomicU64,
+}
+
+// Not derived: it is keyed by caller keys, which end in a stored principal
+// (MIK-8697).
+impl std::fmt::Debug for ReadHistory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReadHistory")
+            .field("principals", &self.principals.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl ReadHistory {
@@ -299,13 +323,24 @@ impl ReadHistory {
 #[derive(Debug, Clone)]
 pub(crate) struct ReadTicket(Arc<TicketInner>);
 
-#[derive(Debug)]
 struct TicketInner {
     history: Arc<ReadHistory>,
     key: String,
     hashes: Vec<String>,
     overflow: u32,
     window: Duration,
+}
+
+// Not derived: the key ends in a stored principal (MIK-8697).
+impl std::fmt::Debug for TicketInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TicketInner")
+            .field("key", &"<redacted>")
+            .field("hashes", &self.hashes.len())
+            .field("overflow", &self.overflow)
+            .field("window", &self.window)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ReadTicket {

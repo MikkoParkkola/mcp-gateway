@@ -405,6 +405,7 @@ async fn direct_task_call(fx: &Twin, tool: &str) -> Value {
             discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
             sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
+        &crate::gateway::record_principal::test_record_key(),
     );
     caller.task = Some(super::owner2_stdio_tasks::intent(
         &fx.fixture.tasks,

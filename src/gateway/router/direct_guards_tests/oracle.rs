@@ -20,7 +20,9 @@ async fn t4_the_session_profile_applies_on_the_direct_route() {
         let fx = fixture_built(Answer::Ok, |meta| meta.with_profile_registry(profiles())).await;
         // A session the caller owns: a presented id is honoured only then (#2468).
         let owner = crate::gateway::session_id::SessionOwner::Credential(
-            crate::gateway::auth::principal_of("k-std"),
+            crate::gateway::auth::principal_of("k-std")
+                .storage_form()
+                .to_owned(),
         );
         let (session, _rx) = fx.state.multiplexer.get_or_create_session_for(None, &owner);
         fx.state
@@ -147,7 +149,9 @@ async fn a_withheld_target_pays_its_nonce_as_a_missing_name_does_on_mcp() {
         })
         .await;
         let owner = crate::gateway::session_id::SessionOwner::Credential(
-            crate::gateway::auth::principal_of("k-std"),
+            crate::gateway::auth::principal_of("k-std")
+                .storage_form()
+                .to_owned(),
         );
         let (session, _rx) = fx.state.multiplexer.get_or_create_session_for(None, &owner);
         let uri = format!("/mcp/{backend}");

@@ -36,7 +36,10 @@ fn auth_state(enabled: bool) -> (AuthState, Arc<DashboardBootstrap>) {
     let bootstrap = Arc::new(DashboardBootstrap::new());
     (
         AuthState {
-            auth_config: Arc::new(ResolvedAuthConfig::from_config(&config)),
+            auth_config: Arc::new(ResolvedAuthConfig::from_config(
+                &config,
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )),
             key_server: None,
             dashboard_bootstrap: Arc::clone(&bootstrap),
             tls_enabled: false,

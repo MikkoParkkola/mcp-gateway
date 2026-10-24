@@ -328,6 +328,7 @@ fn auth_off_multiplexer() -> Arc<NotificationMultiplexer> {
     mux.set_authorizer(crate::gateway::auth::AuthState {
         auth_config: Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
             &config,
+            crate::gateway::record_principal::TEST_RECORD_KEY,
         )),
         key_server: None,
         dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),

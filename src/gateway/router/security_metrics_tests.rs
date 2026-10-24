@@ -280,6 +280,7 @@ async fn admin_gate_refusal_counted_without_a_log() {
         None,
         None,
         "gateway_kill_server",
+        &crate::gateway::record_principal::test_record_key(),
     ));
     assert!(verdict.is_err());
     assert_eq!(

@@ -27,13 +27,27 @@ pub(super) const PRINCIPAL_TAG: &str = "mcp-gateway.execution-admission.principa
 /// Everything a durable task record must persist about the admission that
 /// authorized it. Opaque: the task service stores and compares these values and
 /// never derives them.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub(crate) struct TaskBinding {
     pub(super) identity: String,
     pub(super) principal_digest: String,
     pub(super) operation: String,
     pub(super) representation: String,
     pub(super) metadata_bytes: usize,
+}
+
+// Not derived: the identity and the principal digest name the caller's
+// credential (MIK-8697).
+impl std::fmt::Debug for TaskBinding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TaskBinding")
+            .field("identity", &"<redacted>")
+            .field("principal_digest", &"<redacted>")
+            .field("operation", &self.operation)
+            .field("representation", &self.representation)
+            .field("metadata_bytes", &self.metadata_bytes)
+            .finish()
+    }
 }
 
 impl TaskBinding {
@@ -92,13 +106,27 @@ impl TaskBinding {
 
 /// The persisted shape, OWNED: the records it comes from live behind a mutex,
 /// so nothing borrowed from them could outlive the read.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub(crate) struct RestoredBinding {
     pub identity: String,
     pub principal_digest: String,
     pub operation: String,
     pub representation: String,
     pub metadata_bytes: usize,
+}
+
+// Not derived: the identity and the principal digest name the caller's
+// credential (MIK-8697).
+impl std::fmt::Debug for RestoredBinding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RestoredBinding")
+            .field("identity", &"<redacted>")
+            .field("principal_digest", &"<redacted>")
+            .field("operation", &self.operation)
+            .field("representation", &self.representation)
+            .field("metadata_bytes", &self.metadata_bytes)
+            .finish()
+    }
 }
 
 /// Opaque principal digest. Callers compare this value; only admission hashes.

@@ -76,6 +76,7 @@ async fn dispatch_doc_example(scope: &str, read_only: bool) -> Result<serde_json
         signing: None,
         execution: None,
         credential_principal: None,
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
         credential_kind: crate::security::audit::CredentialKind::ApiKey,
         is_modern: false,

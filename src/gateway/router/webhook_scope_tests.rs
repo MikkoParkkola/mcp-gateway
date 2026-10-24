@@ -44,7 +44,9 @@ async fn a_session_created_by_the_mcp_handler_receives_in_scope_webhook_events()
 
     // The owner resuming its own session: the stream the handler created.
     let owner = crate::gateway::session_id::SessionOwner::Credential(
-        crate::gateway::auth::principal_of("key-webhook-scope"),
+        crate::gateway::auth::principal_of("key-webhook-scope")
+            .storage_form()
+            .to_owned(),
     );
     let (_, mut rx) = state
         .multiplexer

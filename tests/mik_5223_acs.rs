@@ -20,8 +20,9 @@ use uuid::Uuid;
 use mcp_gateway::attestation::{
     ATTESTATION_FLAG_ENV, AttestationEnforcement, AttestationRejection, AttestationToken,
     AttestationValidator, AttestedSandboxLauncher, BNAUT_ISSUER, BnautAttestationSigner,
-    BootDenial, SIGNING_ALGORITHM, SandboxLaunchSpec, Substrate, TOKEN_ENV_VAR, TokenRequest,
+    BootDenial, SIGNING_ALGORITHM, SandboxLaunchSpec, TOKEN_ENV_VAR, TokenRequest,
 };
+use mcp_gateway::runtime::Substrate;
 
 const KEY: &[u8] = b"mik-5223-integration-test-key";
 
@@ -66,7 +67,7 @@ fn ac_1_sandbox_boot_fails_closed_without_valid_token() {
     let now = Utc::now();
 
     // No token = no start.
-    let denied = l.boot(spec(Substrate::GvisorLinux), None, now);
+    let denied = l.boot(spec(Substrate::GVisor), None, now);
     assert_eq!(denied.unwrap_err(), BootDenial::MissingToken);
 
     // An invalid (forged) token = no start either.
@@ -79,7 +80,7 @@ fn ac_1_sandbox_boot_fails_closed_without_valid_token() {
             TimeDelta::try_minutes(5).expect("in range"),
         )
     };
-    let denied = l.boot(spec(Substrate::GvisorLinux), Some(forged.encoded()), now);
+    let denied = l.boot(spec(Substrate::GVisor), Some(forged.encoded()), now);
     assert_eq!(
         denied.unwrap_err(),
         BootDenial::InvalidToken(AttestationRejection::BadSignature)
@@ -95,7 +96,7 @@ fn ac_1_sandbox_boot_fails_closed_without_valid_token() {
         TimeDelta::try_minutes(5).expect("in range"),
     );
     let handle = l
-        .boot(spec(Substrate::GvisorLinux), Some(token.encoded()), now)
+        .boot(spec(Substrate::GVisor), Some(token.encoded()), now)
         .expect("valid token must boot");
     assert!(handle.attested);
     assert_eq!(l.boots_attested_total(), 1);
@@ -304,14 +305,10 @@ fn ac_6_both_substrates_exercise_identical_token_flow() {
     );
 
     let gvisor = l
-        .boot(spec(Substrate::GvisorLinux), Some(token.encoded()), now)
+        .boot(spec(Substrate::GVisor), Some(token.encoded()), now)
         .expect("gVisor boot");
     let apple = l
-        .boot(
-            spec(Substrate::AppleContainerization),
-            Some(token.encoded()),
-            now,
-        )
+        .boot(spec(Substrate::AppleVm), Some(token.encoded()), now)
         .expect("Apple containerization boot");
 
     // The token flow — required, verified, validated, injected at the OCI
@@ -329,8 +326,8 @@ fn ac_6_both_substrates_exercise_identical_token_flow() {
     );
     // Same injection hook, same env var, same token bytes.
     assert_eq!(
-        Substrate::GvisorLinux.token_injection_hook(),
-        Substrate::AppleContainerization.token_injection_hook()
+        Substrate::GVisor.token_injection_hook(),
+        Substrate::AppleVm.token_injection_hook()
     );
     assert_eq!(gvisor.env.get(TOKEN_ENV_VAR), apple.env.get(TOKEN_ENV_VAR));
 }
@@ -467,7 +464,7 @@ fn ac_11_deploy_rollback_flag_contract_holds() {
     // identity attribution — and is counted on its own bypass counter.
     let l = AttestedSandboxLauncher::new(validator(), AttestationEnforcement::from_flag(Some("0")));
     let handle = l
-        .boot(spec(Substrate::GvisorLinux), None, Utc::now())
+        .boot(spec(Substrate::GVisor), None, Utc::now())
         .expect("rollback flag must allow tokenless boot");
     assert!(!handle.attested);
     assert_eq!(l.boots_bypassed_total(), 1);

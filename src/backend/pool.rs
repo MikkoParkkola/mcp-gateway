@@ -28,7 +28,7 @@ mod eviction;
 /// caller identity is present, the backend additionally owns one
 /// [`PoolKey::PerUser`] slot per stable identity binding, so two distinct users
 /// never share a backend transport or its upstream MCP session (IDP.7).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) enum PoolKey {
     /// The canonical single-tenant slot. Every backend without identity
     /// propagation, and every propagating request that lacks a resolved
@@ -38,6 +38,17 @@ pub(crate) enum PoolKey {
     /// A per-user slot keyed by the caller's stable identity binding
     /// (`PropagatedCredential::cache_binding`, MIK-6784).
     PerUser { binding: String },
+}
+
+// Not derived: a per-user binding is the caller's identity key, for an A2A
+// caller an unkeyed hash of its principal (MIK-8697).
+impl std::fmt::Debug for PoolKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Shared => f.write_str("Shared"),
+            Self::PerUser { .. } => f.write_str("PerUser(<redacted>)"),
+        }
+    }
 }
 
 /// One pooled transport slot: its lazily started transport, a start lock that
@@ -382,7 +393,7 @@ impl Backend {
                 "backend" => self.name.clone()
             )
             .set(live);
-            tracing::debug!(backend = %self.name, ?key, live_slots = live, "Pool slot created");
+            tracing::debug!(backend = %self.name, live_slots = live, "Pool slot created");
         }
         Ok((entry, out))
     }

@@ -648,3 +648,14 @@ fn a_fixed_grants_digest_keeps_its_bytes() {
         "sha256:0231855e2a31a21765ad5776324622ddf380b69e6d2910c301c321f0b57dd0bf"
     );
 }
+
+/// MIK-8762 SHAFU.1 golden, computed independently (Python hashlib): a torn
+/// journal line is named `sha256:` + the hex SHA-256 of its bytes.
+#[test]
+fn a_torn_line_digest_matches_its_independent_golden() {
+    let parsed = super::journal::parse_journal(b"not json\n");
+    assert_eq!(
+        parsed.torn,
+        ["sha256:7ccfa1fbf3940e6f0c0375d87c0f9235a50514e14cb427bdfaf5077987b26ccf"]
+    );
+}

@@ -228,7 +228,7 @@ fn exact_names_and_trailing_prefixes_still_load_and_decide_the_same() {
     let key = &config.auth.api_keys[0];
     let client = crate::gateway::auth::AuthenticatedClient {
         quota_principal: None,
-        principal: String::new(),
+        principal: crate::gateway::record_principal::InternalPrincipal::new(String::new()),
         name: key.name.clone(),
         rate_limit: 0,
         backends: key.backends.clone(),
@@ -285,7 +285,7 @@ fn narrow_grants_decide_on_their_own() {
     let key = &config.auth.api_keys[0];
     let client = crate::gateway::auth::AuthenticatedClient {
         quota_principal: None,
-        principal: String::new(),
+        principal: crate::gateway::record_principal::InternalPrincipal::new(String::new()),
         name: key.name.clone(),
         rate_limit: 0,
         backends: key.backends.clone(),

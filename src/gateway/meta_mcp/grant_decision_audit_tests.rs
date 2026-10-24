@@ -65,6 +65,7 @@ pub(super) fn context(who: &Who) -> MetaMcpCallerContext<'_> {
         signing: None,
         execution: None,
         credential_principal: None,
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         authentication: Authentication::Authenticated,
         credential_kind: who.kind,
         is_modern: false,

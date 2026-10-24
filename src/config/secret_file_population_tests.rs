@@ -88,6 +88,11 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "src/config/mod.rs",
         "probes that the config opens; the read goes through read_secret_file",
     ),
+    (
+        "src/config/record_key.rs",
+        "the record key file: read through read_file_ref (the guarded reader), \
+         created at 0600 by create_new_private; File::open only fsyncs its directory",
+    ),
     ("src/config/secret_file.rs", "the checked reader itself"),
     ("src/config_persistence.rs", "owner-only atomic writer"),
     (

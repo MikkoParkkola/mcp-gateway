@@ -50,7 +50,7 @@ pub use descriptor::{
     AttestationConfig, CheckpointPolicy, HebbBridgeConfig, MountSpec, MountType,
     NetworkEgressPolicy, ResourceSpec, SandboxDescriptor,
 };
-pub use divergence::{DivergenceRecord, DivergenceRegistry, SubstrateTag};
+pub use divergence::{DivergenceRecord, DivergenceRegistry};
 pub use r#override::OverrideHook;
 pub use provider::{
     ContainerProvider, LocalProcessProvider, RuntimeApplyAction, RuntimeApplyAuditEvent,

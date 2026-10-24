@@ -26,7 +26,7 @@ impl AuditWho {
     pub(crate) fn from_caller(caller: &MetaMcpCallerContext<'_>) -> Self {
         Self::from_parts(
             caller.credential_kind,
-            caller.credential_principal,
+            caller.record_principal.clone(),
             caller.api_key_name,
             caller.grant_subject.as_ref(),
         )
@@ -632,7 +632,12 @@ impl MetaMcp {
             trace_id: Some(task.id.to_string()),
             otel_trace_id: None,
             outcome: notes.settled_outcome(outcome),
-            who: AuditWho::from_actor_id(principal),
+            // The task owner, keyed for the record when it is credential-derived;
+            // the task lookup keeps the owner (MIK-8697 §16.12).
+            who: AuditWho::from_actor_id(&crate::gateway::record_principal::record_owner(
+                principal,
+                self.record_key(),
+            )),
         };
         let response_hash = result.as_ref().ok().map(sha256_of);
         let request_hash = sha256_of(&serde_json::json!({ "task_id": task.id }));
