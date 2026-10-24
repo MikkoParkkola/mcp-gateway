@@ -15,27 +15,6 @@ use serde::{Deserialize, Serialize};
 
 use super::substrate::Substrate;
 
-/// Tag identifying which substrate produced an artifact.
-///
-/// Used in divergence records to tag the two sides being compared.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
-pub enum SubstrateTag {
-    /// gVisor `runsc` on Linux.
-    GVisor,
-
-    /// Apple containerization VM on macOS.
-    AppleVm,
-}
-
-impl From<Substrate> for SubstrateTag {
-    fn from(s: Substrate) -> Self {
-        match s {
-            Substrate::GVisor => Self::GVisor,
-            Substrate::AppleVm => Self::AppleVm,
-        }
-    }
-}
-
 // ── DivergenceRecord ─────────────────────────────────────────────────────
 
 /// A single cross-substrate divergence entry.
@@ -49,10 +28,10 @@ pub struct DivergenceRecord {
     pub descriptor_name: String,
 
     /// First substrate tag (typically gVisor).
-    pub substrate_a: SubstrateTag,
+    pub substrate_a: Substrate,
 
     /// Second substrate tag (typically Apple VM).
-    pub substrate_b: SubstrateTag,
+    pub substrate_b: Substrate,
 
     /// Human-readable description of the divergence.
     pub description: String,
@@ -85,8 +64,8 @@ impl DivergenceRegistry {
     pub fn log(
         &self,
         descriptor_name: &str,
-        substrate_a: SubstrateTag,
-        substrate_b: SubstrateTag,
+        substrate_a: Substrate,
+        substrate_b: Substrate,
         description: &str,
     ) {
         let mut records = self
@@ -159,8 +138,8 @@ mod tests {
         let r = DivergenceRegistry::new();
         r.log(
             "test-sandbox",
-            SubstrateTag::GVisor,
-            SubstrateTag::AppleVm,
+            Substrate::GVisor,
+            Substrate::AppleVm,
             "mount count mismatch",
         );
 
@@ -170,17 +149,17 @@ mod tests {
         let records = r.get_all();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].descriptor_name, "test-sandbox");
-        assert_eq!(records[0].substrate_a, SubstrateTag::GVisor);
-        assert_eq!(records[0].substrate_b, SubstrateTag::AppleVm);
+        assert_eq!(records[0].substrate_a, Substrate::GVisor);
+        assert_eq!(records[0].substrate_b, Substrate::AppleVm);
         assert_eq!(records[0].description, "mount count mismatch");
     }
 
     #[test]
     fn multiple_logs_are_preserved() {
         let r = DivergenceRegistry::new();
-        r.log("a", SubstrateTag::GVisor, SubstrateTag::AppleVm, "d1");
-        r.log("b", SubstrateTag::GVisor, SubstrateTag::AppleVm, "d2");
-        r.log("c", SubstrateTag::GVisor, SubstrateTag::AppleVm, "d3");
+        r.log("a", Substrate::GVisor, Substrate::AppleVm, "d1");
+        r.log("b", Substrate::GVisor, Substrate::AppleVm, "d2");
+        r.log("c", Substrate::GVisor, Substrate::AppleVm, "d3");
 
         assert_eq!(r.len(), 3);
     }
@@ -188,7 +167,7 @@ mod tests {
     #[test]
     fn clear_removes_all_records() {
         let r = DivergenceRegistry::new();
-        r.log("x", SubstrateTag::GVisor, SubstrateTag::AppleVm, "d");
+        r.log("x", Substrate::GVisor, Substrate::AppleVm, "d");
         assert_eq!(r.len(), 1);
         r.clear();
         assert!(r.is_empty());
@@ -196,24 +175,51 @@ mod tests {
     }
 
     #[test]
-    fn substrate_tag_from_substrate() {
-        assert_eq!(SubstrateTag::from(Substrate::GVisor), SubstrateTag::GVisor);
-        assert_eq!(
-            SubstrateTag::from(Substrate::AppleVm),
-            SubstrateTag::AppleVm
-        );
-    }
-
-    #[test]
     fn divergence_record_serde_round_trip() {
         let record = DivergenceRecord {
             descriptor_name: "test".into(),
-            substrate_a: SubstrateTag::GVisor,
-            substrate_b: SubstrateTag::AppleVm,
+            substrate_a: Substrate::GVisor,
+            substrate_b: Substrate::AppleVm,
             description: "cpu shares != vcpu".into(),
         };
         let json = serde_json::to_string(&record).unwrap();
         let restored: DivergenceRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(record, restored);
+    }
+
+    // MIK-8670 (AC PR13.3a): a record names its substrates with the config
+    // spelling, the one `Substrate` serializes.
+    const RECORD_GOLDEN: &str = r#"{"descriptor_name":"d","substrate_a":"gvisor","substrate_b":"apple_vm","description":"x"}"#;
+
+    #[test]
+    fn record_uses_the_config_spelling_of_each_substrate() {
+        let parsed = serde_json::from_str::<DivergenceRecord>(RECORD_GOLDEN);
+        let round_trip = parsed.as_ref().map(|r| serde_json::to_string(r).ok());
+        assert!(
+            matches!(&round_trip, Ok(Some(json)) if json == RECORD_GOLDEN),
+            "golden must parse and serialize back unchanged: {round_trip:?}"
+        );
+        // Each pre-4.0 spelling alone, so accepting either one fails.
+        for (new, old) in [("gvisor", "GVisor"), ("apple_vm", "AppleVm")] {
+            let legacy = RECORD_GOLDEN.replace(new, old);
+            assert!(
+                serde_json::from_str::<DivergenceRecord>(&legacy).is_err(),
+                "the pre-4.0 spelling {old} must be refused: {legacy}"
+            );
+        }
+    }
+
+    // MIK-8670: the CI example in docs/runtime/divergence_registry.md prints
+    // each side with `.name()`; pin that expression on a logged record.
+    #[test]
+    fn documented_ci_example_names_each_side() {
+        let r = DivergenceRegistry::new();
+        r.log("x", Substrate::GVisor, Substrate::AppleVm, "d");
+        let names: Vec<_> = r
+            .get_all()
+            .iter()
+            .map(|record| (record.substrate_a.name(), record.substrate_b.name()))
+            .collect();
+        assert_eq!(names, vec![("gvisor", "apple_vm")]);
     }
 }

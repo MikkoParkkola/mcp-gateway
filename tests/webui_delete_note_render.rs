@@ -33,6 +33,8 @@ globalThis.confirm = () => true;
 globalThis.alert = (m) => {{ throw new Error('alert: ' + m); }};
 globalThis.authHeaders = () => ({{}});
 globalThis.refreshDashboard = () => {{}};
+// MIK-8786: every /ui/api call goes through the page's uiFetch.
+globalThis.uiFetch = (url, opts) => fetch(url, opts);
 globalThis.fetch = async () => ({{
   ok: true,
   status: {status},
