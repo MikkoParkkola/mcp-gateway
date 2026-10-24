@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 //! MIK-8757 (Family-fix: redactor-structure-blind): credential-named members
 //! beyond `api_key`, one table across every family, name form and value shape.
 //! Rows are built in code; a credential-shaped literal would trip the hooks.

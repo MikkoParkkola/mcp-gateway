@@ -34,6 +34,10 @@ use super::{Finding, FindingLocation, ScanType};
 use crate::security::Severity;
 use crate::truncate::{Budget, Suffix, truncate};
 
+#[path = "credential_names.rs"]
+mod credential_names;
+use credential_names::Family;
+
 /// The largest JSON-in-text leaf whose credential spans are redacted inside
 /// its string values (MIK-8745); a larger one is redacted whole, as before.
 const B2_MAX_LEAF_BYTES: usize = 1 << 20;
@@ -219,12 +223,19 @@ impl Redactor {
                     // Judged on the value as sent, before the recursion below
                     // rewrites any span in it: a member that also matches a raw
                     // rule keeps that rule's finding and gets one replacement.
-                    let member = matches!(&*val, Value::String(s)
-                        if self.credential_member(key, s) && !exempt(s));
+                    let member = match &*val {
+                        Value::String(s) if !exempt(s) => self.credential_member(key, s),
+                        _ => None,
+                    };
                     self.scan_recursive(val, exempt, findings);
-                    if member {
+                    if let Some(family) = member {
+                        // A newer family adds no finding where the raw rules
+                        // already replaced the whole value: one secret, one finding.
+                        let covered = matches!(&*val, Value::String(s) if s.trim() == REDACTED);
                         *val = Value::String(REDACTED.to_owned());
-                        findings.push(Self::member_finding());
+                        if family == Family::ApiKey || !covered {
+                            findings.push(Self::member_finding(family));
+                        }
                     }
                 }
                 // Keys are backend-controlled text the client sees too (#2114).
@@ -326,13 +337,14 @@ impl Redactor {
         }
         // Member values join the projected spans in one merged list, so a key
         // projection and its member's value redaction are spliced in one pass.
-        let mut ranges = project(
+        let raw = project(
             text,
             &spans,
             |lit| self.match_starts_in(text, lit),
             &literals,
         );
-        ranges.extend(members.iter().map(|lit| (lit.start, lit.end)));
+        let mut ranges = raw.clone();
+        ranges.extend(members.iter().map(|(lit, _)| (lit.start, lit.end)));
         ranges.sort_unstable();
         let ranges = merge_spans(ranges);
         let redacted = if literals.iter().any(|lit| lit.key && covers(&ranges, lit)) {
@@ -341,7 +353,15 @@ impl Redactor {
             replace_spans(text, &ranges)
         };
         self.record_findings(&matched, &redacted, Site::Value, findings);
-        findings.extend(members.iter().map(|_| Self::member_finding()));
+        // A newer family adds no finding where one raw range already covers the
+        // value's trimmed content: one secret, one finding (family 1 keeps two).
+        for &(lit, family) in &members {
+            let (start, end) = trimmed_content(text, lit);
+            let covered = raw.iter().any(|&(a, b)| a <= start && end <= b);
+            if family == Family::ApiKey || !covered {
+                findings.push(Self::member_finding(family));
+            }
+        }
         JsonText::Redacted(redacted)
     }
 
@@ -354,19 +374,19 @@ impl Redactor {
         text: &str,
         literals: &'a [Literal],
         exempt: &dyn Fn(&str) -> bool,
-    ) -> Vec<&'a Literal> {
+    ) -> Vec<(&'a Literal, Family)> {
         literals
             .windows(2)
             .filter(|pair| pair[0].key && !pair[1].key)
             .filter(|pair| text[pair[0].end + 1..pair[1].start - 1].trim() == ":")
-            .filter(|pair| {
-                matches!(
-                    (decoded(text, &pair[0]), decoded(text, &pair[1])),
-                    (Some(key), Some(value))
-                        if self.credential_member(&key, &value) && !exempt(&value)
-                )
-            })
-            .map(|pair| &pair[1])
+            .filter_map(
+                |pair| match (decoded(text, &pair[0]), decoded(text, &pair[1])) {
+                    (Some(key), Some(value)) if !exempt(&value) => self
+                        .credential_member(&key, &value)
+                        .map(|family| (&pair[1], family)),
+                    _ => None,
+                },
+            )
             .collect()
     }
 
@@ -419,16 +439,22 @@ impl Redactor {
     /// A JSON member the generic API-key rule describes: the key is one of its
     /// names (any case, alone or after `_`/`-`) and the whole value is in its
     /// class (MIK-8756). The rule itself needs both halves in one string, which a
-    /// parsed member never is.
-    fn credential_member(&self, key: &str, value: &str) -> bool {
-        self.member_key.is_match(key) && self.member_value.is_match(value)
+    /// parsed member never is. Beyond that rule, a key naming another credential
+    /// family (MIK-8757) counts when its value passes that family's own rule.
+    /// A key the generic rule names keeps that rule's value class unchanged.
+    fn credential_member(&self, key: &str, value: &str) -> Option<Family> {
+        if self.member_key.is_match(key) {
+            return self.member_value.is_match(value).then_some(Family::ApiKey);
+        }
+        credential_names::family_of(key)
+            .filter(|&family| credential_names::value_matches(family, value, REDACTED))
     }
 
-    fn member_finding() -> Finding {
+    fn member_finding(family: Family) -> Finding {
         Finding {
             scan_type: ScanType::Credentials,
             severity: Severity::High,
-            description: format!("Credential detected: {API_KEY_DESCRIPTION} (object member)"),
+            description: format!("Credential detected: {}", family.description()),
             matched: REDACTED.to_owned(),
             location: FindingLocation::ResponseContent,
         }
@@ -553,6 +579,38 @@ fn overlapping_spans(re: &Regex, text: &str) -> Vec<(usize, usize)> {
 /// read as the characters they stand for.
 fn decoded(text: &str, lit: &Literal) -> Option<String> {
     serde_json::from_str::<String>(&text[lit.start - 1..=lit.end]).ok()
+}
+
+/// The byte range of `lit`'s content with JSON whitespace, raw or escaped
+/// (`\n`, `\t`, `\r`), trimmed from both ends.
+fn trimmed_content(text: &str, lit: &Literal) -> (usize, usize) {
+    let bytes = text.as_bytes();
+    let (mut start, mut end) = (lit.start, lit.end);
+    loop {
+        if start < end && bytes[start].is_ascii_whitespace() {
+            start += 1;
+        } else if start + 1 < end
+            && bytes[start] == b'\\'
+            && matches!(bytes[start + 1], b'n' | b't' | b'r')
+        {
+            start += 2;
+        } else {
+            break;
+        }
+    }
+    loop {
+        if end > start && bytes[end - 1].is_ascii_whitespace() {
+            end -= 1;
+        } else if end >= start + 2
+            && bytes[end - 2] == b'\\'
+            && matches!(bytes[end - 1], b'n' | b't' | b'r')
+        {
+            end -= 2;
+        } else {
+            break;
+        }
+    }
+    (start, end)
 }
 
 /// The parsed document when `text` is JSON whose credential spans can be
