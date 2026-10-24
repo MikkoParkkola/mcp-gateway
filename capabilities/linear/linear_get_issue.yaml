@@ -1,7 +1,7 @@
-sha256: e44f331e456eb1d6e87943ae06e6c9e78ba248900dc6d45226e0496b98bd8b48
+sha256: b176adfa8be05c12daa47b3251ea0c672376757dab2507dddc9fdc71356dbf0f
 fulcrum: "1.0"
 name: linear_get_issue
-description: "Get a single Linear issue by UUID or identifier (e.g., 'ENG-123') with full details and comments"
+description: "Get a single Linear issue by UUID or identifier (e.g., 'ENG-123') with full details and comments; an archived issue is returned too"
 
 schema:
   input:
@@ -12,6 +12,7 @@ schema:
         description: "Issue UUID, or identifier like 'ENG-123' or 'BOT-42'"
         examples:
           - "ENG-123"
+          - "9cf1e2a4-6b3d-4f8e-a1c7-2d5b8e0f3a61"
     required: [identifier]
   output:
     type: object

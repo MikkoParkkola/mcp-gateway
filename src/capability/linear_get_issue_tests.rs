@@ -4,7 +4,8 @@
 //! first hit of a text search. A loopback GraphQL endpoint answers the way
 //! Linear does: `issue(id:)` resolves a UUID or an identifier, an unknown key
 //! is an error with `data: null`, and `searchIssues` ranks some other issue
-//! first, as it did for MIK-8410's UUID (it returned MIK-5478).
+//! first, as it did for an issue's UUID in production (MIK-8410's returned
+//! MIK-5478).
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -13,7 +14,7 @@ use serde_json::{Value, json};
 
 use crate::capability::executor::CapabilityExecutor;
 
-const WANTED_ID: &str = "4ec22f2b-bd57-48c6-8288-d7c410450ac6";
+const WANTED_ID: &str = "9cf1e2a4-6b3d-4f8e-a1c7-2d5b8e0f3a61";
 const WANTED_KEY: &str = "MIK-8410";
 
 fn issue(id: &str, identifier: &str) -> Value {
@@ -35,6 +36,11 @@ async fn linear(State(seen): State<Seen>, Json(request): Json<Value>) -> Json<Va
     if query.contains("searchIssues") {
         let other = issue("0b5a5bd5-0000-4000-8000-000000005478", "MIK-5478");
         return Json(json!({ "data": { "searchIssues": { "nodes": [other] } } }));
+    }
+    // Only a real key lookup is answered: anything else is refused as Linear
+    // refuses a query it cannot run, so a changed query fails these tests.
+    if !(query.contains("$id: String!") && query.contains("issue(id: $id)")) {
+        return Json(json!({ "data": null, "errors": [{ "message": "unexpected query" }] }));
     }
     let key = request["variables"]["id"].as_str().unwrap_or_default();
     if key == WANTED_ID || key == WANTED_KEY {
