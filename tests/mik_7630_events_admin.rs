@@ -80,7 +80,7 @@ async fn assert_listing_is_payload_free(gw: &Gateway, id: &str, callback: &str) 
             "name",
             "reason",
             "sizeBytes",
-            "subscriptionId"
+            "subscriptionAlias"
         ]
     );
     let (_, raw) = gw.admin(Some(ADMIN), "GET", LIST).await;
@@ -250,7 +250,7 @@ async fn bulk_replay_replays_only_the_named_subscription() {
             .await
             .is_empty()
     );
-    assert!(left.iter().all(|d| d["subscriptionId"] == s2));
+    assert!(left.iter().all(|d| d["subscriptionAlias"] == s2));
 }
 
 /// T33 (RELIABLE.2), replay clause: a replay keeps the dead letter's

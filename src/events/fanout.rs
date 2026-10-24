@@ -44,11 +44,12 @@ pub(crate) struct SourceEvent {
     pub lifecycle_key: Option<String>,
 }
 
-/// `evt_` + 32 hex of SHA-256 over kind, upstream id and subscription id:
+/// `evt_` + 32 hex of SHA-256 over kind, upstream id and the subscription's
+/// handle (its keyed alias, MIK-8697):
 /// stable across retries and restarts, distinct per subscription.
-pub(crate) fn event_id(kind: SourceKind, upstream_id: &str, subscription_id: &str) -> String {
+pub(crate) fn event_id(kind: SourceKind, upstream_id: &str, handle: &str) -> String {
     let digest = crate::hashing::sha256_hex_chunks(
-        [kind.as_str(), upstream_id, subscription_id]
+        [kind.as_str(), upstream_id, handle]
             .into_iter()
             .flat_map(|part| [part.as_bytes(), &[0_u8][..]]),
     );
@@ -171,7 +172,8 @@ impl EventsHub {
         sub: &Subscription,
         now: DateTime<Utc>,
     ) {
-        let id = event_id(event.kind, &event.upstream_id, &sub.id);
+        // From the alias, so the eventId names no stored id (MIK-8697 §14.2).
+        let id = event_id(event.kind, &event.upstream_id, &services.alias(&sub.id));
         let mut data = event.data.clone();
         // Attribution before redaction (MIN.2 row E1): what the source named.
         let tenants = services.tenants(&data);

@@ -343,15 +343,25 @@ fn cap_refusal(hit: CapHit) -> RpcError {
     }
 }
 
-/// The `events/subscribe` result; `deliveryStatus` only on a refresh.
+impl EventsHub {
+    /// The handle a subscriber sees for the stored id `id`: its keyed alias
+    /// (MIK-8697 §13), never the stored id, which stays in the store.
+    pub(super) fn handle(&self, id: &str) -> Result<String, RpcError> {
+        let services = self.runtime.services.get().ok_or_else(RpcError::internal)?;
+        Ok(services.alias(id))
+    }
+}
+
+/// The `events/subscribe` result, naming the subscription by its `handle`;
+/// `deliveryStatus` only on a refresh.
 fn subscribe_answer(
-    id: &str,
+    handle: &str,
     expires_at: Option<DateTime<Utc>>,
     existing: Option<&Subscription>,
     throttled: bool,
 ) -> Value {
     let mut answer = json!({
-        "id": id,
+        "id": handle,
         "refreshBefore": to_wire_time(expires_at),
         "cursor": null,
         "truncated": false,
@@ -372,6 +382,17 @@ fn callback_url(raw: Option<&Value>) -> Result<url::Url, RpcError> {
         .and_then(|s| url::Url::parse(s).ok())
         .filter(|u| u.scheme() == "https" && u.host_str().is_some_and(|h| !h.is_empty()))
         .ok_or_else(|| RpcError::invalid("delivery.url"))
+}
+
+/// The delivery's `whsec_` secret and the signing key it decodes to.
+fn delivery_secret(delivery: &Value) -> Result<(&str, Vec<u8>), RpcError> {
+    let secret = delivery
+        .get("secret")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let key =
+        super::client::decode_whsec(secret).ok_or_else(|| RpcError::invalid("delivery.secret"))?;
+    Ok((secret, key))
 }
 
 /// How long a rotated-out secret still signs; one that does not fit is none.
@@ -460,12 +481,7 @@ impl EventsHub {
         }
         let arguments = checked_arguments(&descriptor, params.get("arguments"))?;
         let url = callback_url(delivery.get("url"))?;
-        let secret = delivery
-            .get("secret")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let key = super::client::decode_whsec(secret)
-            .ok_or_else(|| RpcError::invalid("delivery.secret"))?;
+        let (secret, key) = delivery_secret(delivery)?;
         // Checked before any challenge; fixed to a time only at the commit.
         let grant = Grant {
             ttl: granted_ttl(self, &params)?,
@@ -476,6 +492,9 @@ impl EventsHub {
         // a fresh challenge, so the subscribe is refused (MIK-8202).
         let now = crate::clock::utc_now().map_err(|_| RpcError::internal())?;
         let id = subscription_id(&principal, url.as_str(), &descriptor.name, &arguments);
+        // The answer's handle, before anything is committed: a hub that
+        // cannot key it refuses with no row written (MIK-8697 §13).
+        let handle = self.handle(&id)?;
         let caps = self.caps();
         if self.store.get(&id).as_ref().is_none_or(|s| !s.live(now)) {
             self.store
@@ -548,7 +567,8 @@ impl EventsHub {
                         // The subscribe's own read: an earlier `now` can
                         // only under-report a due record (MIK-8202).
                         && self.store.has_due(&id, now);
-                    let answer = subscribe_answer(&id, expires_at, existing.as_ref(), throttled);
+                    let answer =
+                        subscribe_answer(&handle, expires_at, existing.as_ref(), throttled);
                     return Ok(self.held_answer(answer, &id));
                 }
                 Err(CapHit::Unverified) if verified => verified = false,
@@ -695,7 +715,7 @@ impl EventsHub {
             return Err(RpcError::exhausted("verifications", None));
         }
         self.client
-            .verify(url, id, key)
+            .verify(url, &self.handle(id)?, key)
             .await
             .map_err(RpcError::callback)
     }

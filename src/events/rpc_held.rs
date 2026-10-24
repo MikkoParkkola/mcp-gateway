@@ -48,6 +48,8 @@ impl EventsHub {
             .cloned()
             .unwrap_or_else(|| json!({}));
         let id = subscription_id(principal, url.as_str(), name, &arguments);
+        // Keyed before any commit, as in `subscribe` (MIK-8697 §13).
+        let handle = self.handle(&id)?;
         // A lease, and the callback opt-in it may reuse, are not judged on a
         // clock before 1970: refused before any change (MIK-8202).
         let Ok(now) = crate::clock::utc_now() else {
@@ -112,7 +114,7 @@ impl EventsHub {
             match outcome? {
                 Ok((_, expires_at)) => {
                     self.runtime.wake.notify_one();
-                    let answer = subscribe_answer(&id, expires_at, Some(&existing), false);
+                    let answer = subscribe_answer(&handle, expires_at, Some(&existing), false);
                     return Ok(Some(self.held_answer(answer, &id)));
                 }
                 Err(CapHit::Unverified) if verified => verified = false,

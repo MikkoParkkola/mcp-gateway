@@ -298,3 +298,43 @@ fn s5_the_adoption_warning_is_not_repeated_on_restart() {
         "{second:?}"
     );
 }
+
+// S7 (lead condition 3): the adoption warning names key fingerprints, the
+// identity prefix, and never key material: neither key's text, the hex of
+// its bytes, nor a full identity.
+#[test]
+fn s7_the_adoption_warning_names_fingerprints_never_key_material() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig::default();
+    {
+        let hub = non_empty_hub(dir.path());
+        hub.runtime
+            .services
+            .set(Arc::new(services_with(other_key())))
+            .ok();
+    }
+    std::fs::write(
+        dir.path().join(SIDECAR),
+        format!("{}\n", other_key().identity()),
+    )
+    .expect("bind to B");
+    let hub = EventsHub::open(&config, dir.path()).expect("reopen");
+    let warnings = start_capturing(&hub, test_record_key(), async {});
+    let (current, previous) = (test_record_key().identity(), other_key().identity());
+    assert_eq!(
+        warnings_naming(&warnings, &[&current[..8], &previous[..8]]),
+        1,
+        "premise: the adoption warned: {warnings:?}"
+    );
+    let text: String = warnings.iter().map(Value::to_string).collect();
+    for material in [
+        crate::gateway::record_principal::TEST_RECORD_KEY.to_owned(),
+        OTHER_KEY.to_owned(),
+        hex::encode(crate::gateway::record_principal::TEST_RECORD_KEY),
+        hex::encode(OTHER_KEY),
+        current,
+        previous,
+    ] {
+        assert!(!text.contains(&material), "key material in {text}");
+    }
+}

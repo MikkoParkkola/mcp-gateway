@@ -427,7 +427,7 @@ pub(crate) fn load_records<T: for<'de> Deserialize<'de>>(dir: &Path) -> Vec<(Pat
     records
 }
 
-fn rename(from: &Path, to: &Path) -> std::io::Result<()> {
+pub(super) fn rename(from: &Path, to: &Path) -> std::io::Result<()> {
     #[cfg(windows)]
     {
         crate::private_fs::replace(from, to)

@@ -321,6 +321,21 @@ async fn h6_the_subscribe_answer_holds_no_stored_id() {
     );
 }
 
+// H8 (lead): the handle is keyed before anything is written. A hub with no
+// services cannot key it, so the subscribe is refused and no row of the event
+// is written. Production never serves an unstarted hub (the hub reaches
+// MetaMcp only after `start`, events_wiring.rs); this pins the order.
+#[tokio::test]
+async fn h8_a_subscribe_the_hub_cannot_key_writes_nothing() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig::default();
+    let hub = hub_at(dir.path(), &config, "p", &url("p"));
+    let params = subscribe_params(&url("p"));
+    let refused = hub.subscribe(&caller("p"), Some(&params)).await;
+    assert!(refused.is_err(), "an unkeyable subscribe is refused");
+    assert!(rows(&hub).is_empty(), "no row was committed");
+}
+
 // U1 (characterization, §14.1): the owner's unsubscribe recomputes the row
 // from its own arguments and removes it.
 #[tokio::test]
@@ -655,6 +670,22 @@ async fn h5_an_enqueued_record_keeps_its_event_id_and_gets_the_alias_header() {
     );
 }
 
+/// Every `subscription_id` value anywhere in `v`.
+fn subscription_ids(v: &Value, out: &mut Vec<String>) {
+    match v {
+        Value::Object(map) => {
+            for (k, v) in map {
+                if k == "subscription_id" {
+                    out.extend(v.as_str().map(str::to_owned));
+                }
+                subscription_ids(v, out);
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|v| subscription_ids(v, out)),
+        _ => {}
+    }
+}
+
 // H7 (§13 "records"): the events governance record names the subscription by
 // its alias. Today `events.unsubscribe` records the stored id (rpc.rs:731).
 #[tokio::test]
@@ -691,20 +722,6 @@ async fn h7_governance_records_carry_the_alias_not_the_stored_id() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-    fn subscription_ids(v: &Value, out: &mut Vec<String>) {
-        match v {
-            Value::Object(map) => {
-                for (k, v) in map {
-                    if k == "subscription_id" {
-                        out.extend(v.as_str().map(str::to_owned));
-                    }
-                    subscription_ids(v, out);
-                }
-            }
-            Value::Array(items) => items.iter().for_each(|v| subscription_ids(v, out)),
-            _ => {}
-        }
     }
     let mut ids = Vec::new();
     for line in text.lines() {

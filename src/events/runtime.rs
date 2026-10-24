@@ -156,6 +156,9 @@ impl EventsHub {
         let Some(mut intake) = self.runtime.intake.lock().take() else {
             return;
         };
+        // Before anything reads the store: the worker drops outbox records it
+        // cannot place, and every handle derives from the key (MIK-8697 §13.6).
+        self.store.bind_key(services.record_key());
         let services = Arc::new(services);
         let _ = self.runtime.services.set(Arc::clone(&services));
         let hub = Arc::clone(self);
