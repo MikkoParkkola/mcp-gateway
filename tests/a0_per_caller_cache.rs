@@ -11,6 +11,9 @@
 //! Every backend answer carries its delivery number (`call-N`), so a replay is
 //! proved by content as well as by the delivery count.
 
+#[path = "common/record_key.rs"]
+mod record_key;
+
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -195,7 +198,10 @@ async fn gateway(setup: Setup, calls: &Arc<AtomicUsize>) -> (Arc<AppState>, temp
     let subscriptions = Arc::new(
         mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(
             64,
-            mcp_gateway::gateway::test_helpers::auth_state(&config.auth),
+            mcp_gateway::gateway::test_helpers::auth_state(
+                &config.auth,
+                crate::record_key::RECORD_KEY,
+            ),
         ),
     );
     let store_dir = tempfile::tempdir().expect("a private task-store directory");
@@ -217,7 +223,10 @@ async fn gateway(setup: Setup, calls: &Arc<AtomicUsize>) -> (Arc<AppState>, temp
         multiplexer,
         proxy_manager,
         streaming_config: config.streaming.clone(),
-        auth_config: Arc::new(ResolvedAuthConfig::from_config(&config.auth)),
+        auth_config: Arc::new(ResolvedAuthConfig::from_config(
+            &config.auth,
+            crate::record_key::RECORD_KEY,
+        )),
         key_server: None,
         tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),

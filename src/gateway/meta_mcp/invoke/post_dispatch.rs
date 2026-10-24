@@ -555,7 +555,6 @@ impl MetaMcp {
                 target: INVOKE_TARGET,
                 server,
                 tool,
-                key = reservation.key(),
                 trace_id,
                 "Idempotency entry marked completed"
             );

@@ -171,6 +171,7 @@ pub(super) fn stdio_caller_context<'a>(
         is_modern: era == crate::protocol::meta::Era::Modern,
         protocol_revision: None,
         credential_principal: Some(STDIO_CREDENTIAL_PRINCIPAL),
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
         credential_kind: crate::security::audit::CredentialKind::LocalTransport,
         authorizer,

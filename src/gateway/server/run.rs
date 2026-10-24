@@ -80,6 +80,7 @@ impl Gateway {
             transition_tracker,
             transition_path,
             data_dir,
+            record_key,
             transparency_log,
         } = self.build_meta_mcp().await?;
         // F24: this mode delivers tools/list_changed, so it may advertise it.
@@ -152,9 +153,10 @@ impl Gateway {
             Arc::new(crate::gateway::session_lifecycle::SessionLifecycle::new());
         multiplexer.spawn_reaper_on(Arc::clone(&session_lifecycle));
         let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
-        let auth_config = Arc::new(ResolvedAuthConfig::try_from_config(
+        let auth_config = Arc::new(ResolvedAuthConfig::try_from_config_keyed(
             &self.config.auth,
             self.env.startup(),
+            Arc::clone(&record_key),
         )?);
 
         // Live config handle: shared by the hot-reload watcher (which swaps it

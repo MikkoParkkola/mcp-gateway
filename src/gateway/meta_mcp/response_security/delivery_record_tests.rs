@@ -39,7 +39,7 @@ fn record_bytes(meta: &crate::gateway::meta_mcp::MetaMcp, size: usize) -> u64 {
         runtime.block_on(meta.record_delivery_of(
             &response,
             &correlation,
-            DeliveryCredential::of(None),
+            DeliveryCredential::of(None, &crate::gateway::record_principal::test_record_key()),
             None,
         ))
     });
@@ -99,7 +99,7 @@ async fn t5_a_delivery_record_on_an_unreadable_clock_is_written_undated() {
         .record_delivery_of(
             &response,
             &correlation(),
-            DeliveryCredential::of(None),
+            DeliveryCredential::of(None, &crate::gateway::record_principal::test_record_key()),
             None,
         )
         .await;

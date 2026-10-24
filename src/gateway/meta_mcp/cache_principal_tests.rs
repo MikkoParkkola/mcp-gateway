@@ -142,6 +142,7 @@ mod invoke_path {
             authentication: Authentication::Authenticated,
             credential_kind: crate::security::audit::CredentialKind::ApiKey,
             credential_principal: None,
+            record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
             api_key_name: None,
             retry,
             ..ctx(&AllowAll)

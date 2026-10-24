@@ -35,7 +35,7 @@ pub(in crate::gateway) struct Reader<'a> {
     /// The reader's verified grant subject, when one resolved (MIK-7938).
     pub subject: Option<&'a crate::identity_grants::GrantSubject>,
     /// The credential the delivery record names (MIK-8672).
-    pub credential: DeliveryCredential<'a>,
+    pub credential: DeliveryCredential,
 }
 
 /// A frame built for one reader, not yet delivered. Nothing about its delivery
@@ -156,7 +156,7 @@ impl MetaMcp {
             subject: reader.subject,
         };
         let delivered = self
-            .record_notification_delivery_attempt(sent, &correlation, reader.credential)
+            .record_notification_delivery_attempt(sent, &correlation, reader.credential.clone())
             .await;
         pending.staged.commit(delivered && !pending.withheld);
         delivered

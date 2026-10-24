@@ -75,7 +75,7 @@ pub(super) fn idempotency_outcome(
             caller
                 .client
                 .as_ref()
-                .map(|client| client.principal.as_str()),
+                .map(|client| client.principal.storage_form()),
             crate::gateway::meta_mcp::Authentication::of(caller.client.as_ref()),
             envelope.params.as_ref(),
         )
@@ -115,7 +115,7 @@ pub(super) fn execution_lease(
             caller
                 .client
                 .as_ref()
-                .map(|client| client.principal.as_str()),
+                .map(|client| client.principal.storage_form()),
             caller.grant_subject.as_ref(),
             Some(caller.spend_key.as_str()).filter(|key| !key.is_empty()),
         ),

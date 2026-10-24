@@ -231,7 +231,9 @@ async fn an_a2a_question_on_this_route_is_bound_to_the_key_holder() {
             denied_tools: None,
             admin: false,
             // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
-            principal: principal.to_string(),
+            principal: crate::gateway::record_principal::InternalPrincipal::new(
+                principal.to_string(),
+            ),
             authenticated: true,
             credential_kind: crate::security::audit::CredentialKind::ApiKey,
         });
@@ -295,7 +297,9 @@ async fn an_unminted_a2a_key_holder_is_bound_but_not_proven() {
         denied_tools: None,
         admin: false,
         // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
-        principal: "alice-digest".to_string(),
+        principal: crate::gateway::record_principal::InternalPrincipal::new(
+            "alice-digest".to_string(),
+        ),
         authenticated: true,
         credential_kind: crate::security::audit::CredentialKind::ApiKey,
     });

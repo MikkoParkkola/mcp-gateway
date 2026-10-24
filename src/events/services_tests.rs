@@ -43,13 +43,16 @@ fn services(keys: Vec<ApiKeyConfig>) -> Services {
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: LiveCredentials::default(),
+        record_key: Some(crate::gateway::record_principal::test_key_arc()),
     }
 }
 
 fn presented(name: &str, secret: &str) -> ApiKeyRef {
     ApiKeyRef {
         name: name.to_owned(),
-        principal: crate::gateway::auth::principal_of(secret),
+        principal: crate::gateway::auth::principal_of(secret)
+            .storage_form()
+            .to_owned(),
     }
 }
 
@@ -222,7 +225,11 @@ fn bound(
     }))
     .expect("subscription");
     sub.credential_kind = Some(kind);
-    sub.credential_principal = Some(crate::gateway::auth::principal_of("old"));
+    sub.credential_principal = Some(
+        crate::gateway::auth::principal_of("old")
+            .storage_form()
+            .to_owned(),
+    );
     sub.binding = binding;
     sub
 }
@@ -230,6 +237,7 @@ fn bound(
 fn with(credentials: LiveCredentials) -> Services {
     Services {
         credentials,
+        record_key: Some(crate::gateway::record_principal::test_key_arc()),
         ..services(Vec::new())
     }
 }
@@ -264,12 +272,20 @@ async fn a_static_bearer_subscription_needs_the_same_running_bearer() {
     use crate::security::audit::CredentialKind as Kind;
     let sub = bound(Kind::StaticBearer, Some(LiveBinding::StaticBearer));
     let same = with(LiveCredentials {
-        bearer_principal: Some(crate::gateway::auth::principal_of("old")),
+        bearer_principal: Some(
+            crate::gateway::auth::principal_of("old")
+                .storage_form()
+                .to_owned(),
+        ),
         ..LiveCredentials::default()
     });
     assert_eq!(same.admission(&sub, Some("x")).await, AccessVerdict::Admits);
     let rotated = with(LiveCredentials {
-        bearer_principal: Some(crate::gateway::auth::principal_of("new")),
+        bearer_principal: Some(
+            crate::gateway::auth::principal_of("new")
+                .storage_form()
+                .to_owned(),
+        ),
         ..LiveCredentials::default()
     });
     assert_eq!(
@@ -300,7 +316,11 @@ async fn a_static_bearer_recheck_compares_the_full_digest() {
     );
     let live = |token: &str, fingerprint_of: &str| {
         with(LiveCredentials {
-            bearer_principal: Some(crate::gateway::auth::principal_of(fingerprint_of)),
+            bearer_principal: Some(
+                crate::gateway::auth::principal_of(fingerprint_of)
+                    .storage_form()
+                    .to_owned(),
+            ),
             bearer_sha256: Some(digest(token)),
             ..LiveCredentials::default()
         })
@@ -315,7 +335,11 @@ async fn a_static_bearer_recheck_compares_the_full_digest() {
         "same 12-hex fingerprint, different bearer"
     );
     let none = with(LiveCredentials {
-        bearer_principal: Some(crate::gateway::auth::principal_of("old")),
+        bearer_principal: Some(
+            crate::gateway::auth::principal_of("old")
+                .storage_form()
+                .to_owned(),
+        ),
         ..LiveCredentials::default()
     });
     assert_eq!(
@@ -330,7 +354,10 @@ async fn a_static_bearer_recheck_compares_the_full_digest() {
 #[test]
 fn the_running_static_bearer_yields_a_fingerprint_and_a_full_digest() {
     let (principal, digest) = LiveCredentials::static_bearer(Some("tok"));
-    assert_eq!(principal, Some(crate::gateway::auth::principal_of("tok")));
+    assert_eq!(
+        principal.as_deref(),
+        Some(crate::gateway::auth::principal_of("tok").storage_form())
+    );
     assert_eq!(digest, Some(crate::hashing::sha256_hex(b"tok")));
     assert_eq!(digest.unwrap().len(), 64);
     assert_eq!(LiveCredentials::static_bearer(None), (None, None));

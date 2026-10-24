@@ -19,11 +19,14 @@ async fn router_with(config: Config) -> (axum::Router, tempfile::TempDir) {
     let (mut state, store) = test_router_app_state_with(StreamingConfig::default(), config).await;
     Arc::get_mut(&mut state)
         .expect("state is uniquely owned here")
-        .auth_config = Arc::new(ResolvedAuthConfig::from_config(&AuthConfig {
-        enabled: true,
-        bearer_token: Some(ADMIN.to_string()),
-        ..Default::default()
-    }));
+        .auth_config = Arc::new(ResolvedAuthConfig::from_config(
+        &AuthConfig {
+            enabled: true,
+            bearer_token: Some(ADMIN.to_string()),
+            ..Default::default()
+        },
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    ));
     (create_router(state), store)
 }
 

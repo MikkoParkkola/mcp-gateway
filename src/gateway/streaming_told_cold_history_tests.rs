@@ -126,8 +126,9 @@ async fn a_never_opened_session_still_gets_the_default_copy_after_idle_pruning()
         caller.client.authenticated && !caller.client.principal.is_empty(),
         "VOID: cold bearer did not authenticate"
     );
-    let owner =
-        crate::gateway::session_id::SessionOwner::Credential(caller.client.principal.clone());
+    let owner = crate::gateway::session_id::SessionOwner::Credential(
+        caller.client.principal.storage_form().to_owned(),
+    );
     let mux = Arc::new(NotificationMultiplexer::new(
         Arc::new(crate::backend::BackendRegistry::new()),
         crate::config::StreamingConfig::default(),

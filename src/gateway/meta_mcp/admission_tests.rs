@@ -87,6 +87,7 @@ fn context<'a>(policy: &'a MutablePolicy, retry: &'a RetryFields) -> MetaMcpCall
         is_modern: true,
         protocol_revision: None,
         credential_principal: Some("verified-credential-owner"),
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
         credential_kind: crate::security::audit::CredentialKind::None,
         authorizer: policy,
@@ -538,7 +539,7 @@ fn stdio_principal_admits_a_keyed_mutation_and_anonymous_http_still_cannot() {
     for (label, principal) in [
         (
             "an unauthenticated HTTP caller",
-            Some(anonymous.principal.as_str()),
+            Some(anonymous.principal.storage_form()),
         ),
         ("a caller with no credential at all", None),
     ] {

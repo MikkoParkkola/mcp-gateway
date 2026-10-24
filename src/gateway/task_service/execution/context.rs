@@ -38,6 +38,10 @@ pub(crate) struct OwnedCallerContext {
     /// a second source is how the worker's caller and the durable record
     /// disagree about who owns the task.
     credential_principal: String,
+    /// The creating request's keyed record principal, snapshotted here so the
+    /// worker's records carry the live call's `who.principal`, not a key of the
+    /// owner above (MIK-8697 §16.11).
+    record_principal: crate::gateway::record_principal::RecordPrincipal,
     /// Whether the creating request authenticated. Carried, never inferred:
     /// with authentication off `credential_principal` is a non-empty constant.
     authentication: Authentication,
@@ -82,6 +86,7 @@ impl OwnedCallerContext {
         grant_subject: Option<GrantSubject>,
         verified_identity: Option<VerifiedIdentity>,
         credential_principal: String,
+        record_principal: crate::gateway::record_principal::RecordPrincipal,
         authentication: Authentication,
         credential_kind: crate::security::audit::CredentialKind,
         is_admin: bool,
@@ -102,6 +107,7 @@ impl OwnedCallerContext {
             grant_subject,
             verified_identity,
             credential_principal,
+            record_principal,
             authentication,
             credential_kind,
             is_admin,
@@ -232,6 +238,8 @@ impl OwnedCallerContext {
             // whenever authentication is off; carried so the worker's caller
             // cannot be a weaker principal than the request's.
             credential_principal: Some(self.credential_principal.as_str()),
+            // The live request's keyed principal, not a key of the owner.
+            record_principal: self.record_principal.clone(),
             authentication: self.authentication,
             credential_kind: self.credential_kind,
             // No second lease. The worker's execution is admitted durably in

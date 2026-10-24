@@ -20,7 +20,7 @@ pub(in crate::gateway) async fn record_delivery(
     meta: &MetaMcp,
     mut frame: OutboundFrame,
     correlation: &ResponseCorrelation<'_>,
-    credential: DeliveryCredential<'_>,
+    credential: DeliveryCredential,
     finalized: Option<JsonRpcResponse>,
 ) -> (OutboundFrame, Option<JsonRpcResponse>) {
     let read = frame.take_record_fields();

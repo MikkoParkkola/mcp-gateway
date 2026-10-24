@@ -91,7 +91,7 @@ async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
         let mut fields = serde_json::Map::new();
         fields.insert("route".into(), LOGOUT_PATH.into());
         fields.insert("method".into(), "POST".into());
-        let envelope = AuditEnvelope::ok(dashboard_session_who());
+        let envelope = AuditEnvelope::ok(dashboard_session_who(state.auth_config.record_key()));
         let written = log
             .append_bounded(move |l| {
                 l.append_admin_action("admin_ui", fields, &envelope)
@@ -324,6 +324,7 @@ mod mik_8659_dashboard_tests {
             crate::gateway::auth::ResolvedAuthConfig::try_from_config(
                 &auth,
                 &crate::config::EnvOverlay::none(),
+                crate::gateway::record_principal::TEST_RECORD_KEY,
             )
             .expect("fixture auth resolves"),
         );

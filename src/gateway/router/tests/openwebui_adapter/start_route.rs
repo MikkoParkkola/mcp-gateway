@@ -146,7 +146,10 @@ async fn gateway_on(owui: &FakeOwui, starts: u32, fixture: RevokeFixture) -> Gat
     // The live descriptors are custody's own, so the callback's checks and
     // the provider's exchange read one description of each account.
     config.accounts.as_mut().unwrap().descriptors = Some(fixture.descriptors.clone());
-    let auth = Arc::new(ResolvedAuthConfig::from_config(&config.auth));
+    let auth = Arc::new(ResolvedAuthConfig::from_config(
+        &config.auth,
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    ));
     let (mut state, _store) =
         test_router_app_state_with(StreamingConfig::default(), config.clone()).await;
     let log = crate::security::transparency_log::TransparencyLogConfig {

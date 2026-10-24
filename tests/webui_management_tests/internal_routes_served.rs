@@ -145,7 +145,10 @@ async fn writable() -> (
         make_app_state_with_reload(initial, None, config_path.clone()).await;
     Arc::get_mut(&mut state)
         .expect("test AppState should be uniquely owned")
-        .auth_config = Arc::new(ResolvedAuthConfig::from_config(&auth_on()));
+        .auth_config = Arc::new(ResolvedAuthConfig::from_config(
+        &auth_on(),
+        crate::record_key::RECORD_KEY,
+    ));
     register_http_backend(&state, "docs");
     let gw = Gateway {
         router: create_router(Arc::clone(&state)),

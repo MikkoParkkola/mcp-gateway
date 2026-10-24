@@ -44,6 +44,7 @@ impl DirectCall {
         request: &Value,
         client: Option<&AuthenticatedClient>,
         grant_subject: Option<&GrantSubject>,
+        record_key: &crate::gateway::record_principal::RecordPrincipalKey,
     ) -> Option<Self> {
         if request.get("method").and_then(Value::as_str) != Some("tools/call") {
             return None;
@@ -62,7 +63,7 @@ impl DirectCall {
                 .map(str::to_string),
             request_hash: sha256_of(params),
             otel_trace_id,
-            who: AuditWho::from_request(client, grant_subject),
+            who: AuditWho::from_request(client, grant_subject, record_key),
             // The firewall's own fallback (`handle_backend_call`): a call with
             // no `arguments` member is scanned over `params`, so attribute it
             // the same way (#2523).
@@ -196,7 +197,7 @@ async fn audited_call_judged(
         });
     let (credential_kind, principal) = presented.unwrap_or((
         crate::security::audit::CredentialKind::of(None),
-        String::new(),
+        crate::gateway::record_principal::InternalPrincipal::default(),
     ));
     let mut call = None;
     let mut reads = DirectReads::default();
@@ -268,7 +269,7 @@ async fn audited_call_judged(
                 &correlation,
                 DeliveryCredential {
                     kind: credential_kind,
-                    principal: &principal,
+                    principal: principal.record_form(state.auth_config.record_key()),
                 },
                 read,
             )

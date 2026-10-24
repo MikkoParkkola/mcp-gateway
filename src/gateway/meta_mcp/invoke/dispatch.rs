@@ -368,7 +368,9 @@ impl MetaMcp {
                     spec_present,
                 )
             {
-                emit_projection_ab_event(session_id, key, server, tool, rec, &final_result);
+                // Keyed: the caller key ends in a stored principal (MIK-8697).
+                let caller = crate::gateway::record_principal::record_owner(key, self.record_key());
+                emit_projection_ab_event(session_id, &caller, server, tool, rec, &final_result);
             }
             return Ok(final_result);
         }

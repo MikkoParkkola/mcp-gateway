@@ -130,14 +130,17 @@ async fn fixture() -> Fixture {
         direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
     Arc::get_mut(&mut state)
         .expect("state is uniquely owned here")
-        .auth_config = Arc::new(ResolvedAuthConfig::from_config(&AuthConfig {
-        enabled: true,
-        api_keys: vec![
-            api_key("alpha-key", &["alpha"]),
-            api_key("open-key", &["*"]),
-        ],
-        ..Default::default()
-    }));
+        .auth_config = Arc::new(ResolvedAuthConfig::from_config(
+        &AuthConfig {
+            enabled: true,
+            api_keys: vec![
+                api_key("alpha-key", &["alpha"]),
+                api_key("open-key", &["*"]),
+            ],
+            ..Default::default()
+        },
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    ));
     let mut wires = Vec::new();
     for (name, config) in [
         ("alpha", BackendConfig::default()),

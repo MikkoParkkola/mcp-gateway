@@ -23,6 +23,10 @@ pub struct MetaMcpCallerContext<'a> {
     pub protocol_revision: Option<&'a str>,
     /// Stable validated credential principal; display names are never authority.
     pub credential_principal: Option<&'a str>,
+    /// The caller's keyed record principal (MIK-8697 §16.11): what every record
+    /// of this call writes as `who.principal`. `credential_principal` above is
+    /// the store/owner key and never reaches a record.
+    pub(crate) record_principal: crate::gateway::record_principal::RecordPrincipal,
     /// Whether a credential was presented and validated. Explicit, never
     /// inferred from `credential_principal` (see [`Authentication`]).
     pub(crate) authentication: Authentication,
@@ -217,6 +221,7 @@ impl<'a> MetaMcpCallerContext<'a> {
             is_modern: self.is_modern,
             protocol_revision: self.protocol_revision,
             credential_principal: self.credential_principal,
+            record_principal: self.record_principal.clone(),
             authentication: self.authentication,
             credential_kind: self.credential_kind,
             execution: self.execution,

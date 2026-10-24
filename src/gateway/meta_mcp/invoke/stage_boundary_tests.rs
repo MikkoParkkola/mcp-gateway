@@ -498,6 +498,7 @@ async fn served_on_the_replay(meta: &MetaMcp, key: &str) -> Vec<(String, String)
     let lease_owner = MetaMcpCallerContext {
         is_modern: true,
         credential_principal: Some("verified-credential-owner"),
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         ..keyed(&outer)
     };
     let admitted = meta.admit_meta_sync_for_test(

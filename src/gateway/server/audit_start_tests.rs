@@ -68,7 +68,12 @@ async fn audit_log_open_failure_with_auth_off_still_starts() {
 /// R3: another gateway already writes the log. The start is refused whatever
 /// the auth setting, with the lease refusal named (not the generic
 /// "audit log must open" error), because two writers fork the chain.
-async fn refused_while_leased(auth: bool) {
+fn refused_while_leased(auth: bool) -> std::pin::Pin<Box<impl std::future::Future<Output = ()>>> {
+    // Boxed: the future outgrows clippy's `large_futures` bound on Windows.
+    Box::pin(refused_while_leased_unboxed(auth))
+}
+
+async fn refused_while_leased_unboxed(auth: bool) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("audit.jsonl");
     let held = crate::security::transparency_log::TransparencyLogConfig {

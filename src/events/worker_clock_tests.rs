@@ -467,7 +467,9 @@ async fn an_expiring_key_refused_by_an_unreadable_clock_keeps_its_subscription()
         sub.credential_kind = Some(crate::security::audit::CredentialKind::ApiKey);
         sub.api_key = Some(crate::events::records::ApiKeyRef {
             name: "k".to_owned(),
-            principal: crate::gateway::auth::principal_of(SECRET),
+            principal: crate::gateway::auth::principal_of(SECRET)
+                .storage_form()
+                .to_owned(),
         });
     });
     let posts = || accepted.load(std::sync::atomic::Ordering::SeqCst);

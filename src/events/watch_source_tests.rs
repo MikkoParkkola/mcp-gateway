@@ -128,6 +128,7 @@ fn hub_with(dir: &std::path::Path, config: &crate::config::EventsConfig) -> Arc<
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: super::super::LiveCredentials::default(),
+        record_key: Some(crate::gateway::record_principal::test_key_arc()),
     };
     let _ = hub.runtime.services.set(Arc::new(services));
     hub

@@ -10,6 +10,7 @@ fn auth() -> AuthState {
     AuthState {
         auth_config: Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
             &crate::config::AuthConfig::default(),
+            crate::gateway::record_principal::TEST_RECORD_KEY,
         )),
         key_server: None,
         dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),

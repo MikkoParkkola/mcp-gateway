@@ -117,7 +117,15 @@ struct Session {
 
 /// A stdio session under `setup`, its stdout `capacity` bytes deep, with
 /// the handshake answered.
-async fn open(setup: Setup, capacity: usize) -> Session {
+fn open(
+    setup: Setup,
+    capacity: usize,
+) -> std::pin::Pin<Box<impl std::future::Future<Output = Session>>> {
+    // Boxed: the future outgrows clippy's `large_futures` bound on Windows.
+    Box::pin(open_unboxed(setup, capacity))
+}
+
+async fn open_unboxed(setup: Setup, capacity: usize) -> Session {
     let (backend_url, calls) = spawn_backend().await;
     let dir = tempfile::tempdir().expect("tempdir");
     let quoted = |name: &str| {

@@ -24,7 +24,6 @@ use crate::security::tenant_reads::ReadAttribution;
 /// answered with an error settles through [`fail`](Self::fail) instead — the
 /// backend may have acted, and from here that is indistinguishable from not
 /// having acted (ADR-012).
-#[derive(Debug)]
 pub struct IdempotencyReservation {
     cache: Arc<IdempotencyCache>,
     key: String,
@@ -38,6 +37,16 @@ pub struct IdempotencyReservation {
     /// happens only after `Drop::drop` has finished settling the key
     /// (ADR-012 A2).
     _owner: Arc<OwnerToken>,
+}
+
+// Not derived: the key ends in the caller's stored principal (MIK-8697).
+impl std::fmt::Debug for IdempotencyReservation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IdempotencyReservation")
+            .field("key", &"<redacted>")
+            .field("settled", &self.settled)
+            .finish_non_exhaustive()
+    }
 }
 
 /// What an unsettled [`IdempotencyReservation`] does when it is dropped.
@@ -145,7 +154,7 @@ impl Drop for IdempotencyReservation {
                 debug!(
                     // The pre-split module path, kept as the log target.
                     target: "mcp_gateway::idempotency",
-                    key = %self.key,
+                    // Not the key: it ends in the caller's stored principal.
                     "Released abandoned idempotency reservation"
                 );
             }
@@ -157,7 +166,6 @@ impl Drop for IdempotencyReservation {
                     debug!(
                         // The pre-split module path, kept as the log target.
                         target: "mcp_gateway::idempotency",
-                        key = %self.key,
                         "Settled abandoned idempotency reservation"
                     );
                 } else {
