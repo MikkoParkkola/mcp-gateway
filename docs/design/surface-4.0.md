@@ -96,7 +96,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `auth` | 16 |  | `client_circuit_breaker.failure_threshold`; `client_circuit_breaker.reset_timeout`; `client_circuit_breaker.success_threshold`; `dashboard_session`; `dashboard_session.absolute_timeout_secs`; `dashboard_session.idle_timeout_secs` |  | `api_keys[].key`; `client_circuit_breaker.enabled` |
 | `backends` | 43 | `<name>.oauth.token_refresh_buffer_secs`; `<name>.protocol_version`; `<name>.streamable_http` | `<name>.a2a_agent_card_path`; `<name>.max_frame_bytes` | `<name>.http_url`; `<name>.ws_url` | `<name>.circuit_breaker`; `<name>.idle_timeout` |
 | `cache` | 1 |  | `default_ttl`; `max_entries` |  | `enabled` |
-| `capabilities` | 11 |  | `files.downloads_quota_bytes`; `name` |  | `stale_check_secs` |
+| `capabilities` | 12 |  | `files.downloads_quota_bytes`; `name` |  | `stale_check_secs` |
 | `code_mode` | 2 |  |  |  |  |
 | `control_plane` | 12 |  | `export.max_batch`; `export.poll_interval_secs` |  |  |
 | `cost_governance` | 12 |  |  |  | `currency` |
@@ -114,7 +114,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `routing_profiles` | 6 |  |  |  |  |
 | `runtime` | 30 |  |  |  |  |
 | `security` | 119 |  | `firewall.anomaly_min_observations`; `firewall.anomaly_threshold`; `firewall.collusion.common_principals`; `firewall.collusion.min_matches`; `firewall.collusion.window_secs`; `firewall.memory_poisoning.max_entry_size_bytes`; `message_signing.replay_window` |  | `signature_chain.max_links` |
-| `server` | 10 |  | `max_body_size`; `shutdown_timeout` |  | `protocol_revision_window`; `request_timeout`; `ws_port` |
+| `server` | 11 |  | `max_body_size`; `shutdown_timeout` |  | `protocol_revision_window`; `request_timeout`; `ws_port` |
 | `streaming` | 3 |  | `buffer_size`; `keep_alive_interval`; `session_reaper_interval`; `session_ttl` |  |  |
 | `tasks` | 3 |  | `default_ttl_ms`; `expiry_interval`; `logical_budget_bytes`; `max_per_principal`; `max_record_bytes`; `max_records`; `max_workers`; `poll_interval_ms` |  |  |
 | `webhooks` | 4 |  | `rate_limit` |  |  |

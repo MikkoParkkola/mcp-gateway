@@ -20,8 +20,9 @@ backends:
 # so the semantic-assertion rate scored the harness. The key paths exist
 # identically at v3.5.0, v3.5.1 and HEAD (src/config/mod.rs, cache + failsafe).
 cache:
-  # The cache is always on (MIK-8783); a zero TTL expires every entry at
-  # once, so no cell is ever answered from it.
+  # The cache is always on (MIK-8783) and stores only tools annotated
+  # read-only; this fixture has none, and a zero TTL expires anything stored
+  # as soon as time passes, so no cell is answered from it.
   default_ttl: 0s
 
 failsafe:

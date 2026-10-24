@@ -122,6 +122,37 @@ fn upgrade_reports_a_retired_setting_as_ignored() {
     );
     assert!(report.contains("ignored in 4.0"), "{report}");
     assert!(!report.contains("never had an effect"), "{report}");
+    assert!(
+        report.contains("Seven settings are now the gateway's own choice"),
+        "the report points to the upgrade notes that name the hatch: {report}"
+    );
+}
+
+/// T1.6b: a flow-style client breaker with a tuning key beside `enabled` is
+/// left as written, and the advice keeps the sibling: delete only `enabled`.
+#[test]
+fn upgrade_keeps_a_flow_style_client_breaker_and_its_tuning() {
+    let before = "auth:\n  client_circuit_breaker: {enabled: true, failure_threshold: 3}\n";
+    let s = setup(before);
+    let out = upgrade(&s);
+    let report = text(&out);
+    assert_eq!(
+        read(&s),
+        before,
+        "a flow-style section is left as written: {report}"
+    );
+    assert!(report.contains("delete only `enabled`"), "{report}");
+    assert!(
+        report.contains("if that leaves the section empty"),
+        "{report}"
+    );
+    let edited = setup("auth:\n  client_circuit_breaker: {failure_threshold: 3}\n");
+    let config = Config::load(Some(&edited.config)).expect("the advised edit loads");
+    let breaker = config
+        .auth
+        .client_circuit_breaker
+        .expect("the client breaker stays on");
+    assert_eq!(breaker.failure_threshold, 3, "the sibling tuning survives");
 }
 
 /// T1.6: a lone `enabled` under `auth.client_circuit_breaker` stays, because

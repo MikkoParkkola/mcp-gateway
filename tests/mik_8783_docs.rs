@@ -70,6 +70,12 @@ fn the_upgrade_notes_stop_advertising_the_retired_settings() {
             "`capabilities.stale_check_secs` (default 60, `0` turns it off)",
         ),
     ] {
+        // A fragment is folded into the guide and deleted at release; the
+        // guide row above covers it from then on.
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(file);
+        if file.starts_with("upgrading.d/") && !path.exists() {
+            continue;
+        }
         assert!(
             !read(file).contains(stale),
             "{file} still advertises: {stale}"

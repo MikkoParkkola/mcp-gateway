@@ -97,8 +97,9 @@ pub(super) fn url_report(path: &Path, rewrite: &UrlRewrite, mode: RewriteMode) -
                 let why = match removal.on_load {
                     OnLoad::Refuses => "it never had an effect.",
                     OnLoad::Warns => {
-                        "it is ignored in 4.0; UPGRADING-4.0.md says what replaced it \
-                         and the hatch that remains."
+                        "it is ignored in 4.0; the 4.0 upgrade notes (\"Seven settings are \
+                         now the gateway's own choice\") say what replaced it and the hatch \
+                         that remains."
                     }
                 };
                 out.push(format!("{at}: {verb} `{key}` (line {line}){block}; {why}"));
@@ -109,10 +110,10 @@ pub(super) fn url_report(path: &Path, rewrite: &UrlRewrite, mode: RewriteMode) -
                  load until it is deleted by hand."
             )),
             Retired::Left if key == "auth.client_circuit_breaker.enabled" => out.push(format!(
-                "{at}: kept `{key}`: it is ignored in 4.0, but it is the only key in the \
-                 section whose presence turns the client breaker on. To keep the breaker on, \
-                 delete only `enabled`, and if no other key is left write \
-                 `client_circuit_breaker: {{}}`; to turn it off, delete the section."
+                "{at}: kept `{key}`: it is ignored in 4.0, and the section it sits in is \
+                 the switch that turns the client breaker on. To keep the breaker on, delete \
+                 only `enabled`; if that leaves the section empty, write \
+                 `client_circuit_breaker: {{}}`. To turn it off, delete the section."
             )),
             Retired::Left => out.push(format!(
                 "{at}: kept `{key}`: upgrade removes it only as its own line under a \
