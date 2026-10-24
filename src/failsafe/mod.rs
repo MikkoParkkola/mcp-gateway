@@ -168,7 +168,6 @@ mod tests {
     fn a_rate_limited_response_does_not_reset_the_failure_streak() {
         let config = FailsafeConfig {
             circuit_breaker: CircuitBreakerConfig {
-                enabled: true,
                 failure_threshold: 2,
                 ..Default::default()
             },
@@ -194,7 +193,6 @@ mod tests {
     fn a_throttle_phrase_without_a_co_signal_trips_the_breaker() {
         let config = FailsafeConfig {
             circuit_breaker: CircuitBreakerConfig {
-                enabled: true,
                 failure_threshold: 2,
                 ..Default::default()
             },
@@ -250,7 +248,6 @@ mod tests {
     fn an_open_breaker_refuses_admit_without_spending_the_token() {
         let mut config = FailsafeConfig {
             circuit_breaker: CircuitBreakerConfig {
-                enabled: true,
                 failure_threshold: 1,
                 reset_timeout: Duration::from_secs(3600),
                 ..Default::default()

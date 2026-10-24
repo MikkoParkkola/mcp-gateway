@@ -80,7 +80,6 @@ fn assert_only_the_500_trips_the_breaker(errors: &[String]) {
 
     let failsafe_config = FailsafeConfig {
         circuit_breaker: CircuitBreakerConfig {
-            enabled: true,
             failure_threshold: 1,
             ..Default::default()
         },

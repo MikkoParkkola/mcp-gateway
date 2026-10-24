@@ -224,7 +224,7 @@ fn limited_backend() -> crate::backend::Backend {
     failsafe.rate_limit.enabled = true;
     failsafe.rate_limit.requests_per_second = 1;
     failsafe.rate_limit.burst_size = 1;
-    failsafe.retry.enabled = false;
+    failsafe.retry.max_attempts = 1; // One attempt: `retry.enabled` is retired (MIK-8783).
     let config = crate::config::BackendConfig {
         transport: crate::config::TransportConfig::Http {
             // Port 0 fails at connect on every platform at once. A closed port

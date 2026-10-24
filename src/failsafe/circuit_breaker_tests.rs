@@ -4,9 +4,8 @@
 
 use super::*;
 
-fn make_config(enabled: bool, failure_threshold: u32) -> CircuitBreakerConfig {
+fn make_config(failure_threshold: u32) -> CircuitBreakerConfig {
     CircuitBreakerConfig {
-        enabled,
         failure_threshold,
         success_threshold: 2,
         reset_timeout: Duration::from_secs(30),
@@ -43,7 +42,7 @@ fn circuit_state_serialises_as_its_label() {
 #[test]
 fn reset_closes_an_open_breaker_and_allows_requests() {
     // GIVEN: a breaker tripped open by hitting the failure threshold
-    let cb = CircuitBreaker::new("test", &make_config(true, 3));
+    let cb = CircuitBreaker::new("test", &make_config(3));
     for _ in 0..3 {
         cb.record_failure("test", Duration::ZERO);
     }
@@ -63,7 +62,7 @@ fn reset_closes_an_open_breaker_and_allows_requests() {
 #[test]
 fn reset_in_closed_state_clears_accumulated_failures() {
     // GIVEN: a closed breaker with a half-accumulated failure window
-    let cb = CircuitBreaker::new("test", &make_config(true, 5));
+    let cb = CircuitBreaker::new("test", &make_config(5));
     cb.record_failure("test", Duration::ZERO);
     cb.record_failure("test", Duration::ZERO);
     assert_eq!(cb.stats().current_failures, 2);
@@ -77,16 +76,8 @@ fn reset_in_closed_state_clears_accumulated_failures() {
 }
 
 #[test]
-fn reset_on_disabled_breaker_is_a_noop() {
-    let cb = CircuitBreaker::new("test", &make_config(false, 3));
-    cb.reset();
-    assert_eq!(cb.state(), CircuitState::Closed);
-    assert!(cb.can_proceed());
-}
-
-#[test]
 fn stats_initial_state_is_closed_with_zero_trips() {
-    let cb = CircuitBreaker::new("test", &make_config(true, 3));
+    let cb = CircuitBreaker::new("test", &make_config(3));
     let s = cb.stats();
     assert_eq!(s.state, CircuitState::Closed);
     assert_eq!(s.trips_count, 0);
@@ -101,7 +92,6 @@ fn stats_trips_count_increments_on_each_open() {
     // Use zero reset_timeout so the circuit transitions to HalfOpen immediately
     // on the next can_proceed() call, allowing us to test the full trip cycle.
     let cfg = CircuitBreakerConfig {
-        enabled: true,
         failure_threshold: 1,
         success_threshold: 1,
         reset_timeout: Duration::ZERO,
@@ -136,7 +126,6 @@ fn stats_trips_count_increments_on_each_open() {
 #[test]
 fn stats_retry_after_ms_is_nonzero_when_open() {
     let cfg = CircuitBreakerConfig {
-        enabled: true,
         failure_threshold: 1,
         success_threshold: 1,
         reset_timeout: Duration::from_secs(60),
@@ -157,7 +146,7 @@ fn stats_retry_after_ms_is_nonzero_when_open() {
 
 #[test]
 fn stats_retry_after_ms_is_zero_when_closed() {
-    let cb = CircuitBreaker::new("test", &make_config(true, 3));
+    let cb = CircuitBreaker::new("test", &make_config(3));
     assert_eq!(cb.stats().retry_after_ms, 0);
 }
 
@@ -165,14 +154,14 @@ fn stats_retry_after_ms_is_zero_when_closed() {
 
 #[test]
 fn circuit_starts_closed_and_allows_requests() {
-    let cb = CircuitBreaker::new("test", &make_config(true, 3));
+    let cb = CircuitBreaker::new("test", &make_config(3));
     assert!(cb.can_proceed());
     assert_eq!(cb.state(), CircuitState::Closed);
 }
 
 #[test]
 fn circuit_opens_after_failure_threshold_reached() {
-    let cb = CircuitBreaker::new("test", &make_config(true, 3));
+    let cb = CircuitBreaker::new("test", &make_config(3));
     cb.record_failure("test", Duration::ZERO);
     cb.record_failure("test", Duration::ZERO);
     assert_eq!(cb.state(), CircuitState::Closed);
@@ -185,7 +174,7 @@ fn circuit_opens_after_failure_threshold_reached() {
 fn breaker_open_event() {
     // MIK-6119 AC.1: tripping the breaker captures a structured open-event
     // with all four fields, retrievable without parsing logs.
-    let cb = CircuitBreaker::new("hebb", &make_config(true, 3));
+    let cb = CircuitBreaker::new("hebb", &make_config(3));
     assert!(cb.last_open_event().is_none(), "no event before any trip");
     cb.record_failure("connect timeout", Duration::from_millis(250));
     cb.record_failure("connect timeout", Duration::from_millis(250));
@@ -201,14 +190,6 @@ fn breaker_open_event() {
     assert_eq!(ev.reason, "connect timeout");
     assert_eq!(ev.latency_ms, 250);
     assert_eq!(ev.consecutive_fail_count, 3);
-}
-
-#[test]
-fn disabled_circuit_always_allows_requests() {
-    let cb = CircuitBreaker::new("test", &make_config(false, 1));
-    cb.record_failure("test", Duration::ZERO);
-    assert!(cb.can_proceed());
-    assert_eq!(cb.state(), CircuitState::Closed);
 }
 
 // ── build_circuit_breaker_error ───────────────────────────────────────

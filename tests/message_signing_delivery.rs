@@ -10,7 +10,7 @@
     reason = "test code reads the host clock (MIK-8202 AC.14)"
 )]
 #[path = "common/signing_gateway.rs"]
-mod signing_gateway;
+pub mod signing_gateway;
 // `common/signing_gateway.rs` names `crate::yaml`, so every crate that
 // includes it declares the module once, here.
 #[path = "common/yaml.rs"]

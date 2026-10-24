@@ -356,6 +356,14 @@ fn outgoing_chain_within_max_links() {
     assert_eq!(links.len(), 7);
 }
 
+/// MIK-8783.AUTO.3 (T2.7): the link limit is the constant 8, not a setting.
+/// A literal, so moving the constant fails here rather than drifting with
+/// every row that reads it.
+#[test]
+fn the_chain_link_limit_is_eight() {
+    assert_eq!(MAX_CHAIN_LINKS, 8);
+}
+
 /// P1 (inc3 R3): a client may verify a chain of exactly `max_links`; a
 /// forwarding gateway needs room for its own link.
 #[test]

@@ -18,7 +18,6 @@ use crate::clock::test_clock;
 #[test]
 fn a_trip_on_a_dark_clock_has_no_trip_time() {
     let config = CircuitBreakerConfig {
-        enabled: true,
         failure_threshold: 1,
         success_threshold: 1,
         reset_timeout: Duration::from_secs(30),

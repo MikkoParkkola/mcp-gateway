@@ -38,6 +38,7 @@ fn make_cli(port: Option<u16>, host: Option<String>, no_meta_mcp: bool) -> Cli {
         log_level: "info".to_string(),
         log_format: None,
         no_meta_mcp,
+        protocol_revision_window: None,
         command: None,
     }
 }
@@ -503,6 +504,7 @@ fn make_cli_with_config(config: Option<std::path::PathBuf>) -> Cli {
         log_level: "info".to_string(),
         log_format: None,
         no_meta_mcp: false,
+        protocol_revision_window: None,
         command: None,
     }
 }

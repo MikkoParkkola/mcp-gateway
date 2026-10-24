@@ -34,10 +34,6 @@ streaming:
   enabled: true
   auto_subscribe: []
 failsafe:
-  circuit_breaker:
-    enabled: true
-  retry:
-    enabled: true
   rate_limit:
     enabled: true
   health_check:
@@ -85,8 +81,6 @@ capabilities:
   # Capability calls ignore HTTP(S)_PROXY. To send them through a proxy, name
   # it here; the proxy then resolves (and must police) destination names.
   # egress_proxy: http://proxy.internal:3128
-cache:
-  enabled: true
 playbooks:
   enabled: false
   directories:

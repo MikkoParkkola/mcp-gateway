@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! U1 v2 design row 19: an HTTP `serve` with `server.protocol_revision_window:
-//! record` that serves a request and is then killed (`SIGKILL`) leaves its segment in
+//! U1 v2 design row 19: an HTTP `serve` with `--protocol-revision-window
+//! record` (the hidden flag that replaced the config key, MIK-8783) that
+//! serves a request and is then killed (`SIGKILL`) leaves its segment in
 //! the window, unclean, so the window blocks. It never leaves no segment: the
 //! segment is opened before the listener serves, not at the first periodic
 //! save, so a crash cannot hide a process that served traffic.
@@ -34,7 +35,7 @@ fn a_record_gateway_killed_after_serving_leaves_an_unclean_segment() {
     let config = dir.path().join("gateway.yaml");
     let log = dir.path().join("gateway.log");
     let text = format!(
-        "server:\n  host: 127.0.0.1\n  port: {}\n  protocol_revision_window: record\nauth:\n  enabled: false\ntasks:\n  store_dir: {}\n",
+        "server:\n  host: 127.0.0.1\n  port: {}\nauth:\n  enabled: false\ntasks:\n  store_dir: {}\n",
         gateway_bin::ANY_PORT,
         dir.path().join("tasks").display()
     );
@@ -46,6 +47,7 @@ fn a_record_gateway_killed_after_serving_leaves_an_unclean_segment() {
         .current_dir(dir.path())
         .arg("--config")
         .arg(&config)
+        .args(["--protocol-revision-window", "record"])
         .stdin(Stdio::null())
         .stdout(Stdio::from(out))
         .stderr(Stdio::from(err))

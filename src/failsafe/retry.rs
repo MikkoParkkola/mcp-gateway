@@ -31,7 +31,8 @@ impl RetryPolicy {
     #[must_use]
     pub fn new(config: &RetryConfig) -> Self {
         Self {
-            enabled: config.enabled,
+            // Cleared only per call, when `resend_permission` denies a resend.
+            enabled: true,
             max_attempts: config.max_attempts,
             initial_backoff: config.initial_backoff,
             max_backoff: config.max_backoff,

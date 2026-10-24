@@ -110,15 +110,15 @@ fn backend_for(url: &str) -> Backend {
     };
     let failsafe = FailsafeConfig {
         circuit_breaker: CircuitBreakerConfig {
-            enabled: true,
             ..CircuitBreakerConfig::default()
         },
         // Retry would re-drive the same 429 through the mock several times
         // per call, which does not change what is being proven (the failsafe
         // recording layer runs once on the final dispatch result) and only
-        // adds latency to the test.
+        // adds latency to the test. One attempt is the surviving hatch now
+        // that `retry.enabled` is retired (MIK-8783).
         retry: RetryConfig {
-            enabled: false,
+            max_attempts: 1,
             ..RetryConfig::default()
         },
         ..FailsafeConfig::default()

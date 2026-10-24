@@ -218,7 +218,9 @@ pub fn write_config(
     config.server.port = 0;
     config.server.modern_protocol = true;
     config.capabilities.enabled = false;
-    config.cache.enabled = false;
+    // The response cache is always on (MIK-8783); a zero TTL expires an
+    // entry as soon as any time has passed, so each call reaches the peer.
+    config.cache.default_ttl = std::time::Duration::ZERO;
     config.tasks.store_dir = store_dir.display().to_string();
     config.tasks.default_ttl_ms = 3_600_000;
     config.tasks.expiry_interval = Duration::from_secs(3_600);

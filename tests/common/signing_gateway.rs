@@ -112,6 +112,19 @@ impl BackendFixture {
         *self.result.write().expect("backend result") = result;
     }
 
+    /// The fixture with its tool not marked read-only. The response cache is
+    /// always on (MIK-8783) and stores only read-only tools, so this is the
+    /// fixture for rows whose subject is that every call reaches the backend.
+    pub async fn start_uncacheable(result: Value) -> Self {
+        let fixture = Self::start(result).await;
+        fixture.set_tools(json!({"tools": [{
+            "name": TOOL,
+            "description": "returns the configured test result",
+            "inputSchema": {"type": "object"}
+        }]}));
+        fixture
+    }
+
     pub fn set_tools(&self, tools: Value) {
         *self.tools.write().expect("backend tools") = tools;
     }
@@ -126,7 +139,6 @@ impl Drop for BackendFixture {
 pub fn fixture_config(backend_url: &str) -> Value {
     json!({
         "server": {"host": "127.0.0.1", "modern_protocol": true},
-        "cache": {"enabled": false},
         // Relative to the child's own directory. `HOME` cannot isolate it on
         // Windows (`dirs::home_dir` ignores it), so parallel fixtures would
         // fight over the runner profile's task store.

@@ -13,7 +13,6 @@ fn config(signing_key: &str, key_id: &str) -> SignatureChainConfig {
         signing_key: signing_key.to_owned(),
         key_id: key_id.to_owned(),
         emit: ChainEmit::OnRequest,
-        max_links: 8,
         resolved_identity: None,
     }
 }

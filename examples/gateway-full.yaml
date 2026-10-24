@@ -108,11 +108,9 @@ streaming:
 # --- Failsafes ---
 
 failsafe:
-  circuit_breaker:
-    enabled: true
-
-  retry:
-    enabled: true
+  # The circuit breaker and retry are always on (retry only for tools whose
+  # annotations permit a resend); tune them with failure_threshold,
+  # max_attempts and the backoff keys.
 
   rate_limit:
     enabled: true
@@ -142,10 +140,9 @@ error_budget:
 
 # --- Response Cache ---
 
-cache:
-  enabled: true                   # Enable response caching
-                                  # Errors (isError: true) are never cached, so a
-                                  # transient refusal is not replayed for the TTL.
+# Always on, with nothing to configure: only results of tools marked read-only
+# are cached, and errors (isError: true) never are, so a transient refusal is
+# not replayed.
 
 # --- Capabilities (REST API integration) ---
 

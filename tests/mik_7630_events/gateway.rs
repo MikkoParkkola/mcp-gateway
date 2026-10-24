@@ -78,7 +78,6 @@ pub fn config(root: &Path, events: &Value) -> Value {
     }
     json!({
         "server": {"host": "127.0.0.1", "modern_protocol": true, "port": 0},
-        "cache": {"enabled": false},
         "tasks": {"store_dir": "tasks"},
         "auth": {"enabled": true, "api_keys": [
             key("alice", ALICE, &["hooks"]),

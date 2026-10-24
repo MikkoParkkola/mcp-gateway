@@ -29,6 +29,12 @@ const MAX_GW_BYTES: usize = 64;
 const MAX_NONCE_BYTES: usize = 256;
 const MAX_LINK_BYTES: usize = 1024;
 const MAX_CHAIN_BYTES: usize = 16 * 1024;
+/// Links accepted or produced in one chain. A constant, not a setting
+/// (MIK-8783): every hop must agree on it, or a chain one gateway builds is
+/// refused by the next. 8 links of at most `MAX_LINK_BYTES` fit inside
+/// `MAX_CHAIN_BYTES`, so the link count binds first and the byte cap is the
+/// backstop.
+pub(crate) const MAX_CHAIN_LINKS: usize = 8;
 const MAX_FUTURE_SKEW_SECS: u64 = 60;
 
 /// Upstream verification state recorded by a link's signer.
@@ -126,7 +132,7 @@ pub(crate) struct ChainPolicy<'a> {
     pub(crate) signer: &'a str,
     /// `message_signing.replay_window`, seconds.
     pub(crate) replay_window: u64,
-    /// `security.signature_chain.max_links`; see [`ChainPurpose`].
+    /// [`MAX_CHAIN_LINKS`] in production; see [`ChainPurpose`].
     pub(crate) max_links: usize,
     /// Forwarding or terminal verification.
     pub(crate) purpose: ChainPurpose,

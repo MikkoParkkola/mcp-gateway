@@ -127,44 +127,21 @@ async fn nonce_scope_outside_the_claim() {
     assert_eq!(chain_len(&post(&d, &path, &body).await), 0);
 }
 
-/// P2b: the link count. `max_links: 3` and an upstream chain of 3 leaves D
-/// no room: -32001. A 2-link upstream appends to exactly 3 and verifies.
+/// P2b: the link count, a constant of 8 every hop agrees on (MIK-8783). An
+/// upstream chain of 8 leaves D no room: -32001. A 7-link upstream appends to
+/// exactly 8 and verifies. The 16 KiB byte cap cannot bind within 8 links of
+/// at most 1 KiB, so it is covered in-crate with a raised link limit
+/// (`oversized_chain_refused_before_verify`).
 #[tokio::test]
 async fn link_count_cap_on_append() {
     for route in ROUTES {
-        let upstream = FakeUpstream::start(Mode::Padded { links: 3, pad: 8 }).await;
-        let mut config = d_config(&upstream.url, "verify", "on_request");
-        config["security"]["signature_chain"]["max_links"] = json!(3);
+        let upstream = FakeUpstream::start(Mode::Padded { links: 8, pad: 8 }).await;
+        let config = d_config(&upstream.url, "verify", "on_request");
         let d = HttpGateway::start(config).await;
         assert_refused(&call(&d, route, Some("n-p")).await, "Size");
-        upstream.set_mode(Mode::Padded { links: 2, pad: 8 });
+        upstream.set_mode(Mode::Padded { links: 7, pad: 8 });
         let response = call(&d, route, Some("n-p2")).await;
-        assert_eq!(chain_len(&response), 3, "{route:?}: {response}");
-    }
-}
-
-/// P2: the 16 KiB cap is enforced after the append, not only on receipt.
-#[tokio::test]
-async fn byte_cap_after_append() {
-    for route in ROUTES {
-        // 24 links with 240-byte nonces (the cap is 256) = ~15,985 bytes
-        // received (< 16,384); D's link with a 200-byte client nonce adds
-        // ~640, crossing the cap.
-        let upstream = FakeUpstream::start(Mode::Padded {
-            links: 24,
-            pad: 240,
-        })
-        .await;
-        let mut config = d_config(&upstream.url, "verify", "on_request");
-        config["security"]["signature_chain"]["max_links"] = json!(32);
-        let d = HttpGateway::start(config).await;
-        let long_nonce = "n".repeat(200);
-        assert_refused(&call(&d, route, Some(&long_nonce)).await, "Size");
-        upstream.set_mode(Mode::Padded { links: 4, pad: 240 });
-        assert!(
-            chain_len(&call(&d, route, Some("n-fits")).await) == 5,
-            "{route:?}"
-        );
+        assert_eq!(chain_len(&response), 8, "{route:?}: {response}");
     }
 }
 

@@ -44,12 +44,11 @@ pub struct FailsafeConfig {
     pub health_check: HealthCheckConfig,
 }
 
-/// Circuit breaker configuration.
+/// Circuit breaker configuration. The breaker is always on (MIK-8783); for
+/// `auth.client_circuit_breaker`, the section's presence is the switch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CircuitBreakerConfig {
-    /// Enable circuit breaker.
-    pub enabled: bool,
     /// Failure threshold before opening.
     pub failure_threshold: u32,
     /// Success threshold to close.
@@ -62,7 +61,6 @@ pub struct CircuitBreakerConfig {
 impl Default for CircuitBreakerConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
             failure_threshold: DEFAULT_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
             success_threshold: DEFAULT_CIRCUIT_BREAKER_SUCCESS_THRESHOLD,
             reset_timeout: Duration::from_secs(DEFAULT_CIRCUIT_BREAKER_RESET_TIMEOUT_SECS),
@@ -70,12 +68,11 @@ impl Default for CircuitBreakerConfig {
     }
 }
 
-/// Retry configuration.
+/// Retry configuration. Retry is always on for calls the resend annotations
+/// permit (ADR-012, MIK-8783); `max_attempts: 1` means one attempt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RetryConfig {
-    /// Enable retries.
-    pub enabled: bool,
     /// Maximum number of ATTEMPTS, counting the first one.
     ///
     /// `3` means three calls: the original plus two retries. This is what
@@ -99,7 +96,6 @@ pub struct RetryConfig {
 impl Default for RetryConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
             max_attempts: DEFAULT_RETRY_MAX_ATTEMPTS,
             initial_backoff: Duration::from_millis(DEFAULT_RETRY_INITIAL_BACKOFF_MS),
             max_backoff: Duration::from_secs(DEFAULT_RETRY_MAX_BACKOFF_SECS),

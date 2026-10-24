@@ -22,7 +22,7 @@ const THRESHOLD: u32 = 2;
 fn failsafe() -> FailsafeConfig {
     let mut config = FailsafeConfig::default();
     config.circuit_breaker.failure_threshold = THRESHOLD;
-    config.retry.enabled = false;
+    config.retry.max_attempts = 1; // One attempt: `retry.enabled` is retired (MIK-8783).
     config
 }
 

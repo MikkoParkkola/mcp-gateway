@@ -29,13 +29,12 @@ pub enum ChainMode {
     Require,
 }
 
-const fn default_chain_max_links() -> usize {
-    8
-}
-
 /// `security.signature_chain`: Ed25519 chain identity and emission policy.
+///
+/// No serde refusal of extra keys here: the strict-keys pass refuses a
+/// misspelled key by its full path, as everywhere else, and lets the retired
+/// `max_links` (MIK-8783) load with a warning instead of failing.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct SignatureChainConfig {
     /// Secret reference resolving to a base64 32-byte Ed25519 seed.
     pub signing_key: String,
@@ -44,9 +43,6 @@ pub struct SignatureChainConfig {
     /// Emission mode.
     #[serde(default)]
     pub emit: ChainEmit,
-    /// Maximum links accepted or produced in one chain.
-    #[serde(default = "default_chain_max_links")]
-    pub max_links: usize,
     /// SHA-256 of the resolved seed, set when the config loads (off the async
     /// worker) so reload compares key identities with no file I/O. Never the
     /// seed itself, never serialized.
@@ -61,7 +57,6 @@ impl std::fmt::Debug for SignatureChainConfig {
             .field("signing_key", &"<redacted>")
             .field("key_id", &self.key_id)
             .field("emit", &self.emit)
-            .field("max_links", &self.max_links)
             .field(
                 "resolved_identity",
                 &self.resolved_identity.map(|_| "<recorded>"),
@@ -123,10 +118,6 @@ impl SignatureChainConfig {
         };
         if self.key_id.is_empty() || self.key_id.len() > 64 {
             return Err(invalid("key_id", "must be 1 to 64 bytes"));
-        }
-        // An origin link is itself one link, so zero could never be honoured.
-        if self.max_links == 0 {
-            return Err(invalid("max_links", "must be at least 1"));
         }
         let seed = crate::config::secret_ref::SecretRef::parse(&self.signing_key)
             .resolve("security.signature_chain.signing_key", overlay)?;

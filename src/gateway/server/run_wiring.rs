@@ -34,15 +34,13 @@ impl Gateway {
             );
         }
         info!(target: RUN_TARGET, "Usage statistics tracking enabled");
-        if self.config.cache.enabled {
-            info!(
+        info!(
             target: RUN_TARGET,
-                enabled = true,
-                default_ttl = ?self.config.cache.default_ttl,
-                max_entries = self.config.cache.max_entries,
-                "Response cache initialized"
-            );
-        }
+            enabled = true,
+            default_ttl = ?self.config.cache.default_ttl,
+            max_entries = self.config.cache.max_entries,
+            "Response cache initialized"
+        );
         if !self.config.routing_profiles.is_empty() {
             info!(
             target: RUN_TARGET,

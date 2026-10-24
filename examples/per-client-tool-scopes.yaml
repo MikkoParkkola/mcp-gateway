@@ -18,8 +18,8 @@ auth:
   # Optional dispatch-layer circuit breaker keyed by authenticated client name.
   # Identity is resolved from bearer/API-key auth; forwarded headers are not trusted.
   # Per-client rate_limit below still enforces request throttling.
-  client_circuit_breaker:
-    enabled: true
+  # The section's presence turns it on; `{}` takes the default thresholds.
+  client_circuit_breaker: {}
 
   # API keys with different tool access levels. Each variable holds the
   # key's digest, never the key: printf %s "$KEY" | mcp-gateway hash-key

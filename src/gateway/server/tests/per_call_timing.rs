@@ -122,7 +122,9 @@ async fn bench_state() -> (Arc<crate::gateway::router::AppState>, tempfile::Temp
     let (state, store) = super::invoke_argument_copies::state().await;
     let mut failsafe = crate::config::FailsafeConfig::default();
     failsafe.rate_limit.enabled = false;
-    failsafe.circuit_breaker.enabled = false;
+    // The breaker is always on (MIK-8783); a threshold the bench cannot reach
+    // keeps it out of the timing.
+    failsafe.circuit_breaker.failure_threshold = u32::MAX;
     let backend = Arc::new(crate::backend::Backend::new(
         "bench",
         crate::config::BackendConfig::default(),

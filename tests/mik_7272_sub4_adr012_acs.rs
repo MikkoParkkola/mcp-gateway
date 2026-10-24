@@ -202,7 +202,7 @@ async fn start_mock(fault: Fault) -> (String, Arc<Mutex<Mock>>) {
 fn failsafe() -> FailsafeConfig {
     let mut config = FailsafeConfig::default();
     assert!(
-        config.retry.enabled && config.retry.max_attempts > 1,
+        config.retry.max_attempts > 1,
         "the resend rows need the shipped default to permit a resend, or they \
          pass without exercising anything"
     );

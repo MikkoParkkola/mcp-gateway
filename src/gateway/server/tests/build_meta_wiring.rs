@@ -175,7 +175,6 @@ async fn the_response_contract_reaches_the_meta_mcp_in_observe_mode() {
 async fn an_unbounded_response_cache_is_installed() {
     let _log = info_logging();
     let mut config = Config::default();
-    config.cache.enabled = true;
     config.cache.max_entries = 0;
 
     assert!(
@@ -236,5 +235,19 @@ async fn configured_identity_grants_reach_the_meta_mcp() {
         meta.identity_grants.read().len(),
         1,
         "the configured grant must be loaded"
+    );
+}
+
+/// MIK-8783.AUTO.1 (T2.2): `cache.enabled` is retired. A config that still
+/// says `false` gets the response cache anyway; what it stores stays gated by
+/// the read-only annotations.
+#[tokio::test]
+async fn a_retired_cache_off_switch_still_installs_the_cache() {
+    let _log = info_logging();
+    let config: Config = serde_json::from_value(json!({ "cache": { "enabled": false } }))
+        .expect("a config with the retired key still parses");
+    assert!(
+        built(config).await.cache.is_some(),
+        "the response cache is always built"
     );
 }
