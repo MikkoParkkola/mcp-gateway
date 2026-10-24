@@ -246,8 +246,8 @@ async fn verify_wire(wire: &str, key: &str, request_id: &str, nonce: &str) {
 
 async fn backends() -> (BackendFixture, BackendFixture) {
     (
-        BackendFixture::start(backend_result(A_SENTINEL)).await,
-        BackendFixture::start(backend_result(B_SENTINEL)).await,
+        BackendFixture::start_uncacheable(backend_result(A_SENTINEL)).await,
+        BackendFixture::start_uncacheable(backend_result(B_SENTINEL)).await,
     )
 }
 

@@ -177,7 +177,7 @@ impl StdioGateway {
 
 #[tokio::test]
 async fn stdio_enabled_nonce_replay_then_fresh_batch_is_signed() {
-    let backend = BackendFixture::start(backend_result()).await;
+    let backend = BackendFixture::start_uncacheable(backend_result()).await;
     let mut gateway = StdioGateway::start(fixture_config(&backend.url)).await;
     let first_id = "stdio-echo-1";
     let first_nonce = "stdio-nonce-replay-1";
@@ -238,7 +238,7 @@ async fn stdio_enabled_nonce_replay_then_fresh_batch_is_signed() {
 
 #[tokio::test]
 async fn stdio_enabled_optional_nonce_omitted_is_signed() {
-    let backend = BackendFixture::start(backend_result()).await;
+    let backend = BackendFixture::start_uncacheable(backend_result()).await;
     let mut config = fixture_config(&backend.url);
     config["security"]["message_signing"]["require_nonce"] = json!(false);
     let mut gateway = StdioGateway::start(config).await;
@@ -406,7 +406,7 @@ fn assert_child_profile(dir: Option<&PathBuf>, prior: &ProfileStamps, pid: u32) 
 
 #[tokio::test]
 async fn stdio_followup_policy_error_does_not_consume_nonce() {
-    let backend = BackendFixture::start(backend_result()).await;
+    let backend = BackendFixture::start_uncacheable(backend_result()).await;
     let mut gateway = StdioGateway::start(fixture_config(&backend.url)).await;
     let nonce = json!("stdio-nonce-policy-refuse");
     let mut refused = invoke(json!("stdio-policy-bad-tool"), nonce.clone(), json!({}));
@@ -442,7 +442,7 @@ async fn stdio_followup_policy_error_does_not_consume_nonce() {
 
 #[tokio::test]
 async fn stdio_followup_client_meta_precedence_is_visible_at_backend() {
-    let backend = BackendFixture::start(backend_result()).await;
+    let backend = BackendFixture::start_uncacheable(backend_result()).await;
     let mut gateway = StdioGateway::start(fixture_config(&backend.url)).await;
     let payload = json!({"echo": "metadata-payload"});
     let trace_a = "00-11111111111111111111111111111111-2222222222222222-01";

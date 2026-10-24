@@ -59,7 +59,6 @@ fn backend_result() -> Value {
 /// The inner gateway: `standard`, no signing, one HTTP backend.
 fn inner_config(directory: &std::path::Path, backend_url: &str) -> std::path::PathBuf {
     let config = json!({
-        "cache": {"enabled": false},
         "tasks": {"store_dir": directory.join("tasks")},
         "backends": {(BACKEND): {"http_url": backend_url, "streamable_http": true}},
         "security": {"trust_configured_backends": true}
@@ -83,7 +82,6 @@ fn outer_config(inner: &std::path::Path, inner_home: &std::path::Path) -> Value 
     );
     json!({
         "server": {"host": "127.0.0.1", "modern_protocol": true},
-        "cache": {"enabled": false},
         "auth": {
             "enabled": true,
             "api_keys": [{

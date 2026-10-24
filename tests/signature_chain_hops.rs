@@ -56,7 +56,6 @@ pub const MCP_ROUTES: [Route; 2] = [Route::Invoke, Route::Surfaced];
 pub fn d_config(upstream_url: &str, mode: &str, emit: &str) -> Value {
     json!({
         "server": {"host": "127.0.0.1", "modern_protocol": true},
-        "cache": {"enabled": false},
         "tasks": {"store_dir": "tasks"},
         "meta_mcp": {"surfaced_tools": [{"server": UP, "tool": TOOL}]},
         "backends": {(UP): {"http_url": upstream_url, "streamable_http": true,
