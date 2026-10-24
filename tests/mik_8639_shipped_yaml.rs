@@ -3,8 +3,9 @@
 //! MIK-8639 DEPTH.4: every shipped YAML file the backend accepts, the guarded
 //! seam accepts too.
 //!
-//! Passes on the skeleton by design (its guard accepts everything) and pins
-//! the no-false-refusal contract the implementation must keep green.
+//! The backend's verdicts are recorded per file in
+//! `tests/fixtures/mik_8425_yaml/shipped.tsv` (MIK-8425 MIG.2), so the
+//! no-false-refusal contract outlives the parser it was measured against.
 
 #[path = "common/yaml.rs"]
 mod yaml;
@@ -52,14 +53,8 @@ fn package_root() -> PathBuf {
     std::env::current_dir().expect("the test's working directory")
 }
 
-#[test]
-fn shipped_yaml_accepted_by_backend_stays_accepted() {
-    if is_packaged_crate(&package_root()) {
-        eprintln!(
-            "mik-8639 shipped-yaml: skipped in the packaged crate: the repo YAML it checks is not published; the full-checkout CI job runs it"
-        );
-        return;
-    }
+/// Every shipped YAML file as a sorted repo-relative path.
+fn shipped_files() -> Vec<String> {
     let mut files = Vec::new();
     for root in [
         "capabilities",
@@ -78,51 +73,137 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
     for file in ["gateway.example.yaml", "smithery.yaml"] {
         files.push(PathBuf::from(file));
     }
-    assert!(!files.is_empty(), "expected to find shipped YAML files");
-    let mut single = 0;
-    let mut multi = 0;
-    let mut refused = Vec::new();
-    for path in &files {
-        let content = match std::fs::read_to_string(path) {
-            Ok(content) => content,
-            Err(err) => panic!("shipped file {} unreadable: {err}", path.display()),
+    let mut paths: Vec<String> = files
+        .iter()
+        .map(|path| {
+            path.components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .collect();
+    paths.sort();
+    paths
+}
+
+/// The backend's verdict on one file: `single` when it reads as one
+/// document, `stream <n>` when it reads as `n` documents, else `refused`.
+/// Recorded with serde_yaml before the MIK-8425 swap; the comparison below
+/// holds the guarded seam to it.
+fn backend_reading(content: &str) -> String {
+    if serde_yaml::from_str::<serde_yaml::Value>(content).is_ok() {
+        return "single".to_owned();
+    }
+    // serde_yaml's stream can keep yielding after a malformed document,
+    // so stop at the first error (collecting it unbounded aborted at 77 GB).
+    let mut count = 0usize;
+    for document in serde_yaml::Deserializer::from_str(content) {
+        if serde_yaml::Value::deserialize(document).is_err() {
+            return "refused".to_owned();
+        }
+        count += 1;
+    }
+    if count == 0 {
+        "refused".to_owned()
+    } else {
+        format!("stream {count}")
+    }
+}
+
+fn read(path: &str) -> String {
+    std::fs::read_to_string(path)
+        .unwrap_or_else(|err| panic!("shipped file {path} unreadable: {err}"))
+}
+
+/// Every walked file has a row recorded for its current bytes, and every
+/// file the backend accepted the seam accepts with the same document count.
+/// A new, edited or removed file fails until the golden is re-recorded, so
+/// no file leaves the comparison unseen.
+#[test]
+fn shipped_yaml_accepted_by_backend_stays_accepted() {
+    if is_packaged_crate(&package_root()) {
+        eprintln!(
+            "mik-8639 shipped-yaml: skipped in the packaged crate: the repo YAML it checks is not published; the full-checkout CI job runs it"
+        );
+        return;
+    }
+    let golden = std::fs::read_to_string(GOLDEN).expect("the shipped-YAML golden");
+    let mut recorded = std::collections::BTreeMap::new();
+    for row in golden.lines() {
+        let cols: Vec<&str> = row.split('\t').collect();
+        let [path, sha, reading] = cols[..] else {
+            panic!("{GOLDEN}: malformed row {row:?}");
         };
-        if serde_yaml::from_str::<serde_yaml::Value>(&content).is_ok() {
-            single += 1;
-            if yaml::from_str::<yaml::Value>(&content).is_err() {
-                refused.push(path.clone());
-            }
+        recorded.insert(path.to_owned(), (sha.to_owned(), reading.to_owned()));
+    }
+    let files = shipped_files();
+    assert!(!files.is_empty(), "expected to find shipped YAML files");
+    let mut stale = Vec::new();
+    let mut refused = Vec::new();
+    let mut accepted = 0usize;
+    for path in &files {
+        let content = read(path);
+        let Some((sha, reading)) = recorded.remove(path) else {
+            stale.push(format!("{path} (no row)"));
+            continue;
+        };
+        if sha != digest(&content) {
+            stale.push(format!("{path} (edited since recording)"));
             continue;
         }
-        // serde_yaml's stream can keep yielding after a malformed document,
-        // so stop at the first error (collecting it unbounded aborted at 77 GB).
-        let mut backend = Vec::new();
-        for document in serde_yaml::Deserializer::from_str(&content) {
-            let read = serde_yaml::Value::deserialize(document);
-            let failed = read.is_err();
-            backend.push(read);
-            if failed {
-                break;
-            }
-        }
-        if !backend.is_empty() && backend.iter().all(std::result::Result::is_ok) {
-            multi += 1;
+        let ok = if reading == "single" {
+            yaml::from_str::<yaml::Value>(&content).is_ok()
+        } else if let Some(count) = reading.strip_prefix("stream ") {
             let guarded: Vec<_> = yaml::documents(&content).collect();
-            let ok =
-                guarded.len() == backend.len() && guarded.iter().all(std::result::Result::is_ok);
-            if !ok {
-                refused.push(path.clone());
-            }
+            count.parse() == Ok(guarded.len()) && guarded.iter().all(std::result::Result::is_ok)
+        } else {
+            continue;
+        };
+        accepted += 1;
+        if !ok {
+            refused.push(path.clone());
         }
     }
+    stale.extend(recorded.keys().map(|path| format!("{path} (gone)")));
+    assert!(
+        stale.is_empty(),
+        "{GOLDEN} is stale; re-record it with record_shipped_yaml_golden: {stale:?}"
+    );
     eprintln!(
-        "mik-8639 shipped-yaml: {single} single-document, {multi} multi-document backend-accepted files, {} refused",
+        "mik-8639 shipped-yaml: {accepted} backend-accepted files of {}, {} refused",
+        files.len(),
         refused.len()
     );
     assert!(
         refused.is_empty(),
         "seam refused shipped files: {refused:?}"
     );
+}
+
+const GOLDEN: &str = "tests/fixtures/mik_8425_yaml/shipped.tsv";
+
+fn digest(content: &str) -> String {
+    use sha2::Digest as _;
+    format!(
+        "sha256:{}",
+        hex::encode(sha2::Sha256::digest(content.as_bytes()))
+    )
+}
+
+/// Prints the golden for review; never part of a normal run.
+#[test]
+#[ignore = "records tests/fixtures/mik_8425_yaml/shipped.tsv; run with --ignored --nocapture"]
+fn record_shipped_yaml_golden() {
+    let mut out = String::new();
+    for path in shipped_files() {
+        let content = read(&path);
+        out.push_str(&format!(
+            "{path}\t{}\t{}\n",
+            digest(&content),
+            backend_reading(&content)
+        ));
+    }
+    print!("----- BEGIN shipped.tsv -----\n{out}----- END shipped.tsv -----\n");
 }
 
 /// The packaged-crate switch both ways. A root with `Cargo.toml.orig` and no
