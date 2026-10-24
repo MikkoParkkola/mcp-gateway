@@ -137,10 +137,11 @@ Evidence for each highlight, file and test: `src/config/mod.rs` and `tests/mik_7
   the client closes stdin (after in-flight calls finish) and every 5 minutes while it runs, as
   the HTTP gateway does. Each save writes its own scratch file, so gateways sharing a data
   directory no longer write one scratch file between them.
-- **A failed release or image-manifest job can be re-run for 14 days, not one.** The build
+- **A failed release or image-manifest job can be re-run for 30 days, not one.** The build
   binaries and image digests handed between jobs expired after a day, so a later re-run
   published a release with no binaries or failed to find the digests. They now last the
-  repository's 14-day artifact retention, and a CI check keeps every such handoff there.
+  repository's 90-day artifact retention, past GitHub's 30-day re-run limit, and a CI check
+  keeps every such handoff there.
 - **The release scope gate refuses a waived criterion that is still marked blocked.** Such a
   row let a release pass while the burnup still listed it as held. A test also pins the
   approved-waiver list to the ledger's waived criteria, so a waiver removed from the ledger

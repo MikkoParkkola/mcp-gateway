@@ -695,8 +695,8 @@ def gate_steps(workflow, job):
 
 
 # `gh api repos/MikkoParkkola/mcp-gateway/actions/permissions/artifact-and-log-retention`
-# reports `days: 14`. upload-artifact clamps `retention-days` to that value.
-HANDOFF_RETENTION_DAYS = 14
+# reports `days: 90`. upload-artifact clamps `retention-days` to that value.
+HANDOFF_RETENTION_DAYS = 90
 
 # The oldest cosign the workflows may install. v2.6.5 fixes GHSA-fx35-mq7g-6g98
 # (verification bypass via a public key in a legacy bundle); v2.6.2 fixed
