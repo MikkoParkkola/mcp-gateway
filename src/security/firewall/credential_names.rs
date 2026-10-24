@@ -73,7 +73,9 @@ fn compact(key: &str) -> String {
 }
 
 /// Words that, directly before a final `token`/`tokens`/`cursor`, name a
-/// pagination or continuation key (`next_page_token`, `$skipToken`).
+/// pagination, continuation or correlation key (`next_page_token`,
+/// `$skipToken`, and MCP's own `progressToken`, which the gateway mints as
+/// `gw-<uuid>` for every forwarded call).
 const PAGINATION: &[&str] = &[
     "page",
     "next",
@@ -89,6 +91,7 @@ const PAGINATION: &[&str] = &[
     "marker",
     "pagination",
     "skip",
+    "progress",
 ];
 
 fn is_pagination(w: &[String]) -> bool {
