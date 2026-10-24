@@ -110,3 +110,36 @@ fn x3_over_the_cap_no_secret_is_left() {
         assert!(!findings.is_empty(), "{doc}");
     }
 }
+
+/// The pieces right of an exempt value and between two of them are kept and
+/// projected too, with one finding per pattern that still redacts.
+#[test]
+fn x4_pieces_after_and_between_exempt_values_still_redact() {
+    let url = serde_json::to_string(&dsn()).expect("encodes");
+    let db = "Credential detected: Database Connection String";
+    let gh = "Credential detected: GitHub OAuth Token";
+    let rows = [
+        // The match starts in an exempt connection-string-shaped value and
+        // runs on over a later dsn: the dsn is still covered after the cut.
+        (
+            format!(r#"{{"next":"{}","dsn":{url}}}"#, cont_url()),
+            format!(r#"{{"next":"{}","dsn":"{MARK}"}}"#, cont_url()),
+            vec![db],
+        ),
+        // Two exempt values around a credential, and one after it.
+        (
+            format!(
+                r#"{{"a":"{CONT}","dsn":{url},"b":"{CONT}","k":"{}"}}"#,
+                gho()
+            ),
+            format!(r#"{{"a":"{CONT}","dsn":"{MARK}","b":"{CONT}","k":"{MARK}"}}"#),
+            vec![db, gh],
+        ),
+    ];
+    for (doc, want, found) in rows {
+        let (out, mut findings) = deliver(&doc);
+        findings.sort();
+        assert_eq!(out, want, "{doc}");
+        assert_eq!(findings, found, "{doc}");
+    }
+}

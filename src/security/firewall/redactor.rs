@@ -314,8 +314,14 @@ impl Redactor {
         for idx in &self.set.matches(text) {
             let found = overlapping_spans(&self.regexes[idx], text);
             // Judged on the matches as found: a piece left after an exempt
-            // value is cut out can start on that value's closing quote.
-            if !found.iter().all(|&(start, _)| starts_in_literal(start)) {
+            // value is cut out can start on that value's closing quote. A
+            // match wholly inside an exempt value is not judged at all, as
+            // before the cut existed; no pattern starts on a quote today, so
+            // this only keeps a future one from redacting a continuation.
+            let judged = |&(start, end): &(usize, usize)| {
+                starts_in_literal(start) || without(&[(start, end)], &exempt_contents).is_empty()
+            };
+            if !found.iter().all(judged) {
                 tracing::debug!(
                     "a credential span starts outside a string literal; redacting the leaf whole"
                 );
