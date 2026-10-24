@@ -207,7 +207,13 @@ fn the_retired_key_and_its_old_overlay_leave_the_window_off() {
             "{how}: not served"
         );
         // A recording gateway opens its segment before it serves, so a
-        // served request with no window file means the window is off.
+        // served request with no window file means the window is off; an
+        // open that missed its startup bound would have said "not durable".
+        assert!(
+            !gw.log().contains("not durable"),
+            "{how}: a recording start was attempted:\n{}",
+            gw.log()
+        );
         assert!(
             gw.window().is_none(),
             "{how}: the window must stay off: {:?}",
@@ -255,8 +261,9 @@ fn wait_for_total(gw: &Gateway, at_least: u64, what: &str) -> u64 {
         }
         assert!(
             started.elapsed() < ARRIVAL,
-            "{what} was never counted: {:?}",
-            gw.window()
+            "{what} was never counted: {:?}\n{}",
+            gw.window(),
+            gw.log()
         );
         std::thread::sleep(Duration::from_millis(200));
     }
