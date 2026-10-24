@@ -50,7 +50,7 @@ impl MetaMcp {
         self.chain_signer = Some(Arc::new(ChainIdentity {
             signer,
             emit,
-            max_links: 8,
+            max_links: crate::security::signature_chain::MAX_CHAIN_LINKS,
             trusted_keys: std::collections::BTreeMap::new(),
             replay_window: 300,
         }));
@@ -98,7 +98,7 @@ pub(crate) type TrustedKeys = std::collections::BTreeMap<
 pub(crate) struct ChainIdentity {
     pub(crate) signer: crate::security::signature_chain::ChainSigner,
     pub(crate) emit: crate::config::ChainEmit,
-    /// `security.signature_chain.max_links`.
+    /// [`crate::security::signature_chain::MAX_CHAIN_LINKS`] in production.
     pub(crate) max_links: usize,
     pub(crate) trusted_keys: TrustedKeys,
     /// `security.message_signing.replay_window`, seconds.

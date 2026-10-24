@@ -74,6 +74,10 @@ done
 ee="$(render --set 'extraEnv[0].name=GITHUB_TOKEN' --set 'extraEnv[0].value=x')" \
   || fail "extraEnv GITHUB_TOKEN refused: $(tail -3 <<<"$ee")"
 grep -qE '^ +- name: GITHUB_TOKEN$' <<<"$ee" || fail "extraEnv GITHUB_TOKEN not rendered"
+# MIK-8783: the one CLI-owned MCP_GATEWAY_ name renders; a config overlay is still refused above.
+pw="$(render --set 'extraEnv[0].name=MCP_GATEWAY_PROTOCOL_REVISION_WINDOW' --set 'extraEnv[0].value=record')" \
+  || fail "extraEnv MCP_GATEWAY_PROTOCOL_REVISION_WINDOW refused: $(tail -3 <<<"$pw")"
+grep -qE '^ +- name: MCP_GATEWAY_PROTOCOL_REVISION_WINDOW$' <<<"$pw" || fail "the window env var not rendered"
 
 echo "== helm_env_from_requires_safe_prefix =="
 refused "envFrom without prefix" "prefix" --set 'envFrom[0].secretRef.name=s'

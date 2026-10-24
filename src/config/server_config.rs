@@ -40,6 +40,12 @@ pub struct ServerConfig {
     /// RFC-0060 U1: whether HTTP `serve` records the durable per-transport
     /// protocol-revision window (`protocol-revision-telemetry/window.json`).
     /// See [`ProtocolRevisionWindow`]. RFC-0060 sets no default; it is `off`.
+    ///
+    /// Not a config key (MIK-8783): the window is the operator's instrument,
+    /// switched on by the hidden `--protocol-revision-window record` flag or
+    /// `MCP_GATEWAY_PROTOCOL_REVISION_WINDOW=record`, which `main` writes
+    /// here. A file that still sets the key gets the retired-key warning.
+    #[serde(skip)]
     pub protocol_revision_window: ProtocolRevisionWindow,
     /// Maximum request body size (bytes) on every route. Read once at startup:
     /// an oversize body gets HTTP 413.
@@ -135,8 +141,8 @@ pub enum IdempotencyKeyMode {
     Required,
 }
 
-/// `server.protocol_revision_window`: the RFC-0060 U1 measurement mode.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// The RFC-0060 U1 measurement mode, set by `--protocol-revision-window`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum ProtocolRevisionWindow {
     /// Record nothing for HTTP; shutdown behaves as in 3.5.x.

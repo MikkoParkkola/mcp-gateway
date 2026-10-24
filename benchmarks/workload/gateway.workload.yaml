@@ -22,7 +22,10 @@ backends:
 # so the semantic-assertion rate scored the harness. The key paths exist
 # identically at v3.5.0, v3.5.1 and HEAD (src/config/mod.rs, cache + failsafe).
 cache:
-  enabled: false
+  # The cache is always on (MIK-8783) and stores only tools annotated
+  # read-only; this fixture has none, and a zero TTL expires anything stored
+  # as soon as time passes, so no cell is answered from it.
+  default_ttl: 0s
 
 failsafe:
   rate_limit:
@@ -42,7 +45,7 @@ failsafe:
 # effect an idempotency key would be protecting: it echoes a pinned payload.
 # The declaration reaches exactly one consumer -- is_read_only is read only
 # by read_only_target in src/gateway/meta_mcp/admission.rs -- so it cannot
-# make the call cache-eligible. `cache.enabled: false` above remains the
+# make the call cache-eligible. `cache.default_ttl: 0s` above remains the
 # sole, independent control for the real-backend property section 3 requires.
 #
 # The legacy cells parse this list and consult it on every admission, but

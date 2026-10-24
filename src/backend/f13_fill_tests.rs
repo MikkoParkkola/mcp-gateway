@@ -202,17 +202,18 @@ fn backend(
     backend
 }
 
-/// No breaker: a cell that fails fills repeatedly must not trip it.
+/// No breaker in effect: a cell that fails fills repeatedly must not trip it.
+/// The breaker is always on (MIK-8783), so a threshold no fill can reach
+/// keeps it closed for the rows' lifetime.
 fn no_breaker() -> FailsafeConfig {
     let mut failsafe = FailsafeConfig::default();
-    failsafe.circuit_breaker.enabled = false;
+    failsafe.circuit_breaker.failure_threshold = u32::MAX;
     failsafe
 }
 
 /// A breaker that opens on one failure and closes on one success.
 fn hair_trigger(reset: Duration) -> FailsafeConfig {
     let mut failsafe = FailsafeConfig::default();
-    failsafe.circuit_breaker.enabled = true;
     failsafe.circuit_breaker.failure_threshold = 1;
     failsafe.circuit_breaker.success_threshold = 1;
     failsafe.circuit_breaker.reset_timeout = reset;

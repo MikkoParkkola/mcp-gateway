@@ -153,6 +153,17 @@ pub struct Cli {
     #[arg(long)]
     pub no_meta_mcp: bool,
 
+    /// RFC-0060 U1 measurement window (`record` turns it on). The operator's
+    /// instrument for their own deployment, so hidden from `--help`
+    /// (MIK-8783); it replaces the retired `server.protocol_revision_window`.
+    #[arg(
+        long,
+        hide = true,
+        value_enum,
+        env = "MCP_GATEWAY_PROTOCOL_REVISION_WINDOW"
+    )]
+    pub protocol_revision_window: Option<crate::config::ProtocolRevisionWindow>,
+
     /// Subcommand to run (defaults to server mode when omitted)
     #[command(subcommand)]
     pub command: Option<Command>,

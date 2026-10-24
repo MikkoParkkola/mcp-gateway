@@ -320,8 +320,9 @@ pub fn write_config(root: &Path, fixture: &Fixture<'_>) -> PathBuf {
     config.auth.enabled = false;
     config.capabilities.enabled = false;
     // Counted effects only: a cached answer would make a second read prove
-    // nothing about how many times the peer was actually asked.
-    config.cache.enabled = false;
+    // nothing about how many times the peer was actually asked. The cache is
+    // always on (MIK-8783); a zero TTL expires an entry as soon as any time has passed.
+    config.cache.default_ttl = std::time::Duration::ZERO;
 
     config.tasks.store_dir = root.join("tasks").display().to_string();
     config.tasks.default_ttl_ms = 3_600_000;

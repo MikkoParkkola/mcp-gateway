@@ -591,7 +591,6 @@ fn fixture_auth() -> AuthConfig {
     #[cfg(feature = "firewall")]
     if CLIENT_BREAKER.with(std::cell::Cell::get) {
         auth.client_circuit_breaker = Some(crate::config::CircuitBreakerConfig {
-            enabled: true,
             failure_threshold: 1,
             ..crate::config::CircuitBreakerConfig::default()
         });

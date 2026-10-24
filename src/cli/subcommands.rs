@@ -755,11 +755,13 @@ pub enum ProvenanceCommand {
         #[arg(long)]
         result: Option<PathBuf>,
 
-        /// Accept a receipt that verifies without its result.
+        /// Accept a receipt that carries a result digest when no result is
+        /// given (`--result` absent); only its signature is checked.
         #[arg(long)]
         signature_only: bool,
 
-        /// Accept a receipt whose result digest is absent.
+        /// Accept a receipt that carries no result digest at all, so no
+        /// result can ever be checked against it.
         #[arg(long)]
         accept_unbound: bool,
     },

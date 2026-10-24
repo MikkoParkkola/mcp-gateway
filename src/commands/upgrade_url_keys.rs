@@ -13,7 +13,7 @@ use std::process::ExitCode;
 use super::super::api_key_rewrite::{KeyLeft, KeyRewrite};
 use super::super::backend_url_keys::UrlRewrite;
 use super::super::config_write::{RewriteMode, rewrite_url_aliases_in};
-use super::super::retired_config_keys::Retired;
+use super::super::retired_config_keys::{OnLoad, Retired};
 
 /// `mcp-gateway upgrade`: rewrite the backend URL keys in the config at
 /// `config` (or the one found in the working directory), then run the
@@ -91,18 +91,35 @@ pub(super) fn url_report(path: &Path, rewrite: &UrlRewrite, mode: RewriteMode) -
                 let block = block
                     .map(|h| format!(" and the `{section}:` (line {h}) it was alone under"))
                     .unwrap_or_default();
-                out.push(format!(
-                    "{at}: {verb} `{key}` (line {line}){block}; it never had an effect."
-                ));
+                // A refused key never did anything; a retired setting did, and
+                // its load warning (gone with the line) named the hatch, so
+                // the report points to the UPGRADING entry that keeps it.
+                // `meta_mcp.cache_tools` warns too, but was never read.
+                let why = match removal.on_load {
+                    OnLoad::Refuses => "it never had an effect.",
+                    OnLoad::Warns if key == "meta_mcp.cache_tools" => "it never had an effect.",
+                    OnLoad::Warns => {
+                        "it is ignored in 4.0. What replaced it, and the hatch that \
+                         remains: https://github.com/MikkoParkkola/mcp-gateway/blob/main/docs/\
+                         UPGRADING-4.0.md (\"Seven settings are now the gateway's own choice\")."
+                    }
+                };
+                out.push(format!("{at}: {verb} `{key}` (line {line}){block}; {why}"));
             }
             Retired::Left if removal.blocks_load() => out.push(format!(
                 "{at}: kept `{key}`: upgrade removes it only from block-style YAML it can edit \
                  without touching anything else. It never had an effect; the config will not \
                  load until it is deleted by hand."
             )),
+            Retired::Left if key == "auth.client_circuit_breaker.enabled" => out.push(format!(
+                "{at}: kept `{key}`: it is ignored in 4.0, and the section it sits in is \
+                 the switch that turns the client breaker on. To keep the breaker on, delete \
+                 only `enabled`; if that leaves the section empty, write \
+                 `client_circuit_breaker: {{}}`. To turn it off, delete the section."
+            )),
             Retired::Left => out.push(format!(
                 "{at}: kept `{key}`: upgrade removes it only as its own line under a \
-                 block-style section. Nothing reads it; delete it by hand."
+                 block-style section. It is ignored in 4.0; delete it by hand."
             )),
             Retired::Absent => {}
         }

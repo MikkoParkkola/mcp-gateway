@@ -1490,9 +1490,8 @@ For multi-client setups with per-client tool scoping, see the [README auth secti
 
 Capability files are watched and reloaded without a restart. Because file
 events can stop arriving silently, the watcher also re-checks the watched
-trees every `capabilities.stale_check_secs` (default 60; `0` turns the check
-off) and reloads when the files drifted with no event. The key is
-restart-only: changing it needs a restart to take effect.
+trees every 60 s and reloads when the files drifted with no event. The
+interval is the gateway's own; there is no setting for it (MIK-8782).
 
 The watcher warns rather than dying quietly. `shutdown channel Lagged` means
 a shutdown send was overwritten and the wait continues; `shutdown channel

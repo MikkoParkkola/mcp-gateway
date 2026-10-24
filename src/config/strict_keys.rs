@@ -65,12 +65,56 @@ const REMOVED_KEYS: &[(&[&str], &str)] = &[
 ];
 
 /// Keys retired in 4.0 that still load, with the reason, warned once (#2360).
-const RETIRED_KEYS: &[(&[&str], &str)] = &[(
-    &["meta_mcp", "cache_tools"],
-    "nothing ever read it, so tool lists were cached the same way whatever it said; \
-     `meta_mcp.cache_ttl` sets how long they are kept. Delete it, or run `mcp-gateway upgrade`, \
-     which removes it or says why it cannot",
-)];
+/// The settings-automatic-first rows (MIK-8782, MIK-8783) are settings the
+/// gateway now picks itself; each value is ignored, never honoured.
+const RETIRED_KEYS: &[(&[&str], &str)] = &[
+    (
+        &["meta_mcp", "cache_tools"],
+        "nothing ever read it, so tool lists were cached the same way whatever it said; \
+         `meta_mcp.cache_ttl` sets how long they are kept. Delete it, or run `mcp-gateway upgrade`, \
+         which removes it or says why it cannot",
+    ),
+    (
+        &["capabilities", "stale_check_secs"],
+        "the gateway re-checks the watched capability directories every 60 s by itself, \
+         so a silent file watcher still heals. Delete it, or run `mcp-gateway upgrade`",
+    ),
+    (
+        &["cache", "enabled"],
+        "the response cache is always on and stores only results of tools their annotations \
+         mark read-only; `cache.default_ttl` sets how long an entry lives and a restart clears it. \
+         Delete it, or run `mcp-gateway upgrade`",
+    ),
+    (
+        &["failsafe", "retry", "enabled"],
+        "retry is always on for calls a tool's annotations permit to resend (`readOnlyHint` or \
+         `idempotentHint`) and never for others; `failsafe.retry.max_attempts: 1` means one \
+         attempt. Delete it, or run `mcp-gateway upgrade`",
+    ),
+    (
+        &["failsafe", "circuit_breaker", "enabled"],
+        "the backend circuit breaker is always on; `gateway_revive_server` closes one held open \
+         on a healthy backend, and the health probe closes it on recovery. Delete it, or run \
+         `mcp-gateway upgrade`",
+    ),
+    (
+        &["auth", "client_circuit_breaker", "enabled"],
+        "the `auth.client_circuit_breaker` section's presence turns the client breaker on, \
+         whatever this key says. To keep it on with no other key, write \
+         `client_circuit_breaker: {}`; to turn it off, delete the section",
+    ),
+    (
+        &["security", "signature_chain", "max_links"],
+        "a chain holds at most 8 links, a constant every hop agrees on. Delete it, or run \
+         `mcp-gateway upgrade`",
+    ),
+    (
+        &["server", "protocol_revision_window"],
+        "the measurement window is an operator instrument: start the gateway with \
+         `--protocol-revision-window record` or `MCP_GATEWAY_PROTOCOL_REVISION_WINDOW=record`. \
+         Delete the key, or run `mcp-gateway upgrade`",
+    ),
+];
 
 /// A key the file carries that nothing reads and that still loads.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -493,3 +537,7 @@ fn refusal(path: &Path, found: &BTreeSet<String>, backend: &BackendFindings) -> 
 #[cfg(test)]
 #[path = "strict_keys_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "retired_settings_tests.rs"]
+mod retired_settings_tests;

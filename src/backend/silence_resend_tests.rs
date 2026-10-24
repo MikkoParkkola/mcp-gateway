@@ -128,7 +128,7 @@ fn catalogue() -> Vec<Tool> {
 fn failsafe() -> FailsafeConfig {
     let mut config = FailsafeConfig::default();
     assert!(
-        config.retry.enabled && config.retry.max_attempts > 1,
+        config.retry.max_attempts > 1,
         "the rows need the shipped default to permit a resend"
     );
     config.retry.initial_backoff = Duration::from_millis(1);

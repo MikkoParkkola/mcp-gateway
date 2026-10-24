@@ -81,7 +81,7 @@ pub(crate) fn verify_self(
         origins: &origins,
         signer: KEY_ID,
         replay_window: 300,
-        max_links: 8,
+        max_links: crate::security::signature_chain::MAX_CHAIN_LINKS,
         purpose: ChainPurpose::Terminal,
     };
     verify_chain(chain, &policy, received, nonce, now())

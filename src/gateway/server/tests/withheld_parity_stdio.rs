@@ -366,7 +366,6 @@ fn require_chain(config: &mut crate::config::Config) {
         signing_key: base64::engine::general_purpose::STANDARD.encode([7u8; 32]),
         key_id: "gw-self".to_string(),
         emit: crate::config::ChainEmit::default(),
-        max_links: 8,
         resolved_identity: None,
     });
     // The upstream origin key the backend's chains must start from.

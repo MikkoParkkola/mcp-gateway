@@ -93,10 +93,10 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `_*` | 1 |  |  |  |  |
 | `accounts` | 45 | `schema_version` | `adapters[].clock_skew_seconds`; `adapters[].max_lifetime_seconds`; `limits`; `limits.authority_bytes`; `limits.journeys_created_per_minute`; `limits.journeys_per_user`; `limits.journeys_total`; `limits.starts_per_minute_per_user`; `limits.store_entries` |  |  |
 | `agent_auth` | 10 |  |  |  |  |
-| `auth` | 17 |  | `client_circuit_breaker.failure_threshold`; `client_circuit_breaker.reset_timeout`; `client_circuit_breaker.success_threshold`; `dashboard_session`; `dashboard_session.absolute_timeout_secs`; `dashboard_session.idle_timeout_secs` |  | `api_keys[].key` |
+| `auth` | 16 |  | `client_circuit_breaker.failure_threshold`; `client_circuit_breaker.reset_timeout`; `client_circuit_breaker.success_threshold`; `dashboard_session`; `dashboard_session.absolute_timeout_secs`; `dashboard_session.idle_timeout_secs` |  | `api_keys[].key`; `client_circuit_breaker.enabled` |
 | `backends` | 43 | `<name>.oauth.token_refresh_buffer_secs`; `<name>.protocol_version`; `<name>.streamable_http` | `<name>.a2a_agent_card_path`; `<name>.max_frame_bytes` | `<name>.http_url`; `<name>.ws_url` | `<name>.circuit_breaker`; `<name>.idle_timeout` |
-| `cache` | 2 |  | `default_ttl`; `max_entries` |  |  |
-| `capabilities` | 12 |  | `files.downloads_quota_bytes`; `name` |  |  |
+| `cache` | 1 |  | `default_ttl`; `max_entries` |  | `enabled` |
+| `capabilities` | 12 |  | `files.downloads_quota_bytes`; `name` |  | `stale_check_secs` |
 | `code_mode` | 2 |  |  |  |  |
 | `control_plane` | 12 |  | `export.max_batch`; `export.poll_interval_secs` |  |  |
 | `cost_governance` | 12 |  |  |  | `currency` |
@@ -104,7 +104,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `env_files` | 1 |  |  |  |  |
 | `error_budget` | 11 |  |  |  |  |
 | `events` | 13 |  | `dead_letter_max_bytes`; `dead_letter_max_records`; `default_ttl`; `max_in_flight`; `max_outbox`; `max_outbox_per_subscription`; `max_subscriptions`; `max_subscriptions_per_principal`; `max_ttl`; `max_verified_tail`; `max_verified_tail_per_principal`; `min_ttl`; `queue_depth`; `rate_limit_per_subscription`; `rate_limit_per_subscription.burst`; `rate_limit_per_subscription.per_minute`; `retry_base`; `retry_max_attempts`; `retry_window`; `schedule`; `schedule.max_timers`; `schedule.max_timers_per_principal`; `secret_rotation_grace`; `seen_max_per_route`; `suspend_min_attempts`; `suspend_window`; `verification_per_host_per_minute`; `verified_tail_ttl`; `watch`; `watch.max_pollers`; `watch.max_pollers_per_principal` |  |  |
-| `failsafe` | 9 |  | `circuit_breaker.failure_threshold`; `circuit_breaker.reset_timeout`; `circuit_breaker.success_threshold`; `health_check.interval`; `health_check.timeout`; `rate_limit.burst_size`; `rate_limit.requests_per_second`; `retry.initial_backoff`; `retry.max_attempts`; `retry.max_backoff`; `retry.multiplier` |  |  |
+| `failsafe` | 7 |  | `circuit_breaker.failure_threshold`; `circuit_breaker.reset_timeout`; `circuit_breaker.success_threshold`; `health_check.interval`; `health_check.timeout`; `rate_limit.burst_size`; `rate_limit.requests_per_second`; `retry.initial_backoff`; `retry.max_attempts`; `retry.max_backoff`; `retry.multiplier` |  | `circuit_breaker.enabled`; `retry.enabled` |
 | `idempotency` | 4 |  |  |  |  |
 | `key_server` | 20 | `oidc[].auto_discover` | `cleanup_interval_secs`; `max_oidc_token_age_secs`; `max_tokens_per_identity`; `token_ttl_secs` |  |  |
 | `marketplace` |  |  |  |  | `marketplace` |
@@ -113,8 +113,8 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `playbooks` | 3 |  |  |  |  |
 | `routing_profiles` | 6 |  |  |  |  |
 | `runtime` | 30 |  |  |  |  |
-| `security` | 120 |  | `firewall.anomaly_min_observations`; `firewall.anomaly_threshold`; `firewall.collusion.common_principals`; `firewall.collusion.min_matches`; `firewall.collusion.window_secs`; `firewall.memory_poisoning.max_entry_size_bytes`; `message_signing.replay_window` |  |  |
-| `server` | 11 |  | `max_body_size`; `shutdown_timeout` |  | `request_timeout`; `ws_port` |
+| `security` | 119 |  | `firewall.anomaly_min_observations`; `firewall.anomaly_threshold`; `firewall.collusion.common_principals`; `firewall.collusion.min_matches`; `firewall.collusion.window_secs`; `firewall.memory_poisoning.max_entry_size_bytes`; `message_signing.replay_window` |  | `signature_chain.max_links` |
+| `server` | 11 |  | `max_body_size`; `shutdown_timeout` |  | `protocol_revision_window`; `request_timeout`; `ws_port` |
 | `streaming` | 3 |  | `buffer_size`; `keep_alive_interval`; `session_reaper_interval`; `session_ttl` |  |  |
 | `tasks` | 3 |  | `default_ttl_ms`; `expiry_interval`; `logical_budget_bytes`; `max_per_principal`; `max_record_bytes`; `max_records`; `max_workers`; `poll_interval_ms` |  |  |
 | `webhooks` | 4 |  | `rate_limit` |  |  |
@@ -124,7 +124,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 
 | Area | KEEP | AUTO | INTERNAL, hidden but honoured | INTERNAL | REMOVE |
 |---|---|---|---|---|---|
-| `(global)` | 13 |  |  |  |  |
+| `(global)` | 13 |  | `mcp-gateway --protocol-revision-window` |  |  |
 | `accounts` | 13 |  |  |  |  |
 | `add` | 11 |  |  |  | `mcp-gateway add --config`; `mcp-gateway add -c` |
 | `audit` | 15 |  |  |  |  |
@@ -158,7 +158,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 
 | Area | KEEP | AUTO | INTERNAL, hidden but honoured | INTERNAL | REMOVE |
 |---|---|---|---|---|---|
-| `env` | 19 | `MCP_GATEWAY_CAPABILITIES` |  | `MCP_GATEWAY_KIND_CLUSTER`; `MCP_GATEWAY_KIND_KEEP`; `MCP_GATEWAY_KIND_NAMESPACE`; `MCP_GATEWAY_ROLLOUT_TIMEOUT`; `MCP_GATEWAY_RUNTIME_DOCKER_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_SMOKE`; `MCP_GATEWAY_TEST_CLOCK`; `MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS`; `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN`; `MCP_GATEWAY_TEST_HOME_DIR`; `MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED`; `MCP_GATEWAY_TEST_TRUST_CA` |  |
+| `env` | 19 | `MCP_GATEWAY_CAPABILITIES` | `MCP_GATEWAY_PROTOCOL_REVISION_WINDOW` | `MCP_GATEWAY_KIND_CLUSTER`; `MCP_GATEWAY_KIND_KEEP`; `MCP_GATEWAY_KIND_NAMESPACE`; `MCP_GATEWAY_ROLLOUT_TIMEOUT`; `MCP_GATEWAY_RUNTIME_DOCKER_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_SMOKE`; `MCP_GATEWAY_TEST_CLOCK`; `MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS`; `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN`; `MCP_GATEWAY_TEST_HOME_DIR`; `MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED`; `MCP_GATEWAY_TEST_TRUST_CA` |  |
 
 ### routes
 
@@ -319,7 +319,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `auth.api_keys[].rate_limit` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:84 |
 | `auth.bearer_token` | KEEP | `None` | who may call the gateway | - | src/config/features/auth.rs:22 |
 | `auth.client_circuit_breaker` | KEEP | `None` | opt-in per-client circuit breaker | - | src/config/features/auth.rs:32 |
-| `auth.client_circuit_breaker.enabled` | KEEP | `true` | opt-in per-client circuit breaker | - | src/config/features/failsafe.rs:52 |
+| `auth.client_circuit_breaker.enabled` | REMOVE | `true` | the section's presence is the switch (MIK-8783) | retired: loads and warns once with the reason; `upgrade` deletes it, but keeps it when it is the section's only key and says to write `client_circuit_breaker: {}`; see upgrading.d/8783.md (tests: src/config/retired_settings_tests.rs, tests/mik_8783_*.rs) | src/config/strict_keys.rs |
 | `auth.client_circuit_breaker.failure_threshold` | INTERNAL | `DEFAULT_CIRCUIT_BREAKER_FAILURE_THRESHOLD` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:54 |
 | `auth.client_circuit_breaker.reset_timeout` | INTERNAL | `Duration::from_secs(DEFAULT_CIRCUIT_BREAKER_RESET_TIMEOUT_SE` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:59 |
 | `auth.client_circuit_breaker.success_threshold` | INTERNAL | `DEFAULT_CIRCUIT_BREAKER_SUCCESS_THRESHOLD` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:56 |
@@ -381,9 +381,9 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `backends.<name>.timeout` | KEEP | `Duration::from_secs(30)` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:43 |
 | `backends.<name>.url` | KEEP | — | where to reach the backend; its scheme picks HTTP or WebSocket | - | src/config/config_file.rs:80 |
 | `backends.<name>.ws_url` | INTERNAL | `see impl Default` | older spelling of the backend `url` key (P2c1); still read | hidden alias: still read and validated; `mcp-gateway upgrade` rewrites it as `url`; `doctor` names it | src/config/backend_config.rs:246 |
-| `cache` | KEEP | `type default` | turn response caching off for side-effecting backends | - | src/config/mod.rs:109 |
+| `cache` | KEEP | `type default` | how long cached read-only results live and how many are kept; the cache itself is always on (MIK-8783) | - | src/config/mod.rs:109 |
 | `cache.default_ttl` | INTERNAL | `Duration::from_secs(DEFAULT_TTL_SECS)` | cache sizing with fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/cache.rs:24 |
-| `cache.enabled` | KEEP | `true` | turn response caching off for side-effecting backends | - | src/config/features/cache.rs:21 |
+| `cache.enabled` | REMOVE | `true` | the response cache is always on and stores only read-only annotated tools (MIK-8783) | retired: loads and warns once with the reason; `upgrade` deletes it; see upgrading.d/8783.md (tests: src/config/retired_settings_tests.rs, tests/mik_8783_*.rs) | src/config/strict_keys.rs |
 | `cache.max_entries` | INTERNAL | `DEFAULT_MAX_ENTRIES` | cache sizing with fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/cache.rs:26 |
 | `capabilities` | KEEP | `type default` | where REST capabilities come from and what they may touch | - | src/config/mod.rs:107 |
 | `capabilities.directories` | KEEP | `vec!["capabilities".to_string()]` | where REST capabilities come from and what they may touch | - | src/config/features/capability.rs:20 |
@@ -399,7 +399,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `capabilities.process_commands[].args_prefix` | KEEP | — | where REST capabilities come from and what they may touch | - | src/config/features/capability.rs:110 |
 | `capabilities.process_commands[].command` | KEEP | — | where REST capabilities come from and what they may touch | - | src/config/features/capability.rs:107 |
 | `capabilities.process_execution` | KEEP | `ProcessExecution::Enabled` | where REST capabilities come from and what they may touch | - | src/config/features/capability.rs:34 |
-| `capabilities.stale_check_secs` | KEEP | `60` | where REST capabilities come from and what they may touch | - | src/config/features/capability.rs:23 |
+| `capabilities.stale_check_secs` | REMOVE | `60` | the gateway re-checks the watched capability directories every 60 s by itself (MIK-8782) | retired: loads and warns once with the reason; `upgrade` deletes it; see upgrading.d/8783.md (tests: src/config/retired_settings_tests.rs, tests/mik_8783_*.rs) | src/config/strict_keys.rs |
 | `code_mode` | KEEP | `type default` | opt-in tool surfaces (CODE_MODE.md) | - | src/config/mod.rs:126 |
 | `code_mode.enabled` | KEEP | `type default` | opt-in tool surfaces (CODE_MODE.md) | - | src/config/features/code_mode.rs:24 |
 | `control_plane` | KEEP | `type default` | governance roles and SIEM export (control_plane.md) | - | src/config/mod.rs:141 |
@@ -488,7 +488,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `events.watch.max_pollers_per_principal` | INTERNAL | `10` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:60 |
 | `failsafe` | KEEP | `type default` | turn a resilience mechanism on or off (non-idempotent backends turn retries off) | - | src/config/mod.rs:101 |
 | `failsafe.circuit_breaker` | KEEP | `type default` | turn a resilience mechanism on or off (non-idempotent backends turn retries off) | - | src/config/features/failsafe.rs:38 |
-| `failsafe.circuit_breaker.enabled` | KEEP | `true` | turn a resilience mechanism on or off (non-idempotent backends turn retries off) | - | src/config/features/failsafe.rs:52 |
+| `failsafe.circuit_breaker.enabled` | REMOVE | `true` | the backend breaker is always on; `gateway_revive_server` and the health probe close it (MIK-8783) | retired: loads and warns once with the reason; `upgrade` deletes it; see upgrading.d/8783.md (tests: src/config/retired_settings_tests.rs, tests/mik_8783_*.rs) | src/config/strict_keys.rs |
 | `failsafe.circuit_breaker.failure_threshold` | INTERNAL | `DEFAULT_CIRCUIT_BREAKER_FAILURE_THRESHOLD` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:54 |
 | `failsafe.circuit_breaker.reset_timeout` | INTERNAL | `Duration::from_secs(DEFAULT_CIRCUIT_BREAKER_RESET_TIMEOUT_SE` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:59 |
 | `failsafe.circuit_breaker.success_threshold` | INTERNAL | `DEFAULT_CIRCUIT_BREAKER_SUCCESS_THRESHOLD` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:56 |
@@ -501,7 +501,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `failsafe.rate_limit.enabled` | KEEP | `true` | turn a resilience mechanism on or off (non-idempotent backends turn retries off) | - | src/config/features/failsafe.rs:116 |
 | `failsafe.rate_limit.requests_per_second` | INTERNAL | `DEFAULT_RATE_LIMIT_RPS` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:118 |
 | `failsafe.retry` | KEEP | `type default` | turn a resilience mechanism on or off (non-idempotent backends turn retries off) | - | src/config/features/failsafe.rs:40 |
-| `failsafe.retry.enabled` | KEEP | `true` | turn a resilience mechanism on or off (non-idempotent backends turn retries off) | - | src/config/features/failsafe.rs:78 |
+| `failsafe.retry.enabled` | REMOVE | `true` | retry follows the resend annotations, ADR-012; `max_attempts: 1` is the hatch (MIK-8783) | retired: loads and warns once with the reason; `upgrade` deletes it; see upgrading.d/8783.md (tests: src/config/retired_settings_tests.rs, tests/mik_8783_*.rs) | src/config/strict_keys.rs |
 | `failsafe.retry.initial_backoff` | INTERNAL | `Duration::from_millis(DEFAULT_RETRY_INITIAL_BACKOFF_MS)` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:91 |
 | `failsafe.retry.max_attempts` | INTERNAL | `DEFAULT_RETRY_MAX_ATTEMPTS` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:88 |
 | `failsafe.retry.max_backoff` | INTERNAL | `Duration::from_secs(DEFAULT_RETRY_MAX_BACKOFF_SECS)` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:94 |
@@ -714,7 +714,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `security.signature_chain` | KEEP | `None` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:674 |
 | `security.signature_chain.emit` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/signature_chain.rs:46 |
 | `security.signature_chain.key_id` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/signature_chain.rs:43 |
-| `security.signature_chain.max_links` | KEEP | `8` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/signature_chain.rs:49 |
+| `security.signature_chain.max_links` | REMOVE | `8` | a constant 8 every hop agrees on (MIK-8783) | retired: loads and warns once with the reason; `upgrade` deletes it; see upgrading.d/8783.md (tests: src/config/retired_settings_tests.rs, tests/mik_8783_*.rs) | src/config/strict_keys.rs |
 | `security.signature_chain.signing_key` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/signature_chain.rs:41 |
 | `security.ssrf_protection` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:615 |
 | `security.tool_policy` | KEEP | `ToolPolicyConfig::default()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:632 |
@@ -745,7 +745,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `server.metrics_token` | KEEP | `None` | security opt-out or credential; must stay an explicit operator decision | - | src/config/server_config.rs:77 |
 | `server.modern_protocol` | KEEP | `true` | multi-replica deployments turn it off (DEPLOYMENT.md:181); it is also the protocol rollback switch | - | src/config/server_config.rs:30 |
 | `server.port` | KEEP | `39400` | where the gateway listens and how clients reach it | - | src/config/server_config.rs:34 |
-| `server.protocol_revision_window` | KEEP | `ProtocolRevisionWindow::Off` | operator decision to start the RFC-0060 U1 measurement window (MIK-8442); `record` seals on shutdown and refuses later requests with 503 | - | src/config/server_config.rs:43 |
+| `server.protocol_revision_window` | REMOVE | `ProtocolRevisionWindow::Off` | an operator instrument, switched by the hidden `--protocol-revision-window` flag or its env var (MIK-8783) | retired: loads and warns once with the reason; `upgrade` deletes it; see upgrading.d/8783.md (tests: src/config/retired_settings_tests.rs, tests/mik_8783_*.rs) | src/config/strict_keys.rs |
 | `server.public_url` | KEEP | `None` | where the gateway listens and how clients reach it | - | src/config/server_config.rs:52 |
 | `server.replicas` | KEEP | `1` | declared, not observable from inside a pod | - | src/config/server_config.rs:83 |
 | `server.request_timeout` | REMOVE | — | retired in 4.0; never had an effect | a load error naming the key and `mcp-gateway upgrade`, which deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs); see UPGRADING 39 | src/config/strict_keys.rs:48 |
@@ -793,6 +793,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway --log-format` | KEEP | where the config is and how to listen and log (env MCP_GATEWAY_LOG_FORMAT, global) | - | src/cli/mod.rs:149 |
 | `mcp-gateway --log-level` | KEEP | where the config is and how to listen and log (env MCP_GATEWAY_LOG_LEVEL, global) | - | src/cli/mod.rs:145 |
 | `mcp-gateway --no-meta-mcp` | KEEP | runs as a plain proxy for clients that want every backend tool listed | - | src/cli/mod.rs:153 |
+| `mcp-gateway --protocol-revision-window` | INTERNAL | the operator's RFC-0060 U1 measurement window (`record`), hidden from `--help` (env MCP_GATEWAY_PROTOCOL_REVISION_WINDOW; MIK-8783) | replaces `server.protocol_revision_window`; see upgrading.d/8783.md | src/cli/mod.rs:165 |
 | `mcp-gateway --port` | KEEP | where the config is and how to listen and log (env MCP_GATEWAY_PORT) | - | src/cli/mod.rs:132 |
 | `mcp-gateway -p` | KEEP | short alias of `--port` | - | src/cli/mod.rs:132 |
 | `mcp-gateway accounts` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:274 |
@@ -1343,6 +1344,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK` | KEEP | env form of `doctor --no-registry-check`: skips doctor's npm deprecation lookup on hosts that must not contact registry.npmjs.org (MIK-8512) | - | src/cli/mod.rs:552 |
 | `MCP_GATEWAY_FIREWALL_SKIP_KEYS` | KEEP | security policy list (rule 1): replaces the argument keys the injection scan treats as free text, so it can widen or narrow the scan; an explicit operator decision (rule 2) | - | src/security/firewall/input_scanner.rs:85 |
 | `MCP_GATEWAY_HOST` | KEEP | container and service-manager form of the global flags | - | src/cli/mod.rs:135 |
+| `MCP_GATEWAY_PROTOCOL_REVISION_WINDOW` | INTERNAL | the operator's RFC-0060 U1 measurement window (`record`), hidden like its flag (MIK-8783) | replaces `server.protocol_revision_window`; see upgrading.d/8783.md | src/cli/mod.rs:163 |
 | `MCP_GATEWAY_KIND_CLUSTER` | INTERNAL | variable of a repository test script, not read by the binary | test-only; docs say so | deploy/kubernetes/enterprise-alpha/scripts/kind-rollback-smoke.sh:19 |
 | `MCP_GATEWAY_KIND_KEEP` | INTERNAL | variable of a repository test script, not read by the binary | test-only; docs say so | deploy/kubernetes/enterprise-alpha/README.md:155 |
 | `MCP_GATEWAY_KIND_NAMESPACE` | INTERNAL | variable of a repository test script, not read by the binary | test-only; docs say so | deploy/kubernetes/enterprise-alpha/scripts/kind-rollback-smoke.sh:20 |

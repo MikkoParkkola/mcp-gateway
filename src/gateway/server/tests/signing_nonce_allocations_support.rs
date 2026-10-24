@@ -160,7 +160,6 @@ fn signing_config_for(backend_url: &str, require_nonce: bool, target: Target) ->
     let mut config = signing_config_base(backend_url, require_nonce);
     match target {
         Target::ReadOnlyCached => {
-            config.cache.enabled = true;
             // The echo fixture really is read-only, so declaring it takes the
             // unkeyed path (`SyncAdmission::Unprotected`). The backend's own
             // `readOnlyHint` annotation remains untrusted — only this exact
@@ -171,7 +170,9 @@ fn signing_config_for(backend_url: &str, require_nonce: bool, target: Target) ->
             }];
         }
         Target::MutatingUncached => {
-            config.cache.enabled = false;
+            // The cache is always on (MIK-8783): a zero TTL keeps this row
+            // measuring the dispatcher, whatever the fixture's annotations say.
+            config.cache.default_ttl = std::time::Duration::ZERO;
             config.idempotency.read_only_tools = Vec::new();
         }
     }

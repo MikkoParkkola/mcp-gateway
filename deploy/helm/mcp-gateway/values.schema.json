@@ -617,7 +617,7 @@
           }
         }
       },
-      "description": "Extra container env (EnvVar[]), rendered after the chart's own. Names starting MCP_GATEWAY_ (any case) and chart-owned names are refused: MCP_GATEWAY_* variables override config."
+      "description": "Extra container env (EnvVar[]), rendered after the chart's own. Names starting MCP_GATEWAY_ (any case) and chart-owned names are refused: MCP_GATEWAY_* variables override config. One exception: MCP_GATEWAY_PROTOCOL_REVISION_WINDOW, the CLI-owned switch for the operator's measurement window (MIK-8783)."
     },
     "envFrom": {
       "type": "array",

@@ -31,7 +31,6 @@ async fn start() -> (BackendFixture, HttpGateway) {
     let mut gateway = HttpGateway::start(json!({
         "server": {"host": "127.0.0.1", "modern_protocol": true},
         "auth": {"enabled": true, "bearer_token": TOKEN},
-        "cache": {"enabled": false},
         "backends": {(BACKEND): {"http_url": backend.url, "streamable_http": true}},
         "security": {
             "trust_configured_backends": true,

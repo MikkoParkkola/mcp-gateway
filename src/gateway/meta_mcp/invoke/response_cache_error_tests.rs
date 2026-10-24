@@ -109,7 +109,7 @@ async fn a_rate_limited_refusal_is_not_replayed_from_the_cache() {
     failsafe.rate_limit.enabled = true;
     failsafe.rate_limit.requests_per_second = 1;
     failsafe.rate_limit.burst_size = 1;
-    failsafe.retry.enabled = false;
+    failsafe.retry.max_attempts = 1; // One attempt: `retry.enabled` is retired (MIK-8783).
     let (meta, calls) = cached_meta(&failsafe, vec![ok_body()]);
     let caller = ctx(&AllowAll);
 

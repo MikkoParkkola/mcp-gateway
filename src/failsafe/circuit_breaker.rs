@@ -105,7 +105,6 @@ pub struct CircuitBreaker {
     /// Backend name
     name: String,
     /// Configuration
-    enabled: bool,
     failure_threshold: u32,
     success_threshold: u32,
     reset_timeout: Duration,
@@ -144,7 +143,6 @@ impl CircuitBreaker {
     pub fn new(name: &str, config: &CircuitBreakerConfig) -> Self {
         Self {
             name: name.to_string(),
-            enabled: config.enabled,
             failure_threshold: config.failure_threshold,
             success_threshold: config.success_threshold,
             reset_timeout: config.reset_timeout,
@@ -171,10 +169,6 @@ impl CircuitBreaker {
     /// elapsed, the circuit moves to `HalfOpen` and returns `true`.
     #[tracing::instrument(skip(self), fields(backend = %self.name))]
     pub fn can_proceed(&self) -> bool {
-        if !self.enabled {
-            return true;
-        }
-
         let state = *self.state.read();
 
         match state {
@@ -205,10 +199,6 @@ impl CircuitBreaker {
     /// Record a successful request
     #[tracing::instrument(skip(self), fields(backend = %self.name))]
     pub fn record_success(&self) {
-        if !self.enabled {
-            return;
-        }
-
         let state = *self.state.read();
 
         match state {
@@ -244,9 +234,6 @@ impl CircuitBreaker {
     /// (observed live 2026-06-11: hebb breaker wedged open 6.5h).
     #[tracing::instrument(skip(self), fields(backend = %self.name))]
     pub fn reset(&self) {
-        if !self.enabled {
-            return;
-        }
         let state = *self.state.read();
         if state == CircuitState::Closed {
             // transition_to() early-returns on same-state transitions; still
@@ -267,10 +254,6 @@ impl CircuitBreaker {
     /// post-hoc without log parsing (MIK-6119).
     #[tracing::instrument(skip(self), fields(backend = %self.name))]
     pub fn record_failure(&self, reason: &str, latency: Duration) {
-        if !self.enabled {
-            return;
-        }
-
         let state = *self.state.read();
 
         match state {

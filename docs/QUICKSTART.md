@@ -315,7 +315,7 @@ For a team-shared gateway, keep auth enabled, bind behind TLS or mTLS, and distr
 - **Add remote backends**: For a zero-auth remote backend you can try in seconds, see [Adding remote MCP backends](REMOTE_BACKENDS.md).
 - **Find unmanaged MCP servers**: `mcp-gateway cap discover --shadow --format json` emits a passive ShadowRadar report with stable finding IDs, ownership, transport exposure, trust status, data risk, recommended action, confidence, verification, and rollback. It does not invoke discovered tools. Add `--write-config` only after reviewing adoptable local findings.
 - **Inspect the local control plane**: Open `http://127.0.0.1:39400/ui#control-plane` for read-only inventory, runtime health, decision queue, RBAC, and license-boundary status.
-- **Enable caching**: Add `cache: { enabled: true }` to your config.
+- **Caching**: on already, with nothing to configure. The gateway caches only results of tools whose annotations mark them read-only.
 - **Enable auth**: on a config `init` wrote, it is already on with a generated credential. On a hand-written one, use `auth: { enabled: true, bearer_token: "env:MCP_GATEWAY_TOKEN", public_paths: ["/health", "/mcp"] }` and set that variable to a secret you keep.
 
   Two halves, both load-bearing. `public_paths` is not optional: turning authentication on gates **every** path, so enabling it alone makes the MCP client you already configured start failing. And do not use `bearer_token: "auto"` if anything needs to authenticate — it mints a fresh random token on every start and logs only a fingerprint, never the value, so no client can present it. See [DEPLOYMENT.md](DEPLOYMENT.md#admin-requires-a-credential).

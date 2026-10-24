@@ -11,10 +11,6 @@ meta_mcp:
   enabled: true
 
 failsafe:
-  circuit_breaker:
-    enabled: true
-  retry:
-    enabled: true
   rate_limit:
     enabled: true
   health_check:
