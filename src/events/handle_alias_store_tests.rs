@@ -56,7 +56,18 @@ fn warnings_naming(warnings: &[Value], needles: &[&str]) -> usize {
     warnings
         .iter()
         .filter(|r| {
-            let text = r.to_string();
+            // The field values, not the JSON text: JSON doubles a Windows
+            // path's backslashes.
+            let text = r["fields"]
+                .as_object()
+                .map(|fields| {
+                    fields
+                        .values()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default();
             needles.iter().all(|n| text.contains(n))
         })
         .count()
