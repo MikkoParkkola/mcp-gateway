@@ -260,7 +260,7 @@ fn p5_an_ended_session_shows_sign_in_not_loading() {
     assert_eq!(text(&s, "auth-label"), "Not signed in", "P5: {s}");
     let servers = html(&s, "servers-tbody");
     assert!(
-        servers.contains("Sign in to see servers")
+        servers.contains("Sign in (top right) to see servers")
             && !servers.contains("Loading...")
             && !servers.contains("401"),
         "P5: {s}"
@@ -318,7 +318,10 @@ fn p6_a_refused_call_has_a_plain_message() {
         then,
     );
     let m = text(&s, "p6-out");
-    assert_eq!(m, "This needs an admin key", "P6: {s}");
+    assert_eq!(
+        m, "This needs an admin key: use Change key (top right)",
+        "P6: {s}"
+    );
     assert!(!m.chars().any(|c| c.is_ascii_digit()), "P6: {m:?}");
 }
 
@@ -377,7 +380,11 @@ fn p10_a_refused_capability_validation_says_so() {
         then,
         &function("async function validateCapBlur("),
     );
-    assert_eq!(text(&s, "err-1"), "This needs an admin key", "P10: {s}");
+    assert_eq!(
+        text(&s, "err-1"),
+        "This needs an admin key: use Change key (top right)",
+        "P10: {s}"
+    );
 }
 
 /// P11: a refused registry load shows the plain refusal in the add-server
@@ -401,7 +408,7 @@ fn p11_a_refused_registry_load_says_so() {
     );
     assert_eq!(
         text(&s, "add-server-note"),
-        "Sign in to see this",
+        "Sign in (top right) to see this",
         "P11: {s}"
     );
 }

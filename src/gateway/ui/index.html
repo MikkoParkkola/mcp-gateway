@@ -609,7 +609,8 @@ function authStateFrom(httpStatus, body) {
 }
 
 // The gateway's own startup advice for turning authentication on.
-const AUTH_OFF_TEXT = 'Admin views need authentication. New install: run "mcp-gateway init". '
+const AUTH_OFF_TEXT = 'Authentication is off, so this page shows only the status counts. '
+  + 'Admin views need authentication. New install: run "mcp-gateway init". '
   + 'Existing config: set "auth.enabled: true" with a bearer token and keep /health and /mcp '
   + 'under auth.public_paths, so tool calls keep working.';
 
@@ -632,9 +633,9 @@ function renderAuth(state) {
 // The plain line a refused call shows, chosen from the current state.
 function refusedMessage(httpStatus) {
   if (authState === 'off') return AUTH_OFF_TEXT;
-  if (authState === 'signed_out') return 'Sign in to see this';
-  if (authState === 'signed_in') return 'This needs an admin key';
-  return httpStatus === 401 ? 'Sign in to see this' : 'Refused: this action is not allowed for this key';
+  if (authState === 'signed_out') return 'Sign in (top right) to see this';
+  if (authState === 'signed_in') return 'This needs an admin key: use Change key (top right)';
+  return httpStatus === 401 ? 'Sign in (top right) to see this' : 'Refused: this action is not allowed for this key';
 }
 
 class AuthRefused extends Error {}
@@ -831,8 +832,8 @@ async function refreshDashboard(poll = false) {
   // MIK-8786: not an admin, so no inventory: say why instead of "Loading...".
   const why = {
     off: AUTH_OFF_TEXT,
-    signed_out: 'Sign in to see servers',
-    signed_in: 'This needs an admin key',
+    signed_out: 'Sign in (top right) to see servers',
+    signed_in: 'This needs an admin key: use Change key (top right)',
     admin: 'Status unavailable',
   }[state];
   document.getElementById('servers-tbody').innerHTML =
