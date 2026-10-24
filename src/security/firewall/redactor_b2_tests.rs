@@ -19,8 +19,6 @@ use serde_json::json;
 const MARK: &str = "[REDACTED:credential]";
 /// The design's `B2_MAX_LEAF_BYTES`.
 const CAP: usize = 1 << 20;
-/// The first key serde_json's `raw_value` feature reads as a raw value.
-const RAW_VALUE_TOKEN: &str = "$serde_json::private::RawValue";
 
 fn redactor() -> Redactor {
     Redactor::new()

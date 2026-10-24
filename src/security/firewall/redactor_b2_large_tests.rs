@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
-//! MIK-8774: a leaf over the 1 MiB cap is projected like one under it, with
-//! two exceptions that take base's whole-value path: a key a match starts in,
-//! and an object led by serde_json's raw-value token. Every row goes through
-//! the same [`expected`] oracle, which validates with `serde_json::Value`, so
-//! a rejection row also checks that the over-cap validator agrees with it.
+//! MIK-8774: a leaf over the 1 MiB cap is redacted exactly as one under it:
+//! value spans projected, keys a match starts in renamed, members paired,
+//! exempt values kept. Every row goes through the same [`expected`] oracle,
+//! which validates with `serde_json::Value`, or is compared with the same
+//! document delivered under the cap.
 
 use super::*;
 
@@ -107,48 +107,6 @@ fn s2_validity_over_the_cap_agrees_with_value() {
     }
 }
 
-/// The over-cap path renames no key: a match that starts in a key, alone or
-/// behind a greedy span, sends the leaf down base's path.
-#[test]
-fn s3_a_key_span_over_the_cap_takes_todays_path() {
-    let key = serde_json::to_string(&pg_url()).expect("encodes");
-    let greedy = serde_json::to_string(&secret_url()).expect("encodes");
-    for doc in [
-        format!(r#"{{{key}:1,"n":3}}"#),
-        format!(r#"[{greedy},{{{key}:1}}]"#),
-        format!(r#"{{"v":{greedy},"ghp_{}":1}}"#, "a".repeat(36)),
-    ] {
-        let text = over_cap(&doc);
-        let (out, _) = deliver(&text);
-        assert_eq!(out, today(&text), "{doc}");
-        assert_eq!(out, expected(&text), "{doc}");
-    }
-}
-
-/// An object whose first key is the raw-value token, at any depth and in any
-/// spelling, takes base's path; the token as a later key is an ordinary key.
-#[test]
-fn s4_the_raw_value_token_over_the_cap() {
-    let url = serde_json::to_string(&pg_url()).expect("encodes");
-    let fallback = [
-        format!(r#"[{url},{{"{RAW_VALUE_TOKEN}":"[1]"}}]"#),
-        format!(r#"[{url},{{"{RAW_VALUE_TOKEN}":null}}]"#),
-        format!(r#"[{url},[[{{"{RAW_VALUE_TOKEN}":"{{}}","b":1}}]]]"#),
-        format!(
-            r#"[{url},{{"$serde_json::private::Raw{}alue":"[1]"}}]"#,
-            esc("0056")
-        ),
-    ];
-    for doc in fallback {
-        let text = over_cap(&doc);
-        let (out, _) = deliver(&text);
-        assert_eq!(out, today(&text), "{doc}");
-    }
-    let later = over_cap(&format!(r#"{{"a":{url},"{RAW_VALUE_TOKEN}":"[1]"}}"#));
-    let out = assert_projected(&later);
-    assert!(parses(&out));
-}
-
 /// Two matches in one value whose escape-widened ranges touch become one
 /// marker, as under the cap.
 #[test]
@@ -219,7 +177,11 @@ fn s7_over_the_cap_cost() {
         );
         ratios.push(time_against_base(&format!("q2 {size}"), &text));
     }
-    let keys: String = (0..100_000).map(|i| format!(r#""k{i}":{i},"#)).collect();
+    let keys = (0..100_000).fold(String::new(), |mut keys, i| {
+        use std::fmt::Write as _;
+        write!(keys, r#""k{i}":{i},"#).expect("writes");
+        keys
+    });
     let text = over_cap(&format!(r#"[{{"v":"{}",{keys}"z":0}}]"#, secret_url()));
     ratios.push(time_against_base("one span across 100000 keys", &text));
     // No secret at all: every JSON leaf over the cap now takes the walk (MIK-8756
@@ -285,25 +247,6 @@ fn deliver_unless(text: &str, exempt: &dyn Fn(&str) -> bool) -> (String, Vec<Str
     (out, descriptions)
 }
 
-/// Base's whole-value replacement with each of `members`' first occurrence
-/// replaced too: what a fallback delivers.
-fn today_with_members(text: &str, members: &[&str]) -> String {
-    let mut ranges = redactor().credential_spans(text);
-    for member in members {
-        let at = text.find(member).expect("member present");
-        ranges.push((at, at + member.len()));
-    }
-    ranges.sort_unstable();
-    let mut merged: Vec<(usize, usize)> = Vec::new();
-    for (from, to) in ranges {
-        match merged.last_mut() {
-            Some(last) if from <= last.1 => last.1 = last.1.max(to),
-            _ => merged.push((from, to)),
-        }
-    }
-    splice(text, &merged)
-}
-
 /// Members over the cap, MIK-8757's families: redacted as under the cap,
 /// with the same findings, including a raw match over part of a member
 /// value and an AWS-shaped generic member (both findings).
@@ -331,34 +274,129 @@ fn s8_members_over_the_cap_match_under_the_cap() {
     }
 }
 
-/// An exempt literal over the cap: kept when no span crosses it, and when one
-/// does, the leaf falls back to base's replacement with members still
-/// redacted.
+/// The first object key serde_json's `raw_value` feature reads specially.
+const RAW_VALUE_TOKEN: &str = "$serde_json::private::RawValue";
+
+/// Residual (a), lead ruling 2026-10-24: a match that starts in a key, alone
+/// or behind a greedy span, renames that key over the cap as under it.
+#[test]
+fn s3_a_key_span_over_the_cap_is_renamed_as_under_it() {
+    let key = serde_json::to_string(&pg_url()).expect("encodes");
+    let greedy = serde_json::to_string(&secret_url()).expect("encodes");
+    for doc in [
+        format!(r#"{{{key}:1,"n":3}}"#),
+        format!("[{greedy},{{{key}:1}}]"),
+        format!(r#"{{"v":{greedy},"ghp_{}":1}}"#, "a".repeat(36)),
+        format!(r#"{{{key}:1,{key}:2,"{MARK}":3}}"#),
+        format!(r#"{{"password":"{PASS}",{key}:1}}"#),
+    ] {
+        let text = over_cap(&doc);
+        let out = assert_projected(&text);
+        assert!(parses(&out), "{doc}");
+        assert_as_under_cap(&doc, &|_| false);
+    }
+}
+
+/// Residual (c): an object led by the raw-value token is read as `Value`
+/// reads it, so a document `Value` accepts is projected over the cap and one
+/// it rejects takes base's path, as under it.
+#[test]
+fn s4_the_raw_value_token_over_the_cap_reads_as_value_does() {
+    let url = serde_json::to_string(&pg_url()).expect("encodes");
+    for doc in [
+        format!(r#"[{url},{{"{RAW_VALUE_TOKEN}":"[1]"}}]"#),
+        format!(r#"[{url},[[{{"{RAW_VALUE_TOKEN}":"{{}}"}}]]]"#),
+        format!(
+            r#"[{url},{{"$serde_json::private::Raw{}alue":"[1]"}}]"#,
+            esc("0056")
+        ),
+        format!(r#"{{"a":{url},"{RAW_VALUE_TOKEN}":"[1]"}}"#),
+        format!(r#"[{{"password":"{PASS}"}},{{"{RAW_VALUE_TOKEN}":"[1]"}},{url}]"#),
+    ] {
+        assert!(parses(&doc), "{doc}");
+        assert_as_under_cap(&doc, &|_| false);
+        assert!(parses(&deliver(&over_cap(&doc)).0), "{doc}");
+    }
+    for doc in [
+        format!(r#"[{url},{{"{RAW_VALUE_TOKEN}":null}}]"#),
+        format!(r#"[{url},{{"{RAW_VALUE_TOKEN}":"[1]","b":1}}]"#),
+        format!(r#"[{url},{{"{RAW_VALUE_TOKEN}":"[1"}}]"#),
+    ] {
+        assert!(!parses(&doc), "{doc}");
+        let text = over_cap(&doc);
+        assert_eq!(deliver(&text).0, today(&text), "{doc}");
+    }
+}
+
+/// Residual (b): a span that crosses an exempt value is dropped over the cap
+/// as under it, so the exempt value and the JSON around it stay as sent.
 #[test]
 fn s10_an_exempt_literal_over_the_cap() {
     let exempt = |s: &str| s == "CONT-8774";
-    let url = serde_json::to_string(&pg_url()).unwrap();
-    assert_as_under_cap(&format!(r#"{{"next":"CONT-8774","dsn":{url}}}"#), &exempt);
-    let crossed = over_cap(&format!(
-        r#"{{"password":"{PASS}","dsn":{url},"next":"CONT-8774"}}"#
-    ));
-    let (out, _) = deliver_unless(&crossed, &exempt);
-    assert_eq!(out, today_with_members(&crossed, &[PASS]));
-    assert!(!out.contains(PASS));
+    let url = serde_json::to_string(&pg_url()).expect("encodes");
+    for doc in [
+        format!(r#"{{"next":"CONT-8774","dsn":{url}}}"#),
+        format!(r#"{{"password":"{PASS}","dsn":{url},"next":"CONT-8774"}}"#),
+        format!(
+            r#"{{"dsn":{url},"next":"CONT-8774","k":"ghp_{}"}}"#,
+            "a".repeat(36)
+        ),
+    ] {
+        assert_as_under_cap(&doc, &exempt);
+        let (out, _) = deliver_unless(&over_cap(&doc), &exempt);
+        assert!(
+            parses(&out) && out.contains("CONT-8774") && !out.contains(PASS),
+            "{out:.200}"
+        );
+    }
 }
 
-/// Every fallback over the cap still redacts members: a match that starts
-/// in a key, and an object led by the raw-value token.
+/// MIK-8774 (b), found on the line: a span that crosses an exempt value loses
+/// only the exempt value's bytes, so a credential beside a continuation is
+/// still redacted, under the cap as over it. A pattern counts only where its
+/// remaining bytes redact something.
 #[test]
-fn s11_a_fallback_over_the_cap_still_redacts_members() {
-    let key = serde_json::to_string(&pg_url()).unwrap();
-    for doc in [
-        format!(r#"{{"password":"{PASS}",{key}:1}}"#),
-        format!(r#"[{{"password":"{PASS}"}},{{"{RAW_VALUE_TOKEN}":"[1]"}},{key}]"#),
-    ] {
-        let text = over_cap(&doc);
-        let (out, _) = deliver(&text);
-        assert_eq!(out, today_with_members(&text, &[PASS]), "{doc}");
-        assert!(!out.contains(PASS), "{doc}");
+fn s12_a_span_crossing_an_exempt_value_still_redacts_the_rest() {
+    let cont = "CONT-8774";
+    let url = serde_json::to_string(&pg_url()).expect("encodes");
+    let ghp = format!("ghp_{}", "a".repeat(36));
+    let gho = format!("gho_{}", "b".repeat(36));
+    // A continuation shaped like a connection string, apart from the dsn's.
+    let cont_url = db_url("postgres", "c:t", "cont.local:5432/x");
+    let exempt = |s: &str| s == cont || s == ghp || s == cont_url;
+    let pretty = serde_json::to_string_pretty(&json!({ "dsn": pg_url(), "next": cont })).unwrap();
+    let rows = [
+        // The compact shape: the URL's match runs on across the exempt value.
+        (
+            format!(r#"{{"dsn":{url},"next":"{cont}"}}"#),
+            format!(r#"{{"dsn":"{MARK}","next":"{cont}"}}"#),
+        ),
+        (
+            pretty.clone(),
+            serde_json::to_string_pretty(&json!({ "dsn": MARK, "next": cont })).unwrap(),
+        ),
+        // A match that ends exactly at its value's closing quote.
+        (
+            format!(r#"{{"k":"{gho}","next":"{cont}"}}"#),
+            format!(r#"{{"k":"{MARK}","next":"{cont}"}}"#),
+        ),
+        // A token-shaped exempt value beside a credential.
+        (
+            format!(r#"{{"next":"{ghp}","k":"{gho}"}}"#),
+            format!(r#"{{"next":"{ghp}","k":"{MARK}"}}"#),
+        ),
+    ];
+    for (doc, want) in rows {
+        let (out, findings) = deliver_unless(&doc, &exempt);
+        assert_eq!(out, want, "under the cap: {doc}");
+        assert!(!findings.is_empty(), "{doc}");
+        assert_as_under_cap(&doc, &exempt);
     }
+    // An exempt value whose own match runs past it: only syntax and a key it
+    // did not start in remain, so nothing is redacted and nothing is found.
+    let doc = format!(r#"{{"next":"{cont_url}","n":1}}"#);
+    let (out, findings) = deliver_unless(&doc, &exempt);
+    assert_eq!(out, doc);
+    assert!(findings.is_empty(), "{findings:?}");
+    assert_as_under_cap(&doc, &exempt);
 }
