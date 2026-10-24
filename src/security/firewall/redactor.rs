@@ -233,7 +233,7 @@ impl Redactor {
                         // already replaced the whole value: one secret, one finding.
                         let covered = matches!(&*val, Value::String(s) if s.trim() == REDACTED);
                         *val = Value::String(REDACTED.to_owned());
-                        if family == Family::ApiKey || !covered {
+                        if family == Family::Generic || !covered {
                             findings.push(Self::member_finding(family));
                         }
                     }
@@ -358,7 +358,7 @@ impl Redactor {
         for &(lit, family) in &members {
             let (start, end) = trimmed_content(text, lit);
             let covered = raw.iter().any(|&(a, b)| a <= start && end <= b);
-            if family == Family::ApiKey || !covered {
+            if family == Family::Generic || !covered {
                 findings.push(Self::member_finding(family));
             }
         }
@@ -444,7 +444,7 @@ impl Redactor {
     /// A key the generic rule names keeps that rule's value class unchanged.
     fn credential_member(&self, key: &str, value: &str) -> Option<Family> {
         if self.member_key.is_match(key) {
-            return self.member_value.is_match(value).then_some(Family::ApiKey);
+            return self.member_value.is_match(value).then_some(Family::Generic);
         }
         credential_names::family_of(key)
             .filter(|&family| credential_names::value_matches(family, value, REDACTED))

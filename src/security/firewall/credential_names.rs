@@ -9,7 +9,7 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Family {
     /// The generic API-key rule's own names (MIK-8756).
-    ApiKey,
+    Generic,
     PrivateKey,
     Authorization,
     Secret,
@@ -21,7 +21,7 @@ impl Family {
     /// The finding description for a member of this family.
     pub(super) fn description(self) -> &'static str {
         match self {
-            Self::ApiKey => "Generic API Key in key=value (object member)",
+            Self::Generic => "Generic API Key in key=value (object member)",
             Self::PrivateKey => "Private Key (object member)",
             Self::Authorization => "Authorization header (object member)",
             Self::Secret => "Client or shared secret (object member)",
@@ -104,7 +104,7 @@ fn is_pagination(w: &[String]) -> bool {
 
 /// Word sequences a key may end with, per family, in the order they decide.
 const SUFFIXES: &[(Family, &[&str])] = &[
-    (Family::ApiKey, &["secret", "access", "key"]),
+    (Family::Generic, &["secret", "access", "key"]),
     (Family::PrivateKey, &["private", "key"]),
     (Family::PrivateKey, &["signing", "key"]),
     (Family::Authorization, &["authorization"]),
@@ -156,7 +156,7 @@ pub(super) fn family_of(key: &str) -> Option<Family> {
     };
     // Family 1 by word split: camelCase vendor keys (`openaiApiKey`).
     if ends(&["api", "key"]) || ends(&["secret", "key"]) {
-        return Some(Family::ApiKey);
+        return Some(Family::Generic);
     }
     if let Some((f, _)) = SUFFIXES.iter().find(|(_, seq)| ends(seq)) {
         return Some(*f);
@@ -197,7 +197,7 @@ pub(super) fn value_matches(family: Family, value: &str, marker: &str) -> bool {
         return false;
     }
     match family {
-        Family::ApiKey => {
+        Family::Generic => {
             v.chars().count() >= 20
                 && v.chars()
                     .all(|c| c.is_ascii_alphanumeric() || "+/=_-".contains(c))
