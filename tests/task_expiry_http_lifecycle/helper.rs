@@ -163,8 +163,8 @@ pub fn write_config(root: &Path, backend_url: &str) -> PathBuf {
     config.server.modern_protocol = true;
     config.auth.enabled = false;
     config.capabilities.enabled = false;
-    // The response cache is always on (MIK-8783); a zero TTL means nothing it
-    // stores is ever served, so each call reaches the peer and is counted.
+    // The response cache is always on (MIK-8783); a zero TTL expires an
+    // entry as soon as any time has passed, so each call reaches the peer.
     config.cache.default_ttl = std::time::Duration::ZERO;
 
     config.tasks.store_dir = root.join("tasks").display().to_string();

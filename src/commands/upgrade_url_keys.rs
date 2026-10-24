@@ -13,7 +13,7 @@ use std::process::ExitCode;
 use super::super::api_key_rewrite::{KeyLeft, KeyRewrite};
 use super::super::backend_url_keys::UrlRewrite;
 use super::super::config_write::{RewriteMode, rewrite_url_aliases_in};
-use super::super::retired_config_keys::Retired;
+use super::super::retired_config_keys::{OnLoad, Retired};
 
 /// `mcp-gateway upgrade`: rewrite the backend URL keys in the config at
 /// `config` (or the one found in the working directory), then run the
@@ -91,9 +91,17 @@ pub(super) fn url_report(path: &Path, rewrite: &UrlRewrite, mode: RewriteMode) -
                 let block = block
                     .map(|h| format!(" and the `{section}:` (line {h}) it was alone under"))
                     .unwrap_or_default();
-                out.push(format!(
-                    "{at}: {verb} `{key}` (line {line}){block}; it is ignored in 4.0."
-                ));
+                // A refused key never did anything; a retired setting did, and
+                // its load warning (gone with the line) named the hatch, so
+                // the report points to the UPGRADING entry that keeps it.
+                let why = match removal.on_load {
+                    OnLoad::Refuses => "it never had an effect.",
+                    OnLoad::Warns => {
+                        "it is ignored in 4.0; UPGRADING-4.0.md says what replaced it \
+                         and the hatch that remains."
+                    }
+                };
+                out.push(format!("{at}: {verb} `{key}` (line {line}){block}; {why}"));
             }
             Retired::Left if removal.blocks_load() => out.push(format!(
                 "{at}: kept `{key}`: upgrade removes it only from block-style YAML it can edit \
@@ -103,8 +111,8 @@ pub(super) fn url_report(path: &Path, rewrite: &UrlRewrite, mode: RewriteMode) -
             Retired::Left if key == "auth.client_circuit_breaker.enabled" => out.push(format!(
                 "{at}: kept `{key}`: it is ignored in 4.0, but it is the only key in the \
                  section whose presence turns the client breaker on. To keep the breaker on, \
-                 replace the block with `client_circuit_breaker: {{}}`; to turn it off, delete \
-                 the section."
+                 delete only `enabled`, and if no other key is left write \
+                 `client_circuit_breaker: {{}}`; to turn it off, delete the section."
             )),
             Retired::Left => out.push(format!(
                 "{at}: kept `{key}`: upgrade removes it only as its own line under a \

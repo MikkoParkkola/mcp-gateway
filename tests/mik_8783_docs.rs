@@ -75,11 +75,17 @@ fn the_upgrade_notes_stop_advertising_the_retired_settings() {
             "{file} still advertises: {stale}"
         );
     }
-    let fragment = read("upgrading.d/8783.md");
+    // The fragment until release assembly folds it into the guide and deletes
+    // it, then the guide.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let fragment: String = ["docs/UPGRADING-4.0.md", "upgrading.d/8783.md"]
+        .iter()
+        .filter_map(|rel| std::fs::read_to_string(root.join(rel)).ok())
+        .collect();
     for key in RETIRED {
         assert!(
             fragment.contains(key),
-            "upgrading.d/8783.md must name {key}"
+            "the UPGRADING entry must name {key}"
         );
     }
     assert!(

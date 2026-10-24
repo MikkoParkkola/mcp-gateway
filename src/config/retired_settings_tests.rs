@@ -79,7 +79,13 @@ fn every_retired_setting_loads_and_warns_once() {
 /// `upgrading_fragments.py assemble` does) quotes each retired setting's warning.
 #[test]
 fn upgrading_quotes_every_retired_setting_warning() {
-    let guide = include_str!("../../upgrading.d/8783.md");
+    // The fragment until release assembly folds it into the guide and deletes
+    // it, then the guide: whichever exists, so the row survives assembly.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let guide: String = ["docs/UPGRADING-4.0.md", "upgrading.d/8783.md"]
+        .iter()
+        .filter_map(|rel| std::fs::read_to_string(root.join(rel)).ok())
+        .collect();
     for (key, _) in retired_settings() {
         let path: Vec<&str> = key.split('.').collect();
         let why = RETIRED_KEYS

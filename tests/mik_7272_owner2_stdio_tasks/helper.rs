@@ -218,8 +218,8 @@ pub fn write_config(
     config.server.port = 0;
     config.server.modern_protocol = true;
     config.capabilities.enabled = false;
-    // The response cache is always on (MIK-8783); a zero TTL means nothing it
-    // stores is ever served, so each call reaches the peer and is counted.
+    // The response cache is always on (MIK-8783); a zero TTL expires an
+    // entry as soon as any time has passed, so each call reaches the peer.
     config.cache.default_ttl = std::time::Duration::ZERO;
     config.tasks.store_dir = store_dir.display().to_string();
     config.tasks.default_ttl_ms = 3_600_000;

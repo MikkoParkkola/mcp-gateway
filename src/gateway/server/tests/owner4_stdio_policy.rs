@@ -106,8 +106,8 @@ async fn stdio(signing: Signing) -> Stdio {
 async fn stdio_tuned(signing: Signing, tune: impl FnOnce(&mut Config, &std::path::Path)) -> Stdio {
     let (url, calls) = counting_backend().await;
     let mut config = Config::default();
-    // The response cache is always on (MIK-8783); a zero TTL means nothing it
-    // stores is ever served, so each call reaches the peer and is counted.
+    // The response cache is always on (MIK-8783); a zero TTL expires an
+    // entry as soon as any time has passed, so each call reaches the peer.
     config.cache.default_ttl = std::time::Duration::ZERO;
     config.server.modern_protocol = true;
     if let Signing::On = signing {
