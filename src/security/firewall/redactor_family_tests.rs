@@ -177,6 +177,11 @@ fn k_pagination_keys_are_kept_with_a_token_shaped_value() {
     ] {
         assert_kept(key, &json!(class_value(40)));
     }
+    // MCP's own correlation field: the gateway mints `gw-<uuid>` for every
+    // forwarded call, and a redacted one breaks progress delivery.
+    for key in ["progressToken", "progress_token"] {
+        assert_kept(key, &json!(format!("gw-{}", "0123abcd-".repeat(4))));
+    }
 }
 
 /// Keys whose last word is not a family name, judged with a value every
