@@ -75,6 +75,9 @@ fn start(args: &[&str], sub: Option<&str>, env: &[(&str, &str)], config_extra: &
     let mut command = gateway_bin::command(dir.path(), gateway_bin::Inherit::Environment);
     command
         .env("MCP_GATEWAY_CONFIG_DIR", dir.path().join("state"))
+        // The off row reads a warn line; an inherited filter must not hide it.
+        .env("RUST_LOG", "info")
+        .env("MCP_GATEWAY_LOG_LEVEL", "info")
         .current_dir(dir.path())
         .arg("--config")
         .arg(&config)
@@ -210,7 +213,8 @@ fn the_retired_key_and_its_old_overlay_leave_the_window_off() {
         // served request with no window file means the window is off; an
         // open that missed its startup bound would have said "not durable".
         assert!(
-            !gw.log().contains("not durable"),
+            !gw.log()
+                .contains("HTTP protocol-revision telemetry is not durable"),
             "{how}: a recording start was attempted:\n{}",
             gw.log()
         );
