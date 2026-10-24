@@ -263,12 +263,13 @@ impl super::HttpTransport {
             return Ok(Some(now));
         }
         self.sse_reconnecting.store(true, Ordering::SeqCst);
-        let replaced = async {
+        // Boxed: the handshake sends requests, which come back here (E0733).
+        let replaced: futures::future::BoxFuture<'_, Result<()>> = Box::pin(async {
             self.sessions.write().remove(Self::bucket_key(None));
             self.connect_sse().await?;
             self.legacy_handshake().await
-        }
-        .await;
+        });
+        let replaced = replaced.await;
         self.sse_reconnecting.store(false, Ordering::SeqCst);
         replaced?;
         let now = self.sse_channel.read().clone().filter(|c| !c.is_closed());
