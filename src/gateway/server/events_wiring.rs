@@ -42,7 +42,7 @@ pub(super) fn install(
             .capabilities
             .enabled
             .then(|| config.capabilities.name.clone());
-        hub.install_backend_source_with_upstream(
+        hub.install_backend_source_with_listeners(
             Arc::new({
                 let registry = Arc::clone(&registry);
                 move || {
@@ -57,7 +57,8 @@ pub(super) fn install(
                 }
             }),
             Arc::clone(&registry),
-            crate::events::upstream_live_ineligible(Arc::clone(live_config), registry),
+            crate::events::upstream_live_ineligible(Arc::clone(live_config), Arc::clone(&registry)),
+            crate::events::upstream_listener_ineligible(Arc::clone(live_config), registry),
         );
     }
     if config.events.sources.operational {

@@ -6,7 +6,8 @@
 //! Since #3072 an unset key means "detect at connect", and `add --url` writes
 //! none, so a backend that speaks Streamable HTTP was refused
 //! `backend.<x>.resources_changed` with `sse_handshake_transport` by config
-//! alone. A subscribe now resolves the transport first. Receiver rows trust its CA
+//! alone. A subscribe now resolves the transport first. Since MIK-8835 both
+//! HTTP transports offer the events, so the SSE rows expect an offer. Receiver rows trust its CA
 //! through `Receiver::trust_env` (MIK-8188).
 #![cfg(unix)]
 
@@ -93,10 +94,10 @@ async fn an_unset_key_on_a_streamable_backend_is_offered_the_events() {
 }
 
 /// ELIG.3 with a fallback: an explicit `true` on a server that only speaks
-/// legacy SSE is refused once the transport is known. Before the fix the
-/// key alone made it eligible.
+/// legacy SSE is offered once the transport is known (MIK-8835.SSE.1; it was
+/// refused `sse_handshake_transport` before).
 #[tokio::test]
-async fn an_explicit_true_that_falls_back_to_sse_is_refused() {
+async fn an_explicit_true_that_falls_back_to_sse_is_offered() {
     let dir = tempfile::tempdir().expect("tempdir");
     let receiver = Receiver::start(dir.path()).await;
     let hits = Hits::default();
@@ -108,9 +109,7 @@ async fn an_explicit_true_that_falls_back_to_sse_is_refused() {
     );
     let gw = start_cfg(dir.path(), &receiver, cfg).await;
     let answer = subscribe(&gw, &receiver).await;
-    let err = error(&answer);
-    assert_eq!(err["code"], -32014, "typed refusal, got {answer}");
-    assert_eq!(err["data"]["reason"], "sse_handshake_transport", "{answer}");
+    assert!(answer["result"]["id"].is_string(), "offered: {answer}");
 }
 
 /// An unset key on an unreachable backend: the transport was never learned,
@@ -161,10 +160,10 @@ fn starts(peer: &HttpPeer) -> usize {
 }
 
 /// T2, ELIG.2: an unset key on a server that only speaks legacy SSE is
-/// refused, but only after a connect learned it. Red before the fix at the
-/// GET assertion: config alone refused it with no connect.
+/// judged after a connect learned it, and offered (MIK-8835.SSE.1; refused
+/// `sse_handshake_transport` before).
 #[tokio::test]
-async fn an_unset_key_on_an_sse_server_is_refused_after_connecting() {
+async fn an_unset_key_on_an_sse_server_is_offered_after_connecting() {
     let dir = tempfile::tempdir().expect("tempdir");
     let receiver = Receiver::start(dir.path()).await;
     let hits = Hits::default();
@@ -172,9 +171,7 @@ async fn an_unset_key_on_an_sse_server_is_refused_after_connecting() {
     let cfg = cold_config(dir.path(), json!({"http_url": url}), &[]);
     let gw = start_cfg(dir.path(), &receiver, cfg).await;
     let answer = subscribe(&gw, &receiver).await;
-    let err = error(&answer);
-    assert_eq!(err["code"], -32014, "typed refusal, got {answer}");
-    assert_eq!(err["data"]["reason"], "sse_handshake_transport", "{answer}");
+    assert!(answer["result"]["id"].is_string(), "offered: {answer}");
     let gets = hits
         .lock()
         .expect("hits")
@@ -333,13 +330,15 @@ async fn an_open_circuit_refuses_the_subscribe_without_a_connect() {
     assert_eq!(hits.lock().expect("hits").len(), tripped, "no connect");
 }
 
-/// T21, H2 (MIK-7969 k11c): a backend redeployed as legacy SSE behind the
-/// same URL, found by a session recovery while its event stream sits quiet,
-/// loses the listener and its listener-only subscription. Nothing on the
-/// stream announces the switch and the transport is the same one: only the
-/// listener's per-tick live read of the detected transport can end it.
+/// T21, H2 (MIK-7969 k11c), S10a (MIK-8835.SSE.3): a backend redeployed as
+/// legacy SSE behind the same URL, found by a session recovery while its
+/// event stream sits quiet. Nothing on the stream announces the switch and the
+/// transport is the same one: the listener's per-tick read of the detected
+/// transport reconnects it over its own SSE session, and the subscription is
+/// kept. (Before MIK-8835 the switch ended the listener and the subscription.)
+/// Delivery after the switch is S1's, on a peer that can push on its stream.
 #[tokio::test]
-async fn a_recovery_onto_sse_ends_a_quiet_listener() {
+async fn a_recovery_onto_sse_reconnects_a_quiet_listener() {
     let dir = tempfile::tempdir().expect("tempdir");
     let receiver = Receiver::start(dir.path()).await;
     let peer = HttpPeer::start(Era::Legacy).await;
@@ -363,14 +362,16 @@ async fn a_recovery_onto_sse_ends_a_quiet_listener() {
         "control: the recovery fell back to SSE: {:?}",
         peer.seen()
     );
+    let recovered = peer.sse_handshakes();
     assert!(
-        wait_until(DEADLINE, || peer.open_gets() == 0).await,
-        "the listener outlived the switch to SSE: {}",
+        wait_until(DEADLINE, || peer.sse_handshakes() > recovered).await,
+        "the listener opened its own SSE session after the switch: {}",
         gw.stall_report()
     );
-    assert!(
-        wait_until(DEADLINE, || records(dir.path(), "subs").is_empty()).await,
-        "the listener-only subscription outlived the switch to SSE: {}",
-        gw.stall_report()
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(
+        records(dir.path(), "subs").len(),
+        1,
+        "the subscription is kept across the switch"
     );
 }

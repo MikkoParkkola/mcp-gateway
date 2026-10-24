@@ -54,14 +54,11 @@ pub(crate) fn parse_name(name: &str) -> Option<(&str, Kind)> {
 /// Why a backend offers no upstream-notification events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Ineligible {
-    /// The SSE-handshake transport, whose GET stream is read only up to its
-    /// `endpoint` event (design §11 D2): the transport the backend's live
-    /// connection detected, or, with none live, an explicit
-    /// `streamable_http: false` (MIK-7969).
-    SseHandshake,
-    /// A2A carries no MCP notifications (D2).
+    /// A2A carries no MCP notifications, so it offers no resource or prompt
+    /// events; its `tools_changed` is listened to by polling the agent card
+    /// (MIK-8835). Not a listener refusal: see [`listener_ineligible`].
     #[cfg_attr(not(feature = "a2a"), allow(dead_code, reason = "a2a feature off"))]
-    A2a,
+    A2aCapability,
     /// The backend is reached with the caller's propagated identity; the
     /// shared listener would observe under the gateway's own (D3).
     IdentityPropagation,
@@ -75,8 +72,7 @@ impl Ineligible {
     /// The wire value of `data.reason`.
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
-            Self::SseHandshake => "sse_handshake_transport",
-            Self::A2a => "a2a_transport",
+            Self::A2aCapability => "a2a_no_such_capability",
             Self::IdentityPropagation => "identity_propagation",
             Self::PerUserCredential => "per_user_credential",
         }
@@ -131,6 +127,28 @@ pub(crate) fn live_ineligible(
             &detected_in(&registry),
         )
         .into_keys()
+        .collect()
+    })
+}
+
+/// [`live_ineligible`] for the listener tasks: a backend refused only for
+/// A2A's missing resource and prompt capabilities still gets a listener, for
+/// its `tools_changed` (MIK-8835). The catalogue, admission and delivery keep
+/// the full set; an A2A backend's other kinds are refused at subscribe, so its
+/// listener only ever carries tools interest.
+pub(crate) fn listener_ineligible(
+    live: Arc<crate::config_reload::LiveConfig>,
+    registry: Arc<BackendRegistry>,
+) -> super::backend_source::Ineligible {
+    Arc::new(move || {
+        ineligible_backends(
+            &live.get(),
+            multi_user(live.running()),
+            &detected_in(&registry),
+        )
+        .into_iter()
+        .filter(|(_, reason)| *reason != Ineligible::A2aCapability)
+        .map(|(name, _)| name)
         .collect()
     })
 }
@@ -190,10 +208,6 @@ pub(crate) fn judged_backends(
 /// Why `backend` cannot offer the events yet, if it cannot. The identity
 /// reasons come first, so a subscribe never connects a backend they refuse.
 fn judge(backend: &BackendConfig, multi_user: bool, detected: Option<bool>) -> Option<Judged> {
-    #[cfg(feature = "a2a")]
-    if matches!(backend.transport, TransportConfig::A2a { .. }) {
-        return Some(Judged::Refused(Ineligible::A2a));
-    }
     if backend.identity_propagation.is_some() {
         return Some(Judged::Refused(Ineligible::IdentityPropagation));
     }
@@ -205,18 +219,23 @@ fn judge(backend: &BackendConfig, multi_user: bool, detected: Option<bool>) -> O
     if multi_user && personal {
         return Some(Judged::Refused(Ineligible::PerUserCredential));
     }
+    // After the identity reasons: an identity-bound A2A backend stays refused
+    // for its listener too (MIK-8835.A2A.1).
+    #[cfg(feature = "a2a")]
+    if matches!(backend.transport, TransportConfig::A2a { .. }) {
+        return Some(Judged::Refused(Ineligible::A2aCapability));
+    }
     let TransportConfig::Http {
         streamable_http, ..
     } = &backend.transport
     else {
         return None;
     };
-    // The live connection decides, whatever the key says: a fallback may have
-    // switched transport (ELIG.3). With none live, only an explicit `false`
-    // is known; an unset key or an explicit `true` may still fall back.
+    // Both HTTP transports offer the events (MIK-8835.SSE.1). With no live
+    // connection only an explicit `false` is known; an unset key or an
+    // explicit `true` still waits for a connect to learn the transport.
     match detected.or(streamable_http.filter(|s| !s)) {
-        Some(true) => None,
-        Some(false) => Some(Judged::Refused(Ineligible::SseHandshake)),
+        Some(_) => None,
         None => Some(Judged::Unresolved),
     }
 }
@@ -257,8 +276,6 @@ mod tests {
         crate::yaml::from_str(yaml).expect("backend config")
     }
 
-    const SSE: Option<Judged> = Some(Judged::Refused(Ineligible::SseHandshake));
-
     #[test]
     fn each_reason_is_found_and_the_eligible_pass() {
         let idp = backend(
@@ -284,8 +301,8 @@ mod tests {
         assert_eq!(judge(&backend("ws_url: ws://h/ws"), true, None), None);
     }
 
-    /// MIK-7969: the live connection decides; with none, only an explicit
-    /// `false` is known.
+    /// Both HTTP transports offer the events (MIK-8835.SSE.1); with no live
+    /// connection only an explicit `false` is known (MIK-7969).
     #[test]
     fn an_http_backend_is_judged_by_its_live_transport() {
         let unset = backend("http_url: http://h/mcp");
@@ -293,11 +310,11 @@ mod tests {
         let off = backend("http_url: http://h/mcp\nstreamable_http: false");
         for config in [&unset, &on, &off] {
             assert_eq!(judge(config, true, Some(true)), None, "{config:?}");
-            assert_eq!(judge(config, true, Some(false)), SSE, "{config:?}");
+            assert_eq!(judge(config, true, Some(false)), None, "{config:?}");
         }
         assert_eq!(judge(&unset, false, None), Some(Judged::Unresolved));
         assert_eq!(judge(&on, false, None), Some(Judged::Unresolved));
-        assert_eq!(judge(&off, false, None), SSE);
+        assert_eq!(judge(&off, false, None), None);
     }
 
     /// The identity reasons come before the transport, so a subscribe never
@@ -321,20 +338,19 @@ mod tests {
     fn only_definite_refusals_are_ineligible() {
         let config: Config = crate::yaml::from_str(
             "backends:\n  u:\n    http_url: http://h/mcp\n  \
-             s:\n    http_url: http://h/mcp\n    streamable_http: false\n",
+             i:\n    http_url: http://h/mcp\n    identity_propagation:\n      \
+             strategy: passthrough\n      audience: https://a\n      session_mode: per_user\n",
         )
         .expect("config");
         let none = |_: &str| None;
         let refused = ineligible_backends(&config, false, &none);
-        assert_eq!(refused.get("s"), Some(&Ineligible::SseHandshake));
+        assert_eq!(refused.get("i"), Some(&Ineligible::IdentityPropagation));
         assert_eq!(refused.get("u"), None);
         let judged = judged_backends(&config, false, &none);
         assert_eq!(judged.get("u"), Some(&Judged::Unresolved));
+        // A live SSE connection is eligible now (MIK-8835.SSE.1).
         let live = |name: &str| (name == "u").then_some(false);
-        assert_eq!(
-            ineligible_backends(&config, false, &live).get("u"),
-            Some(&Ineligible::SseHandshake)
-        );
+        assert_eq!(ineligible_backends(&config, false, &live).get("u"), None);
     }
 
     /// Accounts compile before the verdict: a personal or external account
@@ -387,7 +403,36 @@ mod tests {
     fn a2a_is_refused() {
         assert_eq!(
             judge(&backend("a2a_url: http://h"), false, None),
-            Some(Judged::Refused(Ineligible::A2a))
+            Some(Judged::Refused(Ineligible::A2aCapability))
         );
+    }
+
+    /// U1 (MIK-8835.A2A.1): A2A is judged after the identity reasons, so an
+    /// identity-bound A2A backend is refused as identity (and stays out of
+    /// the listener's exemption), while a shared one is only A2A.
+    #[cfg(feature = "a2a")]
+    #[test]
+    fn u1_identity_is_judged_before_a2a() {
+        let idp = backend(
+            "a2a_url: http://h\nidentity_propagation:\n  \
+             strategy: passthrough\n  audience: https://a\n  session_mode: per_user\n",
+        );
+        assert_eq!(
+            judge(&idp, false, None),
+            Some(Judged::Refused(Ineligible::IdentityPropagation))
+        );
+        let config: Config = crate::yaml::from_str(
+            "backends:\n  shared:\n    a2a_url: http://h\n  \
+             idp:\n    a2a_url: http://h\n    identity_propagation:\n      \
+             strategy: passthrough\n      audience: https://a\n      session_mode: per_user\n",
+        )
+        .expect("config");
+        let refused = ineligible_backends(&config, false, &|_: &str| None);
+        let exempt: Vec<&String> = refused
+            .iter()
+            .filter(|(_, r)| **r == Ineligible::A2aCapability)
+            .map(|(n, _)| n)
+            .collect();
+        assert_eq!(exempt, ["shared"], "only the shared A2A backend is exempt");
     }
 }

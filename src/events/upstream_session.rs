@@ -181,7 +181,13 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
             }
             continue;
         };
-        let delay = match session(&shared, &backend, &hub).await {
+        // By transport kind: A2A has no stream to open (MIK-8835.A2A.2).
+        let outcome = if backend.is_a2a() {
+            poll::poll(&shared, &backend, &hub, &registry).await
+        } else {
+            session(&shared, &backend, &hub).await
+        };
+        let delay = match outcome {
             Outcome::Stopped => return,
             Outcome::Unsupported => BACKOFF_CAP,
             // A stream cut at its hourly end (a legacy GET) reconnects at once.
@@ -720,6 +726,9 @@ mod notes;
 
 #[path = "upstream_session_legacy.rs"]
 mod legacy;
+
+#[path = "upstream_session_poll.rs"]
+mod poll;
 use legacy::watched_by;
 
 #[cfg(test)]
