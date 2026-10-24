@@ -17,8 +17,6 @@ use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
 const ARRIVAL: Duration = Duration::from_secs(60);
-/// The shipped periodic save interval (`WINDOW_SAVE_INTERVAL`), plus margin.
-const CHECKPOINT: Duration = Duration::from_secs(8);
 
 struct Gateway {
     child: Child,
@@ -208,7 +206,8 @@ fn the_retired_key_and_its_old_overlay_leave_the_window_off() {
             post_initialize(gw.port).starts_with("HTTP/1.1 200"),
             "{how}: not served"
         );
-        std::thread::sleep(CHECKPOINT);
+        // A recording gateway opens its segment before it serves, so a
+        // served request with no window file means the window is off.
         assert!(
             gw.window().is_none(),
             "{how}: the window must stay off: {:?}",
@@ -222,13 +221,7 @@ fn the_retired_key_and_its_old_overlay_leave_the_window_off() {
 fn an_applied_reload_keeps_the_window_recording() {
     let gw = start(&["--protocol-revision-window", "record"], None, &[], "");
     assert_recording(&gw, "before the reload");
-    std::thread::sleep(CHECKPOINT);
-    let before = gw.total();
-    assert!(
-        before >= 1,
-        "the first request was counted: {:?}",
-        gw.window()
-    );
+    let before = wait_for_total(&gw, 1, "the first request");
     // A hot-reloadable change, so the reload publishes (an unchanged or
     // retired-key-only file gives an empty patch and proves nothing).
     let config = gw.dir.path().join("gateway.yaml");
@@ -248,10 +241,23 @@ fn an_applied_reload_keeps_the_window_recording() {
         post_initialize(gw.port).starts_with("HTTP/1.1 200"),
         "after the reload: not served"
     );
-    std::thread::sleep(CHECKPOINT);
-    assert!(
-        gw.total() > before,
-        "a request after the reload must be counted: {:?}",
-        gw.window()
-    );
+    wait_for_total(&gw, before + 1, "a request after the reload");
+}
+
+/// Waits until the segment's total reaches `at_least` (the periodic save
+/// writes it); fails at the deadline. Returns the total seen.
+fn wait_for_total(gw: &Gateway, at_least: u64, what: &str) -> u64 {
+    let started = Instant::now();
+    loop {
+        let total = gw.total();
+        if total >= at_least {
+            return total;
+        }
+        assert!(
+            started.elapsed() < ARRIVAL,
+            "{what} was never counted: {:?}",
+            gw.window()
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }

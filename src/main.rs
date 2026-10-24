@@ -586,9 +586,7 @@ fn resolve_stats_url(
     })
 }
 
-/// Apply CLI overrides to a loaded configuration.
-///
-/// Merges CLI-provided port, host, and meta-mcp settings into `config`.
+/// Apply CLI overrides (port, host, measurement window, meta-mcp) to `config`.
 fn apply_cli_overrides(config: &mut Config, cli: &Cli) {
     if let Some(port) = cli.port {
         config.server.port = port;
@@ -596,9 +594,7 @@ fn apply_cli_overrides(config: &mut Config, cli: &Cli) {
     if let Some(ref host) = cli.host {
         config.server.host.clone_from(host);
     }
-    if let Some(window) = cli.protocol_revision_window {
-        config.server.protocol_revision_window = window;
-    }
+    config.server.protocol_revision_window = cli.protocol_revision_window.unwrap_or_default();
     if cli.no_meta_mcp {
         config.meta_mcp.enabled = false;
     }
