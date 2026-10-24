@@ -254,3 +254,83 @@ fn t33_overlapping_unsubscribes_keep_the_key_stranded() {
         "the late unsubscribe may still undo it, so the subscribe is re-sent"
     );
 }
+
+/// S11 (MIK-8835.SSE.3, design B14'): three own-session stream cuts with one
+/// watched URI. Each retire frees the old key (held, in flight or uncertain)
+/// instead of stranding it, so the charge stays one key and the URI is due on
+/// each new session. A late answer from a retired session changes nothing.
+#[test]
+fn s11_retiring_a_finished_session_strands_nothing() {
+    let mut l = Ledger::default();
+    l.observe(1);
+    subscribed(&mut l, "a");
+    // Cut 1: held.
+    l.retire_holder();
+    l.observe(2);
+    assert_eq!(
+        l.due(later()),
+        vec![("a".to_owned(), true)],
+        "re-subscribed on the new session"
+    );
+    assert_eq!(l.size(), (1, encoded("a"), 0), "one key, nothing stranded");
+    // Cut 2: an uncertain subscribe in flight, then its late answer.
+    let late = l.sent("a", true).expect("key");
+    l.retire_holder();
+    l.observe(3);
+    l.answered(&late, Outcome::Done, Instant::now());
+    assert_eq!(
+        l.due(later()),
+        vec![("a".to_owned(), true)],
+        "the late answer is discarded"
+    );
+    assert_eq!(l.size(), (1, encoded("a"), 0));
+    // Cut 3: an uncertain answer.
+    let call = l.sent("a", true).expect("key");
+    l.answered(&call, Outcome::Uncertain, Instant::now());
+    l.retire_holder();
+    l.observe(4);
+    assert_eq!(
+        l.size(),
+        (1, encoded("a"), 0),
+        "uncertain is not stranded on a dead session"
+    );
+}
+
+/// S11 (gpt r5): a stranded key from an older, non-own holder survives a
+/// retire, and the accounting is exactly that key plus the new session's.
+#[test]
+fn s11_a_retire_keeps_an_older_stranded_key() {
+    let mut l = Ledger::default();
+    l.observe(1);
+    l.want("old").expect("room");
+    let call = l.sent("old", true).expect("key");
+    l.answered(&call, Outcome::Uncertain, Instant::now());
+    l.unwant("old");
+    // A holder change (not a retire) strands it.
+    l.observe(2);
+    assert_eq!(l.size(), (1, encoded("old"), 1));
+    subscribed(&mut l, "a");
+    l.retire_holder();
+    l.observe(3);
+    assert_eq!(
+        l.size(),
+        (2, encoded("old") + encoded("a"), 1),
+        "the stranded key plus the re-placed URI"
+    );
+}
+
+/// S11 at the cap: a retire with the URI cap full frees room, so every
+/// wanted URI is placed on the next session.
+#[test]
+fn s11_a_retire_at_the_cap_replaces_everything() {
+    let mut l = Ledger::default();
+    l.observe(1);
+    for i in 0..MAX_URIS {
+        l.want(&format!("u{i}")).expect("room");
+    }
+    assert_eq!(l.want("one-more"), Err(Full));
+    l.retire_holder();
+    l.observe(2);
+    assert_eq!(l.size().0, MAX_URIS, "all re-placed, none stranded");
+    assert_eq!(l.unplaced(), 0);
+}

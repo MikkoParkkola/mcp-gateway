@@ -18,7 +18,8 @@ use super::upstream_need::Coalescer;
 use crate::backend::{Backend, BackendRegistry};
 use crate::protocol::era::PeerEra;
 use crate::transport::upstream_tap::{
-    FrameStream, KindSet, NoteKind, Refused, Requested, UpstreamListen, UpstreamNote, Watched,
+    FrameStream, KindSet, ListenerCredential, NoteKind, Refused, Requested, UpstreamListen,
+    UpstreamNote, Watched,
 };
 
 /// How often the loop looks at timers; also bounds coalescing latency.
@@ -295,7 +296,20 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
         }
     };
     let started = Instant::now();
-    let modern = target.era == PeerEra::Modern;
+    // The transport flavour this run starts on: a recovery that switches it in
+    // place keeps the same transport, so only this read sees it (design B2).
+    let flavour = backend.connected_streamable();
+    // P3 listens with the gateway's own credential; MIK-8833 passes the key's.
+    let Some((own, handle)) = pick_session(&target.handle, ListenerCredential::shared()) else {
+        debug!(backend = %shared.name, "upstream listener: an identity credential has no session of its own");
+        return failed();
+    };
+    // An own session's subscriptions end with it, however the run ends; any
+    // `release` runs first, inside the run (design B14').
+    let _retire = own.is_some().then(|| RetireOnEnd(Arc::clone(shared)));
+    // An own session speaks the legacy transport whatever the slot's cached
+    // era says (design B12).
+    let modern = own.is_none() && target.era == PeerEra::Modern;
     let mut state = State::new(
         shared,
         if modern {
@@ -312,13 +326,13 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
         // first, even when no URI is watched (§3).
         let _ = backend.read_resource_snapshot(false).await;
     }
-    if let Err(ended) = open_first(shared, &mut state, &target, modern).await {
+    if let Err(ended) = open_first(shared, &mut state, &handle, modern).await {
         return ended;
     }
-    state.handle = Some(target.handle.clone());
+    state.handle = Some(handle.clone());
     let synced = tokio::select! {
         () = shared.stop.cancelled() => false,
-        () = state.sync_legacy(backend, &target.handle) => true,
+        () = state.sync_legacy(backend, &handle) => true,
     };
     if !synced {
         state.release(backend).await;
@@ -371,9 +385,13 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             debug!(backend = %shared.name, "upstream listener: transport replaced");
             return finish_refill(&mut state, shared, backend, hub, refill, started).await;
         }
+        if backend.connected_streamable() != flavour {
+            debug!(backend = %shared.name, "upstream listener: transport flavour changed; reconnecting");
+            return finish_refill(&mut state, shared, backend, hub, refill, started).await;
+        }
         let stopped = tokio::select! {
             () = shared.stop.cancelled() => true,
-            () = state.maintain(backend, hub, &target.handle, modern) => false,
+            () = state.maintain(backend, hub, &handle, modern) => false,
         };
         if stopped {
             state.release(backend).await;
@@ -415,6 +433,37 @@ fn failed() -> Outcome {
     Outcome::Ended {
         acked: false,
         lasted: Duration::ZERO,
+    }
+}
+
+/// Retires the run's ledger holder when an own session's run ends.
+struct RetireOnEnd(Arc<Shared>);
+
+impl Drop for RetireOnEnd {
+    fn drop(&mut self) {
+        self.0.ledger().lock().retire_holder();
+    }
+}
+
+/// The session a run listens on: the transport's own session when it offers
+/// one (the SSE handshake), the transport itself otherwise. `None` when
+/// `credential` names an identity and there is no own session: the run must
+/// never fall back to the shared transport and its gateway credential
+/// (MIK-8835.SSE.4, design B6). The `Arc` keeps an own session alive for the
+/// run; the `Weak` is what the run's calls upgrade.
+fn pick_session(
+    transport: &Weak<dyn UpstreamListen>,
+    credential: ListenerCredential,
+) -> Option<(Option<Arc<dyn UpstreamListen>>, Weak<dyn UpstreamListen>)> {
+    let identity = credential.source.is_some();
+    let own = transport.upgrade().and_then(|t| t.own_session(credential));
+    match own {
+        Some(own) => {
+            let handle = Arc::downgrade(&own);
+            Some((Some(own), handle))
+        }
+        None if identity => None,
+        None => Some((None, transport.clone())),
     }
 }
 

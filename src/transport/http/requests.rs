@@ -239,7 +239,25 @@ impl HttpTransport {
         identity_key: Option<&str>,
         era: Option<PeerEra>,
     ) -> Result<JsonRpcResponse> {
-        let message_url = self.get_message_url();
+        // SSE mode: the request takes its place on the live stream before its
+        // POST, and is sent to that stream's own endpoint (design B16, B18).
+        let mut channel = self.live_sse_channel().await?;
+        let mut waiting = channel
+            .as_ref()
+            .map(|c| c.register(&request.id))
+            .transpose()?;
+        if channel.as_ref().is_some_and(|c| c.is_closed()) {
+            // Closed between the check and the registration: replace it, once.
+            drop(waiting);
+            channel = self.live_sse_channel().await?;
+            waiting = channel
+                .as_ref()
+                .map(|c| c.register(&request.id))
+                .transpose()?;
+        }
+        let message_url = channel
+            .as_ref()
+            .map_or_else(|| self.get_message_url(), |c| c.endpoint().to_owned());
 
         let mut headers = self
             .build_mcp_headers(
@@ -260,7 +278,7 @@ impl HttpTransport {
         // the disarm: a drop in between is a drop before the reply was read.
         let cancel = CancelOnDrop::arm(&self.client, &message_url, &headers, request, era);
         let result = self
-            .post_and_read(request, headers, &message_url, identity_key)
+            .post_and_read(request, headers, &message_url, identity_key, waiting)
             .await;
         cancel.disarm();
         result
@@ -296,6 +314,7 @@ impl HttpTransport {
         headers: header::HeaderMap,
         message_url: &str,
         identity_key: Option<&str>,
+        waiting: Option<super::sse_channel::Waiting>,
     ) -> Result<JsonRpcResponse> {
         // Sample the redirect counter either side of the send: an unchanged
         // count is the proof that a connect failure here is pre-dispatch
@@ -432,6 +451,25 @@ impl HttpTransport {
                 .bytes_stream()
                 .map_err(|e| safe_request_error("Failed to read SSE response", &e));
             super::sse_decoder::decode_sse_exchange(stream).await
+        } else if let Some(waiting) = waiting {
+            // A 2024-11-05 SSE peer answers 202 with no body and puts the
+            // response on the session stream (MIK-8835.SSE.2); a body, if one
+            // came, is the answer as before.
+            let body = response
+                .bytes()
+                .await
+                .map_err(|e| safe_request_error("Failed to read response", &e))?;
+            if body.iter().all(u8::is_ascii_whitespace) {
+                return tokio::time::timeout(self.timeout, waiting.response())
+                    .await
+                    .map_err(|_| {
+                        Error::Transport(
+                            "timed out waiting for the SSE stream's response".to_owned(),
+                        )
+                    })?;
+            }
+            serde_json::from_slice(&body)
+                .map_err(|e| Error::Transport(format!("Failed to parse response: {e}")))
         } else {
             // Parse JSON response
             response

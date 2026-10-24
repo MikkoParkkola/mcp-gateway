@@ -465,6 +465,19 @@ pub(crate) trait UpstreamListen: Send + Sync {
         watched: Watched,
     ) -> Result<FrameStream, Refused>;
 
+    /// A listener session of its own on this transport, sending every request
+    /// with `credential` (MIK-8835): `Some` for an HTTP transport that
+    /// detected the SSE handshake, `None` otherwise, when the listener uses
+    /// this transport itself. The caller must not fall back to this transport
+    /// when `credential` carries a source (an identity) and this is `None`.
+    fn own_session(
+        self: std::sync::Arc<Self>,
+        credential: ListenerCredential,
+    ) -> Option<std::sync::Arc<dyn UpstreamListen>> {
+        let _ = credential;
+        None
+    }
+
     /// The HTTP transport this connection detected, read live: `Some(true)`
     /// for Streamable HTTP, `Some(false)` for the SSE handshake, `None`
     /// before it is known and for every other transport (MIK-7969).
@@ -487,6 +500,48 @@ pub(crate) trait UpstreamListen: Send + Sync {
         uri: &str,
         subscribe: bool,
     ) -> crate::Result<crate::protocol::JsonRpcResponse>;
+}
+
+/// What a listener session's requests are sent with (MIK-8835.SSE.4).
+/// `shared()` is the gateway's own credential (the transport's configured
+/// headers); an identity-bound listener (MIK-8833) carries a source.
+#[derive(Clone, Default)]
+pub(crate) struct ListenerCredential {
+    pub identity_key: Option<String>,
+    pub source: Option<std::sync::Arc<dyn CredentialSource>>,
+}
+
+impl ListenerCredential {
+    pub(crate) fn shared() -> Self {
+        Self::default()
+    }
+}
+
+/// The send a [`CredentialSource`] wraps: given the credential's headers, it
+/// sends the request.
+pub(crate) type CredentialedSend<'a> = Box<
+    dyn FnOnce(
+            Vec<(String, String)>,
+        ) -> futures::future::BoxFuture<'a, crate::Result<reqwest::Response>>
+        + Send
+        + 'a,
+>;
+
+/// Lends a credential to one send at a time (MIK-8833): the headers exist only
+/// inside `with_credential`, which may cancel the send, so no request keeps a
+/// credential that was withdrawn.
+pub(crate) trait CredentialSource: Send + Sync {
+    /// Run `send` with the credential's headers.
+    ///
+    /// # Errors
+    /// The credential cannot be had; `send` is not run.
+    fn with_credential<'a>(
+        &'a self,
+        send: CredentialedSend<'a>,
+    ) -> futures::future::BoxFuture<'a, crate::Result<reqwest::Response>>;
+
+    /// The pool identity the session's headers are bucketed under.
+    fn identity_key(&self) -> Option<&str>;
 }
 
 /// The holder a legacy call is pinned to: beyond the transport instance,
