@@ -364,26 +364,36 @@ async fn r_replay_mcp_reserves_the_stored_delivery() {
 /// R-FWSTAMP `redaction_keeps_the_counted_text`, `Mcp`, `Stdio` × `Fresh`,
 /// `CacheHit` × both eras: `LatentGap(MIK-8707)`. Those routes stamp at
 /// dispatch, before the egress scan (`source_order`), so the receipt counts
-/// the backend's text. Since MIK-8745 a compact `github_search_repos` answer
-/// carrying a database URI in a string value, scanned under a Warn rule as the
-/// egress scan runs it, is delivered redacted and still parseable: the count
-/// the stamp read (3) is still the count the delivered text states, so the
-/// order changes no counted fact.
+/// the backend's text. Since MIK-8745 a `github_search_repos` answer carrying
+/// a database URI in a string value (compact with the count before or after
+/// it, or as `wrap_tool_success` prints it), scanned under a Warn rule as the
+/// egress scan runs it, is delivered redacted, still parseable and not an
+/// error: the count the stamp read (3) is still the count the delivered text
+/// states, so the order changes no counted fact.
 #[test]
 fn r_fwstamp_redaction_keeps_the_counted_text() {
     use crate::security::firewall::{Firewall, FirewallAction, FirewallConfig, FirewallRule};
     use crate::trust::extract_row_count;
     const TOOL: &str = "github_search_repos";
-    let text = r#"{"total_count":3,"incomplete_results":false,"items":[{"clone_url":"postgres://user:secret@db.internal/prod"}]}"#;
-    let mut result = serde_json::json!({
-        "content": [{"type": "text", "text": text}],
-        "isError": false
+    let uri = "postgres://user:secret@db.internal/prod";
+    let page = serde_json::json!({
+        "total_count": 3,
+        "incomplete_results": false,
+        "items": [{"clone_url": uri}]
     });
-    assert_eq!(
-        extract_row_count("gh", TOOL, &result, true),
-        Some(3),
-        "R-FWSTAMP: the stamp counts the backend's text"
-    );
+    let texts = [
+        // The count before the credential, compact.
+        format!(
+            r#"{{"total_count":3,"incomplete_results":false,"items":[{{"clone_url":"{uri}"}}]}}"#
+        ),
+        // The count after it, the order the old tail-eating redaction broke.
+        format!(
+            r#"{{"items":[{{"clone_url":"{uri}"}}],"incomplete_results":false,"total_count":3}}"#
+        ),
+        // `wrap_tool_success`'s printing, the text the stamp counts when the
+        // answer has no structuredContent (keys sorted: the count comes last).
+        serde_json::to_string_pretty(&page).expect("prints"),
+    ];
     let firewall = Firewall::from_config(
         FirewallConfig {
             enabled: true,
@@ -399,26 +409,41 @@ fn r_fwstamp_redaction_keeps_the_counted_text() {
         },
         None,
     );
-    let verdict = firewall.check_response("s", "gh", TOOL, &mut result, "c");
-    assert!(
-        verdict.allowed && verdict.action == FirewallAction::Warn,
-        "R-FWSTAMP: a Warn rule redacts and still delivers: {verdict:?}"
-    );
-    let delivered = result
-        .pointer("/content/0/text")
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("R-FWSTAMP: the answer keeps its text: {result}"));
-    assert!(
-        !delivered.contains("secret"),
-        "R-FWSTAMP: the URI was redacted: {delivered}"
-    );
-    assert_eq!(
-        extract_row_count("gh", TOOL, &result, true),
-        Some(3),
-        "R-FWSTAMP: the redacted text no longer states the stamped count \
-         ({delivered}): the cells are no longer {:?}",
-        super::AFTER_MIK_8745
-    );
+    for text in texts {
+        let mut result = serde_json::json!({
+            "content": [{"type": "text", "text": text}],
+            "isError": false
+        });
+        assert_eq!(
+            extract_row_count("gh", TOOL, &result, true),
+            Some(3),
+            "R-FWSTAMP: the stamp counts the backend's text: {text}"
+        );
+        let verdict = firewall.check_response("s", "gh", TOOL, &mut result, "c");
+        assert!(
+            verdict.allowed && verdict.action == FirewallAction::Warn,
+            "R-FWSTAMP: a Warn rule redacts and still delivers: {verdict:?}"
+        );
+        assert_eq!(
+            result["isError"], false,
+            "R-FWSTAMP: redaction never flips isError: {result}"
+        );
+        let delivered = result
+            .pointer("/content/0/text")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("R-FWSTAMP: the answer keeps its text: {result}"));
+        assert!(
+            !delivered.contains("secret"),
+            "R-FWSTAMP: the URI was redacted: {delivered}"
+        );
+        assert_eq!(
+            extract_row_count("gh", TOOL, &result, true),
+            Some(3),
+            "R-FWSTAMP: the redacted text no longer states the stamped count \
+             ({delivered}): the cells are no longer {:?}",
+            super::AFTER_MIK_8745
+        );
+    }
 }
 
 /// R-ERAREPLAY `cross_era_replay_is_refused`, `Mcp` × `IdempotentReplay` ×

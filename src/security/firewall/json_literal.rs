@@ -7,11 +7,13 @@
 //! so both read a JSON escape by one rule.
 
 /// The content of one string literal in a JSON document: the bytes between
-/// its quotes, and whether it is an object key.
+/// its quotes, whether it is an object key, and which object or array holds
+/// it (a number unique within the document; keys of one object share it).
 pub(crate) struct Literal {
     pub(crate) start: usize,
     pub(crate) end: usize,
     pub(crate) key: bool,
+    pub(crate) container: usize,
 }
 
 /// Every string literal of `text`, in order. `text` must be a JSON document
@@ -19,15 +21,35 @@ pub(crate) struct Literal {
 /// each one found opens a literal.
 pub(crate) fn string_literals(text: &str) -> Vec<Literal> {
     let mut out = Vec::new();
+    // Open containers, innermost last; the bottom entry is the top level.
+    let (mut open_containers, mut opened) = (vec![0], 0);
     let mut at = 0;
     while let Some(open) = text[at..].find('"') {
+        for byte in text[at..at + open].bytes() {
+            match byte {
+                b'{' | b'[' => {
+                    opened += 1;
+                    open_containers.push(opened);
+                }
+                b'}' | b']' => {
+                    open_containers.pop();
+                }
+                _ => {}
+            }
+        }
         let start = at + open + 1;
         let Some(len) = closing_quote(&text[start..]) else {
             break;
         };
         let end = start + len;
         let key = text[end + 1..].trim_start().starts_with(':');
-        out.push(Literal { start, end, key });
+        let container = open_containers.last().copied().unwrap_or(0);
+        out.push(Literal {
+            start,
+            end,
+            key,
+            container,
+        });
         at = end + 1;
     }
     out
