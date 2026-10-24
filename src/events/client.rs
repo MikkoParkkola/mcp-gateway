@@ -104,7 +104,7 @@ impl CallbackClient {
     pub(crate) async fn verify(
         &self,
         url: &url::Url,
-        subscription_id: &str,
+        handle: &str,
         key: &[u8],
     ) -> Result<(), CallbackFailure> {
         let challenge =
@@ -119,7 +119,7 @@ impl CallbackClient {
             hex::encode(rand::random::<[u8; 16]>())
         );
         let answer = self
-            .post(url, subscription_id, &id, &[key], body, ReadBody::Echo)
+            .post(url, handle, &id, &[key], body, ReadBody::Echo)
             .await?;
         match answer.status {
             400..=499 => return Err(CallbackFailure::Http4xx),
@@ -146,7 +146,7 @@ impl CallbackClient {
     pub(crate) async fn post(
         &self,
         url: &url::Url,
-        subscription_id: &str,
+        handle: &str,
         webhook_id: &str,
         keys: &[&[u8]],
         body: Vec<u8>,
@@ -154,16 +154,9 @@ impl CallbackClient {
     ) -> Result<Answer, CallbackFailure> {
         // The challenge POST's own reading dates its signature (MIK-8202).
         let now = crate::clock::utc_now();
-        self.post_tracked(
-            url,
-            subscription_id,
-            webhook_id,
-            Signing { keys, now },
-            body,
-            read,
-        )
-        .await
-        .map_err(|(failure, _)| failure)
+        self.post_tracked(url, handle, webhook_id, Signing { keys, now }, body, read)
+            .await
+            .map_err(|(failure, _)| failure)
     }
 
     /// [`Self::post`], and with a failure whether it came before any byte of
@@ -172,7 +165,7 @@ impl CallbackClient {
     pub(crate) async fn post_tracked(
         &self,
         url: &url::Url,
-        subscription_id: &str,
+        handle: &str,
         webhook_id: &str,
         signing: Signing<'_>,
         body: Vec<u8>,
@@ -194,7 +187,7 @@ impl CallbackClient {
             .header("webhook-id", webhook_id)
             .header("webhook-timestamp", &timestamp)
             .header("webhook-signature", signature)
-            .header("x-mcp-subscription-id", subscription_id)
+            .header("x-mcp-subscription-id", handle)
             .body(body)
             .send()
             .await

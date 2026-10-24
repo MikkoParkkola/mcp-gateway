@@ -77,22 +77,31 @@ impl EventsHub {
             .collect()
     }
 
-    /// The dead letters as the admin listing shows them: ids, reasons, times
-    /// and sizes, never a body, a secret or a callback URL.
+    /// The dead letters as the admin listing shows them: event ids, the
+    /// subscription's alias, reasons, times and sizes, never a body, a secret,
+    /// a callback URL or a stored subscription id.
     pub(crate) fn list_dead_letters(
         &self,
         subscription: Option<&str>,
         reason: Option<&str>,
     ) -> Vec<Value> {
+        // The listing names a subscription by its alias, never the stored id;
+        // the filter takes either, so a script holding a stored id still works
+        // (MIK-8697 §11.2).
+        let alias = |id: &str| self.runtime.services.get().map(|s| s.alias(id));
         self.store
             .dead_summaries()
             .into_iter()
-            .filter(|d| subscription.is_none_or(|s| d.subscription_id == s))
+            .filter(|d| {
+                subscription.is_none_or(|s| {
+                    d.subscription_id == s || alias(&d.subscription_id).as_deref() == Some(s)
+                })
+            })
             .filter(|d| reason.is_none_or(|r| d.reason == r))
             .map(|d| {
                 json!({
                     "eventId": d.event_id,
-                    "subscriptionId": d.subscription_id,
+                    "subscriptionAlias": alias(&d.subscription_id),
                     "name": d.name,
                     "reason": d.reason,
                     "deadAt": d.dead_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),

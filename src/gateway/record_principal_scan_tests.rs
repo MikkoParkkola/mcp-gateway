@@ -680,3 +680,115 @@ fn g_span_no_production_span_records_a_principal() {
     assert!(sites >= 9, "the scan found the instrumented sites: {sites}");
     assert!(problems.is_empty(), "{problems:#?}");
 }
+
+/// Log macro calls (`problems`, `calls`) in `text` that format a stored
+/// subscription id: a `.id` outside an `alias(&..)`/`handle(&..)` call, a
+/// field holding a bound `id` or a `subscription_id`, or a record path, which
+/// is named by the stored id (MIK-8697 §13).
+fn subid_problems(rel: &str, text: &str) -> (Vec<String>, usize) {
+    let open =
+        regex::Regex::new(r"\b(?:tracing::)?(?:trace|debug|info|warn|error)!\(").expect("regex");
+    let keyed = regex::Regex::new(r"(?:alias|handle)\(&[\w.]+\)").expect("regex");
+    let stored = regex::Regex::new(r"\.id\b|[%?]id\b|\bid\s*=|subscription_id|path\.display\(\)")
+        .expect("regex");
+    let lines = production_lines(text);
+    let (mut problems, mut calls) = (Vec::new(), 0);
+    for (i, (number, line)) in lines.iter().enumerate() {
+        let Some(start) = open
+            .find(line)
+            .filter(|_| !line.trim_start().starts_with("//"))
+        else {
+            continue;
+        };
+        calls += 1;
+        // The call to its closing parenthesis, across lines.
+        let (mut call, mut depth) = (String::new(), 0_i32);
+        'call: for (j, (_, next)) in lines[i..].iter().enumerate() {
+            let from = if j == 0 { start.end() - 1 } else { 0 };
+            for c in next[from..].chars() {
+                call.push(c);
+                depth += match c {
+                    '(' => 1,
+                    ')' => -1,
+                    _ => 0,
+                };
+                if depth == 0 {
+                    break 'call;
+                }
+            }
+        }
+        if stored.is_match(&keyed.replace_all(&call, "")) {
+            problems.push(format!("{rel}:{number}: {}", line.trim()));
+        }
+    }
+    (problems, calls)
+}
+
+/// G-SUBID's checker reports a stored id and a record path, and passes a
+/// keyed handle.
+#[test]
+fn subid_problems_names_a_stored_id_and_a_record_path() {
+    let check = |text: &str| subid_problems("f.rs", text).0.len();
+    assert_eq!(
+        check("fn f() {\n    warn!(subscription = %sub.id, \"x\");\n}\n"),
+        1
+    );
+    assert_eq!(
+        check(
+            "fn f() {\n    tracing::warn!(\n        a = 1,\n        subscription = %r.id,\n        \"x\"\n    );\n}\n"
+        ),
+        1
+    );
+    assert_eq!(
+        check("fn f() {\n    tracing::warn!(path = %path.display(), \"x\");\n}\n"),
+        1
+    );
+    assert_eq!(
+        check("fn f() {\n    warn!(subscription = %services.alias(&sub.id), \"x\");\n}\n"),
+        0
+    );
+    assert_eq!(
+        check("fn f() {\n    warn!(s = %self.handle(&r.id).unwrap_or_default(), \"x\");\n}\n"),
+        0
+    );
+    // A bound id and a record's stored id under its own name.
+    for shape in ["%id", "id = %r.subscription_id"] {
+        let text = format!("fn f() {{\n    warn!({shape}, \"x\");\n}}\n");
+        assert_eq!(check(&text), 1, "{text}");
+    }
+}
+
+/// G-SUBID over `src/events`: no production log line formats a stored
+/// subscription id.
+#[test]
+fn g_subid_no_events_log_line_names_a_stored_subscription_id() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let (mut problems, mut calls) = (Vec::new(), 0usize);
+    let mut dirs = vec![root.join("src/events")];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).expect("src readable").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+                continue;
+            }
+            let rel = path
+                .strip_prefix(root)
+                .expect("under root")
+                .to_string_lossy()
+                .replace('\\', "/");
+            if path.extension().is_none_or(|e| e != "rs")
+                || rel.contains("_tests")
+                || rel.ends_with("tests.rs")
+            {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("source readable");
+            let (found, seen) = subid_problems(&rel, &text);
+            problems.extend(found);
+            calls += seen;
+        }
+    }
+    assert!(calls >= 40, "the scan found the events log calls: {calls}");
+    assert!(problems.is_empty(), "{problems:#?}");
+}

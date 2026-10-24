@@ -214,8 +214,17 @@ fn narrowest() -> String {
 }
 
 /// The id a subscribe answered with.
-fn id_of(answer: &Value) -> String {
-    answer["id"].as_str().expect("id").to_owned()
+/// The stored id of the row `answer` names: the answer carries its keyed
+/// alias (MIK-8697 §13), and the store is addressed by the stored id.
+fn id_of(hub: &EventsHub, answer: &Value) -> String {
+    let alias = answer["id"].as_str().expect("id");
+    let services = hub.runtime.services.get().expect("services");
+    hub.store
+        .subscriptions()
+        .into_iter()
+        .map(|s| s.id)
+        .find(|id| services.alias(id) == alias)
+        .expect("a row with that alias")
 }
 
 /// Review G2: an unsubscribe ends the hold with the row. The same key
@@ -223,7 +232,10 @@ fn id_of(answer: &Value) -> String {
 #[tokio::test]
 async fn an_unsubscribed_held_row_leaves_no_hold_behind() {
     let (_dir, hub, _registry) = restarted(json!({}), &narrower()).await;
-    let id = id_of(&subscribe(&hub, json!({})).await.expect("held refresh"));
+    let id = id_of(
+        &hub,
+        &subscribe(&hub, json!({})).await.expect("held refresh"),
+    );
     assert!(hub.store.held(&id).is_some(), "held first");
     let params = json!({"name": TYPE, "arguments": {}, "delivery": {"url": url("p")}});
     hub.unsubscribe(&hooks_caller(&hub), Some(&params))
@@ -258,7 +270,10 @@ async fn a_held_refresh_racing_a_resume_keeps_no_stale_stamp() {
 #[tokio::test]
 async fn a_held_refresh_reactivates_a_suspended_row() {
     let (_dir, hub, _registry) = restarted(json!({}), &narrower()).await;
-    let id = id_of(&subscribe(&hub, json!({})).await.expect("held refresh"));
+    let id = id_of(
+        &hub,
+        &subscribe(&hub, json!({})).await.expect("held refresh"),
+    );
     hub.store.suspend(&id).expect("io");
     subscribe(&hub, json!({})).await.expect("held refresh");
     assert!(hub.store.get(&id).expect("row").active, "reactivated");
@@ -274,7 +289,10 @@ async fn a_refused_refresh_still_holds_what_the_live_routes_do_not_carry() {
     let id = {
         let (hub, _registry) = hub_with(dir.path(), &full(), &config);
         seed_verified(&hub, &config, "p");
-        id_of(&subscribe(&hub, json!({})).await.expect("first subscribe"))
+        id_of(
+            &hub,
+            &subscribe(&hub, json!({})).await.expect("first subscribe"),
+        )
     };
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
     let registry: Registry = Arc::new(parking_lot::RwLock::new(
@@ -298,7 +316,7 @@ async fn a_refused_refresh_still_holds_what_the_live_routes_do_not_carry() {
 async fn a_failed_stamp_write_still_bounds_the_row() {
     use std::os::unix::fs::PermissionsExt;
     let (dir, hub, registry) = restarted(json!({}), &full()).await;
-    let id = id_of(&subscribe(&hub, json!({})).await.expect("refresh"));
+    let id = id_of(&hub, &subscribe(&hub, json!({})).await.expect("refresh"));
     let subs = dir.path().join("subs");
     let mode = |m| std::fs::set_permissions(&subs, std::fs::Permissions::from_mode(m));
     mode(0o500).expect("read-only");
@@ -316,7 +334,7 @@ async fn a_failed_stamp_write_still_bounds_the_row() {
 #[tokio::test]
 async fn the_held_listing_counts_the_queued_records() {
     let (_dir, hub, registry) = restarted(json!({}), &full()).await;
-    let id = id_of(&subscribe(&hub, json!({})).await.expect("refresh"));
+    let id = id_of(&hub, &subscribe(&hub, json!({})).await.expect("refresh"));
     let now = chrono::Utc::now().to_rfc3339();
     let record = serde_json::from_value(json!({
         "v": 1, "event_id": "evt_q", "subscription_id": id, "name": TYPE,
@@ -389,7 +407,7 @@ async fn a_refresh_records_the_payload_fields_served_at_its_commit() {
         drop(started);
     };
     let (answer, ()) = tokio::join!(subscribe(&hub, json!({})), widen);
-    let id = id_of(&answer.expect("refresh"));
+    let id = id_of(&hub, &answer.expect("refresh"));
     let fields = hub.store.get(&id).expect("row").payload_fields;
     assert!(fields.iter().any(|f| f == "tag"), "{fields:?}");
 }

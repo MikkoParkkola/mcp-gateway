@@ -291,7 +291,7 @@ never refused.
 | Continuations (retries) | Per-process key material and ledger | Degrades: a retry succeeds only on the replica that minted it |
 | MCP sessions, elicitations | One process | Degrades: a follow-up routed elsewhere does not find them |
 | Rate-limit buckets, idempotency admission | One process | Degrades: limits and de-duplication apply per replica |
-| Record key (MIK-8697) | Each pod's `<data dir>/record-principal.key`, created on first start | Degrades: one credential's records carry a different `who.principal` and `credential:rp:` value on each pod. Set `security.record_principal_key` from one shared secret only if you need them to match |
+| Record key (MIK-8697) | Each pod's `<data dir>/record-principal.key`, created on first start | Degrades: one credential's records carry a different `who.principal` and `credential:rp:` value on each pod. Set `security.record_principal_key` from one shared secret only if you need them to match. Event subscription handles derive from the key; the events store records it in `record-key.id` and, if it changes, adopts the new key at startup with one warning (every handle changes). Back the key up with the data directory |
 | Cost-governance spend | Each process's `costs.json` in its data directory, saved every 5 minutes and on graceful shutdown (for stdio, when the client closes stdin), reloaded at start | Degrades: each replica counts its own spend, so a daily budget applies per replica |
 
 While any of the three is on, the modern protocol included, the chart renders the

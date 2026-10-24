@@ -59,6 +59,9 @@ impl EventsHub {
         ) else {
             return Ok(None);
         };
+        // Keyed before any commit, as in `subscribe` (MIK-8697 §13); only for
+        // a held row, so a plain subscribe keeps its own refusal order.
+        let handle = self.handle(&id)?;
         match delivery.get("mode") {
             Some(Value::String(mode)) if mode == "webhook" => {}
             Some(mode) => return Err(RpcError::unsupported_mode(mode)),
@@ -112,7 +115,7 @@ impl EventsHub {
             match outcome? {
                 Ok((_, expires_at)) => {
                     self.runtime.wake.notify_one();
-                    let answer = subscribe_answer(&id, expires_at, Some(&existing), false);
+                    let answer = subscribe_answer(&handle, expires_at, Some(&existing), false);
                     return Ok(Some(self.held_answer(answer, &id)));
                 }
                 Err(CapHit::Unverified) if verified => verified = false,

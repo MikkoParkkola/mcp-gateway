@@ -171,6 +171,9 @@ async fn subscribe(hub: &Arc<EventsHub>, principal: &str) {
 async fn subscribe_at(hub: &Arc<EventsHub>, principal: &str, callback: &str) {
     let params = json!({"name": NAME, "arguments": {"k": "v"}, "delivery": {
         "mode": "webhook", "url": callback, "secret": whsec()}});
+    // Production starts the hub before it serves; a test that subscribes
+    // first gets the default services, whose key names the handle.
+    let _ = hub.runtime.services.set(Arc::new(services()));
     hub.subscribe(&caller(principal), Some(&params))
         .await
         .unwrap_or_else(|e| panic!("subscribe {principal}: {e:?}"));
@@ -483,7 +486,6 @@ async fn a_test_source_event_reaches_a_receiver() {
     let probe = Arc::new(Probe::default());
     hub.register_source(probe.clone());
     seed_verified_at(&hub, &config, "p1", &rx.url);
-    subscribe_at(&hub, "p1", &rx.url).await;
     // Delivery needs the audit trail it promises (MIK-7802): a real log.
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
@@ -499,10 +501,12 @@ async fn a_test_source_event_reaches_a_receiver() {
         ))
         .expect("audit log"),
     );
+    // Started before the subscribe, as production serves only a started hub.
     hub.start(Services {
         audit: Some(log),
         ..services()
     });
+    subscribe_at(&hub, "p1", &rx.url).await;
     assert!(hub.reconcile_catalogue(fanout::CatalogueScan::Complete));
     hub.emit(event());
     for _ in 0..600 {

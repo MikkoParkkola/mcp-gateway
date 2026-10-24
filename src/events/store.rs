@@ -19,6 +19,8 @@ use super::records::{
 
 #[path = "store_hold.rs"]
 mod hold;
+#[path = "store_key_binding.rs"]
+mod key_binding;
 #[path = "store_pending.rs"]
 mod pending;
 pub(crate) use hold::{Held, Judged};

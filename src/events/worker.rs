@@ -184,7 +184,7 @@ impl EventsHub {
         let Err(error) = services.audit_attempt(&ctx.attempt(status)).await else {
             return true;
         };
-        tracing::warn!(%error, status, subscription = %ctx.sub.id, "events: attempt record not written; retrying");
+        tracing::warn!(%error, status, subscription = %services.alias(&ctx.sub.id), "events: attempt record not written; retrying");
         self.retry_unsent(services, ctx.record).await;
         false
     }
@@ -278,8 +278,11 @@ impl EventsHub {
                 .await;
             return;
         }
+        // The header names the subscription by its alias, computed at send
+        // time; an enqueued record keeps its stored eventId (MIK-8697 §14.2).
+        let handle = services.alias(&current.id);
         let answer = self
-            .send_event(url, &current, event_id, frame, sub.read_key.as_deref(), now)
+            .send_event(url, &current, &handle, event_id, frame, now)
             .await;
         self.settle_answer(services, ctx, answer, verdict, &ended)
             .await;
@@ -313,7 +316,7 @@ impl EventsHub {
         {
             let id = sub.id.clone();
             self.blocking(move |store| store.suspend(&id)).await;
-            tracing::warn!(subscription = %sub.id, "events: sustained delivery failure, subscription suspended");
+            tracing::warn!(subscription = %services.alias(&sub.id), "events: sustained delivery failure, subscription suspended");
         }
         self.settle_at(services, record, outcome, now).await;
     }
@@ -408,9 +411,9 @@ impl EventsHub {
         &self,
         url: &url::Url,
         sub: &super::records::Subscription,
+        handle: &str,
         event_id: &str,
         frame: OutboundFrame,
-        key: Option<&str>,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<super::client::Answer, CallbackFailure> {
         // The caller's reading picks the signing keys and dates the
@@ -425,27 +428,31 @@ impl EventsHub {
             .chain(previous.iter())
             .map(Vec::as_slice)
             .collect();
-        outbound::send_callback(frame, key.unwrap_or_default(), |body| async move {
-            // Only a failure before any byte could be written releases the
-            // frame's reservation; any other may follow a written byte, and
-            // the frame commits.
-            match self
-                .client
-                .post_tracked(
-                    url,
-                    &sub.id,
-                    event_id,
-                    super::client::Signing { keys: &keys, now },
-                    body,
-                    ReadBody::Discard,
-                )
-                .await
-            {
-                Err((failure, true)) => CallbackSend::NotSent(failure),
-                Err((failure, false)) => CallbackSend::Sent(Err(failure)),
-                Ok(answer) => CallbackSend::Sent(Ok(answer)),
-            }
-        })
+        outbound::send_callback(
+            frame,
+            sub.read_key.as_deref().unwrap_or_default(),
+            |body| async move {
+                // Only a failure before any byte could be written releases the
+                // frame's reservation; any other may follow a written byte, and
+                // the frame commits.
+                match self
+                    .client
+                    .post_tracked(
+                        url,
+                        handle,
+                        event_id,
+                        super::client::Signing { keys: &keys, now },
+                        body,
+                        ReadBody::Discard,
+                    )
+                    .await
+                {
+                    Err((failure, true)) => CallbackSend::NotSent(failure),
+                    Err((failure, false)) => CallbackSend::Sent(Err(failure)),
+                    Ok(answer) => CallbackSend::Sent(Ok(answer)),
+                }
+            },
+        )
         .await
     }
 
