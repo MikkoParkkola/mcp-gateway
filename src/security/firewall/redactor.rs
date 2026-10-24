@@ -774,27 +774,6 @@ fn replace_spans(text: &str, ranges: &[(usize, usize)]) -> String {
 
 /// Merge sorted spans that overlap or touch, so no character between two
 /// matched spans can survive and touching tokens share one marker.
-/// `spans` (in order) with every byte of `holes` (in order, disjoint) cut
-/// out, so a span crossing a hole leaves the pieces on either side of it.
-fn without(spans: &[(usize, usize)], holes: &[(usize, usize)]) -> Vec<(usize, usize)> {
-    let mut out = Vec::with_capacity(spans.len());
-    for &(mut start, end) in spans {
-        for &(hole_start, hole_end) in holes {
-            if hole_start >= end || hole_end <= start {
-                continue;
-            }
-            if start < hole_start {
-                out.push((start, hole_start));
-            }
-            start = start.max(hole_end);
-        }
-        if start < end {
-            out.push((start, end));
-        }
-    }
-    out
-}
-
 fn merge_spans(spans: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
     let mut merged: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
     for (start, end) in spans {
@@ -807,6 +786,10 @@ fn merge_spans(spans: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[path = "redactor_spans.rs"]
+mod spans;
+use spans::without;
 
 #[cfg(test)]
 #[path = "redactor_tests.rs"]
