@@ -88,9 +88,8 @@ USER gateway
 # Default port (matches gateway default)
 EXPOSE 39400
 
-# Health check using the built-in /health endpoint. The start period covers a
-# slow first start, which the variant's install makes possible.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+# Health check using the built-in /health endpoint
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD wget --spider -q http://localhost:39400/health || exit 1
 
 ENTRYPOINT ["mcp-gateway"]
@@ -173,3 +172,9 @@ COPY --chmod=0755 docker/entrypoint-full.sh /usr/local/bin/entrypoint-full.sh
 # then never exits instead of refusing the way the base stage does.
 ENTRYPOINT ["/usr/local/bin/entrypoint-full.sh"]
 CMD ["--config", "/config.yaml"]
+
+# The variant's own start period: an EXTRA_APT_PACKAGES install runs before
+# the gateway starts, so it gets up to a minute before an unanswered probe
+# counts. The default image keeps the 5s inherited from `runtime`.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD wget --spider -q http://localhost:39400/health || exit 1

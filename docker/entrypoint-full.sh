@@ -64,6 +64,20 @@ install_declared_packages() {
   # shellcheck disable=SC2086
   set -- ${EXTRA_APT_PACKAGES}
   set +f
+  # Only blanks: nothing to install, so no update either.
+  [ "$#" -gt 0 ] || return 0
+  # A word starting with `-` is an apt option, not a package: `--simulate x`
+  # makes apt exit 0 having installed nothing, and the container would start
+  # without what it declared. A word ending in `-` asks apt-get install to
+  # remove that package. Both are refused before apt runs.
+  for word in "$@"; do
+    case "$word" in
+      -*|*-)
+        echo "entrypoint: EXTRA_APT_PACKAGES holds an apt option or removal ($word); list package names only" >&2
+        exit 1
+        ;;
+    esac
+  done
   export DEBIAN_FRONTEND=noninteractive
   # Bounded because apt is the one startup step that waits on something outside
   # the deployment.
@@ -77,8 +91,8 @@ install_declared_packages() {
     echo "entrypoint: EXTRA_APT_PACKAGES install failed (exit $rc)" >&2
     exit 1
   fi
-  # The indexes were only needed by the chain that just ran. Removing the
-  # directory needs no glob, which is still off in this shell.
+  # The indexes were only needed by the chain that just ran. The directory is
+  # removed whole, so no glob is involved.
   rm -rf /var/lib/apt/lists
 }
 
