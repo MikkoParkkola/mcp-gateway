@@ -1,0 +1,67 @@
+name: mingw packages
+
+# Fills the deb cache that the Feature combinations windows target shard
+# installs its mingw C toolchain from (MIK-8766). A workflow of its own, not a
+# job inside feature-combos: that workflow cancels a run when a newer push
+# lands, and a cold download from a slow Ubuntu mirror outlasted the gap
+# between merges, so a fill there never finished. Here a running fill is
+# never cancelled. The key, download and install live in
+# scripts/ci/mingw-debs.sh, shared with the shard.
+on:
+  push:
+    branches: [main, docs/ranking-1-release-line]
+  workflow_dispatch:
+  # Runner images change about weekly and the key names the image. A
+  # scheduled run fills main's cache, which every branch can read.
+  schedule:
+    - cron: "17 3 * * 1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  fill:
+    name: Fetch the mingw packages
+    runs-on: ubuntu-latest
+    # The download is its only work, so a slow mirror day has room here.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Name the mingw package cache
+        id: key
+        run: echo "key=$(scripts/ci/mingw-debs.sh key)" >> "$GITHUB_OUTPUT"
+      # A hit only looks the key up: the run takes seconds.
+      - name: Look the cache up
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/mingw-debs
+          key: ${{ steps.key.outputs.key }}
+          lookup-only: true
+      - name: Download the mingw packages
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: scripts/ci/mingw-debs.sh download "$HOME/mingw-debs"
+      - name: Save the mingw packages
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/mingw-debs
+          key: ${{ steps.key.outputs.key }}
+      # The save action reports an upload failure as a warning, so a green
+      # job alone does not prove a filled cache. Look the key up again: it
+      # passes when this run saved it or a concurrent run on another ref won
+      # the race, and fails only when no entry exists.
+      - name: Confirm the cache is filled
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/mingw-debs
+          key: ${{ steps.key.outputs.key }}
+          lookup-only: true
+          fail-on-cache-miss: true
