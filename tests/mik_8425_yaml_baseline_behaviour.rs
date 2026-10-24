@@ -22,6 +22,9 @@ use std::fmt::Write as _;
 use mcp_gateway::identity_grants::IdentityGrantFile;
 use serde::{Deserialize, Serialize};
 
+#[path = "mik_8425_yaml_baseline_behaviour/mig2.rs"]
+mod mig2;
+
 #[derive(Debug, Deserialize, Serialize)]
 struct Field {
     a: u8,
@@ -296,6 +299,7 @@ fn report() -> String {
     limits(&mut out);
     enums(&mut out);
     writes(&mut out);
+    mig2::rows(&mut out);
     out
 }
 
