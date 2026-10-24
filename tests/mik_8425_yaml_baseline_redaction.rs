@@ -128,6 +128,22 @@ fn config_rows(out: &mut String) {
             good: "backends:\n  x:\n    command: y\n    timeout: 5s\n".to_owned(),
             names: "backends.x.timeout",
         },
+        // MIK-8425 MIG.2 (hard requirement 3, G2): an undefined alias, with
+        // the sentinel as a resolved value elsewhere in the same document, so
+        // the check is not vacuous; the refusal names its place.
+        Case {
+            name: "config/undefined-alias",
+            bad: format!("server:\n  host: {SENTINEL}\n  port: *nope\n"),
+            good: "server:\n  host: localhost\n  port: 39400\n".to_owned(),
+            names: "line",
+        },
+        // A second document is refused; the sentinel is in it.
+        Case {
+            name: "config/multi-document",
+            bad: format!("server:\n  port: 39400\n---\nserver:\n  host: {SENTINEL}\n"),
+            good: "server:\n  port: 39400\n".to_owned(),
+            names: "document",
+        },
     ];
     for case in &cases {
         let _ = writeln!(out, "{}\t{}", case.name, outcome(case, load_config));
@@ -158,6 +174,8 @@ fn no_baseline_path_prints_the_value() {
         "config/type-error",
         "config/syntax-error",
         "config/nested-type-error",
+        "config/undefined-alias",
+        "config/multi-document",
     ] {
         assert!(
             report.contains(&format!(
