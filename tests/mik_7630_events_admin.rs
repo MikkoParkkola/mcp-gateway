@@ -123,6 +123,22 @@ async fn dead_letters_replay_through_admin_route_only() {
     let first = events_at_least(&rx, 1).await;
 
     assert_listing_is_payload_free(&gw, &id, &rx.url).await;
+    // The subscription filter accepts the stored id as input; the answer
+    // names the subscription only by its alias (MIK-8697 §13).
+    let stored = dead[0]["subscription_id"]
+        .as_str()
+        .expect("stored subscription id")
+        .to_owned();
+    assert!(stored.starts_with("sub_"), "premise, a stored id: {stored}");
+    let query = format!("?subscription={stored}");
+    assert_eq!(listing(&gw, &query).await.len(), 1, "the filter accepts it");
+    let (_, raw) = gw
+        .admin(Some(ADMIN), "GET", &format!("{LIST}{query}"))
+        .await;
+    assert!(
+        !raw.to_string().contains("sub_"),
+        "the listing echoes a stored id: {raw}"
+    );
 
     let replay = format!("{LIST}/{id}/replay");
     for key in [Some(ALICE), Some(BOB), None] {
