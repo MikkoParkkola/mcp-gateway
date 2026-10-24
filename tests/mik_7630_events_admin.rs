@@ -131,10 +131,11 @@ async fn dead_letters_replay_through_admin_route_only() {
         .to_owned();
     assert!(stored.starts_with("sub_"), "premise, a stored id: {stored}");
     let query = format!("?subscription={stored}");
-    assert_eq!(listing(&gw, &query).await.len(), 1, "the filter accepts it");
-    let (_, raw) = gw
+    let (status, raw) = gw
         .admin(Some(ADMIN), "GET", &format!("{LIST}{query}"))
         .await;
+    assert_eq!(status, 200, "the filter accepts it: {raw}");
+    assert_eq!(raw["deadLetters"][0]["eventId"], id.as_str(), "{raw}");
     assert!(
         !raw.to_string().contains("sub_"),
         "the listing echoes a stored id: {raw}"

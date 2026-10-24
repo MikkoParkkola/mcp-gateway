@@ -14,8 +14,9 @@ use serde_json::Value;
 /// Highest record version this build loads.
 pub(crate) const MAX_LOADABLE_VERSION: u32 = 1;
 
-/// One subscription. `secret` and `previous_secret` are the only sensitive
-/// fields; `Debug` redacts both.
+/// One subscription. `Debug` redacts the secrets (`secret`,
+/// `previous_secret`), the stored `id` and the `principal`: the id hashes the
+/// stored principal (MIK-8697 §13).
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Subscription {
     pub v: u32,
