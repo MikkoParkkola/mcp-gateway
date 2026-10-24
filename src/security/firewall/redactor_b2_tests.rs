@@ -19,6 +19,8 @@ use serde_json::json;
 const MARK: &str = "[REDACTED:credential]";
 /// The design's `B2_MAX_LEAF_BYTES`.
 const CAP: usize = 1 << 20;
+/// The first key serde_json's `raw_value` feature reads as a raw value.
+const RAW_VALUE_TOKEN: &str = "$serde_json::private::RawValue";
 
 fn redactor() -> Redactor {
     Redactor::new()
@@ -141,7 +143,6 @@ fn expected(text: &str) -> String {
     let spans = redactor().credential_spans(text);
     let trimmed = text.trim_start();
     let gated = !spans.is_empty()
-        && text.len() <= CAP
         && matches!(trimmed.as_bytes().first(), Some(b'{' | b'[' | b'"'))
         && serde_json::from_str::<Value>(text)
             .is_ok_and(|v| v.is_object() || v.is_array() || v.is_string());
@@ -511,13 +512,13 @@ fn c2_two_credential_shaped_keys_take_the_first_free_suffix() {
 }
 
 #[test]
-fn c3_a_leaf_over_the_cap_takes_todays_path() {
+fn c3_a_leaf_over_the_cap_is_projected_too() {
     let head = format!(r#"{{"dsn":"{}","pad":""#, pg_url());
     let pad = "x".repeat(CAP + 1 - head.len() - 2);
     let text = format!("{head}{pad}\"}}");
     assert_eq!(text.len(), CAP + 1);
-    let (out, _) = deliver(&text);
-    assert_eq!(out, today(&text));
+    let out = assert_projected(&text);
+    assert!(parses(&out), "MIK-8774: over the cap the JSON still parses");
 }
 
 #[test]
@@ -553,6 +554,11 @@ mod key_rows;
 
 #[path = "redactor_idem_tests.rs"]
 mod idem_rows;
+
+// ── S: a leaf over the cap (MIK-8774) ─────────────────────────────────────
+
+#[path = "redactor_b2_large_tests.rs"]
+mod large_rows;
 
 // ── D: properties ─────────────────────────────────────────────────────────
 
