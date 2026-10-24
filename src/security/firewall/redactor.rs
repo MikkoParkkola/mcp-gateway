@@ -780,3 +780,7 @@ mod b2_tests;
 #[cfg(test)]
 #[path = "redactor_member_tests.rs"]
 mod member_tests;
+
+#[cfg(test)]
+#[path = "redactor_exempt_span_tests.rs"]
+mod exempt_span_tests;
