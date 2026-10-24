@@ -24,6 +24,9 @@
 
 // `webui_management_tests/backend_mutation.rs` and `internal_routes_served.rs`
 // name `crate::yaml`, so this crate declares the module once, here.
+#[path = "common/record_key.rs"]
+mod record_key;
+
 #[path = "common/yaml.rs"]
 mod yaml;
 
@@ -126,7 +129,7 @@ async fn make_app_state(
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
 
-    let authorizer = auth_state(&admin_auth_config());
+    let authorizer = auth_state(&admin_auth_config(), crate::record_key::RECORD_KEY);
 
     let tool_policy = Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default()));
     let mtls_policy = Arc::new(MtlsPolicy::from_config(&MtlsConfig::default()));
@@ -189,7 +192,10 @@ async fn make_app_state_with_auth_config(auth_config: &AuthConfig) -> (Arc<AppSt
     let (mut state, store_dir) = make_app_state(None, None).await;
     Arc::get_mut(&mut state)
         .expect("test AppState should be uniquely owned")
-        .auth_config = Arc::new(ResolvedAuthConfig::from_config(auth_config));
+        .auth_config = Arc::new(ResolvedAuthConfig::from_config(
+        auth_config,
+        crate::record_key::RECORD_KEY,
+    ));
     (state, store_dir)
 }
 
@@ -205,7 +211,7 @@ async fn make_app_state_with_reload(
         config.streaming.clone(),
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
-    let authorizer = auth_state(&admin_auth_config());
+    let authorizer = auth_state(&admin_auth_config(), crate::record_key::RECORD_KEY);
     let tool_policy = Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default()));
     let mtls_policy = Arc::new(MtlsPolicy::from_config(&MtlsConfig::default()));
     let inflight = Arc::new(tokio::sync::Semaphore::new(100));

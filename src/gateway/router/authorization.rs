@@ -233,6 +233,7 @@ pub(super) async fn require_admin_tool_access(
     client: Option<&AuthenticatedClient>,
     grant_subject: Option<&crate::identity_grants::GrantSubject>,
     tool_name: &str,
+    record_key: &crate::gateway::record_principal::RecordPrincipalKey,
 ) -> Result<(), AuthorizationError> {
     use crate::security::audit::{AuditEnvelope, AuditOutcome, AuditWho};
     let verdict = if CallerStanding::of_client(client).permits(tool_name) {
@@ -265,7 +266,7 @@ pub(super) async fn require_admin_tool_access(
     fields.insert("tool".into(), tool_name.into());
     let envelope = AuditEnvelope {
         outcome,
-        ..AuditEnvelope::ok(AuditWho::from_request(client, grant_subject))
+        ..AuditEnvelope::ok(AuditWho::from_request(client, grant_subject, record_key))
     };
     log.append_admin_action("meta_tool", fields, &envelope)
         .map_err(unavailable)?;

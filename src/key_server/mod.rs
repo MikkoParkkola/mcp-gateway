@@ -138,7 +138,10 @@ impl KeyServer {
             // A temporary token identifies one principal; its own key is the
             // stable identifier.
             // MIK-6704.IDENT.1a: a tagged digest of the token (MIK-8006).
-            principal: runtime_principal(RuntimeIssuer::KeyServerToken, &temp.token),
+            principal: crate::gateway::record_principal::InternalPrincipal::new(runtime_principal(
+                RuntimeIssuer::KeyServerToken,
+                &temp.token,
+            )),
             rate_limit: temp.scopes.rate_limit,
             backends: temp.scopes.backends.clone(),
             allowed_tools: if temp.scopes.tools.is_empty() {
@@ -223,7 +226,10 @@ impl KeyServer {
             quota_principal: Some(QuotaPrincipal::oidc_identity(&actor)),
             // The verified subject identifies this principal.
             // MIK-6704.IDENT.1a: a tagged digest of the verified subject (MIK-8006).
-            principal: runtime_principal(RuntimeIssuer::OidcBearer, &actor),
+            principal: crate::gateway::record_principal::InternalPrincipal::new(runtime_principal(
+                RuntimeIssuer::OidcBearer,
+                &actor,
+            )),
             name: actor,
             rate_limit: scopes.rate_limit,
             backends: scopes.backends.clone(),
@@ -406,9 +412,9 @@ mod tests {
             })
             .await;
         let (client, _) = ks.validate_token(text).await.expect("token is live");
-        let p = &client.principal;
-        assert_ne!(*p, crate::gateway::auth::principal_of(text));
-        assert_eq!(*p, runtime_principal(RuntimeIssuer::KeyServerToken, text));
+        let p = client.principal.storage_form();
+        assert_ne!(p, crate::gateway::auth::principal_of(text).storage_form());
+        assert_eq!(p, runtime_principal(RuntimeIssuer::KeyServerToken, text));
         assert!(
             !(p.len() == 12 && p.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))),
             "{p} is in the configured principal space"

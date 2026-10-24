@@ -309,3 +309,28 @@ async fn settle_failure(code: i32, notes: &DispatchNotes) -> serde_json::Value {
         .find(|entry: &serde_json::Value| entry["route"] == "task_recovery")
         .unwrap_or_else(|| panic!("a settlement record: {text}"))
 }
+
+/// MIK-8697 G-PANIC: the settlement record is the production caller of
+/// `MetaMcp::record_key`. With the key removed (no test default), settling a
+/// credential-owned task panics before any record is written, never writing
+/// the owner unkeyed.
+#[tokio::test]
+#[should_panic(expected = "the record key is installed by build_meta_mcp")]
+async fn g_panic_a_settlement_without_the_record_key_writes_nothing_unkeyed() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut meta = meta_logging_to(&dir);
+    meta.record_key = None;
+    let task = SettledTask {
+        server: "srv",
+        tool: "read",
+        id: "task-1",
+    };
+    let _ = meta
+        .audit_settlement(
+            task,
+            TaskTransition::Complete(json!({ "content": [] })),
+            &DispatchNotes::default(),
+            "credential:3f2a9c0d1e7b",
+        )
+        .await;
+}

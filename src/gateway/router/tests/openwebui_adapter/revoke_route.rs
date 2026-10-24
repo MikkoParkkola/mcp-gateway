@@ -122,7 +122,10 @@ async fn gateway_with(
     )
     .unwrap();
     let config = config(&env, hosted);
-    let auth = Arc::new(ResolvedAuthConfig::from_config(&config.auth));
+    let auth = Arc::new(ResolvedAuthConfig::from_config(
+        &config.auth,
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    ));
     let (mut state, _store) = test_router_app_state_with(StreamingConfig::default(), config).await;
     let log = crate::security::transparency_log::TransparencyLogConfig {
         enabled: true,

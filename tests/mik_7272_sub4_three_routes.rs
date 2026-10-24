@@ -17,6 +17,9 @@
 //! count alone: a count of one with the second caller's body would be a
 //! different defect wearing the same number.
 
+#[path = "common/record_key.rs"]
+mod record_key;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -174,7 +177,10 @@ async fn state_with_idempotency() -> (Arc<AppState>, tempfile::TempDir) {
     let subscriptions = Arc::new(
         mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(
             64,
-            mcp_gateway::gateway::test_helpers::auth_state(&config.auth),
+            mcp_gateway::gateway::test_helpers::auth_state(
+                &config.auth,
+                crate::record_key::RECORD_KEY,
+            ),
         ),
     );
     let store_dir = tempfile::tempdir().expect("a private task-store directory");
@@ -196,7 +202,10 @@ async fn state_with_idempotency() -> (Arc<AppState>, tempfile::TempDir) {
         multiplexer,
         proxy_manager,
         streaming_config: config.streaming.clone(),
-        auth_config: Arc::new(ResolvedAuthConfig::from_config(&config.auth)),
+        auth_config: Arc::new(ResolvedAuthConfig::from_config(
+            &config.auth,
+            crate::record_key::RECORD_KEY,
+        )),
         key_server: None,
         tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),

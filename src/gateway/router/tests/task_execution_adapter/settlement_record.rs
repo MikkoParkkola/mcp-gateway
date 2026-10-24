@@ -222,6 +222,8 @@ struct Setup {
     /// Response inspection in action mode: a HIGH finding refuses.
     refusing: bool,
     envelope_extra: Value,
+    /// The record key the gateway keys principals with (MIK-8697 T-eq).
+    record_key: &'static str,
 }
 
 impl Setup {
@@ -231,6 +233,7 @@ impl Setup {
             policy: AuditFailurePolicy::BestEffort,
             refusing: false,
             envelope_extra: json!({}),
+            record_key: crate::gateway::record_principal::TEST_RECORD_KEY,
         }
     }
 }
@@ -308,6 +311,17 @@ async fn fixture(setup: Setup, path: Path) -> Fixture {
     if setup.refusing {
         meta.enable_response_inspection_action_mode();
     }
+    // One key for the request path and the meta records, as build_meta_mcp
+    // installs one resolved key in both.
+    let key = Arc::new(
+        crate::gateway::record_principal::RecordPrincipalKey::from_text(setup.record_key)
+            .expect("a long enough key"),
+    );
+    meta.set_record_key(Arc::clone(&key));
+    app.auth_config = Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
+        &two_principal_auth(),
+        setup.record_key,
+    ));
     app.meta_mcp = Arc::new(meta);
     Fixture {
         state: Arc::new(app),
@@ -719,4 +733,39 @@ async fn r10_a_plain_call_is_unchanged_and_the_log_verifies() {
         crate::security::transparency_log::verify_log(&fx.log_dir.path().join("audit.jsonl"))
             .expect("the log reads");
     std::assert!(verified.ok, "{verified:?}");
+}
+
+/// T-eq (MIK-8697 §16.11): the task worker's record names the caller as the
+/// live call's record does: the snapshot of the request's keyed principal,
+/// never a key of the task owner. Under two distinct keys, so the equality
+/// cannot come from a constant. Mutant: the worker keys the owner key.
+#[tokio::test]
+async fn t_eq_a_task_worker_and_a_live_call_name_one_principal() {
+    const OTHER_KEY: &str = "t-eq-second-record-key-0123456789abcdef-0123";
+    let mut seen = Vec::new();
+    for record_key in [crate::gateway::record_principal::TEST_RECORD_KEY, OTHER_KEY] {
+        let path = Path::Worker;
+        let mut setup = Setup::answering(Terminal::Completed(result_naming_cust9("")));
+        setup.record_key = record_key;
+        let fx = fixture(setup, path).await;
+        let (id, _) = fx.settle(path, |_| {}).await;
+        let answered = post(&fx.state, "key-a", sync_invoke(7, json!({ "n": 2 }))).await;
+        std::assert!(answered.get("error").is_none(), "{answered}");
+        let records = fx.records();
+        let meta = |task: bool| {
+            records
+                .iter()
+                .find(|r| r["route"] == "meta" && (r["task_id"] == json!(id)) == task)
+                .unwrap_or_else(|| panic!("task={task}: {records:?}"))["who"]["principal"]
+                .clone()
+        };
+        let (worker, live) = (meta(true), meta(false));
+        std::assert_eq!(worker, live, "one caller, one principal");
+        std::assert!(
+            live.as_str().is_some_and(|p| p.len() == 12),
+            "a keyed principal: {live}"
+        );
+        seen.push(live);
+    }
+    std::assert_ne!(seen[0], seen[1], "the key decides the record form");
 }

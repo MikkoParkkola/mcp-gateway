@@ -36,7 +36,10 @@ fn authorizer(backends: &[&str]) -> AuthState {
         ..AuthConfig::default()
     };
     AuthState {
-        auth_config: Arc::new(ResolvedAuthConfig::from_config(&config)),
+        auth_config: Arc::new(ResolvedAuthConfig::from_config(
+            &config,
+            crate::gateway::record_principal::TEST_RECORD_KEY,
+        )),
         key_server: None,
         dashboard_bootstrap: Arc::new(DashboardBootstrap::new()),
         tls_enabled: false,

@@ -16,7 +16,10 @@ async fn a_sealed_worker_takes_no_step_when_it_wakes() {
     let dir = tempfile::tempdir().expect("store root");
     let subscriptions = Arc::new(SubscriptionRegistry::new(
         DEFAULT_MAX_LISTENERS,
-        crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+        crate::gateway::test_helpers::auth_state(
+            &crate::config::AuthConfig::default(),
+            crate::gateway::record_principal::TEST_RECORD_KEY,
+        ),
     ));
     let (service, executor) = open_runtime(
         &dir.path().join("tasks"),

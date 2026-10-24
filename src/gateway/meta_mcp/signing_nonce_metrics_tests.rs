@@ -50,6 +50,7 @@ fn ctx(authorizer: &(dyn ToolAuthorizer + Sync)) -> MetaMcpCallerContext<'_> {
         is_modern: false,
         protocol_revision: None,
         credential_principal: None,
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
         credential_kind: crate::security::audit::CredentialKind::None,
         authorizer,

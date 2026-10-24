@@ -23,6 +23,9 @@
     clippy::disallowed_methods,
     reason = "test code reads the host clock (MIK-8202 AC.14)"
 )]
+
+#[path = "common/record_key.rs"]
+mod record_key;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -73,7 +76,10 @@ async fn state() -> (Arc<AppState>, tempfile::TempDir) {
         config.streaming.clone(),
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
-    let subscriptions = Arc::new(SubscriptionRegistry::new(64, auth_state(&config.auth)));
+    let subscriptions = Arc::new(SubscriptionRegistry::new(
+        64,
+        auth_state(&config.auth, crate::record_key::RECORD_KEY),
+    ));
     let store_dir = tempfile::tempdir().expect("a private task-store directory");
     let (tasks, task_executor) = open_runtime(
         &store_dir.path().join("tasks"),
@@ -93,7 +99,10 @@ async fn state() -> (Arc<AppState>, tempfile::TempDir) {
         multiplexer,
         proxy_manager,
         streaming_config: config.streaming.clone(),
-        auth_config: Arc::new(ResolvedAuthConfig::from_config(&config.auth)),
+        auth_config: Arc::new(ResolvedAuthConfig::from_config(
+            &config.auth,
+            crate::record_key::RECORD_KEY,
+        )),
         key_server: None,
         tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),

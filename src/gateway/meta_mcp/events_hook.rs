@@ -182,6 +182,7 @@ impl MetaMcp {
         crate::events::Services {
             live,
             credentials,
+            record_key: self.record_key.clone(),
             #[cfg(feature = "firewall")]
             firewall: self.firewall.clone(),
             audit: self.transparency_logger.clone(),

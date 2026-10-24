@@ -13,6 +13,7 @@ fn keyed<'a>(
 ) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'a> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
         credential_principal: Some(principal),
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         // As the HTTP edge fills it; the quota still keys on the credential.
         api_key_name: Some(name),
         authentication: crate::gateway::meta_mcp::Authentication::Authenticated,

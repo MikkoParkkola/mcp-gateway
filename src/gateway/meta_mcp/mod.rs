@@ -376,6 +376,11 @@ pub struct MetaMcp {
     /// ASI07 chain identity and emission mode; `None` = feature off.
     pub(super) chain_signer: Option<Arc<response_security::ChainIdentity>>,
 
+    /// The process's record key (MIK-8697 §16.11), set by `build_meta_mcp`.
+    /// A record written while it is unset panics: that is a wiring bug, and a
+    /// principal is never written unkeyed.
+    pub(super) record_key: Option<Arc<crate::gateway::record_principal::RecordPrincipalKey>>,
+
     /// Shadow claim-capture sink (MIK-6908, rung 3.1).
     ///
     /// `Some` when `security.claim_capture.enabled = true`; `None` otherwise.

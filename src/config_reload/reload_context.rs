@@ -503,8 +503,13 @@ impl ReloadContext {
         let (was, now) = (&running.signature_chain, &proposed.security.signature_chain);
         let chain =
             crate::config::SignatureChainConfig::restart_changed_field(was.as_ref(), now.as_ref());
+        // MIK-8697: the record key keys every record and subscription handle
+        // for the process's lifetime, so a changed reference waits for a restart.
+        let record_key = (running.record_principal_key != proposed.security.record_principal_key)
+            .then(|| "record_principal_key".to_owned());
         if let Some(field) = (signing.map(|f| format!("message_signing.{f}")))
             .or_else(|| chain.map(|f| format!("signature_chain.{f}")))
+            .or(record_key)
         {
             return Err(format!(
                 "config reload refused: security.{field} requires restart"

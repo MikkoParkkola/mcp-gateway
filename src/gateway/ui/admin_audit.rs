@@ -87,7 +87,11 @@ async fn admin_action_layer(
     fields.insert("http_status".into(), status.as_u16().into());
     let envelope = AuditEnvelope {
         outcome: AuditOutcome::from_http_status(status, None),
-        ..AuditEnvelope::ok(AuditWho::from_request(client.as_ref(), subject.as_ref()))
+        ..AuditEnvelope::ok(AuditWho::from_request(
+            client.as_ref(),
+            subject.as_ref(),
+            state.auth_config.record_key(),
+        ))
     };
     match log.append_admin_action("admin_ui", fields, &envelope) {
         Ok(()) => response,

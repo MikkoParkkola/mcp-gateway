@@ -15,7 +15,7 @@ use crate::{Error, Result};
 /// implements neither, and deriving over it would compare `email`, `name` and
 /// `groups` — mutable display labels that must never decide whether two
 /// requests are the same principal.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct CapabilityExecutionContext {
     /// Verified caller subject associated with this request, when available.
     pub caller_identity: Option<GrantSubject>,
@@ -106,6 +106,33 @@ pub struct CapabilityExecutionContext {
     /// Crate-visible: an embedder must not assert it.
     // ci-allow-secret-debug: a truncated digest of the validated secret, never the secret; task owners record the same string.
     pub(crate) credential_principal: Option<String>,
+}
+
+// Not derived: the credential principal and the cache binding name the
+// caller's credential (MIK-8697).
+impl std::fmt::Debug for CapabilityExecutionContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CapabilityExecutionContext")
+            .field("caller_identity", &self.caller_identity)
+            .field("allow_loopback_egress", &self.allow_loopback_egress)
+            .field("policy_epoch", &self.policy_epoch)
+            .field("protocol_revision", &self.protocol_revision)
+            .field("routing_profile", &self.routing_profile)
+            .field(
+                "cache_binding",
+                &self.cache_binding.as_ref().map(|_| "<redacted>"),
+            )
+            .field("verified_identity", &self.verified_identity)
+            .field("account_credential", &self.account_credential)
+            .field("account_resolution", &self.account_resolution)
+            .field("caller_provenance", &self.caller_provenance)
+            .field("mcp_generation", &self.mcp_generation)
+            .field(
+                "credential_principal",
+                &self.credential_principal.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 /// Who resolved a capability dispatch's account (MIK-8407).

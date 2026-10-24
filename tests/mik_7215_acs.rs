@@ -10,6 +10,9 @@
 //! discovery document that every test passed, because the tests asserted the
 //! same invented field names. Once was enough.
 
+#[path = "common/record_key.rs"]
+mod record_key;
+
 use mcp_gateway::protocol::meta::{RequestShape, classify_request};
 use serde_json::json;
 

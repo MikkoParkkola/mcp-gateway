@@ -28,7 +28,11 @@ fn config_with_a_lapsed_key() -> AuthConfig {
 /// The WARN lines startup logs while resolving `config`.
 fn startup_warnings(config: &AuthConfig) -> String {
     let (resolved, warnings) = capture_warnings(|| {
-        ResolvedAuthConfig::try_from_config(config, &crate::config::EnvOverlay::none())
+        ResolvedAuthConfig::try_from_config(
+            config,
+            &crate::config::EnvOverlay::none(),
+            crate::gateway::record_principal::TEST_RECORD_KEY,
+        )
     });
     resolved.expect("the config resolves");
     warnings

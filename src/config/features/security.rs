@@ -574,6 +574,33 @@ pub struct SecurityConfig {
     pub claim_capture: ClaimCaptureConfig,
     /// Signature-chain origin emission (ASI07). Absent means the feature is off.
     pub signature_chain: Option<SignatureChainConfig>,
+    /// Override for the key that keys credential principals in records
+    /// (`who.principal`, credential owners; MIK-8697). Unset, the default: the gateway creates and uses
+    /// `<data dir>/record-principal.key`, one per data directory. Set it only
+    /// to make one credential's records match across replicas, or survive the
+    /// loss of a data directory; no secret every deployment has is held by the
+    /// gateway alone, so it cannot pick a shared value itself. Restart-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_principal_key: Option<RecordPrincipalKeyRef>,
+}
+
+/// `security.record_principal_key`: a secret reference (a literal, `env:` or
+/// `file:`). Its `Debug` never prints it, since it may be the key itself (CWE-532).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct RecordPrincipalKeyRef(String);
+
+impl RecordPrincipalKeyRef {
+    /// The reference text, for the resolver.
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for RecordPrincipalKeyRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RecordPrincipalKeyRef(<redacted>)")
+    }
 }
 
 impl SecurityConfig {
@@ -619,6 +646,7 @@ impl Default for SecurityConfig {
             provenance_stamping: false,
             claim_capture: ClaimCaptureConfig::default(),
             signature_chain: None,
+            record_principal_key: None,
         }
     }
 }

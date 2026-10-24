@@ -100,10 +100,8 @@ pub(crate) fn settle_lost_round(
         return false;
     };
     if reservation.is_settled() {
-        tracing::debug!(
-            key = reservation.key(),
-            "lost round found its idempotency reservation already settled"
-        );
+        // Not the key: it ends in the caller's stored principal (MIK-8697).
+        tracing::debug!("lost round found its idempotency reservation already settled");
         return false;
     }
     match route {

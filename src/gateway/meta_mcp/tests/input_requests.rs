@@ -17,6 +17,7 @@ fn allow_all_ctx_declaring(
         signing: None,
         execution: None,
         credential_principal: None,
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
         credential_kind: crate::security::audit::CredentialKind::None,
         is_modern: false,

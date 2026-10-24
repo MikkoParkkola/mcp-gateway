@@ -510,7 +510,9 @@ fn a2a_round_binding(caller: &Caller) -> Option<String> {
             .as_ref()
             .and_then(|client| client.credential_principal())
             .map(|principal| {
-                crate::hashing::sha256_hex(format!("a2a-client:{principal}").as_bytes())
+                crate::hashing::sha256_hex(
+                    format!("a2a-client:{}", principal.storage_form()).as_bytes(),
+                )
             })
     })
 }
@@ -543,7 +545,9 @@ mod mik_8659_preflight_tests {
             denied_tools: None,
             admin: false,
             // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
-            principal: principal.to_owned(),
+            principal: crate::gateway::record_principal::InternalPrincipal::new(
+                principal.to_owned(),
+            ),
             quota_principal: None,
             authenticated,
             credential_kind: crate::security::audit::CredentialKind::ApiKey,

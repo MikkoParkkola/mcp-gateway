@@ -303,7 +303,7 @@ impl Backend {
 
         // Check THIS slot's failsafe, not the backend's.
         entry.failsafe.admit(&self.name).inspect_err(|e| {
-            tracing::warn!(backend = %self.name, ?key, "Request rejected: {e}");
+            tracing::warn!(backend = %self.name, "Request rejected: {e}");
         })?;
 
         // Acquire semaphore
@@ -538,8 +538,10 @@ impl Backend {
     ///
     /// Returns an error if the backend is unavailable, the concurrency limit
     /// is reached, or the notification cannot be sent.
+    // `identity_key` is the caller's pool binding, for an A2A caller an
+    // unkeyed hash of its principal: never a span field (MIK-8697).
     #[tracing::instrument(
-        skip(self, params, extra_headers),
+        skip(self, params, extra_headers, identity_key),
         fields(
             backend = %self.name,
             method = %method,
@@ -567,7 +569,7 @@ impl Backend {
         let entry = self.pooled_entry(&key)?;
 
         entry.failsafe.admit(&self.name).inspect_err(|e| {
-            tracing::warn!(backend = %self.name, ?key, "Notification rejected: {e}");
+            tracing::warn!(backend = %self.name, "Notification rejected: {e}");
         })?;
 
         let _permit = self.semaphore.acquire().await.map_err(|_| {

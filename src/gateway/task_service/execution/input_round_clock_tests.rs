@@ -75,7 +75,10 @@ async fn r2b_p2_an_expired_input_round_wait_fails_the_task_at_last_updated_at() 
     );
     let registry = SubscriptionRegistry::new(
         DEFAULT_MAX_LISTENERS,
-        crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+        crate::gateway::test_helpers::auth_state(
+            &crate::config::AuthConfig::default(),
+            crate::gateway::record_principal::TEST_RECORD_KEY,
+        ),
     );
     let executor = TaskExecutor::new(Arc::clone(&service), Arc::new(registry), 1);
     let options = TaskOptions {

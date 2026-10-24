@@ -95,9 +95,15 @@ async fn anonymous_denied_admin_meta_tools() {
             "{tool} is in the admin list, so the predicate must say so"
         );
         assert!(
-            require_admin_tool_access(None, Some(&anon), None, tool)
-                .await
-                .is_err(),
+            require_admin_tool_access(
+                None,
+                Some(&anon),
+                None,
+                tool,
+                &crate::gateway::record_principal::test_record_key()
+            )
+            .await
+            .is_err(),
             "anonymous must not reach {tool}"
         );
     }

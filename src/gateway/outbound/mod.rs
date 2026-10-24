@@ -398,6 +398,9 @@ pub(crate) fn noted_reads() -> Option<ReadAttribution> {
 }
 
 #[cfg(all(test, feature = "firewall"))]
+#[path = "caller_key_record_tests.rs"]
+mod caller_key_record_tests;
+#[cfg(all(test, feature = "firewall"))]
 #[path = "coverage_tests.rs"]
 mod coverage_tests;
 #[cfg(all(test, feature = "firewall"))]

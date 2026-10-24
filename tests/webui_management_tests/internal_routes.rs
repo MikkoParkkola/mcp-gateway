@@ -112,7 +112,10 @@ async fn gateway(fixture: Fixture) -> Gateway {
             Fixture::AuthOff => Config::default().auth,
             Fixture::AuthOn | Fixture::Configured => auth_on(),
         };
-        s.auth_config = Arc::new(ResolvedAuthConfig::from_config(&auth));
+        s.auth_config = Arc::new(ResolvedAuthConfig::from_config(
+            &auth,
+            crate::record_key::RECORD_KEY,
+        ));
         if fixture == Fixture::Configured {
             s.control_plane_store = Some(Arc::new(InMemoryControlPlaneStore::new()));
             s.export_status = Some(Arc::new(ExportStatus::default()));
