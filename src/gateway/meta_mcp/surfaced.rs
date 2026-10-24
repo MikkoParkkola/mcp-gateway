@@ -111,6 +111,15 @@ impl MetaMcp {
         self.surfaced_tools_map = super::visible::SurfacedMap::new(map);
         self
     }
+
+    /// MIK-8520: point `tool` at `server` in the live surfaced map, as a
+    /// reload of `surfaced_tools` would, so a row can move it between a
+    /// replay's admission and its record.
+    #[cfg(test)]
+    pub(crate) fn resurface_for_test(&mut self, tool: &str, server: &str) {
+        let map = HashMap::from([(tool.to_owned(), server.to_owned())]);
+        self.surfaced_tools_map = super::visible::SurfacedMap::new(map);
+    }
 }
 
 // ============================================================================
