@@ -471,3 +471,6 @@ fn p9_redacting_twice_changes_nothing_more() {
     assert!(scan(&mut value).is_empty(), "second pass finds nothing");
     assert_eq!(value, once);
 }
+
+#[path = "redactor_family_tests.rs"]
+mod family;
