@@ -189,7 +189,42 @@ fn from_value(out: &mut String) {
     }
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct Egress {
+    egress: mcp_gateway::runtime::provider::RuntimeNetworkEgress,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Policy {
+    policy: mcp_gateway::runtime::NetworkEgressPolicy,
+}
+
+/// G3 on the product enums a YAML read reaches (census, section 3a):
+/// `RuntimeNetworkEgress` through `Config`, `NetworkEgressPolicy` through
+/// `SandboxDescriptor`. The second has an `#[serde(untagged)]` variant, so a
+/// bare list must still read as its allowlist.
+fn product_enums(out: &mut String) {
+    for (case, doc) in [
+        ("mig2/g3/egress/unit", "egress: loopback\n"),
+        ("mig2/g3/egress/tag", "egress: !allowlist [a.test]\n"),
+        ("mig2/g3/egress/map", "egress: {allowlist: [a.test]}\n"),
+        ("mig2/g3/egress/bare-list", "egress: [a.test]\n"),
+    ] {
+        row(out, case, &ok_json(yaml::from_str::<Egress>(doc)));
+    }
+    for (case, doc) in [
+        ("mig2/g3/policy/unit", "policy: none\n"),
+        ("mig2/g3/policy/quoted-unit", "policy: 'full'\n"),
+        ("mig2/g3/policy/tag", "policy: !allowlist [10.0.0.0/8]\n"),
+        ("mig2/g3/policy/map", "policy: {allowlist: [10.0.0.0/8]}\n"),
+        ("mig2/g3/policy/bare-list", "policy: [10.0.0.0/8]\n"),
+    ] {
+        row(out, case, &ok_json(yaml::from_str::<Policy>(doc)));
+    }
+}
+
 pub(super) fn rows(out: &mut String) {
+    product_enums(out);
     duplicates(out);
     scalars(out);
     tags(out);

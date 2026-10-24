@@ -110,6 +110,15 @@ enum/struct-map	ERR invalid type: map, expected a YAML tag starting with '!'
 write/enums	- unit | - !newtype hi | - !pair |   x: 1 |   y: 2 | 
 write/ambiguous-strings	k00: yes | k01: no | k02: on | k03: off | k04: y | k05: 'true' | k06: '0755' | k07: '0x1F' | k08: '1e3' | k09: 'null' | k10: '~' | k11: '.inf' | k12: '' | k13: 12:30 | k14: '- x' | k15: 'a: b' | k16: '#c' | 
 write/ambiguous-strings-read-back-equal	true
+mig2/g3/egress/unit	OK {"egress":"loopback"}
+mig2/g3/egress/tag	OK {"egress":{"allowlist":["a.test"]}}
+mig2/g3/egress/map	ERR egress: invalid type: map, expected a YAML tag starting with '!' at line 1 column 9
+mig2/g3/egress/bare-list	ERR egress: invalid type: sequence, expected a YAML tag starting with '!' at line 1 column 9
+mig2/g3/policy/unit	OK {"policy":"none"}
+mig2/g3/policy/quoted-unit	OK {"policy":"full"}
+mig2/g3/policy/tag	ERR policy: untagged and internally tagged enums do not support enum input at line 1 column 9
+mig2/g3/policy/map	ERR data did not match any variant of untagged enum NetworkEgressPolicy
+mig2/g3/policy/bare-list	OK {"policy":["10.0.0.0/8"]}
 mig2/dup/invalid-earlier-map	ERR a: invalid value: integer, expected u8 at line 1 column 4
 mig2/dup/invalid-earlier-dict	OK {"a":2}
 mig2/dup/key-identity-map	OK {"1":2}
