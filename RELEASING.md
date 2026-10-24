@@ -210,16 +210,19 @@ gh run list --commit "$(git rev-parse HEAD)" --event push --json workflowName,da
 
 ### 5. Watch each stage and verify before trusting the next
 
-| Stage (job) | Verify |
-|---|---|
-| `release.yml` `verify` | `Check tag against manifest and classify the channel` classified the tag as `stable`; `Verify publish package` (`cargo publish --dry-run`) green |
-| `release.yml` `release` | The job signs each binary, writes its SBOM, uploads everything to a **draft**, verifies what the draft serves (`Verify the draft release's assets`), and only then publishes. `gh release view v4.0.0` shows 5 binaries, each with `.spdx.json` and `.sigstore.json`, the license files, and `SHA256SUMS.txt` with its bundle; not marked prerelease. Download one binary and run `cosign verify-blob --bundle <binary>.sigstore.json --certificate-identity https://github.com/MikkoParkkola/mcp-gateway/.github/workflows/release.yml@refs/tags/v4.0.0 --certificate-oidc-issuer https://token.actions.githubusercontent.com <binary>` and `sha256sum -c SHA256SUMS.txt`. Rehearse before tagging: `gh workflow run ci.yml --ref <branch> -f rehearse_binary_signing=true` signs one binary into a draft release, verifies it, and deletes it |
-| `release.yml` `publish` | `xh https://crates.io/api/v1/crates/mcp-gateway/4.0.0` returns the version (200, not 404); `cargo search` reads a search index that can lag, so do not rely on it; `cargo install mcp-gateway --version 4.0.0` succeeds |
-| `release.yml` `npm-publish` | `npm view @mikkoparkkola/mcp-gateway dist-tags` shows `latest: 4.0.0`; `npm view @mikkoparkkola/mcp-gateway@4.0.0 dist.attestations` is present |
-| `release.yml` `homebrew-update` | `MikkoParkkola/homebrew-tap` has commit `mcp-gateway 4.0.0`; `brew update && brew upgrade mcp-gateway && mcp-gateway --version` prints 4.0.0 |
-| `ci.yml` `docker-build` | both legs green, including the Trivy and both smoke-test steps, against the pushed digest |
-| `ci.yml` `docker-manifest` | `Verify the release signature + SBOM attestation` and `Assert the release tag resolves to the signed digest` green |
-| `ci.yml` `publish-mcp-registry` | `Confirm the published reference resolves before listing it` and `Publish to MCP Registry` green |
+Each row has one owner. The release lead reads the tag run's job logs; a release lane runs the
+commands against the published names on Spark (Linux, aarch64) unless the row says otherwise.
+
+| Stage (job) | Verify | Owner |
+|---|---|---|
+| `release.yml` `verify` | `Check tag against manifest and classify the channel` classified the tag as `stable`; `Verify publish package` (`cargo publish --dry-run`) green | release lead |
+| `release.yml` `release` | The job signs each binary, writes its SBOM, uploads everything to a **draft**, verifies what the draft serves (`Verify the draft release's assets`), and only then publishes. `gh release view v4.0.0` shows 5 binaries, each with `.spdx.json` and `.sigstore.json`, the license files, and `SHA256SUMS.txt` with its bundle; not marked prerelease. Download one binary and run `cosign verify-blob --bundle <binary>.sigstore.json --certificate-identity https://github.com/MikkoParkkola/mcp-gateway/.github/workflows/release.yml@refs/tags/v4.0.0 --certificate-oidc-issuer https://token.actions.githubusercontent.com <binary>` and `sha256sum -c SHA256SUMS.txt`. Rehearse before tagging: `gh workflow run ci.yml --ref <branch> -f rehearse_binary_signing=true` signs one binary into a draft release, verifies it, and deletes it | lane, on Spark |
+| `release.yml` `publish` | `xh https://crates.io/api/v1/crates/mcp-gateway/4.0.0` returns the version (200, not 404); `cargo search` reads a search index that can lag, so do not rely on it; `cargo install mcp-gateway --version 4.0.0` succeeds | lane, on Spark, in a scratch `CARGO_HOME` |
+| `release.yml` `npm-publish` | `npm view @mikkoparkkola/mcp-gateway dist-tags` shows `latest: 4.0.0`; `npm view @mikkoparkkola/mcp-gateway@4.0.0 dist.attestations` is present | lane, on Spark |
+| `release.yml` `homebrew-update` | `MikkoParkkola/homebrew-tap` has commit `mcp-gateway 4.0.0`; `brew update && brew upgrade mcp-gateway && mcp-gateway --version` prints 4.0.0 | lane: the tap commit anywhere; the `brew` line on the release owner's Mac, after the step 6 NFR.SEC.7 redeploy (an upgrade can replace the binary the listening gateway runs) |
+| `ci.yml` `docker-build` | both legs green, including the Trivy and both smoke-test steps, against the pushed digest | release lead |
+| `ci.yml` `docker-manifest` | `Verify the release signature + SBOM attestation` and `Assert the release tag resolves to the signed digest` green | release lead |
+| `ci.yml` `publish-mcp-registry` | `Confirm the published reference resolves before listing it` and `Publish to MCP Registry` green | release lead |
 
 ### 6. Post-publish checks against the published names
 
@@ -268,6 +271,16 @@ shipped](#if-the-image-fails-but-everything-else-shipped).
 published `v4.0.0` `mcp-gateway-darwin-arm64` asset (runbook option 1a), then run
 `check-control-drift.py http://127.0.0.1:39401/mcp`. Now that the tag exists, its
 provenance note can corroborate `v4.0.0`. Pass is exit 0.
+
+Owners for this step:
+
+| Check | Owner |
+|---|---|
+| `smoke-image.sh` and `smoke-full-image.sh` on the published tags | lane, on Spark (arm64); amd64 by citing the `Docker (amd64)` leg |
+| `crane digest` for `4.0.0`, `4.0` and `latest`; `cosign verify` on that digest | lane, on Spark |
+| The two-platform manifest list | lane, on Spark, reading the CI step too |
+| NFR.SEC.7 redeploy and `check-control-drift.py` | lane, on the release owner's Mac. Tell every lane before the listening gateway restarts, keep the previous binary for rollback, and check `/health` after the restart |
+| Grading the results in the criteria ledger | release lead (ledger owner) |
 
 Record both results as evidence for the criteria ledger. The ledger owner grades them;
 this runbook does not edit the ledger.
