@@ -39,6 +39,26 @@ fn an_operator_set_cache_is_left_alone() {
 }
 
 #[test]
+fn a_cache_named_in_any_npm_spelling_is_left_alone() {
+    // npm folds the key, so each of these is the backend's own cache. The
+    // gateway must assign none beside it: npm keeps whichever value it reads
+    // last, and the repair deletes only a directory the gateway assigned.
+    for key in ["npm_config_cache", "NPM_CONFIG_CACHE", "Npm_Config_Cache"] {
+        let env = HashMap::from([(key.to_string(), "/custom/cache".to_string())]);
+        assert_eq!(
+            assigned_package_cache_dir("paperless", "npx -y paperless-mcp", &env),
+            None,
+            "{key:?} names npm's cache"
+        );
+        assert_eq!(
+            isolated_package_manager_env("paperless", "npx -y paperless-mcp", env.clone()),
+            env,
+            "{key:?}: no second cache beside the backend's"
+        );
+    }
+}
+
+#[test]
 fn only_npm_invoking_commands_get_a_cache() {
     for cmd in [
         "npx -y pkg",
@@ -121,8 +141,16 @@ fn only_the_settings_on_the_allowlist_are_forwarded() {
     // case-insensitively, and `NPM_CONFIG_ALLOW_GIT` is the spelling npm's own
     // documentation uses. Everything off the list stays behind, whether it is a
     // credential, the cache the gateway assigns, or simply unknown.
-    const CASES: [(&str, bool); 21] = [
+    const CASES: [(&str, bool); 27] = [
         ("npm_config_allow_git", true),
+        ("npm_config_offline", true),
+        // Near misses: a suffix, a missing separator, padding, and a
+        // lookalike letter (dotless i) that ASCII folding leaves alone.
+        ("npm_config_cafile_extra", false),
+        ("npm_config_cafilex", false),
+        (" npm_config_cafile", false),
+        ("npm_config_caf\u{131}le", false),
+        ("npm_config_strict-ssl", false),
         ("npm_config_prefer_offline", true),
         ("npm_config_cafile", true),
         ("npm_config_strict_ssl", true),
@@ -160,6 +188,37 @@ fn only_the_settings_on_the_allowlist_are_forwarded() {
             );
         }
     }
+}
+
+#[test]
+fn a_backend_refusing_git_dependencies_keeps_its_refusal() {
+    // `allow_git` folds to `allow-git` too. A backend that opts out of git
+    // dependencies must not have an operator's `all` handed to it beside its
+    // own `none`: npm would read the operator's value last on Unix and fetch
+    // the git dependencies the backend refused.
+    for configured in ["npm_config_allow-git", "NPM_CONFIG_ALLOW-GIT"] {
+        let forwarded = forwarded_npm_config(
+            env_pairs(&[("npm_config_allow_git", "all")]),
+            &HashMap::from([(configured.to_string(), "none".to_string())]),
+        );
+        assert!(
+            forwarded.is_empty(),
+            "{configured:?} names npm's allow-git: {forwarded:?}"
+        );
+    }
+}
+
+#[test]
+fn odd_backend_keys_neither_panic_nor_unlock_a_setting() {
+    // A multibyte character across the prefix boundary is not a prefix match
+    // (and must not panic on the byte slice). An empty backend value still
+    // names the setting: npm skips the empty value and falls back to its
+    // default, which for strict-ssl is `true`, the safe side.
+    let operator = env_pairs(&[("npm_config_strict_ssl", "false")]);
+    let multibyte = HashMap::from([("npm_config\u{e9}strict_ssl".to_string(), "true".to_string())]);
+    assert_eq!(forwarded_npm_config(operator.clone(), &multibyte), operator);
+    let empty = HashMap::from([("npm_config_strict-ssl".to_string(), String::new())]);
+    assert!(forwarded_npm_config(operator, &empty).is_empty());
 }
 
 #[test]
