@@ -354,11 +354,17 @@ fn s5_credential_key_naming_a_member_redacts_key_and_value_separately() {
             .find(|(k, _)| k.as_str() != "other")
             .expect("the credential member");
         // 8772: the key becomes the marker, `#n`-suffixed only on a collision.
-        assert!(k.starts_with(MARK), "the key is projected to the marker: {k}");
+        assert!(
+            k.starts_with(MARK),
+            "the key is projected to the marker: {k}"
+        );
         assert_eq!(v, MARK, "the member value is redacted");
         assert!(!out.contains(&pat_value()), "the PAT survived in the text");
         assert!(!out.contains(&class_value(24)), "the member value survived");
-        assert_eq!(descriptions(&findings), vec![MEMBER.to_owned(), PAT.to_owned()]);
+        assert_eq!(
+            descriptions(&findings),
+            vec![MEMBER.to_owned(), PAT.to_owned()]
+        );
         for f in &findings {
             assert!(
                 !f.matched.contains(&pat_value()) && !f.matched.contains(&class_value(24)),
