@@ -123,7 +123,8 @@ fn upgrade_reports_a_retired_setting_as_ignored() {
     assert!(report.contains("ignored in 4.0"), "{report}");
     assert!(!report.contains("never had an effect"), "{report}");
     assert!(
-        report.contains("Seven settings are now the gateway's own choice"),
+        report.contains("Seven settings are now the gateway's own choice")
+            && report.contains("mcp-gateway/blob/main/docs/UPGRADING-4.0.md"),
         "the report points to the upgrade notes that name the hatch: {report}"
     );
 }

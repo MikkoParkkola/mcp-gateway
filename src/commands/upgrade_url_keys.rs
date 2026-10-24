@@ -99,9 +99,9 @@ pub(super) fn url_report(path: &Path, rewrite: &UrlRewrite, mode: RewriteMode) -
                     OnLoad::Refuses => "it never had an effect.",
                     OnLoad::Warns if key == "meta_mcp.cache_tools" => "it never had an effect.",
                     OnLoad::Warns => {
-                        "it is ignored in 4.0; the 4.0 upgrade notes (\"Seven settings are \
-                         now the gateway's own choice\") say what replaced it and the hatch \
-                         that remains."
+                        "it is ignored in 4.0. What replaced it, and the hatch that \
+                         remains: https://github.com/MikkoParkkola/mcp-gateway/blob/main/docs/\
+                         UPGRADING-4.0.md (\"Seven settings are now the gateway's own choice\")."
                     }
                 };
                 out.push(format!("{at}: {verb} `{key}` (line {line}){block}; {why}"));
