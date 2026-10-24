@@ -188,7 +188,7 @@ async fn state_in(
 
     // One registry, shared between the state the router reads and the
     // executor that publishes through it.
-    let authorizer = auth_state(&config.auth);
+    let authorizer = auth_state(&config.auth, crate::record_key::RECORD_KEY);
     let auth_config = Arc::clone(&authorizer.auth_config);
     let subscriptions = Arc::new(SubscriptionRegistry::new(SUBSCRIPTION_CAPACITY, authorizer));
     let tasks_dir = store_root.join("tasks");

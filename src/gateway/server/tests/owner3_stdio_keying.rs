@@ -283,6 +283,7 @@ fn reserved_spelling<'a>(
 ) -> MetaMcpCallerContext<'a> {
     MetaMcpCallerContext {
         credential_principal: Some("\0local-operator.v1"),
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         ..named(authorizer, retry)
     }
 }

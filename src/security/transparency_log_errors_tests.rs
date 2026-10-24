@@ -172,3 +172,31 @@ fn hwm_write_names_the_mark_file() {
         .expect("the mark cannot be written onto a directory");
     assert_names(&e, "audit log: write ", &hwm);
 }
+
+/// MIK-8697 G-LOG: with no record key installed, a record carrying a
+/// `caller_key` is refused and the file gains nothing naming the raw key;
+/// with the key, the same record is written keyed.
+#[test]
+fn g_log_a_caller_key_record_without_the_record_key_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let mut l = TransparencyLogger::open(cfg(&path, 2, false)).unwrap();
+    l.record_key = None;
+    let mut fields = serde_json::Map::new();
+    fields.insert("caller_key".into(), "credential:3f2a9c0d1e7b".into());
+    let e = l
+        .append_event_synced(fields.clone(), &AuditEnvelope::gateway())
+        .expect_err("no record key");
+    assert!(e.to_string().contains("record key"), "{e}");
+    let raw = |p: &std::path::Path| std::fs::read_to_string(p).unwrap_or_default();
+    assert!(!raw(&path).contains("3f2a9c0d1e7b"), "{}", raw(&path));
+    // Control: the same record with the key is written, and written keyed.
+    l.record_key = Some(std::sync::Arc::new(
+        crate::gateway::record_principal::test_record_key(),
+    ));
+    l.append_event_synced(fields, &AuditEnvelope::gateway())
+        .expect("keyed");
+    let text = raw(&path);
+    assert!(!text.contains("3f2a9c0d1e7b"), "{text}");
+    assert!(text.contains("\"caller_key\":\"credential:rp:"), "{text}");
+}

@@ -214,7 +214,8 @@ async fn call_alpha(
     let context = MetaMcpCallerContext {
         signing: None,
         execution: None,
-        credential_principal: Some(principal.as_str()),
+        credential_principal: Some(principal.storage_form()),
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         authentication: Authentication::Authenticated,
         credential_kind: CredentialKind::OidcBearer,
         is_modern: false,

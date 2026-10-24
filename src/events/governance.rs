@@ -72,18 +72,27 @@ impl Services {
         match by {
             Attribution::Gateway => {}
             Attribution::Caller(caller) => {
-                if let Some(principal) = &caller.principal {
-                    fields.insert("principal".into(), principal.clone().into());
+                // Credential-derived values, keyed for the record (MIK-8697 §16.12).
+                let key = self.record_key();
+                let owner = caller
+                    .principal
+                    .as_deref()
+                    .map(|p| crate::gateway::record_principal::record_owner(p, key));
+                if let Some(owner) = &owner {
+                    fields.insert("principal".into(), owner.clone().into());
                 }
                 envelope.who = AuditWho::from_parts(
                     caller.credential.kind,
-                    Some(&caller.credential.principal),
+                    crate::gateway::record_principal::InternalPrincipal::new(
+                        caller.credential.principal.clone(),
+                    )
+                    .record_form(key),
                     caller
                         .credential
                         .api_key
                         .as_ref()
                         .map(|k| k.name.as_str())
-                        .or(caller.principal.as_deref()),
+                        .or(owner.as_deref()),
                     None,
                 );
             }

@@ -21,6 +21,7 @@ fn owned<'a>(
         retry,
         is_modern: true,
         credential_principal: Some("verified-credential-owner"),
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         ..ctx(authorizer)
     }
 }

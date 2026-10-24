@@ -34,6 +34,7 @@ fn ctx<'a>(
     };
     MetaMcpCallerContext {
         credential_principal: credential,
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         authentication: if credential.is_some() {
             Authentication::Authenticated
         } else {

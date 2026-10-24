@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Per-client tool scope tests
+//! Per-client tool scope tests (moved in-crate from tests/ when
+//! `AuthenticatedClient.principal` became crate-private, MIK-8697)
 //!
 //! Tests the per-client tool access control functionality including:
 //! - Allowlist enforcement (only specified tools accessible)
@@ -8,15 +9,16 @@
 //! - Glob pattern matching
 //! - Interaction with global tool policy
 
-use mcp_gateway::config::ApiKeyConfig;
-use mcp_gateway::gateway::auth::AuthenticatedClient;
+use crate::config::ApiKeyConfig;
+use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::record_principal::InternalPrincipal;
 
 /// Test that no restrictions allows all tools (fallback to global policy)
 #[test]
 fn test_no_tool_restrictions() {
     let client = AuthenticatedClient {
         quota_principal: None,
-        principal: String::new(),
+        principal: InternalPrincipal::new(String::new()),
         name: "unrestricted".to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
@@ -24,7 +26,7 @@ fn test_no_tool_restrictions() {
         denied_tools: None,
         admin: false,
         authenticated: true,
-        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
     };
 
     // All tools should be allowed (fallback to global policy)
@@ -38,7 +40,7 @@ fn test_no_tool_restrictions() {
 fn test_allowlist_exact_match() {
     let client = AuthenticatedClient {
         quota_principal: None,
-        principal: String::new(),
+        principal: InternalPrincipal::new(String::new()),
         name: "frontend".to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
@@ -50,7 +52,7 @@ fn test_allowlist_exact_match() {
         denied_tools: None,
         admin: false,
         authenticated: true,
-        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
     };
 
     // Tools in allowlist should be permitted
@@ -79,7 +81,7 @@ fn test_allowlist_exact_match() {
 fn test_allowlist_glob_patterns() {
     let client = AuthenticatedClient {
         quota_principal: None,
-        principal: String::new(),
+        principal: InternalPrincipal::new(String::new()),
         name: "search_only".to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
@@ -87,7 +89,7 @@ fn test_allowlist_glob_patterns() {
         denied_tools: None,
         admin: false,
         authenticated: true,
-        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
     };
 
     // Tools matching glob patterns should be allowed
@@ -111,7 +113,7 @@ fn test_allowlist_glob_patterns() {
 fn test_denylist_exact_match() {
     let client = AuthenticatedClient {
         quota_principal: None,
-        principal: String::new(),
+        principal: InternalPrincipal::new(String::new()),
         name: "no_writes".to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
@@ -123,7 +125,7 @@ fn test_denylist_exact_match() {
         ]),
         admin: false,
         authenticated: true,
-        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
     };
 
     // Tools in denylist should be blocked
@@ -155,7 +157,7 @@ fn test_denylist_exact_match() {
 fn test_denylist_glob_patterns() {
     let client = AuthenticatedClient {
         quota_principal: None,
-        principal: String::new(),
+        principal: InternalPrincipal::new(String::new()),
         name: "no_filesystem".to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
@@ -163,7 +165,7 @@ fn test_denylist_glob_patterns() {
         denied_tools: Some(vec!["filesystem_*".to_string(), "exec_*".to_string()]),
         admin: false,
         authenticated: true,
-        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
     };
 
     // Tools matching deny patterns should be blocked
@@ -190,7 +192,7 @@ fn test_denylist_glob_patterns() {
 fn test_qualified_name_matching() {
     let client = AuthenticatedClient {
         quota_principal: None,
-        principal: String::new(),
+        principal: InternalPrincipal::new(String::new()),
         name: "specific_server".to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
@@ -201,7 +203,7 @@ fn test_qualified_name_matching() {
         denied_tools: None,
         admin: false,
         authenticated: true,
-        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
     };
 
     // Qualified match: filesystem:read_file allowed, but not on other servers
@@ -226,7 +228,7 @@ fn test_qualified_name_matching() {
 fn test_allowlist_and_denylist_combination() {
     let client = AuthenticatedClient {
         quota_principal: None,
-        principal: String::new(),
+        principal: InternalPrincipal::new(String::new()),
         name: "complex".to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
@@ -237,7 +239,7 @@ fn test_allowlist_and_denylist_combination() {
         ]),
         admin: false,
         authenticated: true,
-        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
     };
 
     // In allowlist AND NOT in denylist: allowed
@@ -269,9 +271,7 @@ fn test_allowlist_and_denylist_combination() {
 fn test_api_key_config_with_tool_scopes() {
     let config = ApiKeyConfig {
         key: None,
-        key_sha256: Some(mcp_gateway::config::api_key_digest_spec(
-            "test-key".as_bytes(),
-        )),
+        key_sha256: Some(crate::config::api_key_digest_spec("test-key".as_bytes())),
         expires_at: None,
         name: "Frontend App".to_string(),
         rate_limit: 0,
@@ -279,7 +279,7 @@ fn test_api_key_config_with_tool_scopes() {
         allowed_tools: Some(vec!["search_*".to_string(), "read_*".to_string()]),
         denied_tools: Some(vec!["read_secrets".to_string()]),
         admin: false,
-        kind: mcp_gateway::config::ApiKeyKind::Shared,
+        kind: crate::config::ApiKeyKind::Shared,
     };
 
     // Verify config fields are set correctly
@@ -295,7 +295,7 @@ fn test_api_key_config_with_tool_scopes() {
 fn test_empty_allowlist() {
     let client = AuthenticatedClient {
         quota_principal: None,
-        principal: String::new(),
+        principal: InternalPrincipal::new(String::new()),
         name: "deny_all".to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
@@ -303,7 +303,7 @@ fn test_empty_allowlist() {
         denied_tools: None,
         admin: false,
         authenticated: true,
-        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
     };
 
     // All tools should be denied with empty allowlist
@@ -316,7 +316,7 @@ fn test_empty_allowlist() {
 fn test_empty_denylist() {
     let client = AuthenticatedClient {
         quota_principal: None,
-        principal: String::new(),
+        principal: InternalPrincipal::new(String::new()),
         name: "allow_all".to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
@@ -324,7 +324,7 @@ fn test_empty_denylist() {
         denied_tools: Some(vec![]), // Empty denylist = no additional blocks
         admin: false,
         authenticated: true,
-        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
     };
 
     // Empty denylist should not block anything (falls back to global policy)
@@ -337,7 +337,7 @@ fn test_empty_denylist() {
 fn test_pattern_matching_edge_cases() {
     let client = AuthenticatedClient {
         quota_principal: None,
-        principal: String::new(),
+        principal: InternalPrincipal::new(String::new()),
         name: "edge_cases".to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
@@ -349,7 +349,7 @@ fn test_pattern_matching_edge_cases() {
         denied_tools: None,
         admin: false,
         authenticated: true,
-        credential_kind: mcp_gateway::security::audit::CredentialKind::ApiKey,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
     };
 
     // Prefix glob works

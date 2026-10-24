@@ -375,7 +375,10 @@ async fn admission_refusal_frees_nonce(
             Arc::clone(&service),
             Arc::new(SubscriptionRegistry::new(
                 DEFAULT_MAX_LISTENERS,
-                crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+                crate::gateway::test_helpers::auth_state(
+                    &crate::config::AuthConfig::default(),
+                    crate::gateway::record_principal::TEST_RECORD_KEY,
+                ),
             )),
             1,
         ),
@@ -388,6 +391,7 @@ async fn admission_refusal_frees_nonce(
             None,
             None,
             OWNER.to_owned(),
+            crate::gateway::record_principal::RecordPrincipal::none(),
             crate::gateway::meta_mcp::Authentication::Anonymous,
             crate::security::audit::CredentialKind::None,
             false,

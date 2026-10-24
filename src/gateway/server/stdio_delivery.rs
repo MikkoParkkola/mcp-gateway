@@ -159,7 +159,7 @@ async fn deliver(
         meta,
         frame,
         &correlation,
-        crate::gateway::meta_mcp::response_security::DeliveryCredential::stdio(),
+        crate::gateway::meta_mcp::response_security::DeliveryCredential::stdio(meta.record_key()),
         settle.stored,
     )
     .await;

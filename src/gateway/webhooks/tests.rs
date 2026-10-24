@@ -463,7 +463,7 @@ async fn webhook_handler_rejects_a_secret_that_resolves_to_nothing() {
     let state = make_handler_state(multiplexer, definition);
 
     let body = br#"{"event":"forged"}"#;
-    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(b"").unwrap();
+    let mut mac = HmacSha256::new_from_slice(b"").unwrap();
     mac.update(body);
     let forged = hex::encode(mac.finalize().into_bytes());
 
@@ -504,7 +504,7 @@ async fn webhook_handler_accepts_a_secret_an_env_file_assigns() {
     state.env = env;
 
     let body = br#"{"event":"legitimate"}"#;
-    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(b"well-known-test-value").unwrap();
+    let mut mac = HmacSha256::new_from_slice(b"well-known-test-value").unwrap();
     mac.update(body);
     let signature = hex::encode(mac.finalize().into_bytes());
 
@@ -538,6 +538,7 @@ fn authorizer(
     crate::gateway::auth::AuthState {
         auth_config: Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
             &config,
+            crate::gateway::record_principal::TEST_RECORD_KEY,
         )),
         key_server,
         dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),

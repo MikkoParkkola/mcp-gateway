@@ -63,6 +63,7 @@ pub(in crate::gateway) fn anonymous_caller() -> MetaMcpCallerContext<'static> {
         is_modern: true,
         protocol_revision: None,
         credential_principal: None,
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
         credential_kind: crate::security::audit::CredentialKind::None,
         authorizer: &crate::gateway::authz::AllowAll,
@@ -93,6 +94,7 @@ pub(in crate::gateway) fn identified_caller(
 ) -> MetaMcpCallerContext<'_> {
     MetaMcpCallerContext {
         credential_principal: Some("a-validated-bearer-token-digest"),
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         verified_identity: Some(identity),
         ..anonymous_caller()
     }

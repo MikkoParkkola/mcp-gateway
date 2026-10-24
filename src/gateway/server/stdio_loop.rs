@@ -49,6 +49,7 @@ impl Gateway {
             tool_policy,
             mtls_policy,
             data_dir,
+            record_key,
             ..
         } = self.build_meta_mcp().await?;
         // Held for the whole serve: it owns the governance store's lease.
@@ -103,8 +104,14 @@ impl Gateway {
             ))
         };
         // MIK-7272.OWNER.2: `<tasks.store_dir>/stdio`, or `None` to serve as before.
-        let task_store =
-            stdio_tasks::open(&self.config, self.env.startup(), &meta_mcp, &tool_policy).await;
+        let task_store = stdio_tasks::open(
+            &self.config,
+            self.env.startup(),
+            &meta_mcp,
+            &tool_policy,
+            &record_key,
+        )
+        .await;
         // MIK-7839.CANCEL.3: a session future dropped before EOF never reaches
         // the async teardown; this guard still stops its task workers.
         let _stop_tasks = task_store.as_ref().map(|(tasks, _)| tasks.stop_on_drop());

@@ -31,8 +31,12 @@ fn resolved(key: &serde_json::Value) -> ResolvedAuthConfig {
         "api_keys": [key]
     }))
     .expect("auth config fixture deserializes");
-    ResolvedAuthConfig::try_from_config(&config, &crate::config::EnvOverlay::none())
-        .expect("resolves")
+    ResolvedAuthConfig::try_from_config(
+        &config,
+        &crate::config::EnvOverlay::none(),
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    )
+    .expect("resolves")
 }
 
 fn digest_key(expires_at: Option<String>) -> ResolvedAuthConfig {
@@ -73,9 +77,13 @@ fn digest_itself_is_not_a_credential() {
 #[test]
 fn principal_unchanged_across_migration() {
     let expected = hex_of(KEY)[..12].to_string();
-    assert_eq!(super::principal_of(KEY), expected, "today's formula");
+    assert_eq!(
+        super::principal_of(KEY).storage_form(),
+        expected,
+        "today's formula"
+    );
     let client = digest_key(None).validate_token(KEY).expect("authenticates");
-    assert_eq!(client.principal, expected);
+    assert_eq!(client.principal.storage_form(), expected);
 }
 
 /// Drive the real middleware on a protected path. Returns the status and
@@ -143,13 +151,14 @@ async fn unexpired_key_is_accepted() {
 fn resolved_auth_config_debug_shows_no_digest() {
     let printed = format!("{:?}", digest_key(None));
     assert!(!printed.contains(KEY), "{printed}");
-    assert!(printed.contains("<redacted:"), "{printed}");
+    assert!(printed.contains("<redacted>"), "{printed}");
     let longest_hex_run = printed
         .split(|c: char| !c.is_ascii_hexdigit())
         .map(str::len)
         .max()
         .unwrap_or(0);
-    assert!(longest_hex_run < 64, "a digest leaked: {printed}");
+    // Not even the 12-hex stored principal (MIK-8697).
+    assert!(longest_hex_run < 12, "a digest leaked: {printed}");
     assert!(!printed.contains(&hex_of(KEY)[..13]), "{printed}");
 }
 

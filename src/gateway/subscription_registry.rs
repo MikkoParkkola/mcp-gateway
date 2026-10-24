@@ -535,7 +535,10 @@ mod tests {
     async fn a_listener_receives_what_is_published() {
         let registry = SubscriptionRegistry::new(
             4,
-            crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+            crate::gateway::test_helpers::auth_state(
+                &crate::config::AuthConfig::default(),
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            ),
         );
         let mut listener = registry.subscribe().expect("capacity");
 
@@ -555,7 +558,10 @@ mod tests {
         // publishing is unfiltered and each stream applies its own.
         let registry = SubscriptionRegistry::new(
             4,
-            crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+            crate::gateway::test_helpers::auth_state(
+                &crate::config::AuthConfig::default(),
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            ),
         );
         let mut first = registry.subscribe().expect("capacity");
         let mut second = registry.subscribe().expect("capacity");
@@ -578,7 +584,10 @@ mod tests {
         // specification says a server must not assume they will not do.
         let registry = SubscriptionRegistry::new(
             2,
-            crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+            crate::gateway::test_helpers::auth_state(
+                &crate::config::AuthConfig::default(),
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            ),
         );
         let _first = registry.subscribe().expect("capacity");
         let _second = registry.subscribe().expect("capacity");
@@ -596,7 +605,10 @@ mod tests {
         // deadline anything has to remember to enforce.
         let registry = SubscriptionRegistry::new(
             1,
-            crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+            crate::gateway::test_helpers::auth_state(
+                &crate::config::AuthConfig::default(),
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            ),
         );
         let listener = registry.subscribe().expect("capacity");
         assert!(registry.subscribe().is_none());
@@ -617,7 +629,10 @@ mod tests {
         // state with no way to learn it.
         let registry = SubscriptionRegistry::new(
             1,
-            crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+            crate::gateway::test_helpers::auth_state(
+                &crate::config::AuthConfig::default(),
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            ),
         );
         let mut listener = registry.subscribe().expect("capacity");
 

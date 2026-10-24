@@ -36,6 +36,9 @@
 //! no built-in is relabelled, and every assertion below is the one that was
 //! there before.
 
+#[path = "common/record_key.rs"]
+mod record_key;
+
 #[path = "mik_7272_task_1_acs/fixture.rs"]
 mod fixture;
 

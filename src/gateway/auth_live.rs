@@ -377,7 +377,10 @@ mod tests {
             ..crate::config::AuthConfig::default()
         };
         AuthState {
-            auth_config: Arc::new(super::super::ResolvedAuthConfig::from_config(&config)),
+            auth_config: Arc::new(super::super::ResolvedAuthConfig::from_config(
+                &config,
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )),
             key_server: Some(key_server),
             dashboard_bootstrap: Arc::new(super::super::DashboardBootstrap::new()),
             tls_enabled: false,

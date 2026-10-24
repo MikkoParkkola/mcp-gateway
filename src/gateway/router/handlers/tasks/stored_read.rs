@@ -51,7 +51,12 @@ pub(super) async fn prepare_stored_read_with_policy(
         caller.cert_identity,
         caller.client,
     );
-    let policy_caller = super::policy_context(caller, authorizer, &caller_key);
+    let policy_caller = super::policy_context(
+        caller,
+        authorizer,
+        &caller_key,
+        state.auth_config.record_key(),
+    );
     state
         .meta_mcp
         .prepare_stored_read(stored, policy_caller.scope(), caller.session_id)

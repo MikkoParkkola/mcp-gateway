@@ -8,6 +8,9 @@
 //! Driven through the built binary: the rewrite, the save and the exit status
 //! are wired in `main`, and only a real run observes all three.
 
+#[path = "common/record_key.rs"]
+mod record_key;
+
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
 
@@ -88,7 +91,7 @@ fn upgrade_hashes_a_plaintext_api_key() {
         "upgrade printed the key or its digest: {printed}"
     );
     let config = Config::load(Some(&s.config)).expect("the upgraded config loads");
-    let client = ResolvedAuthConfig::from_config(&config.auth)
+    let client = ResolvedAuthConfig::from_config(&config.auth, crate::record_key::RECORD_KEY)
         .validate_token(PLAINTEXT)
         .expect("the same key still authenticates");
     assert_eq!(client.name, "c1");

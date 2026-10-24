@@ -173,6 +173,22 @@ impl Session {
         answer(&mut self.lines, id).await
     }
 
+    /// The record key this gateway generated in its data directory on boot
+    /// (MIK-8697): read back, never generated here.
+    fn record_key(&self) -> crate::gateway::record_principal::RecordPrincipalKey {
+        let file = self
+            .dir
+            .path()
+            .join(crate::gateway::record_principal::KEY_FILE);
+        assert!(file.is_file(), "the gateway wrote {}", file.display());
+        crate::gateway::record_principal::resolve_key(
+            None,
+            &crate::config::EnvOverlay::none(),
+            self.dir.path(),
+        )
+        .expect("the generated key reads back")
+    }
+
     /// Every record the session's transparency log holds, in order.
     fn records(&self) -> Vec<Value> {
         std::fs::read_to_string(self.dir.path().join(AUDIT))
@@ -470,7 +486,11 @@ async fn stdio_delivery_records_name_the_local_transport_credential() {
     );
     assert_eq!(
         deliveries[0]["who"]["principal"],
-        super::super::STDIO_CREDENTIAL_PRINCIPAL,
+        crate::gateway::record_principal::InternalPrincipal::new(
+            super::super::STDIO_CREDENTIAL_PRINCIPAL.to_owned()
+        )
+        .record_form(&session.record_key())
+        .as_str(),
         "{:#}",
         deliveries[0]
     );

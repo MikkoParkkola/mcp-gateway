@@ -28,7 +28,10 @@ fn reader() -> Reader<'static> {
         caller: "key-a",
         session_id: "s-1",
         subject: None,
-        credential: DeliveryCredential::of(None),
+        credential: DeliveryCredential::of(
+            None,
+            &crate::gateway::record_principal::test_record_key(),
+        ),
     }
 }
 

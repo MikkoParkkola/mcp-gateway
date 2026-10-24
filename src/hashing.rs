@@ -1,13 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Shared canonical JSON hashing helpers, and the one HMAC-SHA256 type the
-//! signers and the transparency log share (MIK-8662).
+//! Shared canonical JSON hashing helpers, and the crate's one HMAC-SHA256
+//! type (MIK-8662, MIK-8743).
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-/// The shared HMAC-SHA256 type of the attestation signer, message signing
-/// and the transparency log.
+/// The crate's one HMAC-SHA256 type: every keyed SHA-256 MAC in `src/`
+/// (signers, transparency log, event delivery, webhooks, journey links)
+/// names it, so a change to the construction is made once.
 pub(crate) type HmacSha256 = hmac::Hmac<Sha256>;
 
 /// Serialize JSON using the crate's canonical representation.
@@ -16,6 +17,17 @@ pub(crate) type HmacSha256 = hmac::Hmac<Sha256>;
 /// string if serialization fails.
 pub(crate) fn canonical_json(value: &Value) -> String {
     serde_json::to_string(value).unwrap_or_default()
+}
+
+/// Compute `HMAC-SHA256(key, message)` and return lowercase hex: the one
+/// keyed-hashing helper (the transparency log's segment signatures and
+/// MIK-8697's record principals).
+pub(crate) fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
+    use hmac::{KeyInit as _, Mac as _};
+    // invariant: HMAC accepts any key length, so this cannot panic.
+    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(message);
+    hex::encode(mac.finalize().into_bytes())
 }
 
 /// Compute a SHA-256 digest over a single byte slice and return lowercase hex.

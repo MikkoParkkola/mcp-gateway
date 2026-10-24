@@ -130,7 +130,9 @@ impl Presented {
         };
         Ok(crate::events::Credential {
             kind,
-            principal: client.map(|c| c.principal.clone()).unwrap_or_default(),
+            principal: client
+                .map(|c| c.principal.storage_form().to_owned())
+                .unwrap_or_default(),
             api_key: api_key(client),
             expires_at,
             binding,
@@ -147,7 +149,7 @@ fn api_key(
     client.and_then(|c| {
         c.api_key_identity().map(|name| crate::events::ApiKeyRef {
             name: name.to_owned(),
-            principal: c.principal.clone(),
+            principal: c.principal.storage_form().to_owned(),
         })
     })
 }
@@ -269,7 +271,10 @@ mod tests {
     fn only_an_authenticated_api_key_is_kept_for_the_live_re_check() {
         let key = api_key(Some(&client(CredentialKind::ApiKey, true))).expect("an API key");
         assert_eq!(key.name, "alice");
-        assert_eq!(key.principal, crate::gateway::auth::principal_of("secret"));
+        assert_eq!(
+            key.principal,
+            crate::gateway::auth::principal_of("secret").storage_form()
+        );
         for kind in [
             CredentialKind::KeyServerToken,
             CredentialKind::OidcBearer,

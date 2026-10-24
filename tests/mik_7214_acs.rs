@@ -12,6 +12,9 @@
 //! once this release, when a whole increment passed against an invented wire
 //! format.
 
+#[path = "common/record_key.rs"]
+mod record_key;
+
 use mcp_gateway::protocol::headers::{HeaderCheck, decode_header_value, mcp_name_required};
 
 // ===========================================================================

@@ -35,7 +35,7 @@ impl MetaMcp {
         client: Option<&'a AuthenticatedClient>,
         verified_identity: Option<&'a VerifiedIdentity>,
     ) -> CallerProof<'a> {
-        let principal = client.map(|c| c.principal.as_str());
+        let principal = client.map(|c| c.principal.storage_form());
         CallerProof::new(verified_identity, CallerProvenance::classify(principal))
     }
 

@@ -85,6 +85,7 @@ fn caller(
         signing: None,
         execution: None,
         credential_principal,
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         authentication,
         credential_kind: if credential_principal.is_some() {
             CredentialKind::ApiKey

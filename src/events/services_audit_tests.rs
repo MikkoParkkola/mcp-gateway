@@ -42,6 +42,7 @@ fn services_with(log: Option<Arc<TransparencyLogger>>) -> Services {
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: LiveCredentials::default(),
+        record_key: Some(crate::gateway::record_principal::test_key_arc()),
     }
 }
 

@@ -96,7 +96,7 @@ async fn poll(fx: &Fx, key: &str, arguments: Value) -> Value {
     let client = fx
         .state
         .auth_config
-        .client_for_key(key, &crate::gateway::auth::principal_of(key))
+        .client_for_key(key, crate::gateway::auth::principal_of(key).storage_form())
         .expect("the fixture key is live");
     let target = Target {
         capability: "read".into(),

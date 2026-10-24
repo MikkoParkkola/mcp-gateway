@@ -107,7 +107,9 @@ async fn attempt_across_a_reload(after: Config) -> usize {
         sub.credential_kind = Some(crate::security::audit::CredentialKind::ApiKey);
         sub.api_key = Some(ApiKeyRef {
             name: "k".to_owned(),
-            principal: crate::gateway::auth::principal_of(SECRET),
+            principal: crate::gateway::auth::principal_of(SECRET)
+                .storage_form()
+                .to_owned(),
         });
     });
     let (reached, release) = hub.before_send.arm();

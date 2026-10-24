@@ -76,7 +76,10 @@ async fn fixture_with(
         streaming_config.clone(),
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
-    let auth_config = Arc::new(ResolvedAuthConfig::from_config(auth));
+    let auth_config = Arc::new(ResolvedAuthConfig::from_config(
+        auth,
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    ));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     let subscriptions = test_subscriptions(&auth_config, key_server.clone(), &agent_auth);

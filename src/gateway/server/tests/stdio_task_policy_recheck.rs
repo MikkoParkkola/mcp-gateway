@@ -47,6 +47,7 @@ async fn a_stdio_task_worker_refuses_a_tool_the_current_policy_denies() {
             discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
             sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
+        &crate::gateway::record_principal::test_record_key(),
     );
     caller.task = Some(intent(&fixture.tasks, DENIED, &retry));
     let arguments = json!({"server": BACKEND, "tool": DENIED, "arguments": {}});

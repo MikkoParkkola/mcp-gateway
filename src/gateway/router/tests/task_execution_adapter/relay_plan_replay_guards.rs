@@ -59,6 +59,14 @@ pub(super) fn committed(
         .expect("stored task: fixture")
 }
 
+/// The replay store key of `task`'s settled row at `revision` (F1).
+pub(super) fn task_key(task: &str, revision: u64) -> crate::security::firewall::StoredKey {
+    crate::security::firewall::StoredKey::Task {
+        id: task.to_owned(),
+        revision,
+    }
+}
+
 /// `server`'s listing no longer names its tool (MIK-8392 absent answer).
 pub(super) fn delist(state: &Arc<AppState>, server: &str) {
     let other =
@@ -391,10 +399,12 @@ async fn g46b_a_refused_read_with_an_absent_entry_counts_no_absent_lookup() {
     let task = rig.settle_task("g46b-a", "gateway_execute", chain()).await;
     let row = committed(&rig.state, &task);
     assert!(
-        rig.relay.task_replay_digests(&task, row.revision).is_some(),
+        rig.relay
+            .replay_digests(&task_key(&task, row.revision))
+            .is_some(),
         "premise: the settled task captured a replay entry"
     );
-    rig.relay.remove_task_replay(&task, row.revision);
+    rig.relay.remove_replay(&task_key(&task, row.revision));
     delist(&rig.state, ALPHA);
     let measured = get_task(&rig.state, "key-a", &task);
     #[cfg(feature = "metrics")]
@@ -433,7 +443,9 @@ async fn g46b_a_refused_read_with_an_expired_entry_leaves_it_for_the_authorized_
         "premise: the row's TTL is the entry's 24 h retention"
     );
     assert!(
-        rig.relay.task_replay_digests(&task, row.revision).is_some(),
+        rig.relay
+            .replay_digests(&task_key(&task, row.revision))
+            .is_some(),
         "premise: the settled task captured a replay entry"
     );
     rig.relay
@@ -728,7 +740,7 @@ fn g49_a_multi_step_replay_parses_the_answer_once() {
                 .await;
             assert!(joined.is_clean(), "the settling worker must finish: {joined:?}");
             assert!(
-                (0..16u64).any(|r| rig.relay.task_replay_digests(&task, r).is_some()),
+                (0..16u64).any(|r| rig.relay.replay_digests(&task_key(&task, r)).is_some()),
                 "premise: the plan's replay entry was stored, so the re-read replays it"
             );
             let warm = get_task(&rig.state, "key-a", &task).await;

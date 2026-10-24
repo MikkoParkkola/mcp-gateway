@@ -29,6 +29,7 @@ fn key_only<'a>(
 ) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'a> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
         credential_principal: Some(credential),
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
         authentication: Authentication::Authenticated,
         credential_kind: crate::security::audit::CredentialKind::ApiKey,
         api_key_name: Some("ops"),

@@ -10,7 +10,7 @@ use crate::key_server::oidc::VerifiedIdentity;
 
 fn client(admin: bool) -> AuthenticatedClient {
     AuthenticatedClient {
-        principal: String::new(),
+        principal: crate::gateway::record_principal::InternalPrincipal::new(String::new()),
         quota_principal: None,
         name: "c".to_string(),
         rate_limit: 0,

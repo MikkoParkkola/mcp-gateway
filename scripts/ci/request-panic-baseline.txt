@@ -24,7 +24,6 @@ src/context_integrity/kernel.rs	.expect("tool access escalation patterns must co
 src/control_plane/export.rs	self.entries.lock().expect("collecting sink mutex").clone()	1
 src/discovery/client_entry.rs	LazyLock::new(|| Regex::new(r"\$\{env:([^}]*)\}").expect("constant pattern"));	1
 src/duration_bound.rs	None => panic!(	1
-src/events/client.rs	let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");	1
 src/events/store.rs	let count = per_principal.get_mut(principal).expect("counted above");	1
 src/gateway/auth_resolved.rs	.expect("auth config secret references should resolve")	1
 src/gateway/meta_mcp/grant_audit.rs	.expect("grant slot lock")	1
@@ -92,7 +91,6 @@ src/security/message_signing.rs	let (at, nonce) = state.expiries.pop_front().exp
 src/security/message_signing.rs	let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");	1
 src/security/response_inspect.rs	RegexSet::new(patterns).expect("All response inspection patterns must compile")	1
 src/security/response_scanner.rs	let regex_set = RegexSet::new(&patterns).expect("Default injection patterns must compile");	1
-src/security/transparency_log.rs	let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");	1
 src/security/transparency_log.rs	let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");	1
 src/security/transparency_log_rotation.rs	let hw = hw.expect("hw_counter > 0");	1
 src/security/transparency_log_segments.rs	let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");	1
