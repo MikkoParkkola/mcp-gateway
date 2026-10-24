@@ -126,9 +126,10 @@ move for a deprecated pin; the upgrading note reuses them.
        copy-first steps);
      - the roots change does not apply through the gateway;
      - a copy-paste check, `node -e 'process.exit(+process.versions.node.split(".")[0] >= 24 ? 0 : 1)' && echo "Node 24 or later (recommended for 2.0.0)"`.
-7. **Revert:** `git revert` of the whole repin commit, which restores the pins,
-   the sidecar records and the version-dependent tests together. The PR
-   states it.
+7. **Revert:** `git revert -m 1` of the PR's merge commit, which restores the
+   pins, the sidecar records and the version-dependent tests together (they
+   landed across several commits, so reverting one of them alone leaves tests
+   expecting 2.0.0). The PR states it.
 
 ## Behaviour proof on Spark (AC: through the gateway)
 

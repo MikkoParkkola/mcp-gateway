@@ -138,7 +138,7 @@ fn build_init_params_contains_version() {
     // stricter roots rules; it keeps its command-line folders only without them.
     assert!(
         params["capabilities"].get("roots").is_none(),
-        "initialize offers Roots"
+        "initialize offers Roots: filesystem 2.0.0 would then drop its folder arguments"
     );
 }
 

@@ -259,7 +259,7 @@ fn the_reference_servers_recommend_node_24_in_their_description() {
     for (name, _) in REFERENCE_SERVERS_2_0_0 {
         let entry = lookup(name).expect("a reference server is listed");
         assert!(
-            entry.description.ends_with("(Node 24+)"),
+            entry.description.ends_with("(Node 24+ recommended)"),
             "{name}: {}",
             entry.description
         );
