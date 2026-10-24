@@ -272,7 +272,8 @@ fn ui_interval_refresh_is_marked_as_a_poll() {
     assert!(html.contains("refreshDashboard(poll);"));
     assert!(html.contains("refreshControlPlane(poll);"));
     assert!(html.contains("async function refreshDashboard(poll = false)"));
-    assert!(html.contains("apiFetch('/ui/api/status', {}, poll)"));
+    // MIK-8786: the status read is `readStatus(poll)`, which keeps the marker.
+    assert!(html.contains("readStatus(poll)"));
     assert!(html.contains("async function refreshControlPlane(poll = false)"));
     assert!(html.contains("apiFetch('/ui/api/control-plane', {}, poll)"));
     assert!(html.contains("async function apiFetch(url, opts = {}, poll = false)"));

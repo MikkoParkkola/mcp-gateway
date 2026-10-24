@@ -206,3 +206,23 @@ fn the_base_revision_matches_its_independent_golden() {
         "fdc222d05f8c97bc2b69a176bface687532c498835c2130d9bebb07d5d554d44"
     );
 }
+
+/// MIK-8762 SHAFU.4: a second golden with every optional endpoint populated
+/// (distinct values) and scopes given out of order, computed independently
+/// (Python hashlib) over the same encoding as the base golden: the domain,
+/// then each field as a u32 big-endian length plus its bytes, in declaration
+/// order, scopes sorted and space-joined, `send_resource_parameter` as "false".
+#[test]
+fn every_optional_endpoint_populated_matches_its_independent_golden() {
+    let mut full = base();
+    full.scopes = Some(vec!["b.write".to_owned(), "a.read".to_owned()]);
+    full.token_endpoint = Some("https://t.example/token".to_owned());
+    full.authorization_endpoint = Some("https://a.example/auth".to_owned());
+    full.revocation_endpoint = Some("https://r.example/revoke".to_owned());
+    full.redirect_uri = Some("https://app.example/cb".to_owned());
+    full.send_resource_parameter = Some(false);
+    assert_eq!(
+        rev(&full),
+        "5ecadec5f055edbec6cd5adcca1d7058b3bbfab7be09598d019e59e65d1c6528"
+    );
+}

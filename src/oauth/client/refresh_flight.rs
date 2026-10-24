@@ -221,7 +221,7 @@ pub(super) fn fingerprint(refresh_token: &str) -> [u8; 32] {
 
 /// [`fingerprint`] as lowercase hex, for the persisted marker.
 pub(super) fn fingerprint_hex(refresh_token: &str) -> String {
-    hex::encode(fingerprint(refresh_token))
+    crate::hashing::sha256_hex(refresh_token.as_bytes())
 }
 
 /// The stored credential a refresh renews: where it is kept, and the name
