@@ -1,0 +1,64 @@
+{
+  "npm": {
+    "@benborla29/mcp-server-mysql@2.0.9": "sha512-hjLuI/UOe7t/xwREMGHtB3gGJn8lyvCsv65HT+ePYDKZfBFbirDzxJAaIsAg1DJwlVTMiw0Oq88PpJkRyl1+SQ==",
+    "@brave/brave-search-mcp-server@2.1.4": "sha512-a34HBs6os4Ilp0yHPV/j3UrgBQH1uTDLsNA9y5IlO30RCYUFm9QPfC0coh2c7WEDxKcHuWjVsrfuXIJNheu9YA==",
+    "@hubspot/mcp-server@0.4.0": "sha512-nNNrqysJrCkPb8XWl3wd2d61nTLf8IAnfWOHag4FCSRKRjSXuIE/2h4GVUcPmVhJVaN7RsIq8C43BMFV+EI9GA==",
+    "@modelcontextprotocol/server-filesystem@1.0.0": "sha512-2fN6qhpsiPSBAe0ev1qDPk4sCWdULCZQTuYc4ZY7+BDWQ1XCxLB+7dqStF2ZflgG4G/9vTwQsjxh7pjFqrrpcg==",
+    "@modelcontextprotocol/server-memory@1.0.0": "sha512-UDMtMrw2xeI16mcn7O4fesp9Pf3hYh91thuU5KSz0BxKqwnTwEytZKjHfkrqxxmKp0r4QHoiEkMV99UmadmODw==",
+    "@modelcontextprotocol/server-sequential-thinking@1.0.0": "sha512-ykTmeS4Eejs+FESDrD73mDBNYCkb+cCZJ1MWuv7/vwucbVgGfEbBL5HVt2nVw0/vNF8jz+o9sO/WmxxfXt0J6w==",
+    "@perplexity-ai/mcp-server@1.3.0": "sha512-rPeGlp63861F3ZyMUg6joIqBiQgji3acf6wFwMrTFrO2Zd0kKVV8Pwri5pznDjgJIgjiqOo58E1PDliilcmN8w==",
+    "@pinecone-database/mcp@0.3.0": "sha512-hC8nc4VgNi6wbXkergDP3q/8zHnhx67HtuL/lNPtvnlfCmIGNTMEYXX6hkWvvqhHliDTwK+Y8PnIHR3IBRkSVw==",
+    "@playwright/mcp@0.0.83": "sha512-oNcl+Ae2/IAjhfPeP46BfIkSakfmprY+aOtkv5MjrQ4lPav4/yNtPhL0iq8SlIM90oApWgBDUxaNKvktazUKOg==",
+    "@supabase/mcp-server-supabase@0.13.0": "sha512-TUzlt0x9eADZgUOz/5wWk95i5GVf1QSnIwYX0jmasNNmoqPxEkAgO/kg8aAQTqmYZx/OPlVlaX3Er5v/le1z2g==",
+    "airtable-mcp-server@1.14.0": "sha512-OYUwkrIhXsYRqx39wQ5R7OAM5R0RdDWJRb8CBMLFU8OGPAB1Jmm4oOrLtaH3Qmtd+UG2IAT+nFlFrqfs//2klA==",
+    "chrome-devtools-mcp@1.10.1": "sha512-Klw6HWDqHC/XS1JwZldd2r49aUhbUJN9m9Mvcx4SEueIPXtzuQX+QelxAViobv8YUkDZ7HWDrmViR6LeYK0wAw==",
+    "exa-mcp-server@3.4.1": "sha512-X6g4J9LXLJZ0uK52G8KE/KCaxpaD+wkEHzjkoDTYkC+afxfm5xqWgih3i0hgTfyufl6PggkLeR0L6rDAxW6ETg==",
+    "mongodb-mcp-server@3.0.5": "sha512-tB9HfyrVHr7if8JMB3/+uWr4Rz9oJ9XsMzRUX+uGPAqTfpqUVz4IeRZ6c9NkKiVLMFSGXsJtnBVEwW2NtUIEAQ==",
+    "slack-mcp-server@1.3.0": "sha512-YoRGvadhHkN4jwr1uYAxcNidmRPuzDXDM7j8dmnuvclF8zeqzBHefm1IiZE/xGr23Ka0ljNysdDTDUC7PWj21Q==",
+    "tavily-mcp@0.2.22": "sha512-w2pmmmn/JKcNavylDoiNtNPflWt6SK2G1SVUvg0VvdvFJQUaOzEdanAm1VUWBOhUCqmVoBYVPstGcOoWvh8RQQ=="
+  },
+  "pypi": {
+    "awslabs.aws-api-mcp-server==1.5.6": {
+      "awslabs_aws_api_mcp_server-1.5.6-py3-none-any.whl": "11133612071939b06bd389172b6abe7e8ada3a60de02ca31d14f7f98ddaeb357",
+      "awslabs_aws_api_mcp_server-1.5.6.tar.gz": "8faf10ac3f57693fc1a0e78845b3f09b2865d132e44ca3d3dec08dcb8a763887"
+    },
+    "mcp-grafana==2.0.0": {
+      "mcp_grafana-2.0.0-py3-none-macosx_10_9_x86_64.whl": "2acb85e6ab413660b15cc6f390ce919335d75fb28f9c74225aa4d93a97416584",
+      "mcp_grafana-2.0.0-py3-none-macosx_11_0_arm64.whl": "015b4e6811b8f7474d6bc6ed51b6d909f1a94e023b574fdec20980965cfc6ead",
+      "mcp_grafana-2.0.0-py3-none-manylinux_2_17_aarch64.whl": "05349e7916ed7a81a68c9804e11f0fb872958deeae5351238b85dbe8a5aa880c",
+      "mcp_grafana-2.0.0-py3-none-manylinux_2_17_x86_64.whl": "c90b625e0023eff4348b4f45268047feab77eae459ffeb8b89a2a1b9b2386fee",
+      "mcp_grafana-2.0.0-py3-none-musllinux_1_2_aarch64.whl": "444a9c6bf547b5baf183104803e1039380ccb943bae5381a9342d01dfaa331ea",
+      "mcp_grafana-2.0.0-py3-none-musllinux_1_2_x86_64.whl": "79ec3c402a781363900d270d8bbe2df1926ed0e79a168e622b651c8965086bd5",
+      "mcp_grafana-2.0.0-py3-none-win_amd64.whl": "36f1caa7113ad2273bc044df486a6dce254e8e8b712d5edfb4dd58dff97d9e13",
+      "mcp_grafana-2.0.0-py3-none-win_arm64.whl": "fe58fab372d7e598b2bd273d601b619a16715f57f7ef873650576b9c52b4805e"
+    },
+    "mcp-server-fetch==2026.8.18": {
+      "mcp_server_fetch-2026.8.18-py3-none-any.whl": "6642df733a1032e7f37d0f13849af8a944d46c02420d2c070cc14e0948f8fcc2",
+      "mcp_server_fetch-2026.8.18.tar.gz": "da12533c8218c7a4ee2eb9d789170a317cf758c07cb2cc0211a91bdb0d4b7254"
+    },
+    "mcp-server-git==2026.8.18": {
+      "mcp_server_git-2026.8.18-py3-none-any.whl": "6c32a8e771564122a9bafac373cf871fb3ab540ddc1ba0ee8e9c8c6e9878aef7",
+      "mcp_server_git-2026.8.18.tar.gz": "96894ca661cfda45174a8882d4ca97d1f5261301c72ccad006ff04f4108f173f"
+    },
+    "mcp-server-qdrant==0.8.1": {
+      "mcp_server_qdrant-0.8.1-py3-none-any.whl": "eb7b36105021b431989f5a0f794591e52d48d3a6afb1a033d65fd8a08a68991c",
+      "mcp_server_qdrant-0.8.1.tar.gz": "a48db49ee888b0ac7a18bcb800bcf44b51222b0839ddd4be64959d9bda0decf8"
+    },
+    "mcp-server-time==2026.8.18": {
+      "mcp_server_time-2026.8.18-py3-none-any.whl": "1407583af42dc0163909d855c9ef20114a12b4981c3975033721a7906cdd212a",
+      "mcp_server_time-2026.8.18.tar.gz": "ec1313feb558a848838217d922bd218e9f7ca217cb0f7b890ee75ab94bf962e0"
+    },
+    "postgres-mcp==0.3.0": {
+      "postgres_mcp-0.3.0-py3-none-any.whl": "455dd71ed8deab77a67af2468e6f059dd0f114e05c0031ab47306a7048dc30bf",
+      "postgres_mcp-0.3.0.tar.gz": "52e387352e14bbbbc3e254fe304ed77e9f6814c60fe3bd998f337f383f8a42d1"
+    },
+    "redis-mcp-server==0.5.1": {
+      "redis_mcp_server-0.5.1-py3-none-any.whl": "335d9089d4c87a055b362effa7fd718334ccd88b2545d93c4ed9bc2b738b3ed8",
+      "redis_mcp_server-0.5.1.tar.gz": "c6c88b91f5c0e6c5c1e9bb5aff2edcb77bd136b7db5b9c409e90136a4e19376a"
+    },
+    "semgrep-mcp==0.9.0": {
+      "semgrep_mcp-0.9.0-py3-none-any.whl": "2c4bd4feb85958a39def5ca26905ce4511b08f537bccc5d7fc24f7ba1167bdc0",
+      "semgrep_mcp-0.9.0.tar.gz": "1376d5e4a7aebef81058e169053a315671dc61b1321f78bf8edd6e44e71b993f"
+    }
+  }
+}
