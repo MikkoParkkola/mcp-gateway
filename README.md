@@ -91,6 +91,8 @@ Full list, limits and evidence: [What's new in 4.0](docs/whats-new-4.0.md).
 
 ## Install and set up
 
+MCP Registry name: `mcp-name: io.github.MikkoParkkola/mcp-gateway`
+
 ### Install
 
 | Method | Command |
