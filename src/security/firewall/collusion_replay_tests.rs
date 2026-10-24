@@ -163,6 +163,13 @@ fn sync_key(identity: &str, round: &str, operation: &str) -> StoredKey {
     }
 }
 
+fn task_key(id: &str, revision: u64) -> StoredKey {
+    StoredKey::Task {
+        id: id.to_owned(),
+        revision,
+    }
+}
+
 fn hour() -> Duration {
     Duration::from_secs(3600)
 }
@@ -546,16 +553,15 @@ fn d25_a_still_staged_step_yields_no_snapshot_and_no_entry() {
         digest.replay_snapshot(Some(0), "alpha", "read").is_none(),
         "a still-staged step yielded a snapshot"
     );
-    fw.store_task_replay(
-        "task-d25",
-        1,
+    fw.store_replay(
+        task_key("task-d25", 1),
         &[(&digest, Some(0), "alpha", "read")],
         Vec::new(),
         "",
         hour(),
     );
     assert!(
-        fw.task_replay_digests("task-d25", 1).is_none(),
+        fw.replay_digests(&task_key("task-d25", 1)).is_none(),
         "a still-staged step alone stored a replay entry"
     );
 }
@@ -572,26 +578,25 @@ fn a_ttl_less_tasks_entry_expires_after_24h_on_the_relay_clock_not_before() {
     let fw = firewall();
     fw.advance_collusion_clock_for_test(Duration::ZERO);
     let digest = DeliveryDigest::of_seam(vec![1, 2, 3], true, None);
-    fw.store_task_replay(
-        "task-24h",
-        3,
+    fw.store_replay(
+        task_key("task-24h", 3),
         &[(&digest, Some(0), "s", "t")],
         Vec::new(),
         "",
         Duration::from_secs(crate::idempotency::admission::RETENTION_SECS),
     );
     assert!(
-        fw.task_replay_digests("task-24h", 3).is_some(),
+        fw.replay_digests(&task_key("task-24h", 3)).is_some(),
         "premise: the entry is stored"
     );
     fw.advance_collusion_clock_for_test(Duration::from_secs(86_399));
     assert!(
-        fw.task_replay_digests("task-24h", 3).is_some(),
+        fw.replay_digests(&task_key("task-24h", 3)).is_some(),
         "the entry expired before 24 h on the relay clock"
     );
     fw.advance_collusion_clock_for_test(Duration::from_secs(2));
     assert!(
-        fw.task_replay_digests("task-24h", 3).is_none(),
+        fw.replay_digests(&task_key("task-24h", 3)).is_none(),
         "the entry is still live past 24 h on the relay clock"
     );
 }
