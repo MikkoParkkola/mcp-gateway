@@ -327,6 +327,12 @@ fn p2_the_patterns_are_the_reviewed_ones() {
 /// over every later key, so each one runs the key check, against base's
 /// whole-leaf path. Timing, so run by hand on Spark:
 /// `cargo test --lib -- --ignored f2_many_overlapped_keys_cost --nocapture`.
+///
+/// The bar is 8x, not F1's 3x (lead ruling 2026-10-24). This is the worst
+/// case: every one of about 96,000 keys runs the check. Measured on Spark
+/// (release, 2026-10-24): 5.72x, about 66 ms against 11.6 ms for the
+/// whole-leaf path, and the 1 MiB cap bounds it at that. A prefilter that
+/// skips keys no pattern can start in is planned for 4.0.1 (MIK-8822).
 #[test]
 #[ignore = "timing; run by hand"]
 fn f2_many_overlapped_keys_cost() {
@@ -379,8 +385,8 @@ fn f2_many_overlapped_keys_cost() {
         "{i} overlapped keys: projection {projected:?}, whole leaf {base:?}, ratio {ratio:.2}"
     );
     assert!(
-        ratio < 3.0,
-        "many keys: ratio {ratio:.2} over the plan's 3x"
+        ratio < 8.0,
+        "many keys: ratio {ratio:.2} over the 8x worst-case bar"
     );
 }
 
