@@ -129,6 +129,42 @@ impl Services {
         #[cfg(not(feature = "firewall"))]
         "none"
     }
+
+    /// What a replay's attempt record says the firewall decided (MIK-8794):
+    /// [`Self::firewall_verdict`] over the fresh scan of the stored body,
+    /// carried forward by [`carried`] when that body was redacted before it
+    /// was stored. `body` is the body the replay sends.
+    pub(crate) fn replay_verdict(
+        &self,
+        scan: Scan,
+        redacted: bool,
+        stored: Option<&str>,
+        body: &[u8],
+    ) -> &'static str {
+        #[cfg(feature = "firewall")]
+        let holds_marker =
+            String::from_utf8_lossy(body).contains(crate::security::firewall::redactor::MARKER);
+        #[cfg(not(feature = "firewall"))]
+        let holds_marker = {
+            let _ = body;
+            false
+        };
+        carried(self.firewall_verdict(scan, redacted), stored, holds_marker)
+    }
+}
+
+/// A replay's verdict from its fresh one (MIK-8794). Redaction twice changes
+/// nothing, so a re-scan of a body redacted before it was stored reads
+/// `pass`. It stays `redacted` when the stored verdict was `redacted`, or
+/// `block` (a blocked event is stored with its body already redacted), and
+/// the body still holds the marker: a `block` alone proves no redaction. A
+/// fresh `block` or `redacted` stands, and so does `none`.
+fn carried(fresh: &'static str, stored: Option<&str>, holds_marker: bool) -> &'static str {
+    if fresh == "pass" && matches!(stored, Some("redacted" | "block")) && holds_marker {
+        "redacted"
+    } else {
+        fresh
+    }
 }
 
 impl EventsHub {

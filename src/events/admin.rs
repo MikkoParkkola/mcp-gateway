@@ -155,12 +155,14 @@ impl EventsHub {
         if scan == Scan::Block {
             return Err(ReplayRefusal::FirewallBlocked);
         }
-        let verdict = services.firewall_verdict(scan, data != before);
+        let changed = data != before;
         body["data"] = data;
         let bytes = serde_json::to_vec(&body).map_err(|_| ReplayRefusal::Unavailable)?;
         if bytes.len() > MAX_BODY {
             return Err(ReplayRefusal::TooLarge);
         }
+        let verdict =
+            services.replay_verdict(scan, changed, dead.record.firewall.as_deref(), &bytes);
         let record = OutboxRecord {
             body_b64: base64::engine::general_purpose::STANDARD.encode(&bytes),
             attempt: 0,

@@ -118,3 +118,90 @@ fn i7_a_json_text_collision_suffix_does_not_lengthen_the_run() {
     let parsed: Value = serde_json::from_str(&once).expect("still parses");
     assert_eq!(parsed.as_object().expect("object").len(), 2, "{once}");
 }
+
+/// The barrier's inputs, built in code and checked against literal
+/// expectations, independent of the oracle that shares the writer.
+#[test]
+fn i8_the_barrier_holds_only_after_an_open_prefix() {
+    let raw_tab = format!("redis://ab{}t", '\\');
+    for (out_so_far, want) in [
+        ("redis://".to_owned(), true),
+        ("REDIS://".to_owned(), true),
+        ("Postgres://x".to_owned(), true),
+        ("redis:// ".to_owned(), false),
+        (format!(r#"{{"p":"{MARK}","#), false),
+        (r#"{"redis://":""#.to_owned(), true),
+        (raw_tab, true),
+        ("no prefix here".to_owned(), false),
+        (String::new(), false),
+    ] {
+        assert_eq!(ends_open(&out_so_far), want, "{out_so_far:?}");
+    }
+}
+
+/// Only the connection-string rule's class runs through the marker, which
+/// is what lets the barrier ignore every other rule. Each rule's sample has
+/// the marker inserted at every position; a match crossing it counts.
+#[test]
+fn i9_only_the_connection_string_rule_runs_through_the_marker() {
+    let r = redactor();
+    let all = secrets();
+    let mut through = Vec::new();
+    for (index, (_, description)) in CREDENTIAL_PATTERNS.iter().enumerate() {
+        let (_, sample) = all
+            .iter()
+            .find(|(name, _)| name == description)
+            .unwrap_or_else(|| panic!("a sample for {description}"));
+        let crosses = (1..sample.len())
+            .filter(|&at| sample.is_char_boundary(at))
+            .any(|at| {
+                let probe = format!("{}{MARK}{}", &sample[..at], &sample[at..]);
+                r.regexes[index]
+                    .find_iter(&probe)
+                    .any(|m| m.start() < at && m.end() > at + MARK.len())
+            });
+        if crosses {
+            through.push(*description);
+        }
+    }
+    assert_eq!(
+        through,
+        ["Database Connection String"],
+        "another rule runs through the marker: extend the barrier's prefix"
+    );
+}
+
+/// Neither the marker nor the marker behind its barrier space matches any
+/// rule, so nothing can start inside it.
+#[test]
+fn i10_the_marker_matches_no_rule() {
+    for text in [MARK.to_owned(), format!(" {MARK}")] {
+        assert!(!redactor().set.is_match(&text), "{text:?}");
+    }
+}
+
+/// Thousands of credentials with no whitespace between them: the run is
+/// never reset, so a writer rescanning it would be quadratic.
+#[test]
+fn i11_many_insertions_in_one_run_stay_linear() {
+    let token = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
+    let r = redactor();
+    let time = |n: usize| {
+        let text = format!("x:{}", vec![token.as_str(); n].join(":"));
+        (0..3)
+            .map(|_| {
+                let mut value = Value::String(text.clone());
+                let started = std::time::Instant::now();
+                r.scan_and_redact(&mut value);
+                started.elapsed()
+            })
+            .min()
+            .expect("three runs")
+    };
+    let (small, large) = (time(2_000), time(8_000));
+    // Four times the input: about 4x when linear, 16x when quadratic.
+    assert!(
+        large < small * 10,
+        "8000 took {large:?}, 2000 took {small:?}"
+    );
+}

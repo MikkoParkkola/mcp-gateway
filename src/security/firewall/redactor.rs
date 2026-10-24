@@ -48,6 +48,14 @@ pub struct Redactor {
     descriptions: Vec<&'static str>,
 }
 
+/// The connection-string rule's prefix, one text for the rule and for the
+/// barrier [`Spliced`] writes (MIK-8794).
+macro_rules! connection_prefix {
+    () => {
+        "(?i)(?:postgres|mysql|mongodb|redis)://"
+    };
+}
+
 /// (pattern, description) pairs.
 ///
 /// 13 credential patterns covering AWS keys, GitHub tokens (4 variants),
@@ -87,7 +95,7 @@ const CREDENTIAL_PATTERNS: &[(&str, &str)] = &[
     (r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{20,}", "Bearer Token"),
     // Database connection strings (postgres, mysql, mongodb, redis)
     (
-        r"(?i)(?:postgres|mysql|mongodb|redis)://[^\s]{10,}",
+        concat!(connection_prefix!(), r"[^\s]{10,}"),
         "Database Connection String",
     ),
     // OpenAI project API keys (sk-proj-...)
@@ -309,8 +317,10 @@ impl Redactor {
                 map.insert(key, value);
                 continue;
             };
-            let name = match names.claim(&candidate) {
-                Some(n) => format!("{candidate}#{n}"),
+            // A parsed key is its own document, so its end is judged alone.
+            let spaced = ends_open(&candidate);
+            let name = match names.claim(&candidate, spaced) {
+                Some(n) => format!("{candidate}{}", collision_suffix(n, spaced)),
                 None => candidate,
             };
             map.insert(name, value);
@@ -336,19 +346,34 @@ impl KeyNames {
         }
     }
 
-    /// Claim `candidate`, or else the first free `<candidate>#n`: `None`
-    /// when `candidate` itself was free, else the `n`.
-    fn claim(&mut self, candidate: &str) -> Option<usize> {
+    /// Claim `candidate`, or else the first free `<candidate><suffix>`, the
+    /// suffix [`collision_suffix`] writes for `spaced`: `None` when
+    /// `candidate` itself was free, else the `n`.
+    fn claim(&mut self, candidate: &str, spaced: bool) -> Option<usize> {
         if self.taken.insert(candidate.to_owned()) {
             return None;
         }
         let n = self.next.entry(candidate.to_owned()).or_insert(1);
         loop {
             *n += 1;
-            if self.taken.insert(format!("{candidate}#{n}")) {
+            if self
+                .taken
+                .insert(format!("{candidate}{}", collision_suffix(*n, spaced)))
+            {
                 return Some(*n);
             }
         }
+    }
+}
+
+/// The suffix a colliding redacted key takes: ` #n` where `spaced` (the
+/// barrier holds where the key ends), else `#n`. One helper forms both the
+/// name a key reserves and the text written for it, so they cannot differ.
+fn collision_suffix(n: usize, spaced: bool) -> String {
+    if spaced {
+        format!(" #{n}")
+    } else {
+        format!("#{n}")
     }
 }
 
@@ -487,41 +512,46 @@ fn rename_keys(text: &str, ranges: &[(usize, usize)], literals: &[Literal]) -> S
             objects.entry(lit.container).or_default().taken.insert(name);
         }
     }
-    let mut renamed: Vec<(usize, usize, String)> = Vec::new();
-    for lit in keys.filter(|lit| covers(ranges, lit)) {
-        let (lo, hi) = (
-            ranges.partition_point(|range| range.0 < lit.start),
-            ranges.partition_point(|range| range.0 < lit.end),
-        );
-        let inside: Vec<(usize, usize)> = ranges[lo..hi]
-            .iter()
-            .map(|range| (range.0 - lit.start, range.1 - lit.start))
-            .collect();
-        let mut raw = replace_spans(&text[lit.start..lit.end], &inside);
-        if let Some(candidate) = decode(&raw)
-            && let Some(n) = objects.entry(lit.container).or_default().claim(&candidate)
-        {
-            raw = format!("{raw}#{n}");
-        }
-        renamed.push((lit.start, lit.end, raw));
-    }
-    let mut out = String::with_capacity(text.len());
+    let mut renamed = keys.filter(|lit| covers(ranges, lit)).peekable();
+    // The key being written, and where its text starts in `out`. A key is
+    // written into the document's own output, so its markers and its suffix
+    // see what precedes it (MIK-8794).
+    let mut open: Option<(&Literal, usize)> = None;
+    let mut out = Spliced::with_capacity(text.len());
     let mut cursor = 0;
-    let mut keys = renamed.into_iter().peekable();
-    for &(start, end) in ranges {
-        if start < cursor {
-            continue; // inside a key already written whole
+    let mut close = |out: &mut Spliced, cursor: &mut usize, (lit, from): (&Literal, usize)| {
+        out.push(&text[*cursor..lit.end]);
+        *cursor = lit.end;
+        let spaced = out.barrier();
+        if let Some(candidate) = decode(&out.out[from..])
+            && let Some(n) = objects
+                .entry(lit.container)
+                .or_default()
+                .claim(&candidate, spaced)
+        {
+            out.push(&collision_suffix(n, spaced));
         }
-        let (from, to, with) = match keys.next_if(|key| key.0 <= start && start < key.1) {
-            Some(key) => key,
-            None => (start, end, "[REDACTED:credential]".to_owned()),
-        };
-        out.push_str(&text[cursor..from]);
-        out.push_str(&with);
-        cursor = to;
+    };
+    for &(start, end) in ranges {
+        if let Some(key) = open.take_if(|(lit, _)| start >= lit.end) {
+            close(&mut out, &mut cursor, key);
+        }
+        if open.is_none()
+            && let Some(lit) = renamed.next_if(|lit| lit.start <= start && start < lit.end)
+        {
+            out.push(&text[cursor..lit.start]);
+            cursor = lit.start;
+            open = Some((lit, out.out.len()));
+        }
+        out.push(&text[cursor..start]);
+        out.insert_marker();
+        cursor = end;
     }
-    out.push_str(&text[cursor..]);
-    out
+    if let Some(key) = open {
+        close(&mut out, &mut cursor, key);
+    }
+    out.push(&text[cursor..]);
+    out.out
 }
 
 /// The escape in `escapes` (in order, disjoint) that `at` falls strictly
@@ -535,17 +565,95 @@ fn escape_around(escapes: &[(usize, usize)], at: usize) -> Option<(usize, usize)
 }
 
 /// `text` with every range in `ranges` (merged, in order) replaced by the
-/// redaction marker.
+/// redaction marker. `text` is always a whole leaf, never a slice of one,
+/// so the barrier sees everything before each range.
 fn replace_spans(text: &str, ranges: &[(usize, usize)]) -> String {
-    let mut out = String::with_capacity(text.len());
+    let mut out = Spliced::with_capacity(text.len());
     let mut cursor = 0;
     for &(start, end) in ranges {
-        out.push_str(&text[cursor..start]);
-        out.push_str("[REDACTED:credential]");
+        out.push(&text[cursor..start]);
+        out.insert_marker();
         cursor = end;
     }
-    out.push_str(&text[cursor..]);
-    out
+    out.push(&text[cursor..]);
+    out.out
+}
+
+/// The text a redacted span is replaced with.
+pub(crate) const MARKER: &str = "[REDACTED:credential]";
+
+/// How far back from newly written text a connection-string prefix that
+/// ends in it can start: `postgres://` is 11 characters, at most 4 bytes
+/// each under case folding.
+const PREFIX_REACH: usize = 44;
+
+fn connection_prefix() -> &'static Regex {
+    static PREFIX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    PREFIX.get_or_init(|| Regex::new(connection_prefix!()).expect("prefix compiles"))
+}
+
+/// Redacted text being written, and what a second pass will read where it
+/// ends (MIK-8794). Only the connection-string rule's class accepts the
+/// marker's characters, so a marker or a collision suffix written straight
+/// after a run of non-whitespace that holds an unreplaced connection-string
+/// prefix would let that rule's run grow through it on a second pass, past
+/// the floor the first pass did not reach. There, one space goes first. The
+/// run is tracked as text is written, so a write costs its own length plus
+/// [`PREFIX_REACH`], never a rescan of the output.
+struct Spliced {
+    out: String,
+    /// Where the current run of non-whitespace starts in `out`.
+    run: usize,
+    /// Whether that run holds an unreplaced connection-string prefix.
+    prefixed: bool,
+}
+
+impl Spliced {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            out: String::with_capacity(capacity),
+            run: 0,
+            prefixed: false,
+        }
+    }
+
+    /// Append `text` as written, tracking the run it ends in.
+    fn push(&mut self, text: &str) {
+        let old = self.out.len();
+        self.out.push_str(text);
+        if let Some((at, c)) = text.char_indices().rev().find(|(_, c)| c.is_whitespace()) {
+            self.run = old + at + c.len_utf8();
+            self.prefixed = false;
+        }
+        if !self.prefixed {
+            let mut from = old.saturating_sub(PREFIX_REACH).max(self.run);
+            while !self.out.is_char_boundary(from) {
+                from += 1;
+            }
+            self.prefixed = connection_prefix().is_match(&self.out[from..]);
+        }
+    }
+
+    /// Whether an insertion here needs the leading space: the output ends in
+    /// a run of non-whitespace holding an unreplaced connection-string prefix.
+    fn barrier(&self) -> bool {
+        self.prefixed
+    }
+
+    /// Append the marker, behind the barrier space where one is needed.
+    fn insert_marker(&mut self) {
+        if self.barrier() {
+            self.push(" ");
+        }
+        self.push(MARKER);
+    }
+}
+
+/// Whether an insertion after `text`, a whole document, needs the barrier.
+fn ends_open(text: &str) -> bool {
+    let mut out = Spliced::with_capacity(0);
+    out.push(text);
+    out.barrier()
 }
 
 /// Merge sorted spans that overlap or touch, so no character between two
