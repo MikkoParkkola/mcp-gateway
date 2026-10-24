@@ -1,0 +1,11 @@
+{
+  "npm": {
+    "semver@7.6.3": "sha512-oVekP1cKtI+CTDvHWYFUcMtsK/00wmAEfyqKfNdARm8u1wNVhSgaX7A8d4UuIlUI5e84iEwOhs7ZPYRmzU9U6A=="
+  },
+  "pypi": {
+    "mcp-server-time==2026.8.18": {
+      "mcp_server_time-2026.8.18-py3-none-any.whl": "1407583af42dc0163909d855c9ef20114a12b4981c3975033721a7906cdd212a",
+      "mcp_server_time-2026.8.18.tar.gz": "ec1313feb558a848838217d922bd218e9f7ca217cb0f7b890ee75ab94bf962e0"
+    }
+  }
+}
