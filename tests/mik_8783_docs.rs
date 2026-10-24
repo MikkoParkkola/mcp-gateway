@@ -66,10 +66,6 @@ fn the_upgrade_notes_stop_advertising_the_retired_settings() {
             "New setting `server.protocol_revision_window`",
         ),
         (
-            "changelog.d/3920.added.md",
-            "A new setting, `server.protocol_revision_window`",
-        ),
-        (
             "docs/UPGRADING-4.0.md",
             "`capabilities.stale_check_secs` (default 60, `0` turns it off)",
         ),
