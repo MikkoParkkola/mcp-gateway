@@ -51,7 +51,7 @@ async fn keys_settle(hub: &EventsHub, count: usize) -> bool {
 #[tokio::test]
 async fn t11_a_held_webhook_row_releases_its_key() {
     let (_dir, hub, registry) = restarted(json!({}), &full()).await;
-    let id = id_of(&subscribe(&hub, json!({})).await.expect("refresh"));
+    let id = id_of(&hub, &subscribe(&hub, json!({})).await.expect("refresh"));
     assert_eq!(webhook_keys(&hub).await.len(), 1, "premise: started");
     refresh(&hub, &registry, "");
     assert!(hub.store.held(&id).is_some(), "premise: held");
@@ -68,7 +68,7 @@ async fn t11_a_held_webhook_row_releases_its_key() {
 #[tokio::test]
 async fn t28_a_dropped_route_holds_the_row_then_resumes() {
     let (_dir, hub, registry) = restarted(json!({}), &full()).await;
-    let id = id_of(&subscribe(&hub, json!({})).await.expect("refresh"));
+    let id = id_of(&hub, &subscribe(&hub, json!({})).await.expect("refresh"));
     refresh(&hub, &registry, "");
     assert!(hub.store.get(&id).is_some(), "the row is kept");
     assert!(hub.store.held(&id).is_some(), "held");

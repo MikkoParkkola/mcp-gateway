@@ -68,6 +68,8 @@ fn records_survive_reopen_and_secrets_stay_out_of_debug() {
         .expect("io")
         .expect("admitted");
     assert!(!format!("{s:?}").contains("whsec_x"));
+    // Nor the stored id, which hashes the stored principal (MIK-8697 §13).
+    assert!(!format!("{s:?}").contains(&s.id), "{s:?}");
     drop(store);
     let store = Store::open(dir.path(), Ok(now), TAIL).expect("reopen");
     assert!(store.get(&s.id).is_some());

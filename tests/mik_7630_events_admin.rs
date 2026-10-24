@@ -80,7 +80,7 @@ async fn assert_listing_is_payload_free(gw: &Gateway, id: &str, callback: &str) 
             "name",
             "reason",
             "sizeBytes",
-            "subscriptionId"
+            "subscriptionAlias"
         ]
     );
     let (_, raw) = gw.admin(Some(ADMIN), "GET", LIST).await;
@@ -123,6 +123,23 @@ async fn dead_letters_replay_through_admin_route_only() {
     let first = events_at_least(&rx, 1).await;
 
     assert_listing_is_payload_free(&gw, &id, &rx.url).await;
+    // The subscription filter accepts the stored id as input; the answer
+    // names the subscription only by its alias (MIK-8697 §13).
+    let stored = dead[0]["subscription_id"]
+        .as_str()
+        .expect("stored subscription id")
+        .to_owned();
+    assert!(stored.starts_with("sub_"), "premise, a stored id: {stored}");
+    let query = format!("?subscription={stored}");
+    let (status, raw) = gw
+        .admin(Some(ADMIN), "GET", &format!("{LIST}{query}"))
+        .await;
+    assert_eq!(status, 200, "the filter accepts it: {raw}");
+    assert_eq!(raw["deadLetters"][0]["eventId"], id.as_str(), "{raw}");
+    assert!(
+        !raw.to_string().contains("sub_"),
+        "the listing echoes a stored id: {raw}"
+    );
 
     let replay = format!("{LIST}/{id}/replay");
     for key in [Some(ALICE), Some(BOB), None] {
@@ -233,6 +250,7 @@ async fn bulk_replay_replays_only_the_named_subscription() {
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["replayed"], 3, "{body}");
     let posts = events_at_least(&rx, 8).await;
+    // timing: absence
     tokio::time::sleep(SETTLE).await;
     let again = rx.events();
     assert_eq!(again.len(), 8, "no delivery to S2");
@@ -250,7 +268,7 @@ async fn bulk_replay_replays_only_the_named_subscription() {
             .await
             .is_empty()
     );
-    assert!(left.iter().all(|d| d["subscriptionId"] == s2));
+    assert!(left.iter().all(|d| d["subscriptionAlias"] == s2));
 }
 
 /// T33 (RELIABLE.2), replay clause: a replay keeps the dead letter's

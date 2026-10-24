@@ -38,9 +38,6 @@ const MIN_KEY_BYTES: usize = 32;
 
 /// Domain label of the record-principal derivation.
 const RECORD_DOMAIN: &[u8] = b"mcp-gateway/record-principal/v1";
-// Production use lands with MIK-8697 slice 3 (event handles); until then
-// the derivation is pinned by its tests only.
-#[cfg(test)]
 /// Domain label of the subscription-alias derivation.
 const SUBSCRIPTION_DOMAIN: &[u8] = b"mcp-gateway/subscription/v1";
 
@@ -79,7 +76,6 @@ impl RecordPrincipalKey {
     }
 
     /// Lowercase hex SHA-256 of the key bytes: names the key without being it.
-    #[cfg(test)]
     pub(crate) fn identity(&self) -> String {
         crate::hashing::sha256_hex(&self.0)
     }
@@ -206,9 +202,6 @@ fn is_keyed_owner(rest: &str) -> bool {
     })
 }
 
-// Production use lands with MIK-8697 slice 3 (event handles); until then
-// the derivation is pinned by its tests only.
-#[cfg(test)]
 /// The keyed alias of a stored subscription id: the client-facing handle.
 pub(crate) fn subscription_alias(key: &RecordPrincipalKey, stored_id: &str) -> String {
     keyed(key, SUBSCRIPTION_DOMAIN, stored_id, 16)

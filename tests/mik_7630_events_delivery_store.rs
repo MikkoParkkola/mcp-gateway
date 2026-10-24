@@ -157,6 +157,17 @@ async fn event_projection_never_falls_back_to_the_raw_body() {
     );
 }
 
+/// The stored id of the subscription made with `repo`: the subscribe answer
+/// is its keyed alias, and the store keys records by the stored id (MIK-8697).
+fn stored_id(root: &Path, repo: &str) -> String {
+    records(root, "subs")
+        .iter()
+        .find(|r| r["arguments"]["repo"] == repo)
+        .and_then(|r| r["id"].as_str())
+        .unwrap_or_else(|| panic!("a stored subscription for {repo}"))
+        .to_owned()
+}
+
 /// Pending outbox records of subscription `id`.
 fn pending_for(root: &Path, id: &str) -> usize {
     records(root, "outbox")
@@ -181,8 +192,9 @@ async fn outbox_caps_are_hard_and_per_subscription() {
     )
     .await;
     rx.event_default(EventReply::Status(503));
-    let s1 = subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({"repo": "a"})).await;
-    let s2 = subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({"repo": "b"})).await;
+    subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({"repo": "a"})).await;
+    subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({"repo": "b"})).await;
+    let (s1, s2) = (stored_id(root.path(), "a"), stored_id(root.path(), "b"));
     let root_path = root.path().to_path_buf();
     for n in 0..7 {
         fire(&gw, &format!("a-{n}"), "a").await;

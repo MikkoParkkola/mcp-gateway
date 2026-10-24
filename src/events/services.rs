@@ -95,12 +95,18 @@ impl Services {
     ///
     /// When these services were not built by `MetaMcp::events_services`.
     pub(crate) fn record_key(&self) -> &crate::gateway::record_principal::RecordPrincipalKey {
-        // invariant: Services are built only by MetaMcp::events_services, which
-        // passes the MetaMcp key that build_meta_mcp installs (row G-META).
+        // Services are built only by MetaMcp::events_services, which passes
+        // the MetaMcp key that build_meta_mcp installs (row G-META).
         self.record_key
             .as_deref()
             // invariant: events_services hands every Services the MetaMcp key.
             .expect("events services carry the MetaMcp record key")
+    }
+
+    /// The handle a subscriber and every record see for the stored id
+    /// `stored_id`: its keyed alias (MIK-8697 §13). The store keeps the id.
+    pub(crate) fn alias(&self, stored_id: &str) -> String {
+        crate::gateway::record_principal::subscription_alias(self.record_key(), stored_id)
     }
 }
 
@@ -533,7 +539,10 @@ impl Services {
             ));
         };
         let mut extra = Map::new();
-        extra.insert("subscription_id".into(), attempt.subscription_id.into());
+        extra.insert(
+            "subscription_id".into(),
+            self.alias(attempt.subscription_id).into(),
+        );
         extra.insert("event_id".into(), attempt.event_id.into());
         extra.insert("attempt".into(), attempt.number.into());
         let key = self.record_key();
@@ -606,7 +615,10 @@ impl Services {
         fields.insert("action".into(), "events.delivery_outcome".into());
         crate::clock::stamp_audit_row(&mut fields);
         fields.insert("event_id".into(), attempt.event_id.into());
-        fields.insert("subscription_id".into(), attempt.subscription_id.into());
+        fields.insert(
+            "subscription_id".into(),
+            self.alias(attempt.subscription_id).into(),
+        );
         fields.insert("outcome_of_attempt".into(), attempt.number.into());
         fields.insert("status".into(), attempt.status.into());
         fields.insert("delivered".into(), attempt.delivered.into());
@@ -639,7 +651,10 @@ impl Services {
             fields.insert("action".into(), "events.dead_letter_evicted".into());
             crate::clock::stamp_audit_row(&mut fields);
             fields.insert("event_id".into(), e.event_id.into());
-            fields.insert("subscription_id".into(), e.subscription_id.into());
+            fields.insert(
+                "subscription_id".into(),
+                self.alias(&e.subscription_id).into(),
+            );
             fields.insert("reason".into(), e.reason.into());
             let envelope = crate::security::audit::AuditEnvelope::gateway();
             let written = log

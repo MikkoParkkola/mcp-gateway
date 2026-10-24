@@ -393,6 +393,10 @@ fn tail_policy(config: &EventsConfig) -> store::TailPolicy {
 mod lifecycle_tests;
 
 #[cfg(test)]
+#[path = "handle_alias_tests.rs"]
+mod handle_alias_tests;
+
+#[cfg(test)]
 #[path = "clock_entry_tests.rs"]
 mod clock_entry_tests;
 #[cfg(test)]

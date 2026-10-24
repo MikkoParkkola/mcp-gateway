@@ -165,7 +165,8 @@ async fn a_self_evicting_refusal_is_receipted_before_its_eviction() {
         lifecycle_key: None,
     };
     hub.fan_out(&services, &event).await;
-    let id = crate::events::fanout::event_id(SourceKind::Webhook, "big", "sub_worker");
+    let id =
+        crate::events::fanout::event_id(SourceKind::Webhook, "big", &services.alias("sub_worker"));
     assert_burial_first(dir.path(), &id);
 }
 
