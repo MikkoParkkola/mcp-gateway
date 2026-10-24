@@ -230,6 +230,42 @@ fn chrome_devtools_names_its_chrome_prerequisite() {
     );
 }
 
+/// MIK-8511: the three reference servers move to 2.0.0 (operator ruling
+/// 2026-10-22), whose packages recommend Node 24. `init` writes memory and
+/// sequential-thinking enabled, so the descriptions carry the floor where
+/// users list servers.
+const REFERENCE_SERVERS_2_0_0: [(&str, &str); 3] = [
+    (
+        "filesystem",
+        "npx -y @modelcontextprotocol/server-filesystem@2.0.0",
+    ),
+    ("memory", "npx -y @modelcontextprotocol/server-memory@2.0.0"),
+    (
+        "sequential-thinking",
+        "npx -y @modelcontextprotocol/server-sequential-thinking@2.0.0",
+    ),
+];
+
+#[test]
+fn the_reference_servers_are_pinned_to_2_0_0() {
+    for (name, command) in REFERENCE_SERVERS_2_0_0 {
+        let entry = lookup(name).expect("a reference server is listed");
+        assert_eq!(entry.command, command, "{name}");
+    }
+}
+
+#[test]
+fn the_reference_servers_recommend_node_24_in_their_description() {
+    for (name, _) in REFERENCE_SERVERS_2_0_0 {
+        let entry = lookup(name).expect("a reference server is listed");
+        assert!(
+            entry.description.ends_with("(Node 24+ recommended)"),
+            "{name}: {}",
+            entry.description
+        );
+    }
+}
+
 /// What the gateway acts on in a pinned upstream package, read from the
 /// package itself at review time (MIK-8510): the version, and the
 /// `readOnlyHint` / `idempotentHint` of its one tool. The gateway reads the
@@ -237,7 +273,15 @@ fn chrome_devtools_names_its_chrome_prerequisite() {
 /// response-cache eligibility, so a
 /// bump that flips it changes visible behaviour (it did, between the date-based
 /// `2026.8.31`, `true` / `true`, and `1.0.0`, `false` / `false`).
-const SEQUENTIAL_THINKING_REVIEWED: (&str, bool, bool) = ("1.0.0", false, false);
+const SEQUENTIAL_THINKING_REVIEWED: (&str, bool, bool) = ("2.0.0", false, false);
+
+/// MIK-8511: 2.0.0's `dist/index.js` keeps `readOnlyHint: false` and
+/// `idempotentHint: false`, the same as 1.0.0, so the move changes nothing the
+/// gateway acts on.
+#[test]
+fn the_reviewed_sequential_thinking_hints_are_those_of_2_0_0() {
+    assert_eq!(SEQUENTIAL_THINKING_REVIEWED, ("2.0.0", false, false));
+}
 
 /// A later bump of the `sequential-thinking` pin must come with a fresh read of
 /// the tool annotations in the new package (`dist/index.js`, the `annotations`

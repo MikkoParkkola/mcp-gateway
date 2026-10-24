@@ -64,8 +64,8 @@ pub(super) static REGISTRY: &[ServerCatalogEntry] = &[
     // ── filesystem ──────────────────────────────────────────────────────────────────
     ServerCatalogEntry {
         name: "filesystem",
-        description: "Read, write, and navigate the local file system (append the allowed directories)",
-        command: "npx -y @modelcontextprotocol/server-filesystem@1.0.0",
+        description: "Read, write, and navigate the local file system (append the allowed directories) (Node 24+ recommended)",
+        command: "npx -y @modelcontextprotocol/server-filesystem@2.0.0",
         required_env: &[],
         optional_env: &[],
         transport: CatalogTransport::Stdio,
@@ -258,8 +258,8 @@ pub(super) static REGISTRY: &[ServerCatalogEntry] = &[
     // ── memory ──────────────────────────────────────────────────────────────────────
     ServerCatalogEntry {
         name: "memory",
-        description: "Persistent knowledge-graph memory for agents",
-        command: "npx -y @modelcontextprotocol/server-memory@1.0.0",
+        description: "Persistent knowledge-graph memory for agents (Node 24+ recommended)",
+        command: "npx -y @modelcontextprotocol/server-memory@2.0.0",
         required_env: &[],
         optional_env: &[],
         transport: CatalogTransport::Stdio,
@@ -318,8 +318,8 @@ pub(super) static REGISTRY: &[ServerCatalogEntry] = &[
     // ── code ────────────────────────────────────────────────────────────────────────
     ServerCatalogEntry {
         name: "sequential-thinking",
-        description: "Structured multi-step reasoning and problem decomposition",
-        command: "npx -y @modelcontextprotocol/server-sequential-thinking@1.0.0",
+        description: "Structured multi-step reasoning and problem decomposition (Node 24+ recommended)",
+        command: "npx -y @modelcontextprotocol/server-sequential-thinking@2.0.0",
         required_env: &[],
         optional_env: &[],
         transport: CatalogTransport::Stdio,

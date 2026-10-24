@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -71,7 +72,7 @@ class Fixture:
 
     def run(self, lines, **kw):
         kw.setdefault("line_timeout_s", 30)
-        kw.setdefault("deadline_s", 60)
+        kw.setdefault("backstop_s", 60)
         return runner.run(
             lines, repo=self.repo, head=self.head, merge_base=self.merge_base, base_tip=self.base_tip, **kw
         )
@@ -94,6 +95,23 @@ def touch(path):
     return py(f"open({str(path)!r}, 'w').write('x')")
 
 
+class HangFirst:
+    """A `_git` stand-in whose first `name` call (e.g. "clone") is a real 3 s
+    subprocess bounded by the timeout the runner passes, so a short setup
+    timeout raises TimeoutExpired from inside git's own bound (MIK-8787 T1/U2).
+    Every other call, and the first one if it survives, goes to the real _git."""
+
+    def __init__(self, name, real):
+        self.name, self.real, self.fired, self.timeouts = name, real, False, []
+
+    def __call__(self, cwd, *args, timeout=None):
+        self.timeouts.append((args[0], timeout))
+        if args[0] == self.name and not self.fired:
+            self.fired = True
+            subprocess.run(["sleep", "3"], timeout=timeout)
+        return self.real(cwd, *args, timeout=timeout)
+
+
 class Runner(unittest.TestCase):
     def setUp(self):
         self.f = Fixture()
@@ -113,11 +131,11 @@ class Runner(unittest.TestCase):
         self.assertEqual(statuses, ["failed", "timeout"])
         self.assertNotEqual(report.rc, 0)
 
-    # X2
-    def test_x2_at_most_three_lines_run_at_once(self):
-        self.assertEqual(runner.PREPUSH_CI_WORKERS, 3)
-        source = (HERE / "run_prepush_ci_checks.py").read_text()
-        self.assertIn("Lead ruling 2026-10-22", source.split("PREPUSH_CI_WORKERS = 3")[0][-200:])
+    # X2 (MIK-8787 GATE.3, guard change): the worker count comes from the CPU
+    # count, 2..4, with no setting; run() without `workers` uses it.
+    def test_x2_workers_follow_the_cpu_count_within_two_to_four(self):
+        table = {1: 2, 2: 2, 4: 2, 8: 2, 12: 3, 16: 4, 20: 4, 128: 4, None: 2}
+        self.assertEqual({cpu: runner.workers_for(cpu) for cpu in table}, table)
         lock, state = threading.Lock(), {"now": 0, "max": 0, "calls": 0}
 
         def executor(command, workdir, timeout_s):
@@ -130,14 +148,16 @@ class Runner(unittest.TestCase):
                 state["now"] -= 1
             return 0, ""
 
-        real = runner._clone, runner._reset
-        runner._clone, runner._reset = (lambda repo, commit, dest, deadline=None: dest), (lambda clone, deadline=None: None)
+        real = runner._clone, runner._reset, runner.os.cpu_count
+        runner._clone, runner._reset = (lambda repo, commit, dest, **kw: dest), (lambda clone, **kw: None)
         try:
-            self.f.run([line(f"true {i}") for i in range(9)], executor=executor)
+            for cpus, expect in ((8, 2), (16, 4)):
+                state.update(now=0, max=0, calls=0)
+                runner.os.cpu_count = lambda cpus=cpus: cpus
+                self.f.run([line(f"true {i}") for i in range(9)], executor=executor)
+                self.assertEqual((state["calls"], state["max"]), (9, expect), f"{cpus} CPUs")
         finally:
-            runner._clone, runner._reset = real
-        self.assertEqual(state["calls"], 9)
-        self.assertEqual(state["max"], 3)
+            runner._clone, runner._reset, runner.os.cpu_count = real
 
     # X3
     def test_x3_slowest_first(self):
@@ -183,33 +203,30 @@ class Runner(unittest.TestCase):
         self.assertNotEqual(report.rc, 0)
         self.assertEqual(len(report.failures), 1)
 
-    # X7
-    def test_x7_the_deadline_stops_the_pool_and_queued_work(self):
+    # X7 (MIK-8787 GATE.1, guard change; characterization): a hung check is
+    # killed at its own timeout and the queued check still runs. The deadline
+    # case this row used to pin is gone; the backstop is N7.
+    def test_x7_a_hung_check_does_not_stop_queued_work(self):
         queued = self.f.marker("queued")
-        pid = self.f.marker("pid")
-        spawn = py(
-            "import subprocess,sys,time; "
-            f"c=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); open({str(pid)!r},'w').write(str(c.pid)); time.sleep(60)"
-        )
-        start = time.monotonic()
         report = self.f.run(
-            [line(spawn, 60), line(py("import time; time.sleep(60)"), 59), line(py("import time; time.sleep(60)"), 58), line(touch(queued), 1)],
-            deadline_s=3,
+            [line(py("import time; time.sleep(60)"), 60), line(touch(queued), 1)],
+            line_timeout_s=2, workers=1,
         )
-        self.assertLess(time.monotonic() - start, 3 + 5)
-        self.assertFalse(queued.exists(), "the queued line was never dispatched")
-        self.assertTrue(any(r.status == "deadline" for r in report.failures))
-        child = int(pid.read_text())
-        self.assertTrue(dead_within(child), "the deadline killed the whole process group")
+        self.assertTrue(queued.exists(), "the queued line ran after the hang")
+        self.assertEqual([r.status for r in report.failures], ["timeout"])
 
-    # X7b
-    def test_x7b_base_reruns_share_the_deadline(self):
+    # X7b (MIK-8787 D6, guard change): a merge-base rerun that hangs is killed
+    # at its own check timeout and says so; the old deadline phrases are gone.
+    def test_x7b_a_hanging_base_rerun_is_killed_at_its_own_timeout(self):
         f = Fixture(base={"chk.py": "import time; time.sleep(60)\n"}, head={"chk.py": "raise SystemExit(1)\n"})
         try:
             start = time.monotonic()
-            report = f.run([line(f"{PY} chk.py")], deadline_s=3)
-            self.assertLess(time.monotonic() - start, 3 + 5)
-            self.assertIn("NOT COMPARABLE ON MERGE-BASE", report.text)
+            report = f.run([line(f"{PY} chk.py")], line_timeout_s=2)
+            self.assertLess(time.monotonic() - start, 2 + 10)
+            self.assertIn(f"NOT COMPARABLE ON MERGE-BASE {f.merge_base}: timed out on the merge-base (possible hang)",
+                          report.text)
+            for old in ("inside the deadline", "setup hit the deadline"):
+                self.assertNotIn(old, report.text)
             self.assertNotEqual(report.rc, 0)
         finally:
             f.close()
@@ -246,10 +263,20 @@ class Runner(unittest.TestCase):
         log = report.failures[0].log
         self.assertTrue(log is not None and log.exists() and str(log) in report.text)
 
-    # X11
-    def test_x11_the_bounds_are_pinned(self):
-        self.assertEqual(runner.LINE_TIMEOUT_S, 300)
-        self.assertEqual(runner.DEADLINE_S, 300)
+    # X11 (MIK-8787 GATE.1/2, guard change): the bounds are hang timeouts and a
+    # backstop, wired as run()'s defaults; the step-wide deadline is gone.
+    def test_x11_the_bounds_are_pinned_and_wired(self):
+        import inspect
+
+        self.assertEqual((runner.HANG_TIMEOUT_S, runner.SETUP_TIMEOUT_S, runner.STEP_BACKSTOP_S), (900, 300, 3600))
+        for gone in ("DEADLINE_S", "LINE_TIMEOUT_S", "PREPUSH_CI_WORKERS"):
+            self.assertFalse(hasattr(runner, gone), gone)
+        params = inspect.signature(runner.run).parameters
+        self.assertNotIn("deadline_s", params)
+        self.assertIs(params["line_timeout_s"].default, runner.HANG_TIMEOUT_S)
+        self.assertIs(params["setup_timeout_s"].default, runner.SETUP_TIMEOUT_S)
+        self.assertIs(params["backstop_s"].default, runner.STEP_BACKSTOP_S)
+        self.assertIsNone(params["workers"].default, "workers comes from the CPU count inside run()")
 
     # X12
     def test_x12_a_timeout_kills_the_lines_children(self):
@@ -461,28 +488,26 @@ class Runner(unittest.TestCase):
         self.assertIn("reset", report.failures[0].output)
         self.assertNotEqual(dirs["locks"], dirs["next"])
 
-    # X22 (impl r1 F6): clone setup counts against the deadline; the command's
-    # budget is what is left after setup.
-    def test_x22_setup_time_counts_against_the_deadline(self):
+    # X22 (MIK-8787 GATE.2, guard change, inverted; characterization): a slow
+    # clone does not shrink the check's own timeout.
+    def test_x22_setup_time_does_not_shrink_the_checks_timeout(self):
         budgets = []
         real_clone = runner._clone
 
-        def slow_clone(*args, **kwargs):  # (repo, commit, dest, deadline=)
+        def slow_clone(*args, **kwargs):
             time.sleep(1.5)
             return real_clone(*args, **kwargs)
 
         runner._clone = slow_clone
         try:
-            self.f.run([line("a")], executor=lambda c, w, b: (budgets.append(b), (0, ""))[1],
-                       deadline_s=2, line_timeout_s=30)
+            self.f.run([line("a")], executor=lambda c, w, b: (budgets.append(b), (0, ""))[1], line_timeout_s=30)
         finally:
             runner._clone = real_clone
-        self.assertEqual(len(budgets), 1)
-        self.assertLessEqual(budgets[0], 0.6)
+        self.assertEqual(budgets, [30])
 
-    # X22b (r2 gpt + grok): every git call of a line's setup and reset is
-    # bounded by the time left on the one deadline, each recomputed.
-    def test_x22b_every_setup_and_reset_git_call_is_bounded(self):
+    # X22b (MIK-8787 A1, guard change): every setup git call has its own
+    # timeout, the full setup bound while the backstop is far away ...
+    def test_x22b_every_setup_git_call_has_its_own_timeout(self):
         calls, real = [], runner._git
 
         def recording(cwd, *args, timeout=None):
@@ -491,17 +516,28 @@ class Runner(unittest.TestCase):
 
         runner._git = recording
         try:
-            self.f.run([line(py("pass"), requires=self.f.head)], deadline_s=30)
+            self.f.run([line(py("pass"), requires=self.f.head)], setup_timeout_s=7)
         finally:
             runner._git = real
         setup = ("cat-file", "clone", "checkout", "reset", "clean")
-        used = {name for name, _ in calls}
-        self.assertTrue(set(setup) <= used, calls)
-        unbounded = [(n, t) for n, t in calls if n in setup and (t is None or t > 30)]
-        self.assertEqual(unbounded, [])
-        timeouts = [t for n, t in calls if n in setup]
-        self.assertTrue(all(a > b for a, b in zip(timeouts, timeouts[1:])),
-                        f"each call gets the time left, not one captured slice: {timeouts}")
+        self.assertTrue(set(setup) <= {name for name, _ in calls}, calls)
+        self.assertEqual({t for n, t in calls if n in setup}, {7}, calls)
+
+    # ... and capped by the backstop when it is near: a long clone is killed
+    # at the backstop and the check reads backstop.
+    def test_x22b_a_setup_call_is_capped_by_a_near_backstop(self):
+        hang = HangFirst("clone", runner._git)
+        runner._git = hang
+        try:
+            start = time.monotonic()
+            report = self.f.run([line(py("pass"))], backstop_s=1, setup_timeout_s=30, workers=1)
+            elapsed = time.monotonic() - start
+        finally:
+            runner._git = hang.real
+        self.assertLess(elapsed, 1 + 5)
+        self.assertEqual([r.status for r in report.failures], ["backstop"])
+        clone_timeouts = [t for n, t in hang.timeouts if n == "clone"]
+        self.assertTrue(clone_timeouts and clone_timeouts[0] <= 1, hang.timeouts)
 
     # X23 (gpt L1): a list line with an unknown direction, or an open line
     # without its skip marker, is refused before anything runs.
@@ -520,6 +556,215 @@ class Runner(unittest.TestCase):
         self.assertRegex(slow, r"^  rc 0 +[0-9]+\.[0-9] s ")
         self.assertGreaterEqual(float(slow.split()[2]), 0.3)
         self.assertTrue(any(r.startswith("  rc 4 ") and "SystemExit(4)" in r for r in rows), rows)
+
+    # N1 (MIK-8787 GATE.2/5; characterization): a slow clone does not fail a
+    # healthy check whose own run fits its timeout.
+    def test_n1_a_slow_clone_does_not_fail_a_healthy_check(self):
+        real_clone = runner._clone
+
+        def slow_clone(*args, **kwargs):
+            time.sleep(2)
+            return real_clone(*args, **kwargs)
+
+        runner._clone = slow_clone
+        try:
+            report = self.f.run([line("sleep 1")], line_timeout_s=1.5)
+        finally:
+            runner._clone = real_clone
+        self.assertEqual(report.rc, 0, report.text)
+
+    # N2 (MIK-8787 GATE.1/5): a hung check fails with the hang message and its
+    # log, its whole process group dies, and the next check still runs.
+    def test_n2_a_hung_check_fails_with_the_hang_message(self):
+        pid, after = self.f.marker("pid"), self.f.marker("after")
+        spawn = py(
+            "import subprocess,sys,time; "
+            f"c=subprocess.Popen([sys.executable,'-c','import time; time.sleep(600)']); open({str(pid)!r},'w').write(str(c.pid)); time.sleep(600)"
+        )
+        start = time.monotonic()
+        report = self.f.run([line(spawn, 9), line(touch(after), 1)], line_timeout_s=2, workers=1)
+        self.assertLess(time.monotonic() - start, 2 + 10)
+        self.assertEqual([r.status for r in report.failures], ["timeout"])
+        self.assertIn("timed out after 2 s (possible hang)", report.text)
+        self.assertIn(str(report.failures[0].log), report.text)
+        self.assertTrue(dead_within(int(pid.read_text())))
+        self.assertTrue(after.exists(), "the check after the hang ran")
+
+    # N3 (MIK-8787 GATE.4/5; characterization): a real failure still fails the
+    # push and is compared on the merge-base.
+    def test_n3_a_failing_check_still_fails_and_is_compared(self):
+        report = self.f.run([line(py("raise SystemExit(3)"))])
+        self.assertNotEqual(report.rc, 0)
+        self.assertEqual([r.status for r in report.failures], ["failed"])
+        self.assertRegex(report.text, r"FAILS ON HEAD|PRE-EXISTING ON MERGE-BASE")
+
+    # N4 (MIK-8787 D3): a clone that outlives its own setup timeout fails the
+    # push as setup-timeout, is not compared, and the next check gets a fresh clone.
+    def test_n4_a_hung_clone_is_a_setup_timeout(self):
+        after = self.f.marker("after")
+        hang = HangFirst("clone", runner._git)
+        runner._git = hang
+        try:
+            report = self.f.run([line(py("pass"), 9), line(touch(after), 1)], setup_timeout_s=1, workers=1)
+        finally:
+            runner._git = hang.real
+        self.assertNotEqual(report.rc, 0)
+        self.assertEqual([r.status for r in report.failures], ["setup-timeout"])
+        self.assertIn("git clone timed out after 1 s (possible hang)", report.text)
+        self.assertIn("setup-timeout, the check gave no verdict on HEAD", report.text)
+        self.assertTrue(after.exists(), "the next check got a fresh clone and ran")
+
+    # N4b (MIK-8787 D6): a clone hang while preparing the merge-base rerun is
+    # NOT COMPARABLE with the hang message; the push still fails.
+    def test_n4b_a_hung_base_clone_is_not_comparable(self):
+        f = Fixture(base={"chk.py": "pass\n"}, head={"chk.py": "raise SystemExit(1)\n"})
+        try:
+            real = runner._git
+            hang = None
+
+            def arm_after_head(cwd, *args, timeout=None):
+                nonlocal hang
+                if hang is None and args[0] == "clone" and "base" in str(args[-1]):
+                    hang = HangFirst("clone", real)
+                return (hang or real)(cwd, *args, timeout=timeout)
+
+            runner._git = arm_after_head
+            try:
+                report = f.run([line(f"{PY} chk.py")], setup_timeout_s=1)
+            finally:
+                runner._git = real
+            self.assertNotEqual(report.rc, 0)
+            self.assertRegex(report.text, rf"NOT COMPARABLE ON MERGE-BASE {f.merge_base}: .*setup-timeout.*possible hang")
+        finally:
+            f.close()
+
+    # N5 (MIK-8787 GATE.6): the slowest checks are ranked by measured time,
+    # not by their listed seconds, next to the worker count.
+    def test_n5_the_slowest_checks_are_ranked_by_measured_time(self):
+        a, b = py("import time; time.sleep(0.1)  # A"), py("import time; time.sleep(0.6)  # B")
+        report = self.f.run([line(a, 50), line(b, 1)], workers=1)
+        self.assertEqual(report.rc, 0, report.text)
+        summary = next(l for l in report.text.splitlines() if "slowest:" in l)
+        self.assertIn("1 workers", summary)
+        self.assertLess(summary.index("# B"), summary.index("# A"), summary)
+        seconds = [float(s) for s in re.findall(r" ([0-9]+\.[0-9]) s", summary)]
+        self.assertEqual(len(seconds), 2, summary)
+        self.assertGreater(seconds[0], seconds[1])
+        self.assertGreaterEqual(seconds[0], 0.6)
+
+    # N6a (MIK-8787 A4/R3): a reset that fails after a check timed out keeps
+    # the timeout, its log and a note, and the next check gets a fresh clone.
+    def test_n6a_a_failed_reset_after_a_timeout_keeps_the_timeout(self):
+        where, first = self.f.marker("where"), self.f.marker("first")
+        locker = py(f"import os, time; open({str(first)!r},'w').write(os.getcwd()); "
+                    "open('.git/index.lock','w').write(''); time.sleep(60)")
+        report = self.f.run([line(locker, 9), line(py(f"import os; open({str(where)!r},'w').write(os.getcwd())"), 1)],
+                            line_timeout_s=2, workers=1)
+        self.assertEqual([r.status for r in report.failures], ["timeout"])
+        failure = report.failures[0]
+        self.assertIn("reset failed after the check ran", failure.output)
+        self.assertTrue(failure.log is not None and failure.log.exists())
+        self.assertTrue(where.exists(), "the next check ran")
+        self.assertNotEqual(where.read_text(), first.read_text(), "the next check reused the dirty clone")
+
+    # N6b (A4): a reset that fails after a PASSING check is still a crash
+    # (X21), and the result keeps the check's log and duration.
+    def test_n6b_a_failed_reset_after_a_pass_is_a_crash(self):
+        report = self.f.run([line(py("import time; time.sleep(0.2); open('.git/index.lock','w').write('')"))],
+                            workers=1)
+        self.assertEqual([r.status for r in report.failures], ["crashed"])
+        failure = report.failures[0]
+        self.assertTrue(failure.log is not None and failure.log.exists())
+        self.assertGreaterEqual(failure.seconds, 0.2)
+        self.assertIn("crashed, the check gave no verdict on HEAD", report.text)
+
+    # N7 (MIK-8787 A1-A3): the step backstop interrupts a running check (its
+    # group dies) and leaves the queued one undispatched; the push fails.
+    def test_n7_the_backstop_interrupts_running_and_stops_queued_checks(self):
+        pid, queued = self.f.marker("pid"), self.f.marker("queued")
+        spawn = py(
+            "import subprocess,sys,time; "
+            f"c=subprocess.Popen([sys.executable,'-c','import time; time.sleep(600)']); open({str(pid)!r},'w').write(str(c.pid)); time.sleep(600)"
+        )
+        start = time.monotonic()
+        report = self.f.run([line(spawn, 9), line(touch(queued), 1)], backstop_s=2, line_timeout_s=30, workers=1)
+        self.assertLess(time.monotonic() - start, 2 + 5)
+        self.assertNotEqual(report.rc, 0)
+        self.assertEqual([r.status for r in report.failures], ["backstop", "backstop"])
+        self.assertIn("interrupted by the step backstop", report.text)
+        self.assertIn("not dispatched: the step backstop", report.text)
+        self.assertNotIn("PASSES ON MERGE-BASE", report.text)
+        self.assertFalse(queued.exists())
+        self.assertTrue(dead_within(int(pid.read_text())))
+
+    # N7b (A1): a merge-base rerun in flight is killed at the backstop.
+    def test_n7b_the_backstop_kills_a_base_rerun_in_flight(self):
+        f = Fixture(base={"chk.py": "import time; time.sleep(60)\n"}, head={"chk.py": "raise SystemExit(1)\n"})
+        try:
+            start = time.monotonic()
+            report = f.run([line(f"{PY} chk.py")], backstop_s=3, line_timeout_s=30)
+            self.assertLess(time.monotonic() - start, 3 + 5)
+            self.assertRegex(report.text, rf"NOT COMPARABLE ON MERGE-BASE {f.merge_base}: .*backstop")
+            for old in ("inside the deadline", "setup hit the deadline"):
+                self.assertNotIn(old, report.text)
+        finally:
+            f.close()
+
+    # N7c (U5): two checks running at once are both interrupted.
+    def test_n7c_the_backstop_interrupts_every_running_check(self):
+        pids = [self.f.marker(f"pid{i}") for i in range(2)]
+        spawns = [py(
+            "import subprocess,sys,time; "
+            f"c=subprocess.Popen([sys.executable,'-c','import time; time.sleep(600)']); open({str(p)!r},'w').write(str(c.pid)); time.sleep(600)"
+        ) for p in pids]
+        start = time.monotonic()
+        report = self.f.run([line(s, 9) for s in spawns], backstop_s=2, line_timeout_s=30, workers=2)
+        self.assertLess(time.monotonic() - start, 2 + 5)
+        self.assertEqual([r.status for r in report.failures], ["backstop", "backstop"])
+        self.assertTrue(all(dead_within(int(p.read_text())) for p in pids))
+
+    # N7d (impl review): a backstop that expires during setup never starts the
+    # command; the line reads backstop.
+    def test_n7d_a_backstop_expiring_during_setup_never_starts_the_command(self):
+        started, real_clone = [], runner._clone
+
+        def slow_clone(*args, **kwargs):  # the clone succeeds; the backstop passes after it
+            dest = real_clone(*args, **kwargs)
+            time.sleep(1.5)
+            return dest
+
+        runner._clone = slow_clone
+        try:
+            report = self.f.run([line("a")], backstop_s=1, workers=1,
+                                executor=lambda c, w, b: (started.append(c), (0, ""))[1])
+        finally:
+            runner._clone = real_clone
+        self.assertEqual(started, [], "the command started after the backstop")
+        self.assertEqual([r.status for r in report.failures], ["backstop"])
+        self.assertIn("not dispatched: the step backstop", report.text)
+
+    # N8 (MIK-8787 D6/R2): a check that gave no verdict on HEAD is not rerun
+    # on the merge-base; it is NOT COMPARABLE and still fails the push.
+    def test_n8_no_merge_base_rerun_without_a_head_verdict(self):
+        report = self.f.run([line(py("import time; time.sleep(60)"))], line_timeout_s=2)
+        self.assertIn(f"NOT COMPARABLE ON MERGE-BASE {self.f.merge_base}: timeout, the check gave no verdict on HEAD",
+                      report.text)
+        tmp = report.failures[0].log.parent.parent
+        self.assertEqual(sorted(p.name for p in tmp.iterdir() if p.name.startswith(("base", "head"))), [])
+        missing = self.f.run([line(py("pass"), requires="0" * 40)])
+        self.assertIn("missing, the check gave no verdict on HEAD", missing.text)
+        self.assertNotEqual(missing.rc, 0)
+
+    # N9 (MIK-8787 D6; characterization): the merge-base rerun gets its own
+    # full check timeout, not what HEAD left of it.
+    def test_n9_the_base_rerun_gets_a_full_timeout(self):
+        f = Fixture(base={"chk.py": "import time; time.sleep(1)\n"},
+                    head={"chk.py": "import sys, time; time.sleep(2.5); sys.exit(1)\n"})
+        try:
+            report = f.run([line(f"{PY} chk.py")], line_timeout_s=3)
+            self.assertIn(f"PASSES ON MERGE-BASE {f.merge_base}", report.text)
+        finally:
+            f.close()
 
     # R3b (r2 gpt + grok): the push path's drift check includes the Rust set,
     # so dropping rust_drift from it fails here, not only in the scanner suite.

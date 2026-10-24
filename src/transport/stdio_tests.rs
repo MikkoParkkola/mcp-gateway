@@ -134,6 +134,12 @@ fn build_init_params_contains_version() {
     let params = initialize_params("2025-06-18");
     assert_eq!(params["protocolVersion"], "2025-06-18");
     assert_eq!(params["clientInfo"]["name"], "mcp-gateway");
+    // MIK-8511: offering Roots would hand every filesystem backend 2.0.0's
+    // stricter roots rules; it keeps its command-line folders only without them.
+    assert!(
+        params["capabilities"].get("roots").is_none(),
+        "initialize offers Roots: filesystem 2.0.0 would then drop its folder arguments"
+    );
 }
 
 // =========================================================================

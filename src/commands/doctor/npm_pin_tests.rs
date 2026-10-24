@@ -155,7 +155,7 @@ fn the_allowlist_is_exactly_the_registry_npx_packages() {
     .map(String::from)
     .collect();
     assert_eq!(allowlist(), expected);
-    assert_eq!(current_version(MEMORY_PACKAGE).as_deref(), Some("1.0.0"));
+    assert_eq!(current_version(MEMORY_PACKAGE).as_deref(), Some("2.0.0"));
     assert_eq!(current_version("@company/internal-tool"), None);
 }
 
@@ -476,11 +476,11 @@ fn the_memory_hint_copies_the_graph_before_the_pin_changes() {
     assert!(text.contains("pkg-cache"), "{text}");
     assert!(text.to_lowercase().contains("copy"), "{text}");
     assert!(
-        text.contains("1.0.0"),
+        text.contains("2.0.0"),
         "names the registry's current pin: {text}"
     );
     let copy_at = text.to_lowercase().find("copy").expect("checked above");
-    let pin_at = text.find("1.0.0").expect("checked above");
+    let pin_at = text.find("2.0.0").expect("checked above");
     assert!(copy_at < pin_at, "copy first, then change the pin: {text}");
 }
 
@@ -500,7 +500,7 @@ fn an_absolute_memory_file_path_gets_the_plain_hint() {
     assert!(!text.contains("pkg-cache"), "{text}");
     assert!(text.contains("backends.memory.command"), "{text}");
     assert!(
-        text.contains("@modelcontextprotocol/server-memory@1.0.0"),
+        text.contains("@modelcontextprotocol/server-memory@2.0.0"),
         "{text}"
     );
 
@@ -522,7 +522,7 @@ fn other_packages_get_the_edit_the_pin_hint() {
     let text = hint("files", &old, &backend);
     assert!(text.contains("backends.files.command"), "{text}");
     assert!(
-        text.contains("@modelcontextprotocol/server-filesystem@1.0.0"),
+        text.contains("@modelcontextprotocol/server-filesystem@2.0.0"),
         "{text}"
     );
     assert!(!text.contains("MEMORY_FILE_PATH"), "{text}");
