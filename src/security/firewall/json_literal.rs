@@ -20,11 +20,17 @@ pub(crate) struct Literal {
 /// `serde_json` has accepted: outside a literal such text holds no `"`, so
 /// each one found opens a literal.
 pub(crate) fn string_literals(text: &str) -> Vec<Literal> {
-    let mut out = Vec::new();
+    literals(text).collect()
+}
+
+/// [`string_literals`] one at a time, holding only the open containers, so a
+/// document over the redactor's size cap is walked without a list (MIK-8774).
+pub(crate) fn literals(text: &str) -> impl Iterator<Item = Literal> + '_ {
     // Open containers, innermost last; the bottom entry is the top level.
     let (mut open_containers, mut opened) = (vec![0], 0);
     let mut at = 0;
-    while let Some(open) = text[at..].find('"') {
+    std::iter::from_fn(move || {
+        let open = text[at..].find('"')?;
         for byte in text[at..at + open].bytes() {
             match byte {
                 b'{' | b'[' => {
@@ -38,21 +44,17 @@ pub(crate) fn string_literals(text: &str) -> Vec<Literal> {
             }
         }
         let start = at + open + 1;
-        let Some(len) = closing_quote(&text[start..]) else {
-            break;
-        };
-        let end = start + len;
+        let end = start + closing_quote(&text[start..])?;
         let key = text[end + 1..].trim_start().starts_with(':');
         let container = open_containers.last().copied().unwrap_or(0);
-        out.push(Literal {
+        at = end + 1;
+        Some(Literal {
             start,
             end,
             key,
             container,
-        });
-        at = end + 1;
-    }
-    out
+        })
+    })
 }
 
 /// The byte ranges, offset by `base`, of the escapes in `content`, a string

@@ -183,15 +183,19 @@ fn s6_families_and_generated_documents_over_the_cap() {
             format!(r#"{{"v":{quoted},"n":3}}"#),
             format!(r#"{{{quoted}:{{"v":"a"}},"n":3}}"#),
         ] {
-            let out = assert_projected(&over_cap(&doc));
-            assert!(parses(&out), "{rule}: {doc}");
+            // A key a match starts in takes base's replacement, which may
+            // cut the JSON; every projected leaf still parses.
+            let text = over_cap(&doc);
+            let out = assert_projected(&text);
+            assert!(out == today(&text) || parses(&out), "{rule}: {doc}");
         }
     }
     let mut g = Gen(8774);
     for _ in 0..30 {
         let doc = g.document(true);
-        let out = assert_projected(&over_cap(&doc));
-        assert!(parses(&out), "{doc}");
+        let text = over_cap(&doc);
+        let out = assert_projected(&text);
+        assert!(out == today(&text) || parses(&out), "{doc}");
     }
 }
 
@@ -202,7 +206,9 @@ fn s6_families_and_generated_documents_over_the_cap() {
 #[ignore = "timing; run by hand"]
 fn s7_over_the_cap_cost() {
     let row = r#"{"full_name":"o/r","description":"short words here"},"#;
-    for size in [1_155_114_usize, 8 << 20] {
+    let mut ratios = Vec::new();
+    // The first size is under the cap: the same shape on MIK-8745's walk.
+    for size in [1_000_000_usize, 1_155_114, 8 << 20] {
         let mut body = String::new();
         while body.len() < size {
             body.push_str(row);
@@ -211,14 +217,35 @@ fn s7_over_the_cap_cost() {
             r#"{{"items":[{{"homepage":"{}"}},{body}{{}}],"total_count":3}}"#,
             secret_url()
         );
-        time_against_base(&format!("q2 {size}"), &text);
+        ratios.push(time_against_base(&format!("q2 {size}"), &text));
     }
     let keys: String = (0..100_000).map(|i| format!(r#""k{i}":{i},"#)).collect();
     let text = over_cap(&format!(r#"[{{"v":"{}",{keys}"z":0}}]"#, secret_url()));
-    time_against_base("one span across 100000 keys", &text);
+    ratios.push(time_against_base("one span across 100000 keys", &text));
+    // No secret at all: every JSON leaf over the cap now takes the walk (MIK-8756
+    // ruling A), where base ran only the regex set. Reported, not asserted.
+    let mut body = String::new();
+    while body.len() < 8 << 20 {
+        body.push_str(row);
+    }
+    let text = format!(r#"{{"items":[{body}{{}}],"total_count":3}}"#);
+    let warm = redactor();
+    let mut value = json!({ "content": [{ "type": "text", "text": &text }] });
+    let started = std::time::Instant::now();
+    warm.scan_and_redact(&mut value);
+    let walked = started.elapsed();
+    assert_eq!(value["content"][0]["text"].as_str(), Some(text.as_str()));
+    let started = std::time::Instant::now();
+    assert!(!warm.set.is_match(&text));
+    let base = started.elapsed();
+    let ratio = walked.as_secs_f64() / base.as_secs_f64();
+    println!("no secret, 8 MiB: walk {walked:?}, base regex {base:?}, ratio {ratio:.2}");
+    for (label, ratio) in ratios {
+        assert!(ratio < 3.0, "{label}: ratio {ratio:.2} over the plan's 3x");
+    }
 }
 
-fn time_against_base(label: &str, text: &str) {
+fn time_against_base(label: &str, text: &str) -> (String, f64) {
     let warm = redactor();
     let mut value = json!({ "content": [{ "type": "text", "text": text }] });
     let started = std::time::Instant::now();
@@ -231,7 +258,7 @@ fn time_against_base(label: &str, text: &str) {
     assert_ne!(out, whole, "{label}: the projection must have run");
     let ratio = projected.as_secs_f64() / base.as_secs_f64();
     println!("{label}: projection {projected:?}, whole leaf {base:?}, ratio {ratio:.2}");
-    assert!(ratio < 3.0, "{label}: ratio {ratio:.2} over the plan's 3x");
+    (label.to_owned(), ratio)
 }
 
 /// The member password every M row carries.

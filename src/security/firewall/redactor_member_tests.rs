@@ -442,15 +442,20 @@ fn p5_exempt_parsed_member_is_kept() {
 }
 
 #[test]
-fn p6_leaf_over_the_walk_cap_keeps_today_s_path() {
-    // B2's cap (1 MiB, MIK-8745) sends a larger leaf down today's regex
-    // path, where a member is not paired: a known gap, named in the PR.
+fn p6_leaf_over_the_walk_cap_pairs_members_too() {
+    // Past B2's cap (1 MiB) the streaming walk pairs members as the walk
+    // under it does (MIK-8774), closing the gap this row used to pin.
     let pad = "x".repeat(1 << 20);
     let text =
         serde_json::to_string(&json!({ "pad": pad, "api_key": class_value(24) })).expect("json");
     let (out, findings) = deliver(&text);
-    assert_eq!(out, text);
-    assert!(findings.is_empty());
+    let expected = serde_json::to_string(&json!({ "pad": pad, "api_key": MARK })).expect("json");
+    assert_eq!(out, expected);
+    // The same findings as the member alone under the cap.
+    let small = serde_json::to_string(&json!({ "api_key": class_value(24) })).expect("json");
+    let describe = |f: &[Finding]| f.iter().map(|f| f.description.clone()).collect::<Vec<_>>();
+    assert_eq!(describe(&findings), describe(&deliver(&small).1));
+    assert!(describe(&findings).iter().any(|d| d == MEMBER));
 }
 
 #[test]

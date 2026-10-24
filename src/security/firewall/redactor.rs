@@ -308,6 +308,9 @@ impl Redactor {
         exempt: &dyn Fn(&str) -> bool,
         findings: &mut Vec<Finding>,
     ) -> JsonText {
+        if text.len() > B2_MAX_LEAF_BYTES {
+            return self.redact_large_json(text, exempt, findings);
+        }
         if b2_gate(text).is_none() {
             return JsonText::NotJson;
         }
@@ -792,6 +795,9 @@ fn replace_spans(text: &str, ranges: &[(usize, usize)]) -> String {
 #[path = "redactor_spans.rs"]
 mod spans;
 use spans::{covers, escape_around, merge_spans, without};
+
+#[path = "redactor_large.rs"]
+mod large;
 
 #[cfg(test)]
 #[path = "redactor_tests.rs"]
