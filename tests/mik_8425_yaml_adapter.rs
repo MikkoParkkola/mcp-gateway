@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8425 MIG.1a: the YAML adapter (`src/yaml.rs`) behaves exactly as
+//! MIK-8425 MIG.1a: the YAML adapter (`src/yaml/`) behaves exactly as
 //! `serde_yaml` and figment do today, and no new file bypasses it.
 //!
 //! T1 to T3 and T5 of the MIG.1a test plan
@@ -388,7 +388,7 @@ fn repo_root() -> std::path::PathBuf {
 const ALLOWLIST: &str = "tests/fixtures/mik_8425_yaml/direct_users.txt";
 
 /// The files that may still name a parser directly. Each MIG.1 PR removes
-/// the files it routes through the adapter; MIG.2 leaves only `src/yaml.rs`.
+/// the files it routes through the adapter; MIG.2 leaves only `src/yaml/`.
 fn allowlist() -> std::collections::BTreeSet<String> {
     std::fs::read_to_string(repo_root().join(ALLOWLIST))
         .expect("allowlist")
@@ -414,7 +414,7 @@ fn no_new_file_names_a_yaml_parser_directly() {
     assert!(
         new.is_empty(),
         "these files name serde_yaml or figment's Yaml provider directly; route them \
-         through src/yaml.rs (or tests/common/yaml.rs) instead: {new:?}"
+         through src/yaml/ (or tests/common/yaml.rs) instead: {new:?}"
     );
 }
 

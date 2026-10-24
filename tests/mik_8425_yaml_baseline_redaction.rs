@@ -5,7 +5,7 @@
 //!
 //! The config load path removes values (`config/load_error.rs`, MIK-8375).
 //! The direct capability path did not, until B3 moved the redaction into the
-//! adapter (`src/yaml.rs`), so a value in a wrongly typed field no longer
+//! adapter (`src/yaml/`), so a value in a wrongly typed field no longer
 //! reaches the log. The leak MIG.0 recorded as `leaks=true` is closed here;
 //! the golden shows `leaks=false` on every value row (the key-name control
 //! still prints its key by design).

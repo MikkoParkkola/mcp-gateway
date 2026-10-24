@@ -8,7 +8,7 @@
 //! this helper is what proves it.
 #![allow(dead_code)]
 
-#[path = "../../src/yaml.rs"]
+#[path = "../../src/yaml/mod.rs"]
 mod adapter;
 
 pub(crate) use adapter::*;
