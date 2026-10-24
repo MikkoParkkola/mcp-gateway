@@ -36,7 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The `-full` image no longer runs a downloaded installer script as root.** Node.js
   comes from NodeSource's apt repository, trusted through a signing key whose
-  fingerprint is pinned and checked at build time, and `uv` is copied from its
+  fingerprint is pinned and checked at build time against the key file's one
+  primary key (a matching subkey is not enough), and `uv` is copied from its
   official image pinned by version and digest, instead of piping NodeSource's setup
   script and uv's `install.sh` into a root shell.
 

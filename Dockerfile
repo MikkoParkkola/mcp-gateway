@@ -112,9 +112,8 @@ RUN echo "apt cache bust: ${APT_CACHE_BUST}" \
     gnupg \
     openssh-client \
     && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /tmp/nodesource.key \
-    && test "$(gpg --show-keys --with-colons /tmp/nodesource.key | grep -c '^pub:')" = 1 \
-    && gpg --show-keys --with-colons /tmp/nodesource.key \
-       | grep -qx 'fpr:::::::::6F71F525282841EEDAF851B42F59B5F99B1BE0B4:' \
+    && gpg --show-keys --with-colons /tmp/nodesource.key | awk -F: \
+       '$1 == "pub" { pubs++; want = 1; next } want && $1 == "fpr" { primary = $10 } { want = 0 } END { exit !(pubs == 1 && primary == "6F71F525282841EEDAF851B42F59B5F99B1BE0B4") }' \
     && gpg --dearmor -o /usr/share/keyrings/nodesource.gpg /tmp/nodesource.key \
     && rm -f /tmp/nodesource.key \
     && printf '%s\n' 'Types: deb' 'URIs: https://deb.nodesource.com/node_24.x' 'Suites: nodistro' \
