@@ -146,7 +146,7 @@ impl Services {
     ) -> &'static str {
         #[cfg(feature = "firewall")]
         let holds_marker =
-            String::from_utf8_lossy(body).contains(crate::security::firewall::redactor::MARKER);
+            String::from_utf8_lossy(body).contains(crate::security::firewall::redactor::REDACTED);
         #[cfg(not(feature = "firewall"))]
         let holds_marker = {
             let _ = body;

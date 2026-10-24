@@ -22,10 +22,12 @@ mod receiver;
 use std::path::Path;
 use std::time::Duration;
 
-use delivery::{DEADLINE, delivery_config, events_at_least, fire, records, subscribe, wait_until};
+use delivery::{
+    DEADLINE, audit_records, delivery_config, events_at_least, fire, records, subscribe, wait_until,
+};
 use gateway::{ADMIN, ALICE, Gateway};
 use receiver::{EventReply, Receiver, whsec};
-use serde_json::json;
+use serde_json::{Value, json};
 
 /// Stored subscriptions only: the store rewrites a record through a
 /// `.{name}.{n}.tmp` file and a rename, and a count taken mid-rewrite would
@@ -38,36 +40,128 @@ fn subs_on_disk(root: &Path) -> usize {
     })
 }
 
+/// The queued event's state when the gateway stopped (MIK-8796). Every POST is
+/// preceded by a durable claim (`attempt`) and a `sending` audit record, so
+/// these bound what was sent while the route existed, however many jittered
+/// retries landed before the stop.
+struct AtStop {
+    event_id: String,
+    attempt: u64,
+    sending: usize,
+    /// Hold verdicts already written, so a wait for a new one is not
+    /// released by one from before the stop.
+    held: usize,
+}
+
+/// The audit records of `event_id` with `status`: a `sending` one is written
+/// before each POST, a `source_unavailable` one per hold verdict.
+fn audited(root: &Path, event_id: &str, status: &str) -> usize {
+    audit_records(root)
+        .iter()
+        .filter(|r| r["event_id"] == event_id && r["status"] == status)
+        .count()
+}
+
+/// The single queued record, once its retry is settled and scheduled:
+/// pending, attempted and answered. In flight is never a stop signal.
+fn settled(root: &Path) -> Option<Value> {
+    let queued = records(root, "outbox");
+    let record = queued.first()?;
+    (queued.len() == 1
+        && record["state"] == "pending"
+        && record["attempt"].as_u64().is_some_and(|a| a >= 1)
+        && !record["last_status"].is_null())
+    .then(|| record.clone())
+}
+
+/// Nothing was sent for the held event after the restart: no `sending`
+/// record was added, the receiver saw no more than the attempts claimed
+/// before the stop, and the record is still queued (held, not exhausted).
+async fn assert_nothing_sent_after(root: &Path, rx: &Receiver, at_stop: &AtStop) {
+    let mut last = Value::Null;
+    let pending = wait_until(DEADLINE, || {
+        last = records(root, "outbox")
+            .into_iter()
+            .find(|r| r["event_id"] == at_stop.event_id.as_str())
+            .unwrap_or(Value::Null);
+        last["state"] == "pending"
+    })
+    .await;
+    let (now_sending, received) = (
+        audited(root, &at_stop.event_id, "sending"),
+        rx.events().len(),
+    );
+    let context = format!(
+        "event {}: attempt at stop {}, sending at stop {}, sending now {now_sending}, received {received}, record {last}",
+        at_stop.event_id, at_stop.attempt, at_stop.sending
+    );
+    assert!(pending, "held, still queued; {context}");
+    assert_eq!(
+        now_sending, at_stop.sending,
+        "nothing is sent for it; {context}"
+    );
+    assert!(
+        u64::try_from(received).is_ok_and(|n| n <= at_stop.attempt),
+        "nothing is sent for it; {context}"
+    );
+}
+
+/// The retry policy of the rows that only need one retry pending: its first
+/// retry is seconds away.
+fn slow_retry() -> serde_json::Value {
+    json!({"retry_base": "30s", "retry_max_attempts": 5, "retry_window": "15m"})
+}
+
 /// A subscription with one retry pending, the gateway stopped, then started
-/// again with `change` applied to its directory and config.
+/// again with `change` applied to its directory and config. `script` answers
+/// the first deliveries (503 after it); the stop waits for `stop_after` POSTs.
 async fn restart_after(
+    retry: serde_json::Value,
+    script: Vec<EventReply>,
+    stop_after: usize,
     change: impl FnOnce(&mut Gateway),
-) -> (tempfile::TempDir, Receiver, Gateway, usize) {
+) -> (tempfile::TempDir, Receiver, Gateway, AtStop) {
     let dir = tempfile::tempdir().expect("root");
     let root = dir.path().to_path_buf();
     let rx = Receiver::start(&root).await;
-    let cfg = delivery_config(
-        &root,
-        &json!({"retry_base": "30s", "retry_max_attempts": 5, "retry_window": "15m"}),
-    );
+    let cfg = delivery_config(&root, &retry);
     let trust = rx.trust_env();
     let env = trust.each_ref().map(|(k, v)| (*k, v.as_str()));
     let mut gw = Gateway::start_with_env(&root, cfg, &env).await;
     gw.event_names(Some(ALICE), Some(gateway::EVENT)).await;
     rx.event_default(EventReply::Status(503));
+    rx.script(script);
     subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;
     fire(&gw, "d-7772", "o/r").await;
-    let posts = events_at_least(&rx, 1).await.len();
+    events_at_least(&rx, stop_after).await;
     assert_eq!(subs_on_disk(&root), 1);
+    // The stop is keyed off the retry the gateway scheduled, not the first
+    // POST: a jittered retry may already have gone out (MIK-8796).
     assert!(
-        wait_until(DEADLINE, || !records(&root, "outbox").is_empty()).await,
-        "the failed delivery is pending a retry"
+        wait_until(DEADLINE, || settled(&root).is_some()).await,
+        "the failed delivery is pending a scheduled retry; outbox {:?}; {}",
+        records(&root, "outbox"),
+        gw.stall_report()
     );
     // Down first: a live gateway would reload the change itself.
     gw.stop().await;
+    // Read in the gap between the stop and the restart.
+    let record = records(&root, "outbox").pop().expect("the queued record");
+    let event_id = record["event_id"].as_str().expect("event id").to_owned();
+    let at_stop = AtStop {
+        attempt: record["attempt"].as_u64().expect("attempt"),
+        sending: audited(&root, &event_id, "sending"),
+        held: audited(&root, &event_id, "source_unavailable"),
+        event_id,
+    };
+    assert!(
+        at_stop.sending >= stop_after,
+        "a sending record per POST before the stop: {} for {stop_after} POSTs",
+        at_stop.sending
+    );
     change(&mut gw);
     gw.restart().await;
-    (dir, rx, gw, posts)
+    (dir, rx, gw, at_stop)
 }
 
 /// AC1, AC3 as amended by MIK-8057: the route is gone when the gateway
@@ -75,14 +169,14 @@ async fn restart_after(
 /// posted for it.
 #[tokio::test]
 async fn a_route_removed_while_down_holds_its_subscription() {
-    let (_dir, rx, gw, posts) = restart_after(|gw| {
+    let (_dir, rx, gw, at_stop) = restart_after(slow_retry(), Vec::new(), 1, |gw| {
         std::fs::remove_file(gw.root().join("caps/github.yaml")).expect("remove the route");
     })
     .await;
     let root = gw.root().to_path_buf();
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert_eq!(subs_on_disk(&root), 1, "held, not withdrawn");
-    assert_eq!(rx.events().len(), posts, "nothing is sent for it");
+    assert_nothing_sent_after(&root, &rx, &at_stop).await;
 }
 
 /// MIK-8044.SURF.8: the admin's held listing, served through the route with a
@@ -91,7 +185,7 @@ async fn a_route_removed_while_down_holds_its_subscription() {
 /// queued record (src/events/admin.rs), which only the unit tests saw before.
 #[tokio::test]
 async fn a_held_subscription_is_listed_with_its_queued_record() {
-    let (_dir, _rx, gw, _posts) = restart_after(|gw| {
+    let (_dir, _rx, gw, _at_stop) = restart_after(slow_retry(), Vec::new(), 1, |gw| {
         std::fs::remove_file(gw.root().join("caps/github.yaml")).expect("remove the route");
     })
     .await;
@@ -121,7 +215,7 @@ async fn a_held_subscription_is_listed_with_its_queued_record() {
 /// event types, so the subscriptions to them are held until they lapse.
 #[tokio::test]
 async fn webhooks_off_holds_webhook_subscriptions() {
-    let (_dir, _rx, gw, _posts) = restart_after(|gw| {
+    let (_dir, _rx, gw, _at_stop) = restart_after(slow_retry(), Vec::new(), 1, |gw| {
         let mut cfg = gw.config().clone();
         cfg["webhooks"]["enabled"] = json!(false);
         gw.rewrite_config(cfg);
@@ -183,4 +277,36 @@ async fn a_backend_removed_while_down_takes_its_subscription() {
         names.iter().all(|n| n != name),
         "the type is gone: {names:?}"
     );
+}
+
+/// MIK-8796: a retry the gateway makes before the restart, while the route
+/// still exists, is not a send after it. The first reply is held, so the old
+/// baseline (taken at the first POST) is exactly one; the stop waits for the
+/// retry itself, and what was sent is counted after the stop. Ten attempts at
+/// a 1 s base cannot run out first.
+#[tokio::test]
+async fn a_retry_before_the_restart_is_not_counted_as_sent_after_it() {
+    let (_dir, rx, gw, at_stop) = restart_after(
+        json!({"retry_base": "1s", "retry_max_attempts": 10, "retry_window": "15m"}),
+        vec![EventReply::Hold(Duration::from_secs(8), 503)],
+        2,
+        |gw| {
+            std::fs::remove_file(gw.root().join("caps/github.yaml")).expect("remove the route");
+        },
+    )
+    .await;
+    let root = gw.root().to_path_buf();
+    // The worker judged the due retry after the restart and held it: a new
+    // hold verdict. Extra pre-stop retries can push the next attempt up to the
+    // 27 s backoff ceiling (base x 3^3), past DEADLINE.
+    assert!(
+        wait_until(Duration::from_secs(45), || {
+            audited(&root, &at_stop.event_id, "source_unavailable") > at_stop.held
+        })
+        .await,
+        "the due retry is held after the restart; {}",
+        gw.stall_report()
+    );
+    assert_eq!(subs_on_disk(&root), 1, "held, not withdrawn");
+    assert_nothing_sent_after(&root, &rx, &at_stop).await;
 }

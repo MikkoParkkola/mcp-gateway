@@ -70,10 +70,14 @@ globalThis.refreshServersTable = (servers) => {{ el('servers-tbody').innerHTML =
 globalThis.refreshAll = () => {{}};
 const answers = {answers};
 const sent = [];
+const holds = {{}};
+const release = (name) => holds[name]();
 globalThis.fetch = async (url, opts = {{}}) => {{
   sent.push({{ url, headers: opts.headers || {{}} }});
   const queue = answers[url] || [];
   const a = queue.length > 1 ? queue.shift() : (queue[0] || {{ status: 404, body: {{}} }});
+  if (a.hold) await new Promise((r) => {{ holds[a.hold] = r; }});
+  if (a.throws) throw new TypeError('Failed to fetch');
   return {{ ok: a.status >= 200 && a.status < 300, status: a.status, statusText: 'S' + a.status,
     json: async () => a.body, text: async () => JSON.stringify(a.body) }};
 }};
@@ -119,6 +123,10 @@ fn html(state: &serde_json::Value, id: &str) -> String {
         .unwrap_or_default()
         .to_string()
 }
+
+/// A network failure: the stub `fetch` throws, as a browser does when the
+/// request never gets an HTTP answer.
+const NETWORK_FAILURE: &str = "{ throws: true }";
 
 /// A status answer with the given facts; `full` adds the admin inventory.
 fn status(code: u16, auth: &str, full: bool) -> String {
@@ -199,6 +207,10 @@ fn p3_auth_off_says_so_and_how_to_turn_it_on() {
     assert!(
         banner.contains("mcp-gateway init") && banner.contains("auth.enabled: true"),
         "P3: the banner gives the way to turn authentication on: {s}"
+    );
+    assert!(
+        banner.contains("this page shows only the status counts"),
+        "P3 (MIK-8821.FOLLOW.1): the banner says what the page still shows: {s}"
     );
     let servers = html(&s, "servers-tbody");
     assert!(
@@ -410,5 +422,209 @@ fn p11_a_refused_registry_load_says_so() {
         text(&s, "add-server-note"),
         "Sign in (top right) to see this",
         "P11: {s}"
+    );
+}
+
+/// The cells a status answer fills, as text, for before/after comparisons.
+const RENDERED: &str = "JSON.stringify(['auth-label', 'auth-dot', 'auth-btn', 'auth-banner', 'd-servers', 'd-tools', 'd-uptime', \
+    'd-version', 'd-cb-closed', 'd-cb-open', 'd-cb-half', 'servers-tbody']\
+    .map((id) => [el(id).textContent, el(id).className, el(id).innerHTML, el(id).style.display]))";
+
+/// P12 (MIK-8821.FOLLOW.3): a poll that gets no HTTP answer keeps the last
+/// rendered auth state and counts; a 401 or a 403 right after it still fails
+/// safe.
+#[test]
+fn p12_a_network_failure_keeps_the_last_state_and_a_refusal_still_signs_out() {
+    let admin = status(200, "{ enabled: true, signed_in: true, admin: true }", true).replacen(
+        "version: 'x'",
+        "version: 'x', circuit_breakers: { closed: 2, open: 1, half_open: 0 }",
+        1,
+    );
+    let then = format!(
+        "const before = {RENDERED};\nawait refreshDashboard(true);\n\
+         el('p12-kept').textContent = String({RENDERED} === before);\n\
+         el('p12-mid').textContent = el('auth-label').textContent;\n\
+         await refreshDashboard(true);"
+    );
+    for refusal in [
+        "{ status: 401, body: { error: 'Authentication required' } }",
+        "{ status: 403, body: { error: 'Admin authentication required' } }",
+        "{ status: 500, body: { error: 'Internal error' } }",
+    ] {
+        let s = run(
+            &answers_for(&[
+                admin.clone(),
+                NETWORK_FAILURE.to_string(),
+                refusal.to_string(),
+            ]),
+            &then,
+        );
+        assert_eq!(
+            text(&s, "p12-mid"),
+            "Signed in",
+            "P12: the blip relabelled the bar: {s}"
+        );
+        assert_eq!(
+            text(&s, "p12-kept"),
+            "true",
+            "P12: the blip changed the bar, the counts or the Servers table: {s}"
+        );
+        assert_eq!(
+            text(&s, "auth-label"),
+            "Not signed in",
+            "P12: {refusal} after the blip: {s}"
+        );
+        assert_eq!(text(&s, "auth-btn"), "Sign in", "P12: {refusal}: {s}");
+        assert_ne!(
+            s["els"]["auth-btn"]["display"], "none",
+            "P12: {refusal}: {s}"
+        );
+        assert_eq!(
+            text(&s, "d-cb-closed"),
+            "-",
+            "P12: {refusal} still blanks the breakers: {s}"
+        );
+        assert!(
+            !html(&s, "servers-tbody").starts_with("ROWS:"),
+            "P12: {refusal} left the admin rows up: {s}"
+        );
+    }
+}
+
+/// P13 (MIK-8821.FOLLOW.3): the re-read after a refusal that gets no HTTP
+/// answer leaves the bar as it was.
+#[test]
+fn p13_a_failed_auth_re_read_keeps_the_bar() {
+    let s = run(
+        &answers_for(&[
+            status(200, "{ enabled: true, signed_in: true, admin: true }", true),
+            NETWORK_FAILURE.to_string(),
+        ]),
+        "await refreshAuth();",
+    );
+    assert_eq!(text(&s, "auth-label"), "Signed in", "P13: {s}");
+    assert_eq!(s["els"]["auth-dot"]["cls"], "dot on", "P13: {s}");
+}
+
+/// P14 (MIK-8821.FOLLOW.3): a cold start while the gateway is unreachable
+/// shows the fail-safe, never "Loading...", and a failure that answers first
+/// does not stop the slower first answer from painting.
+#[test]
+fn p14_a_cold_start_failure_shows_sign_in_and_a_late_answer_still_paints() {
+    let slow_admin = status(200, "{ enabled: true, signed_in: true, admin: true }", true).replacen(
+        "{ status: 200,",
+        "{ hold: 'first', status: 200,",
+        1,
+    );
+    let then = "await refreshDashboard();\n\
+         el('p14-label').textContent = el('auth-label').textContent;\n\
+         el('p14-servers').textContent = el('servers-tbody').innerHTML;\n\
+         release('first'); await tick(); await tick(); await tick();";
+    let s = run(
+        &answers_for(&[slow_admin, NETWORK_FAILURE.to_string()]),
+        then,
+    );
+    assert_eq!(text(&s, "p14-label"), "Not signed in", "P14: {s}");
+    let servers = text(&s, "p14-servers");
+    assert!(
+        servers.contains("Sign in (top right) to see servers") && !servers.contains("Loading..."),
+        "P14: a cold-start failure left the table on {servers:?}: {s}"
+    );
+    assert_eq!(
+        text(&s, "auth-label"),
+        "Signed in",
+        "P14: the late answer was dropped: {s}"
+    );
+    assert_eq!(html(&s, "servers-tbody"), "ROWS:1", "P14: {s}");
+}
+
+/// P15 (MIK-8821.FOLLOW.3): a key change is a new caller. Change key runs
+/// the page's own refresh, as `refreshAll` does. An answer still in flight
+/// for the old key never repaints, a no-answer read for the new key shows the
+/// fail-safe, and the new key's own answer to the handler's read paints.
+#[test]
+fn p15_a_key_change_never_keeps_or_repaints_the_old_keys_view() {
+    let admin = status(200, "{ enabled: true, signed_in: true, admin: true }", true);
+    let old_in_flight = admin.replacen("{ status: 200,", "{ hold: 'old', status: 200,", 1);
+    let then = "const view = () => [el('auth-label').textContent, el('auth-btn').textContent, \
+         el('auth-btn').style.display, el('servers-tbody').innerHTML].join('|');\n\
+         const old = refreshDashboard();\n\
+         await tick();\n\
+         globalThis.prompt = () => 'another-key';\n\
+         globalThis.refreshAll = () => { refreshDashboard(); };\n\
+         el('auth-btn').listeners.click({ preventDefault() {} });\n\
+         await tick(); await tick(); await tick();\n\
+         el('p15-failed').textContent = view();\n\
+         release('old'); await old; await tick();\n\
+         el('p15-late').textContent = view();\n\
+         el('auth-btn').listeners.click({ preventDefault() {} });";
+    let s = run(
+        &answers_for(&[
+            admin.clone(),
+            old_in_flight,
+            NETWORK_FAILURE.to_string(),
+            status(
+                200,
+                "{ enabled: true, signed_in: true, admin: false }",
+                false,
+            ),
+        ]),
+        then,
+    );
+    for (cell, when) in [
+        ("p15-failed", "the failed read"),
+        ("p15-late", "the old answer"),
+    ] {
+        let got = text(&s, cell);
+        assert!(
+            got.starts_with("Not signed in|Sign in||")
+                && got.contains("Sign in (top right) to see servers"),
+            "P15: after {when} the page showed {got:?}: {s}"
+        );
+    }
+    assert_eq!(
+        text(&s, "auth-label"),
+        "Signed in (no admin)",
+        "P15: the answer to Change key's own read was dropped: {s}"
+    );
+    let sent = s["sent"].as_array().cloned().unwrap_or_default();
+    assert_eq!(
+        sent.last().cloned().unwrap_or_default()["headers"]["Authorization"],
+        "Bearer another-key",
+        "P15: the new key was not sent: {s}"
+    );
+}
+
+/// P16 (MIK-8821.FOLLOW.3): the re-read after a refusal renders the whole
+/// view, not only the bar, so a later network failure keeps that view and
+/// never the previous key's admin rows.
+#[test]
+fn p16_a_refusal_re_read_renders_the_view_a_failure_then_keeps() {
+    let then = "globalThis.prompt = () => 'another-key';\n\
+         el('auth-btn').listeners.click({ preventDefault() {} });\n\
+         await refreshAuth();\n\
+         await refreshDashboard(true);";
+    let s = run(
+        &answers_for(&[
+            status(200, "{ enabled: true, signed_in: true, admin: true }", true),
+            status(
+                200,
+                "{ enabled: true, signed_in: true, admin: false }",
+                false,
+            ),
+            NETWORK_FAILURE.to_string(),
+        ]),
+        then,
+    );
+    assert_eq!(text(&s, "auth-label"), "Signed in (no admin)", "P16: {s}");
+    assert_eq!(
+        text(&s, "d-tools"),
+        "-",
+        "P16: the previous key's tool count stayed: {s}"
+    );
+    let servers = html(&s, "servers-tbody");
+    assert!(
+        servers.contains("This needs an admin key"),
+        "P16: the previous key's view stayed: {servers:?}: {s}"
     );
 }
