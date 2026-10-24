@@ -74,6 +74,7 @@ tr:hover td { background: var(--bg3); }
 .auth-bar .dot.on { background: var(--green); }
 .auth-bar .dot.off { background: var(--red); }
 .auth-bar .dot.neutral { background: var(--fg2); }
+.auth-banner { margin: 0 0 1rem; padding: 0.75rem 1rem; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); color: var(--fg2); font-size: 0.9rem; }
 
 /* Tool detail */
 .tool-detail { display: none; background: var(--bg3); padding: 0.75rem; border-radius: var(--radius); margin-top: 0.25rem; font-size: 0.8rem; }
@@ -283,7 +284,6 @@ tr:hover td { background: var(--bg3); }
   <span class="dot off" id="auth-dot"></span>
   <span id="auth-label">Not authenticated</span>
   <a href="#" id="auth-btn" style="margin-left:0.5rem">Set API Key</a>
-  <span id="auth-banner" style="display:none;margin-left:0.75rem;color:var(--fg2)"></span>
 </div>
 
 <div class="shell">
@@ -299,6 +299,8 @@ tr:hover td { background: var(--bg3); }
   </nav>
 
   <main>
+    <!-- MIK-8786: the auth state's explanation, in the page flow so it never covers the header -->
+    <p id="auth-banner" class="auth-banner" style="display:none"></p>
     <!-- Dashboard -->
     <div id="page-dashboard" class="page active">
       <h1>Dashboard</h1>
@@ -607,9 +609,9 @@ function authStateFrom(httpStatus, body) {
 }
 
 // The gateway's own startup advice for turning authentication on.
-const AUTH_OFF_TEXT = 'Admin views need authentication. New install: run `mcp-gateway init`. '
-  + 'Existing config: set `auth.enabled: true` with a bearer token and keep `/health` and `/mcp` '
-  + 'under `auth.public_paths`, so tool calls keep working.';
+const AUTH_OFF_TEXT = 'Admin views need authentication. New install: run "mcp-gateway init". '
+  + 'Existing config: set "auth.enabled: true" with a bearer token and keep /health and /mcp '
+  + 'under auth.public_paths, so tool calls keep working.';
 
 let authState = 'signed_out';
 function renderAuth(state) {
