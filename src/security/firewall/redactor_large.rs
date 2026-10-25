@@ -15,7 +15,9 @@ use super::super::json_valid;
 use std::borrow::Cow;
 
 use super::json_literal::{self, Literal};
-use super::{Family, Finding, JsonText, REDACTED, Redactor, Site, decoded, trimmed_content};
+use super::{
+    Family, Finding, JsonText, REDACTED, Redactor, Site, Spliced, decoded, trimmed_content,
+};
 
 /// Where the walk puts a span's replacement.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -152,12 +154,13 @@ impl Redactor {
         if plan.ranges == 0 {
             return JsonText::Kept;
         }
-        let len = text.len() - plan.covered + plan.ranges * REDACTED.len();
-        let mut out = String::with_capacity(len);
+        // At most: each marker behind MIK-8794's one barrier space.
+        let len = text.len() - plan.covered + plan.ranges * (REDACTED.len() + 1);
+        let mut out = Spliced::with_capacity(len);
         let mut cursor = 0;
         let mut write = |from: usize, to: usize| {
-            out.push_str(&text[cursor..from]);
-            out.push_str(REDACTED);
+            out.push(&text[cursor..from]);
+            out.insert_marker();
             cursor = to;
         };
         let replay = Members::Replay(&plan.members);
@@ -167,7 +170,8 @@ impl Redactor {
             tracing::warn!("the second redaction pass disagreed; redacting the leaf whole");
             return JsonText::Redacted(REDACTED.to_owned());
         }
-        out.push_str(&text[cursor..]);
+        out.push(&text[cursor..]);
+        let out = out.out;
         let matched: Vec<usize> = self.set.matches(text).into_iter().collect();
         self.record_findings(&matched, &out, Site::Value, findings);
         findings.extend(
