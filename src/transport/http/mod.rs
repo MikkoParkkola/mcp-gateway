@@ -290,6 +290,18 @@ pub struct HttpTransport {
     reinit_needed: AtomicBool,
     /// Serializes that re-handshake, so concurrent callers share one.
     reinit_lock: TokioMutex<()>,
+    /// SSE mode: the calls session's retained stream, whose answers are paired
+    /// with their POSTs by id (MIK-8835.SSE.2). `None` in Streamable HTTP mode.
+    sse_channel: RwLock<Option<Arc<sse_channel::SseChannel>>>,
+    /// The peer has answered at least one call on its SSE stream: from then
+    /// on the stream is needed, and a closed one is replaced before a call. A
+    /// peer that answers in POST bodies may end its stream after `endpoint`,
+    /// and that end changes nothing.
+    sse_stream_answers: AtomicBool,
+    /// Test-only: stops an SSE-mode request between taking its place on the
+    /// stream and the check before its POST (K4b).
+    #[cfg(test)]
+    before_sse_post: Arc<crate::test_pause::Slot>,
     /// Redirect hops this client has followed, ever (MIK-7272.SUB.4).
     ///
     /// Incremented by the redirect policy closure on the `Follow` arm, which
@@ -475,6 +487,10 @@ impl HttpTransport {
             listen_cancel: tokio_util::sync::CancellationToken::new(),
             reinit_needed: AtomicBool::new(false),
             reinit_lock: TokioMutex::new(()),
+            sse_channel: RwLock::new(None),
+            sse_stream_answers: AtomicBool::new(false),
+            #[cfg(test)]
+            before_sse_post: Arc::default(),
             redirects_followed,
             #[cfg(test)]
             last_send_error: parking_lot::Mutex::new(None),
@@ -575,7 +591,12 @@ mod modern_meta;
 mod redirect_policy;
 pub use redirect_policy::transport_follows_redirect;
 mod requests;
+mod sse_channel;
 mod sse_decoder;
+mod sse_listen;
+#[cfg(test)]
+#[path = "sse_send_tests.rs"]
+mod sse_send_tests;
 mod startup;
 mod transport_impl;
 

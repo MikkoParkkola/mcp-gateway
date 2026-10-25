@@ -214,6 +214,11 @@ tokio::task_local! {
 }
 
 impl UpstreamListeners {
+    /// Whether the listener predicate refuses `backend` now.
+    pub(crate) fn refuses(&self, backend: &str) -> bool {
+        (self.ineligible)().contains(backend)
+    }
+
     pub(crate) fn new(
         registry: Arc<BackendRegistry>,
         hub: Weak<EventsHub>,

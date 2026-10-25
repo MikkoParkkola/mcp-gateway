@@ -662,8 +662,8 @@ async fn t39j_ineligible_backends_offer_no_upstream_events() {
         dir.path(),
         http_backend(&peer),
         &[
-            // An explicit `false` that never connected is refused (MIK-7969);
-            // an unset key is listed until a connect detects it.
+            // An explicit `false` that never connected is offered (MIK-8835;
+            // refused before); an unset key is listed until a connect detects it.
             (
                 "sse",
                 json!({"http_url": sse_url, "streamable_http": false}),
@@ -685,15 +685,15 @@ async fn t39j_ineligible_backends_offer_no_upstream_events() {
     cfg["meta_mcp"]["warm_start"] = json!(["hooks"]);
     let gw = start_listed(dir.path(), &receiver, cfg).await;
     let names = gw.event_names(Some(ALICE), None).await;
-    for backend in ["sse", "idp"] {
-        assert!(
-            !names
-                .iter()
-                .any(|n| n.starts_with(&format!("backend.{backend}.resource"))
-                    || n.starts_with(&format!("backend.{backend}.prompts"))),
-            "{backend} must offer no b2 events: {names:?}"
-        );
-    }
+    let offers = |backend: &str| {
+        names.iter().any(|n| {
+            n.starts_with(&format!("backend.{backend}.resource"))
+                || n.starts_with(&format!("backend.{backend}.prompts"))
+        })
+    };
+    // An explicit SSE key offers the events since MIK-8835.SSE.1.
+    assert!(offers("sse"), "sse must offer the b2 events: {names:?}");
+    assert!(!offers("idp"), "idp must offer no b2 events: {names:?}");
 }
 
 /// T39k: a burst for one URI is one event, sent after the burst.

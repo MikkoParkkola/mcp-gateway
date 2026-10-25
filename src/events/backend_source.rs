@@ -193,7 +193,14 @@ impl EventSource for BackendSource {
         // would leave the subscription silent, so it is refused (MIK-7969),
         // and a replay retries it.
         let known = up.listeners.knows(backend);
-        let refused = known && (up.ineligible)().contains(backend);
+        // `tools_changed` asks the listeners' own predicate: an A2A backend is
+        // refused its other kinds but polled for this one (MIK-8835.A2A.2).
+        let refused = known
+            && if matches!(interest, Interest::ToolsChanged) {
+                up.listeners.refuses(backend)
+            } else {
+                (up.ineligible)().contains(backend)
+            };
         if !known || refused {
             return if matches!(interest, Interest::ToolsChanged) {
                 // Counted with no task: the revive sweep starts one once the
@@ -322,15 +329,29 @@ impl EventsHub {
 
     /// [`Self::install_backend_source`] plus the three upstream-notification
     /// names for the eligible backends of `registry` (MIK-7630 I5).
+    #[cfg(test)]
     pub(crate) fn install_backend_source_with_upstream(
         self: &Arc<Self>,
         names: BackendNames,
         registry: Arc<crate::backend::BackendRegistry>,
         ineligible: Ineligible,
     ) {
+        let listener = Arc::clone(&ineligible);
+        self.install_backend_source_with_listeners(names, registry, ineligible, listener);
+    }
+
+    /// [`Self::install_backend_source_with_upstream`] with the listener
+    /// tasks judged by `listener_ineligible` (`upstream::listener_ineligible`),
+    /// which keeps an A2A backend's tools listener (MIK-8835).
+    pub(crate) fn install_backend_source_with_listeners(
+        self: &Arc<Self>,
+        names: BackendNames,
+        registry: Arc<crate::backend::BackendRegistry>,
+        ineligible: Ineligible,
+        listener_ineligible: Ineligible,
+    ) {
         let _ = self.runtime.backends.set(Arc::clone(&registry));
-        let listeners =
-            UpstreamListeners::new(registry, Arc::downgrade(self), Arc::clone(&ineligible));
+        let listeners = UpstreamListeners::new(registry, Arc::downgrade(self), listener_ineligible);
         self.register_source(Arc::new(BackendSource {
             names,
             upstream: Some(Upstream {

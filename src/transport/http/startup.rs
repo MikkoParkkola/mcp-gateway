@@ -187,7 +187,7 @@ impl HttpTransport {
     }
 
     /// SSE mode: GET the SSE endpoint to receive the message endpoint.
-    async fn connect_sse(&self) -> Result<()> {
+    pub(super) async fn connect_sse(&self) -> Result<()> {
         let message_endpoint = self.establish_sse_connection().await?;
         let full_message_url = self.resolve_message_url(&message_endpoint)?;
         *self.message_url.write() = Some(full_message_url.clone());
@@ -494,8 +494,6 @@ impl HttpTransport {
     /// is unaffected: the era is unresolved before the first `initialize()`,
     /// `outbound_era()` reads `None`, and the GET stays legacy-shaped.
     pub(super) async fn establish_sse_connection(&self) -> Result<String> {
-        use futures::StreamExt;
-
         let mut headers = self.build_mcp_headers(HeaderMode::Sse, None).await?;
         if self.outbound_era() == Some(PeerEra::Modern) {
             headers.insert(
@@ -508,10 +506,14 @@ impl HttpTransport {
         let diagnostic_url = sanitize_url_for_diagnostics(&self.base_url);
         debug!(target: HTTP_TARGET, url = %diagnostic_url, "Establishing SSE connection");
 
+        // The stream is kept for the session's life (its answers arrive on it),
+        // so it is bounded by the long-stream lifetime, not the per-request
+        // timeout (design B8).
         let response = self
             .client
             .get(&self.base_url)
             .headers(headers)
+            .timeout(super::listen::STREAM_TIMEOUT)
             .send()
             .await
             .map_err(|e| safe_request_error("SSE connection failed", &e))?;
@@ -521,80 +523,39 @@ impl HttpTransport {
             return Err(Error::Transport(format!("SSE endpoint returned: {status}")));
         }
 
-        // Stream the SSE response to find the endpoint event
-        // We only need to read until we get the endpoint event, then stop
-        let mut stream = response.bytes_stream();
-        let mut buffer = String::new();
-        let mut event_type: Option<String> = None;
-
-        // Bound the unparsed handshake buffer at 64 KiB. The endpoint event is
-        // a single short SSE line; complete lines are drained below, so a
-        // well-behaved backend never approaches this. A compromised/misbehaving
-        // backend streaming bytes without a newline is capped here rather than
-        // growing `buffer` without limit (trusted-backend DoS defence in depth).
-        let max_sse_handshake_buffer: usize = 64 * 1024;
-
-        while let Some(chunk_result) = stream.next().await {
-            let chunk =
-                chunk_result.map_err(|e| safe_request_error("Failed to read SSE chunk", &e))?;
-
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
-
-            if buffer.len() > max_sse_handshake_buffer {
-                return Err(Error::Transport(format!(
-                    "SSE handshake exceeded {max_sse_handshake_buffer}-byte buffer without an endpoint event"
-                )));
-            }
-
-            // Process complete lines in the buffer
-            while let Some(newline_pos) = buffer.find('\n') {
-                let line = buffer[..newline_pos].trim().to_string();
-                buffer = buffer[newline_pos + 1..].to_string();
-
-                if line.is_empty() {
-                    event_type = None;
-                    continue;
-                }
-
-                if let Some(event) = line.strip_prefix("event:") {
-                    event_type = Some(event.trim().to_string());
-                } else if let Some(data) = line.strip_prefix("data:") {
-                    let data = data.trim();
-
-                    if event_type.as_deref() == Some("endpoint") {
-                        // Computed before the macro: tracing compiles its arguments
-                        // twice, and the coverage instrument reads the copy that
-                        // never runs (MIK-7324).
-                        let endpoint = sanitize_url_for_diagnostics(data);
-                        debug!(target: HTTP_TARGET, endpoint = %endpoint, "Received message endpoint from SSE");
-
-                        // Extract session_id from the endpoint URL if present.
-                        // The SSE handshake is connection-level (not per-caller),
-                        // so an endpoint-embedded session lands in the shared
-                        // default bucket (MIK-6784).
-                        if let Ok(url) = Url::parse(data)
-                            .or_else(|_| Url::parse(&format!("http://localhost{data}")))
-                        {
-                            for (key, value) in url.query_pairs() {
-                                if key == "session_id" {
-                                    self.sessions
-                                        .write()
-                                        .insert(String::new(), value.to_string());
-                                    debug!(target: HTTP_TARGET, "Extracted session ID");
-                                }
-                            }
+        let mut raw = String::new();
+        let channel = super::sse_channel::SseChannel::open(
+            response,
+            |data| {
+                // Computed before the macro: tracing compiles its arguments
+                // twice, and the coverage instrument reads the copy that
+                // never runs (MIK-7324).
+                let endpoint = sanitize_url_for_diagnostics(data);
+                debug!(target: HTTP_TARGET, endpoint = %endpoint, "Received message endpoint from SSE");
+                // Extract session_id from the endpoint URL if present.
+                // The SSE handshake is connection-level (not per-caller),
+                // so an endpoint-embedded session lands in the shared
+                // default bucket (MIK-6784).
+                if let Ok(url) =
+                    Url::parse(data).or_else(|_| Url::parse(&format!("http://localhost{data}")))
+                {
+                    for (key, value) in url.query_pairs() {
+                        if key == "session_id" {
+                            self.sessions
+                                .write()
+                                .insert(String::new(), value.to_string());
+                            debug!(target: HTTP_TARGET, "Extracted session ID");
                         }
-
-                        return Ok(data.to_string());
                     }
                 }
-            }
-        }
-
-        Err(Error::Transport(
-            "SSE stream ended without endpoint event. Server may not support MCP SSE protocol."
-                .to_string(),
-        ))
+                raw = data.to_string();
+                self.resolve_message_url(data)
+            },
+            None,
+        )
+        .await?;
+        *self.sse_channel.write() = Some(channel);
+        Ok(raw)
     }
 
     /// Resolve a potentially relative message URL against the SSE URL.

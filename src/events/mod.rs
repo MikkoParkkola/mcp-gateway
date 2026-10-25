@@ -61,6 +61,7 @@ pub(crate) use rpc::Caller;
 pub(crate) use services::{LiveCredentials, Services};
 pub(crate) use types::CallbackFailure;
 pub(crate) use types::{RpcError, Visibility};
+pub(crate) use upstream::listener_ineligible as upstream_listener_ineligible;
 pub(crate) use upstream::live_ineligible as upstream_live_ineligible;
 pub(crate) use webhook_source::Inbound;
 

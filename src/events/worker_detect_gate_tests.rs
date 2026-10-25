@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8125 `DETECT-GATE`: a backend's detected HTTP flavour changes at
 //! runtime, under the transport's own lock, not through a config reload. A
-//! flip that makes the backend ineligible for upstream events, landing after
-//! an attempt's checks and before its send, does not deliver that attempt's
-//! event; and detection never waits on a send in flight.
+//! flip landing after an attempt's checks and before its send is judged at
+//! admission (since MIK-8835 both flavours are eligible, so it delivers), and
+//! detection never waits on a send in flight.
 //!
 //! The attempt stops at its last step before the send (`before_send`); the
 //! flip is published there, through the transport's real setter, and read by
@@ -94,19 +94,22 @@ async fn attempt_across_flips(flips: &[Option<bool>]) -> usize {
     accepted.load(Ordering::SeqCst)
 }
 
-/// T15 `DETECT-GATE.1`: the connection is re-detected as the legacy SSE
-/// handshake (ineligible for upstream events) between the attempt's checks
-/// and its send: nothing is sent. Control: no flip, the attempt sends.
+/// T15 `DETECT-GATE.1`, since MIK-8835: the connection is re-detected as the
+/// legacy SSE handshake between the attempt's checks and its send. The SSE
+/// handshake offers upstream events now (MIK-8835.SSE.1), so the flip is not
+/// an ineligibility and the event is delivered. (Until MIK-8835 this row
+/// pinned the opposite: SSE was ineligible and the attempt sent nothing. An
+/// ineligibility that lands before the send is still refused at admission;
+/// a flavour flip can no longer cause one.)
 #[tokio::test]
-async fn a_flavour_flip_before_the_send_sends_nothing() {
+async fn a_flavour_flip_before_the_send_still_sends() {
     assert!(
         attempt_across_flips(&[]).await >= 1,
         "premise: sent while the backend stays eligible"
     );
-    assert_eq!(
-        attempt_across_flips(&[Some(false)]).await,
-        0,
-        "sent for a backend re-detected as ineligible before the send"
+    assert!(
+        attempt_across_flips(&[Some(false)]).await >= 1,
+        "not sent for a backend re-detected as SSE, which is eligible"
     );
 }
 

@@ -181,7 +181,13 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
             }
             continue;
         };
-        let delay = match session(&shared, &backend, &hub).await {
+        // By transport kind: A2A has no stream to open (MIK-8835.A2A.2).
+        let outcome = if backend.is_a2a() {
+            poll::poll(&shared, &backend, &hub, &registry).await
+        } else {
+            session(&shared, &backend, &hub).await
+        };
+        let delay = match outcome {
             Outcome::Stopped => return,
             Outcome::Unsupported => BACKOFF_CAP,
             // A stream cut at its hourly end (a legacy GET) reconnects at once.
@@ -279,25 +285,12 @@ fn requested(shared: &Shared) -> Requested {
 
 /// One connection's life.
 async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<EventsHub>) -> Outcome {
-    shared.refresh_ledger();
-    let _lease = backend.listen_lease();
-    let target = match backend.listen_target().await {
-        Ok(target) => target,
-        Err(error) => {
-            debug!(backend = %shared.name, %error, "upstream listener: backend not reachable");
-            return failed();
-        }
+    let Some(run) = begin_run(shared, backend).await else {
+        return failed();
     };
     let started = Instant::now();
-    let modern = target.era == PeerEra::Modern;
-    let mut state = State::new(
-        shared,
-        if modern {
-            PeerEra::Modern
-        } else {
-            PeerEra::Legacy
-        },
-    );
+    let modern = run.era == PeerEra::Modern;
+    let mut state = State::new(shared, run.era);
     // The first catalogue read doubles as the legacy HTTP session's first
     // request on the shared bucket (§3).
     state.read_snapshot(backend, hub, false).await;
@@ -306,13 +299,13 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
         // first, even when no URI is watched (§3).
         let _ = backend.read_resource_snapshot(false).await;
     }
-    if let Err(ended) = open_first(shared, &mut state, &target, modern).await {
+    if let Err(ended) = open_first(shared, &mut state, &run.handle, modern).await {
         return ended;
     }
-    state.handle = Some(target.handle.clone());
+    state.handle = Some(run.handle.clone());
     let synced = tokio::select! {
         () = shared.stop.cancelled() => false,
-        () = state.sync_legacy(backend, &target.handle) => true,
+        () = state.sync_legacy(backend, &run.handle) => true,
     };
     if !synced {
         state.release(backend).await;
@@ -361,13 +354,17 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
         if refill.is_none() {
             refill = start_due_refill(&mut state, backend);
         }
-        if !backend_still_current(backend, &target.handle) {
+        if !backend_still_current(backend, &run.transport) {
             debug!(backend = %shared.name, "upstream listener: transport replaced");
+            return finish_refill(&mut state, shared, backend, hub, refill, started).await;
+        }
+        if backend.connected_streamable() != run.flavour {
+            debug!(backend = %shared.name, "upstream listener: transport flavour changed; reconnecting");
             return finish_refill(&mut state, shared, backend, hub, refill, started).await;
         }
         let stopped = tokio::select! {
             () = shared.stop.cancelled() => true,
-            () = state.maintain(backend, hub, &target.handle, modern) => false,
+            () = state.maintain(backend, hub, &run.handle, modern) => false,
         };
         if stopped {
             state.release(backend).await;
@@ -720,8 +717,21 @@ mod notes;
 
 #[path = "upstream_session_legacy.rs"]
 mod legacy;
+
+#[path = "upstream_session_poll.rs"]
+mod poll;
+
+#[path = "upstream_session_run.rs"]
+mod run;
 use legacy::watched_by;
+use run::begin_run;
+#[cfg(test)]
+use run::{pick_session, runs_modern};
 
 #[cfg(test)]
 #[path = "upstream_session_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "upstream_session_seam_tests.rs"]
+mod seam_tests;
