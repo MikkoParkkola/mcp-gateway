@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use parking_lot::RwLock;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, error, info, warn};
 
@@ -253,8 +253,8 @@ fn sanitize_cache_component(name: &str) -> String {
 
 /// Stdio transport for subprocess MCP servers
 pub struct StdioTransport {
-    /// Child process
-    child: Mutex<Option<Child>>,
+    /// The child's process tree, and the reaps it started (MIK-8895)
+    child: parking_lot::Mutex<reaper::ChildSlot>,
     /// Pending requests waiting for response
     pending: dashmap::DashMap<String, oneshot::Sender<JsonRpcResponse>>,
     /// Request ID counter
@@ -343,7 +343,7 @@ impl StdioTransport {
         assigned_cache: Option<PathBuf>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            child: Mutex::new(None),
+            child: parking_lot::Mutex::new(reaper::ChildSlot::default()),
             pending: dashmap::DashMap::new(),
             request_id: AtomicU64::new(1),
             connected: AtomicBool::new(false),
@@ -424,14 +424,22 @@ impl StdioTransport {
     /// the exit is reaped is `None`. This is only called on a failed start, so
     /// the wait can never delay a backend that is working.
     async fn settle_child_exit(&self) {
-        let mut guard = self.child.lock().await;
-        let Some(child) = guard.as_mut() else {
-            return;
+        // Exit observed without reaping, then the group ends before the reap
+        // (MIK-8080). After `close`, the status its reap recorded. The tree
+        // leaves the slot only for the reaper (MIK-7923).
+        let (has_tree, recorded) = {
+            let slot = self.child.lock();
+            (slot.tree.is_some(), slot.last_status())
         };
-        let Ok(Ok(status)) = tokio::time::timeout(EXIT_DRAIN_GRACE, child.wait()).await else {
-            return;
+        let status = if has_tree {
+            if !self.wait_exited_in_slot(EXIT_DRAIN_GRACE).await {
+                return;
+            }
+            self.end_tree().await
+        } else {
+            recorded
         };
-        if let Ok(mut slot) = self.exit_status.lock() {
+        if let (Some(status), Ok(mut slot)) = (status, self.exit_status.lock()) {
             *slot = Some(status);
         }
     }
@@ -475,8 +483,7 @@ impl StdioTransport {
         cmd.args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
+            .stderr(Stdio::piped());
 
         // Backend processes get only the minimal execution environment plus
         // values explicitly assigned to this backend. In particular, secrets
@@ -488,49 +495,46 @@ impl StdioTransport {
             cmd.current_dir(cwd);
         }
 
-        let mut child = cmd.spawn().map_err(|e| match e.kind() {
-            // A command path that does not exist, or a file that is not
-            // executable. No amount of waiting fixes either, and warm-start
-            // retries transport failures indefinitely -- so before this, a
-            // typo in a backend command was respawned once a minute for the
-            // life of the process with no indication the config was wrong.
-            std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied => {
-                Error::TransportPermanent(format!("Failed to spawn: {e}"))
-            }
-            _ => Error::Transport(format!("Failed to spawn: {e}")),
-        })?;
+        // The reaper exists before any child does (MIK-7923, design P4).
+        reaper::ensure_started()
+            .map_err(|error| Error::Transport(format!("stdio reaper unavailable: {error}")))?;
+        // Taken before the spawn: from spawn to install there is no await, so
+        // a start cancelled at an await cannot strand a tree outside the slot.
+        let mut writer = self.writer.lock().await;
+        let mut child = spawn_in_own_tree(cmd)?;
 
         let stdin = child
-            .stdin
+            .stdin()
             .take()
             .ok_or_else(|| Error::Transport("Failed to get stdin".to_string()))?;
 
         let stdout = child
-            .stdout
+            .stdout()
             .take()
             .ok_or_else(|| Error::Transport("Failed to get stdout".to_string()))?;
         let stderr = child
-            .stderr
+            .stderr()
             .take()
             .ok_or_else(|| Error::Transport("Failed to get stderr".to_string()))?;
 
-        *self.writer.lock().await = Some(stdin);
-        *self.child.lock().await = Some(child);
+        self.install_tree(child_tree::ChildTree::new(child));
+        *writer = Some(stdin);
+        drop(writer);
 
         // Spawn reader task.
         //
         // WEAK on purpose. A strong `Arc` here is an ownership cycle: the task
-        // holds the transport, the transport holds the `Child`, the child only
-        // dies when it is killed or dropped, the transport only drops when this
-        // task ends, and this task only ends at stdout EOF - which needs the
-        // child to die. Nothing breaks that loop except an explicit `close()`,
-        // so a transport that is merely dropped leaks its MCP server process
-        // forever, and `kill_on_drop(true)` above never fires.
+        // holds the transport, the transport holds the child's tree, the child
+        // only dies when it is killed or dropped, the transport only drops when
+        // this task ends, and this task only ends at stdout EOF - which needs
+        // the child to die. Nothing breaks that loop except an explicit
+        // `close()`, so a transport that is merely dropped would leak its MCP
+        // server process forever.
         //
         // With a `Weak`, dropping the last real handle drops the transport,
-        // which drops the `Child`, which kills the process, which closes stdout,
-        // which ends this task. Ownership does the cleanup; nothing has to
-        // decide when it is safe.
+        // which hands its tree to the reaper, which ends the process group,
+        // which closes stdout, which ends this task. Ownership does the
+        // cleanup; nothing has to decide when it is safe.
         let transport = Arc::downgrade(self);
         tokio::spawn(async move {
             debug!("Reader task started");
@@ -1082,11 +1086,12 @@ impl Transport for StdioTransport {
         // leave the cached flag stale-true. A stale-true flag makes
         // `Backend::ensure_started` a no-op and dispatches requests into a dead
         // pipe — the core reason a tripped breaker never recovered. Confirm real
-        // liveness with a non-blocking waitpid. `try_lock` keeps this sync
-        // method from blocking; on lock contention we trust the flag.
-        if let Ok(mut guard) = self.child.try_lock()
-            && let Some(child) = guard.as_mut()
-            && let Ok(Some(_status)) = child.try_wait()
+        // liveness with a non-reaping `waitid` probe: the leader is reaped only
+        // after the last signal to its group (MIK-8080). `try_lock` keeps this
+        // sync method from blocking; on lock contention we trust the flag.
+        if let Some(mut slot) = self.child.try_lock()
+            && let Some(tree) = slot.tree.as_mut()
+            && tree.exited()
         {
             // Child has exited; reconcile the cached flag so callers and future
             // checks see the truth.
@@ -1097,19 +1102,18 @@ impl Transport for StdioTransport {
     }
 
     async fn close(&self) -> Result<()> {
-        self.connected.store(false, Ordering::Relaxed);
-
-        // Close stdin
-        *self.writer.lock().await = None;
-
-        // Kill child process
-        if let Some(ref mut child) = *self.child.lock().await {
-            let _ = child.kill().await;
-        }
-
+        self.shut().await;
         Ok(())
     }
 }
+
+#[path = "stdio_child_tree.rs"]
+mod child_tree;
+#[path = "stdio_reaper.rs"]
+mod reaper;
+#[path = "stdio_tree.rs"]
+mod tree;
+use tree::spawn_in_own_tree;
 
 #[cfg(test)]
 #[path = "stdio_tests.rs"]
