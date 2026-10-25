@@ -23,8 +23,9 @@ const YARN_CACHE: &str = "YARN_CACHE_FOLDER";
 /// nothing for bunx or yarn (#2258).
 ///
 /// When the operator already set one of a runner's variables, in any spelling
-/// that runner reads, none of that runner's variables is filled in. A cache path no runner could use as written is assigned to
-/// none of them (MIK-8147): the runner keeps its default cache.
+/// that runner reads, none of that runner's variables is filled in. A cache
+/// path no runner could use as written is assigned to none of them
+/// (MIK-8147): the runner keeps its default cache.
 #[must_use]
 pub fn isolated_package_manager_env<S: std::hash::BuildHasher>(
     backend_name: &str,
@@ -68,7 +69,7 @@ pub(crate) fn isolated_env_and_assigned_cache<S: std::hash::BuildHasher>(
                 assigned_cache = Some(PathBuf::from(&dir));
             }
             for var in vars {
-                backend_env.insert(var.to_owned(), dir.clone());
+                backend_env.insert((*var).to_owned(), dir.clone());
             }
             folder
         }
@@ -88,7 +89,7 @@ enum Assignment {
     Unusable(PathBuf),
     /// These variables, each set to this directory.
     To {
-        vars: Vec<&'static str>,
+        vars: &'static [&'static str],
         dir: String,
     },
 }
@@ -98,7 +99,7 @@ fn assignment<S: std::hash::BuildHasher>(
     command: &str,
     backend_env: &HashMap<String, String, S>,
 ) -> Assignment {
-    let vars: Vec<&'static str> = cache_vars_for(command).to_vec();
+    let vars = cache_vars_for(command);
     // An operator who chose one of a runner's dirs keeps that choice whole:
     // a second variable filled in beside it could override it or split the
     // runner across two trees (MIK-8831.REL.6).
@@ -312,7 +313,9 @@ fn cache_vars_for(command: &str) -> &'static [&'static str] {
     match runner_name(&program) {
         "npx" | "npm" => &["npm_config_cache"],
         // bunx installs the executable under the platform temp dir, read
-        // from `TMPDIR` first (MIK-8831.REL.6).
+        // from `TMPDIR` first (MIK-8831.REL.6). Bun reads no narrower
+        // variable, so the whole child tree gets this temp dir; an operator
+        // `TMPDIR`, `TMP` or `TEMP` keeps the default instead.
         "bunx" => &["BUN_INSTALL_CACHE_DIR", "TMPDIR"],
         "yarn" => &["YARN_CACHE_FOLDER"],
         // `pnpm dlx` installs under `<cache-dir>/dlx`, apart from the store
