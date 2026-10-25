@@ -510,6 +510,32 @@ const ROWS: &[Row] = &[
         Payload::Import,
         [401, 403, 403, 200],
     ),
+    // src/gateway/ui/history.rs (markers). MIK-8854: the codes come from the
+    // design (admin only: no credential 401, non-admin 403, admin 200), not
+    // from a run.
+    row(
+        "/ui/api/markers",
+        Method::GET,
+        "/ui/api/markers",
+        Payload::None,
+        [401, 403, 403, 200],
+    ),
+    // history.rs (series), as above.
+    row(
+        "/ui/api/metrics/series",
+        Method::GET,
+        "/ui/api/metrics/series?metric=calls&window=24h",
+        Payload::None,
+        [401, 403, 403, 200],
+    ),
+    // history.rs (series): an unsupported query is refused for the admin too.
+    row(
+        "/ui/api/metrics/series",
+        Method::GET,
+        "/ui/api/metrics/series?window=7d",
+        Payload::None,
+        [401, 403, 403, 400],
+    ),
     // src/gateway/ui/shell.rs:51 (asset): static, outside auth like /ui (MIK-8870)
     row(
         "/ui/assets/{file}",
