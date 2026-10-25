@@ -178,6 +178,8 @@ pub struct ReloadContext {
     pub(super) capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
     /// Told which backends each applied reload registered (`MIK-8054`).
     pub(super) on_registered: Option<super::reload_warm_hook::OnRegistered>,
+    /// MIK-8854: where an applied reload marks the web UI's charts.
+    pub(super) markers: Option<Arc<crate::counters::CounterStore>>,
 }
 
 /// The refusal a reload returns when the gateway's shutdown ended its wait.
@@ -247,7 +249,18 @@ impl ReloadContext {
             stop: tokio_util::sync::CancellationToken::new(),
             capabilities: None,
             on_registered: None,
+            markers: None,
         })
+    }
+
+    /// Mark every applied reload on `markers` (MIK-8854).
+    #[must_use]
+    pub(crate) fn with_markers(
+        mut self,
+        markers: Option<Arc<crate::counters::CounterStore>>,
+    ) -> Self {
+        self.markers = markers;
+        self
     }
 
     /// Announce `tools/list_changed` for `capabilities` when a reload's env
