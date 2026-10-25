@@ -8,7 +8,8 @@ import { test as base, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 
 export const test = base.extend({
-  offsite: async ({ context, baseURL }, use) => {
+  // Automatic: every test gets the guard whether or not it names `offsite`.
+  offsite: [async ({ context, baseURL }, use) => {
     const origin = new URL(baseURL).origin;
     const blocked = [];
     await context.route('**/*', (route) => {
@@ -18,7 +19,7 @@ export const test = base.extend({
       return route.abort('blockedbyclient');
     });
     await use(blocked);
-  },
+  }, { auto: true }],
 });
 
 export { expect };

@@ -58,7 +58,11 @@ function handle(req, res) {
     const file = ASSETS.get(path.slice('/ui/assets/'.length));
     if (!get || !file) return send(res, 404, {}, '');
     const ext = file.split('.').pop();
-    return send(res, 200, { 'content-type': TYPES[ext] ?? 'application/octet-stream', 'x-content-type-options': 'nosniff' }, readFileSync(file));
+    return send(res, 200, {
+      'content-type': TYPES[ext] ?? 'application/octet-stream',
+      'cache-control': 'public, max-age=31536000, immutable',
+      'x-content-type-options': 'nosniff',
+    }, readFileSync(file));
   }
   if (path === '/ui/api' || path.startsWith('/ui/api/')) {
     const rel = path.slice('/ui/api/'.length);
@@ -66,6 +70,9 @@ function handle(req, res) {
     if (!get || !/^[\w-]+(\/[\w-]+)*$/.test(rel) || !existsSync(file)) return send(res, 404, {}, '');
     return send(res, 200, { 'content-type': 'application/json' }, readFileSync(file));
   }
+  // As shell.rs: a first segment of `api` or `assets` never gets the shell.
+  const first = path.slice('/ui/'.length).split('/')[0];
+  if (first === 'api' || first === 'assets') return send(res, 404, {}, '');
   if (path.startsWith('/ui/') && path !== '/ui/' && get) {
     return send(res, 200, {
       'content-type': 'text/html; charset=utf-8',

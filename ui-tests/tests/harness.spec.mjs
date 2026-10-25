@@ -16,17 +16,37 @@ test('a deep link answers the shell document with the gateway CSP', async ({ req
 });
 
 test('api and asset paths outside the fixtures answer 404, never the shell', async ({ request }) => {
-  for (const path of ['/ui/api/nope', '/ui/api', '/ui/assets/nope.css', '/ui/assets/a/b', '/ui/']) {
+  for (const path of ['/ui/api/nope', '/ui/api', '/ui/assets', '/ui/assets/nope.css', '/ui/assets/a/b', '/ui/']) {
     expect((await request.get(path)).status(), path).toBe(404);
   }
 });
 
-test('every asset the shell document names is served', async ({ page }) => {
+test('every asset the shell document names is served, cached immutable', async ({ page, request }) => {
+  const doc = await (await request.get('/ui/overview')).text();
+  const refs = [...doc.matchAll(/(?:href|src)="(\/ui\/assets\/[^"]+)"/g)].map((m) => m[1]);
+  expect(refs.length).toBeGreaterThan(0);
+  for (const ref of refs) {
+    const reply = await request.get(ref);
+    expect(reply.status(), ref).toBe(200);
+    expect(reply.headers()['cache-control'], ref).toContain('immutable');
+  }
+  // In the browser too: no asset request may fail, with or without a response.
   const failed = [];
+  page.on('requestfailed', (r) => failed.push(`failed ${r.url()}`));
   page.on('response', (r) => { if (r.status() >= 400) failed.push(`${r.status()} ${r.url()}`); });
   await page.goto('/ui/overview');
   await page.waitForLoadState('networkidle');
   expect(failed).toEqual([]);
+});
+
+test('the network guard is on in a test that does not ask for it', async ({ page }) => {
+  // The guard's own error, not a DNS failure, which would pass without it.
+  const errors = [];
+  page.on('requestfailed', (r) => errors.push(r.failure()?.errorText));
+  await page.goto('/ui/classic');
+  await page.evaluate(() => fetch('https://example.invalid/y').catch(() => null));
+  expect(errors).toHaveLength(1);
+  expect(errors[0]).toMatch(/^net::ERR_BLOCKED_BY_CLIENT/);
 });
 
 test('a request to another host is aborted and recorded', async ({ page, offsite }) => {
