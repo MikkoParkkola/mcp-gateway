@@ -32,6 +32,44 @@ impl MetaMcp {
             .0)
     }
 
+    /// The headers an events listener of `server` sends as `identity`
+    /// (MIK-8833 B2): the audited mint a call uses, with the same transport
+    /// check, header validation, audit record and refusals. Fail-closed even
+    /// on a non-required backend: a listener with nothing minted sends
+    /// nothing, never the gateway's own credential.
+    ///
+    /// # Errors
+    /// No such backend, no identity propagation on it, a refused or failed
+    /// mint, an unavailable audit log, or an empty minted set.
+    pub(crate) async fn mint_listener_credential(
+        &self,
+        server: &str,
+        identity: &crate::key_server::oidc::VerifiedIdentity,
+    ) -> Result<Vec<(String, String)>> {
+        let backend = self.backends.get_for(
+            crate::gateway::meta_mcp::scoped_backends::Unscoped::Background,
+            server,
+        );
+        let Some(idp_cfg) = backend
+            .as_deref()
+            .and_then(|b| b.identity_propagation_config().cloned())
+        else {
+            return Err(Error::Config(format!(
+                "events listener for backend '{server}': no identity propagation"
+            )));
+        };
+        let caller = CallerProof::new(Some(identity), CallerProvenance::Anonymous);
+        let minted = self
+            .resolve_caller_credential_as(server, backend.as_deref(), &idp_cfg, caller)
+            .await?;
+        if minted.headers.is_empty() {
+            return Err(Error::Config(format!(
+                "events listener for backend '{server}': nothing was minted"
+            )));
+        }
+        Ok(minted.headers)
+    }
+
     /// Like [`Self::resolve_propagation_headers`] but also returns the caller's
     /// stable identity binding (MIK-6784), so the direct backend route can
     /// partition upstream `MCP-Session-Id` state per identity. The binding is

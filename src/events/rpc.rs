@@ -21,6 +21,9 @@ pub(crate) struct Caller {
     /// The canonical principal; `None` when the call is not authenticated
     /// (or authentication is off).
     pub principal: Option<String>,
+    /// The identity the key server or OIDC verified for this caller, if any:
+    /// what a per-user backend observes it as (MIK-8833 §2.3).
+    pub identity: Option<crate::key_server::oidc::VerifiedIdentity>,
     /// The caller key the read verdict judges this caller's frames under;
     /// `None` when the verdict is off or the caller has no identity.
     pub read_key: Option<String>,
@@ -506,6 +509,7 @@ impl EventsHub {
         // may start the backend; and before the source's own check, which may
         // read the backend's resource catalogue.
         self.resolve_upstream(&descriptor.name).await?;
+        let observed = self.observe(caller, &descriptor.name)?;
         if let Some(source) = self.source_offering(&descriptor.name) {
             source
                 .authorize(&principal, &descriptor.name, &arguments)
@@ -546,6 +550,8 @@ impl EventsHub {
             unoffered_since: None,
             held_until: None,
             watch_class: None,
+            observed_identity: caller.stored_identity(observed.as_ref()),
+            obs_basis: observed.clone(),
         };
         // At most two passes: a cached opt-in can vanish (tail eviction)
         // between the read above and the commit; the store then refuses
@@ -595,15 +601,7 @@ impl EventsHub {
         let mut attempt = record.clone();
         let mut started = self.lifecycle.lock().await;
         self.upstream_admits(&record.name)?;
-        let begun = self
-            .start_key(
-                &mut started,
-                &record.principal,
-                &record.name,
-                &record.arguments,
-                now,
-            )
-            .await?;
+        let begun = self.start_key(&mut started, record, now).await?;
         let hub = Arc::clone(self);
         let outcome = blocking(self, move |store| {
             // Under the catalogue gate, then the store lock (the order every

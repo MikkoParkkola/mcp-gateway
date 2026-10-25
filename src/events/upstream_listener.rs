@@ -31,9 +31,15 @@ const REVIVE_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
 /// unconfirmed absence proves nothing (design section 7).
 const CONFIRM_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// What one backend's task and the event source share.
+#[path = "upstream_listener_key.rs"]
+mod key;
+pub(crate) use key::{ListenerKey, MAX_PER_USER_LISTENERS};
+
+/// What one listener task and the event source share.
 pub(super) struct Shared {
     pub name: String,
+    /// The listener this task is: `name` is its backend.
+    pub key: ListenerKey,
     pub need: Mutex<Need>,
     /// What the backend's legacy holders may keep of ours (D5). Shared by
     /// every task of the backend; taken after `need` when both are held.
@@ -73,6 +79,17 @@ pub(super) struct Shared {
 }
 
 impl Shared {
+    /// What a log line may say of `error`: a per-user listener's transport
+    /// errors can echo its subscriber's credential, so only that the error
+    /// happened is logged (MIK-8833 C9).
+    pub(super) fn error_text(&self, error: &dyn std::fmt::Display) -> String {
+        if self.key.obs.is_some() {
+            "withheld".to_owned()
+        } else {
+            error.to_string()
+        }
+    }
+
     /// Whether the live config now refuses this backend's upstream events.
     pub(super) fn is_ineligible(&self) -> bool {
         (self.ineligible)().contains(&self.name)
@@ -122,11 +139,11 @@ impl Shared {
 /// listened to again. The replacement inherits the interest still counted
 /// (the `tools_changed` keys kept meanwhile), so their removal later balances
 /// against it.
-fn take_ended(map: &mut HashMap<String, Arc<Shared>>, backend: &str) -> Need {
-    match map.get(backend).filter(|s| s.stop.is_cancelled()) {
+fn take_ended(map: &mut HashMap<ListenerKey, Arc<Shared>>, key: &ListenerKey) -> Need {
+    match map.get(key).filter(|s| s.stop.is_cancelled()) {
         Some(ended) => {
             let carried = std::mem::take(&mut *ended.need.lock());
-            map.remove(backend);
+            map.remove(key);
             carried
         }
         None => Need::default(),
@@ -140,13 +157,13 @@ type LedgerSlot = (Weak<Backend>, Arc<Mutex<Ledger>>);
 pub(crate) struct UpstreamListeners {
     registry: Arc<BackendRegistry>,
     hub: Weak<EventsHub>,
-    backends: Mutex<HashMap<String, Arc<Shared>>>,
+    backends: Mutex<HashMap<ListenerKey, Arc<Shared>>>,
     ineligible: super::backend_source::Ineligible,
-    gates: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    gates: Mutex<HashMap<ListenerKey, Arc<tokio::sync::Mutex<()>>>>,
     /// Per backend, kept while the registry holds the same `Backend`: a
     /// backend removed from (or replaced in) the config, or a restart, is
     /// the only thing that drops a ledger (D5 release points).
-    ledgers: Mutex<HashMap<String, LedgerSlot>>,
+    ledgers: Mutex<HashMap<ListenerKey, LedgerSlot>>,
     stop: CancellationToken,
     /// Tasks `start` has spawned: a task started wrongly for a refused
     /// backend cancels itself at once, so its entry alone cannot show it.
@@ -156,8 +173,8 @@ pub(crate) struct UpstreamListeners {
     #[cfg(test)]
     pub(super) before_park: Arc<crate::test_pause::Slot>,
     me: Weak<UpstreamListeners>,
-    /// When each backend's last confirming read began (`CONFIRM_EVERY`).
-    confirmed: Mutex<HashMap<String, tokio::time::Instant>>,
+    /// When each listener's last confirming read began (`CONFIRM_EVERY`).
+    confirmed: Mutex<HashMap<ListenerKey, tokio::time::Instant>>,
 }
 
 impl Drop for UpstreamListeners {
@@ -174,11 +191,11 @@ impl EventsHub {
     /// began) are judged: a later grant was not covered by this read.
     pub(super) async fn revoke_absent_uris(
         self: &Arc<Self>,
-        backend: &str,
+        key: &ListenerKey,
         listed: &std::collections::HashSet<String>,
         granted_by: u64,
     ) {
-        let name = format!("backend.{backend}.resource_updated");
+        let name = format!("backend.{}.resource_updated", key.backend);
         // A 1969 `now` reads expired rows live and would revoke them, dropping
         // their records with no expiry burial. Skipped: the next complete read
         // revokes again, and delivery is idle on such a clock (MIK-8202).
@@ -194,6 +211,9 @@ impl EventsHub {
             .subscriptions()
             .into_iter()
             .filter(|s| s.name == name && s.live(now) && s.incarnation <= granted_by)
+            // One subscriber's catalogue read judges only their own rows
+            // (MIK-8833 ISO-T4).
+            .filter(|s| self.listens_as(s, key))
             .filter(|s| {
                 s.arguments
                     .get("uri")
@@ -203,6 +223,24 @@ impl EventsHub {
             .collect();
         for sub in gone {
             self.revoke(&sub).await;
+        }
+    }
+}
+
+impl EventsHub {
+    /// Whether `sub` is served by listener `key`: a shared row by the
+    /// backend's shared listener, a per-user row by the listener of the
+    /// observation its stored identity derives now.
+    pub(super) fn listens_as(&self, sub: &super::records::Subscription, key: &ListenerKey) -> bool {
+        match &key.obs {
+            None => sub.obs_basis.is_none(),
+            Some(obs) => self.runtime.services.get().is_some_and(|services| {
+                super::observation::observe_row(&services.live.get(), &key.backend, sub)
+                    .ok()
+                    .flatten()
+                    .as_deref()
+                    == Some(obs.as_str())
+            }),
         }
     }
 }
@@ -264,7 +302,7 @@ impl UpstreamListeners {
     ///
     /// # Errors
     /// [`Full`] when the backend's URI budget is spent.
-    pub(crate) fn add(&self, backend: &str, interest: &Interest) -> Result<(), Full> {
+    pub(crate) fn add(&self, key: &ListenerKey, interest: &Interest) -> Result<(), Full> {
         let mut map = self.backends.lock();
         let (shared, outcome) = loop {
             // A task that ended (a reload made its backend ineligible, or it
@@ -272,19 +310,19 @@ impl UpstreamListeners {
             // is one whose ledger belongs to a `Backend` the registry no longer
             // holds (config removal or replacement, D5). The replacement
             // inherits the interest still counted, so later removals balance.
-            let ledger = self.ledger(backend);
+            let ledger = self.ledger(key);
             let mut carried = Need::default();
             if let Some(old) = map
-                .get(backend)
+                .get(key)
                 .filter(|s| s.stop.is_cancelled() || !Arc::ptr_eq(&s.ledger(), &ledger))
             {
                 old.stop.cancel();
                 carried = std::mem::take(&mut *old.need.lock());
-                map.remove(backend);
+                map.remove(key);
             }
             let shared = Arc::clone(
-                map.entry(backend.to_owned())
-                    .or_insert_with(|| self.start(backend, carried, ledger)),
+                map.entry(key.clone())
+                    .or_insert_with(|| self.start(key, carried, ledger)),
             );
             // The task's idle self-stop also runs under `need`: either it
             // stopped first and this picks a successor, or this admission
@@ -306,7 +344,7 @@ impl UpstreamListeners {
                 if ledger.warn_cap() {
                     let ((keys, bytes, stranded), unplaced) = (ledger.size(), ledger.unplaced());
                     tracing::warn!(
-                        backend,
+                        backend = %key.backend,
                         keys,
                         bytes,
                         stranded,
@@ -319,7 +357,7 @@ impl UpstreamListeners {
                 // its passes can still release keys (D5 cleanup).
                 if shared.is_idle() {
                     shared.stop.cancel();
-                    map.remove(backend);
+                    map.remove(key);
                 } else {
                     shared.wake.send_modify(|n| *n += 1);
                 }
@@ -333,10 +371,10 @@ impl UpstreamListeners {
     /// refused), starting nothing: the entry is an ended one, which the
     /// revive sweep starts once the backend can be (MIK-7944
     /// `D6.EVENTS_MISC.6`). On a backend whose task runs it counts there.
-    pub(crate) fn hold(&self, backend: &str, interest: &Interest) {
+    pub(crate) fn hold(&self, key: &ListenerKey, interest: &Interest) {
         let mut map = self.backends.lock();
-        let shared = map.entry(backend.to_owned()).or_insert_with(|| {
-            let ended = self.entry(backend, Need::default(), self.ledger(backend));
+        let shared = map.entry(key.clone()).or_insert_with(|| {
+            let ended = self.entry(key, Need::default(), self.ledger(key));
             ended.stop.cancel();
             ended
         });
@@ -355,46 +393,51 @@ impl UpstreamListeners {
         self.revive_where(|_| true);
     }
 
-    /// Revive backend `name` now rather than at the sweep: its registration
-    /// changed (design r3 L2).
+    /// Revive every listener of backend `name` now rather than at the
+    /// sweep: its registration changed (design r3 L2).
     pub(crate) fn revive_backend(&self, name: &str) {
-        self.revive_where(|of| of == name);
+        self.revive_where(|of| of.backend == name);
         // A task parked while its backend was gone retries now, not in 30 s.
-        if let Some(shared) = self.backends.lock().get(name) {
-            shared.wake.send_modify(|n| *n += 1);
+        for (key, shared) in self.backends.lock().iter() {
+            if key.backend == name {
+                shared.wake.send_modify(|n| *n += 1);
+            }
         }
     }
 
-    fn revive_where(&self, only: impl Fn(&str) -> bool) {
+    fn revive_where(&self, only: impl Fn(&ListenerKey) -> bool) {
         let refused = (self.ineligible)();
         let mut map = self.backends.lock();
-        let due: Vec<String> = map
+        let due: Vec<ListenerKey> = map
             .iter()
-            .filter(|(name, shared)| only(name) && self.revivable(name, shared, &refused))
-            .map(|(name, _)| name.clone())
+            .filter(|(key, shared)| only(key) && self.revivable(key, shared, &refused))
+            .map(|(key, _)| key.clone())
             .collect();
-        for name in due {
-            let carried = take_ended(&mut map, &name);
-            tracing::debug!(backend = %name, "upstream listener: revived");
-            let shared = self.start(&name, carried, self.ledger(&name));
-            map.insert(name, shared);
+        for key in due {
+            let carried = take_ended(&mut map, &key);
+            tracing::debug!(backend = %key.backend, "upstream listener: revived");
+            let shared = self.start(&key, carried, self.ledger(&key));
+            map.insert(key, shared);
         }
     }
 
     /// An ended entry, of a registered backend that is not refused.
     fn revivable(
         &self,
-        name: &str,
+        key: &ListenerKey,
         shared: &Shared,
         refused: &std::collections::BTreeSet<String>,
     ) -> bool {
-        shared.stop.is_cancelled() && self.knows(name) && !refused.contains(name)
+        shared.stop.is_cancelled()
+            && self.knows(&key.backend)
+            && !refused.contains(&key.backend)
+            && self.may_run(key)
     }
 
     /// Count one key fewer; the last one stops the task.
-    pub(crate) fn remove(&self, backend: &str, interest: &Interest) {
+    pub(crate) fn remove(&self, key: &ListenerKey, interest: &Interest) {
         let mut map = self.backends.lock();
-        let Some(shared) = map.get(backend).cloned() else {
+        let Some(shared) = map.get(key).cloned() else {
             return;
         };
         let (changed, no_uris) = {
@@ -414,7 +457,7 @@ impl UpstreamListeners {
         }
         if shared.is_idle() {
             shared.stop.cancel();
-            map.remove(backend);
+            map.remove(key);
         } else if changed {
             shared.wake.send_modify(|n| *n += 1);
         }
@@ -422,35 +465,35 @@ impl UpstreamListeners {
 
     /// What the backend's last good catalogue read says about `uri`;
     /// `Skip` while no listener holds one.
-    pub(crate) fn verdict(&self, backend: &str, uri: &str, granted: Option<u64>) -> Verdict {
-        self.answering(backend).map_or(Verdict::Skip, |s| {
+    pub(crate) fn verdict(&self, key: &ListenerKey, uri: &str, granted: Option<u64>) -> Verdict {
+        self.answering(key).map_or(Verdict::Skip, |s| {
             s.snapshot.lock().verdict_for(uri, granted)
         })
     }
 
     /// Whether a listener task holds a good snapshot for `backend`.
-    pub(crate) fn has_snapshot(&self, backend: &str) -> bool {
-        self.answering(backend)
+    pub(crate) fn has_snapshot(&self, key: &ListenerKey) -> bool {
+        self.answering(key)
             .is_some_and(|s| s.snapshot.lock().is_known())
     }
 
     /// The entry whose snapshot may answer for `backend`: none when its
     /// ledger was made for an instance the registry no longer holds, so a
     /// replaced backend is judged live (design r3 L4, MIK-7897 LIFE.3b).
-    fn answering(&self, backend: &str) -> Option<Arc<Shared>> {
-        let entry = self.backends.lock().get(backend).cloned()?;
+    fn answering(&self, key: &ListenerKey) -> Option<Arc<Shared>> {
+        let entry = self.backends.lock().get(key).cloned()?;
         #[allow(
             clippy::disallowed_methods,
             reason = "Background: the events source watches backends; no caller request"
         )]
-        let now = self.registry.get(backend);
+        let now = self.registry.get(&key.backend);
         let current = entry.ledger();
         // Replaced: the ledgers map holds another instance, or the entry has
         // not yet taken the map's ledger (a swap in progress).
         let replaced = self
             .ledgers
             .lock()
-            .get(backend)
+            .get(key)
             .is_some_and(|(made_for, ledger)| {
                 !Arc::ptr_eq(ledger, &current)
                     || now
@@ -463,7 +506,70 @@ impl UpstreamListeners {
     /// The entry for `backend`, so a session-level test can drive it.
     #[cfg(test)]
     pub(super) fn entry_of(&self, backend: &str) -> Option<Arc<Shared>> {
-        self.backends.lock().get(backend).cloned()
+        self.entry_for(&ListenerKey::shared(backend))
+    }
+
+    /// The entry for `key`, so a test can drive a per-user listener.
+    #[cfg(test)]
+    pub(super) fn entry_for(&self, key: &ListenerKey) -> Option<Arc<Shared>> {
+        self.backends.lock().get(key).cloned()
+    }
+
+    /// The hub these listeners serve, while it lives.
+    pub(super) fn hub(&self) -> Option<Arc<EventsHub>> {
+        self.hub.upgrade()
+    }
+
+    /// The live config, to re-derive a row's observation (MIK-8833 §2.2);
+    /// `None` before the events services are wired.
+    pub(super) fn live_config(&self) -> Option<Arc<crate::config::Config>> {
+        let hub = self.hub.upgrade()?;
+        Some(hub.runtime.services.get()?.live.get())
+    }
+
+    /// Whether listener `key` may run now: a passthrough subscriber's
+    /// listener only while they hold a lease (E2, E7). Until then it stays
+    /// parked, counted with no task, and sends nothing.
+    pub(crate) fn may_run(&self, key: &ListenerKey) -> bool {
+        let Some(obs) = &key.obs else {
+            return true;
+        };
+        let passthrough = self.live_config().is_some_and(|config| {
+            super::observation::binding(&config, &key.backend).is_some_and(|b| {
+                b.basis.strategy
+                    == crate::identity_propagation::PropagationStrategyKind::Passthrough
+            })
+        });
+        !passthrough
+            || self.hub().is_some_and(|hub| {
+                hub.leases.is_held(&super::lease::LeaseKey {
+                    backend: key.backend.clone(),
+                    obs: obs.clone(),
+                })
+            })
+    }
+
+    /// Whether a per-user listener `key` would be one past the backend's
+    /// budget: a new one when [`MAX_PER_USER_LISTENERS`] already run.
+    pub(crate) fn over_budget(&self, key: &ListenerKey) -> bool {
+        if key.obs.is_none() {
+            return false;
+        }
+        let map = self.backends.lock();
+        !map.contains_key(key)
+            && map
+                .keys()
+                .filter(|k| k.backend == key.backend && k.obs.is_some())
+                .count()
+                >= MAX_PER_USER_LISTENERS
+    }
+
+    /// Whether listener `key` still counts any interest.
+    pub(crate) fn holds(&self, key: &ListenerKey) -> bool {
+        self.backends
+            .lock()
+            .get(key)
+            .is_some_and(|shared| !shared.need.lock().is_empty())
     }
 
     /// Whether a registered backend called `name` exists.
@@ -484,16 +590,23 @@ impl UpstreamListeners {
     /// made after its read began (MIK-8194).
     pub(crate) async fn authorize_uri(
         &self,
-        backend: &str,
+        key: &ListenerKey,
         uri: &str,
         granted: Option<u64>,
     ) -> Result<(), RpcError> {
-        if self.has_snapshot(backend) {
-            return match self.verdict(backend, uri, granted) {
+        if self.has_snapshot(key) {
+            return match self.verdict(key, uri, granted) {
                 Verdict::Revoke => Err(RpcError::forbidden()),
                 Verdict::Deliver | Verdict::Skip => Ok(()),
             };
         }
+        // A per-user listener's catalogue is read only as its subscriber, by
+        // its own task: a read here would be the gateway's, so it admits, as
+        // a backend that cannot be read does (§7, MIK-8833 §2.3).
+        if key.obs.is_some() {
+            return Ok(());
+        }
+        let backend = key.backend.as_str();
         #[allow(
             clippy::disallowed_methods,
             reason = "Background: the events source watches backends; no caller request"
@@ -521,7 +634,7 @@ impl UpstreamListeners {
                 if granted.is_none() {
                     return Err(RpcError::forbidden());
                 }
-                if !self.may_confirm(backend) {
+                if !self.may_confirm(key) {
                     return Ok(());
                 }
                 match tokio::time::timeout(
@@ -552,53 +665,54 @@ impl UpstreamListeners {
     }
 
     /// Whether `backend` may take a confirming read now; records it if so.
-    pub(super) fn may_confirm(&self, backend: &str) -> bool {
+    pub(super) fn may_confirm(&self, key: &ListenerKey) -> bool {
         let now = tokio::time::Instant::now();
         let mut confirmed = self.confirmed.lock();
         // Only windows still open are kept, so the map never outgrows them.
         confirmed.retain(|_, at| now.duration_since(*at) < CONFIRM_EVERY);
         if confirmed
-            .get(backend)
+            .get(key)
             .is_some_and(|at| now.duration_since(*at) < CONFIRM_EVERY)
         {
             return false;
         }
-        confirmed.insert(backend.to_owned(), now);
+        confirmed.insert(key.clone(), now);
         true
     }
 
-    /// The backend's ledger, fresh when the registry holds another `Backend`
-    /// than the one it was made for.
-    fn ledger(&self, backend: &str) -> Arc<Mutex<Ledger>> {
+    /// The listener's ledger, fresh when the registry holds another
+    /// `Backend` than the one it was made for. One per key: one subscriber's
+    /// legacy holders never keep another's (ISO-T4c).
+    fn ledger(&self, key: &ListenerKey) -> Arc<Mutex<Ledger>> {
         #[allow(
             clippy::disallowed_methods,
             reason = "Background: the events source watches backends; no caller request"
         )]
         let current = self
             .registry
-            .get(backend)
+            .get(&key.backend)
             .map_or_else(Weak::new, |b| Arc::downgrade(&b));
         let mut ledgers = self.ledgers.lock();
         if current.strong_count() == 0 {
             // Removed from the config: its charges are released with it.
-            ledgers.remove(backend);
+            ledgers.remove(key);
             return Arc::new(Mutex::new(Ledger::default()));
         }
-        if let Some((made_for, ledger)) = ledgers.get(backend)
+        if let Some((made_for, ledger)) = ledgers.get(key)
             && Weak::ptr_eq(made_for, &current)
         {
             return Arc::clone(ledger);
         }
         let ledger = Arc::new(Mutex::new(Ledger::default()));
-        ledgers.insert(backend.to_owned(), (current, Arc::clone(&ledger)));
+        ledgers.insert(key.clone(), (current, Arc::clone(&ledger)));
         ledger
     }
 
-    fn start(&self, backend: &str, need: Need, ledger: Arc<Mutex<Ledger>>) -> Arc<Shared> {
+    fn start(&self, key: &ListenerKey, need: Need, ledger: Arc<Mutex<Ledger>>) -> Arc<Shared> {
         #[cfg(test)]
         self.starts
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let shared = self.entry(backend, need, ledger);
+        let shared = self.entry(key, need, ledger);
         // Background upkeep never opens a browser (MIK-8269): every bounded
         // open, refill and subscription the session sends would otherwise lead
         // a login and end it `Cancelled` when its bound fires.
@@ -612,23 +726,24 @@ impl UpstreamListeners {
         shared
     }
 
-    fn entry(&self, backend: &str, need: Need, ledger: Arc<Mutex<Ledger>>) -> Arc<Shared> {
+    fn entry(&self, key: &ListenerKey, need: Need, ledger: Arc<Mutex<Ledger>>) -> Arc<Shared> {
         // Interest carried into a fresh ledger takes its keys there.
         ledger.lock().want_all(need.filter().1);
         let (wake, _) = watch::channel(0);
         Arc::new(Shared {
-            name: backend.to_owned(),
+            name: key.backend.clone(),
+            key: key.clone(),
             need: Mutex::new(need),
             ledger: Mutex::new(ledger),
             resolve: {
-                let (me, name) = (self.me.clone(), backend.to_owned());
-                Box::new(move || me.upgrade().map(|l| l.ledger(&name)))
+                let (me, key) = (self.me.clone(), key.clone());
+                Box::new(move || me.upgrade().map(|l| l.ledger(&key)))
             },
             recycle: super::upstream_session::RECYCLE,
             snapshot: Mutex::new(Snapshot::default()),
             wake,
             stop: self.stop.child_token(),
-            gate: Arc::clone(self.gates.lock().entry(backend.to_owned()).or_default()),
+            gate: Arc::clone(self.gates.lock().entry(key.clone()).or_default()),
             ineligible: Arc::clone(&self.ineligible),
             tools: Mutex::default(),
             #[cfg(test)]
@@ -667,3 +782,7 @@ mod tests;
 #[cfg(test)]
 #[path = "upstream_charge_tests.rs"]
 mod charge_tests;
+
+#[cfg(test)]
+#[path = "upstream_listener_keys_tests.rs"]
+mod keys_tests;

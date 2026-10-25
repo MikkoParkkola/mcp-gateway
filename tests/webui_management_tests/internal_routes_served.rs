@@ -75,6 +75,11 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
             "a_held_subscription_is_listed_with_its_queued_record",
         )],
     ),
+    (
+        "/ui/api/events/leases",
+        Method::GET,
+        &[(EVENTS_ADMIN, "the_lease_listing_is_admin_only")],
+    ),
     ("/ui/api/control-plane/grants", Method::POST, CP_WRITES),
     ("/ui/api/control-plane/policies", Method::POST, CP_WRITES),
     ("/ui/api/control-plane/decisions", Method::POST, CP_WRITES),

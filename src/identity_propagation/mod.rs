@@ -213,7 +213,10 @@ pub enum PropagationStrategyKind {
     /// Client-supplied passthrough (ADR-008 rung 2, MIK-6746). The caller
     /// attaches its OWN backend credential per request; the gateway forwards it
     /// verbatim and stores/mints NOTHING (INV-4). The primary path for capable
-    /// MCP clients that run their own OAuth flow.
+    /// MCP clients that run their own OAuth flow. One scoped exception
+    /// (MIK-8833, ADR-008 INV-4): a subscriber's own token, handed over with
+    /// `events/lease`, is held in memory only to run their events listener,
+    /// and wiped on every end of that subscription.
     Passthrough,
     /// RFC 8693 OAuth token-exchange (MIK-6729, fast-follow).
     TokenExchange,
@@ -318,6 +321,31 @@ fn cache_binding(subject_key: &str, audience: &str) -> String {
         audience.len(),
         audience
     )
+}
+
+/// The events observation key for `identity` on a backend with `config`
+/// (MIK-8833 design §2.1): the binding a call's minted credential caches
+/// under, so a listener isolates users exactly as calls do. A passthrough
+/// backend observes by the subscriber's gateway identity, never the token.
+/// `None` for a vault backend, which observes by account (`vault.rs`).
+#[must_use]
+pub(crate) fn observation_key(
+    config: &IdentityPropagationConfig,
+    identity: &VerifiedIdentity,
+) -> Option<String> {
+    let subject_key = identity.stable_actor_id();
+    match config.strategy {
+        PropagationStrategyKind::SignedAssertion | PropagationStrategyKind::Passthrough => {
+            Some(cache_binding(&subject_key, &config.audience))
+        }
+        PropagationStrategyKind::TokenExchange => Some(token_exchange::exchange_cache_key(
+            &subject_key,
+            &config.audience,
+            config.token_exchange_endpoint.as_deref().unwrap_or(""),
+            config.token_exchange_scope.as_deref().unwrap_or(""),
+        )),
+        PropagationStrategyKind::Vault => None,
+    }
 }
 
 /// The binding PREFIX a grant revocation evicts on, reconstructed from the
@@ -649,6 +677,10 @@ pub(crate) async fn audit_identity_propagation(
 
 #[cfg(test)]
 mod audience_tests;
+
+#[cfg(test)]
+#[path = "observation_tests.rs"]
+mod observation_tests;
 
 #[cfg(test)]
 mod tests;

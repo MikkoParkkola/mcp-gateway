@@ -7,3 +7,5 @@ src/file_mode_inherit_tests.rs	a_skills_save_keeps_a_group_readable_file	inheren
 src/gateway/task_service/store_tests/durability.rs	open_refuses_a_lease_it_cannot_inspect_and_creates_none	inherent	Builds a path at the Linux PATH_MAX (4096); macOS PATH_MAX is 1024, so the fixture cannot be made the same way.
 src/test_ports.rs	the_reserved_range_is_outside_the_ephemeral_range	inherent	Reads /proc/sys/net/ipv4/ip_local_port_range, which exists only on Linux.
 tests/cli_broken_pipe.rs	any_other_stdout_error_still_fails	inherent	Writes to /dev/full for ENOSPC; macOS has no /dev/full.
+src/security/dump_guard_tests.rs	lease_t11_child	inherent	The child half of lease_t11_linux_guard_is_observable: asserts prctl(PR_GET_DUMPABLE) reads not-dumpable, a flag only Linux and Android have (MIK-8833 LEASE-T11).
+src/security/dump_guard_tests.rs	lease_t11_linux_guard_is_observable	inherent	Runs lease_t11_child in a fresh process to observe the not-dumpable mark, which only Linux and Android have; on macOS no test observes the guard's zero core limit (MIK-8833 LEASE-T11).

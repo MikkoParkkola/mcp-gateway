@@ -689,3 +689,22 @@ async fn the_held_listing_is_admin_only() {
     assert_eq!(status, 200, "admin held listing answered {status}: {body}");
     assert!(body["held"].is_array(), "{body}");
 }
+
+/// MIK-8833 L5: the held passthrough credentials listing is admin only, like
+/// the held listing; an admin gets the list (empty with no passthrough row).
+#[tokio::test]
+async fn the_lease_listing_is_admin_only() {
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let gw = start(root.path(), &rx, json!({})).await;
+    for key in [Some(ALICE), Some(BOB), None] {
+        let (status, _) = gw.admin(key, "GET", "/ui/api/events/leases").await;
+        assert!(
+            matches!(status, 401 | 403),
+            "a non-admin lease listing is refused, got {status}"
+        );
+    }
+    let (status, body) = gw.admin(Some(ADMIN), "GET", "/ui/api/events/leases").await;
+    assert_eq!(status, 200, "admin lease listing answered {status}: {body}");
+    assert_eq!(body["leases"], json!([]), "{body}");
+}

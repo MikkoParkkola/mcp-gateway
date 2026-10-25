@@ -39,22 +39,37 @@ pub(super) struct Run {
 /// the gateway's own credential; MIK-8833 passes the key's. `None`: the
 /// backend is not reachable, or an identity credential has no session of its
 /// own and the run fails closed.
-pub(super) async fn begin_run(shared: &Arc<Shared>, backend: &Backend) -> Option<Run> {
+pub(super) async fn begin_run(
+    shared: &Arc<Shared>,
+    backend: &Backend,
+    hub: &Weak<crate::events::EventsHub>,
+) -> Option<Run> {
     shared.refresh_ledger();
     let lease = backend.listen_lease();
     let target: ListenTarget = match backend.listen_target().await {
         Ok(target) => target,
         Err(error) => {
-            debug!(backend = %shared.name, %error, "upstream listener: backend not reachable");
+            debug!(backend = %shared.name, error = %shared.error_text(&error), "upstream listener: backend not reachable");
             return None;
         }
     };
     let flavour = backend.connected_streamable();
-    let Some((own, handle)) = pick_session(&target.handle, ListenerCredential::shared()) else {
+    // A per-user key listens only as its subscriber, never as the gateway:
+    // with no credential to be had it does not run (MIK-8833 §2.3).
+    let Some(credential) = crate::events::listener_credential::for_key(&shared.key, hub) else {
+        debug!(backend = %shared.name, "upstream listener: no credential for a per-user key");
+        return None;
+    };
+    let Some((own, handle)) = pick_session(&target.handle, credential) else {
         debug!(backend = %shared.name, "upstream listener: an identity credential has no session of its own");
         return None;
     };
-    let era = if runs_modern(own.is_some(), target.era) {
+    // An SSE own session speaks the legacy handshake; a Streamable HTTP one
+    // (a per-user listener, MIK-8833 D7) the era the slot detected.
+    let sse_own = own
+        .as_ref()
+        .is_some_and(|o| o.detected_streamable() != Some(true));
+    let era = if runs_modern(sse_own, target.era) {
         PeerEra::Modern
     } else {
         PeerEra::Legacy

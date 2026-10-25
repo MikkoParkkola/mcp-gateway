@@ -48,7 +48,16 @@ impl HttpTransport {
         &self,
         requested: Requested,
     ) -> Result<std::result::Result<mpsc::Receiver<UpstreamNote>, u16>> {
-        if !self.reinit_if_needed().await {
+        self.open_listen_as(requested, &OpenAs::Gateway).await
+    }
+
+    /// [`Self::open_listen`] sending as `who` (MIK-8833 D7).
+    pub(super) async fn open_listen_as(
+        &self,
+        requested: Requested,
+        who: &OpenAs<'_>,
+    ) -> Result<std::result::Result<mpsc::Receiver<UpstreamNote>, u16>> {
+        if matches!(who, OpenAs::Gateway) && !self.reinit_if_needed().await {
             return Ok(Err(404));
         }
         let id = self.next_id();
@@ -57,8 +66,8 @@ impl HttpTransport {
             METHOD,
             Some(listen_filter(requested.kinds, &requested.uris)),
         )?;
-        let mut headers = self
-            .build_mcp_headers(HeaderMode::Request { method: METHOD }, None)
+        let mut headers = who
+            .headers(self, HeaderMode::Request { method: METHOD })
             .await?;
         finalise_modern_headers(&mut headers, METHOD, params.as_ref())?;
         headers.insert(
@@ -67,17 +76,19 @@ impl HttpTransport {
         );
         let carried = carried_session(&headers);
         let body = json!({"jsonrpc": "2.0", "id": id, "method": METHOD, "params": params});
-        let response = self
-            .client
-            .post(self.get_message_url())
-            .headers(headers)
-            .json(&body)
-            .timeout(STREAM_TIMEOUT)
-            .send()
-            .await
-            .map_err(|e| safe_request_error("listen", &e))?;
+        let url = self.get_message_url();
+        let response = who
+            .send(headers, |h| {
+                self.client
+                    .post(url)
+                    .headers(h)
+                    .json(&body)
+                    .timeout(STREAM_TIMEOUT)
+            })
+            .await?;
         if !response.status().is_success() {
-            return Ok(Err(self.refused(response.status().as_u16(), carried).await));
+            let status = response.status().as_u16();
+            return Ok(Err(who.refused(self, status, carried).await));
         }
         // A peer may answer the POST with one JSON response instead of a
         // stream: the end, the compatible acknowledgement or a `-32601`.
@@ -180,23 +191,29 @@ impl HttpTransport {
         &self,
         watched: Watched,
     ) -> Result<std::result::Result<mpsc::Receiver<UpstreamNote>, u16>> {
-        if !self.reinit_if_needed().await {
+        self.open_session_stream_as(watched, &OpenAs::Gateway).await
+    }
+
+    /// [`Self::open_session_stream`] sending as `who` (MIK-8833 D7).
+    pub(super) async fn open_session_stream_as(
+        &self,
+        watched: Watched,
+        who: &OpenAs<'_>,
+    ) -> Result<std::result::Result<mpsc::Receiver<UpstreamNote>, u16>> {
+        if matches!(who, OpenAs::Gateway) && !self.reinit_if_needed().await {
             return Ok(Err(404));
         }
-        let headers = self
-            .build_mcp_headers(HeaderMode::SessionStream, None)
-            .await?;
+        let headers = who.headers(self, HeaderMode::SessionStream).await?;
         let carried = carried_session(&headers);
-        let mut response = self
-            .client
-            .get(self.get_message_url())
-            .headers(headers)
-            .timeout(STREAM_TIMEOUT)
-            .send()
-            .await
-            .map_err(|e| safe_request_error("session stream", &e))?;
+        let url = self.get_message_url();
+        let mut response = who
+            .send(headers, |h| {
+                self.client.get(url).headers(h).timeout(STREAM_TIMEOUT)
+            })
+            .await?;
         if !response.status().is_success() {
-            return Ok(Err(self.refused(response.status().as_u16(), carried).await));
+            let status = response.status().as_u16();
+            return Ok(Err(who.refused(self, status, carried).await));
         }
         let (tx, rx) = mpsc::channel(TAP_CAPACITY);
         let cancel = self.listen_cancel.clone();
@@ -298,22 +315,27 @@ impl UpstreamListen for HttpTransport {
     }
 
     /// The listener's own session once the SSE handshake is detected
-    /// (MIK-8835.SSE.1); on Streamable HTTP the listener uses this transport.
+    /// (MIK-8835.SSE.1), and for a per-user listener on Streamable HTTP
+    /// (MIK-8833 D7); a shared listener on Streamable HTTP uses this transport.
     fn own_session(
         self: std::sync::Arc<Self>,
         credential: crate::transport::upstream_tap::ListenerCredential,
     ) -> Option<std::sync::Arc<dyn UpstreamListen>> {
-        (self.streamable() == Some(false)).then(|| {
-            let session: std::sync::Arc<dyn UpstreamListen> =
-                std::sync::Arc::new(self.sse_listen_session(credential));
-            session
-        })
+        match self.streamable() {
+            Some(false) => Some(std::sync::Arc::new(self.sse_listen_session(credential))),
+            // A per-user listener on Streamable HTTP gets a session of its
+            // own too (MIK-8833 D7); the shared one uses this transport.
+            Some(true) if credential.source.is_some() => self
+                .streamable_listen_session(credential)
+                .map(|s| std::sync::Arc::new(s) as std::sync::Arc<dyn UpstreamListen>),
+            _ => None,
+        }
     }
 }
 
 /// A refused open by its status: 405 means the backend offers no such
 /// stream, 404 that the session expired (MIK-7899).
-fn refused_as(
+pub(super) fn refused_as(
     what: &str,
     opened: std::result::Result<FrameStream, u16>,
 ) -> std::result::Result<FrameStream, Refused> {
@@ -480,3 +502,74 @@ mod session_heal_tests;
 #[cfg(test)]
 #[path = "legacy_pin_tests.rs"]
 mod legacy_pin_tests;
+
+/// Who a stream open sends as (MIK-8833 D7): the gateway on its shared
+/// session, or one subscriber on their own session bucket with the
+/// credential a source lends, and nothing of the gateway's (C6).
+pub(super) enum OpenAs<'a> {
+    Gateway,
+    Lent {
+        bucket: &'a str,
+        source: &'a std::sync::Arc<dyn crate::transport::upstream_tap::CredentialSource>,
+    },
+}
+
+impl OpenAs<'_> {
+    pub(super) async fn headers(
+        &self,
+        t: &HttpTransport,
+        mode: HeaderMode<'_>,
+    ) -> Result<header::HeaderMap> {
+        match self {
+            Self::Gateway => t.build_mcp_headers(mode, None).await,
+            Self::Lent { bucket, .. } => t.build_lent_headers(mode, Some(bucket)).await,
+        }
+    }
+
+    /// Send what `build` makes; a lent credential's headers are merged in
+    /// inside the source, which may refuse (nothing is sent then).
+    pub(super) async fn send(
+        &self,
+        mut headers: header::HeaderMap,
+        build: impl FnOnce(header::HeaderMap) -> reqwest::RequestBuilder + Send,
+    ) -> Result<reqwest::Response> {
+        match self {
+            Self::Gateway => build(headers)
+                .send()
+                .await
+                .map_err(|e| safe_request_error("listener request", &e)),
+            Self::Lent { source, .. } => {
+                source
+                    .with_credential(Box::new(move |extra| {
+                        Box::pin(async move {
+                            super::extra_headers::merge_extra_headers(&mut headers, &extra);
+                            build(headers)
+                                .send()
+                                .await
+                                .map_err(|e| safe_request_error("listener request", &e))
+                        })
+                    }))
+                    .await
+            }
+        }
+    }
+
+    /// A refused open: the gateway's session recovers as before; a lent
+    /// session's expired id is dropped from its own bucket only, and its
+    /// owner re-handshakes before the next open.
+    async fn refused(&self, t: &HttpTransport, status: u16, carried: Option<String>) -> u16 {
+        match self {
+            Self::Gateway => t.refused(status, carried).await,
+            Self::Lent { bucket, .. } => {
+                if status == 404 {
+                    let mut sessions = t.sessions.write();
+                    let key = HttpTransport::bucket_key(Some(bucket));
+                    if carried.is_some() && sessions.get(key) == carried.as_ref() {
+                        sessions.remove(key);
+                    }
+                }
+                status
+            }
+        }
+    }
+}

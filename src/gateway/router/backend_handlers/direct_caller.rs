@@ -441,6 +441,55 @@ pub(super) fn route<'a>(
     })
 }
 
+/// Answers `events/lease` (MIK-8833 E3) itself, never forwarded,
+/// so the backend sees no request. The owner is the events owner principal
+/// subscribe keys rows by (D4); the token is the caller's own passthrough
+/// header, moved straight into a wiping buffer.
+pub(super) async fn events_lease(
+    state: &AppState,
+    name: &str,
+    caller: &Caller,
+    params: Option<&Value>,
+    id: crate::protocol::RequestId,
+) -> Rejection {
+    let answer = match state.meta_mcp.events() {
+        None => Err(crate::events::RpcError::method_not_found()),
+        Some(hub) => {
+            let owners = crate::gateway::router::handlers::tasks::owner::route_owners(
+                state,
+                &caller.task_caller(),
+            );
+            let principal = crate::gateway::router::handlers::events::principal(
+                &owners.events,
+                state.auth_config.enabled,
+            );
+            let token = caller
+                .inbound_headers
+                .get(super::PASSTHROUGH_HEADER)
+                .and_then(|v| v.to_str().ok())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(|v| zeroize::Zeroizing::new(v.to_owned()));
+            hub.lease(principal.as_deref(), name, params, token).await
+        }
+    };
+    let reply = match answer {
+        Ok(result) => crate::protocol::JsonRpcResponse::success(id, result),
+        Err(crate::events::RpcError {
+            code,
+            message,
+            data: Some(data),
+        }) => crate::protocol::JsonRpcResponse::error_with_data(Some(id), code, message, data),
+        Err(crate::events::RpcError { code, message, .. }) => {
+            crate::protocol::JsonRpcResponse::error(Some(id), code, message)
+        }
+    };
+    (
+        StatusCode::OK,
+        Json(serde_json::to_value(reply).unwrap_or(Value::Null)),
+    )
+}
+
 /// Terminal arm for `notifications/*`: forward to the backend, answer 202.
 /// The bucket is the one a matching `request_with_headers` call for this
 /// caller would use (MIK-6735 fix 2), so a notification correlating that

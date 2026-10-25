@@ -297,3 +297,29 @@ async fn build_headers_trace_flag_gates_trace_header() {
         "trace:true must emit x-trace-id"
     );
 }
+
+/// MIK-8833 C6: a lent credential's headers are protocol headers only: the
+/// operator's static headers (an API key here) never ride along with a
+/// subscriber's request, and the gateway's own credential is never read.
+#[tokio::test]
+async fn lent_headers_carry_no_gateway_credential() {
+    let mut custom = HashMap::new();
+    custom.insert("X-Api-Key".to_string(), "gateway-secret".to_string());
+    custom.insert("Authorization".to_string(), "Bearer gateway".to_string());
+    let t = make_transport_with_headers("http://localhost", custom);
+    for mode in [
+        HeaderMode::Sse,
+        HeaderMode::Request { method: "m" },
+        HeaderMode::Notify,
+    ] {
+        let lent = t.build_lent_headers(mode, Some("idp:p")).await.unwrap();
+        assert!(!lent.contains_key("x-api-key"), "{lent:?}");
+        assert!(!lent.contains_key(header::AUTHORIZATION), "{lent:?}");
+        assert!(lent.contains_key("mcp-protocol-version"));
+        let own = t.build_mcp_headers(mode, None).await.unwrap();
+        assert!(
+            own.contains_key("x-api-key"),
+            "control: the gateway's own keep them"
+        );
+    }
+}

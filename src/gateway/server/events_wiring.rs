@@ -18,7 +18,7 @@ use crate::gateway::meta_mcp::MetaMcp;
 /// cannot be opened stops startup, like the task store.
 pub(super) fn install(
     config: &Config,
-    meta_mcp: &MetaMcp,
+    meta_mcp: &Arc<MetaMcp>,
     registry: &Arc<crate::backend::BackendRegistry>,
     webhooks: &Arc<parking_lot::RwLock<WebhookRegistry>>,
     live_config: &Arc<crate::config_reload::LiveConfig>,
@@ -73,8 +73,29 @@ pub(super) fn install(
     if config.events.sources.schedule {
         hub.install_schedule_source(&store_dir);
     }
+    // A per-user listener mints through the same audited path a call uses
+    // (MIK-8833 B2). Weak: the hub never keeps the meta layer alive.
+    hub.set_listener_mint(Arc::new(ListenerMint(Arc::downgrade(meta_mcp))));
     hub.start(meta_mcp.events_services(Arc::clone(live_config), credentials));
     meta_mcp.set_events(hub);
     meta_mcp.reconcile_events_after_scan();
     Ok(())
+}
+
+/// The events hub's way to mint a per-user listener's credential.
+struct ListenerMint(std::sync::Weak<MetaMcp>);
+
+#[async_trait::async_trait]
+impl crate::events::ListenerMint for ListenerMint {
+    async fn mint(
+        &self,
+        backend: &str,
+        identity: &crate::key_server::oidc::VerifiedIdentity,
+    ) -> Result<Vec<(String, String)>> {
+        let meta = self
+            .0
+            .upgrade()
+            .ok_or_else(|| crate::Error::Transport("gateway stopping".to_owned()))?;
+        meta.mint_listener_credential(backend, identity).await
+    }
 }

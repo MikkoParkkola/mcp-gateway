@@ -65,7 +65,13 @@ impl SseListenSession {
             .as_ref()
             .and_then(|s| s.identity_key())
             .or(self.credential.identity_key.as_deref());
-        let mut headers = t.build_mcp_headers(mode, identity).await?;
+        // A lent credential's session carries protocol headers and the
+        // source's only: never the gateway's own (MIK-8833 C6).
+        let mut headers = if self.credential.source.is_some() {
+            t.build_lent_headers(mode, identity).await?
+        } else {
+            t.build_mcp_headers(mode, identity).await?
+        };
         headers.remove("mcp-session-id");
         Ok(headers)
     }

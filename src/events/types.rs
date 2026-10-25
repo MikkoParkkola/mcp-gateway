@@ -81,6 +81,17 @@ impl RpcError {
         )
     }
 
+    /// `-32014` for a passthrough token the lease refuses (MIK-8833 L2, E8),
+    /// naming why and, for the core-dump guard, which call failed.
+    pub(crate) fn lease_refused(refusal: super::lease::LeaseRefusal) -> Self {
+        let (reason, detail) = refusal.reason();
+        let mut data = json!({ "feature": "passthroughLease", "reason": reason });
+        if let Some(detail) = detail {
+            data["detail"] = json!(detail);
+        }
+        Self::new(-32014, "Unsupported", Some(data))
+    }
+
     /// `-32015` with one of the [`CallbackFailure`] categories.
     pub(crate) fn callback(reason: CallbackFailure) -> Self {
         Self::new(

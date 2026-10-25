@@ -28,6 +28,12 @@ const DECISION_POINTS: &[(&str, &str, usize)] = &[
     ("fanout.rs", "revoke", 1),
     ("fanout.rs", "withdraw_rows", 1),
     ("governance.rs", "audit_lifecycle", 1),
+    // MIK-8833: a lease judges its token's expiry at install, and a held
+    // lease's expiry before each send.
+    ("lease.rs", "install", 1),
+    ("lease.rs", "with_credential", 1),
+    // MIK-8833: a lease request judges its row live once.
+    ("lease_rpc.rs", "lease", 1),
     ("lifecycle.rs", "live_keys", 1),
     ("mod.rs", "open_with", 1),
     ("operational_source.rs", "authorize", 1),

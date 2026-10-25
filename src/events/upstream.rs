@@ -59,12 +59,10 @@ pub(crate) enum Ineligible {
     /// (MIK-8835). Not a listener refusal: see [`listener_ineligible`].
     #[cfg_attr(not(feature = "a2a"), allow(dead_code, reason = "a2a feature off"))]
     A2aCapability,
-    /// The backend is reached with the caller's propagated identity; the
-    /// shared listener would observe under the gateway's own (D3).
-    IdentityPropagation,
-    /// The backend's credential is one person's (a per-user OAuth login) and
-    /// the gateway serves several callers (D3). A personal account compiles
-    /// to identity propagation and is refused as that.
+    /// The backend's credential is one person's raw OAuth login and the
+    /// gateway serves several callers (D3): no listener can observe as each
+    /// subscriber. A backend reached with a propagated identity or a managed
+    /// account is observed per subscriber instead (MIK-8833).
     PerUserCredential,
 }
 
@@ -73,7 +71,6 @@ impl Ineligible {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::A2aCapability => "a2a_no_such_capability",
-            Self::IdentityPropagation => "identity_propagation",
             Self::PerUserCredential => "per_user_credential",
         }
     }
@@ -208,14 +205,15 @@ pub(crate) fn judged_backends(
 /// Why `backend` cannot offer the events yet, if it cannot. The identity
 /// reasons come first, so a subscribe never connects a backend they refuse.
 fn judge(backend: &BackendConfig, multi_user: bool, detected: Option<bool>) -> Option<Judged> {
-    if backend.identity_propagation.is_some() {
-        return Some(Judged::Refused(Ineligible::IdentityPropagation));
-    }
-    let personal = backend
-        .oauth
-        .as_ref()
-        .is_some_and(|o| o.enabled && !o.shared_account)
-        || backend.account.is_some();
+    // A propagated identity or a managed account is observed per subscriber
+    // (MIK-8833); only a raw personal login, with no identity to listen as
+    // each subscriber, stays refused on a multi-user gateway.
+    let personal = backend.identity_propagation.is_none()
+        && (backend
+            .oauth
+            .as_ref()
+            .is_some_and(|o| o.enabled && !o.shared_account)
+            || backend.account.is_some());
     if multi_user && personal {
         return Some(Judged::Refused(Ineligible::PerUserCredential));
     }
@@ -283,8 +281,9 @@ mod tests {
              strategy: passthrough\n  audience: https://a\n  session_mode: per_user\n",
         );
         assert_eq!(
-            judge(&idp, false, Some(true)),
-            Some(Judged::Refused(Ineligible::IdentityPropagation))
+            judge(&idp, true, Some(true)),
+            None,
+            "observed per subscriber (MIK-8833)"
         );
         let oauth =
             backend("http_url: http://h/mcp\nstreamable_http: true\noauth:\n  enabled: true\n");
@@ -317,20 +316,22 @@ mod tests {
         assert_eq!(judge(&off, false, None), None);
     }
 
-    /// The identity reasons come before the transport, so a subscribe never
-    /// connects a backend they refuse.
+    /// MIK-8833: an identity-bound backend is judged by its transport like
+    /// any other; a personal login with a propagated identity is not refused.
     #[test]
-    fn identity_is_judged_before_the_transport() {
+    fn an_identity_backend_is_judged_by_its_transport() {
         let idp = backend(
             "http_url: http://h/mcp\nidentity_propagation:\n  \
              strategy: passthrough\n  audience: https://a\n  session_mode: per_user\n",
         );
-        for detected in [None, Some(false)] {
-            assert_eq!(
-                judge(&idp, false, detected),
-                Some(Judged::Refused(Ineligible::IdentityPropagation))
-            );
-        }
+        assert_eq!(judge(&idp, true, None), Some(Judged::Unresolved));
+        assert_eq!(judge(&idp, true, Some(false)), None);
+        let both = backend(
+            "http_url: http://h/mcp\nstreamable_http: true\noauth:\n  enabled: true\n\
+             identity_propagation:\n  strategy: signed_assertion\n  audience: https://a\n  \
+             session_mode: per_user\n",
+        );
+        assert_eq!(judge(&both, true, Some(true)), None);
     }
 
     /// The refused set leaves the unresolved out; the judged set has both.
@@ -344,7 +345,7 @@ mod tests {
         .expect("config");
         let none = |_: &str| None;
         let refused = ineligible_backends(&config, false, &none);
-        assert_eq!(refused.get("i"), Some(&Ineligible::IdentityPropagation));
+        assert_eq!(refused.get("i"), None, "observed per subscriber");
         assert_eq!(refused.get("u"), None);
         let judged = judged_backends(&config, false, &none);
         assert_eq!(judged.get("u"), Some(&Judged::Unresolved));
@@ -354,8 +355,8 @@ mod tests {
     }
 
     /// Accounts compile before the verdict: a personal or external account
-    /// is identity propagation whatever the auth posture, a shared one is
-    /// the static credential it names.
+    /// is identity propagation, observed per subscriber whatever the auth
+    /// posture (MIK-8833); a shared one is the static credential it names.
     #[test]
     fn account_bindings_are_judged_as_they_compile() {
         let yaml = "accounts:\n  schema_version: accounts.v1\n  enabled: true\n  \
@@ -387,8 +388,8 @@ mod tests {
         crate::config::account_bindings::compile(&config).expect("the fixture compiles");
         for multi_user in [false, true] {
             let refused = ineligible_backends(&config, multi_user, &|_| None);
-            assert_eq!(refused.get("a"), Some(&Ineligible::IdentityPropagation));
-            assert_eq!(refused.get("b"), Some(&Ineligible::IdentityPropagation));
+            assert_eq!(refused.get("a"), None, "managed: per subscriber");
+            assert_eq!(refused.get("b"), None, "external: per subscriber");
             assert_eq!(
                 refused.get("c"),
                 None,
@@ -407,19 +408,19 @@ mod tests {
         );
     }
 
-    /// U1 (MIK-8835.A2A.1): A2A is judged after the identity reasons, so an
-    /// identity-bound A2A backend is refused as identity (and stays out of
-    /// the listener's exemption), while a shared one is only A2A.
+    /// U1 (MIK-8835.A2A.1, MIK-8833): an identity-bound A2A backend is
+    /// refused its resource and prompt kinds as A2A, like a shared one; its
+    /// per-user `tools_changed` is refused at the listener start instead.
     #[cfg(feature = "a2a")]
     #[test]
-    fn u1_identity_is_judged_before_a2a() {
+    fn u1_an_identity_a2a_backend_is_refused_as_a2a() {
         let idp = backend(
             "a2a_url: http://h\nidentity_propagation:\n  \
              strategy: passthrough\n  audience: https://a\n  session_mode: per_user\n",
         );
         assert_eq!(
             judge(&idp, false, None),
-            Some(Judged::Refused(Ineligible::IdentityPropagation))
+            Some(Judged::Refused(Ineligible::A2aCapability))
         );
         let config: Config = crate::yaml::from_str(
             "backends:\n  shared:\n    a2a_url: http://h\n  \
@@ -433,6 +434,6 @@ mod tests {
             .filter(|(_, r)| **r == Ineligible::A2aCapability)
             .map(|(n, _)| n)
             .collect();
-        assert_eq!(exempt, ["shared"], "only the shared A2A backend is exempt");
+        assert_eq!(exempt, ["idp", "shared"], "both are A2A only");
     }
 }

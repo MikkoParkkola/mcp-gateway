@@ -124,7 +124,10 @@ async fn t34_a_read_begun_before_a_renewal_does_not_revoke_it() {
         .source(crate::events::types::SourceKind::BackendNotification)
         .expect("source");
     let listeners = source.upstream_listeners().expect("listeners");
-    listeners.hold("b", &Interest::ResourceUpdated("file:///x".to_owned()));
+    listeners.hold(
+        &crate::events::upstream_listener::ListenerKey::shared("b"),
+        &Interest::ResourceUpdated("file:///x".to_owned()),
+    );
     let shared = listeners.entry_of("b").expect("entry");
     let backend = registry.get("b").expect("b");
     let weak = Arc::downgrade(&hub);
@@ -355,7 +358,11 @@ async fn a_failed_confirm_spends_the_attempts_lookup() {
         .scope(std::cell::Cell::new(false), async {
             assert!(
                 listeners
-                    .authorize_uri("b", "file:///x", Some(1))
+                    .authorize_uri(
+                        &crate::events::upstream_listener::ListenerKey::shared("b"),
+                        "file:///x",
+                        Some(1)
+                    )
                     .await
                     .is_ok(),
                 "a failed confirm admits"
@@ -367,7 +374,11 @@ async fn a_failed_confirm_spends_the_attempts_lookup() {
             );
             assert!(
                 listeners
-                    .authorize_uri("b", "file:///x", Some(1))
+                    .authorize_uri(
+                        &crate::events::upstream_listener::ListenerKey::shared("b"),
+                        "file:///x",
+                        Some(1)
+                    )
                     .await
                     .is_ok()
             );

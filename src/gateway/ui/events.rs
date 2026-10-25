@@ -6,6 +6,7 @@
 //!   POST `/ui/api/events/dead-letters/{id}/replay`        — replay one
 //!   POST `/ui/api/events/dead-letters/replay?all=1&subscription=S` — replay a subscription's
 //!   GET  `/ui/api/events/held`                            — held subscriptions per type
+//!   GET  `/ui/api/events/leases`                          — held passthrough credentials
 //!
 //! Admin only. Never a meta-tool: the meta surface is pinned.
 
@@ -35,6 +36,7 @@ pub(super) fn events_router() -> Router<Arc<AppState>> {
         .route(routes::UI_DEAD_LETTERS_REPLAY, post(replay_all))
         .route(routes::UI_DEAD_LETTER_REPLAY, post(replay_one))
         .route(routes::UI_EVENTS_HELD, get(held))
+        .route(routes::UI_EVENTS_LEASES, get(leases))
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,6 +102,20 @@ async fn held(
         Err(answer) => return *answer,
     };
     Json(json!({ "held": hub.list_held() })).into_response()
+}
+
+/// Every passthrough subscription's held credential (MIK-8833 L5): backend,
+/// subscription handle, state and expiry; never the token or a digest of it.
+async fn leases(
+    State(state): State<Arc<AppState>>,
+    client: Option<Extension<AuthenticatedClient>>,
+    identity: Option<Extension<VerifiedIdentity>>,
+) -> axum::response::Response {
+    let (hub, _) = match admitted(&state, client, identity) {
+        Ok(admitted) => admitted,
+        Err(answer) => return *answer,
+    };
+    Json(json!({ "leases": hub.list_leases().await })).into_response()
 }
 
 async fn list(

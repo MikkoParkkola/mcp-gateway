@@ -72,7 +72,11 @@ async fn sweep() {
 
 /// The backend's entry is live and counts the held tools key.
 fn assert_listened(source: &BackendSource) {
-    let entry = listeners(source).backends.lock().get("b").cloned();
+    let entry = listeners(source)
+        .backends
+        .lock()
+        .get(&crate::events::upstream_listener::ListenerKey::shared("b"))
+        .cloned();
     let entry = entry.expect("listener");
     assert!(!entry.stop.is_cancelled(), "the listener runs");
     assert!(
@@ -149,7 +153,7 @@ async fn a_listener_ended_as_ineligible_comes_back_once_eligible() {
             let stopped = listeners(&source)
                 .backends
                 .lock()
-                .get("b")
+                .get(&crate::events::upstream_listener::ListenerKey::shared("b"))
                 .is_some_and(|s| s.stop.is_cancelled());
             if stopped {
                 break;
@@ -174,8 +178,16 @@ async fn a_held_key_that_leaves_takes_its_entry_along() {
     let refused = Arc::new(AtomicBool::new(true));
     let source = source(registry, Arc::clone(&refused));
     hold_tools(&source).await;
-    listeners(&source).remove("b", &Interest::ToolsChanged);
-    assert!(!listeners(&source).backends.lock().contains_key("b"));
+    listeners(&source).remove(
+        &crate::events::upstream_listener::ListenerKey::shared("b"),
+        &Interest::ToolsChanged,
+    );
+    assert!(
+        !listeners(&source)
+            .backends
+            .lock()
+            .contains_key(&crate::events::upstream_listener::ListenerKey::shared("b"))
+    );
     refused.store(false, Ordering::SeqCst);
     sweep().await;
     assert_eq!(starts(&source), 0);
@@ -189,15 +201,28 @@ async fn holding_on_a_running_listener_only_counts() {
     assert!(registry.register(silent_backend()));
     let source = source(registry, Arc::new(AtomicBool::new(false)));
     hold_tools(&source).await;
-    listeners(&source).hold("b", &Interest::ToolsChanged);
+    listeners(&source).hold(
+        &crate::events::upstream_listener::ListenerKey::shared("b"),
+        &Interest::ToolsChanged,
+    );
     assert_eq!(starts(&source), 1);
-    let running = listeners(&source).backends.lock().get("b").cloned();
+    let running = listeners(&source)
+        .backends
+        .lock()
+        .get(&crate::events::upstream_listener::ListenerKey::shared("b"))
+        .cloned();
     let running = running.expect("listener");
     assert!(!running.stop.is_cancelled());
     assert!(running.need.lock().emits(NoteKind::ToolsChanged, None));
-    listeners(&source).remove("b", &Interest::ToolsChanged);
+    listeners(&source).remove(
+        &crate::events::upstream_listener::ListenerKey::shared("b"),
+        &Interest::ToolsChanged,
+    );
     assert!(
-        listeners(&source).backends.lock().contains_key("b"),
+        listeners(&source)
+            .backends
+            .lock()
+            .contains_key(&crate::events::upstream_listener::ListenerKey::shared("b")),
         "one key still held"
     );
 }
@@ -210,11 +235,16 @@ async fn dropping_the_listeners_cancels_their_tasks_while_the_sweep_sleeps() {
     assert!(registry.register(silent_backend()));
     let none: crate::events::backend_source::Ineligible = Arc::new(std::collections::BTreeSet::new);
     let listeners = UpstreamListeners::new(registry, Weak::new(), none);
-    listeners.add("b", &Interest::ToolsChanged).expect("room");
+    listeners
+        .add(
+            &crate::events::upstream_listener::ListenerKey::shared("b"),
+            &Interest::ToolsChanged,
+        )
+        .expect("room");
     let task = listeners
         .backends
         .lock()
-        .get("b")
+        .get(&crate::events::upstream_listener::ListenerKey::shared("b"))
         .cloned()
         .expect("listener");
     tokio::time::advance(std::time::Duration::from_secs(5)).await;
@@ -244,7 +274,10 @@ async fn a_backend_refused_again_before_its_revived_task_runs_ends_that_task() {
         }
     });
     let listeners = UpstreamListeners::new(registry, Weak::new(), ineligible);
-    listeners.hold("b", &Interest::ToolsChanged);
+    listeners.hold(
+        &crate::events::upstream_listener::ListenerKey::shared("b"),
+        &Interest::ToolsChanged,
+    );
     for _ in 0..3 {
         sweep().await;
     }
@@ -253,7 +286,12 @@ async fn a_backend_refused_again_before_its_revived_task_runs_ends_that_task() {
         1,
         "one task at most"
     );
-    let entry = listeners.backends.lock().get("b").cloned().expect("held");
+    let entry = listeners
+        .backends
+        .lock()
+        .get(&crate::events::upstream_listener::ListenerKey::shared("b"))
+        .cloned()
+        .expect("held");
     assert!(
         entry.stop.is_cancelled(),
         "the revived task ended at its loop head"

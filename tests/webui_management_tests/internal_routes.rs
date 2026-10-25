@@ -494,6 +494,14 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 404],
     ),
+    // events.rs (leases), :59, :71
+    row(
+        "/ui/api/events/leases",
+        Method::GET,
+        "/ui/api/events/leases",
+        Payload::None,
+        [401, 403, 403, 404],
+    ),
     // src/gateway/ui/import.rs:95 (preview_handler)
     row(
         "/ui/api/import/openapi/preview",

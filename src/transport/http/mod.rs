@@ -589,6 +589,7 @@ mod extra_headers;
 mod listen;
 mod modern_meta;
 mod redirect_policy;
+mod streamable_listen;
 pub use redirect_policy::transport_follows_redirect;
 mod requests;
 mod sse_channel;

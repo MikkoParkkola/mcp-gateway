@@ -51,11 +51,10 @@ impl EventsHub {
     pub(super) async fn start_key(
         &self,
         started: &mut HashSet<(SourceKind, String)>,
-        principal: &str,
-        name: &str,
-        arguments: &serde_json::Value,
+        row: &super::records::Subscription,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<Option<(SourceKind, String)>, RpcError> {
+        let (principal, name, arguments) = (&row.principal, &row.name, &row.arguments);
         let Some(source) = self.source_offering(name) else {
             // An upstream-notification name no source offers any more (its
             // backend was refused or removed since the subscribe judged it)
@@ -67,10 +66,12 @@ impl EventsHub {
                 _ => Ok(None),
             };
         };
-        let key = (
-            source.kind(),
-            source.lifecycle_key(principal, name, arguments, now),
-        );
+        // A row that holds no key (its observation cannot be had) is never
+        // started as anyone else (MIK-8833 §2.3).
+        let Some(key) = source.key_of_row(row, now) else {
+            return Err(RpcError::forbidden());
+        };
+        let key = (source.kind(), key);
         if started.contains(&key) {
             return Ok(None);
         }
@@ -131,12 +132,8 @@ impl EventsHub {
                 continue;
             }
             let key = owned.or_else(|| {
-                self.source_offering(&sub.name).map(|source| {
-                    (
-                        source.kind(),
-                        source.lifecycle_key(&sub.principal, &sub.name, &sub.arguments, now),
-                    )
-                })
+                self.source_offering(&sub.name)
+                    .and_then(|source| Some((source.kind(), source.key_of_row(&sub, now)?)))
             });
             if let Some(key) = key {
                 keys.push((key, sub.principal, sub.name, sub.arguments));

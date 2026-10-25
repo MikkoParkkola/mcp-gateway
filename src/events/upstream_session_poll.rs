@@ -24,6 +24,12 @@ pub(super) async fn poll(
     hub: &Weak<EventsHub>,
     registry: &crate::backend::BackendRegistry,
 ) -> Outcome {
+    // A per-user A2A listener has no credential-bearing read of its own: it
+    // sends nothing rather than poll as the gateway (MIK-8833 §2.3).
+    if shared.key.obs.is_some() {
+        shared.stop.cancelled().await;
+        return Outcome::Stopped;
+    }
     loop {
         let ttl = backend.cache_ttl();
         let every = snapshot_interval(ttl);
@@ -33,7 +39,7 @@ pub(super) async fn poll(
             backend.invalidate_tools();
         }
         if let Err(error) = backend.get_tools_shared().await {
-            debug!(backend = %shared.name, %error, "upstream listener: A2A tools read failed");
+            debug!(backend = %shared.name, error = %shared.error_text(&error), "upstream listener: A2A tools read failed");
         }
         tokio::select! {
             () = shared.stop.cancelled() => return Outcome::Stopped,

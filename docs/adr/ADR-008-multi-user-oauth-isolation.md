@@ -86,6 +86,15 @@ single-user and disabled the INV-2 guard. The previous formula was
   is mixed into response + idempotency cache keys.
 - **INV-4** — the gateway stores tokens ONLY for the gateway-brokered rung (3).
   Passthrough (rung 2) and SSO reuse (rung 1) store nothing.
+  *One scoped exception (MIK-8833):* to run a
+  subscriber's MCP Events listener on a passthrough backend, the gateway may
+  hold that subscriber's own token **in memory only**, and only when the
+  subscriber hands it over with `events/lease` for their own live subscription.
+  It is never written to disk, a log, a snapshot or an answer; it is wiped
+  (zeroized) on unsubscribe, expiry, revocation, a 401, a config change or
+  restart; it lives at most until its `exp`, the subscription's end and 12
+  hours; and no lease is held where core dumps cannot be disabled. Calls are
+  unchanged: they still forward the caller's token and never read a lease.
 
 ## Consequences
 

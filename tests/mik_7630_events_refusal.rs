@@ -82,10 +82,7 @@ async fn subscribe(gw: &Gateway, key: &str, name: &str) -> Value {
 async fn ineligible_backends_refuse_upstream_events_with_the_reason() {
     let dir = tempfile::tempdir().expect("tempdir");
     let gw = Gateway::start(dir.path(), refusal_config(dir.path())).await;
-    let cases = [
-        ("agent", "a2a_no_such_capability"),
-        ("idp", "identity_propagation"),
-    ];
+    let cases = [("agent", "a2a_no_such_capability")];
     for (backend, reason) in cases {
         for kind in ["resource_updated", "resources_changed", "prompts_changed"] {
             let name = format!("backend.{backend}.{kind}");
@@ -98,6 +95,17 @@ async fn ineligible_backends_refuse_upstream_events_with_the_reason() {
                 "{name}: the refusal names the reason"
             );
         }
+    }
+    // MIK-8833: an identity-propagating backend is observed per subscriber,
+    // so it is no longer refused for its credential; this one cannot connect.
+    for kind in ["resource_updated", "resources_changed", "prompts_changed"] {
+        let name = format!("backend.idp.{kind}");
+        let answer = subscribe(&gw, ALICE, &name).await;
+        assert_ne!(
+            error(&answer)["code"],
+            -32014,
+            "{name}: not refused, got {answer}"
+        );
     }
     // MIK-7969: an unset key that cannot connect was never learned to be
     // SSE; it answers the backend error, as `tools/call` would.

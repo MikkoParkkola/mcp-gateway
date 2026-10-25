@@ -463,6 +463,8 @@ pub(crate) use storage::journey::{
     JourneyError, JourneyLimits, JourneyRefusal, JourneyStatus, JourneyView,
 };
 pub(crate) use storage::migration_revision::descriptor_revision;
+/// The events observation key of a managed account (MIK-8833).
+pub(crate) use vault::observation_key as vault_observation_key;
 #[cfg(test)]
 pub(crate) use worker::CustodyHandle;
 pub(crate) use worker::{

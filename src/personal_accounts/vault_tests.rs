@@ -743,3 +743,32 @@ mod custody_order;
 
 #[path = "vault_propagation_tests.rs"]
 mod propagation;
+
+/// MIK-8833 B3: a vault listener observes by account and audience, so a lease
+/// rotation keeps its route while the call binding moves.
+#[test]
+fn the_observation_key_survives_a_lease_rotation() {
+    let alice = key_for(Principal::Verified(&identity()));
+    let key = observation_key(&alice, "https://drive").expect("binds");
+    assert!(key.starts_with("acct:v1:"), "{key}");
+    assert_ne!(
+        cache_binding_for_test(&alice, "0123456789abcdef0123456789abcdef"),
+        cache_binding_for_test(&alice, "fedcba9876543210fedcba9876543210"),
+        "the call binding moves with the lease"
+    );
+    assert_eq!(
+        observation_key(&alice, "https://drive").ok(),
+        Some(key.clone())
+    );
+    assert_ne!(
+        observation_key(&alice, "https://calendar").ok(),
+        Some(key),
+        "a new audience is a new observation"
+    );
+    let operator = key_for(Principal::SoleOperator);
+    assert_ne!(
+        observation_key(&operator, "https://drive").ok(),
+        observation_key(&alice, "https://drive").ok(),
+        "two principals never share an observation"
+    );
+}
