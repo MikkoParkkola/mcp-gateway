@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tracing::warn;
 
 use crate::Error;
-use crate::transport::{StdioTransport, assigned_package_cache_dir, isolated_package_manager_env};
+use crate::transport::{StdioTransport, isolated_env_and_assigned_cache};
 
 /// Text a package manager prints when its install tree cannot be used.
 ///
@@ -126,10 +126,10 @@ pub(crate) fn stdio_transport(
     cwd: Option<String>,
     (request_timeout, protocol_version): (std::time::Duration, Option<String>),
 ) -> Arc<StdioTransport> {
-    let assigned_cache = assigned_package_cache_dir(backend_name, command, &env);
+    let (env, assigned_cache) = isolated_env_and_assigned_cache(backend_name, command, env);
     StdioTransport::new_with_assigned_cache(
         command,
-        isolated_package_manager_env(backend_name, command, env),
+        env,
         cwd,
         request_timeout,
         protocol_version,
