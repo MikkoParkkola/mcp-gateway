@@ -82,6 +82,14 @@ pub mod key_server;
 pub mod kill_switch;
 #[doc(hidden)]
 pub mod kubernetes;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "first callers land with MIK-8901's enforcer change and MIK-8854"
+    )
+)]
+pub(crate) mod local_day;
 #[cfg(feature = "metrics")]
 #[doc(hidden)]
 pub mod metrics;
