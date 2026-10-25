@@ -243,10 +243,13 @@ fn cache_dir(backend_name: &str) -> PathBuf {
 /// prints `undefined` for `npm_config_store_dir`; older pnpm reads
 /// `npm_config_*`. Both are set so either generation is isolated.
 fn cache_vars_for(command: &str) -> &'static [&'static str] {
-    let Some(program) = command.split_whitespace().next() else {
+    // The splitter the launch uses, so a quoted program is classified as the
+    // one that will be spawned (MIK-8831.REL.4).
+    let Some(program) = crate::transport::split_command(command).and_then(|p| p.into_iter().next())
+    else {
         return &[];
     };
-    match program.rsplit('/').next().unwrap_or(program) {
+    match program.rsplit('/').next().unwrap_or(&program) {
         "npx" | "npm" => &["npm_config_cache"],
         "bunx" => &["BUN_INSTALL_CACHE_DIR"],
         "yarn" => &["YARN_CACHE_FOLDER"],
