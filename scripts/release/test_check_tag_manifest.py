@@ -257,6 +257,9 @@ COSIGN_ANY = re.compile(r"cosign\s+\w")
 # The one command that makes a name resolvable. Every tag the release exposes
 # is created by it, so the ordering assertions anchor on it rather than on the
 # tag strings, which also appear in `inspect` calls and log lines.
+# One `apt-get install` command naming tini (MIK-8352): the command runs on
+# through escaped newlines and ends at `&&` or at a newline that is not.
+TINI_INSTALLED = r"apt-get install(?:[^&\n\\]|\\.|\\\n)*?\btini\b"
 IMAGETOOLS_CREATE = re.compile(r"docker\s+buildx\s+imagetools\s+create(?![-\w])")
 # The gate, however it is spelled. Shared by the assertion that it runs at all
 # and by the one that protects the steps running it, so a step cannot be
@@ -2034,6 +2037,48 @@ class VariantStage(unittest.TestCase):
             "non-root each call them once",
         )
 
+    def test_tini_is_pid_1_of_the_variant_only(self):
+        # MIK-8352 TINI.1: tini -g in front of the entrypoint, so a stop reaches
+        # a sourced step's foreground command. The default image keeps the
+        # gateway itself as PID 1.
+        stage = self.variant_stage()
+        self.assertRegex(
+            stage,
+            TINI_INSTALLED,
+            "the variant does not install tini",
+        )
+        self.assertRegex(
+            stage,
+            r'(?m)^ENTRYPOINT \["/usr/bin/tini", "-g", "--", '
+            r'"/usr/local/bin/entrypoint-full\.sh"\]$',
+            "the variant's PID 1 is not tini -g in front of its entrypoint",
+        )
+        base = self.body[: self.body.index("FROM runtime AS runtime-full")]
+        self.assertRegex(
+            base,
+            r'(?m)^ENTRYPOINT \["mcp-gateway"\]$',
+            "the default image's PID 1 is no longer the gateway",
+        )
+
+    def test_the_tini_pin_reads_only_the_install_command(self):
+        # The command ends at `&&` or at a newline that is not escaped: a
+        # `tini` after it (the ENTRYPOINT, a comment) installs nothing.
+        installs = (
+            "RUN apt-get install -y \\\n    curl \\\n    tini \\\n    && rm -rf x\n",
+            "RUN apt-get install -y curl tini\n",
+        )
+        for stage in installs:
+            with self.subTest(stage=stage):
+                self.assertRegex(stage, TINI_INSTALLED)
+        installs_nothing = (
+            "RUN apt-get install -y curl\n"
+            'ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/x"]\n',
+            "RUN apt-get install -y curl \\\n    && echo tini\n",
+        )
+        for stage in installs_nothing:
+            with self.subTest(stage=stage):
+                self.assertNotRegex(stage, TINI_INSTALLED)
+
     def test_the_variant_keeps_the_default_invocation(self):
         # An ENTRYPOINT declared in the stage resets the CMD the base stage set.
         # The variant's own invocation carries no arguments, so a variant
@@ -2258,10 +2303,23 @@ class VariantGateCoverage(unittest.TestCase):
             r"docker stop -t \d+",
             "the variant gate never stops the image while startup is running",
         )
+        # PID 1 is tini, so the gateway's uid is read from the process named
+        # mcp-gateway, and PID 1 is checked to be tini (MIK-8352).
         self.assertRegex(
             self.body,
-            r"proc/1/status",
+            r'= mcp-gateway \] && exec grep -m1 "\^Uid:"',
             "the variant gate never checks which user the gateway runs as",
+        )
+        self.assertRegex(
+            self.body,
+            r'cat /proc/1/comm',
+            "the variant gate never checks that tini is PID 1",
+        )
+        # A stop during a sourced step: the case tini -g exists for.
+        self.assertRegex(
+            self.body,
+            r"(?s)10-slow\.envsh.*?docker stop -t \d+.*?!= 143",
+            "the variant gate never stops the image during a sourced step",
         )
 
 
