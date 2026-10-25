@@ -23,7 +23,9 @@ pub(super) fn install(
     webhooks: &Arc<parking_lot::RwLock<WebhookRegistry>>,
     live_config: &Arc<crate::config_reload::LiveConfig>,
     credentials: crate::events::LiveCredentials,
+    counters: &Arc<crate::counters::CounterStore>,
 ) -> Result<()> {
+    let _ = counters;
     if config.webhooks.enabled {
         meta_mcp.set_webhook_registry(Arc::clone(webhooks));
     }
@@ -62,7 +64,7 @@ pub(super) fn install(
         );
     }
     if config.events.sources.operational {
-        let source = hub.install_operational_source(&meta_mcp.kill_switch(), registry);
+        let source = hub.install_operational_source(&meta_mcp.kill_switch(), registry, None);
         #[cfg(feature = "cost-governance")]
         if let Some(budget) = &meta_mcp.budget_enforcer {
             source.report_budgets(budget);
@@ -78,3 +80,7 @@ pub(super) fn install(
     meta_mcp.reconcile_events_after_scan();
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "events_wiring_tests.rs"]
+mod tests;

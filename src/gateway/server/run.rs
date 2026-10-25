@@ -293,6 +293,7 @@ impl Gateway {
             bearer_sha256,
             dashboard: Some(Arc::clone(&dashboard_bootstrap)),
         };
+        let counters = Arc::new(crate::counters::CounterStore::new(0));
         events_wiring::install(
             &self.config,
             &meta_mcp,
@@ -300,6 +301,7 @@ impl Gateway {
             &webhook_registry,
             &live_config,
             credentials,
+            &counters,
         )?;
         let subscriptions = Arc::new(
             crate::gateway::subscription_registry::SubscriptionRegistry::new(

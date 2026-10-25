@@ -227,7 +227,9 @@ impl EventsHub {
         self: &Arc<Self>,
         kill_switch: &crate::kill_switch::KillSwitch,
         backends: &crate::backend::BackendRegistry,
+        markers: Option<Arc<crate::counters::CounterStore>>,
     ) -> Arc<OperationalSource> {
+        let _ = markers;
         let source = Arc::new(OperationalSource {
             hub: Arc::downgrade(self),
         });
