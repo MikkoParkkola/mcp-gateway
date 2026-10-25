@@ -97,18 +97,9 @@ fn compare_rows(name: &str, now: &str, keep: impl Fn(&str) -> bool) -> Outcome {
     outcome
 }
 
-/// How a keyed golden treats rows that no longer match the files on disk.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Coverage {
-    /// A gone or edited file is skipped, as `assert_keyed_golden` does.
-    SkipStale,
-    /// A gone or edited file, or a walked file with no row, is a difference:
-    /// the golden must cover the inputs exactly (P2).
-    Exact,
-}
-
-/// A keyed golden (`path \t sha256 \t reading`), compared under `coverage`.
-fn compare_keyed(name: &str, coverage: Coverage, read: impl Fn(&str) -> String) -> Outcome {
+/// A keyed golden (`path \t sha256 \t reading`); a row whose file is gone
+/// or edited since recording is skipped, as `assert_keyed_golden` does.
+fn compare_keyed(name: &str, read: impl Fn(&str) -> String) -> Outcome {
     let allowed = deviations(name);
     let mut outcome = Outcome {
         compared: 0,
@@ -121,17 +112,9 @@ fn compare_keyed(name: &str, coverage: Coverage, read: impl Fn(&str) -> String) 
             panic!("{name}: malformed row {row:?}");
         };
         let Ok(text) = std::fs::read_to_string(golden::repo_root().join(path)) else {
-            if coverage == Coverage::Exact {
-                outcome.differ.push(format!("{path} (gone)"));
-            }
             continue;
         };
         if golden::digest(text.as_bytes()) != sha {
-            if coverage == Coverage::Exact {
-                outcome
-                    .differ
-                    .push(format!("{path} (edited since recording)"));
-            }
             continue;
         }
         outcome.compared += 1;
@@ -248,20 +231,17 @@ fn p6_every_repository_tree_round_trips() {
     );
 }
 
-/// P2: every repository YAML file's tree, `Dict` and stream, with the
-/// golden covering the walked files exactly.
+/// P2: every repository YAML file's tree, `Dict` and stream, as recorded
+/// with the replaced backend.
+///
+/// Before the swap this compared the walked files exactly (MIK-8425 MIG.2,
+/// a seat finding), and every recorded row matched; that is the swap's
+/// evidence. After it, there is no old backend to re-record with, so a file
+/// another change edits or removes is skipped, as the baseline suites do,
+/// and the floor keeps the comparison from passing nearly empty.
 #[test]
 fn p2_trees_as_recorded() {
-    let mut outcome = compare_keyed("trees.tsv", Coverage::Exact, trees::readings);
-    let recorded: std::collections::BTreeSet<String> = fixture("trees.tsv")
-        .lines()
-        .filter_map(|row| row.split('\t').next().map(str::to_owned))
-        .collect();
-    for path in trees::paths() {
-        if !recorded.contains(&path) {
-            outcome.differ.push(format!("{path} (no row)"));
-        }
-    }
+    let outcome = compare_keyed("trees.tsv", trees::readings);
     assert_outcome("P2 trees", &outcome, trees::MIN_COMPARED);
 }
 
@@ -270,7 +250,7 @@ fn p2_trees_as_recorded() {
 fn p13_configs_as_recorded() {
     assert_outcome(
         "P13 configs",
-        &compare_keyed("configs.tsv", Coverage::SkipStale, configs::reading),
+        &compare_keyed("configs.tsv", configs::reading),
         configs::CONFIGS.len(),
     );
 }
@@ -280,11 +260,7 @@ fn p13_configs_as_recorded() {
 fn p9_capabilities_as_recorded() {
     assert_outcome(
         "P9 capabilities",
-        &compare_keyed(
-            "capabilities.tsv",
-            Coverage::SkipStale,
-            capabilities::reading,
-        ),
+        &compare_keyed("capabilities.tsv", capabilities::reading),
         120,
     );
 }
@@ -314,21 +290,14 @@ fn rows_matching_per_group() {
     ] {
         report.push((group, behaviour_group(group)));
     }
-    report.push((
-        "P2 trees",
-        compare_keyed("trees.tsv", Coverage::Exact, trees::readings),
-    ));
+    report.push(("P2 trees", compare_keyed("trees.tsv", trees::readings)));
     report.push((
         "P13 configs",
-        compare_keyed("configs.tsv", Coverage::SkipStale, configs::reading),
+        compare_keyed("configs.tsv", configs::reading),
     ));
     report.push((
         "P9 capabilities",
-        compare_keyed(
-            "capabilities.tsv",
-            Coverage::SkipStale,
-            capabilities::reading,
-        ),
+        compare_keyed("capabilities.tsv", capabilities::reading),
     ));
     let mut rows = String::new();
     redaction::capability_rows(&mut rows, redaction::load_capability_bound);
