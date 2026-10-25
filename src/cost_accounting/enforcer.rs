@@ -98,6 +98,16 @@ impl DailyAccumulator {
     fn is_current(&self) -> bool {
         !current_day().is_ok_and(|today| self.lock().0 < today)
     }
+
+    /// File an accumulator that holds no spend under `day`, earlier or later.
+    /// Restore only: a pre-upgrade snapshot's UTC day is older than the local
+    /// day the accumulator was built on (ADR-026).
+    fn redate_if_empty(&self, day: u64) {
+        let mut state = self.lock();
+        if state.1 == 0 {
+            state.0 = day;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -150,9 +160,82 @@ fn usd(micro: u64) -> f64 {
     micro as f64 / 1_000_000.0
 }
 
-/// Days since the epoch (UTC); `Err` on a clock before 1970.
+/// Today's day key; `Err` on a clock before 1970.
 fn current_day() -> Result<u64, crate::clock::ClockBeforeEpoch> {
-    crate::clock::unix_secs().map(|secs| secs / 86_400)
+    crate::clock::unix_secs().map(day_key)
+}
+
+/// The day key of `secs` (ADR-026). Keys are only ever compared, and a local
+/// day is always newer than a legacy UTC day of the same or an earlier number:
+/// - a local day is `2 × days + 1`, `days` counted from 1970-01-01 to the
+///   local date of `secs` in the host zone;
+/// - the legacy UTC day restored from a pre-upgrade snapshot is
+///   `2 × (secs / 86_400)` while that UTC day lasts, so it resets once at UTC
+///   midnight, east or west of UTC, and local days follow.
+fn day_key(secs: u64) -> u64 {
+    let utc_day = secs / 86_400;
+    if legacy_utc_day() == Some(utc_day) {
+        return 2 * utc_day;
+    }
+    let date = crate::local_day::local_day(&crate::local_day::host_zone(), secs).date;
+    let days = date
+        .signed_duration_since(chrono::NaiveDate::default())
+        .num_days();
+    2 * u64::try_from(days).unwrap_or(0) + 1
+}
+
+/// Whether `secs` falls on the open legacy UTC day: a save then records no
+/// `day_basis`, and the costs API names UTC.
+fn on_legacy_utc_day(secs: u64) -> bool {
+    legacy_utc_day() == Some(secs / 86_400)
+}
+
+/// The `day_basis` a save at `secs` records: none while the legacy UTC day
+/// is open, so a restart keeps that day's one UTC reset.
+pub(crate) fn day_basis_at(secs: u64) -> Option<String> {
+    (!on_legacy_utc_day(secs)).then(|| "local".to_owned())
+}
+
+/// The zone today's spend is counted in: the host's, or UTC while the legacy
+/// UTC day restored at start-up is still open.
+pub(crate) fn day_zone() -> &'static str {
+    match crate::clock::unix_secs() {
+        Ok(secs) if on_legacy_utc_day(secs) => "UTC",
+        _ => crate::local_day::host_zone_name(),
+    }
+}
+
+/// The open legacy UTC day as `utc_day + 1`; 0 is none. Set once by a
+/// restore of a snapshot saved before the upgrade; never cleared, since it
+/// stops matching when that day ends. One enforcer per process.
+#[cfg(not(test))]
+static LEGACY_UTC_DAY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(test)]
+thread_local! {
+    /// Per test thread, so parallel tests never see each other's restores.
+    static LEGACY_UTC_DAY: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+fn legacy_utc_day() -> Option<u64> {
+    #[cfg(not(test))]
+    let stored = LEGACY_UTC_DAY.load(std::sync::atomic::Ordering::Relaxed);
+    #[cfg(test)]
+    let stored = LEGACY_UTC_DAY.with(std::cell::Cell::get);
+    stored.checked_sub(1)
+}
+
+fn set_legacy_utc_day(utc_day: u64) {
+    #[cfg(not(test))]
+    LEGACY_UTC_DAY.store(utc_day + 1, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(test)]
+    LEGACY_UTC_DAY.with(|d| d.set(utc_day + 1));
+}
+
+/// A process restart, for a test: the legacy UTC day lives in a static.
+#[cfg(test)]
+fn forget_legacy_utc_day() {
+    LEGACY_UTC_DAY.with(|d| d.set(0));
 }
 
 // ── EnforcementResult ────────────────────────────────────────────────────────

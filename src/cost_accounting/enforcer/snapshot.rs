@@ -16,30 +16,36 @@ impl BudgetEnforcer {
     /// Re-apply today's spend from a persisted snapshot, so a restart keeps
     /// counting against the budgets instead of starting them at zero.
     ///
-    /// A snapshot saved on an earlier UTC day is ignored: the daily budgets it
-    /// counted have already reset. The global total is the sum of the per-tool
-    /// totals, because every recorded spend lands in both.
+    /// A snapshot saved on an earlier day is ignored: the daily budgets it
+    /// counted have already reset. A snapshot with `day_basis: "local"` was
+    /// saved under local days and restores on the same local day. One without
+    /// it was saved under UTC days (before ADR-026): it restores on the same
+    /// UTC day, and that day stays open until UTC midnight, so its budgets
+    /// reset once there and count local days after. The global total is the
+    /// sum of the per-tool totals, because every recorded spend lands in both.
     pub fn restore(&self, persisted: &super::super::persistence::PersistedCosts) {
-        // A clock it cannot read keeps the saved spend counting (MIK-8202):
-        // discarding it would restart the budgets at zero.
-        let today = super::current_day();
-        if today.is_ok_and(|today| persisted.saved_at / 86_400 != today) {
-            tracing::info!(
-                // The pre-split module path, kept as the log target.
-                target: "mcp_gateway::cost_accounting::enforcer",
-                saved_at = persisted.saved_at,
-                "Persisted cost data is from an earlier UTC day; budgets start at zero"
-            );
+        let Some(day) = self.restore_day(persisted) else {
             return;
+        };
+        // Accumulators built before this restore hold the local day; filed
+        // under the older legacy day, their spend would count on the local
+        // day and miss the UTC reset. None holds spend yet at start-up.
+        for acc in [&self.global_daily, &self.tool_overflow, &self.key_overflow] {
+            acc.redate_if_empty(day);
         }
+        for map in [&self.tool_daily, &self.key_daily] {
+            for acc in map.iter() {
+                acc.redate_if_empty(day);
+            }
+        }
+        let day = Some(day);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let micro = |usd: f64| (usd.max(0.0) * 1_000_000.0).round() as u64;
         // Through the cap: a snapshot saved before the cap existed may hold
-        // more names than it allows. Filed under the snapshot's own UTC day,
-        // so spend restored on a clock before 1970 still counts once the
-        // clock reads that day (MIK-8202).
+        // more names than it allows. Filed under the snapshot's own day, so
+        // spend restored on a clock before 1970 still counts once the clock
+        // reads that day (MIK-8202).
         let budgets = &self.config.budgets;
-        let day = Some(persisted.saved_at / 86_400);
         // A zero row (a name saved after midnight before it spent again) is
         // not restored: it would take a place in the cap and read 0 anyway.
         for (tool, total) in &persisted.tool_totals {
@@ -59,6 +65,42 @@ impl BudgetEnforcer {
         self.tool_overflow.add_on(day, tool_overflow);
         self.key_overflow
             .add_on(day, micro(persisted.key_overflow_usd));
+    }
+
+    /// The day key to file `persisted` under, or `None` when it is from an
+    /// earlier day. A clock it cannot read keeps the saved spend counting
+    /// (MIK-8202): discarding it would restart the budgets at zero.
+    fn restore_day(&self, persisted: &super::super::persistence::PersistedCosts) -> Option<u64> {
+        let now = crate::clock::unix_secs();
+        let saved = persisted.saved_at;
+        let same_day = match persisted.day_basis.as_deref() {
+            Some("local") => now.map(|now| super::day_key(now) == super::day_key(saved)),
+            None => {
+                let same = now.map(|now| now / 86_400 == saved / 86_400);
+                if same != Ok(false) {
+                    super::set_legacy_utc_day(saved / 86_400);
+                }
+                same
+            }
+            Some(other) => {
+                tracing::warn!(
+                    target: "mcp_gateway::cost_accounting::enforcer",
+                    day_basis = other,
+                    "Persisted cost data names a day basis this gateway does not know; budgets start at zero"
+                );
+                return None;
+            }
+        };
+        if same_day == Ok(false) {
+            tracing::info!(
+                // The pre-split module path, kept as the log target.
+                target: "mcp_gateway::cost_accounting::enforcer",
+                saved_at = saved,
+                "Persisted cost data is from an earlier day; budgets start at zero"
+            );
+            return None;
+        }
+        Some(super::day_key(saved))
     }
 
     /// The per-tool day rows.

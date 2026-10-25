@@ -88,6 +88,8 @@ pub(in crate::gateway::router) async fn costs_handler(
             "aggregate": serde_json::to_value(tracker.aggregate()).unwrap_or(serde_json::json!(null)),
             "sessions": serde_json::to_value(tracker.all_sessions()).unwrap_or(serde_json::json!([])),
             "keys": serde_json::to_value(tracker.all_keys()).unwrap_or(serde_json::json!([])),
+            // The zone daily budgets count days in (ADR-026).
+            "day_zone": crate::cost_accounting::enforcer::day_zone(),
         })
     };
 

@@ -14,6 +14,13 @@ use std::sync::OnceLock;
 use chrono::{DateTime, NaiveDate, NaiveTime, TimeDelta, TimeZone, Utc};
 
 /// One local calendar day and the UTC instants that bound it.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the bounds' first reader is MIK-8854's counter store"
+    )
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LocalDay {
     /// The local calendar date.
