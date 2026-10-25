@@ -789,3 +789,7 @@ use legacy::watched_by;
 #[cfg(test)]
 #[path = "upstream_session_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "upstream_session_seam_tests.rs"]
+mod seam_tests;
