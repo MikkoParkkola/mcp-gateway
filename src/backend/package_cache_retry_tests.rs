@@ -28,6 +28,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[path = "package_cache_race_tests.rs"]
+mod race;
+
+#[path = "package_cache_log_tests.rs"]
+mod logging;
+
 /// The key the gateway assigns per backend.
 const CACHE_ENV: &str = "npm_config_cache";
 
@@ -57,6 +63,9 @@ if [ -f "$MCP_GATEWAY_TEST_SPAWN_LOG" ]; then
 fi
 printf 'spawned\n' >> "$MCP_GATEWAY_TEST_SPAWN_LOG"
 count=$((count + 1))
+if [ "$count" -gt 1 ] && [ -n "${MCP_GATEWAY_TEST_RETRY_DELAY:-}" ]; then
+    sleep "$MCP_GATEWAY_TEST_RETRY_DELAY"
+fi
 
 while IFS= read -r request; do
     case "$request" in
@@ -69,6 +78,7 @@ while IFS= read -r request; do
         fail-once) if [ "$count" -eq 1 ]; then fail=1; fi ;;
         esac
         if [ "$fail" -eq 1 ]; then
+            printf '%s attempt %s\n' "$MCP_GATEWAY_TEST_SPAWN_FAILURE" "$count" >&2
             printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"%s attempt %s"}}\n' "$id" "$MCP_GATEWAY_TEST_SPAWN_FAILURE" "$count"
         else
             printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-11-25"}}\n' "$id"
@@ -185,11 +195,16 @@ fn transport(
     )
 }
 
-fn assert_caller_sees(error: &Error, needle: &str) {
-    let text = error.to_string();
+/// The failure the last start reported, read from the child's stderr tail.
+///
+/// An `initialize` error here carries the backend's error code only, never its
+/// message (it may quote back a credential), so the text the stub chose is
+/// asserted where the classifier reads it.
+fn assert_last_attempt_said(transport: &StdioTransport, needle: &str) {
+    let text = transport.stderr_tail();
     assert!(
         text.contains(needle),
-        "the caller must see the original failure text ({needle}): {text}"
+        "the last attempt must have reported the original failure ({needle}): {text}"
     );
 }
 
@@ -221,8 +236,9 @@ async fn a_cache_shaped_failure_clears_the_cache_and_retries_exactly_once() {
         !cache.root.exists(),
         "the cache is cleared before the retry respawns"
     );
-    assert_caller_sees(&error, "attempt 2");
-    assert_caller_sees(&error, "Cannot find module");
+    assert!(matches!(error, Error::Protocol(_)), "{error:?}");
+    assert_last_attempt_said(&transport, "attempt 2");
+    assert_last_attempt_said(&transport, "Cannot find module");
 }
 
 #[tokio::test]
@@ -233,14 +249,15 @@ async fn a_non_cache_shaped_failure_is_returned_unchanged_without_a_retry() {
     let log = workspace.path().join("spawns.log");
     let env = env_with_cache(&log, "always-fail", UNRELATED, &cache.root);
 
-    let error = start_with_repair(&transport(
+    let transport = transport(
         workspace.path(),
         env,
         Duration::from_secs(5),
         Some(&cache.root),
-    ))
-    .await
-    .expect_err("the backend is broken for good, so start must fail");
+    );
+    let error = start_with_repair(&transport)
+        .await
+        .expect_err("the backend is broken for good, so start must fail");
 
     assert_eq!(
         spawns(&log).len(),
@@ -251,8 +268,8 @@ async fn a_non_cache_shaped_failure_is_returned_unchanged_without_a_retry() {
         matches!(error, Error::Protocol(_)),
         "the original error is returned as-is, not re-shaped by a retry: {error:?}"
     );
-    assert_caller_sees(&error, "attempt 1");
-    assert_caller_sees(&error, UNRELATED);
+    assert_last_attempt_said(&transport, "attempt 1");
+    assert_last_attempt_said(&transport, UNRELATED);
     assert_eq!(
         std::fs::read_to_string(&cache.sentinel).expect("the cache tree is untouched"),
         SEEDED,
@@ -273,14 +290,10 @@ async fn a_cache_that_cannot_be_removed_is_not_retried() {
     let log = workspace.path().join("spawns.log");
     let env = env_with_cache(&log, "always-fail", CACHE_SHAPED, &cache);
 
-    let error = start_with_repair(&transport(
-        workspace.path(),
-        env,
-        Duration::from_secs(5),
-        Some(&cache),
-    ))
-    .await
-    .expect_err("the backend is broken for good, so start must fail");
+    let transport = transport(workspace.path(), env, Duration::from_secs(5), Some(&cache));
+    let error = start_with_repair(&transport)
+        .await
+        .expect_err("the backend is broken for good, so start must fail");
 
     assert_eq!(
         spawns(&log).len(),
@@ -291,7 +304,8 @@ async fn a_cache_that_cannot_be_removed_is_not_retried() {
         cache.is_file(),
         "the caller's path must not be deleted out from under it"
     );
-    assert_caller_sees(&error, "attempt 1");
+    assert!(matches!(error, Error::Protocol(_)), "{error:?}");
+    assert_last_attempt_said(&transport, "attempt 1");
 }
 
 #[tokio::test]
@@ -436,7 +450,8 @@ async fn a_cache_shaped_failure_without_an_assigned_cache_is_not_retried() {
         1,
         "with no cache assigned there is nothing to clear, so nothing is retried"
     );
-    assert_caller_sees(&error, "attempt 1");
+    assert!(matches!(error, Error::Protocol(_)), "{error:?}");
+    assert_last_attempt_said(&transport, "attempt 1");
     assert_eq!(
         std::fs::read_to_string(&bystander).expect("an unassigned path is never touched"),
         SEEDED
@@ -712,210 +727,69 @@ async fn a_cache_is_cleared_once_until_a_start_succeeds() {
     assert!(!path.exists(), "a start that succeeds arms the next repair");
 }
 
-/// Two repairs of one cache, each taking the lock the registry hands out.
-///
-/// Covers `repair_lock`'s registry: one path yields one lock, and two holders of
-/// it are never inside the section at once. It does not cover the repair path's
-/// own use of that lock — this test takes it directly, so it holds whether or not
-/// the repair does. Covering that use means forcing the window between the latch
-/// check and the removal, which no test here does.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn two_repairs_of_one_cache_never_enter_the_guarded_section_together() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    let workspace = tempfile::tempdir().expect("workspace");
-    let cache = seed_cache(workspace.path());
-    let path = cache.root.clone();
-
-    let live = Arc::new(AtomicUsize::new(0));
-    let peak = Arc::new(AtomicUsize::new(0));
-
-    let mut repairs = Vec::new();
-    for _ in 0..2 {
-        let path = path.clone();
-        let live = Arc::clone(&live);
-        let peak = Arc::clone(&peak);
-        repairs.push(tokio::spawn(async move {
-            struct Inside(Arc<AtomicUsize>);
-            impl Drop for Inside {
-                fn drop(&mut self) {
-                    self.0.fetch_sub(1, Ordering::SeqCst);
-                }
-            }
-
-            let lock = repair_lock(&path);
-            let _repairing = lock.lock().await;
-            let now = live.fetch_add(1, Ordering::SeqCst) + 1;
-            peak.fetch_max(now, Ordering::SeqCst);
-            let _inside = Inside(Arc::clone(&live));
-            tokio::time::sleep(Duration::from_millis(150)).await;
-        }));
-    }
-
-    for repairing in repairs {
-        repairing.await.expect("the repair task does not panic");
-    }
-
-    assert_eq!(
-        peak.load(Ordering::SeqCst),
-        1,
-        "two repairs of one cache must never be inside the section together"
-    );
-}
-
-/// Two attempts of one backend: exactly one clears, the other finds its mark.
-///
-/// Released together, both attempts fail the same way and both reach the
-/// repair. The latch is a single mark per cache, so the outcome they report has
-/// to be one `Cleared` and one `AlreadyRepaired`.
-///
-/// This does not cover the lock: the two attempts never overlap inside the
-/// guarded section here, so the assertion holds whether the lock is taken or not.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn two_attempts_of_one_backend_leave_one_repair_to_clear_the_cache() {
+#[tokio::test]
+async fn an_assignment_the_child_never_received_is_not_cleared() {
     let workspace = tempfile::tempdir().expect("workspace");
     write_stub(workspace.path(), STUB);
     let cache = seed_cache(workspace.path());
     let log = workspace.path().join("spawns.log");
-    let path = cache.root.clone();
 
-    let barrier = Arc::new(tokio::sync::Barrier::new(2));
-    let mut attempts = Vec::new();
-    for _ in 0..2 {
-        let started = transport(
-            workspace.path(),
-            env_with_cache(&log, "always-fail", CACHE_SHAPED, &path),
-            Duration::from_secs(5),
-            Some(&path),
-        );
-        let barrier = Arc::clone(&barrier);
-        attempts.push(tokio::spawn(async move {
-            barrier.wait().await;
-            start_reporting(&started).await.1
-        }));
-    }
-
-    let mut outcomes = Vec::new();
-    for attempt in attempts {
-        outcomes.push(attempt.await.expect("the attempt task does not panic"));
-    }
-    outcomes.sort_by_key(|outcome| match outcome {
-        Repair::Cleared => 0,
-        Repair::AlreadyRepaired => 1,
-        Repair::NotRepaired => 2,
-    });
-
-    assert_eq!(
-        outcomes,
-        vec![Repair::Cleared, Repair::AlreadyRepaired],
-        "one attempt clears, and the other finds the mark it left: {:#?}",
-        spawns(&log)
-    );
-}
-
-#[test]
-fn a_failed_start_logs_the_classification_and_not_the_childs_text() {
-    use tracing::field::{Field, Visit};
-    use tracing_subscriber::Registry;
-    use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
-
-    const TOKEN: &str = "ghp_SENTINELSENTINELSENTINELSENTINEL01";
-
-    #[derive(Default)]
-    struct Fields(HashMap<String, String>);
-
-    impl Visit for Fields {
-        fn record_str(&mut self, field: &Field, value: &str) {
-            self.0.insert(field.name().to_string(), value.to_string());
-        }
-
-        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-            self.0
-                .insert(field.name().to_string(), format!("{value:?}"));
-        }
-    }
-
-    struct Collector(Arc<std::sync::Mutex<Vec<HashMap<String, String>>>>);
-
-    impl<S: tracing::Subscriber> Layer<S> for Collector {
-        fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
-            let mut fields = Fields::default();
-            event.record(&mut fields);
-            self.0.lock().expect("collector lock").push(fields.0);
-        }
-    }
-
-    // `tracing` caches each callsite's interest process-wide, and the other
-    // tests in this file reach this callsite with no subscriber installed.
-    // An interested global default keeps the cached interest live so the
-    // thread-local subscriber below decides each event instead.
-    static INTEREST: std::sync::Once = std::sync::Once::new();
-    INTEREST.call_once(|| {
-        let _ = tracing::subscriber::set_global_default(
-            Registry::default().with(tracing::level_filters::LevelFilter::TRACE),
-        );
-    });
-
-    let workspace = tempfile::tempdir().expect("workspace");
-    write_stub(workspace.path(), LEAKY_DYING_STUB);
-    let cache = seed_cache(workspace.path());
-    let log = workspace.path().join("spawns.log");
-    let env = env_with_cache(&log, "always-fail", CACHE_SHAPED, &cache.root);
+    // The transport is told it assigned `cache.root`, but the child's
+    // environment names no cache at all, so the child never used it.
     let transport = transport(
         workspace.path(),
-        env,
+        stub_env(&log, "always-fail", CACHE_SHAPED),
         Duration::from_secs(5),
         Some(&cache.root),
     );
+    let _ = start_with_repair(&transport)
+        .await
+        .expect_err("the stub fails on every attempt");
 
-    let events: Arc<std::sync::Mutex<Vec<HashMap<String, String>>>> =
-        Arc::new(std::sync::Mutex::new(Vec::new()));
-    let subscriber = Registry::default().with(Collector(events.clone()));
-    tracing::subscriber::with_default(subscriber, || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("a current-thread runtime");
-        let _ = runtime.block_on(start_with_repair(&transport));
-    });
-
-    let captured = events.lock().expect("collector lock");
-    let every_field = captured
-        .iter()
-        .flat_map(|fields| fields.values())
-        .cloned()
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let classification = captured
-        .iter()
-        .find(|fields| {
-            fields.get("message").map(String::as_str)
-                == Some("start failed; reporting how the child ended, not what it printed")
-        })
-        .expect("a failed start names the classification of the child's output");
-    assert_eq!(
-        classification.get("needle").map(String::as_str),
-        Some("MODULE_NOT_FOUND"),
-        "the log says which needle the child's output matched: {classification:?}"
-    );
-    assert!(
-        classification
-            .get("exit_status")
-            .is_some_and(|status| status.contains('3')),
-        "and how the child ended, which is not text the child chose: {classification:?}"
-    );
-    assert!(
-        !every_field.contains(TOKEN),
-        "the child's stderr never reaches the log, at any level: {every_field}"
-    );
-    assert!(
-        !every_field.contains("Authorization"),
-        "nor any other part of it: {every_field}"
-    );
     assert_eq!(
         spawns(&log).len(),
-        2,
-        "the classification is what drives the repair, not a substitute for it"
+        1,
+        "nothing the child used, nothing to retry"
     );
+    assert_eq!(
+        std::fs::read_to_string(&cache.sentinel).expect("the assignment is untouched"),
+        SEEDED
+    );
+}
+
+#[tokio::test]
+async fn a_retry_that_succeeds_arms_the_next_repair() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    write_stub(workspace.path(), STUB);
+    let cache = seed_cache(workspace.path());
+    let path = cache.root.clone();
+    let start = |log: &Path, mode: &str| {
+        transport(
+            workspace.path(),
+            env_with_cache(log, mode, CACHE_SHAPED, &path),
+            Duration::from_secs(5),
+            Some(&path),
+        )
+    };
+
+    let first_log = workspace.path().join("first.log");
+    let first = start(&first_log, "fail-once");
+    start_with_repair(&first)
+        .await
+        .expect("the retry after the repair succeeds");
+    first.close().await.expect("close");
+
+    // No start succeeds in between other than that retry.
+    std::fs::create_dir_all(path.join("_npx/1")).expect("re-seed the cache tree");
+    let second_log = workspace.path().join("second.log");
+    let second = start(&second_log, "always-fail");
+    let _ = start_with_repair(&second)
+        .await
+        .expect_err("the stub fails on every attempt");
+    assert_eq!(
+        spawns(&second_log).len(),
+        2,
+        "the next failure is repaired again"
+    );
+    assert!(!path.exists(), "a retry that succeeds arms the next repair");
 }

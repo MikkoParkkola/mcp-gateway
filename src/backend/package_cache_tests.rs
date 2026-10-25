@@ -3,7 +3,11 @@
 //! Classifying, owning and removing the package caches a stdio backend
 //! installs into.
 
-use super::{install_failure_needle, is_a_tree_to_walk, remove_now};
+use super::{
+    Retired, TOMBSTONE_MARK, install_failure_needle, is_a_tree_to_walk, remove_now, retire_now,
+    sweep_tombstones_once,
+};
+use super::{attempt_bound, lock_hold_bound, rename_bound};
 use crate::Error;
 
 // Verbatim texts Node and npm print when a package tree is missing, half
@@ -324,4 +328,106 @@ fn remove_cache_dir_deletes_a_link_without_following_it() {
          must not let the recovery take the target with it"
     );
     cleanup(&outside);
+}
+
+#[test]
+fn retire_moves_a_cache_aside_in_one_step() {
+    let root = tempfile::tempdir().expect("root");
+    let cache = root.path().join("backend-0123456789abcdef");
+    std::fs::create_dir_all(cache.join("_npx/1/node_modules/zod")).expect("seed the cache");
+
+    let Retired::Moved(tombstone) = retire_now(&cache) else {
+        panic!("a real cache tree is moved aside");
+    };
+    assert!(
+        !cache.exists(),
+        "the cache path is free for a fresh install"
+    );
+    assert!(
+        tombstone.join("_npx/1/node_modules/zod").is_dir(),
+        "the old tree is whole at the tombstone, waiting to be deleted"
+    );
+    assert_eq!(
+        tombstone.parent(),
+        cache.parent(),
+        "a sibling, on the same filesystem"
+    );
+    assert!(
+        tombstone.to_string_lossy().contains(TOMBSTONE_MARK),
+        "named so a later run's sweep finds it"
+    );
+}
+
+#[test]
+fn retire_treats_an_absent_cache_as_already_gone() {
+    let root = tempfile::tempdir().expect("root");
+    assert_eq!(
+        retire_now(&root.path().join("never-made")),
+        Retired::AlreadyGone
+    );
+}
+
+#[test]
+fn retire_refuses_what_is_not_a_cache_tree() {
+    let root = tempfile::tempdir().expect("root");
+    let file = root.path().join("a-file");
+    std::fs::write(&file, "not a cache").expect("write a file");
+    assert_eq!(retire_now(&file), Retired::Refused);
+    assert!(file.is_file(), "a refused path is left where it was");
+
+    let dir = root.path().join("cache");
+    std::fs::create_dir_all(&dir).expect("create the cache");
+    assert_eq!(
+        retire_now(&root.path().join("cache/")),
+        Retired::Refused,
+        "a trailing separator is refused, as for removal"
+    );
+    assert!(dir.is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn retire_refuses_a_cache_that_is_a_symlink() {
+    let root = tempfile::tempdir().expect("root");
+    let target = root.path().join("elsewhere");
+    std::fs::create_dir_all(&target).expect("create the link target");
+    let leaf = root.path().join("cache");
+    std::os::unix::fs::symlink(&target, &leaf).expect("link the cache path");
+    assert_eq!(retire_now(&leaf), Retired::Refused);
+    assert!(target.is_dir(), "the link's target is untouched");
+}
+
+#[tokio::test]
+async fn the_startup_sweep_deletes_tombstones_and_nothing_else() {
+    let root = tempfile::tempdir().expect("root");
+    let live = root.path().join("backend-0123456789abcdef");
+    std::fs::create_dir_all(live.join("_npx")).expect("a live cache");
+    let tombstone = root
+        .path()
+        .join(format!("backend-0123456789abcdef{TOMBSTONE_MARK}1-0"));
+    std::fs::create_dir_all(tombstone.join("_npx")).expect("a leftover tombstone");
+
+    sweep_tombstones_once(root.path());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while tombstone.exists() {
+        assert!(std::time::Instant::now() < deadline, "the sweep never ran");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(live.join("_npx").is_dir(), "a live cache is never swept");
+}
+
+#[test]
+fn the_lock_hold_bound_is_its_steps_summed() {
+    let t = std::time::Duration::from_secs(1);
+    assert_eq!(
+        attempt_bound(t),
+        std::time::Duration::from_secs(4),
+        "2t + 2s"
+    );
+    assert_eq!(rename_bound(t), t);
+    assert_eq!(
+        lock_hold_bound(t),
+        std::time::Duration::from_secs(9),
+        "a failed attempt, the rename and the retry: 5t + 4s"
+    );
 }
