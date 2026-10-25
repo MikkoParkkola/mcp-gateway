@@ -1755,3 +1755,5 @@ fn watch_dir_of(path: &std::path::Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod ui_write_tests;
