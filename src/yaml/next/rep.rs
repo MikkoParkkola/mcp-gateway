@@ -205,28 +205,52 @@ fn node_place(
     let Some(start_byte) = start.byte_offset().filter(|b| text.is_char_boundary(*b)) else {
         return fallback;
     };
-    // `byte` moves back from the span start; `chars` follows it.
-    let at =
-        |byte: usize| lines.place(byte, start.index() - text[byte..start_byte].chars().count());
+    // A place at `byte`, either side of the span start; `chars` follows it.
+    let at = |byte: usize| {
+        let chars = if byte <= start_byte {
+            start.index() - text[byte..start_byte].chars().count()
+        } else {
+            start.index() + text[start_byte..byte].chars().count()
+        };
+        lines.place(byte, chars)
+    };
+    let mut byte = start_byte;
     if shape == Shape::Empty {
         // The parser starts an empty value's span on its indicator (`:` or
         // `-`), or after the space that follows it.
-        return if text[start_byte..].starts_with([':', '-']) {
-            lines.place(start_byte + 1, start.index() + 1)
+        let on_indicator = text[byte..].starts_with([':', '-']);
+        if tagged || anchored {
+            // Placed at its first property (`v: !t`), which follows the
+            // indicator when the span sits on it.
+            if on_indicator {
+                let rest = &text[byte + 1..];
+                let pad = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+                return at(byte + 1 + pad);
+            }
         } else {
-            at(text[..start_byte].trim_end().len())
-        };
+            return if on_indicator {
+                at(byte + 1)
+            } else {
+                at(text[..byte].trim_end().len())
+            };
+        }
     }
-    let mut byte = start_byte;
-    // A block scalar (`|` or `>`) is placed at its indicator, which the
-    // parser's span leaves out when it starts at the content.
-    if shape == Shape::Block && !text[byte..].starts_with(['|', '>']) {
+    // A block scalar (`|` or `>`) is placed at its indicator, the last token
+    // of the line before its content once a trailing comment is cut off.
+    if shape == Shape::Block {
         let before = text[..byte].trim_end();
-        let token = before.rfind(char::is_whitespace).map_or(0, |i| {
-            i + before[i..].chars().next().map_or(1, char::len_utf8)
+        let line_start = before.rfind(['\n', '\r']).map_or(0, |i| i + 1);
+        let line = &before[line_start..];
+        let code = line
+            .find(" #")
+            .or_else(|| line.find("\t#"))
+            .map_or(line, |i| &line[..i])
+            .trim_end();
+        let token = code.rfind(char::is_whitespace).map_or(0, |i| {
+            i + code[i..].chars().next().map_or(1, char::len_utf8)
         });
-        if before[token..].starts_with(['|', '>']) {
-            byte = token;
+        if code[token..].starts_with(['|', '>']) {
+            byte = line_start + token;
         }
     }
     if properties == 0 {

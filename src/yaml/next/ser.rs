@@ -29,6 +29,8 @@ pub(crate) enum Mode {
 /// `to_value` never makes one.
 pub(crate) const PLAIN_MARK: &str = "\u{0}plain";
 pub(crate) const QUOTED_MARK: &str = "\u{0}quoted";
+/// A map that repeated a key, as a sequence of `[key, value]` pairs.
+pub(crate) const PAIRS_MARK: &str = "\u{0}pairs";
 
 /// `value` as a tree.
 pub(crate) fn to_value<T: ?Sized + Serialize>(value: &T) -> Result<Value, Error> {
@@ -123,14 +125,12 @@ impl ser::Serializer for ValueSerializer {
             Err(_) => Ok(self.wide(v.to_string())),
         }
     }
-    /// In text, at the `f32`'s own shortest form (`0.7`, not the widened
-    /// `0.699999988079071`).
+    /// In text, the `f32`'s own spelling, written as is (`0.7` and
+    /// `0.000001`, not the widened `0.699999988079071`).
     fn serialize_f32(self, v: f32) -> Result<Value, Error> {
         if self.0 == Mode::Text && v.is_finite() {
-            let shortest = ryu::Buffer::new().format_finite(v).parse::<f64>();
-            if let Ok(f) = shortest {
-                return Ok(Value::Number(Number::from(f)));
-            }
+            let spelling = ryu::Buffer::new().format_finite(v).to_owned();
+            return Ok(tagged(PLAIN_MARK, Value::String(spelling)));
         }
         Ok(Value::Number(Number::from(v)))
     }
@@ -332,27 +332,62 @@ enum MapState {
         mapping: Mapping,
         next_key: Option<Value>,
     },
+    /// In text, a map that repeated a key: every entry, in order.
+    Pairs {
+        entries: Vec<(Value, Value)>,
+        next_key: Option<Value>,
+    },
 }
 
 impl SerializeMap {
-    /// The map so far as an ordinary mapping: a tag already taken becomes
-    /// its `!tag` key again.
-    fn untagged(&mut self) -> (&mut Mapping, &mut Option<Value>) {
-        if !matches!(self.state, MapState::Untagged { .. }) {
-            let mut mapping = Mapping::new();
-            if let MapState::Tagged(tagged) =
-                std::mem::replace(&mut self.state, MapState::CheckForTag)
-            {
-                mapping.insert(Value::String(tagged.tag.to_string()), tagged.value);
-            }
-            self.state = MapState::Untagged {
-                mapping,
+    /// Leave the one-entry tag check: a tag already taken becomes its
+    /// `!tag` key again.
+    fn ordinary(&mut self) {
+        if matches!(
+            self.state,
+            MapState::Untagged { .. } | MapState::Pairs { .. }
+        ) {
+            return;
+        }
+        let mut mapping = Mapping::new();
+        if let MapState::Tagged(tagged) = std::mem::replace(&mut self.state, MapState::CheckForTag)
+        {
+            mapping.insert(Value::String(tagged.tag.to_string()), tagged.value);
+        }
+        self.state = MapState::Untagged {
+            mapping,
+            next_key: None,
+        };
+    }
+
+    fn next_key(&mut self) -> &mut Option<Value> {
+        self.ordinary();
+        match &mut self.state {
+            MapState::Untagged { next_key, .. } | MapState::Pairs { next_key, .. } => next_key,
+            MapState::CheckForTag | MapState::Tagged(_) => unreachable!("made ordinary above"),
+        }
+    }
+
+    /// One entry. In text a repeated key keeps both entries, as the
+    /// replaced text serializer wrote them; in a tree the last one wins.
+    fn insert(&mut self, key: Value, value: Value) {
+        self.ordinary();
+        if self.mode == Mode::Text
+            && let MapState::Untagged { mapping, .. } = &mut self.state
+            && mapping.contains_key(&key)
+        {
+            let entries = std::mem::take(mapping).into_iter().collect();
+            self.state = MapState::Pairs {
+                entries,
                 next_key: None,
             };
         }
         match &mut self.state {
-            MapState::Untagged { mapping, next_key } => (mapping, next_key),
-            MapState::CheckForTag | MapState::Tagged(_) => unreachable!("made untagged above"),
+            MapState::Untagged { mapping, .. } => {
+                mapping.insert(key, value);
+            }
+            MapState::Pairs { entries, .. } => entries.push((key, value)),
+            MapState::CheckForTag | MapState::Tagged(_) => unreachable!("made ordinary above"),
         }
     }
 }
@@ -363,17 +398,17 @@ impl ser::SerializeMap for SerializeMap {
 
     fn serialize_key<T: ?Sized + Serialize>(&mut self, key: &T) -> Result<(), Error> {
         let key = serialize_in(self.mode, key)?;
-        *self.untagged().1 = Some(key);
+        *self.next_key() = Some(key);
         Ok(())
     }
 
     fn serialize_value<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<(), Error> {
         let value = serialize_in(self.mode, value)?;
-        let (mapping, next_key) = self.untagged();
-        let key = next_key
+        let key = self
+            .next_key()
             .take()
             .ok_or_else(|| Error::message("serialize_value called before serialize_key"))?;
-        mapping.insert(key, value);
+        self.insert(key, value);
         Ok(())
     }
 
@@ -393,7 +428,7 @@ impl ser::SerializeMap for SerializeMap {
         }
         let key = serialize_in(self.mode, key)?;
         let value = serialize_in(self.mode, value)?;
-        self.untagged().0.insert(key, value);
+        self.insert(key, value);
         Ok(())
     }
 
@@ -402,6 +437,15 @@ impl ser::SerializeMap for SerializeMap {
             MapState::CheckForTag => Value::Mapping(Mapping::new()),
             MapState::Tagged(tagged) => Value::Tagged(Box::new(tagged)),
             MapState::Untagged { mapping, .. } => Value::Mapping(mapping),
+            MapState::Pairs { entries, .. } => tagged(
+                PAIRS_MARK,
+                Value::Sequence(
+                    entries
+                        .into_iter()
+                        .map(|(k, v)| Value::Sequence(vec![k, v]))
+                        .collect(),
+                ),
+            ),
         })
     }
 }

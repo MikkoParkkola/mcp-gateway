@@ -12,15 +12,19 @@ use std::fmt::Write as _;
 
 use scalar::{analyze, double_quoted, scalar_text, simple_key_ok, single_quoted};
 
-use super::ser::{PLAIN_MARK, QUOTED_MARK};
+use super::ser::{PAIRS_MARK, PLAIN_MARK, QUOTED_MARK};
 use super::tagged::{TaggedValue, nobang};
 use super::{Error, Tag, Value};
 
 /// A tag as libyaml writes it: `!` and the name, with every byte outside
 /// its URI set written as `%XX` (`!foo%20bar`).
 fn tag_text(tag: &Tag) -> String {
-    let mut out = String::from("!");
-    for ch in nobang(&tag.string).chars() {
+    let name = nobang(&tag.string);
+    // The non-specific tag `!` has no name after its handle, which libyaml
+    // will not write, so it goes in verbatim form: `!<%21>`.
+    let verbatim = name == "!";
+    let mut out = String::from(if verbatim { "!<" } else { "!" });
+    for ch in name.chars() {
         if ch.is_ascii_alphanumeric() || "-_;/?:@&=+$,.~*'()[]".contains(ch) {
             out.push(ch);
         } else {
@@ -30,7 +34,22 @@ fn tag_text(tag: &Tag) -> String {
             }
         }
     }
+    if verbatim {
+        out.push('>');
+    }
     out
+}
+
+/// The entries of a `to_string` pairs mark: a map that repeated a key,
+/// kept entry by entry as the replaced text serializer wrote it.
+fn pairs(v: &Value) -> Option<&[Value]> {
+    match v {
+        Value::Tagged(t) if t.tag.string == PAIRS_MARK => match &t.value {
+            Value::Sequence(entries) => Some(entries),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// The text of a `to_string` mark (see `ser::Mode::Text`): a wide integer's
@@ -90,6 +109,19 @@ enum Ctx {
 fn node(v: &Value, indent: usize, ctx: Ctx, out: &mut String) -> Result<(), Error> {
     let lead = if ctx == Ctx::Top { "" } else { " " };
     let scalar_indent = if ctx == Ctx::Top { 2 } else { indent + 2 };
+    if pairs(v).is_some() {
+        return match ctx {
+            Ctx::Top => block(v, 0, false, out),
+            Ctx::MapValue => {
+                out.push('\n');
+                block(v, indent + 2, false, out)
+            }
+            Ctx::SeqItem | Ctx::ComplexValue => {
+                out.push(' ');
+                block(v, indent + 2, true, out)
+            }
+        };
+    }
     if let Value::Tagged(t) = v
         && marked(t, scalar_indent).is_none()
     {
@@ -151,29 +183,17 @@ fn is_simple_key(k: &Value) -> bool {
 fn block(v: &Value, indent: usize, first_inline: bool, out: &mut String) -> Result<(), Error> {
     let pad = " ".repeat(indent);
     match v {
-        Value::Mapping(m) => {
-            for (i, (k, val)) in m.iter().enumerate() {
-                if !(i == 0 && first_inline) {
-                    out.push_str(&pad);
+        Value::Mapping(m) => entries(m.iter(), indent, first_inline, out)?,
+        _ if pairs(v).is_some() => {
+            let list = pairs(v).unwrap_or_default();
+            let mut kv = Vec::with_capacity(list.len());
+            for entry in list {
+                match entry {
+                    Value::Sequence(pair) if pair.len() == 2 => kv.push((&pair[0], &pair[1])),
+                    _ => return Err(Error::message("a malformed entry list")),
                 }
-                if is_simple_key(k) {
-                    let (text, _) = inline(k, indent + 2, true)
-                        .ok_or_else(|| Error::message("a collection as a simple key"))?;
-                    out.push_str(&text);
-                    out.push(':');
-                } else {
-                    // libyaml's complex key: `? key`, then `: value` on its own line.
-                    out.push('?');
-                    node(k, indent, Ctx::SeqItem, out)?;
-                    out.push_str(&pad);
-                    out.push(':');
-                    // After `:` of a complex key, a collection value continues
-                    // the line like a sequence item does.
-                    node(val, indent, Ctx::ComplexValue, out)?;
-                    continue;
-                }
-                node(val, indent, Ctx::MapValue, out)?;
             }
+            entries(kv.into_iter(), indent, first_inline, out)?;
         }
         Value::Sequence(s) => {
             for (i, item) in s.iter().enumerate() {
@@ -185,6 +205,39 @@ fn block(v: &Value, indent: usize, first_inline: bool, out: &mut String) -> Resu
             }
         }
         _ => return Err(Error::message("a scalar in block position")),
+    }
+    Ok(())
+}
+
+/// A mapping's entries at `indent`, in the order given.
+fn entries<'v>(
+    list: impl Iterator<Item = (&'v Value, &'v Value)>,
+    indent: usize,
+    first_inline: bool,
+    out: &mut String,
+) -> Result<(), Error> {
+    let pad = " ".repeat(indent);
+    for (i, (k, val)) in list.enumerate() {
+        if !(i == 0 && first_inline) {
+            out.push_str(&pad);
+        }
+        if is_simple_key(k) {
+            let (text, _) = inline(k, indent + 2, true)
+                .ok_or_else(|| Error::message("a collection as a simple key"))?;
+            out.push_str(&text);
+            out.push(':');
+        } else {
+            // libyaml's complex key: `? key`, then `: value` on its own line.
+            out.push('?');
+            node(k, indent, Ctx::SeqItem, out)?;
+            out.push_str(&pad);
+            out.push(':');
+            // After `:` of a complex key, a collection value continues
+            // the line like a sequence item does.
+            node(val, indent, Ctx::ComplexValue, out)?;
+            continue;
+        }
+        node(val, indent, Ctx::MapValue, out)?;
     }
     Ok(())
 }
