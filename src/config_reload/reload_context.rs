@@ -399,10 +399,8 @@ impl ReloadContext {
             Ok(outcome) => {
                 // MIK-8854: an applied reload marks the charts; a refused one
                 // returns below and marks nothing.
-                if let Some(markers) = &self.markers
-                    && let Ok(now) = crate::clock::unix_secs()
-                {
-                    markers.mark(crate::counters::MarkerKind::ConfigReload, None, now);
+                if let Some(markers) = &self.markers {
+                    markers.mark_now(crate::counters::MarkerKind::ConfigReload, None);
                 }
                 outcome
             }

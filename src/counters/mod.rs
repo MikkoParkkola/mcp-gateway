@@ -427,6 +427,14 @@ impl CounterStore {
         self.inner.lock().mark(kind, subject, at);
     }
 
+    /// Record a marker now. On a clock that cannot be read, nothing: a
+    /// recorder writes nothing (MIK-8202).
+    pub(crate) fn mark_now(&self, kind: MarkerKind, subject: Option<&str>) {
+        if let Ok(now) = crate::clock::unix_secs() {
+            self.mark(kind, subject, now);
+        }
+    }
+
     /// Markers at or after `from`, oldest first.
     #[cfg(any(test, feature = "webui"))]
     pub(crate) fn markers(&self, from: u64) -> Vec<Marker> {
@@ -454,8 +462,8 @@ impl CounterStore {
     /// The file bytes for this store: the snapshot is taken under the lock,
     /// serialized after it is released.
     #[cfg(test)]
-    pub(crate) fn to_bytes(&self, binary_version: &str, saved_at: u64) -> Vec<u8> {
-        snapshot::to_bytes(&self.snapshot(), binary_version, saved_at)
+    pub(crate) fn encode(&self, binary_version: &str, saved_at: u64) -> Vec<u8> {
+        snapshot::encode(&self.snapshot(), binary_version, saved_at)
     }
 
     /// Restore from `bytes` at `now`, re-applying every bound. Returns the

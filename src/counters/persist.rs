@@ -202,7 +202,7 @@ impl CounterFile {
     fn write(&self, store: &CounterStore, binary_version: &str, now: u64, hook: &dyn Fn(Stage)) {
         let inner = store.snapshot();
         hook(Stage::Serializing);
-        let bytes = snapshot::to_bytes(&inner, binary_version, now);
+        let bytes = snapshot::encode(&inner, binary_version, now);
         drop(inner);
         hook(Stage::Writing);
         if let Some(parent) = self.path.parent()

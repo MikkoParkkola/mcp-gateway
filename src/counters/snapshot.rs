@@ -77,7 +77,7 @@ fn dim_file<K: Hash + Eq + Clone + Ord>(dim: &Dimension<K>) -> DimFile<K> {
 }
 
 /// `inner` as file bytes.
-pub(super) fn to_bytes(inner: &Inner, binary_version: &str, saved_at: u64) -> Vec<u8> {
+pub(super) fn encode(inner: &Inner, binary_version: &str, saved_at: u64) -> Vec<u8> {
     let file = File {
         version: FORMAT,
         binary_version: binary_version.to_owned(),

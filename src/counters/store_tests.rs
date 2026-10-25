@@ -211,7 +211,7 @@ fn t6_a_store_at_every_cap_serializes_under_the_ceiling_from_the_constants() {
     for i in 0..MAX_MARKERS {
         store.mark(MarkerKind::Pause, Some(&long(i)), T0 + 30 * DAY - 5);
     }
-    let bytes = store.to_bytes("4.0.0", T0 + 30 * DAY);
+    let bytes = store.encode("4.0.0", T0 + 30 * DAY);
     let series = 1 + 3 * MAX_LABELS + MAX_PAIRS;
     let per_series = 6 * MAX_LABEL_BYTES + (HALF_BUCKETS + DAYS) * (21 + 5 * 21);
     // A pair's key holds two labels.
@@ -471,7 +471,7 @@ fn t11_untrusted_names_count_in_overflow_and_are_stored_nowhere() {
     assert_eq!(sum(Filter::Overflow(Dim::Server)), 1);
     assert_eq!(sum(Filter::Overflow(Dim::Tool)), 2);
     assert_eq!(sum(Filter::Server("s")), 1);
-    let bytes = store.to_bytes("4.0.0", T0 + 20);
+    let bytes = store.encode("4.0.0", T0 + 20);
     assert!(!String::from_utf8_lossy(&bytes).contains(sentinel));
     assert_eq!(store.labels(Dim::Tool), 0);
 }
@@ -489,7 +489,7 @@ fn t45_a_restored_file_is_cut_back_to_the_caps() {
     for i in 0..5_000 {
         big.mark(MarkerKind::ConfigReload, Some(&"z".repeat(1024)), T0 + i);
     }
-    let bytes = big.to_bytes("4.0.0", T0 + 10);
+    let bytes = big.encode("4.0.0", T0 + 10);
     let (restored, warned) = CounterStore::from_bytes(&bytes, T0 + 20, "4.0.0", &UTC).unwrap();
     assert!(warned, "an oversized file is reported");
     assert_eq!(restored.labels(Dim::Caller), MAX_LABELS);

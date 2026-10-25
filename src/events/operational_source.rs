@@ -251,18 +251,6 @@ pub(crate) fn install_marker_observers(
     observe(kill_switch, backends, Some(markers), None);
 }
 
-/// Mark `kind` on `subject` now; on a clock that cannot be read, nothing
-/// (MIK-8202: a recorder writes nothing).
-fn mark_now(
-    markers: &crate::counters::CounterStore,
-    kind: crate::counters::MarkerKind,
-    subject: &str,
-) {
-    if let Ok(now) = crate::clock::unix_secs() {
-        markers.mark(kind, Some(subject), now);
-    }
-}
-
 /// The one observer per slot: markers first, then the events source.
 fn observe(
     kill_switch: &crate::kill_switch::KillSwitch,
@@ -279,7 +267,7 @@ fn observe(
             } else {
                 MarkerKind::SwitchOn
             };
-            mark_now(store, kind, &change.backend);
+            store.mark_now(kind, Some(&change.backend));
         }
         if let Some(kills) = &kills {
             let state = if change.killed { "killed" } else { "live" };
@@ -300,7 +288,7 @@ fn observe(
         if let Some(store) = &markers
             && change.to == crate::failsafe::CircuitState::Open
         {
-            mark_now(store, MarkerKind::Pause, &change.backend);
+            store.mark_now(MarkerKind::Pause, Some(&change.backend));
         }
         if let Some(health) = &source {
             health.emit(

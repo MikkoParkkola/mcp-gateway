@@ -16,7 +16,7 @@ src/config_reload/reload_context.rs	reload_outcome	statement	Lifecycle	lock_relo
 src/config_reload/reload_warm_hook.rs	report_registered	statement	Lifecycle	resolve_unwarmedx1
 src/config_reload/watcher.rs	start_with_hook	statement	Lifecycle	enforce_destinationsx1
 src/events/fanout.rs	reconcile_catalogue_after	statement	Background	with_membershipx1
-src/events/operational_source.rs	install_operational_source	statement	Background	observe_breakersx1
+src/events/operational_source.rs	observe	statement	Background	observe_breakersx1
 src/events/rpc.rs	judged_backends	statement	Discovery	getx1
 src/events/rpc.rs	resolve_upstream	statement	Discovery	getx1
 src/events/upstream.rs	detected_in	statement	Background	getx1
