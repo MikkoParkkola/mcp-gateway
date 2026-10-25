@@ -837,3 +837,14 @@ fn c4_an_identity_credential_never_falls_back_to_the_shared_transport() {
     };
     assert!(pick_session(&handle, identity).is_none(), "fails closed");
 }
+
+/// S10b (MIK-8835.SSE.3, design B12): an own session runs legacy even when
+/// the slot's cached era is modern (a modern slot that fell back to SSE);
+/// without one, the era decides.
+#[test]
+fn s10b_an_own_session_always_runs_legacy() {
+    assert!(!runs_modern(true, PeerEra::Modern));
+    assert!(!runs_modern(true, PeerEra::Legacy));
+    assert!(runs_modern(false, PeerEra::Modern));
+    assert!(!runs_modern(false, PeerEra::Legacy));
+}

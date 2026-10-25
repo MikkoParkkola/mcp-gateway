@@ -265,3 +265,86 @@ async fn s8_a_cross_origin_endpoint_is_refused() {
         elsewhere.seen()
     );
 }
+
+/// A `gateway_invoke` of the peer's `echo` tool.
+async fn invoke(gw: &Gateway) -> Value {
+    let call = json!({"name": "gateway_invoke",
+        "arguments": {"server": "x", "tool": "echo", "arguments": {}}});
+    gw.rpc(Some(ALICE), "tools/call", call).await
+}
+
+fn timed_backend(peer: &SsePeer, timeout: &str) -> Value {
+    json!({"http_url": peer.url, "streamable_http": false, "timeout": timeout})
+}
+
+/// K1 + K2 (MIK-8835.SSE.2): calls work on a stream-only peer. When the
+/// calls' stream ends under a pending call, that call fails promptly (not at
+/// its timeout), the next call reconnects first and succeeds, and the failed
+/// call is never sent again.
+#[tokio::test]
+async fn k2_a_dead_calls_stream_fails_the_pending_call_and_reconnects() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receiver = Receiver::start(dir.path()).await;
+    let peer = SsePeer::start().await;
+    let cfg = upstream_config(dir.path(), timed_backend(&peer, "20s"), &[]);
+    let gw = start_cfg(dir.path(), &receiver, cfg).await;
+    let first = invoke(&gw).await;
+    assert!(
+        first.get("error").is_none(),
+        "K1: a call on a stream-only peer: {first}"
+    );
+    assert_eq!(peer.posted("tools/call"), 1);
+
+    peer.hold_calls(true);
+    let began = std::time::Instant::now();
+    let held = invoke(&gw);
+    let cut = async {
+        eventually("the held call reached the peer", || {
+            peer.posted("tools/call") == 2
+        })
+        .await;
+        peer.drop_stream(1);
+    };
+    let (held, ()) = tokio::join!(held, cut);
+    assert!(
+        began.elapsed() < Duration::from_secs(15),
+        "failed promptly, not at the 20 s timeout: {:?} {held}",
+        began.elapsed()
+    );
+
+    peer.hold_calls(false);
+    let next = invoke(&gw).await;
+    assert!(
+        next.get("error").is_none(),
+        "the next call succeeds: {next}"
+    );
+    assert!(peer.gets() >= 2, "a new handshake replaced the dead stream");
+    assert_eq!(
+        peer.posted("tools/call"),
+        3,
+        "the failed call was not resent"
+    );
+}
+
+/// K3 (design B8): the calls' stream is not cut at the backend's request
+/// timeout; a call after it still uses the same stream.
+#[tokio::test]
+async fn k3_the_calls_stream_outlives_the_request_timeout() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receiver = Receiver::start(dir.path()).await;
+    let peer = SsePeer::start().await;
+    let cfg = upstream_config(dir.path(), timed_backend(&peer, "2s"), &[]);
+    let gw = start_cfg(dir.path(), &receiver, cfg).await;
+    assert!(invoke(&gw).await.get("error").is_none());
+    let gets = peer.gets();
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert!(
+        invoke(&gw).await.get("error").is_none(),
+        "a call past the timeout"
+    );
+    assert_eq!(peer.gets(), gets, "no reconnect: the stream was kept");
+    assert!(
+        peer.open_sessions().contains(&1),
+        "the calls' stream is still open"
+    );
+}

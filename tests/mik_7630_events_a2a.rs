@@ -34,7 +34,7 @@ use delivery::start_cfg;
 use gateway::{ALICE, Gateway, error};
 use receiver::{Receiver, whsec};
 use serde_json::{Value, json};
-use upstream_sub::{delivered, expect_events, sub, sub_params, upstream_config};
+use upstream_sub::{delivered, expect_events, sub, sub_params, unsub, upstream_config};
 
 /// Several snapshot intervals at the 1 s cache TTL the rows configure.
 const INTERVALS: Duration = Duration::from_secs(5);
@@ -240,4 +240,41 @@ async fn a5_a_failed_read_keeps_the_baseline() {
     agent.set(|card| card["description"] = json!("Answers questions, now in Dutch."));
     agent.failing.store(false, Ordering::SeqCst);
     expect_events(&receiver, &id, TOOLS, base + 1).await;
+}
+
+/// A6: the poll runs on the snapshot schedule. With a zero cache TTL the
+/// 1 s floor holds: over 5 s a handful of card reads, not a busy loop.
+#[tokio::test]
+async fn a6_the_poll_keeps_the_one_second_floor() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receiver = Receiver::start(dir.path()).await;
+    let agent = Agent::start().await;
+    let mut cfg = upstream_config(dir.path(), json!({"a2a_url": agent.url}), &[]);
+    cfg["meta_mcp"]["cache_ttl"] = json!("0s");
+    let gw = start_cfg(dir.path(), &receiver, cfg).await;
+    let id = sub(&gw, ALICE, TOOLS, &receiver, json!({})).await;
+    let _ = first_fill(&agent, &receiver, &id).await;
+    let from = agent.fetches();
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let polls = agent.fetches() - from;
+    assert!(
+        (3..=8).contains(&polls),
+        "about one read a second over 5 s, got {polls}"
+    );
+}
+
+/// A9: the last unsubscribe stops the poll.
+#[tokio::test]
+async fn a9_the_poll_stops_with_the_last_subscriber() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receiver = Receiver::start(dir.path()).await;
+    let agent = Agent::start().await;
+    let gw = start(dir.path(), &receiver, &agent).await;
+    let id = sub(&gw, ALICE, TOOLS, &receiver, json!({})).await;
+    let _ = first_fill(&agent, &receiver, &id).await;
+    unsub(&gw, ALICE, TOOLS, &receiver, json!({})).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let after = agent.fetches();
+    tokio::time::sleep(INTERVALS).await;
+    assert_eq!(agent.fetches(), after, "no card reads once nobody listens");
 }

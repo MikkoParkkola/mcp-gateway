@@ -51,6 +51,8 @@ struct State {
     seen: Arc<Mutex<Vec<Seen>>>,
     sessions: Arc<Mutex<BTreeMap<u32, Session>>>,
     answer_in_body: Arc<AtomicBool>,
+    /// `tools/call` is accepted (202) and never answered.
+    hold_calls: Arc<AtomicBool>,
     /// An `endpoint` value replacing the session's own message path.
     endpoint_override: Arc<Mutex<Option<String>>>,
 }
@@ -92,6 +94,27 @@ impl SsePeer {
             let _ = axum::serve(listener, app).await;
         });
         Self { url, state }
+    }
+
+    /// Accept every later `tools/call` and never answer it.
+    pub fn hold_calls(&self, hold: bool) {
+        self.state.hold_calls.store(hold, Ordering::SeqCst);
+    }
+
+    /// GETs (handshakes) served so far.
+    pub fn gets(&self) -> usize {
+        self.seen()
+            .iter()
+            .filter(|s| matches!(s, Seen::Get { .. }))
+            .count()
+    }
+
+    /// Every POSTed `method`, on any session.
+    pub fn posted(&self, method: &str) -> usize {
+        self.seen()
+            .iter()
+            .filter(|s| matches!(s, Seen::Post { method: m, .. } if m == method))
+            .count()
     }
 
     pub fn answer_in_body(&self) {
@@ -251,6 +274,9 @@ fn message(
         }
         return StatusCode::ACCEPTED.into_response();
     };
+    if method == "tools/call" && state.hold_calls.load(Ordering::SeqCst) {
+        return StatusCode::ACCEPTED.into_response();
+    }
     let response = match outcome(state, session, &method, &frame["params"]) {
         Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
         Err((code, message)) => {
@@ -289,6 +315,7 @@ fn outcome(
             "serverInfo": {"name": "sse-peer", "version": "1"},
         })),
         "ping" => Ok(json!({})),
+        "tools/call" => Ok(json!({"content": [{"type": "text", "text": "ok"}]})),
         "tools/list" => Ok(json!({"tools": [{"name": "echo", "inputSchema": {"type": "object"}}]})),
         "resources/list" => Ok(json!({"resources": [
             {"uri": URI_A, "name": "a"},

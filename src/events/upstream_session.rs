@@ -309,7 +309,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
     let _retire = own.is_some().then(|| RetireOnEnd(Arc::clone(shared)));
     // An own session speaks the legacy transport whatever the slot's cached
     // era says (design B12).
-    let modern = own.is_none() && target.era == PeerEra::Modern;
+    let modern = runs_modern(own.is_some(), target.era);
     let mut state = State::new(
         shared,
         if modern {
@@ -434,6 +434,12 @@ fn failed() -> Outcome {
         acked: false,
         lasted: Duration::ZERO,
     }
+}
+
+/// Whether a run speaks the modern transport: never on an own session, which
+/// is the legacy SSE handshake whatever the slot's cached era (design B12).
+fn runs_modern(own_session: bool, era: PeerEra) -> bool {
+    !own_session && era == PeerEra::Modern
 }
 
 /// Retires the run's ledger holder when an own session's run ends.
