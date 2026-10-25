@@ -171,6 +171,24 @@ class AcceptanceTests(unittest.TestCase):
         errors = self.inspect()[0]
         self.assertTrue(any("range runs backwards" in e for e in errors), errors)
 
+    def test_a_pin_row_without_a_tab_fails_rather_than_crashing(self):
+        self.cite_private("reviewed result\n")
+        (self.root / gate.PRIVATE_EVIDENCE).write_text("docs/internal/proof.md\n")
+        errors = self.inspect()[0]
+        self.assertTrue(any("pin is not a sha256" in e for e in errors), errors)
+
+    def test_a_clone_path_outside_the_clone_fails(self):
+        outside = self.root / "outside.md"
+        outside.write_text("reviewed result\n")
+        self.cite_private("reviewed result\n")
+        (self.root / gate.PRIVATE_CHECKOUT).mkdir()
+        digest = gate.hashlib.sha256(b"reviewed result\n").hexdigest()
+        (self.root / gate.PRIVATE_EVIDENCE).write_text(
+            f"docs/internal/proof.md\t{digest}\t../outside.md\n"
+        )
+        errors = self.inspect()[0]
+        self.assertTrue(any("must stay inside the clone" in e for e in errors), errors)
+
     def test_unlisted_missing_evidence_fails(self):
         self.data["criteria"][0]["evidence"] = ["docs/internal/absent.md"]
         errors = self.inspect()[0]

@@ -138,8 +138,10 @@ def private_evidence(root):
     if table.is_file():
         for line in table.read_text().splitlines():
             if line and not line.startswith("#"):
-                cells = line.split("\t")
-                pins[cells[0]] = (cells[1].strip(), cells[2].strip() if len(cells) > 2 else cells[0])
+                # A row without its pin keeps an empty one, which the
+                # sha256 check then refuses, rather than crashing the gate.
+                cells = line.split("\t") + ["", ""]
+                pins[cells[0]] = (cells[1].strip(), cells[2].strip() or cells[0])
     return pins
 
 
@@ -184,7 +186,11 @@ def evidence_errors(root, evidence, label, required):
             errors.append(f"{label}: evidence range runs backwards: {item}")
         elif (root / PRIVATE_CHECKOUT).is_dir():
             # The clone is here, so the file is read: absent or altered fails.
-            private = root / PRIVATE_CHECKOUT / pins[cite][1]
+            clone = (root / PRIVATE_CHECKOUT).resolve()
+            private = (clone / pins[cite][1]).resolve()
+            if not private.is_relative_to(clone):
+                errors.append(f"{label}: private evidence must stay inside the clone: {item}")
+                continue
             if not private.is_file():
                 errors.append(
                     f"{label}: private evidence is missing from the clone at"
