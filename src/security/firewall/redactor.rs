@@ -706,23 +706,6 @@ fn project(
     merge_spans(ranges)
 }
 
-/// How many literal pieces `spans` (merged, in order) cover in `literals`.
-fn overlaps(spans: &[(usize, usize)], literals: &[Literal]) -> usize {
-    let mut first = 0;
-    let mut count = 0;
-    for lit in literals {
-        while first < spans.len() && spans[first].1 <= lit.start() {
-            first += 1;
-        }
-        count += spans[first..]
-            .iter()
-            .take_while(|span| span.0 < lit.end())
-            .filter(|span| span.0.max(lit.start()) < span.1.min(lit.end()))
-            .count();
-    }
-    count
-}
-
 /// `text` with `ranges` replaced, where a key holding a range is renamed as
 /// [`Redactor::redact_keys`] renames one: within its object every clean key
 /// keeps its name, and each redacted key takes its redacted name or the first
@@ -784,18 +767,6 @@ fn rename_keys(text: &str, ranges: &[(usize, usize)], literals: &[Literal]) -> S
     out.out
 }
 
-/// `text` with every range in `ranges` (merged, in order) replaced by the
-/// redaction marker. `text` is always a whole leaf, never a slice of one,
-/// so the barrier sees everything before each range.
-/// The length `text` has with `ranges` (in order, disjoint) replaced, each
-/// marker behind its possible barrier space: sized once, the output does not
-/// grow by doubling, which held two copies at the last growth (MIK-8774).
-/// A renamed key's suffix may still grow it a little.
-fn spliced_len(text: &str, ranges: &[(usize, usize)]) -> usize {
-    let covered: usize = ranges.iter().map(|&(start, end)| end - start).sum();
-    text.len() - covered + ranges.len() * (REDACTED.len() + 1)
-}
-
 fn replace_spans(text: &str, ranges: &[(usize, usize)]) -> String {
     let mut out = Spliced::with_capacity(spliced_len(text, ranges));
     let mut cursor = 0;
@@ -812,7 +783,7 @@ fn replace_spans(text: &str, ranges: &[(usize, usize)]) -> String {
 
 #[path = "redactor_spans.rs"]
 mod spans;
-use spans::{covers, escape_around, merge_spans, without};
+use spans::{covers, escape_around, merge_spans, overlaps, spliced_len, without};
 
 #[path = "redactor_large.rs"]
 mod large;

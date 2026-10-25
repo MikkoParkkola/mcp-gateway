@@ -3,7 +3,7 @@
 
 //! Byte-span arithmetic for the credential redactor.
 
-use super::Literal;
+use super::{Literal, REDACTED};
 
 /// `spans` (in order) with every byte of `holes` (in order, disjoint) cut
 /// out, so a span crossing a hole leaves the pieces on either side of it.
@@ -58,4 +58,33 @@ pub(super) fn merge_spans(mut spans: Vec<(usize, usize)>) -> Vec<(usize, usize)>
     }
     spans.truncate(kept);
     spans
+}
+
+/// How many literal pieces `spans` (merged, in order) cover in `literals`.
+pub(super) fn overlaps(spans: &[(usize, usize)], literals: &[Literal]) -> usize {
+    let mut first = 0;
+    let mut count = 0;
+    for lit in literals {
+        while first < spans.len() && spans[first].1 <= lit.start() {
+            first += 1;
+        }
+        count += spans[first..]
+            .iter()
+            .take_while(|span| span.0 < lit.end())
+            .filter(|span| span.0.max(lit.start()) < span.1.min(lit.end()))
+            .count();
+    }
+    count
+}
+
+/// `text` with every range in `ranges` (merged, in order) replaced by the
+/// redaction marker. `text` is always a whole leaf, never a slice of one,
+/// so the barrier sees everything before each range.
+/// The length `text` has with `ranges` (in order, disjoint) replaced, each
+/// marker behind its possible barrier space: sized once, the output does not
+/// grow by doubling, which held two copies at the last growth (MIK-8774).
+/// A renamed key's suffix may still grow it a little.
+pub(super) fn spliced_len(text: &str, ranges: &[(usize, usize)]) -> usize {
+    let covered: usize = ranges.iter().map(|&(start, end)| end - start).sum();
+    text.len() - covered + ranges.len() * (REDACTED.len() + 1)
 }
