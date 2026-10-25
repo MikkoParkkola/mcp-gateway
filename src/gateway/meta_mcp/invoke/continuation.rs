@@ -310,14 +310,19 @@ pub(in crate::gateway::meta_mcp) fn retry_origin_backend(
     // called. Routing it by `backend_id` would dispatch the pending step's
     // backend with the whole chain array as its arguments and skip every
     // binding `plan_chain_resume` exists to check.
-    if matches!(
-        payload.purpose,
-        crate::protocol::continuation::ContinuationPurpose::DestructiveConfirm
-            | crate::protocol::continuation::ContinuationPurpose::ChainResume
-    ) {
-        return None;
+    //
+    // A preview confirmation (MIK-8838) belongs to the web UI's start-once
+    // preview and continues no backend exchange at all.
+    //
+    // Exhaustive and without a wildcard: a new purpose must be routed here on
+    // purpose, never defaulted into a backend route.
+    use crate::protocol::continuation::ContinuationPurpose;
+    match payload.purpose {
+        ContinuationPurpose::BackendInput => Some(Ok(payload.backend_id)),
+        ContinuationPurpose::DestructiveConfirm
+        | ContinuationPurpose::ChainResume
+        | ContinuationPurpose::PreviewConfirm => None,
     }
-    Some(Ok(payload.backend_id))
 }
 
 /// Open the continuation a retry presents and recover what the backend gets

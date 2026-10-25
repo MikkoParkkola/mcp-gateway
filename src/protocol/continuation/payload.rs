@@ -16,6 +16,7 @@ use super::ContinuationError;
 /// masquerade as either supported one.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ContinuationPurpose {
     /// Continues a backend `input_required` exchange.
     #[default]
@@ -28,7 +29,15 @@ pub enum ContinuationPurpose {
     /// confirmation grant must not restart a chain's tail, and a chain resume
     /// must not stand in for the confirmation the gated step still owes.
     ChainResume,
+    /// Confirms the web UI's start-once preview of a server before it is
+    /// added (MIK-8838). It continues no backend exchange and holds nothing:
+    /// the second request carries the same body and this token, single use.
+    PreviewConfirm,
 }
+
+/// Lifetime of a preview confirmation: long enough to read what will run and
+/// press the button, short enough that a stale one is useless.
+const PREVIEW_CONFIRM_LIFETIME_SECS: u64 = 120;
 
 /// What the envelope carries. None of it is visible to the client.
 ///
@@ -253,6 +262,28 @@ impl Payload {
             now,
         )
         .with_purpose(ContinuationPurpose::DestructiveConfirm)
+    }
+
+    /// Seal one preview confirmation for `principal_fingerprint`, bound to
+    /// `request_digest` (the resolved, scrubbed backend it describes), valid for
+    /// 120 s from `now`.
+    ///
+    /// No backend, no replica, no hold: a preview continues no exchange, and
+    /// its single use is the consumed ledger's job.
+    #[must_use]
+    pub fn mint_preview(principal_fingerprint: String, request_digest: String, now: u64) -> Self {
+        let mut payload = Self::mint(
+            String::new(),
+            None,
+            principal_fingerprint,
+            request_digest,
+            String::new(),
+            String::new(),
+            now,
+        )
+        .with_purpose(ContinuationPurpose::PreviewConfirm);
+        payload.expires_at = now.saturating_add(PREVIEW_CONFIRM_LIFETIME_SECS);
+        payload
     }
 
     /// Refuse a payload whose domain is not `expected`.

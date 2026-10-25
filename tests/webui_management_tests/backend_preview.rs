@@ -296,7 +296,13 @@ async fn a_command_preview_is_refused_until_the_sandbox_lands() {
     let (router, _store) = router_with(false).await;
     let marker = std::env::temp_dir().join(format!("u6-never-{}", std::process::id()));
     let command = format!("touch {}", marker.display());
-    let (status, body) = confirmed(&router, &json!({"name": "cmd", "command": command})).await;
+    // Refused at the describe step: there is nothing to confirm.
+    let (status, body) = preview_as(
+        &router,
+        Some(ADMIN_TOKEN),
+        &json!({"name": "cmd", "command": command}),
+    )
+    .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     assert!(
         body.to_string().to_lowercase().contains("sandbox"),

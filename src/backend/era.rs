@@ -398,6 +398,24 @@ fn probe_cap() -> Duration {
     PROBE_TIMEOUT
 }
 
+/// Start an HTTP transport that belongs to no backend slot (the web UI's
+/// start-once preview, MIK-8838): attach a fresh era cache, connect, probe the
+/// peer's era once, and finish startup with that verdict. The same sequence
+/// `Backend::start_entry` runs, so a modern stateless server that refuses
+/// `initialize` previews like a legacy one.
+pub(crate) async fn start_detached_http(
+    transport: &Arc<crate::transport::HttpTransport>,
+    name: &str,
+    timeout: Duration,
+) -> Result<()> {
+    transport.attach_era(Arc::new(crate::protocol::era::EraCache::for_backend(name)));
+    transport.connect().await?;
+    let peer: Arc<dyn Transport> = transport.clone();
+    let cap = timeout.min(probe_cap());
+    let decided = crate::protocol::era::EraCache::probe_detached(|| probe(&peer, cap)).await;
+    transport.finish_startup(decided.era()).await
+}
+
 /// What a refusal of a method the 2026-07-28 revision removed carries, so the
 /// route that answers the caller can tell it from a peer's own error.
 const REMOVED_METHOD_MARK: &str = "removedInRevision";
