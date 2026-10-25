@@ -159,10 +159,14 @@ struct Busy(usize);
 impl Busy {
     fn acquire(state: &Arc<AppState>) -> Option<Self> {
         let key = Arc::as_ptr(state).addr();
-        BUSY.lock()
+        // The lock is released before any guard exists: a guard built under
+        // it (as `then_some` would, even when the insert fails) is dropped
+        // under it too, and its `Drop` takes the same lock and deadlocks.
+        let inserted = BUSY
+            .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(key)
-            .then_some(Self(key))
+            .insert(key);
+        inserted.then(|| Self(key))
     }
 }
 
