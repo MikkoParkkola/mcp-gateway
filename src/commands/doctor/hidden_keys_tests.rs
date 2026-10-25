@@ -344,3 +344,35 @@ fn an_older_url_key_upgrade_cannot_edit_names_no_upgrade() {
         row.detail
     );
 }
+
+/// MIK-8425 MIG.2 G2: a file that does not parse gives no row, and so prints
+/// nothing from it; the parse error is dropped unformatted. The control (a
+/// file that parses and sets a hidden key) proves the path runs and names
+/// the key, never its value.
+#[test]
+fn a_file_that_does_not_parse_prints_nothing_from_it() {
+    const SENTINEL: &str = "MIK8425-SENTINEL-7f3a";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        format!("meta_mcp:\n  projection_mode: \"{SENTINEL}\n"),
+    )
+    .expect("write config");
+    assert!(
+        check_hidden_keys(&path).is_none(),
+        "an unparsable file must give no row"
+    );
+    std::fs::write(&path, format!("meta_mcp:\n  projection_mode: {SENTINEL}\n"))
+        .expect("write config");
+    let row = check_hidden_keys(&path).expect("the control parses and sets a hidden key");
+    let shown = format!("{row:?}");
+    assert!(
+        shown.contains("projection_mode"),
+        "the row names the key: {shown}"
+    );
+    assert!(
+        !shown.contains(SENTINEL),
+        "the row never prints the value: {shown}"
+    );
+}

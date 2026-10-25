@@ -4,3 +4,5 @@ config/type-error	refused names=true leaks=false control=loads
 config/key-name-control	refused names=true leaks=true control=loads
 config/syntax-error	refused names=true leaks=false control=loads
 config/nested-type-error	refused names=true leaks=false control=loads
+config/undefined-alias	refused names=true leaks=false control=loads
+config/multi-document	refused names=true leaks=false control=loads
