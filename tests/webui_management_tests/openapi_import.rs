@@ -172,3 +172,78 @@ async fn test_import_preview_rejects_neither_url_nor_spec() {
         "Expected 422 for empty body, got: {body}"
     );
 }
+
+/// MIK-8838 AC4: the spec preview carries the same `preview` block as a
+/// server preview, and each tool a class from the generated capability's
+/// `metadata.read_only` (GET and HEAD read, everything else write).
+#[tokio::test]
+async fn the_spec_preview_has_the_preview_block_and_a_class_per_tool() {
+    let (state, _store) = make_app_state(None, None).await;
+    let router = create_router(state);
+    let (status, body) = send_json(
+        &router,
+        Method::POST,
+        "/ui/api/import/openapi/preview",
+        Some(json!({ "spec": MINIMAL_OPENAPI_SPEC })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["preview"]["transport"], "openapi");
+    assert_eq!(
+        body["preview"]["url"],
+        Value::Null,
+        "an inline spec has no URL"
+    );
+    assert_eq!(
+        body["preview"]["publisher"],
+        json!({"verified": false, "source": null})
+    );
+    let tools = body["tools"].as_array().expect("tools");
+    let by_method = |method: &str| {
+        tools
+            .iter()
+            .find(|t| t["method"] == method)
+            .unwrap_or_else(|| panic!("a {method} tool: {body}"))
+            .clone()
+    };
+    assert_eq!(by_method("GET")["class"], "read");
+    assert_eq!(by_method("POST")["class"], "write");
+    for tool in tools {
+        assert_eq!(tool["class_source"], "inferred", "{tool}");
+        assert!(
+            tool["path"].as_str().is_some(),
+            "existing fields stay: {tool}"
+        );
+    }
+}
+
+/// MIK-8838 AC4: a fetched spec's URL is echoed without its query, so a
+/// query-authenticated spec still fetches and its key never comes back.
+#[tokio::test]
+async fn the_spec_preview_echoes_the_url_without_its_query() {
+    let app = axum::Router::new().fallback(|| async { MINIMAL_OPENAPI_SPEC });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    let (mut state, _store) = make_app_state(None, None).await;
+    Arc::get_mut(&mut state)
+        .expect("test AppState should be uniquely owned")
+        .ssrf_protection = false;
+    let router = create_router(state);
+    let url = format!("http://{address}/spec.yaml?api_key=s3cr3t-value");
+    let (status, body) = send_json(
+        &router,
+        Method::POST,
+        "/ui/api/import/openapi/preview",
+        Some(json!({ "url": url })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["preview"]["url"],
+        format!("http://{address}/spec.yaml")
+    );
+    assert!(!body.to_string().contains("s3cr3t-value"), "{body}");
+}
