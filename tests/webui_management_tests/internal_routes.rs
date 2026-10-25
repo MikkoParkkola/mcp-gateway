@@ -227,6 +227,8 @@ const DECISION: &str = r#"{"target_kind":"grant","target_id":"grant-1","decision
 /// `AddBackendRequest` / `UpdateBackendRequest` (src/gateway/ui/backends.rs:48, :67).
 const ADD_BACKEND: &str = r#"{"name":"probe","url":"http://127.0.0.1:9/probe"}"#;
 const UPDATE_BACKEND: &str = r#"{"description":"probe"}"#;
+/// An unconfirmed preview: the admin gets a 202 and a token, and nothing starts.
+const PREVIEW_BACKEND: &str = r#"{"name":"probe","url":"http://127.0.0.1:9/mcp"}"#;
 
 const fn row(
     path: &'static str,
@@ -493,6 +495,14 @@ const ROWS: &[Row] = &[
         "/ui/api/events/held",
         Payload::None,
         [401, 403, 403, 404],
+    ),
+    // src/gateway/ui/preview.rs (preview_backend): describe step, MIK-8838
+    row(
+        "/ui/api/previews",
+        Method::POST,
+        "/ui/api/previews",
+        Payload::Json(PREVIEW_BACKEND),
+        [401, 403, 403, 202],
     ),
     // src/gateway/ui/import.rs:95 (preview_handler)
     row(

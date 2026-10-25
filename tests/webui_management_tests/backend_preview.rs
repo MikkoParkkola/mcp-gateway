@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8838 (U6): `POST /ui/api/backends/preview` starts a server once, lists
+//! MIK-8838 (U6): `POST /ui/api/previews` starts a server once, lists
 //! its tools with a read/write class, and stops. These cover the URL arm and
 //! the route's contract; the command arm's sandbox is MIK-8905's (ADR-027),
 //! and until it lands a command preview is refused.
@@ -13,7 +13,7 @@ use axum::response::{IntoResponse, Response};
 
 use super::*;
 
-const PREVIEW: &str = "/ui/api/backends/preview";
+const PREVIEW: &str = "/ui/api/previews";
 
 /// One request the stub saw: path with query, and its header names.
 #[derive(Clone, Debug)]
@@ -316,4 +316,26 @@ async fn a_websocket_url_is_refused() {
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+}
+
+/// The preview route cannot shadow a backend: one named `preview` answers GET,
+/// PATCH and DELETE on `/ui/api/backends/{name}` exactly as any other name does.
+#[tokio::test]
+async fn a_backend_named_preview_keeps_its_routes() {
+    let (state, _store) = make_app_state(None, None).await;
+    register_http_backend(&state, "preview");
+    register_http_backend(&state, "docs");
+    let router = create_router(state);
+    for method in [Method::GET, Method::PATCH, Method::DELETE] {
+        let body = (method == Method::PATCH).then(|| json!({"description": "x"}));
+        let (preview, _) = send_json(
+            &router,
+            method.clone(),
+            "/ui/api/backends/preview",
+            body.clone(),
+        )
+        .await;
+        let (docs, _) = send_json(&router, method.clone(), "/ui/api/backends/docs", body).await;
+        assert_eq!(preview, docs, "{method} on a backend named preview");
+    }
 }
