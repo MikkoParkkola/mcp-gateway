@@ -232,14 +232,14 @@ report_failure() {
 
 # Whether $1 (a path) is covered for check $2 by a debt entry; marks it used.
 is_debt() {
-  local file="$1" id="$2" entry where rest
+  local file="$1" id="$2" n="${3:-1}" entry where rest
   for entry in ${debt_entries[@]+"${debt_entries[@]}"}; do
     where="${entry%%$'\t'*}"
     rest="${entry#*$'\t'}"
     [[ "${rest%%$'\t'*}" == "$id" ]] || continue
     if [[ "$file" == "$where" || ( "$where" == */ && "$file" == "$where"* ) ]]; then
       debt_used["$entry"]=1
-      debt_hits["$entry"]=$(( ${debt_hits["$entry"]:-0} + 1 ))
+      debt_hits["$entry"]=$(( ${debt_hits["$entry"]:-0} + n ))
       return 0
     fi
   done
@@ -342,11 +342,10 @@ done < <(git_lit ls-files -z -- "${private_path_prefixes[@]}" "${private_file_na
 # One fixed-string git grep finds every candidate line (an ERE grep over the
 # tree costs seconds); each candidate is then matched against the checks.
 self_skips=("${self_files[@]/#/:(exclude)}")
-while IFS= read -r hit; do
-  [[ -n "$hit" ]] || continue
-  file="${hit%%:*}"
-  text="${hit#*:}"
-  text="${text#*:}"
+# --null ends the path and the line number with a NUL, so a path holding a
+# colon is read whole.
+while IFS= read -r -d '' file && IFS= read -r -d '' lineno && IFS= read -r text; do
+  hit="$lineno:$text"
   for check in "${private_content_checks[@]}"; do
     id="${check%%::*}"
     rest="${check#*::}"
@@ -355,16 +354,21 @@ while IFS= read -r hit; do
     regex="${rest%%::*}"
     reason="${rest#*::}"
     [[ "$flags" == i ]] && shopt -s nocasematch
-    if [[ "$text" =~ $regex ]]; then
-      shopt -u nocasematch
-      is_content_allowlisted "$file" "$id" && continue
-      is_debt "$file" "$id" && continue
-      report_failure "$hit -- $reason ($id)"
-    fi
+    # Every occurrence counts against a debt entry, not just the line.
+    count=0
+    rest="$text"
+    while [[ -n "$rest" && "$rest" =~ $regex ]]; do
+      count=$((count + 1))
+      rest="${rest#*"${BASH_REMATCH[0]}"}"
+    done
     shopt -u nocasematch
+    (( count > 0 )) || continue
+    is_content_allowlisted "$file" "$id" && continue
+    is_debt "$file" "$id" "$count" && continue
+    report_failure "$file:$hit -- $reason ($id)"
   done
 done < <(
-  git_lit grep -I -n -i -F "${private_content_prefilter[@]/#/-e}" -- . "${self_skips[@]}" || true)
+  git_lit grep -I -n -i -F --null "${private_content_prefilter[@]/#/-e}" -- . "${self_skips[@]}" || true)
 
 if [[ -n "$base" ]]; then
   # Added lines, as path TAB line TAB text. An id that the same file's removed
@@ -373,12 +377,12 @@ if [[ -n "$base" ]]; then
     is_self_file "$file" && continue
     is_ticket_keyed "$file" && continue
     report_failure "$file:$line adds a ticket id: $text"
-  done < <(git_lit diff --no-color --no-ext-diff --unified=0 --no-renames "$merge_base" HEAD |
+  done < <(git_lit diff --no-color --no-ext-diff --unified=0 -M "$merge_base" HEAD |
     awk -v re="$ticket_id_regex" '
       # An acceptance-criterion id (MIK-N.AREA.n) is the key tests report
       # evidence under, not a citation, so it is stripped before the search.
       function bare(s) { gsub(/MIK-[0-9]+\.[A-Z0-9]+\.[0-9]+[a-z]?/, "", s); return s }
-      function ids(s,   out) { s = bare(s); out = ""; while (match(s, /MIK-[0-9]+/)) { out = out " " substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH) } return out }
+      function ids(s,   out, m) { s = " " bare(s); out = ""; while (match(s, /[^A-Za-z0-9]MIK-[0-9]+/)) { m = substr(s, RSTART + 1, RLENGTH - 1); out = out " " m; s = substr(s, RSTART + RLENGTH) } return out }
       /^diff --git / { flush(); inhunk = 0; next }
       !inhunk && /^\+\+\+ / { file = substr($0, 7); next }
       !inhunk && /^--- / { next }
@@ -505,6 +509,8 @@ for entry in ${debt_entries[@]+"${debt_entries[@]}"}; do
   most="${most#*$'\t'}"
   if (( ${debt_hits[$entry]} > most )); then
     report_failure "debt entry covers ${debt_hits[$entry]} hits, more than its $most; the change adds private material: ${entry//$'\t'/ }"
+  elif (( ${debt_hits[$entry]} < most )); then
+    report_failure "debt entry covers ${debt_hits[$entry]} hits, fewer than its $most; lower its count to ${debt_hits[$entry]} in $debt_file: ${entry//$'\t'/ }"
   fi
 done
 

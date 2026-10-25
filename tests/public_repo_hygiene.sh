@@ -438,6 +438,49 @@ printf 'Decided in MIK-9999.\n' >"$repo/docs/adr/ADR-099.md"
 commit_all "$repo" "change"
 assert_base_fail_contains "$repo" HEAD~1 "docs/adr/ADR-099.md:1 adds a ticket id"
 
+# Debt counts occurrences: a second name on an indebted line is a new hit.
+repo="$(make_repo debt-counts-occurrences)"
+mkdir -p "$repo/docs"
+printf 'the hebb notes\n' >"$repo/docs/b.md"
+printf 'docs/b.md\tprivate-name\t1\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
+git -C "$repo" add .gitignore scripts/dev docs/b.md
+assert_pass "$repo"
+printf 'the hebb and botnaut notes\n' >"$repo/docs/b.md"
+assert_fail_contains "$repo" "more than its 1"
+
+# A count above the hits left must come down, or the slack could regrow.
+repo="$(make_repo debt-count-must-shrink)"
+mkdir -p "$repo/docs"
+printf 'the hebb notes\n' >"$repo/docs/c.md"
+printf 'docs/c.md\tprivate-name\t2\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
+git -C "$repo" add .gitignore scripts/dev docs/c.md
+assert_fail_contains "$repo" "lower its count to 1"
+
+# A path holding a colon is read whole, so it cannot pose as an exempt file.
+repo="$(make_repo content-in-colon-path)"
+mkdir -p "$repo/scripts/dev"
+printf 'see the hebb notes\n' >"$repo/scripts/dev/public-hygiene-patterns.sh:extra.md"
+git -C "$repo" add .gitignore scripts/dev
+assert_fail_contains "$repo" "names a private project"
+
+# Renaming a file does not re-add the ticket ids it already carried.
+repo="$(make_repo ticket-id-kept-across-rename)"
+mkdir -p "$repo/src"
+printf '// Guard the reload path (MIK-1234).\nfn reload() {}\nfn a() {}\nfn b() {}\n' >"$repo/src/old.rs"
+commit_all "$repo" "seed"
+git -C "$repo" mv src/old.rs src/reload.rs
+commit_all "$repo" "change"
+assert_base_pass "$repo" HEAD~1
+
+# A removed XMIK-1234 is not the id MIK-1234, so adding the id is refused.
+repo="$(make_repo ticket-id-boundary-on-removal)"
+mkdir -p "$repo/src"
+printf '// token XMIK-1234\n' >"$repo/src/d.rs"
+commit_all "$repo" "seed"
+printf '// Guard the reload path (MIK-1234).\n' >"$repo/src/d.rs"
+commit_all "$repo" "change"
+assert_base_fail_contains "$repo" HEAD~1 "src/d.rs:1 adds a ticket id"
+
 # The whole check runs on every push, so its time on this tree is shown here,
 # where a slow regression is visible. Informational: the verdict on the real
 # tree is the CI step's job, not this fixture suite's.
