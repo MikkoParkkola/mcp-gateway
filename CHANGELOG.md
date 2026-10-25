@@ -90,6 +90,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   step meant a failing command in a later step no longer stopped the container, and the
   gateway started after a failed step. The entrypoint now restores `set -eu` after each
   sourced step. A step's exported variables still reach the gateway.
+- **Backend names that differ only in punctuation or case no longer share a package
+  cache, and every package manager gets the cache setting it reads.** `team.alpha` and
+  `team_alpha` mapped to one cache directory, and `bunx`, `yarn` and `pnpm` were given
+  `npm_config_cache`, which they do not read. The cache directory name now carries a hash
+  of the full backend name:
+  - `bunx` gets `BUN_INSTALL_CACHE_DIR`;
+  - `yarn` gets `YARN_CACHE_FOLDER`, with Berry's global cache turned off so the folder
+    takes effect;
+  - `pnpm` gets `pnpm_config_store_dir` and `npm_config_store_dir`.
+
+  An operator's own cache setting is recognised in exactly the spellings that runner reads.
+  A data directory that is not valid UTF-8, or holds `..` or `${`, is assigned to no runner,
+  instead of a path the runner would read as another directory. A relative
+  `MCP_GATEWAY_CONFIG_DIR` is resolved against the gateway's working directory, and a
+  non-UTF-8 one is used rather than replaced by the default.
+
+  Package caches are downloaded once more after the upgrade. The old `pkg-cache/<name>`
+  directories are no longer used and can be deleted. Ported from the release line (#2258,
+  MIK-8147, MIK-7964).
+- **A damaged package cache is repaired without blocking or racing other starts.** Each start
+  of a backend with a gateway-assigned cache now holds that cache's lock from the first spawn
+  to the end of any retry, so a concurrent start cannot install into a tree a repair is
+  replacing. The wait for the lock is bounded, and a start that waits it out fails as
+  unavailable and is retried. The damaged tree is moved aside in one rename and deleted in
+  the background with no lock held. A move left behind by a crash is swept on the next start.
+  Ported from the release line.
 
 - **The `-full` image's bundled npm packages are past the new HIGH CVEs, and verified by hash.** `brace-expansion` (CVE-2026-102276, CVE-2026-102278) and `undici` (CVE-2026-19534) in npm's own tree are replaced with fixed releases, and every npm tarball the image fetches is checked against a pinned sha512 before use.
 

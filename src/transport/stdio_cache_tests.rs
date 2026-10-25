@@ -63,7 +63,8 @@ fn only_npm_invoking_commands_get_a_cache() {
     for cmd in [
         "npx -y pkg",
         "/usr/local/bin/npx -y pkg",
-        "pnpm dlx pkg",
+        // pnpm reads its own store variables, not npm's cache: see
+        // `each_runner_gets_the_variable_it_reads` (#2258).
         "npm exec pkg",
     ] {
         let out = isolated_package_manager_env("thing", cmd, HashMap::new());

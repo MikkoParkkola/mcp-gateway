@@ -91,8 +91,6 @@ fn configure_child_environment(cmd: &mut Command, backend_env: &HashMap<String, 
     }
 }
 
-const CACHE_ENV: &str = "npm_config_cache";
-
 /// How many stderr lines are kept from a child, for classifying a failure.
 const STDERR_TAIL_LINES: usize = 20;
 
@@ -144,111 +142,12 @@ where
             key.to_str().is_some_and(|name| {
                 let name = name.to_ascii_lowercase();
                 FORWARDED_NPM_SETTINGS.contains(&name.as_str())
-                    && !backend_env
-                        .keys()
-                        .any(|configured| npm_setting(configured) == npm_setting(&name))
+                    && !backend_env.keys().any(|configured| {
+                        cache::npm_setting(configured) == cache::npm_setting(&name)
+                    })
             })
         })
         .collect()
-}
-
-/// The setting npm reads from an environment key, folded as npm folds it: the
-/// `npm_config_` prefix in any case, then every non-leading `_` read as `-`,
-/// lowercased (`@npmcli/config` `loadEnv`). `npm_config_strict_ssl` and
-/// `NPM_CONFIG_STRICT-SSL` are one setting; a key outside the prefix is none.
-/// Lowercasing is ASCII only, where npm's is Unicode: enough here, whose
-/// settings are ASCII, since a key that folds differently cannot name one.
-/// One fold for the forwarded-settings filter and the cache check, so the two
-/// cannot drift.
-fn npm_setting(key: &str) -> Option<String> {
-    const PREFIX: &str = "npm_config_";
-    let rest = key
-        .get(..PREFIX.len())
-        .filter(|head| head.eq_ignore_ascii_case(PREFIX))
-        .map(|_| &key[PREFIX.len()..])?;
-    if rest.starts_with("//") {
-        return Some(rest.to_owned());
-    }
-    Some(
-        rest.char_indices()
-            .map(|(at, c)| {
-                if at > 0 && c == '_' {
-                    '-'
-                } else {
-                    c.to_ascii_lowercase()
-                }
-            })
-            .collect(),
-    )
-}
-
-/// A per-backend npm cache, so backends sharing a command cannot tear one tree.
-#[must_use]
-pub fn isolated_package_manager_env<S: std::hash::BuildHasher>(
-    backend_name: &str,
-    command: &str,
-    mut backend_env: HashMap<String, String, S>,
-) -> HashMap<String, String, S> {
-    if let Some(dir) = assigned_package_cache_dir(backend_name, command, &backend_env) {
-        backend_env.insert(CACHE_ENV.to_string(), dir.to_string_lossy().into_owned());
-    }
-    backend_env
-}
-
-/// The cache directory the gateway assigns to a backend, or `None` when it
-/// assigns none.
-///
-/// `None` means the value in the child's environment, if there is one, came
-/// from the operator: either this backend does not invoke a package manager,
-/// or its configuration already names a cache. That distinction is the whole
-/// point of returning the path rather than only writing it into the
-/// environment — the repair deletes what it is handed, and a directory the
-/// gateway did not create is not the gateway's to delete, however much a
-/// caller's `npm_config_cache` looks like one [#1759].
-#[must_use]
-pub fn assigned_package_cache_dir<S: std::hash::BuildHasher>(
-    backend_name: &str,
-    command: &str,
-    backend_env: &HashMap<String, String, S>,
-) -> Option<PathBuf> {
-    if !invokes_npm(command)
-        || backend_env
-            .keys()
-            .any(|key| npm_setting(key) == npm_setting(CACHE_ENV))
-    {
-        return None;
-    }
-    Some(
-        crate::config_persistence::gateway_data_dir()
-            .join("pkg-cache")
-            .join(sanitize_cache_component(backend_name)),
-    )
-}
-
-fn invokes_npm(command: &str) -> bool {
-    command
-        .split_whitespace()
-        .next()
-        .map(|program| program.rsplit('/').next().unwrap_or(program))
-        .is_some_and(|program| matches!(program, "npx" | "npm" | "pnpm" | "yarn" | "bunx"))
-}
-
-fn sanitize_cache_component(name: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if cleaned.is_empty() {
-        "unnamed".to_string()
-    } else {
-        cleaned
-    }
 }
 
 /// Stdio transport for subprocess MCP servers
@@ -393,6 +292,12 @@ impl StdioTransport {
         }
     }
 
+    /// The backend's request timeout, which bounds how long a start may hold
+    /// its package cache's lock (`package_cache::lock_hold_bound`).
+    pub(crate) fn request_timeout(&self) -> std::time::Duration {
+        self.request_timeout
+    }
+
     /// The cache directory this gateway assigned, if it assigned one.
     pub(crate) fn assigned_package_cache_dir(&self) -> Option<&Path> {
         self.assigned_cache.as_deref()
@@ -403,7 +308,7 @@ impl StdioTransport {
     pub(crate) fn package_cache_dir(&self) -> Option<PathBuf> {
         self.env
             .iter()
-            .find(|(key, _)| npm_setting(key) == npm_setting(CACHE_ENV))
+            .find(|(key, _)| cache::npm_setting(key) == cache::npm_setting(cache::CACHE_ENV))
             .map(|(_, dir)| PathBuf::from(dir))
     }
 
@@ -1107,6 +1012,9 @@ impl Transport for StdioTransport {
     }
 }
 
+#[path = "stdio_cache.rs"]
+mod cache;
+pub use cache::{assigned_package_cache_dir, isolated_package_manager_env};
 #[path = "stdio_child_tree.rs"]
 mod child_tree;
 #[path = "stdio_reaper.rs"]
@@ -1130,6 +1038,14 @@ mod tree_tests;
 #[cfg(test)]
 #[path = "stdio_cache_tests.rs"]
 mod cache_tests;
+
+#[cfg(test)]
+#[path = "stdio_cache_abs_tests.rs"]
+mod cache_abs_tests;
+
+#[cfg(test)]
+#[path = "stdio_cache_runner_tests.rs"]
+mod cache_runner_tests;
 
 #[cfg(test)]
 mod spawn_classification_tests {
