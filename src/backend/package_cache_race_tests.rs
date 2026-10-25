@@ -382,6 +382,10 @@ async fn a_panicking_rename_re_arms_the_repair() {
     assert!(matches!(retired, Retired::Refused), "{retired:?}");
     assert!(guard.is_none(), "the panicked task took the guard with it");
     assert!(
+        repair_lock(&dir).try_lock().is_ok(),
+        "and released the lock as it unwound, so later starts are not blocked"
+    );
+    assert!(
         mark_repaired(&dir),
         "the failed rename re-armed the latch, so a later start can repair"
     );
