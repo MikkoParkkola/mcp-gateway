@@ -3,7 +3,7 @@
 //! MIK-7215.CONTROL.3 — the transparency log's correlation key must survive
 //! the removal of sessions.
 //!
-//! Plan: `docs/requirements/RELEASE-4.0.0-test-plan.md` §"Increment 7".
+//! Plan: the 4.0.0 release test plan §"Increment 7".
 //!
 //! The defect this guards: `invoke_tool_traced` had a `trace_id` in scope
 //! (used in its own `debug!`/`warn!` calls) and logged `session_id.unwrap_or

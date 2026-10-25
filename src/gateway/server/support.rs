@@ -708,7 +708,7 @@ pub fn network_bind_refusal(config: &Config) -> Option<String> {
 /// where startup refused it; reachable off it, since `run_stdio` never runs the
 /// check.
 ///
-/// Design: `docs/design/unauthenticated-network-posture.md`, Decision C.
+/// Design: the unauthenticated network posture design, Decision C.
 #[must_use]
 pub fn reload_posture_refusal(running: &Config, wanted: &Config) -> Option<ReloadPostureRefusal> {
     if network_bind_refusal(running).is_some() {

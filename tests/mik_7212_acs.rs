@@ -3,7 +3,7 @@
 //! Acceptance-criterion tests for MIK-7212 — the multi-round-trip continuation
 //! envelope.
 //!
-//! Plan: `docs/requirements/RELEASE-4.0.0-test-plan.md` §"Increment 5".
+//! Plan: the 4.0.0 release test plan §"Increment 5".
 //!
 //! A backend hands the gateway an opaque `requestState`. The gateway must reach
 //! the client, and on retry reach that same backend with that same state —

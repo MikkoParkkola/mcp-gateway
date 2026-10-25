@@ -181,7 +181,7 @@ const MINOR: &[Row] = &[
         // Role::Both, and both halves are carried here.
         //
         // The server half is E1-E3 of
-        // `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md`
+        // the cluster b capability and trace metadata test plan
         // in `src/gateway/meta_mcp_helpers_tests.rs`;
         // `ac_ext_1_a_the_builder_serializes_the_map_it_was_given` is the one
         // that pins identity, because it injects a probe identifier the

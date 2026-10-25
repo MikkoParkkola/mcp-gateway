@@ -1076,7 +1076,7 @@ impl InFlight {
     /// this replica, because `hold` is the only thing that writes one, so a
     /// retry that reaches the wrong process asks a table that never knew the
     /// key and is told `Gone`. That is the design's own bargain
-    /// (`docs/design/2026-08-30-shared-continuation-state.md:116`): the
+    /// (the shared continuation state design): the
     /// cross-replica guarantee holds cryptographically, with no shared store
     /// and **no affinity**, and MRTR.6's second arm — fail explicitly — is
     /// what serves the criterion.
@@ -1134,7 +1134,7 @@ impl InFlight {
 /// no shared store, no session affinity, no consensus. A configured shared key
 /// without a shared ledger is exactly the deployment the requirement forbids.
 ///
-/// See `docs/design/2026-08-30-shared-continuation-state.md`.
+/// See the shared continuation state design.
 #[derive(Debug)]
 pub struct ContinuationState {
     replica: String,
@@ -1287,7 +1287,7 @@ impl Default for ContinuationState {
 mod in_flight_lifetime {
     //! MRTR.8b Change A — the `InFlight` table's bounded lifetime.
     //!
-    //! Plan: `docs/design/2026-09-06-mrtr-8b-lifetime-test-plan.md`. Row numbers
+    //! Plan: the mrtr 8b lifetime test plan. Row numbers
     //! below are that plan's. Every `now` is supplied by the test and anchored to
     //! one synthetic epoch, never `SystemTime::now()`: a `guard` that read the
     //! clock itself would answer identically to a correct one under a real-clock

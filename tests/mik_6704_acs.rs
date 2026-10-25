@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Acceptance-criterion tests for MIK-6704 — identity under MCP 2026-07-28.
 //!
-//! Plan: `docs/requirements/RELEASE-4.0.0-test-plan.md` §"Increment 7".
+//! Plan: the 4.0.0 release test plan §"Increment 7".
 //!
 //! Negative-first, deliberately. The revision carries caller *context* on every
 //! request, and the tempting mistake is to read that as caller *identity*. The

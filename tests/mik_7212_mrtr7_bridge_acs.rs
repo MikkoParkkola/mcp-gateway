@@ -4,7 +4,7 @@
 //! legacy client.
 //!
 //! One test per row of the MRTR.7 block in
-//! `docs/requirements/RELEASE-4.0.0-test-plan.md`. Each is named for the row it
+//! the 4.0.0 release test plan. Each is named for the row it
 //! proves and fails, before the bridge exists, on the assertion that names the
 //! behaviour rather than on a missing symbol.
 
@@ -1553,7 +1553,7 @@ async fn mik_7388_an_elicitation_reply_without_an_action_fails_as_malformed() {
 ///
 /// The counter's name is not asserted, because no name exists to assert:
 /// `NFR.OBS.4` is recorded as having no design and no counters
-/// (`docs/internal/requirements/RELEASE-4.0.0-cluster-a-readiness.md:44`), so a literal
+/// (the cluster A readiness note), so a literal
 /// here would be this test inventing the contract it claims to check. The two
 /// halves the row does name are both asserted, and each is written so that the
 /// cheapest wrong implementation fails it.

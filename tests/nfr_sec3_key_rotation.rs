@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Continuation key rotation — NFR.SEC.3.
 //!
-//! Test plan: `docs/requirements/2026-09-09-nfr-sec3-key-rotation-test-plan.md`.
+//! Test plan: the nfr sec3 key rotation test plan.
 //! Design: the nfr sec3 key rotation design.
 //!
 //! Every case here drives `Keyring` through its public surface only, because

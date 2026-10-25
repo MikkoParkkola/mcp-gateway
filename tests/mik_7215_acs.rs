@@ -3,7 +3,7 @@
 //! Acceptance-criterion tests for MIK-7215 — stateless request handling, the
 //! second increment of MCP revision 2026-07-28 support.
 //!
-//! Plan: `docs/requirements/RELEASE-4.0.0-test-plan.md` §"Increment 2".
+//! Plan: the 4.0.0 release test plan §"Increment 2".
 //!
 //! Request frames here are transcribed from the specification's examples, not
 //! built from the gateway's own types. Increment 1 shipped a nonconforming

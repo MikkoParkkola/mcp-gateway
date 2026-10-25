@@ -3,7 +3,7 @@
 //! Acceptance-criterion tests for MIK-7215 §3.7 — the controls that must
 //! survive the removal of sessions.
 //!
-//! Plan: `docs/requirements/RELEASE-4.0.0-test-plan.md` §"Increment 6".
+//! Plan: the 4.0.0 release test plan §"Increment 6".
 //!
 //! Every case here asserts a **refusal**, never a computed value. That is the
 //! whole point: these controls do not fail loudly when their state disappears.

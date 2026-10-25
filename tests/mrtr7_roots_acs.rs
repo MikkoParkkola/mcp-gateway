@@ -3,7 +3,7 @@
 //! Acceptance-criterion tests for the MRTR.7 `roots/list` repair
 //! (MIK-7212.ROOTS.1 through .5).
 //!
-//! Plan: `docs/requirements/RELEASE-4.0.0-test-plan.md`, the rows added after
+//! Plan: the 4.0.0 release test plan, the rows added after
 //! the D-A ruling. Design: the mrtr7 bridge wiring design.
 //!
 //! These live at the integration level because the criteria are about a ROUND

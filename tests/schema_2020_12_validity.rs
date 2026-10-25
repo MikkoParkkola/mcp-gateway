@@ -473,7 +473,7 @@ fn falsifier_a_composed_subschema_is_reported_by_the_same_walker() {
 ///
 /// AC1 (an unresolved local `$ref` from a backend is reported) and AC3 (the
 /// published schema is judged, never altered) of
-/// `docs/design/2026-09-07-schema-1c-forwarded-schema-bounds-test-plan.md`.
+/// the schema 1c forwarded schema bounds test plan.
 #[test]
 fn a_backend_forwarded_schema_is_inspected_before_it_reaches_the_client() {
     // Exactly what a remote server sends, deserialized the way the backend

@@ -3,7 +3,7 @@
 //! Acceptance-criterion tests for MIK-7272 §3.10 — the authorization-server
 //! requirements MCP 2026-07-28 places on a client.
 //!
-//! Plan: `docs/requirements/RELEASE-4.0.0-test-plan.md` §"Increment 9".
+//! Plan: the 4.0.0 release test plan §"Increment 9".
 //!
 //! These apply to the gateway acting as an **OAuth client** to a backend, which
 //! it does: it runs an authorization-code flow and registers itself

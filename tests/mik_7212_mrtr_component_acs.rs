@@ -962,7 +962,7 @@ async fn ac_mrtr_2_the_backends_own_state_is_never_relayed_to_the_client() {
 ///
 /// `ContinuationState::new()` draws its own key material, so this is the
 /// arrangement the accepted design deploys — independent keys per process, no
-/// shared store (`docs/design/2026-08-30-shared-continuation-state.md:107-120`).
+/// shared store (the shared continuation state design).
 /// The payload is identical in every field; only the minting key differs.
 fn mint_on_a_foreign_process(tool: &str, args: &Value) -> String {
     let foreign = ContinuationState::new();
@@ -1163,7 +1163,7 @@ async fn ac_mrtr_8_a_call_that_finished_holds_no_slot() {
 // ---------------------------------------------------------------------------
 //
 // The criterion offers two arms and the accepted design took the second:
-// `docs/design/2026-08-30-shared-continuation-state.md:116` forecloses affinity
+// the shared continuation state design forecloses affinity
 // and `:103-104` prices the consequence. `6e744936` deleted `Routing::Elsewhere`
 // accordingly, so "reach the holder" is not a behaviour this gateway can be
 // tested for. What remains testable is the half the criterion actually forbids:

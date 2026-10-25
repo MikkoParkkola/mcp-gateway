@@ -3,7 +3,7 @@
 //! Acceptance-criterion tests for MIK-7213 and MIK-7272 — results, renumbered
 //! errors, and the cacheability fields of MCP 2026-07-28.
 //!
-//! Plan: `docs/requirements/RELEASE-4.0.0-test-plan.md` §"Increment 4".
+//! Plan: the 4.0.0 release test plan §"Increment 4".
 //!
 //! `cacheScope` is the reason this increment is not mechanical. `public` means
 //! any intermediary may serve this response across authorization contexts — a
