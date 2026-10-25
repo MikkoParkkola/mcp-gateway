@@ -162,6 +162,11 @@ const CHILD_OK: &str = "mik-8299: the isolated body ran";
 /// so those overrides are the environment's only way in. True in the child,
 /// which runs the body; the parent returns false once the child has passed.
 fn in_clean_child(test: &str) -> bool {
+    in_clean_child_with(test, &[])
+}
+
+/// [`in_clean_child`], with `vars` set in the child.
+fn in_clean_child_with(test: &str, vars: &[(String, String)]) -> bool {
     if std::env::var_os(CHILD).is_some() {
         return true;
     }
@@ -177,6 +182,7 @@ fn in_clean_child(test: &str) -> bool {
             child.env_remove(key);
         }
     }
+    child.envs(vars.iter().map(|(k, v)| (k, v)));
     let output = child.output().expect("run the isolated child");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -290,5 +296,84 @@ fn a_backends_section_of_the_wrong_type_is_still_refused() {
             "{yaml:?} loaded; only an empty section may read as none"
         );
     }
+    println!("{CHILD_OK}");
+}
+
+/// YAML in `examples/` that is not a gateway config: a playbook and a
+/// capability, read by their own loaders (as `c1_unrecognised_config_keys`).
+const NOT_GATEWAY_CONFIGS: &[&str] = &["playbook-morning-briefing.yaml", "transform-example.yaml"];
+
+/// The gateway configs the repository ships: every `examples/*.yaml` but
+/// [`NOT_GATEWAY_CONFIGS`], and the root `gateway.example.yaml`.
+fn shipped_examples() -> Vec<(String, String)> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut found: Vec<(String, String)> = std::fs::read_dir(root.join("examples"))
+        .expect("examples/")
+        .map(|entry| entry.expect("entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "yaml"))
+        .filter(|path| {
+            let name = path.file_name().expect("name").to_string_lossy();
+            !NOT_GATEWAY_CONFIGS.contains(&name.as_ref())
+        })
+        .map(|path| {
+            let name = format!(
+                "examples/{}",
+                path.file_name().expect("name").to_string_lossy()
+            );
+            (name, std::fs::read_to_string(&path).expect("read example"))
+        })
+        .collect();
+    let root_example = root.join("gateway.example.yaml");
+    found.push((
+        "gateway.example.yaml".to_string(),
+        std::fs::read_to_string(root_example).expect("read gateway.example.yaml"),
+    ));
+    found.sort();
+    found
+}
+
+/// MIK-8894.EXAMPLE.2: every shipped example config loads through the
+/// gateway's own loader, from an owner-only copy, with each variable it
+/// references set to a stand-in. A walkthrough that tells users to run one
+/// must not hand them a config 4.0 refuses (`examples/token-exchange-live.yaml`
+/// shipped `audiences: []`, which validation refuses).
+#[test]
+fn every_shipped_example_config_loads() {
+    let examples = shipped_examples();
+    let mut vars: Vec<(String, String)> = Vec::new();
+    for (_, yaml) in &examples {
+        for name in referenced_vars(yaml) {
+            if !vars.iter().any(|(k, _)| *k == name) {
+                let value = stand_in(&name);
+                vars.push((name, value));
+            }
+        }
+    }
+    if !in_clean_child_with("every_shipped_example_config_loads", &vars) {
+        return;
+    }
+    // Pinned, so an example added or lost without this test noticing fails.
+    assert_eq!(
+        examples.len(),
+        9,
+        "shipped examples: {:?}",
+        examples.iter().map(|(n, _)| n).collect::<Vec<_>>()
+    );
+    let mut refused = Vec::new();
+    for (name, yaml) in &examples {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let home = format!("{}/", dir.path().display().to_string().replace('\\', "/"));
+        let path = dir.path().join("gateway.yaml");
+        mcp_gateway::gateway::test_helpers::write_owner_only(&path, yaml.replace("~/", &home))
+            .expect("write config");
+        if let Err(error) = Config::load(Some(&path)) {
+            refused.push(format!("{name}: {error}"));
+        }
+    }
+    assert!(
+        refused.is_empty(),
+        "shipped examples 4.0 refuses:\n{}",
+        refused.join("\n")
+    );
     println!("{CHILD_OK}");
 }
