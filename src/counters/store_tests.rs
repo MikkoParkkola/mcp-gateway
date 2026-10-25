@@ -34,7 +34,11 @@ fn calls_24h(store: &CounterStore, filter: Filter<'_>, now: u64) -> Vec<Point> {
 }
 
 fn nonzero(points: &[Point]) -> Vec<(u64, u64)> {
-    points.iter().filter(|p| p.v > 0).map(|p| (p.t, p.v)).collect()
+    points
+        .iter()
+        .filter(|p| p.v > 0)
+        .map(|p| (p.t, p.v))
+        .collect()
 }
 
 #[test]
@@ -55,12 +59,20 @@ fn t2_the_half_hour_ring_holds_48_hours_and_the_day_ring_keeps_the_count() {
     let later = T0 + 48 * HOUR + HALF + 10;
     store.record(&ok("key:a", "s", "t"), later, &UTC);
     let two_days = store
-        .series(&Query::new(Metric::Calls, Window::TwoDays, Filter::All), later, &UTC)
+        .series(
+            &Query::new(Metric::Calls, Window::TwoDays, Filter::All),
+            later,
+            &UTC,
+        )
         .points;
     assert_eq!(two_days.len(), 96);
     assert_eq!(nonzero(&two_days), vec![(later - later % HALF, 1)]);
     let month = store
-        .series(&Query::new(Metric::Calls, Window::Month, Filter::All), later, &UTC)
+        .series(
+            &Query::new(Metric::Calls, Window::Month, Filter::All),
+            later,
+            &UTC,
+        )
         .points;
     assert_eq!(nonzero(&month), vec![(T0, 1), (T0 + 2 * DAY, 1)]);
 }
@@ -74,7 +86,10 @@ fn t3_a_clock_stepping_back_lands_in_its_own_bucket_and_never_widens_the_window(
     let points = calls_24h(&store, Filter::All, now);
     assert_eq!(
         nonzero(&points),
-        vec![(now - 2 * HOUR - (now - 2 * HOUR) % HALF, 1), (now - now % HALF, 1)]
+        vec![
+            (now - 2 * HOUR - (now - 2 * HOUR) % HALF, 1),
+            (now - now % HALF, 1)
+        ]
     );
     // A record far behind the window is kept nowhere in the half-hour ring.
     store.record(&ok("key:a", "s", "t"), now - 72 * HOUR, &UTC);
@@ -95,7 +110,11 @@ fn t4a_the_25_hour_day_is_one_local_date() {
     let end = start + 25 * HOUR + 60;
     store.record(&ok("key:a", "s", "t"), end, &Amsterdam);
     let month = store
-        .series(&Query::new(Metric::Calls, Window::Month, Filter::All), end, &Amsterdam)
+        .series(
+            &Query::new(Metric::Calls, Window::Month, Filter::All),
+            end,
+            &Amsterdam,
+        )
         .points;
     assert_eq!(nonzero(&month), vec![(start, 25), (start + 25 * HOUR, 1)]);
 }
@@ -111,7 +130,11 @@ fn t4b_the_23_hour_day_is_one_local_date() {
     let end = start + 23 * HOUR + 60;
     store.record(&ok("key:a", "s", "t"), end, &Amsterdam);
     let month = store
-        .series(&Query::new(Metric::Calls, Window::Month, Filter::All), end, &Amsterdam)
+        .series(
+            &Query::new(Metric::Calls, Window::Month, Filter::All),
+            end,
+            &Amsterdam,
+        )
         .points;
     assert_eq!(nonzero(&month), vec![(start, 23), (start + 23 * HOUR, 1)]);
 }
@@ -128,7 +151,11 @@ fn t5_a_quarter_hour_zone_cuts_the_day_at_its_own_midnight() {
     store.record(&ok("key:a", "s", "t"), before, &Kathmandu);
     store.record(&ok("key:a", "s", "t"), after, &Kathmandu);
     let month = store
-        .series(&Query::new(Metric::Calls, Window::Month, Filter::All), after, &Kathmandu)
+        .series(
+            &Query::new(Metric::Calls, Window::Month, Filter::All),
+            after,
+            &Kathmandu,
+        )
         .points;
     let days: Vec<u64> = nonzero(&month).iter().map(|(_, v)| *v).collect();
     assert_eq!(days, vec![1, 1], "23:50 and 00:10 local are two dates");
@@ -142,7 +169,10 @@ fn t6_tools_past_the_cap_count_in_overflow_and_totals_stay_exact() {
     }
     assert_eq!(store.labels(Dim::Tool), MAX_LABELS);
     let overflow = calls_24h(&store, Filter::Overflow(Dim::Tool), T0 + 20);
-    assert_eq!(overflow.iter().map(|p| p.v).sum::<u64>(), 10_000 - MAX_LABELS as u64);
+    assert_eq!(
+        overflow.iter().map(|p| p.v).sum::<u64>(),
+        10_000 - MAX_LABELS as u64
+    );
     let global = calls_24h(&store, Filter::All, T0 + 20);
     assert_eq!(global.iter().map(|p| p.v).sum::<u64>(), 10_000);
 }
@@ -194,6 +224,18 @@ fn t6_a_store_at_every_cap_serializes_under_the_ceiling_from_the_constants() {
         "{} bytes over the {ceiling}-byte ceiling",
         bytes.len()
     );
+    // The bytes are the whole store, not a stand-in: restored, every cap is
+    // there again.
+    let (back, _) = CounterStore::from_bytes(&bytes, T0 + 30 * DAY, "4.0.0", &UTC).unwrap();
+    for (dim, cap) in [
+        (Dim::Server, MAX_LABELS),
+        (Dim::Tool, MAX_LABELS),
+        (Dim::Caller, MAX_LABELS),
+        (Dim::CallerServer, MAX_PAIRS),
+    ] {
+        assert_eq!(back.labels(dim), cap, "{dim:?}");
+    }
+    assert_eq!(back.markers(0).len(), MAX_MARKERS);
 }
 
 #[test]
@@ -208,20 +250,30 @@ fn t7_caller_server_pairs_past_their_cap_count_in_overflow() {
     }
     assert_eq!(store.labels(Dim::CallerServer), MAX_PAIRS);
     let overflow = calls_24h(&store, Filter::Overflow(Dim::CallerServer), T0 + 20);
-    assert_eq!(overflow.iter().map(|p| p.v).sum::<u64>(), 3_000 - MAX_PAIRS as u64);
+    assert_eq!(
+        overflow.iter().map(|p| p.v).sum::<u64>(),
+        3_000 - MAX_PAIRS as u64
+    );
 }
 
 #[test]
 fn t7a_callers_and_servers_have_their_own_caps() {
     let store = CounterStore::new(T0);
     for i in 0..600 {
-        store.record(&ok(&format!("key:c{i}"), &format!("s{i}"), "t"), T0 + 10, &UTC);
+        store.record(
+            &ok(&format!("key:c{i}"), &format!("s{i}"), "t"),
+            T0 + 10,
+            &UTC,
+        );
     }
     assert_eq!(store.labels(Dim::Caller), MAX_LABELS);
     assert_eq!(store.labels(Dim::Server), MAX_LABELS);
     for dim in [Dim::Caller, Dim::Server] {
         let overflow = calls_24h(&store, Filter::Overflow(dim), T0 + 20);
-        assert_eq!(overflow.iter().map(|p| p.v).sum::<u64>(), 600 - MAX_LABELS as u64);
+        assert_eq!(
+            overflow.iter().map(|p| p.v).sum::<u64>(),
+            600 - MAX_LABELS as u64
+        );
     }
 }
 
@@ -249,7 +301,10 @@ fn t9_aged_series_free_their_slot_and_the_sweep_is_throttled() {
     store.record(&ok("key:a", "s", "new-1"), aged, &UTC);
     assert_eq!(store.sweeps(), 1);
     assert_eq!(
-        calls_24h(&store, Filter::Tool("s", "new-1"), aged).iter().map(|p| p.v).sum::<u64>(),
+        calls_24h(&store, Filter::Tool("s", "new-1"), aged)
+            .iter()
+            .map(|p| p.v)
+            .sum::<u64>(),
         1,
         "the new label got its own series"
     );
@@ -260,21 +315,53 @@ fn t9_aged_series_free_their_slot_and_the_sweep_is_throttled() {
     }
     store.record(&ok("key:a", "s", "over-1"), aged + 2, &UTC);
     store.record(&ok("key:a", "s", "over-2"), aged + 3, &UTC);
-    assert_eq!(store.sweeps(), 1, "one sweep per dimension per half-hour bucket");
+    assert_eq!(
+        store.sweeps(),
+        1,
+        "one sweep per dimension per half-hour bucket"
+    );
 }
 
 #[test]
 fn t10_each_outcome_moves_exactly_its_counters() {
     let cases: [(Tally, [u64; 5]); 6] = [
         (Tally::default(), [1, 0, 0, 0, 0]),
-        (Tally { error: true, ..Tally::default() }, [1, 0, 1, 0, 0]),
-        (Tally { blocked: true, ..Tally::default() }, [1, 1, 0, 0, 0]),
         (
-            Tally { blocked: true, firewall: true, ..Tally::default() },
+            Tally {
+                error: true,
+                ..Tally::default()
+            },
+            [1, 0, 1, 0, 0],
+        ),
+        (
+            Tally {
+                blocked: true,
+                ..Tally::default()
+            },
+            [1, 1, 0, 0, 0],
+        ),
+        (
+            Tally {
+                blocked: true,
+                firewall: true,
+                ..Tally::default()
+            },
             [1, 1, 0, 1, 0],
         ),
-        (Tally { cache_hit: true, ..Tally::default() }, [1, 0, 0, 0, 1]),
-        (Tally { replay: true, ..Tally::default() }, [0, 0, 0, 0, 0]),
+        (
+            Tally {
+                cache_hit: true,
+                ..Tally::default()
+            },
+            [1, 0, 0, 0, 1],
+        ),
+        (
+            Tally {
+                replay: true,
+                ..Tally::default()
+            },
+            [0, 0, 0, 0, 0],
+        ),
     ];
     for (tally, want) in cases {
         let store = CounterStore::new(T0);
@@ -296,21 +383,58 @@ fn t10_each_outcome_moves_exactly_its_counters() {
 #[test]
 fn t10_audit_outcomes_map_to_tallies() {
     use crate::security::audit::AuditOutcome as A;
-    let t = |o, fw| Tally::from_outcome(Outcome::Audited { outcome: o, firewall: fw, cache_hit: false });
+    let t = |o, fw| {
+        Tally::from_outcome(Outcome::Audited {
+            outcome: o,
+            firewall: fw,
+            cache_hit: false,
+        })
+    };
     assert_eq!(t(A::Ok, false), Tally::default());
-    assert_eq!(t(A::ToolError, false), Tally { error: true, ..Tally::default() });
-    assert_eq!(t(A::Error(-32603), false), Tally { error: true, ..Tally::default() });
-    assert_eq!(t(A::Invalid(-32602), false), Tally { error: true, ..Tally::default() });
-    assert_eq!(t(A::Denied(-32003), false), Tally { blocked: true, ..Tally::default() });
+    assert_eq!(
+        t(A::ToolError, false),
+        Tally {
+            error: true,
+            ..Tally::default()
+        }
+    );
+    assert_eq!(
+        t(A::Error(-32603), false),
+        Tally {
+            error: true,
+            ..Tally::default()
+        }
+    );
+    assert_eq!(
+        t(A::Invalid(-32602), false),
+        Tally {
+            error: true,
+            ..Tally::default()
+        }
+    );
+    assert_eq!(
+        t(A::Denied(-32003), false),
+        Tally {
+            blocked: true,
+            ..Tally::default()
+        }
+    );
     // Firewall provenance wins over the audit outcome: a direct response-
     // firewall refusal is answered 200 with an error code (`Error`).
-    let fw = Tally { blocked: true, firewall: true, ..Tally::default() };
+    let fw = Tally {
+        blocked: true,
+        firewall: true,
+        ..Tally::default()
+    };
     assert_eq!(t(A::Denied(-32002), true), fw);
     assert_eq!(t(A::Error(-32002), true), fw);
     assert!(Tally::from_outcome(Outcome::Replay).is_empty());
     assert_eq!(
         Tally::from_outcome(Outcome::AdmissionRefused),
-        Tally { error: true, ..Tally::default() }
+        Tally {
+            error: true,
+            ..Tally::default()
+        }
     );
 }
 
@@ -338,7 +462,12 @@ fn t11_untrusted_names_count_in_overflow_and_are_stored_nowhere() {
         T0 + 11,
         &UTC,
     );
-    let sum = |f| calls_24h(&store, f, T0 + 20).iter().map(|p| p.v).sum::<u64>();
+    let sum = |f| {
+        calls_24h(&store, f, T0 + 20)
+            .iter()
+            .map(|p| p.v)
+            .sum::<u64>()
+    };
     assert_eq!(sum(Filter::Overflow(Dim::Server)), 1);
     assert_eq!(sum(Filter::Overflow(Dim::Tool)), 2);
     assert_eq!(sum(Filter::Server("s")), 1);
@@ -351,7 +480,11 @@ fn t11_untrusted_names_count_in_overflow_and_are_stored_nowhere() {
 fn t45_a_restored_file_is_cut_back_to_the_caps() {
     let big = CounterStore::new_unbounded_for_test(T0);
     for i in 0..5_000 {
-        big.record(&ok(&format!("key:c{i}"), &format!("s{i}"), "t"), T0 + 10, &UTC);
+        big.record(
+            &ok(&format!("key:c{i}"), &format!("s{i}"), "t"),
+            T0 + 10,
+            &UTC,
+        );
     }
     for i in 0..5_000 {
         big.mark(MarkerKind::ConfigReload, Some(&"z".repeat(1024)), T0 + i);
@@ -364,16 +497,32 @@ fn t45_a_restored_file_is_cut_back_to_the_caps() {
     assert_eq!(restored.labels(Dim::CallerServer), MAX_PAIRS);
     let markers = restored.markers(0);
     assert_eq!(markers.len(), MAX_MARKERS);
-    assert!(markers.iter().all(|m| m.subject.as_deref().unwrap_or("").len() <= MAX_LABEL_BYTES));
+    assert!(
+        markers
+            .iter()
+            .all(|m| m.subject.as_deref().unwrap_or("").len() <= MAX_LABEL_BYTES)
+    );
     let month = restored
-        .series(&Query::new(Metric::Calls, Window::Month, Filter::All), T0 + 20, &UTC)
+        .series(
+            &Query::new(Metric::Calls, Window::Month, Filter::All),
+            T0 + 20,
+            &UTC,
+        )
         .points;
-    assert_eq!(month.iter().map(|p| p.v).sum::<u64>(), 5_000, "global never folds");
+    assert_eq!(
+        month.iter().map(|p| p.v).sum::<u64>(),
+        5_000,
+        "global never folds"
+    );
     // Restored 40 days on, every bucket is outside both windows.
     let (late, _) = CounterStore::from_bytes(&bytes, T0 + 40 * DAY, "4.0.0", &UTC).unwrap();
     for window in [Window::Day, Window::TwoDays, Window::Month] {
         let points = late
-            .series(&Query::new(Metric::Calls, window, Filter::All), T0 + 40 * DAY, &UTC)
+            .series(
+                &Query::new(Metric::Calls, window, Filter::All),
+                T0 + 40 * DAY,
+                &UTC,
+            )
             .points;
         assert_eq!(points.iter().map(|p| p.v).sum::<u64>(), 0, "{window:?}");
     }
@@ -381,11 +530,20 @@ fn t45_a_restored_file_is_cut_back_to_the_caps() {
 
 #[test]
 fn t46_a_key_named_bearer_and_the_bearer_are_two_callers() {
-    assert_eq!(caller_label(CallerKind::Key, "bearer"), "key:bearer");
-    assert_eq!(caller_label(CallerKind::Bearer, "bearer"), "bearer");
-    assert_eq!(caller_label(CallerKind::Anonymous, ""), "anonymous");
+    use crate::security::audit::CredentialKind as K;
+    assert_eq!(caller_label(K::ApiKey, "bearer"), "key:bearer");
+    assert_eq!(caller_label(K::StaticBearer, "bearer"), "bearer");
+    assert_eq!(caller_label(K::None, ""), "anonymous");
     let store = CounterStore::new(T0);
-    store.record(&ok(&caller_label(CallerKind::Key, "bearer"), "s", "t"), T0 + 10, &UTC);
-    store.record(&ok(&caller_label(CallerKind::Bearer, "bearer"), "s", "t"), T0 + 10, &UTC);
+    store.record(
+        &ok(&caller_label(K::ApiKey, "bearer"), "s", "t"),
+        T0 + 10,
+        &UTC,
+    );
+    store.record(
+        &ok(&caller_label(K::StaticBearer, "bearer"), "s", "t"),
+        T0 + 10,
+        &UTC,
+    );
     assert_eq!(store.labels(Dim::Caller), 2);
 }
