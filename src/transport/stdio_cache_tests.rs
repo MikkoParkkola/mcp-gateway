@@ -200,7 +200,7 @@ fn each_runner_gets_the_variable_it_reads() {
     // folder (MIK-8147 D3b).
     for (cmd, var, count) in [
         ("npx -y pkg", "npm_config_cache", 1),
-        ("bunx pkg", "BUN_INSTALL_CACHE_DIR", 1),
+        ("bunx pkg", "BUN_INSTALL_CACHE_DIR", 2),
         ("/opt/bin/yarn dlx pkg", "YARN_CACHE_FOLDER", 2),
     ] {
         let out = isolated_package_manager_env("thing", cmd, HashMap::new());
@@ -208,13 +208,72 @@ fn each_runner_gets_the_variable_it_reads() {
         assert!(out[var].contains("pkg-cache"), "{cmd} lacked {var}");
     }
     let out = isolated_package_manager_env("thing", "pnpm dlx pkg", HashMap::new());
-    assert_eq!(out.len(), 2, "{out:?}");
+    assert_eq!(out.len(), 4, "{out:?}");
     assert!(out["pnpm_config_store_dir"].contains("pkg-cache"));
-    assert_eq!(out["pnpm_config_store_dir"], out["npm_config_store_dir"]);
+    // `pnpm dlx` installs under `<cache-dir>/dlx`, not the store (MIK-8831.REL.6).
+    for var in [
+        "npm_config_store_dir",
+        "pnpm_config_cache_dir",
+        "npm_config_cache_dir",
+    ] {
+        assert_eq!(out["pnpm_config_store_dir"], out[var], "{var}");
+    }
+    // bunx installs the executable under the platform temp dir, which Bun
+    // reads from `TMPDIR` first (MIK-8831.REL.6).
+    let out = isolated_package_manager_env("thing", "bunx pkg", HashMap::new());
+    assert_eq!(out["TMPDIR"], out["BUN_INSTALL_CACHE_DIR"]);
     let mut env = HashMap::new();
     env.insert("BUN_INSTALL_CACHE_DIR".to_string(), "/mine".to_string());
     let out = isolated_package_manager_env("thing", "bunx pkg", env);
     assert_eq!(out["BUN_INSTALL_CACHE_DIR"], "/mine");
+    assert!(
+        !out.contains_key("TMPDIR"),
+        "an operator who chose one of bunx's dirs gets no other filled in: {out:?}"
+    );
+}
+
+/// An operator who sets one of a runner's cache or store variables keeps
+/// their choice: the gateway fills in none of that runner's others, or a
+/// second variable could override or split what they asked for
+/// (MIK-8831.REL.6).
+#[test]
+fn an_operator_value_for_one_runner_variable_leaves_all_of_them_alone() {
+    for (command, key, vars) in [
+        (
+            "pnpm dlx pkg",
+            "npm_config_store_dir",
+            &[
+                "pnpm_config_store_dir",
+                "pnpm_config_cache_dir",
+                "npm_config_cache_dir",
+            ][..],
+        ),
+        (
+            "pnpm dlx pkg",
+            "pnpm_config_cache_dir",
+            &[
+                "pnpm_config_store_dir",
+                "npm_config_store_dir",
+                "npm_config_cache_dir",
+            ][..],
+        ),
+        ("bunx pkg", "TMPDIR", &["BUN_INSTALL_CACHE_DIR"][..]),
+        // Bun falls back from `TMPDIR` to `TMP` and `TEMP`: either is the
+        // operator choosing the temp dir, which an injected `TMPDIR` would
+        // override.
+        ("bunx pkg", "TMP", &["BUN_INSTALL_CACHE_DIR", "TMPDIR"][..]),
+        ("bunx pkg", "TEMP", &["BUN_INSTALL_CACHE_DIR", "TMPDIR"][..]),
+    ] {
+        let operator = HashMap::from([(key.to_owned(), "/operator/dir".to_owned())]);
+        let out = isolated_package_manager_env("thing", command, operator);
+        for var in vars {
+            assert!(
+                !out.contains_key(*var),
+                "{command} with {key}: the gateway filled in {var}: {out:?}"
+            );
+        }
+        assert_eq!(out[key], "/operator/dir");
+    }
 }
 
 #[test]
