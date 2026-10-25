@@ -114,9 +114,12 @@ fn day_of(secs: u64) -> u64 {
 }
 
 /// `usd` as micro-USD, or 0 for a value a saved file should never hold
-/// (negative, NaN or infinite), which restores nothing rather than wrapping.
+/// (negative, NaN, infinite, or too large for a micro-USD count), which
+/// restores nothing rather than saturating into a cap that refuses all day.
 fn saved_micro(usd: f64) -> u64 {
-    if usd.is_finite() && usd > 0.0 {
+    #[allow(clippy::cast_precision_loss)]
+    let ceiling = u64::MAX as f64;
+    if usd.is_finite() && usd > 0.0 && usd * 1_000_000.0 < ceiling {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let micro = (usd * 1_000_000.0).round() as u64;
         micro
@@ -360,6 +363,9 @@ impl BudgetEnforcer {
     }
 
     /// Puts back the daily totals a previous run saved (MIK-8904).
+    ///
+    /// Call it once, on a fresh enforcer, before any spend is recorded: it adds
+    /// to the live totals, so a second call or a late one counts twice.
     ///
     /// Only a save from today counts: a day that ended while the gateway was
     /// down is not carried into this one. The global total is the sum of the
@@ -632,6 +638,30 @@ mod tests {
             !global.check("other", None).allowed,
             "the global cap was forgotten"
         );
+    }
+
+    // A damaged or tampered file restores nothing for a value no run could
+    // have saved, rather than wrapping or saturating into a cap.
+    #[test]
+    fn a_saved_value_out_of_range_restores_nothing() {
+        let e = enforcer_with(true, Some(10.0), &[], &[], &[]);
+        e.restore(&persisted(
+            now_secs(),
+            &[
+                ("neg", -1.0),
+                ("nan", f64::NAN),
+                ("inf", f64::INFINITY),
+                ("huge", 1e15),
+                ("ok", 0.25),
+            ],
+            &[("k", f64::NAN)],
+        ));
+        let snap = e.snapshot();
+        assert!((snap.global_daily_usd - 0.25).abs() < 1e-6, "{snap:?}");
+        for tool in ["neg", "nan", "inf", "huge"] {
+            assert!(!snap.tool_daily.contains_key(tool), "{tool}: {snap:?}");
+        }
+        assert!(!snap.key_daily.contains_key("k"), "{snap:?}");
     }
 
     // MIK-8904.COST.3: a day that ended while the gateway was down is not
