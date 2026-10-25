@@ -51,6 +51,31 @@ fn only_npm_invoking_commands_get_a_cache() {
     }
 }
 
+/// A quoted program is the one the launch spawns, so it gets the same cache
+/// as the unquoted spelling; a whitespace split read `"/opt/node` and skipped
+/// isolation (MIK-8831.REL.4).
+#[test]
+fn a_quoted_runner_gets_the_cache_its_unquoted_spelling_gets() {
+    for (quoted, plain, var) in [
+        (
+            r#""/opt/node js/bin/npx" -y pkg"#,
+            "npx -y pkg",
+            "npm_config_cache",
+        ),
+        (r#""npx" -y pkg"#, "npx -y pkg", "npm_config_cache"),
+        (
+            r#""/opt/bun dir/bunx" pkg"#,
+            "bunx pkg",
+            "BUN_INSTALL_CACHE_DIR",
+        ),
+    ] {
+        let want = isolated_package_manager_env("thing", plain, HashMap::new());
+        let got = isolated_package_manager_env("thing", quoted, HashMap::new());
+        assert_eq!(got.get(var), want.get(var), "{quoted} was missed");
+        assert!(got.contains_key(var), "{plain} itself got no {var}");
+    }
+}
+
 #[test]
 fn a_name_cannot_escape_the_state_directory() {
     let root = crate::config_persistence::gateway_data_dir()
