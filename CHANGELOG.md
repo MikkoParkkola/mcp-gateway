@@ -58,6 +58,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`docker stop` no longer waits out the grace period while a `-full` startup step
+  runs.** The `-full` image's entrypoint ran as PID 1, and a sourced `.envsh` step ran
+  in its own shell, so a stop during that step waited for it to return: Docker's 10 s
+  stop timeout, then a `SIGKILL`. The image now runs `tini -g` as PID 1 in front of the
+  entrypoint, so the stop reaches the step at once and the container exits with status
+  143. tini also reaps orphaned processes. The default image is unchanged. Ported from
+  the release line (#3812).
+
 - **The `-full` image's bundled npm packages are past the new HIGH CVEs, and verified by hash.** `brace-expansion` (CVE-2026-102276, CVE-2026-102278) and `undici` (CVE-2026-19534) in npm's own tree are replaced with fixed releases, and every npm tarball the image fetches is checked against a pinned sha512 before use.
 
 - **The `-full` variant's smoke gate bounds every probe.** Four of its six probes

@@ -6,10 +6,12 @@ set -eu
 DROPIN_DIR=/docker-entrypoint.d
 INSTALL_TIMEOUT=300
 
-# The child a stop would interrupt: the install, or one startup step. PID 1
-# with no handler installed ignores SIGTERM, and a trap is deferred until a
-# foreground child exits, so every child is started in the background and
-# waited on, which a trap can interrupt.
+# The child a stop would interrupt: the install, or one startup step. This
+# shell is tini's child (tini -g, Dockerfile), so a stop reaches it and every
+# process in its group. A trap is deferred until a foreground child exits, so
+# every child this script starts runs in the background and is waited on,
+# which a trap can interrupt; a sourced `.envsh` step's foreground command
+# gets the stop from tini directly, and the trap runs when it returns.
 current_child=
 on_term() {
   if [ -n "$current_child" ]; then
