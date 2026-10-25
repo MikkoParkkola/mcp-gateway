@@ -29,7 +29,6 @@ use tracing::{debug, warn};
 
 use crate::attestation::signer::BnautAttestationSigner;
 use crate::capability::CapabilityBackend;
-use crate::config::SurfacedToolConfig;
 use crate::config_reload::ReloadContext;
 use crate::context_integrity::ContextIntegrityKernel;
 use crate::cost_accounting::CostTracker;
@@ -290,17 +289,16 @@ pub struct MetaMcp {
     /// Cost governance: tool-cost registry used by enforcer and suggestions.
     #[cfg(feature = "cost-governance")]
     pub(crate) cost_registry: Option<Arc<CostRegistry>>,
-    /// Statically surfaced tools — appear directly in `tools/list`.
+    /// Statically surfaced tools — appear directly in `tools/list` — and
+    /// their name table (tool name → server), validated as one unit.
     ///
-    /// Built from `MetaMcpConfig::surfaced_tools` at construction time.
-    /// Empty by default; populated via [`MetaMcp::with_surfaced_tools`].
-    pub(super) surfaced_tools: Vec<SurfacedToolConfig>,
-    /// Fast lookup map for surfaced tool dispatch: tool name → server name.
-    ///
-    /// Pre-built from `surfaced_tools` so `handle_tools_call` only pays one
-    /// `HashMap` lookup instead of a linear scan on every call. Read through
-    /// [`MetaMcp::surfaced_for`] for any decision about a caller (MIK-8340).
-    pub(super) surfaced_tools_map: visible::SurfacedMap,
+    /// Built from `MetaMcpConfig::surfaced_tools` by
+    /// [`MetaMcp::with_surfaced_tools`], and replaced whole by a config reload
+    /// (MIK-8520). Private behind the accessors: every read goes through
+    /// [`MetaMcp::surfaced_state`] (the request snapshot) or
+    /// [`MetaMcp::surfaced_state_live`], and any decision about a caller through
+    /// [`MetaMcp::surfaced_for`] (MIK-8340). Shared so the reload hook can swap it.
+    surfaced: Arc<parking_lot::RwLock<Arc<visible::SurfacedState>>>,
 
     /// Which meta-tools this gateway exposes, from `MetaMcpConfig::exposed_meta_tools`.
     ///

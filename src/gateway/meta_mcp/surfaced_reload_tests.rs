@@ -180,7 +180,7 @@ async fn l4_a_reload_drops_invalid_entries_and_never_aborts() {
 /// servers (MIK-8520.REPLAY.3).
 #[tokio::test]
 async fn l5_one_request_reads_one_surfaced_map() {
-    let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
         .with_surfaced_tools(surfaced(&[("alpha", "read")]));
     let (first, second) = super::super::visible::memo::with_visibility_memo(async {
         let first = meta.surfaced_server_unscoped("read").map(str::to_owned);

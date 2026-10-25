@@ -465,6 +465,14 @@ impl BackendRegistry {
         }
     }
 
+    /// Report that a config reload changed the surfaced-tools set (MIK-8520).
+    /// A no-op until a feed is set.
+    pub(crate) fn nudge_surfaced(&self) {
+        if let Some(feed) = self.change_feed.get() {
+            let _ = feed.send(super::tools_nudge::ToolsNudge::Surfaced);
+        }
+    }
+
     /// Report that the capability catalogue `name` finished its startup scan:
     /// announced whatever it lists. A no-op until a feed is set.
     pub(crate) fn nudge_catalogue_scanned(&self, name: &str) {

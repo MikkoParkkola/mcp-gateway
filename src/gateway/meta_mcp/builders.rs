@@ -248,7 +248,15 @@ impl MetaMcp {
     }
 
     /// Attach a [`ReloadContext`] to enable the `gateway_reload_config` meta-tool.
+    ///
+    /// It also installs the hook that applies `meta_mcp.surfaced_tools` on
+    /// every applied reload (MIK-8520 D3).
     pub fn set_reload_context(&self, ctx: Arc<ReloadContext>) {
+        let surfaced = Arc::clone(&self.surfaced);
+        let backends = self.backends.clone();
+        ctx.set_surfaced_hook(Arc::new(move |config| {
+            super::surfaced::apply_surfaced_reload(&surfaced, &backends, config);
+        }));
         *self.reload_context.write() = Some(ctx);
     }
 

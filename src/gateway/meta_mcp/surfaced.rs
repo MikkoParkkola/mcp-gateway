@@ -8,6 +8,7 @@
 //! the same backend registry as the surfaced-tool resolver.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use serde_json::{Value, json};
 use tracing::{debug, warn};
@@ -84,31 +85,8 @@ impl MetaMcp {
     /// Validation failures are logged as warnings rather than panics so the
     /// gateway always starts — misconfigured surfaced tools are simply dropped.
     #[must_use]
-    pub fn with_surfaced_tools(mut self, tools: Vec<SurfacedToolConfig>) -> Self {
-        let mut map: HashMap<String, String> = HashMap::new();
-        let mut validated: Vec<SurfacedToolConfig> = Vec::with_capacity(tools.len());
-
-        for cfg in tools {
-            if args_policy(&cfg.tool) != ArgsPolicy::BackendWhole {
-                warn!(
-                    tool = %cfg.tool,
-                    "Surfaced tool name collides with a meta-tool — skipping"
-                );
-                continue;
-            }
-            if map.contains_key(&cfg.tool) {
-                warn!(
-                    tool = %cfg.tool,
-                    "Duplicate surfaced tool name — skipping second occurrence"
-                );
-                continue;
-            }
-            map.insert(cfg.tool.clone(), cfg.server.clone());
-            validated.push(cfg);
-        }
-
-        self.surfaced_tools = validated;
-        self.surfaced_tools_map = super::visible::SurfacedMap::new(map);
+    pub fn with_surfaced_tools(self, tools: Vec<SurfacedToolConfig>) -> Self {
+        *self.surfaced.write() = Arc::new(validate_surfaced(tools));
         self
     }
 
@@ -116,9 +94,96 @@ impl MetaMcp {
     /// reload of `surfaced_tools` would, so a row can move it between a
     /// replay's admission and its record.
     #[cfg(test)]
-    pub(crate) fn resurface_for_test(&mut self, tool: &str, server: &str) {
-        let map = HashMap::from([(tool.to_owned(), server.to_owned())]);
-        self.surfaced_tools_map = super::visible::SurfacedMap::new(map);
+    pub(crate) fn resurface_for_test(&self, tool: &str, server: &str) {
+        let tools = vec![SurfacedToolConfig {
+            server: server.to_owned(),
+            tool: tool.to_owned(),
+        }];
+        *self.surfaced.write() = Arc::new(validate_surfaced(tools));
+    }
+}
+
+/// Apply a reloaded config's `surfaced_tools` (MIK-8520 D3, under
+/// `lock_reload`). The new list is validated as at startup; when the ordered
+/// `(tool, server)` list differs from the running one (a reorder changes every
+/// served list), the state is swapped and one tools/list_changed nudge is
+/// sent. An identical list changes and announces nothing. Returns whether
+/// anything changed.
+pub(super) fn apply_surfaced_reload(
+    slot: &parking_lot::RwLock<Arc<super::visible::SurfacedState>>,
+    backends: &super::scoped_backends::Registry,
+    config: &crate::config::Config,
+) -> bool {
+    let next = validate_surfaced(config.meta_mcp.surfaced_tools.clone());
+    let pairs = |state: &super::visible::SurfacedState| {
+        state
+            .tools
+            .iter()
+            .map(|t| (t.tool.clone(), t.server.clone()))
+            .collect::<Vec<_>>()
+    };
+    if pairs(&slot.read()) == pairs(&next) {
+        return false;
+    }
+    for surfaced in &next.tools {
+        if backends
+            .get_for(
+                super::scoped_backends::Unscoped::Visibility,
+                &surfaced.server,
+            )
+            .is_none()
+        {
+            warn!(
+                tool = %surfaced.tool,
+                server = %surfaced.server,
+                "Surfaced tool names a backend that is not configured"
+            );
+        }
+        // T2.6, as at startup (run.rs): repeated only when the set changed.
+        if !config.meta_mcp.warm_start.contains(&surfaced.server) {
+            warn!(
+                tool = %surfaced.tool,
+                server = %surfaced.server,
+                "Surfaced tool's backend is not in meta_mcp.warm_start — \
+                 schema may be absent until the backend is first used"
+            );
+        }
+    }
+    *slot.write() = Arc::new(next);
+    backends.nudge_surfaced();
+    true
+}
+
+/// Validate a surfaced-tools list as startup and every reload do (MIK-8520
+/// RELOAD.4): a name colliding with a meta tool, and a second occurrence of
+/// a name, are dropped with a warning. Never fails, so an invalid entry
+/// never aborts a reload.
+pub(crate) fn validate_surfaced(tools: Vec<SurfacedToolConfig>) -> super::visible::SurfacedState {
+    let mut map: HashMap<String, String> = HashMap::new();
+    let mut validated: Vec<SurfacedToolConfig> = Vec::with_capacity(tools.len());
+
+    for cfg in tools {
+        if args_policy(&cfg.tool) != ArgsPolicy::BackendWhole {
+            warn!(
+                tool = %cfg.tool,
+                "Surfaced tool name collides with a meta-tool — skipping"
+            );
+            continue;
+        }
+        if map.contains_key(&cfg.tool) {
+            warn!(
+                tool = %cfg.tool,
+                "Duplicate surfaced tool name — skipping second occurrence"
+            );
+            continue;
+        }
+        map.insert(cfg.tool.clone(), cfg.server.clone());
+        validated.push(cfg);
+    }
+
+    super::visible::SurfacedState {
+        tools: validated,
+        map: super::visible::SurfacedMap::new(map),
     }
 }
 

@@ -73,7 +73,7 @@ fn idp_backend() -> Arc<crate::backend::Backend> {
 #[tokio::test]
 async fn r1_a_surfaced_replay_records_the_admitted_server() {
     let dir = tempfile::tempdir().unwrap();
-    let mut meta = surfaced(meta(Ok(ok_result()), &dir), "alpha");
+    let meta = surfaced(meta(Ok(ok_result()), &dir), "alpha");
     let who = api_key_caller();
     let retry = keyed("r1");
     let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
@@ -179,7 +179,7 @@ async fn r5b_a_failed_deferral_records_the_admitted_server() {
         base.backends.for_test().register(idp_backend()),
         "premise: idp registers"
     );
-    let mut meta = surfaced(base, "idp");
+    let meta = surfaced(base, "idp");
     let retry = keyed("r5b");
     let who = api_key_caller();
     let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
@@ -261,7 +261,7 @@ async fn r2_a_surfaced_replay_stages_its_receipt_for_the_admitted_server() {
     let mut base = meta(Ok(ok_result()), &dir);
     base.set_firewall(Some(Arc::clone(&firewall)));
     base.share_keyring_with_for_test(&firewall);
-    let mut meta = surfaced(base, "alpha");
+    let meta = surfaced(base, "alpha");
     let who = api_key_caller();
     let retry = keyed("r2");
     let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
@@ -375,7 +375,7 @@ async fn r3_no_carried_server_records_and_stages_nothing() {
     let mut base = meta(Ok(ok_result()), &dir);
     base.set_firewall(Some(Arc::clone(&firewall)));
     base.share_keyring_with_for_test(&firewall);
-    let mut meta = surfaced(base, "alpha");
+    let meta = surfaced(base, "alpha");
     meta.resurface_for_test(NAME, "beta");
     let who = api_key_caller();
     let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
@@ -418,7 +418,7 @@ async fn r3_no_carried_server_records_and_stages_nothing() {
 #[tokio::test]
 async fn r5_a_refused_replay_records_the_admitted_server() {
     let dir = tempfile::tempdir().unwrap();
-    let mut meta = surfaced(meta(Ok(ok_result()), &dir), "alpha");
+    let meta = surfaced(meta(Ok(ok_result()), &dir), "alpha");
     let who = api_key_caller();
     let retry = keyed("r5");
     let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
@@ -478,7 +478,7 @@ async fn r5_a_refused_replay_records_the_admitted_server() {
 #[tokio::test]
 async fn l8_a_keyed_repeat_after_the_name_moves_is_refused() {
     let dir = tempfile::tempdir().unwrap();
-    let mut meta = surfaced(meta(Ok(ok_result()), &dir), "alpha");
+    let meta = surfaced(meta(Ok(ok_result()), &dir), "alpha");
     let who = api_key_caller();
     let retry = keyed("l8");
     let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {

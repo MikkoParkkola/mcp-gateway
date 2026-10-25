@@ -56,6 +56,10 @@ pub(crate) enum ToolsNudge {
     /// what it lists matches the last report: a client may have listed tools
     /// mid-scan that the scan's end hid, and no nudge reported them (#3701).
     CatalogueScanned { name: String },
+    /// The surfaced-tools set changed on a config reload (MIK-8520): every
+    /// listener's served list may differ. Sent only when the ordered list
+    /// actually changed, so an identical reload announces nothing.
+    Surfaced,
 }
 
 /// What one per-user slot holds now.

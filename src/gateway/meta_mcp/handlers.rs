@@ -225,8 +225,9 @@ impl MetaMcp {
                 crate::protocol_revision_telemetry::ListFilters::default(),
             );
         }
-        let profile = self.active_profile(session_id).is_restrictive()
-            && (request_variant || !self.surfaced_tools.is_empty());
+        let surfaced_any = !self.surfaced_state().tools.is_empty();
+        let profile =
+            self.active_profile(session_id).is_restrictive() && (request_variant || surfaced_any);
         #[cfg(feature = "spec-preview")]
         let session = !self.promoted_tools_for_session(session_id).is_empty();
         #[cfg(not(feature = "spec-preview"))]
@@ -235,7 +236,7 @@ impl MetaMcp {
             crate::protocol_revision_telemetry::ListFilters {
                 // The caller's invoke predicate shapes the surfaced tools (A3),
                 // so it shapes this list exactly when there are any to shape.
-                principal: !self.surfaced_tools.is_empty(),
+                principal: surfaced_any,
                 profile,
                 session,
                 request: request_variant,
@@ -264,6 +265,9 @@ impl MetaMcp {
         session_id: Option<&str>,
         scope: InvokeScope<'_>,
     ) -> JsonRpcResponse {
+        // MIK-8520 D2d: one surfaced snapshot for the whole list, so one
+        // tools/list (and one listener digest) never mixes two surfaced sets.
+        let surfaced_state = self.surfaced_state();
         let standing = CallerStanding::from(scope);
         let tools = self.meta_tools_for(standing, self.admitted_counts(scope, session_id));
         let mut tool_descriptors =
@@ -272,7 +276,7 @@ impl MetaMcp {
 
         // Append surfaced tools (skip in Code Mode — it uses a fixed 2-tool schema).
         if !self.code_mode_enabled {
-            for surfaced in &self.surfaced_tools {
+            for surfaced in &surfaced_state.tools {
                 if let Some(tool) = self.resolve_surfaced_tool(surfaced, session_id, scope) {
                     let server_id = if self
                         .backends

@@ -52,6 +52,7 @@ pub(in crate::gateway) enum Unscoped {
 
 /// The backend registry, reachable only through a scoped view or a classed
 /// operation.
+#[derive(Clone)]
 pub(in crate::gateway) struct Registry(Arc<BackendRegistry>);
 
 impl Registry {
@@ -131,6 +132,11 @@ impl Registry {
         )]
         let started = self.0.subscribe_started();
         started
+    }
+
+    /// Report a surfaced-tools change from a config reload (MIK-8520).
+    pub(in crate::gateway) fn nudge_surfaced(&self) {
+        self.0.nudge_surfaced();
     }
 
     pub(in crate::gateway) fn nudge_catalogue_for(&self, _why: Unscoped, name: &str) {

@@ -236,7 +236,7 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
         session_id: Option<&str>,
     ) -> Surfaced<'s> {
-        let Some(server) = self.surfaced_tools_map.unscoped(tool_name) else {
+        let Some(server) = self.surfaced_server_unscoped(tool_name) else {
             return Surfaced::Absent;
         };
         match self.tool_visible_to(server, tool_name, scope, session_id) {
@@ -273,17 +273,41 @@ impl MetaMcp {
 /// of a call already authorized and dispatched (receipts, relay records,
 /// audit attribution, recovery of an admitted task).
 #[derive(Debug, Default, Clone)]
-pub(crate) struct SurfacedMap(std::collections::HashMap<String, String>);
+pub(crate) struct SurfacedMap(std::collections::HashMap<String, &'static str>);
+
+/// A backend name as a `&'static str`, leaked once per distinct name.
+///
+/// MIK-8520: the surfaced map is swapped by a reload, but its readers hand
+/// out a server name borrowed for the caller's own lifetime (`Surfaced<'s>`,
+/// `Option<&str>`). An interned name outlives every snapshot, so those
+/// signatures stay as they are.
+// ponytail: one small leak per distinct backend name ever surfaced, bounded
+// by what an operator configures; move to `Arc<str>` values if names churn.
+fn intern(server: &str) -> &'static str {
+    static NAMES: std::sync::LazyLock<parking_lot::Mutex<std::collections::HashSet<&'static str>>> =
+        std::sync::LazyLock::new(Default::default);
+    let mut names = NAMES.lock();
+    if let Some(name) = names.get(server) {
+        return name;
+    }
+    let name: &'static str = Box::leak(server.to_owned().into_boxed_str());
+    names.insert(name);
+    name
+}
 
 impl SurfacedMap {
     pub(super) fn new(map: std::collections::HashMap<String, String>) -> Self {
-        Self(map)
+        Self(
+            map.into_iter()
+                .map(|(tool, server)| (tool, intern(&server)))
+                .collect(),
+        )
     }
 
     /// The backend a surfaced name routes to, for every caller alike. Not a
     /// visibility decision: use [`MetaMcp::surfaced_for`] for one.
-    pub(crate) fn unscoped(&self, tool_name: &str) -> Option<&str> {
-        self.0.get(tool_name).map(String::as_str)
+    pub(crate) fn unscoped(&self, tool_name: &str) -> Option<&'static str> {
+        self.0.get(tool_name).copied()
     }
 
     #[cfg(test)]
@@ -297,11 +321,37 @@ impl SurfacedMap {
     }
 }
 
+/// The validated surfaced tools and their name table: one unit, replaced
+/// whole by a reload (MIK-8520).
+#[derive(Debug, Default)]
+pub(crate) struct SurfacedState {
+    pub(crate) tools: Vec<crate::config::SurfacedToolConfig>,
+    pub(crate) map: SurfacedMap,
+}
+
 impl MetaMcp {
+    /// The surfaced state this request reads (MIK-8520 D2). Inside a request's
+    /// visibility memo the first read fixes it for the rest of the request, so
+    /// admission, policy, dispatch and a deferred replay's lift all see one
+    /// map even if a reload swaps it mid-request; a pinned name (a task's
+    /// recorded server) wins over that snapshot. Outside a memo, the live
+    /// state. The read guard is dropped before this returns.
+    pub(crate) fn surfaced_state(&self) -> std::sync::Arc<SurfacedState> {
+        memo::surfaced_snapshot(|| self.surfaced_state_live())
+            .unwrap_or_else(|| self.surfaced_state_live())
+    }
+
+    /// The live surfaced state, ignoring any request snapshot: for the one
+    /// check that must see a reload a snapshot would hide (a task's
+    /// moved-target check, MIK-8520 D2b) and for the reload itself.
+    pub(crate) fn surfaced_state_live(&self) -> std::sync::Arc<SurfacedState> {
+        std::sync::Arc::clone(&self.surfaced.read())
+    }
+
     /// [`SurfacedMap::unscoped`] for readers outside this module that name the
     /// server of a call already authorized and dispatched. Never a decision.
-    pub(crate) fn surfaced_server_unscoped(&self, tool_name: &str) -> Option<&str> {
-        self.surfaced_tools_map.unscoped(tool_name)
+    pub(crate) fn surfaced_server_unscoped(&self, tool_name: &str) -> Option<&'static str> {
+        memo::surfaced_pin(tool_name).or_else(|| self.surfaced_state().map.unscoped(tool_name))
     }
 }
 

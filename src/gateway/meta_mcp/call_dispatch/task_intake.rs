@@ -243,7 +243,7 @@ impl MetaMcp {
         value: Value,
         caller: &MetaMcpCallerContext<'_>,
     ) -> JsonRpcResponse {
-        let shape = ResultShape::of_presented(tool_name, &self.surfaced_tools_map);
+        let shape = ResultShape::of_presented(tool_name, &self.surfaced_state().map);
         response_security::shape_meta_result(
             id,
             tool_name,
@@ -256,7 +256,7 @@ impl MetaMcp {
 }
 
 fn task_backend_name(meta: &MetaMcp, tool_name: &str, arguments: &Value) -> String {
-    if let Some(server) = meta.surfaced_tools_map.unscoped(tool_name) {
+    if let Some(server) = meta.surfaced_server_unscoped(tool_name) {
         return server.to_owned();
     }
     match tool_name {
