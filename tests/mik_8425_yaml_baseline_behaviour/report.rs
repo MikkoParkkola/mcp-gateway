@@ -265,14 +265,14 @@ fn writes(out: &mut String) {
         Shape::Newtype("hi".into()),
         Shape::Pair { x: 1, y: 2 },
     ];
-    let written = yaml::to_string(&shapes).expect("shapes serialise");
+    let written = yaml::to_string(&shapes).unwrap_or_else(|e| format!("ERR {e}"));
     row(out, "write/enums", &golden::one_line(&written));
     let ambiguous: BTreeMap<String, String> = AMBIGUOUS
         .iter()
         .enumerate()
         .map(|(i, s)| (format!("k{i:02}"), (*s).to_owned()))
         .collect();
-    let written = yaml::to_string(&ambiguous).expect("strings serialise");
+    let written = yaml::to_string(&ambiguous).unwrap_or_else(|e| format!("ERR {e}"));
     row(out, "write/ambiguous-strings", &golden::one_line(&written));
     let back = yaml::from_str::<BTreeMap<String, String>>(&written);
     let equal = back.as_ref().is_ok_and(|b| *b == ambiguous);

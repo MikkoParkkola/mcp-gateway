@@ -184,8 +184,11 @@ fn from_value(out: &mut String) {
         ("mig2/from-value/struct-tag", "!pair {x: 1, y: 2}"),
         ("mig2/from-value/struct-map", "{pair: {x: 1, y: 2}}"),
     ] {
-        let tree = yaml::from_str::<yaml::Value>(doc).expect("the tree reads every case");
-        row(out, case, &ok_json(yaml::from_value::<Shape>(tree)));
+        let reading = match yaml::from_str::<yaml::Value>(doc) {
+            Ok(tree) => ok_json(yaml::from_value::<Shape>(tree)),
+            Err(error) => format!("ERR tree {error}"),
+        };
+        row(out, case, &reading);
     }
 }
 

@@ -1,4 +1,5 @@
 src/yaml/mod.rs # the adapter itself, the one seam allowed to name the backend
+src/yaml/next.rs # the replacement backend's step-3 stubs refuse through the adapter's error
 src/yaml/error.rs # the adapter's error, which wraps the backend's
 src/yaml/guard.rs # the adapter's pre-parse guard
 src/yaml/provider.rs # the adapter's figment provider
