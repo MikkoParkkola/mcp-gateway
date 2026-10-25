@@ -25,6 +25,6 @@ For a gateway in Europe/Amsterdam, limits reset at 01:00 or 02:00 local time, an
 ## Consequences
 
 - The copy is true for every operator once MIK-8901 ships; until then it is a known gap, marked on MIK-8901.
-- `costs.json` (F2) gains a `day_basis` field. A snapshot without it was saved under UTC days; the first start after the upgrade keeps that day's totals as they are until the next local midnight, then counts local days. No spend is moved between days, so no budget changes at the upgrade.
+- `costs.json` (F2) gains a `day_basis` field. A snapshot without it was saved under UTC days; the gateway keeps resetting that open day at UTC midnight as before, and starts counting local days only after that one UTC reset. The open day's allowance therefore neither shrinks nor grows at the upgrade, and no spend moves between days.
 - A restart just after local midnight starts a fresh day, as the operator expects.
 - A host whose zone changes between saves restores by the zone at load; the saved timestamp is unchanged.

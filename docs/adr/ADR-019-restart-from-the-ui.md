@@ -27,7 +27,7 @@ Gateway › Actions (frame 26) offers Restart for settings that wait for one (a 
 
 Option 2 on Unix, Option 3 where 2 cannot run.
 
-- **Path.** At startup the gateway records the path it was invoked by (argv[0] resolved against the start directory) and its arguments. It does not use `current_exe`, which follows the running inode and would re-run the old binary after an upgrade replaced the file.
+- **Path.** At startup the gateway records the path it was invoked by, and its arguments: argv[0] if it contains a slash (resolved against the start directory), otherwise the first executable match for that name in the startup `PATH`. It keeps that path, not its target, so a symlink an upgrade repoints (as Homebrew does) leads to the new binary. It does not use `current_exe`, which resolves to the running file and would re-run the old version.
 - **Refuse first.** Before anything stops, Restart is refused when the platform is Windows or the recorded path is missing or not executable; the UI then shows "Restart required" with the platform's command. Nothing is half-stopped.
 - **Sequence.** Stop accepting new calls; let calls in flight finish for up to 10 s, then fail the rest (frame 26 already says a write cut off may have happened); save state and check that every save succeeded (F5). A failed save cancels the restart and reopens for calls, and the UI says why.
 - **Exec after the runtime is gone.** The restart request ends `run` with a restart outcome; `main` (F4) drops the runtime, so no worker thread or open listener is left, then calls `exec` from the one remaining thread. Listener sockets are close-on-exec, so the new process binds afresh.
@@ -40,4 +40,5 @@ Option 2 on Unix, Option 3 where 2 cannot run.
 - An upgrade followed by Restart runs the new binary.
 - Windows operators get guidance, not a button, in 4.0.0.
 - A few seconds of refused connections during the restart, the "3 s down" in the frames.
-- The only case that leaves a bare-shell gateway down is an exec that fails after its own check passed; it is logged with the command to recover.
+- Runtime shutdown is bounded: blocking work still running when the timeout ends is abandoned with the process image, which is why every save is checked before exec rather than after.
+- Two cases leave a bare-shell gateway down: an exec that fails after its own check passed, and a new process that execs fine but then fails to start (a config error, a port taken). Both are logged with the command to recover; under a supervisor the second is handled by its restart policy.

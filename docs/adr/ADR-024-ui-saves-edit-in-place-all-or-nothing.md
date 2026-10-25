@@ -22,14 +22,14 @@ An operator's hand-commented `gateway.yaml` is theirs, and one UI save that drop
 - **Never `Rewrite` from the UI.** When the splice cannot be proven safe (an anchor or alias on the edited key, a structure it does not handle), the save uses `Refuse` (F1): nothing is written, and the change comes back as a patch the operator can paste (frame 41t). The patch loads under the strict key check.
 - **Two proofs per splice.** Meaning: the edited text parses to the old document plus exactly the changed keys, and the check fails if replaced text held an alias or anchor the new text drops. Bytes: every untouched line, comment and line ending is unchanged.
 - **Stale diff.** A save carries the hash of the file its diff was made from; if the file changed since, nothing is written and the diff is regenerated.
-- **Secrets never overwrite in place.** A changed secret is written to a new keychain entry with a fresh name; the file edit then points at that name and commits atomically (F4); only after the commit is the old entry deleted. A crash before the commit leaves the old file and old secret working, plus an unreferenced new entry; a crash after it leaves the new file and new secret working, plus an unreferenced old entry.
-- **Startup sweep.** At start the gateway deletes keychain entries under its own prefix that no config file names, and logs each one. That is the only recovery step, and it cannot remove a secret a file still references.
-- **Partial keychain failure.** If writing any new entry fails, the entries already written in this save are deleted and nothing else changes.
+- **Secrets never overwrite in place.** A changed secret is written to a new keychain entry with a fresh name; the file edit then points at that name and commits atomically (F4). The old entry is not deleted: other settings, or another gateway sharing the keychain, may still name it, and replacing one reference does not prove it unused. A crash before the commit leaves the old file and old secret working, plus an unreferenced new entry; a crash after it leaves the new file and new secret working.
+- **No automatic cleanup.** Gateway › Settings lists keychain entries under the gateway's prefix that no loaded config names, with when each was written, for an admin to delete one at a time. Nothing deletes a keychain entry on its own.
+- **Partial keychain failure.** If writing any new entry fails, the entries this save created are deleted (nothing else can name them yet) and nothing else changes.
 
 ## Consequences
 
 - No UI save ever drops a comment; a save that cannot keep them is a patch, not a loss.
 - At every instant the file names secrets that exist, so a killed save never leaves a dangling reference.
-- Keychain entry names change on every secret change; the file is the only place that says which is current.
+- Keychain entry names change on every secret change; the file is the only place that says which is current, and unused entries accumulate until an admin removes them.
 - Saves that touch unusual YAML (anchors, merge keys) fall back to the patch more often; that is the intended cost.
-- History (U21) keeps exact bytes, so restore is byte for byte and comments come back; restoring a version whose secret entry was swept asks for the secret again.
+- History (U21) keeps exact bytes, so restore is byte for byte and comments come back; restoring a version whose secret entry an admin has since deleted asks for the secret again.
