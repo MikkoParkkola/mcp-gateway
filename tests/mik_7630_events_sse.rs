@@ -385,3 +385,70 @@ async fn k6_concurrent_calls_share_one_replacement() {
 fn is_tool_error(answer: &Value) -> bool {
     answer["result"]["isError"].as_bool().unwrap_or(false)
 }
+
+/// K4a (design B7'): the replacement's own stream ends right after its
+/// `initialize` answer. That replacement fails, so the call that needed it
+/// is refused before it is sent; the next call replaces the stream again and
+/// succeeds. Nothing is ever sent twice.
+#[tokio::test]
+async fn k4a_a_replacement_that_dies_at_once_refuses_the_call_and_the_next_rebuilds() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receiver = Receiver::start(dir.path()).await;
+    let peer = SsePeer::start().await;
+    let cfg = upstream_config(dir.path(), timed_backend(&peer, "20s"), &[]);
+    let gw = start_cfg(dir.path(), &receiver, cfg).await;
+    assert!(invoke(&gw).await.get("error").is_none(), "control");
+    let gets = peer.gets();
+    peer.drop_next_after_initialize();
+    peer.drop_stream(1);
+    // Let the gateway's reader see the end (as K6).
+    // timing: precondition
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let refused = invoke(&gw).await;
+    assert!(
+        refused.get("error").is_some() || is_tool_error(&refused),
+        "the call that met a dead replacement fails: {refused}"
+    );
+    assert_eq!(peer.posted("tools/call"), 1, "and it was never sent");
+    let next = invoke(&gw).await;
+    assert!(
+        next.get("error").is_none() && !is_tool_error(&next),
+        "the next call rebuilds and succeeds: {next}"
+    );
+    assert_eq!(
+        peer.gets(),
+        gets + 2,
+        "two replacements: the dead one and the good one"
+    );
+    assert_eq!(peer.posted("tools/call"), 2, "each call sent at most once");
+}
+
+/// K7 (lead ruling on D5): a call the peer accepts (202) and never answers
+/// ends at the backend's own timeout with a clear error, never a hang.
+#[tokio::test]
+async fn k7_an_unanswered_call_ends_at_its_timeout_with_a_clear_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receiver = Receiver::start(dir.path()).await;
+    let peer = SsePeer::start().await;
+    let cfg = upstream_config(dir.path(), timed_backend(&peer, "2s"), &[]);
+    let gw = start_cfg(dir.path(), &receiver, cfg).await;
+    assert!(invoke(&gw).await.get("error").is_none(), "control");
+    peer.hold_calls(true);
+    let began = std::time::Instant::now();
+    let held = tokio::time::timeout(Duration::from_secs(30), invoke(&gw))
+        .await
+        .expect("the call ended; it did not hang");
+    let took = began.elapsed();
+    assert!(
+        held.get("error").is_some() || is_tool_error(&held),
+        "the unanswered call is an error: {held}"
+    );
+    assert!(
+        held.to_string().contains("timed out"),
+        "the error says it timed out: {held}"
+    );
+    assert!(
+        took >= Duration::from_secs(2) && took < Duration::from_secs(15),
+        "bounded by the 2 s timeout, not hung: {took:?}"
+    );
+}

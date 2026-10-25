@@ -246,6 +246,10 @@ impl HttpTransport {
             .as_ref()
             .map(|c| c.register(&request.id))
             .transpose()?;
+        #[cfg(test)]
+        if channel.is_some() {
+            self.before_sse_post.pause().await;
+        }
         if channel.as_ref().is_some_and(|c| c.is_closed()) {
             // Closed between the check and the registration: replace it, once.
             drop(waiting);

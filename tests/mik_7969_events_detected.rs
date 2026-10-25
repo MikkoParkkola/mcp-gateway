@@ -336,7 +336,9 @@ async fn an_open_circuit_refuses_the_subscribe_without_a_connect() {
 /// transport is the same one: the listener's per-tick read of the detected
 /// transport reconnects it over its own SSE session, and the subscription is
 /// kept. (Before MIK-8835 the switch ended the listener and the subscription.)
-/// Delivery after the switch is S1's, on a peer that can push on its stream.
+/// This row cannot assert delivery after the switch: the test server here
+/// (`HttpPeer`) cannot push on its SSE stream. Delivery over an SSE session
+/// is S1's (`mik_7630_events_sse.rs`), on a peer that can.
 #[tokio::test]
 async fn a_recovery_onto_sse_reconnects_a_quiet_listener() {
     let dir = tempfile::tempdir().expect("tempdir");

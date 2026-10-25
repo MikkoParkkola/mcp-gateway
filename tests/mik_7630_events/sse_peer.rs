@@ -53,6 +53,9 @@ struct State {
     answer_in_body: Arc<AtomicBool>,
     /// `tools/call` is accepted (202) and never answered.
     hold_calls: Arc<AtomicBool>,
+    /// Once: end the stream of the next session to be initialized, right
+    /// after its `initialize` answer.
+    drop_after_initialize: Arc<AtomicBool>,
     /// An `endpoint` value replacing the session's own message path.
     endpoint_override: Arc<Mutex<Option<String>>>,
 }
@@ -99,6 +102,14 @@ impl SsePeer {
     /// Accept every later `tools/call` and never answer it.
     pub fn hold_calls(&self, hold: bool) {
         self.state.hold_calls.store(hold, Ordering::SeqCst);
+    }
+
+    /// End the next initialized session's stream just after its `initialize`
+    /// answer is on it.
+    pub fn drop_next_after_initialize(&self) {
+        self.state
+            .drop_after_initialize
+            .store(true, Ordering::SeqCst);
     }
 
     /// GETs (handshakes) served so far.
@@ -292,6 +303,11 @@ fn message(
         json!({"jsonrpc": "2.0", "id": "decoy", "error": {"code": -32603, "message": "not yours"}});
     send(state, session, &decoy);
     send(state, session, &response);
+    if method == "initialize" && state.drop_after_initialize.swap(false, Ordering::SeqCst) {
+        if let Some(s) = state.sessions.lock().expect("sessions").get_mut(&session) {
+            s.tx = None;
+        }
+    }
     (StatusCode::ACCEPTED, "Accepted").into_response()
 }
 

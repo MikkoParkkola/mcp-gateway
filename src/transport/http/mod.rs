@@ -293,6 +293,10 @@ pub struct HttpTransport {
     /// SSE mode: the calls session's retained stream, whose answers are paired
     /// with their POSTs by id (MIK-8835.SSE.2). `None` in Streamable HTTP mode.
     sse_channel: RwLock<Option<Arc<sse_channel::SseChannel>>>,
+    /// Test-only: stops an SSE-mode request between taking its place on the
+    /// stream and the check before its POST (K4b).
+    #[cfg(test)]
+    before_sse_post: Arc<crate::test_pause::Slot>,
     /// Redirect hops this client has followed, ever (MIK-7272.SUB.4).
     ///
     /// Incremented by the redirect policy closure on the `Follow` arm, which
@@ -479,6 +483,8 @@ impl HttpTransport {
             reinit_needed: AtomicBool::new(false),
             reinit_lock: TokioMutex::new(()),
             sse_channel: RwLock::new(None),
+            #[cfg(test)]
+            before_sse_post: Arc::default(),
             redirects_followed,
             #[cfg(test)]
             last_send_error: parking_lot::Mutex::new(None),
@@ -582,6 +588,9 @@ mod requests;
 mod sse_channel;
 mod sse_decoder;
 mod sse_listen;
+#[cfg(test)]
+#[path = "sse_send_tests.rs"]
+mod sse_send_tests;
 mod startup;
 mod transport_impl;
 

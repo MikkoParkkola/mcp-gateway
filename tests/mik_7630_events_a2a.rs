@@ -20,6 +20,9 @@ mod gateway;
 #[path = "mik_7630_events/receiver.rs"]
 #[allow(dead_code, reason = "shared receiver; each binary uses a subset")]
 mod receiver;
+#[path = "mik_7630_events/sse_peer.rs"]
+#[allow(dead_code, reason = "mock peer; each row uses a subset")]
+mod sse_peer;
 #[path = "mik_7630_events/upstream_sub.rs"]
 #[allow(dead_code, reason = "shared helpers; each binary uses a subset")]
 mod upstream_sub;
@@ -30,7 +33,7 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use delivery::start_cfg;
+use delivery::{DEADLINE, records, start_cfg, wait_until};
 use gateway::{ALICE, Gateway, error};
 use receiver::{Receiver, whsec};
 use serde_json::{Value, json};
@@ -262,7 +265,9 @@ async fn a6_the_poll_keeps_the_one_second_floor() {
     let polls = agent.fetches() - from;
     assert!(
         (3..=8).contains(&polls),
-        "about one read a second over 5 s, got {polls}"
+        "about one read a second over 5 s, got {polls}; the bounds allow CI \
+         scheduling jitter (one tick early or late) and the backend's own health \
+         ping, while a busy loop would read hundreds"
     );
 }
 
@@ -288,4 +293,79 @@ async fn a9_the_poll_stops_with_the_last_subscriber() {
         more <= 1,
         "the poll stopped once nobody listens; {more} reads in 5 s"
     );
+}
+
+/// A7 (MIK-8835.A2A.2, design B3'): a reload turns backend `x` from a legacy
+/// SSE backend into an A2A agent. Its resource subscription is withdrawn (A2A
+/// has no resources), and its `tools_changed` subscription is kept and polled.
+#[tokio::test]
+async fn a7_a_reload_from_mcp_to_a2a_keeps_only_tools_changed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receiver = Receiver::start(dir.path()).await;
+    let sse = sse_peer::SsePeer::start().await;
+    let agent = Agent::start().await;
+    let mut cfg = upstream_config(
+        dir.path(),
+        json!({"http_url": sse.url, "streamable_http": false}),
+        &[],
+    );
+    cfg["meta_mcp"]["cache_ttl"] = json!("1s");
+    let mut gw = start_cfg(dir.path(), &receiver, cfg).await;
+    sub(
+        &gw,
+        ALICE,
+        "backend.x.resource_updated",
+        &receiver,
+        json!({"uri": sse_peer::URI_A}),
+    )
+    .await;
+    let id = sub(&gw, ALICE, TOOLS, &receiver, json!({})).await;
+    assert_eq!(records(dir.path(), "subs").len(), 2, "control: both stored");
+
+    let mut next = gw.config().clone();
+    next["backends"]["x"] = json!({"a2a_url": agent.url});
+    gw.rewrite_config(next);
+    assert!(
+        wait_until(DEADLINE, || records(dir.path(), "subs").len() == 1).await,
+        "the resource subscription is withdrawn on the reload: {}",
+        gw.stall_report()
+    );
+    let base = first_fill(&agent, &receiver, &id).await;
+    agent.set(|card| card["name"] = json!("Reloaded Agent"));
+    expect_events(&receiver, &id, TOOLS, base + 1).await;
+}
+
+/// A10 (design B3'): `x` is an A2A agent reached with the caller's identity,
+/// so its `tools_changed` subscription is held with no listener. A reload
+/// drops the identity propagation: the held subscription revives, its card
+/// is polled, and a change is delivered.
+#[tokio::test]
+async fn a10_a_reload_to_a_shared_a2a_backend_revives_tools_changed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receiver = Receiver::start(dir.path()).await;
+    let agent = Agent::start().await;
+    let mut cfg = upstream_config(
+        dir.path(),
+        json!({"a2a_url": agent.url, "identity_propagation": {"strategy": "passthrough",
+            "audience": "https://idp.example", "session_mode": "per_user"}}),
+        &[],
+    );
+    cfg["meta_mcp"]["cache_ttl"] = json!("1s");
+    let mut gw = start_cfg(dir.path(), &receiver, cfg).await;
+    let id = sub(&gw, ALICE, TOOLS, &receiver, json!({})).await;
+    let held = agent.fetches();
+    // timing: absence
+    tokio::time::sleep(INTERVALS).await;
+    assert_eq!(
+        agent.fetches(),
+        held,
+        "control: an identity-bound agent is never polled"
+    );
+
+    let mut next = gw.config().clone();
+    next["backends"]["x"] = json!({"a2a_url": agent.url});
+    gw.rewrite_config(next);
+    let base = first_fill(&agent, &receiver, &id).await;
+    agent.set(|card| card["name"] = json!("Shared Agent"));
+    expect_events(&receiver, &id, TOOLS, base + 1).await;
 }
