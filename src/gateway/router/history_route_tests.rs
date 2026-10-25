@@ -195,3 +195,20 @@ async fn t42_no_secret_and_no_caller_chosen_name_in_anything_u1_writes() {
         "the file is the real store"
     );
 }
+
+/// Without a counter store (a gateway built without the server's start),
+/// both routes tell the admin counting is off, never an empty 200 that
+/// would read as "no calls". The one place this body is asserted.
+#[tokio::test]
+async fn t41_without_a_store_both_routes_say_counting_is_off() {
+    let (state, _dir) = test_router_app_state_with_auth_and_config(
+        &scoped_auth_config(true),
+        crate::config::Config::default(),
+    )
+    .await;
+    for uri in ["/ui/api/metrics/series?metric=calls", "/ui/api/markers"] {
+        let (status, body, _) = get(&state, uri, Some(SECRET)).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{uri}");
+        assert_eq!(body["error"], "call counters are not running", "{uri}");
+    }
+}
