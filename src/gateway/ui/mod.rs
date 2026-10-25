@@ -19,6 +19,7 @@ mod errors;
 mod events;
 pub mod import;
 pub(crate) mod session;
+mod shell;
 
 use crate::gateway::routes;
 use std::sync::Arc;
@@ -82,12 +83,20 @@ pub fn api_router() -> Router<Arc<AppState>> {
 
 /// Build the unauthenticated `/ui` route (serves static HTML, no data).
 pub fn html_router() -> Router {
-    Router::new().route(routes::UI, get(index))
+    Router::new()
+        .route(routes::UI, get(index))
+        .route(routes::UI_CLASSIC, get(index))
+        .route(routes::UI_ASSET, get(shell::asset))
+        .route(
+            routes::UI_SHELL,
+            get(shell::document).fallback(shell::not_found),
+        )
 }
 
 // ── Handlers ────────────────────────────────────────────────────────
 
-/// `GET /ui` — serve the single-page HTML dashboard.
+/// `GET /ui` and `GET /ui/classic` — serve the single-page HTML dashboard
+/// (`/ui/classic` keeps it reachable once `/ui` serves the new UI, MIK-8870).
 ///
 /// Returns `Cache-Control: no-cache` so browsers always fetch fresh HTML
 /// after gateway restarts (the HTML is embedded via `include_str!`).

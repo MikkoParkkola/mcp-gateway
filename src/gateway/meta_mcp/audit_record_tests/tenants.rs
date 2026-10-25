@@ -448,7 +448,7 @@ async fn a_replayed_invoke_answer_is_attributed_from_its_tool_value() {
             None,
             &context(&AllowAll, &who),
             replay,
-            None,
+            crate::gateway::meta_mcp::admission::ReplayFacts::default(),
         )
         .await;
     assert!(

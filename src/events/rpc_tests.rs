@@ -282,7 +282,8 @@ fn canonical_is_the_libraries_jcs_within_2_pow_53() {
 }
 
 /// The T16 hub: upstream events on `u` (unset key, never connected), `s`
-/// (explicit SSE) and `c` (stdio), with the live services a commit reads.
+/// (identity propagation, refused; it was explicit SSE until MIK-8835 made SSE
+/// eligible) and `c` (stdio), with the live services a commit reads.
 async fn t16_hub() -> (
     Arc<EventsHub>,
     crate::config::EventsConfig,
@@ -293,7 +294,9 @@ async fn t16_hub() -> (
 
     let config: Config = crate::yaml::from_str(
         "backends:\n  u:\n    http_url: http://127.0.0.1:9/mcp\n  \
-         s:\n    http_url: http://127.0.0.1:9/sse\n    streamable_http: false\n  \
+         s:\n    http_url: http://127.0.0.1:9/mcp\n    streamable_http: true\n    \
+         identity_propagation:\n      strategy: passthrough\n      audience: https://a\n      \
+         session_mode: per_user\n  \
          c:\n    command: echo\n",
     )
     .expect("config");

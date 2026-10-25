@@ -316,6 +316,7 @@ async fn lift_recorded(recorded: Option<String>, proved: Option<String>) -> Lift
             serde_json::json!({"content": [{"type": "text", "text": "lift-stored"}]}),
         ),
         audit: None,
+        audit_server: None,
         tool_name: "gateway_invoke".to_owned(),
         arguments: serde_json::json!({}),
         bindings: vec![
@@ -391,4 +392,186 @@ async fn a_deferred_replay_whose_target_is_bound_elsewhere_now_is_refused_at_the
         "premise: the binding now differs from the record the resolution proved"
     );
     assert_lift_refused("lift, current", &lifted);
+}
+
+/// MIK-8520 R4 (M4): a deferred replay of the surfaced name `TOOL`, admitted
+/// for `BACKEND` and lifted after the surfaced map moves to `beta`, is
+/// recorded under `BACKEND`, the server it was admitted for.
+#[tokio::test]
+async fn r4_a_lifted_surfaced_replay_records_the_admitted_server() {
+    use crate::gateway::meta_mcp::MetaMcpCallerContext;
+    use crate::gateway::meta_mcp::visible::deferred::{DeferredReplay, deferred_replay_key};
+    use crate::gateway::meta_mcp::visible::memo::record_deferred_replay;
+    use std::ops::ControlFlow;
+    let dir = tempfile::tempdir().unwrap();
+    let (_gateway, meta) = connected();
+    let mut meta = meta.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
+        server: BACKEND.to_string(),
+        tool: TOOL.to_string(),
+    }]);
+    let logger = crate::security::TransparencyLogger::open(std::sync::Arc::new(
+        crate::security::transparency_log::TransparencyLogConfig {
+            enabled: true,
+            path: dir
+                .path()
+                .join("audit.jsonl")
+                .to_string_lossy()
+                .into_owned(),
+            key_id: "r4".to_string(),
+            ..Default::default()
+        },
+    ))
+    .expect("open log");
+    meta.enable_transparency_log(std::sync::Arc::new(logger));
+    let backend = meta.backends.for_test().get(BACKEND).expect("the backend");
+    let resolved = meta
+        .resolve_dispatch(
+            (BACKEND, TOOL),
+            Some(&backend),
+            CallerProof::new(None, CallerProvenance::Credential),
+            None,
+        )
+        .await
+        .expect("premise: the operator's live grant resolves");
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some("r4-key".to_owned()),
+        ..crate::protocol::mrtr::RetryFields::default()
+    };
+    let caller = MetaMcpCallerContext {
+        retry: &retry,
+        ..ctx(&AllowAll)
+    };
+    let recorded = meta.current_binding(
+        &meta.scoped(caller.scope().authorizer.backend_grant()),
+        BACKEND,
+        TOOL,
+    );
+    let key = deferred_replay_key(BACKEND, TOOL, &retry).expect("a keyed call");
+    let deferred = DeferredReplay {
+        response: crate::protocol::JsonRpcResponse::success(
+            RequestId::Number(11),
+            serde_json::json!({"content": [{"type": "text", "text": "r4-stored"}]}),
+        ),
+        audit: None,
+        audit_server: Some(BACKEND.to_owned()),
+        tool_name: TOOL.to_owned(),
+        arguments: serde_json::json!({}),
+        bindings: vec![(BACKEND.to_owned(), TOOL.to_owned(), recorded)],
+    };
+    meta.resurface_for_test(TOOL, "beta");
+    let flow = visible::memo::with_visibility_memo(async {
+        assert!(record_deferred_replay(key, deferred), "premise: deferred");
+        let mut witness = super::super::nonce_settle::Witnessed::take(&caller);
+        meta.lift_deferred((BACKEND, TOOL), &resolved, &mut witness, None, &caller)
+            .await
+    })
+    .await;
+    let ControlFlow::Break(answer) = flow else {
+        panic!("premise: the lift served the deferred entry");
+    };
+    assert!(answer.error.is_none(), "premise: served: {answer:?}");
+    let servers: Vec<String> = std::fs::read_to_string(dir.path().join("audit.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|entry| {
+            entry.get("tool").is_some() && entry["event"] != "response_delivery_attempt"
+        })
+        .map(|entry| entry["server"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(
+        servers,
+        vec![BACKEND.to_owned()],
+        "R4: the lifted replay's record names the live map's server, not the admitted one"
+    );
+}
+
+/// MIK-8520 R7b (M7): a deferred continuation-origin replay carries no audit
+/// server, so the lift records nothing for it, as before; taking the server
+/// from the lift's dispatch pair would start recording it.
+#[tokio::test]
+async fn r7b_a_lifted_continuation_origin_replay_writes_no_record() {
+    use crate::gateway::meta_mcp::MetaMcpCallerContext;
+    use crate::gateway::meta_mcp::visible::deferred::{DeferredReplay, deferred_replay_key};
+    use crate::gateway::meta_mcp::visible::memo::record_deferred_replay;
+    use std::ops::ControlFlow;
+    let dir = tempfile::tempdir().unwrap();
+    let (_gateway, meta) = connected();
+    let mut meta = meta.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
+        server: BACKEND.to_string(),
+        tool: TOOL.to_string(),
+    }]);
+    let logger = crate::security::TransparencyLogger::open(std::sync::Arc::new(
+        crate::security::transparency_log::TransparencyLogConfig {
+            enabled: true,
+            path: dir
+                .path()
+                .join("audit.jsonl")
+                .to_string_lossy()
+                .into_owned(),
+            key_id: "r7b".to_string(),
+            ..Default::default()
+        },
+    ))
+    .expect("open log");
+    meta.enable_transparency_log(std::sync::Arc::new(logger));
+    let backend = meta.backends.for_test().get(BACKEND).expect("the backend");
+    let resolved = meta
+        .resolve_dispatch(
+            (BACKEND, TOOL),
+            Some(&backend),
+            CallerProof::new(None, CallerProvenance::Credential),
+            None,
+        )
+        .await
+        .expect("premise: the operator's live grant resolves");
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some("r7b-key".to_owned()),
+        ..crate::protocol::mrtr::RetryFields::default()
+    };
+    let caller = MetaMcpCallerContext {
+        retry: &retry,
+        ..ctx(&AllowAll)
+    };
+    let recorded = meta.current_binding(
+        &meta.scoped(caller.scope().authorizer.backend_grant()),
+        BACKEND,
+        TOOL,
+    );
+    let key = deferred_replay_key(BACKEND, TOOL, &retry).expect("a keyed call");
+    let deferred = DeferredReplay {
+        response: crate::protocol::JsonRpcResponse::success(
+            RequestId::Number(11),
+            serde_json::json!({"content": [{"type": "text", "text": "r4-stored"}]}),
+        ),
+        audit: None,
+        audit_server: None,
+        tool_name: "continued".to_owned(),
+        arguments: serde_json::json!({}),
+        bindings: vec![(BACKEND.to_owned(), TOOL.to_owned(), recorded)],
+    };
+    let flow = visible::memo::with_visibility_memo(async {
+        assert!(record_deferred_replay(key, deferred), "premise: deferred");
+        let mut witness = super::super::nonce_settle::Witnessed::take(&caller);
+        meta.lift_deferred((BACKEND, TOOL), &resolved, &mut witness, None, &caller)
+            .await
+    })
+    .await;
+    let ControlFlow::Break(answer) = flow else {
+        panic!("premise: the lift served the deferred entry");
+    };
+    assert!(answer.error.is_none(), "premise: served: {answer:?}");
+    let servers: Vec<String> = std::fs::read_to_string(dir.path().join("audit.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|entry| {
+            entry.get("tool").is_some() && entry["event"] != "response_delivery_attempt"
+        })
+        .map(|entry| entry["server"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    assert!(
+        servers.is_empty(),
+        "R7b: a lifted continuation-origin replay wrote a record under {servers:?}"
+    );
 }

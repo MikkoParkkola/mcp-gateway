@@ -56,16 +56,10 @@ fn today(text: &str) -> String {
     splice(text, &redactor().credential_spans(text))
 }
 
+/// The product's splice, so the oracle writes the barrier where the code
+/// does (MIK-8794); the barrier itself is pinned by literal rows.
 fn splice(text: &str, ranges: &[(usize, usize)]) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut cursor = 0;
-    for &(start, end) in ranges {
-        out.push_str(&text[cursor..start]);
-        out.push_str(MARK);
-        cursor = end;
-    }
-    out.push_str(&text[cursor..]);
-    out
+    replace_spans(text, ranges)
 }
 
 /// The finding descriptions base records for `text`: one per matched pattern.
@@ -147,7 +141,6 @@ fn expected(text: &str) -> String {
     let spans = redactor().credential_spans(text);
     let trimmed = text.trim_start();
     let gated = !spans.is_empty()
-        && text.len() <= CAP
         && matches!(trimmed.as_bytes().first(), Some(b'{' | b'[' | b'"'))
         && serde_json::from_str::<Value>(text)
             .is_ok_and(|v| v.is_object() || v.is_array() || v.is_string());
@@ -193,52 +186,49 @@ fn expected(text: &str) -> String {
         }
         per_lit[index] = merged;
     }
-    // Each literal's new raw content; keys then take redact_keys' collision
-    // rule per object: clean names reserved first, then the first free `#n`.
+    // Each literal written in order into one output, so a marker and a key's
+    // suffix see what precedes them (MIK-8794); keys then take redact_keys'
+    // collision rule per object: clean names reserved first, then the first
+    // free suffix.
     let decode =
         |raw: &str| serde_json::from_str::<String>(&format!("\"{raw}\"")).expect("decodes");
-    let mut contents: Vec<String> = lits
-        .iter()
-        .enumerate()
-        .map(|(index, &(s, e, _, _))| {
-            let shifted: Vec<(usize, usize)> = per_lit[index]
-                .iter()
-                .map(|&(f, t)| (f - s, t - s))
-                .collect();
-            splice(&text[s..e], &shifted)
-        })
-        .collect();
     let mut taken: std::collections::HashSet<(usize, String)> = lits
         .iter()
         .enumerate()
         .filter(|&(index, &(_, _, key, _))| key && per_lit[index].is_empty())
         .map(|(_, &(s, e, _, object))| (object, decode(&text[s..e])))
         .collect();
-    for (index, &(_, _, key, object)) in lits.iter().enumerate() {
+    let mut out = Spliced::with_capacity(text.len());
+    let mut cursor = 0;
+    for (index, &(s, e, key, object)) in lits.iter().enumerate() {
+        out.push(&text[cursor..s]);
+        let from = out.out.len();
+        let mut at = s;
+        for &(f, t) in &per_lit[index] {
+            out.push(&text[at..f]);
+            out.insert_marker();
+            at = t;
+        }
+        out.push(&text[at..e]);
+        cursor = e;
         if !key || per_lit[index].is_empty() {
             continue;
         }
-        let candidate = decode(&contents[index]);
+        let candidate = decode(&out.out[from..]);
+        let spaced = out.barrier();
         let (mut name, mut n) = (candidate.clone(), 1);
         while taken.contains(&(object, name.clone())) {
             n += 1;
-            name = format!("{candidate}#{n}");
+            name = format!("{candidate}{}", collision_suffix(n, spaced));
         }
         taken.insert((object, name.clone()));
         if name != candidate {
             // The suffix goes on the raw text, so escapes stay as sent.
-            contents[index] = format!("{}#{n}", contents[index]);
+            out.push(&collision_suffix(n, spaced));
         }
     }
-    let mut out = String::with_capacity(text.len());
-    let mut cursor = 0;
-    for (index, &(s, e, _, _)) in lits.iter().enumerate() {
-        out.push_str(&text[cursor..s]);
-        out.push_str(&contents[index]);
-        cursor = e;
-    }
-    out.push_str(&text[cursor..]);
-    out
+    out.push(&text[cursor..]);
+    out.out
 }
 
 /// Every row: delivered as the oracle says, findings as base records, and a
@@ -520,13 +510,13 @@ fn c2_two_credential_shaped_keys_take_the_first_free_suffix() {
 }
 
 #[test]
-fn c3_a_leaf_over_the_cap_takes_todays_path() {
+fn c3_a_leaf_over_the_cap_is_projected_too() {
     let head = format!(r#"{{"dsn":"{}","pad":""#, pg_url());
     let pad = "x".repeat(CAP + 1 - head.len() - 2);
     let text = format!("{head}{pad}\"}}");
     assert_eq!(text.len(), CAP + 1);
-    let (out, _) = deliver(&text);
-    assert_eq!(out, today(&text));
+    let out = assert_projected(&text);
+    assert!(parses(&out), "MIK-8774: over the cap the JSON still parses");
 }
 
 #[test]
@@ -557,6 +547,16 @@ fn c7_depth_is_one_level() {
 
 #[path = "redactor_b2_key_tests.rs"]
 mod key_rows;
+
+// ── I: redacting twice changes nothing (MIK-8794) ─────────────────────────
+
+#[path = "redactor_idem_tests.rs"]
+mod idem_rows;
+
+// ── S: a leaf over the cap (MIK-8774) ─────────────────────────────────────
+
+#[path = "redactor_b2_large_tests.rs"]
+mod large_rows;
 
 // ── D: properties ─────────────────────────────────────────────────────────
 
@@ -591,9 +591,12 @@ impl Gen {
         if secret {
             let all = secrets();
             let (_, s) = self.pick(&all).clone();
+            // A connection-string prefix right before the secret (MIK-8794):
+            // under ten more non-space characters, so only the marker could
+            // carry the run past the rule's floor on a second pass.
             format!(
                 "{}{s}{}",
-                self.pick(&["", "x ", "pre-"]),
+                self.pick(&["", "x ", "pre-", "redis://", "Postgres://"]),
                 self.pick(&["", " y", "/tail"])
             )
         } else {

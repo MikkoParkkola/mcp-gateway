@@ -5,10 +5,10 @@
 //! typed refusal naming why, never a silent no-op. The three names are
 //! `backend.<x>.resource_updated|resources_changed|prompts_changed`.
 //!
-//! Refused: the SSE-handshake HTTP transport (an explicit
-//! `streamable_http: false` never connected, or the transport a connect
-//! detected; MIK-7969), A2A, and identity propagation. An unset key is
-//! judged at connect, so an unreachable one answers the backend error. The refusal is
+//! Refused: A2A (it has no resource or prompt capabilities; its
+//! `tools_changed` is offered, MIK-8835) and identity propagation. The
+//! SSE-handshake HTTP transport offers the events since MIK-8835. An unset key
+//! is judged at connect, so an unreachable one answers the backend error. The refusal is
 //! `-32014` with `data.feature = "backendEvents"` and `data.reason`; it is
 //! answered only to a caller who may reach the backend, so it cannot be used
 //! to probe the config, and before any callback traffic.
@@ -83,8 +83,7 @@ async fn ineligible_backends_refuse_upstream_events_with_the_reason() {
     let dir = tempfile::tempdir().expect("tempdir");
     let gw = Gateway::start(dir.path(), refusal_config(dir.path())).await;
     let cases = [
-        ("sse", "sse_handshake_transport"),
-        ("agent", "a2a_transport"),
+        ("agent", "a2a_no_such_capability"),
         ("idp", "identity_propagation"),
     ];
     for (backend, reason) in cases {

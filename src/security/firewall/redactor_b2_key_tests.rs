@@ -289,7 +289,8 @@ fn p2_the_patterns_are_the_reviewed_ones() {
     let live: Vec<&str> = CREDENTIAL_PATTERNS.iter().map(|(p, _)| *p).collect();
     assert_eq!(
         live, reviewed,
-        "a pattern changed: recheck KEY_MATCH_TAIL's bound"
+        "a pattern changed: recheck KEY_MATCH_TAIL's bound, and MIK-8794's barrier \
+         (only the connection-string class may run through the marker)"
     );
     let mut crossers = Vec::new();
     for (pattern, name) in CREDENTIAL_PATTERNS {
@@ -391,12 +392,12 @@ fn f2_many_overlapped_keys_cost() {
 }
 
 /// The redaction marker holds no whitespace, so redacting a span that did
-/// (`Bearer` and its token) can join the text around it into a new match: a
-/// second pass then changes the first pass's output. Over-redaction, never a
-/// leak; production re-scans the same bytes on a dead-letter event replay.
-/// Pinned as today's outcome so MIK-8794's fix flips this row.
+/// (`Bearer` and its token) could join the text around it into a new match,
+/// and a second pass changed the first pass's output; production re-scans
+/// the same bytes on a dead-letter event replay. MIK-8794's barrier ends the
+/// run at the marker, so a second pass now changes nothing.
 #[test]
-fn g1_a_second_pass_still_changes_these_until_mik_8794() {
+fn g1_a_second_pass_changes_these_no_more_mik_8794() {
     let bearer = format!("{} {}", "Bearer", "t".repeat(20));
     let rows = [
         format!("redis://{bearer}"),
@@ -408,10 +409,7 @@ fn g1_a_second_pass_still_changes_these_until_mik_8794() {
     for text in rows {
         let (once, _) = deliver(&text);
         let (twice, _) = deliver(&once);
-        assert_ne!(
-            twice, once,
-            "MIK-8794 fixed? a second pass now leaves {once:?} as it is: flip this row"
-        );
+        assert_eq!(twice, once, "a second pass changed {once:?}");
         assert!(
             !once.contains(&"t".repeat(20)),
             "pass 1 still hides the token: {once}"

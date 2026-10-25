@@ -8,7 +8,6 @@ use std::time::Instant;
 use tracing::debug;
 
 use super::{OPEN_LIMIT, Outcome, State, failed, requested, watched_by};
-use crate::backend::listen::ListenTarget;
 use crate::events::upstream_listener::Shared;
 use crate::transport::upstream_tap::{FrameStream, Refused, Requested, UpstreamListen, Watched};
 
@@ -16,13 +15,13 @@ use crate::transport::upstream_tap::{FrameStream, Refused, Requested, UpstreamLi
 pub(super) async fn open_first(
     shared: &Arc<Shared>,
     state: &mut State<'_>,
-    target: &ListenTarget,
+    handle: &Weak<dyn UpstreamListen>,
     modern: bool,
 ) -> Result<(), Outcome> {
     let first = requested(shared);
     let opened = tokio::select! {
         () = shared.stop.cancelled() => return Err(Outcome::Stopped),
-        opened = tokio::time::timeout(OPEN_LIMIT, open(&target.handle, modern, first.clone(), watched_by(shared))) => {
+        opened = tokio::time::timeout(OPEN_LIMIT, open(handle, modern, first.clone(), watched_by(shared))) => {
             opened.unwrap_or(Err(Refused::Expired))
         }
     };

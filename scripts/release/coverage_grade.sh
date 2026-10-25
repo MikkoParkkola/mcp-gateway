@@ -26,7 +26,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$(git -C "$HERE" rev-parse --show-toplevel)"
 
 # Offline self-check baseline: release-line commit 07027881e, whose grader
-# inputs and outputs are vendored below (artifacts are kept 14 days).
+# inputs and outputs are vendored below (artifacts were kept 14 days then).
 SELF_DIR=docs/release/baselines/coverage-39396107020
 SELF_REV=07027881e
 

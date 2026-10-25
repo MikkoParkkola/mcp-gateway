@@ -29,7 +29,7 @@ use std::collections::{HashMap, HashSet};
 use regex::{Regex, RegexSet};
 use serde_json::{Map, Value};
 
-use super::json_literal::{self, Literal};
+use super::json_literal::{self, Literal, decoded, trimmed_content};
 use super::{Finding, FindingLocation, ScanType};
 use crate::security::Severity;
 use crate::truncate::{Budget, Suffix, truncate};
@@ -38,8 +38,8 @@ use crate::truncate::{Budget, Suffix, truncate};
 mod credential_names;
 use credential_names::Family;
 
-/// The largest JSON-in-text leaf whose credential spans are redacted inside
-/// its string values (MIK-8745); a larger one is redacted whole, as before.
+/// The largest JSON-in-text leaf walked on its collected literals (MIK-8745);
+/// a larger one takes the streaming walk in `redactor_large.rs` (MIK-8774).
 const B2_MAX_LEAF_BYTES: usize = 1 << 20;
 
 /// Pre-compiled credential/PII redactor.
@@ -56,6 +56,20 @@ pub struct Redactor {
     member_value: Regex,
 }
 
+/// The connection-string rule's prefix, one text for the rule and for the
+/// barrier [`Spliced`] writes (MIK-8794).
+macro_rules! connection_prefix {
+    () => {
+        "(?i)(?:postgres|mysql|mongodb|redis)://"
+    };
+}
+
+// MIK-8794: the writer every redaction insertion goes through; declared
+// after the macro it uses.
+#[path = "redactor_splice.rs"]
+mod splice;
+use splice::{Spliced, collision_suffix, ends_open};
+
 /// What [`Redactor::redact_json_text`] did with a leaf.
 enum JsonText {
     /// Not a JSON document the walk takes: today's whole-leaf path applies.
@@ -67,7 +81,7 @@ enum JsonText {
 }
 
 /// The replacement every redaction writes.
-const REDACTED: &str = "[REDACTED:credential]";
+pub(crate) const REDACTED: &str = "[REDACTED:credential]";
 
 // The generic API-key rule's two halves, shared by its text pattern and by the
 // JSON-member pairing, so the two cannot drift apart (MIK-8756).
@@ -128,7 +142,7 @@ const CREDENTIAL_PATTERNS: &[(&str, &str)] = &[
     (r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{20,}", "Bearer Token"),
     // Database connection strings (postgres, mysql, mongodb, redis)
     (
-        r"(?i)(?:postgres|mysql|mongodb|redis)://[^\s]{10,}",
+        concat!(connection_prefix!(), r"[^\s]{10,}"),
         "Database Connection String",
     ),
     // OpenAI project API keys (sk-proj-...)
@@ -294,43 +308,81 @@ impl Redactor {
         exempt: &dyn Fn(&str) -> bool,
         findings: &mut Vec<Finding>,
     ) -> JsonText {
+        if !json_literal::fits_offsets(text.len()) {
+            return JsonText::NotJson;
+        }
+        if text.len() > B2_MAX_LEAF_BYTES {
+            return self.redact_large_json(text, exempt, findings);
+        }
         if b2_gate(text).is_none() {
             return JsonText::NotJson;
         }
+        self.redact_collected(text, exempt, findings)
+    }
+
+    /// [`Self::redact_json_text`] on a document already validated: its
+    /// literals collected, projected, and keys renamed where a match starts.
+    fn redact_collected(
+        &self,
+        text: &str,
+        exempt: &dyn Fn(&str) -> bool,
+        findings: &mut Vec<Finding>,
+    ) -> JsonText {
         let literals = json_literal::string_literals(text);
         // A value literal whose decoded text is exempt keeps every byte, and a
         // pattern counts only where it still redacts something (MIK-8756).
-        let exempt_lits: Vec<&Literal> = literals
+        let exempt_contents: Vec<(usize, usize)> = literals
             .iter()
             .filter(|lit| !lit.key && decoded(text, lit).is_some_and(|v| exempt(&v)))
+            .map(|lit| (lit.start(), lit.end()))
             .collect();
-        let overlaps_exempt = |&(start, end): &(usize, usize)| {
-            exempt_lits.iter().any(|l| start < l.end && l.start < end)
+        let starts_in_literal = |at: usize| {
+            let after = literals.partition_point(|lit| lit.start() <= at);
+            after.checked_sub(1).is_some_and(|i| at < literals[i].end())
         };
         let mut matched = Vec::new();
         let mut spans = Vec::new();
         for idx in &self.set.matches(text) {
-            let kept: Vec<(usize, usize)> = overlapping_spans(&self.regexes[idx], text)
-                .into_iter()
-                .filter(|span| !overlaps_exempt(span))
-                .collect();
-            if !kept.is_empty() {
-                matched.push(idx);
-                spans.extend(kept);
+            let found = overlapping_spans(&self.regexes[idx], text);
+            // Judged on the matches as found: a piece left after an exempt
+            // value is cut out can start on that value's closing quote. No
+            // pattern starts on a quote (P2 pins their text), so a match in
+            // an exempt value starts inside it and passes; a pattern that
+            // could start on one must revisit this check.
+            if !found.iter().all(|&(start, _)| starts_in_literal(start)) {
+                tracing::debug!(
+                    "a credential span starts outside a string literal; redacting the leaf whole"
+                );
+                return JsonText::NotJson;
             }
+            // An exempt value loses only its own bytes from a span that
+            // crosses it; dropping the whole span delivered the credential
+            // beside it (MIK-8832).
+            let crossed = found
+                .iter()
+                .any(|&(start, end)| exempt_contents.iter().any(|&(a, b)| a < end && start < b));
+            let mut kept = without(&found, &exempt_contents);
+            kept.sort_unstable();
+            let kept = merge_spans(kept);
+            // A pattern counts only where what is left still redacts.
+            let redacts = if crossed {
+                !project(
+                    text,
+                    &kept,
+                    |lit| self.match_starts_in(text, lit),
+                    &literals,
+                )
+                .is_empty()
+            } else {
+                !kept.is_empty()
+            };
+            if redacts {
+                matched.push(idx);
+            }
+            spans.extend(kept);
         }
         spans.sort_unstable();
         let spans = merge_spans(spans);
-        let starts_in_literal = |at: usize| {
-            let after = literals.partition_point(|lit| lit.start <= at);
-            after.checked_sub(1).is_some_and(|i| at < literals[i].end)
-        };
-        if !spans.iter().all(|&(start, _)| starts_in_literal(start)) {
-            tracing::debug!(
-                "a credential span starts outside a string literal; redacting the leaf whole"
-            );
-            return JsonText::NotJson;
-        }
         let members = self.member_values(text, &literals, exempt);
         if spans.is_empty() && members.is_empty() {
             return JsonText::Kept;
@@ -343,8 +395,21 @@ impl Redactor {
             |lit| self.match_starts_in(text, lit),
             &literals,
         );
-        let mut ranges = raw.clone();
-        ranges.extend(members.iter().map(|(lit, _)| (lit.start, lit.end)));
+        // A newer family adds no finding where one raw range already covers the
+        // value's trimmed content: one secret, one finding (family 1 keeps two).
+        // Decided before the member ranges join `raw`, by a search of its
+        // sorted ranges, so it costs no copy and no rescan per member.
+        let reported: Vec<Family> = (members.iter())
+            .filter(|&&(lit, family)| {
+                let (start, end) = trimmed_content(text, lit);
+                let after = raw.partition_point(|range| range.0 <= start);
+                let covered = after.checked_sub(1).is_some_and(|i| end <= raw[i].1);
+                family == Family::Generic || !covered
+            })
+            .map(|&(_, family)| family)
+            .collect();
+        let mut ranges = raw;
+        ranges.extend(members.iter().map(|(lit, _)| (lit.start(), lit.end())));
         ranges.sort_unstable();
         let ranges = merge_spans(ranges);
         let redacted = if literals.iter().any(|lit| lit.key && covers(&ranges, lit)) {
@@ -353,15 +418,7 @@ impl Redactor {
             replace_spans(text, &ranges)
         };
         self.record_findings(&matched, &redacted, Site::Value, findings);
-        // A newer family adds no finding where one raw range already covers the
-        // value's trimmed content: one secret, one finding (family 1 keeps two).
-        for &(lit, family) in &members {
-            let (start, end) = trimmed_content(text, lit);
-            let covered = raw.iter().any(|&(a, b)| a <= start && end <= b);
-            if family == Family::Generic || !covered {
-                findings.push(Self::member_finding(family));
-            }
-        }
+        findings.extend(reported.into_iter().map(Self::member_finding));
         JsonText::Redacted(redacted)
     }
 
@@ -378,7 +435,7 @@ impl Redactor {
         literals
             .windows(2)
             .filter(|pair| pair[0].key && !pair[1].key)
-            .filter(|pair| text[pair[0].end + 1..pair[1].start - 1].trim() == ":")
+            .filter(|pair| text[pair[0].end() + 1..pair[1].start() - 1].trim() == ":")
             .filter_map(
                 |pair| match (decoded(text, &pair[0]), decoded(text, &pair[1])) {
                     (Some(key), Some(value)) if !exempt(&value) => self
@@ -398,16 +455,19 @@ impl Redactor {
     /// [`KEY_MATCH_TAIL`] cannot invent a match, and that tail holds every
     /// match a key can start.
     fn match_starts_in(&self, text: &str, lit: &Literal) -> bool {
-        let mut end = (lit.end + KEY_MATCH_TAIL).min(text.len());
+        let mut end = (lit.end() + KEY_MATCH_TAIL).min(text.len());
         while !text.is_char_boundary(end) {
             end -= 1;
         }
         let near = &text[..end];
-        self.set.matches_at(near, lit.start).into_iter().any(|idx| {
-            self.regexes[idx]
-                .find_at(near, lit.start)
-                .is_some_and(|found| found.start() < lit.end)
-        })
+        self.set
+            .matches_at(near, lit.start())
+            .into_iter()
+            .any(|idx| {
+                self.regexes[idx]
+                    .find_at(near, lit.start())
+                    .is_some_and(|found| found.start() < lit.end())
+            })
     }
 
     /// One finding per matched pattern, showing `redacted`.
@@ -477,8 +537,10 @@ impl Redactor {
                 map.insert(key, value);
                 continue;
             };
-            let name = match names.claim(&candidate) {
-                Some(n) => format!("{candidate}#{n}"),
+            // A parsed key is its own document, so its end is judged alone.
+            let spaced = ends_open(&candidate);
+            let name = match names.claim(&candidate, spaced) {
+                Some(n) => format!("{candidate}{}", collision_suffix(n, spaced)),
                 None => candidate,
             };
             map.insert(name, value);
@@ -492,7 +554,9 @@ impl Redactor {
 #[derive(Default)]
 struct KeyNames {
     taken: HashSet<String>,
-    next: HashMap<String, usize>,
+    /// Per candidate and spacing: the two spellings of a suffix never
+    /// collide, so each keeps its own first free `n`.
+    next: HashMap<(String, bool), usize>,
 }
 
 impl KeyNames {
@@ -504,16 +568,20 @@ impl KeyNames {
         }
     }
 
-    /// Claim `candidate`, or else the first free `<candidate>#n`: `None`
-    /// when `candidate` itself was free, else the `n`.
-    fn claim(&mut self, candidate: &str) -> Option<usize> {
+    /// Claim `candidate`, or else the first free `<candidate><suffix>`, the
+    /// suffix [`collision_suffix`] writes for `spaced`: `None` when
+    /// `candidate` itself was free, else the `n`.
+    fn claim(&mut self, candidate: &str, spaced: bool) -> Option<usize> {
         if self.taken.insert(candidate.to_owned()) {
             return None;
         }
-        let n = self.next.entry(candidate.to_owned()).or_insert(1);
+        let n = self.next.entry((candidate.to_owned(), spaced)).or_insert(1);
         loop {
             *n += 1;
-            if self.taken.insert(format!("{candidate}#{n}")) {
+            if self
+                .taken
+                .insert(format!("{candidate}{}", collision_suffix(*n, spaced)))
+            {
                 return Some(*n);
             }
         }
@@ -575,44 +643,6 @@ fn overlapping_spans(re: &Regex, text: &str) -> Vec<(usize, usize)> {
     spans
 }
 
-/// `lit`'s content decoded, quotes included in the parse, so JSON escapes
-/// read as the characters they stand for.
-fn decoded(text: &str, lit: &Literal) -> Option<String> {
-    serde_json::from_str::<String>(&text[lit.start - 1..=lit.end]).ok()
-}
-
-/// The byte range of `lit`'s content with JSON whitespace, raw or escaped
-/// (`\n`, `\t`, `\r`), trimmed from both ends.
-fn trimmed_content(text: &str, lit: &Literal) -> (usize, usize) {
-    let bytes = text.as_bytes();
-    let (mut start, mut end) = (lit.start, lit.end);
-    loop {
-        if start < end && bytes[start].is_ascii_whitespace() {
-            start += 1;
-        } else if start + 1 < end
-            && bytes[start] == b'\\'
-            && matches!(bytes[start + 1], b'n' | b't' | b'r')
-        {
-            start += 2;
-        } else {
-            break;
-        }
-    }
-    loop {
-        if end > start && bytes[end - 1].is_ascii_whitespace() {
-            end -= 1;
-        } else if end >= start + 2
-            && bytes[end - 2] == b'\\'
-            && matches!(bytes[end - 1], b'n' | b't' | b'r')
-        {
-            end -= 2;
-        } else {
-            break;
-        }
-    }
-    (start, end)
-}
-
 /// The parsed document when `text` is JSON whose credential spans can be
 /// redacted inside its string values: an object, an array or a string, within
 /// the size cap. One function, so MIK-8756 can widen the entry.
@@ -641,24 +671,28 @@ fn project(
     redact_key: impl Fn(&Literal) -> bool,
     literals: &[Literal],
 ) -> Vec<(usize, usize)> {
-    let mut ranges = Vec::new();
+    // Sized by a first count of every literal a span overlaps (keys included,
+    // so an upper bound): grown by doubling, the list held its old and new
+    // buffers at the last growth (MIK-8774).
+    let mut ranges = Vec::with_capacity(overlaps(spans, literals));
     let mut first = 0;
     for lit in literals {
-        while first < spans.len() && spans[first].1 <= lit.start {
+        while first < spans.len() && spans[first].1 <= lit.start() {
             first += 1;
         }
         let mut lit_escapes = None;
-        let overlapped = spans.get(first).is_some_and(|span| span.0 < lit.end);
+        let overlapped = spans.get(first).is_some_and(|span| span.0 < lit.end());
         if lit.key && !(overlapped && redact_key(lit)) {
             continue; // a key spans only cross, or none reach
         }
-        for &(start, end) in spans[first..].iter().take_while(|span| span.0 < lit.end) {
-            let (mut from, mut to) = (start.max(lit.start), end.min(lit.end));
+        for &(start, end) in spans[first..].iter().take_while(|span| span.0 < lit.end()) {
+            let (mut from, mut to) = (start.max(lit.start()), end.min(lit.end()));
             if from >= to {
                 continue; // an empty value: the span covers none of its bytes
             }
-            let escapes = lit_escapes
-                .get_or_insert_with(|| json_literal::escapes(&text[lit.start..lit.end], lit.start));
+            let escapes = lit_escapes.get_or_insert_with(|| {
+                json_literal::escapes(&text[lit.start()..lit.end()], lit.start())
+            });
             if let Some(escape) = escape_around(escapes, from) {
                 from = escape.0;
             }
@@ -672,12 +706,6 @@ fn project(
     merge_spans(ranges)
 }
 
-/// Whether any of `ranges` (in order, disjoint) falls inside `lit`.
-fn covers(ranges: &[(usize, usize)], lit: &Literal) -> bool {
-    let after = ranges.partition_point(|range| range.0 < lit.start);
-    ranges.get(after).is_some_and(|range| range.0 < lit.end)
-}
-
 /// `text` with `ranges` replaced, where a key holding a range is renamed as
 /// [`Redactor::redact_keys`] renames one: within its object every clean key
 /// keeps its name, and each redacted key takes its redacted name or the first
@@ -689,85 +717,84 @@ fn rename_keys(text: &str, ranges: &[(usize, usize)], literals: &[Literal]) -> S
     let keys = literals.iter().filter(|lit| lit.key);
     let mut objects: HashMap<usize, KeyNames> = HashMap::new();
     for lit in keys.clone().filter(|lit| !covers(ranges, lit)) {
-        if let Some(name) = decode(&text[lit.start..lit.end]) {
-            objects.entry(lit.container).or_default().taken.insert(name);
+        if let Some(name) = decode(&text[lit.start()..lit.end()]) {
+            objects
+                .entry(lit.container())
+                .or_default()
+                .taken
+                .insert(name);
         }
     }
-    let mut renamed: Vec<(usize, usize, String)> = Vec::new();
-    for lit in keys.filter(|lit| covers(ranges, lit)) {
-        let (lo, hi) = (
-            ranges.partition_point(|range| range.0 < lit.start),
-            ranges.partition_point(|range| range.0 < lit.end),
-        );
-        let inside: Vec<(usize, usize)> = ranges[lo..hi]
-            .iter()
-            .map(|range| (range.0 - lit.start, range.1 - lit.start))
-            .collect();
-        let mut raw = replace_spans(&text[lit.start..lit.end], &inside);
-        if let Some(candidate) = decode(&raw)
-            && let Some(n) = objects.entry(lit.container).or_default().claim(&candidate)
+    let mut renamed = keys.filter(|lit| covers(ranges, lit)).peekable();
+    // The key being written, and where its text starts in `out`. A key is
+    // written into the document's own output, so its markers and its suffix
+    // see what precedes it (MIK-8794).
+    let mut open: Option<(&Literal, usize)> = None;
+    // Each renamed key may also take a collision suffix and its barrier.
+    let suffixes = literals
+        .iter()
+        .filter(|lit| lit.key && covers(ranges, lit))
+        .count();
+    let mut out = Spliced::with_capacity(spliced_len(text, ranges) + suffixes * SUFFIX_ROOM);
+    let mut cursor = 0;
+    let mut close = |out: &mut Spliced, cursor: &mut usize, (lit, from): (&Literal, usize)| {
+        out.push(&text[*cursor..lit.end()]);
+        *cursor = lit.end();
+        let spaced = out.barrier();
+        if let Some(candidate) = decode(&out.out[from..])
+            && let Some(n) = objects
+                .entry(lit.container())
+                .or_default()
+                .claim(&candidate, spaced)
         {
-            raw = format!("{raw}#{n}");
+            out.push(&collision_suffix(n, spaced));
         }
-        renamed.push((lit.start, lit.end, raw));
-    }
-    let mut out = String::with_capacity(text.len());
-    let mut cursor = 0;
-    let mut keys = renamed.into_iter().peekable();
+    };
     for &(start, end) in ranges {
-        if start < cursor {
-            continue; // inside a key already written whole
+        if let Some(key) = open.take_if(|(lit, _)| start >= lit.end()) {
+            close(&mut out, &mut cursor, key);
         }
-        let (from, to, with) = match keys.next_if(|key| key.0 <= start && start < key.1) {
-            Some(key) => key,
-            None => (start, end, "[REDACTED:credential]".to_owned()),
-        };
-        out.push_str(&text[cursor..from]);
-        out.push_str(&with);
-        cursor = to;
-    }
-    out.push_str(&text[cursor..]);
-    out
-}
-
-/// The escape in `escapes` (in order, disjoint) that `at` falls strictly
-/// inside, if any.
-fn escape_around(escapes: &[(usize, usize)], at: usize) -> Option<(usize, usize)> {
-    let after = escapes.partition_point(|escape| escape.0 < at);
-    after
-        .checked_sub(1)
-        .map(|i| escapes[i])
-        .filter(|escape| at < escape.1)
-}
-
-/// `text` with every range in `ranges` (merged, in order) replaced by the
-/// redaction marker.
-fn replace_spans(text: &str, ranges: &[(usize, usize)]) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut cursor = 0;
-    for &(start, end) in ranges {
-        out.push_str(&text[cursor..start]);
-        out.push_str(REDACTED);
+        if open.is_none()
+            && let Some(lit) = renamed.next_if(|lit| lit.start() <= start && start < lit.end())
+        {
+            out.push(&text[cursor..lit.start()]);
+            cursor = lit.start();
+            open = Some((lit, out.out.len()));
+        }
+        out.push(&text[cursor..start]);
+        out.insert_marker();
         cursor = end;
     }
-    out.push_str(&text[cursor..]);
-    out
+    if let Some(key) = open {
+        close(&mut out, &mut cursor, key);
+    }
+    out.push(&text[cursor..]);
+    out.out
 }
 
-/// Merge sorted spans that overlap or touch, so no character between two
-/// matched spans can survive and touching tokens share one marker.
-fn merge_spans(spans: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
-    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
-    for (start, end) in spans {
-        match merged.last_mut() {
-            Some(last) if start <= last.1 => last.1 = last.1.max(end),
-            _ => merged.push((start, end)),
-        }
+/// Room for one key's collision suffix (`#` and a counter) and its barrier.
+const SUFFIX_ROOM: usize = 24;
+
+fn replace_spans(text: &str, ranges: &[(usize, usize)]) -> String {
+    let mut out = Spliced::with_capacity(spliced_len(text, ranges));
+    let mut cursor = 0;
+    for &(start, end) in ranges {
+        out.push(&text[cursor..start]);
+        out.insert_marker();
+        cursor = end;
     }
-    merged
+    out.push(&text[cursor..]);
+    out.out
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[path = "redactor_spans.rs"]
+mod spans;
+use spans::{covers, escape_around, merge_spans, overlaps, spliced_capacity, spliced_len, without};
+
+#[path = "redactor_large.rs"]
+mod large;
 
 #[cfg(test)]
 #[path = "redactor_tests.rs"]
@@ -780,3 +807,7 @@ mod b2_tests;
 #[cfg(test)]
 #[path = "redactor_member_tests.rs"]
 mod member_tests;
+
+#[cfg(test)]
+#[path = "redactor_exempt_span_tests.rs"]
+mod exempt_span_tests;

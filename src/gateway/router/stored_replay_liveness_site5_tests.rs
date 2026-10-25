@@ -428,6 +428,7 @@ async fn l3_a_deferred_replay_is_taken_only_by_its_own_key_once() {
             json!({"content": [{"type": "text", "text": text}]}),
         ),
         audit: None,
+        audit_server: None,
         tool_name: "gateway_invoke".to_string(),
         arguments: json!({}),
         bindings: Vec::new(),

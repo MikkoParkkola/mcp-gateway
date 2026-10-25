@@ -135,15 +135,15 @@ fn linear_capability_payload_shapes_match_declared_output_schemas() {
 
     assert_linear_capability_shape(
         "capabilities/linear/linear_get_issue.yaml",
-        "data.searchIssues",
+        "data",
         serde_json::json!({
-            "nodes": [{
+            "issue": {
                 "id": "issue-1",
                 "identifier": "MIK-1",
                 "title": "Validation",
                 "comments": { "nodes": [] },
                 "children": { "nodes": [] }
-            }]
+            }
         }),
         serde_json::json!({
             "issue": {
@@ -271,8 +271,8 @@ fn linear_get_issue_projection_spec_maps_canonical_fields() {
         .as_ref()
         .expect("linear_get_issue must declare a projection spec");
 
-    // Realistic payload AFTER the capability's transform (project nodes[0] ->
-    // rename to `issue`) — that is what the projection engine sees at dispatch.
+    // Realistic payload as the capability returns it (`data` from
+    // `issue(id:)`, so `{issue: {...}}`) — what the projection engine sees.
     let payload = serde_json::json!({
         "issue": {
             "id": "uuid-1",

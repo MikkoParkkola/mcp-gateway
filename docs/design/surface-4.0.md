@@ -180,7 +180,7 @@ counts, and `/sse` answers 410 Gone pointing to `POST /mcp` (MIK-8044.SURF.4b).
 | `/metrics` | 1 |  |  |  |  |
 | `/readyz` | 1 |  |  |  |  |
 | `/sse` |  |  |  | `/sse` |  |
-| `/ui` | 1 |  |  | `/ui/api/backends`; `/ui/api/backends/{name}`; `/ui/api/backends/{name}/revive`; `/ui/api/capabilities`; `/ui/api/capabilities/{name}`; `/ui/api/config`; `/ui/api/control-plane`; `/ui/api/control-plane/decisions`; `/ui/api/control-plane/export-status`; `/ui/api/control-plane/grants`; `/ui/api/control-plane/policies`; `/ui/api/costs`; `/ui/api/dashboard-link`; `/ui/api/events/dead-letters`; `/ui/api/events/dead-letters/replay`; `/ui/api/events/dead-letters/{id}/replay`; `/ui/api/events/held`; `/ui/api/import/openapi`; `/ui/api/import/openapi/preview`; `/ui/api/registry`; `/ui/api/registry/search`; `/ui/api/reload`; `/ui/api/status`; `/ui/api/tools` |  |
+| `/ui` | 3 |  |  | `/ui/api/backends`; `/ui/api/backends/{name}`; `/ui/api/backends/{name}/revive`; `/ui/api/capabilities`; `/ui/api/capabilities/{name}`; `/ui/api/config`; `/ui/api/control-plane`; `/ui/api/control-plane/decisions`; `/ui/api/control-plane/export-status`; `/ui/api/control-plane/grants`; `/ui/api/control-plane/policies`; `/ui/api/costs`; `/ui/api/dashboard-link`; `/ui/api/events/dead-letters`; `/ui/api/events/dead-letters/replay`; `/ui/api/events/dead-letters/{id}/replay`; `/ui/api/events/held`; `/ui/api/import/openapi`; `/ui/api/import/openapi/preview`; `/ui/api/registry`; `/ui/api/registry/search`; `/ui/api/reload`; `/ui/api/status`; `/ui/api/tools`; `/ui/assets/{file}` |  |
 | `config-driven` | 3 |  |  |  |  |
 
 ### lib
@@ -1376,22 +1376,22 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 |---|---|---|---|---|
 | `/.well-known/jwks.json` | KEEP | OAuth discovery documents clients fetch | - | src/gateway/routes.rs:29 |
 | `/.well-known/oauth-protected-resource` | KEEP | OAuth discovery documents clients fetch | - | src/gateway/routes.rs:30 |
-| `/accounts/v1` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:64 |
-| `/accounts/v1/assets/complete.js` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:73 |
-| `/accounts/v1/callback` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:71 |
-| `/accounts/v1/complete` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:72 |
-| `/accounts/v1/connections/{account_id}` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:70 |
-| `/accounts/v1/journeys` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:67 |
-| `/accounts/v1/journeys/{id}` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:68 |
-| `/accounts/v1/journeys/{id}/start` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:69 |
-| `/accounts/v1/{*rest}` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:66 |
+| `/accounts/v1` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:70 |
+| `/accounts/v1/assets/complete.js` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:79 |
+| `/accounts/v1/callback` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:77 |
+| `/accounts/v1/complete` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:78 |
+| `/accounts/v1/connections/{account_id}` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:76 |
+| `/accounts/v1/journeys` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:73 |
+| `/accounts/v1/journeys/{id}` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:74 |
+| `/accounts/v1/journeys/{id}/start` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:75 |
+| `/accounts/v1/{*rest}` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:72 |
 | `/api/costs` | KEEP | admin cost API for scripts (raw session ids) | - | src/gateway/routes.rs:25 |
 | `/auth/token` | KEEP | key-server token issue and revoke (MULTI_USER.md); mounted only with `key_server.enabled` | - | src/gateway/routes.rs:31 |
 | `/auth/token/{jti}` | KEEP | key-server token issue and revoke (MULTI_USER.md); mounted only with `key_server.enabled` | - | src/gateway/routes.rs:32 |
 | `/auth/tokens` | KEEP | key-server token issue and revoke (MULTI_USER.md); mounted only with `key_server.enabled` | - | src/gateway/routes.rs:33 |
-| `/dashboard` | KEEP | the web dashboard and its sign-in hand-off | - | src/gateway/routes.rs:35 |
-| `/dashboard/handoff` | KEEP | the web dashboard and its sign-in hand-off | - | src/gateway/routes.rs:36 |
-| `/dashboard/logout` | KEEP | the web dashboard and its sign-in hand-off | - | src/gateway/routes.rs:37 |
+| `/dashboard` | KEEP | the web dashboard and its sign-in hand-off | - | src/gateway/routes.rs:41 |
+| `/dashboard/handoff` | KEEP | the web dashboard and its sign-in hand-off | - | src/gateway/routes.rs:42 |
+| `/dashboard/logout` | KEEP | the web dashboard and its sign-in hand-off | - | src/gateway/routes.rs:43 |
 | `/health` | KEEP | liveness and readiness probes for supervisors and Kubernetes | - | src/gateway/routes.rs:21 |
 | `/livez` | KEEP | liveness and readiness probes for supervisors and Kubernetes | - | src/gateway/routes.rs:22 |
 | `/mcp` | KEEP | the MCP endpoint every client uses | - | src/gateway/routes.rs:26 |
@@ -1400,30 +1400,33 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `/readyz` | KEEP | liveness and readiness probes for supervisors and Kubernetes | - | src/gateway/routes.rs:23 |
 | `/sse` | INTERNAL | not a transport: answers a pointer to `/mcp` for clients configured for the removed SSE endpoint; SSE-transport clients use `/mcp` (Streamable HTTP; `GET /mcp` opens the stream) | unchanged; listed as a deprecation helper | src/gateway/routes.rs:28 |
 | `/ui` | KEEP | the web dashboard and its sign-in hand-off | - | src/gateway/routes.rs:34 |
-| `/ui/api/backends` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:51 |
-| `/ui/api/backends/{name}` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:52 |
-| `/ui/api/backends/{name}/revive` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:53 |
-| `/ui/api/capabilities` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:44 |
-| `/ui/api/capabilities/{name}` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:45 |
-| `/ui/api/config` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:40 |
-| `/ui/api/control-plane` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:46 |
-| `/ui/api/control-plane/decisions` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:49 |
-| `/ui/api/control-plane/export-status` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:50 |
-| `/ui/api/control-plane/grants` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:47 |
-| `/ui/api/control-plane/policies` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:48 |
-| `/ui/api/costs` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:43 |
-| `/ui/api/dashboard-link` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:42 |
-| `/ui/api/events/dead-letters` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface; MIK-8697: a row names its subscription as `subscriptionAlias` (keyed) and `subscriptionId` is removed, and the `subscription` filter takes the alias or a stored id | src/gateway/routes.rs:56 |
-| `/ui/api/events/dead-letters/replay` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:57 |
-| `/ui/api/events/dead-letters/{id}/replay` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:58 |
-| `/ui/api/events/held` | INTERNAL | private JSON API of the bundled web UI | admin only, like the dead-letter listing; held webhook subscriptions per type (MIK-8057) | src/gateway/routes.rs:59 |
-| `/ui/api/import/openapi` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:61 |
-| `/ui/api/import/openapi/preview` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:60 |
-| `/ui/api/registry` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:54 |
-| `/ui/api/registry/search` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:55 |
-| `/ui/api/reload` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:41 |
-| `/ui/api/status` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:38 |
-| `/ui/api/tools` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:39 |
+| `/ui/api/backends` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:57 |
+| `/ui/api/backends/{name}` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:58 |
+| `/ui/api/backends/{name}/revive` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:59 |
+| `/ui/api/capabilities` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:50 |
+| `/ui/api/capabilities/{name}` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:51 |
+| `/ui/api/config` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:46 |
+| `/ui/api/control-plane` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:52 |
+| `/ui/api/control-plane/decisions` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:55 |
+| `/ui/api/control-plane/export-status` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:56 |
+| `/ui/api/control-plane/grants` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:53 |
+| `/ui/api/control-plane/policies` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:54 |
+| `/ui/api/costs` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:49 |
+| `/ui/api/dashboard-link` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:48 |
+| `/ui/api/events/dead-letters` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface; MIK-8697: a row names its subscription as `subscriptionAlias` (keyed) and `subscriptionId` is removed, and the `subscription` filter takes the alias or a stored id | src/gateway/routes.rs:62 |
+| `/ui/api/events/dead-letters/replay` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:63 |
+| `/ui/api/events/dead-letters/{id}/replay` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:64 |
+| `/ui/api/events/held` | INTERNAL | private JSON API of the bundled web UI | admin only, like the dead-letter listing; held webhook subscriptions per type (MIK-8057) | src/gateway/routes.rs:65 |
+| `/ui/api/import/openapi` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:67 |
+| `/ui/api/import/openapi/preview` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:66 |
+| `/ui/api/registry` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:60 |
+| `/ui/api/registry/search` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:61 |
+| `/ui/api/reload` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:47 |
+| `/ui/api/status` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:44 |
+| `/ui/api/tools` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:45 |
+| `/ui/assets/{file}` | INTERNAL | content-hashed static files of the bundled web UI (MIK-8870) | none: the UI's own files, not an integration surface | src/gateway/routes.rs:38 |
+| `/ui/classic` | KEEP | the current web dashboard, kept for one release beside the new UI (MIK-8870) | - | src/gateway/routes.rs:36 |
+| `/ui/{*path}` | KEEP | deep links into the web dashboard; until the new UI ships they hand the visitor to `/ui` (MIK-8870) | - | src/gateway/routes.rs:40 |
 | `dynamic &route (src/gateway/webhooks/mod.rs)` | KEEP | inbound webhooks under `webhooks.base_path` | - | src/gateway/webhooks/mod.rs:323 |
 | `dynamic callback_path (src/oauth/callback.rs)` | KEEP | backend OAuth redirect on its own short-lived loopback listener | - | src/oauth/callback.rs:309 |
 | `dynamic path (src/gateway/webhooks/mod.rs)` | KEEP | inbound webhooks under `webhooks.base_path` | - | src/gateway/webhooks/mod.rs:300 |

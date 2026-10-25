@@ -23,6 +23,39 @@ pub(crate) struct ReplayTarget {
     pub(crate) server: String,
     /// The presented tool: the target branch's, or the retry's own name.
     pub(crate) tool: String,
+    /// How admission resolved the target, which decides whether its replay
+    /// is recorded under `server` (MIK-8520).
+    pub(crate) origin: ReplayOrigin,
+}
+
+/// Where a [`ReplayTarget`] came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReplayOrigin {
+    /// The target branch: a surfaced name or `gateway_invoke` resolved to it.
+    Named,
+    /// A continuation retry's origin, a backend tool no operator surfaced.
+    ContinuationOrigin,
+}
+
+/// What a served replay carries to `audit_replay`: the stored facts, and the
+/// server a `Named` target was admitted for (MIK-8520, MIK-7645 AC3). The
+/// record and receipt name that server, never the live surfaced map read
+/// again, which a reload may have moved since admission.
+#[derive(Debug, Default)]
+pub(crate) struct ReplayFacts {
+    pub(crate) audit: Option<ReplayAudit>,
+    pub(crate) server: Option<String>,
+}
+
+impl ReplayTarget {
+    /// The server a replay of this target is recorded under: a `Named`
+    /// target's, none for a continuation origin (recorded as before: not at
+    /// all).
+    pub(crate) fn audit_server(target: Option<&Self>) -> Option<String> {
+        target
+            .filter(|target| target.origin == ReplayOrigin::Named)
+            .map(|target| target.server.clone())
+    }
 }
 
 impl MetaMcp {
@@ -75,6 +108,7 @@ impl MetaMcp {
             Some(Ok(server)) => Ok(Some(ReplayTarget {
                 server,
                 tool: tool_name.to_owned(),
+                origin: ReplayOrigin::ContinuationOrigin,
             })),
             // E1: an unreadable origin is never served stored; the
             // continuation error is the live path's answer for it.
@@ -189,12 +223,19 @@ impl MetaMcp {
             Vec<super::super::admission::StepBinding>,
         ),
         (response, audit): (JsonRpcResponse, Option<ReplayAudit>),
-    ) -> Option<(JsonRpcResponse, Option<ReplayAudit>)> {
+    ) -> Option<(JsonRpcResponse, ReplayFacts)> {
+        // Derived once: every answer below, refusals included, and the
+        // deferred entry are records of the call admitted for this server.
+        let server = ReplayTarget::audit_server(target.as_ref());
+        let facts = |audit| ReplayFacts {
+            audit,
+            server: server.clone(),
+        };
         let view = self.scoped(caller.scope().authorizer.backend_grant());
         if let Err(error) = self.judge_bindings(&view, &bindings) {
             return Some((
                 JsonRpcResponse::error(response.id.clone(), error.to_rpc_code(), error.to_string()),
-                None,
+                facts(None),
             ));
         }
         // A replay with no target is a plan or a read-only meta tool. A plan
@@ -203,7 +244,7 @@ impl MetaMcp {
         // reads as "deferred", re-running the call live (S6).
         let Some(target) = target else {
             if !matches!(tool_name, "gateway_execute" | "gateway_run_playbook") {
-                return Some((response, audit));
+                return Some((response, facts(audit)));
             }
             // Boxed: the walk's state (resolution, custody) would otherwise
             // sit in every route stage's dispatch future, cold refusals
@@ -217,17 +258,17 @@ impl MetaMcp {
             return Some(match unproven {
                 // Judged again at the serving point: the walk resolved live.
                 None => match self.judge_bindings(&view, &bindings) {
-                    Ok(()) => (response, audit),
+                    Ok(()) => (response, facts(audit)),
                     Err(error) => (
                         JsonRpcResponse::error(
                             response.id.clone(),
                             error.to_rpc_code(),
                             error.to_string(),
                         ),
-                        None,
+                        facts(None),
                     ),
                 },
-                Some(answer) => (answer, None),
+                Some(answer) => (answer, facts(None)),
             });
         };
         // Unkeyed likewise: admission never replays one, so the lift could
@@ -237,14 +278,14 @@ impl MetaMcp {
             &target.tool,
             caller.retry,
         ) else {
-            return Some((response, audit));
+            return Some((response, facts(audit)));
         };
         if !self.stored_replay_defers(
             &self.scoped(caller.scope().authorizer.backend_grant()),
             &target.server,
             &target.tool,
         ) {
-            return Some((response, audit));
+            return Some((response, facts(audit)));
         }
         let id = response.id.clone();
         let recorded = super::super::visible::memo::record_deferred_replay(
@@ -252,6 +293,7 @@ impl MetaMcp {
             super::super::visible::deferred::DeferredReplay {
                 response,
                 audit,
+                audit_server: server.clone(),
                 tool_name: tool_name.to_owned(),
                 arguments: arguments.clone(),
                 bindings,
@@ -263,7 +305,7 @@ impl MetaMcp {
         if !recorded {
             return Some((
                 JsonRpcResponse::error(id, INTERNAL_ERROR, "stored replay could not be deferred"),
-                None,
+                facts(None),
             ));
         }
         None

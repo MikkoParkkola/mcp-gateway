@@ -193,11 +193,12 @@ fn no_pending_restart_when_the_file_matches_the_running_process() {
 }
 
 /// MIK-7645 AC3 guard: surfaced tools are filled once at startup
-/// (`with_surfaced_tools` in `build_meta_mcp`), so a replay's record can name
-/// the surfaced tool's server by looking it up again. A reload that changes
-/// them must stay restart-pending. If `meta_mcp.surfaced_tools` is ever made
-/// live-reloadable, this fails: admission must then hand the resolved
-/// `(server, tool)` to `audit_replay` (MIK-7645 AC3).
+/// (`with_surfaced_tools` in `build_meta_mcp`), so a reload that changes them
+/// stays restart-pending. Admission already hands the resolved server to
+/// `audit_replay` (MIK-8520, `ReplayFacts`). What remains before this guard
+/// can go: a deferred surfaced replay that re-enters the live route resolves
+/// the name again, so it must dispatch the server it was admitted for
+/// (MIK-8520.REPLAY.3).
 #[test]
 fn a_surfaced_tools_change_is_restart_pending() {
     let running = Config::default();

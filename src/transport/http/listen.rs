@@ -32,7 +32,7 @@ use crate::{Error, Result};
 const FRAME_CAP: usize = 64 * 1024;
 /// The stream is recycled hourly (§4): the client's total timeout would
 /// otherwise cut it at an arbitrary point.
-const STREAM_TIMEOUT: Duration = Duration::from_secs(3600);
+pub(super) const STREAM_TIMEOUT: Duration = Duration::from_secs(3600);
 const METHOD: &str = "subscriptions/listen";
 
 impl HttpTransport {
@@ -296,6 +296,19 @@ impl UpstreamListen for HttpTransport {
     fn detected_streamable(&self) -> Option<bool> {
         self.streamable()
     }
+
+    /// The listener's own session once the SSE handshake is detected
+    /// (MIK-8835.SSE.1); on Streamable HTTP the listener uses this transport.
+    fn own_session(
+        self: std::sync::Arc<Self>,
+        credential: crate::transport::upstream_tap::ListenerCredential,
+    ) -> Option<std::sync::Arc<dyn UpstreamListen>> {
+        (self.streamable() == Some(false)).then(|| {
+            let session: std::sync::Arc<dyn UpstreamListen> =
+                std::sync::Arc::new(self.sse_listen_session(credential));
+            session
+        })
+    }
 }
 
 /// A refused open by its status: 405 means the backend offers no such
@@ -330,7 +343,7 @@ async fn next_events(
 }
 
 /// One legacy stream payload as a note: only the three notifications.
-fn unsolicited_frame(data: &str) -> Option<UpstreamNote> {
+pub(super) fn unsolicited_frame(data: &str) -> Option<UpstreamNote> {
     match serde_json::from_str::<JsonRpcMessage>(data) {
         Ok(JsonRpcMessage::Notification(n)) => project(&n.method, n.params.as_ref(), None).ok(),
         _ => None,

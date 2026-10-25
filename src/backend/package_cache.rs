@@ -318,6 +318,12 @@ pub(crate) enum Retired {
 /// (see `cache_component`), so this cannot match a live cache.
 const TOMBSTONE_MARK: &str = ".tombstone-";
 
+/// A file the gateway writes into a cache it is about to move aside. The
+/// startup sweep deletes only entries that hold it, so a directory under
+/// `pkg-cache` the gateway did not retire is never deleted, whatever its name:
+/// an operator's cache can live there too (#1759).
+const TOMBSTONE_PROOF: &str = ".mcp-gateway-tombstone";
+
 /// [`retire_cache_dir`], given up on after `limit`.
 ///
 /// Giving up drops only the wait. The blocking rename cannot be stopped, so its
@@ -388,6 +394,15 @@ fn retire_now(dir: &Path) -> Retired {
     let (Some(parent), Some(leaf)) = (dir.parent(), dir.file_name()) else {
         return Retired::Refused;
     };
+    // Written before the rename, so a tombstone a crash leaves behind is
+    // provably the gateway's. Created new, never opened: a link or a file
+    // already at that name is neither followed nor truncated. A cache that
+    // cannot take the file is still moved aside and deleted by this run's
+    // `discard`; a crash then leaks it rather than letting the sweep delete
+    // what it cannot prove.
+    if let Err(error) = crate::config_persistence::create_new_private(&dir.join(TOMBSTONE_PROOF)) {
+        warn!(%error, "could not mark the package cache before moving it aside");
+    }
     let tombstone = parent.join(format!(
         "{}{TOMBSTONE_MARK}{}-{}",
         leaf.to_string_lossy(),
@@ -426,17 +441,30 @@ fn sweep_tombstones_once(root: &Path) {
         return;
     }
     let root = root.to_path_buf();
-    drop(tokio::task::spawn_blocking(move || {
-        let Ok(entries) = std::fs::read_dir(&root) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if entry.file_name().to_string_lossy().contains(TOMBSTONE_MARK) && !remove_now(&path) {
-                warn!(path = %path.display(), "could not delete a package cache tombstone");
-            }
+    drop(tokio::task::spawn_blocking(move || sweep_now(&root)));
+}
+
+/// One pass of the sweep over `root`, on the caller's thread: deletes the
+/// tombstones the gateway marked and nothing else.
+fn sweep_now(root: &Path) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if entry.file_name().to_string_lossy().contains(TOMBSTONE_MARK)
+            && is_gateway_tombstone(&path)
+            && !remove_now(&path)
+        {
+            warn!(path = %path.display(), "could not delete a package cache tombstone");
         }
-    }));
+    }
+}
+
+/// Whether `path` holds the proof the gateway writes before a rename, as a
+/// regular file and not through a link.
+fn is_gateway_tombstone(path: &Path) -> bool {
+    std::fs::symlink_metadata(path.join(TOMBSTONE_PROOF)).is_ok_and(|meta| meta.is_file())
 }
 
 fn remove_now(dir: &Path) -> bool {

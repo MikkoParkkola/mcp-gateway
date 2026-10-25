@@ -695,8 +695,8 @@ def gate_steps(workflow, job):
 
 
 # `gh api repos/MikkoParkkola/mcp-gateway/actions/permissions/artifact-and-log-retention`
-# reports `days: 14`. upload-artifact clamps `retention-days` to that value.
-HANDOFF_RETENTION_DAYS = 14
+# reports `days: 90`. upload-artifact clamps `retention-days` to that value.
+HANDOFF_RETENTION_DAYS = 90
 
 # The oldest cosign the workflows may install. v2.6.5 fixes GHSA-fx35-mq7g-6g98
 # (verification bypass via a public key in a legacy bundle); v2.6.2 fixed
@@ -3010,6 +3010,51 @@ class VariantStage(unittest.TestCase):
             "6F71F525282841EEDAF851B42F59B5F99B1BE0B4",
             stage,
             "the variant stage does not pin the NodeSource signing key fingerprint",
+        )
+
+    def test_the_nodesource_key_guard_binds_the_primary_fingerprint(self):
+        # The pin must name the key apt will trust, which is the key file's one
+        # primary key. A subkey's fingerprint is printed too, so a file whose
+        # primary is someone else's and which carries NodeSource's key as a
+        # subkey would pass a check that matched any `fpr` line. The guard is run
+        # as the Dockerfile writes it, against gpg's colon output.
+        match = re.search(
+            r"gpg --show-keys --with-colons /tmp/nodesource\.key \| awk -F: \\\n\s*'([^']*)'",
+            self.variant_stage(),
+        )
+        self.assertIsNotNone(match, "the variant stage has no NodeSource key guard")
+        pinned = "6F71F525282841EEDAF851B42F59B5F99B1BE0B4"
+        other = "0123456789ABCDEF0123456789ABCDEF01234567"
+        subkey = "0FA5ECC8C0CA58863C0AC5867E9656125E955B26"
+        pub = "pub:-:2048:1:2F59B5F99B1BE0B4:1464022864:::-:::scESC::::::23::0:"
+        sub = "sub:-:2048:1:7E9656125E955B26:1464022864::::::e::::::23:"
+        uid = "uid:-::::1464022864::0::NodeSource <gpg@nodesource.com>::::::::::0:"
+        cases = {
+            "the published key": ([pub, f"fpr:::::::::{pinned}:", uid, sub, f"fpr:::::::::{subkey}:"], True),
+            "another primary key": ([pub, f"fpr:::::::::{other}:", uid], False),
+            "two primary keys": ([pub, f"fpr:::::::::{other}:", pub, f"fpr:::::::::{pinned}:"], False),
+            "NodeSource's key as a subkey": ([pub, f"fpr:::::::::{other}:", uid, sub, f"fpr:::::::::{pinned}:"], False),
+            "an empty key file": ([], False),
+        }
+        for label, (lines, accepted) in cases.items():
+            run = subprocess.run(
+                ["awk", "-F:", match.group(1)],
+                input="".join(f"{line}\n" for line in lines),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(run.returncode == 0, accepted, f"{label}: exit {run.returncode}")
+
+    def test_apt_trusts_only_the_pinned_nodesource_key(self):
+        # `gpg --show-keys` leaves out a primary key that has no user ID, while
+        # `gpg --dearmor` keeps every key in the file, so the guard above cannot
+        # see everything apt would trust. A fingerprint in Signed-By makes apt
+        # itself select only that key (and its subkeys) from the keyring.
+        self.assertRegex(
+            self.variant_stage(),
+            r"Signed-By: /usr/share/keyrings/nodesource\.gpg 6F71F525282841EEDAF851B42F59B5F99B1BE0B4'",
+            "apt trusts every key in the NodeSource keyring, not only the pinned one",
         )
 
     def test_the_variant_installs_what_a_deployment_declares(self):

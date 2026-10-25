@@ -684,8 +684,8 @@ impl MetaMcp {
     /// #2472: record a replay of a completed execution, which is a delivered
     /// call like any other (D1-d). Only an invocation is recorded, over the
     /// envelope its first execution hashed, and with that execution's
-    /// outcome and response hash (`audit`), so it reads as the original
-    /// record did. A meta tool that wrote no invocation record the first
+    /// outcome and response hash, under the server it was admitted for
+    /// (`facts`, MIK-8520), so it reads as the original record did. A meta tool that wrote no invocation record the first
     /// time writes none on replay. Under `FailClosed` a failed write
     /// withholds the replay (D1-f).
     pub(crate) async fn audit_replay(
@@ -695,15 +695,16 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
         replay: JsonRpcResponse,
-        audit: Option<super::super::admission::ReplayAudit>,
+        facts: super::super::admission::ReplayFacts,
     ) -> JsonRpcResponse {
-        self.stage_replay(tool_name, arguments, session_id, caller, &replay);
+        let server = facts.server.as_deref();
+        self.stage_replay((tool_name, server), arguments, session_id, caller, &replay);
         let Some(log) = self.transparency_logger.as_ref() else {
             return replay;
         };
         let envelope = if tool_name == "gateway_invoke" {
             arguments.clone()
-        } else if let Some(server) = self.surfaced_tools_map.unscoped(tool_name) {
+        } else if let Some(server) = server {
             super::super::admission::named_tool_envelope(server, tool_name, arguments, caller)
         } else {
             return replay;
@@ -711,7 +712,7 @@ impl MetaMcp {
         // The store is process memory, so this build wrote every entry; facts
         // are absent only when the first run wrote no record. Derive them from
         // the replayed response then, where a wrapped tool error reads as `ok`.
-        let facts = if let Some(facts) = audit {
+        let facts = if let Some(facts) = facts.audit {
             facts
         } else {
             let result = match (&replay.result, &replay.error) {

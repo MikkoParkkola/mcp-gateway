@@ -301,6 +301,35 @@ impl Ledger {
         self.place();
     }
 
+    /// The current holder is gone, and everything it held with it: a legacy
+    /// SSE session's subscriptions live and die with its stream (2024-11-05),
+    /// so when an own listener session ends nothing is left held anywhere
+    /// (MIK-8835.SSE.3, design B14'). Like [`Self::holder_changed`], each
+    /// wanted URI needs a fresh key on the next holder and the old
+    /// generation's late answers are discarded; unlike it, the old keys are
+    /// removed and uncharged, not stranded, so dead sessions never hold the
+    /// URI or byte cap.
+    pub(crate) fn retire_holder(&mut self) {
+        let old = self.generation;
+        self.generation += 1;
+        let current: Vec<(u64, String)> = self
+            .keys
+            .keys()
+            .filter(|(g, _)| *g == old)
+            .cloned()
+            .collect();
+        for key in current {
+            if let Some(entry) = self.keys.remove(&key) {
+                if entry.wanted {
+                    self.unplaced.insert(key.1.clone());
+                }
+                self.bytes -= encoded(&key.1);
+            }
+        }
+        self.holder = None;
+        self.place();
+    }
+
     /// Diagnostics: (keys, bytes, stranded keys).
     pub(crate) fn size(&self) -> (usize, usize, usize) {
         (
