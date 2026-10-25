@@ -7,7 +7,7 @@ mod stdio;
 pub mod websocket;
 
 pub use self::http::HttpTransport;
-pub use self::stdio::StdioTransport;
+pub use self::stdio::{StdioTransport, isolated_package_manager_env};
 pub use self::websocket::McpFrame;
 
 use async_trait::async_trait;
