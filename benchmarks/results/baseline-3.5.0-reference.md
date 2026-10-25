@@ -42,7 +42,7 @@ recomputed from the raw summaries if that is what a future comparison needs.
 
 ## Provenance
 
-- Run: `2026-09-14-rehearsal2`, Spark, all three A reps completed.
+- Run: `2026-09-14-rehearsal2`, bench-host, all three A reps completed.
 - Evidence: `benchmarks/results/rehearsal-2026-09-14/`.
 - k6 image pinned by digest `sha256:1f40432b1cbe7234e977f96c362c9bc550a2d2b583d014dd8669fe40d3e9e755`.
 - The run this figure came from was graded **VOID** (exit 3) on cell C. That void
