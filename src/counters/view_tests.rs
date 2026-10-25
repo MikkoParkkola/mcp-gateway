@@ -147,6 +147,26 @@ fn t35_the_spring_forward_day_skips_the_missing_hour() {
     assert!(view.previous_complete);
 }
 
+/// T35: across a fall-back, on either side, the previous period is in time
+/// order with each `t` once: the day after it (the repeated hour is in the
+/// previous period) and the day itself (it is in the current window).
+#[test]
+fn t35_the_previous_period_is_ordered_and_unique_across_a_fall_back() {
+    let since = at(&Amsterdam, (2026, 10, 22, 0, 0));
+    let store = CounterStore::new(since);
+    for now in [
+        at(&Amsterdam, (2026, 10, 26, 3, 10)),
+        at(&Amsterdam, (2026, 10, 25, 12, 0)),
+    ] {
+        store.record(&call(), now, &Amsterdam);
+        let previous = compare(&store, now, &Amsterdam).previous.unwrap();
+        assert!(
+            previous.windows(2).all(|w| w[0].t < w[1].t),
+            "ordered and unique at {now}: {previous:?}"
+        );
+    }
+}
+
 /// T39: before coverage began there are no points; after it, an empty bucket
 /// is a zero.
 #[test]

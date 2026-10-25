@@ -122,6 +122,57 @@ async fn t34_the_series_route_answers_points_and_the_previous_period() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }
 
+/// T51 over HTTP: a label admitted after its overflow answers the same
+/// fields as any series, with `since` moved to its own first count.
+#[tokio::test]
+async fn t51_a_late_label_answers_the_same_shape_with_a_later_since() {
+    let (admin, store, _dir) = state(true).await;
+    let at = |tool: &str, when: u64| {
+        let call = Call {
+            caller: "key:scoped-client",
+            server: Label::Known("demo"),
+            tool: Label::Known(tool),
+            tally: Tally::default(),
+        };
+        store.record(&call, when, &chrono::Local);
+    };
+    const DAY: u64 = 86_400;
+    let base = now() - 32 * DAY;
+    let names: Vec<String> = (0..crate::counters::MAX_LABELS)
+        .map(|i| format!("old-{i}"))
+        .collect();
+    for name in &names {
+        at(name, base);
+    }
+    at("late", base + DAY);
+    at("new-1", now() - 10);
+    at("late", now() - 5);
+    let uri = "/ui/api/metrics/series?metric=calls&window=30d";
+    let (_, global, _) = get(&admin, uri, Some(SECRET)).await;
+    let (status, late, _) = get(
+        &admin,
+        &format!("{uri}&server=demo&tool=late"),
+        Some(SECRET),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{late}");
+    let keys = |v: &Value| {
+        let mut keys: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        keys
+    };
+    assert_eq!(keys(&late), keys(&global), "the same fields");
+    assert_eq!(late["folded"], false);
+    assert!(
+        late["since"].as_u64().unwrap() > base + DAY,
+        "since starts after the overflowed call: {late}"
+    );
+    assert_eq!(
+        global["since"], 0,
+        "the global series keeps the store's since"
+    );
+}
+
 /// T40: markers at or after `from`, oldest first.
 #[tokio::test]
 async fn t40_markers_from_a_time_oldest_first() {

@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Store rules (test plan T1-T11, T45-T49): buckets, rings, local
+//! Store rules (test plan T1-T11, T45-T51): buckets, rings, local
 //! days, caps, labels and classification, all on explicit times and zones.
 
 use chrono::TimeZone;
@@ -602,4 +602,52 @@ fn t49_a_bucket_older_than_the_window_is_kept_nowhere() {
         half.buckets().collect::<Vec<_>>(),
         vec![(first, [1, 0, 0, 0, 0]), (newest, [1, 0, 0, 0, 0])]
     );
+}
+
+/// A store whose tool dimension filled, sent `late` to the overflow, then
+/// swept every old label free 31 days on: `late` is not held, the dimension
+/// is no longer full, and its one call is in the overflow.
+fn swept_after_overflow() -> (CounterStore, u64) {
+    let store = CounterStore::new(T0);
+    for i in 0..MAX_LABELS {
+        store.record(&ok("key:a", "s", &format!("old-{i}")), T0 + 10, &UTC);
+    }
+    store.record(&ok("key:a", "s", "late"), T0 + DAY, &UTC);
+    let swept = T0 + 31 * DAY;
+    store.record(&ok("key:a", "s", "new-1"), swept, &UTC);
+    assert_eq!(store.labels(Dim::Tool), 1, "the old labels were swept");
+    (store, swept)
+}
+
+fn month(store: &CounterStore, filter: Filter<'_>, now: u64) -> SeriesView {
+    store.series(&Query::new(Metric::Calls, Window::Month, filter), now, &UTC)
+}
+
+#[test]
+fn t50_a_label_swept_past_its_overflow_reads_as_folded() {
+    let (store, now) = swept_after_overflow();
+    let view = month(&store, Filter::Tool("s", "late"), now);
+    assert!(
+        view.folded,
+        "its call is in the overflow, so zeros would read as exact"
+    );
+    assert!(view.points.is_empty());
+}
+
+#[test]
+fn t51_a_label_admitted_after_its_overflow_starts_at_its_own_first_bucket() {
+    let (store, now) = swept_after_overflow();
+    store.record(&ok("key:a", "s", "late"), now + 10, &UTC);
+    let view = month(&store, Filter::Tool("s", "late"), now + 20);
+    assert!(!view.folded);
+    let today = day::local_day(&UTC, now + 10).start;
+    assert_eq!(view.since, today, "coverage starts at its own first count");
+    assert_eq!(
+        nonzero(&view.points),
+        vec![(today, 1)],
+        "nothing drawn before it, and its own count"
+    );
+    assert!(view.points.iter().all(|p| p.t >= today));
+    let server = month(&store, Filter::Server("s"), now + 20);
+    assert_eq!(server.since, T0, "a dimension with no overflow keeps since");
 }

@@ -234,6 +234,10 @@ enum MetaMode {
     SurfacedT,
     /// Code mode is on, so `gateway_execute` runs chains (MIK-8387 rows).
     CodeMode,
+    /// Only the dispatch layer has a firewall, so the send's own rescan is
+    /// what refuses a dangerous argument.
+    #[cfg(feature = "firewall")]
+    DispatchFirewall,
 }
 
 impl MetaMode {
@@ -248,6 +252,17 @@ impl MetaMode {
                 crate::idempotency::CLEANUP_INTERVAL,
             ),
             Self::CodeMode => return meta.with_code_mode(true),
+            #[cfg(feature = "firewall")]
+            Self::DispatchFirewall => meta.set_firewall(Some(Arc::new(
+                crate::security::firewall::Firewall::from_config(
+                    crate::security::firewall::FirewallConfig {
+                        enabled: true,
+                        scan_requests: true,
+                        ..crate::security::firewall::FirewallConfig::default()
+                    },
+                    None,
+                ),
+            ))),
             Self::SurfacedT => {
                 return meta.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
                     server: "alpha".to_string(),
