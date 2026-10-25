@@ -336,12 +336,37 @@ async fn fetch_spec(url: &str, ssrf_protection: bool) -> Result<String, (StatusC
         ));
     }
 
-    resp.text().await.map_err(|e| {
+    read_spec_body(resp).await
+}
+
+/// The most a fetched spec may carry, counted while it is read (MIK-8838).
+/// Sized for large public API specs, not for MCP listings; an inline `spec`
+/// is not counted here.
+const SPEC_BUDGET: usize = 32 * 1024 * 1024;
+
+/// `resp`'s body as text, refused with a 502 the moment it passes
+/// [`SPEC_BUDGET`], so an over-budget spec is never held whole.
+async fn read_spec_body(mut resp: reqwest::Response) -> Result<String, (StatusCode, String)> {
+    let unreadable = |e: reqwest::Error| {
         (
             StatusCode::BAD_GATEWAY,
             format!("Failed to read response body: {e}"),
         )
-    })
+    };
+    let mut body = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(unreadable)? {
+        if body.len() + chunk.len() > SPEC_BUDGET {
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                format!(
+                    "the spec is over its {} MiB budget",
+                    SPEC_BUDGET / (1024 * 1024)
+                ),
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&body).into_owned())
 }
 
 /// Parse a spec string into generated capabilities.
