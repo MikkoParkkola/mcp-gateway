@@ -404,7 +404,12 @@ impl HttpTransport {
         if !status.is_success() {
             // A11-b/g: a deterministic refusal is typed by its STATUS alone.
             let typed = response.error_for_status_ref().err();
-            let body = response.text().await.unwrap_or_default();
+            // Under a byte budget an over-budget error body is that refusal,
+            // never an empty body read past.
+            let body = match self.body_budget.get() {
+                Some(budget) => String::from_utf8_lossy(&budget.read(response).await?).into_owned(),
+                None => response.text().await.unwrap_or_default(),
+            };
             // Some servers refuse a protocol version with a status, not a
             // JSON-RPC error, so the body with the supported versions is read
             // first. Three signals together, because this parser sees every
@@ -454,9 +459,18 @@ impl HttpTransport {
             let stream = response
                 .bytes_stream()
                 .map_err(|e| safe_request_error("Failed to read SSE response", &e));
-            super::sse_decoder::decode_sse_exchange(stream).await
+            match self.body_budget.get() {
+                Some(budget) => {
+                    super::sse_decoder::decode_sse_exchange(budget.metered(stream)).await
+                }
+                None => super::sse_decoder::decode_sse_exchange(stream).await,
+            }
         } else if let Some(waiting) = waiting {
             self.body_or_stream(status, response, waiting).await
+        } else if let Some(budget) = self.body_budget.get() {
+            let body = budget.read(response).await?;
+            serde_json::from_slice(&body)
+                .map_err(|e| Error::Transport(format!("Failed to parse response: {e}")))
         } else {
             // Parse JSON response
             response
@@ -477,10 +491,13 @@ impl HttpTransport {
         // A 2024-11-05 SSE peer answers 202 and puts the response on the
         // session stream (MIK-8835.SSE.2); a JSON body, if one came, is the
         // answer as before.
-        let body = response
-            .bytes()
-            .await
-            .map_err(|e| safe_request_error("Failed to read response", &e))?;
+        let body = match self.body_budget.get() {
+            Some(budget) => budget.read(response).await?,
+            None => response
+                .bytes()
+                .await
+                .map_err(|e| safe_request_error("Failed to read response", &e))?,
+        };
         // 202 is "the answer comes on the stream" whatever its body (the
         // TS SDK's SSE server writes "Accepted"); an empty 2xx is too.
         if status == reqwest::StatusCode::ACCEPTED || body.iter().all(u8::is_ascii_whitespace) {

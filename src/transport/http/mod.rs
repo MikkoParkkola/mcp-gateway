@@ -279,6 +279,9 @@ pub struct HttpTransport {
     /// the `debug_assert!` at the session-write site below for the invariant
     /// this hint unlocks.
     single_tenant_hint: AtomicBool,
+    /// The start-once preview's byte budget (MIK-8838); unset everywhere
+    /// else, so a live backend reads its bodies as before.
+    body_budget: std::sync::OnceLock<Arc<budget::ByteBudget>>,
 
     /// Request ID counter
     request_id: AtomicU64,
@@ -483,6 +486,7 @@ impl HttpTransport {
             era: std::sync::OnceLock::new(),
             sessions: RwLock::new(HashMap::new()),
             single_tenant_hint: AtomicBool::new(false),
+            body_budget: std::sync::OnceLock::new(),
             request_id: AtomicU64::new(1),
             listen_cancel: tokio_util::sync::CancellationToken::new(),
             reinit_needed: AtomicBool::new(false),
@@ -557,6 +561,14 @@ impl HttpTransport {
     pub(crate) fn mark_single_tenant(&self) {
         self.single_tenant_hint.store(true, Ordering::Relaxed);
     }
+
+    /// Refuse any body past `per_response` bytes, and everything read past
+    /// `total`, counted before parsing. Set once, before the first request.
+    pub(crate) fn set_body_budget(&self, per_response: usize, total: usize) {
+        let _ = self
+            .body_budget
+            .set(Arc::new(budget::ByteBudget::new(per_response, total)));
+    }
 }
 
 // ADR-008 / F3 (MIK-6746): RAII backstop — a discarded/partial-init transport
@@ -575,6 +587,7 @@ impl Drop for HttpTransport {
     }
 }
 
+mod budget;
 mod cancel_guard;
 mod client;
 /// The guarded client, for the A2A transport (MIK-8063): the same redirect

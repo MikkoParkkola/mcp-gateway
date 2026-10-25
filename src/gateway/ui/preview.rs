@@ -131,6 +131,12 @@ fn url_carries_credentials(raw: &str) -> bool {
 /// The whole start and listing, then teardown.
 const PREVIEW_CAP: Duration = Duration::from_secs(30);
 
+/// The most one response may carry, counted before parsing.
+const RESPONSE_BUDGET: usize = 4 * 1024 * 1024;
+
+/// The most a whole preview may read.
+const PREVIEW_BUDGET: usize = 8 * 1024 * 1024;
+
 /// The add body, plus the token from the describe step.
 #[derive(Debug, Deserialize)]
 pub(super) struct PreviewRequest {
@@ -307,6 +313,7 @@ async fn run_confirmed(
             protocol_version.clone(),
             policy,
         )?;
+        transport.set_body_budget(RESPONSE_BUDGET, PREVIEW_BUDGET);
         let listed = async {
             crate::backend::start_detached_http(&transport, name, backend.timeout).await?;
             crate::backend::list_tools_for_preview(name, transport.as_ref()).await

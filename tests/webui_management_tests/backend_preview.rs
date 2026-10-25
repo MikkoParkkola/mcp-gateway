@@ -457,11 +457,12 @@ async fn an_over_budget_preview_is_a_502_naming_the_budget() {
         let url = stub_with(&log, reply).await;
         let (router, _store) = router_with(false).await;
         let (status, body) = confirmed(&router, &json!({"name": "big", "url": url})).await;
-        assert_eq!(status, StatusCode::BAD_GATEWAY, "{shape}: {body}");
-        let message = body.to_string();
+        let message = body["error"].as_str().unwrap_or_default();
+        let shown: String = message.chars().take(200).collect();
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{shape}: {shown}");
         assert!(
             message.contains(budget) && message.contains("budget"),
-            "{shape} names the {budget} budget: {body}"
+            "{shape} names the {budget} budget: {shown}"
         );
     }
 }
