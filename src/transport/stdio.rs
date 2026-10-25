@@ -1221,3 +1221,11 @@ mod spawn_classification_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "stdio_cache_abs_tests.rs"]
+mod cache_abs_tests;
+
+#[cfg(test)]
+#[path = "stdio_cache_runner_tests.rs"]
+mod cache_runner_tests;
