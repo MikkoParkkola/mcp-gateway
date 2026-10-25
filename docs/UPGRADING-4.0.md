@@ -137,10 +137,12 @@ In 3.x the server wrote `usage.json` (the usage counts that rank search results)
 already did for the upgrade stamp. A relative value resolves against the gateway's working
 directory.
 
-If you do not set `MCP_GATEWAY_CONFIG_DIR`, or set it to `~/.mcp-gateway`, nothing changes.
+If you do not set `MCP_GATEWAY_CONFIG_DIR`, or set it to the full path of
+`.mcp-gateway` in your home directory, nothing changes (a literal `~` is not expanded).
 Otherwise the first 4.0.0 start begins with empty usage and transition history. To keep it, stop
-the 3.x gateway (it writes both files on shutdown), then copy whichever of `usage.json` and
-`transitions.json` exist in `~/.mcp-gateway` into your configured directory before that start.
+the 3.x gateway and let it exit (it writes both files on a graceful shutdown), then copy
+whichever of `usage.json` and `transitions.json` exist in `~/.mcp-gateway` into your configured
+directory before that start.
 
 `costs.json` needs no copy. Neither 3.x nor 4.0.0 restores cost totals from it on start, so they
 begin at zero after any restart, upgrade or not.
