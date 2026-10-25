@@ -468,3 +468,41 @@ async fn r5_a_refused_replay_records_the_admitted_server() {
         "R5: the refused replay's record is incomplete ({refusal:?}): {record}"
     );
 }
+
+/// MIK-8520 L8 (N10, pin): across requests. A keyed surfaced call completes
+/// on `alpha`; the name then moves to `beta` (as a reload moves it); the
+/// keyed repeat is refused at execution admission, because the operation
+/// names the server. It never runs on `beta` and is never served `alpha`'s
+/// answer as `beta`'s: one client key never produces two writes (lead
+/// ruling 2026-10-25). This already holds on base, so the row pins it.
+#[tokio::test]
+async fn l8_a_keyed_repeat_after_the_name_moves_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut meta = surfaced(meta(Ok(ok_result()), &dir), "alpha");
+    let who = api_key_caller();
+    let retry = keyed("l8");
+    let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        retry: &retry,
+        ..context(&AllowAll, &who)
+    };
+    let owner = || crate::gateway::meta_mcp::AdmissionOwner::for_test(ctx.owner_principal());
+    let args = json!({});
+    let first =
+        meta.admit_meta_sync_for_test(owner(), &ctx, NAME, &args, None, &RequestId::Number(1));
+    let Ok(SyncAdmission::Owned(lease)) = first else {
+        panic!("premise: the first surfaced call owns its admission");
+    };
+    lease.mark_dispatched();
+    lease.complete_secured(&JsonRpcResponse::success(RequestId::Number(1), ok_result()));
+    meta.resurface_for_test(NAME, "beta");
+    let again =
+        meta.admit_meta_sync_for_test(owner(), &ctx, NAME, &args, None, &RequestId::Number(2));
+    assert!(
+        !matches!(again, Ok(SyncAdmission::Replay(..))),
+        "L8: the repeat after the move was served alpha's stored answer"
+    );
+    assert!(
+        again.is_err(),
+        "L8: the repeat after the move was admitted as a new operation"
+    );
+}

@@ -172,3 +172,32 @@ async fn l4_a_reload_drops_invalid_entries_and_never_aborts() {
         "L4: an all-invalid reload left the previous set in place"
     );
 }
+
+/// L5/L6 (N6, N6b): one request reads one surfaced map. Inside a request's
+/// visibility memo, the first read (admission's, in production) fixes the
+/// map for the rest of the request; a reload landing mid-request does not
+/// split admission, policy, dispatch and the deferred-replay key across two
+/// servers (MIK-8520.REPLAY.3).
+#[tokio::test]
+async fn l5_one_request_reads_one_surfaced_map() {
+    let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
+        .with_surfaced_tools(surfaced(&[("alpha", "read")]));
+    let (first, second) = super::super::visible::memo::with_visibility_memo(async {
+        let first = meta.surfaced_server_unscoped("read").map(str::to_owned);
+        meta.resurface_for_test("read", "beta");
+        let second = meta.surfaced_server_unscoped("read").map(str::to_owned);
+        (first, second)
+    })
+    .await;
+    assert_eq!(first.as_deref(), Some("alpha"), "premise: the first read");
+    assert_eq!(
+        second.as_deref(),
+        Some("alpha"),
+        "L5: a mid-request move reached the same request's second read"
+    );
+    assert_eq!(
+        meta.surfaced_server_unscoped("read"),
+        Some("beta"),
+        "L5: outside the request the live map moved"
+    );
+}
