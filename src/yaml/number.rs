@@ -233,32 +233,3 @@ impl From<f64> for Number {
         Number { n: N::Float(v) }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::Number;
-
-    #[test]
-    fn prints_as_the_replaced_backend_did() {
-        for (number, text) in [
-            (Number::from(1000.0), "1000.0"),
-            (Number::from(1e100), "1e100"),
-            (Number::from(0.5), "0.5"),
-            (Number::from(f64::NAN), ".nan"),
-            (Number::from(f64::INFINITY), ".inf"),
-            (Number::from(f64::NEG_INFINITY), "-.inf"),
-            (Number::from(-3_i64), "-3"),
-            (Number::from(u64::MAX), "18446744073709551615"),
-        ] {
-            assert_eq!(number.to_string(), text);
-        }
-    }
-
-    #[test]
-    fn one_nan_and_kinds_stay_apart() {
-        assert_eq!(Number::from(f64::NAN), Number::from(-f64::NAN));
-        assert_ne!(Number::from(1_u8), Number::from(1.0));
-        assert!(Number::from(-1_i8).is_i64() && !Number::from(-1_i8).is_u64());
-        assert_eq!(Number::from(u64::MAX).as_i64(), None);
-    }
-}

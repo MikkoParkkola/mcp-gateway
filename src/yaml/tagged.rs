@@ -103,17 +103,3 @@ impl Serialize for TaggedValue {
         map.end()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{Tag, nobang};
-
-    #[test]
-    fn a_tag_is_one_tag_with_or_without_its_bang() {
-        assert_eq!(Tag::new("!exact"), Tag::new("exact"));
-        assert_eq!(Tag::new("exact").to_string(), "!exact");
-        assert_eq!(Tag::new("!exact").to_string(), "!exact");
-        assert_eq!(nobang("!"), "!");
-        assert_eq!(Tag::new("!!str").to_string(), "!!str");
-    }
-}

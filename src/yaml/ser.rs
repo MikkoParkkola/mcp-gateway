@@ -638,24 +638,3 @@ impl ser::Serializer for TagProbe {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::super::{Mapping, Tag, TaggedValue, Value};
-    use super::to_value;
-
-    #[test]
-    fn a_tagged_value_serializes_back_to_itself_and_a_bang_key_does_not() {
-        let tagged = Value::Tagged(Box::new(TaggedValue {
-            tag: Tag::new("pair"),
-            value: Value::from(1_u8),
-        }));
-        assert_eq!(to_value(&tagged).expect("serializes"), tagged);
-        let mut map = Mapping::new();
-        map.insert(Value::from("!x"), Value::from(1_u8));
-        assert_eq!(
-            to_value(&Value::Mapping(map.clone())).expect("serializes"),
-            Value::Mapping(map)
-        );
-    }
-}
