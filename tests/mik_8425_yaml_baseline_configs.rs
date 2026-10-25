@@ -11,9 +11,11 @@
 //! backend `url` is refused there. The parity suite drives this one against
 //! the new backend. `configs_loaded.tsv` loads each config through the
 //! gateway's own `Config::load_literal`, the path the gateway reads it by.
-//! Neither layers the environment, so the digests are the same on every
-//! machine. A refusal row keeps its text; a later stage compares refusal
-//! against refusal.
+//! `configs.tsv` layers no environment, so its digests are the same on every
+//! machine. `configs_loaded.tsv` does: `load_literal` merges `MCP_GATEWAY_`
+//! variables, so a row (the Helm `credential.yaml`, which needs
+//! `MCP_GATEWAY_TOKEN`) reads differently where one is set. A refusal row
+//! keeps its whole text; an allowed wording change is a `deviations.tsv` row.
 
 #[path = "common/mik_8425_golden.rs"]
 mod golden;

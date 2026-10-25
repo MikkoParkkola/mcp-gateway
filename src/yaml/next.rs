@@ -3,13 +3,15 @@
 //! The replacement backend, built here beside the current one (MIK-8425
 //! MIG.2). Every entry point mirrors the adapter's own signature, so
 //! `tests/mik_8425_mig2_parity.rs` drives the same golden reports over it.
-//! Step 3 leaves each one a stub that refuses, which makes every parity row
-//! red; step 4 fills them in; the switch collapses this module into the
-//! adapter.
+//! Each parse entry point runs the adapter's own pre-parse guard first, as
+//! the adapter does. Step 3 left every entry point a stub that refuses;
+//! step 4 fills them in; the switch collapses this module into the adapter.
 
 use figment::value::{Dict, Map};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+
+use super::guard;
 
 pub(crate) use super::{Error, Limit, Location, Mapping, Value, redact_message, to_json};
 
@@ -19,11 +21,13 @@ fn not_yet() -> Error {
     Error::backend(<serde_yaml::Error as serde::de::Error>::custom(NOT_YET))
 }
 
-pub(crate) fn from_str<T: DeserializeOwned>(_text: &str) -> Result<T, Error> {
+pub(crate) fn from_str<T: DeserializeOwned>(text: &str) -> Result<T, Error> {
+    guard(text)?;
     Err(not_yet())
 }
 
-pub(crate) fn from_str_loose(_text: &str) -> Result<Dict, Error> {
+pub(crate) fn from_str_loose(text: &str) -> Result<Dict, Error> {
+    guard(text)?;
     Err(not_yet())
 }
 
@@ -31,7 +35,8 @@ pub(crate) fn from_str_loose(_text: &str) -> Result<Dict, Error> {
     clippy::result_large_err,
     reason = "figment's own `Provider::data` signature, which the config loader returns"
 )]
-pub(crate) fn figment_data(_text: &str) -> figment::Result<Map<figment::Profile, Dict>> {
+pub(crate) fn figment_data(text: &str) -> figment::Result<Map<figment::Profile, Dict>> {
+    guard(text).map_err(|err| figment::Error::from(err.to_string()))?;
     Err(figment::Error::from(NOT_YET.to_owned()))
 }
 
@@ -47,6 +52,7 @@ pub(crate) fn from_value<T: DeserializeOwned>(_value: Value) -> Result<T, Error>
     Err(not_yet())
 }
 
-pub(crate) fn documents(_text: &str) -> impl Iterator<Item = Result<Value, Error>> + '_ {
-    std::iter::once(Err(not_yet()))
+pub(crate) fn documents(text: &str) -> impl Iterator<Item = Result<Value, Error>> + '_ {
+    // The guard refuses the stream as a whole, as the adapter's does.
+    std::iter::once(guard(text).and_then(|()| Err(not_yet())))
 }

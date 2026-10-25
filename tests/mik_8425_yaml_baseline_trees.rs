@@ -15,8 +15,8 @@
 //!   document count plus the digest of each document's structure.
 //!
 //! The backend swap must reproduce every digest. A refusal row keeps
-//! `serde-yaml`'s text: a later stage compares refusal against refusal, never
-//! the wording.
+//! `serde-yaml`'s text, and the comparison is of the whole text; a wording
+//! change the design allows is a `deviations.tsv` row, never an edit here.
 
 #[path = "common/mik_8425_golden.rs"]
 mod golden;
