@@ -127,7 +127,8 @@ impl Redactor {
             // outside a literal: the walk under the cap does all three. Its
             // literal list (32 bytes a literal, each at least 3 bytes of text)
             // and ranges cost at most about 11x the leaf at worst, a document
-            // of tiny strings, on a leaf already in memory; the Value tree
+            // of tiny strings, on a leaf already in memory (9.0x measured for
+            // `"a",` literals, tests/redact_memory_peak.rs); the Value tree
             // that set the cap is never built (lead ruling, 2026-10-25).
             return self.redact_collected(text, exempt, findings);
         };

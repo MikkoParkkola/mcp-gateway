@@ -20,7 +20,12 @@ pub(crate) struct Literal {
 /// `serde_json` has accepted: outside a literal such text holds no `"`, so
 /// each one found opens a literal.
 pub(crate) fn string_literals(text: &str) -> Vec<Literal> {
-    literals(text).collect()
+    // Sized from the quotes, two a literal (an escaped one only adds room):
+    // collected by doubling, the old and new buffers would both be live at
+    // the last growth, half again the list's own size (MIK-8774).
+    let mut out = Vec::with_capacity(text.bytes().filter(|&b| b == b'"').count() / 2);
+    out.extend(literals(text));
+    out
 }
 
 /// [`string_literals`] one at a time, holding only the open containers, so a
@@ -124,4 +129,42 @@ fn hex4(text: &str, at: usize) -> Option<u32> {
         .all(|b| b.is_ascii_hexdigit())
         .then(|| u32::from_str_radix(digits, 16).ok())
         .flatten()
+}
+
+/// `lit`'s content decoded, quotes included in the parse, so JSON escapes
+/// read as the characters they stand for.
+pub(crate) fn decoded(text: &str, lit: &Literal) -> Option<String> {
+    serde_json::from_str::<String>(&text[lit.start - 1..=lit.end]).ok()
+}
+
+/// The byte range of `lit`'s content with JSON whitespace, raw or escaped
+/// (`\n`, `\t`, `\r`), trimmed from both ends.
+pub(crate) fn trimmed_content(text: &str, lit: &Literal) -> (usize, usize) {
+    let bytes = text.as_bytes();
+    let (mut start, mut end) = (lit.start, lit.end);
+    loop {
+        if start < end && bytes[start].is_ascii_whitespace() {
+            start += 1;
+        } else if start + 1 < end
+            && bytes[start] == b'\\'
+            && matches!(bytes[start + 1], b'n' | b't' | b'r')
+        {
+            start += 2;
+        } else {
+            break;
+        }
+    }
+    loop {
+        if end > start && bytes[end - 1].is_ascii_whitespace() {
+            end -= 1;
+        } else if end >= start + 2
+            && bytes[end - 2] == b'\\'
+            && matches!(bytes[end - 1], b'n' | b't' | b'r')
+        {
+            end -= 2;
+        } else {
+            break;
+        }
+    }
+    (start, end)
 }

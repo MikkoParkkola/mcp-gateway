@@ -29,7 +29,7 @@ use std::collections::{HashMap, HashSet};
 use regex::{Regex, RegexSet};
 use serde_json::{Map, Value};
 
-use super::json_literal::{self, Literal};
+use super::json_literal::{self, Literal, decoded, trimmed_content};
 use super::{Finding, FindingLocation, ScanType};
 use crate::security::Severity;
 use crate::truncate::{Budget, Suffix, truncate};
@@ -630,44 +630,6 @@ fn overlapping_spans(re: &Regex, text: &str) -> Vec<(usize, usize)> {
         at = next.max(floor);
     }
     spans
-}
-
-/// `lit`'s content decoded, quotes included in the parse, so JSON escapes
-/// read as the characters they stand for.
-fn decoded(text: &str, lit: &Literal) -> Option<String> {
-    serde_json::from_str::<String>(&text[lit.start - 1..=lit.end]).ok()
-}
-
-/// The byte range of `lit`'s content with JSON whitespace, raw or escaped
-/// (`\n`, `\t`, `\r`), trimmed from both ends.
-fn trimmed_content(text: &str, lit: &Literal) -> (usize, usize) {
-    let bytes = text.as_bytes();
-    let (mut start, mut end) = (lit.start, lit.end);
-    loop {
-        if start < end && bytes[start].is_ascii_whitespace() {
-            start += 1;
-        } else if start + 1 < end
-            && bytes[start] == b'\\'
-            && matches!(bytes[start + 1], b'n' | b't' | b'r')
-        {
-            start += 2;
-        } else {
-            break;
-        }
-    }
-    loop {
-        if end > start && bytes[end - 1].is_ascii_whitespace() {
-            end -= 1;
-        } else if end >= start + 2
-            && bytes[end - 2] == b'\\'
-            && matches!(bytes[end - 1], b'n' | b't' | b'r')
-        {
-            end -= 2;
-        } else {
-            break;
-        }
-    }
-    (start, end)
 }
 
 /// The parsed document when `text` is JSON whose credential spans can be
