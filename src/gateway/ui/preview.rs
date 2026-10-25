@@ -131,6 +131,10 @@ fn url_carries_credentials(raw: &str) -> bool {
 /// The whole start and listing, then teardown.
 const PREVIEW_CAP: Duration = Duration::from_secs(30);
 
+/// Each request's own timeout, past [`PREVIEW_CAP`], so a silent server is
+/// always ended by the cap: one answer, 504, never a race with a 502.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(35);
+
 /// The most one response may carry, counted before parsing.
 const RESPONSE_BUDGET: usize = 4 * 1024 * 1024;
 
@@ -307,7 +311,7 @@ async fn run_confirmed(
         let transport = crate::transport::HttpTransport::with_destination(
             http_url,
             std::collections::HashMap::new(),
-            backend.timeout,
+            REQUEST_TIMEOUT,
             *streamable_http,
             None,
             protocol_version.clone(),
@@ -315,7 +319,7 @@ async fn run_confirmed(
         )?;
         transport.set_body_budget(RESPONSE_BUDGET, PREVIEW_BUDGET);
         let listed = async {
-            crate::backend::start_detached_http(&transport, name, backend.timeout).await?;
+            crate::backend::start_detached_http(&transport, name, REQUEST_TIMEOUT).await?;
             crate::backend::list_tools_for_preview(name, transport.as_ref()).await
         }
         .await;
