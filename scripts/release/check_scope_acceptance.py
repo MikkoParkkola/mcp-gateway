@@ -175,6 +175,13 @@ def evidence_errors(root, evidence, label, required):
             errors.append(
                 f"{label}: evidence must remain inside the repository: {item}"
             )
+        elif resolved.is_file() and cite in private_evidence(root):
+            # A file back at a pinned private path is not the recorded evidence
+            # until someone checks it is; the pin says where that lives.
+            errors.append(
+                f"{label}: evidence pinned as private is back in the tree; drop the"
+                f" pin or the file: {item}"
+            )
         elif resolved.is_file():
             if span:
                 errors += span_errors(label, item, resolved.read_text(errors="replace"), span)

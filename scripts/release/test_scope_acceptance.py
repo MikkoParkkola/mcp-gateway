@@ -189,6 +189,14 @@ class AcceptanceTests(unittest.TestCase):
         errors = self.inspect()[0]
         self.assertTrue(any("must stay inside the clone" in e for e in errors), errors)
 
+    def test_a_tree_file_at_a_pinned_private_path_fails(self):
+        self.cite_private("reviewed result\n")
+        public = self.root / "docs/internal/proof.md"
+        public.parent.mkdir(parents=True, exist_ok=True)
+        public.write_text("something else\n")
+        errors = self.inspect()[0]
+        self.assertTrue(any("back in the tree" in e for e in errors), errors)
+
     def test_unlisted_missing_evidence_fails(self):
         self.data["criteria"][0]["evidence"] = ["docs/internal/absent.md"]
         errors = self.inspect()[0]
