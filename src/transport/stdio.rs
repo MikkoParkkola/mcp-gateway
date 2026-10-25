@@ -1014,6 +1014,7 @@ impl Transport for StdioTransport {
 
 #[path = "stdio_cache.rs"]
 mod cache;
+pub(crate) use cache::isolated_env_and_assigned_cache;
 pub use cache::{assigned_package_cache_dir, isolated_package_manager_env};
 #[path = "stdio_child_tree.rs"]
 mod child_tree;

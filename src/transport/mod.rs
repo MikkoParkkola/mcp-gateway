@@ -10,6 +10,7 @@ pub mod websocket;
 
 pub use self::command_split::{split_command, split_command_unix, split_command_windows};
 pub use self::http::HttpTransport;
+pub(crate) use self::stdio::isolated_env_and_assigned_cache;
 pub use self::stdio::{StdioTransport, assigned_package_cache_dir, isolated_package_manager_env};
 pub use self::websocket::McpFrame;
 
