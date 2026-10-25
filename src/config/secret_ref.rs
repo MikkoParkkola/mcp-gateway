@@ -94,10 +94,42 @@ impl<'a> SecretRef<'a> {
 /// not a valid keychain name, or the entry is missing, empty, not UTF-8, or
 /// cannot be read.
 pub(crate) fn read_keychain_ref(field: &str, name: &str, overlay: &EnvOverlay) -> Result<String> {
-    let _ = (name, overlay);
-    Err(Error::ConfigValidation(format!(
-        "{field}: keychain references are not implemented"
-    )))
+    use super::keychain::KeychainError;
+    // Checked before any lookup: a name outside the grammar is a typo, and
+    // asking the store about it could only prompt or mislead.
+    let valid = (1..=128).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
+    if !valid {
+        return Err(Error::ConfigValidation(format!(
+            "{field} references keychain:{}, which is not a valid keychain name \
+             (1-128 of A-Z, a-z, 0-9, '.', '_', '-').",
+            name.escape_debug()
+        )));
+    }
+    let refused = |why: &str| {
+        Error::ConfigValidation(format!("{field} references keychain entry '{name}', {why}"))
+    };
+    let bytes = match overlay.keychain().read(name) {
+        Ok(bytes) => bytes,
+        Err(KeychainError::Missing) => return Err(refused("which does not exist.")),
+        Err(KeychainError::NotUtf8) => return Err(refused("which is not UTF-8.")),
+        Err(other) => {
+            return Err(refused(&format!(
+                "which cannot be read: {}.",
+                other.reason()
+            )));
+        }
+    };
+    if bytes.as_bytes().is_empty() {
+        return Err(refused("which is empty; empty secrets are refused."));
+    }
+    // Exact bytes: unlike `file:`, no trailing newline is stripped (ADR-028
+    // rule 5); the store holds what the operator saved.
+    std::str::from_utf8(bytes.as_bytes())
+        .map(str::to_owned)
+        .map_err(|_| refused("which is not UTF-8."))
 }
 
 /// The secret a `file:` reference names. See the module docs for the rules.
