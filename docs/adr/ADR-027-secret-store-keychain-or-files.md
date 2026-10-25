@@ -99,38 +99,72 @@ The value never appears in argv, logs or error text. Readers and writers pass it
 - Entry names change on every secret change, and unused entries accumulate until an admin deletes them (ADR-024).
 - Rollback: the `keychain:` prefix stays reserved. A build without keychain support refuses `keychain:NAME` by name, never reading it as a literal secret. A binary older than this ADR would read it as a literal, so UPGRADING says to convert keychain references to `file:` before downgrading.
 
-## Rules from review r1 (binding; they refine §1-§7)
+## Rules from review (binding; where they differ from §1-§7, they win)
 
-1. **Create-only on every OS.**
+### Names and limits
+
+1. **Names.** `mcp-gateway.<slug>.<unix-ms>.<16 hex>`.
+   - The slug is the field path, with every byte outside `[A-Za-z0-9-]` mapped to `-`, runs collapsed, capped at 40.
+   - The 16 hex characters come from the OS CSPRNG (64 bits).
+   - The same string is the keychain service name, the `files` basename, and the `secret-tool`/Windows label: the name, never the value. It always fits `[A-Za-z0-9._-]{1,128}`.
+   - This supersedes §3's 8 hex suffix and its retry.
+2. **Value limits.** Every value is checked against the chosen store's limit before any entry is created; a refused value names the limit and offers `files`.
+   - An empty value is refused on every store.
+   - Windows: 2,560 bytes (`CRED_MAX_CREDENTIAL_BLOB_SIZE`).
+   - Linux: 8,192 bytes (`secret-tool` 0.21.8 truncates piped input past it).
+   - `files`: 64 KiB (the existing `file:` limit).
+
+### Create-only writes
+
+3. **One vault lock.** Several gateways can share one user's keychain (ADR-024), and the config writer lock is per `gateway.yaml`. So every secret write holds one per-user lock: `<user data dir>/mcp-gateway/secrets.lock`, using the same flock mechanism as `config_persistence_lock`, from the absence check through commit or rollback.
    - macOS: `SecItemAdd` refuses a duplicate itself.
-   - Linux and Windows: the store has no create-only call, so the save confirms the name is absent and writes under the config writer lock. The name carries a 64-bit random suffix (16 hex characters).
+   - Linux and Windows: `exists(name)` false, then create, under that lock.
    - Rollback deletes only names this save confirmed absent and then created.
-2. **Names.** The format is `mcp-gateway.<slug>.<unix-ms>.<16 hex>`.
-   - The slug is the field path with every byte outside `[A-Za-z0-9-]` mapped to `-`, runs collapsed, capped at 40.
-   - The same string is the keychain service name, the `files` basename, and the `secret-tool` / Windows label: the name, never the value.
-   - Every name fits `[A-Za-z0-9._-]{1,128}`.
-3. **Size limits.**
-   - Every value is checked against the chosen store's limit before any entry is created: Windows 2,560 bytes (`CRED_MAX_CREDENTIAL_BLOB_SIZE`), Linux 8,192 bytes (`secret-tool` 0.21.8 truncates piped input past it), and `file:`'s existing 64 KiB.
-   - An oversized value is refused, naming the limit and offering `files`.
-4. **Exact bytes.**
-   - Reads return the stored bytes as strict UTF-8: no `trim()`. Linux takes `secret-tool lookup` output verbatim; macOS and Windows use the API.
-   - `file:` keeps its one-trailing-newline rule.
-5. **No enumeration API.** Listing unused entries never calls `CredEnumerateW`, `secret-tool search` or `security dump-keychain` (each returns secret values).
-   - Instead, an owner-only index `<config dir>/secrets/index.jsonl` gets `{name, store, created_at}` appended **before** each create, so it is a superset even after a crash.
-   - Listing reads the index, checks each name still exists (an existence check that returns no value), and drops names a loaded config references.
-6. **The probe.**
-   - It is read-only, non-interactive and bounded at 2 s: it looks up a name that does not exist.
-   - macOS: authentication UI is skipped, and an interaction-not-allowed or locked error means unavailable.
-   - Linux: `secret-tool` is missing, no D-Bus session, or the timeout means unavailable; "not found" means available.
-   - Windows: `ERROR_NOT_FOUND` means available; `ERROR_NO_SUCH_LOGON_SESSION` or any other error means unavailable.
-   - The probe runs before anything is written.
-7. **`win_cred.rs` contract** (in addition to §2a):
-   - `CredFree` only after a `CredReadW` that returned TRUE, via a guard built from that pointer;
-   - `GetLastError` captured as the first call after any failing Win32 call;
-   - the blob is the secret's UTF-8 bytes with `CredentialBlobSize` set, never UTF-16;
-   - names reject interior NUL, and an empty blob is refused;
-   - `CRED_PERSIST_LOCAL_MACHINE`: it survives logoff for a user-run gateway;
-   - the read copy goes into the existing `WipedToken` wipe, with no second secret type.
-8. **Field coverage.** Besides `SecretRef`, the validators that check references themselves accept `keychain:`: `accounts.keys` and the adapter HMAC references, plus `ReferenceKey` identity. The few callers that match `SecretRef` arms (reload recording, `server.metrics_token`, message signing) get an explicit `Keychain` arm. KC.2 has a test per secret field.
-9. **The `unsafe` allow-list.** Production code may use `unsafe` in exactly `src/win_acl.rs` and `src/win_cred.rs`; ADR-016's test-only exception (`src/gateway/server/tests/alloc_meter.rs`) is kept. A source-scan test pins that list. The implementing PR also updates ADR-016's "exactly one module" sentence and the `src/lib.rs` comment.
-10. **Capability files are out of scope.** Their `keychain:` and `{keychain.X}` keep the old readers. A UI save never writes a `keychain:` reference into capability YAML until those readers use these backends (noted on MIK-8902).
+
+### Exists and read
+
+4. **`exists(name)` never returns the value.**
+   - macOS: `SecItemCopyMatching` with attributes only.
+   - Windows: `CredReadW`, then immediately `CredFree`, with the blob wiped first.
+   - Linux: `secret-tool lookup`, its stdout read into a wiped buffer and dropped.
+5. **Reads return exact bytes.** Strict UTF-8, no `trim()` (`file:` keeps its one-trailing-newline rule).
+   - Reads are non-interactive and bounded like the probe (rule 7). A locked store or a refused interaction fails validation, naming the entry.
+   - Bytes are held in one shared crate-private `WipedBytes` buffer (the existing `WipedToken` wipe, widened from `String` to bytes), not a second secret type.
+
+### Listing unused entries
+
+6. **An inventory without enumeration.** `CredEnumerateW`, `secret-tool search` and `security dump-keychain` are never called (each returns values).
+   - The owner-only index is `<config dir>/secrets-index.jsonl`, **outside** `secrets/`. It is never listed as unused and never deletable.
+   - `{name, store, created_at}` is appended and `sync_all`'d, with its directory synced, **before** each create. A truncated last line is dropped on the next open.
+   - A name this save rolled back is recorded as removed.
+   - Listing reads the index, keeps names `exists()` confirms, and drops names a loaded config references.
+
+### Availability
+
+7. **The probe.** Read-only, non-interactive, bounded at 2 s, run before anything is written; the same bound applies to every store and read call.
+   - **macOS:** query a missing name with authentication UI set to fail. `errSecItemNotFound` means available; `errSecInteractionNotAllowed` (-25308) or `errSecAuthFailed` means unavailable. If `security-framework` 3.7 cannot express the fail mode without new `unsafe`, the implementing PR stops and brings the options to the lead.
+   - **Linux:** `secret-tool` missing, no session bus, or the timeout means unavailable. Readiness itself is read over D-Bus with `gdbus` (part of GLib, present wherever libsecret is): the default collection exists and its `Locked` property is false. Locked means unavailable, and no unlock prompt is ever triggered. A `secret-tool` exit status is never used to tell "not found" from a bus failure.
+   - **Windows:** a missing name's `CredReadW` giving `ERROR_NOT_FOUND` means available; `ERROR_NO_SUCH_LOGON_SESSION` or any other error means unavailable.
+
+### Windows `unsafe` module
+
+8. **`win_cred.rs`** replaces §2a's first bullet list where they differ.
+   - Exports: safe `create(name, &[u8])`, `exists(name)`, `read(name) -> WipedBytes`, `delete(name)`.
+   - `CredFree` only on a pointer from a `CredReadW` that returned TRUE, through a guard.
+   - `GetLastError` captured as the first call after a failing Win32 call.
+   - The blob is the UTF-8 bytes with `CredentialBlobSize` set, never UTF-16. Names reject interior NUL.
+   - `CRED_TYPE_GENERIC`, `CRED_PERSIST_LOCAL_MACHINE`.
+   - `// SAFETY:` on every block. Tests run on the Windows CI shard.
+
+### Coverage and the `unsafe` allow-list
+
+9. **Field coverage.** `keychain:` is accepted and read through the same path as `file:` in:
+   - `SecretRef` and its arm-matching callers (reload recording, `server.metrics_token`, message signing);
+   - `accounts.keys` and the adapter HMAC references, and `ReferenceKey` identity;
+   - `validate_api_key_material` (`src/config/features/api_key.rs`);
+   - `EnvSecrets::resolve` (`src/personal_accounts/provider.rs`);
+   - `client_secret_ref`.
+
+   KC.2 has a test per secret field.
+10. **The `unsafe` allow-list.** Production `unsafe` lives in exactly `src/win_acl.rs` and `src/win_cred.rs`; ADR-016's test-only `src/gateway/server/tests/alloc_meter.rs` stays. A source-scan test pins the list, and the implementing PR updates ADR-016's "exactly one module" sentence and the `src/lib.rs` comment. This supersedes §2a's two-file scan.
+11. **Capability files are out of scope.** Their `keychain:` and `{keychain.X}` keep the old readers, and a UI save never writes a `keychain:` reference into capability YAML until they share these backends (MIK-8902).
