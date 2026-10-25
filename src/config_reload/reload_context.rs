@@ -396,7 +396,16 @@ impl ReloadContext {
             guard = lock => guard,
         };
         let mut outcome = match self.reload_outcome_locked().await {
-            Ok(outcome) => outcome,
+            Ok(outcome) => {
+                // MIK-8854: an applied reload marks the charts; a refused one
+                // returns below and marks nothing.
+                if let Some(markers) = &self.markers
+                    && let Ok(now) = crate::clock::unix_secs()
+                {
+                    markers.mark(crate::counters::MarkerKind::ConfigReload, None, now);
+                }
+                outcome
+            }
             // Both steps render on every path: a config refusal read alone
             // hides whether the revocation landed. Appended, so every consumer
             // keying on the refusal's prefix still matches.
