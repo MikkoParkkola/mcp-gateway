@@ -6,6 +6,8 @@
 // test that drives a real startup must call the same one rather than a copy of
 // its policy.
 pub(crate) mod account_bindings;
+#[cfg(feature = "cost-governance")]
+mod cost_restore;
 #[cfg(test)]
 mod gh475_budget_decides_tests;
 mod persistence;
@@ -986,7 +988,7 @@ impl Gateway {
             if cg_cfg.enabled {
                 let registry = Arc::new(CostRegistry::new(&cg_cfg));
                 let enforcer = Arc::new(BudgetEnforcer::new(cg_cfg, Arc::clone(&registry)));
-                support::restore_persisted_costs(&enforcer, &data_dir.join("costs.json"));
+                cost_restore::restore_persisted_costs(&enforcer, &data_dir.join("costs.json"));
                 info!("Cost governance enabled");
                 (Some(registry), Some(enforcer))
             } else {

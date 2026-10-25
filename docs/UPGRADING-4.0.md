@@ -30,7 +30,7 @@ upgrading a running deployment.
 | 7 | An OAuth backend must be on TLS or loopback | Put TLS in front of it, or move it to `127.0.0.1` — no opt-out |
 | 8 | A credential-bearing backend on plain `http://` is refused at load | Use TLS, or set `allow_cleartext_credentials: true` on that backend |
 | 9 | The savings estimates are gone from stats | Drop `--price`; compute cost from `total_cached_tokens` yourself |
-| 10 | Server state follows `MCP_GATEWAY_CONFIG_DIR` | If you set it, copy two files across once — see below |
+| 10 | Server state follows `MCP_GATEWAY_CONFIG_DIR` | If you set it, copy three files across once — see below |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -139,13 +139,14 @@ directory.
 
 If you do not set `MCP_GATEWAY_CONFIG_DIR`, or set it to the full path of
 `.mcp-gateway` in your home directory, nothing changes (a literal `~` is not expanded).
-Otherwise the first 4.0.0 start begins with empty usage and transition history. To keep it, stop
-the 3.x gateway and let it exit (it writes both files on a graceful shutdown), then copy
-whichever of `usage.json` and `transitions.json` exist in `~/.mcp-gateway` into your configured
-directory before that start.
+Otherwise the first 4.0.0 start begins with empty usage, transition and cost history. To keep
+it, stop the 3.x gateway and let it exit (it writes the files on a graceful shutdown), then copy
+whichever of `usage.json`, `transitions.json` and `costs.json` exist in `~/.mcp-gateway` into
+your configured directory before that start.
 
-`costs.json` needs no copy. Neither 3.x nor 4.0.0 restores cost totals from it on start, so they
-begin at zero after any restart, upgrade or not.
+`costs.json` holds today's spend against the daily budgets. 4.0.0 and 3.5.2 put it back on
+start, so a restart no longer resets a daily cap; without the copy, the first 4.0.0 start
+begins the day's budgets at zero. A file saved on an earlier day is not carried over.
 
 ## After upgrading
 
@@ -161,6 +162,6 @@ and touches no credential (`src/commands/upgrade.rs:264`). A rollback therefore 
 files back up rather than prompting again, unless the tokens expired in the meantime. What 4.0.0
 wrote under the per-issuer key is simply not read by 3.x.
 
-Item 10 rolls back the same way: 3.x reads `usage.json` and `transitions.json` from
-`~/.mcp-gateway` again, so history 4.0.0 recorded under `MCP_GATEWAY_CONFIG_DIR` is not seen
-until you stop 4.0.0 and copy those two files back.
+Item 10 rolls back the same way: 3.x reads `usage.json`, `transitions.json` and `costs.json`
+from `~/.mcp-gateway` again, so history 4.0.0 recorded under `MCP_GATEWAY_CONFIG_DIR` is not
+seen until you stop 4.0.0 and copy those files back.

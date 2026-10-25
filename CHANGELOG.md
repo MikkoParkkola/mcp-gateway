@@ -58,6 +58,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A restart no longer resets the daily cost budgets.** The gateway saved
+  each day's spend to `costs.json` on shutdown but never read it back, so any
+  restart put the global, per-tool and per-key daily totals at zero and an
+  agent that had hit its cap could spend again. The totals saved today are now
+  restored on start; a file saved on an earlier day is not carried over, and an
+  unreadable one starts at zero with a warning naming the file. (MIK-8904)
+
 - **tokio 1.53.3 (RUSTSEC-2026-0386).** tokio 1.53.3 deprecates `AsyncFd`'s safe
   constructors, which accepted any raw file descriptor and could break I/O safety. The
   gateway does not call them. Lockfile only. Ported from the release line (#4081).
