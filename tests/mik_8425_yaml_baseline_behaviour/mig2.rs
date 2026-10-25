@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8425 MIG.2 step 2: rows recorded with the guarded serde_yaml adapter
-//! before the backend swap, so the swap's parity suite keeps an oracle once
-//! serde_yaml leaves the build. Each row is a case the K0 spikes or the
+//! MIK-8425 MIG.2 step 2: rows recorded with the guarded adapter over the
+//! old backend before the swap, so the swap's parity suite keeps an oracle once
+//! the old parser leaves the build. Each row is a case the K0 spikes or the
 //! design reviews named and the MIG.0 recording lacked.
 
 use super::{Shape, ok_json, ok_tree, row, yaml};
@@ -38,7 +38,7 @@ struct Text {
     s: String,
 }
 
-/// A level-3 alias fan-out (loads under serde_yaml's repetition limit).
+/// A level-3 alias fan-out (loads under the old parser's repetition limit).
 fn fanout3() -> String {
     let mut doc = String::from("a0: &a0 [x, x, x, x, x, x, x, x, x, x]\n");
     for level in 1..=3 {
@@ -145,7 +145,7 @@ fn streams(out: &mut String) {
     );
 }
 
-/// D16: serde_yaml's repetition rule counts every alias visit, including in
+/// D16: the old parser's repetition rule counts every alias visit, including in
 /// a field the target ignores, and resets per document.
 fn aliases(out: &mut String) {
     let ignored = format!(
