@@ -1,0 +1,43 @@
+# Debt: tracked material that is on its way to the private companion
+# repository, or text that is being reworded. One <path or directory/> TAB
+# <check id> per line. A line that no longer matches anything fails the
+# hygiene check, so this list only shrinks; it is not a place to add to.
+CLAUDE.md	private-path
+docs/internal/	private-path
+docs/requirements/	private-path
+capabilities/automation/bus_pull.yaml	private-name
+capabilities/automation/bus_subscribe.yaml	private-name
+CHANGELOG.md	private-name
+crates/gateway-core/src/lib.rs	private-name
+docs/adr/ADR-001-inter-agent-message-signing.md	private-name
+docs/adr/ADR-005-control-plane-persistence.md	private-name
+docs/design/2026-09-06-gh452-session-delete-ownership.md	private-name
+docs/design/2026-09-06-personal-accounts.md	private-name
+docs/design/issue-462-config-preservation.md	private-name
+docs/design/RFC-0060-dual-generation-mcp.md	private-name
+docs/design/RFC-0061-protocol-2026-07-28-release-scope.md	private-name
+docs/internal/	agent-config
+docs/internal/	private-name
+docs/requirements/	private-name
+docs/runtime/descriptor_spec.md	private-name
+docs/runtime/substrate_mapping.md	private-name
+README.md	agent-config
+scripts/release/surface_docs.py	private-name
+src/backend/annotations.rs	private-name
+src/backend/tests/tool_cache.rs	private-name
+src/config/features/security.rs	private-name
+src/failsafe/circuit_breaker_tests.rs	private-name
+src/failsafe/circuit_breaker.rs	private-name
+src/gateway/route_check_matrix_tests/response.rs	agent-config
+src/gateway/server/warmstart.rs	private-name
+src/gateway/server/warmstart/tests.rs	private-name
+src/projection/schema.rs	private-name
+src/runtime/compiler_tests.rs	private-name
+src/runtime/compiler.rs	private-name
+src/runtime/descriptor_tests.rs	private-name
+src/runtime/descriptor.rs	private-name
+src/runtime/mod.rs	private-name
+src/security/firewall/memory_scanner.rs	private-name
+src/transport/http/tests/session_expiry.rs	private-name
+src/transport/http/transport_impl.rs	private-name
+tests/mik_5226_acs.rs	private-name

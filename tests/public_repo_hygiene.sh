@@ -5,6 +5,7 @@ set -euo pipefail
 
 source_repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 checker="$source_repo/scripts/dev/check-public-repo-hygiene.sh"
+patterns="$source_repo/scripts/dev/public-hygiene-patterns.sh"
 tmp_root="$(mktemp -d)"
 trap 'rm -rf "$tmp_root"' EXIT
 
@@ -18,7 +19,11 @@ make_repo() {
   mkdir -p "$repo/scripts/dev"
   cp "$checker" "$repo/scripts/dev/check-public-repo-hygiene.sh"
   chmod +x "$repo/scripts/dev/check-public-repo-hygiene.sh"
+  # The shared pattern list travels with the checker. The debt list does not:
+  # a fixture repository owes nothing, so every check runs at full strength.
+  [[ -f "$patterns" ]] && cp "$patterns" "$repo/scripts/dev/public-hygiene-patterns.sh"
   cat >"$repo/.gitignore" <<'EOF'
+/internal/
 docs/strategy/
 docs/competitive/
 docs/competitive-intelligence/
@@ -74,15 +79,15 @@ Run the quickstart, configure a local gateway, and review the OWASP Agentic AI
 controls, deployment guide, capability import guide, architecture overview,
 release notes, security compliance matrix, and public setup examples.
 EOF
-git -C "$repo" add .gitignore README.md scripts/dev/check-public-repo-hygiene.sh
+git -C "$repo" add .gitignore README.md scripts/dev
 assert_pass "$repo"
 
 repo="$(make_repo tracked-private-path)"
 mkdir -p "$repo/docs/competitive"
 echo "# Competitive scan" >"$repo/docs/competitive/scan.md"
-git -C "$repo" add .gitignore scripts/dev/check-public-repo-hygiene.sh
+git -C "$repo" add .gitignore scripts/dev
 git -C "$repo" add -f docs/competitive/scan.md
-assert_fail_contains "$repo" "tracked files remain under private strategy paths"
+assert_fail_contains "$repo" "is a private path"
 
 # No comparison page is public any more, even one un-ignored by name.
 repo="$(make_repo named-comparison-is-refused)"
@@ -99,9 +104,9 @@ EOF
 cat >"$repo/docs/competitive/example-comparison.md" <<'EOF'
 # Feature comparison for users
 EOF
-git -C "$repo" add .gitignore scripts/dev/check-public-repo-hygiene.sh
+git -C "$repo" add .gitignore scripts/dev
 git -C "$repo" add docs/competitive/README.md docs/competitive/example-comparison.md
-assert_fail_contains "$repo" "tracked files remain under private strategy paths"
+assert_fail_contains "$repo" "is a private path"
 
 blocked_markers=(
   "Status: DRAFT. Not ready to publish"
@@ -128,7 +133,7 @@ for i in "${!blocked_markers[@]}"; do
 
 ${blocked_markers[$i]}
 EOF
-  git -C "$repo" add .gitignore docs-public.md scripts/dev/check-public-repo-hygiene.sh
+  git -C "$repo" add .gitignore docs-public.md scripts/dev
   assert_fail_contains "$repo" "contains"
 done
 
@@ -157,7 +162,7 @@ for i in "${!allowed_cases[@]}"; do
 
 ${allowed_cases[$i]}
 EOF
-  git -C "$repo" add .gitignore "$target_file" scripts/dev/check-public-repo-hygiene.sh
+  git -C "$repo" add .gitignore "$target_file" scripts/dev
   assert_pass "$repo"
 done
 
@@ -170,7 +175,7 @@ cat >"$repo/docs/release/v4.0.0-burndown-tracker.md" <<'EOF'
 |---|---|
 | NFR.PERF.1 | MET |
 EOF
-git -C "$repo" add .gitignore docs/release/v4.0.0-burndown-tracker.md scripts/dev/check-public-repo-hygiene.sh
+git -C "$repo" add .gitignore docs/release/v4.0.0-burndown-tracker.md scripts/dev
 assert_fail_contains "$repo" "reads as an internal working document"
 
 repo="$(make_repo internal-doc-named-by-path)"
@@ -180,20 +185,18 @@ cat >"$repo/docs/design/pr473-gateway.md" <<'EOF'
 
 Findings recorded while reading the shard.
 EOF
-git -C "$repo" add .gitignore docs/design/pr473-gateway.md scripts/dev/check-public-repo-hygiene.sh
+git -C "$repo" add .gitignore docs/design/pr473-gateway.md scripts/dev
 assert_fail_contains "$repo" "path marker"
 
+# docs/internal/ is no longer a destination: working documents live in the
+# private companion repository, cloned at the ignored internal/ path.
 repo="$(make_repo internal-doc-relocated)"
 mkdir -p "$repo/docs/internal/release"
 cat >"$repo/docs/internal/release/v4.0.0-burndown-tracker.md" <<'EOF'
 # v4.0.0 release-criteria burndown
-
-| criterion | status |
-|---|---|
-| NFR.PERF.1 | MET |
 EOF
-git -C "$repo" add .gitignore docs/internal/release/v4.0.0-burndown-tracker.md scripts/dev/check-public-repo-hygiene.sh
-assert_pass "$repo"
+git -C "$repo" add .gitignore docs/internal/release/v4.0.0-burndown-tracker.md scripts/dev
+assert_fail_contains "$repo" "is a private path"
 
 # A product page may cite a ruling or a review in its prose. The marker set
 # reads headings, so citing one is not the same as being one.
@@ -206,14 +209,157 @@ The team-lead ruling recorded in `docs/internal/release/rulings.md` fixed the
 wording. This page describes the envelope the gateway emits, its version field
 and the review findings that shaped the retry path.
 EOF
-git -C "$repo" add .gitignore docs/design/continuation-envelope.md scripts/dev/check-public-repo-hygiene.sh
+git -C "$repo" add .gitignore docs/design/continuation-envelope.md scripts/dev
 assert_pass "$repo"
 
-repo="$(make_repo internal-dir-ignored)"
-printf 'docs/internal/\n' >>"$repo/.gitignore"
-mkdir -p "$repo/docs/internal"
-printf '# v4.0.0 burndown\n' >"$repo/docs/internal/notes.md"
-git -C "$repo" add .gitignore scripts/dev/check-public-repo-hygiene.sh
-assert_fail_contains "$repo" "docs/internal is ignored"
+repo="$(make_repo internal-clone-not-ignored)"
+sed -i.bak '/^\/internal\/$/d' "$repo/.gitignore" && rm -f "$repo/.gitignore.bak"
+git -C "$repo" add .gitignore scripts/dev
+assert_fail_contains "$repo" "internal/example.md is not ignored"
 
+# Commit everything staged in $1, so a case can name a base for the diff checks.
+commit_all() {
+  git -C "$1" add -A
+  git -C "$1" commit -q -m "$2"
+}
+
+assert_base_fail_contains() {
+  local repo="$1" base="$2" expected="$3"
+  local output="$tmp_root/fail.out"
+  if (cd "$repo" && scripts/dev/check-public-repo-hygiene.sh --base "$base" >"$output" 2>&1); then
+    cat "$output" >&2
+    echo "expected hygiene check to fail against $base in $repo" >&2
+    exit 1
+  fi
+  if ! grep -F -q "$expected" "$output"; then
+    cat "$output" >&2
+    echo "expected failure output to contain: $expected" >&2
+    exit 1
+  fi
+}
+
+assert_base_pass() {
+  local repo="$1" base="$2"
+  local output="$tmp_root/pass.out"
+  if ! (cd "$repo" && scripts/dev/check-public-repo-hygiene.sh --base "$base" >"$output" 2>&1); then
+    cat "$output" >&2
+    echo "expected hygiene check to pass against $base in $repo" >&2
+    exit 1
+  fi
+}
+
+# Every path the private companion repository owns is refused in the index,
+# whatever the file is called.
+private_path_cases=(
+  "docs/internal/notes.md"
+  "docs/competitive/notes.md"
+  "docs/requirements/RELEASE-9.9.9-plan.md"
+  "tickets/backlog.md"
+  "CLAUDE.md"
+  "AGENTS.md"
+  "src/AGENTS.md"
+)
+for i in "${!private_path_cases[@]}"; do
+  repo="$(make_repo "private-path-$i")"
+  target="${private_path_cases[$i]}"
+  mkdir -p "$repo/$(dirname "$target")"
+  printf '# Notes\n' >"$repo/$target"
+  git -C "$repo" add .gitignore scripts/dev
+  git -C "$repo" add -f "$target"
+  assert_fail_contains "$repo" "$target is a private path"
+done
+
+# Content that only makes sense on the maintainer's machine or inside a
+# private project, planted in a file type the old marker scan never read.
+private_content_cases=(
+  "src/lib.rs::// Mirrors the hebb recall path.::names a private project"
+  "src/lib.rs::let cfg = HebbBridgeConfig { enabled: true };::names a private project"
+  "docs/guide.md::Run the botnaut-client wrapper first.::names a private project"
+  "scripts/run.sh::cd /Users/mikko/github/mcp-gateway::home-directory path"
+  "scripts/run.sh::cat ~/.claude/settings.json::private agent-configuration directory"
+  "deploy/values.yaml::host: 100.101.102.103::private-network address"
+)
+for i in "${!private_content_cases[@]}"; do
+  case_spec="${private_content_cases[$i]}"
+  target="${case_spec%%::*}"
+  rest="${case_spec#*::}"
+  line="${rest%%::*}"
+  expected="${rest#*::}"
+  repo="$(make_repo "private-content-$i")"
+  mkdir -p "$repo/$(dirname "$target")"
+  printf '%s\n' "$line" >"$repo/$target"
+  git -C "$repo" add .gitignore scripts/dev "$target"
+  assert_fail_contains "$repo" "$expected"
+done
+
+# Known-innocent text that resembles a hit: the published maintainer contact,
+# the public capability schema name, a learning-rule term, a version string.
+innocent_cases=(
+  "SECURITY.md::email **mikko.parkkola@iki.fi** with the report"
+  "docs/QUICKSTART.md::fulcrum: \"1.0\""
+  "docs/notes.md::a Hebbian learning rule"
+  "docs/notes.md::release 1.100.2.3 is current"
+)
+for i in "${!innocent_cases[@]}"; do
+  case_spec="${innocent_cases[$i]}"
+  target="${case_spec%%::*}"
+  line="${case_spec#*::}"
+  repo="$(make_repo "innocent-content-$i")"
+  mkdir -p "$repo/$(dirname "$target")"
+  printf '# Page\n\n%s\n' "$line" >"$repo/$target"
+  git -C "$repo" add .gitignore scripts/dev "$target"
+  assert_pass "$repo"
+done
+
+# A ticket id already in the tree stays; one added on a line of this change is
+# refused, in code and docs alike.
+repo="$(make_repo ticket-id-added)"
+mkdir -p "$repo/src"
+printf '// Guard the reload path (MIK-1234).\n' >"$repo/src/lib.rs"
+commit_all "$repo" "seed"
+assert_base_pass "$repo" HEAD
+printf '// Keep the cache warm (MIK-5678).\n' >>"$repo/src/lib.rs"
+commit_all "$repo" "change"
+assert_base_fail_contains "$repo" HEAD~1 "src/lib.rs:2 adds a ticket id"
+
+repo="$(make_repo ticket-id-existing-line-kept)"
+mkdir -p "$repo/src"
+printf '// Guard the reload path (MIK-1234).\n' >"$repo/src/lib.rs"
+commit_all "$repo" "seed"
+printf 'fn reload() {}\n' >>"$repo/src/lib.rs"
+commit_all "$repo" "change"
+assert_base_pass "$repo" HEAD~1
+
+repo="$(make_repo ticket-id-in-new-file-name)"
+commit_all "$repo" "seed"
+mkdir -p "$repo/tests"
+printf 'fn main() {}\n' >"$repo/tests/mik_9999_reload.rs"
+commit_all "$repo" "change"
+assert_base_fail_contains "$repo" HEAD~1 "tests/mik_9999_reload.rs names a ticket id"
+
+# A debt entry that no longer matches anything is itself a failure, so the
+# list can only shrink.
+repo="$(make_repo stale-debt-entry)"
+printf 'docs/internal/\tprivate-path\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
+git -C "$repo" add .gitignore scripts/dev
+assert_fail_contains "$repo" "debt entry no longer matches"
+
+# A file named in the public-data allowlist passes; its neighbour does not.
+repo="$(make_repo public-data-under-private-dir)"
+sed -i.bak 's#^public_data_allowlist=($#public_data_allowlist=(\n  "docs/requirements/data.json"#' "$repo/scripts/dev/check-public-repo-hygiene.sh"
+rm -f "$repo/scripts/dev/check-public-repo-hygiene.sh.bak"
+mkdir -p "$repo/docs/requirements"
+printf '{}\n' >"$repo/docs/requirements/data.json"
+git -C "$repo" add .gitignore scripts/dev docs/requirements/data.json
+assert_pass "$repo"
+printf '# Notes\n' >"$repo/docs/requirements/notes.md"
+git -C "$repo" add docs/requirements/notes.md
+assert_fail_contains "$repo" "docs/requirements/notes.md is a private path"
+
+repo="$(make_repo debt-entry-covers-a-hit)"
+mkdir -p "$repo/docs/internal"
+printf '# Notes\n' >"$repo/docs/internal/notes.md"
+printf 'docs/internal/\tprivate-path\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
+git -C "$repo" add .gitignore scripts/dev docs/internal/notes.md
+assert_pass "$repo"
 echo "public repo hygiene fixtures OK"

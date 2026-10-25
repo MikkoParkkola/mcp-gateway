@@ -13,6 +13,9 @@ failures=0
 # One commit carrying $1 as its message, checked over its own single-commit range.
 run_case() {
   local name="$1" expectation="$2" message="$3"
+  # Author and committer dates of the checked commit; both default to after
+  # the tracker-id cutoff, so every rule applies.
+  local authored="${4:-2030-01-01T00:00:00Z}" committed="${5:-2030-01-01T00:00:00Z}"
   local repo="$tmp_root/$name"
   mkdir -p "$repo"
   git -C "$repo" init -q
@@ -23,7 +26,7 @@ run_case() {
   git -C "$repo" commit -q -m "chore: seed the fixture"
   printf 'change\n' >>"$repo/file.txt"
   git -C "$repo" add file.txt
-  git -C "$repo" commit -q -m "$message"
+  GIT_AUTHOR_DATE="$authored" GIT_COMMITTER_DATE="$committed" git -C "$repo" commit -q -m "$message"
 
   local status=0
   (cd "$repo" && bash "$checker" 'HEAD~1..HEAD' >/dev/null 2>&1) || status=$?
@@ -80,6 +83,68 @@ run_case trailer_is_not_a_hit pass 'docs(readme): state the supported protocol r
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Signed-off-by: Mikko Parkkola <mikko@example.com>'
+
+run_case ticket_id_in_body fail 'fix(router): reject a credential-bearing URL
+
+- Close the gap from MIK-1234'
+
+run_case ticket_id_in_trailer fail 'fix(router): reject a credential-bearing URL
+
+- Refuse the connection unless the host is loopback
+
+Refs: MIK-1234'
+
+# A backport cherry-picked after the cutoff keeps its old author date, so its
+# message is still recognised as old.
+run_case ticket_id_authored_before_cutoff_picked_after pass 'fix(router): reject a credential-bearing URL
+
+- Close the gap from MIK-1234' '2026-01-01T00:00:00Z' '2030-01-01T00:00:00Z'
+
+run_case ticket_id_authored_after_cutoff fail 'fix(router): reject a credential-bearing URL
+
+- Close the gap from MIK-1234' '2030-01-01T00:00:00Z' '2030-01-01T00:00:00Z'
+
+run_case private_project fail 'fix(router): reject a credential-bearing URL
+
+- Match the hebb client behaviour'
+
+run_case home_path fail 'fix(router): reject a credential-bearing URL
+
+- Read the fixture from /Users/mikko/github/mcp-gateway/tests'
+
+run_case agent_config_path fail 'fix(router): reject a credential-bearing URL
+
+- Mirror the guard in ~/.claude/hooks'
+
+run_case private_address fail 'fix(router): reject a credential-bearing URL
+
+- Point the smoke test at 100.101.102.103'
+
+# The pull-request body check reads $PR_BODY.
+pr_body_case() {
+  local name="$1" expectation="$2" body="$3" status=0
+  PR_BODY="$body" bash "$source_repo/scripts/dev/check-pr-body-hygiene.sh" >/dev/null 2>&1 || status=$?
+  if [[ "$expectation" == "pass" && "$status" -ne 0 ]]; then
+    printf 'FAIL pr_body_%s: expected a clean body to pass, exit %d\n' "$name" "$status" >&2
+    failures=$((failures + 1))
+  elif [[ "$expectation" == "fail" && "$status" -eq 0 ]]; then
+    printf 'FAIL pr_body_%s: expected the checker to reject this body\n' "$name" >&2
+    failures=$((failures + 1))
+  fi
+}
+
+pr_body_case clean pass '## Summary
+
+- Refuse a credential-bearing URL over plain http
+- Credit: thanks to @terafin for the report; contact mikko.parkkola@iki.fi'
+pr_body_case ticket_id fail 'Closes MIK-1234'
+pr_body_case private_project fail 'Same shape as the botnaut client.'
+pr_body_case camel_identifier fail 'Renames HebbBridgeConfig.'
+pr_body_case home_path fail 'Built in /Users/mikko/github/mcp-gateway.'
+pr_body_case agent_config fail 'See $HOME/.claude/rules for the gate.'
+pr_body_case private_address fail 'Measured against 100.64.1.2.'
+pr_body_case learning_rule_is_not_a_name pass 'Uses a Hebbian decay for ranking.'
+pr_body_case empty_body pass ''
 
 if (( failures > 0 )); then
   printf 'Commit message hygiene fixtures failed: %d case(s).\n' "$failures" >&2

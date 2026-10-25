@@ -18,6 +18,11 @@
 #     caught, per the ruling, ruling <n>
 #   * apology or self-criticism, and addressing an absent reader
 #   * unfinished markers, and a subject over 72 characters
+#   * private content, from scripts/dev/public-hygiene-patterns.sh: a private
+#     project name, a home-directory or agent-configuration path, a
+#     private-network address -- trailers included, except Co-Authored-By
+#   * a tracker id, anywhere in the message, trailers included, on a commit
+#     made after the cutoff below
 #
 # RUN IT BEFORE YOU PUSH, and gate the push on its exit status with `&&`, not
 # `;` -- a check whose verdict is not read is not a check:
@@ -51,6 +56,17 @@ checks=(
   "\\b(as (you|the user) (asked|requested)|as instructed)\\b::addresses a reader who is not there"
   "\\bTODO\\b::unfinished marker in published history"
 )
+
+# shellcheck source=scripts/dev/public-hygiene-patterns.sh
+source "$(dirname "${BASH_SOURCE[0]}")/public-hygiene-patterns.sh"
+
+# Commits authored before this instant may cite a tracker id. Branches already
+# in flight when the rule landed cannot rewrite what they pushed, and published
+# history is never rewritten here. The AUTHOR date decides, not the committer
+# date: a cherry-pick or rebase (the release/3.5.x backports) restamps the
+# committer date and keeps the author date, so an old message carried across
+# is still recognised as old. Set to the rule's landing plus 48 hours.
+ticket_id_cutoff=1793145600 # 2026-10-28T00:00:00Z, in seconds since the epoch
 
 failures=0
 commits="$(git rev-list --no-merges "$range" 2>/dev/null || true)"
@@ -86,6 +102,30 @@ while IFS= read -r sha; do
       failures=$((failures + 1))
     fi
   done
+
+  # A trailer can leak as easily as the body, so these read every line but
+  # the co-author credit.
+  full="$(git log -1 --format='%B' "$sha" | sed -E '/^Co-[Aa]uthored-[Bb]y:[[:space:]]/d')"
+  for check in "${private_content_checks[@]}"; do
+    id="${check%%::*}"
+    rest="${check#*::}"
+    flags="${rest%%::*}"
+    rest="${rest#*::}"
+    regex="${rest%%::*}"
+    reason="${rest#*::}"
+    case_flag=()
+    [[ "$flags" == i ]] && case_flag=(-i)
+    if match="$(printf '%s\n' "$full" | grep -E ${case_flag[@]+"${case_flag[@]}"} -n -m 1 -e "$regex" || true)"; [[ -n "$match" ]]; then
+      printf 'FAIL %s: %s (%s) -- %s\n' "${sha:0:8}" "$reason" "$id" "$match" >&2
+      failures=$((failures + 1))
+    fi
+  done
+  if (( $(git log -1 --format='%at' "$sha") >= ticket_id_cutoff )); then
+    if match="$(printf '%s\n' "$full" | grep -E -n -m 1 -e "$ticket_id_regex" || true)"; [[ -n "$match" ]]; then
+      printf 'FAIL %s: cites a tracker id; describe the change instead -- %s\n' "${sha:0:8}" "$match" >&2
+      failures=$((failures + 1))
+    fi
+  fi
 done <<<"$commits"
 
 if (( failures > 0 )); then
