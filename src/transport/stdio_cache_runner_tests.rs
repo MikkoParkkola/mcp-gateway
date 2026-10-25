@@ -21,11 +21,16 @@ use crate::transport::{assigned_package_cache_dir, isolated_package_manager_env}
 const RUNNERS: [(&str, &[&str]); 5] = [
     ("npm exec pkg", &["npm_config_cache"]),
     ("npx -y pkg", &["npm_config_cache"]),
-    ("bunx pkg", &["BUN_INSTALL_CACHE_DIR"]),
+    ("bunx pkg", &["BUN_INSTALL_CACHE_DIR", "TMPDIR"]),
     ("yarn dlx pkg", &["YARN_CACHE_FOLDER"]),
     (
         "pnpm dlx pkg",
-        &["pnpm_config_store_dir", "npm_config_store_dir"],
+        &[
+            "pnpm_config_store_dir",
+            "npm_config_store_dir",
+            "pnpm_config_cache_dir",
+            "npm_config_cache_dir",
+        ],
     ),
 ];
 
@@ -91,11 +96,13 @@ fn the_operator_names_a_setting_only_in_a_spelling_its_runner_reads() {
             "npm_config_store_dir",
             false,
         ),
+        // Naming one of a runner's variables leaves all of them to the
+        // operator (MIK-8831.REL.6).
         (
             "pnpm dlx pkg",
             "npm_config_store-dir",
             "pnpm_config_store_dir",
-            true,
+            false,
         ),
         (
             "pnpm dlx pkg",
