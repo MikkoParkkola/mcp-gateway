@@ -8,8 +8,9 @@
 //! error for supported versions and retries with the highest mutually
 //! supported version.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -75,7 +76,21 @@ fn configure_child_environment(cmd: &mut Command, backend_env: &HashMap<String, 
 
 #[path = "stdio_cache.rs"]
 mod cache;
-pub use cache::isolated_package_manager_env;
+use cache::CACHE_ENV;
+pub use cache::{assigned_package_cache_dir, isolated_package_manager_env};
+
+/// How many stderr lines are kept from a child, for classifying a failure.
+const STDERR_TAIL_LINES: usize = 20;
+
+/// How long a failed start waits for the child's stderr to be drained.
+const STDERR_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// How long a failed start waits for a child that is still dying.
+///
+/// Only the exit status is wanted here, and only a child that has already
+/// exited has one. A child still alive after this is one the caller was about
+/// to be told about anyway, and it is killed on the failure path either way.
+const EXIT_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Stdio transport for subprocess MCP servers
 pub struct StdioTransport {
@@ -99,6 +114,30 @@ pub struct StdioTransport {
     writer: Mutex<Option<tokio::process::ChildStdin>>,
     /// Negotiated protocol version (config override or auto-negotiated)
     protocol_version: RwLock<Option<String>>,
+    /// What a failed start said, kept only long enough to classify it.
+    ///
+    /// A package manager that cannot use its install tree says so here and
+    /// dies before it can answer anything, so this is the only place that
+    /// failure is visible: it is what tells a failed install apart from a
+    /// backend that is merely dead.
+    ///
+    /// Child stderr is text from a process the gateway did not write, so it
+    /// stays in memory and is read only to pick a needle out of it. The text
+    /// itself is never logged and never handed to a caller, and the next start
+    /// of this backend drops it. Redaction would have to cover every shape a
+    /// credential can take — a bare token, a PEM block, a JSON body holding a
+    /// key — and one missed shape is one credential in the log.
+    stderr_tail: Arc<std::sync::Mutex<VecDeque<String>>>,
+    /// The task draining the child's stderr, so a failure can wait for the
+    /// child's last words instead of racing them.
+    stderr_reader: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// How the child of the last start exited, once it was seen to.
+    exit_status: std::sync::Mutex<Option<std::process::ExitStatus>>,
+    /// The cache directory the gateway assigned this backend, or `None`.
+    ///
+    /// `Some` is the gateway's to clear; `None` says the value that reaches
+    /// the child, if any, came from the operator's own configuration.
+    assigned_cache: Option<PathBuf>,
 }
 
 impl StdioTransport {
@@ -115,6 +154,24 @@ impl StdioTransport {
         request_timeout: std::time::Duration,
         protocol_version: Option<String>,
     ) -> Arc<Self> {
+        Self::new_with_assigned_cache(command, env, cwd, request_timeout, protocol_version, None)
+    }
+
+    /// [`StdioTransport::new`], telling the transport which cache this gateway
+    /// assigned.
+    ///
+    /// The caller that built the environment is the only one that knows, and
+    /// the repair reads it rather than the environment: a path the operator
+    /// configured has the same shape as one the gateway assigned.
+    #[must_use]
+    pub fn new_with_assigned_cache(
+        command: &str,
+        env: HashMap<String, String>,
+        cwd: Option<String>,
+        request_timeout: std::time::Duration,
+        protocol_version: Option<String>,
+        assigned_cache: Option<PathBuf>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             child: Mutex::new(None),
             pending: dashmap::DashMap::new(),
@@ -126,19 +183,106 @@ impl StdioTransport {
             request_timeout,
             writer: Mutex::new(None),
             protocol_version: RwLock::new(protocol_version),
+            stderr_tail: Arc::new(std::sync::Mutex::new(VecDeque::new())),
+            stderr_reader: std::sync::Mutex::new(None),
+            exit_status: std::sync::Mutex::new(None),
+            assigned_cache,
         })
     }
 
-    fn diagnostic_command(&self) -> String {
+    pub(crate) fn diagnostic_command(&self) -> String {
         crate::security::summarize_stdio_command(&self.command)
     }
 
-    /// Start the subprocess
+    /// Drops what the previous attempt said, so each start is judged on its own.
+    fn clear_stderr_tail(&self) {
+        if let Ok(mut tail) = self.stderr_tail.lock() {
+            tail.clear();
+        }
+        if let Ok(mut status) = self.exit_status.lock() {
+            *status = None;
+        }
+    }
+
+    /// Waits, briefly, for the stderr reader to finish.
+    ///
+    /// The reader is its own task, so a child that dies mid-handshake is
+    /// visible to the failure path before the last thing it said has been
+    /// read. A child that has exited closes the pipe, so this returns as soon
+    /// as there is nothing left to read and only ever waits out the grace for
+    /// a backend that is still alive.
+    async fn settle_stderr_tail(&self) {
+        let handle = self
+            .stderr_reader
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take());
+        if let Some(handle) = handle {
+            let _ = tokio::time::timeout(STDERR_DRAIN_GRACE, handle).await;
+        }
+    }
+
+    /// The cache directory this gateway assigned, if it assigned one.
+    pub(crate) fn assigned_package_cache_dir(&self) -> Option<&Path> {
+        self.assigned_cache.as_deref()
+    }
+
+    /// The cache directory the child is given, whoever chose it.
+    pub(crate) fn package_cache_dir(&self) -> Option<PathBuf> {
+        self.env.get(CACHE_ENV).map(PathBuf::from)
+    }
+
+    /// How the child exited, if a failed start saw it exit.
+    ///
+    /// `None` covers both "the child is still running" and "no failed start
+    /// has looked yet", which is all a caller can do anything with: the status
+    /// is only ever read to classify a failure.
+    pub(crate) fn exit_status(&self) -> Option<std::process::ExitStatus> {
+        self.exit_status.lock().ok().and_then(|status| *status)
+    }
+
+    /// Waits, briefly, for a child that is on its way out, and records how it
+    /// went.
+    ///
+    /// A process that fails at startup writes its reason and exits; the order
+    /// those two become visible here is not fixed, and a status read before
+    /// the exit is reaped is `None`. This is only called on a failed start, so
+    /// the wait can never delay a backend that is working.
+    async fn settle_child_exit(&self) {
+        let mut guard = self.child.lock().await;
+        let Some(child) = guard.as_mut() else {
+            return;
+        };
+        let Ok(Ok(status)) = tokio::time::timeout(EXIT_DRAIN_GRACE, child.wait()).await else {
+            return;
+        };
+        if let Ok(mut slot) = self.exit_status.lock() {
+            *slot = Some(status);
+        }
+    }
+
+    /// The child's last lines on stderr, as one block.
+    ///
+    /// For classifying a failure, never for a log: see `stderr_tail`.
+    pub(crate) fn stderr_tail(&self) -> String {
+        self.stderr_tail.lock().map_or_else(
+            |_| String::new(),
+            |tail| tail.iter().cloned().collect::<Vec<_>>().join("\n"),
+        )
+    }
+
+    /// Start the subprocess and complete the MCP handshake.
+    ///
+    /// A failure leaves the child's last stderr lines settled, so whoever
+    /// decides what to do about the failure can read what it said.
     ///
     /// # Errors
     ///
-    /// Returns an error if the command cannot be spawned or MCP initialization fails.
+    /// Returns an error if the command cannot be spawned or initialization
+    /// fails.
     pub async fn start(self: &Arc<Self>) -> Result<()> {
+        self.clear_stderr_tail();
+
         let parts = shlex::split(&self.command).ok_or_else(|| {
             Error::Config(format!(
                 "Invalid stdio command quoting: {}",
@@ -246,13 +390,7 @@ impl StdioTransport {
             debug!("Stdio reader task ended");
         });
 
-        let command = self.diagnostic_command();
-        tokio::spawn(async move {
-            let mut reader = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                debug!(command = %command, line_len = line.len(), "Received line from stderr");
-            }
-        });
+        self.spawn_stderr_reader(stderr);
 
         // Initialize with protocol version negotiation. If initialization
         // fails, tear down the spawned process now rather than waiting for the
@@ -265,13 +403,49 @@ impl StdioTransport {
         // the child. It holds a `Weak` now, so drop alone is sufficient and this
         // is only about being prompt.
         if let Err(error) = self.initialize().await {
-            if let Err(close_error) = self.close().await {
-                warn!(error = %close_error, "Failed to clean up stdio process after initialization error");
-            }
-            return Err(error);
+            return Err(self.fail_start(error).await);
         }
 
         Ok(())
+    }
+
+    /// Drains the child's stderr into the tail, for as long as it lives.
+    ///
+    /// Kept out of `start` for length alone; it is the task `start` spawns.
+    fn spawn_stderr_reader(&self, stderr: tokio::process::ChildStderr) {
+        let command = self.diagnostic_command();
+        let stderr_tail = Arc::clone(&self.stderr_tail);
+        let reader = tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                // The line itself is not logged, at any level: see
+                // `stderr_tail`. Its length is all the log gets.
+                debug!(command = %command, line_len = line.len(), "Received line from stderr");
+                if let Ok(mut tail) = stderr_tail.lock() {
+                    if tail.len() == STDERR_TAIL_LINES {
+                        tail.pop_front();
+                    }
+                    tail.push_back(line);
+                }
+            }
+        });
+        if let Ok(mut slot) = self.stderr_reader.lock() {
+            *slot = Some(reader);
+        }
+    }
+
+    /// Tears down a child whose handshake failed, leaving enough behind to
+    /// classify the failure.
+    async fn fail_start(&self, error: Error) -> Error {
+        // Order matters: the exit status has to be read before `close` kills
+        // the child, and the stderr after, because the reader only reaches EOF
+        // once the child is gone.
+        self.settle_child_exit().await;
+        if let Err(close_error) = self.close().await {
+            warn!(error = %close_error, "Failed to clean up stdio process after initialization error");
+        }
+        self.settle_stderr_tail().await;
+        error
     }
 
     /// Build the JSON-RPC initialize params for a given protocol version.
@@ -997,6 +1171,10 @@ done
 #[cfg(test)]
 #[path = "stdio_cache_tests.rs"]
 mod cache_tests;
+
+#[cfg(test)]
+#[path = "stdio_tests.rs"]
+mod start_failure_tests;
 
 #[cfg(test)]
 mod spawn_classification_tests {
