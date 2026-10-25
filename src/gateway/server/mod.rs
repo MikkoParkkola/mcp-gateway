@@ -985,14 +985,8 @@ impl Gateway {
             let cg_cfg = self.config.cost_governance.clone();
             if cg_cfg.enabled {
                 let registry = Arc::new(CostRegistry::new(&cg_cfg));
-                let costs_path = data_dir.join("costs.json");
-                persistence::load_if_exists(
-                    &costs_path,
-                    |path| cost_persistence::load(path).map(|_persisted| ()),
-                    "Failed to load persisted cost data",
-                    "Loaded persisted cost data",
-                );
                 let enforcer = Arc::new(BudgetEnforcer::new(cg_cfg, Arc::clone(&registry)));
+                support::restore_persisted_costs(&enforcer, &data_dir.join("costs.json"));
                 info!("Cost governance enabled");
                 (Some(registry), Some(enforcer))
             } else {
