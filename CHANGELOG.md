@@ -29,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **ctutils 0.4.5 (RUSTSEC-2026-0385).** ctutils 0.4.2 could compile its constant-time
+  mask generation to a branch. HMAC verification of attestation tokens, receipts and
+  signed log entries reaches it through `digest`. Lockfile only. Ported from the release
+  line (a1ecb6fc6).
+
 - **The `-full` image's bundled npm packages are past the new HIGH CVEs, and verified by hash.** `brace-expansion` (CVE-2026-102276, CVE-2026-102278) and `undici` (CVE-2026-19534) in npm's own tree are replaced with fixed releases, and every npm tarball the image fetches is checked against a pinned sha512 before use.
 
 - **The `-full` variant's smoke gate bounds every probe.** Four of its six probes
