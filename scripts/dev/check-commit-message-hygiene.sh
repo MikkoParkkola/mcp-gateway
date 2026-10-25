@@ -127,7 +127,7 @@ while IFS= read -r sha; do
     fi
   done
   if (( $(git log -1 --format='%at' "$sha") >= ticket_id_cutoff )); then
-    if match="$(printf '%s\n' "$full" | grep -E -n -m 1 -e "$ticket_id_regex" || true)"; [[ -n "$match" ]]; then
+    if match="$(printf '%s\n' "$full" | sed -E "s/$ac_id_regex//g" | grep -E -n -m 1 -e "$ticket_id_regex" || true)"; [[ -n "$match" ]]; then
       printf 'FAIL %s: cites a tracker id; describe the change instead -- %s\n' "${sha:0:8}" "$match" >&2
       failures=$((failures + 1))
     fi

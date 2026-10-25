@@ -481,6 +481,35 @@ printf '// Guard the reload path (MIK-1234).\n' >"$repo/src/d.rs"
 commit_all "$repo" "change"
 assert_base_fail_contains "$repo" HEAD~1 "src/d.rs:1 adds a ticket id"
 
+# The private clone's path is refused even when force-added.
+repo="$(make_repo internal-clone-force-added)"
+mkdir -p "$repo/internal/docs"
+printf '# Notes\n' >"$repo/internal/docs/notes.md"
+git -C "$repo" add .gitignore scripts/dev
+git -C "$repo" add -f internal/docs/notes.md
+assert_fail_contains "$repo" "internal/docs/notes.md is a private path"
+
+# A change may not raise a debt count or add a debt entry.
+repo="$(make_repo debt-grows-in-change)"
+mkdir -p "$repo/docs"
+printf 'the hebb notes\n' >"$repo/docs/e.md"
+printf 'docs/e.md\tprivate-name\t1\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
+commit_all "$repo" "seed"
+printf 'the hebb notes\nmore hebb notes\n' >"$repo/docs/e.md"
+printf 'docs/e.md\tprivate-name\t2\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
+commit_all "$repo" "change"
+assert_base_fail_contains "$repo" HEAD~1 "count rose from 1 to 2"
+
+repo="$(make_repo debt-entry-added-in-change)"
+mkdir -p "$repo/docs"
+printf 'notes\n' >"$repo/docs/f.md"
+printf '# debt\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
+commit_all "$repo" "seed"
+printf 'the hebb notes\n' >"$repo/docs/f.md"
+printf '# debt\ndocs/f.md\tprivate-name\t1\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
+commit_all "$repo" "change"
+assert_base_fail_contains "$repo" HEAD~1 "debt entry is new in this change"
+
 # The whole check runs on every push, so its time on this tree is shown here,
 # where a slow regression is visible. Informational: the verdict on the real
 # tree is the CI step's job, not this fixture suite's.

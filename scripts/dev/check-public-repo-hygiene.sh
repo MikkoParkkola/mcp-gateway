@@ -499,6 +499,27 @@ while IFS= read -r file; do
   fi
 done < <(git_lit ls-files | awk '!/\//')
 
+# A change may shrink the debt list, never grow it: no new entry, no higher
+# count than the base carried.
+# A base without the list is the change that introduces it.
+if [[ -n "$merge_base" ]] && git cat-file -e "$merge_base:$debt_file" 2>/dev/null; then
+  declare -A base_most=()
+  while IFS=$'\t' read -r where id most; do
+    [[ -z "$where" || "$where" == \#* ]] && continue
+    base_most["$where"$'\t'"$id"]="${most:-0}"
+  done < <(git show "$merge_base:$debt_file" 2>/dev/null || true)
+  for entry in ${debt_entries[@]+"${debt_entries[@]}"}; do
+    key="${entry%$'\t'*}"
+    [[ "$entry" == *$'\t'*$'\t'* ]] || key="$entry"
+    most="${entry##*$'\t'}"
+    if [[ -z "${base_most[$key]+set}" ]]; then
+      report_failure "debt entry is new in this change; reword or remove the hit instead: ${entry//$'\t'/ }"
+    elif [[ "$entry" == *$'\t'*$'\t'* ]] && (( most > ${base_most[$key]} )); then
+      report_failure "debt entry count rose from ${base_most[$key]} to $most in this change: ${entry//$'\t'/ }"
+    fi
+  done
+fi
+
 for entry in ${debt_entries[@]+"${debt_entries[@]}"}; do
   if [[ -z "${debt_used[$entry]:-}" ]]; then
     report_failure "debt entry no longer matches anything; delete it from $debt_file: ${entry//$'\t'/ }"

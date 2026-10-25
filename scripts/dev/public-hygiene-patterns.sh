@@ -34,10 +34,14 @@ private_content_prefilter=(
 # A tracker id. Existing ones stay and fade; a change may not add one, in a
 # line, a file name, a commit message or a pull-request body.
 ticket_id_regex='(^|[^[:alnum:]])MIK-[0-9]+'
+# An acceptance-criterion id (MIK-N.AREA.n) keys the evidence tests report; it
+# is stripped from text before ticket_id_regex is applied.
+ac_id_regex='MIK-[0-9]+\.[A-Z0-9]+\.[0-9]+[a-z]?'
 
 # Paths the private companion repository owns. It is cloned at the ignored
 # internal/ path of a public checkout; nothing under these is tracked here.
 private_path_prefixes=(
+  "internal/"
   "docs/internal/"
   "docs/competitive/"
   "docs/competitive-intelligence/"
