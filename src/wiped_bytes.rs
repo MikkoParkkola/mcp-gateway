@@ -26,6 +26,9 @@ impl Drop for WipedBytes {
 
 impl std::fmt::Debug for WipedBytes {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "WipedBytes({} bytes)", self.0.len())
+        // The length only; the bytes are the secret.
+        f.debug_struct("WipedBytes")
+            .field("len", &self.0.len())
+            .finish_non_exhaustive()
     }
 }
