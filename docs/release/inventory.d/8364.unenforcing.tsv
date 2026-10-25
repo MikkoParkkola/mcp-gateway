@@ -1,3 +1,0 @@
-src/gateway/server/persistence.rs	spawn_periodic_save	1	Runs a saver's per-tick body on a detached thread at an interval until shutdown; schedules persistence and decides nothing
-src/gateway/server/stdio_shutdown.rs	save_stdio_protocol_telemetry_unless_busy	1	The stdio telemetry saver's tick: persists the protocol-revision window unless a save is in flight; writes operator telemetry, decides nothing
-src/gateway/server/stdio_shutdown.rs	persist_held	1	Persists the protocol-revision window through a held sink and logs a failure; writes operator telemetry, decides nothing

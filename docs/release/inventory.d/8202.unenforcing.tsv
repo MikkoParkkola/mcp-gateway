@@ -1,9 +1,0 @@
-src/oauth/storage.rs	from_response_at	1	Dates a token answer's expiry from the reading issuance_clock already checked; decides nothing, the refusal is issuance_clock's (MIK-8202)
-src/gateway/task_service/execution/worker_settle.rs	settle_cas	1	Delegates to settle_cas_by with the gateway as author; the owner-scoped decision is there (moved from worker.rs)
-src/gateway/task_service/execution/worker_settle.rs	settle_cas_with	1	Delegates to settle_cas_by with the given author; the owner-scoped decision is there (moved from worker.rs)
-src/gateway/task_service/execution/worker_settle.rs	reread	1	Maps dated_reread to the retry revision; the terminal and failed-read decisions are dated_reread's
-src/gateway/task_service/execution/worker_settle.rs	is_terminal	1	Status predicate for the three terminal states (moved from worker.rs)
-src/gateway/task_service/execution/input_round_clock.rs	settle_expired	1	Delegates an input round's expired clock wait to settle_dated_last_known; decides nothing itself (MIK-8202 P4a)
-src/gateway/task_service/store_targets.rs	claim_upstream_cancel_undated	1	Delegates to claim_upstream_cancel_undated_blocking on the blocking pool; the claim checks are there (MIK-8202 P4b)
-src/gateway/task_service/store_targets.rs	claim_upstream_cancel_undated_blocking	1	Delegates to claim_upstream_cancel_inner_blocking with no time; decides nothing itself (MIK-8202 P4b)
-src/gateway/task_service/execution/expiry.rs	expiry_pass_for_test	1	Test-only: runs one sweep instead of waiting on the interval; the retention decisions are the sweep's (MIK-8202 P4b)

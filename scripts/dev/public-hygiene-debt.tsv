@@ -2,9 +2,6 @@
 # repository, or text that is being reworded. One <path or directory/> TAB
 # <check id> per line. A line that no longer matches anything fails the
 # hygiene check, so this list only shrinks; it is not a place to add to.
-CLAUDE.md	private-path
-docs/internal/	private-path
-docs/requirements/	private-path
 capabilities/automation/bus_pull.yaml	private-name
 capabilities/automation/bus_subscribe.yaml	private-name
 CHANGELOG.md	private-name
@@ -16,9 +13,6 @@ docs/design/2026-09-06-personal-accounts.md	private-name
 docs/design/issue-462-config-preservation.md	private-name
 docs/design/RFC-0060-dual-generation-mcp.md	private-name
 docs/design/RFC-0061-protocol-2026-07-28-release-scope.md	private-name
-docs/internal/	agent-config
-docs/internal/	private-name
-docs/requirements/	private-name
 docs/runtime/descriptor_spec.md	private-name
 docs/runtime/substrate_mapping.md	private-name
 README.md	agent-config

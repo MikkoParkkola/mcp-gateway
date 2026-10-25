@@ -1,1 +1,0 @@
-src/gateway/router/backend_handlers/direct_preflight.rs	unforwarded_refusal	1	Builds the refusal text a passthrough call that forwarded no credential answers a stored result with; decides nothing: resolve_headers sets it and deliver_replay refuses on it (MIK-8434)

@@ -1,1 +1,0 @@
-src/gateway/router/handlers/dispatch_intake.rs	degraded_session_tool_refusal	1	critical	d	Intake::degraded_session_tool_refusal	Refuses the three session tools on a legacy request served without a session at the provisional cap, before dispatch, with recovery advice (MIK-8533)

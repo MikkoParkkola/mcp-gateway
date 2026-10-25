@@ -1,4 +1,0 @@
-src/gateway/server/window_saver.rs	production	1	Returns the shipped saver intervals and bounds; decides nothing about access (MIK-7211)
-src/gateway/server/window_saver.rs	open_detached	1	Runs the segment open on a detached thread and reports whether it opened; decides nothing about access (MIK-7211)
-src/gateway/server/window_saver.rs	open_into	1	Opens the segment into the held sink unless already open; telemetry file I/O only, decides nothing about access (MIK-7211)
-src/gateway/server/window_saver.rs	checkpoint_detached	1	Writes one periodic checkpoint on a detached thread, retrying the open; telemetry file I/O only, decides nothing about access (MIK-7211)

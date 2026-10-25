@@ -50,6 +50,16 @@ content_allowlist=(
 # those directories is refused. Each file is scrubbed of private lines, and
 # the content checks still read it.
 public_data_allowlist=(
+  "docs/internal/perf/per_call_stages.tsv"
+  "docs/internal/perf/per_call_stages_stdio.tsv"
+  "docs/requirements/RELEASE-4.0.0-criteria-status.md"
+  "docs/requirements/RELEASE-4.0.0-requirements.md"
+  "docs/requirements/RELEASE-4.0.0-scope-status.json"
+  "docs/requirements/RELEASE-4.0.0-scope-tests.md"
+  "docs/requirements/RELEASE-4.0.0-scope-update.md"
+  "docs/requirements/RELEASE-4.0.0-workload-contract.md"
+  "docs/requirements/nfr-sec1-control-inventory.md"
+  "docs/requirements/workload-pins-observed.md"
 )
 
 # Debt: hits that exist on the tree today and are being removed. One
@@ -160,7 +170,6 @@ internal_path_markers=(
 # carve-out: when the lane lands, the file moves under docs/internal/ and the
 # line goes.
 internal_doc_allowlist=(
-  "docs/analysis/release-4.0-remaining-plan.md"
 )
 
 # Every tracked file at the repository root. Not filtered by extension: the

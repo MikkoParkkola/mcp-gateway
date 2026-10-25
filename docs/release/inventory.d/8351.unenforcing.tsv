@@ -1,2 +1,0 @@
-src/gateway/router/backend_handlers/direct_permit.rs	give_back_refused	1	After a chokepoint refusal, gives back the signing nonce and idempotency key the call took; decides nothing, the refusal is already made (MIK-8351)
-src/gateway/router/backend_handlers/direct_permit.rs	refused_send	1	Answers a send the chokepoint already refused, on either arm: gives back the nonce and key via give_back_refused and builds the refusal; decides nothing (MIK-8351)

@@ -1,1 +1,0 @@
-src/gateway/router/backend_handlers/direct_caller.rs	backend_not_found	1	Builds the direct route's 404 -32001 backend-miss answer; decides nothing: read_envelope (S4) and route decide when it is given (MIK-8387)

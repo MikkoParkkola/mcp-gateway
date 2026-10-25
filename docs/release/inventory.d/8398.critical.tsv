@@ -1,4 +1,0 @@
-src/trust/provenance_public.rs	verify_public	1	critical	d	verify_public	Verifies the Ed25519 public signature over the payload bytes; refuses an unknown kid, a bad signature or profile, an outer receipt that differs, and a result that mismatches or is unhashable
-src/trust/provenance_public.rs	resolve_public_signer	1	critical	d	resolve_public_signer	Resolves the Ed25519 seed and kid from the overlay; refuses a malformed seed or kid and an attestation collision with a value-free error, absent or blank resolves to none
-src/trust/provenance_public.rs	from_json	1	critical	d	TrustSet::from_json	Loads one JWK or a keys set; refuses malformed shape, duplicate kid, non-Ed25519 key, bad x, private member, and missing or malformed kid
-src/gateway/server/provenance_signer.rs	install_public_provenance	1	critical	d	install_public_provenance	Installs the public signer at startup when stamping is on; a malformed seed propagates and refuses startup

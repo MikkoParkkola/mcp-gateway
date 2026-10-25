@@ -1,1 +1,0 @@
-src/gateway/task_service/record.rs	pairs	1	Projects stored targets to borrowed (server, tool) names in recorded order for the stored-result walks; decides nothing, every check runs on the pairs afterwards (MIK-8498)

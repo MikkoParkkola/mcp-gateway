@@ -1,2 +1,0 @@
-src/gateway/input_bridge/channel.rs	send_request	1	critical	d	NoClientChannel::send_request	Refuses every relayed server request with NoSession on a transport that has no client to ask; answering instead would let a backend's elicitation or sampling request pass with no person behind it.
-src/gateway/input_bridge/debug.rs	fmt	1	standard	borderline	BridgeError::fmt	Redacts the backend's raw requestState in RoundsExhausted (MRTR.2); a mistake would print an opaque, possibly authorizing state into any log or panic that formats the error.

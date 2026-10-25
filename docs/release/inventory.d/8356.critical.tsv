@@ -1,1 +1,0 @@
-src/gateway/router/authorization.rs	per_user_surfaced	1	critical	d	per_user_surfaced	Decides that a surfaced name on a per-user backend is never exempt from sanitizing: its caller's own catalogue judges the name only later, so an exemption would let the answer tell a withheld or lacked name from one the backend has nowhere (MIK-8356 ruling a)

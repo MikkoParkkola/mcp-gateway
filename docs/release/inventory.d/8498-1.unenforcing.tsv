@@ -1,1 +1,0 @@
-src/gateway/router/backend_handlers/direct_caller.rs	task_caller	1	Bundles the caller's five identity references for route_owners; decides nothing

@@ -1,2 +1,0 @@
-src/gateway/router/meta_refusal_audit.rs	note_withheld	1	Writes the best-effort denied record of a hidden surfaced name the route already refused, counting a failed write; decides nothing, the refusal is already made (MIK-8361)
-src/gateway/router/meta_refusal_audit.rs	write	1	Writes one refusal record to the transparency log and returns the write's result; decides nothing, its callers choose what a failed write answers (MIK-8361)

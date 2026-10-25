@@ -1,5 +1,0 @@
-src/gateway/task_service/execution.rs	created_serves_no_output	1	Asserts the invariant that a just-created task serves no backend output (a debug assertion, counted in tests); it refuses nothing in a release build (MIK-8392 F3)
-src/identity_propagation/account_strategies_view.rs	audit_transient_refusal	1	Writes the idp_refuse audit record for a busy custody; it decides no answer and admits nothing
-src/gateway/task_service/service.rs	already_admitted	1	A read-only peek delegating to admission's already_admitted, so the intake can tell a repeat from a new task call; admission's begin re-decides and admits nothing here
-src/personal_accounts/vault.rs	into_error	1	Returns the PropagationError a MintError carries for callers that do not distinguish a busy custody; it decides nothing
-src/personal_accounts/vault.rs	from	1	Wraps a PropagationError as MintError::Other, the classification every non-custody refusal already had; it decides nothing

@@ -1,2 +1,0 @@
-src/gateway/router/backend_handlers/direct_dispatch.rs	admission_witness	1	critical	b,d	admission_witness	Mints the direct route's refund witness with the nonce only when nothing before admission acted (no mint or attempted mint, no account lease, no tool-list fill), so a later refusal cannot refund after an effect (MIK-8379)
-src/gateway/router/backend_handlers/direct_dispatch.rs	spend_witness	1	critical	b,d	spend_witness	Spends the direct route's refund witness before the send, so no failure at or after the send gives the nonce back (MIK-8379 D4)

@@ -1,2 +1,0 @@
-src/gateway/server/stdio_single.rs	discover_lists_modern	1	Chooses whether server/discover lists 2026-07-28 for one stdio request (serving on and the process-wide listing); decides nothing about admission, the version refusal is made in stdio_dispatch (MIK-8380)
-src/gateway/server/stdio_single.rs	from_setting	1	Reads server.modern_protocol once at stdio start into ModernServing; decides nothing, the refusal that uses it is made in stdio_dispatch (MIK-8380)
