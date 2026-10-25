@@ -282,7 +282,7 @@ fn decide_on(
             }
             (name, Reach::View)
         }
-        // MIK-8520: a reload changed the surfaced-tools set. The hook sends
+        // A reload changed the surfaced-tools set. The hook sends
         // this only when the ordered list changed, so it always announces;
         // the per-listener digests skip a listener whose list is unchanged.
         // The empty name is the one stdio's drain already baselines.
@@ -405,6 +405,9 @@ mod audience_review_tests;
 mod audience_source_tests;
 #[cfg(test)]
 mod audience_sse_tests;
+#[cfg(test)]
+/// L3b: a surfaced-only reload reaches both HTTP channels once.
+mod audience_surfaced_reload_tests;
 #[cfg(test)]
 mod audience_tests;
 #[cfg(test)]

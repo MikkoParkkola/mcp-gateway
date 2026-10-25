@@ -465,7 +465,7 @@ impl BackendRegistry {
         }
     }
 
-    /// Report that a config reload changed the surfaced-tools set (MIK-8520).
+    /// Report that a config reload changed the surfaced-tools set.
     /// A no-op until a feed is set.
     pub(crate) fn nudge_surfaced(&self) {
         if let Some(feed) = self.change_feed.get() {

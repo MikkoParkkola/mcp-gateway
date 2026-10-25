@@ -86,7 +86,7 @@ fn creation_targets(intent: &TaskIntent, call: &TaskCall) -> Vec<Target> {
         .upgrade()
         .and_then(|host| host.meta_mcp().direct_job(&call.tool, &call.arguments))
         .map(|job| Target {
-            server: job.server,
+            server: call.surfaced_server.clone().unwrap_or(job.server),
             tool: job.tool,
         })
         .into_iter()
@@ -137,6 +137,17 @@ async fn run_dispatched(
         return;
     }
 
+    // A surfaced task runs on the server it recorded at
+    // creation, or is refused before any backend is called when a reload has
+    // moved or removed that name since.
+    #[cfg(test)]
+    crate::gateway::meta_mcp::visible::seams::task_starts();
+    let recorded = call.surfaced_server.as_deref();
+    if !state.meta_mcp().surfaced_target_holds(&call.tool, recorded) {
+        settle_surfaced_refused(&executor, &principal, &id, revision, &mut cancel_rx).await;
+        return;
+    }
+
     // The upstream slot, armed only for a supported direct backend job whose
     // backend a trusted adapter claims right now. Nothing else is armed, so a
     // playbook, a code-mode program or an unclaimed backend takes exactly the
@@ -163,6 +174,9 @@ async fn run_dispatched(
     };
     if !claimed {
         job = None;
+    }
+    if let (Some(job), Some(recorded)) = (job.as_mut(), recorded) {
+        recorded.clone_into(&mut job.server);
     }
 
     // Capacity for the WHOLE recovery descriptor, reserved before the peer is
@@ -215,12 +229,17 @@ async fn run_dispatched(
     // `input_required` round from it before anything is committed.
     #[cfg(test)]
     crate::gateway::meta_mcp::visible::seams::task_dispatch_starts();
-    let dispatch = state.meta_mcp().dispatch_below_gate_native_result(
-        RequestId::Number(0),
+    let meta = state.meta_mcp();
+    let dispatch = meta.with_surfaced_pin(
         &call.tool,
-        call.arguments.clone(),
-        session_id.as_deref(),
-        &caller,
+        recorded,
+        meta.dispatch_below_gate_native_result(
+            RequestId::Number(0),
+            &call.tool,
+            call.arguments.clone(),
+            session_id.as_deref(),
+            &caller,
+        ),
     );
     let dispatch = async {
         match submission.as_ref() {
@@ -564,6 +583,25 @@ async fn settle_descriptor_refused(
         "recovery_descriptor_too_large",
         "The gateway refused this task before calling the backend: its recovery \
          descriptor does not fit the durable record budget.",
+    ));
+    executor
+        .settle_cas(principal, id, revision, event, cancel_rx)
+        .await;
+}
+
+/// A surfaced task whose name a reload moved or removed since creation,
+/// settled before any backend is called.
+async fn settle_surfaced_refused(
+    executor: &TaskExecutor,
+    principal: &str,
+    id: &str,
+    revision: u64,
+    cancel_rx: &mut watch::Receiver<bool>,
+) {
+    let event = TaskTransition::Complete(interrupted_result(
+        "not_executed",
+        "surfaced_target_changed",
+        "surfaced target changed since the task was created",
     ));
     executor
         .settle_cas(principal, id, revision, event, cancel_rx)

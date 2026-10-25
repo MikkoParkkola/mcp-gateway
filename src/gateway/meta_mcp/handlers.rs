@@ -265,9 +265,11 @@ impl MetaMcp {
         session_id: Option<&str>,
         scope: InvokeScope<'_>,
     ) -> JsonRpcResponse {
-        // MIK-8520 D2d: one surfaced snapshot for the whole list, so one
+        // One surfaced snapshot for the whole list, so one
         // tools/list (and one listener digest) never mixes two surfaced sets.
         let surfaced_state = self.surfaced_state();
+        #[cfg(test)]
+        super::visible::seams::list_snapshot_taken();
         let standing = CallerStanding::from(scope);
         let tools = self.meta_tools_for(standing, self.admitted_counts(scope, session_id));
         let mut tool_descriptors =

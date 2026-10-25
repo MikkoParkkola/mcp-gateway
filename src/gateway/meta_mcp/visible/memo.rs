@@ -44,10 +44,10 @@ struct VisibilityMemo {
     /// carried to that target's dispatch so it answers without resolving
     /// (and auditing) a second time in one request.
     resolution_error: Keyed<TargetKey, crate::Error>,
-    /// MIK-8520 D2: the surfaced state this request reads, taken at its first
+    /// The surfaced state this request reads, taken at its first
     /// surfaced read, so a reload mid-request cannot split it across two maps.
     surfaced: parking_lot::Mutex<Option<std::sync::Arc<super::SurfacedState>>>,
-    /// MIK-8520 D2b: a task's recorded server for its surfaced name, which
+    /// A task's recorded server for its surfaced name, which
     /// wins over the snapshot, so its dispatch runs where it was admitted.
     surfaced_pins: parking_lot::Mutex<std::collections::HashMap<String, &'static str>>,
 }
@@ -221,8 +221,8 @@ fn in_memo<R>(read: impl FnOnce(&VisibilityMemo) -> R) -> Option<R> {
     VISIBILITY_MEMO.try_with(read).ok()
 }
 
-/// This request's surfaced snapshot, taken from `live` at the first read
-/// (MIK-8520 D2); `None` outside a memo.
+/// This request's surfaced snapshot, taken from `live` at the first read;
+/// `None` outside a memo.
 pub(crate) fn surfaced_snapshot(
     live: impl FnOnce() -> std::sync::Arc<super::SurfacedState>,
 ) -> Option<std::sync::Arc<super::SurfacedState>> {
@@ -234,7 +234,7 @@ pub(crate) fn surfaced_pin(tool_name: &str) -> Option<&'static str> {
     in_memo(|memo| memo.surfaced_pins.lock().get(tool_name).copied()).flatten()
 }
 
-/// Pin `tool_name` to `server` in the active memo (MIK-8520 D2b). A resume
+/// Pin `tool_name` to `server` in the active memo. A resume
 /// runs inside its answering request's memo, and a nested scope would reuse
 /// that one, so the pin is recorded into whichever memo is active. Returns
 /// whether one was: the caller opens a memo first when none is.

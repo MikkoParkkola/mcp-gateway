@@ -61,7 +61,7 @@ pub struct MetaMcpConfig {
     /// (one hop) instead of going through `gateway_invoke` (two hops).
     /// The gateway validates, at startup and on every config reload, that
     /// surfaced tool names do not collide with any meta-tool name. A reload
-    /// applies an edited list without a restart (MIK-8520).
+    /// applies an edited list without a restart.
     #[serde(default)]
     pub surfaced_tools: Vec<SurfacedToolConfig>,
     /// Canonical response-projection rollout mode (MIK-5877).

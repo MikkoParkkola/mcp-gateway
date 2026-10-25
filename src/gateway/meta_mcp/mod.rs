@@ -117,7 +117,7 @@ mod slot_quota_release_tests;
 mod spec_preview;
 mod support;
 mod surfaced;
-pub(crate) use surfaced::{ArgsPolicy, args_policy};
+pub(crate) use surfaced::{ArgsPolicy, args_policy, surfaced_target_changed};
 mod task_confirmation;
 pub(crate) mod task_notify;
 mod task_replay;
@@ -293,11 +293,11 @@ pub struct MetaMcp {
     /// their name table (tool name → server), validated as one unit.
     ///
     /// Built from `MetaMcpConfig::surfaced_tools` by
-    /// [`MetaMcp::with_surfaced_tools`], and replaced whole by a config reload
-    /// (MIK-8520). Private behind the accessors: every read goes through
+    /// [`MetaMcp::with_surfaced_tools`], and replaced whole by a config
+    /// reload. Private behind the accessors: every read goes through
     /// [`MetaMcp::surfaced_state`] (the request snapshot) or
     /// [`MetaMcp::surfaced_state_live`], and any decision about a caller through
-    /// [`MetaMcp::surfaced_for`] (MIK-8340). Shared so the reload hook can swap it.
+    /// [`MetaMcp::surfaced_for`]. Shared so the reload hook can swap it.
     surfaced: Arc<parking_lot::RwLock<Arc<visible::SurfacedState>>>,
 
     /// Which meta-tools this gateway exposes, from `MetaMcpConfig::exposed_meta_tools`.

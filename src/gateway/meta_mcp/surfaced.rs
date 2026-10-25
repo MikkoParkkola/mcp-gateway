@@ -101,9 +101,72 @@ impl MetaMcp {
         }];
         *self.surfaced.write() = Arc::new(validate_surfaced(tools));
     }
+
+    /// Apply `tools` as a reload of `surfaced_tools` does, nudge
+    /// included, without a config file. Returns whether anything changed.
+    #[cfg(test)]
+    pub(crate) fn reload_surfaced_for_test(&self, tools: Vec<SurfacedToolConfig>) -> bool {
+        let mut config = crate::config::Config::default();
+        config.meta_mcp.surfaced_tools = tools;
+        apply_surfaced_reload(&self.surfaced, &self.backends, &config)
+    }
+
+    /// Withdraw every surfaced name, as a reload to an empty list
+    /// would.
+    #[cfg(test)]
+    pub(crate) fn clear_surfaced_for_test(&self) {
+        *self.surfaced.write() = Arc::default();
+    }
 }
 
-/// Apply a reloaded config's `surfaced_tools` (MIK-8520 D3, under
+impl MetaMcp {
+    /// Whether a task's recorded surfaced server still holds,
+    /// read memo-blind so a request snapshot cannot hide a reload: the live
+    /// map still surfaces `tool` from `recorded`, and that backend is still
+    /// configured. `None` (no recorded server) always holds and resolves live.
+    pub(crate) fn surfaced_target_holds(&self, tool: &str, recorded: Option<&str>) -> bool {
+        let Some(recorded) = recorded else {
+            return true;
+        };
+        self.surfaced_state_live().map.unscoped(tool) == Some(recorded)
+            && self
+                .backends
+                .get_for(super::scoped_backends::Unscoped::Visibility, recorded)
+                .is_some()
+    }
+
+    /// Run `dispatch` with `tool` pinned to its recorded server in the active
+    /// memo, opening one when none is. The pin closes the gap
+    /// between [`Self::surfaced_target_holds`] and the dispatch, where a reload
+    /// could land; it is not redundant with that check.
+    pub(crate) async fn with_surfaced_pin<F: std::future::Future>(
+        &self,
+        tool: &str,
+        recorded: Option<&str>,
+        dispatch: F,
+    ) -> F::Output {
+        let Some(server) = recorded.map(super::visible::intern) else {
+            return dispatch.await;
+        };
+        super::visible::memo::with_visibility_memo(async move {
+            super::visible::memo::pin_surfaced(tool, server);
+            dispatch.await
+        })
+        .await
+    }
+}
+
+/// The plain answer for a surfaced task whose name a reload moved or removed
+/// after the task was created: no backend is called.
+pub(crate) fn surfaced_target_changed() -> crate::protocol::JsonRpcResponse {
+    crate::protocol::JsonRpcResponse::error(
+        None,
+        crate::error::rpc_codes::INTERNAL_ERROR,
+        "surfaced target changed since the task was created",
+    )
+}
+
+/// Apply a reloaded config's `surfaced_tools` (under
 /// `lock_reload`). The new list is validated as at startup; when the ordered
 /// `(tool, server)` list differs from the running one (a reorder changes every
 /// served list), the state is swapped and one tools/list_changed nudge is
@@ -154,8 +217,8 @@ pub(super) fn apply_surfaced_reload(
     true
 }
 
-/// Validate a surfaced-tools list as startup and every reload do (MIK-8520
-/// RELOAD.4): a name colliding with a meta tool, and a second occurrence of
+/// Validate a surfaced-tools list as startup and every reload do: a name
+/// colliding with a meta tool, and a second occurrence of
 /// a name, are dropped with a warning. Never fails, so an invalid entry
 /// never aborts a reload.
 pub(crate) fn validate_surfaced(tools: Vec<SurfacedToolConfig>) -> super::visible::SurfacedState {

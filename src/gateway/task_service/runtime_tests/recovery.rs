@@ -307,6 +307,7 @@ async fn seed_row(
                         arguments: json!({}),
                         accepted_inputs: serde_json::Map::new(),
                         continuation_deadline: None,
+                        surfaced_server: None,
                     },
                     chrono::Utc::now(),
                 )

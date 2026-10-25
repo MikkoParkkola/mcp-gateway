@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8520.RELOAD.1 / RELOAD.4: a config reload applies `surfaced_tools` to
+//! A config reload applies `surfaced_tools` to
 //! the running gateway. Each row drives a real reload: the config is written
 //! to a file, the gateway is attached to a reload context the way
 //! `build_meta_mcp` attaches it, and `reload_outcome` reads the file.
@@ -32,6 +32,15 @@ fn config_with(pairs: &[(&str, &str)]) -> Config {
 /// A gateway started on `start`, attached to a reload context over a config
 /// file in `dir`, as `build_meta_mcp` attaches it.
 fn started(dir: &tempfile::TempDir, start: &[(&str, &str)]) -> (MetaMcp, Arc<ReloadContext>) {
+    started_in(dir, start, Arc::new(BackendRegistry::new()))
+}
+
+/// [`started`] over a caller's `registry`, so a row can attach a nudge feed.
+fn started_in(
+    dir: &tempfile::TempDir,
+    start: &[(&str, &str)],
+    registry: Arc<BackendRegistry>,
+) -> (MetaMcp, Arc<ReloadContext>) {
     let initial = config_with(start);
     let path = dir.path().join("gateway.yaml");
     crate::gateway::test_helpers::write_owner_only(
@@ -39,7 +48,6 @@ fn started(dir: &tempfile::TempDir, start: &[(&str, &str)]) -> (MetaMcp, Arc<Rel
         serde_yaml::to_string(&initial).expect("yaml"),
     )
     .expect("write");
-    let registry = Arc::new(BackendRegistry::new());
     let meta = MetaMcp::new(Arc::clone(&registry))
         .with_surfaced_tools(initial.meta_mcp.surfaced_tools.clone());
     let context = Arc::new(
@@ -177,7 +185,7 @@ async fn l4_a_reload_drops_invalid_entries_and_never_aborts() {
 /// visibility memo, the first read (admission's, in production) fixes the
 /// map for the rest of the request; a reload landing mid-request does not
 /// split admission, policy, dispatch and the deferred-replay key across two
-/// servers (MIK-8520.REPLAY.3).
+/// servers.
 #[tokio::test]
 async fn l5_one_request_reads_one_surfaced_map() {
     let meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
@@ -199,5 +207,41 @@ async fn l5_one_request_reads_one_surfaced_map() {
         meta.surfaced_server_unscoped("read"),
         Some("beta"),
         "L5: outside the request the live map moved"
+    );
+}
+
+/// L3 (N2, N3): the reload hook sends exactly one surfaced nudge for a
+/// changed list, and none for an identical one, read at the nudge sender.
+#[tokio::test]
+async fn l3_a_changed_list_nudges_once_and_an_identical_one_never() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = Arc::new(BackendRegistry::new());
+    let (feed, mut nudges) = tokio::sync::mpsc::unbounded_channel();
+    registry.set_change_feed(feed);
+    let (_meta, context) = started_in(&dir, &[("t1", "alpha")], registry);
+    let mut surfaced_nudges = || {
+        let mut count = 0;
+        while let Ok(nudge) = nudges.try_recv() {
+            count += usize::from(matches!(
+                nudge,
+                crate::backend::tools_nudge::ToolsNudge::Surfaced
+            ));
+        }
+        count
+    };
+    let _ = surfaced_nudges();
+    reload_to(&dir, &context, &[("t1", "alpha")]).await;
+    assert_eq!(surfaced_nudges(), 0, "L3: an identical list nudged");
+    reload_to(&dir, &context, &[("t1", "beta")]).await;
+    assert_eq!(
+        surfaced_nudges(),
+        1,
+        "L3: a changed list must nudge exactly once"
+    );
+    reload_to(&dir, &context, &[("t1", "beta")]).await;
+    assert_eq!(
+        surfaced_nudges(),
+        0,
+        "L3: the repeat of the new list nudged"
     );
 }

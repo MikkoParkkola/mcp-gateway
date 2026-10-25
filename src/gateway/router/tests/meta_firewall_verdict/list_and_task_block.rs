@@ -426,6 +426,7 @@ async fn a_task_mode_discovery_settles_with_one_inspection() {
     let call = TaskCall {
         tool: "gateway_search_tools".to_owned(),
         arguments,
+        surfaced_server: None,
     };
     let before = inspections(&meta);
 

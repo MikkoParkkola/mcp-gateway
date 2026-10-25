@@ -469,12 +469,12 @@ async fn r5_a_refused_replay_records_the_admitted_server() {
     );
 }
 
-/// MIK-8520 L8 (N10, pin): across requests. A keyed surfaced call completes
+/// L8 (N10, pin): across requests. A keyed surfaced call completes
 /// on `alpha`; the name then moves to `beta` (as a reload moves it); the
 /// keyed repeat is refused at execution admission, because the operation
 /// names the server. It never runs on `beta` and is never served `alpha`'s
-/// answer as `beta`'s: one client key never produces two writes (lead
-/// ruling 2026-10-25). This already holds on base, so the row pins it.
+/// answer as `beta`'s: one client key never produces two writes. This
+/// already holds on base, so the row pins it.
 #[tokio::test]
 async fn l8_a_keyed_repeat_after_the_name_moves_is_refused() {
     let dir = tempfile::tempdir().unwrap();

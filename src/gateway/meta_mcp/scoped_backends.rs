@@ -134,7 +134,7 @@ impl Registry {
         started
     }
 
-    /// Report a surfaced-tools change from a config reload (MIK-8520).
+    /// Report a surfaced-tools change from a config reload.
     pub(in crate::gateway) fn nudge_surfaced(&self) {
         self.0.nudge_surfaced();
     }

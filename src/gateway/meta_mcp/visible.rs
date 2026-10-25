@@ -277,13 +277,13 @@ pub(crate) struct SurfacedMap(std::collections::HashMap<String, &'static str>);
 
 /// A backend name as a `&'static str`, leaked once per distinct name.
 ///
-/// MIK-8520: the surfaced map is swapped by a reload, but its readers hand
+/// The surfaced map is swapped by a reload, but its readers hand
 /// out a server name borrowed for the caller's own lifetime (`Surfaced<'s>`,
 /// `Option<&str>`). An interned name outlives every snapshot, so those
 /// signatures stay as they are.
 // ponytail: one small leak per distinct backend name ever surfaced, bounded
 // by what an operator configures; move to `Arc<str>` values if names churn.
-fn intern(server: &str) -> &'static str {
+pub(crate) fn intern(server: &str) -> &'static str {
     static NAMES: std::sync::LazyLock<parking_lot::Mutex<std::collections::HashSet<&'static str>>> =
         std::sync::LazyLock::new(Default::default);
     let mut names = NAMES.lock();
@@ -322,7 +322,7 @@ impl SurfacedMap {
 }
 
 /// The validated surfaced tools and their name table: one unit, replaced
-/// whole by a reload (MIK-8520).
+/// whole by a reload.
 #[derive(Debug, Default)]
 pub(crate) struct SurfacedState {
     pub(crate) tools: Vec<crate::config::SurfacedToolConfig>,
@@ -330,7 +330,7 @@ pub(crate) struct SurfacedState {
 }
 
 impl MetaMcp {
-    /// The surfaced state this request reads (MIK-8520 D2). Inside a request's
+    /// The surfaced state this request reads. Inside a request's
     /// visibility memo the first read fixes it for the rest of the request, so
     /// admission, policy, dispatch and a deferred replay's lift all see one
     /// map even if a reload swaps it mid-request; a pinned name (a task's
@@ -343,7 +343,7 @@ impl MetaMcp {
 
     /// The live surfaced state, ignoring any request snapshot: for the one
     /// check that must see a reload a snapshot would hide (a task's
-    /// moved-target check, MIK-8520 D2b) and for the reload itself.
+    /// moved-target check) and for the reload itself.
     pub(crate) fn surfaced_state_live(&self) -> std::sync::Arc<SurfacedState> {
         std::sync::Arc::clone(&self.surfaced.read())
     }
@@ -423,6 +423,34 @@ pub(crate) mod seams {
         static AFTER_ROUTE_STAGE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static BEFORE_TASK_DISPATCH: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static AFTER_INTAKE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+        static AT_TASK_START: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+        static AFTER_LIST_SNAPSHOT: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    /// Run `hook` once, the next time `served_tools_list` on this thread has
+    /// taken its surfaced snapshot.
+    pub(crate) fn after_list_snapshot(hook: impl FnOnce() + 'static) {
+        AFTER_LIST_SNAPSHOT.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    /// Called where `served_tools_list` has taken its surfaced snapshot.
+    pub(crate) fn list_snapshot_taken() {
+        if let Some(hook) = AFTER_LIST_SNAPSHOT.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
+    }
+
+    /// Run `hook` once, the next time a task worker on this thread starts,
+    /// before its surfaced-target check.
+    pub(crate) fn at_task_start(hook: impl FnOnce() + 'static) {
+        AT_TASK_START.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    /// Called where a task worker starts, before the surfaced-target check.
+    pub(crate) fn task_starts() {
+        if let Some(hook) = AT_TASK_START.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
     }
 
     /// Run `hook` once, the next time `/mcp` or `/mcp/{name}` intake on this

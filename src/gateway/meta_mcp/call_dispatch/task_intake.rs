@@ -86,6 +86,9 @@ impl MetaMcp {
         let call = crate::gateway::task_service::TaskCall {
             tool: tool_name.to_owned(),
             arguments,
+            // Read in this request's snapshot, so the task runs
+            // where it was admitted or is refused.
+            surfaced_server: self.surfaced_server_unscoped(tool_name).map(str::to_owned),
         };
         match executor.begin(intent, task, backend, call).await {
             Ok(BeginOutcome::Existing(held)) => {

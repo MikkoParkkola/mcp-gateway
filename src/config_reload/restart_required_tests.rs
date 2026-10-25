@@ -192,11 +192,11 @@ fn no_pending_restart_when_the_file_matches_the_running_process() {
     assert!(!live.restart_required());
 }
 
-/// MIK-8520.RELOAD.5 L7: `surfaced_tools` is applied by a reload (the
+/// L7: `surfaced_tools` is applied by a reload (the
 /// surfaced snapshot is swapped under the reload lock), so a change to it
-/// alone is not restart-pending. It replaces the MIK-7645 AC3 guard: the
+/// alone is not restart-pending. It replaces the earlier guard: the
 /// replay record carries its admitted server, and a deferred replay's live
-/// re-entry reads the request snapshot (MIK-8520.REPLAY.3).
+/// re-entry reads the request snapshot.
 #[test]
 fn l7_a_surfaced_tools_change_alone_is_not_restart_pending() {
     let running = Config::default();
@@ -215,7 +215,7 @@ fn l7_a_surfaced_tools_change_alone_is_not_restart_pending() {
     );
 }
 
-/// MIK-8520.RELOAD.5 L7 (pin): every other `meta_mcp` field is still read
+/// L7 (pin): every other `meta_mcp` field is still read
 /// once at startup, so a change to any of them stays restart-pending even
 /// alongside a surfaced_tools edit.
 #[test]

@@ -112,6 +112,11 @@ pub(crate) struct InputRound {
     /// TTL alone bounds the round.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) continuation_deadline: Option<u64>,
+    /// The parked task's recorded surfaced server, so its resume
+    /// dispatches where it was admitted. Absent for a non-surfaced round and
+    /// in a record from before the field (decodes as `None`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) surfaced_server: Option<String>,
 }
 
 /// Upper bound on a durable upstream handle, in bytes.
