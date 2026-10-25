@@ -26,7 +26,7 @@ pub(super) fn load_if_exists<F, E>(
 {
     if path.exists() {
         if let Err(e) = load(path) {
-            warn!(error = %e, "{error_message}");
+            warn!(path = %path.display(), error = %e, "{error_message}");
         } else {
             info!("{success_message}");
         }
