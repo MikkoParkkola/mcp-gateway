@@ -12,3 +12,4 @@ src/transport/http/sse_listen.rs	unsolicited	1	Forwards to handshake.
 src/transport/http/sse_listen.rs	legacy_pin	1	Hashes the endpoint as the D5 ledger's holder id; bookkeeping, not a security decision.
 src/transport/http/sse_listen.rs	legacy_interest	1	Forwards a resources/subscribe or unsubscribe through request, which enforces.
 src/transport/http/sse_listen.rs	detected_streamable	1	Reports Some(false): this session is the SSE transport.
+src/transport/http/requests.rs	body_or_stream	1	Chooses where a 2xx SSE-mode answer is read from (its body, or the response the stream pairs with the request); the pairing itself is route's, which is critical.

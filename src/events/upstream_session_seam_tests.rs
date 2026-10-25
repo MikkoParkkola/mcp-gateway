@@ -5,6 +5,7 @@
 //! (S10b).
 
 use super::*;
+use crate::transport::upstream_tap::ListenerCredential;
 
 /// C4 (MIK-8835.SSE.4, design B6): an identity credential on a transport with
 /// no session of its own fails closed; it never falls back to the shared

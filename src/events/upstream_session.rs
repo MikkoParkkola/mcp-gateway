@@ -15,12 +15,10 @@ use super::EventsHub;
 use super::upstream::Kind;
 use super::upstream_listener::Shared;
 use super::upstream_need::Coalescer;
-use crate::backend::listen::ListenTarget;
 use crate::backend::{Backend, BackendRegistry};
 use crate::protocol::era::PeerEra;
 use crate::transport::upstream_tap::{
-    FrameStream, KindSet, ListenerCredential, NoteKind, Refused, Requested, UpstreamListen,
-    UpstreamNote, Watched,
+    FrameStream, KindSet, NoteKind, Refused, Requested, UpstreamListen, UpstreamNote, Watched,
 };
 
 /// How often the loop looks at timers; also bounds coalescing latency.
@@ -411,102 +409,6 @@ fn failed() -> Outcome {
     }
 }
 
-/// What a run listens on, chosen once at its start.
-struct Run {
-    /// Keeps the idle reaper off the shared slot while the run lasts.
-    _lease: crate::backend::listen::ListenLease,
-    /// The shared slot's transport: a replaced one ends the run.
-    transport: Weak<dyn UpstreamListen>,
-    /// What the run's calls go to: an own session, or `transport` itself.
-    handle: Weak<dyn UpstreamListen>,
-    /// An own session speaks the legacy transport whatever the slot's cached
-    /// era says (B12).
-    era: PeerEra,
-    /// The transport flavour the run starts on: a recovery that switches it
-    /// in place keeps the same transport, so only this read sees it (B2).
-    flavour: Option<bool>,
-    /// An own session, kept alive for the run.
-    _own: Option<Arc<dyn UpstreamListen>>,
-    /// An own session's subscriptions end with it, however the run ends; any
-    /// `release` runs first, inside the run (B14').
-    _retire: Option<RetireOnEnd>,
-}
-
-/// Start a run: reach the backend and choose its session. P3 listens with
-/// the gateway's own credential; MIK-8833 passes the key's. `None`: the
-/// backend is not reachable, or an identity credential has no session of its
-/// own and the run fails closed.
-async fn begin_run(shared: &Arc<Shared>, backend: &Backend) -> Option<Run> {
-    shared.refresh_ledger();
-    let lease = backend.listen_lease();
-    let target: ListenTarget = match backend.listen_target().await {
-        Ok(target) => target,
-        Err(error) => {
-            debug!(backend = %shared.name, %error, "upstream listener: backend not reachable");
-            return None;
-        }
-    };
-    let flavour = backend.connected_streamable();
-    let Some((own, handle)) = pick_session(&target.handle, ListenerCredential::shared()) else {
-        debug!(backend = %shared.name, "upstream listener: an identity credential has no session of its own");
-        return None;
-    };
-    let era = if runs_modern(own.is_some(), target.era) {
-        PeerEra::Modern
-    } else {
-        PeerEra::Legacy
-    };
-    Some(Run {
-        _lease: lease,
-        transport: target.handle,
-        handle,
-        era,
-        flavour,
-        _retire: own.is_some().then(|| RetireOnEnd(Arc::clone(shared))),
-        _own: own,
-    })
-}
-
-/// Whether a run speaks the modern transport: never on an own session, which
-/// is the legacy SSE handshake whatever the slot's cached era (design B12).
-fn runs_modern(own_session: bool, era: PeerEra) -> bool {
-    !own_session && era == PeerEra::Modern
-}
-
-/// Retires the run's ledger holder when an own session's run ends.
-struct RetireOnEnd(Arc<Shared>);
-
-impl Drop for RetireOnEnd {
-    fn drop(&mut self) {
-        self.0.ledger().lock().retire_holder();
-    }
-}
-
-/// An own session (kept alive for the run), and the handle the run upgrades.
-type Picked = (Option<Arc<dyn UpstreamListen>>, Weak<dyn UpstreamListen>);
-
-/// The session a run listens on: the transport's own session when it offers
-/// one (the SSE handshake), the transport itself otherwise. `None` when
-/// `credential` names an identity and there is no own session: the run must
-/// never fall back to the shared transport and its gateway credential
-/// (MIK-8835.SSE.4, design B6). The `Arc` keeps an own session alive for the
-/// run; the `Weak` is what the run's calls upgrade.
-fn pick_session(
-    transport: &Weak<dyn UpstreamListen>,
-    credential: ListenerCredential,
-) -> Option<Picked> {
-    let identity = credential.source.is_some();
-    let own = transport.upgrade().and_then(|t| t.own_session(credential));
-    match own {
-        Some(own) => {
-            let handle = Arc::downgrade(&own);
-            Some((Some(own), handle))
-        }
-        None if identity => None,
-        None => Some((None, transport.clone())),
-    }
-}
-
 fn backend_still_current(backend: &Backend, handle: &Weak<dyn UpstreamListen>) -> bool {
     backend.listens_on(handle)
 }
@@ -818,7 +720,13 @@ mod legacy;
 
 #[path = "upstream_session_poll.rs"]
 mod poll;
+
+#[path = "upstream_session_run.rs"]
+mod run;
 use legacy::watched_by;
+use run::{Run, begin_run};
+#[cfg(test)]
+use run::{pick_session, runs_modern};
 
 #[cfg(test)]
 #[path = "upstream_session_tests.rs"]
