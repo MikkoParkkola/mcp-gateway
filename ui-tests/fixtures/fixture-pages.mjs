@@ -33,6 +33,7 @@ for (const [id, label] of PAGES) {
   };
   register(id, {
     title: title || label,
+    subtitle: id === 'overview' ? '24 of 28 servers ready.' : undefined,
     tabs: {
       // Access › Status reads an API the tests can answer with 403.
       status: id === 'access' ? async (el) => { await api('/ui/api/forbidden-probe'); el.textContent = 'access - status'; } : tab('status'),

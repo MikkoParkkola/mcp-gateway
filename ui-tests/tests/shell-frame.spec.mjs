@@ -352,6 +352,15 @@ test.describe('page states and safety', () => {
     await expect(page.locator('#content [data-state="forbidden"]')).toBeVisible();
   });
 
+  test('F13c the page subtitle renders as text under the plate, and only when given', async ({ page }) => {
+    await withFixturePages(page);
+    await page.goto('/ui/overview/status');
+    await shellReady(page);
+    await expect(page.locator('.head .sub')).toHaveText('24 of 28 servers ready.');
+    await page.locator('nav.route-nav a[href="/ui/servers"]').click();
+    await expect(page.locator('.head .sub')).toBeHidden();
+  });
+
   test('F14 a page title is text, never markup', async ({ page }) => {
     await withFixturePages(page, { title: '<img src=x onerror="window.pwned=1">' });
     await page.goto('/ui/overview/status');

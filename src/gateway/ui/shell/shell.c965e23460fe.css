@@ -573,6 +573,7 @@ a { color: inherit; text-decoration: none; }
 .head { padding: 20px 24px 0; }
 .head h1 { display: inline-flex; font: inherit; }
 .head h1 .plate { font: var(--type-plate); letter-spacing: var(--type-plate-tracking); text-transform: uppercase; display: inline-flex; padding: 7px 16px 5px; border-radius: var(--radius-md); background: var(--color-plate-fill); color: var(--color-plate-on); box-shadow: inset 0 0 0 2px var(--color-plate-fill), inset 0 0 0 calc(2px + var(--size-plate-keyline)) var(--color-plate-keyline); }
+.head .sub { margin-top: 6px; }
 .tabs { padding: 14px 24px 0; }
 .tabs:empty { display: none; }
 .tabs a { color: var(--color-text-secondary); border-bottom: 3px solid transparent; }

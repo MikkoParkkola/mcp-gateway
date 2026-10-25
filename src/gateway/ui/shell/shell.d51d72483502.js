@@ -23,7 +23,10 @@ const TABS = [['status', 'Status'], ['actions', 'Actions'], ['settings', 'Settin
 const PAGE_IDS = new Set(NAV.map(([id]) => id));
 const pages = new Map();
 
-/** Register a page: `{title, tabs: {status, actions, settings}, entries}`. A null tab is hidden. */
+/**
+ * Register a page: `{title, subtitle, tabs: {status, actions, settings}, entries}`.
+ * A null tab is hidden. The subtitle is the one line under the plate.
+ */
 export function register(id, spec) {
   if (!PAGE_IDS.has(id)) throw new Error(`register: no sidebar page ${id}`);
   pages.set(id, spec);
@@ -153,11 +156,15 @@ export function render() {
 
   if (!label) {
     plate.textContent = 'Not found';
+    document.querySelector('.head .sub').hidden = true;
     content.replaceChildren(mark(state('empty', { title: 'No such page', body: 'Pick a page from the list.' })));
     return;
   }
   const spec = pages.get(route.page);
   plate.textContent = spec?.title ?? label;
+  const sub = document.querySelector('.head .sub');
+  sub.textContent = spec?.subtitle ?? '';
+  sub.hidden = !spec?.subtitle;
   document.title = `${spec?.title ?? label} · MCP Gateway`;
   const tabs = visibleTabs(route.page);
   if (tabs.length === 0) {

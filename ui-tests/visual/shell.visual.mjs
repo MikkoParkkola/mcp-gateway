@@ -8,7 +8,7 @@
 // bodies are not compared: their content belongs to the screen tickets.
 // Both images are decoded in the browser's own canvas, so no image library
 // is needed. The ratio per region is printed for the PR.
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, expect } from '../tests/base.mjs';
 
@@ -51,6 +51,13 @@ test.describe('frames', () => {
           g.drawImage(img, x, y, w, h, 0, 0, w, h);
           return g.getImageData(0, 0, w, h).data;
         };
+        const crop = (img, [x, y, w, h]) => {
+          const c = document.createElement('canvas');
+          c.width = w;
+          c.height = h;
+          c.getContext('2d').drawImage(img, x, y, w, h, 0, 0, w, h);
+          return c.toDataURL('image/png').split(',')[1];
+        };
         return regions.map(([name, ...box]) => {
           const p = pixels(a, box);
           const q = pixels(b, box);
@@ -58,9 +65,15 @@ test.describe('frames', () => {
           for (let i = 0; i < p.length; i += 4) {
             if (Math.abs(p[i] - q[i]) + Math.abs(p[i + 1] - q[i + 1]) + Math.abs(p[i + 2] - q[i + 2]) > 96) diff++;
           }
-          return [name, diff / (p.length / 4)];
+          return [name, diff / (p.length / 4), crop(a, box), crop(b, box)];
         });
       }, { shot, frame, regions });
+      // The two crops of each region, side by side in the test output, for the PR.
+      for (const [name, , shotCrop, frameCrop] of ratios) {
+        const slug = `${file.replace('.png', '')}-${name.replace(' ', '-')}`;
+        writeFileSync(test.info().outputPath(`${slug}-shell.png`), Buffer.from(shotCrop, 'base64'));
+        writeFileSync(test.info().outputPath(`${slug}-frame.png`), Buffer.from(frameCrop, 'base64'));
+      }
       for (const [name, ratio] of ratios) console.log(`visual: ${file} ${name} ${(ratio * 100).toFixed(2)}% differs`);
       test.info().annotations.push(...ratios.map(([name, ratio]) => ({ type: 'diff', description: `${file} ${name} ${(ratio * 100).toFixed(2)}%` })));
     });
