@@ -121,9 +121,12 @@ fn x4_pieces_after_and_between_exempt_values_still_redact() {
     let rows = [
         // The match starts in an exempt connection-string-shaped value and
         // runs on over a later dsn: the dsn is still covered after the cut.
+        // The kept exempt value leaves a connection-string prefix open up to
+        // the marker, so MIK-8794's writer puts one space before it and a
+        // second pass cannot match through it.
         (
             format!(r#"{{"next":"{}","dsn":{url}}}"#, cont_url()),
-            format!(r#"{{"next":"{}","dsn":"{MARK}"}}"#, cont_url()),
+            format!(r#"{{"next":"{}","dsn":" {MARK}"}}"#, cont_url()),
             vec![db],
         ),
         // Two exempt values around a credential, and one after it.

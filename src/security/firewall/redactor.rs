@@ -715,12 +715,6 @@ fn project(
     merge_spans(ranges)
 }
 
-/// Whether any of `ranges` (in order, disjoint) falls inside `lit`.
-fn covers(ranges: &[(usize, usize)], lit: &Literal) -> bool {
-    let after = ranges.partition_point(|range| range.0 < lit.start);
-    ranges.get(after).is_some_and(|range| range.0 < lit.end)
-}
-
 /// `text` with `ranges` replaced, where a key holding a range is renamed as
 /// [`Redactor::redact_keys`] renames one: within its object every clean key
 /// keeps its name, and each redacted key takes its redacted name or the first
@@ -778,16 +772,6 @@ fn rename_keys(text: &str, ranges: &[(usize, usize)], literals: &[Literal]) -> S
     out.out
 }
 
-/// The escape in `escapes` (in order, disjoint) that `at` falls strictly
-/// inside, if any.
-fn escape_around(escapes: &[(usize, usize)], at: usize) -> Option<(usize, usize)> {
-    let after = escapes.partition_point(|escape| escape.0 < at);
-    after
-        .checked_sub(1)
-        .map(|i| escapes[i])
-        .filter(|escape| at < escape.1)
-}
-
 /// `text` with every range in `ranges` (merged, in order) replaced by the
 /// redaction marker. `text` is always a whole leaf, never a slice of one,
 /// so the barrier sees everything before each range.
@@ -803,24 +787,11 @@ fn replace_spans(text: &str, ranges: &[(usize, usize)]) -> String {
     out.out
 }
 
-/// Merge sorted spans that overlap or touch, so no character between two
-/// matched spans can survive and touching tokens share one marker.
-fn merge_spans(spans: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
-    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
-    for (start, end) in spans {
-        match merged.last_mut() {
-            Some(last) if start <= last.1 => last.1 = last.1.max(end),
-            _ => merged.push((start, end)),
-        }
-    }
-    merged
-}
-
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[path = "redactor_spans.rs"]
 mod spans;
-use spans::without;
+use spans::{covers, escape_around, merge_spans, without};
 
 #[cfg(test)]
 #[path = "redactor_tests.rs"]
