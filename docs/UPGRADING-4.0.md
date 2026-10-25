@@ -10,7 +10,8 @@ items 1-4 below, then stamps the new version. The notice is printed rather than 
 The rest of the list has no startup notice, for two different reasons. Items 5 and 9 are
 changes to the license and to a removed CLI surface rather than to running behaviour. Items
 6-8 are decided per request or per backend, so there is no single moment at startup at which
-the binary could know whether a given deployment is affected.
+the binary could know whether a given deployment is affected. Item 10 has no notice because it
+moves no file; it only changes where new state is written.
 
 **Items 2 and 8 refuse the gateway's start. Item 7 permanently fails the backend it names,
 with one warning, and the gateway starts without it.** Read those three first if you are
@@ -29,6 +30,7 @@ upgrading a running deployment.
 | 7 | An OAuth backend must be on TLS or loopback | Put TLS in front of it, or move it to `127.0.0.1` — no opt-out |
 | 8 | A credential-bearing backend on plain `http://` is refused at load | Use TLS, or set `allow_cleartext_credentials: true` on that backend |
 | 9 | The savings estimates are gone from stats | Drop `--price`; compute cost from `total_cached_tokens` yourself |
+| 10 | Server state follows `MCP_GATEWAY_CONFIG_DIR` | If you set it, copy three files across once — see below |
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -127,6 +129,18 @@ that answer `tools/call` fine. In 4.0.0 `tools_count` is JSON `null` whenever `t
 A client that parsed `tools_count` as an integer must accept `null`: treat it as "not known
 yet", read `tools_known`, and call `gateway_list_tools(server)` to load the list.
 
+## 10. Server state follows `MCP_GATEWAY_CONFIG_DIR`
+
+In 3.x the server wrote `usage.json` (the usage counts that rank search results),
+`transitions.json` and `costs.json` under `~/.mcp-gateway` even when
+`MCP_GATEWAY_CONFIG_DIR` pointed somewhere else. 4.0.0 writes them under that directory, as it
+already did for the upgrade stamp. A relative value resolves against the gateway's working
+directory.
+
+If you do not set `MCP_GATEWAY_CONFIG_DIR`, nothing changes. If you do, the first 4.0.0 start
+begins with empty usage, transition and cost history. To keep it, copy the three files from
+`~/.mcp-gateway` into your configured directory before that start.
+
 ## After upgrading
 
 - Confirm the version stamp advanced: the notice prints once and not again.
@@ -140,3 +154,7 @@ leaves the 3.x token files in place — its migration prints the notice and stam
 and touches no credential (`src/commands/upgrade.rs:264`). A rollback therefore picks those
 files back up rather than prompting again, unless the tokens expired in the meantime. What 4.0.0
 wrote under the per-issuer key is simply not read by 3.x.
+
+Item 10 rolls back the same way: 3.x reads `usage.json`, `transitions.json` and `costs.json`
+from `~/.mcp-gateway` again, so history 4.0.0 recorded under `MCP_GATEWAY_CONFIG_DIR` is not
+seen until you copy it back.
