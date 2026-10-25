@@ -10,8 +10,8 @@ use super::*;
 // discarding a notification it saw on a request's stream and returns it
 // alongside the response, in stream order, from one call.
 //
-// Governing plan: docs/design/2026-08-31-cluster-b-connection-invariance
-// -test-plan.md S-02 (forwarding) and S-03 (per-request isolation).
+// Governing plan: the cluster B connection-invariance test plan, S-02
+// (forwarding) and S-03 (per-request isolation).
 // Design: the sub2b request scoped notifications design.
 // =========================================================================
 

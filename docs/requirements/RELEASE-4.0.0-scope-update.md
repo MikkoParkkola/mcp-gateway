@@ -216,7 +216,7 @@ test files and ignored tests are not completed feature evidence.
 
 ### Linear tickets mapped onto existing rows (operator chat ruling C1)
 
-Ruling C1 is recorded in `docs/requirements/RELEASE-4.0.0-operator-decisions.md`, section "Operator rulings given in chat" (added by #2385).
+Ruling C1 is recorded in the operator decisions ledger, kept in the private companion repository and pinned in `docs/release/private-evidence.tsv` (added by #2385).
 
 - MIK-7217 (server/discover): the MIK-7217.DISCOVER.* and MIK-7217.OUTBOUND.* baseline rows (MET), plus MIK-7217.SEARCH.1, CLAIMS.1, STDIO.1 and ERA.1-3 above. The other-repository half (Linear MCP728.DISCOVER.2: the other servers' repositories) moved to MIK-7629: decision `portfolio_halves_outside_4_0` (operator ruling C5).
 - MIK-7272 (two revisions behind): the MIK-7272.RESULT/ERROR/ORDER/SUB/EXT/OAUTH/OTEL/TASK baseline rows, all MET or N/A, plus MIK-7272.OWNER.1-5 and LIFE.1 above (the SUB4.STDIO.OWNER and SUB4.BRIDGE.LIFE ACs; ids shortened to the ledger's TICKET.COMPONENT.N form).
