@@ -311,7 +311,6 @@ jobs:
           context: .
           load: true
           tags: mcp-gateway:ci
-          cache-from: type=gha
 
       - name: Trivy image scan (block on fixable HIGH/CRITICAL CVEs)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -350,8 +349,9 @@ jobs:
       - name: Extract tag
         id: meta
         # v3.5.1 published both tag styles (3.5.1 and v3.5.1), so 3.5.2 does
-        # too. The floating aliases (major.minor, latest) go only on a stable
-        # vX.Y.Z tag: a pre-release tag gets its exact names and the sha only.
+        # too. major.minor goes only on a stable vX.Y.Z tag, and latest only on
+        # the highest stable tag the repository has, so a maintenance release
+        # of an older line never takes latest from a newer one.
         run: |
           version="${GITHUB_REF#refs/tags/v}"
           image=ghcr.io/mikkoparkkola/mcp-gateway
@@ -360,8 +360,15 @@ jobs:
           ${image}:sha-${GITHUB_SHA::7}"
           if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             tags="${tags}
-          ${image}:${version%.*}
+          ${image}:${version%.*}"
+            highest="$(git ls-remote --tags --refs origin 'refs/tags/v*' \
+              | sed 's|.*refs/tags/v||' \
+              | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -V | tail -n 1)"
+            if [ "${version}" = "${highest}" ]; then
+              tags="${tags}
           ${image}:latest"
+            fi
           fi
           {
             echo "version=${version}"
@@ -372,6 +379,28 @@ jobs:
 
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
+      # One build: the image scanned and smoked below is the image pushed and
+      # signed, never a second build of the same source.
+      - name: Build the release image (load locally)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+
+      - name: Trivy image scan (block on fixable HIGH/CRITICAL CVEs)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ghcr.io/mikkoparkkola/mcp-gateway:${{ steps.meta.outputs.version }}
+          format: table
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+
+      - name: Smoke the image
+        run: docker run --rm "ghcr.io/mikkoparkkola/mcp-gateway:${{ steps.meta.outputs.version }}" --version
+
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -379,14 +408,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Push the scanned image
         id: build
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r ref; do
+            [ -n "${ref}" ] || continue
+            docker push "${ref}"
+          done <<< "${TAGS}"
+          ref="$(docker inspect --format '{{index .RepoDigests 0}}' "ghcr.io/mikkoparkkola/mcp-gateway:${VERSION}")"
+          echo "digest=${ref#*@}" >> "$GITHUB_OUTPUT"
 
       - name: Install cosign
         # SHA-pinned like every other action here; cosign-release is pinned so
