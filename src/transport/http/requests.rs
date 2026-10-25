@@ -484,11 +484,16 @@ impl HttpTransport {
         // 202 is "the answer comes on the stream" whatever its body (the
         // TS SDK's SSE server writes "Accepted"); an empty 2xx is too.
         if status == reqwest::StatusCode::ACCEPTED || body.iter().all(u8::is_ascii_whitespace) {
-            return tokio::time::timeout(self.timeout, waiting.response())
+            let answer = tokio::time::timeout(self.timeout, waiting.response())
                 .await
                 .map_err(|_| {
                     Error::Transport("timed out waiting for the SSE stream's response".to_owned())
-                })?;
+                })??;
+            // This peer answers on its stream: a closed stream is replaced
+            // before the next call from now on.
+            self.sse_stream_answers
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            return Ok(answer);
         }
         serde_json::from_slice(&body)
             .map_err(|e| Error::Transport(format!("Failed to parse response: {e}")))

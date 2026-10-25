@@ -273,6 +273,14 @@ impl super::HttpTransport {
         if !current.is_closed() {
             return Ok(Some(current));
         }
+        // A peer that has only ever answered in POST bodies does not need its
+        // stream: its end changes nothing, and calls go out in body mode.
+        if !self
+            .sse_stream_answers
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(None);
+        }
         // The replacement's own handshake requests land here when its new
         // stream ended at once: they fail rather than wait on the lock their
         // caller holds. Every other caller waits for the replacement.

@@ -293,6 +293,11 @@ pub struct HttpTransport {
     /// SSE mode: the calls session's retained stream, whose answers are paired
     /// with their POSTs by id (MIK-8835.SSE.2). `None` in Streamable HTTP mode.
     sse_channel: RwLock<Option<Arc<sse_channel::SseChannel>>>,
+    /// The peer has answered at least one call on its SSE stream: from then
+    /// on the stream is needed, and a closed one is replaced before a call. A
+    /// peer that answers in POST bodies may end its stream after `endpoint`,
+    /// and that end changes nothing.
+    sse_stream_answers: AtomicBool,
     /// Test-only: stops an SSE-mode request between taking its place on the
     /// stream and the check before its POST (K4b).
     #[cfg(test)]
@@ -483,6 +488,7 @@ impl HttpTransport {
             reinit_needed: AtomicBool::new(false),
             reinit_lock: TokioMutex::new(()),
             sse_channel: RwLock::new(None),
+            sse_stream_answers: AtomicBool::new(false),
             #[cfg(test)]
             before_sse_post: Arc::default(),
             redirects_followed,

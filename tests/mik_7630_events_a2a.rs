@@ -146,6 +146,21 @@ async fn first_fill(agent: &Agent, receiver: &Receiver, id: &str) -> usize {
     base
 }
 
+/// The delivered `tools_changed` count once it has held still for 2 s, so no
+/// event still in flight is counted after it.
+async fn settled_count(receiver: &Receiver, id: &str) -> usize {
+    let mut last = delivered(receiver, id, TOOLS).len();
+    loop {
+        // timing: precondition
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let now = delivered(receiver, id, TOOLS).len();
+        if now == last {
+            return now;
+        }
+        last = now;
+    }
+}
+
 /// A1: the resource and prompt kinds are refused with the capability reason.
 #[tokio::test]
 async fn a1_a2a_resource_and_prompt_kinds_are_refused() {
@@ -336,9 +351,7 @@ async fn a7_a_reload_from_mcp_to_a2a_keeps_only_tools_changed() {
     // this baseline is at least one event, not the at-most-one of
     // `first_fill`.
     polled(&agent, agent.fetches(), 3).await;
-    // timing: precondition
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    let base = delivered(&receiver, &id, TOOLS).len();
+    let base = settled_count(&receiver, &id).await;
     assert!(base >= 1, "the reload's tool change is announced");
     agent.set(|card| card["name"] = json!("Reloaded Agent"));
     expect_events(&receiver, &id, TOOLS, base + 1).await;

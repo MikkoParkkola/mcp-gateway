@@ -458,8 +458,9 @@ async fn k7_row(empty_200: bool) {
         "the unanswered call is an error: {held}"
     );
     assert!(
-        held.to_string().contains("timed out"),
-        "the error says it timed out: {held}"
+        held.to_string()
+            .contains("timed out waiting for the SSE stream's response"),
+        "the error is the SSE wait's own timeout: {held}"
     );
     assert!(
         took >= Duration::from_secs(6) && took < Duration::from_secs(11),
