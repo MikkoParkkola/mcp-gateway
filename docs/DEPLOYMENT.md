@@ -98,7 +98,123 @@ services:
         limits: { memory: 512M, cpus: "1.0" }
 ```
 
-Stdio backends spawn child processes. If those backends use `npx`, install Node.js in the image or run them as HTTP sidecar containers.
+Stdio backends spawn child processes. If those backends use `npx` or `uvx`,
+either use the `-full` image variant or run them as HTTP sidecar containers.
+
+The default image is the gateway binary and libc. The `-full` variant adds the
+runtimes a stdio backend shells out to — Node.js 24, `uv`, `git` and
+`openssh-client` (for `git+https://` and `git+ssh://` package specs). It also
+leaves `curl` behind, which the builds above it use, and picks up `python3` as
+a hard dependency of the NodeSource package; neither is there to be spawned.
+`pnpm`, `yarn` and `bunx` are not installed. A backend that needs one of them —
+or a deployment that needs a package the image has no reason to carry, such as
+`iproute2` to route a backend's egress through a tunnel — has two ways to get it
+without forking the image.
+
+**Declare the packages.** `EXTRA_APT_PACKAGES` names apt packages the entrypoint
+installs before the gateway starts:
+
+```bash
+docker run --user root -e EXTRA_APT_PACKAGES="iproute2 net-tools" \
+  ghcr.io/mikkoparkkola/mcp-gateway:latest-full
+```
+
+Installing needs root, so the container runs as root and the entrypoint drops to
+the gateway user before exec'ing it; run as the image's own user the variable
+does nothing. The install is non-interactive and bounded at five minutes, and an
+update or install that fails, or that outlives the bound, stops the container
+instead of starting without the packages it was told to carry. The variable takes
+package names only, optionally pinned (`name=version`). A word that starts with `-`
+is an apt option and is refused, as is a word that ends in `-`: `apt-get install`
+reads `name-` as "remove name", so a list could otherwise uninstall a package and
+still start the container.
+
+That couples startup to the apt mirror and resolves versions at every start, so
+a restart can pick up a different build of a package. Name a version
+(`EXTRA_APT_PACKAGES="iproute2=6.12.0-1"`) when that matters. Where neither
+trade is acceptable — and in every Helm deployment, whose chart runs non-root
+with a read-only root filesystem, where this cannot work at all — derive an
+image instead: two lines, reproducible, and never running as root.
+
+```dockerfile
+FROM ghcr.io/mikkoparkkola/mcp-gateway:latest-full
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+USER gateway
+```
+
+**Mount the startup steps.** Executable `*.sh` files in `/docker-entrypoint.d`
+run, and `*.envsh` files are sourced, in name order, before the gateway starts.
+A container that starts as root runs them as root, after the packages are
+installed and before it drops to the gateway user, so a step that needs root — a
+route, a NAT rule — works; a container run as the image's user runs them as that
+user. A file that is not executable is skipped with a message rather than
+half-run, and a step that fails stops the container. A step that changes routes
+or NAT rules also needs `--cap-add=NET_ADMIN`; root alone does not grant it. Both
+follow the convention nginx and postgres ship:
+
+```bash
+docker run --user root -e EXTRA_APT_PACKAGES="iproute2" \
+  -v ./startup:/docker-entrypoint.d:ro \
+  ghcr.io/mikkoparkkola/mcp-gateway:latest-full
+```
+
+Mount the directory read-only and own it as root: its steps run with the
+privileges the container started with, so write access to it is write access to
+root's next startup step.
+
+A sourced `.envsh` runs in the entrypoint's shell immediately before the gateway
+is exec'd, so a variable it exports is part of the environment the gateway
+inherits, and one it only assigns is not. One exception: in a container started
+as root the gateway is exec'd with `HOME=/home/gateway`, so an exported `HOME`
+does not reach it. It is a startup step, not a configuration channel; the
+gateway's own settings belong in `-e` or the config file.
+
+**Stopping during startup.** The `-full` image runs `tini -g` as PID 1 in front
+of the entrypoint, so `docker stop` sends `SIGTERM` to every process in the
+entrypoint's process group: the install, a `*.sh` step, and the command a sourced
+`.envsh` step is running. The container then stops at once with exit status 143.
+A step that ignores or traps `SIGTERM` and is still running when Docker's stop
+timeout (`--stop-timeout`, 10 s by default) runs out is ended with a `SIGKILL`
+(exit status 137).
+Once the gateway is running, tini passes the stop to it, and the gateway
+coordinates its backends' shutdown; each stdio backend runs in its own process
+group, so tini does not signal it directly. The default image is unchanged: the gateway itself is PID 1.
+
+The `-full` health check allows 60 s before an unanswered probe counts. An
+install that takes longer can still finish (it is bounded at 300 s), but the
+container reads as unhealthy meanwhile; raise the start period with
+`--health-start-period` when a deployment's packages take that long.
+
+```bash
+docker pull ghcr.io/mikkoparkkola/mcp-gateway:latest-full
+```
+
+Node 24 rather than Debian's packaged 20.19.2, because the floors stdio
+backends declare sit above it — `@sentry/mcp-server` wants `>=22.13`,
+`outline-mcp-server` wants `>=24`, and 20.x is past end of life — and npm only
+warns (`EBADENGINE`) when a floor is not met, so the mismatch surfaces as a
+backend that fails at spawn rather than at install.
+
+`git+ssh://` package specs need more than the client: mount the key and a
+`known_hosts`, or set `GIT_SSH_COMMAND` in that backend's `env:` to name the
+key and disable host-key checking. A spawned backend inherits only `PATH`,
+`HOME` and `TMPDIR` from the gateway, so `SSH_AUTH_SOCK` never reaches it —
+an agent-held key will not be used.
+
+The variant exists because nothing else keeps that toolchain in step with the
+gateway: a hand-written layer is fixed at the moment someone wrote it, and
+nothing tells them when it has fallen behind the image it fronts. The release
+publishes `latest-full`, `<version>-full` and `<major>.<minor>-full`, each
+naming the same commit as the tag it mirrors, and `sha-<commit>-full` — the
+provenance tag its manifest list is composed under, the same one the default
+image carries, which is what lets the list be signed before any release name
+exists. As on the default image, `latest-full` and `<major>.<minor>-full` move
+only for a stable release. A push to a branch builds, scans and smoke-tests the
+variant but publishes nothing for it: there is no `<branch>-full`, and
+`--target runtime-full` builds the variant from any commit in one command. It
+costs nothing if you carry no such backend; the default tag is smaller.
 
 ### Container Verification
 
