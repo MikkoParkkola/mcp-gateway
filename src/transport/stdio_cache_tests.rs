@@ -466,3 +466,66 @@ fn one_backend_setting_suppresses_only_its_own_setting() {
          operator's"
     );
 }
+
+// #2258
+#[test]
+fn names_that_sanitize_alike_get_distinct_cache_dirs() {
+    for (a, b) in [
+        ("team.alpha", "team_alpha"),
+        ("Alpha", "alpha"),
+        ("", "unnamed"),
+    ] {
+        let x = isolated_package_manager_env(a, "npx -y pkg", HashMap::new());
+        let y = isolated_package_manager_env(b, "npx -y pkg", HashMap::new());
+        assert_ne!(
+            x["npm_config_cache"], y["npm_config_cache"],
+            "{a:?} vs {b:?}"
+        );
+    }
+}
+
+// #2258
+#[test]
+fn each_runner_gets_the_variable_it_reads() {
+    // Yarn also gets Berry's global cache turned off, or Berry ignores the
+    // folder (MIK-8147 D3b).
+    for (cmd, var, count) in [
+        ("npx -y pkg", "npm_config_cache", 1),
+        ("bunx pkg", "BUN_INSTALL_CACHE_DIR", 1),
+        ("/opt/bin/yarn dlx pkg", "YARN_CACHE_FOLDER", 2),
+    ] {
+        let out = isolated_package_manager_env("thing", cmd, HashMap::new());
+        assert_eq!(out.len(), count, "{cmd}: {out:?}");
+        assert!(out[var].contains("pkg-cache"), "{cmd} lacked {var}");
+    }
+    let out = isolated_package_manager_env("thing", "pnpm dlx pkg", HashMap::new());
+    assert_eq!(out.len(), 2, "{out:?}");
+    assert!(out["pnpm_config_store_dir"].contains("pkg-cache"));
+    assert_eq!(out["pnpm_config_store_dir"], out["npm_config_store_dir"]);
+    let mut env = HashMap::new();
+    env.insert("BUN_INSTALL_CACHE_DIR".to_string(), "/mine".to_string());
+    let out = isolated_package_manager_env("thing", "bunx pkg", env);
+    assert_eq!(out["BUN_INSTALL_CACHE_DIR"], "/mine");
+}
+
+#[test]
+fn only_an_npm_cache_the_gateway_set_is_reported_as_assigned() {
+    let operator = HashMap::from([("npm_config_cache".to_string(), "/opt/cache".to_string())]);
+    assert_eq!(
+        assigned_package_cache_dir("b", "npx -y some-server", &operator),
+        None,
+        "an operator's cache is not the gateway's to clear"
+    );
+    for command in [
+        "bunx some-server",
+        "yarn dlx some-server",
+        "pnpm dlx some-server",
+        "uvx x",
+    ] {
+        assert_eq!(
+            assigned_package_cache_dir("b", command, &HashMap::new()),
+            None,
+            "the repair covers npm's cache only: {command}"
+        );
+    }
+}
