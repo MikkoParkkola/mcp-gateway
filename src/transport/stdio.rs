@@ -77,7 +77,8 @@ fn configure_child_environment(cmd: &mut Command, backend_env: &HashMap<String, 
 #[path = "stdio_cache.rs"]
 mod cache;
 use cache::CACHE_ENV;
-pub use cache::{assigned_package_cache_dir, isolated_package_manager_env};
+pub(crate) use cache::assigned_package_cache_dir;
+pub use cache::isolated_package_manager_env;
 
 /// How many stderr lines are kept from a child, for classifying a failure.
 const STDERR_TAIL_LINES: usize = 20;
@@ -222,6 +223,11 @@ impl StdioTransport {
         }
     }
 
+    /// The per-request timeout, which also bounds the cache repair's waits.
+    pub(crate) fn request_timeout(&self) -> std::time::Duration {
+        self.request_timeout
+    }
+
     /// The cache directory this gateway assigned, if it assigned one.
     pub(crate) fn assigned_package_cache_dir(&self) -> Option<&Path> {
         self.assigned_cache.as_deref()
@@ -357,7 +363,7 @@ impl StdioTransport {
         // which ends this task. Ownership does the cleanup; nothing has to
         // decide when it is safe.
         let transport = Arc::downgrade(self);
-        tokio::spawn(async move {
+        let stdout_reader = tokio::spawn(async move {
             debug!("Reader task started");
             let mut reader = BufReader::new(stdout).lines();
 
@@ -403,7 +409,7 @@ impl StdioTransport {
         // the child. It holds a `Weak` now, so drop alone is sufficient and this
         // is only about being prompt.
         if let Err(error) = self.initialize().await {
-            return Err(self.fail_start(error).await);
+            return Err(self.fail_start(error, stdout_reader).await);
         }
 
         Ok(())
@@ -436,7 +442,7 @@ impl StdioTransport {
 
     /// Tears down a child whose handshake failed, leaving enough behind to
     /// classify the failure.
-    async fn fail_start(&self, error: Error) -> Error {
+    async fn fail_start(&self, error: Error, stdout_reader: tokio::task::JoinHandle<()>) -> Error {
         // Order matters: the exit status has to be read before `close` kills
         // the child, and the stderr after, because the reader only reaches EOF
         // once the child is gone.
@@ -444,7 +450,15 @@ impl StdioTransport {
         if let Err(close_error) = self.close().await {
             warn!(error = %close_error, "Failed to clean up stdio process after initialization error");
         }
+        // The child `close` just killed: record that ending, so the failure is
+        // not reported as a child still running.
+        self.settle_child_exit().await;
         self.settle_stderr_tail().await;
+        // A retry may start on this same transport. This start's reader must
+        // be gone first: at its EOF it marks the transport disconnected, which
+        // would land on the retry instead.
+        stdout_reader.abort();
+        let _ = stdout_reader.await;
         error
     }
 

@@ -23,10 +23,12 @@ pub fn isolated_package_manager_env<S: std::hash::BuildHasher>(
     }
     let dir = cache_dir(backend_name).to_string_lossy().into_owned();
     for var in vars {
-        // An operator-set value wins.
-        backend_env
-            .entry((*var).to_string())
-            .or_insert_with(|| dir.clone());
+        // An operator-set value wins, in any spelling: npm reads its
+        // environment case-insensitively, so a `NPM_CONFIG_CACHE` beside an
+        // injected `npm_config_cache` would leave the child two caches.
+        if !backend_env.keys().any(|key| key.eq_ignore_ascii_case(var)) {
+            backend_env.insert((*var).to_string(), dir.clone());
+        }
     }
     backend_env
 }
@@ -45,16 +47,29 @@ pub fn isolated_package_manager_env<S: std::hash::BuildHasher>(
 /// Only npm's cache is answered for: the repair was reviewed against npm's
 /// install failures, and the other runners' trees are left to their own tools.
 #[must_use]
-pub fn assigned_package_cache_dir<S: std::hash::BuildHasher>(
+pub(crate) fn assigned_package_cache_dir<S: std::hash::BuildHasher>(
     backend_name: &str,
     command: &str,
     backend_env: &HashMap<String, String, S>,
 ) -> Option<PathBuf> {
-    // The same rule the environment writer applies: an operator-set value wins.
-    if !cache_vars_for(command).contains(&CACHE_ENV) || backend_env.contains_key(CACHE_ENV) {
+    // npm reads its environment case-insensitively, so `NPM_CONFIG_CACHE` in a
+    // backend's `env:` is the operator naming a cache too.
+    if !cache_vars_for(command).contains(&CACHE_ENV)
+        || backend_env
+            .keys()
+            .any(|key| key.eq_ignore_ascii_case(CACHE_ENV))
+    {
         return None;
     }
-    Some(cache_dir(backend_name))
+    // A relative data directory resolves against the gateway's working
+    // directory here and against the child's `cwd` there, so the path the
+    // repair would remove need not be the cache the child used.
+    absolute(cache_dir(backend_name))
+}
+
+/// The directory, when it names one place whatever the working directory.
+pub(super) fn absolute(dir: PathBuf) -> Option<PathBuf> {
+    dir.is_absolute().then_some(dir)
 }
 
 /// One backend's cache directory: the single source of the path, so the one
