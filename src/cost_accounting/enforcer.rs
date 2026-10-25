@@ -78,11 +78,21 @@ impl DailyAccumulator {
             {
                 // Won: zero the counter, then add our spend
                 self.micro_usd.swap(0, Ordering::AcqRel);
-                return self.micro_usd.fetch_add(micro, Ordering::AcqRel) + micro;
+                return self.add_saturating(micro);
             }
             // Lost: another thread already reset — fall through to fetch_add
         }
-        self.micro_usd.fetch_add(micro, Ordering::AcqRel) + micro
+        self.add_saturating(micro)
+    }
+
+    /// Adds without wrapping: a total that would pass `u64::MAX` stays there,
+    /// so an overflowing day refuses instead of resetting to near zero.
+    fn add_saturating(&self, micro: u64) -> u64 {
+        let update = |v: u64| Some(v.saturating_add(micro));
+        let (Ok(prev) | Err(prev)) =
+            self.micro_usd
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, update);
+        prev.saturating_add(micro)
     }
 
     /// Current daily spend in micro-USD.
@@ -738,6 +748,14 @@ mod tests {
         acc.add(500_000); // $0.50
         acc.add(300_000); // $0.30
         assert_eq!(acc.current(), 800_000);
+    }
+
+    #[test]
+    fn daily_accumulator_add_saturates_instead_of_wrapping() {
+        let acc = DailyAccumulator::new();
+        acc.add(u64::MAX - 1);
+        assert_eq!(acc.add(5), u64::MAX);
+        assert_eq!(acc.current(), u64::MAX);
     }
 
     #[test]
