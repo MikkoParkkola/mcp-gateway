@@ -43,12 +43,12 @@ fn resolve_gateway_data_dir(
     )
 }
 
-/// Load config from `path`, returning `Config::default()` when the file is absent
-/// or cannot be parsed.
+/// Load config from `path` for editing, with references kept as written,
+/// returning `Config::default()` when the file is absent or cannot be parsed.
 #[must_use]
 pub fn load_config_or_default(path: &Path) -> Config {
     if path.exists() {
-        Config::load(Some(path)).unwrap_or_else(|e| {
+        Config::load_literal(Some(path)).unwrap_or_else(|e| {
             tracing::warn!(error = %e, "Could not load config, using defaults");
             Config::default()
         })
@@ -57,14 +57,15 @@ pub fn load_config_or_default(path: &Path) -> Config {
     }
 }
 
-/// Load config from `path`, returning `Config::default()` when the file is absent.
+/// Load config from `path` for editing, with references kept as written,
+/// returning `Config::default()` when the file is absent.
 ///
 /// # Errors
 ///
 /// Returns an error when the file exists but cannot be parsed.
 pub fn load_existing_or_default(path: &Path) -> crate::Result<Config> {
     if path.exists() {
-        Config::load(Some(path))
+        Config::load_literal(Some(path))
     } else {
         Ok(Config::default())
     }

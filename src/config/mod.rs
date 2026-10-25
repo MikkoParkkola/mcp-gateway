@@ -180,6 +180,25 @@ impl Config {
     /// Returns an error if an explicit `path` is supplied but does not exist,
     /// or if the config file cannot be parsed.
     pub fn load(path: Option<&Path>) -> Result<Self> {
+        Self::load_with(path, Expansion::Resolved)
+    }
+
+    /// Load the config exactly as it is written, leaving `${VAR}` patterns
+    /// unexpanded.
+    ///
+    /// Every read-modify-write of the config file goes through this. A loader
+    /// that resolves references in memory turns the next write into a
+    /// plaintext copy of every secret the file only referenced, because the
+    /// whole struct is serialised back.
+    ///
+    /// # Errors
+    ///
+    /// As [`Config::load`].
+    pub fn load_literal(path: Option<&Path>) -> Result<Self> {
+        Self::load_with(path, Expansion::Literal)
+    }
+
+    fn load_with(path: Option<&Path>, expansion: Expansion) -> Result<Self> {
         // Resolve the config file: explicit path takes priority; otherwise
         // search well-known fallback locations.
         let resolved: Option<PathBuf> = match path {
@@ -226,7 +245,9 @@ impl Config {
         let mut config: Self = Self::figment(resolved.as_deref())
             .extract()
             .map_err(|e| Error::Config(e.to_string()))?;
-        config.expand_env_vars();
+        if expansion == Expansion::Resolved {
+            config.expand_env_vars();
+        }
         config.validate()?;
         Self::warn_on_retired_keys(resolved.as_deref());
 
@@ -1126,6 +1147,15 @@ fn default_true() -> bool {
 }
 
 // ── Transport ─────────────────────────────────────────────────────────────────
+
+/// Whether a load resolves `${VAR}` references or keeps them as written.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Expansion {
+    /// For running the gateway: references become their values.
+    Resolved,
+    /// For editing the file: references stay as the operator wrote them.
+    Literal,
+}
 
 /// Transport configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]

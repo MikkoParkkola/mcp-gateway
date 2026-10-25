@@ -1402,7 +1402,7 @@ impl ReloadContext {
         F: FnOnce(&mut Config) -> std::result::Result<T, E>,
     {
         let _reload_guard = self.lock_reload_within(wait).await?;
-        let mut config = crate::config_persistence::load_config_or_default(path);
+        let mut config = load_for_edit(path)?;
         let value = match mutate(&mut config) {
             Ok(value) => value,
             Err(rejection) => return Ok(ConfigMutation::Rejected(rejection)),
@@ -1647,6 +1647,19 @@ pub async fn write_config_and_reload_outcome(
     Ok(None)
 }
 
+/// The config an edit starts from: the file as written, or the defaults when
+/// there is no file yet. A file that exists but does not load is refused, not
+/// replaced: an edit built on the defaults would write them over every backend
+/// and setting the file held.
+fn load_for_edit(path: &Path) -> std::result::Result<Config, ConfigWriteError> {
+    crate::config_persistence::load_existing_or_default(path).map_err(|e| {
+        ConfigWriteError::Failed(format!(
+            "{} does not load, so it was not changed: {e}",
+            path.display()
+        ))
+    })
+}
+
 /// What a guarded read-modify-write did: either the change was applied and
 /// persisted, or the caller's own check rejected it and nothing was written.
 pub enum ConfigMutation<T, E> {
@@ -1685,7 +1698,7 @@ where
 
     // No live gateway to reload, so no reload lock exists to hold. This path is
     // the CLI acting on a config file nothing else is serving.
-    let mut config = crate::config_persistence::load_config_or_default(path);
+    let mut config = load_for_edit(path)?;
     match mutate(&mut config) {
         Ok(value) => {
             crate::config_persistence::write_config(path, &config)?;
