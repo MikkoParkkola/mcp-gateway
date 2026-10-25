@@ -28,6 +28,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[path = "package_cache_race_tests.rs"]
+mod race;
+
 /// The key the gateway assigns per backend.
 const CACHE_ENV: &str = "npm_config_cache";
 

@@ -114,3 +114,19 @@ fn each_runner_gets_the_variable_it_reads() {
     let out = isolated_package_manager_env("thing", "bunx pkg", env);
     assert_eq!(out["BUN_INSTALL_CACHE_DIR"], "/mine");
 }
+
+#[test]
+fn an_operator_cache_in_either_spelling_is_not_the_gateways() {
+    let operator = HashMap::from([("NPM_CONFIG_CACHE".to_string(), "/opt/cache".to_string())]);
+    assert_eq!(
+        assigned_package_cache_dir("b", "npx -y some-server", &operator),
+        None,
+        "npm reads its environment case-insensitively, so this names a cache too"
+    );
+    let env = isolated_package_manager_env("b", "npx -y some-server", operator);
+    assert_eq!(
+        env.len(),
+        1,
+        "and the gateway adds no second, lowercase cache beside it: {env:?}"
+    );
+}
