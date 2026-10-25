@@ -29,13 +29,13 @@ export const WIDTHS = [390, 1440];
 
 /**
  * axe violations that fail a screen: serious or critical impact, plus any
- * colour-contrast or accessible-name rule whatever its impact. WCAG 2.2 AA.
+ * colour-contrast, accessible-name or alt-text rule whatever its impact. WCAG 2.2 AA.
  */
 export async function blockingViolations(page) {
   const { violations } = await new AxeBuilder({ page })
     .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
     .analyze();
-  const nameRules = /contrast|name|label|title/;
+  const nameRules = /contrast|name|label|title|alt/;
   return violations
     .filter((v) => v.impact === 'serious' || v.impact === 'critical' || nameRules.test(v.id))
     .map((v) => `${v.id} (${v.impact}): ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`);
