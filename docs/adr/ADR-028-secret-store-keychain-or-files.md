@@ -30,7 +30,7 @@
 | OS | Read | Write / delete | Unsafe in our crate | New dependency |
 |---|---|---|---|---|
 | macOS | `security-framework` only (never the `security` CLI) | create via `ItemAddOptions::add()` (`SecItemAdd`, which itself refuses a duplicate: create-only) / `delete_generic_password` | none | none (already locked, F4; becomes a direct macOS-only dependency) |
-| Linux | `secret-tool lookup service NAME`, bounded and non-interactive (rule 5), stdout into a wiped buffer, no `trim()` | `secret-tool store --label=... service NAME` with the secret on **stdin**; `secret-tool clear service NAME` | none | none (runtime needs `libsecret-tools` and a Secret Service) |
+| Linux | `secret-tool lookup service NAME`, bounded and non-interactive (rule 5), stdout into a wiped buffer, no `trim()` | `secret-tool store --label=... service NAME` with the secret on **stdin**; `secret-tool clear service NAME` | none | none (runtime needs `libsecret-tools`, `libglib2.0-bin` and a Secret Service) |
 | Windows | Credential Manager `CredReadW` | `CredWriteW` (`CRED_TYPE_GENERIC`, `CRED_PERSIST_LOCAL_MACHINE`; create-only: `exists()` first under the vault lock, rule 3) / `CredDeleteW` | **one new scoped module**, `src/win_cred.rs` (ADR-016 extension, §2a) | none: the `Win32_Security_Credentials` feature of the already-direct `windows-sys` 0.61 |
 
 #### 2a. ADR-016 extension: a second scoped `unsafe` module (lead ruling 2026-10-25, option W1)
@@ -94,7 +94,7 @@ The value never appears in argv, logs or error text. Readers and writers pass it
 ## Consequences
 
 - One grammar, so no second resolver. Capability `{keychain.X}` templates keep their own syntax and reader. Unifying them is out of scope.
-- macOS gains a direct `security-framework` dependency (already compiled in). Linux needs `libsecret-tools` at runtime for the keychain store. `auto` falls back to files without it.
+- macOS gains a direct `security-framework` dependency (already compiled in). Linux needs `libsecret-tools` and `libglib2.0-bin` at runtime for the keychain store. `auto` falls back to files without them.
 - Windows gains a second scoped `unsafe` module (§2a), reviewed with this ADR, plus one `windows-sys` feature.
 - Entry names change on every secret change, and unused entries accumulate until an admin deletes them (ADR-024).
 - Rollback: the `keychain:` prefix stays reserved. A build without keychain support refuses `keychain:NAME` by name, never reading it as a literal secret. A binary older than this ADR would read it as a literal, so UPGRADING says to convert keychain references to `file:` before downgrading.
@@ -115,7 +115,9 @@ The value never appears in argv, logs or error text. Readers and writers pass it
 
 ### Create-only writes
 
-3. **One vault lock.** Several gateways can share one user's keychain (ADR-024), and the config writer lock is per `gateway.yaml`. So every secret write holds one per-user lock: `<user data dir>/mcp-gateway/secrets.lock`, using the same flock mechanism as `config_persistence_lock`, from the absence check through commit or rollback.
+3. **One vault lock.** Several gateways can share one user's keychain (ADR-024), and the config writer lock is per `gateway.yaml`. So every secret write holds one per-user lock, `dirs::data_local_dir()/mcp-gateway/secrets.lock`, from the absence check through commit or rollback. It uses the same flock mechanism as `config_persistence_lock`.
+   - The path never follows `--data-dir`, `MCP_GATEWAY_CONFIG_DIR` or `gateway_data_dir()`, so two gateways with different data dirs still share one lock.
+   - Lock order: the config writer lock first, then the vault lock, on every path that holds both.
    - macOS: `SecItemAdd` refuses a duplicate itself.
    - Linux and Windows: `exists(name)` false, then create, under that lock.
    - Rollback deletes only names this save confirmed absent and then created.
@@ -123,9 +125,10 @@ The value never appears in argv, logs or error text. Readers and writers pass it
 ### Exists and read
 
 4. **`exists(name)` never returns the value.**
-   - macOS: `SecItemCopyMatching` with attributes only.
+   - macOS: `SecItemCopyMatching` with attributes only, under the interaction guard (rule 7).
    - Windows: `CredReadW`, then immediately `CredFree`, with the blob wiped first.
-   - Linux: `secret-tool lookup`, its stdout read into a wiped buffer and dropped.
+   - Linux: `gdbus` calling the Secret Service `SearchItems` with the `service NAME` attribute (a name, never a value). Non-empty unlocked or locked paths mean the entry exists. No secret is loaded and no prompt can open.
+   - Every `exists()` is bounded and non-interactive like the probe (rule 7).
 5. **Reads return exact bytes.** Strict UTF-8, no `trim()` (`file:` keeps its one-trailing-newline rule).
    - Reads are non-interactive and bounded like the probe (rule 7). A locked store or a refused interaction fails validation, naming the entry.
    - Bytes are held in one shared crate-private `WipedBytes` buffer (the existing `WipedToken` wipe, widened from `String` to bytes), not a second secret type.
@@ -133,23 +136,34 @@ The value never appears in argv, logs or error text. Readers and writers pass it
 ### Listing unused entries
 
 6. **An inventory without enumeration.** `CredEnumerateW`, `secret-tool search` and `security dump-keychain` are never called (each returns values).
-   - The owner-only index is `<config dir>/secrets-index.jsonl`, **outside** `secrets/`. It is never listed as unused and never deletable.
+   - The index is `<config dir>/secrets-index.jsonl`, created with the same owner-only create-new constructor as `files` (0600 or ADR-016's DACL), **outside** `secrets/`. It is never listed as unused and never deletable.
    - `{name, store, created_at}` is appended and `sync_all`'d, with its directory synced, **before** each create. A truncated last line is dropped on the next open.
    - A name this save rolled back is recorded as removed.
    - Listing reads the index, keeps names `exists()` confirms, and drops names a loaded config references.
 
 ### Availability
 
-7. **The probe.** Read-only, non-interactive, bounded at 2 s, run before anything is written; the same bound applies to every store and read call.
-   - **macOS:** query a missing name with authentication UI set to fail. `errSecItemNotFound` means available; `errSecInteractionNotAllowed` (-25308) or `errSecAuthFailed` means unavailable. If `security-framework` 3.7 cannot express the fail mode without new `unsafe`, the implementing PR stops and brings the options to the lead.
-   - **Linux:** `secret-tool` missing, no session bus, or the timeout means unavailable. Readiness itself is read over D-Bus with `gdbus` (part of GLib, present wherever libsecret is): the default collection exists and its `Locked` property is false. Locked means unavailable, and no unlock prompt is ever triggered. A `secret-tool` exit status is never used to tell "not found" from a bus failure.
+7. **The probe.** Read-only, non-interactive, bounded at 2 s, run before anything is written. The same bound applies to every store and read call.
+   - A timed-out child is killed and reaped before the vault lock is released.
+   - A store that timed out is treated as possibly written: its name is already in the index, so rollback checks `exists()` and deletes it.
+   - The probe is a fast refusal, not the guarantee. A later failure still rolls back through ADR-024's sequence.
+   - **macOS:** every keychain call runs with `SecKeychain::disable_user_interaction()` held (`security-framework` 3.7, `os/macos/keychain.rs:98`).
+     - It is a safe API, so no new `unsafe`. It is taken once when the keychain backend starts and kept for the process lifetime, because the flag is process-wide and a gateway never wants a dialog.
+     - With it held, a call that would prompt fails with `errSecInteractionNotAllowed` (-25308) instead.
+     - The probe queries a missing name. `errSecItemNotFound` means available; -25308, `errSecAuthFailed` or any other error means unavailable. A read-only or locked keychain that passes the probe fails at `SecItemAdd`, and rollback applies.
+   - **Linux:** a missing `secret-tool` or `gdbus`, no session bus, or the timeout means unavailable.
+     - Runtime needs `libsecret-tools` and `libglib2.0-bin`. The refusal names the missing package.
+     - Readiness is read over D-Bus with `gdbus`: the default collection exists and its `Locked` property is false. Locked means unavailable, and the probe never triggers an unlock prompt.
+     - A `secret-tool` exit status is never used to tell "not found" from a bus failure.
+     - Accepted residual: the collection can lock between the probe and a `secret-tool store` or `lookup`, which may then open the desktop's own unlock dialog. `secret-tool` has no no-prompt flag, and the D-Bus calls that could avoid it pass the value in argv.
    - **Windows:** a missing name's `CredReadW` giving `ERROR_NOT_FOUND` means available; `ERROR_NO_SUCH_LOGON_SESSION` or any other error means unavailable.
 
 ### Windows `unsafe` module
 
 8. **`win_cred.rs`** replaces §2a's first bullet list where they differ.
    - Exports: safe `create(name, &[u8])`, `exists(name)`, `read(name) -> WipedBytes`, `delete(name)`.
-   - `CredFree` only on a pointer from a `CredReadW` that returned TRUE, through a guard.
+   - `CredFree` only on a pointer from a `CredReadW` that returned TRUE, through a guard that wipes the blob first, on every exit of `read()` and `exists()`.
+   - `TargetName` is the fresh name and `UserName` is `mcp-gateway`. Generic credentials are unique on `(TargetName, Type)`, so each secret is its own target. `exists()` is tested on the Windows shard too.
    - `GetLastError` captured as the first call after a failing Win32 call.
    - The blob is the UTF-8 bytes with `CredentialBlobSize` set, never UTF-16. Names reject interior NUL.
    - `CRED_TYPE_GENERIC`, `CRED_PERSIST_LOCAL_MACHINE`.
