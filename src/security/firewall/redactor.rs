@@ -29,7 +29,7 @@ use std::collections::{HashMap, HashSet};
 use regex::{Regex, RegexSet};
 use serde_json::{Map, Value};
 
-use super::json_literal::{self, Literal};
+use super::json_literal::{self, Literal, decoded, trimmed_content};
 use super::{Finding, FindingLocation, ScanType};
 use crate::security::Severity;
 use crate::truncate::{Budget, Suffix, truncate};
@@ -38,8 +38,8 @@ use crate::truncate::{Budget, Suffix, truncate};
 mod credential_names;
 use credential_names::Family;
 
-/// The largest JSON-in-text leaf whose credential spans are redacted inside
-/// its string values (MIK-8745); a larger one is redacted whole, as before.
+/// The largest JSON-in-text leaf walked on its collected literals (MIK-8745);
+/// a larger one takes the streaming walk in `redactor_large.rs` (MIK-8774).
 const B2_MAX_LEAF_BYTES: usize = 1 << 20;
 
 /// Pre-compiled credential/PII redactor.
@@ -308,20 +308,37 @@ impl Redactor {
         exempt: &dyn Fn(&str) -> bool,
         findings: &mut Vec<Finding>,
     ) -> JsonText {
+        if !json_literal::fits_offsets(text.len()) {
+            return JsonText::NotJson;
+        }
+        if text.len() > B2_MAX_LEAF_BYTES {
+            return self.redact_large_json(text, exempt, findings);
+        }
         if b2_gate(text).is_none() {
             return JsonText::NotJson;
         }
+        self.redact_collected(text, exempt, findings)
+    }
+
+    /// [`Self::redact_json_text`] on a document already validated: its
+    /// literals collected, projected, and keys renamed where a match starts.
+    fn redact_collected(
+        &self,
+        text: &str,
+        exempt: &dyn Fn(&str) -> bool,
+        findings: &mut Vec<Finding>,
+    ) -> JsonText {
         let literals = json_literal::string_literals(text);
         // A value literal whose decoded text is exempt keeps every byte, and a
         // pattern counts only where it still redacts something (MIK-8756).
         let exempt_contents: Vec<(usize, usize)> = literals
             .iter()
             .filter(|lit| !lit.key && decoded(text, lit).is_some_and(|v| exempt(&v)))
-            .map(|lit| (lit.start, lit.end))
+            .map(|lit| (lit.start(), lit.end()))
             .collect();
         let starts_in_literal = |at: usize| {
-            let after = literals.partition_point(|lit| lit.start <= at);
-            after.checked_sub(1).is_some_and(|i| at < literals[i].end)
+            let after = literals.partition_point(|lit| lit.start() <= at);
+            after.checked_sub(1).is_some_and(|i| at < literals[i].end())
         };
         let mut matched = Vec::new();
         let mut spans = Vec::new();
@@ -378,8 +395,21 @@ impl Redactor {
             |lit| self.match_starts_in(text, lit),
             &literals,
         );
-        let mut ranges = raw.clone();
-        ranges.extend(members.iter().map(|(lit, _)| (lit.start, lit.end)));
+        // A newer family adds no finding where one raw range already covers the
+        // value's trimmed content: one secret, one finding (family 1 keeps two).
+        // Decided before the member ranges join `raw`, by a search of its
+        // sorted ranges, so it costs no copy and no rescan per member.
+        let reported: Vec<Family> = (members.iter())
+            .filter(|&&(lit, family)| {
+                let (start, end) = trimmed_content(text, lit);
+                let after = raw.partition_point(|range| range.0 <= start);
+                let covered = after.checked_sub(1).is_some_and(|i| end <= raw[i].1);
+                family == Family::Generic || !covered
+            })
+            .map(|&(_, family)| family)
+            .collect();
+        let mut ranges = raw;
+        ranges.extend(members.iter().map(|(lit, _)| (lit.start(), lit.end())));
         ranges.sort_unstable();
         let ranges = merge_spans(ranges);
         let redacted = if literals.iter().any(|lit| lit.key && covers(&ranges, lit)) {
@@ -388,15 +418,7 @@ impl Redactor {
             replace_spans(text, &ranges)
         };
         self.record_findings(&matched, &redacted, Site::Value, findings);
-        // A newer family adds no finding where one raw range already covers the
-        // value's trimmed content: one secret, one finding (family 1 keeps two).
-        for &(lit, family) in &members {
-            let (start, end) = trimmed_content(text, lit);
-            let covered = raw.iter().any(|&(a, b)| a <= start && end <= b);
-            if family == Family::Generic || !covered {
-                findings.push(Self::member_finding(family));
-            }
-        }
+        findings.extend(reported.into_iter().map(Self::member_finding));
         JsonText::Redacted(redacted)
     }
 
@@ -413,7 +435,7 @@ impl Redactor {
         literals
             .windows(2)
             .filter(|pair| pair[0].key && !pair[1].key)
-            .filter(|pair| text[pair[0].end + 1..pair[1].start - 1].trim() == ":")
+            .filter(|pair| text[pair[0].end() + 1..pair[1].start() - 1].trim() == ":")
             .filter_map(
                 |pair| match (decoded(text, &pair[0]), decoded(text, &pair[1])) {
                     (Some(key), Some(value)) if !exempt(&value) => self
@@ -433,16 +455,19 @@ impl Redactor {
     /// [`KEY_MATCH_TAIL`] cannot invent a match, and that tail holds every
     /// match a key can start.
     fn match_starts_in(&self, text: &str, lit: &Literal) -> bool {
-        let mut end = (lit.end + KEY_MATCH_TAIL).min(text.len());
+        let mut end = (lit.end() + KEY_MATCH_TAIL).min(text.len());
         while !text.is_char_boundary(end) {
             end -= 1;
         }
         let near = &text[..end];
-        self.set.matches_at(near, lit.start).into_iter().any(|idx| {
-            self.regexes[idx]
-                .find_at(near, lit.start)
-                .is_some_and(|found| found.start() < lit.end)
-        })
+        self.set
+            .matches_at(near, lit.start())
+            .into_iter()
+            .any(|idx| {
+                self.regexes[idx]
+                    .find_at(near, lit.start())
+                    .is_some_and(|found| found.start() < lit.end())
+            })
     }
 
     /// One finding per matched pattern, showing `redacted`.
@@ -618,44 +643,6 @@ fn overlapping_spans(re: &Regex, text: &str) -> Vec<(usize, usize)> {
     spans
 }
 
-/// `lit`'s content decoded, quotes included in the parse, so JSON escapes
-/// read as the characters they stand for.
-fn decoded(text: &str, lit: &Literal) -> Option<String> {
-    serde_json::from_str::<String>(&text[lit.start - 1..=lit.end]).ok()
-}
-
-/// The byte range of `lit`'s content with JSON whitespace, raw or escaped
-/// (`\n`, `\t`, `\r`), trimmed from both ends.
-fn trimmed_content(text: &str, lit: &Literal) -> (usize, usize) {
-    let bytes = text.as_bytes();
-    let (mut start, mut end) = (lit.start, lit.end);
-    loop {
-        if start < end && bytes[start].is_ascii_whitespace() {
-            start += 1;
-        } else if start + 1 < end
-            && bytes[start] == b'\\'
-            && matches!(bytes[start + 1], b'n' | b't' | b'r')
-        {
-            start += 2;
-        } else {
-            break;
-        }
-    }
-    loop {
-        if end > start && bytes[end - 1].is_ascii_whitespace() {
-            end -= 1;
-        } else if end >= start + 2
-            && bytes[end - 2] == b'\\'
-            && matches!(bytes[end - 1], b'n' | b't' | b'r')
-        {
-            end -= 2;
-        } else {
-            break;
-        }
-    }
-    (start, end)
-}
-
 /// The parsed document when `text` is JSON whose credential spans can be
 /// redacted inside its string values: an object, an array or a string, within
 /// the size cap. One function, so MIK-8756 can widen the entry.
@@ -684,24 +671,28 @@ fn project(
     redact_key: impl Fn(&Literal) -> bool,
     literals: &[Literal],
 ) -> Vec<(usize, usize)> {
-    let mut ranges = Vec::new();
+    // Sized by a first count of every literal a span overlaps (keys included,
+    // so an upper bound): grown by doubling, the list held its old and new
+    // buffers at the last growth (MIK-8774).
+    let mut ranges = Vec::with_capacity(overlaps(spans, literals));
     let mut first = 0;
     for lit in literals {
-        while first < spans.len() && spans[first].1 <= lit.start {
+        while first < spans.len() && spans[first].1 <= lit.start() {
             first += 1;
         }
         let mut lit_escapes = None;
-        let overlapped = spans.get(first).is_some_and(|span| span.0 < lit.end);
+        let overlapped = spans.get(first).is_some_and(|span| span.0 < lit.end());
         if lit.key && !(overlapped && redact_key(lit)) {
             continue; // a key spans only cross, or none reach
         }
-        for &(start, end) in spans[first..].iter().take_while(|span| span.0 < lit.end) {
-            let (mut from, mut to) = (start.max(lit.start), end.min(lit.end));
+        for &(start, end) in spans[first..].iter().take_while(|span| span.0 < lit.end()) {
+            let (mut from, mut to) = (start.max(lit.start()), end.min(lit.end()));
             if from >= to {
                 continue; // an empty value: the span covers none of its bytes
             }
-            let escapes = lit_escapes
-                .get_or_insert_with(|| json_literal::escapes(&text[lit.start..lit.end], lit.start));
+            let escapes = lit_escapes.get_or_insert_with(|| {
+                json_literal::escapes(&text[lit.start()..lit.end()], lit.start())
+            });
             if let Some(escape) = escape_around(escapes, from) {
                 from = escape.0;
             }
@@ -726,8 +717,12 @@ fn rename_keys(text: &str, ranges: &[(usize, usize)], literals: &[Literal]) -> S
     let keys = literals.iter().filter(|lit| lit.key);
     let mut objects: HashMap<usize, KeyNames> = HashMap::new();
     for lit in keys.clone().filter(|lit| !covers(ranges, lit)) {
-        if let Some(name) = decode(&text[lit.start..lit.end]) {
-            objects.entry(lit.container).or_default().taken.insert(name);
+        if let Some(name) = decode(&text[lit.start()..lit.end()]) {
+            objects
+                .entry(lit.container())
+                .or_default()
+                .taken
+                .insert(name);
         }
     }
     let mut renamed = keys.filter(|lit| covers(ranges, lit)).peekable();
@@ -735,15 +730,20 @@ fn rename_keys(text: &str, ranges: &[(usize, usize)], literals: &[Literal]) -> S
     // written into the document's own output, so its markers and its suffix
     // see what precedes it (MIK-8794).
     let mut open: Option<(&Literal, usize)> = None;
-    let mut out = Spliced::with_capacity(text.len());
+    // Each renamed key may also take a collision suffix and its barrier.
+    let suffixes = literals
+        .iter()
+        .filter(|lit| lit.key && covers(ranges, lit))
+        .count();
+    let mut out = Spliced::with_capacity(spliced_len(text, ranges) + suffixes * SUFFIX_ROOM);
     let mut cursor = 0;
     let mut close = |out: &mut Spliced, cursor: &mut usize, (lit, from): (&Literal, usize)| {
-        out.push(&text[*cursor..lit.end]);
-        *cursor = lit.end;
+        out.push(&text[*cursor..lit.end()]);
+        *cursor = lit.end();
         let spaced = out.barrier();
         if let Some(candidate) = decode(&out.out[from..])
             && let Some(n) = objects
-                .entry(lit.container)
+                .entry(lit.container())
                 .or_default()
                 .claim(&candidate, spaced)
         {
@@ -751,14 +751,14 @@ fn rename_keys(text: &str, ranges: &[(usize, usize)], literals: &[Literal]) -> S
         }
     };
     for &(start, end) in ranges {
-        if let Some(key) = open.take_if(|(lit, _)| start >= lit.end) {
+        if let Some(key) = open.take_if(|(lit, _)| start >= lit.end()) {
             close(&mut out, &mut cursor, key);
         }
         if open.is_none()
-            && let Some(lit) = renamed.next_if(|lit| lit.start <= start && start < lit.end)
+            && let Some(lit) = renamed.next_if(|lit| lit.start() <= start && start < lit.end())
         {
-            out.push(&text[cursor..lit.start]);
-            cursor = lit.start;
+            out.push(&text[cursor..lit.start()]);
+            cursor = lit.start();
             open = Some((lit, out.out.len()));
         }
         out.push(&text[cursor..start]);
@@ -772,11 +772,11 @@ fn rename_keys(text: &str, ranges: &[(usize, usize)], literals: &[Literal]) -> S
     out.out
 }
 
-/// `text` with every range in `ranges` (merged, in order) replaced by the
-/// redaction marker. `text` is always a whole leaf, never a slice of one,
-/// so the barrier sees everything before each range.
+/// Room for one key's collision suffix (`#` and a counter) and its barrier.
+const SUFFIX_ROOM: usize = 24;
+
 fn replace_spans(text: &str, ranges: &[(usize, usize)]) -> String {
-    let mut out = Spliced::with_capacity(text.len());
+    let mut out = Spliced::with_capacity(spliced_len(text, ranges));
     let mut cursor = 0;
     for &(start, end) in ranges {
         out.push(&text[cursor..start]);
@@ -791,7 +791,10 @@ fn replace_spans(text: &str, ranges: &[(usize, usize)]) -> String {
 
 #[path = "redactor_spans.rs"]
 mod spans;
-use spans::{covers, escape_around, merge_spans, without};
+use spans::{covers, escape_around, merge_spans, overlaps, spliced_capacity, spliced_len, without};
+
+#[path = "redactor_large.rs"]
+mod large;
 
 #[cfg(test)]
 #[path = "redactor_tests.rs"]

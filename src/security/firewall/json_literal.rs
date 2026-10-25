@@ -9,22 +9,60 @@
 /// The content of one string literal in a JSON document: the bytes between
 /// its quotes, whether it is an object key, and which object or array holds
 /// it (a number unique within the document; keys of one object share it).
+/// Offsets are kept in 32 bits, so a literal costs 16 bytes, half the
+/// redactor's per-literal bookkeeping over the cap (MIK-8774); a text
+/// past [`fits_offsets`] is never walked.
 pub(crate) struct Literal {
-    pub(crate) start: usize,
-    pub(crate) end: usize,
+    start: u32,
+    end: u32,
+    container: u32,
     pub(crate) key: bool,
-    pub(crate) container: usize,
+}
+
+impl Literal {
+    /// Where the content starts, just after the opening quote.
+    pub(crate) fn start(&self) -> usize {
+        self.start as usize
+    }
+
+    /// Where the content ends, at the closing quote.
+    pub(crate) fn end(&self) -> usize {
+        self.end as usize
+    }
+
+    /// The object or array that holds the literal.
+    pub(crate) fn container(&self) -> usize {
+        self.container as usize
+    }
+}
+
+/// Whether every offset in a text of `len` bytes fits a [`Literal`]: callers
+/// leave a longer text to the whole-value path (4 GiB, far over any body
+/// limit the gateway accepts).
+pub(crate) fn fits_offsets(len: usize) -> bool {
+    u32::try_from(len).is_ok()
 }
 
 /// Every string literal of `text`, in order. `text` must be a JSON document
 /// `serde_json` has accepted: outside a literal such text holds no `"`, so
 /// each one found opens a literal.
 pub(crate) fn string_literals(text: &str) -> Vec<Literal> {
-    let mut out = Vec::new();
+    // Sized from the quotes, two a literal (an escaped one only adds room):
+    // collected by doubling, the old and new buffers would both be live at
+    // the last growth, half again the list's own size (MIK-8774).
+    let mut out = Vec::with_capacity(text.bytes().filter(|&b| b == b'"').count() / 2);
+    out.extend(literals(text));
+    out
+}
+
+/// [`string_literals`] one at a time, holding only the open containers, so a
+/// document over the redactor's size cap is walked without a list (MIK-8774).
+pub(crate) fn literals(text: &str) -> impl Iterator<Item = Literal> + '_ {
     // Open containers, innermost last; the bottom entry is the top level.
     let (mut open_containers, mut opened) = (vec![0], 0);
     let mut at = 0;
-    while let Some(open) = text[at..].find('"') {
+    std::iter::from_fn(move || {
+        let open = text[at..].find('"')?;
         for byte in text[at..at + open].bytes() {
             match byte {
                 b'{' | b'[' => {
@@ -38,21 +76,18 @@ pub(crate) fn string_literals(text: &str) -> Vec<Literal> {
             }
         }
         let start = at + open + 1;
-        let Some(len) = closing_quote(&text[start..]) else {
-            break;
-        };
-        let end = start + len;
+        let end = start + closing_quote(&text[start..])?;
         let key = text[end + 1..].trim_start().starts_with(':');
         let container = open_containers.last().copied().unwrap_or(0);
-        out.push(Literal {
-            start,
-            end,
-            key,
-            container,
-        });
         at = end + 1;
-    }
-    out
+        // A text past `fits_offsets` ends the walk rather than wrap an offset.
+        Some(Literal {
+            start: u32::try_from(start).ok()?,
+            end: u32::try_from(end).ok()?,
+            container: u32::try_from(container).ok()?,
+            key,
+        })
+    })
 }
 
 /// The byte ranges, offset by `base`, of the escapes in `content`, a string
@@ -122,4 +157,42 @@ fn hex4(text: &str, at: usize) -> Option<u32> {
         .all(|b| b.is_ascii_hexdigit())
         .then(|| u32::from_str_radix(digits, 16).ok())
         .flatten()
+}
+
+/// `lit`'s content decoded, quotes included in the parse, so JSON escapes
+/// read as the characters they stand for.
+pub(crate) fn decoded(text: &str, lit: &Literal) -> Option<String> {
+    serde_json::from_str::<String>(&text[lit.start() - 1..=lit.end()]).ok()
+}
+
+/// The byte range of `lit`'s content with JSON whitespace, raw or escaped
+/// (`\n`, `\t`, `\r`), trimmed from both ends.
+pub(crate) fn trimmed_content(text: &str, lit: &Literal) -> (usize, usize) {
+    let bytes = text.as_bytes();
+    let (mut start, mut end) = (lit.start(), lit.end());
+    loop {
+        if start < end && bytes[start].is_ascii_whitespace() {
+            start += 1;
+        } else if start + 1 < end
+            && bytes[start] == b'\\'
+            && matches!(bytes[start + 1], b'n' | b't' | b'r')
+        {
+            start += 2;
+        } else {
+            break;
+        }
+    }
+    loop {
+        if end > start && bytes[end - 1].is_ascii_whitespace() {
+            end -= 1;
+        } else if end >= start + 2
+            && bytes[end - 2] == b'\\'
+            && matches!(bytes[end - 1], b'n' | b't' | b'r')
+        {
+            end -= 2;
+        } else {
+            break;
+        }
+    }
+    (start, end)
 }
