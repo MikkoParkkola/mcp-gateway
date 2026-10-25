@@ -730,7 +730,12 @@ fn rename_keys(text: &str, ranges: &[(usize, usize)], literals: &[Literal]) -> S
     // written into the document's own output, so its markers and its suffix
     // see what precedes it (MIK-8794).
     let mut open: Option<(&Literal, usize)> = None;
-    let mut out = Spliced::with_capacity(spliced_len(text, ranges));
+    // Each renamed key may also take a collision suffix and its barrier.
+    let suffixes = literals
+        .iter()
+        .filter(|lit| lit.key && covers(ranges, lit))
+        .count();
+    let mut out = Spliced::with_capacity(spliced_len(text, ranges) + suffixes * SUFFIX_ROOM);
     let mut cursor = 0;
     let mut close = |out: &mut Spliced, cursor: &mut usize, (lit, from): (&Literal, usize)| {
         out.push(&text[*cursor..lit.end()]);
@@ -767,6 +772,9 @@ fn rename_keys(text: &str, ranges: &[(usize, usize)], literals: &[Literal]) -> S
     out.out
 }
 
+/// Room for one key's collision suffix (`#` and a counter) and its barrier.
+const SUFFIX_ROOM: usize = 24;
+
 fn replace_spans(text: &str, ranges: &[(usize, usize)]) -> String {
     let mut out = Spliced::with_capacity(spliced_len(text, ranges));
     let mut cursor = 0;
@@ -783,7 +791,7 @@ fn replace_spans(text: &str, ranges: &[(usize, usize)]) -> String {
 
 #[path = "redactor_spans.rs"]
 mod spans;
-use spans::{covers, escape_around, merge_spans, overlaps, spliced_len, without};
+use spans::{covers, escape_around, merge_spans, overlaps, spliced_capacity, spliced_len, without};
 
 #[path = "redactor_large.rs"]
 mod large;

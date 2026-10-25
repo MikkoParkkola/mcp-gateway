@@ -16,7 +16,7 @@ use std::borrow::Cow;
 
 use super::json_literal::{self, Literal};
 use super::{
-    Family, Finding, JsonText, REDACTED, Redactor, Site, Spliced, decoded, trimmed_content,
+    Family, Finding, JsonText, Redactor, Site, Spliced, decoded, spliced_capacity, trimmed_content,
 };
 
 /// How a pass finds the member values it redacts whole.
@@ -142,7 +142,7 @@ impl Redactor {
             return JsonText::Kept;
         }
         // At most: each marker behind MIK-8794's one barrier space.
-        let len = text.len() - plan.covered + plan.ranges * (REDACTED.len() + 1);
+        let len = spliced_capacity(text.len(), plan.covered, plan.ranges);
         let mut out = Spliced::with_capacity(len);
         let mut cursor = 0;
         let mut write = |from: usize, to: usize| {

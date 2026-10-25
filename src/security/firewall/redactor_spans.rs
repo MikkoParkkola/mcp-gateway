@@ -86,5 +86,12 @@ pub(super) fn overlaps(spans: &[(usize, usize)], literals: &[Literal]) -> usize 
 /// A renamed key's suffix may still grow it a little.
 pub(super) fn spliced_len(text: &str, ranges: &[(usize, usize)]) -> usize {
     let covered: usize = ranges.iter().map(|&(start, end)| end - start).sum();
-    text.len() - covered + ranges.len() * (REDACTED.len() + 1)
+    spliced_capacity(text.len(), covered, ranges.len())
+}
+
+/// The output length of a text of `len` bytes with `count` spans covering
+/// `covered` bytes replaced, each marker behind its possible barrier space:
+/// one rule for both walks, so neither can undersize its buffer.
+pub(super) fn spliced_capacity(len: usize, covered: usize, count: usize) -> usize {
+    len - covered + count * (REDACTED.len() + 1)
 }

@@ -100,8 +100,8 @@ fn redaction_over_the_cap_stays_within_its_stated_memory() {
     let len = doc.len();
     let work = report("key then values", len, peak_of(&redactor, &doc));
     assert!(
-        work <= 11 * len + slack,
-        "key-then-values working memory {work} over 11x {len}"
+        work <= 9 * len + slack,
+        "key-then-values working memory {work} over 9x {len}"
     );
 
     // The collected walk's worst case: tiny strings, and a key to rename.
@@ -111,7 +111,7 @@ fn redaction_over_the_cap_stays_within_its_stated_memory() {
     assert!(len > 2 << 20);
     let work = report("collected", len, peak_of(&redactor, &doc));
     assert!(
-        work <= 11 * len + slack,
-        "collected working memory {work} over 11x {len}"
+        work <= 9 * len + slack,
+        "collected working memory {work} over 9x {len}"
     );
 }

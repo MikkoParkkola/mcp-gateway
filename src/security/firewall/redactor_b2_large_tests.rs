@@ -186,13 +186,37 @@ fn s7_over_the_cap_cost() {
     ratios.push(time_against_base("one span across 100000 keys", &text));
     // One literal of many matches and no escape: each escape lookup must
     // stay a forward step, not a rescan of the literal (gpt review).
-    let mut body = String::new();
-    for i in 0..60_000 {
-        use std::fmt::Write as _;
-        write!(body, "AKIA{i:016} ").expect("writes");
-    }
-    let text = over_cap(&format!(r#"{{"s":"{body}"}}"#));
-    ratios.push(time_against("60000 matches in one literal", &text, false));
+    // Linear: twice the matches may cost at most about twice the time.
+    let dense = |n: usize| {
+        let mut body = String::new();
+        for i in 0..n {
+            use std::fmt::Write as _;
+            write!(body, "AKIA{i:016} ").expect("writes");
+        }
+        over_cap(&format!(r#"{{"s":"{body}"}}"#))
+    };
+    let warm = redactor();
+    let timed = |text: &str| {
+        let mut value = json!({ "content": [{ "type": "text", "text": text }] });
+        let started = std::time::Instant::now();
+        warm.scan_and_redact(&mut value);
+        let took = started.elapsed();
+        let out = value["content"][0]["text"].as_str().expect("text");
+        assert!(!out.contains("AKIA"), "every dense match is redacted");
+        took
+    };
+    let (half, full) = (timed(&dense(30_000)), timed(&dense(60_000)));
+    let scaling = full.as_secs_f64() / half.as_secs_f64();
+    println!("dense matches: 30000 in {half:?}, 60000 in {full:?}, scaling {scaling:.2}");
+    assert!(
+        scaling < 3.0,
+        "dense-match scaling {scaling:.2}: not linear"
+    );
+    ratios.push(time_against(
+        "60000 matches in one literal",
+        &dense(60_000),
+        false,
+    ));
     // No secret at all: every JSON leaf over the cap now takes the walk (MIK-8756
     // ruling A), where base ran only the regex set. Reported, not asserted.
     let mut body = String::new();
