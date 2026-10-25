@@ -86,6 +86,20 @@ fn a_skipped_midnight_starts_the_day_at_the_first_valid_instant() {
     assert_eq!(local_day(&America::Havana, day.start + 43_200), day);
 }
 
+/// Where midnight happens twice, the day starts at the first one. Havana fell
+/// back from 01:00 to 00:00 on 2023-11-05, so that day began at 00:00 CDT
+/// (04:00 UTC), held both copies of 00:30, and lasted 25 hours.
+#[test]
+fn a_repeated_midnight_starts_the_day_at_the_first_one() {
+    let day = local_day(&America::Havana, 1_699_160_400);
+    assert_eq!(day.date, date(2023, 11, 5));
+    assert_eq!((day.start, day.end), (1_699_156_800, 1_699_246_800));
+    assert_eq!(
+        local_day(&America::Havana, day.start - 1).date,
+        date(2023, 11, 4)
+    );
+}
+
 /// U1 walks a chart back one day at a time from `start - 1`: across the
 /// 25-hour day each step lands on the previous date, none repeated or skipped.
 #[test]
