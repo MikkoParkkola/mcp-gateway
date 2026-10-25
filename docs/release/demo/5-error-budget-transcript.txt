@@ -1,0 +1,84 @@
+== NFR.DEMO.1 scenario 5: error-budget diagnosis/recovery ==
+gateway:    mcp-gateway 4.0.0
+peer:       fails every tool call while $RUN_DIR/s5run/peer-is-sick exists
+budget:     threshold 0.5, min_samples 3 (tuned so the recording is short)
+run dir:    $RUN_DIR/s5run
+gateway up (pid 9895, port 50623)
+
+-- healthy: the peer answers --
+flaky_peer -> {
+  "content": [
+    {
+      "text": "budget_ping ok",
+      "type": "text"
+    }
+  ],
+  "trace_id": "gw-745aca52-d2f4-4d23-9e4b-52bbb7e7fd8b"
+}
+[PASS] S5.HEALTHY_CALL_SUCCEEDS
+        expected: budget_ping ok present
+        actual:   budget_ping ok present
+
+-- the peer goes sick; the operator does nothing --
+call 1 -> {"jsonrpc":"2.0","id":1,"result":{"content":[{"text":"{\n  \"content\": [\n    {\n      \"text\": \"JSON-RPC error -32000: upstream unavailable (demo fault injection)\",\n      \"type\": \"text\"\n   
+call 2 -> {"jsonrpc":"2.0","id":1,"result":{"content":[{"text":"{\n  \"content\": [\n    {\n      \"text\": \"JSON-RPC error -32000: upstream unavailable (demo fault injection)\",\n      \"type\": \"text\"\n   
+call 3 -> {"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"JSON-RPC error -32000: Server 'flaky_peer' is currently disabled by operator kill switch"}}
+call 4 -> {"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"JSON-RPC error -32000: Server 'flaky_peer' is currently disabled by operator kill switch"}}
+
+-- diagnosis: the gateway's own numbers, through gateway_get_stats --
+[
+  {
+    "error_rate": "66.7%",
+    "killed": true,
+    "server": "flaky_peer",
+    "window": {
+      "failures": 2,
+      "successes": 1
+    }
+  }
+]
+[PASS] S5.BUDGET_KILLED_THE_BACKEND
+        expected: true
+        actual:   true
+[PASS] S5.ERROR_RATE_AT_KILL
+        expected: "66.7%"
+        actual:   "66.7%"
+[PASS] S5.WINDOW_SUCCESSES_AT_KILL
+        expected: 1
+        actual:   1
+[PASS] S5.WINDOW_FAILURES_AT_KILL
+        expected: 2
+        actual:   2
+
+-- while killed, the gateway refuses rather than retrying a sick peer --
+refusal -> {"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"JSON-RPC error -32000: Server 'flaky_peer' is currently disabled by operator kill switch"}}
+[PASS] S5.REFUSED_WHILE_KILLED
+        expected: is currently disabled by operator kill switch present
+        actual:   is currently disabled by operator kill switch present
+
+-- recovery: the peer is fixed, then the operator revives it --
+revive -> {
+  "breaker_was_open": false,
+  "message": "Server 'flaky_peer' has been re-enabled",
+  "server": "flaky_peer",
+  "status": "active",
+  "was_killed": true
+}
+[PASS] S5.REVIVE_SAW_A_KILLED_SERVER
+        expected: true
+        actual:   true
+flaky_peer -> {
+  "content": [
+    {
+      "text": "budget_ping ok",
+      "type": "text"
+    }
+  ],
+  "trace_id": "gw-baf529f1-2bfa-4297-8d3e-b0d1676f2036"
+}
+[PASS] S5.CALL_SUCCEEDS_AFTER_REVIVE
+        expected: budget_ping ok present
+        actual:   budget_ping ok present
+
+results: $RUN_DIR/s5run/results.json
+transcript: $RUN_DIR/s5run/transcript.txt

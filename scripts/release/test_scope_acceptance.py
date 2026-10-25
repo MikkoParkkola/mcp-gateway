@@ -128,6 +128,48 @@ class AcceptanceTests(unittest.TestCase):
         ):
             return gate.main([mode])
 
+    # Evidence kept in the private companion repository: cited by path, pinned
+    # by sha256 in PRIVATE_EVIDENCE, and hashed wherever the clone exists.
+    def cite_private(self, pinned_text, clone_text=None):
+        self.data["criteria"][0]["evidence"] = ["docs/internal/proof.md:1"]
+        digest = gate.hashlib.sha256(pinned_text.encode()).hexdigest()
+        table = self.root / gate.PRIVATE_EVIDENCE
+        table.parent.mkdir(parents=True, exist_ok=True)
+        table.write_text(f"docs/internal/proof.md\t{digest}\n")
+        if clone_text is not None:
+            private = self.root / gate.PRIVATE_CHECKOUT / "docs/internal/proof.md"
+            private.parent.mkdir(parents=True, exist_ok=True)
+            private.write_text(clone_text)
+        gate.UNVERIFIED_PRIVATE.clear()
+        self.addCleanup(gate.UNVERIFIED_PRIVATE.clear)
+
+    def test_evidence_in_the_tree_needs_no_private_listing(self):
+        self.assertEqual(self.inspect()[0], [])
+        self.assertEqual(gate.UNVERIFIED_PRIVATE, set())
+
+    def test_private_evidence_with_its_pinned_hash_passes(self):
+        self.cite_private("reviewed result\n", clone_text="reviewed result\n")
+        self.assertEqual(self.inspect()[0], [])
+        self.assertEqual(gate.UNVERIFIED_PRIVATE, set())
+
+    def test_private_evidence_with_another_hash_fails(self):
+        self.cite_private("reviewed result\n", clone_text="edited result\n")
+        errors = self.inspect()[0]
+        self.assertTrue(any("does not match its pinned sha256" in e for e in errors), errors)
+
+    def test_unlisted_missing_evidence_fails(self):
+        self.data["criteria"][0]["evidence"] = ["docs/internal/absent.md"]
+        errors = self.inspect()[0]
+        self.assertTrue(any("evidence file does not exist" in e for e in errors), errors)
+
+    def test_private_evidence_without_a_clone_passes_and_is_counted(self):
+        self.cite_private("reviewed result\n")
+        self.assertEqual(self.cli("--check"), 0)
+        self.assertIn(
+            "private evidence: 1 rows, hash-pinned, not verified here",
+            self.stdout.getvalue(),
+        )
+
     def test_complete_release_positive_control(self):
         self.assertEqual(self.inspect(), ([], [], []))
         self.assertEqual(self.cli("--release"), 0)
