@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The gateway host's local day (ADR-026, MIK-8901).
+//! The gateway host's local day (ADR-026).
 //!
 //! Every "day" the gateway counts runs from local midnight to local midnight
 //! in the host's time zone, read from the system; there is no setting. A day

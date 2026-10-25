@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Local-day bounds on DST days and fractional-offset zones (MIK-8901).
+//! Local-day bounds on DST days and fractional-offset zones.
 //! Instants computed independently with Python's `zoneinfo`.
 
 use super::*;
@@ -77,7 +77,7 @@ fn a_skipped_midnight_starts_the_day_at_the_first_valid_instant() {
     assert_eq!(day.end - day.start, 82_800);
     // The day before ends where this one starts: no gap, no overlap.
     assert_eq!(local_day(&America::Havana, day.start - 1).end, day.start);
-    // `start` is in the day it opens, never in the day before (MIK-8854 U1).
+    // `start` is in the day it opens, never in the day before: a chart draws each day from its start.
     assert_eq!(local_day(&America::Havana, day.start).date, day.date);
     assert_eq!(
         local_day(&America::Havana, day.start - 1).date,
@@ -100,7 +100,7 @@ fn a_repeated_midnight_starts_the_day_at_the_first_one() {
     );
 }
 
-/// U1 walks a chart back one day at a time from `start - 1`: across the
+/// A daily chart walks back one day at a time from `start - 1`: across the
 /// 25-hour day each step lands on the previous date, none repeated or skipped.
 #[test]
 fn walking_back_from_start_visits_every_date_once() {

@@ -86,7 +86,7 @@ pub mod kubernetes;
     not(test),
     expect(
         dead_code,
-        reason = "first callers land with MIK-8901's enforcer change and MIK-8854"
+        reason = "its first callers are the budget enforcer and the UI counter store"
     )
 )]
 pub(crate) mod local_day;
