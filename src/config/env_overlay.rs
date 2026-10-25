@@ -125,7 +125,8 @@ impl std::fmt::Debug for EnvOverlay {
                 "secret_files",
                 &self.secret_files.keys().collect::<Vec<_>>(),
             )
-            .finish()
+            // The keychain reader holds no state worth printing.
+            .finish_non_exhaustive()
     }
 }
 
