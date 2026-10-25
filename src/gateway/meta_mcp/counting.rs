@@ -62,23 +62,45 @@ impl MetaMcp {
         store.record(&call, now, &chrono::Local);
     }
 
+    /// Whether `server` is a name this gateway was configured with. The one
+    /// test for every server name the call history keeps: counters and
+    /// chart markers alike.
+    pub(crate) fn configured_server(&self, server: &str) -> bool {
+        self.configured(server).is_some()
+    }
+
     /// `server` and `tool` as labels: kept only when configured and
     /// catalogued, never as the caller spelled something else.
     fn trusted_labels<'a>(&self, server: &'a str, tool: Option<&'a str>) -> (Label<'a>, Label<'a>) {
+        let listed = match self.configured(server) {
+            None => return (Label::Untrusted, Label::Untrusted),
+            Some(Configured::Capabilities(capabilities)) => {
+                tool.filter(|t| capabilities.has_capability(t))
+            }
+            Some(Configured::Backend(backend)) => {
+                tool.filter(|t| backend.lists_tool_in_any_slot(t))
+            }
+        };
+        (
+            Label::Known(server),
+            listed.map_or(Label::Untrusted, Label::Known),
+        )
+    }
+
+    fn configured(&self, server: &str) -> Option<Configured> {
         if let Some(capabilities) = self.get_capabilities()
             && capabilities.name == server
         {
-            let tool = tool
-                .filter(|t| capabilities.has_capability(t))
-                .map_or(Label::Untrusted, Label::Known);
-            return (Label::Known(server), tool);
+            return Some(Configured::Capabilities(capabilities));
         }
-        let Some(backend) = self.backends.get_for(Unscoped::Admin, server) else {
-            return (Label::Untrusted, Label::Untrusted);
-        };
-        let tool = tool
-            .filter(|t| backend.with_cached_tool_for(None, t, |_| ()).is_some())
-            .map_or(Label::Untrusted, Label::Known);
-        (Label::Known(server), tool)
+        self.backends
+            .get_for(Unscoped::Admin, server)
+            .map(Configured::Backend)
     }
+}
+
+/// What a configured server name resolves to.
+enum Configured {
+    Capabilities(Arc<crate::capability::CapabilityBackend>),
+    Backend(Arc<crate::backend::Backend>),
 }

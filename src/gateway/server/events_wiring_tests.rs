@@ -59,20 +59,26 @@ fn marks(store: &CounterStore) -> Vec<(MarkerKind, Option<String>)> {
 }
 
 /// T28, T29 and T30: a kill, a revive and a tripped breaker are three
-/// markers, whatever the events configuration.
+/// markers, whatever the events configuration; a kill of a name nobody
+/// configured is marked with no subject.
 #[tokio::test]
 async fn t30_kill_switch_and_breaker_markers_in_every_events_configuration() {
-    for (events, operational) in [(false, false), (true, false), (true, true)] {
-        let (meta, registry, store, _dir) = wire(events, operational);
-        let kill = meta.kill_switch();
-        kill.kill("alpha");
-        kill.revive("alpha");
-        let beta = Arc::new(Backend::new(
-            "beta",
+    let backend = |name: &str| {
+        Arc::new(Backend::new(
+            name,
             crate::config::BackendConfig::default(),
             &crate::config::FailsafeConfig::default(),
             Duration::from_secs(300),
-        ));
+        ))
+    };
+    for (events, operational) in [(false, false), (true, false), (true, true)] {
+        let (meta, registry, store, _dir) = wire(events, operational);
+        assert!(registry.register(backend("alpha")));
+        let kill = meta.kill_switch();
+        kill.kill("alpha");
+        kill.revive("alpha");
+        kill.kill("sk-live-SENTINEL-8854");
+        let beta = backend("beta");
         assert!(registry.register(Arc::clone(&beta)));
         beta.trip_circuit_breaker("test");
         assert_eq!(
@@ -80,6 +86,7 @@ async fn t30_kill_switch_and_breaker_markers_in_every_events_configuration() {
             vec![
                 (MarkerKind::SwitchOff, Some("alpha".to_owned())),
                 (MarkerKind::SwitchOn, Some("alpha".to_owned())),
+                (MarkerKind::SwitchOff, None),
                 (MarkerKind::Pause, Some("beta".to_owned())),
             ],
             "events {events}, operational {operational}"

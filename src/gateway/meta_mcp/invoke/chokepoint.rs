@@ -414,6 +414,8 @@ impl MetaMcp {
                 "Firewall blocked: Security firewall blocked this request".to_owned(),
             )
         });
+        // The call history counts this refusal as a firewall catch.
+        super::audit::note_request_firewall();
         Err(Error::Forbidden {
             code,
             status: 400,

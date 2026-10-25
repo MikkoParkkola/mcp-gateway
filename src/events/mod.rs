@@ -25,7 +25,7 @@ mod governance;
 mod lifecycle;
 mod limiter;
 mod operational_source;
-pub(crate) use operational_source::install_marker_observers;
+pub(crate) use operational_source::{Markers, install_marker_observers};
 mod outbox;
 mod rate;
 mod reconcile;

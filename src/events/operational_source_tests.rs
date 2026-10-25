@@ -533,7 +533,10 @@ async fn markers_and_events_share_the_one_observer_slot() {
     hub.install_operational_source(
         &kill,
         &crate::backend::BackendRegistry::new(),
-        Some(Arc::clone(&store)),
+        Some(crate::events::Markers {
+            store: Arc::clone(&store),
+            known: Arc::new(|_: &str| true),
+        }),
     );
     kill.kill("alpha");
     assert_eq!(

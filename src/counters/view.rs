@@ -71,32 +71,56 @@ pub(crate) struct SeriesView {
     /// False when part of the previous period lies outside what the store
     /// holds (before `since`, or past the 48-hour ring on a 25-hour day).
     pub previous_complete: bool,
-    /// The asked label is not held and its dimension is full, so its calls
-    /// may be in the overflow count: no points are returned for it.
+    /// The asked label is not held and its dimension is full, or its
+    /// dimension's overflow has calls in this window, so its calls may be in
+    /// the overflow count: no points are returned for it.
     pub folded: bool,
+    /// When coverage began. For a label admitted after its dimension's
+    /// overflow had calls in this window, it is the label's own first bucket.
     pub since: u64,
 }
 
 impl Inner {
-    /// The series `filter` names, or `None` with whether it may be folded.
-    fn find(&self, filter: Filter<'_>) -> Result<&Series, bool> {
+    /// The series `filter` names and, for a label, its dimension's overflow.
+    /// `Err` when the label is not held: the overflow, and whether the
+    /// dimension is full.
+    fn find(&self, filter: Filter<'_>) -> Result<(&Series, Option<&Series>), (&Series, bool)> {
         fn held<'s, K: std::hash::Hash + Eq>(
             dim: &'s super::Dimension<K>,
             key: &K,
-        ) -> Result<&'s Series, bool> {
-            dim.labels.get(key).ok_or(dim.labels.len() >= dim.cap)
+        ) -> Result<(&'s Series, Option<&'s Series>), (&'s Series, bool)> {
+            dim.labels
+                .get(key)
+                .map(|series| (series, Some(&dim.overflow)))
+                .ok_or((&dim.overflow, dim.labels.len() >= dim.cap))
         }
         match filter {
-            Filter::All => Ok(&self.global),
+            Filter::All => Ok((&self.global, None)),
             Filter::Server(s) => held(&self.server, &normalize(s)),
             Filter::Tool(s, t) => held(&self.tool, &(normalize(s), normalize(t))),
             Filter::Caller(c) => held(&self.caller, &normalize(c)),
             Filter::CallerServer(c, s) => held(&self.caller_server, &(normalize(c), normalize(s))),
-            Filter::Overflow(Dim::Server) => Ok(&self.server.overflow),
-            Filter::Overflow(Dim::Tool) => Ok(&self.tool.overflow),
-            Filter::Overflow(Dim::Caller) => Ok(&self.caller.overflow),
-            Filter::Overflow(Dim::CallerServer) => Ok(&self.caller_server.overflow),
+            Filter::Overflow(Dim::Server) => Ok((&self.server.overflow, None)),
+            Filter::Overflow(Dim::Tool) => Ok((&self.tool.overflow, None)),
+            Filter::Overflow(Dim::Caller) => Ok((&self.caller.overflow, None)),
+            Filter::Overflow(Dim::CallerServer) => Ok((&self.caller_server.overflow, None)),
         }
+    }
+}
+
+/// One bucket of a window: its start in unix seconds, and its key in the
+/// ring the window reads.
+#[derive(Clone, Copy)]
+struct Slot {
+    t: u64,
+    key: u64,
+}
+
+/// The ring `window` reads, as one bucket's counts.
+fn counts(series: &Series, window: Window, key: u64) -> Option<[u64; 5]> {
+    match window {
+        Window::Day | Window::TwoDays => series.half.get(key),
+        Window::Month => series.day.get(key),
     }
 }
 
@@ -109,41 +133,18 @@ impl CounterStore {
         zone: &Tz,
     ) -> SeriesView {
         let inner = self.inner.lock();
-        let since = inner.since;
-        let empty = Series::default();
-        let (series, folded) = match inner.find(query.filter) {
-            Ok(series) => (series, false),
-            Err(folded) => (&empty, folded),
-        };
-        let m = query.metric.index();
-        let mut view = SeriesView {
-            points: Vec::new(),
-            previous: None,
-            previous_complete: true,
-            folded,
-            since,
-        };
-        if folded {
-            return view;
-        }
-        match query.window {
+        let mut since = inner.since;
+        let mut slots: Vec<Slot> = match query.window {
             Window::Day | Window::TwoDays => {
                 let n = if query.window == Window::Day { 48 } else { 96 };
                 let now_bucket = now / HALF;
-                let first = (now_bucket + 1).saturating_sub(n);
-                view.points = (first..=now_bucket)
+                ((now_bucket + 1).saturating_sub(n)..=now_bucket)
                     .filter(|b| (b + 1) * HALF > since)
-                    .map(|b| Point {
+                    .map(|b| Slot {
                         t: b * HALF,
-                        v: series.half.get(b).map_or(0, |c| c[m]),
+                        key: b,
                     })
-                    .collect();
-                if query.compare && query.window == Window::Day {
-                    let (previous, complete) =
-                        previous_day(series, &view.points, now_bucket, since, m, zone);
-                    view.previous = Some(previous);
-                    view.previous_complete = complete;
-                }
+                    .collect()
             }
             Window::Month => {
                 // Today, then each day before it, walked back from its start.
@@ -155,16 +156,71 @@ impl CounterStore {
                     }
                     days.push(day::local_day(zone, earliest.start - 1));
                 }
-                view.points = days
-                    .iter()
+                days.iter()
                     .rev()
                     .filter(|day| day.end > since)
-                    .map(|day| Point {
+                    .map(|day| Slot {
                         t: day.start,
-                        v: series.day.get(super::day_key(day.date)).map_or(0, |c| c[m]),
+                        key: super::day_key(day.date),
                     })
-                    .collect();
+                    .collect()
             }
+        };
+        let overflowed =
+            |overflow: &Series, slot: &Slot| counts(overflow, query.window, slot.key).is_some();
+        let empty = Series::default();
+        let series = match inner.find(query.filter) {
+            // A label not held, with calls in its dimension's overflow in
+            // this window, may be among them: zeros would read as exact.
+            Err((overflow, full)) => {
+                if full || slots.iter().any(|slot| overflowed(overflow, slot)) {
+                    return SeriesView {
+                        points: Vec::new(),
+                        previous: None,
+                        previous_complete: true,
+                        folded: true,
+                        since,
+                    };
+                }
+                &empty
+            }
+            Ok((series, overflow)) => {
+                // A label admitted after its dimension overflowed may have
+                // earlier calls in the overflow: it is covered from its own
+                // first count on.
+                let first = slots
+                    .iter()
+                    .position(|slot| counts(series, query.window, slot.key).is_some())
+                    .unwrap_or(slots.len());
+                if let Some(overflow) = overflow
+                    && slots[..first].iter().any(|slot| overflowed(overflow, slot))
+                {
+                    since = slots.get(first).map_or(now, |slot| slot.t.max(since));
+                    slots.drain(..first);
+                }
+                series
+            }
+        };
+        let m = query.metric.index();
+        let points: Vec<Point> = slots
+            .into_iter()
+            .map(|slot| Point {
+                t: slot.t,
+                v: counts(series, query.window, slot.key).map_or(0, |c| c[m]),
+            })
+            .collect();
+        let mut view = SeriesView {
+            points,
+            previous: None,
+            previous_complete: true,
+            folded: false,
+            since,
+        };
+        if query.compare && query.window == Window::Day {
+            let (previous, complete) =
+                previous_day(series, &view.points, now / HALF, since, m, zone);
+            view.previous = Some(previous);
+            view.previous_complete = complete;
         }
         view
     }
@@ -218,14 +274,15 @@ fn previous_day<Tz: TimeZone>(
                 complete = false;
                 continue;
             }
-            if previous.last().is_some_and(|p| p.t == bucket * HALF) {
-                continue;
-            }
             previous.push(Point {
                 t: bucket * HALF,
                 v: series.half.get(bucket).map_or(0, |c| c[m]),
             });
         }
     }
+    // A repeated hour on either side maps two points to one bucket, and an
+    // ambiguous wall time adds a later bucket before an earlier one.
+    previous.sort_unstable_by_key(|p| p.t);
+    previous.dedup_by_key(|p| p.t);
     (previous, complete)
 }

@@ -228,7 +228,7 @@ impl EventsHub {
         self: &Arc<Self>,
         kill_switch: &crate::kill_switch::KillSwitch,
         backends: &crate::backend::BackendRegistry,
-        markers: Option<Arc<crate::counters::CounterStore>>,
+        markers: Option<Markers>,
     ) -> Arc<OperationalSource> {
         let source = Arc::new(OperationalSource {
             hub: Arc::downgrade(self),
@@ -239,6 +239,15 @@ impl EventsHub {
     }
 }
 
+/// Where the kill switch and the breakers mark the web UI's charts, and
+/// which server names a mark may keep: a kill of a name nobody configured
+/// is marked with no subject, so the caller's spelling is never stored.
+#[derive(Clone)]
+pub(crate) struct Markers {
+    pub(crate) store: Arc<crate::counters::CounterStore>,
+    pub(crate) known: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+}
+
 /// The kill switch and the breakers mark the web UI's charts when
 /// the operational events source is not installed. Each takes one observer,
 /// set once (`crate::observer`), so when the source is installed it carries
@@ -246,7 +255,7 @@ impl EventsHub {
 pub(crate) fn install_marker_observers(
     kill_switch: &crate::kill_switch::KillSwitch,
     backends: &crate::backend::BackendRegistry,
-    markers: Arc<crate::counters::CounterStore>,
+    markers: Markers,
 ) {
     observe(kill_switch, backends, Some(markers), None);
 }
@@ -255,19 +264,20 @@ pub(crate) fn install_marker_observers(
 fn observe(
     kill_switch: &crate::kill_switch::KillSwitch,
     backends: &crate::backend::BackendRegistry,
-    markers: Option<Arc<crate::counters::CounterStore>>,
+    markers: Option<Markers>,
     source: Option<Arc<OperationalSource>>,
 ) {
     use crate::counters::MarkerKind;
     let (kills, kill_marks) = (source.clone(), markers.clone());
     kill_switch.observe(Arc::new(move |change: crate::kill_switch::KillChange| {
-        if let Some(store) = &kill_marks {
+        if let Some(marks) = &kill_marks {
             let kind = if change.killed {
                 MarkerKind::SwitchOff
             } else {
                 MarkerKind::SwitchOn
             };
-            store.mark_now(kind, Some(&change.backend));
+            let subject = (marks.known)(&change.backend).then_some(change.backend.as_str());
+            marks.store.mark_now(kind, subject);
         }
         if let Some(kills) = &kills {
             let state = if change.killed { "killed" } else { "live" };
@@ -285,10 +295,13 @@ fn observe(
     )]
     backends.observe_breakers(Arc::new(move |change: crate::failsafe::HealthChange| {
         // Until U4 adds a paused state, a pause is a breaker opening.
-        if let Some(store) = &markers
+        // A breaker belongs to a registered backend: its name is configured.
+        if let Some(marks) = &markers
             && change.to == crate::failsafe::CircuitState::Open
         {
-            store.mark_now(MarkerKind::Pause, Some(&change.backend));
+            marks
+                .store
+                .mark_now(MarkerKind::Pause, Some(&change.backend));
         }
         if let Some(health) = &source {
             health.emit(

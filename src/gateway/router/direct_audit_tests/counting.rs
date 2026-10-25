@@ -457,10 +457,16 @@ fn t42_real_calls_and_a_kill_store_no_secret_and_no_caller_chosen_name() {
                 })
                 .await;
                 let store = attach(&fx);
+                let meta = Arc::downgrade(&fx.state.meta_mcp);
                 crate::events::install_marker_observers(
                     &fx.state.meta_mcp.kill_switch(),
                     &fx.state.backends,
-                    Arc::clone(&store),
+                    crate::events::Markers {
+                        store: Arc::clone(&store),
+                        known: Arc::new(move |name: &str| {
+                            meta.upgrade().is_some_and(|m| m.configured_server(name))
+                        }),
+                    },
                 );
                 let _ = post(&fx, "alpha", &tools_call(SENTINEL), &Caller::Bearer).await;
                 let _ = post_to(

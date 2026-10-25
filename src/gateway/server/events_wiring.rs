@@ -18,7 +18,7 @@ use crate::gateway::meta_mcp::MetaMcp;
 /// cannot be opened stops startup, like the task store.
 pub(super) fn install(
     config: &Config,
-    meta_mcp: &MetaMcp,
+    meta_mcp: &Arc<MetaMcp>,
     registry: &Arc<crate::backend::BackendRegistry>,
     webhooks: &Arc<parking_lot::RwLock<WebhookRegistry>>,
     live_config: &Arc<crate::config_reload::LiveConfig>,
@@ -28,12 +28,18 @@ pub(super) fn install(
     // The kill switch and breakers mark the charts in every events
     // configuration. Their observer slots are set once: when the operational
     // source is installed below it carries the markers, otherwise this does.
+    // A mark keeps a server name only when it is configured, by the same
+    // test the counters use. Weak: the kill switch the observer sits in is
+    // the gateway's own.
+    let markers = crate::events::Markers {
+        store: Arc::clone(counters),
+        known: {
+            let meta = Arc::downgrade(meta_mcp);
+            Arc::new(move |name: &str| meta.upgrade().is_some_and(|m| m.configured_server(name)))
+        },
+    };
     if !(config.events.enabled && config.events.sources.operational) {
-        crate::events::install_marker_observers(
-            &meta_mcp.kill_switch(),
-            registry,
-            Arc::clone(counters),
-        );
+        crate::events::install_marker_observers(&meta_mcp.kill_switch(), registry, markers.clone());
     }
     if config.webhooks.enabled {
         meta_mcp.set_webhook_registry(Arc::clone(webhooks));
@@ -73,11 +79,8 @@ pub(super) fn install(
         );
     }
     if config.events.sources.operational {
-        let source = hub.install_operational_source(
-            &meta_mcp.kill_switch(),
-            registry,
-            Some(Arc::clone(counters)),
-        );
+        let source =
+            hub.install_operational_source(&meta_mcp.kill_switch(), registry, Some(markers));
         #[cfg(feature = "cost-governance")]
         if let Some(budget) = &meta_mcp.budget_enforcer {
             source.report_budgets(budget);
