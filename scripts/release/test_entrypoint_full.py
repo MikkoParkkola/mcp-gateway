@@ -23,7 +23,8 @@ SHIMS = {
     "apt-get": 'echo "apt-get $*" >> "$LOG"\n'
     'case "$1" in update) exit "${APT_UPDATE_STATUS:-0}" ;; install) exit "${APT_INSTALL_STATUS:-0}" ;; esac\n',
     "rm": 'echo "rm $*" >> "$LOG"\n',
-    "setpriv": 'echo "setpriv $*" >> "$LOG"\n',
+    # What the gateway would be started with, including a step's export.
+    "setpriv": 'echo "setpriv $* STEP_VALUE=${STEP_VALUE:-}" >> "$LOG"\n',
 }
 
 
@@ -88,6 +89,8 @@ class RootStart(unittest.TestCase):
         self.assertNotEqual(run.returncode, 0, "a failed step still started the gateway")
         self.assertNotIn("reached", log, "the step ran past its failing command")
         self.assertNotIn("setpriv", log, "the gateway started after a failed step")
+        self.assertIn("running", run.stderr)
+        self.assertIn("20-late.envsh", run.stderr, "the failing step is not named")
 
     def test_a_steps_set_plus_u_does_not_leak_into_the_next_step(self):
         run, log = self.run_with_steps(
@@ -105,7 +108,7 @@ class RootStart(unittest.TestCase):
             {"10-env.envsh": 'export STEP_VALUE=from-step\n'}
         )
         self.assertEqual(run.returncode, 0, run.stderr)
-        self.assertIn("setpriv", log)
+        self.assertIn("STEP_VALUE=from-step", log, "the step's export did not reach the gateway")
 
     def test_declared_packages_are_installed_before_the_gateway(self):
         run, log = self.run_entrypoint(EXTRA_APT_PACKAGES="iproute2 jq=1.7.1-3")
