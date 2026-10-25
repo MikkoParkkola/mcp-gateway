@@ -434,11 +434,16 @@ fn oversized_error(request: &Value) -> Response {
     answer(request)
 }
 
+/// Fires when [`hanging_list`] has been asked for the tools, so a test knows
+/// the preview is inside its listing (and holds the guard) without a timer.
+static LIST_ARRIVED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
 /// A `tools/list` answer whose body never ends.
 fn hanging_list(request: &Value) -> Response {
     if request.get("method").and_then(Value::as_str) != Some("tools/list") {
         return answer(request);
     }
+    LIST_ARRIVED.notify_one();
     (
         [("content-type", "application/json")],
         Body::from_stream(futures::stream::pending::<Result<Bytes, std::io::Error>>()),
@@ -518,12 +523,14 @@ async fn a_disconnected_preview_frees_the_guard() {
     let log = Log::default();
     let hanging = stub_with(&log, hanging_list).await;
     let (router, _store) = router_with(false).await;
-    let first = tokio::time::timeout(
-        Duration::from_millis(500),
-        confirmed(&router, &json!({"name": "slow", "url": hanging})),
-    )
-    .await;
-    assert!(first.is_err(), "the hanging preview is still running");
+    // The first preview is dropped, as a disconnect drops it, once the
+    // server has been asked for its tools: from then on it holds the guard.
+    tokio::select! {
+        (status, body) = confirmed(&router, &json!({"name": "slow", "url": hanging})) => {
+            panic!("the hanging preview answered: {status} {body}");
+        }
+        () = LIST_ARRIVED.notified() => {}
+    }
     let url = stub(&log).await;
     let (status, answer) = confirmed(&router, &json!({"name": "stub", "url": url})).await;
     assert_eq!(

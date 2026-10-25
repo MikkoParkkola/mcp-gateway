@@ -32,11 +32,11 @@ use crate::protocol::{
 // MIK-8014 PERF.12: the fresh-slot answer and completeness `tools_for_check` reads.
 #[path = "metadata_fresh_check.rs"]
 mod fresh_check;
+#[path = "metadata_preview.rs"]
+mod preview;
 // MIK-8393: the response cache's admission, read from the slot this file resolves.
 #[path = "metadata_read_only.rs"]
 mod read_only;
-#[path = "metadata_preview.rs"]
-mod preview;
 pub(crate) use preview::{PreviewListing, list_tools_for_preview};
 
 impl Backend {
