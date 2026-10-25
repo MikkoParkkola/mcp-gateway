@@ -28,7 +28,7 @@ SHIMS = {
 
 
 class RootStart(unittest.TestCase):
-    def run_entrypoint(self, **env):
+    def run_entrypoint(self, script=ENTRYPOINT, **env):
         tmp = pathlib.Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp)
         bin_dir = tmp / "bin"
@@ -45,13 +45,67 @@ class RootStart(unittest.TestCase):
             **env,
         }
         run = subprocess.run(
-            ["sh", str(ENTRYPOINT), "--config", "/config.yaml"],
+            ["sh", str(script), "--config", "/config.yaml"],
             env=full_env,
             capture_output=True,
             text=True,
             timeout=30,
         )
         return run, log.read_text()
+
+    def run_with_steps(self, steps):
+        """The entrypoint against `steps` ({name: body}) as its drop-ins.
+
+        A copy of the script with the drop-in directory swapped for a temp
+        one: the real path is fixed in the image and is not a setting.
+        """
+        tmp = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        dropins = tmp / "steps"
+        dropins.mkdir()
+        for name, body in steps.items():
+            step = dropins / name
+            step.write_text(body)
+            step.chmod(0o755)
+        script = tmp / "entrypoint-full.sh"
+        text = ENTRYPOINT.read_text()
+        self.assertIn("DROPIN_DIR=/docker-entrypoint.d\n", text)
+        script.write_text(
+            text.replace("DROPIN_DIR=/docker-entrypoint.d\n", f"DROPIN_DIR={dropins}\n")
+        )
+        return self.run_entrypoint(script)
+
+    def test_a_steps_set_plus_e_does_not_leak_into_the_next_step(self):
+        # MIK-8895 ENVSH: a sourced step that turns errexit off must not leave
+        # it off, or the next step's failing command no longer stops the
+        # container and the gateway starts after a failed step.
+        run, log = self.run_with_steps(
+            {
+                "10-off.envsh": "set +e\n",
+                "20-late.envsh": 'false\necho reached >> "$LOG"\ntrue\n',
+            }
+        )
+        self.assertNotEqual(run.returncode, 0, "a failed step still started the gateway")
+        self.assertNotIn("reached", log, "the step ran past its failing command")
+        self.assertNotIn("setpriv", log, "the gateway started after a failed step")
+
+    def test_a_steps_set_plus_u_does_not_leak_into_the_next_step(self):
+        run, log = self.run_with_steps(
+            {
+                "10-off.envsh": "set +u\n",
+                "20-late.envsh": 'echo "$NOT_SET_ANYWHERE" > /dev/null\necho reached >> "$LOG"\n',
+            }
+        )
+        self.assertNotEqual(run.returncode, 0, "an unset variable passed unnoticed")
+        self.assertNotIn("reached", log)
+        self.assertNotIn("setpriv", log)
+
+    def test_a_step_that_exports_still_reaches_the_gateway(self):
+        run, log = self.run_with_steps(
+            {"10-env.envsh": 'export STEP_VALUE=from-step\n'}
+        )
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn("setpriv", log)
 
     def test_declared_packages_are_installed_before_the_gateway(self):
         run, log = self.run_entrypoint(EXTRA_APT_PACKAGES="iproute2 jq=1.7.1-3")
