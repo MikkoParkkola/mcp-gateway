@@ -164,6 +164,9 @@ jobs:
 
   release:
     needs: build
+    # Every publishing job runs only for a pushed `v*` tag: a manual dispatch
+    # verifies and builds, and publishes nothing (MIK-8831 REL).
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: avrea-ubuntu-latest-4-vcpu
     permissions:
       contents: write
@@ -242,6 +245,7 @@ jobs:
 
   publish:
     needs: release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: avrea-ubuntu-latest-4-vcpu
 
     steps:
@@ -262,6 +266,7 @@ jobs:
 
   npm-publish:
     needs: release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     # GitHub-hosted on purpose. npm rejects a provenance bundle signed on a
     # self-hosted runner ("Unsupported GitHub Actions runner environment:
     # self-hosted"), so publishing from avrea-* costs the build attestation.
@@ -311,6 +316,7 @@ jobs:
 
   homebrew-update:
     needs: release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: avrea-ubuntu-latest-4-vcpu
 
     steps:

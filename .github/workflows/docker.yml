@@ -1,11 +1,13 @@
 name: Docker
 
+# A branch and pull-request check of the image: build, OSV and Trivy scans,
+# and a smoke. It publishes nothing; ci.yml's docker job is the only image
+# publisher (MIK-8831 REL).
 on:
   push:
-    branches: [main]
-    tags: ['v*']
+    branches: [main, release/3.5.x]
   pull_request:
-    branches: [main]
+    branches: [main, release/3.5.x]
 
 env:
   REGISTRY: ghcr.io
@@ -38,7 +40,6 @@ jobs:
     runs-on: avrea-ubuntu-latest-4-vcpu
     permissions:
       contents: read
-      packages: write
 
     steps:
       - name: Checkout
@@ -47,30 +48,10 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
-      - name: Log in to Container Registry
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=
-
       # Build the image once and load it into the local daemon so trivy can scan
-      # the actual artifact's layers BEFORE anything is pushed. This is the
-      # image half of the vulnerability gate — osv-scanner (above) gates the Rust
-      # deps; trivy gates the base-image OS/library CVEs. The push step reuses the
-      # gha build cache, so the second build is a cache hit, not a rebuild.
+      # the actual artifact's layers. This is the image half of the
+      # vulnerability gate — osv-scanner (above) gates the Rust deps; trivy
+      # gates the base-image OS/library CVEs. Nothing is pushed from here.
       - name: Build image for vulnerability scan (load locally, no push)
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
@@ -94,46 +75,5 @@ jobs:
           ignore-unfixed: true
           trivyignores: .trivyignore
 
-      - name: Build and push
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  publish-mcp-registry:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
-    runs-on: avrea-ubuntu-latest-4-vcpu
-    permissions:
-      contents: read
-      id-token: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install mcp-publisher
-        run: |
-          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
-          chmod +x mcp-publisher
-
-      - name: Set release metadata
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:${VERSION}"
-          jq --arg version "$VERSION" --arg image "$IMAGE" \
-            '.version = $version
-             | del(.packages[0].version)
-             | .packages[0].identifier = $image' \
-            server.json > server.tmp
-          mv server.tmp server.json
-
-      - name: Authenticate to MCP Registry
-        run: ./mcp-publisher login github-oidc
-
-      - name: Publish to MCP Registry
-        run: ./mcp-publisher publish
+      - name: Smoke the image
+        run: docker run --rm ${{ env.REGISTRY }}/mikkoparkkola/mcp-gateway:scan --version
