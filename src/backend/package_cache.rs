@@ -384,6 +384,19 @@ where
 
 /// Renames the cache to a sibling tombstone: one atomic step on one filesystem,
 /// however large the tree, so the next start installs into a fresh directory.
+/// This run's part of a tombstone name: the time it first retired a cache,
+/// in nanoseconds. A container restart reuses the pid and the counter starts
+/// again at zero, so pid and counter alone can name a tombstone a crashed run
+/// left behind, and the rename onto it fails (MIK-8831.REL.7).
+fn run_nonce() -> u128 {
+    static NONCE: OnceLock<u128> = OnceLock::new();
+    *NONCE.get_or_init(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_nanos())
+    })
+}
+
 fn retire_now(dir: &Path) -> Retired {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -408,9 +421,10 @@ fn retire_now(dir: &Path) -> Retired {
         warn!(%error, "could not mark the package cache before moving it aside");
     }
     let tombstone = parent.join(format!(
-        "{}{TOMBSTONE_MARK}{}-{}",
+        "{}{TOMBSTONE_MARK}{}-{}-{}",
         leaf.to_string_lossy(),
         std::process::id(),
+        run_nonce(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     match std::fs::rename(dir, &tombstone) {
