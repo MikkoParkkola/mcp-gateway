@@ -418,8 +418,8 @@ async fn test_gateway_list_servers() {
             "Server missing 'tools_count' field: {server:?}"
         );
         assert!(
-            server.get("circuit_state").is_some(),
-            "Server missing 'circuit_state' field: {server:?}"
+            server.get("circuit_breaker").is_some(),
+            "Server missing 'circuit_breaker' field: {server:?}"
         );
 
         // Verify types
@@ -447,8 +447,8 @@ async fn test_gateway_list_servers() {
             );
         }
         assert!(
-            server["circuit_state"].is_string(),
-            "circuit_state should be string"
+            server["circuit_breaker"].is_string(),
+            "circuit_breaker should be string"
         );
     }
 
