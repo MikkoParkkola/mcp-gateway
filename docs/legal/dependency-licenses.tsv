@@ -279,7 +279,6 @@ serde_ignored	0.1.14	David Tolnay <dtolnay@gmail.com>	https://github.com/dtolnay
 serde_json	1.0.150	Erick Tryzelaar <erick.tryzelaar@gmail.com>|David Tolnay <dtolnay@gmail.com>	https://github.com/serde-rs/json	Apache-2.0 OR MIT		A JSON serialization file format
 serde_path_to_error	0.1.20	David Tolnay <dtolnay@gmail.com>	https://github.com/dtolnay/path-to-error	Apache-2.0 OR MIT		Path to the element that failed to deserialize
 serde_urlencoded	0.7.1	Anthony Ramine <n.oxyde@gmail.com>	https://github.com/nox/serde_urlencoded	Apache-2.0 OR MIT		`x-www-form-urlencoded` meets Serde
-serde_yaml	0.9.34+deprecated	David Tolnay <dtolnay@gmail.com>	https://github.com/dtolnay/serde-yaml	Apache-2.0 OR MIT		YAML data format for Serde
 sha1	0.10.6	RustCrypto Developers	https://github.com/RustCrypto/hashes	Apache-2.0 OR MIT		SHA-1 hash function
 sha2	0.11.0	RustCrypto Developers	https://github.com/RustCrypto/hashes	Apache-2.0 OR MIT		Pure Rust implementation of the SHA-2 hash function family including SHA-224, SHA-256, SHA-384, and SHA-512.
 sharded-slab	0.1.7	Eliza Weisman <eliza@buoyant.io>	https://github.com/hawkw/sharded-slab	MIT		A lock-free concurrent slab.
@@ -338,7 +337,6 @@ typenum	1.19.0	Paho Lurie-Gregg <paho@paholg.com>|Andre Bogus <bogusandre@gmail.
 uncased	0.9.10	Sergio Benitez <sb@sergio.bz>	https://github.com/SergioBenitez/uncased	Apache-2.0 OR MIT		Case-preserving, ASCII case-insensitive, no_std string types.
 unicode-ident	1.0.24	David Tolnay <dtolnay@gmail.com>	https://github.com/dtolnay/unicode-ident	(Apache-2.0 OR MIT) AND Unicode-3.0		Determine whether characters have the XID_Start or XID_Continue properties according to Unicode Standard Annex #31
 unicode-xid	0.2.6	erick.tryzelaar <erick.tryzelaar@gmail.com>|kwantam <kwantam@gmail.com>|Manish Goregaokar <manishsmail@gmail.com>	https://github.com/unicode-rs/unicode-xid	Apache-2.0 OR MIT		Determine whether characters have the XID_Start or XID_Continue properties according to Unicode Standard Annex #31.
-unsafe-libyaml	0.2.11	David Tolnay <dtolnay@gmail.com>	https://github.com/dtolnay/unsafe-libyaml	MIT		libyaml transpiled to rust by c2rust
 untrusted	0.7.1	Brian Smith <brian@briansmith.org>	https://github.com/briansmith/untrusted	ISC		Safe, fast, zero-panic, zero-crashing, zero-allocation parsing of untrusted inputs in Rust.
 untrusted	0.9.0	Brian Smith <brian@briansmith.org>	https://github.com/briansmith/untrusted	ISC		Safe, fast, zero-panic, zero-crashing, zero-allocation parsing of untrusted inputs in Rust.
 url	2.5.8	The rust-url developers	https://github.com/servo/rust-url	Apache-2.0 OR MIT		URL library for Rust, based on the WHATWG URL Standard

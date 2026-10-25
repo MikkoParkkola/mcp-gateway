@@ -59,7 +59,7 @@ if [[ -f Cargo.toml ]]; then
   scripts/dev/check-commit-message-hygiene.sh "$base..HEAD"
 
   step "public repo hygiene"
-  scripts/dev/check-public-repo-hygiene.sh
+  scripts/dev/check-public-repo-hygiene.sh --base "$base"
 
   # MIK-8410: the CI-check scanner's own drift tests first (CI runs them too;
   # the runner's 22.5 s suite runs in CI only), then CI's cargo-free
