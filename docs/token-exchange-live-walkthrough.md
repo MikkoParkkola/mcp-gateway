@@ -19,9 +19,16 @@ below hits real HTTP endpoints, no mocks.
 
 ## 1. Start the gateway
 
+The gateway loads only an owner-only config (it can hold credentials), and a
+git checkout leaves `examples/` readable by everyone, so run a private copy:
+
 ```bash
-mcp-gateway --config examples/token-exchange-live.yaml
+install -m 600 examples/token-exchange-live.yaml ./token-exchange-live.yaml
+mcp-gateway --config ./token-exchange-live.yaml
 ```
+
+It logs `Key server enabled ... providers=2 policies=2` and then
+`Listening host=127.0.0.1 port=39400`.
 
 This mounts, among others:
 
@@ -30,7 +37,11 @@ This mounts, among others:
 - `GET /.well-known/jwks.json` — the gateway's own signing key, unauthenticated
   (`src/gateway/router/mod.rs`). The `mcp-gateway` OIDC provider entry in the
   config verifies against this same endpoint, closing the loop: the gateway
-  trusts tokens it signed itself.
+  trusts tokens it signed itself. Its `audiences` must list the
+  `identity_propagation.audience` of every backend that uses token exchange
+  (`https://mail-svc.internal` in the example): the gateway signs its own
+  assertion for that audience, and 4.0 refuses an issuer with an empty
+  `audiences` list.
 
 ## 2. Log in as the user: exchange the real OIDC token for a gateway bearer
 

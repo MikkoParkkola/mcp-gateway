@@ -294,11 +294,6 @@ const FAILS_BEFORE_C1: &[(&str, &str)] = &[
         "per-client-tool-scopes.yaml",
         "missing environment variable",
     ),
-    // An `oidc` rule with no audience is refused at load.
-    (
-        "token-exchange-live.yaml",
-        "must declare at least one non-empty audience",
-    ),
 ];
 
 /// `deploy/helm/mcp-gateway/templates/configmap.yaml` rendered from the default
