@@ -547,3 +547,44 @@ fn t46_a_key_named_bearer_and_the_bearer_are_two_callers() {
     );
     assert_eq!(store.labels(Dim::Caller), 2);
 }
+
+/// The day cache moves at local midnight: a record a minute after it is on
+/// the next date, not the cached one.
+#[test]
+fn t47_the_cached_day_moves_at_midnight() {
+    let before = Amsterdam.with_ymd_and_hms(2026, 10, 20, 23, 59, 0).unwrap();
+    let before = u64::try_from(before.timestamp()).unwrap();
+    let store = CounterStore::new(before);
+    store.record(&ok("key:a", "s", "t"), before, &Amsterdam);
+    store.record(&ok("key:a", "s", "t"), before + 120, &Amsterdam);
+    let month = store
+        .series(
+            &Query::new(Metric::Calls, Window::Month, Filter::All),
+            before + 120,
+            &Amsterdam,
+        )
+        .points;
+    let days: Vec<u64> = nonzero(&month).iter().map(|(_, v)| *v).collect();
+    assert_eq!(days, vec![1, 1], "23:59 and 00:01 are two dates");
+}
+
+/// A clock stepping back across midnight lands on its own date, and the next
+/// record after it lands on today again.
+#[test]
+fn t48_the_cached_day_follows_a_clock_stepping_back() {
+    let after = Amsterdam.with_ymd_and_hms(2026, 10, 21, 0, 10, 0).unwrap();
+    let after = u64::try_from(after.timestamp()).unwrap();
+    let store = CounterStore::new(after - 3600);
+    store.record(&ok("key:a", "s", "t"), after, &Amsterdam);
+    store.record(&ok("key:a", "s", "t"), after - 1200, &Amsterdam);
+    store.record(&ok("key:a", "s", "t"), after + 600, &Amsterdam);
+    let month = store
+        .series(
+            &Query::new(Metric::Calls, Window::Month, Filter::All),
+            after + 600,
+            &Amsterdam,
+        )
+        .points;
+    let days: Vec<u64> = nonzero(&month).iter().map(|(_, v)| *v).collect();
+    assert_eq!(days, vec![1, 2], "23:50 on the 20th, then two on the 21st");
+}

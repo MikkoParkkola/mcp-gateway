@@ -146,17 +146,22 @@ impl CounterStore {
                 }
             }
             Window::Month => {
-                let Some(today) = day::day_key(now, zone) else {
-                    return view;
-                };
-                view.points = ((today + 1).saturating_sub(30)..=today)
-                    .filter_map(|key| {
-                        let start = day::day_start(key, zone)?;
-                        let end = day::day_start(key + 1, zone)?;
-                        (end > since).then(|| Point {
-                            t: start,
-                            v: series.day.get(key).map_or(0, |c| c[m]),
-                        })
+                // Today, then each day before it, walked back from its start.
+                let mut days = vec![day::local_day(zone, now)];
+                while days.len() < super::DAYS {
+                    let earliest = days[days.len() - 1];
+                    if earliest.start == 0 {
+                        break;
+                    }
+                    days.push(day::local_day(zone, earliest.start - 1));
+                }
+                view.points = days
+                    .iter()
+                    .rev()
+                    .filter(|day| day.end > since)
+                    .map(|day| Point {
+                        t: day.start,
+                        v: series.day.get(super::day_key(day.date)).map_or(0, |c| c[m]),
                     })
                     .collect();
             }

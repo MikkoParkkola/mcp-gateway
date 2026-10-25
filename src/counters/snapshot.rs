@@ -97,7 +97,7 @@ pub(super) fn to_bytes(inner: &Inner, binary_version: &str, saved_at: u64) -> Ve
 /// `series` with only the buckets a window ending at `now` holds.
 fn windowed<Tz: TimeZone>(series: &Series, now: u64, zone: &Tz) -> Series {
     let mut kept = Series::default();
-    let today = day::day_key(now, zone);
+    let today = Some(super::day_key(day::local_day(zone, now).date));
     for (bucket, counts) in series.half.buckets() {
         kept.half.add(bucket, counts);
     }

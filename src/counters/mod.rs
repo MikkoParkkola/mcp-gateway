@@ -215,6 +215,12 @@ pub(crate) fn normalize(label: &str) -> String {
     )
 }
 
+/// A daily bucket's key: the local date as days from the common era.
+fn day_key(date: chrono::NaiveDate) -> u64 {
+    use chrono::Datelike;
+    u64::try_from(date.num_days_from_ce()).unwrap_or_default()
+}
+
 /// A dimension the store keeps labels for.
 #[cfg(any(test, feature = "webui"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -307,6 +313,10 @@ pub(crate) struct Inner {
     markers: VecDeque<Marker>,
     marker_cap: usize,
     sweeps: u64,
+    /// The local day the last record fell on, so the hot path is one
+    /// comparison and the zone is read once a day. One store counts in one
+    /// zone: the host's.
+    today: Option<day::LocalDay>,
 }
 
 impl Inner {
@@ -322,7 +332,23 @@ impl Inner {
             markers: VecDeque::new(),
             marker_cap: markers,
             sweeps: 0,
+            today: None,
         }
+    }
+
+    /// The daily bucket `at` falls in: the cached day while `at` is inside
+    /// it, else the zone is read again, past midnight or for a clock that
+    /// stepped back.
+    fn day_of<Tz: TimeZone>(&mut self, at: u64, zone: &Tz) -> u64 {
+        let day = match self.today {
+            Some(day) if day.start <= at && at < day.end => day,
+            _ => {
+                let day = day::local_day(zone, at);
+                self.today = Some(day);
+                day
+            }
+        };
+        day_key(day.date)
     }
 
     fn mark(&mut self, kind: MarkerKind, subject: Option<&str>, at: u64) {
@@ -374,7 +400,6 @@ impl CounterStore {
             return;
         }
         let counts = call.tally.counts();
-        let day = day::day_key(at, zone);
         let server = match call.server {
             Label::Known(name) => Some(normalize(name)),
             Label::Untrusted => None,
@@ -386,6 +411,7 @@ impl CounterStore {
         let caller = normalize(call.caller);
         let pair = server.clone().map(|server| (caller.clone(), server));
         let mut inner = self.inner.lock();
+        let day = Some(inner.day_of(at, zone));
         inner.global.add(at, day, counts);
         let swept = [
             inner.server.add(server, at, day, counts),
