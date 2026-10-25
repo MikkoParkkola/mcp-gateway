@@ -22,6 +22,11 @@ use crate::config::AuthConfig;
 const ASSET: &str = "/ui/assets/shell.59b6e0f80d81.css";
 const SHELL: &[u8] = include_bytes!("../ui/shell/index.html");
 const CLASSIC: &[u8] = include_bytes!("../ui/index.html");
+/// The shell's policy as the design states it, written out here so the
+/// served header is checked against the spec, not against its own constant.
+const SHELL_CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
+     img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; \
+     form-action 'self'; frame-ancestors 'none'";
 
 struct Reply {
     status: StatusCode,
@@ -94,12 +99,16 @@ async fn t1_a_deep_link_answers_the_shell_document() {
             Some("no-cache, no-store, must-revalidate"),
             "{uri}"
         );
-        let csp = reply
-            .header(header::CONTENT_SECURITY_POLICY)
-            .unwrap_or_default();
-        for directive in ["default-src 'none'", "script-src 'self'", "font-src 'self'"] {
-            assert!(csp.contains(directive), "{uri}: {csp}");
-        }
+        assert_eq!(
+            reply.header(header::CONTENT_SECURITY_POLICY),
+            Some(SHELL_CSP),
+            "{uri}"
+        );
+        assert_eq!(
+            reply.header(header::REFERRER_POLICY),
+            Some("no-referrer"),
+            "{uri}"
+        );
         assert_eq!(
             reply.header(header::X_CONTENT_TYPE_OPTIONS),
             Some("nosniff")
@@ -163,11 +172,9 @@ async fn t3b_an_unknown_or_nested_asset_path_is_not_found() {
         "/ui/assets/../index.html",
         "/ui/assets",
     ] {
-        assert_eq!(
-            send(&state, "GET", uri).await.status,
-            StatusCode::NOT_FOUND,
-            "{uri}"
-        );
+        let reply = send(&state, "GET", uri).await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND, "{uri}");
+        assert_ne!(reply.body, SHELL, "{uri}");
     }
 }
 
@@ -184,6 +191,7 @@ async fn t4_the_api_subtree_never_reaches_the_shell() {
     ] {
         let reply = send(&state, method, uri).await;
         assert_eq!(reply.status, StatusCode::NOT_FOUND, "{method} {uri}");
+        assert_ne!(reply.body, SHELL, "{method} {uri}");
     }
     for (method, uri) in [
         ("GET", "/ui/api/status"),
@@ -205,4 +213,23 @@ async fn t9_a_trailing_slash_on_ui_is_not_found() {
         send(&state, "GET", "/ui/").await.status,
         StatusCode::NOT_FOUND
     );
+}
+
+/// The exclusion reads the decoded path, a HEAD answers like a GET without a
+/// body, and any other method on a deep link stays 404.
+#[tokio::test]
+async fn t10_encodings_and_methods_on_deep_links() {
+    let (state, _dir) = fixture().await;
+    for uri in ["/ui/%61pi/nope", "/ui/%61ssets/x"] {
+        let reply = send(&state, "GET", uri).await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND, "{uri}");
+        assert_ne!(reply.body, SHELL, "{uri}");
+    }
+    let head = send(&state, "HEAD", "/ui/servers").await;
+    assert_eq!(head.status, StatusCode::OK);
+    assert!(head.body.is_empty(), "a HEAD has no body");
+    for method in ["POST", "PUT", "DELETE", "OPTIONS"] {
+        let reply = send(&state, method, "/ui/servers").await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND, "{method}");
+    }
 }

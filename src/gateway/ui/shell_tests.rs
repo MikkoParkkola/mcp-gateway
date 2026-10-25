@@ -13,7 +13,8 @@ fn t5_every_asset_name_carries_its_content_hash() {
     );
     for (name, bytes) in ASSETS {
         let digest = crate::hashing::sha256_hex(bytes);
-        let hash = name.split('.').nth(1).unwrap_or_default();
+        // The label right before the extension: `name[.more].<hash>.<ext>`.
+        let hash = name.rsplit('.').nth(1).unwrap_or_default();
         assert_eq!(hash, &digest[..12], "{name}: rename it after editing");
     }
 }
@@ -23,10 +24,14 @@ fn t6_the_shell_references_nothing_off_origin() {
     let texts = std::iter::once(DOCUMENT.as_bytes()).chain(ASSETS.iter().map(|(_, b)| *b));
     for text in texts {
         let text = String::from_utf8_lossy(text);
+        let lower = text.to_ascii_lowercase();
         assert!(
-            !text.contains("http:") && !text.contains("https:"),
+            !lower.contains("http:") && !lower.contains("https:"),
             "{text}"
         );
+        for attribute in ["src=\"//", "href=\"//", "url(//"] {
+            assert!(!lower.contains(attribute), "protocol-relative: {text}");
+        }
     }
     assert!(
         DOCUMENT.contains(r#"<meta http-equiv="refresh" content="0; url=/ui">"#),
@@ -36,6 +41,17 @@ fn t6_the_shell_references_nothing_off_origin() {
         assert!(
             DOCUMENT.contains(&format!("/ui/assets/{name}")),
             "{name} is linked"
+        );
+    }
+    // Every asset the document names is in the table, so none answers 404.
+    for reference in DOCUMENT.split("/ui/assets/").skip(1) {
+        let name = reference
+            .split(['"', '\'', ')', ' '])
+            .next()
+            .unwrap_or_default();
+        assert!(
+            ASSETS.iter().any(|(n, _)| *n == name),
+            "{name} is not in the table"
         );
     }
 }
