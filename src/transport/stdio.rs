@@ -1116,6 +1116,10 @@ impl Transport for StdioTransport {
 mod tests;
 
 #[cfg(test)]
+#[path = "stdio_tail_tests.rs"]
+mod tail_tests;
+
+#[cfg(test)]
 #[path = "stdio_cache_tests.rs"]
 mod cache_tests;
 
