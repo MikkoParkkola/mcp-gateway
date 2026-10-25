@@ -24,6 +24,9 @@ struct Seen {
 
 type Log = Arc<Mutex<Vec<Seen>>>;
 
+/// How a stub answers one JSON-RPC request.
+type Reply = fn(&Value) -> Response;
+
 /// A Streamable HTTP MCP server on loopback that records every request.
 /// `list_notes` is a read by name; `delete_all` is a write by name; `stamp` declares
 /// `readOnlyHint: true` itself.
@@ -32,7 +35,7 @@ async fn stub(log: &Log) -> String {
 }
 
 /// [`stub`] answering every request with `reply`.
-async fn stub_with(log: &Log, reply: fn(&Value) -> Response) -> String {
+async fn stub_with(log: &Log, reply: Reply) -> String {
     let log = Arc::clone(log);
     let app = axum::Router::new().fallback(move |uri: Uri, headers: HeaderMap, body: Bytes| {
         let log = Arc::clone(&log);
@@ -446,7 +449,7 @@ fn hanging_list(request: &Value) -> Response {
 /// T11: each over-budget shape is a 502 naming the budget it broke.
 #[tokio::test]
 async fn an_over_budget_preview_is_a_502_naming_the_budget() {
-    let cases: [(&str, fn(&Value) -> Response, &str); 4] = [
+    let cases: [(&str, Reply, &str); 4] = [
         ("one response", oversized_list, "4 MiB"),
         ("one SSE response", oversized_sse, "4 MiB"),
         ("an error body", oversized_error, "4 MiB"),
