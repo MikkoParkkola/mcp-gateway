@@ -53,8 +53,8 @@ fn first_instant<Z: TimeZone>(zone: &Z, date: NaiveDate) -> u64 {
     let midnight = date.and_time(NaiveTime::MIN);
     let secs = (0..=MAX_GAP_MINUTES)
         .find_map(|m| {
-            zone.from_local_datetime(&(midnight + TimeDelta::minutes(m)))
-                .earliest()
+            let local = TimeDelta::try_minutes(m).and_then(|d| midnight.checked_add_signed(d))?;
+            zone.from_local_datetime(&local).earliest()
         })
         .map_or_else(|| midnight.and_utc().timestamp(), |d| d.timestamp());
     u64::try_from(secs).unwrap_or(0)
@@ -66,12 +66,11 @@ fn system_zone() -> chrono_tz::Tz {
     static ZONE: OnceLock<chrono_tz::Tz> = OnceLock::new();
     *ZONE.get_or_init(|| {
         let read = iana_time_zone::get_timezone();
-        match read.as_deref().map(str::parse::<chrono_tz::Tz>) {
-            Ok(Ok(tz)) => tz,
-            _ => {
-                tracing::warn!(zone = ?read, "Cannot read the host's time zone; counting days in UTC");
-                chrono_tz::Tz::UTC
-            }
+        if let Ok(Ok(tz)) = read.as_deref().map(str::parse::<chrono_tz::Tz>) {
+            tz
+        } else {
+            tracing::warn!(zone = ?read, "Cannot read the host's time zone; counting days in UTC");
+            chrono_tz::Tz::UTC
         }
     })
 }

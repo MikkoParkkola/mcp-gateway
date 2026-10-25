@@ -77,6 +77,27 @@ fn a_skipped_midnight_starts_the_day_at_the_first_valid_instant() {
     assert_eq!(day.end - day.start, 82_800);
     // The day before ends where this one starts: no gap, no overlap.
     assert_eq!(local_day(&America::Havana, day.start - 1).end, day.start);
+    // `start` is in the day it opens, never in the day before (MIK-8854 U1).
+    assert_eq!(local_day(&America::Havana, day.start).date, day.date);
+    assert_eq!(
+        local_day(&America::Havana, day.start - 1).date,
+        date(2023, 3, 11)
+    );
+    assert_eq!(local_day(&America::Havana, day.start + 43_200), day);
+}
+
+/// U1 walks a chart back one day at a time from `start - 1`: across the
+/// 25-hour day each step lands on the previous date, none repeated or skipped.
+#[test]
+fn walking_back_from_start_visits_every_date_once() {
+    let mut day = local_day(&Europe::Amsterdam, 1_794_783_600); // 2026-11-16 00:00 CET
+    for _ in 0..30 {
+        let previous = local_day(&Europe::Amsterdam, day.start - 1);
+        assert_eq!(previous.date.succ_opt(), Some(day.date));
+        assert_eq!(previous.end, day.start);
+        day = previous;
+    }
+    assert_eq!(day.date, date(2026, 10, 17));
 }
 
 /// A date the zone skipped whole (Pacific/Apia, 2011-12-30) never appears:
