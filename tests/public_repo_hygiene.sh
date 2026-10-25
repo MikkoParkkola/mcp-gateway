@@ -409,4 +409,40 @@ printf '++ follow MIK-5678\n' >>"$repo/docs/n.txt"
 commit_all "$repo" "change"
 assert_base_fail_contains "$repo" HEAD~1 "adds a ticket id"
 
+# Where a CI check keys a file by ticket number, the number is allowed: a
+# changelog or UPGRADING fragment and an inventory row file, by name and in
+# their text, and an acceptance-criterion id anywhere.
+ticket_keyed_cases=(
+  "changelog.d/9999.fixed.md::- Refuse a stale handle (MIK-9999)."
+  "upgrading.d/9999-handles.md::Handles from before MIK-9999 are refused."
+  "docs/release/inventory.d/9999.handles.tsv::src/x.rs	refuse	MIK-9999"
+  "tests/handles.rs::// MIK-9999.HANDLE.1: a stale handle is refused."
+)
+for i in "${!ticket_keyed_cases[@]}"; do
+  case_spec="${ticket_keyed_cases[$i]}"
+  target="${case_spec%%::*}"
+  line="${case_spec#*::}"
+  repo="$(make_repo "ticket-keyed-$i")"
+  commit_all "$repo" "seed"
+  mkdir -p "$repo/$(dirname "$target")"
+  printf '%s\n' "$line" >"$repo/$target"
+  commit_all "$repo" "change"
+  assert_base_pass "$repo" HEAD~1
+done
+
+# The same id as a citation in a docs page is still refused.
+repo="$(make_repo ticket-id-in-doc-refused)"
+commit_all "$repo" "seed"
+mkdir -p "$repo/docs/adr"
+printf 'Decided in MIK-9999.\n' >"$repo/docs/adr/ADR-099.md"
+commit_all "$repo" "change"
+assert_base_fail_contains "$repo" HEAD~1 "docs/adr/ADR-099.md:1 adds a ticket id"
+
+# The whole check runs on every push, so its time on this tree is shown here,
+# where a slow regression is visible. Informational: the verdict on the real
+# tree is the CI step's job, not this fixture suite's.
+start="$(date +%s)"
+(cd "$source_repo" && scripts/dev/check-public-repo-hygiene.sh >/dev/null 2>&1) || true
+printf 'timing: the full-tree check took %ss on this tree\n' "$(( $(date +%s) - start ))"
+
 echo "public repo hygiene fixtures OK"

@@ -265,6 +265,15 @@ is_self_file() {
   return 1
 }
 
+# Files a CI check keys by ticket number: a changelog or UPGRADING fragment
+# and an inventory row file are named for their ticket and cite it.
+is_ticket_keyed() {
+  case "$1" in
+    changelog.d/*.md | upgrading.d/*.md | docs/release/inventory.d/*.tsv) return 0 ;;
+  esac
+  return 1
+}
+
 is_private_path() {
   local file="$1" prefix name
   for prefix in "${private_path_prefixes[@]}"; do
@@ -328,42 +337,54 @@ while IFS= read -r -d '' file; do
   [[ -z "${added[$file]:-}" ]] && is_debt "$file" private-path && continue
   report_failure "$file is a private path; it belongs in the private companion repository"
   printf 'Remediation: move it into the private companion repository (cloned at internal/) keeping its path, then git rm it here.\n' >&2
-done < <(git ls-files -z)
+done < <(git_lit ls-files -z -- "${private_path_prefixes[@]}" "${private_file_names[@]/#/:(glob)**/}")
 
-for check in "${private_content_checks[@]}"; do
-  id="${check%%::*}"
-  rest="${check#*::}"
-  flags="${rest%%::*}"
-  rest="${rest#*::}"
-  regex="${rest%%::*}"
-  reason="${rest#*::}"
-  case_flag=()
-  [[ "$flags" == i ]] && case_flag=(-i)
-  while IFS= read -r hit; do
-    [[ -n "$hit" ]] || continue
-    file="${hit%%:*}"
-    is_self_file "$file" && continue
-    is_content_allowlisted "$file" "$id" && continue
-    is_debt "$file" "$id" && continue
-    report_failure "$hit -- $reason ($id)"
-  done < <(git_lit grep -I -n -E ${case_flag[@]+"${case_flag[@]}"} -e "$regex" -- . || true)
-done
+# One fixed-string git grep finds every candidate line (an ERE grep over the
+# tree costs seconds); each candidate is then matched against the checks.
+self_skips=("${self_files[@]/#/:(exclude)}")
+while IFS= read -r hit; do
+  [[ -n "$hit" ]] || continue
+  file="${hit%%:*}"
+  text="${hit#*:}"
+  text="${text#*:}"
+  for check in "${private_content_checks[@]}"; do
+    id="${check%%::*}"
+    rest="${check#*::}"
+    flags="${rest%%::*}"
+    rest="${rest#*::}"
+    regex="${rest%%::*}"
+    reason="${rest#*::}"
+    [[ "$flags" == i ]] && shopt -s nocasematch
+    if [[ "$text" =~ $regex ]]; then
+      shopt -u nocasematch
+      is_content_allowlisted "$file" "$id" && continue
+      is_debt "$file" "$id" && continue
+      report_failure "$hit -- $reason ($id)"
+    fi
+    shopt -u nocasematch
+  done
+done < <(
+  git_lit grep -I -n -i -F "${private_content_prefilter[@]/#/-e}" -- . "${self_skips[@]}" || true)
 
 if [[ -n "$base" ]]; then
   # Added lines, as path TAB line TAB text. An id that the same file's removed
   # lines also carry was edited in place, not added.
   while IFS=$'\t' read -r file line text; do
     is_self_file "$file" && continue
+    is_ticket_keyed "$file" && continue
     report_failure "$file:$line adds a ticket id: $text"
   done < <(git_lit diff --no-color --no-ext-diff --unified=0 --no-renames "$merge_base" HEAD |
     awk -v re="$ticket_id_regex" '
-      function ids(s,   out) { out = ""; while (match(s, /MIK-[0-9]+/)) { out = out " " substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH) } return out }
+      # An acceptance-criterion id (MIK-N.AREA.n) is the key tests report
+      # evidence under, not a citation, so it is stripped before the search.
+      function bare(s) { gsub(/MIK-[0-9]+\.[A-Z0-9]+\.[0-9]+[a-z]?/, "", s); return s }
+      function ids(s,   out) { s = bare(s); out = ""; while (match(s, /MIK-[0-9]+/)) { out = out " " substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH) } return out }
       /^diff --git / { flush(); inhunk = 0; next }
       !inhunk && /^\+\+\+ / { file = substr($0, 7); next }
       !inhunk && /^--- / { next }
       /^@@/ { inhunk = 1; match($0, /\+[0-9]+/); n = substr($0, RSTART + 1, RLENGTH - 1) + 0; next }
       /^-/ { gone = gone ids($0); next }
-      /^\+/ { if (match($0, re)) { pend[++np] = file "\t" n "\t" substr($0, 2); pids[np] = ids($0) } n++; next }
+      /^\+/ { if (match(bare($0), re)) { pend[++np] = file "\t" n "\t" substr($0, 2); pids[np] = ids($0) } n++; next }
       function flush(   i, k, m, kept) {
         for (i = 1; i <= np; i++) {
           m = split(pids[i], k, " "); kept = 0
@@ -378,6 +399,7 @@ if [[ -n "$base" ]]; then
   while IFS= read -r file; do
     [[ -n "$file" ]] || continue
     is_self_file "$file" && continue
+    is_ticket_keyed "$file" && continue
     path=""
     remaining="$file"
     while [[ -n "$remaining" ]]; do
@@ -392,45 +414,67 @@ if [[ -n "$base" ]]; then
   done < <(printf '%s\n' "${!added[@]}")
 fi
 
-while IFS= read -r -d '' file; do
-  [[ -f "$file" ]] || continue
-
-  case "$file" in
-    CONTRIBUTING.md|scripts/dev/check-public-repo-hygiene.sh|tests/public_repo_hygiene.sh)
-      continue
-      ;;
-    *.md|*.txt|*.adoc|*.rst)
-      ;;
-    *)
-      continue
-      ;;
-  esac
-
+# Each scan below is one git grep or one awk pass over the tracked tree, never
+# a process per file: the whole check has to stay fast enough for every push.
+doc_specs=('*.md' '*.txt' '*.adoc' '*.rst')
+doc_skips=(':(exclude)CONTRIBUTING.md' ':(exclude)scripts/dev/check-public-repo-hygiene.sh' ':(exclude)tests/public_repo_hygiene.sh')
+# One grep for every marker; each hit is attributed to the markers it carries,
+# reported once per file and marker.
+declare -A marker_seen=()
+shopt -s nocasematch
+while IFS= read -r hit; do
+  [[ -n "$hit" ]] || continue
+  file="${hit%%:*}"
+  text="${hit#*:}"
+  text="${text#*:}"
   for i in "${!blocked_patterns[@]}"; do
-    if match="$(grep -E -i -n -m 1 "${blocked_patterns[$i]}" "$file" || true)"; [[ -n "$match" ]]; then
-      report_failure "$file contains ${blocked_reasons[$i]} marker: $match"
-      printf 'Remediation: move the material into the private companion repository (cloned at internal/).\n' >&2
-    fi
+    [[ -z "${marker_seen["$i:$file"]:-}" && "$text" =~ ${blocked_patterns[$i]} ]] || continue
+    marker_seen["$i:$file"]=1
+    report_failure "$file contains ${blocked_reasons[$i]} marker: ${hit#*:}"
+    printf 'Remediation: move the material into the private companion repository (cloned at internal/).\n' >&2
   done
+done < <(git_lit grep -I -n -i -E "${blocked_patterns[@]/#/-e}" -- "${doc_specs[@]}" "${doc_skips[@]}" || true)
+shopt -u nocasematch
 
-  [[ "$file" == *.md ]] || continue
-  [[ "$file" == docs/internal/* ]] && continue
-  is_allowlisted_internal "$file" && continue
-
-  headings="$(head -15 "$file" | grep -E '^#{1,3} ' || true)"
-  for marker in "${internal_heading_markers[@]}"; do
-    if match="$(printf '%s\n' "$headings" | grep -E -i -m 1 -e "$marker" || true)"; [[ -n "$match" ]]; then
-      report_internal_doc "$file" "heading marker /$marker/: $match"
-      continue 2
-    fi
-  done
-  for marker in "${internal_path_markers[@]}"; do
-    if grep -E -q -i -e "$marker" <<<"$file"; then
-      report_internal_doc "$file" "path marker /$marker/"
-      continue 2
-    fi
-  done
-done < <(git ls-files -z)
+# A working document announces itself in a heading within its first fifteen
+# lines, or in its name. The first marker in list order is the one reported.
+md_skips=(':(exclude)docs/internal/' "${doc_skips[@]}")
+for permitted in ${internal_doc_allowlist[@]+"${internal_doc_allowlist[@]}"}; do
+  md_skips+=(":(exclude)$permitted")
+done
+heading_list="$(printf '%s\037' "${internal_heading_markers[@]}")"
+path_list="$(printf '%s\037' "${internal_path_markers[@]}")"
+while IFS=$'\t' read -r file evidence; do
+  [[ -n "$file" ]] || continue
+  report_internal_doc "$file" "$evidence"
+done < <(
+  {
+    git_lit ls-files -- '*.md' "${md_skips[@]}" | sed 's/^/F\t/'
+    git_lit grep -I -n -E -e '^#{1,3} ' -- '*.md' "${md_skips[@]}" | sed 's/^/H\t/' || true
+  } | awk -F'\t' -v hm="$heading_list" -v pm="$path_list" '
+    BEGIN { nh = split(hm, H, "\037") - 1; np = split(pm, P, "\037") - 1 }
+    $1 == "F" { order[++nf] = $2; next }
+    $1 == "H" {
+      rest = substr($0, 3)
+      # path:line:text, and the path itself may hold a colon
+      if (match(rest, /:[0-9]+:/)) {
+        f = substr(rest, 1, RSTART - 1); ln = substr(rest, RSTART + 1, RLENGTH - 2) + 0
+        if (ln <= 15) heads[f] = heads[f] "\n" substr(rest, RSTART + RLENGTH)
+      }
+    }
+    END {
+      for (i = 1; i <= nf; i++) {
+        f = order[i]; done = 0
+        if (f in heads) {
+          n = split(substr(heads[f], 2), L, "\n")
+          for (m = 1; m <= nh && !done; m++)
+            for (k = 1; k <= n; k++)
+              if (tolower(L[k]) ~ H[m]) { print f "\theading marker /" H[m] "/: " L[k]; done = 1; break }
+        }
+        for (m = 1; m <= np && !done; m++)
+          if (tolower(f) ~ P[m]) { print f "\tpath marker /" P[m] "/"; done = 1 }
+      }
+    }')
 
 for surface in "${shipped_surfaces[@]}"; do
   [[ -f "$surface" ]] || continue
@@ -439,9 +483,8 @@ for surface in "${shipped_surfaces[@]}"; do
   fi
 done
 
-while IFS= read -r -d '' file; do
+while IFS= read -r file; do
   [[ -n "$file" ]] || continue
-  [[ "$file" == */* ]] && continue
   is_private_path "$file" && continue
   allowed=0
   for permitted in "${root_doc_allowlist[@]}"; do
@@ -450,7 +493,7 @@ while IFS= read -r -d '' file; do
   if [[ "$allowed" -eq 0 ]]; then
     report_failure "$file is a top-level file that is not on the root allowlist; move it under docs/ or add it to root_doc_allowlist in this script"
   fi
-done < <(git ls-files -z)
+done < <(git_lit ls-files | awk '!/\//')
 
 for entry in ${debt_entries[@]+"${debt_entries[@]}"}; do
   if [[ -z "${debt_used[$entry]:-}" ]]; then

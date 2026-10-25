@@ -23,6 +23,14 @@ private_content_checks=(
   "tailnet-ip::-::(^|[^0-9.])100\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}([^0-9]|$)::is a private-network address"
 )
 
+# Fixed strings, matched case-insensitively, that every hit of a check above
+# contains. The tree check greps for these first and runs the regexes only on
+# the lines they find, so a new check needs its literal core added here.
+private_content_prefilter=(
+  "hebb" "botnaut" "airlok" "raxor" "throttla" "pithy"
+  "/Users/mikko" "/.claude" "100."
+)
+
 # A tracker id. Existing ones stay and fade; a change may not add one, in a
 # line, a file name, a commit message or a pull-request body.
 ticket_id_regex='(^|[^[:alnum:]])MIK-[0-9]+'
