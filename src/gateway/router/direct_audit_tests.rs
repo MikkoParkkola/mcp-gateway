@@ -28,6 +28,7 @@ mod extras;
 use extras::{Extra, arm_extras, backend_config, harden};
 mod anon_key;
 mod backend_oracle;
+mod counting;
 mod delivery;
 mod delivery_who;
 mod empty_grant;
@@ -161,6 +162,8 @@ async fn post_modern_as(
 #[derive(Default)]
 struct Setup {
     auth: Option<AuthConfig>,
+    /// MIK-8854 T21: no transparency log on either route.
+    no_log: bool,
     fail_closed: bool,
     backend_error: Option<i32>,
     /// MIK-7979: the backends' transport fails after counting each call.
@@ -324,7 +327,9 @@ async fn fixture(setup: Setup) -> Fixture {
             .with_continuations(meta.continuation()),
         ));
     }
-    meta.enable_transparency_log(Arc::clone(&log));
+    if !setup.no_log {
+        meta.enable_transparency_log(Arc::clone(&log));
+    }
     meta = arm_extras(meta, extras);
     if setup.chain == crate::config::ChainMode::Require {
         meta.set_chain_signer(
@@ -346,7 +351,7 @@ async fn fixture(setup: Setup) -> Fixture {
         meta = meta.with_caller_identity(config);
     }
     state_mut.meta_mcp = Arc::new(setup.meta_mode.arm(meta));
-    state_mut.transparency_log = Some(Arc::clone(&log));
+    state_mut.transparency_log = (!setup.no_log).then(|| Arc::clone(&log));
     let router = create_router(Arc::clone(&state));
     Fixture {
         state,
