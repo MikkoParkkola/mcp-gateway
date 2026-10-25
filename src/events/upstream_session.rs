@@ -724,7 +724,7 @@ mod poll;
 #[path = "upstream_session_run.rs"]
 mod run;
 use legacy::watched_by;
-use run::{Run, begin_run};
+use run::begin_run;
 #[cfg(test)]
 use run::{pick_session, runs_modern};
 
