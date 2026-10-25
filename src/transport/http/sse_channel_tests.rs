@@ -241,9 +241,11 @@ async fn the_replacing_tasks_own_request_fails_fast() {
         .expect("handshake on session 1");
     streams.lock().expect("streams").insert(1, None);
     wait_closed(&transport).await;
-    let refused = super::REPLACING
+    let Err(refused) = super::REPLACING
         .scope((), transport.live_sse_channel())
         .await
-        .expect_err("fails fast inside the replacement");
+    else {
+        panic!("the replacing task's own request must fail fast");
+    };
     assert!(refused.to_string().contains("being replaced"), "{refused}");
 }
