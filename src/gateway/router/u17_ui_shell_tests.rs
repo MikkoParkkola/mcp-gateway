@@ -150,7 +150,10 @@ fn shell_asset_names() -> Vec<String> {
                 .next()
                 .unwrap_or_default()
                 .to_string();
-            if name.ends_with(".css") {
+            if std::path::Path::new(&name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("css"))
+            {
                 texts.push(std::fs::read_to_string(dir.join(&name)).expect("stylesheet"));
             }
             names.push(name);

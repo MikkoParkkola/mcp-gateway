@@ -156,6 +156,49 @@ test('F7b modified clicks and new-tab links are left to the browser', async ({ p
   expect(prevented).toEqual([false, false, false, false, false]);
 });
 
+test('F7c a keyboard-followed sidebar link moves focus to the new content', async ({ page }) => {
+  await withFixturePages(page);
+  await page.goto('/ui/overview/status');
+  await shellReady(page);
+  await page.locator('nav.route-nav a[href="/ui/servers"]').focus();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL('/ui/servers/status');
+  await expect(page.locator('#content')).toBeFocused();
+});
+
+test('F7c the decisions count arriving does not take focus off a sidebar link', async ({ page }) => {
+  let release;
+  const held = new Promise((ok) => { release = ok; });
+  await page.route('**/ui/api/decisions/count', async (r) => { await held; await r.fulfill({ json: { count: 2 } }); });
+  await page.goto('/ui/overview/status');
+  await shellReady(page);
+  const link = page.locator('nav.route-nav a[href="/ui/costs"]');
+  await link.focus();
+  release();
+  await expect(page.locator('nav.route-nav .count')).toHaveText('2');
+  await expect(link).toBeFocused();
+});
+
+test('F6b a malformed escape renders not-found instead of breaking the shell', async ({ page }) => {
+  await page.goto('/ui/servers/%E0%A4%A');
+  await shellReady(page);
+  await expect(page.locator('h1')).toContainText('Not found');
+});
+
+test('F7d a link with a query is left to the browser', async ({ page }) => {
+  await page.goto('/ui/overview/status');
+  await shellReady(page);
+  await page.evaluate(() => {
+    const a = document.createElement('a');
+    a.href = '/ui/servers/status?view=x';
+    a.textContent = 'query link';
+    document.getElementById('content').append(a);
+  });
+  const load = page.waitForRequest((r) => r.resourceType() === 'document' && r.url().endsWith('?view=x'));
+  await page.getByText('query link').click();
+  await load; // a full document load: the router did not take it
+});
+
 test.describe('route line', () => {
   test('F8 the current station is copper and the To do badge follows the count', async ({ page }) => {
     await page.goto('/ui/servers/status');
@@ -205,24 +248,26 @@ test.describe('layout and themes', () => {
     });
   }
 
-  for (const [name, media] of [['dark', { colorScheme: 'dark' }], ['light', { colorScheme: 'light' }], ['hc', { colorScheme: 'dark', contrast: 'more' }]]) {
-    test(`F10 the ${name} theme applies with JavaScript off`, async ({ browser, baseURL }) => {
-      const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
-      const page = await context.newPage();
-      await page.emulateMedia(media);
-      await page.goto('/ui/overview/status');
-      const [bg, token] = await page.evaluate(() => {
-        const probe = document.createElement('div');
-        probe.style.background = 'var(--color-bg-canvas)';
-        document.body.append(probe);
-        return [getComputedStyle(document.body).backgroundColor, getComputedStyle(probe).backgroundColor];
+  test.describe('script off', () => {
+    test.use({ javaScriptEnabled: false });
+    for (const [name, media] of [['dark', { colorScheme: 'dark' }], ['light', { colorScheme: 'light' }], ['hc', { colorScheme: 'dark', contrast: 'more' }]]) {
+      test(`F10 the ${name} theme applies with JavaScript off`, async ({ page }) => {
+        await page.emulateMedia(media);
+        await page.goto('/ui/overview/status');
+        // Script is off for the page, not for evaluate(), which runs over CDP.
+        const [bg, token] = await page.evaluate(() => {
+          const probe = document.createElement('div');
+          probe.style.background = 'var(--color-bg-canvas)';
+          document.body.append(probe);
+          return [getComputedStyle(document.body).backgroundColor, getComputedStyle(probe).backgroundColor];
+        });
+        expect(await page.locator('nav.route-nav a').count()).toBe(0); // proves the module did not run
+        expect(token).not.toBe('rgba(0, 0, 0, 0)');
+        expect(bg).toBe(token);
+        backgrounds[name] = bg;
       });
-      expect(token).not.toBe('rgba(0, 0, 0, 0)');
-      expect(bg).toBe(token);
-      backgrounds[name] = bg;
-      await context.close();
-    });
-  }
+    }
+  });
 
   test('F10 the three themes differ', () => {
     expect(new Set(Object.values(backgrounds)).size).toBe(3);

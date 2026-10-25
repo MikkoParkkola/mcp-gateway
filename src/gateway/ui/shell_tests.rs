@@ -45,9 +45,21 @@ fn t6_the_shell_references_nothing_off_origin() {
         DOCUMENT.contains(r#"<script type="module" src="/ui/assets/shell."#),
         "the shell's module is loaded from the asset table"
     );
+    // Every asset is named by the document or by a stylesheet it loads
+    // (the fonts), so none ships unused.
+    let stylesheets: Vec<String> = ASSETS
+        .iter()
+        .filter(|(n, _)| {
+            std::path::Path::new(n)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("css"))
+        })
+        .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+        .collect();
     for (name, _) in ASSETS {
+        let reference = format!("/ui/assets/{name}");
         assert!(
-            DOCUMENT.contains(&format!("/ui/assets/{name}")),
+            DOCUMENT.contains(&reference) || stylesheets.iter().any(|css| css.contains(&reference)),
             "{name} is linked"
         );
     }

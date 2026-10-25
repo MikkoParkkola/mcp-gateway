@@ -105,7 +105,12 @@ export async function api(path, init = {}) {
  * (/ui/servers/status/actions). A hidden tab then falls back to the first.
  */
 function parse(pathname) {
-  const parts = pathname.replace(/^\/ui\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
+  let parts;
+  try {
+    parts = pathname.replace(/^\/ui\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
+  } catch {
+    return { page: null, object: null, tab: null }; // a malformed escape: not-found
+  }
   const [page, second, third] = parts;
   if (second !== undefined && third === undefined && TABS.some(([t]) => t === second)) {
     return { page, object: null, tab: second };
@@ -120,6 +125,8 @@ function pathFor({ page, object, tab }) {
 /** Links the router owns: same origin, a registered sidebar page as the first segment. */
 function owned(a) {
   if (!a || a.target || a.hasAttribute('download') || a.origin !== location.origin) return false;
+  // A query, or a fragment on this same page, keeps the browser's own behaviour.
+  if (a.search || (a.hash && a.pathname === location.pathname)) return false;
   const first = a.pathname.split('/')[2];
   return a.pathname.startsWith('/ui/') && PAGE_IDS.has(first);
 }
@@ -182,26 +189,38 @@ function mark(node) {
   return node;
 }
 
-let todoCount = null;
+/** The decisions count for the sidebar badge; null hides it. */
+const DECISIONS = { count: null };
 
+/** Build the sidebar once, then update it in place, so a focused link is never replaced. */
 function drawNav(current) {
   const nav = document.querySelector('nav.route-nav');
-  nav.replaceChildren(...NAV.map(([id, label]) => {
-    const a = el('a', { class: 'stn', href: `/ui/${id}`, 'aria-current': id === current ? 'page' : null },
-      el('i', { 'aria-hidden': 'true' }), el('span', { class: 'lbl' }, label));
-    if (id === NAV[1][0] && Number.isInteger(todoCount) && todoCount > 0) {
-      a.append(el('span', { class: 'count', 'aria-label': `${todoCount} to decide` }, String(todoCount)));
-    }
-    return a;
-  }));
+  if (!nav.childElementCount) {
+    nav.append(...NAV.map(([id, label]) => el('a', { class: 'stn', href: `/ui/${id}`, 'data-page': id },
+      el('i', { 'aria-hidden': 'true' }), el('span', { class: 'lbl' }, label))));
+  }
+  for (const a of nav.children) {
+    if (a.dataset.page === current) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  }
+  const decide = nav.querySelector(`[data-page="${NAV[1][0]}"]`);
+  let badge = decide.querySelector('.count');
+  const n = DECISIONS.count;
+  if (Number.isInteger(n) && n > 0) {
+    if (!badge) decide.append(badge = el('span', { class: 'count' }));
+    badge.textContent = String(n);
+    badge.setAttribute('aria-label', `${n} to decide`);
+  } else {
+    badge?.remove();
+  }
 }
 
 async function loadCounts() {
   try {
     const { count } = await api('/ui/api/decisions/count');
-    todoCount = Number.isInteger(count) ? count : null;
+    DECISIONS.count = Number.isInteger(count) ? count : null;
   } catch {
-    todoCount = null; // the count route ships with the To do queue; until then no badge
+    DECISIONS.count = null; // the count route ships with the To do queue; until then no badge
   }
   drawNav(parse(location.pathname).page);
 }
@@ -222,6 +241,9 @@ function boot() {
     if (!owned(a)) return;
     ev.preventDefault();
     if (a.pathname !== location.pathname) go(a.pathname + a.hash);
+    // A tab keeps focus so the next tab is one key away; any other link
+    // hands focus to the new content, as a page load would.
+    if (!a.closest('nav.tabs')) document.getElementById('content').focus({ preventScroll: true });
   });
   addEventListener('popstate', render);
   document.querySelector('a.skip').addEventListener('click', (ev) => {
