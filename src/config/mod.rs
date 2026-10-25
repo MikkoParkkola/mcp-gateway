@@ -30,6 +30,7 @@ mod secret_ref;
 mod server_config;
 mod strict_keys;
 mod validation;
+pub(crate) use validation::CLEARTEXT_REFUSAL;
 mod ws_backend;
 
 use std::{

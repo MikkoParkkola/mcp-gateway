@@ -234,6 +234,7 @@ async fn t2c_watcher_reload_records_the_change() {
         event_rx,
         shutdown_rx,
         Arc::new(super::env_poll::EnvReloadCounts::default()),
+        super::refusals::ReloadReporting::default(),
     );
     event_tx.send(ReloadTrigger::ConfigFile).await.unwrap();
     // The task debounces on a std `Instant`: poll real time.

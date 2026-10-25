@@ -435,6 +435,8 @@ pub async fn apply_patch(
 }
 
 mod diff;
+pub(crate) mod override_audit;
+pub(crate) mod refusals;
 mod reload_context;
 mod reload_warm_hook;
 // Linux and macOS, as the other real-watcher rows (MIK-8181).

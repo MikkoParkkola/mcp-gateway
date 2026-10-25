@@ -178,6 +178,8 @@ pub struct ReloadContext {
     pub(super) capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
     /// Told which backends each applied reload registered (`MIK-8054`).
     pub(super) on_registered: Option<super::reload_warm_hook::OnRegistered>,
+    /// The shared refusal ledger and override auditor (`GET /ui/api/refusals`).
+    pub(super) reporting: super::refusals::ReloadReporting,
 }
 
 /// The refusal a reload returns when the gateway's shutdown ended its wait.
@@ -247,6 +249,7 @@ impl ReloadContext {
             stop: tokio_util::sync::CancellationToken::new(),
             capabilities: None,
             on_registered: None,
+            reporting: super::refusals::ReloadReporting::default(),
         })
     }
 
@@ -484,6 +487,37 @@ impl ReloadContext {
     /// The reload transaction itself. The caller must already hold the reload
     /// lock; taking it here as well would deadlock on the non-reentrant mutex.
     async fn reload_outcome_locked(&self) -> std::result::Result<ReloadOutcome, String> {
+        // Audits the overrides the registry holds however this ends: applied,
+        // refused, or dropped at an await after registering backends.
+        let _audit = (self.reporting.override_audit.as_deref()).map(|a| a.guard(&self.registry));
+        let outcome = self.reload_outcome_locked_inner().await;
+        let refusals = &self.reporting.refusals;
+        match &outcome {
+            Ok(_) => refusals.reload_applied(),
+            Err(refusal) => refusals.record(super::refusals::RefusalKind::Reload, None, refusal),
+        }
+        outcome
+    }
+
+    /// The refusals this context's reloads and writes recorded.
+    pub(crate) fn refusals(&self) -> &Arc<super::refusals::RefusalLedger> {
+        &self.reporting.refusals
+    }
+
+    /// Share `reporting` with every other reload context of this gateway.
+    #[must_use]
+    pub fn with_reporting(mut self, reporting: super::refusals::ReloadReporting) -> Self {
+        self.reporting = reporting;
+        self
+    }
+
+    /// The reporting this context shares, for a context built elsewhere.
+    #[must_use]
+    pub fn reporting(&self) -> super::refusals::ReloadReporting {
+        self.reporting.clone()
+    }
+
+    async fn reload_outcome_locked_inner(&self) -> std::result::Result<ReloadOutcome, String> {
         #[cfg(test)]
         super::reload_pause::pause_here(&self.config_path).await;
         let evaluated = self.load_off_worker().await?;

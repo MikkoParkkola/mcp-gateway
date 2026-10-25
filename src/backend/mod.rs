@@ -46,6 +46,7 @@ mod registry;
 mod repin;
 mod restart;
 mod runtime_launch;
+pub(crate) mod server_state;
 mod status;
 mod stdio_start;
 mod stop;

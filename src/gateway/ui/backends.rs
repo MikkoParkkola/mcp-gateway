@@ -24,6 +24,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use super::refusals::WriteTicket;
 use super::{
     backend_ops::{
         BackendUpdate, add_backend as add_backend_config, remove_backend as remove_backend_config,
@@ -34,6 +35,7 @@ use super::{
 };
 use crate::config::TransportConfig;
 use crate::config_persistence::CommentLoss;
+use crate::config_reload::refusals::RefusalKind;
 use crate::config_reload::{
     ConfigMutation, ConfigWriteError, MutateError, mutate_config_and_reload_detached,
 };
@@ -219,12 +221,15 @@ async fn add_backend(
     // Load, check for duplicates, persist and reload - all inside one lock, so
     // a second request cannot build its change on the pre-edit config.
     let name = req.name.clone();
+    let ticket = WriteTicket::new(&state);
+    let in_lock = ticket.clone();
     let mutation = mutate_config_and_reload_detached(
         config_path.clone(),
         state.meta_mcp.reload_context(),
         CommentLoss::Refuse,
         move |config| {
             add_backend_config(config, &name, resolved)
+                .inspect(|_| in_lock.note(RefusalKind::Add, &name, config))
                 .map(|notes| {
                     // Whether it went in enabled: notes alone do not say, an
                     // OAuth login note comes with an enabled backend.
@@ -242,7 +247,10 @@ async fn add_backend(
     .await;
 
     let ((notes, enabled), reload) = match mutation {
-        Ok(ConfigMutation::Applied(added, reload)) => (added, reload),
+        Ok(ConfigMutation::Applied(added, reload)) => {
+            ticket.committed(&req.name);
+            (added, reload)
+        }
         Ok(ConfigMutation::Rejected((code, message))) => {
             return flat_error(code, message).into_response();
         }
@@ -289,6 +297,8 @@ async fn remove_backend(
     // runs detached (MIK-8120), so the note comes back as its value.
     let removed = name.clone();
     let path = config_path.clone();
+    let ticket = WriteTicket::new(&state);
+    let in_lock = ticket.clone();
     let mutation = mutate_config_and_reload_detached(
         config_path.clone(),
         state.meta_mcp.reload_context(),
@@ -300,6 +310,9 @@ async fn remove_backend(
                     format!("Backend '{removed}' not found"),
                 )
             })?;
+            // Gone: once the write commits, its earlier add and edit
+            // refusals no longer apply.
+            in_lock.reserve();
             Ok::<Vec<String>, (StatusCode, String)>(
                 crate::config_persistence::comments_a_write_drops(&path, config),
             )
@@ -308,7 +321,10 @@ async fn remove_backend(
     .await;
 
     let gone = match mutation {
-        Ok(ConfigMutation::Applied(gone, _)) => gone,
+        Ok(ConfigMutation::Applied(gone, _)) => {
+            ticket.committed(&name);
+            gone
+        }
         Ok(ConfigMutation::Rejected((code, message))) => {
             return flat_error(code, message).into_response();
         }
@@ -426,6 +442,8 @@ async fn update_backend(
     // inside one lock. Splitting the read from the write is what lets one edit
     // overwrite another.
     let updated = name.clone();
+    let ticket = WriteTicket::new(&state);
+    let in_lock = ticket.clone();
     let mutation = mutate_config_and_reload_detached(
         config_path.clone(),
         state.meta_mcp.reload_context(),
@@ -467,6 +485,7 @@ async fn update_backend(
                     stop_when_idle_for,
                 },
             )
+            .inspect(|()| in_lock.note(RefusalKind::Edit, &name, config))
             .map_err(|message| {
                 // Surface the refusal verbatim. An operator setting "stop when idle" on a
                 // backend the gateway does not start needs to be told why, not silently
@@ -474,6 +493,7 @@ async fn update_backend(
                 let code = if message.contains("not found") {
                     StatusCode::NOT_FOUND
                 } else {
+                    in_lock.record(RefusalKind::Edit, &name, &message);
                     StatusCode::BAD_REQUEST
                 };
                 (code, message)
@@ -483,13 +503,15 @@ async fn update_backend(
     .await;
 
     let reload = match mutation {
-        Ok(ConfigMutation::Applied((), reload)) => reload,
+        Ok(ConfigMutation::Applied((), reload)) => {
+            ticket.committed(&updated);
+            reload
+        }
         Ok(ConfigMutation::Rejected((code, message))) => {
             return flat_error(code, message).into_response();
         }
         Err(e) => return unwritten(e),
     };
-
     Json(json!({"status": "updated", "name": updated, "reload": reload})).into_response()
 }
 

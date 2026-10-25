@@ -77,4 +77,5 @@ owned_routes! {
     ACCOUNTS_CALLBACK = "/accounts/v1/callback",
     ACCOUNTS_COMPLETE = "/accounts/v1/complete",
     ACCOUNTS_COMPLETE_SCRIPT = "/accounts/v1/assets/complete.js",
+    UI_REFUSALS = "/ui/api/refusals",
 }

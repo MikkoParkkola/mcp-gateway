@@ -68,6 +68,7 @@ async fn a_watched_reload_reports_its_backends_to_the_hook() {
         None,
         shutdown_rx,
         Some(hook),
+        crate::config_reload::refusals::ReloadReporting::default(),
     )
     .expect("the watcher starts");
 

@@ -71,6 +71,8 @@ mod internal_routes;
 mod openapi_import;
 #[path = "webui_management_tests/registry.rs"]
 mod registry;
+#[path = "webui_management_tests/server_state.rs"]
+mod server_state;
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
