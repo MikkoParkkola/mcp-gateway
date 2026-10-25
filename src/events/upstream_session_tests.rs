@@ -401,6 +401,7 @@ async fn a_real_reload_making_the_backend_ineligible_stops_its_listener() {
         uri: None,
     };
     state.note(changed(), false);
+    // timing: precondition
     tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
     state.flush(&weak);
     assert!(intake.try_recv().is_ok(), "control: eligible, one event");

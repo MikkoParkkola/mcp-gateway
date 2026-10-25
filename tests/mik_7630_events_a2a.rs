@@ -136,6 +136,7 @@ async fn polled(agent: &Agent, from: usize, n: usize) {
 /// polls settle it; at most that one announcement is allowed.
 async fn first_fill(agent: &Agent, receiver: &Receiver, id: &str) -> usize {
     polled(agent, agent.fetches(), 3).await;
+    // timing: precondition
     tokio::time::sleep(Duration::from_secs(2)).await;
     let base = delivered(receiver, id, TOOLS).len();
     assert!(base <= 1, "at most the first fill is announced, got {base}");
@@ -229,6 +230,7 @@ async fn a5_a_failed_read_keeps_the_baseline() {
     polled(&agent, agent.fetches(), 2).await;
     agent.failing.store(false, Ordering::SeqCst);
     polled(&agent, agent.fetches(), 2).await;
+    // timing: absence
     tokio::time::sleep(INTERVALS).await;
     assert_eq!(
         delivered(&receiver, &id, TOOLS).len(),

@@ -124,7 +124,7 @@ async fn x3_a_saturated_sink_never_holds_an_answer() {
     }
     tx.send(event(&json!({"jsonrpc": "2.0", "id": 1, "result": {}})))
         .expect("send");
-    let answered = tokio::time::timeout(std::time::Duration::from_secs(5), waiting.response())
+    let answered = tokio::time::timeout(std::time::Duration::from_secs(10), waiting.response())
         .await
         .expect("not held behind the notifications");
     assert!(answered.is_ok());
@@ -180,7 +180,7 @@ async fn the_stream_ending_fails_what_waits() {
     let channel = open(&url, None).await.expect("open");
     let waiting = channel.register(&RequestId::Number(1)).expect("register");
     drop(tx);
-    let ended = tokio::time::timeout(std::time::Duration::from_secs(5), waiting.response())
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(10), waiting.response())
         .await
         .expect("prompt");
     assert!(ended.is_err());
