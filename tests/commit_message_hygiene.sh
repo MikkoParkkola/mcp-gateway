@@ -120,6 +120,36 @@ run_case private_address fail 'fix(router): reject a credential-bearing URL
 
 - Point the smoke test at 100.101.102.103'
 
+# A merge commit and a co-author line are read too.
+merge_case() {
+  local repo="$tmp_root/merge_with_ticket_id" status=0
+  mkdir -p "$repo"
+  git -C "$repo" init -q -b main
+  git -C "$repo" config user.email "test@example.com"
+  git -C "$repo" config user.name "Commit Hygiene Test"
+  printf 'base\n' >"$repo/file.txt"
+  git -C "$repo" add file.txt
+  git -C "$repo" commit -q -m "chore: seed the fixture"
+  git -C "$repo" checkout -q -b side
+  printf 'side\n' >"$repo/side.txt"
+  git -C "$repo" add side.txt
+  git -C "$repo" commit -q -m "feat: add the side file"
+  git -C "$repo" checkout -q main
+  GIT_AUTHOR_DATE=2030-01-01T00:00:00Z git -C "$repo" merge -q --no-ff side -m "Merge the side branch for MIK-1234"
+  (cd "$repo" && bash "$checker" 'HEAD~1..HEAD' >/dev/null 2>&1) || status=$?
+  if [[ "$status" -eq 0 ]]; then
+    printf 'FAIL merge_with_ticket_id: expected the checker to reject a merge citing a tracker id\n' >&2
+    failures=$((failures + 1))
+  fi
+}
+merge_case
+
+run_case private_name_in_coauthor fail 'fix(router): reject a credential-bearing URL
+
+- Refuse the connection unless the host is loopback
+
+Co-Authored-By: Hebb Agent <agent@example.com>'
+
 # The pull-request body check reads $PR_BODY.
 pr_body_case() {
   local name="$1" expectation="$2" body="$3" status=0

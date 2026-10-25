@@ -362,4 +362,51 @@ printf '# Notes\n' >"$repo/docs/internal/notes.md"
 printf 'docs/internal/\tprivate-path\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
 git -C "$repo" add .gitignore scripts/dev docs/internal/notes.md
 assert_pass "$repo"
+# A debt entry with a count covers that many hits and no more.
+repo="$(make_repo debt-count-exceeded)"
+mkdir -p "$repo/docs"
+printf 'the hebb notes\n' >"$repo/docs/a.md"
+printf 'docs/a.md\tprivate-name\t1\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
+git -C "$repo" add .gitignore scripts/dev docs/a.md
+assert_pass "$repo"
+printf 'more hebb notes\n' >>"$repo/docs/a.md"
+assert_fail_contains "$repo" "more than its 1"
+
+# Debt on a directory covers what the base already carried, never a file the
+# change adds under it.
+repo="$(make_repo debt-dir-new-file)"
+mkdir -p "$repo/docs/internal"
+printf '# Old\n' >"$repo/docs/internal/old.md"
+printf 'docs/internal/\tprivate-path\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
+commit_all "$repo" "seed"
+assert_base_pass "$repo" HEAD
+printf '# New\n' >"$repo/docs/internal/new.md"
+commit_all "$repo" "change"
+assert_base_fail_contains "$repo" HEAD~1 "docs/internal/new.md is a private path"
+
+# A name git would quote is still compared as the literal path.
+repo="$(make_repo private-path-quoted-name)"
+mkdir -p "$repo/tickets"
+printf '# Notes\n' >"$repo/tickets/ä.md"
+git -C "$repo" add .gitignore scripts/dev tickets
+assert_fail_contains "$repo" "tickets/ä.md is a private path"
+
+# A clean file renamed to a ticket-id name is judged as an addition.
+repo="$(make_repo ticket-id-by-rename)"
+mkdir -p "$repo/tests"
+printf 'fn main() { let reload = 1; let _ = reload; }\n' >"$repo/tests/reload.rs"
+commit_all "$repo" "seed"
+git -C "$repo" mv tests/reload.rs tests/mik_9999_reload.rs
+commit_all "$repo" "change"
+assert_base_fail_contains "$repo" HEAD~1 "tests/mik_9999_reload.rs names a ticket id"
+
+# An added line whose text starts with "++ " is content, not a file header.
+repo="$(make_repo ticket-id-after-plus-plus)"
+mkdir -p "$repo/docs"
+printf 'notes\n' >"$repo/docs/n.txt"
+commit_all "$repo" "seed"
+printf '++ follow MIK-5678\n' >>"$repo/docs/n.txt"
+commit_all "$repo" "change"
+assert_base_fail_contains "$repo" HEAD~1 "adds a ticket id"
+
 echo "public repo hygiene fixtures OK"

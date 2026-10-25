@@ -70,7 +70,7 @@ ticket_id_cutoff=1793145600 # 2026-10-28T00:00:00Z, in seconds since the epoch
 
 failures=0
 commits="$(git rev-list --no-merges "$range" 2>/dev/null || true)"
-[[ -n "$commits" ]] || { printf 'Commit message hygiene OK: no commits in %s.\n' "$range"; exit 0; }
+[[ -n "$(git rev-list "$range" 2>/dev/null || true)" ]] || { printf 'Commit message hygiene OK: no commits in %s.\n' "$range"; exit 0; }
 
 while IFS= read -r sha; do
   [[ -n "$sha" ]] || continue
@@ -103,9 +103,15 @@ while IFS= read -r sha; do
     fi
   done
 
-  # A trailer can leak as easily as the body, so these read every line but
-  # the co-author credit.
-  full="$(git log -1 --format='%B' "$sha" | sed -E '/^Co-[Aa]uthored-[Bb]y:[[:space:]]/d')"
+done <<<"$commits"
+
+# Private content and tracker ids, in every commit of the range, merges too,
+# and in every line of the message: a trailer or a merge subject leaks as
+# easily as the body.
+all_commits="$(git rev-list "$range" 2>/dev/null || true)"
+while IFS= read -r sha; do
+  [[ -n "$sha" ]] || continue
+  full="$(git log -1 --format='%B' "$sha")"
   for check in "${private_content_checks[@]}"; do
     id="${check%%::*}"
     rest="${check#*::}"
@@ -126,7 +132,7 @@ while IFS= read -r sha; do
       failures=$((failures + 1))
     fi
   fi
-done <<<"$commits"
+done <<<"$all_commits"
 
 if (( failures > 0 )); then
   printf '\nCommit message hygiene failed with %d issue(s) in %s.\n' "$failures" "$range" >&2

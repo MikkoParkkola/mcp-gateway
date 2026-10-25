@@ -53,7 +53,9 @@ public_data_allowlist=(
 )
 
 # Debt: hits that exist on the tree today and are being removed. One
-# <path or directory/>TAB<check id> per line. An entry that no longer matches
+# <path or directory/>TAB<check id>[TAB<most hits>] per line. With a count,
+# more hits than that under the entry fail: debt covers what is there, not
+# what is added. An entry that no longer matches
 # anything fails the check, so the list only shrinks.
 debt_file="scripts/dev/public-hygiene-debt.tsv"
 debt_entries=()
@@ -63,7 +65,7 @@ if [[ -f "$debt_file" ]]; then
     debt_entries+=("$entry")
   done <"$debt_file"
 fi
-declare -A debt_used=()
+declare -A debt_used=() debt_hits=()
 
 ignore_samples=(
   "internal/example.md"
@@ -230,12 +232,14 @@ report_failure() {
 
 # Whether $1 (a path) is covered for check $2 by a debt entry; marks it used.
 is_debt() {
-  local file="$1" id="$2" entry where
+  local file="$1" id="$2" entry where rest
   for entry in ${debt_entries[@]+"${debt_entries[@]}"}; do
-    [[ "${entry#*$'\t'}" == "$id" ]] || continue
     where="${entry%%$'\t'*}"
+    rest="${entry#*$'\t'}"
+    [[ "${rest%%$'\t'*}" == "$id" ]] || continue
     if [[ "$file" == "$where" || ( "$where" == */ && "$file" == "$where"* ) ]]; then
       debt_used["$entry"]=1
+      debt_hits["$entry"]=$(( ${debt_hits["$entry"]:-0} + 1 ))
       return 0
     fi
   done
@@ -302,13 +306,29 @@ is_public_data() {
   return 1
 }
 
-while IFS= read -r file; do
+# Literal paths throughout: a quoted name ("tickets/\303\244.md") would slip
+# past every prefix comparison.
+git_lit() { git -c core.quotePath=false "$@"; }
+
+merge_base=""
+declare -A added=()
+if [[ -n "$base" ]]; then
+  merge_base="$(git merge-base "$base" HEAD)"
+  # No rename detection: a file renamed into a private path or a ticket-id
+  # name is judged as the addition it is.
+  while IFS= read -r -d '' file; do
+    added["$file"]=1
+  done < <(git_lit diff -z --no-renames --name-only --diff-filter=A "$merge_base" HEAD)
+fi
+
+while IFS= read -r -d '' file; do
   is_private_path "$file" || continue
   is_public_data "$file" && continue
-  is_debt "$file" private-path && continue
+  # Debt covers what the tree already carried, never a file this change adds.
+  [[ -z "${added[$file]:-}" ]] && is_debt "$file" private-path && continue
   report_failure "$file is a private path; it belongs in the private companion repository"
   printf 'Remediation: move it into the private companion repository (cloned at internal/) keeping its path, then git rm it here.\n' >&2
-done < <(git ls-files)
+done < <(git ls-files -z)
 
 for check in "${private_content_checks[@]}"; do
   id="${check%%::*}"
@@ -326,23 +346,22 @@ for check in "${private_content_checks[@]}"; do
     is_content_allowlisted "$file" "$id" && continue
     is_debt "$file" "$id" && continue
     report_failure "$hit -- $reason ($id)"
-  done < <(git grep -I -n -E ${case_flag[@]+"${case_flag[@]}"} -e "$regex" -- . || true)
+  done < <(git_lit grep -I -n -E ${case_flag[@]+"${case_flag[@]}"} -e "$regex" -- . || true)
 done
 
 if [[ -n "$base" ]]; then
-  merge_base="$(git merge-base "$base" HEAD)"
   # Added lines, as path TAB line TAB text. An id that the same file's removed
   # lines also carry was edited in place, not added.
   while IFS=$'\t' read -r file line text; do
     is_self_file "$file" && continue
     report_failure "$file:$line adds a ticket id: $text"
-  done < <(git diff --no-color --no-ext-diff --unified=0 -M "$merge_base" HEAD |
+  done < <(git_lit diff --no-color --no-ext-diff --unified=0 --no-renames "$merge_base" HEAD |
     awk -v re="$ticket_id_regex" '
       function ids(s,   out) { out = ""; while (match(s, /MIK-[0-9]+/)) { out = out " " substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH) } return out }
-      /^diff --git / { flush(); next }
-      /^\+\+\+ / { file = substr($0, 7); next }
-      /^--- / { next }
-      /^@@/ { match($0, /\+[0-9]+/); n = substr($0, RSTART + 1, RLENGTH - 1) + 0; next }
+      /^diff --git / { flush(); inhunk = 0; next }
+      !inhunk && /^\+\+\+ / { file = substr($0, 7); next }
+      !inhunk && /^--- / { next }
+      /^@@/ { inhunk = 1; match($0, /\+[0-9]+/); n = substr($0, RSTART + 1, RLENGTH - 1) + 0; next }
       /^-/ { gone = gone ids($0); next }
       /^\+/ { if (match($0, re)) { pend[++np] = file "\t" n "\t" substr($0, 2); pids[np] = ids($0) } n++; next }
       function flush(   i, k, m, kept) {
@@ -370,10 +389,10 @@ if [[ -n "$base" ]]; then
         break
       fi
     done
-  done < <(git diff --no-color --name-only --diff-filter=A -M "$merge_base" HEAD)
+  done < <(printf '%s\n' "${!added[@]}")
 fi
 
-while IFS= read -r file; do
+while IFS= read -r -d '' file; do
   [[ -f "$file" ]] || continue
 
   case "$file" in
@@ -411,7 +430,7 @@ while IFS= read -r file; do
       continue 2
     fi
   done
-done < <(git ls-files)
+done < <(git ls-files -z)
 
 for surface in "${shipped_surfaces[@]}"; do
   [[ -f "$surface" ]] || continue
@@ -420,7 +439,7 @@ for surface in "${shipped_surfaces[@]}"; do
   fi
 done
 
-while IFS= read -r file; do
+while IFS= read -r -d '' file; do
   [[ -n "$file" ]] || continue
   [[ "$file" == */* ]] && continue
   is_private_path "$file" && continue
@@ -431,11 +450,19 @@ while IFS= read -r file; do
   if [[ "$allowed" -eq 0 ]]; then
     report_failure "$file is a top-level file that is not on the root allowlist; move it under docs/ or add it to root_doc_allowlist in this script"
   fi
-done < <(git ls-files)
+done < <(git ls-files -z)
 
 for entry in ${debt_entries[@]+"${debt_entries[@]}"}; do
-  [[ -n "${debt_used[$entry]:-}" ]] && continue
-  report_failure "debt entry no longer matches anything; delete it from $debt_file: ${entry/$'\t'/ }"
+  if [[ -z "${debt_used[$entry]:-}" ]]; then
+    report_failure "debt entry no longer matches anything; delete it from $debt_file: ${entry//$'\t'/ }"
+    continue
+  fi
+  most="${entry#*$'\t'}"
+  [[ "$most" == *$'\t'* ]] || continue
+  most="${most#*$'\t'}"
+  if (( ${debt_hits[$entry]} > most )); then
+    report_failure "debt entry covers ${debt_hits[$entry]} hits, more than its $most; the change adds private material: ${entry//$'\t'/ }"
+  fi
 done
 
 if (( failures > 0 )); then
