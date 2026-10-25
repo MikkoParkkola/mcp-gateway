@@ -28,6 +28,7 @@ Option 2.
 
 - **Apply on reload in 4.0.0:** `auth.api_keys` (with ADR-022's rotation fields), cost_governance budgets and alerts, `security.sanitize_input` and `security.ssrf_protection`, and the policy rules, actions, sensitivity and exceptions U8 writes (U19 API19.1 and API19.3), plus the environment name (frame 28g), which only the UI reads.
 - **Each swap is atomic.** A parse or validation failure keeps the running value; a removed key stops working for open sessions (API19.2).
+- **The restart check ignores what now applies live.** The comparison that marks a section outstanding leaves the hot-applied fields out, the way `restart_only_json` already leaves out `dashboard_session` (F1), so changing a key does not mark the rest of `auth` as needing a restart.
 - **Everything else stays restart-only** and keeps F1's truthful reporting (API19.4). The UI marks those fields ↻ before Save, and Gateway › Actions offers Restart (ADR-019).
 
 ## Consequences

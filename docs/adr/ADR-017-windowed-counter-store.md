@@ -26,10 +26,10 @@ The new UI (MIK-8791, frames in `~/github/mcp-gateway-ux-design/png/r6/`) draws 
 
 Option 1.
 
-- **Buckets.** Each series keeps 48 hourly buckets and 30 daily buckets in a ring. Hourly answers "last hour vs the hour before" and the 24 h charts with the previous period; daily answers the 30-day charts. Day boundaries follow ADR-026.
-- **Series.** Calls, failures, firewall catches and cache hits, each globally, per server, per key and per tool; added latency; spend stays in the cost tracker.
-- **Cardinality cap.** Per dimension, at most 512 entries per window, and caller × server at most 2,048 pairs; the rest fold into one `other` series per dimension, as F4 does for cost. The UI's "+N more" fold is the same idea client-side. The cap is a constant, not a setting.
-- **Persistence.** `~/.mcp-gateway/counters.json`, written by the existing periodic saver and on shutdown, restored at start. A crash loses at most one save interval.
+- **Buckets.** Each series keeps 96 half-hour buckets (48 hours) and 30 daily buckets in a ring. Half-hour buckets answer the 30-minute charts with the same hours a day earlier, and add up to the hourly views ("last hour vs the hour before"); daily buckets answer the 30-day charts. Day boundaries follow ADR-026.
+- **Series.** Calls, failures, firewall catches and cache hits, each globally, per server, per key and per tool; added latency. Spend stays in the cost tracker's existing hourly buckets (F2), and the cost saver writes those buckets too, not only today's totals, so the 30-day spend charts survive a restart like the call charts.
+- **Cardinality cap.** Per dimension, at most 512 entries per window, and caller × server at most 2,048 pairs; the rest fold into one `other` series per dimension, as F4 does for cost. Names longer than 128 bytes are truncated with a hash suffix, so the cap bounds bytes as well as entries. The UI's "+N more" fold is the same idea client-side. The caps are constants, not settings.
+- **Persistence.** `~/.mcp-gateway/counters.json`, written by the existing periodic saver and on shutdown, restored at start. A periodic save can be skipped while the previous write is still running, so a crash loses everything since the last successful save, which is usually one interval and can be more.
 - **Restart.** A restart leaves a gap: buckets for the time the process was down stay empty, and the restart is a marker on every chart (frames 26s, 40, 41).
 - **Before U1 ships.** Charts that need history are labelled "since restart", or hidden, never drawn from cumulative counters as if they were windowed.
 

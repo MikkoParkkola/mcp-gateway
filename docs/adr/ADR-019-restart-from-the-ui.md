@@ -12,28 +12,32 @@ Gateway › Actions (frame 26) offers Restart for settings that wait for one (a 
 |---|---|---|
 | F1 | The gateway has no restart mechanism. | api-gaps.md F19, Risk 3 |
 | F2 | It runs under launchd, systemd, Docker, Homebrew services or a bare shell, and cannot tell which; 4.0 also ships a Windows binary. | api-gaps.md Risk 3; ADR-016 |
-| F3 | Host, port and TLS are read once at start; a reload does not change the listener. | `src/gateway/ui/session.rs:154-156` (restart-only listener values) |
-| F4 | State that must survive a restart is already saved on shutdown. | `src/gateway/server/persistence.rs:284` (`save_state_on_shutdown`) |
-| F5 | The crate denies `unsafe`. | `src/lib.rs:12` (`#![deny(unsafe_code)]`) |
+| F3 | Host, port and TLS are read once at start; a reload does not change the listener. | `src/gateway/ui/session.rs:154-156` |
+| F4 | `main` runs the whole gateway inside `runtime::block_on` and returns an exit code when it ends. | `src/main.rs:55-59` |
+| F5 | State is saved on shutdown, but a periodic cost save can be skipped while the previous write is still running, and save failures are logged, not raised. | `src/gateway/server/persistence.rs:145-160`, `:284` |
+| F6 | The crate denies `unsafe`. | `src/lib.rs:12` |
 
 ## Options
 
-1. **Exit with a reserved code** and rely on the supervisor's restart policy. Works under systemd with `Restart=on-failure` and Docker with a restart policy; under a bare shell or a launchd job without KeepAlive the gateway just stops, and the button lied.
-2. **Re-execute itself.** Drain, save state (F4), then replace the process image with the same binary and arguments (`std::os::unix::process::CommandExt::exec`, safe Rust, so F5 holds). The PID stays the same, so every supervisor still sees its own process; a bare shell keeps its foreground job. Not available on Windows.
-3. **Guidance only.** The UI says "restart required" and shows the command. Always honest; never a one-click restart.
+1. **Exit with a reserved code** and rely on the supervisor's restart policy. Works under systemd with `Restart=on-failure` and Docker with a restart policy; under a bare shell or a launchd job without KeepAlive the gateway just stops.
+2. **Re-execute itself.** Shut down cleanly, then replace the process image with the same binary and arguments (`std::os::unix::process::CommandExt::exec`, safe Rust, so F6 holds). The PID stays the same, so every supervisor still sees its own process, and a bare shell keeps its foreground job. Not available on Windows.
+3. **Guidance only.** The UI says "restart required" and shows the command.
 
 ## Decision
 
 Option 2 on Unix, Option 3 where 2 cannot run.
 
-- **Sequence.** Stop accepting new calls; let calls in flight finish for up to 10 s, then fail the rest (frame 26's copy already says writes cut off may have happened); save state (F4); `exec` the binary at the path the process started from, with the same arguments and environment.
-- **Upgrade.** If the binary on disk was replaced by an upgrade, the re-exec runs the new version; Gateway › Status reports the version that comes back.
-- **Refusal.** On Windows, or when the starting binary path no longer exists or is not executable, Restart is refused before anything stops, and the UI shows "Restart required" with the service command for that platform. Nothing is half-stopped.
-- **Progress.** The UI keeps its connection attempts going and shows the down time when the gateway answers again (26t); the restart and its duration go to the restart log U13 (MIK-8866) keeps for the uptime strip.
+- **Path.** At startup the gateway records the path it was invoked by (argv[0] resolved against the start directory) and its arguments. It does not use `current_exe`, which follows the running inode and would re-run the old binary after an upgrade replaced the file.
+- **Refuse first.** Before anything stops, Restart is refused when the platform is Windows or the recorded path is missing or not executable; the UI then shows "Restart required" with the platform's command. Nothing is half-stopped.
+- **Sequence.** Stop accepting new calls; let calls in flight finish for up to 10 s, then fail the rest (frame 26 already says a write cut off may have happened); save state and check that every save succeeded (F5). A failed save cancels the restart and reopens for calls, and the UI says why.
+- **Exec after the runtime is gone.** The restart request ends `run` with a restart outcome; `main` (F4) drops the runtime, so no worker thread or open listener is left, then calls `exec` from the one remaining thread. Listener sockets are close-on-exec, so the new process binds afresh.
+- **If exec returns.** It failed (the file changed between the check and the call). The gateway logs why and exits with code 75 (temporary failure), so a supervisor with a restart policy brings it back. Under a bare shell it stays down; that is the residual risk, and the log line names the command to start it.
+- **Progress.** The UI keeps reconnecting and shows the down time when the gateway answers again (26t); the restart and its duration go to the restart log U13 (MIK-8866) keeps for the uptime strip.
 
 ## Consequences
 
 - One-click restart under every Unix supervisor and a bare shell, with no supervisor detection.
+- An upgrade followed by Restart runs the new binary.
 - Windows operators get guidance, not a button, in 4.0.0.
-- The listener is closed for the re-exec: a few seconds of refused connections (the "3 s down" in the frames), which is what an operator restart costs today.
-- A crash during the drain falls back to the supervisor's own policy, as any crash does.
+- A few seconds of refused connections during the restart, the "3 s down" in the frames.
+- The only case that leaves a bare-shell gateway down is an exec that fails after its own check passed; it is logged with the command to recover.

@@ -17,15 +17,15 @@ To do's third decision is "Adopt an unmanaged server": an MCP server agents can 
 
 ## Options
 
-1. **Local only for 4.0.0.** Client config files and running processes on the gateway's host (F1-F3).
+1. **Client config files only, for 4.0.0.** The adopt decision draws on the config files of MCP clients on the gateway's host (F1). The process scanner (F2) keeps its current uses and does not feed To do.
 2. **Add a network scan.** Probing a subnet for MCP endpoints finds servers no local config names, but it is a new capability with consent (scanning networks the operator may not own), SSRF exposure (the gateway making connections an attacker can steer), and false positives.
 
 ## Decision
 
-Option 1. A network scan is out of 4.0.0 and filed for v4.1.0 with those three questions as its acceptance.
+Option 1, as the ticket's ADR.5 criterion states. A network scan is out of 4.0.0 and filed for v4.1.0 with consent, SSRF and false positives as its acceptance.
 
 ## Consequences
 
-- An unmanaged server is found only if a client on this host names it or it runs on this host.
+- An unmanaged server is found only if a client config on this host names it.
 - Frame 44d's example must read as a local find (named in a client config on this host), not as a network find; the design repo changes that copy.
 - The "Not behind the gateway" group on Servers lists only local finds in 4.0.0.
