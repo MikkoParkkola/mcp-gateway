@@ -7,7 +7,7 @@
 //! nesting stack, whatever the document's structure. Pass 1 sizes the output
 //! and collects member findings; pass 2 writes the output into exactly that
 //! capacity. No key is renamed here: where a key would be, and where a span
-//! crosses an exempt value or the document is led by serde_json's raw-value
+//! crosses an exempt value or the document is led by `serde_json`'s raw-value
 //! token, the walk replaces the spans unclipped (base's output) and still
 //! redacts every member value.
 
@@ -126,19 +126,11 @@ impl Redactor {
             text.trim_start().as_bytes().first(),
             Some(b'{' | b'[' | b'"')
         );
-        let Some(doc) = opens
-            .then(|| json_valid::check(text))
-            .flatten()
-            .filter(|doc| doc.walkable)
-        else {
+        if !opens || json_valid::walkable(text) != Some(true) {
             return JsonText::NotJson;
-        };
+        }
         let spans = self.credential_spans(text);
-        let mut placement = if doc.raw_value_token {
-            Placement::Raw
-        } else {
-            Placement::Clip
-        };
+        let mut placement = Placement::Clip;
         let plan = loop {
             let pass = self.walk(
                 text,
@@ -220,7 +212,7 @@ impl Redactor {
             while checked < spans.len() && spans[checked].0 < lit.start {
                 if placement == Placement::Raw {
                     merger.push(spans[checked].0, spans[checked].1);
-                } else if !prev.as_ref().is_some_and(|p| spans[checked].0 < p.end) {
+                } else if prev.as_ref().is_none_or(|p| spans[checked].0 >= p.end) {
                     return None;
                 }
                 checked += 1;
@@ -243,25 +235,9 @@ impl Redactor {
                     replayed += usize::from(hit);
                     hit.then_some(None)
                 }
-                Members::Classify => {
-                    // The pairing `member_values` reads: a key, then only `:`.
-                    let paired = prev
-                        .as_ref()
-                        .filter(|key| key.key && text[key.end + 1..lit.start - 1].trim() == ":");
-                    let value = (clip || paired.is_some())
-                        .then(|| content(text, &lit))
-                        .flatten();
-                    let is_exempt = value.as_deref().is_some_and(exempt);
-                    if is_exempt && clip {
-                        return None;
-                    }
-                    match (paired, value.as_deref()) {
-                        (Some(key), Some(value)) if !is_exempt => content(text, key)
-                            .and_then(|key| self.credential_member(&key, value))
-                            .map(Some),
-                        _ => None,
-                    }
-                }
+                Members::Classify => self
+                    .member_of(text, prev.as_ref(), &lit, clip, exempt)?
+                    .map(Some),
             };
             // The member's whole value goes first, so every range of this
             // literal after it starts inside it and the merge stays in order.
@@ -270,32 +246,12 @@ impl Redactor {
             }
             let trimmed = trimmed_content(text, &lit);
             let contains = |(a, b): (usize, usize)| a <= trimmed.0 && trimmed.1 <= b;
-            let mut is_covered = false;
-            if clip {
-                let mut escapes = Escapes::new(text, &lit);
-                let mut local: Option<(usize, usize)> = None;
-                for &(start, end) in spans[first..].iter().take_while(|span| span.0 < lit.end) {
-                    let (mut from, mut to) = (start.max(lit.start), end.min(lit.end));
-                    if from >= to {
-                        continue; // an empty value: the span covers none of its bytes
-                    }
-                    if let Some(escape) = escapes.around(from) {
-                        from = escape.0;
-                    }
-                    if let Some(escape) = escapes.around(to) {
-                        to = escape.1;
-                    }
-                    merger.push(from, to);
-                    match &mut local {
-                        Some(last) if from <= last.1 => last.1 = last.1.max(to),
-                        _ => is_covered |= local.replace((from, to)).is_some_and(contains),
-                    }
-                }
-                is_covered |= local.is_some_and(contains);
-            } else if member.is_some() {
+            let is_covered = if clip {
+                clip_into(text, &spans[first..], &lit, &mut merger, contains)
+            } else {
                 let after = spans.partition_point(|span| span.0 <= trimmed.0);
-                is_covered = after.checked_sub(1).is_some_and(|i| contains(spans[i]));
-            }
+                member.is_some() && after.checked_sub(1).is_some_and(|i| contains(spans[i]))
+            };
             // As under the cap: one secret, one finding, except family 1.
             if let Some(Some(family)) = member {
                 members.push(Member {
@@ -309,7 +265,7 @@ impl Redactor {
         for &(start, end) in &spans[checked..] {
             if placement == Placement::Raw {
                 merger.push(start, end);
-            } else if !prev.as_ref().is_some_and(|p| start < p.end) {
+            } else if prev.as_ref().is_none_or(|p| start >= p.end) {
                 return None;
             }
         }
@@ -320,6 +276,68 @@ impl Redactor {
             members,
         })
     }
+}
+
+impl Redactor {
+    /// The family of the member whose value is `lit`, paired as
+    /// `member_values` pairs it: the literal before is a key, then only `:`.
+    /// `None` when `lit` is an exempt value a span covers (`clip`), which
+    /// sends the walk to [`Placement::Raw`]; an exempt value is no member.
+    fn member_of(
+        &self,
+        text: &str,
+        prev: Option<&Literal>,
+        lit: &Literal,
+        clip: bool,
+        exempt: &dyn Fn(&str) -> bool,
+    ) -> Option<Option<Family>> {
+        let paired = prev.filter(|key| key.key && text[key.end + 1..lit.start - 1].trim() == ":");
+        let value = (clip || paired.is_some())
+            .then(|| content(text, lit))
+            .flatten();
+        let is_exempt = value.as_deref().is_some_and(exempt);
+        if is_exempt && clip {
+            return None;
+        }
+        Some(match (paired, value.as_deref()) {
+            (Some(key), Some(value)) if !is_exempt => {
+                content(text, key).and_then(|key| self.credential_member(&key, value))
+            }
+            _ => None,
+        })
+    }
+}
+
+/// `spans` (from the first not wholly before `lit`) clipped to `lit` and
+/// widened to whole escapes, into `merger`; whether one merged piece holds
+/// the content `contains` asks about.
+fn clip_into(
+    text: &str,
+    spans: &[(usize, usize)],
+    lit: &Literal,
+    merger: &mut Merger<'_>,
+    contains: impl Fn((usize, usize)) -> bool,
+) -> bool {
+    let mut escapes = Escapes::new(text, lit);
+    let (mut local, mut covered): (Option<(usize, usize)>, bool) = (None, false);
+    for &(start, end) in spans.iter().take_while(|span| span.0 < lit.end) {
+        let (mut from, mut to) = (start.max(lit.start), end.min(lit.end));
+        if from >= to {
+            continue; // an empty value: the span covers none of its bytes
+        }
+        if let Some(escape) = escapes.around(from) {
+            from = escape.0;
+        }
+        if let Some(escape) = escapes.around(to) {
+            to = escape.1;
+        }
+        merger.push(from, to);
+        match &mut local {
+            Some(last) if from <= last.1 => last.1 = last.1.max(to),
+            _ => covered |= local.replace((from, to)).is_some_and(&contains),
+        }
+    }
+    covered || local.is_some_and(contains)
 }
 
 /// A literal's text decoded, borrowed when it holds no escape: most keys and

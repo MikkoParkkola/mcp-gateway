@@ -14,12 +14,11 @@ fn esc(hex: &str) -> String {
 
 fn agrees(text: &str) {
     let value = serde_json::from_str::<Value>(text);
-    let checked = check(text);
-    assert_eq!(checked.is_some(), value.is_ok(), "{text}: {value:?}");
-    if let (Some(doc), Ok(value)) = (checked, value) {
-        let walkable = value.is_object() || value.is_array() || value.is_string();
-        assert_eq!(doc.walkable, walkable, "{text}");
-        assert!(!doc.raw_value_token, "{text}");
+    let walkable = walkable(text);
+    assert_eq!(walkable.is_some(), value.is_ok(), "{text}: {value:?}");
+    if let (Some(walkable), Ok(value)) = (walkable, value) {
+        let gate = value.is_object() || value.is_array() || value.is_string();
+        assert_eq!(walkable, gate, "{text}");
     }
 }
 
@@ -49,7 +48,7 @@ fn v1_agrees_with_value() {
         r#"["esc\"aped\n"]"#.to_owned(),
         r#"{"a":1,"a":2}"#.to_owned(),
         r#"{"a" 1}"#.to_owned(),
-        r#"{1:2}"#.to_owned(),
+        "{1:2}".to_owned(),
         String::new(),
         "  ".to_owned(),
         "3".to_owned(),
@@ -64,24 +63,26 @@ fn v1_agrees_with_value() {
     }
 }
 
+/// The raw-value token is read as `Value` reads it: the member's string is
+/// a nested document that stands for the object, and nothing may follow it.
 #[test]
-fn v2_the_raw_value_token_is_flagged_not_followed() {
+fn v2_the_raw_value_token_agrees_with_value() {
     let token = "$serde_json::private::RawValue";
     for text in [
         format!(r#"{{"{token}":"[1]"}}"#),
+        format!(r#"{{"{token}":"3"}}"#),
+        format!(r#"{{"{token}":"\"s\""}}"#),
         format!(r#"{{"{token}":null}}"#),
-        format!(r#"[[{{"{token}":"{{}}","b":1}}]]"#),
-        format!(r#"{{"$serde_json::private::Raw{}alue":1}}"#, esc("0056")),
+        format!(r#"{{"{token}":"[1"}}"#),
+        format!(r#"{{"{token}":"[1]","b":1}}"#),
+        format!(r#"[[{{"{token}":"{{}}"}}]]"#),
+        format!(r#"{{"{token}":"{{\"{token}\":\"[2]\"}}"}}"#),
+        format!(
+            r#"{{"$serde_json::private::Raw{}alue":"[1]"}}"#,
+            esc("0056")
+        ),
+        format!(r#"{{"a":1,"{token}":"[1]"}}"#),
     ] {
-        let doc = check(&text).unwrap_or_else(|| panic!("{text}"));
-        assert!(doc.raw_value_token, "{text}");
+        agrees(&text);
     }
-    let later = format!(r#"{{"a":1,"{token}":"[1]"}}"#);
-    assert_eq!(
-        check(&later),
-        Some(Document {
-            walkable: true,
-            raw_value_token: false
-        })
-    );
 }

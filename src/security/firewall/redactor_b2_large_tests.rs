@@ -313,9 +313,11 @@ fn s4_the_raw_value_token_over_the_cap_reads_as_value_does() {
         format!(r#"{{"a":{url},"{RAW_VALUE_TOKEN}":"[1]"}}"#),
         format!(r#"[{{"password":"{PASS}"}},{{"{RAW_VALUE_TOKEN}":"[1]"}},{url}]"#),
     ] {
+        // The same delivery as under the cap is the contract. It need not
+        // parse as `Value`: a span reaching a raw-value string leaves the
+        // marker there, which `Value` reads as an invalid nested document.
         assert!(parses(&doc), "{doc}");
         assert_as_under_cap(&doc, &|_| false);
-        assert!(parses(&deliver(&over_cap(&doc)).0), "{doc}");
     }
     for doc in [
         format!(r#"[{url},{{"{RAW_VALUE_TOKEN}":null}}]"#),

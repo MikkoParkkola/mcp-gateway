@@ -5,54 +5,41 @@
 //! decided without building it (MIK-8774). Read through the same
 //! deserializer as `Value`, so surrogates, number range, nesting depth and
 //! trailing characters are judged by the same code; the only memory it adds
-//! is serde_json's own scratch for one escaped token.
+//! is `serde_json`'s own scratch for one escaped token.
 
 use std::fmt;
 
 use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 
-/// The first object key serde_json's `raw_value` feature reads specially.
+/// The first object key `serde_json`'s `raw_value` feature reads specially:
+/// `Value` takes the member's string as a nested JSON document, which stands
+/// for the whole object, and accepts no member after it.
 const RAW_VALUE_TOKEN: &str = "$serde_json::private::RawValue";
 
-/// What [`check`] found in an accepted document.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct Document {
-    /// The top level is an object, an array or a string (the redactor's gate).
-    pub(crate) walkable: bool,
-    /// Some object's first key is [`RAW_VALUE_TOKEN`], which `Value` does not
-    /// read as an ordinary key: the redactor does not follow such a document.
-    pub(crate) raw_value_token: bool,
+/// `None` when `Value` rejects `text`; otherwise whether the `Value` it would
+/// build is an object, an array or a string (the redactor's gate).
+pub(crate) fn walkable(text: &str) -> Option<bool> {
+    shape(text).map(|shape| matches!(shape, Shape::Container | Shape::String))
 }
 
-/// `Some` when `text` is one JSON document `Value` would accept.
-pub(crate) fn check(text: &str) -> Option<Document> {
-    let mut raw_value_token = false;
+fn shape(text: &str) -> Option<Shape> {
     let mut de = serde_json::Deserializer::from_str(text);
-    let shape = Any {
-        token: &mut raw_value_token,
-    }
-    .deserialize(&mut de)
-    .ok()?;
+    let shape = Any.deserialize(&mut de).ok()?;
     de.end().ok()?;
-    Some(Document {
-        walkable: matches!(shape, Shape::Container | Shape::String),
-        raw_value_token,
-    })
+    Some(shape)
 }
 
+#[derive(Clone, Copy)]
 enum Shape {
     Container,
     String,
     Scalar,
 }
 
-/// One value, read and dropped; sets `token` when an object below it is led
-/// by [`RAW_VALUE_TOKEN`].
-struct Any<'a> {
-    token: &'a mut bool,
-}
+/// One value, read and dropped: the shape of the `Value` it would be.
+struct Any;
 
-impl<'de> DeserializeSeed<'de> for Any<'_> {
+impl<'de> DeserializeSeed<'de> for Any {
     type Value = Shape;
 
     fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Shape, D::Error> {
@@ -60,7 +47,7 @@ impl<'de> DeserializeSeed<'de> for Any<'_> {
     }
 }
 
-impl<'de> Visitor<'de> for Any<'_> {
+impl<'de> Visitor<'de> for Any {
     type Value = Shape;
 
     fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -87,27 +74,28 @@ impl<'de> Visitor<'de> for Any<'_> {
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Shape, A::Error> {
-        while seq
-            .next_element_seed(Any {
-                token: &mut *self.token,
-            })?
-            .is_some()
-        {}
+        while seq.next_element_seed(Any)?.is_some() {}
         Ok(Shape::Container)
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Shape, A::Error> {
-        let mut first = true;
-        while let Some(is_token) = map.next_key_seed(Key)? {
-            if first && is_token {
-                *self.token = true;
+        // As `Value`'s visitor: only the first key is classified, and a
+        // raw-value member returns at once, so the deserializer's own end of
+        // the map rejects any member after it.
+        match map.next_key_seed(Key)? {
+            Some(true) => {
+                let nested: String = map.next_value()?;
+                shape(&nested).ok_or_else(|| de::Error::custom("invalid raw value"))
             }
-            first = false;
-            map.next_value_seed(Any {
-                token: &mut *self.token,
-            })?;
+            Some(false) => {
+                map.next_value_seed(Any)?;
+                while map.next_key_seed(Key)?.is_some() {
+                    map.next_value_seed(Any)?;
+                }
+                Ok(Shape::Container)
+            }
+            None => Ok(Shape::Container),
         }
-        Ok(Shape::Container)
     }
 }
 
