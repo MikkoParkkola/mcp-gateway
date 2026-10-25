@@ -413,7 +413,7 @@ jobs:
             # The -full variant takes every name the default image takes, with
             # -full appended: latest-full, 3.5-full, 3.5.2-full, v3.5.2-full.
             echo "tags_full<<EOF"
-            echo "${tags}" | sed 's/^ *//; s/$/-full/'
+            echo "${tags}" | sed 's/^ *//; /^$/d; s/$/-full/'
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
