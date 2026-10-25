@@ -158,10 +158,10 @@ The value never appears in argv, logs or error text. Readers and writers pass it
      - Readiness is read over D-Bus with `gdbus`: the default collection exists and its `Locked` property is false. Locked means unavailable, and the probe never triggers an unlock prompt.
      - A `secret-tool` exit status is never used to tell "not found" from a bus failure.
      - **Every `secret-tool` spawn is gated, not just the probe.** Immediately before each spawn, `gdbus` checks the item's state and nothing is spawned when it is locked.
-       - For `lookup`, `SearchItems` on the `service NAME` attribute: a path in its locked list means unavailable, naming the entry. That covers a locked non-default collection too.
-       - For `store`, the default collection's `Locked` property must be false.
+       - For `lookup`, `SearchItems` on the `service NAME` attribute. A path in its locked list means unavailable, naming the entry, which covers a locked non-default collection too. Empty results mean missing. `secret-tool lookup` is spawned only for an unlocked path.
+       - For `store` and `clear`, the default collection's `Locked` property must be false (for `clear`, also the item's own path from `SearchItems`).
        - Startup, reload and every `keychain:` read take this path.
-     - Accepted residual: a collection that locks in the gap between that check and the spawn may open the desktop's own unlock dialog. `secret-tool` has no no-prompt flag, and the D-Bus calls that avoid it would put the value in argv. The bound (2 s) still applies.
+     - Accepted residual: any prompt that `secret-tool` itself performs. That covers a collection locking in the gap between the check and the spawn, and an authorization prompt the Secret Service returns for a create or delete, which libsecret runs automatically. `secret-tool` has no no-prompt flag. Refusing prompt objects needs an in-process D-Bus client, which the tree does not have; `gdbus` cannot be used for create, since it would put the value in argv. The bound (2 s) still applies.
    - **Windows:** a missing name's `CredReadW` giving `ERROR_NOT_FOUND` means available; `ERROR_NO_SUCH_LOGON_SESSION` or any other error means unavailable.
 
 ### Windows `unsafe` module
@@ -189,7 +189,8 @@ The value never appears in argv, logs or error text. Readers and writers pass it
 11. **Capability files are out of scope.** Their `keychain:` and `{keychain.X}` keep the old readers, and a UI save never writes a `keychain:` reference into capability YAML until they share these backends (MIK-8902).
 12. **Acceptance cases.** The implementing PR proves each one:
     - a locked default collection, and an entry in a locked non-default collection, each refused without spawning `secret-tool`;
-    - a lock after the probe on Linux, recorded as the residual;
+    - on Linux, a collection locked after the probe but before the per-spawn check, refused without spawning; a lock between that check and the spawn is the recorded residual;
+    - exact-byte round trips (leading and trailing whitespace, a trailing newline) and a value at and one byte over each store's limit;
     - a store that times out after writing, cleaned up by rollback;
     - a locked macOS keychain, refused at `SecItemAdd` with nothing left behind;
     - two gateways with different data dirs, serialised by the one vault lock;
