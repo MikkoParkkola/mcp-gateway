@@ -784,5 +784,121 @@ class BuildTargets(unittest.TestCase):
                 )
 
 
+
+# The `-full` variant's steps in each job, each required, in this order.
+FULL_CHECK_STEPS = [
+    "Build the full variant for the scan and smoke (load locally, no push)",
+    "Trivy the full variant (block on fixable HIGH/CRITICAL CVEs)",
+    "Smoke the full variant (it must spawn npx and uvx)",
+]
+FULL_PUBLISH_STEPS = [
+    "Build the full variant (load locally)",
+    "Trivy the full variant (block on fixable HIGH/CRITICAL CVEs)",
+    "Smoke the full variant (it must spawn npx and uvx)",
+    "Push the full variant",
+    "Cosign keyless-sign the full variant by digest",
+    "Generate + attest an SBOM (SPDX JSON) for the full variant",
+    "Verify the full variant's signature + SBOM attestation",
+    "Verify every full alias resolves to its signed digest",
+]
+SCRIPTS = pathlib.Path(__file__).parents[2] / "scripts" / "ci"
+
+
+class FullVariantWiring(unittest.TestCase):
+    """CI builds, scans and smokes the `-full` variant beside the default image,
+    and the publisher releases it under every name the default gets, with
+    `-full` appended, signed and verified the same way (MIK-8831 REL)."""
+
+    def setUp(self):
+        self.ci = (WORKFLOWS / "ci.yml").read_text()
+
+    def test_the_check_builds_scans_and_smokes_both_images(self):
+        check = job(self.ci, "docker-check")
+        assert_steps(check, FULL_CHECK_STEPS, "the image check")
+        build = step(check, FULL_CHECK_STEPS[0])
+        self.assertRegex(build, r"(?m)^          target: runtime-full$")
+        self.assertIn("load: true", build)
+        self.assertIn("scripts/ci/smoke-image.sh mcp-gateway:ci", step(check, "Smoke the image"))
+        self.assertIn(
+            "scripts/ci/smoke-full-image.sh mcp-gateway:ci-full", step(check, FULL_CHECK_STEPS[2])
+        )
+
+    def test_the_publisher_releases_the_full_variant_beside_the_default(self):
+        docker = job(self.ci, "docker")
+        assert_steps(docker, FULL_PUBLISH_STEPS, "the publisher")
+        build = step(docker, FULL_PUBLISH_STEPS[0])
+        self.assertRegex(build, r"(?m)^          target: runtime-full$")
+        self.assertIn("load: true", build)
+        self.assertNotIn("push:", build, "one local build, pushed after its scan")
+        self.assertIn("tags: ${{ steps.meta.outputs.tags_full }}", build)
+        self.assertIn("scripts/ci/smoke-image.sh", step(docker, "Smoke the image"))
+        self.assertIn("scripts/ci/smoke-full-image.sh", step(docker, FULL_PUBLISH_STEPS[2]))
+        for name in FULL_PUBLISH_STEPS[4:]:
+            self.assertIn(
+                "DIGEST: ${{ steps.build_full.outputs.digest }}",
+                step(docker, name),
+                f"{name!r} does not act on the full variant's own digest",
+            )
+        self.assertIn(
+            "TAGS: ${{ steps.meta.outputs.tags_full }}",
+            step(docker, FULL_PUBLISH_STEPS[-1]),
+            "every pushed -full name is verified",
+        )
+
+    def test_the_smoke_scripts_ship_and_are_executable(self):
+        for name in ("smoke-image.sh", "smoke-full-image.sh"):
+            path = SCRIPTS / name
+            self.assertTrue(path.is_file(), f"scripts/ci/{name} is missing")
+            self.assertTrue(os.access(path, os.X_OK), f"scripts/ci/{name} is not executable")
+
+    def test_every_name_has_a_full_twin(self):
+        rc, out = run_script(
+            self.ci,
+            "Extract tag",
+            {"GITHUB_REF": "refs/tags/v3.5.2", "GITHUB_SHA": "1234567890abcdef"},
+            remote_tags("3.5.1", "3.5.2"),
+        )
+        self.assertEqual(rc, 0)
+        self.assertIn("tags_full<<EOF\n", out, "the tag step emits no -full names")
+        full = sorted(
+            line for line in out.split("tags_full<<EOF\n", 1)[1].split("\nEOF", 1)[0].splitlines() if line
+        )
+        self.assertEqual(full, sorted(f"{t}-full" for t in emitted_tags(out)))
+
+    def push_full(self, remote):
+        image = "ghcr.io/mikkoparkkola/mcp-gateway"
+        tags = "\n".join(
+            f"{image}:{t}-full" for t in ("3.5.2", "v3.5.2", "sha-1234567", "3.5", "latest")
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            log = pathlib.Path(tmp, "pushed")
+            docker = (
+                f'case "$1" in\n'
+                f'  push) echo "$2" >> "{log}" ;;\n'
+                f'  inspect) echo "{image}@sha256:full" ;;\n'
+                f"esac\n"
+            )
+            rc, out = run_script(
+                self.ci,
+                "Push the full variant",
+                {"TAGS": tags, "VERSION": "3.5.2"},
+                {"docker": docker, **remote_tags(*remote)},
+            )
+            pushed = log.read_text().split() if log.exists() else []
+        return rc, out, pushed
+
+    def test_the_full_push_moves_latest_full_last_and_only_for_the_highest(self):
+        rc, out, pushed = self.push_full(["3.5.1", "3.5.2"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(pushed), 5)
+        self.assertEqual(pushed[-1], "ghcr.io/mikkoparkkola/mcp-gateway:latest-full")
+        self.assertIn("digest=sha256:full", out)
+        self.assertIn("latest=true", out)
+        rc, out, pushed = self.push_full(["3.5.2", "3.5.3"])
+        self.assertEqual(rc, 0)
+        self.assertNotIn("ghcr.io/mikkoparkkola/mcp-gateway:latest-full", pushed)
+        self.assertIn("latest=false", out)
+
+
 if __name__ == "__main__":
     unittest.main()
