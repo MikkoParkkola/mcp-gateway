@@ -183,3 +183,10 @@ mig2/r1/place/anchor-and-tag	ERR v: invalid type: map, expected a string at line
 mig2/r1/place/cr	ERR b: invalid type: map, expected a string at line 2 column 4
 mig2/r1/place/crlf	ERR b: invalid type: map, expected a string at line 2 column 4
 mig2/r1/nested-enum	ERR v: deserializing nested enum in Outer::inner from YAML is not supported yet at line 1 column 4
+mig2/r2/write/repeated-key	OK "a: 1\na: 2\n"
+mig2/r2/write/f32-forms	OK "- 0.000001\n- 0.00001\n- 0.1\n- 123456790.0\n- 3e38\n- 1.5\n"
+mig2/r2/write/bang-tag	OK "v: !<%21> x\n"
+mig2/r2/place/tag-only-empty	ERR v: invalid type: unit value, expected u8 at line 1 column 4
+mig2/r2/place/block-comment	ERR v: invalid type: string, expected u8 at line 1 column 4
+mig2/r2/place/block-pipe-content	ERR v: invalid type: string, expected u8 at line 1 column 4
+mig2/r2/place/folded	ERR v: invalid type: string, expected u8 at line 1 column 4

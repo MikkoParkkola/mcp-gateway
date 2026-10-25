@@ -358,6 +358,52 @@ fn seat_r1(out: &mut String) {
     );
 }
 
+/// A map that writes the same key twice, as a hand-written `Serialize` can.
+struct Repeated;
+
+impl Serialize for Repeated {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap as _;
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("a", &1)?;
+        map.serialize_entry("a", &2)?;
+        map.end()
+    }
+}
+
+/// The code seats' r2 cases (gpt and grok, 2026-10-25), recorded with the
+/// current backend.
+fn seat_r2(out: &mut String) {
+    row(out, "mig2/r2/write/repeated-key", &written(&Repeated));
+    let floats: Vec<f32> = vec![1.0e-6, 1.0e-5, 0.1, 123_456_790.0, 3.0e38, 1.5];
+    row(out, "mig2/r2/write/f32-forms", &written(&floats));
+    let reading = match yaml::from_str::<yaml::Value>("v: ! x\n") {
+        Ok(tree) => written(&tree),
+        Err(error) => format!("ERR read {error}"),
+    };
+    row(out, "mig2/r2/write/bang-tag", &reading);
+    row(
+        out,
+        "mig2/r2/place/tag-only-empty",
+        &ok_json(yaml::from_str::<BTreeMap<String, u8>>("v: !t\n")),
+    );
+    row(
+        out,
+        "mig2/r2/place/block-comment",
+        &ok_json(yaml::from_str::<BTreeMap<String, u8>>("v: |- # c\n  5\n")),
+    );
+    row(
+        out,
+        "mig2/r2/place/block-pipe-content",
+        &ok_json(yaml::from_str::<BTreeMap<String, u8>>("v: |-\n  |x\n")),
+    );
+    row(
+        out,
+        "mig2/r2/place/folded",
+        &ok_json(yaml::from_str::<BTreeMap<String, u8>>("v: >-\n  5\n")),
+    );
+}
+
 pub(super) fn rows(out: &mut String) {
     product_enums(out);
     duplicates(out);
@@ -368,4 +414,5 @@ pub(super) fn rows(out: &mut String) {
     from_value(out);
     figment_data(out);
     seat_r1(out);
+    seat_r2(out);
 }
