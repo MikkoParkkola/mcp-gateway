@@ -195,6 +195,35 @@ fn p6_write_rows_as_recorded() {
     assert_outcome("P6 writer", &behaviour_group("P6 writer"), 3);
 }
 
+/// P6 (round trips): every repository YAML file that reads as one tree is
+/// written by the new writer and read back by the new reader unchanged.
+#[test]
+fn p6_every_repository_tree_round_trips() {
+    let mut checked = 0usize;
+    let mut differ = Vec::new();
+    for path in trees::paths() {
+        let Ok(text) = std::fs::read_to_string(golden::repo_root().join(&path)) else {
+            continue;
+        };
+        let Ok(tree) = yaml::from_str::<yaml::Value>(&text) else {
+            continue;
+        };
+        checked += 1;
+        let written = yaml::to_string(&tree).expect("a read tree writes");
+        match yaml::from_str::<yaml::Value>(&written) {
+            Ok(back) if back == tree => {}
+            Ok(_) => differ.push(format!("{path}: reads back differently")),
+            Err(error) => differ.push(format!("{path}: written text refused: {error}")),
+        }
+    }
+    assert!(checked >= 100, "only {checked} trees checked");
+    assert!(
+        differ.is_empty(),
+        "{} of {checked} trees do not round-trip: {differ:?}",
+        differ.len()
+    );
+}
+
 /// P2: every repository YAML file's tree, `Dict` and stream.
 #[test]
 fn p2_trees_as_recorded() {

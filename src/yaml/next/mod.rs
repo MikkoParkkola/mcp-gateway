@@ -4,8 +4,7 @@
 //! MIG.2). Every entry point mirrors the adapter's own signature, so
 //! `tests/mik_8425_mig2_parity.rs` drives the same golden reports over it.
 //! Each parse entry point runs the adapter's own pre-parse guard first, as
-//! the adapter does. Step 3 left every entry point a stub that refuses;
-//! step 4 fills them in; the switch collapses this module into the adapter.
+//! the adapter does. The switch collapses this module into the adapter.
 
 use figment::value::{Dict, Map};
 use serde::Serialize;
@@ -14,6 +13,7 @@ use serde::de::DeserializeOwned;
 use super::guard;
 
 mod de;
+mod emit;
 mod mapping;
 mod number;
 mod rep;
@@ -28,12 +28,6 @@ pub(crate) use mapping::Mapping;
 pub(crate) use number::Number;
 pub(crate) use tagged::{Tag, TaggedValue};
 pub(crate) use value::{Sequence, Value};
-
-const NOT_YET: &str = "yaml::next is not implemented yet (MIK-8425 MIG.2 step 4)";
-
-fn not_yet() -> Error {
-    Error::backend(<serde_yaml::Error as serde::de::Error>::custom(NOT_YET))
-}
 
 /// The replaced backend's refusal of a second document where one is read.
 const MORE_THAN_ONE: &str =
@@ -66,8 +60,9 @@ pub(crate) fn figment_data(text: &str) -> figment::Result<Map<figment::Profile, 
     Ok(figment::Profile::Default.collect(dict))
 }
 
-pub(crate) fn to_string<T: Serialize + ?Sized>(_value: &T) -> Result<String, Error> {
-    Err(not_yet())
+/// `value` as YAML text, byte-equal to the replaced backend's output (D20).
+pub(crate) fn to_string<T: Serialize + ?Sized>(value: &T) -> Result<String, Error> {
+    emit::emit(&ser::to_value(value)?)
 }
 
 /// `value` as a tree: unit variants as their names, other variants under
