@@ -36,7 +36,9 @@ key_server:
       allowed_domains: ["example.com"]
     - issuer: "mcp-gateway"
       jwks_uri: "http://127.0.0.1:39400/.well-known/jwks.json"
-      audiences: []
+      # The gateway signs its own assertion for the backend it calls, so list
+      # every token-exchange backend's `identity_propagation.audience` here.
+      audiences: ["https://mail-svc.internal"]
       allowed_domains: []
   policies:
     # One rule per hop. The human user's real identity matches on a verified
