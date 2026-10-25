@@ -164,3 +164,22 @@ mig2/figment/plain	OK {"default":{"a":1,"b":["x","y"]}}
 mig2/figment/dup-nested	OK {"default":{"a":{"c":3}}}
 mig2/figment/syntax-error	ERR YAML refused: unclosed bracket at line 1 column 4
 mig2/figment/second-document	ERR deserializing from YAML containing more than one document is not supported
+mig2/r1/write/escaped-tag	OK "v: !foo%20bar x\n"
+mig2/r1/write/escaped-tag-map	OK "v: !a/b\n  k: 1\n"
+mig2/r1/write/keep-root	OK "|+\n  a\n\n"
+mig2/r1/write/clip-root	OK "|\n  a\n"
+mig2/r1/write/keep-in-map	OK "k: |+\n  a\n\n"
+mig2/r1/write/f32	OK "f32: 0.7\ntiny: 1e-7\n"
+mig2/r1/write/u128	OK "max: 340282366920938463463374607431768211455\n"
+mig2/r1/write/i128	OK "min: -170141183460469231731687303715884105728\n"
+mig2/r1/write/chars	OK "a: 'y'\nb: '0'\nc: ':'\nd: ''''\ne: '~'\n"
+mig2/r1/write/bytes	ERR serialization and deserialization of bytes in YAML is not implemented
+mig2/r1/read/int-literal	OK {"v":5}
+mig2/r1/read/bool-literal	OK {"v":true}
+mig2/r1/read/float-literal	OK {"v":1.5}
+mig2/r1/read/untagged-literal	ERR v: invalid type: string, expected u8 at line 1 column 4
+mig2/r1/place/tag-above-map	ERR v: invalid type: map, expected a string at line 1 column 4
+mig2/r1/place/anchor-and-tag	ERR v: invalid type: map, expected a string at line 1 column 4
+mig2/r1/place/cr	ERR b: invalid type: map, expected a string at line 2 column 4
+mig2/r1/place/crlf	ERR b: invalid type: map, expected a string at line 2 column 4
+mig2/r1/nested-enum	ERR v: deserializing nested enum in Outer::inner from YAML is not supported yet at line 1 column 4

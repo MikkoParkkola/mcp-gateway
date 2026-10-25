@@ -236,6 +236,128 @@ fn figment_data(out: &mut String) {
     }
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Outer {
+    Inner(Shape),
+}
+
+/// Writes `bytes` through `serialize_bytes`, which YAML has no form for.
+struct Bytes;
+
+impl Serialize for Bytes {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(b"ab")
+    }
+}
+
+fn written<T: Serialize + ?Sized>(value: &T) -> String {
+    match yaml::to_string(value) {
+        Ok(text) => format!("OK {text:?}"),
+        Err(error) => format!("ERR {error}"),
+    }
+}
+
+/// The code seats' r1 cases (gpt and grok, 2026-10-25), recorded with the
+/// current backend before the replacement's fixes.
+fn seat_r1(out: &mut String) {
+    // Writer: a tag that needs escaping, keep-chomped text, f32, wide
+    // integers, chars, bytes.
+    for (case, doc) in [
+        ("mig2/r1/write/escaped-tag", "v: !foo%20bar x\n"),
+        ("mig2/r1/write/escaped-tag-map", "v: !a%2Fb {k: 1}\n"),
+    ] {
+        let reading = match yaml::from_str::<yaml::Value>(doc) {
+            Ok(tree) => written(&tree),
+            Err(error) => format!("ERR read {error}"),
+        };
+        row(out, case, &reading);
+    }
+    row(out, "mig2/r1/write/keep-root", &written("a\n\n"));
+    row(out, "mig2/r1/write/clip-root", &written("a\n"));
+    let mut keep = BTreeMap::new();
+    keep.insert("k".to_owned(), "a\n\n".to_owned());
+    row(out, "mig2/r1/write/keep-in-map", &written(&keep));
+    let mut floats = BTreeMap::new();
+    floats.insert("f32".to_owned(), 0.7_f32);
+    floats.insert("tiny".to_owned(), 1.0e-7_f32);
+    row(out, "mig2/r1/write/f32", &written(&floats));
+    let mut wide = BTreeMap::new();
+    wide.insert("max".to_owned(), u128::MAX);
+    row(out, "mig2/r1/write/u128", &written(&wide));
+    let mut negative = BTreeMap::new();
+    negative.insert("min".to_owned(), i128::MIN);
+    row(out, "mig2/r1/write/i128", &written(&negative));
+    let mut chars = BTreeMap::new();
+    for (k, c) in [("a", 'y'), ("b", '0'), ("c", ':'), ("d", '\''), ("e", '~')] {
+        chars.insert(k.to_owned(), c);
+    }
+    row(out, "mig2/r1/write/chars", &written(&chars));
+    row(out, "mig2/r1/write/bytes", &written(&Bytes));
+    // Reader: core-tagged literal blocks into typed targets.
+    row(
+        out,
+        "mig2/r1/read/int-literal",
+        &ok_json(yaml::from_str::<BTreeMap<String, u8>>("v: !!int |-\n  5\n")),
+    );
+    row(
+        out,
+        "mig2/r1/read/bool-literal",
+        &ok_json(yaml::from_str::<BTreeMap<String, bool>>(
+            "v: !!bool |-\n  true\n",
+        )),
+    );
+    row(
+        out,
+        "mig2/r1/read/float-literal",
+        &ok_json(yaml::from_str::<BTreeMap<String, f64>>(
+            "v: !!float |-\n  1.5\n",
+        )),
+    );
+    row(
+        out,
+        "mig2/r1/read/untagged-literal",
+        &ok_json(yaml::from_str::<BTreeMap<String, u8>>("v: |-\n  5\n")),
+    );
+    // Places: a tag on the line above its collection, and CR line breaks.
+    row(
+        out,
+        "mig2/r1/place/tag-above-map",
+        &ok_json(yaml::from_str::<BTreeMap<String, String>>(
+            "v: !t\n  a: 1\n",
+        )),
+    );
+    row(
+        out,
+        "mig2/r1/place/anchor-and-tag",
+        &ok_json(yaml::from_str::<BTreeMap<String, String>>(
+            "v: &x !t\n  a: 1\n",
+        )),
+    );
+    row(
+        out,
+        "mig2/r1/place/cr",
+        &ok_json(yaml::from_str::<BTreeMap<String, String>>(
+            "a: x\rb: !t {x: 1}\r",
+        )),
+    );
+    row(
+        out,
+        "mig2/r1/place/crlf",
+        &ok_json(yaml::from_str::<BTreeMap<String, String>>(
+            "a: x\r\nb: !t {x: 1}\r\n",
+        )),
+    );
+    // A nested enum under a tag names its path and place.
+    row(
+        out,
+        "mig2/r1/nested-enum",
+        &ok_json(yaml::from_str::<BTreeMap<String, Outer>>(
+            "v: !inner {x: 1}\n",
+        )),
+    );
+}
+
 pub(super) fn rows(out: &mut String) {
     product_enums(out);
     duplicates(out);
@@ -245,4 +367,5 @@ pub(super) fn rows(out: &mut String) {
     aliases(out);
     from_value(out);
     figment_data(out);
+    seat_r1(out);
 }
