@@ -30,22 +30,22 @@
 | OS | Read | Write / delete | Unsafe in our crate | New dependency |
 |---|---|---|---|---|
 | macOS | `security-framework` only (never the `security` CLI) | create via `ItemAddOptions::add()` (`SecItemAdd`, which itself refuses a duplicate: create-only) / `delete_generic_password` | none | none (already locked, F4; becomes a direct macOS-only dependency) |
-| Linux | `secret-tool lookup service NAME` (existing) | `secret-tool store --label=... service NAME` with the secret on **stdin**; `secret-tool clear service NAME` | none | none (runtime needs `libsecret-tools` and a Secret Service) |
-| Windows | Credential Manager `CredReadW` | `CredWriteW` (`CRED_TYPE_GENERIC`, `CRED_PERSIST_LOCAL_MACHINE`; create-only: `CredReadW` first, refuse an existing name) / `CredDeleteW` | **one new scoped module**, `src/win_cred.rs` (ADR-016 extension, §2a) | none: the `Win32_Security_Credentials` feature of the already-direct `windows-sys` 0.61 |
+| Linux | `secret-tool lookup service NAME`, bounded and non-interactive (rule 5), stdout into a wiped buffer, no `trim()` | `secret-tool store --label=... service NAME` with the secret on **stdin**; `secret-tool clear service NAME` | none | none (runtime needs `libsecret-tools` and a Secret Service) |
+| Windows | Credential Manager `CredReadW` | `CredWriteW` (`CRED_TYPE_GENERIC`, `CRED_PERSIST_LOCAL_MACHINE`; create-only: `exists()` first under the vault lock, rule 3) / `CredDeleteW` | **one new scoped module**, `src/win_cred.rs` (ADR-016 extension, §2a) | none: the `Win32_Security_Credentials` feature of the already-direct `windows-sys` 0.61 |
 
 #### 2a. ADR-016 extension: a second scoped `unsafe` module (lead ruling 2026-10-25, option W1)
 
 ADR-016 allowed one Windows-only file of `unsafe` code for owner-only DACLs. This decision allows a second, `src/win_cred.rs`, under the same rules:
 
 - `#![allow(unsafe_code)]` only there, `#[cfg(windows)]`.
-- Every export is a safe function over `&str` names and a `Secret` value: `create(name, value)`, `read(name)`, `delete(name)`. Callers never see a pointer, a handle or a Win32 type.
+- Every export is a safe function (rule 8): `create(name, &[u8])`, `exists(name)`, `read(name) -> WipedBytes`, `delete(name)`. Callers never see a pointer, a handle or a Win32 type.
 - Every `unsafe` block carries a `// SAFETY:` comment naming the contract it relies on:
   - buffer lengths;
   - NUL-terminated UTF-16 built and owned in the block;
-  - the `CREDENTIALW` read through `CredReadW` freed with `CredFree` on every path, by a drop guard;
+  - `CredFree` only on a pointer from a `CredReadW` that returned TRUE, by a drop guard;
   - no aliasing of the blob.
-- The secret blob is copied into a zeroising buffer and the Win32 copy freed immediately. The value never enters an error string; Win32 errors are reported by code.
-- The module's own tests run on the Windows CI shard: create, read, delete, create-on-existing refused, read-missing named. A source-scan test pins that `allow(unsafe_code)` appears under `src/` in exactly `win_acl.rs` and `win_cred.rs`.
+- The secret blob is copied into `WipedBytes` and the Win32 copy freed immediately. The value never enters an error string; Win32 errors are reported by code.
+- The module's own tests run on the Windows CI shard: create, read, delete, create-on-existing refused, read-missing named. The `unsafe` allow-list is rule 10.
 
 Option W2, the `keyring` crate, was rejected. It moves the same `unsafe` into a dependency we do not review, and adds a tree on every OS. Option W3, a refusal on Windows, was rejected by the operator's ruling for full keychain support.
 
@@ -53,11 +53,11 @@ The macOS `security` CLI is **not** used to write: `add-generic-password -w SECR
 
 ### 3. Fresh names
 
-Every UI secret write creates a new entry: `mcp-gateway.<field-slug>.<unix-ms>.<8 hex random>`.
-- Example: `mcp-gateway.auth-bearer-token.1761418800123.9f3a1c2e`.
+Every UI secret write creates a new entry: `mcp-gateway.<slug>.<unix-ms>.<16 hex>` (rule 1).
+- Example: `mcp-gateway.auth-bearer-token.1761418800123.9f3a1c2e04b7d815`.
 - The service name is that string, and the account is `mcp-gateway`.
-- Write is create-only: an existing name is an error, never an overwrite. A collision is astronomically unlikely and retried once with a new random suffix.
-- The `mcp-gateway.` prefix is what "unused entries" lists.
+- Write is create-only (rule 3): an existing name is an error, never an overwrite, and is not retried.
+- "Unused entries" are listed from the index (rule 6), never by enumerating the store.
 
 ### 4. The setting
 
@@ -76,7 +76,7 @@ secrets:
 A save that needs a secret write to a store that is unavailable is refused before anything is written.
 - **Unavailable** means: no Secret Service, a locked keychain, a headless session that cannot unlock, a missing `secret-tool`, or Credential Manager refusing the write (for example, a service account with no credential vault).
 - **The refusal** names the reason and offers the switch: "set `secrets.store: files`, or unlock/install the keychain".
-- **Nothing is half-written:** the probe runs before any entry is created, and ADR-024's sequence deletes only the entries this save created if a later write fails.
+- **Nothing is half-written:** the probe (rule 7) and every value limit (rule 2) run before any entry is created, and ADR-024's sequence deletes only the entries this save created if a later write fails.
 
 ### 6. Both stores follow ADR-024's sequence unchanged
 
@@ -85,7 +85,7 @@ A save that needs a secret write to a store that is unavailable is refused befor
 3. Commit the file.
 4. On a failed create, delete only this save's entries.
 5. Never delete an old entry.
-6. List unused `mcp-gateway.`-prefixed entries (keychain) or files under `secrets/` (files) that no loaded config names.
+6. List unused entries from the index (rule 6), for both stores, that no loaded config names.
 
 ### 7. Secrets never leak
 
@@ -99,7 +99,7 @@ The value never appears in argv, logs or error text. Readers and writers pass it
 - Entry names change on every secret change, and unused entries accumulate until an admin deletes them (ADR-024).
 - Rollback: the `keychain:` prefix stays reserved. A build without keychain support refuses `keychain:NAME` by name, never reading it as a literal secret. A binary older than this ADR would read it as a literal, so UPGRADING says to convert keychain references to `file:` before downgrading.
 
-## Rules from review (binding; where they differ from §1-§7, they win)
+## Rules from review (binding)
 
 ### Names and limits
 
@@ -107,7 +107,6 @@ The value never appears in argv, logs or error text. Readers and writers pass it
    - The slug is the field path, with every byte outside `[A-Za-z0-9-]` mapped to `-`, runs collapsed, capped at 40.
    - The 16 hex characters come from the OS CSPRNG (64 bits).
    - The same string is the keychain service name, the `files` basename, and the `secret-tool`/Windows label: the name, never the value. It always fits `[A-Za-z0-9._-]{1,128}`.
-   - This supersedes §3's 8 hex suffix and its retry.
 2. **Value limits.** Every value is checked against the chosen store's limit before any entry is created; a refused value names the limit and offers `files`.
    - An empty value is refused on every store.
    - Windows: 2,560 bytes (`CRED_MAX_CREDENTIAL_BLOB_SIZE`).
