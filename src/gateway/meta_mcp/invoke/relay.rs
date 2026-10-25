@@ -547,11 +547,12 @@ impl MetaMcp {
 
     /// A replayed single-target call (`gateway_invoke`, a surfaced tool) is
     /// delivered again: stage the delivered value under its own target, so
-    /// the replay renews the caller's receipt. A plan call stages its
-    /// stored entry's snapshot receipts instead (`MIK-8408`).
+    /// the replay renews the caller's receipt; a surfaced tool's is the
+    /// server it was admitted for (`server`, MIK-8520). A plan call stages
+    /// its stored entry's snapshot receipts instead (`MIK-8408`).
     pub(super) fn stage_replay(
         &self,
-        tool_name: &str,
+        (tool_name, server): (&str, Option<&str>),
         arguments: &Value,
         session_id: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
@@ -561,9 +562,7 @@ impl MetaMcp {
         let target = if tool_name == "gateway_invoke" {
             field("server").zip(field("tool"))
         } else {
-            self.surfaced_tools_map
-                .unscoped(tool_name)
-                .map(|server| (server, tool_name))
+            server.map(|server| (server, tool_name))
         };
         let Some(result) = replay.result.as_ref() else {
             return;

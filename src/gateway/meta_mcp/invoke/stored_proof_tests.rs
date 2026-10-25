@@ -316,6 +316,7 @@ async fn lift_recorded(recorded: Option<String>, proved: Option<String>) -> Lift
             serde_json::json!({"content": [{"type": "text", "text": "lift-stored"}]}),
         ),
         audit: None,
+        audit_server: None,
         tool_name: "gateway_invoke".to_owned(),
         arguments: serde_json::json!({}),
         bindings: vec![
@@ -452,6 +453,7 @@ async fn r4_a_lifted_surfaced_replay_records_the_admitted_server() {
             serde_json::json!({"content": [{"type": "text", "text": "r4-stored"}]}),
         ),
         audit: None,
+        audit_server: Some(BACKEND.to_owned()),
         tool_name: TOOL.to_owned(),
         arguments: serde_json::json!({}),
         bindings: vec![(BACKEND.to_owned(), TOOL.to_owned(), recorded)],

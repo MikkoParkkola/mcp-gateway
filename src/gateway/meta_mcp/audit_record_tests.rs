@@ -446,7 +446,7 @@ async fn a_replay_whose_record_fails_is_withheld() {
             None,
             &context(&AllowAll, &who),
             replay,
-            None,
+            crate::gateway::meta_mcp::admission::ReplayFacts::default(),
         )
         .await;
     assert!(answer.result.is_none(), "delivered unrecorded: {answer:?}");
@@ -510,7 +510,10 @@ async fn a_replay_keeps_the_stored_class_of_its_first_execution() {
                 None,
                 &context(&AllowAll, &who),
                 delivered,
-                Some(ReplayAudit::new(stored, None)),
+                crate::gateway::meta_mcp::admission::ReplayFacts {
+                    audit: Some(ReplayAudit::new(stored, None)),
+                    server: None,
+                },
             )
             .await;
         let record = only_record(&dir);
@@ -536,7 +539,7 @@ async fn a_replayed_error_with_no_stored_class_is_not_claimed_as_a_denial() {
             None,
             &context(&AllowAll, &who),
             delivered,
-            None,
+            crate::gateway::meta_mcp::admission::ReplayFacts::default(),
         )
         .await;
     let record = only_record(&dir);

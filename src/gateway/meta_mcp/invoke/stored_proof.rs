@@ -127,7 +127,10 @@ impl crate::gateway::meta_mcp::MetaMcp {
                 session_id,
                 caller,
                 deferred.response,
-                deferred.audit,
+                super::super::admission::ReplayFacts {
+                    audit: deferred.audit,
+                    server: deferred.audit_server,
+                },
             )
             .await,
         )

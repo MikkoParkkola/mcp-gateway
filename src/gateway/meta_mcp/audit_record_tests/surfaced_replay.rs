@@ -141,6 +141,7 @@ async fn r7_a_continuation_origin_replay_writes_no_record() {
     let origin = ReplayTarget {
         server: "alpha".to_string(),
         tool: "continued".to_string(),
+        origin: crate::gateway::meta_mcp::admission::ReplayOrigin::ContinuationOrigin,
     };
     let stored = JsonRpcResponse::success(RequestId::Number(3), ok_result());
     let Some((response, audit)) = meta
@@ -192,6 +193,7 @@ async fn r5b_a_failed_deferral_records_the_admitted_server() {
     let target = ReplayTarget {
         server: "idp".to_string(),
         tool: NAME.to_string(),
+        origin: crate::gateway::meta_mcp::admission::ReplayOrigin::Named,
     };
     meta.resurface_for_test(NAME, "beta");
     let stored = JsonRpcResponse::success(RequestId::Number(4), ok_result());
@@ -270,6 +272,7 @@ async fn r2_a_surfaced_replay_stages_its_receipt_for_the_admitted_server() {
     let target = ReplayTarget {
         server: "alpha".to_string(),
         tool: NAME.to_string(),
+        origin: crate::gateway::meta_mcp::admission::ReplayOrigin::Named,
     };
     meta.resurface_for_test(NAME, "beta");
     let stored = JsonRpcResponse::success(
@@ -307,5 +310,161 @@ async fn r2_a_surfaced_replay_stages_its_receipt_for_the_admitted_server() {
     assert!(
         relayed,
         "R2: the replay's receipt was staged under the live map's server, not alpha"
+    );
+}
+
+/// R8 (M8): an unkeyed replay of a `Named` target (`deferred_replay_key`
+/// answers `None`) still carries the admitted server. Admission never yields
+/// a replay without a key, so the route stage is called directly.
+#[tokio::test]
+async fn r8_an_unkeyed_named_replay_carries_the_admitted_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let meta = surfaced(meta(Ok(ok_result()), &dir), "alpha");
+    let who = api_key_caller();
+    let ctx = context(&AllowAll, &who);
+    let target = ReplayTarget {
+        server: "alpha".to_string(),
+        tool: NAME.to_string(),
+        origin: crate::gateway::meta_mcp::admission::ReplayOrigin::Named,
+    };
+    let stored = JsonRpcResponse::success(RequestId::Number(8), ok_result());
+    let Some((_, facts)) = meta
+        .defer_or_serve_replay(
+            NAME,
+            &json!({}),
+            &ctx,
+            Some(target),
+            (None, Vec::new()),
+            (stored, None),
+        )
+        .await
+    else {
+        panic!("premise: an unkeyed replay is served");
+    };
+    assert_eq!(
+        facts.server.as_deref(),
+        Some("alpha"),
+        "R8: the unkeyed return dropped the admitted server"
+    );
+}
+
+/// R3 (M3): with no server carried, a surfaced name the live map still binds
+/// (to `beta`) is never looked up again: no record is written and no receipt
+/// is staged. On the relay fixture, so "nothing staged" can fail.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn r3_no_carried_server_records_and_stages_nothing() {
+    use crate::security::firewall::{
+        CollusionAction, CollusionConfig, Firewall, FirewallConfig, RelayCaller,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    sources: vec!["beta:*".to_string()],
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .keyed_for_test(),
+    );
+    let mut base = meta(Ok(ok_result()), &dir);
+    base.set_firewall(Some(Arc::clone(&firewall)));
+    base.share_keyring_with_for_test(&firewall);
+    let mut meta = surfaced(base, "alpha");
+    meta.resurface_for_test(NAME, "beta");
+    let who = api_key_caller();
+    let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        caller_key: Some("alice"),
+        ..context(&AllowAll, &who)
+    };
+    let replay = JsonRpcResponse::success(
+        RequestId::Number(6),
+        json!({"content": [{"type": "text", "text": PROSE}], "isError": false}),
+    );
+    let facts = crate::gateway::meta_mcp::admission::ReplayFacts::default();
+    let (_, staged) = meta
+        .collecting_staged(meta.audit_replay(NAME, &json!({}), None, &ctx, replay, facts))
+        .await;
+    staged.commit(true);
+    assert!(
+        records(&dir).is_empty(),
+        "R3: a replay with no carried server wrote a record: {:?}",
+        records(&dir)
+    );
+    let params = json!({"name": "send", "arguments": {"text": PROSE}});
+    assert!(
+        firewall
+            .check_relay(
+                RelayCaller::Keyed("bob"),
+                "beta",
+                "send",
+                &params,
+                ("s", "bob")
+            )
+            .allowed,
+        "R3: a receipt was staged from the live map's server"
+    );
+}
+
+/// R5 (M5): a stored step recorded under a binding the target no longer has
+/// is refused at the route stage (`judge_bindings`). The refusal is still the
+/// surfaced call admitted for `alpha`, so its record names `alpha` after the
+/// map moves, outcome and response hash included.
+#[tokio::test]
+async fn r5_a_refused_replay_records_the_admitted_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut meta = surfaced(meta(Ok(ok_result()), &dir), "alpha");
+    let who = api_key_caller();
+    let retry = keyed("r5");
+    let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        retry: &retry,
+        ..context(&AllowAll, &who)
+    };
+    let target = ReplayTarget {
+        server: "alpha".to_string(),
+        tool: NAME.to_string(),
+        origin: crate::gateway::meta_mcp::admission::ReplayOrigin::Named,
+    };
+    meta.resurface_for_test(NAME, "beta");
+    let stored = JsonRpcResponse::success(RequestId::Number(7), ok_result());
+    let bindings = vec![(
+        "alpha".to_string(),
+        NAME.to_string(),
+        Some("a-binding-alpha-no-longer-has".to_string()),
+    )];
+    let Some((response, facts)) = meta
+        .defer_or_serve_replay(
+            NAME,
+            &json!({}),
+            &ctx,
+            Some(target),
+            (None, bindings),
+            (stored, None),
+        )
+        .await
+    else {
+        panic!("premise: the refusal is answered, not deferred");
+    };
+    let refusal = response
+        .error
+        .clone()
+        .expect("premise: the binding is refused");
+    let _ = meta
+        .audit_replay(NAME, &json!({}), None, &ctx, response, facts)
+        .await;
+    let record = only_record(&dir);
+    assert_eq!(
+        server_of(&record),
+        "alpha",
+        "R5: the refused replay's record names the live map's server: {record}"
+    );
+    assert!(
+        record.get("outcome").is_some() && record.get("request_hash").is_some(),
+        "R5: the refused replay's record is incomplete ({refusal:?}): {record}"
     );
 }

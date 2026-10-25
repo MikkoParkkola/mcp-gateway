@@ -18,7 +18,7 @@ use super::warn_limit::{WarnedAt, first_warn};
 mod plan;
 #[path = "admission_replay.rs"]
 mod replay;
-pub(crate) use replay::ReplayTarget;
+pub(crate) use replay::{ReplayFacts, ReplayOrigin, ReplayTarget};
 #[path = "admission_era.rs"]
 mod era;
 #[path = "admission_operation.rs"]
@@ -301,6 +301,7 @@ impl MetaMcp {
                 Ok(Some(ReplayTarget {
                     server: server.to_owned(),
                     tool: tool.to_owned(),
+                    origin: replay::ReplayOrigin::Named,
                 }))
             },
         )

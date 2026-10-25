@@ -33,7 +33,7 @@ async fn a_replayed_invoke_answer_stages_its_unwrapped_value() {
     let arguments = json!({"server": "alpha", "tool": "send", "arguments": {}});
     let ((), staged) = meta
         .collecting_staged(async {
-            meta.stage_replay("gateway_invoke", &arguments, None, &caller, &replay);
+            meta.stage_replay(("gateway_invoke", None), &arguments, None, &caller, &replay);
         })
         .await;
     staged.commit(true);

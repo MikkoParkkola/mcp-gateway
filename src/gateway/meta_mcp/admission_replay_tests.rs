@@ -82,6 +82,7 @@ async fn an_unrecorded_deferral_fails_closed() {
             Some(ReplayTarget {
                 server: "idp".to_string(),
                 tool: "read".to_string(),
+                origin: super::super::ReplayOrigin::Named,
             }),
             (None, Vec::new()),
             (stored, None),
@@ -89,7 +90,7 @@ async fn an_unrecorded_deferral_fails_closed() {
         .await;
     let (response, audit) = answer.expect("R-closed: an unrecorded deferral answered None");
     assert!(
-        audit.is_none(),
+        audit.audit.is_none(),
         "R-closed: no stored facts travel with the refusal"
     );
     let error = response.error.expect("R-closed: the answer is an error");
@@ -157,7 +158,7 @@ async fn p8_legacy_a_plan_record_with_no_step_list_judges_its_declared_targets()
         "P8-legacy: the stored plan was served on an unproven declared target: {response:?}"
     );
     assert!(
-        audit.is_none(),
+        audit.audit.is_none(),
         "P8-legacy: stored facts travelled with the refusal"
     );
 }
@@ -236,7 +237,7 @@ async fn p8_noid_a_stored_plan_replay_with_no_request_id_fails_closed() {
         "P8-noid: served: {response}"
     );
     assert!(
-        audit.is_none(),
+        audit.audit.is_none(),
         "P8-noid: stored facts travelled with the refusal"
     );
 }
@@ -282,7 +283,10 @@ async fn p8_rebind_a_step_rebound_while_the_plan_walk_runs_is_refused() {
         "premise: the walk ended and the hook re-bound idp"
     );
     let (response, audit) = answer.expect("P8-rebind: a plan replay is answered, never deferred");
-    assert!(audit.is_none(), "P8-rebind: a refused replay was audited");
+    assert!(
+        audit.audit.is_none(),
+        "P8-rebind: a refused replay was audited"
+    );
     let text = serde_json::to_string(&response).expect("serialises");
     assert!(
         text.contains("produced under a different account"),
