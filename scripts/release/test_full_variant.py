@@ -747,5 +747,42 @@ class VariantStage(unittest.TestCase):
         )
 
 
+
+class BuildTargets(unittest.TestCase):
+    """Every image build names its stage.
+
+    `runtime-full` is the Dockerfile's last stage, and Docker builds the last
+    stage when a build names none: an untargeted build would scan, smoke and
+    publish the variant as the default image (MIK-8831 REL).
+    """
+
+    def builds(self, name):
+        lines = (WORKFLOWS / name).read_text().splitlines()
+        found = []
+        for i, line in enumerate(lines):
+            if "uses: docker/build-push-action@" not in line:
+                continue
+            indent = len(line) - len(line.lstrip())
+            step = []
+            for following in lines[i + 1 :]:
+                stripped = following.lstrip()
+                if stripped.startswith("- ") and len(following) - len(stripped) < indent:
+                    break
+                step.append(following)
+            found.append("\n".join(step))
+        return found
+
+    def test_every_image_build_names_its_stage(self):
+        for name in ("ci.yml", "docker.yml"):
+            builds = self.builds(name)
+            self.assertTrue(builds, f"{name} builds no image")
+            for step in builds:
+                self.assertRegex(
+                    step,
+                    r"(?m)^\s+target:\s+runtime(?:-full)?\s*$",
+                    f"{name}: an image build names no stage, so it builds the last one",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

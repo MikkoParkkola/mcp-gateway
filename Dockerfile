@@ -1,7 +1,8 @@
 # =============================================================================
 # MCP Gateway - Multi-stage Docker Build
 # =============================================================================
-# Build:  docker build -t mcp-gateway:latest .
+# Build:  docker build --target runtime -t mcp-gateway:latest .
+#         docker build --target runtime-full -t mcp-gateway:latest-full .
 # Run:    docker run -p 39400:39400 -v ./gateway.yaml:/config.yaml:ro mcp-gateway:latest --config /config.yaml
 # =============================================================================
 
@@ -36,7 +37,7 @@ RUN touch src/main.rs && cargo build --release
 # ---------------------------------------------------------------------------
 # Stage 2: Runtime
 # ---------------------------------------------------------------------------
-FROM debian:trixie-slim
+FROM debian:trixie-slim AS runtime
 
 LABEL io.modelcontextprotocol.server.name="io.github.MikkoParkkola/mcp-gateway"
 
@@ -46,9 +47,11 @@ RUN apt-get update && apt-get upgrade -y \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Non-root user
+# Non-root user. `-m` is load-bearing: without it a system account gets no home
+# directory, and the gateway resolves its state and caches under $HOME, so a
+# variant that installs into the user's home (npm, uv) has nowhere to write.
 RUN groupadd -r -g 1001 gateway && \
-    useradd -r -u 1001 -g gateway -s /usr/sbin/nologin gateway
+    useradd -r -u 1001 -g gateway -m -d /home/gateway -s /usr/sbin/nologin gateway
 
 # Copy binary from builder
 COPY --from=builder /app/target/release/mcp-gateway /usr/local/bin/mcp-gateway
@@ -73,3 +76,93 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
 
 ENTRYPOINT ["mcp-gateway"]
 CMD ["--config", "/config.yaml"]
+
+# ---------------------------------------------------------------------------
+# Stage 3: Runtime + stdio backend runtimes (`:latest-full`)
+# ---------------------------------------------------------------------------
+FROM runtime AS runtime-full
+
+ARG APT_CACHE_BUST=local
+
+USER root
+
+RUN echo "apt cache bust: ${APT_CACHE_BUST}" \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    git \
+    gnupg \
+    openssh-client \
+    tini \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /tmp/nodesource.key \
+    && gpg --show-keys --with-colons /tmp/nodesource.key | awk -F: \
+       '$1 == "pub" { pubs++; want = 1; next } want && $1 == "fpr" { primary = $10 } { want = 0 } END { exit !(pubs == 1 && primary == "6F71F525282841EEDAF851B42F59B5F99B1BE0B4") }' \
+    && gpg --dearmor -o /usr/share/keyrings/nodesource.gpg /tmp/nodesource.key \
+    && rm -f /tmp/nodesource.key \
+    && printf '%s\n' 'Types: deb' 'URIs: https://deb.nodesource.com/node_24.x' 'Suites: nodistro' \
+       'Components: main' 'Signed-By: /usr/share/keyrings/nodesource.gpg 6F71F525282841EEDAF851B42F59B5F99B1BE0B4' \
+       > /etc/apt/sources.list.d/nodesource.sources \
+    && apt-get update && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/* \
+    && node --version | grep -q '^v24\.' \
+    && npm --version >/dev/null
+
+# NodeSource ships whichever npm it bundled that day; the pin makes the tree
+# scanned below a version this repo chose. Do not "simplify" it away.
+# Every tarball is checked against the sha512 pinned here (the registry's
+# `dist.integrity`) before use, so the registry cannot swap the bytes. Compare
+# the strings as written: a decoded compare can miss an edit in the last char.
+# Past npm itself, npm protects its own vendored tree; the rest are unpacked
+# over it, not installed.
+RUN cd /tmp && mkdir npm-patch && cd npm-patch \
+    && pins="npm@12.0.2:sha512-uIXokLlBj6FpNUTQX1PmT5pz7BlIN9QlixX+zdaSNHsd0qUXsbDLr50xzY6Sw7cJVr0uzHKDOle0swmPW/p5Qw== \
+brace-expansion@5.0.12:sha512-YovQ3rzhaLMIrDjNDMkNS01tea93qhEhG5xy8f6+R0l+dw3Ki+5sCoIoI942iuLZTHWogWktgwVDhU09iNEimQ== \
+ip-address@10.3.1:sha512-1e9d3kb97NHJTIJDZW9rKqW2h6+dFa50Dy0fpPSMQp2ADje5gvKsXmdiK6dwY5t76TaTt5+P5N1Y/LoToIxP6g== \
+tar@7.5.21:sha512-XdhtCvlMywwxpCW8YEq3lOXBJpUPTR2OHHcwLPO3HwsJqOHa2Ok/oJ7ruGzp+JrKoRPVCzJwAdEjqLW/vNRPHA== \
+undici@6.29.1:sha512-EvRlUt/QqAEvXdQeRMYUfwOQsfzpDztykrG2owGEE/rBOBoYv9uF39ZzsNDh4lTFHhTr2XOZjKkYgueD12ZmGA==" \
+    && for pin in ${pins}; do \
+         spec="${pin%%:*}"; want="${pin#*:}"; \
+         npm pack --silent "${spec}" >/dev/null || exit 1; \
+         got="$(node -p "'sha512-' + require('crypto').createHash('sha512').update(require('fs').readFileSync('${spec%@*}-${spec##*@}.tgz')).digest('base64')")" || exit 1; \
+         test "${got}" = "${want}" || { echo "npm integrity mismatch: ${spec} is ${got}, pinned ${want}" >&2; exit 1; }; \
+       done \
+    && npm install -g ./npm-12.0.2.tgz \
+    && test "$(npm --version)" = "12.0.2" \
+    && for pin in ${pins}; do \
+         spec="${pin%%:*}"; name="${spec%@*}"; ver="${spec##*@}"; \
+         test "${name}" = npm && continue; \
+         dest="/usr/lib/node_modules/npm/node_modules/${name}"; \
+         rm -rf "${dest}"; \
+         mkdir -p "${dest}"; \
+         tar -xzf "${name}-${ver}.tgz" -C "${dest}" --strip-components=1 || exit 1; \
+         got="$(node -p "require('${dest}/package.json').version")"; \
+         test "${got}" = "${ver}" || { echo "npm patch failed: ${name} is ${got}, wanted ${ver}" >&2; exit 1; }; \
+       done \
+    && cd / && rm -rf /tmp/npm-patch
+
+COPY --from=ghcr.io/astral-sh/uv:0.12.18@sha256:3adc3706091ce7c2fe595e669628caedd6d951551b92b258b7e7dbe06d9440bc /uv /uvx /usr/local/bin/
+
+RUN mkdir -p /home/gateway/.cache/uv /home/gateway/.npm && \
+    chown -R gateway:gateway /home/gateway/.cache /home/gateway/.npm
+
+USER gateway
+
+COPY --chmod=0755 docker/entrypoint-full.sh /usr/local/bin/entrypoint-full.sh
+
+# Declaring an ENTRYPOINT here resets the CMD inherited from `runtime`, so the
+# variant restates it: the image's own invocation passes no arguments, and
+# without this the entrypoint execs a gateway with no config that starts and
+# then never exits instead of refusing the way the base stage does.
+#
+# tini is PID 1 and `-g` sends a stop to the entrypoint's whole process group.
+# A sourced `.envsh` step's foreground command is in that group, so a stop
+# reaches it instead of waiting for it to return; tini also reaps orphans and
+# exits with the entrypoint's (later the gateway's) status.
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/entrypoint-full.sh"]
+CMD ["--config", "/config.yaml"]
+
+# The variant's own start period: an EXTRA_APT_PACKAGES install runs before
+# the gateway starts, so it gets up to a minute before an unanswered probe
+# counts. The default image keeps the 5s inherited from `runtime`.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD wget --spider -q http://localhost:39400/health || exit 1
