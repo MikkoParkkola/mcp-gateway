@@ -947,7 +947,6 @@ dependencies = [
  "atomic",
  "pear",
  "serde",
- "serde_yaml",
  "uncased",
  "version_check",
 ]
@@ -1927,6 +1926,7 @@ dependencies = [
  "hmac",
  "iana-time-zone",
  "icu_normalizer",
+ "indexmap",
  "jsonschema",
  "jsonwebtoken",
  "log",
@@ -1946,12 +1946,12 @@ dependencies = [
  "ring",
  "rustix",
  "rustls",
+ "ryu",
  "serde",
  "serde_ignored",
  "serde_json",
  "serde_json_canonicalizer",
  "serde_urlencoded",
- "serde_yaml",
  "sha2",
  "shlex",
  "subtle",
@@ -3137,19 +3137,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_yaml"
-version = "0.9.34+deprecated"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
-dependencies = [
- "indexmap",
- "itoa",
- "ryu",
- "serde",
- "unsafe-libyaml",
-]
-
-[[package]]
 name = "sha1"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3764,12 +3751,6 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
-
-[[package]]
-name = "unsafe-libyaml"
-version = "0.2.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "untrusted"
