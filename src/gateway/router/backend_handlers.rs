@@ -188,6 +188,7 @@ async fn guard_tool_call(
             );
         }
         if let Some((code, message)) = verdict.request_refusal() {
+            crate::gateway::meta_mcp::invoke::audit::note_request_firewall();
             // The shared wording's code, ASI10's -32002 included, with this
             // route's own HTTP status (403).
             return Err(backend_security_error_with_status(

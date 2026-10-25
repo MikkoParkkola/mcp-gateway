@@ -224,10 +224,12 @@ pub(super) fn deliver_replay(
     };
     let replay = match guarded {
         Some(GuardOutcome::CachedResult(cached)) => {
+            crate::gateway::meta_mcp::invoke::audit::note_replay();
             Some(JsonRpcResponse::success(id.clone(), cached))
         }
         Some(GuardOutcome::CachedError(error)) => {
             crate::gateway::meta_mcp::invoke::audit::note_cached_failure(&error);
+            crate::gateway::meta_mcp::invoke::audit::note_replay();
             let mut response = super::cached_error_response(Some(id.clone()), &error);
             replay_scan(state, (&admitted.call, envelope), client, &mut response);
             return Err(build_http_response(&Egressed::of(response), StatusCode::OK));
