@@ -1,51 +1,24 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8854: windowed, persisted call counters and the marker ledger the web
-//! UI draws its history from (ADR-017, ADR-026).
-//!
-//! Each logical call is counted once, where its one invocation record is
-//! written (design: `u1-counter-store/design.md`). A series holds 96
-//! half-hour buckets and 30 host-local days. Labels come only from config,
-//! the catalogue and verified credentials: a name the caller chose adds to
-//! its dimension's overflow count and is stored nowhere. Every dimension is
-//! capped, so memory and `counters.json` are bounded by the constants below,
-//! never by traffic.
+//! MIK-8854 red stub: the counter store's API with plausible but wrong
+//! answers (nothing counted, nothing cut, nothing quarantined), so every
+//! store test is seen failing at its own assertion before the real store
+//! replaces this file.
 
-use std::collections::{HashMap, VecDeque};
-use std::hash::Hash;
-
-use chrono::TimeZone;
-use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::security::audit::{AuditOutcome, CredentialKind};
 
-mod day;
 pub(crate) mod persist;
-mod ring;
-mod snapshot;
-mod view;
 
-pub(crate) use ring::Series;
-pub(crate) use view::{Filter, Point, Query, SeriesView, Window};
-
-/// Labels one dimension keeps before new ones add to its overflow count.
 pub(crate) const MAX_LABELS: usize = 512;
-/// Caller × server pairs kept before new ones add to the overflow count.
 pub(crate) const MAX_PAIRS: usize = 2_048;
-/// Longest label, in bytes; a longer one is cut and given a hash suffix.
 pub(crate) const MAX_LABEL_BYTES: usize = 128;
-/// Half-hour buckets per series: 48 hours.
 pub(crate) const HALF_BUCKETS: usize = 96;
-/// Local days per series.
 pub(crate) const DAYS: usize = 30;
-/// Markers kept, at most, and for at most [`MARKER_SECS`].
 pub(crate) const MAX_MARKERS: usize = 1_000;
-const MARKER_SECS: u64 = 30 * 86_400;
-/// Width of a half-hour bucket, in seconds.
 pub(crate) const HALF: u64 = 1_800;
 
-/// What a series counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Metric {
     Calls,
@@ -56,7 +29,6 @@ pub(crate) enum Metric {
 }
 
 impl Metric {
-    /// Every metric, in bucket order.
     pub(crate) const ALL: [Self; 5] = [
         Self::Calls,
         Self::Blocks,
@@ -64,14 +36,8 @@ impl Metric {
         Self::Firewall,
         Self::CacheHits,
     ];
-
-    const fn index(self) -> usize {
-        self as usize
-    }
 }
 
-/// How one finished call moves the counters. A replay is the delivery of an
-/// answer its first execution already counted, so it moves none.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct Tally {
     pub blocked: bool,
@@ -81,92 +47,33 @@ pub(crate) struct Tally {
     pub replay: bool,
 }
 
-/// What a writer knows about a finished call.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Outcome {
-    /// A call with an invocation record: its outcome, whether a firewall
-    /// refused it (carried from the verdict, never read back from the body),
-    /// and whether the gateway's response cache answered it.
     Audited {
         outcome: AuditOutcome,
         firewall: bool,
         cache_hit: bool,
     },
-    /// An idempotency replay of a call already counted.
     Replay,
-    /// A `tools/call` refused because the audit log could not admit it.
     AdmissionRefused,
 }
 
 impl Tally {
-    /// The counter moves for `outcome`. Firewall provenance wins over the
-    /// audit outcome: a direct response-firewall refusal is answered 200 with
-    /// an error code, which the audit record classes as an error.
-    pub(crate) fn from_outcome(outcome: Outcome) -> Self {
-        match outcome {
-            Outcome::Replay => Self {
-                replay: true,
-                ..Self::default()
-            },
-            Outcome::AdmissionRefused => Self {
-                error: true,
-                ..Self::default()
-            },
-            Outcome::Audited { firewall: true, .. } => Self {
-                blocked: true,
-                firewall: true,
-                ..Self::default()
-            },
-            Outcome::Audited {
-                outcome, cache_hit, ..
-            } => match outcome {
-                AuditOutcome::Ok => Self {
-                    cache_hit,
-                    ..Self::default()
-                },
-                AuditOutcome::Denied(_) => Self {
-                    blocked: true,
-                    ..Self::default()
-                },
-                AuditOutcome::ToolError | AuditOutcome::Invalid(_) | AuditOutcome::Error(_) => {
-                    Self {
-                        error: true,
-                        ..Self::default()
-                    }
-                }
-            },
-        }
+    pub(crate) fn from_outcome(_outcome: Outcome) -> Self {
+        Self::default()
     }
 
-    /// Whether this tally moves nothing.
     pub(crate) const fn is_empty(self) -> bool {
-        self.replay
-    }
-
-    fn counts(self) -> [u64; 5] {
-        if self.replay {
-            return [0; 5];
-        }
-        [
-            1,
-            u64::from(self.blocked),
-            u64::from(self.error),
-            u64::from(self.firewall),
-            u64::from(self.cache_hit),
-        ]
+        false
     }
 }
 
-/// A server or tool name as the counting site resolved it.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Label<'a> {
-    /// Configured (a server) or catalogued (a tool): kept as a label.
     Known(&'a str),
-    /// Chosen by the caller: adds to the overflow count, stored nowhere.
     Untrusted,
 }
 
-/// One finished call. `caller` is a [`caller_label`].
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Call<'a> {
     pub caller: &'a str,
@@ -175,38 +82,14 @@ pub(crate) struct Call<'a> {
     pub tally: Tally,
 }
 
-/// A caller's label, namespaced by how it presented itself, so that an API
-/// key named `bearer` and the static bearer stay two callers. `account` is
-/// the audit record's account: the key name, the OIDC actor id, or empty.
-pub(crate) fn caller_label(kind: CredentialKind, account: &str) -> String {
-    match kind {
-        CredentialKind::ApiKey => format!("key:{account}"),
-        CredentialKind::StaticBearer => "bearer".to_owned(),
-        CredentialKind::OidcBearer => format!("oidc:{account}"),
-        CredentialKind::DashboardSession => format!("session:{account}"),
-        CredentialKind::KeyServerToken => format!("token:{account}"),
-        CredentialKind::LocalTransport => "local".to_owned(),
-        CredentialKind::None => "anonymous".to_owned(),
-    }
+pub(crate) fn caller_label(_kind: CredentialKind, account: &str) -> String {
+    account.to_owned()
 }
 
-/// `label` cut to [`MAX_LABEL_BYTES`] on a character boundary, with an 8-hex
-/// SHA-256 suffix when cut, so two long labels sharing a prefix stay apart.
 pub(crate) fn normalize(label: &str) -> String {
-    if label.len() <= MAX_LABEL_BYTES {
-        return label.to_owned();
-    }
-    let digest = crate::hashing::sha256_hex(label.as_bytes());
-    let marker = format!("~{}", &digest[..8]);
-    crate::truncate::truncate(
-        label,
-        crate::truncate::Budget::Bytes(MAX_LABEL_BYTES),
-        &marker,
-        crate::truncate::Suffix::Within,
-    )
+    label.to_owned()
 }
 
-/// A dimension the store keeps labels for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Dim {
     Server,
@@ -215,7 +98,6 @@ pub(crate) enum Dim {
     CallerServer,
 }
 
-/// What a marker marks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum MarkerKind {
@@ -227,247 +109,139 @@ pub(crate) enum MarkerKind {
     SwitchOn,
 }
 
-/// One event drawn on every chart.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Marker {
-    /// Unix seconds.
     pub at: u64,
     pub kind: MarkerKind,
-    /// A configured server name or a version string, never caller input.
     pub subject: Option<String>,
 }
 
-/// One capped label map plus the overflow count past its cap.
-#[derive(Debug, Clone)]
-pub(crate) struct Dimension<K: Hash + Eq> {
-    labels: HashMap<K, Series>,
-    overflow: Series,
-    cap: usize,
-    /// The half-hour bucket of the last sweep, so a stream of new labels
-    /// against a full dimension sweeps at most once per bucket.
-    last_sweep: Option<u64>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Window {
+    Day,
+    TwoDays,
+    Month,
 }
 
-impl<K: Hash + Eq + Clone> Dimension<K> {
-    fn new(cap: usize) -> Self {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Filter<'a> {
+    All,
+    Server(&'a str),
+    Tool(&'a str, &'a str),
+    Caller(&'a str),
+    CallerServer(&'a str, &'a str),
+    Overflow(Dim),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Query<'a> {
+    pub metric: Metric,
+    pub window: Window,
+    pub filter: Filter<'a>,
+    pub compare: bool,
+}
+
+impl<'a> Query<'a> {
+    pub(crate) const fn new(metric: Metric, window: Window, filter: Filter<'a>) -> Self {
         Self {
-            labels: HashMap::new(),
-            overflow: Series::default(),
-            cap,
-            last_sweep: None,
-        }
-    }
-
-    /// Add `counts` under `key`, or to the overflow when `key` is `None` or
-    /// the cap is met. Returns whether a sweep ran.
-    fn add(&mut self, key: Option<K>, at: u64, day: Option<u64>, counts: [u64; 5]) -> bool {
-        let Some(key) = key else {
-            self.overflow.add(at, day, counts);
-            return false;
-        };
-        if let Some(series) = self.labels.get_mut(&key) {
-            series.add(at, day, counts);
-            return false;
-        }
-        let mut swept = false;
-        let bucket = at / HALF;
-        if self.labels.len() >= self.cap && self.last_sweep != Some(bucket) {
-            self.last_sweep = Some(bucket);
-            self.labels.retain(|_, series| !series.aged(at, day));
-            swept = true;
-        }
-        if self.labels.len() < self.cap {
-            self.labels.entry(key).or_default().add(at, day, counts);
-        } else {
-            self.overflow.add(at, day, counts);
-        }
-        swept
-    }
-}
-
-/// Everything one store holds, cloned whole for a save.
-#[derive(Debug, Clone)]
-pub(crate) struct Inner {
-    since: u64,
-    global: Series,
-    server: Dimension<String>,
-    tool: Dimension<(String, String)>,
-    caller: Dimension<String>,
-    caller_server: Dimension<(String, String)>,
-    markers: VecDeque<Marker>,
-    marker_cap: usize,
-    sweeps: u64,
-}
-
-impl Inner {
-    fn new(since: u64, caps: [usize; 3]) -> Self {
-        let [labels, pairs, markers] = caps;
-        Self {
-            since,
-            global: Series::default(),
-            server: Dimension::new(labels),
-            tool: Dimension::new(labels),
-            caller: Dimension::new(labels),
-            caller_server: Dimension::new(pairs),
-            markers: VecDeque::new(),
-            marker_cap: markers,
-            sweeps: 0,
-        }
-    }
-
-    fn mark(&mut self, kind: MarkerKind, subject: Option<&str>, at: u64) {
-        let marker = Marker {
-            at,
-            kind,
-            subject: subject.map(normalize),
-        };
-        let position = self.markers.partition_point(|m| m.at <= at);
-        self.markers.insert(position, marker);
-        while self.markers.len() > self.marker_cap {
-            self.markers.pop_front();
-        }
-        let newest = self.markers.back().map_or(at, |m| m.at);
-        while self
-            .markers
-            .front()
-            .is_some_and(|m| m.at + MARKER_SECS < newest)
-        {
-            self.markers.pop_front();
+            metric,
+            window,
+            filter,
+            compare: false,
         }
     }
 }
 
-/// The counters and markers, behind one lock.
-///
-/// ponytail: one global lock held for one map lookup and one ring update per
-/// call; shard per dimension if the invoke-path bench shows contention.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) struct Point {
+    pub t: u64,
+    pub v: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SeriesView {
+    pub points: Vec<Point>,
+    pub previous: Option<Vec<Point>>,
+    pub previous_complete: bool,
+    pub folded: bool,
+    pub since: u64,
+}
+
+#[derive(Debug)]
+pub(crate) struct RestoreError;
+
 #[derive(Debug)]
 pub(crate) struct CounterStore {
-    inner: Mutex<Inner>,
+    since: u64,
+    lock: parking_lot::Mutex<()>,
 }
 
 impl CounterStore {
-    /// An empty store whose coverage starts at `since`.
     pub(crate) fn new(since: u64) -> Self {
-        Self::from_inner(Inner::new(since, [MAX_LABELS, MAX_PAIRS, MAX_MARKERS]))
-    }
-
-    fn from_inner(inner: Inner) -> Self {
         Self {
-            inner: Mutex::new(inner),
+            since,
+            lock: parking_lot::Mutex::new(()),
         }
     }
 
-    /// Count `call`, finished at unix second `at`, on `zone`'s days.
-    pub(crate) fn record<Tz: TimeZone>(&self, call: &Call<'_>, at: u64, zone: &Tz) {
-        if call.tally.is_empty() {
-            return;
-        }
-        let counts = call.tally.counts();
-        let day = day::day_key(at, zone);
-        let server = match call.server {
-            Label::Known(name) => Some(normalize(name)),
-            Label::Untrusted => None,
-        };
-        let tool = match (&server, call.tool) {
-            (Some(server), Label::Known(tool)) => Some((server.clone(), normalize(tool))),
-            _ => None,
-        };
-        let caller = normalize(call.caller);
-        let pair = server.clone().map(|server| (caller.clone(), server));
-        let mut inner = self.inner.lock();
-        inner.global.add(at, day, counts);
-        let swept = [
-            inner.server.add(server, at, day, counts),
-            inner.tool.add(tool, at, day, counts),
-            inner.caller.add(Some(caller), at, day, counts),
-            inner.caller_server.add(pair, at, day, counts),
-        ];
-        inner.sweeps += swept.iter().map(|&s| u64::from(s)).sum::<u64>();
+    pub(crate) fn record<Tz: chrono::TimeZone>(&self, _call: &Call<'_>, _at: u64, _zone: &Tz) {}
+
+    pub(crate) fn mark(&self, _kind: MarkerKind, _subject: Option<&str>, _at: u64) {}
+
+    pub(crate) fn markers(&self, _from: u64) -> Vec<Marker> {
+        Vec::new()
     }
 
-    /// Record a marker at unix second `at`.
-    pub(crate) fn mark(&self, kind: MarkerKind, subject: Option<&str>, at: u64) {
-        self.inner.lock().mark(kind, subject, at);
-    }
-
-    /// Markers at or after `from`, oldest first.
-    pub(crate) fn markers(&self, from: u64) -> Vec<Marker> {
-        let inner = self.inner.lock();
-        inner
-            .markers
-            .iter()
-            .filter(|m| m.at >= from)
-            .cloned()
-            .collect()
-    }
-
-    /// When coverage began.
     pub(crate) fn since(&self) -> u64 {
-        self.inner.lock().since
+        self.since
     }
 
-    /// A copy of everything, taken under the lock and released before the
-    /// caller serializes it.
-    pub(crate) fn snapshot(&self) -> Inner {
-        self.inner.lock().clone()
+    pub(crate) fn series<Tz: chrono::TimeZone>(
+        &self,
+        _query: &Query<'_>,
+        _now: u64,
+        _zone: &Tz,
+    ) -> SeriesView {
+        SeriesView {
+            points: Vec::new(),
+            previous: None,
+            previous_complete: true,
+            folded: false,
+            since: self.since,
+        }
     }
 
-    /// The file bytes for this store: the snapshot is taken under the lock,
-    /// serialized after it is released.
-    pub(crate) fn to_bytes(&self, binary_version: &str, saved_at: u64) -> Vec<u8> {
-        snapshot::to_bytes(&self.snapshot(), binary_version, saved_at)
+    pub(crate) fn to_bytes(&self, _binary_version: &str, _saved_at: u64) -> Vec<u8> {
+        b"{}".to_vec()
     }
 
-    /// Restore from `bytes` at `now`, re-applying every bound. Returns the
-    /// store and whether anything had to be cut back. A file saved by another
-    /// binary version records an `upgrade` marker.
-    ///
-    /// # Errors
-    ///
-    /// The bytes are not a version-1 `counters.json`.
-    pub(crate) fn from_bytes<Tz: TimeZone>(
-        bytes: &[u8],
+    pub(crate) fn from_bytes<Tz: chrono::TimeZone>(
+        _bytes: &[u8],
         now: u64,
-        binary_version: &str,
-        zone: &Tz,
-    ) -> Result<(Self, bool), snapshot::RestoreError> {
-        let (mut inner, saved_version, cut) = snapshot::from_bytes(bytes, now, zone)?;
-        if saved_version != binary_version {
-            let subject = format!("{saved_version} → {binary_version}");
-            inner.mark(MarkerKind::Upgrade, Some(&subject), now);
-        }
-        Ok((Self::from_inner(inner), cut))
+        _binary_version: &str,
+        _zone: &Tz,
+    ) -> Result<(Self, bool), RestoreError> {
+        Ok((Self::new(now), false))
     }
 
-    /// Labels a dimension holds now.
     #[cfg(test)]
-    pub(crate) fn labels(&self, dim: Dim) -> usize {
-        let inner = self.inner.lock();
-        match dim {
-            Dim::Server => inner.server.labels.len(),
-            Dim::Tool => inner.tool.labels.len(),
-            Dim::Caller => inner.caller.labels.len(),
-            Dim::CallerServer => inner.caller_server.labels.len(),
-        }
+    pub(crate) fn labels(&self, _dim: Dim) -> usize {
+        0
     }
 
-    /// Sweeps run so far, across dimensions.
     #[cfg(test)]
     pub(crate) fn sweeps(&self) -> u64 {
-        self.inner.lock().sweeps
+        0
     }
 
-    /// Whether the store's lock is free right now.
     #[cfg(test)]
     pub(crate) fn lock_is_free(&self) -> bool {
-        self.inner.try_lock().is_some()
+        self.lock.try_lock().is_some()
     }
 
-    /// A store with no caps, to build an oversized file for a restore test.
     #[cfg(test)]
     pub(crate) fn new_unbounded_for_test(since: u64) -> Self {
-        Self::from_inner(Inner::new(since, [usize::MAX; 3]))
+        Self::new(since)
     }
 }
 
@@ -478,3 +252,7 @@ mod store_tests;
 #[cfg(test)]
 #[path = "persist_tests.rs"]
 mod persist_tests;
+
+#[cfg(test)]
+#[path = "view_tests.rs"]
+mod view_tests;
