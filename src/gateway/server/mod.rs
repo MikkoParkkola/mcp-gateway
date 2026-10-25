@@ -2393,6 +2393,18 @@ impl Gateway {
             meta_mcp.set_playbook_engine(engine);
         }
 
+        // Ctrl+C and SIGTERM end stdio the way stdin EOF does: stop reading,
+        // drain what was accepted, then `stop_all`. Without this a signal
+        // killed stdio outright, and since each backend leads its own process
+        // group (MIK-8895) nothing else would end the backends' trees. The
+        // release line does the same (MIK-8364). Polled once here, before any
+        // backend can start, so the OS handlers are registered from now on
+        // rather than from the read loop's first poll.
+        let (signal_tx, _) = tokio::sync::broadcast::channel(1);
+        let stop_signal = support::shutdown_signal(signal_tx);
+        tokio::pin!(stop_signal);
+        let mut signalled = futures::FutureExt::now_or_never(stop_signal.as_mut()).is_some();
+
         // Warm-start backends (same as HTTP mode). Held for the rest of the
         // function: dropping the guard aborts the retry tasks, so cancelling
         // `run_stdio` anywhere cancels them too, not only the EOF path below.
@@ -2427,7 +2439,7 @@ impl Gateway {
         // unbounded queue would turn a stalled reader into operator-process
         // memory growth.
         let (writer, queue) = tokio::sync::mpsc::channel::<serde_json::Value>(STDOUT_QUEUE_DEPTH);
-        let writer_task = tokio::spawn(Self::run_stdout_writer(tokio::io::stdout(), queue));
+        let mut writer_task = tokio::spawn(Self::run_stdout_writer(tokio::io::stdout(), queue));
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)
         let session_id = STDIO_SESSION_ID;
@@ -2455,17 +2467,10 @@ impl Gateway {
         // Why the loop can end before EOF: see `run_stdout_writer`.
         let mut stdout_died = false;
 
-        // Ctrl+C and SIGTERM end stdio the way stdin EOF does: stop reading,
-        // drain what was accepted, then `stop_all`. Without this a signal
-        // killed stdio outright, and since each backend leads its own process
-        // group (MIK-8895) nothing else would end the backends' trees. The
-        // release line does the same (MIK-8364).
-        let (signal_tx, _) = tokio::sync::broadcast::channel(1);
-        let stop_signal = support::shutdown_signal(signal_tx);
-        tokio::pin!(stop_signal);
-        let mut signalled = false;
-
         loop {
+            if signalled {
+                break;
+            }
             // A closed queue means the stdout writer has exited, so every
             // answer from here on would be written nowhere. Executing the
             // request anyway performs its side effect and discards the only
@@ -2705,8 +2710,16 @@ impl Gateway {
         // and returns, which is what flushes the responses the drain produced.
         drop(writer);
         drop(channel);
-        if let Err(error) = writer_task.await {
-            warn!(%error, "stdio: the stdout writer did not finish cleanly");
+        // Bounded like the dispatch drain: a client that stopped reading
+        // leaves a write pending on a full pipe, and an unbounded join would
+        // never reach the backend teardown below.
+        match tokio::time::timeout(STDIO_DRAIN_TIMEOUT, &mut writer_task).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => warn!(%error, "stdio: the stdout writer did not finish cleanly"),
+            Err(_) => {
+                warn!(timeout = ?STDIO_DRAIN_TIMEOUT, "stdio: stdout writer stuck; aborting it");
+                writer_task.abort();
+            }
         }
         // Stop sweeping and probing before tearing the backends down. Both tasks
         // hold an Arc on the registry and have no shutdown channel in this mode,
