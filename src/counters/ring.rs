@@ -27,12 +27,11 @@ impl<const W: u64> Ring<W> {
         newest.saturating_sub(W - 1)
     }
 
-    /// Add `counts` in `bucket`. Past the window: kept nowhere.
+    /// Add `counts` in `bucket`. Past the window: kept nowhere, because a
+    /// bucket older than every held one goes to the front and the `expire`
+    /// below drops it before this returns.
     pub(crate) fn add(&mut self, bucket: u64, counts: [u64; 5]) {
         let newest = self.newest().map_or(bucket, |n| n.max(bucket));
-        if bucket < Self::first_held(newest) {
-            return;
-        }
         let at_or_before = self.0.iter().rposition(|(b, _)| *b <= bucket);
         match at_or_before {
             Some(i) if self.0[i].0 == bucket => {

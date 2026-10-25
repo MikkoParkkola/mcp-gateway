@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Store rules (test plan T1-T11, T45, T46): buckets, rings, local
+//! Store rules (test plan T1-T11, T45-T49): buckets, rings, local
 //! days, caps, labels and classification, all on explicit times and zones.
 
 use chrono::TimeZone;
@@ -587,4 +587,19 @@ fn t48_the_cached_day_follows_a_clock_stepping_back() {
         .points;
     let days: Vec<u64> = nonzero(&month).iter().map(|(_, v)| *v).collect();
     assert_eq!(days, vec![1, 2], "23:50 on the 20th, then two on the 21st");
+}
+
+#[test]
+fn t49_a_bucket_older_than_the_window_is_kept_nowhere() {
+    let mut half = ring::Ring::<{ HALF_BUCKETS as u64 }>::default();
+    let newest = 1_000;
+    half.add(newest, [1, 0, 0, 0, 0]);
+    let first = half.window_start(newest);
+    half.add(first, [1, 0, 0, 0, 0]);
+    half.add(first - 1, [7, 0, 0, 0, 0]);
+    assert_eq!(half.get(first - 1), None);
+    assert_eq!(
+        half.buckets().collect::<Vec<_>>(),
+        vec![(first, [1, 0, 0, 0, 0]), (newest, [1, 0, 0, 0, 0])]
+    );
 }
