@@ -10,6 +10,8 @@ cd "$repo_root"
 failures=0
 
 private_dirs=(
+  "docs/internal"
+  "tickets"
   "docs/strategy"
   "docs/competitive"
   "docs/competitive-intelligence"
@@ -17,11 +19,10 @@ private_dirs=(
 )
 
 public_competitive_docs=(
-  "docs/competitive/README.md"
-  "docs/competitive/willow-enterprise-agent-governance.md"
 )
 
 ignore_samples=(
+  "internal/example.md"
   "docs/strategy/example.md"
   "docs/competitive/example.md"
   "docs/competitive-intelligence/example.md"
@@ -115,7 +116,6 @@ internal_path_markers=(
 # carve-out: when the lane lands, the file moves under docs/internal/ and the
 # line goes.
 internal_doc_allowlist=(
-  "docs/analysis/release-4.0-remaining-plan.md"
 )
 
 # Every tracked file at the repository root. Not filtered by extension: the
@@ -146,7 +146,6 @@ root_doc_allowlist=(
   "AUTHORSHIP.md"
   "CHANGELOG.md"
   "CLA.md"
-  "CLAUDE.md"
   "CODE_OF_CONDUCT.md"
   "COMMERCIAL.md"
   "CONTRIBUTING.md"
@@ -190,7 +189,7 @@ done
 is_allowlisted_internal() {
   local file="$1"
   local permitted
-  for permitted in "${internal_doc_allowlist[@]}"; do
+  for permitted in ${internal_doc_allowlist[@]+"${internal_doc_allowlist[@]}"}; do
     [[ "$file" == "$permitted" ]] && return 0
   done
   return 1
@@ -200,24 +199,13 @@ report_internal_doc() {
   local file="$1"
   local evidence="$2"
   report_failure "$file reads as an internal working document ($evidence)"
-  printf 'Remediation: git mv it under docs/internal/ keeping its subdirectory, then repoint the links that named it.\n' >&2
+  printf 'Remediation: move it into the private companion repository (cloned at the ignored internal/ path), git rm it here, and state inline whatever a public link to it was for.\n' >&2
 }
-
-# docs/internal/ is published, not hidden: the history is worth reading and the
-# gate above is satisfied by moving a document there, which only works if the
-# destination stays in the index.
-if git ls-files --error-unmatch docs/internal >/dev/null 2>&1 || [[ -d docs/internal ]]; then
-  if git check-ignore -q docs/internal; then
-    report_failure "docs/internal is ignored; the internal-document gate has no tracked destination"
-  elif [[ -z "$(git ls-files docs/internal)" ]]; then
-    report_failure "docs/internal exists but nothing under it is tracked"
-  fi
-fi
 
 is_public_competitive_doc() {
   local file="$1"
   local public_file
-  for public_file in "${public_competitive_docs[@]}"; do
+  for public_file in ${public_competitive_docs[@]+"${public_competitive_docs[@]}"}; do
     [[ "$file" == "$public_file" ]] && return 0
   done
   return 1
