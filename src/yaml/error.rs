@@ -6,8 +6,9 @@
 /// (MIK-8425 B3, CWE-532), keeps the key path, expected type and line/column.
 pub(crate) struct Error(Repr);
 
-/// What an adapter error carries: the backend's own failure, or the guard's
-/// refusal (MIK-8639). Both print value-free.
+/// What an adapter error carries: the backend's own failure, the guard's
+/// refusal (MIK-8639), or the replacement backend's own message (MIK-8425
+/// MIG.2). All print value-free.
 enum Repr {
     /// `serde_yaml`'s error, shown redacted exactly as before the guard.
     Backend(serde_yaml::Error),
@@ -18,12 +19,24 @@ enum Repr {
         what: Option<String>,
         hint: Option<&'static str>,
     },
+    /// The replacement backend's refusal: a fixed wording or a serde
+    /// message, and where it points. Printed through `redact_message`, as
+    /// `Backend` is.
+    Message {
+        text: String,
+        location: Option<Location>,
+        /// Still to learn its place: a serde `custom` message gets the node's
+        /// key path and position from the deserializer that sees it, once,
+        /// as the replaced backend's `fix_mark` did.
+        fixable: bool,
+    },
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.0 {
             Repr::Backend(err) => f.write_str(&redact_message(&err.to_string())),
+            Repr::Message { .. } => f.write_str(&self.message_text()),
             Repr::Refused { limit, what, hint } => match limit {
                 Limit::Size { len, max } => {
                     write!(f, "YAML refused: {len} bytes, over the {max}-byte limit")
@@ -78,12 +91,25 @@ impl std::fmt::Debug for Error {
                 .finish(),
             // The limit only: never `what`'s source error.
             Repr::Refused { limit, .. } => f.debug_tuple("Error").field(limit).finish(),
+            Repr::Message { .. } => f.debug_tuple("Error").field(&self.message_text()).finish(),
         }
     }
 }
 
 // No `source()`: a chain printer must not reach serde_yaml's unredacted text.
 impl std::error::Error for Error {}
+
+impl serde::de::Error for Error {
+    /// A serde message, placed by the deserializer that sees it and printed
+    /// through `redact_message`, so a quoted value never shows.
+    fn custom<T: std::fmt::Display>(msg: T) -> Self {
+        Self(Repr::Message {
+            text: msg.to_string(),
+            location: None,
+            fixable: true,
+        })
+    }
+}
 
 impl Error {
     /// Where the refusal points in the document, if the parser knows.
@@ -100,13 +126,14 @@ impl Error {
                 }),
                 _ => None,
             },
+            Repr::Message { location, .. } => *location,
         }
     }
 
     /// Why the guard refused the text, when it did.
     pub(crate) fn limit(&self) -> Option<&Limit> {
         match &self.0 {
-            Repr::Backend(_) => None,
+            Repr::Backend(_) | Repr::Message { .. } => None,
             Repr::Refused { limit, .. } => Some(limit),
         }
     }
@@ -114,6 +141,60 @@ impl Error {
     /// The backend's own failure.
     pub(super) fn backend(err: serde_yaml::Error) -> Self {
         Self(Repr::Backend(err))
+    }
+
+    /// The replacement backend's own refusal, with no position.
+    pub(super) fn message(text: impl Into<String>) -> Self {
+        Self(Repr::Message {
+            text: text.into(),
+            location: None,
+            fixable: false,
+        })
+    }
+
+    /// The replacement backend's own refusal at `line`, `column` (1-based).
+    pub(super) fn message_at(text: impl Into<String>, line: usize, column: usize) -> Self {
+        Self(Repr::Message {
+            text: text.into(),
+            location: Some(Location { line, column }),
+            fixable: false,
+        })
+    }
+
+    /// Give a serde message its place, the first time one is offered: the
+    /// key path (`.` is the root, printed as nothing) and the node's line
+    /// and column. Any other error passes through unchanged.
+    pub(super) fn fix_place(mut self, line: usize, column: usize, path: &str) -> Self {
+        if let Repr::Message {
+            text,
+            location,
+            fixable,
+        } = &mut self.0
+            && *fixable
+        {
+            if path != "." {
+                *text = format!("{path}: {text}");
+            }
+            *location = Some(Location { line, column });
+            *fixable = false;
+        }
+        self
+    }
+
+    /// A `Message`'s text as printed: `text at line L column C` when it has
+    /// a place, as the replaced backend wrote it, with any value redacted.
+    fn message_text(&self) -> String {
+        let Repr::Message { text, location, .. } = &self.0 else {
+            return String::new();
+        };
+        // The replaced backend left out a place at the very start.
+        let full = match location {
+            Some(at) if (at.line, at.column) != (1, 1) => {
+                format!("{text} at line {} column {}", at.line, at.column)
+            }
+            _ => text.clone(),
+        };
+        redact_message(&full)
     }
 
     /// The guard's refusal; `what` carries the Syntax wording and nothing else.
@@ -273,4 +354,52 @@ fn location(tail: &str) -> &str {
                 && !column.is_empty()
     ) && words.next().is_none();
     if exact { suffix } else { "" }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Error, Location};
+
+    /// The replacement backend's message prints as the replaced backend's
+    /// did, place included, and neither `Display` nor `Debug` carries the
+    /// value a serde message quotes (B3).
+    #[test]
+    fn a_backend_message_prints_its_place_and_never_the_value() {
+        let error = Error::message_at(
+            "port: invalid type: string \"MIK8425-SENTINEL-7f3a\", expected u16",
+            3,
+            7,
+        );
+        let shown = error.to_string();
+        let debug = format!("{error:?}");
+        assert!(shown.ends_with(" at line 3 column 7"), "{shown}");
+        assert!(shown.starts_with("port: invalid type: "), "{shown}");
+        assert!(!shown.contains("SENTINEL") && !debug.contains("SENTINEL"));
+        assert_eq!(error.location(), Some(Location { line: 3, column: 7 }));
+        assert_eq!(error.limit(), None);
+        let start = Error::message_at("duplicate entry with key \"a\"", 1, 1);
+        assert_eq!(start.to_string(), "duplicate entry with key \"a\"");
+        assert_eq!(start.location(), Some(Location { line: 1, column: 1 }));
+        let bare = Error::message("repetition limit exceeded");
+        assert_eq!(bare.to_string(), "repetition limit exceeded");
+        assert_eq!(bare.location(), None);
+    }
+
+    /// A serde message learns its key path and place once, from the first
+    /// node that sees it; a fixed wording never takes one.
+    #[test]
+    fn a_serde_message_is_placed_once() {
+        let error = <Error as serde::de::Error>::custom("invalid type: map, expected a string")
+            .fix_place(1, 4, "v")
+            .fix_place(9, 9, "outer");
+        assert_eq!(
+            error.to_string(),
+            "v: invalid type: map, expected a string at line 1 column 4"
+        );
+        let root = <Error as serde::de::Error>::custom("duplicate field `a`").fix_place(1, 1, ".");
+        assert_eq!(root.to_string(), "duplicate field `a`");
+        let fixed = Error::message("repetition limit exceeded").fix_place(2, 2, "x");
+        assert_eq!(fixed.to_string(), "repetition limit exceeded");
+        assert_eq!(fixed.location(), None);
+    }
 }
