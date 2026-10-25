@@ -561,8 +561,10 @@ a { color: inherit; text-decoration: none; }
 :focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
 
 .side { width: 232px; flex: none; border-right: var(--size-rule) solid var(--color-border-subtle); padding: 18px 12px; display: flex; flex-direction: column; gap: 2px; }
-.brand { padding: 2px 8px 18px; font: var(--type-title); letter-spacing: var(--type-title-tracking); text-transform: uppercase; }
-.route-nav .stn { font-weight: var(--font-weight-semibold); }
+.brand { padding: 4px 8px 23px; font: var(--type-title); letter-spacing: var(--type-title-tracking); text-transform: uppercase; }
+.route-nav { padding-left: 12px; }
+.route-nav::before { left: 17px; }
+.route-nav .stn { font-weight: var(--font-weight-semibold); gap: calc(var(--space-3) - 2px); }
 
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .top { height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 24px; border-bottom: var(--size-rule) solid var(--color-border-subtle); }
