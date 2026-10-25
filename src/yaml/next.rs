@@ -27,6 +27,10 @@ pub(crate) fn from_str_loose(_text: &str) -> Result<Dict, Error> {
     Err(not_yet())
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "figment's own `Provider::data` signature, which the config loader returns"
+)]
 pub(crate) fn figment_data(_text: &str) -> figment::Result<Map<figment::Profile, Dict>> {
     Err(figment::Error::from(NOT_YET.to_owned()))
 }

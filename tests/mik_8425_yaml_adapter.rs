@@ -333,10 +333,10 @@ fn structure_or_refusal(r: Result<yaml::Value, impl std::fmt::Display>) -> Strin
     )
 }
 
-/// Every reading the serde_yaml and figment comparisons above make, through
-/// the adapter alone. Recorded while the adapter is serde_yaml (the tests
+/// Every reading the `serde_yaml` and figment comparisons above make, through
+/// the adapter alone. Recorded while the adapter is `serde_yaml` (the tests
 /// above prove it reads the same), it keeps them checkable after MIK-8425
-/// MIG.2 removes serde_yaml from the build.
+/// MIG.2 removes `serde_yaml` from the build.
 fn adapter_report() -> String {
     let mut out = String::new();
     let mut row = |case: String, reading: String| {

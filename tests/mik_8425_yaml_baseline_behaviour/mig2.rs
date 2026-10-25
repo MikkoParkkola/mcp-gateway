@@ -8,6 +8,7 @@
 use super::{Shape, ok_json, ok_tree, row, yaml};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Keep {
@@ -44,7 +45,7 @@ fn fanout3() -> String {
     for level in 1..=3 {
         let prev = level - 1;
         let refs = vec![format!("*a{prev}"); 10].join(", ");
-        doc.push_str(&format!("a{level}: &a{level} [{refs}]\n"));
+        let _ = writeln!(doc, "a{level}: &a{level} [{refs}]");
     }
     doc
 }
@@ -137,7 +138,7 @@ fn tags(out: &mut String) {
 
 fn streams(out: &mut String) {
     let later_dup = "a: 1\n---\nb: 1\nb: 2\n---\nc: 1\n";
-    let readings: Vec<String> = yaml::documents(later_dup).map(|d| ok_tree(d)).collect();
+    let readings: Vec<String> = yaml::documents(later_dup).map(ok_tree).collect();
     row(
         out,
         "mig2/stream/later-duplicate",
@@ -148,13 +149,10 @@ fn streams(out: &mut String) {
 /// D16: the old parser's repetition rule counts every alias visit, including in
 /// a field the target ignores, and resets per document.
 fn aliases(out: &mut String) {
-    let ignored = format!(
-        "keep: 1\nskip:\n{}",
-        fanout3()
-            .lines()
-            .map(|l| format!("  {l}\n"))
-            .collect::<String>()
-    );
+    let mut ignored = String::from("keep: 1\nskip:\n");
+    for line in fanout3().lines() {
+        let _ = writeln!(ignored, "  {line}");
+    }
     row(
         out,
         "mig2/alias/ignored-field",
@@ -167,7 +165,7 @@ fn aliases(out: &mut String) {
         &ok_tree(yaml::from_str::<yaml::Value>(self_ref)),
     );
     let two = format!("{}---\n{}", fanout3(), fanout3());
-    let readings: Vec<String> = yaml::documents(&two).map(|d| ok_tree(d)).collect();
+    let readings: Vec<String> = yaml::documents(&two).map(ok_tree).collect();
     row(
         out,
         "mig2/alias/per-document",

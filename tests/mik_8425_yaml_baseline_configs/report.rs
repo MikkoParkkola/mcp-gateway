@@ -44,7 +44,7 @@ pub(crate) const CONFIGS: &[&str] = &[
     "tests/fixtures/helm-golden/mesh.yaml",
 ];
 
-/// The `gateway.yaml` a rendered Helm manifest's ConfigMap carries, when
+/// The `gateway.yaml` a rendered Helm manifest's `ConfigMap` carries, when
 /// `text` is such a manifest: the chart's configs are extracted as the
 /// gateway reads them once mounted.
 pub(crate) fn helm_gateway_yaml(text: &str) -> Option<String> {
@@ -66,7 +66,7 @@ pub(crate) fn helm_gateway_yaml(text: &str) -> Option<String> {
 pub(crate) fn reading(text: &str) -> String {
     let text = helm_gateway_yaml(text).unwrap_or_else(|| text.to_owned());
     let extracted = Figment::from(figment::providers::Serialized::defaults(Config::default()))
-        .merge(AdapterYaml(text.to_owned()))
+        .merge(AdapterYaml(text))
         .extract::<Config>();
     match extracted {
         Ok(config) => match golden::canonical_digest(&config) {

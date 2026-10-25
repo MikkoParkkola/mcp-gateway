@@ -11,6 +11,7 @@
 mod yaml;
 
 use serde::Deserialize;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 /// Collect `*.yaml`/`*.yml` files under `root`, skipping `target` and `.git`.
@@ -88,7 +89,7 @@ fn shipped_files() -> Vec<String> {
 
 /// The backend's verdict on one file: `single` when it reads as one
 /// document, `stream <n>` when it reads as `n` documents, else `refused`.
-/// Recorded with serde_yaml before the MIK-8425 swap; the comparison below
+/// Recorded with `serde_yaml` before the MIK-8425 swap; the comparison below
 /// holds the guarded seam to it.
 fn backend_reading(content: &str) -> String {
     if serde_yaml::from_str::<serde_yaml::Value>(content).is_ok() {
@@ -197,11 +198,12 @@ fn record_shipped_yaml_golden() {
     let mut out = String::new();
     for path in shipped_files() {
         let content = read(&path);
-        out.push_str(&format!(
-            "{path}\t{}\t{}\n",
+        let _ = writeln!(
+            out,
+            "{path}\t{}\t{}",
             digest(&content),
             backend_reading(&content)
-        ));
+        );
     }
     print!("----- BEGIN shipped.tsv -----\n{out}----- END shipped.tsv -----\n");
 }

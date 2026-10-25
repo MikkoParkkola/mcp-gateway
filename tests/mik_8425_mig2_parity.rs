@@ -40,10 +40,12 @@ fn recorded_rows(name: &str, prefix: &str) -> String {
             .join(name),
     )
     .expect("golden");
-    text.lines()
-        .filter(|row| row.starts_with(prefix))
-        .map(|row| format!("{row}\n"))
-        .collect()
+    let mut rows = String::new();
+    for row in text.lines().filter(|row| row.starts_with(prefix)) {
+        rows.push_str(row);
+        rows.push('\n');
+    }
+    rows
 }
 
 /// P1, P3-P5, P7, P11, P12 and the P6 write rows: every `behaviour.txt` row.
@@ -58,7 +60,7 @@ fn every_repository_yaml_file_reads_as_recorded() {
     golden::assert_keyed_golden("trees.tsv", trees::MIN_COMPARED, trees::readings);
 }
 
-/// P13: the `Config` each shipped config and Helm ConfigMap extracts to.
+/// P13: the `Config` each shipped config and Helm `ConfigMap` extracts to.
 #[test]
 fn every_shipped_config_extracts_as_recorded() {
     golden::assert_keyed_golden("configs.tsv", configs::CONFIGS.len(), configs::reading);

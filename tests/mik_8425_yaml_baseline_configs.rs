@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8425 MIG.2 step 2 (P13, MIG.3 Config identity): the `Config` each
-//! shipped gateway config, and each rendered Helm ConfigMap, extracts to
+//! shipped gateway config, and each rendered Helm `ConfigMap`, extracts to
 //! through the adapter's `figment_data`, recorded with the current backend
 //! before the swap.
 //!
