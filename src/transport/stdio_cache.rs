@@ -34,7 +34,7 @@ pub fn isolated_package_manager_env<S: std::hash::BuildHasher>(
     isolated_env_and_assigned_cache(backend_name, command, backend_env).0
 }
 
-/// [`isolated_package_manager_env`] and [`assigned_package_cache_dir`] from one
+/// [`isolated_package_manager_env`] and `assigned_package_cache_dir` from one
 /// assignment. The write probe can answer differently from one call to the
 /// next, so a start that read the two separately could hand the child a cache
 /// the repair does not know is the gateway's (MIK-8831.REL.5).
