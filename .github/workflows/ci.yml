@@ -339,6 +339,12 @@ jobs:
     # security jobs, so a red secrets-scan or leak-lint would not have
     # blocked ghcr.io publish. docker-check gates it on the scanned image.
     needs: [check, test, fmt, audit, secrets-scan, secret-leak-lint, public-claims, public-repo-hygiene, service-template-smoke, usability-smoke, helm-chart-smoke, helm-oci-roundtrip, helm-supply-chain, helm-airgap, docker-check]
+    # One publisher at a time, never cancelled mid-release. A run that is still
+    # pending when a newer tag queues behind it is superseded by GitHub; that
+    # release shows as cancelled and is re-run.
+    concurrency:
+      group: ghcr-publish
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
@@ -353,6 +359,7 @@ jobs:
         # the highest stable tag the repository has, so a maintenance release
         # of an older line never takes latest from a newer one.
         run: |
+          set -euo pipefail
           version="${GITHUB_REF#refs/tags/v}"
           image=ghcr.io/mikkoparkkola/mcp-gateway
           tags="${image}:${version}
@@ -361,9 +368,11 @@ jobs:
           if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             tags="${tags}
           ${image}:${version%.*}"
-            highest="$(git ls-remote --tags --refs origin 'refs/tags/v*' \
+            # A failed query fails the release rather than skipping latest.
+            remote="$(git ls-remote --tags --refs origin 'refs/tags/v*')"
+            highest="$(printf '%s\n' "${remote}" \
               | sed 's|.*refs/tags/v||' \
-              | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+              | { grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true; } \
               | sort -V | tail -n 1)"
             if [ "${version}" = "${highest}" ]; then
               tags="${tags}
@@ -413,12 +422,31 @@ jobs:
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
           VERSION: ${{ steps.meta.outputs.version }}
+        # latest is pushed last and only if this version is still the highest
+        # stable tag now: a newer release tagged while this one ran keeps it.
         run: |
           set -euo pipefail
           while IFS= read -r ref; do
             [ -n "${ref}" ] || continue
+            if [ "${ref##*:}" = latest ]; then
+              continue
+            fi
             docker push "${ref}"
           done <<< "${TAGS}"
+          if printf '%s\n' "${TAGS}" | grep -qx 'ghcr.io/mikkoparkkola/mcp-gateway:latest'; then
+            remote="$(git ls-remote --tags --refs origin 'refs/tags/v*')"
+            highest="$(printf '%s\n' "${remote}" \
+              | sed 's|.*refs/tags/v||' \
+              | { grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true; } \
+              | sort -V | tail -n 1)"
+            if [ "${VERSION}" = "${highest}" ]; then
+              docker push ghcr.io/mikkoparkkola/mcp-gateway:latest
+              echo "latest=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "latest: ${highest} is newer than ${VERSION}; not moved" >&2
+              echo "latest=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
           ref="$(docker inspect --format '{{index .RepoDigests 0}}' "ghcr.io/mikkoparkkola/mcp-gateway:${VERSION}")"
           echo "digest=${ref#*@}" >> "$GITHUB_OUTPUT"
 
@@ -468,12 +496,16 @@ jobs:
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           TAGS: ${{ steps.meta.outputs.tags }}
+          LATEST: ${{ steps.build.outputs.latest }}
         # Every name the push applied, from the same list it was given, so an
-        # alias added there is checked here too.
+        # alias added there is checked here too; latest only if it was moved.
         run: |
           set -euo pipefail
           while IFS= read -r ref; do
             [ -n "${ref}" ] || continue
+            if [ "${ref##*:}" = latest ] && [ "${LATEST:-false}" != true ]; then
+              continue
+            fi
             got="$(docker buildx imagetools inspect "${ref}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
             if [ "${got}" != "${DIGEST}" ]; then
               echo "alias ${ref} resolves to ${got}, not the signed ${DIGEST}" >&2

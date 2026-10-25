@@ -151,6 +151,10 @@ def check_ci(text):
     verify = step(docker, "Verify every alias resolves to the signed digest")
     assert "TAGS: ${{ steps.meta.outputs.tags }}" in verify, "every pushed name is verified"
 
+    assert re.search(r"^    concurrency:\n      group: ghcr-publish\n      cancel-in-progress: false$", head, re.M), (
+        "publishers run one at a time and are never cancelled mid-release"
+    )
+
     registry = job(text, "publish-mcp-registry")
     head = job_header(registry)
     assert guarded(head), "the registry publish runs only for a pushed v* tag"
@@ -184,7 +188,7 @@ def run_script(text, step_name, env, stubs):
             **env,
         }
         run = subprocess.run(
-            ["bash", "-c", "\n".join(lines)], env=full_env, capture_output=True, text=True, timeout=30
+            ["bash", "-eo", "pipefail", "-c", "\n".join(lines)], env=full_env, capture_output=True, text=True, timeout=30
         )
         return run.returncode, output.read_text()
 
@@ -307,21 +311,73 @@ class PublishingGuards(unittest.TestCase):
             sorted(f"{image}:{t}" for t in ("4.0.0-rc.1", "v4.0.0-rc.1", "sha-1234567")),
         )
 
+    def test_a_failed_tag_query_fails_the_release(self):
+        rc, _ = run_script(
+            self.ci,
+            "Extract tag",
+            {"GITHUB_REF": "refs/tags/v3.5.2", "GITHUB_SHA": "1234567890abcdef"},
+            {"git": "exit 128\n"},
+        )
+        self.assertNotEqual(rc, 0, "a stable release must not ship without knowing latest")
+
+    def push(self, remote, docker_push_rc=0):
+        """Run the push step for 3.5.2 with stub docker and git; returns
+        (exit code, outputs, pushed references)."""
+        image = "ghcr.io/mikkoparkkola/mcp-gateway"
+        tags = "\n".join(f"{image}:{t}" for t in ("3.5.2", "v3.5.2", "sha-1234567", "3.5", "latest"))
+        with tempfile.TemporaryDirectory() as tmp:
+            log = pathlib.Path(tmp, "pushed")
+            docker = (
+                f'case "$1" in\n'
+                f'  push) echo "$2" >> "{log}"; exit {docker_push_rc} ;;\n'
+                f'  inspect) echo "{image}@sha256:abc" ;;\n'
+                f"esac\n"
+            )
+            stubs = {"docker": docker, **remote_tags(*remote)}
+            rc, out = run_script(self.ci, "Push the scanned image", {"TAGS": tags, "VERSION": "3.5.2"}, stubs)
+            pushed = log.read_text().split() if log.exists() else []
+        return rc, out, pushed
+
+    def test_the_push_sends_every_name_latest_last_and_records_the_digest(self):
+        rc, out, pushed = self.push(["3.5.1", "3.5.2"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(pushed[-1], "ghcr.io/mikkoparkkola/mcp-gateway:latest")
+        self.assertEqual(len(pushed), 5)
+        self.assertIn("digest=sha256:abc", out)
+        self.assertIn("latest=true", out)
+
+    def test_a_newer_release_tagged_meanwhile_keeps_latest(self):
+        rc, out, pushed = self.push(["3.5.2", "3.5.3"])
+        self.assertEqual(rc, 0)
+        self.assertNotIn("ghcr.io/mikkoparkkola/mcp-gateway:latest", pushed)
+        self.assertIn("latest=false", out)
+
+    def test_a_failed_push_fails_the_release(self):
+        rc, _, _ = self.push(["3.5.2"], docker_push_rc=1)
+        self.assertNotEqual(rc, 0)
+
     def test_an_alias_on_another_digest_fails_the_release(self):
         tags = "ghcr.io/mikkoparkkola/mcp-gateway:3.5.2\nghcr.io/mikkoparkkola/mcp-gateway:latest"
         docker = 'case "$*" in *:latest*) echo \'"sha256:other"\' ;; *) echo \'"sha256:signed"\' ;; esac\n'
         rc, _ = run_script(
             self.ci,
             "Verify every alias resolves to the signed digest",
-            {"DIGEST": "sha256:signed", "TAGS": tags},
+            {"DIGEST": "sha256:signed", "TAGS": tags, "LATEST": "true"},
             {"docker": docker},
         )
         self.assertNotEqual(rc, 0, "a stale alias must fail the release")
+        rc, _ = run_script(
+            self.ci,
+            "Verify every alias resolves to the signed digest",
+            {"DIGEST": "sha256:signed", "TAGS": tags, "LATEST": "false"},
+            {"docker": docker},
+        )
+        self.assertEqual(rc, 0, "latest left to a newer release is not this one's to verify")
         same = 'echo \'"sha256:signed"\'\n'
         rc, _ = run_script(
             self.ci,
             "Verify every alias resolves to the signed digest",
-            {"DIGEST": "sha256:signed", "TAGS": tags},
+            {"DIGEST": "sha256:signed", "TAGS": tags, "LATEST": "true"},
             {"docker": same},
         )
         self.assertEqual(rc, 0, "every alias on the signed digest passes")
