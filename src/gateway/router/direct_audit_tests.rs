@@ -25,7 +25,7 @@ use crate::transport::Transport;
 
 pub(in crate::gateway::router) mod anon_intake;
 mod extras;
-use extras::{Extra, arm_extras, backend_config, harden};
+use extras::{Extra, Log, arm_extras, audit_log, backend_config, harden};
 mod anon_key;
 mod backend_oracle;
 mod counting;
@@ -203,14 +203,6 @@ struct Setup {
     sanitize: Sanitize,
 }
 
-/// Whether both routes have a transparency log (MIK-8854 T21).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum Log {
-    #[default]
-    On,
-    Off,
-}
-
 /// Whether both routes sanitize input (`security.sanitize_input`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Sanitize {
@@ -268,35 +260,6 @@ impl MetaMode {
 }
 
 /// Backends `alpha` and `beta`, one logger shared by both routes.
-/// The logger both routes share, in its own directory, failing closed when
-/// `fail_closed`.
-fn audit_log(
-    fail_closed: bool,
-) -> (
-    tempfile::TempDir,
-    std::path::PathBuf,
-    Arc<TransparencyLogger>,
-) {
-    let audit = tempfile::tempdir().unwrap();
-    let path = audit.path().join("audit.jsonl");
-    let policy = if fail_closed {
-        AuditFailurePolicy::FailClosed
-    } else {
-        AuditFailurePolicy::BestEffort
-    };
-    let log = Arc::new(
-        TransparencyLogger::open(Arc::new(TransparencyLogConfig {
-            enabled: true,
-            path: path.to_string_lossy().into_owned(),
-            key_id: "d2".to_string(),
-            ..TransparencyLogConfig::default()
-        }))
-        .expect("open log")
-        .with_failure_policy(policy),
-    );
-    (audit, path, log)
-}
-
 async fn fixture(setup: Setup) -> Fixture {
     let (audit, path, log) = audit_log(setup.fail_closed);
     let (mut state, store) = match &setup.auth {
