@@ -287,7 +287,21 @@ mod tests {
 
     #[test]
     fn a_relative_path_is_made_absolute() {
-        assert!(absolutize(PathBuf::from("isolated-state")).is_absolute());
+        assert_eq!(
+            absolutize(PathBuf::from("isolated-state")),
+            std::env::current_dir().unwrap().join("isolated-state")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_override_is_kept() {
+        use std::os::unix::ffi::OsStringExt;
+        let dir = std::ffi::OsString::from_vec(b"state-\xff".to_vec());
+        assert_eq!(
+            resolve_gateway_data_dir(Some(dir.clone()), Some(PathBuf::from("home"))),
+            PathBuf::from(dir)
+        );
     }
 
     // Drive-relative and rooted paths are relative on Windows, and `join`
