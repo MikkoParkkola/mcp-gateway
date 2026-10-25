@@ -1,8 +1,8 @@
 # ADR-028: Where UI saves put secrets: the OS keychain or owner-only files
 
 - **Status**: Proposed, 2026-10-25
-- **Ticket**: MIK-8908 (KC.1); extends ADR-016 (a second scoped `unsafe` module, §2a); amends ADR-024 (its secret sequence gains a store choice; its F5 is corrected); unblocks MIK-8860 (API8.7) and MIK-8859 (adopt with secrets)
-- **Operator ruling 2026-10-25:** full keychain support in 4.0.0, and the store is a user setting (OS keychain or owner-only secret files). Lead default: keychain where the OS provides one, otherwise files; the setting overrides.
+- **Ticket**: MIK-8908; extends ADR-016 (a second scoped `unsafe` module, §2a); amends ADR-024 (its secret sequence gains a store choice; its F5 is corrected)
+- **Requirement:** full keychain support in 4.0.0, and the store is a user setting (OS keychain or owner-only secret files). Default: keychain where the OS provides one, otherwise files; the setting overrides.
 
 ## Context
 
@@ -33,7 +33,7 @@
 | Linux | `secret-tool lookup service NAME`, bounded and non-interactive (rule 5), stdout into a wiped buffer, no `trim()` | `secret-tool store --label=... service NAME` with the secret on **stdin**; `secret-tool clear service NAME` | none | none (runtime needs `libsecret-tools`, `libglib2.0-bin` and a Secret Service) |
 | Windows | Credential Manager `CredReadW` | `CredWriteW` (`CRED_TYPE_GENERIC`, `CRED_PERSIST_LOCAL_MACHINE`; create-only: `exists()` first under the vault lock, rule 3) / `CredDeleteW` | **one new scoped module**, `src/win_cred.rs` (ADR-016 extension, §2a) | none: the `Win32_Security_Credentials` feature of the already-direct `windows-sys` 0.61 |
 
-#### 2a. ADR-016 extension: a second scoped `unsafe` module (lead ruling 2026-10-25, option W1)
+#### 2a. ADR-016 extension: a second scoped `unsafe` module (option W1)
 
 ADR-016 allowed one Windows-only file of `unsafe` code for owner-only DACLs. This decision allows a second, `src/win_cred.rs`, under the same rules:
 
@@ -47,7 +47,7 @@ ADR-016 allowed one Windows-only file of `unsafe` code for owner-only DACLs. Thi
 - The secret blob is copied into `WipedBytes` and the Win32 copy freed immediately. The value never enters an error string; Win32 errors are reported by code.
 - The module's own tests run on the Windows CI shard: create, read, delete, create-on-existing refused, read-missing named. The `unsafe` allow-list is rule 10.
 
-Option W2, the `keyring` crate, was rejected. It moves the same `unsafe` into a dependency we do not review, and adds a tree on every OS. Option W3, a refusal on Windows, was rejected by the operator's ruling for full keychain support.
+Option W2, the `keyring` crate, was rejected. It moves the same `unsafe` into a dependency we do not review, and adds a tree on every OS. Option W3, a refusal on Windows, was rejected by the requirement for full keychain support.
 
 The macOS `security` CLI is **not** used to write: `add-generic-password -w SECRET` puts the secret in argv (KC.3).
 
@@ -99,7 +99,7 @@ The value never appears in argv, logs or error text. Readers and writers pass it
 - Entry names change on every secret change, and unused entries accumulate until an admin deletes them (ADR-024).
 - Rollback: the `keychain:` prefix stays reserved. A build without keychain support refuses `keychain:NAME` by name, never reading it as a literal secret. A binary older than this ADR would read it as a literal, so UPGRADING says to convert keychain references to `file:` before downgrading.
 
-## Rules from review (binding)
+## Rules (binding)
 
 ### Names and limits
 
