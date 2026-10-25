@@ -21,6 +21,15 @@ pub fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// Whether the tests run from the unpacked published crate, where the
+/// packaged suite runs them: `cargo package` writes `Cargo.toml.orig`, and an
+/// unpacked crate has no `.git`. Repository files outside Cargo.toml
+/// `include` are absent there.
+pub fn in_packaged_crate() -> bool {
+    let root = repo_root();
+    root.join("Cargo.toml.orig").exists() && !root.join(".git").exists()
+}
+
 /// `sha256:<hex>` of `bytes`: a fixed-width stand-in for a value too long to
 /// keep in a golden line.
 pub fn digest(bytes: &[u8]) -> String {
@@ -154,6 +163,7 @@ pub fn assert_golden(name: &str, actual: &str) {
 pub fn assert_keyed_golden(name: &str, min_compared: usize, read: impl Fn(&str) -> String) {
     let golden = read_golden(name);
     let mut compared = 0usize;
+    let mut not_packaged = Vec::new();
     let mut skipped = Vec::new();
     let mut differ = Vec::new();
     for row in golden.lines() {
@@ -163,7 +173,11 @@ pub fn assert_keyed_golden(name: &str, min_compared: usize, read: impl Fn(&str) 
             panic!("golden {name}: malformed row {row:?}");
         };
         let Ok(text) = std::fs::read_to_string(repo_root().join(path)) else {
-            skipped.push(format!("{path} (gone)"));
+            if in_packaged_crate() {
+                not_packaged.push(path);
+            } else {
+                skipped.push(format!("{path} (gone)"));
+            }
             continue;
         };
         if digest(text.as_bytes()) != content {
@@ -184,12 +198,21 @@ pub fn assert_keyed_golden(name: &str, min_compared: usize, read: impl Fn(&str) 
             skipped.len()
         );
     }
+    if !not_packaged.is_empty() {
+        eprintln!(
+            "golden {name}: {} row(s) not in the package: {not_packaged:?}",
+            not_packaged.len()
+        );
+    }
     assert!(
         differ.is_empty(),
         "golden {name}: {} file(s) read differently from the recording:\n{}",
         differ.len(),
         differ.join("\n")
     );
+    // A file the package does not ship cannot be compared there; it still
+    // counts toward the floor, so only a reviewed edit lowers it.
+    let compared = compared + not_packaged.len();
     assert!(
         compared >= min_compared,
         "golden {name}: only {compared} row(s) comparable (need {min_compared}); \
