@@ -368,6 +368,10 @@ async fn k6_concurrent_calls_share_one_replacement() {
         !peer.open_sessions().contains(&1)
     })
     .await;
+    // The peer has ended the stream; let the gateway's reader see that end,
+    // so both calls meet a closed channel rather than one racing onto it.
+    // timing: precondition
+    tokio::time::sleep(Duration::from_secs(1)).await;
     let (a, b) = tokio::join!(invoke(&gw), invoke(&gw));
     assert!(a.get("error").is_none() && !is_tool_error(&a), "first: {a}");
     assert!(
