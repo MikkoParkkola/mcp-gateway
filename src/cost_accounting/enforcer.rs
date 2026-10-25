@@ -11,9 +11,9 @@
 //!
 //! `DailyAccumulator` stores (`day_number`, `micro_usd`) as separate atomics.
 //! On each `add()` call the current day is compared to the stored day:
-//! - If equal: `fetch_add` on the counter.
+//! - If equal: a saturating add on the counter.
 //! - If different: `compare_exchange` to win the reset race, then `swap(0)`
-//!   + `fetch_add`.  Losers of the CAS fall through to `fetch_add` on the
+//!   + add.  Losers of the CAS fall through to the add on the
 //!     already-reset counter — no spend is lost.
 
 use std::collections::HashMap;
@@ -62,9 +62,9 @@ impl DailyAccumulator {
     /// Returns the new running total **after** the add.
     ///
     /// Race-safety: `compare_exchange` ensures only one winner resets the
-    /// counter.  The winner uses `swap(0)` then `fetch_add(micro)` so any
-    /// concurrent `fetch_add` calls that arrive between the swap and our add
-    /// are preserved.  Losers of the CAS simply `fetch_add` on the
+    /// counter.  The winner uses `swap(0)` then adds `micro`, so any
+    /// concurrent adds that arrive between the swap and ours are preserved.
+    /// Losers of the CAS simply add to the
     /// already-reset accumulator.
     pub fn add(&self, micro: u64) -> u64 {
         let today = current_day();
@@ -80,7 +80,7 @@ impl DailyAccumulator {
                 self.micro_usd.swap(0, Ordering::AcqRel);
                 return self.add_saturating(micro);
             }
-            // Lost: another thread already reset — fall through to fetch_add
+            // Lost: another thread already reset — fall through to the add
         }
         self.add_saturating(micro)
     }
