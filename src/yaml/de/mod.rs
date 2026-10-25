@@ -233,6 +233,7 @@ fn invalid_type(de: &De<'_>, exp: &dyn de::Expected) -> Error {
     }
     match de.kind() {
         Kind::Scalar { .. } => {
+            // invariant: this arm matched Kind::Scalar, and scalar() is Some for every scalar.
             let scalar = de.scalar().expect("a scalar node");
             match visit_scalar(Expecting(exp), &scalar, false) {
                 Ok(never) => match never {},
@@ -241,6 +242,7 @@ fn invalid_type(de: &De<'_>, exp: &dyn de::Expected) -> Error {
         }
         Kind::Seq { .. } => de::Error::invalid_type(Unexpected::Seq, exp),
         Kind::Map { .. } => de::Error::invalid_type(Unexpected::Map, exp),
+        // invariant: every caller follows an alias (follow()) before asking for a type error.
         Kind::Alias(_) => unreachable!("aliases are followed before a type check"),
     }
 }
@@ -347,6 +349,7 @@ impl<'de> de::Deserializer<'de> for &mut De<'_> {
             Kind::Scalar { tag: t, .. } | Kind::Seq { tag: t, .. } | Kind::Map { tag: t, .. }
                 if variant_tag(t.as_deref(), tagged_already).is_some() =>
             {
+                // invariant: the match guard just checked that this returns Some.
                 let tag = variant_tag(t.as_deref(), tagged_already).expect("checked");
                 visitor.visit_enum(EnumAccess {
                     de: self,
@@ -355,11 +358,13 @@ impl<'de> de::Deserializer<'de> for &mut De<'_> {
                 })
             }
             Kind::Scalar { .. } => {
+                // invariant: this arm matched Kind::Scalar, and scalar() is Some for every scalar.
                 let scalar = self.scalar().expect("a scalar node");
                 visit_scalar(visitor, &scalar, tagged_already)
             }
             Kind::Seq { items, .. } => self.visit_seq(visitor, items),
             Kind::Map { entries, .. } => self.visit_map(visitor, entries),
+            // invariant: follow() at the top of this method returned early for an alias.
             Kind::Alias(_) => unreachable!("followed above"),
         };
         self.place(result)
@@ -652,6 +657,7 @@ impl<'de> de::Deserializer<'de> for &mut De<'_> {
             Kind::Scalar { tag, .. } | Kind::Seq { tag, .. } | Kind::Map { tag, .. }
                 if enum_tag(tag.as_deref()).is_some() =>
             {
+                // invariant: the match guard just checked that this returns Some.
                 let tag = enum_tag(tag.as_deref()).expect("checked");
                 visitor.visit_enum(EnumAccess {
                     de: self,
@@ -668,6 +674,7 @@ impl<'de> de::Deserializer<'de> for &mut De<'_> {
                 Unexpected::Seq,
                 &"a YAML tag starting with '!'",
             )),
+            // invariant: follow() at the top of this method returned early for an alias.
             Kind::Alias(_) => unreachable!("followed above"),
         };
         self.place(result)

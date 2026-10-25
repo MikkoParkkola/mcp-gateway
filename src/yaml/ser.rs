@@ -375,6 +375,7 @@ impl SerializeMap {
         self.ordinary();
         match &mut self.state {
             MapState::Untagged { next_key, .. } | MapState::Pairs { next_key, .. } => next_key,
+            // invariant: ordinary() just moved the state to Untagged or Pairs.
             MapState::CheckForTag | MapState::Tagged(_) => unreachable!("made ordinary above"),
         }
     }
@@ -398,6 +399,7 @@ impl SerializeMap {
                 mapping.insert(key, value);
             }
             MapState::Pairs { entries, .. } => entries.push((key, value)),
+            // invariant: ordinary() just moved the state to Untagged or Pairs.
             MapState::CheckForTag | MapState::Tagged(_) => unreachable!("made ordinary above"),
         }
     }

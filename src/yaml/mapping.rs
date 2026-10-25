@@ -281,6 +281,8 @@ impl<K: Key> std::ops::Index<K> for Mapping {
     ///
     /// When the key is absent, as the replaced backend's `Index` did.
     fn index(&self, key: K) -> &Value {
+        // Index panics by contract, as std maps and the replaced backend do.
+        // invariant: a missing key panics; get() is the non-panicking lookup.
         key.get_in(self).expect("key not found in YAML mapping")
     }
 }
