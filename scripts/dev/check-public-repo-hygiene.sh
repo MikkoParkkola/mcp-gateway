@@ -514,7 +514,8 @@ if [[ -n "$merge_base" ]] && git cat-file -e "$merge_base:$debt_file" 2>/dev/nul
     most="${entry##*$'\t'}"
     if [[ -z "${base_most[$key]+set}" ]]; then
       report_failure "debt entry is new in this change; reword or remove the hit instead: ${entry//$'\t'/ }"
-    elif [[ "$entry" == *$'\t'*$'\t'* ]] && (( most > ${base_most[$key]} )); then
+    elif [[ "$entry" == *$'\t'*$'\t'* ]] && [[ "$most" =~ ^[0-9]+$ && "${base_most[$key]}" =~ ^[0-9]+$ ]] &&
+      (( 10#$most > 10#${base_most[$key]} )); then
       report_failure "debt entry count rose from ${base_most[$key]} to $most in this change: ${entry//$'\t'/ }"
     fi
   done
@@ -526,8 +527,10 @@ for entry in ${debt_entries[@]+"${debt_entries[@]}"}; do
     continue
   fi
   most="${entry#*$'\t'}"
-  if [[ "$most" != *$'\t'* || ! "${most#*$'\t'}" =~ ^[0-9]+$ ]]; then
-    report_failure "debt entry has no hit count; every entry states how many hits it covers: ${entry//$'\t'/ }"
+  if [[ "$most" != *$'\t'* || ! "${most#*$'\t'}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+    # Plain decimal only: a leading zero would be read as octal and break the
+    # comparisons below.
+    report_failure "debt entry has no plain decimal hit count; every entry states how many hits it covers: ${entry//$'\t'/ }"
     continue
   fi
   most="${most#*$'\t'}"

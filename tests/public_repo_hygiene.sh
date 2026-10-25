@@ -516,7 +516,14 @@ mkdir -p "$repo/docs"
 printf 'the hebb notes\n' >"$repo/docs/g.md"
 printf 'docs/g.md\tprivate-name\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
 git -C "$repo" add .gitignore scripts/dev docs/g.md
-assert_fail_contains "$repo" "debt entry has no hit count"
+assert_fail_contains "$repo" "no plain decimal hit count"
+
+repo="$(make_repo debt-count-leading-zero)"
+mkdir -p "$repo/docs"
+printf 'the hebb notes\n' >"$repo/docs/h.md"
+printf 'docs/h.md\tprivate-name\t08\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
+git -C "$repo" add .gitignore scripts/dev docs/h.md
+assert_fail_contains "$repo" "no plain decimal hit count"
 
 # The whole check runs on every push, so its time on this tree is shown here,
 # where a slow regression is visible. Informational: the verdict on the real
