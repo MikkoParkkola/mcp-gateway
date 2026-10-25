@@ -117,6 +117,16 @@ previously never reached them.
 Send `MCP-Protocol-Version` on stateless requests, or complete `initialize` and reuse the
 session. Either restores caching; neither requires a configuration change.
 
+## 7. `gateway_list_servers` reports `tools_count` as null until a backend's tools are known
+
+In 3.x, `tools_count` was always a number, and a backend whose tools had not been loaded yet
+reported `0`. Agents read that `0` as "this backend serves no tools" and gave up on backends
+that answer `tools/call` fine. In 4.0.0 `tools_count` is JSON `null` whenever `tools_known` is
+`false`. A number, including `0`, still means a known count.
+
+A client that parsed `tools_count` as an integer must accept `null`: treat it as "not known
+yet", read `tools_known`, and call `gateway_list_tools(server)` to load the list.
+
 ## After upgrading
 
 - Confirm the version stamp advanced: the notice prints once and not again.

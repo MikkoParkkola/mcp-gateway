@@ -429,10 +429,23 @@ async fn test_gateway_list_servers() {
             server["transport"].is_string(),
             "transport should be string"
         );
-        assert!(
-            server["tools_count"].is_number() || server["tools_count"].is_null(),
-            "tools_count should be a number, or null before enumeration"
-        );
+        // A count only for a backend whose tools are known; null until then,
+        // so an unenumerated backend never reads as empty (#4040).
+        let known = server["tools_known"]
+            .as_bool()
+            .unwrap_or_else(|| panic!("tools_known should be a boolean: {server:?}"));
+        if known {
+            assert!(
+                server["tools_count"].as_u64().is_some(),
+                "a known backend's tools_count should be a whole, non-negative number: {server:?}"
+            );
+        } else {
+            assert_eq!(
+                server.get("tools_count"),
+                Some(&serde_json::Value::Null),
+                "an unenumerated backend's tools_count should be null: {server:?}"
+            );
+        }
         assert!(
             server["circuit_state"].is_string(),
             "circuit_state should be string"
