@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tracing::warn;
 
 use crate::Error;
-use crate::transport::StdioTransport;
+use crate::transport::{StdioTransport, assigned_package_cache_dir, isolated_package_manager_env};
 
 /// Text a package manager prints when its install tree cannot be used.
 ///
@@ -92,6 +92,28 @@ fn repair_lock(dir: &Path) -> Arc<tokio::sync::Mutex<()>> {
 /// successful start. A backend whose install genuinely cannot be repaired fails
 /// the second attempt too, and what happens after that is the caller's retry
 /// policy — warm-start's loop, the health probe — not this function's.
+/// A stdio transport for `backend_name`, given its own npm cache when it runs a
+/// package manager. The assigned cache is read before the environment is built:
+/// that is what says the cache is the gateway's to clear. A backend whose `env:`
+/// already names one gets `None`, and the repair leaves that path alone.
+pub(crate) fn stdio_transport(
+    backend_name: &str,
+    command: &str,
+    env: HashMap<String, String>,
+    cwd: Option<String>,
+    (request_timeout, protocol_version): (std::time::Duration, Option<String>),
+) -> Arc<StdioTransport> {
+    let assigned_cache = assigned_package_cache_dir(backend_name, command, &env);
+    StdioTransport::new_with_assigned_cache(
+        command,
+        isolated_package_manager_env(backend_name, command, env),
+        cwd,
+        request_timeout,
+        protocol_version,
+        assigned_cache,
+    )
+}
+
 pub(crate) async fn start_with_repair(transport: &Arc<StdioTransport>) -> crate::Result<()> {
     start_reporting(transport).await.0
 }
