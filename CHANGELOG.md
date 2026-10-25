@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **ctutils 0.4.5 (RUSTSEC-2026-0385).** ctutils 0.4.2 could compile its constant-time
+  mask generation to a branch. HMAC verification of attestation tokens, receipts and
+  signed log entries reaches it through `digest`. Lockfile only. Ported from the release
+  line (a1ecb6fc6).
 - **The `-full` image pins `undici` 6.29.1 (CVE-2026-109869).** The pin was 6.29.0,
   which carries CVE-2026-109869 (HIGH, a denial of service through an unhandled stream
   error) and fails the image's Trivy gate. The new pin carries the registry's
