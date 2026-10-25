@@ -340,7 +340,7 @@ assert_base_fail_contains "$repo" HEAD~1 "tests/mik_9999_reload.rs names a ticke
 # A debt entry that no longer matches anything is itself a failure, so the
 # list can only shrink.
 repo="$(make_repo stale-debt-entry)"
-printf 'docs/internal/\tprivate-path\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
+printf 'docs/internal/\tprivate-path\t1\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
 git -C "$repo" add .gitignore scripts/dev
 assert_fail_contains "$repo" "debt entry no longer matches"
 
@@ -359,7 +359,7 @@ assert_fail_contains "$repo" "docs/requirements/notes.md is a private path"
 repo="$(make_repo debt-entry-covers-a-hit)"
 mkdir -p "$repo/docs/internal"
 printf '# Notes\n' >"$repo/docs/internal/notes.md"
-printf 'docs/internal/\tprivate-path\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
+printf 'docs/internal/\tprivate-path\t1\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
 git -C "$repo" add .gitignore scripts/dev docs/internal/notes.md
 assert_pass "$repo"
 # A debt entry with a count covers that many hits and no more.
@@ -377,7 +377,7 @@ assert_fail_contains "$repo" "more than its 1"
 repo="$(make_repo debt-dir-new-file)"
 mkdir -p "$repo/docs/internal"
 printf '# Old\n' >"$repo/docs/internal/old.md"
-printf 'docs/internal/\tprivate-path\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
+printf 'docs/internal/\tprivate-path\t1\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
 commit_all "$repo" "seed"
 assert_base_pass "$repo" HEAD
 printf '# New\n' >"$repo/docs/internal/new.md"
@@ -509,6 +509,14 @@ printf 'the hebb notes\n' >"$repo/docs/f.md"
 printf '# debt\ndocs/f.md\tprivate-name\t1\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
 commit_all "$repo" "change"
 assert_base_fail_contains "$repo" HEAD~1 "debt entry is new in this change"
+
+# Every debt entry carries its count; dropping it cannot lift the cap.
+repo="$(make_repo debt-entry-without-count)"
+mkdir -p "$repo/docs"
+printf 'the hebb notes\n' >"$repo/docs/g.md"
+printf 'docs/g.md\tprivate-name\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
+git -C "$repo" add .gitignore scripts/dev docs/g.md
+assert_fail_contains "$repo" "debt entry has no hit count"
 
 # The whole check runs on every push, so its time on this tree is shown here,
 # where a slow regression is visible. Informational: the verdict on the real

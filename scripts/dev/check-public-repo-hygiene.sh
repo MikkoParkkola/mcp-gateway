@@ -526,7 +526,10 @@ for entry in ${debt_entries[@]+"${debt_entries[@]}"}; do
     continue
   fi
   most="${entry#*$'\t'}"
-  [[ "$most" == *$'\t'* ]] || continue
+  if [[ "$most" != *$'\t'* || ! "${most#*$'\t'}" =~ ^[0-9]+$ ]]; then
+    report_failure "debt entry has no hit count; every entry states how many hits it covers: ${entry//$'\t'/ }"
+    continue
+  fi
   most="${most#*$'\t'}"
   if (( ${debt_hits[$entry]} > most )); then
     report_failure "debt entry covers ${debt_hits[$entry]} hits, more than its $most; the change adds private material: ${entry//$'\t'/ }"
