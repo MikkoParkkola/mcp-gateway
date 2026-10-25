@@ -347,3 +347,7 @@ impl MetaMcp {
         Ok(json!({ "servers": servers }))
     }
 }
+
+#[cfg(test)]
+#[path = "surfaced_reload_tests.rs"]
+mod reload_tests;
