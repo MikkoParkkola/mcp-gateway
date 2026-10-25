@@ -7,7 +7,9 @@ mod stdio;
 pub mod websocket;
 
 pub use self::http::HttpTransport;
+#[cfg(test)]
 pub(crate) use self::stdio::assigned_package_cache_dir;
+pub(crate) use self::stdio::isolated_env_and_assigned_cache;
 pub use self::stdio::{StdioTransport, isolated_package_manager_env};
 pub use self::websocket::McpFrame;
 

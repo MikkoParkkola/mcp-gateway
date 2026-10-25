@@ -358,6 +358,34 @@ async fn orphaned_rename(dir: &Path, retire: Retired) {
     );
 }
 
+/// A rename task that panics re-arms the repair like a refused rename does:
+/// otherwise the backend stays marked as repaired with nothing cleared, and
+/// its cache is never repaired again until restart (MIK-8831.REL.8).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_panicking_rename_re_arms_the_repair() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let dir = temp_root(workspace.path()).join(unique_leaf());
+    assert!(
+        mark_repaired(&dir),
+        "the repair is taken, as a failed start does"
+    );
+    let held = Arc::clone(&repair_lock(&dir)).lock_owned().await;
+
+    let (retired, guard) =
+        retire_cache_dir(&dir, held, |_| panic!("the rename task fails"), |_| {}).await;
+
+    assert!(matches!(retired, Retired::Refused), "{retired:?}");
+    assert!(guard.is_none(), "the panicked task took the guard with it");
+    assert!(
+        repair_lock(&dir).try_lock().is_ok(),
+        "and released the lock as it unwound, so later starts are not blocked"
+    );
+    assert!(
+        mark_repaired(&dir),
+        "the failed rename re-armed the latch, so a later start can repair"
+    );
+}
+
 /// A refused rename nobody waited for still re-arms the repair, so the backend
 /// is not left marked as repaired with nothing cleared.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
