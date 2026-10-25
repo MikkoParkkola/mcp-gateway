@@ -221,6 +221,61 @@ async fn a_redacted_payload_is_recorded_as_redacted() {
     );
 }
 
+/// MIK-8794 IDEM.3: a dead letter's stored body is already redacted, so its
+/// replay re-scan changes nothing: the receiver gets the same data both
+/// times, and every attempt, the replayed one included, records `redacted`.
+#[tokio::test]
+async fn a_replayed_redacted_payload_is_delivered_as_first_sent() {
+    // Built at run time: a DSN prefix, then a bearer token with a space.
+    let repo = format!("redis://{} {}", "Bearer", "t".repeat(20));
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let mut cfg = delivery_config(root.path(), &json!({}));
+    cfg["security"]["firewall"] = json!({"rules": [{"match": "*", "action": "warn"}]});
+    let gw = start_cfg(root.path(), &rx, cfg).await;
+    subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;
+    rx.script([EventReply::Status(410)]);
+    fire(&gw, "d-8794", &repo).await;
+    let dead = dead_with_reason(root.path(), "gone").await;
+    let event_id = dead[0]["event_id"].as_str().expect("event id").to_owned();
+    let (status, _) = gw
+        .admin(
+            Some(ADMIN),
+            "POST",
+            &format!("/ui/api/events/dead-letters/{event_id}/replay"),
+        )
+        .await;
+    assert_eq!(status, 200);
+    let posts = events_at_least(&rx, 2).await;
+    let data = |at: usize| -> Value {
+        serde_json::from_slice::<Value>(&posts[at].body).expect("event body")["data"].clone()
+    };
+    let (first, replayed) = (data(0), data(1));
+    assert!(
+        !first.to_string().contains(&"t".repeat(20)),
+        "the token never leaves: {first}"
+    );
+    assert_eq!(replayed, first, "the replay delivered other data");
+    let attempts = || -> Vec<Value> {
+        audit_records(root.path())
+            .into_iter()
+            .filter(|r| r.get("attempt").is_some() && r["event_id"] == event_id.as_str())
+            .collect()
+    };
+    assert!(
+        wait_until(DEADLINE, || attempts().len() >= 2).await,
+        "both attempts are recorded: {:?}",
+        attempts()
+    );
+    assert!(
+        attempts()
+            .iter()
+            .all(|r| r["firewall_verdict"] == "redacted"),
+        "every attempt says redacted: {:?}",
+        attempts()
+    );
+}
+
 /// MIK-7805 AC3: a refused verification carries the code the caller was
 /// answered with, not a fixed callback-error code: the per-host limit is -32013.
 #[tokio::test]
