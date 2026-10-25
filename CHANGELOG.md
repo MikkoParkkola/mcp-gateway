@@ -58,6 +58,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **tokio 1.53.3 (RUSTSEC-2026-0386).** tokio 1.53.3 deprecates `AsyncFd`'s safe
+  constructors, which accepted any raw file descriptor and could break I/O safety. The
+  gateway does not call them. Lockfile only. Ported from the release line (#4081).
+
+- **ctutils 0.4.5 (RUSTSEC-2026-0385).** ctutils 0.4.2 could compile its constant-time
+  mask generation to a branch. HMAC verification of attestation tokens, receipts and
+  signed log entries reaches it through `digest`. Lockfile only. Ported from the release
+  line (a1ecb6fc6).
+- **The `-full` image pins `undici` 6.29.1 (CVE-2026-109869).** The pin was 6.29.0,
+  which carries CVE-2026-109869 (HIGH, a denial of service through an unhandled stream
+  error) and fails the image's Trivy gate. The new pin carries the registry's
+  `dist.integrity`, which the downloaded tarball also hashes to.
+
+- **The `-full` image no longer runs a downloaded installer script as root.** Node.js
+  comes from NodeSource's apt repository, trusted through a signing key whose
+  fingerprint is pinned and checked at build time against the key file's one
+  primary key (a matching subkey is not enough); apt's `Signed-By` also names that
+  fingerprint, so apt trusts that key alone whatever else the file holds. `uv` is copied from its
+  official image pinned by version and digest, instead of piping NodeSource's setup
+  script and uv's `install.sh` into a root shell.
 - **`docker stop` no longer waits out the grace period while a `-full` startup step
   runs.** The `-full` image's entrypoint ran as PID 1, and a sourced `.envsh` step ran
   in its own shell, so a stop during that step waited for it to return: Docker's 10 s
