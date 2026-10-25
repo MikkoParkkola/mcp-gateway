@@ -155,6 +155,8 @@ mod transport_key;
 mod truncate;
 #[doc(hidden)]
 pub mod trust;
+#[cfg(test)]
+mod unsafe_allowlist_tests;
 #[doc(hidden)]
 pub mod validator;
 // Windows owner-only store custody; `win_acl` is the one module allowed

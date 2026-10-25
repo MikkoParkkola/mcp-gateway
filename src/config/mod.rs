@@ -20,6 +20,7 @@ pub(crate) mod load_error;
 pub(crate) use features::DEFAULT_TASK_TTL_MS;
 mod flagged_tools;
 mod input_schema;
+mod keychain;
 pub(crate) mod log_once;
 mod meta_mcp_config;
 mod pattern_grammar;
@@ -748,6 +749,7 @@ impl Config {
                 files.insert(path.to_path_buf(), value.as_deref().map(digest));
                 value
             }
+            SecretRef::Keychain(name) => secret_ref::read_keychain_ref("", name, overlay).ok(),
             SecretRef::Literal(_) => None,
         };
         // A literal stays as written; an empty one is `validate_with_env`'s to
@@ -813,6 +815,8 @@ pub mod humantime_serde;
 
 #[cfg(test)]
 mod backend_url_tests;
+#[cfg(test)]
+mod keychain_ref_tests;
 #[cfg(test)]
 mod secret_file_ref_tests;
 #[cfg(test)]

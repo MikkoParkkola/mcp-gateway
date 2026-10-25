@@ -30,6 +30,8 @@ pub(crate) enum SecretRef<'a> {
     Env(&'a str),
     /// `file:PATH`: the content of the file at `PATH`, which must be absolute.
     File(&'a Path),
+    /// `keychain:NAME`: the OS keychain entry `NAME` (ADR-028).
+    Keychain(&'a str),
     /// Anything else: the text itself is the secret.
     Literal(&'a str),
 }
@@ -43,6 +45,8 @@ impl<'a> SecretRef<'a> {
             Self::Env(name)
         } else if let Some(path) = text.strip_prefix("file:") {
             Self::File(Path::new(path))
+        } else if let Some(name) = text.strip_prefix("keychain:") {
+            Self::Keychain(name)
         } else {
             Self::Literal(text)
         }
@@ -76,8 +80,24 @@ impl<'a> SecretRef<'a> {
                 Some(value) => Ok(value),
             },
             Self::File(path) => read_file_ref(field, path),
+            Self::Keychain(name) => read_keychain_ref(field, name, overlay),
         }
     }
+}
+
+/// The secret a `keychain:` reference names: the entry's exact bytes, never
+/// trimmed (ADR-028 rule 5).
+///
+/// # Errors
+///
+/// [`Error::ConfigValidation`] naming `field` and the entry when the name is
+/// not a valid keychain name, or the entry is missing, empty, not UTF-8, or
+/// cannot be read.
+pub(crate) fn read_keychain_ref(field: &str, name: &str, overlay: &EnvOverlay) -> Result<String> {
+    let _ = (name, overlay);
+    Err(Error::ConfigValidation(format!(
+        "{field}: keychain references are not implemented"
+    )))
 }
 
 /// The secret a `file:` reference names. See the module docs for the rules.
