@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8908 A4: every gateway.yaml secret slot accepts `keychain:NAME` the way
+//! ADR-028: every gateway.yaml secret slot accepts `keychain:NAME` the way
 //! it accepts `env:` and `file:`, through a whole `Config` load.
 
 use std::sync::Arc;

@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8908 KC.2 / ADR-028: `keychain:NAME` references, resolved through the
+//! ADR-028: `keychain:NAME` references, resolved through the
 //! overlay's reader. Every test here uses an in-memory keychain.
 
 use std::sync::Arc;

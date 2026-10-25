@@ -1,7 +1,7 @@
 # ADR-028: Where UI saves put secrets: the OS keychain or owner-only files
 
 - **Status**: Accepted, 2026-10-25
-- **Ticket**: MIK-8908; extends ADR-016 (a second scoped `unsafe` module, §2a); amends ADR-024 (its secret sequence gains a store choice; its F5 is corrected)
+- **Relations**: extends ADR-016 (a second scoped `unsafe` module, §2a); amends ADR-024 (its secret sequence gains a store choice; its F5 is corrected)
 - **Requirement:** full keychain support in 4.0.0, and the store is a user setting (OS keychain or owner-only secret files). Default: keychain where the OS provides one, otherwise files; the setting overrides.
 
 ## Context
@@ -186,7 +186,7 @@ The value never appears in argv, logs or error text. Readers and writers pass it
 
    KC.2 has a test per secret field.
 10. **The `unsafe` allow-list.** Production `unsafe` lives in exactly `src/win_acl.rs` and `src/win_cred.rs`; ADR-016's test-only `src/gateway/server/tests/alloc_meter.rs` stays. A source-scan test pins the list, and the implementing PR updates ADR-016's "exactly one module" sentence and the `src/lib.rs` comment. This supersedes §2a's two-file scan.
-11. **Capability files are out of scope.** Their `keychain:` and `{keychain.X}` keep the old readers, and a UI save never writes a `keychain:` reference into capability YAML until they share these backends (MIK-8902).
+11. **Capability files are out of scope.** Their `keychain:` and `{keychain.X}` keep the old readers, and a UI save never writes a `keychain:` reference into capability YAML until they share these backends; unifying them is a separate change.
 12. **Acceptance cases.** The implementing PR proves each one:
     - a locked default collection, and an entry in a locked non-default collection, each refused without spawning `secret-tool`;
     - on Linux, a collection locked after the probe but before the per-spawn check, refused without spawning; a lock between that check and the spawn is the recorded residual;

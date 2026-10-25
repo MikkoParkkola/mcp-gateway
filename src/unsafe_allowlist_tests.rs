@@ -1,17 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! ADR-016 and ADR-028 rule 10: `unsafe` lives in exactly the scoped modules
-//! named here. A new site fails this test until an ADR names it.
+//! ADR-016: `unsafe` lives in exactly the scoped modules named here. A new
+//! site fails this test until an ADR names it (ADR-028 rule 10 adds the
+//! Windows credential module when it lands).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// Product and test-helper files allowed to hold `unsafe`.
-const ALLOWED: &[&str] = &[
-    "src/win_acl.rs",
-    "src/win_cred.rs",
-    "src/gateway/server/tests/alloc_meter.rs",
-];
+const ALLOWED: &[&str] = &["src/win_acl.rs", "src/gateway/server/tests/alloc_meter.rs"];
 
 /// Integration tests with their own `unsafe` exemption (environment mutation
 /// in single-threaded test binaries), recorded so a new one is a decision.
@@ -95,22 +92,4 @@ fn a18_test_exemptions_are_the_recorded_ones() {
     let found = sites(root, &["tests"]);
     let exempt: BTreeSet<String> = TEST_EXEMPT.iter().map(|path| (*path).to_owned()).collect();
     assert_eq!(found, exempt, "a new unsafe site in tests/");
-}
-
-#[test]
-fn a11_every_unsafe_block_in_win_cred_has_a_safety_comment() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/win_cred.rs");
-    let text = std::fs::read_to_string(&path).expect("src/win_cred.rs exists (ADR-028)");
-    let lines: Vec<&str> = text.lines().collect();
-    let block = concat!("uns", "afe {");
-    for (index, line) in lines.iter().enumerate() {
-        if line.contains(block) {
-            let above = &lines[index.saturating_sub(3)..index];
-            assert!(
-                above.iter().any(|l| l.contains("// SAFETY:")),
-                "src/win_cred.rs:{} has an unsafe block without a SAFETY comment",
-                index + 1
-            );
-        }
-    }
 }
