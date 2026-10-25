@@ -57,7 +57,7 @@ use env_overlay::{SecretFileDigests, SecretRefsRead, digest};
 pub use input_schema::InputSchemaEnforcement;
 pub(crate) use record_key::resolve_record_key_text;
 use secret_ref::SecretRef;
-pub(crate) use secret_ref::is_template_syntax;
+pub(crate) use secret_ref::{is_keychain_name, is_template_syntax};
 
 // New items (F18): the one mode-checked read for files outside `config`.
 #[cfg(windows)]
@@ -815,6 +815,8 @@ pub mod humantime_serde;
 
 #[cfg(test)]
 mod backend_url_tests;
+#[cfg(test)]
+mod keychain_load_tests;
 #[cfg(test)]
 mod keychain_ref_tests;
 #[cfg(test)]

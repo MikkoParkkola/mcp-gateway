@@ -610,7 +610,19 @@ fn validate_managed(
         .as_ref()
         .is_some_and(|value| !is_reference(value))
     {
-        return Err(fail("client_secret_ref must be an env: or file: reference"));
+        return Err(fail(
+            "client_secret_ref must be an env:, file: or keychain: reference",
+        ));
+    }
+    if descriptor
+        .client_secret_ref
+        .as_deref()
+        .and_then(|value| value.strip_prefix("keychain:"))
+        .is_some_and(|name| !crate::config::is_keychain_name(name))
+    {
+        return Err(fail(
+            "client_secret_ref keychain: must name a valid keychain entry",
+        ));
     }
     // A file: path is judged at load, as `config::secret_ref` judges one at
     // resolution: an empty or relative path would otherwise load and fail only

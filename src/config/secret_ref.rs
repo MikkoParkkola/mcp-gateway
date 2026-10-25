@@ -85,6 +85,15 @@ impl<'a> SecretRef<'a> {
     }
 }
 
+/// Whether `name` fits ADR-028's keychain grammar, `[A-Za-z0-9._-]{1,128}`.
+/// Text only; reads nothing.
+pub(crate) fn is_keychain_name(name: &str) -> bool {
+    (1..=128).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
 /// The secret a `keychain:` reference names: the entry's exact bytes, never
 /// trimmed (ADR-028 rule 5).
 ///
@@ -97,11 +106,7 @@ pub(crate) fn read_keychain_ref(field: &str, name: &str, overlay: &EnvOverlay) -
     use super::keychain::KeychainError;
     // Checked before any lookup: a name outside the grammar is a typo, and
     // asking the store about it could only prompt or mislead.
-    let valid = (1..=128).contains(&name.len())
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
-    if !valid {
+    if !is_keychain_name(name) {
         return Err(Error::ConfigValidation(format!(
             "{field} references keychain:{}, which is not a valid keychain name \
              (1-128 of A-Z, a-z, 0-9, '.', '_', '-').",

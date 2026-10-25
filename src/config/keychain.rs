@@ -86,8 +86,34 @@ impl KeychainReader {
 
 impl Default for KeychainReader {
     fn default() -> Self {
+        #[cfg(test)]
+        if let Some(reader) = TEST_READER.with(|slot| slot.borrow().clone()) {
+            return Self(reader);
+        }
         Self(Arc::new(OsKeychain))
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The reader every overlay built on this thread gets, so a test can load
+    /// a whole config against a fake (`Config::load` builds its own overlay).
+    static TEST_READER: std::cell::RefCell<Option<Arc<dyn KeychainRead>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `body` with every overlay built on this thread reading from `reader`.
+#[cfg(test)]
+pub(crate) fn with_test_keychain<T>(reader: Arc<dyn KeychainRead>, body: impl FnOnce() -> T) -> T {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_READER.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+    TEST_READER.with(|slot| *slot.borrow_mut() = Some(reader));
+    let _reset = Reset;
+    body()
 }
 
 /// The platform keychain.
