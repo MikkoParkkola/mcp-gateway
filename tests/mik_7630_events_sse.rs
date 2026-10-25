@@ -233,7 +233,7 @@ async fn s7_a_dropped_listener_stream_reconnects_and_resubscribes() {
     expect_events(&receiver, &alice, &updated, 1).await;
 }
 
-/// S8: an `endpoint` naming another origin is never POSTed to.
+/// S8: an `endpoint` naming another origin is never posted to.
 #[tokio::test]
 async fn s8_a_cross_origin_endpoint_is_refused() {
     let dir = tempfile::tempdir().expect("tempdir");

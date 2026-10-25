@@ -82,7 +82,7 @@ impl SsePeer {
                           headers: HeaderMap,
                           axum::Json(frame): axum::Json<Value>| {
                         let state = post_state.clone();
-                        async move { message(&state, &q, &headers, frame) }
+                        async move { message(&state, &q, &headers, &frame) }
                     },
                 ),
             );
@@ -109,7 +109,7 @@ impl SsePeer {
             .count()
     }
 
-    /// Every POSTed `method`, on any session.
+    /// Every posted `method`, on any session.
     pub fn posted(&self, method: &str) -> usize {
         self.seen()
             .iter()
@@ -131,7 +131,7 @@ impl SsePeer {
         self.state.seen.lock().expect("seen").clone()
     }
 
-    /// The methods POSTed on `session`, in order.
+    /// The methods posted on `session`, in order.
     pub fn methods_on(&self, session: u32) -> Vec<String> {
         self.seen()
             .into_iter()
@@ -166,7 +166,8 @@ impl SsePeer {
 
     /// Send a notification on `session`'s stream.
     pub fn push(&self, session: u32, method: &str, params: Value) {
-        let frame = json!({"jsonrpc": "2.0", "method": method, "params": params});
+        let mut frame = json!({"jsonrpc": "2.0", "method": method});
+        frame["params"] = params;
         send(&self.state, session, &frame);
     }
 
@@ -248,7 +249,7 @@ fn message(
     state: &State,
     query: &BTreeMap<String, String>,
     headers: &HeaderMap,
-    frame: Value,
+    frame: &Value,
 ) -> Response {
     let Some(session) = query.get("session_id").and_then(|s| s.parse::<u32>().ok()) else {
         return StatusCode::BAD_REQUEST.into_response();
