@@ -49,6 +49,9 @@ run_dropins() {
       # with, and a sourced file cannot be backgrounded.
       # shellcheck disable=SC1090
       . "$f" || rc=$?
+      # A step may change this shell's flags (`set +e`, `set +u`); the next
+      # step and the gateway's exec run under the script's own (MIK-8895).
+      set -eu
     else
       run_child "$f" || rc=$?
     fi

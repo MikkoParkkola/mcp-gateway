@@ -85,6 +85,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entrypoint, so the stop reaches the step at once and the container exits with status
   143. tini also reaps orphaned processes. The default image is unchanged. Ported from
   the release line (#3812).
+- **A `-full` startup step that turns off `set -e` or `set -u` no longer weakens the steps
+  after it.** A sourced `.envsh` step ran in the entrypoint's own shell, so a `set +e` in one
+  step meant a failing command in a later step no longer stopped the container, and the
+  gateway started after a failed step. The entrypoint now restores `set -eu` after each
+  sourced step. A step's exported variables still reach the gateway.
 
 - **The `-full` image's bundled npm packages are past the new HIGH CVEs, and verified by hash.** `brace-expansion` (CVE-2026-102276, CVE-2026-102278) and `undici` (CVE-2026-19534) in npm's own tree are replaced with fixed releases, and every npm tarball the image fetches is checked against a pinned sha512 before use.
 
