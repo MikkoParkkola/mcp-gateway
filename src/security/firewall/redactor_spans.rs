@@ -28,8 +28,8 @@ pub(super) fn without(spans: &[(usize, usize)], holes: &[(usize, usize)]) -> Vec
 
 /// Whether any of `ranges` (in order, disjoint) falls inside `lit`.
 pub(super) fn covers(ranges: &[(usize, usize)], lit: &Literal) -> bool {
-    let after = ranges.partition_point(|range| range.0 < lit.start);
-    ranges.get(after).is_some_and(|range| range.0 < lit.end)
+    let after = ranges.partition_point(|range| range.0 < lit.start());
+    ranges.get(after).is_some_and(|range| range.0 < lit.end())
 }
 
 /// The escape in `escapes` (in order, disjoint) that `at` falls strictly
@@ -44,13 +44,18 @@ pub(super) fn escape_around(escapes: &[(usize, usize)], at: usize) -> Option<(us
 
 /// Merge sorted spans that overlap or touch, so no character between two
 /// matched spans can survive and touching tokens share one marker.
-pub(super) fn merge_spans(spans: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
-    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
-    for (start, end) in spans {
-        match merged.last_mut() {
-            Some(last) if start <= last.1 => last.1 = last.1.max(end),
-            _ => merged.push((start, end)),
+pub(super) fn merge_spans(mut spans: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+    // In place: a second list would double the ranges held at the peak.
+    let mut kept = 0;
+    for read in 0..spans.len() {
+        let (start, end) = spans[read];
+        if kept > 0 && start <= spans[kept - 1].1 {
+            spans[kept - 1].1 = spans[kept - 1].1.max(end);
+        } else {
+            spans[kept] = (start, end);
+            kept += 1;
         }
     }
-    merged
+    spans.truncate(kept);
+    spans
 }

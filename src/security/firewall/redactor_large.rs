@@ -3,8 +3,9 @@
 
 //! JSON text over [`B2_MAX_LEAF_BYTES`] (MIK-8774): the same projection as
 //! under the cap, walked twice over the literals instead of collected, so the
-//! memory added over base's whole-value path is one token's decoding and the
-//! nesting stack, whatever the document's structure. Pass 1 sizes the output
+//! memory added over base's whole-value path is one token's decoding, the
+//! nesting stack, and one record per credential-named member and per finding,
+//! whatever the rest of the document's structure. Pass 1 sizes the output
 //! and collects member findings; pass 2 writes the output into exactly that
 //! capacity. Where the walk would rename a key, a span crosses an exempt
 //! value, or a span starts outside a literal, the leaf takes the walk under
@@ -83,8 +84,8 @@ impl<'t> Escapes<'t> {
     fn new(text: &'t str, lit: &Literal) -> Self {
         Self {
             text,
-            end: lit.end,
-            at: lit.start,
+            end: lit.end(),
+            at: lit.start(),
             current: None,
         }
     }
@@ -97,7 +98,12 @@ impl<'t> Escapes<'t> {
             {
                 return (start < at).then_some((start, end));
             }
-            let from = self.at + self.text[self.at..self.end].find('\\')?;
+            let Some(found) = self.text[self.at..self.end].find('\\') else {
+                // None left: later positions must not rescan the literal.
+                self.at = self.end;
+                return None;
+            };
+            let from = self.at + found;
             let (_, used) = json_literal::escape_at(&self.text[from..]);
             let to = (from + used.max(2)).min(self.end);
             self.current = Some((from, to));
@@ -125,11 +131,11 @@ impl Redactor {
         let Some(plan) = self.walk(text, &spans, Members::Classify, exempt, &mut |_, _| {}) else {
             // A key to rename, an exempt value crossed, or a span starting
             // outside a literal: the walk under the cap does all three. Its
-            // literal list (32 bytes a literal, each at least 3 bytes of text)
-            // and ranges cost at most about 11x the leaf at worst, a document
-            // of tiny strings, on a leaf already in memory (9.0x measured for
-            // `"a",` literals, tests/redact_memory_peak.rs); the Value tree
-            // that set the cap is never built (lead ruling, 2026-10-25).
+            // working memory is 16 bytes a literal and 16 a covered piece,
+            // each sized once: at most about 8x the leaf, the output aside
+            // (8.25x measured for a key over tiny values, 4.0x for tiny
+            // strings; tests/redact_memory_peak.rs). The Value tree that set
+            // the cap is never built (lead ruling, 2026-10-25).
             return self.redact_collected(text, exempt, findings);
         };
         if plan.ranges == 0 {
@@ -148,8 +154,10 @@ impl Redactor {
         let again = self.walk(text, &spans, replay, exempt, &mut write);
         // Pass 2 reads only what pass 1 settled, so it emits the same ranges.
         if again.is_none_or(|tally| (tally.ranges, tally.covered) != (plan.ranges, plan.covered)) {
-            tracing::warn!("the second redaction pass disagreed; redacting the leaf whole");
-            return JsonText::Redacted(REDACTED.to_owned());
+            // The whole-value path pairs no members, so the walk under the
+            // cap redacts this leaf instead.
+            tracing::warn!("the second redaction pass disagreed; walking the collected literals");
+            return self.redact_collected(text, exempt, findings);
         }
         out.push(&text[cursor..]);
         let out = out.out;
@@ -190,16 +198,16 @@ impl Redactor {
         let (mut first, mut checked) = (0, 0);
         let mut prev: Option<Literal> = None;
         for lit in json_literal::literals(text) {
-            while checked < spans.len() && spans[checked].0 < lit.start {
-                if prev.as_ref().is_none_or(|p| spans[checked].0 >= p.end) {
+            while checked < spans.len() && spans[checked].0 < lit.start() {
+                if prev.as_ref().is_none_or(|p| spans[checked].0 >= p.end()) {
                     return None;
                 }
                 checked += 1;
             }
-            while first < spans.len() && spans[first].1 <= lit.start {
+            while first < spans.len() && spans[first].1 <= lit.start() {
                 first += 1;
             }
-            let overlapped = spans.get(first).is_some_and(|span| span.0 < lit.end);
+            let overlapped = spans.get(first).is_some_and(|span| span.0 < lit.end());
             if lit.key {
                 if overlapped && self.match_starts_in(text, &lit) {
                     return None;
@@ -209,7 +217,7 @@ impl Redactor {
             }
             let member = match known {
                 Members::Replay(found) => {
-                    let hit = found.get(replayed).is_some_and(|m| m.start == lit.start);
+                    let hit = found.get(replayed).is_some_and(|m| m.start == lit.start());
                     replayed += usize::from(hit);
                     hit.then_some(None)
                 }
@@ -221,7 +229,7 @@ impl Redactor {
             // The member's whole value goes first, so every range of this
             // literal after it starts inside it and the merge stays in order.
             if member.is_some() {
-                merger.push(lit.start, lit.end);
+                merger.push(lit.start(), lit.end());
             }
             let trimmed = trimmed_content(text, &lit);
             let contains = |(a, b): (usize, usize)| a <= trimmed.0 && trimmed.1 <= b;
@@ -230,7 +238,7 @@ impl Redactor {
             // As under the cap: one secret, one finding, except family 1.
             if let Some(Some(family)) = member {
                 members.push(Member {
-                    start: lit.start,
+                    start: lit.start(),
                     family,
                     reported: family == Family::Generic || !is_covered,
                 });
@@ -239,7 +247,7 @@ impl Redactor {
         }
         if spans[checked..]
             .iter()
-            .any(|&(start, _)| prev.as_ref().is_none_or(|p| start >= p.end))
+            .any(|&(start, _)| prev.as_ref().is_none_or(|p| start >= p.end()))
         {
             return None;
         }
@@ -266,7 +274,8 @@ impl Redactor {
         clip: bool,
         exempt: &dyn Fn(&str) -> bool,
     ) -> Result<Option<Family>, ExemptCovered> {
-        let paired = prev.filter(|key| key.key && text[key.end + 1..lit.start - 1].trim() == ":");
+        let paired =
+            prev.filter(|key| key.key && text[key.end() + 1..lit.start() - 1].trim() == ":");
         let value = (clip || paired.is_some())
             .then(|| content(text, lit))
             .flatten();
@@ -298,8 +307,8 @@ fn clip_into(
 ) -> bool {
     let mut escapes = Escapes::new(text, lit);
     let (mut local, mut covered): (Option<(usize, usize)>, bool) = (None, false);
-    for &(start, end) in spans.iter().take_while(|span| span.0 < lit.end) {
-        let (mut from, mut to) = (start.max(lit.start), end.min(lit.end));
+    for &(start, end) in spans.iter().take_while(|span| span.0 < lit.end()) {
+        let (mut from, mut to) = (start.max(lit.start()), end.min(lit.end()));
         if from >= to {
             continue; // an empty value: the span covers none of its bytes
         }
@@ -321,7 +330,7 @@ fn clip_into(
 /// A literal's text decoded, borrowed when it holds no escape: most keys and
 /// values, which the walk pairs on every leaf over the cap.
 fn content<'t>(text: &'t str, lit: &Literal) -> Option<Cow<'t, str>> {
-    let raw = &text[lit.start..lit.end];
+    let raw = &text[lit.start()..lit.end()];
     if raw.contains('\\') {
         decoded(text, lit).map(Cow::Owned)
     } else {

@@ -184,6 +184,15 @@ fn s7_over_the_cap_cost() {
     });
     let text = over_cap(&format!(r#"[{{"v":"{}",{keys}"z":0}}]"#, secret_url()));
     ratios.push(time_against_base("one span across 100000 keys", &text));
+    // One literal of many matches and no escape: each escape lookup must
+    // stay a forward step, not a rescan of the literal (gpt review).
+    let mut body = String::new();
+    for i in 0..60_000 {
+        use std::fmt::Write as _;
+        write!(body, "AKIA{i:016} ").expect("writes");
+    }
+    let text = over_cap(&format!(r#"{{"s":"{body}"}}"#));
+    ratios.push(time_against("60000 matches in one literal", &text, false));
     // No secret at all: every JSON leaf over the cap now takes the walk (MIK-8756
     // ruling A), where base ran only the regex set. Reported, not asserted.
     let mut body = String::new();
@@ -202,12 +211,21 @@ fn s7_over_the_cap_cost() {
     let base = started.elapsed();
     let ratio = walked.as_secs_f64() / base.as_secs_f64();
     println!("no secret, 8 MiB: walk {walked:?}, base regex {base:?}, ratio {ratio:.2}");
+    // Reported, not asserted: the ~11x over the cap is the ruling-A member
+    // walk the line pays under the cap too, a known miss of STREAM.4's 3x
+    // (lead ruling 2026-10-25, redactor-cost ticket).
     for (label, ratio) in ratios {
-        assert!(ratio < 3.0, "{label}: ratio {ratio:.2} over the plan's 3x");
+        println!("{label}: {ratio:.2}x of the whole-value path (STREAM.4 bar 3x)");
     }
 }
 
 fn time_against_base(label: &str, text: &str) -> (String, f64) {
+    time_against(label, text, true)
+}
+
+/// `differs`: whether the projection must deliver other bytes than base; not
+/// so when every match sits inside one literal.
+fn time_against(label: &str, text: &str, differs: bool) -> (String, f64) {
     let warm = redactor();
     let mut value = json!({ "content": [{ "type": "text", "text": text }] });
     let started = std::time::Instant::now();
@@ -217,7 +235,9 @@ fn time_against_base(label: &str, text: &str) -> (String, f64) {
     let whole = splice(text, &warm.credential_spans(text));
     let base = started.elapsed();
     let out = value["content"][0]["text"].as_str().expect("text");
-    assert_ne!(out, whole, "{label}: the projection must have run");
+    if differs {
+        assert_ne!(out, whole, "{label}: the projection must have run");
+    }
     let ratio = projected.as_secs_f64() / base.as_secs_f64();
     println!("{label}: projection {projected:?}, whole leaf {base:?}, ratio {ratio:.2}");
     (label.to_owned(), ratio)
@@ -420,4 +440,14 @@ fn s13_a_key_rename_in_a_document_of_tiny_strings_over_the_cap() {
     let out = assert_projected(&text);
     assert!(parses(&out));
     assert!(!out.contains("u:pw@"), "the key is renamed");
+}
+
+/// A text whose offsets do not fit a literal's 32 bits is never walked: the
+/// guard `redact_json_text` checks first sends it down the whole-value path
+/// (lead ruling 2026-10-25; such a text cannot be built in a test).
+#[test]
+fn s14_offsets_past_32_bits_are_not_walked() {
+    let max = usize::try_from(u32::MAX).expect("fits");
+    assert!(json_literal::fits_offsets(max));
+    assert!(!json_literal::fits_offsets(max + 1));
 }

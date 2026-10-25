@@ -40,14 +40,29 @@ unsafe impl GlobalAlloc for Counting {
 static COUNTING: Counting = Counting;
 
 /// Bytes allocated at the peak of redacting `text` as a tool answer's text,
-/// above what was live when the call began (the answer itself is built first).
-fn peak_of(redactor: &Redactor, text: &str) -> usize {
+/// above what was live when the call began (the answer itself is built first),
+/// and the length of the redacted text that peak includes.
+fn peak_of(redactor: &Redactor, text: &str) -> (usize, usize) {
     let mut answer = json!({ "content": [{ "type": "text", "text": text }] });
     let before = LIVE.load(Ordering::Relaxed);
     PEAK.store(before, Ordering::Relaxed);
     let findings = redactor.scan_and_redact(&mut answer);
+    let peak = PEAK.load(Ordering::Relaxed) - before;
     assert!(!findings.is_empty(), "the leaf held a credential");
-    PEAK.load(Ordering::Relaxed) - before
+    let out = answer["content"][0]["text"].as_str().map_or(0, str::len);
+    (peak, out)
+}
+
+/// The peak minus the output it allocates, as a multiple of the input: the
+/// working memory, apart from the redacted text that is the result.
+fn report(label: &str, len: usize, (peak, out): (usize, usize)) -> usize {
+    let work = peak.saturating_sub(out);
+    println!(
+        "{label}: {len} bytes in, {out} out, peak {peak}, working {work} ({}.{:02}x)",
+        work / len,
+        work * 100 / len % 100
+    );
+    work
 }
 
 #[test]
@@ -72,15 +87,21 @@ fn redaction_over_the_cap_stays_within_its_stated_memory() {
     let page = format!(r#"{{"items":[{{"homepage":{dsn}}},{rows}],"total_count":3}}"#);
     let len = page.len();
     assert!(len > 2 << 20);
-    let peak = peak_of(&redactor, &page);
-    println!(
-        "streaming: {len} bytes, peak {peak} bytes ({}.{:02}x)",
-        peak / len,
-        peak * 100 / len % 100
-    );
+    let work = report("streaming", len, peak_of(&redactor, &page));
     assert!(
-        peak <= 2 * len + slack,
-        "streaming peak {peak} over 2x {len}"
+        work <= len + slack,
+        "streaming working memory {work} over 1x {len}"
+    );
+
+    // A key a match starts in, its greedy span over every tiny value after it:
+    // one projected range per value on top of the literal list.
+    let values = vec![r#""a""#; 600_000].join(",");
+    let doc = format!("{{{dsn}:[{values}]}}");
+    let len = doc.len();
+    let work = report("key then values", len, peak_of(&redactor, &doc));
+    assert!(
+        work <= 11 * len + slack,
+        "key-then-values working memory {work} over 11x {len}"
     );
 
     // The collected walk's worst case: tiny strings, and a key to rename.
@@ -88,14 +109,9 @@ fn redaction_over_the_cap_stays_within_its_stated_memory() {
     let doc = format!("[{tiny},{{{dsn}:1,\"n\":3}}]");
     let len = doc.len();
     assert!(len > 2 << 20);
-    let peak = peak_of(&redactor, &doc);
-    println!(
-        "collected: {len} bytes, peak {peak} bytes ({}.{:02}x)",
-        peak / len,
-        peak * 100 / len % 100
-    );
+    let work = report("collected", len, peak_of(&redactor, &doc));
     assert!(
-        peak <= 12 * len + slack,
-        "collected peak {peak} over 12x {len}"
+        work <= 11 * len + slack,
+        "collected working memory {work} over 11x {len}"
     );
 }
