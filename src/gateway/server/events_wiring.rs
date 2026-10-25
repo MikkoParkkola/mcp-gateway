@@ -25,7 +25,16 @@ pub(super) fn install(
     credentials: crate::events::LiveCredentials,
     counters: &Arc<crate::counters::CounterStore>,
 ) -> Result<()> {
-    let _ = counters;
+    // MIK-8854: the kill switch and breakers mark the charts in every events
+    // configuration. Their observer slots are set once: when the operational
+    // source is installed below it carries the markers, otherwise this does.
+    if !(config.events.enabled && config.events.sources.operational) {
+        crate::events::install_marker_observers(
+            &meta_mcp.kill_switch(),
+            registry,
+            Arc::clone(counters),
+        );
+    }
     if config.webhooks.enabled {
         meta_mcp.set_webhook_registry(Arc::clone(webhooks));
     }
@@ -64,7 +73,11 @@ pub(super) fn install(
         );
     }
     if config.events.sources.operational {
-        let source = hub.install_operational_source(&meta_mcp.kill_switch(), registry, None);
+        let source = hub.install_operational_source(
+            &meta_mcp.kill_switch(),
+            registry,
+            Some(Arc::clone(counters)),
+        );
         #[cfg(feature = "cost-governance")]
         if let Some(budget) = &meta_mcp.budget_enforcer {
             source.report_budgets(budget);

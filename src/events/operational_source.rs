@@ -222,20 +222,66 @@ impl EventSource for OperationalSource {
 
 impl EventsHub {
     /// Offer the operational events and attach the kill-switch and breaker
-    /// hooks; budgets attach with [`OperationalSource::report_budgets`].
+    /// hooks, which also mark `markers` (MIK-8854); budgets attach with
+    /// [`OperationalSource::report_budgets`].
     pub(crate) fn install_operational_source(
         self: &Arc<Self>,
         kill_switch: &crate::kill_switch::KillSwitch,
         backends: &crate::backend::BackendRegistry,
         markers: Option<Arc<crate::counters::CounterStore>>,
     ) -> Arc<OperationalSource> {
-        let _ = markers;
         let source = Arc::new(OperationalSource {
             hub: Arc::downgrade(self),
         });
         self.register_source(Arc::clone(&source) as Arc<dyn EventSource>);
-        let kills = Arc::clone(&source);
-        kill_switch.observe(Arc::new(move |change: crate::kill_switch::KillChange| {
+        observe(kill_switch, backends, markers, Some(Arc::clone(&source)));
+        source
+    }
+}
+
+/// MIK-8854: the kill switch and the breakers mark the web UI's charts when
+/// the operational events source is not installed. Each takes one observer,
+/// set once (`crate::observer`), so when the source is installed it carries
+/// the markers itself and this must not be called.
+pub(crate) fn install_marker_observers(
+    kill_switch: &crate::kill_switch::KillSwitch,
+    backends: &crate::backend::BackendRegistry,
+    markers: Arc<crate::counters::CounterStore>,
+) {
+    observe(kill_switch, backends, Some(markers), None);
+}
+
+/// Mark `kind` on `subject` now; on a clock that cannot be read, nothing
+/// (MIK-8202: a recorder writes nothing).
+fn mark_now(
+    markers: &crate::counters::CounterStore,
+    kind: crate::counters::MarkerKind,
+    subject: &str,
+) {
+    if let Ok(now) = crate::clock::unix_secs() {
+        markers.mark(kind, Some(subject), now);
+    }
+}
+
+/// The one observer per slot: markers first, then the events source.
+fn observe(
+    kill_switch: &crate::kill_switch::KillSwitch,
+    backends: &crate::backend::BackendRegistry,
+    markers: Option<Arc<crate::counters::CounterStore>>,
+    source: Option<Arc<OperationalSource>>,
+) {
+    use crate::counters::MarkerKind;
+    let (kills, kill_marks) = (source.clone(), markers.clone());
+    kill_switch.observe(Arc::new(move |change: crate::kill_switch::KillChange| {
+        if let Some(store) = &kill_marks {
+            let kind = if change.killed {
+                MarkerKind::SwitchOff
+            } else {
+                MarkerKind::SwitchOn
+            };
+            mark_now(store, kind, &change.backend);
+        }
+        if let Some(kills) = &kills {
             let state = if change.killed { "killed" } else { "live" };
             kills.emit(
                 KILL_SWITCH_CHANGED,
@@ -243,22 +289,28 @@ impl EventsHub {
                 Visibility::Operator,
                 json!({"backend": change.backend, "state": state}),
             );
-        }));
-        let health = Arc::clone(&source);
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "Background: the events source watches backends; no caller request"
-        )]
-        backends.observe_breakers(Arc::new(move |change: crate::failsafe::HealthChange| {
+        }
+    }));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "Background: the events source watches backends; no caller request"
+    )]
+    backends.observe_breakers(Arc::new(move |change: crate::failsafe::HealthChange| {
+        // Until U4 adds a paused state, a pause is a breaker opening.
+        if let Some(store) = &markers
+            && change.to == crate::failsafe::CircuitState::Open
+        {
+            mark_now(store, MarkerKind::Pause, &change.backend);
+        }
+        if let Some(health) = &source {
             health.emit(
                 HEALTH_CHANGED,
                 &change.backend,
                 Visibility::Operator,
                 json!({"backend": change.backend, "from": change.from, "to": change.to}),
             );
-        }));
-        source
-    }
+        }
+    }));
 }
 
 #[cfg(feature = "cost-governance")]
