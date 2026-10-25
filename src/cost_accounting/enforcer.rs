@@ -88,11 +88,19 @@ impl DailyAccumulator {
     /// Adds without wrapping: a total that would pass `u64::MAX` stays there,
     /// so an overflowing day refuses instead of resetting to near zero.
     fn add_saturating(&self, micro: u64) -> u64 {
-        let update = |v: u64| Some(v.saturating_add(micro));
-        let (Ok(prev) | Err(prev)) =
-            self.micro_usd
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, update);
-        prev.saturating_add(micro)
+        let mut current = self.micro_usd.load(Ordering::Acquire);
+        loop {
+            let next = current.saturating_add(micro);
+            match self.micro_usd.compare_exchange_weak(
+                current,
+                next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return next,
+                Err(actual) => current = actual,
+            }
+        }
     }
 
     /// Current daily spend in micro-USD.
