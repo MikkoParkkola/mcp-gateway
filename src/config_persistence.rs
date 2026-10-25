@@ -9,15 +9,31 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::config::Config;
 
 /// Gateway state directory, honoring the existing operator override.
+///
+/// Always absolute when the working directory is readable: a relative override
+/// resolves against the gateway's own working directory, so a backend started
+/// in another `cwd` is handed the same directory (MIK-7964, from the release
+/// line).
 #[must_use]
 pub fn gateway_data_dir() -> PathBuf {
-    resolve_gateway_data_dir(
-        std::env::var("MCP_GATEWAY_CONFIG_DIR").ok(),
+    absolutize(resolve_gateway_data_dir(
+        // `var_os`: a directory that is not UTF-8 is still the operator's
+        // (MIK-8147); `var` would drop it for the default under home.
+        std::env::var_os("MCP_GATEWAY_CONFIG_DIR"),
         dirs::home_dir(),
-    )
+    ))
 }
 
-fn resolve_gateway_data_dir(configured: Option<String>, home: Option<PathBuf>) -> PathBuf {
+/// `path` made absolute against the working directory, or kept as given when
+/// that cannot be read; the cache repair refuses a relative path on its own.
+fn absolutize(path: PathBuf) -> PathBuf {
+    std::path::absolute(&path).unwrap_or(path)
+}
+
+fn resolve_gateway_data_dir(
+    configured: Option<std::ffi::OsString>,
+    home: Option<PathBuf>,
+) -> PathBuf {
     configured.map_or_else(
         || {
             home.unwrap_or_else(|| PathBuf::from("."))
