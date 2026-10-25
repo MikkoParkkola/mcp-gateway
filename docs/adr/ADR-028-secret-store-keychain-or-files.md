@@ -1,6 +1,6 @@
 # ADR-028: Where UI saves put secrets: the OS keychain or owner-only files
 
-- **Status**: Proposed, 2026-10-25
+- **Status**: Accepted, 2026-10-25
 - **Ticket**: MIK-8908; extends ADR-016 (a second scoped `unsafe` module, §2a); amends ADR-024 (its secret sequence gains a store choice; its F5 is corrected)
 - **Requirement:** full keychain support in 4.0.0, and the store is a user setting (OS keychain or owner-only secret files). Default: keychain where the OS provides one, otherwise files; the setting overrides.
 
