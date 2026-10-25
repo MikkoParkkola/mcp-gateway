@@ -111,10 +111,15 @@ RUN echo "apt cache bust: ${APT_CACHE_BUST}" \
     git \
     gnupg \
     openssh-client \
-    && curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource-setup.sh \
-    && bash /tmp/nodesource-setup.sh \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -f /tmp/nodesource-setup.sh \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /tmp/nodesource.key \
+    && gpg --show-keys --with-colons /tmp/nodesource.key | awk -F: \
+       '$1 == "pub" { pubs++; want = 1; next } want && $1 == "fpr" { primary = $10 } { want = 0 } END { exit !(pubs == 1 && primary == "6F71F525282841EEDAF851B42F59B5F99B1BE0B4") }' \
+    && gpg --dearmor -o /usr/share/keyrings/nodesource.gpg /tmp/nodesource.key \
+    && rm -f /tmp/nodesource.key \
+    && printf '%s\n' 'Types: deb' 'URIs: https://deb.nodesource.com/node_24.x' 'Suites: nodistro' \
+       'Components: main' 'Signed-By: /usr/share/keyrings/nodesource.gpg 6F71F525282841EEDAF851B42F59B5F99B1BE0B4' \
+       > /etc/apt/sources.list.d/nodesource.sources \
+    && apt-get update && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \
     && node --version | grep -q '^v24\.' \
     && npm --version >/dev/null
@@ -131,7 +136,7 @@ RUN cd /tmp && mkdir npm-patch && cd npm-patch \
 brace-expansion@5.0.12:sha512-YovQ3rzhaLMIrDjNDMkNS01tea93qhEhG5xy8f6+R0l+dw3Ki+5sCoIoI942iuLZTHWogWktgwVDhU09iNEimQ== \
 ip-address@10.3.1:sha512-1e9d3kb97NHJTIJDZW9rKqW2h6+dFa50Dy0fpPSMQp2ADje5gvKsXmdiK6dwY5t76TaTt5+P5N1Y/LoToIxP6g== \
 tar@7.5.21:sha512-XdhtCvlMywwxpCW8YEq3lOXBJpUPTR2OHHcwLPO3HwsJqOHa2Ok/oJ7ruGzp+JrKoRPVCzJwAdEjqLW/vNRPHA== \
-undici@6.29.0:sha512-R+RODBqp6i2pPflGdq+xIOUkl+RNfGgHwoinecKu/JCuf2uO06cOKoDbI2P7Dn6KcswdKwrczbU6IYJ6K8X+wg==" \
+undici@6.29.1:sha512-EvRlUt/QqAEvXdQeRMYUfwOQsfzpDztykrG2owGEE/rBOBoYv9uF39ZzsNDh4lTFHhTr2XOZjKkYgueD12ZmGA==" \
     && for pin in ${pins}; do \
          spec="${pin%%:*}"; want="${pin#*:}"; \
          npm pack --silent "${spec}" >/dev/null || exit 1; \
@@ -152,9 +157,7 @@ undici@6.29.0:sha512-R+RODBqp6i2pPflGdq+xIOUkl+RNfGgHwoinecKu/JCuf2uO06cOKoDbI2P
        done \
     && cd / && rm -rf /tmp/npm-patch
 
-RUN curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv-install.sh \
-    && env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh \
-    && rm -f /tmp/uv-install.sh
+COPY --from=ghcr.io/astral-sh/uv:0.12.18@sha256:3adc3706091ce7c2fe595e669628caedd6d951551b92b258b7e7dbe06d9440bc /uv /uvx /usr/local/bin/
 
 RUN mkdir -p /home/gateway/.cache/uv /home/gateway/.npm && \
     chown -R gateway:gateway /home/gateway/.cache /home/gateway/.npm
