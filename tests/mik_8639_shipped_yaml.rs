@@ -185,8 +185,9 @@ const GOLDEN: &str = "tests/fixtures/mik_8425_yaml/shipped.tsv";
 /// The recorded rows whose file is unchanged on disk: the exact count, so any
 /// further skip fails until it is reviewed. 184 rows were recorded on
 /// 2026-10-25; skipped today, each printed by name when the test runs:
-/// `capabilities/linear/linear_get_issue.yaml` (edited on the release line).
-const MIN_COMPARED: usize = 183;
+/// `capabilities/linear/linear_get_issue.yaml` (edited on the release line,
+/// #4133) and `examples/token-exchange-live.yaml` (#4150).
+const MIN_COMPARED: usize = 182;
 
 fn digest(content: &str) -> String {
     use sha2::Digest as _;
