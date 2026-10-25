@@ -127,40 +127,67 @@ fn pos(marker: granit_parser::Marker) -> Pos {
     }
 }
 
-/// `byte`'s line and column in `text`, both 1-based.
-fn place(text: &str, byte: usize) -> Pos {
-    let before = &text[..byte];
-    let line_start = before.rfind('\n').map_or(0, |i| i + 1);
-    Pos {
-        line: before.matches('\n').count() + 1,
-        column: before[line_start..].chars().count() + 1,
+/// Where each line starts, as a byte and a character offset, built once per
+/// parse so placing a node costs a binary search, not a scan of the text
+/// before it.
+struct Lines(Vec<(usize, usize)>);
+
+impl Lines {
+    fn new(text: &str) -> Self {
+        let mut starts = vec![(0, 0)];
+        for (chars, (byte, ch)) in text.char_indices().enumerate() {
+            if ch == '\n' {
+                starts.push((byte + 1, chars + 1));
+            }
+        }
+        Lines(starts)
+    }
+
+    /// The place of the character at `byte`, which is `chars` characters
+    /// into the text; both 1-based.
+    fn place(&self, byte: usize, chars: usize) -> Pos {
+        let line = self.0.partition_point(|&(start, _)| start <= byte);
+        let (_, line_chars) = self.0[line - 1];
+        Pos {
+            line,
+            column: chars - line_chars + 1,
+        }
     }
 }
 
 /// Where the replaced backend placed a node: at its first property (`!tag`
 /// or `&anchor`) when it has `properties` of them, rather than at the
 /// value after them; and an empty value just after the indicator before it
-/// (`v:` places the empty value at the column after `:`).
+/// (`v:` places the empty value at the column after `:`). `start` is the
+/// parser's span start; every scan here is short, back over one token or
+/// one run of spaces.
 fn node_place(
     text: &str,
-    start: Option<usize>,
+    lines: &Lines,
+    start: granit_parser::Marker,
     properties: usize,
     empty: bool,
-    fallback: Pos,
 ) -> Pos {
-    let Some(mut byte) = start.filter(|b| text.is_char_boundary(*b)) else {
+    let fallback = pos(start);
+    let Some(start_byte) = start.byte_offset().filter(|b| text.is_char_boundary(*b)) else {
         return fallback;
     };
+    // `byte` moves back from the span start; `chars` follows it.
+    let at =
+        |byte: usize| lines.place(byte, start.index() - text[byte..start_byte].chars().count());
     if empty {
         // The parser starts an empty value's span on its indicator (`:` or
         // `-`), or after the space that follows it.
-        let after = if text[byte..].starts_with([':', '-']) {
-            byte + 1
+        return if text[start_byte..].starts_with([':', '-']) {
+            lines.place(start_byte + 1, start.index() + 1)
         } else {
-            text[..byte].trim_end().len()
+            at(text[..start_byte].trim_end().len())
         };
-        return place(text, after);
     }
+    if properties == 0 {
+        return fallback;
+    }
+    let mut byte = start_byte;
     for _ in 0..properties {
         let before = text[..byte].trim_end_matches([' ', '\t']);
         let token = before
@@ -174,11 +201,7 @@ fn node_place(
             break;
         }
     }
-    if properties == 0 {
-        fallback
-    } else {
-        place(text, byte)
-    }
+    at(byte)
 }
 
 /// An open collection while its events arrive.
@@ -201,6 +224,7 @@ pub(crate) fn parse(text: &str) -> Result<Vec<Document>, Error> {
     let mut anchors: std::collections::HashMap<usize, NodeId> = std::collections::HashMap::new();
     let mut root: Option<NodeId> = None;
     let mut events = 0usize;
+    let lines = Lines::new(text);
     for item in Parser::new_from_str(text) {
         let (event, span) = item.map_err(|e| refused_at(pos(*e.marker())))?;
         let at = pos(span.start);
@@ -238,7 +262,7 @@ pub(crate) fn parse(text: &str) -> Result<Vec<Document>, Error> {
                         tag: tag_text(tag.as_deref()),
                         empty,
                     },
-                    pos: node_place(text, span.start.byte_offset(), properties, empty, at),
+                    pos: node_place(text, &lines, span.start, properties, empty),
                 });
                 let id = nodes.len() - 1;
                 if anchor != 0 {
@@ -254,7 +278,7 @@ pub(crate) fn parse(text: &str) -> Result<Vec<Document>, Error> {
                         tag: tag_text(tag.as_deref()),
                         items: Vec::new(),
                     },
-                    pos: node_place(text, span.start.byte_offset(), properties, false, at),
+                    pos: node_place(text, &lines, span.start, properties, false),
                 });
                 // Registered at the start, as the replaced backend did, so an
                 // alias inside its own anchor refers to it.
@@ -274,7 +298,7 @@ pub(crate) fn parse(text: &str) -> Result<Vec<Document>, Error> {
                         tag: tag_text(tag.as_deref()),
                         entries: Vec::new(),
                     },
-                    pos: node_place(text, span.start.byte_offset(), properties, false, at),
+                    pos: node_place(text, &lines, span.start, properties, false),
                 });
                 if anchor != 0 {
                     anchors.insert(anchor, nodes.len() - 1);
@@ -360,5 +384,34 @@ mod tests {
         assert_eq!(value_place("v: \n"), (Pos { line: 1, column: 3 }, true));
         assert_eq!(value_place("v:\n").0, Pos { line: 1, column: 3 });
         assert_eq!(value_place("v: x\n").0, Pos { line: 1, column: 4 });
+    }
+
+    /// Placing a tagged node costs a lookup, not a scan of the text before
+    /// it: 200,000 tagged items parse well inside the budget, and the last
+    /// is still placed at its tag. A scan per node would take hours here.
+    #[test]
+    fn placing_many_tagged_nodes_stays_linear() {
+        const ITEMS: usize = 200_000;
+        let text = "- !t x\n".repeat(ITEMS);
+        let started = std::time::Instant::now();
+        let documents = parse(&text).expect("parses");
+        let elapsed = started.elapsed();
+        let document = &documents[0];
+        let Kind::Seq { items, .. } = &document.node(document.root).kind else {
+            panic!("a sequence root");
+        };
+        assert_eq!(items.len(), ITEMS);
+        let last = document.node(items[ITEMS - 1]).pos;
+        assert_eq!(
+            last,
+            Pos {
+                line: ITEMS,
+                column: 3
+            }
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(30),
+            "took {elapsed:?}"
+        );
     }
 }
