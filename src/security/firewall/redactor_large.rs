@@ -214,7 +214,8 @@ impl Redactor {
                     hit.then_some(None)
                 }
                 Members::Classify => self
-                    .member_of(text, prev.as_ref(), &lit, overlapped, exempt)?
+                    .member_of(text, prev.as_ref(), &lit, overlapped, exempt)
+                    .ok()?
                     .map(Some),
             };
             // The member's whole value goes first, so every range of this
@@ -254,8 +255,9 @@ impl Redactor {
 impl Redactor {
     /// The family of the member whose value is `lit`, paired as
     /// `member_values` pairs it: the literal before is a key, then only `:`.
-    /// `None` when `lit` is an exempt value a span covers (`clip`), which
-    /// sends the leaf to the walk under the cap; an exempt value is no member.
+    /// [`ExemptCovered`] when `lit` is an exempt value a span covers (`clip`),
+    /// which sends the leaf to the walk under the cap; an exempt value is no
+    /// member.
     fn member_of(
         &self,
         text: &str,
@@ -263,16 +265,16 @@ impl Redactor {
         lit: &Literal,
         clip: bool,
         exempt: &dyn Fn(&str) -> bool,
-    ) -> Option<Option<Family>> {
+    ) -> Result<Option<Family>, ExemptCovered> {
         let paired = prev.filter(|key| key.key && text[key.end + 1..lit.start - 1].trim() == ":");
         let value = (clip || paired.is_some())
             .then(|| content(text, lit))
             .flatten();
         let is_exempt = value.as_deref().is_some_and(exempt);
         if is_exempt && clip {
-            return None;
+            return Err(ExemptCovered);
         }
-        Some(match (paired, value.as_deref()) {
+        Ok(match (paired, value.as_deref()) {
             (Some(key), Some(value)) if !is_exempt => {
                 content(text, key).and_then(|key| self.credential_member(&key, value))
             }
@@ -280,6 +282,9 @@ impl Redactor {
         })
     }
 }
+
+/// A span covers an exempt value: only the walk under the cap cuts it out.
+struct ExemptCovered;
 
 /// `spans` (from the first not wholly before `lit`) clipped to `lit` and
 /// widened to whole escapes, into `merger`; whether one merged piece holds

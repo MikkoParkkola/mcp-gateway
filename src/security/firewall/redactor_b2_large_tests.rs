@@ -274,7 +274,7 @@ fn s8_members_over_the_cap_match_under_the_cap() {
     }
 }
 
-/// The first object key serde_json's `raw_value` feature reads specially.
+/// The first object key `serde_json`'s `raw_value` feature reads specially.
 const RAW_VALUE_TOKEN: &str = "$serde_json::private::RawValue";
 
 /// Residual (a), lead ruling 2026-10-24: a match that starts in a key, alone

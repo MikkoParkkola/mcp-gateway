@@ -41,7 +41,7 @@ static COUNTING: Counting = Counting;
 
 /// Bytes allocated at the peak of redacting `text` as a tool answer's text,
 /// above what was live when the call began (the answer itself is built first).
-fn peak_of(redactor: &Redactor, text: String) -> usize {
+fn peak_of(redactor: &Redactor, text: &str) -> usize {
     let mut answer = json!({ "content": [{ "type": "text", "text": text }] });
     let before = LIVE.load(Ordering::Relaxed);
     PEAK.store(before, Ordering::Relaxed);
@@ -72,10 +72,11 @@ fn redaction_over_the_cap_stays_within_its_stated_memory() {
     let page = format!(r#"{{"items":[{{"homepage":{dsn}}},{rows}],"total_count":3}}"#);
     let len = page.len();
     assert!(len > 2 << 20);
-    let peak = peak_of(&redactor, page);
+    let peak = peak_of(&redactor, &page);
     println!(
-        "streaming: {len} bytes, peak {peak} bytes ({:.2}x)",
-        peak as f64 / len as f64
+        "streaming: {len} bytes, peak {peak} bytes ({}.{:02}x)",
+        peak / len,
+        peak * 100 / len % 100
     );
     assert!(
         peak <= 2 * len + slack,
@@ -87,10 +88,11 @@ fn redaction_over_the_cap_stays_within_its_stated_memory() {
     let doc = format!("[{tiny},{{{dsn}:1,\"n\":3}}]");
     let len = doc.len();
     assert!(len > 2 << 20);
-    let peak = peak_of(&redactor, doc);
+    let peak = peak_of(&redactor, &doc);
     println!(
-        "collected: {len} bytes, peak {peak} bytes ({:.2}x)",
-        peak as f64 / len as f64
+        "collected: {len} bytes, peak {peak} bytes ({}.{:02}x)",
+        peak / len,
+        peak * 100 / len % 100
     );
     assert!(
         peak <= 12 * len + slack,
