@@ -307,11 +307,11 @@ jobs:
           # These binaries are a handoff to the `release` job below, which
           # downloads them and attaches them to the GitHub release. Once they
           # expire, re-running a failed `release` job publishes a release with
-          # no binaries and the only recovery is a rebuild. 14 is the
+          # no binaries and the only recovery is a rebuild. 90 is the
           # repository's artifact retention setting, which caps this value:
           # a larger number would be clamped to it without a word, so the
           # workflow says what actually takes effect (RELEASING.md rule 4).
-          retention-days: 14
+          retention-days: 90
 
   release:
     needs: [build, verify, packaged-suite]
