@@ -3,7 +3,7 @@
 //! Per-backend package-manager cache directories for stdio children (#2258).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tracing::warn;
 
@@ -37,11 +37,12 @@ pub fn isolated_package_manager_env<S: std::hash::BuildHasher>(
     let berry_switch_free = yarn && !operator_names(&backend_env, BERRY_GLOBAL_CACHE);
     let assigned_folder = match assignment(backend_name, command, &backend_env) {
         Assignment::None => false,
-        Assignment::Unusable => {
+        Assignment::Unusable(dir) => {
             warn!(
                 backend = backend_name,
-                "package cache path is not one a package manager can use as written \
-                 (not UTF-8, relative, holding `..`, or holding `${{`); the backend keeps its runner's default cache"
+                dir = %dir.display(),
+                "package cache path is not one a package manager can use \
+                 (not UTF-8, relative, holding `..` or `${{`, or not writable); the backend keeps its runner's default cache"
             );
             false
         }
@@ -64,8 +65,8 @@ pub fn isolated_package_manager_env<S: std::hash::BuildHasher>(
 enum Assignment {
     /// The runner reads no cache variable, or the operator set every one.
     None,
-    /// Variables are left to the gateway, but no runner could use its path.
-    Unusable,
+    /// Variables are left to the gateway, but no runner could use this path.
+    Unusable(PathBuf),
     /// These variables, each set to this directory.
     To {
         vars: Vec<&'static str>,
@@ -88,7 +89,7 @@ fn assignment<S: std::hash::BuildHasher>(
     }
     match usable_cache_dir(backend_name) {
         Some(dir) => Assignment::To { vars, dir },
-        None => Assignment::Unusable,
+        None => Assignment::Unusable(cache_dir(backend_name)),
     }
 }
 
@@ -125,9 +126,27 @@ pub(crate) fn assigned_package_cache_dir<S: std::hash::BuildHasher>(
 /// config value. A `..` is read as text by npm and through symlinks by the
 /// filesystem. And a relative path resolves against the child's `cwd`, not
 /// the gateway's (`gateway_data_dir` is absolute since MIK-7964 unless the
-/// working directory is unreadable).
+/// working directory is unreadable). And a directory the child cannot create
+/// or write fails every install, where the runner's default cache would have
+/// served (MIK-8831.REL.5).
 fn usable_cache_dir(backend_name: &str) -> Option<String> {
-    usable(cache_dir(backend_name))
+    usable(cache_dir(backend_name)).filter(|dir| writable(Path::new(dir)))
+}
+
+/// Whether a child could install into `dir`: it exists or can be created, and
+/// a file can be written in it. A read-only mount passes `create_dir_all` for
+/// a directory that already exists, so only the probe file tells.
+fn writable(dir: &Path) -> bool {
+    let probe = dir.join(format!(".gateway-write-probe-{}", std::process::id()));
+    let ok = std::fs::create_dir_all(dir).is_ok()
+        && std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&probe)
+            .is_ok();
+    let _ = std::fs::remove_file(&probe);
+    ok
 }
 
 /// `dir` as a runner will read it, or `None` when no runner could use it as
