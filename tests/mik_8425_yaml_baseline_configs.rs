@@ -5,10 +5,15 @@
 //! through the adapter's `figment_data`, recorded with the current backend
 //! before the swap.
 //!
-//! The extract uses `figment_data` alone over the defaults, with no
-//! environment overlay, so the digest is the same on every machine. A
-//! refusal row keeps its text; a later stage compares refusal against
-//! refusal.
+//! Two goldens. `configs.tsv` extracts through `figment_data` alone over the
+//! defaults: what the YAML backend hands `Config`, before the provider's own
+//! `url` rewrite (`config/config_file.rs`), so a config that writes a
+//! backend `url` is refused there. The parity suite drives this one against
+//! the new backend. `configs_loaded.tsv` loads each config through the
+//! gateway's own `Config::load_literal`, the path the gateway reads it by.
+//! Neither layers the environment, so the digests are the same on every
+//! machine. A refusal row keeps its text; a later stage compares refusal
+//! against refusal.
 
 #[path = "common/mik_8425_golden.rs"]
 mod golden;
@@ -83,6 +88,26 @@ fn reading(text: &str) -> String {
     }
 }
 
+/// The `Config` the gateway's loader builds from `text`, written where no
+/// env file it names exists.
+fn loaded(text: &str) -> String {
+    let text = helm_gateway_yaml(text).unwrap_or_else(|| text.to_owned());
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(&path, text).expect("write the config");
+    match Config::load_literal(Some(&path)) {
+        Ok(config) => match golden::canonical_digest(&config) {
+            Ok(digest) => digest,
+            Err(error) => format!("JSON-ERR {}", golden::one_line(&error.to_string())),
+        },
+        Err(error) => format!(
+            "ERR {}",
+            golden::one_line(&error.to_string())
+                .replace(&dir.path().display().to_string(), "<dir>")
+        ),
+    }
+}
+
 fn report() -> String {
     let paths: Vec<String> = CONFIGS.iter().map(|p| (*p).to_owned()).collect();
     golden::keyed_rows(&paths, reading)
@@ -102,5 +127,23 @@ fn record_configs_golden() {
     print!(
         "----- BEGIN configs.tsv -----\n{}----- END configs.tsv -----\n",
         report()
+    );
+}
+
+/// Every shipped config loads through the gateway's loader to the recorded
+/// `Config`.
+#[test]
+fn every_shipped_config_loads_as_recorded() {
+    golden::assert_keyed_golden("configs_loaded.tsv", CONFIGS.len(), loaded);
+}
+
+/// Prints the loaded golden for review; never part of a normal run.
+#[test]
+#[ignore = "records tests/fixtures/mik_8425_yaml/configs_loaded.tsv; run with --ignored --nocapture"]
+fn record_configs_loaded_golden() {
+    let paths: Vec<String> = CONFIGS.iter().map(|p| (*p).to_owned()).collect();
+    print!(
+        "----- BEGIN configs_loaded.tsv -----\n{}----- END configs_loaded.tsv -----\n",
+        golden::keyed_rows(&paths, loaded)
     );
 }
