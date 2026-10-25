@@ -291,7 +291,8 @@ async fn a9_the_poll_stops_with_the_last_subscriber() {
     let more = agent.fetches() - after;
     assert!(
         more <= 1,
-        "the poll stopped once nobody listens; {more} reads in 5 s"
+        "the poll stopped once nobody listens; {more} reads in 5 s. One is allowed: the \
+         backend's own health check pings with a card read"
     );
 }
 
