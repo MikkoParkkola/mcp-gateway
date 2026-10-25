@@ -1,0 +1,6 @@
+/* SPDX-FileCopyrightText: 2026 Mikko Parkkola */
+/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* The hand-off page shown at a /ui deep link until the new UI ships (MIK-8870). */
+:root { color-scheme: light dark; }
+body { font: 16px/1.5 system-ui, sans-serif; margin: 0; display: grid; min-height: 100vh; place-items: center; }
+a { color: #e8590c; font-weight: 600; }

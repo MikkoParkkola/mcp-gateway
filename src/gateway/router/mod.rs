@@ -172,6 +172,9 @@ mod meta_fingerprint_tests;
 /// MIK-8154.LEASE.1 rows: the direct route takes the shared execution lease.
 #[cfg(test)]
 mod mik8154_lease_rows_tests;
+/// U17: the UI shell at deep links, hashed assets, /ui/classic (MIK-8870).
+#[cfg(all(test, feature = "webui"))]
+mod u17_ui_shell_tests;
 // MIK-8697: the credential canary over the router's request paths.
 #[cfg(test)]
 mod canary_tests;
