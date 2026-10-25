@@ -151,20 +151,69 @@ pub fn assert_golden(name: &str, actual: &str) {
     }
 }
 
+/// The recorded files edited since recording, as `reviewed_skips.tsv` lists
+/// them: path, then the PR that edited it.
+pub fn reviewed_skips() -> std::collections::BTreeMap<String, String> {
+    read_golden("reviewed_skips.tsv")
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
+        .map(|line| {
+            let (path, pr) = line
+                .split_once('\t')
+                .unwrap_or_else(|| panic!("reviewed_skips.tsv: malformed row {line:?}"));
+            (path.to_owned(), pr.to_owned())
+        })
+        .collect()
+}
+
+/// A keyed golden skips exactly the reviewed rows. `rows` are the golden's
+/// paths and `skipped` those it could not compare (gone or edited). Fails on
+/// a skip `reviewed_skips.tsv` does not list, and on a listed path of this
+/// golden that compares again. The old backend has left the build, so an
+/// edited file cannot be re-recorded; a reviewer adds its line instead.
+pub fn assert_skips_reviewed<'a>(
+    name: &str,
+    rows: impl IntoIterator<Item = &'a str>,
+    skipped: &[&str],
+) {
+    let reviewed = reviewed_skips();
+    if !skipped.is_empty() {
+        eprintln!(
+            "golden {name}: {} row(s) skipped: {skipped:?}",
+            skipped.len()
+        );
+    }
+    let unlisted: Vec<&str> = skipped
+        .iter()
+        .copied()
+        .filter(|path| !reviewed.contains_key(*path))
+        .collect();
+    assert!(
+        unlisted.is_empty(),
+        "golden {name}: recorded files edited or removed since recording: {unlisted:?}; \
+         review each and add `path<TAB>PR` to tests/fixtures/mik_8425_yaml/reviewed_skips.tsv"
+    );
+    let compares_again: Vec<&str> = rows
+        .into_iter()
+        .filter(|path| reviewed.contains_key(*path) && !skipped.contains(path))
+        .collect();
+    assert!(
+        compares_again.is_empty(),
+        "golden {name}: listed in reviewed_skips.tsv but compared again: {compares_again:?}; \
+         remove their lines"
+    );
+}
+
 /// A golden keyed by input file: each row is `path \t sha256-of-file \t
 /// readings`. A row whose file is gone or whose bytes changed since the
-/// recording is skipped rather than failed, so another lane editing a
-/// capability does not break this test. The readings of every unchanged file
-/// must match. `read` gives the readings for one file's text.
-///
-/// Fails when fewer than `min_compared` rows could be compared: a golden
-/// that has gone stale wholesale must be re-recorded (on the last commit
-/// that still has the old parser), not silently skipped.
-pub fn assert_keyed_golden(name: &str, min_compared: usize, read: impl Fn(&str) -> String) {
+/// recording is skipped, and every skip must be reviewed
+/// (`assert_skips_reviewed`). The readings of every unchanged file must
+/// match. `read` gives the readings for one file's text.
+pub fn assert_keyed_golden(name: &str, read: impl Fn(&str) -> String) {
     let golden = read_golden(name);
-    let mut compared = 0usize;
-    let mut not_packaged = Vec::new();
+    let mut rows = Vec::new();
     let mut skipped = Vec::new();
+    let mut not_packaged = Vec::new();
     let mut differ = Vec::new();
     for row in golden.lines() {
         let mut cols = row.splitn(3, '\t');
@@ -173,18 +222,21 @@ pub fn assert_keyed_golden(name: &str, min_compared: usize, read: impl Fn(&str) 
             panic!("golden {name}: malformed row {row:?}");
         };
         let Ok(text) = std::fs::read_to_string(repo_root().join(path)) else {
+            // The package does not ship it: neither a skip nor a row the
+            // reviewed list can be checked against.
             if in_packaged_crate() {
                 not_packaged.push(path);
             } else {
-                skipped.push(format!("{path} (gone)"));
+                rows.push(path);
+                skipped.push(path);
             }
             continue;
         };
+        rows.push(path);
         if digest(text.as_bytes()) != content {
-            skipped.push(format!("{path} (edited since recording)"));
+            skipped.push(path);
             continue;
         }
-        compared += 1;
         let actual = read(&text);
         if actual != expected {
             differ.push(format!(
@@ -192,31 +244,18 @@ pub fn assert_keyed_golden(name: &str, min_compared: usize, read: impl Fn(&str) 
             ));
         }
     }
-    if !skipped.is_empty() {
-        eprintln!(
-            "golden {name}: {} row(s) skipped: {skipped:?}",
-            skipped.len()
-        );
-    }
     if !not_packaged.is_empty() {
         eprintln!(
             "golden {name}: {} row(s) not in the package: {not_packaged:?}",
             not_packaged.len()
         );
     }
+    assert_skips_reviewed(name, rows, &skipped);
     assert!(
         differ.is_empty(),
         "golden {name}: {} file(s) read differently from the recording:\n{}",
         differ.len(),
         differ.join("\n")
-    );
-    // A file the package does not ship cannot be compared there; it still
-    // counts toward the floor, so only a reviewed edit lowers it.
-    let compared = compared + not_packaged.len();
-    assert!(
-        compared >= min_compared,
-        "golden {name}: only {compared} row(s) comparable (need {min_compared}); \
-         re-record it on a commit that still has serde-yaml"
     );
 }
 

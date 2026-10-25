@@ -69,8 +69,6 @@ fn deviations(name: &str) -> std::collections::BTreeMap<String, String> {
 /// (after deviations), and how many rows were compared.
 struct Outcome {
     compared: usize,
-    /// Rows whose file the packaged crate does not ship (`in_packaged_crate`).
-    not_packaged: usize,
     differ: Vec<String>,
 }
 
@@ -81,7 +79,6 @@ fn compare_rows(name: &str, now: &str, keep: impl Fn(&str) -> bool) -> Outcome {
         now.lines().filter_map(|r| r.split_once('\t')).collect();
     let mut outcome = Outcome {
         compared: 0,
-        not_packaged: 0,
         differ: Vec::new(),
     };
     for row in fixture(name).lines() {
@@ -101,31 +98,36 @@ fn compare_rows(name: &str, now: &str, keep: impl Fn(&str) -> bool) -> Outcome {
 }
 
 /// A keyed golden (`path \t sha256 \t reading`); a row whose file is gone
-/// or edited since recording is skipped, as `assert_keyed_golden` does.
+/// or edited since recording is skipped only when `reviewed_skips.tsv` lists
+/// it, as `assert_keyed_golden` does.
 fn compare_keyed(name: &str, read: impl Fn(&str) -> String) -> Outcome {
     let allowed = deviations(name);
     let mut outcome = Outcome {
         compared: 0,
-        not_packaged: 0,
         differ: Vec::new(),
     };
-    for row in fixture(name).lines() {
+    let table = fixture(name);
+    let mut rows = Vec::new();
+    let mut skipped = Vec::new();
+    for row in table.lines() {
         let mut cols = row.splitn(3, '\t');
         let (Some(path), Some(sha), Some(recorded)) = (cols.next(), cols.next(), cols.next())
         else {
             panic!("{name}: malformed row {row:?}");
         };
         let Ok(text) = std::fs::read_to_string(golden::repo_root().join(path)) else {
+            // The package does not ship it: neither a skip nor a listed row.
             if golden::in_packaged_crate() {
                 eprintln!("{name}: {path} is not in the package");
-                outcome.not_packaged += 1;
             } else {
-                eprintln!("{name}: skipped {path} (gone since recording)");
+                rows.push(path);
+                skipped.push(path);
             }
             continue;
         };
+        rows.push(path);
         if golden::digest(text.as_bytes()) != sha {
-            eprintln!("{name}: skipped {path} (edited since recording)");
+            skipped.push(path);
             continue;
         }
         outcome.compared += 1;
@@ -134,16 +136,15 @@ fn compare_keyed(name: &str, read: impl Fn(&str) -> String) -> Outcome {
             outcome.differ.push(path.to_owned());
         }
     }
+    golden::assert_skips_reviewed(name, rows, &skipped);
     outcome
 }
 
 fn assert_outcome(group: &str, outcome: &Outcome, min_compared: usize) {
-    // A file the package does not ship still counts toward the floor, so
-    // only a reviewed edit lowers it.
-    let counted = outcome.compared + outcome.not_packaged;
     assert!(
-        counted >= min_compared,
-        "{group}: only {counted} rows comparable (need {min_compared})"
+        outcome.compared >= min_compared,
+        "{group}: only {} rows comparable (need {min_compared})",
+        outcome.compared
     );
     assert!(
         outcome.differ.is_empty(),
@@ -244,31 +245,19 @@ fn p6_every_repository_tree_round_trips() {
     );
 }
 
-/// The `trees.tsv` rows whose file is unchanged since recording: the exact
-/// count, so any further skip fails until it is reviewed. 184 rows were
-/// recorded; skipped today, each printed by name when the test runs:
-/// `capabilities/linear/linear_get_issue.yaml` (edited on the release line,
-/// #4133) and `examples/token-exchange-live.yaml` (#4150).
-const P2_UNEDITED: usize = 182;
-
 /// P2: every repository YAML file's tree, `Dict` and stream, as recorded
 /// with the replaced backend.
 ///
 /// Before the swap this compared the walked files exactly (MIK-8425 MIG.2,
 /// a seat finding), and every recorded row matched; that is the swap's
 /// evidence. After it, there is no old backend to re-record with, so a file
-/// another change edits or removes is skipped, as the baseline suites do,
-/// and `P2_UNEDITED` fails any skip beyond the reviewed ones.
+/// another change edits or removes is skipped only when
+/// `reviewed_skips.tsv` lists it, as the baseline suites do.
 #[test]
 fn p2_trees_as_recorded() {
     let outcome = compare_keyed("trees.tsv", trees::readings);
-    assert_outcome("P2 trees", &outcome, P2_UNEDITED);
+    assert_outcome("P2 trees", &outcome, 1);
 }
-
-/// The `configs.tsv` rows whose file was edited since recording, so P13
-/// compares exactly the rest, as `P2_UNEDITED` does. Skipped today:
-/// `examples/token-exchange-live.yaml` (#4150).
-const P13_EDITED: usize = 1;
 
 /// P13: the `Config` each shipped config and Helm `ConfigMap` extracts to.
 #[test]
@@ -276,7 +265,7 @@ fn p13_configs_as_recorded() {
     assert_outcome(
         "P13 configs",
         &compare_keyed("configs.tsv", configs::reading),
-        configs::CONFIGS.len() - P13_EDITED,
+        1,
     );
 }
 
@@ -286,7 +275,7 @@ fn p9_capabilities_as_recorded() {
     assert_outcome(
         "P9 capabilities",
         &compare_keyed("capabilities.tsv", capabilities::reading),
-        120,
+        1,
     );
 }
 

@@ -23,10 +23,6 @@ pub(crate) const ROOTS: &[&str] = &[
 ];
 pub(crate) const ROOT_FILES: &[&str] = &["gateway.example.yaml", "smithery.yaml"];
 
-/// Rows recorded on 2026-10-17. At least this many must still be comparable
-/// (unchanged since recording); otherwise the golden is stale.
-pub(crate) const MIN_COMPARED: usize = 150;
-
 pub(crate) fn paths() -> Vec<String> {
     let mut paths: Vec<String> = ROOTS
         .iter()
