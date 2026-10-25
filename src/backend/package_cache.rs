@@ -79,19 +79,6 @@ fn repair_lock(dir: &Path) -> Arc<tokio::sync::Mutex<()>> {
     Arc::clone(locks.entry(dir.to_path_buf()).or_default())
 }
 
-/// Starts a stdio backend, clearing its package cache and retrying once when
-/// the failure is one a fresh install can repair.
-///
-/// The cache cleared is the one the gateway assigned, read from the transport
-/// rather than from its environment: `assigned_package_cache_dir` answers
-/// `None` for a backend that runs no package manager and for one whose
-/// configuration names a cache of its own, and a path the operator wrote is
-/// not the gateway's to delete however much it looks like one.
-///
-/// The retry is bounded to one, and the cache is cleared at most once per
-/// successful start. A backend whose install genuinely cannot be repaired fails
-/// the second attempt too, and what happens after that is the caller's retry
-/// policy — warm-start's loop, the health probe — not this function's.
 /// A stdio transport for `backend_name`, given its own npm cache when it runs a
 /// package manager. The assigned cache is read before the environment is built:
 /// that is what says the cache is the gateway's to clear. A backend whose `env:`
@@ -114,6 +101,19 @@ pub(crate) fn stdio_transport(
     )
 }
 
+/// Starts a stdio backend, clearing its package cache and retrying once when
+/// the failure is one a fresh install can repair.
+///
+/// The cache cleared is the one the gateway assigned, read from the transport
+/// rather than from its environment: `assigned_package_cache_dir` answers
+/// `None` for a backend that runs no package manager and for one whose
+/// configuration names a cache of its own, and a path the operator wrote is
+/// not the gateway's to delete however much it looks like one.
+///
+/// The retry is bounded to one, and the cache is cleared at most once per
+/// successful start. A backend whose install genuinely cannot be repaired fails
+/// the second attempt too, and what happens after that is the caller's retry
+/// policy — warm-start's loop, the health probe — not this function's.
 pub(crate) async fn start_with_repair(transport: &Arc<StdioTransport>) -> crate::Result<()> {
     start_reporting(transport).await.0
 }
