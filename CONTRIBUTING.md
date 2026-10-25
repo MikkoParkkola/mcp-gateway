@@ -313,7 +313,9 @@ Changes affecting public API, config schema, new dependencies, transport protoco
 
 Public docs should explain install, operation, architecture, security, compliance, and user-facing comparisons. Internal strategy, competitive intelligence, product positioning, roadmap reasoning, launch OPSEC, patent strategy, and build-vs-integrate licensing analysis must stay outside tracked public paths.
 
-Use ignored local paths for private strategy work: `docs/strategy/`, `docs/competitive/`, `docs/competitive-intelligence/`, or `docs/positioning/`. Before pushing, run `scripts/dev/check-public-repo-hygiene.sh`; CI runs the same check and fails if tracked public docs contain high-confidence internal strategy markers.
+Working material (process ledgers, release bookkeeping, internal design notes, requirements drafts, strategy) lives in a separate private repository, cloned into a checkout at the ignored `internal/` path. Nothing under `docs/internal/`, `docs/requirements/`, `docs/competitive/`, `docs/strategy/`, `docs/positioning/` or `tickets/`, and no `CLAUDE.md` or `AGENTS.md`, is tracked here.
+
+Before pushing, run `scripts/dev/check-public-repo-hygiene.sh --base origin/<base>`. CI runs the same check. It fails on a tracked file under those paths, on the name of a private project, on a home-directory or agent-configuration path, on a private-network address, and on a tracker id added by the change, in a line or in a new file's name. Commit messages and the pull request body are held to the same rules. Text that matches a pattern and is public by design goes on the allowlist in that script, with a reason.
 
 ## Commit Messages
 

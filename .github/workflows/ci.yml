@@ -109,7 +109,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Validate public repo hygiene scripts
-        run: bash -n scripts/dev/check-public-repo-hygiene.sh tests/public_repo_hygiene.sh scripts/dev/check-commit-message-hygiene.sh tests/commit_message_hygiene.sh
+        run: bash -n scripts/dev/check-public-repo-hygiene.sh scripts/dev/public-hygiene-patterns.sh scripts/dev/check-pr-body-hygiene.sh tests/public_repo_hygiene.sh scripts/dev/check-commit-message-hygiene.sh tests/commit_message_hygiene.sh
       - name: Validate public repo hygiene fixtures
         run: tests/public_repo_hygiene.sh
       - name: Validate commit message hygiene fixtures
@@ -137,8 +137,17 @@ jobs:
           python3 scripts/ci/check_per_call_stages.py
           python3 scripts/ci/test_check_per_call_stages.py
           python3 scripts/perf/test_per_call_gate.py
+      # On a pull request the change itself is also checked: no added line or
+      # new file name may carry a tracker id.
       - name: Validate tracked public docs boundary
-        run: scripts/dev/check-public-repo-hygiene.sh
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ -n "$BASE_REF" ]; then
+            scripts/dev/check-public-repo-hygiene.sh --base "origin/$BASE_REF"
+          else
+            scripts/dev/check-public-repo-hygiene.sh
+          fi
       - name: Enforce the Noncommercial license header on every source file
         run: scripts/ci/check-license-headers.sh
       - name: Verify license files ship in every packaged artifact
