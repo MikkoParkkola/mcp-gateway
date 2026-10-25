@@ -13,7 +13,16 @@ use serde::de::DeserializeOwned;
 
 use super::guard;
 
-pub(crate) use super::{Error, Limit, Location, Mapping, Value, redact_message, to_json};
+mod mapping;
+mod number;
+mod tagged;
+mod value;
+
+pub(crate) use super::{Error, Limit, Location, redact_message};
+pub(crate) use mapping::Mapping;
+pub(crate) use number::Number;
+pub(crate) use tagged::{Tag, TaggedValue};
+pub(crate) use value::{Sequence, Value};
 
 const NOT_YET: &str = "yaml::next is not implemented yet (MIK-8425 MIG.2 step 4)";
 
