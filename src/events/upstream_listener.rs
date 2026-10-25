@@ -370,17 +370,21 @@ impl UpstreamListeners {
     /// refused), starting nothing: the entry is an ended one, which the
     /// revive sweep starts once the backend can be (MIK-7944
     /// `D6.EVENTS_MISC.6`). On a backend whose task runs it counts there.
-    pub(crate) fn hold(&self, key: &ListenerKey, interest: &Interest) {
+    ///
+    /// # Errors
+    /// The URI budget is spent, as [`Self::add`] refuses; `tools_changed` has
+    /// no URI budget and is always counted.
+    pub(crate) fn hold(&self, key: &ListenerKey, interest: &Interest) -> Result<(), Full> {
         let mut map = self.backends.lock();
         let shared = map.entry(key.clone()).or_insert_with(|| {
             let ended = self.entry(key, Need::default(), self.ledger(key));
             ended.stop.cancel();
             ended
         });
-        // `tools_changed` has no URI budget, so it is always counted.
-        if matches!(shared.need.lock().add(interest), Ok(true)) && !shared.stop.is_cancelled() {
+        if shared.need.lock().add(interest)? && !shared.stop.is_cancelled() {
             shared.wake.send_modify(|n| *n += 1);
         }
+        Ok(())
     }
 
     /// One revive pass: start every ended entry whose backend can be

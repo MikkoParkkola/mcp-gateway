@@ -193,6 +193,7 @@ impl EventsHub {
                 let Some(hub) = weak.upgrade() else {
                     return;
                 };
+                hub.revoke_unobservable(None).await;
                 hub.revoke_inadmissible(None).await;
             }
         });

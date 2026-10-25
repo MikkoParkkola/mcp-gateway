@@ -333,3 +333,24 @@ fn lease_t6_the_lease_code_cannot_write_or_log_a_token() {
         }
     }
 }
+
+/// The token is zeroized at its deadline with no send asking for it, and the
+/// sweep then drops the expired entry.
+#[tokio::test(start_paused = true)]
+async fn an_unused_lease_is_zeroized_at_its_deadline() {
+    let s = store();
+    s.install(key("p"), token_until(now() + 3600), now() + 120, 60)
+        .await
+        .unwrap();
+    let token = {
+        let held = s.held.lock().await;
+        Arc::clone(&held.get(&key("p")).expect("held").token)
+    };
+    assert!(token.read().await.is_some());
+    tokio::time::sleep(std::time::Duration::from_secs(121)).await;
+    tokio::task::yield_now().await;
+    assert!(token.read().await.is_none(), "zeroized at the deadline");
+    s.wipe_expired(now() + 121).await;
+    assert_eq!(s.generation(&key("p")).await, None);
+    assert!(!s.is_held(&key("p")));
+}

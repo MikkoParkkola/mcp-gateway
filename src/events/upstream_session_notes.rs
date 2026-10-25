@@ -173,7 +173,10 @@ impl State<'_> {
             if !self.shared.need.lock().emits(kind, uri.as_deref()) {
                 continue;
             }
+            // A per-user listener reads no catalogue (`read_snapshot`), so its
+            // URIs are admitted, not judged by an empty snapshot.
             if let Some(uri) = &uri
+                && self.shared.key.obs.is_none()
                 && self.shared.snapshot.lock().verdict(uri) != Verdict::Deliver
             {
                 continue;

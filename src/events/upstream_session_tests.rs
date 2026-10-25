@@ -21,9 +21,19 @@ fn shared() -> Arc<Shared> {
 }
 
 fn shared_with(ineligible: crate::events::backend_source::Ineligible) -> Arc<Shared> {
+    shared_keyed(
+        crate::events::upstream_listener::ListenerKey::shared("b"),
+        ineligible,
+    )
+}
+
+fn shared_keyed(
+    key: crate::events::upstream_listener::ListenerKey,
+    ineligible: crate::events::backend_source::Ineligible,
+) -> Arc<Shared> {
     Arc::new(Shared {
         name: "b".to_owned(),
-        key: crate::events::upstream_listener::ListenerKey::shared("b"),
+        key,
         need: Mutex::new(Need::default()),
         ledger: Mutex::new(Arc::default()),
         resolve: Box::new(|| None),
@@ -194,6 +204,39 @@ async fn emission_waits_for_the_snapshot_to_list_the_uri() {
     tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
     state.flush(&weak);
     assert!(intake.try_recv().is_ok(), "listed: one event");
+}
+
+/// A per-user listener reads no catalogue, so its snapshot stays empty: its
+/// watched URIs are emitted, not held back for a snapshot that never comes.
+#[tokio::test]
+async fn a_per_user_listener_emits_without_a_snapshot() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let mut intake = hub.runtime.intake.lock().take().expect("intake");
+    let weak = Arc::downgrade(&hub);
+    let shared = shared_keyed(
+        crate::events::upstream_listener::ListenerKey {
+            backend: "b".to_owned(),
+            obs: Some("o".to_owned()),
+        },
+        Arc::new(std::collections::BTreeSet::new),
+    );
+    shared
+        .need
+        .lock()
+        .add(&Interest::ResourceUpdated("file:///a".to_owned()))
+        .expect("room");
+    let mut state = State::new(&shared, PeerEra::Legacy);
+    state.note(
+        UpstreamNote::Notice {
+            kind: NoteKind::ResourceUpdated,
+            uri: Some("file:///a".to_owned()),
+        },
+        false,
+    );
+    tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
+    state.flush(&weak);
+    assert!(intake.try_recv().is_ok(), "emitted with no snapshot");
 }
 
 /// MIK-8202 E2: a listed change the clock cannot date (before 1970) is not

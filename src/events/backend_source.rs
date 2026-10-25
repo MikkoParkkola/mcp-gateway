@@ -265,8 +265,10 @@ impl EventSource for BackendSource {
         // A passthrough subscriber with no lease is parked: counted with no
         // task until `events/lease` (E7).
         if !up.listeners.may_run(&listener) {
-            up.listeners.hold(&listener, &interest);
-            return Ok(());
+            return up
+                .listeners
+                .hold(&listener, &interest)
+                .map_err(|_| RpcError::exhausted("upstream_uris", Some(MAX_URIS)));
         }
         let known = up.listeners.knows(backend);
         // `tools_changed` asks the listeners' own predicate: an A2A backend is
@@ -281,7 +283,8 @@ impl EventSource for BackendSource {
             return if matches!(interest, Interest::ToolsChanged) {
                 // Counted with no task: the revive sweep starts one once the
                 // backend can be listened to (MIK-7944 D6.EVENTS_MISC.6).
-                up.listeners.hold(&listener, &interest);
+                // `tools_changed` has no URI budget: never refused here.
+                let _ = up.listeners.hold(&listener, &interest);
                 // A registration between the check and the park missed it.
                 if up.listeners.knows(backend) {
                     up.listeners.revive_backend(backend);

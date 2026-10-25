@@ -66,6 +66,39 @@ fn a_managed_backend_observes_by_account() {
     assert_ne!(p, b.observe(&person("q")).expect("binds an account"));
 }
 
+/// The account key binds the descriptor's issuer and resource, so the basis
+/// does too: a row observed before either changes cannot keep its route.
+#[test]
+fn a_managed_backend_basis_moves_with_its_issuer_and_resource() {
+    let before = binding(&config(), "managed").expect("identity-bound").basis;
+    assert_eq!(
+        before.account_issuer.as_deref(),
+        Some("https://issuer.fixture.test")
+    );
+    assert_eq!(
+        before.account_resource.as_deref(),
+        Some("https://api.fixture.test/")
+    );
+    for change in [
+        |d: &mut crate::personal_accounts::config::AccountDescriptor| {
+            d.issuer = Some("https://other-issuer.fixture.test".into());
+        },
+        |d: &mut crate::personal_accounts::config::AccountDescriptor| {
+            d.resource = Some("https://other-api.fixture.test/".into());
+        },
+    ] {
+        let mut changed = config();
+        let descriptors = changed
+            .accounts
+            .as_mut()
+            .and_then(|a| a.descriptors.as_mut())
+            .expect("descriptors");
+        change(descriptors.get_mut("work").expect("work"));
+        let after = binding(&changed, "managed").expect("identity-bound").basis;
+        assert_ne!(after, before);
+    }
+}
+
 #[test]
 fn a_managed_backend_without_its_descriptor_cannot_observe() {
     let mut b = binding(&config(), "managed").expect("identity-bound");

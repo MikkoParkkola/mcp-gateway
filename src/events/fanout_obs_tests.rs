@@ -25,6 +25,8 @@ async fn a_keyless_occurrence_skips_rows_observed_per_user() {
             token_exchange_endpoint: None,
             token_exchange_scope: None,
             descriptor_id: None,
+            account_resource: None,
+            account_issuer: None,
         });
         hub.store
             .admit(

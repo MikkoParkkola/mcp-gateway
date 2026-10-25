@@ -44,7 +44,7 @@ async fn each_subscriber_of_a_backend_is_its_own_listener() {
     let l = listeners();
     let (p, q, shared) = (as_user("p"), as_user("q"), ListenerKey::shared("b"));
     for key in [&p, &q, &shared] {
-        l.hold(key, &watched("file:///a"));
+        l.hold(key, &watched("file:///a")).expect("counted");
     }
     let map = l.backends.lock();
     assert_eq!(map.len(), 3, "one entry per key");
@@ -63,8 +63,8 @@ async fn each_subscriber_of_a_backend_is_its_own_listener() {
 async fn removing_one_subscribers_interest_leaves_the_others() {
     let l = listeners();
     let (p, q) = (as_user("p"), as_user("q"));
-    l.hold(&p, &Interest::ToolsChanged);
-    l.hold(&q, &Interest::ToolsChanged);
+    l.hold(&p, &Interest::ToolsChanged).expect("counted");
+    l.hold(&q, &Interest::ToolsChanged).expect("counted");
     l.remove(&p, &Interest::ToolsChanged);
     let map = l.backends.lock();
     assert!(
@@ -111,8 +111,10 @@ fn a_listener_key_debug_omits_the_observation() {
 #[tokio::test]
 async fn a_per_user_listener_withholds_error_text() {
     let l = listeners();
-    l.hold(&as_user("p"), &Interest::ToolsChanged);
-    l.hold(&ListenerKey::shared("b"), &Interest::ToolsChanged);
+    l.hold(&as_user("p"), &Interest::ToolsChanged)
+        .expect("counted");
+    l.hold(&ListenerKey::shared("b"), &Interest::ToolsChanged)
+        .expect("counted");
     let map = l.backends.lock();
     let echoed = "401: bad token eyJsecret";
     assert_eq!(map[&as_user("p")].error_text(&echoed), "withheld");
@@ -126,7 +128,8 @@ async fn a_per_user_listener_withholds_error_text() {
 async fn a5_per_user_listeners_are_bounded_per_backend() {
     let l = listeners();
     for n in 0..MAX_PER_USER_LISTENERS {
-        l.hold(&as_user(&format!("u{n}")), &Interest::ToolsChanged);
+        l.hold(&as_user(&format!("u{n}")), &Interest::ToolsChanged)
+            .expect("counted");
     }
     assert!(l.over_budget(&as_user("new")), "one past the budget");
     assert!(
@@ -139,4 +142,18 @@ async fn a5_per_user_listeners_are_bounded_per_backend() {
         obs: Some("new".into()),
     };
     assert!(!l.over_budget(&other), "per backend");
+}
+
+/// A parked key is counted against the same URI budget a running one is: past
+/// it, `hold` refuses rather than dropping the URI.
+#[tokio::test]
+async fn a_parked_key_refuses_a_uri_past_the_budget() {
+    let l = listeners();
+    let p = as_user("p");
+    for n in 0..crate::events::upstream_need::MAX_URIS {
+        l.hold(&p, &watched(&format!("file:///{n}")))
+            .expect("counted");
+    }
+    assert!(l.hold(&p, &watched("file:///over")).is_err());
+    assert!(l.hold(&p, &Interest::ToolsChanged).is_ok(), "no URI budget");
 }

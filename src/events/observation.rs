@@ -28,6 +28,12 @@ pub(crate) struct ObsBasis {
     /// The `accounts.descriptors` key a managed-account backend names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub descriptor_id: Option<String>,
+    /// That descriptor's resource and issuer: both are in the account key,
+    /// so a change to either is a change of what the row observes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_resource: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_issuer: Option<String>,
 }
 
 /// A backend's identity binding in the live config. Absent for a backend
@@ -65,6 +71,7 @@ pub(crate) fn binding(config: &Config, backend: &str) -> Option<Binding> {
         .map_or_else(|| raw.clone(), |b| b.effective(raw));
     let propagation = effective.identity_propagation?;
     let descriptor_id = bound.as_ref().map(|b| b.descriptor_id.clone());
+    let account = bound.as_ref().and_then(|b| b.account.as_ref());
     Some(Binding {
         basis: ObsBasis {
             strategy: propagation.strategy,
@@ -72,6 +79,8 @@ pub(crate) fn binding(config: &Config, backend: &str) -> Option<Binding> {
             token_exchange_endpoint: propagation.token_exchange_endpoint.clone(),
             token_exchange_scope: propagation.token_exchange_scope.clone(),
             descriptor_id,
+            account_resource: account.map(|a| a.resource.clone()),
+            account_issuer: account.map(|a| a.issuer.clone()),
         },
         config: propagation,
         account: bound.and_then(|b| b.account),

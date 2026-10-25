@@ -124,10 +124,12 @@ async fn t34_a_read_begun_before_a_renewal_does_not_revoke_it() {
         .source(crate::events::types::SourceKind::BackendNotification)
         .expect("source");
     let listeners = source.upstream_listeners().expect("listeners");
-    listeners.hold(
-        &crate::events::upstream_listener::ListenerKey::shared("b"),
-        &Interest::ResourceUpdated("file:///x".to_owned()),
-    );
+    listeners
+        .hold(
+            &crate::events::upstream_listener::ListenerKey::shared("b"),
+            &Interest::ResourceUpdated("file:///x".to_owned()),
+        )
+        .expect("counted");
     let shared = listeners.entry_of("b").expect("entry");
     let backend = registry.get("b").expect("b");
     let weak = Arc::downgrade(&hub);

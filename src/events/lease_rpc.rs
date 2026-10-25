@@ -65,9 +65,29 @@ impl EventsHub {
             obs,
         };
         self.leases
-            .install(key, authorization, until, lease::MIN_LEASE_REMAINING_SECS)
+            .install(
+                key.clone(),
+                authorization,
+                until,
+                lease::MIN_LEASE_REMAINING_SECS,
+            )
             .await
             .map_err(RpcError::lease_refused)?;
+        // An unsubscribe between the row check and the install found no lease
+        // to wipe. Unsubscribe removes the row before its last-interest wipe
+        // runs, so either that wipe sees this lease or this check sees no
+        // live row of the caller's on the backend and wipes it here.
+        let still_live = crate::clock::utc_now().is_ok_and(|now| {
+            self.store.subscriptions().iter().any(|s| {
+                s.principal == principal
+                    && s.live(now)
+                    && upstream::parse_name(&s.name).is_some_and(|(b, _)| b == backend)
+            })
+        });
+        if !still_live {
+            self.leases.wipe(&key, lease::WipeReason::Released).await;
+            return Err(RpcError::forbidden());
+        }
         // The parked listener starts now, under the new lease (E7).
         if let Some(source) = self.source(super::types::SourceKind::BackendNotification) {
             source.backend_changed(backend);

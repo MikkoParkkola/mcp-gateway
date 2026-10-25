@@ -199,12 +199,19 @@ impl LeaseStore {
         if let Some(old) = held.remove(&key) {
             wipe(old).await;
         }
+        let cancel = CancellationToken::new();
+        let token = Arc::new(RwLock::new(Some(authorization)));
+        tokio::spawn(zeroize_at(
+            cancel.clone(),
+            Arc::clone(&token),
+            expires_at.saturating_sub(now),
+        ));
         held.insert(
             key.clone(),
             Held {
                 generation,
-                cancel: CancellationToken::new(),
-                token: Arc::new(RwLock::new(Some(authorization))),
+                cancel,
+                token,
                 expires_at,
             },
         );
@@ -219,6 +226,23 @@ impl LeaseStore {
         if let Some(old) = held.remove(key) {
             wipe(old).await;
             self.park(key, Some(reason));
+        }
+    }
+
+    /// Wipe every lease past its deadline. The token itself was zeroized at
+    /// the deadline by its timer; this drops the entry and parks its rows.
+    pub(crate) async fn wipe_expired(&self, now: u64) {
+        let mut held = self.held.lock().await;
+        let expired: Vec<LeaseKey> = held
+            .iter()
+            .filter(|(_, h)| now >= h.expires_at)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in expired {
+            if let Some(old) = held.remove(&key) {
+                wipe(old).await;
+                self.park(&key, Some(WipeReason::Released));
+            }
         }
     }
 
@@ -351,6 +375,24 @@ impl LeaseStore {
 /// D1's order: cancel the generation, wait for its sends to drop their read
 /// guards, then take the write lock and drop the token, which `Zeroizing`
 /// wipes.
+/// Zeroize `token` after `after_secs` even if no send asks for it: custody
+/// ends at the deadline, not at the next use. Cancelling sends first keeps
+/// the wipe order (cancel, drain, zeroize); a wipe before the deadline
+/// cancels `cancel` and ends this timer.
+async fn zeroize_at(
+    cancel: CancellationToken,
+    token: Arc<RwLock<Option<Zeroizing<String>>>>,
+    after_secs: u64,
+) {
+    tokio::select! {
+        () = cancel.cancelled() => {}
+        () = tokio::time::sleep(std::time::Duration::from_secs(after_secs)) => {
+            cancel.cancel();
+            *token.write().await = None;
+        }
+    }
+}
+
 async fn wipe(old: Held) {
     old.cancel.cancel();
     let mut token = old.token.write().await;

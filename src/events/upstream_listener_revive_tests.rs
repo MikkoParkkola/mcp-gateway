@@ -201,10 +201,12 @@ async fn holding_on_a_running_listener_only_counts() {
     assert!(registry.register(silent_backend()));
     let source = source(registry, Arc::new(AtomicBool::new(false)));
     hold_tools(&source).await;
-    listeners(&source).hold(
-        &crate::events::upstream_listener::ListenerKey::shared("b"),
-        &Interest::ToolsChanged,
-    );
+    listeners(&source)
+        .hold(
+            &crate::events::upstream_listener::ListenerKey::shared("b"),
+            &Interest::ToolsChanged,
+        )
+        .expect("counted");
     assert_eq!(starts(&source), 1);
     let running = listeners(&source)
         .backends
@@ -274,10 +276,12 @@ async fn a_backend_refused_again_before_its_revived_task_runs_ends_that_task() {
         }
     });
     let listeners = UpstreamListeners::new(registry, Weak::new(), ineligible);
-    listeners.hold(
-        &crate::events::upstream_listener::ListenerKey::shared("b"),
-        &Interest::ToolsChanged,
-    );
+    listeners
+        .hold(
+            &crate::events::upstream_listener::ListenerKey::shared("b"),
+            &Interest::ToolsChanged,
+        )
+        .expect("counted");
     for _ in 0..3 {
         sweep().await;
     }

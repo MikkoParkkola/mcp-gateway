@@ -122,6 +122,9 @@ impl EventsHub {
             self.runtime.rates.retain(&held);
             self.runtime.failures.retain(&held);
         }
+        if let Ok(now) = crate::clock::unix_secs() {
+            self.leases.wipe_expired(now).await;
+        }
         self.reconcile_stops().await;
         // After the stops, so freed slots are free: a watch key whose
         // capability is offered again (the startup scan finished, a reload
