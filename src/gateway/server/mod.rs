@@ -13,6 +13,7 @@ mod persistence;
 #[path = "tests/mod.rs"]
 mod signing_allocation_tests;
 mod stdio_channel;
+mod stdio_writer;
 mod support;
 // Two questions leave this module, both to `config_reload`, and each is
 // exported under the question it answers. A reload asks about the config that
@@ -26,7 +27,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpListener;
 use tracing::{debug, error, info, warn};
 
@@ -2393,17 +2394,8 @@ impl Gateway {
             meta_mcp.set_playbook_engine(engine);
         }
 
-        // Ctrl+C and SIGTERM end stdio the way stdin EOF does: stop reading,
-        // drain what was accepted, then `stop_all`. Without this a signal
-        // killed stdio outright, and since each backend leads its own process
-        // group (MIK-8895) nothing else would end the backends' trees. The
-        // release line does the same (MIK-8364). Polled once here, before any
-        // backend can start, so the OS handlers are registered from now on
-        // rather than from the read loop's first poll.
-        let (signal_tx, _) = tokio::sync::broadcast::channel(1);
-        let stop_signal = support::shutdown_signal(signal_tx);
-        tokio::pin!(stop_signal);
-        let mut signalled = futures::FutureExt::now_or_never(stop_signal.as_mut()).is_some();
+        // Ctrl+C and SIGTERM end stdio as EOF does: see `stdio_stop_signal`.
+        let (mut stop_signal, mut signalled) = Self::stdio_stop_signal();
 
         // Warm-start backends (same as HTTP mode). Held for the rest of the
         // function: dropping the guard aborts the retry tasks, so cancelling
@@ -2439,7 +2431,7 @@ impl Gateway {
         // unbounded queue would turn a stalled reader into operator-process
         // memory growth.
         let (writer, queue) = tokio::sync::mpsc::channel::<serde_json::Value>(STDOUT_QUEUE_DEPTH);
-        let mut writer_task = tokio::spawn(Self::run_stdout_writer(tokio::io::stdout(), queue));
+        let writer_task = tokio::spawn(Self::run_stdout_writer(tokio::io::stdout(), queue));
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)
         let session_id = STDIO_SESSION_ID;
@@ -2710,17 +2702,7 @@ impl Gateway {
         // and returns, which is what flushes the responses the drain produced.
         drop(writer);
         drop(channel);
-        // Bounded like the dispatch drain: a client that stopped reading
-        // leaves a write pending on a full pipe, and an unbounded join would
-        // never reach the backend teardown below.
-        match tokio::time::timeout(STDIO_DRAIN_TIMEOUT, &mut writer_task).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => warn!(%error, "stdio: the stdout writer did not finish cleanly"),
-            Err(_) => {
-                warn!(timeout = ?STDIO_DRAIN_TIMEOUT, "stdio: stdout writer stuck; aborting it");
-                writer_task.abort();
-            }
-        }
+        Self::join_stdout_writer(writer_task, STDIO_DRAIN_TIMEOUT).await;
         // Stop sweeping and probing before tearing the backends down. Both tasks
         // hold an Arc on the registry and have no shutdown channel in this mode,
         // so leaving either running keeps the registry alive after run_stdio
@@ -2756,55 +2738,6 @@ impl Gateway {
                 "failed to persist stdio protocol-revision telemetry; measurement window is incomplete"
             );
         }
-    }
-
-    /// Drain `queue` onto `sink`, closing the queue once the sink is gone.
-    ///
-    /// A dead sink ends the writer: staying open would let the dispatch tasks
-    /// keep executing requests whose answers are already being thrown away.
-    /// Closing the queue makes every producer's `send` fail and `is_closed`
-    /// true, which is the signal the read loop stops admitting on.
-    async fn run_stdout_writer<W: tokio::io::AsyncWrite + Unpin>(
-        mut sink: W,
-        mut queue: tokio::sync::mpsc::Receiver<serde_json::Value>,
-    ) {
-        while let Some(frame) = queue.recv().await {
-            if !Self::write_response(&mut sink, &frame).await {
-                queue.close();
-                break;
-            }
-        }
-    }
-
-    /// Write a JSON-RPC response to stdout followed by a newline.
-    /// `false` when the frame did not reach `stdout`, which the stdio writer
-    /// reads as "the pipe is gone" rather than "this one frame was lost".
-    async fn write_response<W: tokio::io::AsyncWrite + Unpin>(
-        stdout: &mut W,
-        value: &serde_json::Value,
-    ) -> bool {
-        let serialized = match serde_json::to_string(value) {
-            Ok(s) => s,
-            Err(e) => {
-                // Serialisation is this frame's problem, not the pipe's.
-                warn!(error = %e, "Failed to serialize response");
-                return true;
-            }
-        };
-        debug!(response_len = serialized.len(), "stdio: writing response");
-        if let Err(e) = stdout.write_all(serialized.as_bytes()).await {
-            warn!(error = %e, "Failed to write to stdout");
-            return false;
-        }
-        if let Err(e) = stdout.write_all(b"\n").await {
-            warn!(error = %e, "Failed to write newline to stdout");
-            return false;
-        }
-        if let Err(e) = stdout.flush().await {
-            warn!(error = %e, "Failed to flush stdout");
-            return false;
-        }
-        true
     }
 
     /// Run `fut` inside a notification scope, writing each notification the

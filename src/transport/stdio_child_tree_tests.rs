@@ -138,10 +138,6 @@ async fn gone(pid: Pid) {
     poll_until("the descendant is gone", || !alive(pid)).await;
 }
 
-async fn sent(t: &StdioTransport) -> (usize, usize) {
-    with_tree(t, |c| (c.group_signals_sent, c.signals_refused)).await
-}
-
 /// The close signal and at least one pre-reap signal were sent, and none was
 /// refused (MIK-8080, MIK-8213: the pre-reap signal repeats while the group
 /// settles, so the exact count depends on timing).
