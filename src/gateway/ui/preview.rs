@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! `POST /ui/api/backends/preview` (MIK-8838, U6): start a server once to list
+//! `POST /ui/api/previews` (MIK-8838, U6): start a server once to list
 //! its tools before it is added, with nothing secret and nothing persisted.
 //!
 //! A command server runs only inside the ADR-027 sandbox launcher (MIK-8905);
@@ -8,8 +8,9 @@
 //! unsandboxed. A URL server is reached under the SSRF guard with no
 //! credentials of any kind.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use axum::Json;
@@ -28,6 +29,7 @@ use crate::gateway::router::AppState;
 use crate::protocol::continuation::{ContinuationPurpose, Payload, clock_now};
 use crate::security::ssrf::{DestinationPolicy, SSRF_BLOCKED};
 
+use crate::backend::PreviewListing;
 use crate::config::{BackendConfig, TransportConfig};
 
 /// What a preview withheld from the resolved backend. Names only, never a
@@ -137,23 +139,28 @@ pub(super) struct PreviewRequest {
     confirm: Option<String>,
 }
 
-/// One confirmed preview at a time, process-wide. Released when dropped, so
-/// every exit frees it, a client that disconnects included.
-static BUSY: AtomicBool = AtomicBool::new(false);
+/// The gateways (by `AppState` address) with a confirmed preview running: one
+/// at a time per gateway. A guard releases its entry when dropped, so every
+/// exit frees it, a client that disconnects included.
+static BUSY: Mutex<BTreeSet<usize>> = Mutex::new(BTreeSet::new());
 
-struct Busy;
+struct Busy(usize);
 
 impl Busy {
-    fn acquire() -> Option<Self> {
-        BUSY.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .ok()
-            .map(|_| Self)
+    fn acquire(state: &Arc<AppState>) -> Option<Self> {
+        let key = Arc::as_ptr(state).addr();
+        BUSY.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key)
+            .then_some(Self(key))
     }
 }
 
 impl Drop for Busy {
     fn drop(&mut self) {
-        BUSY.store(false, Ordering::Release);
+        BUSY.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.0);
     }
 }
 
@@ -230,15 +237,29 @@ pub(super) async fn preview_backend(
     };
 
     // Busy first, then redeem: a busy answer never spends the token.
-    let Some(busy) = Busy::acquire() else {
+    let Some(busy) = Busy::acquire(&state) else {
         return flat_error(StatusCode::CONFLICT, "a preview is already running").into_response();
     };
-    let redeemed = match state.continuation.keyring().open(&token, now) {
+    if !redeem(&state, &token, &principal, &digest, now).await {
+        return flat_error(
+            StatusCode::CONFLICT,
+            "the confirmation is invalid, expired or spent",
+        )
+        .into_response();
+    }
+    let response = run_confirmed(&state, &add.name, &backend, described).await;
+    drop(busy);
+    response
+}
+
+/// Open, check and spend a preview confirmation in one step.
+async fn redeem(state: &AppState, token: &str, principal: &str, digest: &str, now: u64) -> bool {
+    match state.continuation.keyring().open(token, now) {
         Ok(payload)
             if payload
                 .require_purpose(ContinuationPurpose::PreviewConfirm)
                 .is_ok()
-                && payload.redeemable_by(&principal, &digest).is_ok() =>
+                && payload.redeemable_by(principal, digest).is_ok() =>
         {
             state
                 .continuation
@@ -247,17 +268,18 @@ pub(super) async fn preview_backend(
                 .await
         }
         _ => false,
-    };
-    if !redeemed {
-        drop(busy);
-        return flat_error(
-            StatusCode::CONFLICT,
-            "the confirmation is invalid, expired or spent",
-        )
-        .into_response();
     }
+}
 
-    let crate::config::TransportConfig::Http {
+/// Start the scrubbed backend once, list its tools, and close it, all inside
+/// [`PREVIEW_CAP`].
+async fn run_confirmed(
+    state: &AppState,
+    name: &str,
+    backend: &BackendConfig,
+    described: Value,
+) -> Response {
+    let TransportConfig::Http {
         http_url,
         streamable_http,
         protocol_version,
@@ -286,23 +308,20 @@ pub(super) async fn preview_backend(
             policy,
         )?;
         let listed = async {
-            crate::backend::start_detached_http(&transport, &add.name, backend.timeout).await?;
-            crate::backend::list_tools_for_preview(&add.name, transport.as_ref()).await
+            crate::backend::start_detached_http(&transport, name, backend.timeout).await?;
+            crate::backend::list_tools_for_preview(name, transport.as_ref()).await
         }
         .await;
         let _ = crate::transport::Transport::close(transport.as_ref()).await;
         listed
     })
     .await;
-    drop(busy);
-    let listing = match outcome {
-        Err(_) => {
-            return flat_error(
-                StatusCode::GATEWAY_TIMEOUT,
-                "the server did not answer within 30 s",
-            )
-            .into_response();
-        }
+    match outcome {
+        Err(_) => flat_error(
+            StatusCode::GATEWAY_TIMEOUT,
+            "the server did not answer within 30 s",
+        )
+        .into_response(),
         Ok(Err(error)) => {
             let message = error.to_string();
             let status = if message.contains(SSRF_BLOCKED) {
@@ -310,10 +329,16 @@ pub(super) async fn preview_backend(
             } else {
                 StatusCode::BAD_GATEWAY
             };
-            return flat_error(status, message).into_response();
+            flat_error(status, message).into_response()
         }
-        Ok(Ok(listing)) => listing,
-    };
+        Ok(Ok(listing)) => {
+            Json(listed_body(&listing, described, started.elapsed())).into_response()
+        }
+    }
+}
+
+/// The 200 body: each tool with its class and where the class came from.
+fn listed_body(listing: &PreviewListing, mut preview: Value, elapsed: Duration) -> Value {
     let tools: Vec<Value> = listing
         .tools
         .iter()
@@ -329,14 +354,12 @@ pub(super) async fn preview_backend(
             })
         })
         .collect();
-    let mut preview = described;
     preview["stopped"] = json!(true);
     preview["truncated"] = json!(listing.truncated);
-    preview["elapsed_ms"] = json!(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
-    Json(json!({
+    preview["elapsed_ms"] = json!(u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX));
+    json!({
         "preview": preview,
         "tools": tools,
         "withheld_tools": listing.withheld.iter().map(|name| json!({"name": name})).collect::<Vec<_>>(),
-    }))
-    .into_response()
+    })
 }

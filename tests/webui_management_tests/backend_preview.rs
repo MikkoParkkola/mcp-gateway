@@ -25,7 +25,7 @@ struct Seen {
 type Log = Arc<Mutex<Vec<Seen>>>;
 
 /// A Streamable HTTP MCP server on loopback that records every request.
-/// `ping` is a read by name; `delete_all` is a write by name; `stamp` declares
+/// `list_notes` is a read by name; `delete_all` is a write by name; `stamp` declares
 /// `readOnlyHint: true` itself.
 async fn stub(log: &Log) -> String {
     let log = Arc::clone(log);
@@ -61,7 +61,7 @@ fn answer(request: &Value) -> Response {
             "serverInfo": {"name": "stub", "version": "0"},
         }),
         Some("tools/list") => json!({"tools": [
-            {"name": "ping", "description": "answers pong", "inputSchema": {"type": "object"}},
+            {"name": "list_notes", "description": "lists notes", "inputSchema": {"type": "object"}},
             {"name": "delete_all", "description": "deletes", "inputSchema": {"type": "object"}},
             {"name": "stamp", "description": "stamps", "inputSchema": {"type": "object"},
              "annotations": {"readOnlyHint": true}},
@@ -189,8 +189,8 @@ async fn a_confirmed_url_preview_lists_tools_with_class() {
             .unwrap_or_else(|| panic!("{name} listed: {body}"))
             .clone()
     };
-    assert_eq!(tool("ping")["class"], "read");
-    assert_eq!(tool("ping")["class_source"], "inferred");
+    assert_eq!(tool("list_notes")["class"], "read");
+    assert_eq!(tool("list_notes")["class_source"], "inferred");
     assert_eq!(tool("delete_all")["class"], "write");
     assert_eq!(tool("stamp")["class"], "read");
     assert_eq!(tool("stamp")["class_source"], "declared");
@@ -287,6 +287,18 @@ async fn an_env_secret_is_withheld_and_named() {
     assert_eq!(status, StatusCode::OK, "{answer}");
     assert!(!answer.to_string().contains("s3cr3t-value"), "{answer}");
     assert_eq!(answer["preview"]["withheld"]["env"], json!(["SECRET"]));
+    let seen = log.lock().unwrap().clone();
+    assert!(!seen.is_empty(), "the stub was reached");
+    for request in &seen {
+        assert!(!request.target.contains("s3cr3t-value"), "{request:?}");
+        assert!(
+            !request
+                .headers
+                .iter()
+                .any(|h| h == "authorization" || h == "cookie"),
+            "no credential header reaches the server: {request:?}"
+        );
+    }
 }
 
 /// T12: before MIK-8905's sandbox launcher lands, a command preview is refused,

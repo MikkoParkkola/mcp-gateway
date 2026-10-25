@@ -6,6 +6,7 @@ use crate::error::rpc_codes::INVALID_PARAMS;
 use serde_json::{Value, json};
 use tracing::warn;
 
+use crate::protocol::continuation::ContinuationPurpose;
 use crate::{Error, Result};
 
 /// Seal one interim exchange into a continuation this caller can redeem, or
@@ -316,7 +317,6 @@ pub(in crate::gateway::meta_mcp) fn retry_origin_backend(
     //
     // Exhaustive and without a wildcard: a new purpose must be routed here on
     // purpose, never defaulted into a backend route.
-    use crate::protocol::continuation::ContinuationPurpose;
     match payload.purpose {
         ContinuationPurpose::BackendInput => Some(Ok(payload.backend_id)),
         ContinuationPurpose::DestructiveConfirm
