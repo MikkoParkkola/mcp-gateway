@@ -404,6 +404,59 @@ fn seat_r2(out: &mut String) {
     );
 }
 
+/// A struct, and a struct variant, that write the same field twice, as a
+/// hand-written `Serialize` can.
+struct RepeatedField;
+
+impl Serialize for RepeatedField {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+        let mut fields = serializer.serialize_struct("RepeatedField", 2)?;
+        fields.serialize_field("a", &1)?;
+        fields.serialize_field("a", &2)?;
+        fields.end()
+    }
+}
+
+struct RepeatedVariantField;
+
+impl Serialize for RepeatedVariantField {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStructVariant as _;
+        let mut fields = serializer.serialize_struct_variant("E", 0, "v", 2)?;
+        fields.serialize_field("a", &1)?;
+        fields.serialize_field("a", &2)?;
+        fields.end()
+    }
+}
+
+/// The code seats' r3 cases (gpt and grok, 2026-10-25), recorded with the
+/// current backend.
+fn seat_r3(out: &mut String) {
+    row(
+        out,
+        "mig2/r3/write/repeated-field",
+        &written(&RepeatedField),
+    );
+    row(
+        out,
+        "mig2/r3/write/repeated-variant-field",
+        &written(&RepeatedVariantField),
+    );
+    for (case, doc) in [
+        ("mig2/r3/place/quoted-hash-key", "\" #\": |-\n  5\n"),
+        ("mig2/r3/place/quoted-pipe-key", "'a | b': |-\n  5\n"),
+        ("mig2/r3/place/comment-with-pipe", "x: |- # c | d\n  5\n"),
+        ("mig2/r3/place/keep-hint", "x: |2+\n  5\n"),
+    ] {
+        row(
+            out,
+            case,
+            &ok_json(yaml::from_str::<BTreeMap<String, u8>>(doc)),
+        );
+    }
+}
+
 pub(super) fn rows(out: &mut String) {
     product_enums(out);
     duplicates(out);
@@ -415,4 +468,5 @@ pub(super) fn rows(out: &mut String) {
     figment_data(out);
     seat_r1(out);
     seat_r2(out);
+    seat_r3(out);
 }

@@ -190,3 +190,9 @@ mig2/r2/place/tag-only-empty	ERR v: invalid type: unit value, expected u8 at lin
 mig2/r2/place/block-comment	ERR v: invalid type: string, expected u8 at line 1 column 4
 mig2/r2/place/block-pipe-content	ERR v: invalid type: string, expected u8 at line 1 column 4
 mig2/r2/place/folded	ERR v: invalid type: string, expected u8 at line 1 column 4
+mig2/r3/write/repeated-field	OK "a: 1\na: 2\n"
+mig2/r3/write/repeated-variant-field	OK "!v\na: 1\na: 2\n"
+mig2/r3/place/quoted-hash-key	ERR  #: invalid type: string, expected u8 at line 1 column 7
+mig2/r3/place/quoted-pipe-key	ERR a | b: invalid type: string, expected u8 at line 1 column 10
+mig2/r3/place/comment-with-pipe	ERR x: invalid type: string, expected u8 at line 1 column 4
+mig2/r3/place/keep-hint	ERR x: invalid type: string, expected u8 at line 1 column 4
