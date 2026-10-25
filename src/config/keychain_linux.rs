@@ -74,7 +74,7 @@ impl LinuxKeychain {
                 "the Secret Service did not answer on the session bus".into(),
             ));
         }
-        parse_search(&String::from_utf8_lossy(&output.stdout)).ok_or_else(|| {
+        parse_search(&String::from_utf8_lossy(output.stdout.as_bytes())).ok_or_else(|| {
             KeychainError::Unavailable("the Secret Service gave an unreadable answer".into())
         })
     }
