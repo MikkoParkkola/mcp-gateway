@@ -12,6 +12,7 @@
 //! - `BudgetEnforcer`: pre-invoke cost check (`DashMap` + short locks, target <0.1ms) [cost-governance]
 //! - `SemanticIndex`: TF-IDF query over 500-tool corpus (target <2ms)           [semantic-search]
 //! - Continuation: minting and redeeming a sealed continuation envelope (NFR.PERF.1)
+//! - HTTP request path: one `tools/list` round trip through `HttpTransport` to a loopback stub, JSON and SSE
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use serde_json::{Value, json};
@@ -732,6 +733,64 @@ fn bench_continuation(c: &mut Criterion) {
     group.finish();
 }
 
+/// MIK-8838: one `tools/list` round trip through `HttpTransport` against a
+/// loopback stub, answered as JSON and as one SSE event: the two body-read
+/// branches a live backend takes, so a change to either shows here.
+fn bench_http_request_path(c: &mut Criterion) {
+    use mcp_gateway::transport::{HttpTransport, Transport};
+
+    async fn listing(sse: bool, body: axum::body::Bytes) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        let answer = json!({"jsonrpc": "2.0", "id": request["id"], "result": {"tools": [
+            {"name": "list_notes", "description": "lists notes", "inputSchema": {"type": "object"}}]}});
+        if sse {
+            (
+                [("content-type", "text/event-stream")],
+                format!("event: message\ndata: {answer}\n\n"),
+            )
+                .into_response()
+        } else {
+            axum::Json(answer).into_response()
+        }
+    }
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("bench runtime");
+    let mut group = c.benchmark_group("http_request_path");
+    for (name, sse) in [("tools_list_json", false), ("tools_list_sse", true)] {
+        let url = runtime.block_on(async move {
+            let app =
+                axum::Router::new().fallback(move |body: axum::body::Bytes| listing(sse, body));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind");
+            let address = listener.local_addr().expect("address");
+            tokio::spawn(async move {
+                let _ = axum::serve(listener, app).await;
+            });
+            format!("http://{address}/mcp")
+        });
+        let transport = HttpTransport::new(
+            &url,
+            std::collections::HashMap::new(),
+            std::time::Duration::from_secs(5),
+            true,
+        )
+        .expect("transport");
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                runtime
+                    .block_on(transport.request("tools/list", None))
+                    .expect("answer")
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_tool_registry,
@@ -744,5 +803,6 @@ criterion_group!(
     bench_semantic_search,
     bench_modern_request_path,
     bench_continuation,
+    bench_http_request_path,
 );
 criterion_main!(benches);
