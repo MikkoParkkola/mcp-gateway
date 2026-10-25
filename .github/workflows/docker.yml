@@ -63,7 +63,6 @@ jobs:
           # metadata-action's already-lowercased tags).
           tags: ${{ env.REGISTRY }}/mikkoparkkola/mcp-gateway:scan
           cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Trivy image scan (block push on fixable HIGH/CRITICAL CVEs)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
