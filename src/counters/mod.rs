@@ -4,7 +4,7 @@
 //! UI draws its history from (ADR-017, ADR-026).
 //!
 //! Each logical call is counted once, where its one invocation record is
-//! written (design: `u1-counter-store/design.md`). A series holds 96
+//! written (ADR-017). A series holds 96
 //! half-hour buckets and 30 host-local days. Labels come only from config,
 //! the catalogue and verified credentials: a name the caller chose adds to
 //! its dimension's overflow count and is stored nowhere. Every dimension is

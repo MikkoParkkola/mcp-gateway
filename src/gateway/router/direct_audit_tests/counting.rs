@@ -237,7 +237,7 @@ async fn t11_an_uncatalogued_tool_counts_in_overflow() {
     assert_eq!(count(&store, Metric::Calls, Filter::Overflow(Dim::Tool)), 1);
     assert_eq!(count(&store, Metric::Calls, Filter::Server("alpha")), 1);
     assert_eq!(store.labels(Dim::Tool), 0);
-    // API1.5 as ruled: the audit log keeps recording the target the caller
+    // MIK-8854.API1.5: the audit log keeps recording the target the caller
     // named; U1 neither hides nor changes it.
     assert_eq!(
         only_invocation(&fx)["tool"],

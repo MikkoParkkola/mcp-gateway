@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Reading a series out of the store: windows, filters and the previous
-//! period, which maps by local wall-clock time (design.md, Read routes).
+//! period, which maps by local wall-clock time (ADR-017, ADR-026).
 
 use chrono::{LocalResult, TimeZone};
 use serde::Serialize;
