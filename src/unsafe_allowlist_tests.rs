@@ -38,19 +38,63 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Whether `text` opts into or uses `unsafe`. This file's own patterns are
-/// split so it does not match itself.
-fn uses_unsafe(text: &str) -> bool {
-    let unsafe_word = concat!("uns", "afe");
-    [
-        format!("allow({unsafe_word}_code)"),
-        format!("expect({unsafe_word}_code)"),
-        format!("{unsafe_word} {{"),
-        format!("{unsafe_word} fn "),
-        format!("{unsafe_word} impl "),
-    ]
-    .iter()
-    .any(|pattern| text.contains(pattern.as_str()))
+/// Finds any use of `unsafe` or opt-in to it in one parsed file.
+#[derive(Default)]
+struct UnsafeFinder {
+    found: bool,
+}
+
+impl<'ast> syn::visit::Visit<'ast> for UnsafeFinder {
+    fn visit_expr_unsafe(&mut self, node: &'ast syn::ExprUnsafe) {
+        self.found = true;
+        syn::visit::visit_expr_unsafe(self, node);
+    }
+
+    fn visit_signature(&mut self, node: &'ast syn::Signature) {
+        self.found |= node.unsafety.is_some();
+        syn::visit::visit_signature(self, node);
+    }
+
+    fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
+        self.found |= node.unsafety.is_some();
+        syn::visit::visit_item_impl(self, node);
+    }
+
+    fn visit_item_trait(&mut self, node: &'ast syn::ItemTrait) {
+        self.found |= node.unsafety.is_some();
+        syn::visit::visit_item_trait(self, node);
+    }
+
+    fn visit_item_foreign_mod(&mut self, node: &'ast syn::ItemForeignMod) {
+        // `extern` blocks declare foreign items that only `unsafe` can call.
+        self.found = true;
+        syn::visit::visit_item_foreign_mod(self, node);
+    }
+
+    fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
+        // `#[unsafe(no_mangle)]`, and `unsafe_code` anywhere in an `allow`,
+        // `expect` or combined lint list.
+        let lint_list = match &node.meta {
+            syn::Meta::List(list)
+                if list.path.is_ident("allow") || list.path.is_ident("expect") =>
+            {
+                list.tokens.to_string().contains("unsafe_code")
+            }
+            _ => false,
+        };
+        self.found |= node.path().is_ident("unsafe") || lint_list;
+        syn::visit::visit_attribute(self, node);
+    }
+}
+
+/// Whether the Rust source in `text` uses or opts into `unsafe`. A file that
+/// does not parse fails the test by name rather than passing unread.
+fn uses_unsafe(path: &Path, text: &str) -> bool {
+    let file = syn::parse_file(text)
+        .unwrap_or_else(|error| panic!("{} does not parse: {error}", path.display()));
+    let mut finder = UnsafeFinder::default();
+    syn::visit::Visit::visit_file(&mut finder, &file);
+    finder.found
 }
 
 fn sites(root: &Path, dirs: &[&str]) -> BTreeSet<String> {
@@ -65,7 +109,7 @@ fn sites(root: &Path, dirs: &[&str]) -> BTreeSet<String> {
     }
     files
         .into_iter()
-        .filter(|path| std::fs::read_to_string(path).is_ok_and(|text| uses_unsafe(&text)))
+        .filter(|path| std::fs::read_to_string(path).is_ok_and(|text| uses_unsafe(path, &text)))
         .map(|path| {
             path.strip_prefix(root)
                 .unwrap_or(&path)
@@ -92,4 +136,29 @@ fn a18_test_exemptions_are_the_recorded_ones() {
     let found = sites(root, &["tests"]);
     let exempt: BTreeSet<String> = TEST_EXEMPT.iter().map(|path| (*path).to_owned()).collect();
     assert_eq!(found, exempt, "a new unsafe site in tests/");
+}
+
+#[test]
+fn the_scan_sees_every_form_of_unsafe() {
+    let path = Path::new("fixture.rs");
+    for source in [
+        "fn f() { unsafe { g() } }",
+        "unsafe fn f() {}",
+        "unsafe impl Send for T {}",
+        "unsafe trait T {}",
+        "unsafe extern \"C\" { fn g(); }",
+        "#[unsafe(no_mangle)] fn f() {}",
+        "#![allow(unsafe_code)]",
+        "#[expect(unsafe_code)] fn f() {}",
+        "#[allow(dead_code, unsafe_code)] fn f() {}",
+    ] {
+        assert!(uses_unsafe(path, source), "missed: {source}");
+    }
+    for source in [
+        "fn f() { let s = \"unsafe { }\"; }",
+        "// unsafe { }\nfn f() {}",
+        "#[allow(dead_code)] fn f() {}",
+    ] {
+        assert!(!uses_unsafe(path, source), "false hit: {source}");
+    }
 }

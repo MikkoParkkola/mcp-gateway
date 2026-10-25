@@ -126,3 +126,81 @@ fn a4_message_signing_secrets_resolve_from_the_keychain() {
     assert_eq!(resolved.shared_secret, key);
     assert_eq!(resolved.previous_secret, previous);
 }
+
+/// A value an `env:` reference resolves to is the secret, even when it reads
+/// like a `keychain:` reference: it is never followed a second time.
+#[test]
+fn an_env_value_that_reads_as_a_reference_is_the_secret() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let env = dir.path().join("secrets.env");
+    crate::gateway::test_helpers::write_owner_only(
+        &env,
+        "BEARER=keychain:not-a-reference-0123456789\n",
+    )
+    .expect("write env");
+    let path = dir.path().join("gateway.yaml");
+    crate::gateway::test_helpers::write_owner_only(
+        &path,
+        format!(
+            "env_files:\n  - '{}'\nauth:\n  bearer_token: env:BEARER\n",
+            env.display()
+        ),
+    )
+    .expect("write config");
+    let fake = Arc::new(FakeKeychain::default());
+    let evaluated =
+        with_test_keychain(fake.clone(), || Config::load_evaluated(Some(&path))).expect("loads");
+    let token = evaluated
+        .config
+        .auth
+        .resolve_bearer_token(&evaluated.overlay)
+        .expect("resolves");
+    assert_eq!(
+        token.as_deref(),
+        Some("keychain:not-a-reference-0123456789")
+    );
+    assert!(
+        fake.asked().is_empty(),
+        "followed as a reference: {:?}",
+        fake.asked()
+    );
+}
+
+#[test]
+fn a4_the_record_key_resolves_from_the_keychain() {
+    let fake = fake();
+    let key = "a".repeat(64);
+    fake.insert("gw.record", key.as_bytes());
+    let overlay = super::EnvOverlay::none().with_keychain(fake);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let resolved = super::record_key::resolve_record_key_text(
+        Some("keychain:gw.record"),
+        &overlay,
+        &dir.path().join("unused"),
+        "security.record_principal_key",
+    )
+    .expect("resolves");
+    assert_eq!(resolved, key);
+}
+
+/// The accounts block (`accounts.keys`, adapter `hmac_secret_ref`,
+/// `client_secret_ref`) resolves through `EnvOverlay::resolve_reference`.
+#[test]
+fn a4_account_references_resolve_from_the_keychain() {
+    let fake = fake();
+    let overlay = super::EnvOverlay::none().with_keychain(fake);
+    assert_eq!(
+        overlay
+            .resolve_reference("accounts.keys[current]", "keychain:gw.current")
+            .expect("resolves")
+            .as_deref(),
+        Some(CURRENT_B64)
+    );
+    let missing = overlay
+        .resolve_reference("accounts.keys[gone]", "keychain:gw.gone")
+        .expect_err("a missing entry is refused");
+    assert!(
+        missing.contains("accounts.keys[gone]") && missing.contains("gw.gone"),
+        "{missing}"
+    );
+}
