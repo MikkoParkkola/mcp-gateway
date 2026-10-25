@@ -182,7 +182,7 @@ fn in_clean_child_with(test: &str, vars: &[(String, String)]) -> bool {
             child.env_remove(key);
         }
     }
-    child.envs(vars.iter().map(|(k, v)| (k, v)));
+    child.envs(vars.iter().map(|(k, v)| (k, v))); // spawn-check: not the gateway: this test binary, given the examples' stand-in variables
     let output = child.output().expect("run the isolated child");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
