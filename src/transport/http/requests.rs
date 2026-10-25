@@ -404,12 +404,7 @@ impl HttpTransport {
         if !status.is_success() {
             // A11-b/g: a deterministic refusal is typed by its STATUS alone.
             let typed = response.error_for_status_ref().err();
-            // Under a byte budget an over-budget error body is that refusal,
-            // never an empty body read past.
-            let body = match self.body_budget.get() {
-                Some(budget) => String::from_utf8_lossy(&budget.read(response).await?).into_owned(),
-                None => response.text().await.unwrap_or_default(),
-            };
+            let body = self.error_body(response).await?;
             // Some servers refuse a protocol version with a status, not a
             // JSON-RPC error, so the body with the supported versions is read
             // first. Three signals together, because this parser sees every
@@ -467,16 +462,30 @@ impl HttpTransport {
             }
         } else if let Some(waiting) = waiting {
             self.body_or_stream(status, response, waiting).await
-        } else if let Some(budget) = self.body_budget.get() {
-            let body = budget.read(response).await?;
-            serde_json::from_slice(&body)
-                .map_err(|e| Error::Transport(format!("Failed to parse response: {e}")))
         } else {
-            // Parse JSON response
-            response
+            self.json_body(response).await
+        }
+    }
+
+    /// A non-2xx body as text. Under a byte budget an over-budget body is
+    /// that refusal, never an empty body read past; without one, an unreadable
+    /// body is empty, as before.
+    async fn error_body(&self, response: reqwest::Response) -> Result<String> {
+        Ok(match self.body_budget.get() {
+            Some(budget) => String::from_utf8_lossy(&budget.read(response).await?).into_owned(),
+            None => response.text().await.unwrap_or_default(),
+        })
+    }
+
+    /// A 2xx JSON body, counted against the byte budget when one is set.
+    async fn json_body(&self, response: reqwest::Response) -> Result<JsonRpcResponse> {
+        match self.body_budget.get() {
+            Some(budget) => serde_json::from_slice(&budget.read(response).await?)
+                .map_err(|e| Error::Transport(format!("Failed to parse response: {e}"))),
+            None => response
                 .json()
                 .await
-                .map_err(|e| safe_request_error("Failed to parse response", &e))
+                .map_err(|e| safe_request_error("Failed to parse response", &e)),
         }
     }
 
