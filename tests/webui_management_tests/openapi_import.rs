@@ -247,3 +247,37 @@ async fn the_spec_preview_echoes_the_url_without_its_query() {
     );
     assert!(!body.to_string().contains("s3cr3t-value"), "{body}");
 }
+
+/// MIK-8838: a fetched spec is counted while it is read; one byte over the
+/// 32 MiB spec budget is a 502 naming the budget, for preview and import.
+#[tokio::test]
+async fn a_spec_over_its_budget_is_a_502_naming_the_budget() {
+    const SPEC_BUDGET: usize = 32 * 1024 * 1024;
+    let app = axum::Router::new().fallback(|| async { "x".repeat(SPEC_BUDGET + 1) });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    let (mut state, _store) = make_app_state(None, None).await;
+    Arc::get_mut(&mut state)
+        .expect("test AppState should be uniquely owned")
+        .ssrf_protection = false;
+    let router = create_router(state);
+    for route in ["/ui/api/import/openapi/preview", "/ui/api/import/openapi"] {
+        let (status, body) = send_json(
+            &router,
+            Method::POST,
+            route,
+            Some(json!({ "url": format!("http://{address}/spec.yaml") })),
+        )
+        .await;
+        let message = body["error"].as_str().unwrap_or_default();
+        let shown: String = message.chars().take(200).collect();
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{route}: {shown}");
+        assert!(
+            message.contains("32 MiB budget"),
+            "{route} names the budget: {shown}"
+        );
+    }
+}
