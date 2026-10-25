@@ -196,4 +196,12 @@ fn the_system_zone_reads_as_a_named_zone() {
     let zone = system_zone();
     assert_eq!(zone.name().parse::<chrono_tz::Tz>(), Ok(zone));
     assert_eq!(system_zone(), zone);
+    // A name the system reports and chrono-tz knows is that zone, not the
+    // UTC fallback.
+    if let Some(named) = iana_time_zone::get_timezone()
+        .ok()
+        .and_then(|name| name.parse::<chrono_tz::Tz>().ok())
+    {
+        assert_eq!(zone, named);
+    }
 }

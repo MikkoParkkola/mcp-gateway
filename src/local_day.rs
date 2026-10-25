@@ -19,7 +19,9 @@ pub(crate) struct LocalDay {
     /// The local calendar date.
     pub(crate) date: NaiveDate,
     /// Unix seconds of the day's first instant: local midnight, or the first
-    /// valid local time after it where the zone skips midnight.
+    /// valid local time after it where the zone skips midnight. 0 for the
+    /// day holding the epoch in a zone ahead of UTC, so a walk back through
+    /// `start - 1` stops there.
     pub(crate) start: u64,
     /// Unix seconds of the next date's first instant (exclusive), so
     /// consecutive days tile with no gap and no overlap.
