@@ -649,5 +649,9 @@ mod tests;
 #[path = "enforcer_atomic_tests.rs"]
 mod atomic_tests;
 
+#[cfg(all(test, feature = "cost-governance"))]
+#[path = "enforcer_local_day_tests.rs"]
+mod local_day_tests;
+
 #[cfg(test)]
 pub(crate) mod settle_seam;
