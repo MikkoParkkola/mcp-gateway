@@ -8,6 +8,41 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::config::Config;
 
+/// Gateway state directory, honoring the existing operator override.
+///
+/// Always absolute when the working directory is readable: a relative override
+/// resolves against the gateway's own working directory, so a backend started
+/// in another `cwd` is handed the same directory (MIK-7964, from the release
+/// line).
+#[must_use]
+pub fn gateway_data_dir() -> PathBuf {
+    absolutize(resolve_gateway_data_dir(
+        // `var_os`: a directory that is not UTF-8 is still the operator's
+        // (MIK-8147); `var` would drop it for the default under home.
+        std::env::var_os("MCP_GATEWAY_CONFIG_DIR"),
+        dirs::home_dir(),
+    ))
+}
+
+/// `path` made absolute against the working directory, or kept as given when
+/// that cannot be read.
+fn absolutize(path: PathBuf) -> PathBuf {
+    std::path::absolute(&path).unwrap_or(path)
+}
+
+fn resolve_gateway_data_dir(
+    configured: Option<std::ffi::OsString>,
+    home: Option<PathBuf>,
+) -> PathBuf {
+    configured.map_or_else(
+        || {
+            home.unwrap_or_else(|| PathBuf::from("."))
+                .join(".mcp-gateway")
+        },
+        PathBuf::from,
+    )
+}
+
 /// Load config from `path`, returning `Config::default()` when the file is absent
 /// or cannot be parsed.
 #[must_use]
@@ -232,6 +267,38 @@ fn scratch_candidate(path: &Path, seed: u64) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gateway_state_override_precedes_home_and_preserves_default_fallback() {
+        let home = Some(PathBuf::from("operator-home"));
+        assert_eq!(
+            resolve_gateway_data_dir(Some("isolated-state".into()), home.clone()),
+            PathBuf::from("isolated-state")
+        );
+        assert_eq!(
+            resolve_gateway_data_dir(None, home),
+            PathBuf::from("operator-home/.mcp-gateway")
+        );
+        assert_eq!(
+            resolve_gateway_data_dir(None, None),
+            PathBuf::from("./.mcp-gateway")
+        );
+    }
+
+    #[test]
+    fn a_relative_path_is_made_absolute() {
+        assert!(absolutize(PathBuf::from("isolated-state")).is_absolute());
+    }
+
+    // Drive-relative and rooted paths are relative on Windows, and `join`
+    // would replace the base with them rather than resolve them.
+    #[cfg(windows)]
+    #[test]
+    fn windows_drive_relative_and_rooted_paths_are_made_absolute() {
+        for path in [r"C:foo", r"\foo"] {
+            assert!(absolutize(PathBuf::from(path)).is_absolute(), "{path}");
+        }
+    }
 
     #[test]
     fn load_existing_or_default_returns_default_when_missing() {
