@@ -331,7 +331,15 @@ async fn a7_a_reload_from_mcp_to_a2a_keeps_only_tools_changed() {
         "the resource subscription is withdrawn on the reload: {}",
         gw.stall_report()
     );
-    let base = first_fill(&agent, &receiver, &id).await;
+    // The reload replaced `x`'s tools (the SSE peer's `echo`, then the
+    // agent's tool), which is itself announced, alongside any first fill; so
+    // this baseline is at least one event, not the at-most-one of
+    // `first_fill`.
+    polled(&agent, agent.fetches(), 3).await;
+    // timing: precondition
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let base = delivered(&receiver, &id, TOOLS).len();
+    assert!(base >= 1, "the reload's tool change is announced");
     agent.set(|card| card["name"] = json!("Reloaded Agent"));
     expect_events(&receiver, &id, TOOLS, base + 1).await;
 }
