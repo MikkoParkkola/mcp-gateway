@@ -9,7 +9,7 @@
 
 ## Context
 
-The public roadmap (`docs/roadmap/mik-6550-trust-fabric-roadmap.md`) was written
+The trust-fabric roadmap was written
 as a feature wishlist. Two of its child tickets, taken at face value, pushed
 toward heavy net-new architecture that the codebase did not need:
 
