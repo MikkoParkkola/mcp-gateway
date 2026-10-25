@@ -598,6 +598,7 @@ a { color: inherit; text-decoration: none; }
   .top .who { display: none; }
   .head { padding: 14px 16px 0; }
   .head h1 .plate { padding: 5px 12px 3px; }
+  .head .sub { margin-top: 2px; }
   .tabs { padding: 6px 16px 0; gap: 4px; }
   .tabs a { min-height: 44px; display: flex; align-items: center; padding: 0 12px; }
   #content { padding: 14px 12px 24px; }

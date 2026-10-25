@@ -11,6 +11,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, expect } from '../tests/base.mjs';
+import { withFixturePages } from '../tests/shell.mjs';
 
 const FRAMES = process.env.FRAMES_DIR;
 
@@ -32,6 +33,8 @@ test.describe('frames', () => {
       expect(FRAMES).toBeTruthy();
       await page.setViewportSize({ width, height });
       await page.emulateMedia({ colorScheme: scheme });
+      // The fixture pages give Overview its subtitle, as a real screen will.
+      await withFixturePages(page);
       await page.goto('/ui/overview/status');
       await page.waitForSelector('#content [data-rendered]');
       await page.evaluate(() => document.fonts.ready);
