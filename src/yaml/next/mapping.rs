@@ -201,22 +201,16 @@ impl Hash for Mapping {
 }
 
 impl PartialOrd for Mapping {
-    /// Both sides' entries sorted by `Value::total_cmp`, then compared in
-    /// that order, so the result does not depend on insertion order.
+    /// Both sides' entries sorted by `Value::total_cmp`, then compared
+    /// entry by entry with `PartialOrd`, as the replaced backend did, so the
+    /// result does not depend on insertion order.
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         fn sorted(m: &Mapping) -> Vec<(&Value, &Value)> {
             let mut entries: Vec<(&Value, &Value)> = m.iter().collect();
             entries.sort_by(|(ak, av), (bk, bv)| ak.total_cmp(bk).then_with(|| av.total_cmp(bv)));
             entries
         }
-        let (a, b) = (sorted(self), sorted(other));
-        let order = a
-            .iter()
-            .zip(&b)
-            .map(|((ak, av), (bk, bv))| ak.total_cmp(bk).then_with(|| av.total_cmp(bv)))
-            .find(|o| o.is_ne())
-            .unwrap_or_else(|| a.len().cmp(&b.len()));
-        Some(order)
+        sorted(self).partial_cmp(&sorted(other))
     }
 }
 

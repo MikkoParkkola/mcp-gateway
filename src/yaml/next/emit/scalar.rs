@@ -9,10 +9,7 @@
     reason = "a byte-level port of libyaml's scanner classes; the names follow it"
 )]
 
-fn digits_but_not_number(s: &str) -> bool {
-    let s = s.strip_prefix(['-', '+']).unwrap_or(s);
-    s.len() > 1 && s.starts_with('0') && s[1..].bytes().all(|b| b.is_ascii_digit())
-}
+use super::super::resolve::digits_but_not_number;
 
 fn radix_ok(rest: &str, radix: u32) -> bool {
     !rest.starts_with(['+', '-']) && u128::from_str_radix(rest, radix).is_ok()

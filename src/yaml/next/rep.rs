@@ -29,6 +29,9 @@ pub(crate) enum Kind {
     Scalar {
         text: String,
         plain: bool,
+        /// A literal block (`|`): a typed read accepts it under its own
+        /// core tag (`!!int |`), as the replaced backend did.
+        literal: bool,
         tag: Option<String>,
         empty: bool,
     },
@@ -86,8 +89,9 @@ impl Document {
 }
 
 /// The replaced backend's alias rule: refuse once a document's alias
-/// expansions exceed a hundred times its event count, counting every
-/// expansion, in a field the target ignores too.
+/// expansions exceed a hundred times its event count. Every expansion a
+/// read follows counts; a field the target ignores is skipped without
+/// following its aliases, as the replaced backend skipped it.
 pub(crate) struct Budget {
     jumps: usize,
     limit: usize,
@@ -135,8 +139,11 @@ struct Lines(Vec<(usize, usize)>);
 impl Lines {
     fn new(text: &str) -> Self {
         let mut starts = vec![(0, 0)];
-        for (chars, (byte, ch)) in text.char_indices().enumerate() {
-            if ch == '\n' {
+        let mut iter = text.char_indices().enumerate().peekable();
+        while let Some((chars, (byte, ch))) = iter.next() {
+            // `\n`, `\r` and `\r\n` each end a line, as the parser counts.
+            let crlf = ch == '\r' && iter.peek().is_some_and(|(_, (_, next))| *next == '\n');
+            if (ch == '\n' || ch == '\r') && !crlf {
                 starts.push((byte + 1, chars + 1));
             }
         }
@@ -161,13 +168,39 @@ impl Lines {
 /// (`v:` places the empty value at the column after `:`). `start` is the
 /// parser's span start; every scan here is short, back over one token or
 /// one run of spaces.
+/// What a node carries before its value.
+#[derive(Clone, Copy)]
+struct Properties {
+    tagged: bool,
+    anchored: bool,
+}
+
+/// What kind of value a node starts with, for its place.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    /// A value the parser synthesized (`v:` with nothing after it).
+    Empty,
+    /// A block scalar (`|` or `>`).
+    Block,
+    /// Anything else.
+    Other,
+}
+
 fn node_place(
     text: &str,
     lines: &Lines,
-    start: granit_parser::Marker,
-    properties: usize,
-    empty: bool,
+    span: &granit_parser::Span,
+    properties: Properties,
+    shape: Shape,
 ) -> Pos {
+    let Properties { tagged, anchored } = properties;
+    // The parser marks where a tag starts when it is not where the value
+    // does (`v: !t` above its mapping); an anchor before it is found by
+    // scanning back from there.
+    let (start, properties) = match (tagged, span.tag_start) {
+        (true, Some(tag)) => (tag, usize::from(anchored)),
+        _ => (span.start, usize::from(tagged) + usize::from(anchored)),
+    };
     let fallback = pos(start);
     let Some(start_byte) = start.byte_offset().filter(|b| text.is_char_boundary(*b)) else {
         return fallback;
@@ -175,7 +208,7 @@ fn node_place(
     // `byte` moves back from the span start; `chars` follows it.
     let at =
         |byte: usize| lines.place(byte, start.index() - text[byte..start_byte].chars().count());
-    if empty {
+    if shape == Shape::Empty {
         // The parser starts an empty value's span on its indicator (`:` or
         // `-`), or after the space that follows it.
         return if text[start_byte..].starts_with([':', '-']) {
@@ -184,10 +217,25 @@ fn node_place(
             at(text[..start_byte].trim_end().len())
         };
     }
-    if properties == 0 {
-        return fallback;
-    }
     let mut byte = start_byte;
+    // A block scalar (`|` or `>`) is placed at its indicator, which the
+    // parser's span leaves out when it starts at the content.
+    if shape == Shape::Block && !text[byte..].starts_with(['|', '>']) {
+        let before = text[..byte].trim_end();
+        let token = before.rfind(char::is_whitespace).map_or(0, |i| {
+            i + before[i..].chars().next().map_or(1, char::len_utf8)
+        });
+        if before[token..].starts_with(['|', '>']) {
+            byte = token;
+        }
+    }
+    if properties == 0 {
+        return if byte == start_byte {
+            fallback
+        } else {
+            at(byte)
+        };
+    }
     for _ in 0..properties {
         let before = text[..byte].trim_end_matches([' ', '\t']);
         let token = before
@@ -237,6 +285,7 @@ pub(crate) fn parse(text: &str) -> Result<Vec<Document>, Error> {
                         kind: Kind::Scalar {
                             text: String::new(),
                             plain: true,
+                            literal: false,
                             tag: None,
                             empty: true,
                         },
@@ -254,15 +303,30 @@ pub(crate) fn parse(text: &str) -> Result<Vec<Document>, Error> {
             Event::Scalar(value, style, anchor, tag) => {
                 events += 1;
                 let empty = span.start.index() == span.end.index();
-                let properties = usize::from(tag.is_some()) + usize::from(anchor != 0);
                 nodes.push(Node {
                     kind: Kind::Scalar {
                         text: value.into_owned(),
                         plain: style == ScalarStyle::Plain,
+                        literal: style == ScalarStyle::Literal,
                         tag: tag_text(tag.as_deref()),
                         empty,
                     },
-                    pos: node_place(text, &lines, span.start, properties, empty),
+                    pos: node_place(
+                        text,
+                        &lines,
+                        &span,
+                        Properties {
+                            tagged: tag.is_some(),
+                            anchored: anchor != 0,
+                        },
+                        if empty {
+                            Shape::Empty
+                        } else if matches!(style, ScalarStyle::Literal | ScalarStyle::Folded) {
+                            Shape::Block
+                        } else {
+                            Shape::Other
+                        },
+                    ),
                 });
                 let id = nodes.len() - 1;
                 if anchor != 0 {
@@ -272,13 +336,21 @@ pub(crate) fn parse(text: &str) -> Result<Vec<Document>, Error> {
             }
             Event::SequenceStart(_, anchor, tag) => {
                 events += 1;
-                let properties = usize::from(tag.is_some()) + usize::from(anchor != 0);
                 nodes.push(Node {
                     kind: Kind::Seq {
                         tag: tag_text(tag.as_deref()),
                         items: Vec::new(),
                     },
-                    pos: node_place(text, &lines, span.start, properties, false),
+                    pos: node_place(
+                        text,
+                        &lines,
+                        &span,
+                        Properties {
+                            tagged: tag.is_some(),
+                            anchored: anchor != 0,
+                        },
+                        Shape::Other,
+                    ),
                 });
                 // Registered at the start, as the replaced backend did, so an
                 // alias inside its own anchor refers to it.
@@ -292,13 +364,21 @@ pub(crate) fn parse(text: &str) -> Result<Vec<Document>, Error> {
             }
             Event::MappingStart(_, anchor, tag) => {
                 events += 1;
-                let properties = usize::from(tag.is_some()) + usize::from(anchor != 0);
                 nodes.push(Node {
                     kind: Kind::Map {
                         tag: tag_text(tag.as_deref()),
                         entries: Vec::new(),
                     },
-                    pos: node_place(text, &lines, span.start, properties, false),
+                    pos: node_place(
+                        text,
+                        &lines,
+                        &span,
+                        Properties {
+                            tagged: tag.is_some(),
+                            anchored: anchor != 0,
+                        },
+                        Shape::Other,
+                    ),
                 });
                 if anchor != 0 {
                     anchors.insert(anchor, nodes.len() - 1);
@@ -346,6 +426,7 @@ pub(crate) fn parse(text: &str) -> Result<Vec<Document>, Error> {
                 kind: Kind::Scalar {
                     text: String::new(),
                     plain: true,
+                    literal: false,
                     tag: None,
                     empty: true,
                 },
@@ -387,7 +468,7 @@ mod tests {
     }
 
     /// Placing a tagged node costs a lookup, not a scan of the text before
-    /// it: 200,000 tagged items parse well inside the budget, and the last
+    /// it: 200,000 tagged items parse well inside a 10 s budget, and the last
     /// is still placed at its tag. A scan per node would take hours here.
     #[test]
     fn placing_many_tagged_nodes_stays_linear() {
@@ -410,7 +491,7 @@ mod tests {
             }
         );
         assert!(
-            elapsed < std::time::Duration::from_secs(30),
+            elapsed < std::time::Duration::from_secs(10),
             "took {elapsed:?}"
         );
     }

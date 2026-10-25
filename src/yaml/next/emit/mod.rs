@@ -8,13 +8,58 @@
 
 mod scalar;
 
-use scalar::{scalar_text, simple_key_ok};
+use std::fmt::Write as _;
 
-use super::{Error, Value};
+use scalar::{analyze, double_quoted, scalar_text, simple_key_ok, single_quoted};
+
+use super::ser::{PLAIN_MARK, QUOTED_MARK};
+use super::tagged::{TaggedValue, nobang};
+use super::{Error, Tag, Value};
+
+/// A tag as libyaml writes it: `!` and the name, with every byte outside
+/// its URI set written as `%XX` (`!foo%20bar`).
+fn tag_text(tag: &Tag) -> String {
+    let mut out = String::from("!");
+    for ch in nobang(&tag.string).chars() {
+        if ch.is_ascii_alphanumeric() || "-_;/?:@&=+$,.~*'()[]".contains(ch) {
+            out.push(ch);
+        } else {
+            let mut bytes = [0; 4];
+            for byte in ch.encode_utf8(&mut bytes).bytes() {
+                let _ = write!(out, "%{byte:02X}");
+            }
+        }
+    }
+    out
+}
+
+/// The text of a `to_string` mark (see `ser::Mode::Text`): a wide integer's
+/// digits written plain, or a `char` always quoted.
+fn marked(tagged: &TaggedValue, indent: usize) -> Option<String> {
+    let Value::String(text) = &tagged.value else {
+        return None;
+    };
+    if tagged.tag.string == PLAIN_MARK {
+        Some(text.clone())
+    } else if tagged.tag.string == QUOTED_MARK {
+        Some(if analyze(text).single {
+            single_quoted(text, indent)
+        } else {
+            double_quoted(text)
+        })
+    } else {
+        None
+    }
+}
 
 /// A scalar-like node's text at `indent`, and whether it ended on a break;
 /// None for a non-empty collection.
 fn inline(v: &Value, indent: usize, simple_key: bool) -> Option<(String, bool)> {
+    if let Value::Tagged(t) = v
+        && let Some(text) = marked(t, indent)
+    {
+        return Some((text, false));
+    }
     Some(match v {
         Value::Null => ("null".into(), false),
         Value::Bool(b) => (b.to_string(), false),
@@ -45,9 +90,11 @@ enum Ctx {
 fn node(v: &Value, indent: usize, ctx: Ctx, out: &mut String) -> Result<(), Error> {
     let lead = if ctx == Ctx::Top { "" } else { " " };
     let scalar_indent = if ctx == Ctx::Top { 2 } else { indent + 2 };
-    if let Value::Tagged(t) = v {
+    if let Value::Tagged(t) = v
+        && marked(t, scalar_indent).is_none()
+    {
         out.push_str(lead);
-        out.push_str(&t.tag.to_string());
+        out.push_str(&tag_text(&t.tag));
         if let Some((text, br)) = inline(&t.value, scalar_indent, false) {
             out.push(' ');
             out.push_str(&text);
@@ -92,7 +139,9 @@ fn is_simple_key(k: &Value) -> bool {
         Value::String(s) => simple_key_ok(s),
         Value::Sequence(s) => s.is_empty(),
         Value::Mapping(m) => m.is_empty(),
-        Value::Tagged(_) => false,
+        Value::Tagged(t) => {
+            marked(t, 0).is_some() && matches!(&t.value, Value::String(s) if simple_key_ok(s))
+        }
         _ => true,
     }
 }

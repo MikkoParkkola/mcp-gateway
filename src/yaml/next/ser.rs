@@ -12,9 +12,36 @@ use serde::ser::{self, Impossible, Serialize};
 
 use super::{Error, Mapping, Number, Sequence, Tag, TaggedValue, Value};
 
+/// What the tree is for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Mode {
+    /// `to_value`: the replaced backend's tree shapes.
+    Value,
+    /// `to_string`: the tree the writer emits, keeping what the replaced
+    /// backend's text serializer kept that the tree cannot hold: an `f32`
+    /// at its own precision, a wide integer as plain digits, a `char`
+    /// always quoted, and bytes refused.
+    Text,
+}
+
+/// Internal tag marks a `Text` tree carries to the writer. YAML cannot
+/// spell a NUL in a tag, so no document's tag is either of them, and
+/// `to_value` never makes one.
+pub(crate) const PLAIN_MARK: &str = "\u{0}plain";
+pub(crate) const QUOTED_MARK: &str = "\u{0}quoted";
+
 /// `value` as a tree.
 pub(crate) fn to_value<T: ?Sized + Serialize>(value: &T) -> Result<Value, Error> {
-    value.serialize(ValueSerializer)
+    serialize_in(Mode::Value, value)
+}
+
+/// `value` as the tree `to_string` writes.
+pub(crate) fn to_text_tree<T: ?Sized + Serialize>(value: &T) -> Result<Value, Error> {
+    serialize_in(Mode::Text, value)
+}
+
+fn serialize_in<T: ?Sized + Serialize>(mode: Mode, value: &T) -> Result<Value, Error> {
+    value.serialize(ValueSerializer(mode))
 }
 
 /// The replaced backend's refusal of an empty variant name, which cannot be
@@ -30,7 +57,17 @@ fn tagged(tag: &str, value: Value) -> Value {
     }))
 }
 
-pub(crate) struct ValueSerializer;
+pub(crate) struct ValueSerializer(Mode);
+
+impl ValueSerializer {
+    /// An integer past `i64` and `u64`: digits, kept plain in text.
+    fn wide(self, digits: String) -> Value {
+        match self.0 {
+            Mode::Value => Value::String(digits),
+            Mode::Text => tagged(PLAIN_MARK, Value::String(digits)),
+        }
+    }
+}
 
 impl ser::Serializer for ValueSerializer {
     type Ok = Value;
@@ -65,7 +102,7 @@ impl ser::Serializer for ValueSerializer {
         } else if let Ok(v) = i64::try_from(v) {
             self.serialize_i64(v)
         } else {
-            Ok(Value::String(v.to_string()))
+            Ok(self.wide(v.to_string()))
         }
     }
     fn serialize_u8(self, v: u8) -> Result<Value, Error> {
@@ -83,22 +120,39 @@ impl ser::Serializer for ValueSerializer {
     fn serialize_u128(self, v: u128) -> Result<Value, Error> {
         match u64::try_from(v) {
             Ok(v) => self.serialize_u64(v),
-            Err(_) => Ok(Value::String(v.to_string())),
+            Err(_) => Ok(self.wide(v.to_string())),
         }
     }
+    /// In text, at the `f32`'s own shortest form (`0.7`, not the widened
+    /// `0.699999988079071`).
     fn serialize_f32(self, v: f32) -> Result<Value, Error> {
+        if self.0 == Mode::Text && v.is_finite() {
+            let shortest = ryu::Buffer::new().format_finite(v).parse::<f64>();
+            if let Ok(f) = shortest {
+                return Ok(Value::Number(Number::from(f)));
+            }
+        }
         Ok(Value::Number(Number::from(v)))
     }
     fn serialize_f64(self, v: f64) -> Result<Value, Error> {
         Ok(Value::Number(Number::from(v)))
     }
     fn serialize_char(self, v: char) -> Result<Value, Error> {
-        Ok(Value::String(v.to_string()))
+        let text = Value::String(v.to_string());
+        Ok(match self.0 {
+            Mode::Value => text,
+            Mode::Text => tagged(QUOTED_MARK, text),
+        })
     }
     fn serialize_str(self, v: &str) -> Result<Value, Error> {
         Ok(Value::String(v.to_owned()))
     }
     fn serialize_bytes(self, v: &[u8]) -> Result<Value, Error> {
+        if self.0 == Mode::Text {
+            return Err(Error::message(
+                "serialization and deserialization of bytes in YAML is not implemented",
+            ));
+        }
         Ok(Value::Sequence(
             v.iter().map(|&b| Value::Number(Number::from(b))).collect(),
         ))
@@ -140,10 +194,13 @@ impl ser::Serializer for ValueSerializer {
         if variant.is_empty() {
             return Err(empty_tag());
         }
-        Ok(tagged(variant, to_value(value)?))
+        Ok(tagged(variant, serialize_in(self.0, value)?))
     }
     fn serialize_seq(self, len: Option<usize>) -> Result<SerializeArray, Error> {
-        Ok(SerializeArray(Sequence::with_capacity(len.unwrap_or(0))))
+        Ok(SerializeArray(
+            Sequence::with_capacity(len.unwrap_or(0)),
+            self.0,
+        ))
     }
     fn serialize_tuple(self, len: usize) -> Result<SerializeArray, Error> {
         self.serialize_seq(Some(len))
@@ -168,21 +225,26 @@ impl ser::Serializer for ValueSerializer {
         Ok(SerializeTupleVariant {
             tag: variant,
             items: Sequence::with_capacity(len),
+            mode: self.0,
         })
     }
     /// A one-entry map may be a tag written back (`TaggedValue`'s form).
     fn serialize_map(self, len: Option<usize>) -> Result<SerializeMap, Error> {
-        Ok(if len == Some(1) {
-            SerializeMap::CheckForTag
+        let state = if len == Some(1) {
+            MapState::CheckForTag
         } else {
-            SerializeMap::Untagged {
+            MapState::Untagged {
                 mapping: Mapping::new(),
                 next_key: None,
             }
+        };
+        Ok(SerializeMap {
+            mode: self.0,
+            state,
         })
     }
     fn serialize_struct(self, _name: &'static str, _len: usize) -> Result<SerializeStruct, Error> {
-        Ok(SerializeStruct(Mapping::new()))
+        Ok(SerializeStruct(Mapping::new(), self.0))
     }
     fn serialize_struct_variant(
         self,
@@ -197,17 +259,18 @@ impl ser::Serializer for ValueSerializer {
         Ok(SerializeStructVariant {
             tag: variant,
             mapping: Mapping::new(),
+            mode: self.0,
         })
     }
 }
 
-pub(crate) struct SerializeArray(Sequence);
+pub(crate) struct SerializeArray(Sequence, Mode);
 
 impl ser::SerializeSeq for SerializeArray {
     type Ok = Value;
     type Error = Error;
     fn serialize_element<T: ?Sized + Serialize>(&mut self, elem: &T) -> Result<(), Error> {
-        self.0.push(to_value(elem)?);
+        self.0.push(serialize_in(self.1, elem)?);
         Ok(())
     }
     fn end(self) -> Result<Value, Error> {
@@ -240,13 +303,14 @@ impl ser::SerializeTupleStruct for SerializeArray {
 pub(crate) struct SerializeTupleVariant {
     tag: &'static str,
     items: Sequence,
+    mode: Mode,
 }
 
 impl ser::SerializeTupleVariant for SerializeTupleVariant {
     type Ok = Value;
     type Error = Error;
     fn serialize_field<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<(), Error> {
-        self.items.push(to_value(value)?);
+        self.items.push(serialize_in(self.mode, value)?);
         Ok(())
     }
     fn end(self) -> Result<Value, Error> {
@@ -254,7 +318,12 @@ impl ser::SerializeTupleVariant for SerializeTupleVariant {
     }
 }
 
-pub(crate) enum SerializeMap {
+pub(crate) struct SerializeMap {
+    mode: Mode,
+    state: MapState,
+}
+
+enum MapState {
     /// A one-entry map before its key is seen.
     CheckForTag,
     /// Its one key was a tag.
@@ -269,22 +338,21 @@ impl SerializeMap {
     /// The map so far as an ordinary mapping: a tag already taken becomes
     /// its `!tag` key again.
     fn untagged(&mut self) -> (&mut Mapping, &mut Option<Value>) {
-        if !matches!(self, SerializeMap::Untagged { .. }) {
+        if !matches!(self.state, MapState::Untagged { .. }) {
             let mut mapping = Mapping::new();
-            if let SerializeMap::Tagged(tagged) = std::mem::replace(self, SerializeMap::CheckForTag)
+            if let MapState::Tagged(tagged) =
+                std::mem::replace(&mut self.state, MapState::CheckForTag)
             {
                 mapping.insert(Value::String(tagged.tag.to_string()), tagged.value);
             }
-            *self = SerializeMap::Untagged {
+            self.state = MapState::Untagged {
                 mapping,
                 next_key: None,
             };
         }
-        match self {
-            SerializeMap::Untagged { mapping, next_key } => (mapping, next_key),
-            SerializeMap::CheckForTag | SerializeMap::Tagged(_) => {
-                unreachable!("made untagged above")
-            }
+        match &mut self.state {
+            MapState::Untagged { mapping, next_key } => (mapping, next_key),
+            MapState::CheckForTag | MapState::Tagged(_) => unreachable!("made untagged above"),
         }
     }
 }
@@ -294,13 +362,13 @@ impl ser::SerializeMap for SerializeMap {
     type Error = Error;
 
     fn serialize_key<T: ?Sized + Serialize>(&mut self, key: &T) -> Result<(), Error> {
-        let key = to_value(key)?;
+        let key = serialize_in(self.mode, key)?;
         *self.untagged().1 = Some(key);
         Ok(())
     }
 
     fn serialize_value<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<(), Error> {
-        let value = to_value(value)?;
+        let value = serialize_in(self.mode, value)?;
         let (mapping, next_key) = self.untagged();
         let key = next_key
             .take()
@@ -314,31 +382,31 @@ impl ser::SerializeMap for SerializeMap {
         key: &K,
         value: &V,
     ) -> Result<(), Error> {
-        if matches!(self, SerializeMap::CheckForTag)
+        if matches!(self.state, MapState::CheckForTag)
             && let Ok(tag) = key.serialize(TagProbe)
         {
-            *self = SerializeMap::Tagged(TaggedValue {
+            self.state = MapState::Tagged(TaggedValue {
                 tag: Tag::new(tag),
-                value: to_value(value)?,
+                value: serialize_in(self.mode, value)?,
             });
             return Ok(());
         }
-        let key = to_value(key)?;
-        let value = to_value(value)?;
+        let key = serialize_in(self.mode, key)?;
+        let value = serialize_in(self.mode, value)?;
         self.untagged().0.insert(key, value);
         Ok(())
     }
 
     fn end(self) -> Result<Value, Error> {
-        Ok(match self {
-            SerializeMap::CheckForTag => Value::Mapping(Mapping::new()),
-            SerializeMap::Tagged(tagged) => Value::Tagged(Box::new(tagged)),
-            SerializeMap::Untagged { mapping, .. } => Value::Mapping(mapping),
+        Ok(match self.state {
+            MapState::CheckForTag => Value::Mapping(Mapping::new()),
+            MapState::Tagged(tagged) => Value::Tagged(Box::new(tagged)),
+            MapState::Untagged { mapping, .. } => Value::Mapping(mapping),
         })
     }
 }
 
-pub(crate) struct SerializeStruct(Mapping);
+pub(crate) struct SerializeStruct(Mapping, Mode);
 
 impl ser::SerializeStruct for SerializeStruct {
     type Ok = Value;
@@ -348,8 +416,8 @@ impl ser::SerializeStruct for SerializeStruct {
         key: &'static str,
         value: &T,
     ) -> Result<(), Error> {
-        self.0
-            .insert(Value::String(key.to_owned()), to_value(value)?);
+        let value = serialize_in(self.1, value)?;
+        self.0.insert(Value::String(key.to_owned()), value);
         Ok(())
     }
     fn end(self) -> Result<Value, Error> {
@@ -360,6 +428,7 @@ impl ser::SerializeStruct for SerializeStruct {
 pub(crate) struct SerializeStructVariant {
     tag: &'static str,
     mapping: Mapping,
+    mode: Mode,
 }
 
 impl ser::SerializeStructVariant for SerializeStructVariant {
@@ -370,8 +439,8 @@ impl ser::SerializeStructVariant for SerializeStructVariant {
         key: &'static str,
         value: &T,
     ) -> Result<(), Error> {
-        self.mapping
-            .insert(Value::String(key.to_owned()), to_value(value)?);
+        let value = serialize_in(self.mode, value)?;
+        self.mapping.insert(Value::String(key.to_owned()), value);
         Ok(())
     }
     fn end(self) -> Result<Value, Error> {

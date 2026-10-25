@@ -62,7 +62,7 @@ pub(crate) fn figment_data(text: &str) -> figment::Result<Map<figment::Profile, 
 
 /// `value` as YAML text, byte-equal to the replaced backend's output (D20).
 pub(crate) fn to_string<T: Serialize + ?Sized>(value: &T) -> Result<String, Error> {
-    emit::emit(&ser::to_value(value)?)
+    emit::emit(&ser::to_text_tree(value)?)
 }
 
 /// `value` as a tree: unit variants as their names, other variants under

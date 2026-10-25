@@ -78,6 +78,7 @@ pub(crate) struct De<'a> {
 struct Scalar<'a> {
     text: &'a str,
     plain: bool,
+    literal: bool,
     tag: Option<&'a str>,
     empty: bool,
 }
@@ -107,11 +108,13 @@ impl<'a> De<'a> {
             Kind::Scalar {
                 text,
                 plain,
+                literal,
                 tag,
                 empty,
             } => Some(Scalar {
                 text: if *empty { "" } else { text },
                 plain: *plain,
+                literal: *literal,
                 tag: tag.as_deref(),
                 empty: *empty,
             }),
@@ -211,15 +214,11 @@ fn variant_tag(tag: Option<&str>, tagged_already: bool) -> Option<&str> {
     if tagged_already { None } else { enum_tag(tag) }
 }
 
-/// Whether a typed number or bool read accepts this scalar: a plain one.
-///
-/// ponytail: the replaced backend also accepted a literal block (`|`)
-/// carrying exactly the target's core tag (`!!int |` over `5`); the parse
-/// representation does not record block style, so that form reads as a
-/// type error here. Add a `literal` flag to `rep::Kind::Scalar` if a
-/// golden row or a shipped file ever uses it.
-fn readable(scalar: &Scalar<'_>) -> bool {
-    scalar.plain
+/// Whether a typed number or bool read accepts this scalar: a plain one,
+/// or a literal block (`|`) carrying exactly the target's core tag
+/// (`!!int |` over `5`), unless a tag already named the enum around it.
+fn readable(scalar: &Scalar<'_>, expected: &str, tagged_already: bool) -> bool {
+    scalar.plain || (scalar.literal && !tagged_already && scalar.tag == Some(expected))
 }
 
 /// serde's type error for this node against what `exp` wanted, naming the
@@ -319,15 +318,17 @@ impl de::Expected for ExpectedLen {
 /// A typed number read: follow an alias, read a plain scalar with `read`,
 /// or refuse with serde's type error; placed at this node.
 macro_rules! typed {
-    ($de:ident, $visitor:ident, $method:ident, $read:expr) => {{
+    ($de:ident, $visitor:ident, $method:ident, $tag:expr, $read:expr) => {{
         if let Some(mut target) = $de.follow()? {
             return target.$method($visitor);
         }
         let result = match $de.scalar() {
-            Some(scalar) if readable(&scalar) => match $read(scalar.text, $visitor) {
-                Ok(done) => done,
-                Err(visitor) => Err(invalid_type($de, &visitor)),
-            },
+            Some(scalar) if readable(&scalar, $tag, $de.current_enum.is_some()) => {
+                match $read(scalar.text, $visitor) {
+                    Ok(done) => done,
+                    Err(visitor) => Err(invalid_type($de, &visitor)),
+                }
+            }
             _ => Err(invalid_type($de, &$visitor)),
         };
         $de.place(result)
@@ -369,6 +370,7 @@ impl<'de> de::Deserializer<'de> for &mut De<'_> {
             self,
             visitor,
             deserialize_bool,
+            resolve::BOOL,
             |text: &str, v: V| match resolve::parse_bool(text) {
                 Some(b) => Ok(v.visit_bool(b)),
                 None => Err(v),
@@ -381,6 +383,7 @@ impl<'de> de::Deserializer<'de> for &mut De<'_> {
             self,
             visitor,
             deserialize_i64,
+            resolve::INT,
             |text: &str, v: V| match resolve::parse_signed_int(text, i64::from_str_radix) {
                 Some(i) => Ok(v.visit_i64(i)),
                 None => Err(v),
@@ -393,6 +396,7 @@ impl<'de> de::Deserializer<'de> for &mut De<'_> {
             self,
             visitor,
             deserialize_i128,
+            resolve::INT,
             |text: &str, v: V| match resolve::parse_signed_int(text, i128::from_str_radix) {
                 Some(i) => Ok(v.visit_i128(i)),
                 None => Err(v),
@@ -405,6 +409,7 @@ impl<'de> de::Deserializer<'de> for &mut De<'_> {
             self,
             visitor,
             deserialize_u64,
+            resolve::INT,
             |text: &str, v: V| match resolve::parse_unsigned_int(text, u64::from_str_radix) {
                 Some(u) => Ok(v.visit_u64(u)),
                 None => Err(v),
@@ -417,6 +422,7 @@ impl<'de> de::Deserializer<'de> for &mut De<'_> {
             self,
             visitor,
             deserialize_u128,
+            resolve::INT,
             |text: &str, v: V| match resolve::parse_unsigned_int(text, u128::from_str_radix) {
                 Some(u) => Ok(v.visit_u128(u)),
                 None => Err(v),
@@ -429,6 +435,7 @@ impl<'de> de::Deserializer<'de> for &mut De<'_> {
             self,
             visitor,
             deserialize_f64,
+            resolve::FLOAT,
             |text: &str, v: V| match resolve::parse_f64(text) {
                 Some(f) => Ok(v.visit_f64(f)),
                 None => Err(v),
@@ -624,7 +631,8 @@ impl<'de> de::Deserializer<'de> for &mut De<'_> {
         if let Some(current) = self.current_enum {
             let result = match self.scalar() {
                 Some(s) if !s.text.is_empty() => visitor.visit_enum(UnitVariantAccess { de: self }),
-                _ => Err(Error::message(match current.name {
+                // It takes this node's key path and place, as before.
+                _ => Err(Error::placed(match current.name {
                     Some(outer) => format!(
                         "deserializing nested enum in {outer}::{} from YAML is not supported yet",
                         current.tag
