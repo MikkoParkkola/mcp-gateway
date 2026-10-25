@@ -272,10 +272,10 @@ fn message(
         {
             s.initialized = true;
         }
-        return StatusCode::ACCEPTED.into_response();
+        return (StatusCode::ACCEPTED, "Accepted").into_response();
     };
     if method == "tools/call" && state.hold_calls.load(Ordering::SeqCst) {
-        return StatusCode::ACCEPTED.into_response();
+        return (StatusCode::ACCEPTED, "Accepted").into_response();
     }
     let response = match outcome(state, session, &method, &frame["params"]) {
         Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
@@ -291,7 +291,7 @@ fn message(
         json!({"jsonrpc": "2.0", "id": "decoy", "error": {"code": -32603, "message": "not yours"}});
     send(state, session, &decoy);
     send(state, session, &response);
-    StatusCode::ACCEPTED.into_response()
+    (StatusCode::ACCEPTED, "Accepted").into_response()
 }
 
 fn outcome(

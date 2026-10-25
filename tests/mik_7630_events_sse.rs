@@ -351,3 +351,33 @@ async fn k3_the_calls_stream_outlives_the_request_timeout() {
         "the calls' stream is still open"
     );
 }
+
+/// K6 (design B7'): with the calls' stream dead, two calls at once share one
+/// replacement and both succeed; neither fails because the other is replacing.
+#[tokio::test]
+async fn k6_concurrent_calls_share_one_replacement() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receiver = Receiver::start(dir.path()).await;
+    let peer = SsePeer::start().await;
+    let cfg = upstream_config(dir.path(), timed_backend(&peer, "20s"), &[]);
+    let gw = start_cfg(dir.path(), &receiver, cfg).await;
+    assert!(invoke(&gw).await.get("error").is_none(), "control");
+    let gets = peer.gets();
+    peer.drop_stream(1);
+    eventually("the calls stream closed", || {
+        !peer.open_sessions().contains(&1)
+    })
+    .await;
+    let (a, b) = tokio::join!(invoke(&gw), invoke(&gw));
+    assert!(a.get("error").is_none() && !is_tool_error(&a), "first: {a}");
+    assert!(
+        b.get("error").is_none() && !is_tool_error(&b),
+        "second: {b}"
+    );
+    assert_eq!(peer.gets(), gets + 1, "one shared replacement");
+}
+
+/// A `tools/call` result the gateway reports as a failed call.
+fn is_tool_error(answer: &Value) -> bool {
+    answer["result"]["isError"].as_bool().unwrap_or(false)
+}

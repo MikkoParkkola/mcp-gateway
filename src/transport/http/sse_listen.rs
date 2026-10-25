@@ -58,9 +58,14 @@ impl SseListenSession {
     /// Headers for one request of this session: the transport's configured
     /// ones, without the calls' session id (this session's is in its URL).
     async fn headers(&self, t: &HttpTransport, mode: HeaderMode<'_>) -> Result<header::HeaderMap> {
-        let mut headers = t
-            .build_mcp_headers(mode, self.credential.identity_key.as_deref())
-            .await?;
+        // The bucket is the lending source's identity when there is one.
+        let identity = self
+            .credential
+            .source
+            .as_ref()
+            .and_then(|s| s.identity_key())
+            .or(self.credential.identity_key.as_deref());
+        let mut headers = t.build_mcp_headers(mode, identity).await?;
         headers.remove("mcp-session-id");
         Ok(headers)
     }
@@ -128,11 +133,13 @@ impl SseListenSession {
                 response.status()
             )));
         }
+        let accepted = response.status() == reqwest::StatusCode::ACCEPTED;
         let body = response
             .bytes()
             .await
             .map_err(|e| safe_request_error("listener response", &e))?;
-        if body.iter().all(u8::is_ascii_whitespace) {
+        // 202 is "the answer comes on the stream" whatever its body.
+        if accepted || body.iter().all(u8::is_ascii_whitespace) {
             return tokio::time::timeout(t.timeout, waiting.response())
                 .await
                 .map_err(|_| Error::Transport(format!("listener {method}: no answer in time")))?;

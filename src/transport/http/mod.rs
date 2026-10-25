@@ -293,9 +293,6 @@ pub struct HttpTransport {
     /// SSE mode: the calls session's retained stream, whose answers are paired
     /// with their POSTs by id (MIK-8835.SSE.2). `None` in Streamable HTTP mode.
     sse_channel: RwLock<Option<Arc<sse_channel::SseChannel>>>,
-    /// Set while a dead SSE stream is being replaced, so a request the
-    /// replacement itself sends never waits on the lock its own caller holds.
-    sse_reconnecting: AtomicBool,
     /// Redirect hops this client has followed, ever (MIK-7272.SUB.4).
     ///
     /// Incremented by the redirect policy closure on the `Follow` arm, which
@@ -482,7 +479,6 @@ impl HttpTransport {
             reinit_needed: AtomicBool::new(false),
             reinit_lock: TokioMutex::new(()),
             sse_channel: RwLock::new(None),
-            sse_reconnecting: AtomicBool::new(false),
             redirects_followed,
             #[cfg(test)]
             last_send_error: parking_lot::Mutex::new(None),

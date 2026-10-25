@@ -452,24 +452,7 @@ impl HttpTransport {
                 .map_err(|e| safe_request_error("Failed to read SSE response", &e));
             super::sse_decoder::decode_sse_exchange(stream).await
         } else if let Some(waiting) = waiting {
-            // A 2024-11-05 SSE peer answers 202 with no body and puts the
-            // response on the session stream (MIK-8835.SSE.2); a body, if one
-            // came, is the answer as before.
-            let body = response
-                .bytes()
-                .await
-                .map_err(|e| safe_request_error("Failed to read response", &e))?;
-            if body.iter().all(u8::is_ascii_whitespace) {
-                return tokio::time::timeout(self.timeout, waiting.response())
-                    .await
-                    .map_err(|_| {
-                        Error::Transport(
-                            "timed out waiting for the SSE stream's response".to_owned(),
-                        )
-                    })?;
-            }
-            serde_json::from_slice(&body)
-                .map_err(|e| Error::Transport(format!("Failed to parse response: {e}")))
+            self.body_or_stream(status, response, waiting).await
         } else {
             // Parse JSON response
             response
@@ -477,6 +460,34 @@ impl HttpTransport {
                 .await
                 .map_err(|e| safe_request_error("Failed to parse response", &e))
         }
+    }
+
+    /// A 2xx answer in SSE mode: its body when it carries one, else the
+    /// response its stream pairs with the request (MIK-8835.SSE.2).
+    async fn body_or_stream(
+        &self,
+        status: reqwest::StatusCode,
+        response: reqwest::Response,
+        waiting: super::sse_channel::Waiting,
+    ) -> Result<JsonRpcResponse> {
+        // A 2024-11-05 SSE peer answers 202 and puts the response on the
+        // session stream (MIK-8835.SSE.2); a JSON body, if one came, is the
+        // answer as before.
+        let body = response
+            .bytes()
+            .await
+            .map_err(|e| safe_request_error("Failed to read response", &e))?;
+        // 202 is "the answer comes on the stream" whatever its body (the
+        // TS SDK's SSE server writes "Accepted"); an empty 2xx is too.
+        if status == reqwest::StatusCode::ACCEPTED || body.iter().all(u8::is_ascii_whitespace) {
+            return tokio::time::timeout(self.timeout, waiting.response())
+                .await
+                .map_err(|_| {
+                    Error::Transport("timed out waiting for the SSE stream's response".to_owned())
+                })?;
+        }
+        serde_json::from_slice(&body)
+            .map_err(|e| Error::Transport(format!("Failed to parse response: {e}")))
     }
 
     /// Get next request ID

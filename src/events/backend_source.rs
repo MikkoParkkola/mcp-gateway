@@ -329,6 +329,7 @@ impl EventsHub {
 
     /// [`Self::install_backend_source`] plus the three upstream-notification
     /// names for the eligible backends of `registry` (MIK-7630 I5).
+    #[cfg(test)]
     pub(crate) fn install_backend_source_with_upstream(
         self: &Arc<Self>,
         names: BackendNames,

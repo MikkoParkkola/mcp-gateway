@@ -15,6 +15,7 @@ use super::EventsHub;
 use super::upstream::Kind;
 use super::upstream_listener::Shared;
 use super::upstream_need::Coalescer;
+use crate::backend::listen::ListenTarget;
 use crate::backend::{Backend, BackendRegistry};
 use crate::protocol::era::PeerEra;
 use crate::transport::upstream_tap::{
@@ -296,20 +297,16 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
         }
     };
     let started = Instant::now();
-    // The transport flavour this run starts on: a recovery that switches it in
-    // place keeps the same transport, so only this read sees it (design B2).
-    let flavour = backend.connected_streamable();
-    // P3 listens with the gateway's own credential; MIK-8833 passes the key's.
-    let Some((own, handle)) = pick_session(&target.handle, ListenerCredential::shared()) else {
-        debug!(backend = %shared.name, "upstream listener: an identity credential has no session of its own");
+    let Some(Run {
+        flavour,
+        handle,
+        modern,
+        own: _own,
+        retire: _retire,
+    }) = begin_run(shared, backend, &target)
+    else {
         return failed();
     };
-    // An own session's subscriptions end with it, however the run ends; any
-    // `release` runs first, inside the run (design B14').
-    let _retire = own.is_some().then(|| RetireOnEnd(Arc::clone(shared)));
-    // An own session speaks the legacy transport whatever the slot's cached
-    // era says (design B12).
-    let modern = runs_modern(own.is_some(), target.era);
     let mut state = State::new(
         shared,
         if modern {
@@ -436,6 +433,40 @@ fn failed() -> Outcome {
     }
 }
 
+/// What a run listens on, chosen once at its start.
+struct Run {
+    /// The transport flavour the run starts on: a recovery that switches it
+    /// in place keeps the same transport, so only this read sees it (B2).
+    flavour: Option<bool>,
+    handle: Weak<dyn UpstreamListen>,
+    modern: bool,
+    /// An own session, kept alive for the run.
+    own: Option<Arc<dyn UpstreamListen>>,
+    /// An own session's subscriptions end with it, however the run ends; any
+    /// `release` runs first, inside the run (B14').
+    retire: Option<RetireOnEnd>,
+}
+
+/// Choose a run's session. P3 listens with the gateway's own credential;
+/// MIK-8833 passes the key's. `None`: an identity credential has no session
+/// of its own, and the run fails closed.
+fn begin_run(shared: &Arc<Shared>, backend: &Backend, target: &ListenTarget) -> Option<Run> {
+    let flavour = backend.connected_streamable();
+    let Some((own, handle)) = pick_session(&target.handle, ListenerCredential::shared()) else {
+        debug!(backend = %shared.name, "upstream listener: an identity credential has no session of its own");
+        return None;
+    };
+    Some(Run {
+        flavour,
+        handle,
+        // An own session speaks the legacy transport whatever the slot's
+        // cached era says (B12).
+        modern: runs_modern(own.is_some(), target.era),
+        retire: own.is_some().then(|| RetireOnEnd(Arc::clone(shared))),
+        own,
+    })
+}
+
 /// Whether a run speaks the modern transport: never on an own session, which
 /// is the legacy SSE handshake whatever the slot's cached era (design B12).
 fn runs_modern(own_session: bool, era: PeerEra) -> bool {
@@ -451,6 +482,9 @@ impl Drop for RetireOnEnd {
     }
 }
 
+/// An own session (kept alive for the run), and the handle the run upgrades.
+type Picked = (Option<Arc<dyn UpstreamListen>>, Weak<dyn UpstreamListen>);
+
 /// The session a run listens on: the transport's own session when it offers
 /// one (the SSE handshake), the transport itself otherwise. `None` when
 /// `credential` names an identity and there is no own session: the run must
@@ -460,7 +494,7 @@ impl Drop for RetireOnEnd {
 fn pick_session(
     transport: &Weak<dyn UpstreamListen>,
     credential: ListenerCredential,
-) -> Option<(Option<Arc<dyn UpstreamListen>>, Weak<dyn UpstreamListen>)> {
+) -> Option<Picked> {
     let identity = credential.source.is_some();
     let own = transport.upgrade().and_then(|t| t.own_session(credential));
     match own {

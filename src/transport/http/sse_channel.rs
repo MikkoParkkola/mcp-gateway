@@ -11,7 +11,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use futures::future::BoxFuture;
 use parking_lot::Mutex;
@@ -25,6 +24,13 @@ use crate::security::http_diagnostics::safe_request_error;
 use crate::transport::upstream_tap::{TAP_CAPACITY, UpstreamNote};
 use crate::{Error, Result};
 
+tokio::task_local! {
+    /// Set while a dead calls stream is being replaced, for the replacing
+    /// task only: a request its own handshake sends never waits on the
+    /// `reinit_lock` that task holds.
+    static REPLACING: ();
+}
+
 /// Bytes read before the `endpoint` event, at most. The event is one short
 /// line, so a peer streaming more without it is refused rather than buffered
 /// (the handshake's bound before the stream was kept).
@@ -36,10 +42,13 @@ pub(super) struct Sink {
     pub map: Box<dyn Fn(&str) -> Option<UpstreamNote> + Send + Sync>,
 }
 
+/// The requests waiting on a channel, by pairing key.
+type PendingMap = Arc<Mutex<HashMap<String, oneshot::Sender<JsonRpcResponse>>>>;
+
 /// A live session stream: its message endpoint and the requests waiting on it.
 pub(crate) struct SseChannel {
     endpoint: String,
-    pending: Arc<Mutex<HashMap<String, oneshot::Sender<JsonRpcResponse>>>>,
+    pending: PendingMap,
     closed: CancellationToken,
 }
 
@@ -54,7 +63,7 @@ impl Drop for SseChannel {
 pub(super) struct Waiting {
     key: String,
     rx: Option<oneshot::Receiver<JsonRpcResponse>>,
-    pending: Arc<Mutex<HashMap<String, oneshot::Sender<JsonRpcResponse>>>>,
+    pending: PendingMap,
 }
 
 impl Drop for Waiting {
@@ -259,8 +268,8 @@ impl super::HttpTransport {
         }
         // The replacement's own handshake requests land here when its new
         // stream ended at once: they fail rather than wait on the lock their
-        // caller holds.
-        if self.sse_reconnecting.load(Ordering::SeqCst) {
+        // caller holds. Every other caller waits for the replacement.
+        if REPLACING.try_with(|()| ()).is_ok() {
             return Err(Error::Transport(
                 "SSE stream ended while it was being replaced".to_owned(),
             ));
@@ -271,14 +280,13 @@ impl super::HttpTransport {
         {
             return Ok(Some(now));
         }
-        self.sse_reconnecting.store(true, Ordering::SeqCst);
-        let replaced = async {
-            self.sessions.write().remove(Self::bucket_key(None));
-            self.connect_sse().await?;
-            self.legacy_handshake().await
-        }
-        .await;
-        self.sse_reconnecting.store(false, Ordering::SeqCst);
+        let replaced = REPLACING
+            .scope((), async {
+                self.sessions.write().remove(Self::bucket_key(None));
+                self.connect_sse().await?;
+                self.legacy_handshake().await
+            })
+            .await;
         replaced?;
         let now = self.sse_channel.read().clone().filter(|c| !c.is_closed());
         now.map(Some)
