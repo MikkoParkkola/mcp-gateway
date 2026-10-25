@@ -245,3 +245,76 @@ async fn l3_a_changed_list_nudges_once_and_an_identical_one_never() {
         "L3: the repeat of the new list nudged"
     );
 }
+
+/// Rewrite the config file to `pairs` without reloading it.
+fn write_file(dir: &tempfile::TempDir, pairs: &[(&str, &str)]) {
+    crate::gateway::test_helpers::write_owner_only(
+        &dir.path().join("gateway.yaml"),
+        serde_yaml::to_string(&config_with(pairs)).expect("yaml"),
+    )
+    .expect("write");
+}
+
+/// L2 (N1): the `gateway_reload_config` meta tool applies a moved name.
+#[tokio::test]
+async fn l2_the_reload_meta_tool_applies_surfaced_tools() {
+    let dir = tempfile::tempdir().unwrap();
+    let (meta, _context) = started(&dir, &[("alpha", "read")]);
+    write_file(&dir, &[("beta", "read")]);
+    meta.reload_config()
+        .await
+        .expect("premise: the meta tool reloads");
+    assert_eq!(
+        meta.surfaced_server_unscoped("read"),
+        Some("beta"),
+        "L2: gateway_reload_config left the surfaced set as it was"
+    );
+}
+
+/// L2 (N1): a reload the file watcher drives applies a moved name. The
+/// watcher runs its own reload context, so this row fails when the gateway
+/// does not hand the watcher its surfaced hook.
+#[tokio::test]
+async fn l2_a_watcher_driven_reload_applies_surfaced_tools() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.yaml");
+    let initial = config_with(&[("alpha", "read")]);
+    crate::gateway::test_helpers::write_owner_only(
+        &path,
+        serde_yaml::to_string(&initial).expect("yaml"),
+    )
+    .expect("write");
+    let registry = Arc::new(BackendRegistry::new());
+    let meta = MetaMcp::new(Arc::clone(&registry))
+        .with_surfaced_tools(initial.meta_mcp.surfaced_tools.clone());
+    let (_shutdown, shutdown_rx) = tokio::sync::broadcast::channel(1);
+    let _watcher = crate::config_reload::ConfigWatcher::start_with_hook(
+        path,
+        Arc::new(LiveConfig::new(initial.clone())),
+        registry,
+        &initial,
+        Arc::new(crate::config::LiveEnv::new(
+            Arc::new(crate::config::EnvOverlay::none()),
+            crate::config::ResolvedEnvFiles::default(),
+        )),
+        None,
+        None,
+        shutdown_rx,
+        None,
+        Some(meta.surfaced_hook()),
+    )
+    .expect("the watcher starts");
+    write_file(&dir, &[("beta", "read")]);
+    // The watcher debounces on a std `Instant`: poll real time past it.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while meta.surfaced_server_unscoped("read") != Some("beta")
+        && std::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        meta.surfaced_server_unscoped("read"),
+        Some("beta"),
+        "L2: a watcher-driven reload left the surfaced set as it was"
+    );
+}

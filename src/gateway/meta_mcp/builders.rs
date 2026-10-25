@@ -252,12 +252,20 @@ impl MetaMcp {
     /// It also installs the hook that applies `meta_mcp.surfaced_tools` on
     /// every applied reload.
     pub fn set_reload_context(&self, ctx: Arc<ReloadContext>) {
+        ctx.set_surfaced_hook(self.surfaced_hook());
+        *self.reload_context.write() = Some(ctx);
+    }
+
+    /// The hook that applies a published config's `meta_mcp.surfaced_tools`
+    /// to this gateway. The file watcher runs its own reload context, so it
+    /// is handed this hook too; without it a file edit would reload every
+    /// other section and leave the surfaced set as it was.
+    pub(crate) fn surfaced_hook(&self) -> crate::config_reload::SurfacedHook {
         let surfaced = Arc::clone(&self.surfaced);
         let backends = self.backends.clone();
-        ctx.set_surfaced_hook(Arc::new(move |config| {
+        Arc::new(move |config| {
             super::surfaced::apply_surfaced_reload(&surfaced, &backends, config);
-        }));
-        *self.reload_context.write() = Some(ctx);
+        })
     }
 
     /// Attach the end-user identity-propagation strategy (MIK-6704 / ADR-007).
