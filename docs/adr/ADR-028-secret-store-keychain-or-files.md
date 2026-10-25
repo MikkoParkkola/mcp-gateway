@@ -115,8 +115,8 @@ The value never appears in argv, logs or error text. Readers and writers pass it
 
 ### Create-only writes
 
-3. **One vault lock.** Several gateways can share one user's keychain (ADR-024), and the config writer lock is per `gateway.yaml`. So every secret write holds one per-user lock, `dirs::data_local_dir()/mcp-gateway/secrets.lock`, from the absence check through commit or rollback. It uses the same flock mechanism as `config_persistence_lock`.
-   - The path never follows `--data-dir`, `MCP_GATEWAY_CONFIG_DIR` or `gateway_data_dir()`, so two gateways with different data dirs still share one lock.
+3. **One vault lock.** Several gateways can share one user's keychain (ADR-024), and the config writer lock is per `gateway.yaml`. So every secret write holds one per-user lock, `<home>/.mcp-gateway-secrets.lock` (`crate::home_dir::home_dir()`), from the absence check through commit or rollback. It uses the same flock mechanism as `config_persistence_lock`.
+   - The path never follows `--data-dir`, `MCP_GATEWAY_CONFIG_DIR`, `XDG_*` or `gateway_data_dir()`, so two gateways with different data dirs still share one lock. Two processes with different home directories are treated as different users.
    - Lock order: the config writer lock first, then the vault lock, on every path that holds both.
    - macOS: `SecItemAdd` refuses a duplicate itself.
    - Linux and Windows: `exists(name)` false, then create, under that lock.
@@ -148,14 +148,20 @@ The value never appears in argv, logs or error text. Readers and writers pass it
    - A store that timed out is treated as possibly written: its name is already in the index, so rollback checks `exists()` and deletes it.
    - The probe is a fast refusal, not the guarantee. A later failure still rolls back through ADR-024's sequence.
    - **macOS:** every keychain call runs with `SecKeychain::disable_user_interaction()` held (`security-framework` 3.7, `os/macos/keychain.rs:98`).
-     - It is a safe API, so no new `unsafe`. It is taken once when the keychain backend starts and kept for the process lifetime, because the flag is process-wide and a gateway never wants a dialog.
+     - It is a safe API, so no new `unsafe`. The returned `KeychainUserInteractionLock` re-enables prompts when dropped, so it is stored in a process-lifetime static, never discarded. It is taken once when the keychain backend starts and kept for the process lifetime, because the flag is process-wide and a gateway never wants a dialog.
      - With it held, a call that would prompt fails with `errSecInteractionNotAllowed` (-25308) instead.
-     - The probe queries a missing name. `errSecItemNotFound` means available; -25308, `errSecAuthFailed` or any other error means unavailable. A read-only or locked keychain that passes the probe fails at `SecItemAdd`, and rollback applies.
+     - The probe queries a missing name. `errSecItemNotFound` means available; -25308, `errSecAuthFailed` or any other error means unavailable.
+     - A locked or read-only keychain can still pass the probe. `security-framework` has no safe status call, and this ADR adds no macOS `unsafe`. Such a keychain then fails at the first `SecItemAdd`, and the save is refused with the reason and the `files` switch. Nothing is left half-written (KC.5), but `auto` does not silently fall back to files in that case.
+     - The guard does not reach the `security` CLI child that capability `{keychain.X}` reads still use (rule 11). Those reads stay as interactive as they are today.
    - **Linux:** a missing `secret-tool` or `gdbus`, no session bus, or the timeout means unavailable.
      - Runtime needs `libsecret-tools` and `libglib2.0-bin`. The refusal names the missing package.
      - Readiness is read over D-Bus with `gdbus`: the default collection exists and its `Locked` property is false. Locked means unavailable, and the probe never triggers an unlock prompt.
      - A `secret-tool` exit status is never used to tell "not found" from a bus failure.
-     - Accepted residual: the collection can lock between the probe and a `secret-tool store` or `lookup`, which may then open the desktop's own unlock dialog. `secret-tool` has no no-prompt flag, and the D-Bus calls that could avoid it pass the value in argv.
+     - **Every `secret-tool` spawn is gated, not just the probe.** Immediately before each spawn, `gdbus` checks the item's state and nothing is spawned when it is locked.
+       - For `lookup`, `SearchItems` on the `service NAME` attribute: a path in its locked list means unavailable, naming the entry. That covers a locked non-default collection too.
+       - For `store`, the default collection's `Locked` property must be false.
+       - Startup, reload and every `keychain:` read take this path.
+     - Accepted residual: a collection that locks in the gap between that check and the spawn may open the desktop's own unlock dialog. `secret-tool` has no no-prompt flag, and the D-Bus calls that avoid it would put the value in argv. The bound (2 s) still applies.
    - **Windows:** a missing name's `CredReadW` giving `ERROR_NOT_FOUND` means available; `ERROR_NO_SUCH_LOGON_SESSION` or any other error means unavailable.
 
 ### Windows `unsafe` module
@@ -181,3 +187,10 @@ The value never appears in argv, logs or error text. Readers and writers pass it
    KC.2 has a test per secret field.
 10. **The `unsafe` allow-list.** Production `unsafe` lives in exactly `src/win_acl.rs` and `src/win_cred.rs`; ADR-016's test-only `src/gateway/server/tests/alloc_meter.rs` stays. A source-scan test pins the list, and the implementing PR updates ADR-016's "exactly one module" sentence and the `src/lib.rs` comment. This supersedes §2a's two-file scan.
 11. **Capability files are out of scope.** Their `keychain:` and `{keychain.X}` keep the old readers, and a UI save never writes a `keychain:` reference into capability YAML until they share these backends (MIK-8902).
+12. **Acceptance cases.** The implementing PR proves each one:
+    - a locked default collection, and an entry in a locked non-default collection, each refused without spawning `secret-tool`;
+    - a lock after the probe on Linux, recorded as the residual;
+    - a store that times out after writing, cleaned up by rollback;
+    - a locked macOS keychain, refused at `SecItemAdd` with nothing left behind;
+    - two gateways with different data dirs, serialised by the one vault lock;
+    - a capability `{keychain.X}` read, unchanged.
