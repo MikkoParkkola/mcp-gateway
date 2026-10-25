@@ -270,6 +270,54 @@ mod tests {
         (dir, path)
     }
 
+    // ── a file that does not load ────────────────────────────────────────────
+
+    /// A config holding one backend, then a line that does not parse.
+    fn unloadable_config(path: &std::path::Path) -> String {
+        let mut config = Config::default();
+        config.backends.insert(
+            "alpha".to_string(),
+            mcp_gateway::config::BackendConfig {
+                transport: TransportConfig::Http {
+                    http_url: "http://127.0.0.1:9/mcp".to_string(),
+                    streamable_http: false,
+                    protocol_version: None,
+                },
+                ..mcp_gateway::config::BackendConfig::default()
+            },
+        );
+        write_config(path, &config).unwrap();
+        let mut broken = std::fs::read_to_string(path).unwrap();
+        broken.push_str("\n: [this line does not parse\n");
+        std::fs::write(path, &broken).unwrap();
+        broken
+    }
+
+    /// Adding to a file that does not load must not start from the defaults:
+    /// writing them back would erase every backend the file held.
+    #[tokio::test]
+    async fn add_leaves_a_file_it_cannot_load_unchanged() {
+        let (_dir, path) = temp_config();
+        let broken = unloadable_config(&path);
+
+        let code = run_add_command("tavily", None, None, None, &[], &path).await;
+
+        assert_eq!(code, ExitCode::FAILURE, "add reported success");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), broken);
+    }
+
+    /// Removing from a file that does not load refuses and leaves it as it was.
+    #[test]
+    fn remove_leaves_a_file_it_cannot_load_unchanged() {
+        let (_dir, path) = temp_config();
+        let broken = unloadable_config(&path);
+
+        let code = run_remove_command("alpha", &path);
+
+        assert_eq!(code, ExitCode::FAILURE, "remove reported success");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), broken);
+    }
+
     // ── add round-trip ────────────────────────────────────────────────────────
 
     #[tokio::test]
