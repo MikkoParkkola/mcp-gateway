@@ -10,7 +10,6 @@
 #[path = "common/yaml.rs"]
 mod yaml;
 
-use serde::Deserialize;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -89,25 +88,17 @@ fn shipped_files() -> Vec<String> {
 
 /// The backend's verdict on one file: `single` when it reads as one
 /// document, `stream <n>` when it reads as `n` documents, else `refused`.
-/// Recorded with `serde_yaml` before the MIK-8425 swap; the comparison below
-/// holds the guarded seam to it.
+/// The golden was recorded with the replaced backend before the MIK-8425 swap; a
+/// re-recording now reads through the adapter, which is the backend.
 fn backend_reading(content: &str) -> String {
-    if serde_yaml::from_str::<serde_yaml::Value>(content).is_ok() {
+    if yaml::from_str::<yaml::Value>(content).is_ok() {
         return "single".to_owned();
     }
-    // serde_yaml's stream can keep yielding after a malformed document,
-    // so stop at the first error (collecting it unbounded aborted at 77 GB).
-    let mut count = 0usize;
-    for document in serde_yaml::Deserializer::from_str(content) {
-        if serde_yaml::Value::deserialize(document).is_err() {
-            return "refused".to_owned();
-        }
-        count += 1;
-    }
-    if count == 0 {
-        "refused".to_owned()
+    let documents: Vec<_> = yaml::documents(content).collect();
+    if !documents.is_empty() && documents.iter().all(std::result::Result::is_ok) {
+        format!("stream {}", documents.len())
     } else {
-        format!("stream {count}")
+        "refused".to_owned()
     }
 }
 

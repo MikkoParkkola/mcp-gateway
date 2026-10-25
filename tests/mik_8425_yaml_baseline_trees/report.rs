@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The `trees.tsv` readings, over whichever backend the including crate
 //! binds as `crate::yaml`: the adapter in `mik_8425_yaml_baseline_trees`,
-//! `yaml::next` in `mik_8425_mig2_parity` (MIK-8425 MIG.2).
+//! the same adapter in `mik_8425_mig2_parity`, which bound `yaml::next`
+//! until the MIK-8425 MIG.2 switch.
 #![allow(
     dead_code,
     reason = "each including crate uses a different part of the report"

@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The `redaction.txt` capability rows, over whichever backend the including
 //! crate binds as `crate::yaml`: the adapter in
-//! `mik_8425_yaml_baseline_redaction`, `yaml::next` in
-//! `mik_8425_mig2_parity` (MIK-8425 MIG.2). The config rows stay in the
+//! `mik_8425_yaml_baseline_redaction`, the same adapter in `mik_8425_mig2_parity`, which bound `yaml::next`
+//! until the MIK-8425 MIG.2 switch. The config rows stay in the
 //! baseline: `Config::load` reads through the library's own adapter.
 #![allow(
     dead_code,

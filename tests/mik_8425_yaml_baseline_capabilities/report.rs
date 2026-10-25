@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The `capabilities.tsv` reading, over whichever backend the including
 //! crate binds as `crate::yaml`: the adapter in
-//! `mik_8425_yaml_baseline_capabilities`, `yaml::next` in
-//! `mik_8425_mig2_parity` (MIK-8425 MIG.2).
+//! `mik_8425_yaml_baseline_capabilities`, the same adapter in `mik_8425_mig2_parity`, which bound `yaml::next`
+//! until the MIK-8425 MIG.2 switch.
 //!
 //! `parse_capability` reads through the library's own adapter, which a test
 //! binding cannot reach, so this reading repeats what it does: a typed read

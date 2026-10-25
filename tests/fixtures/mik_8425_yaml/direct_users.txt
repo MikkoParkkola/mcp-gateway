@@ -1,6 +1,1 @@
-src/yaml/mod.rs # the adapter itself, the one seam allowed to name the backend
-src/yaml/error.rs # the adapter's error, which wraps the backend's
-src/yaml/guard.rs # the adapter's pre-parse guard
-src/yaml/provider.rs # the adapter's figment provider
-tests/mik_8425_yaml_adapter.rs # serde_yaml and figment are the oracles the adapter is compared against
-tests/mik_8639_shipped_yaml.rs # serde_yaml is the oracle the guard is compared against
+tests/mik_8425_yaml_adapter.rs # the bypass scan's own negative controls spell the names it scans for

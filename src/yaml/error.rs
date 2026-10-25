@@ -6,12 +6,9 @@
 /// (MIK-8425 B3, CWE-532), keeps the key path, expected type and line/column.
 pub(crate) struct Error(Repr);
 
-/// What an adapter error carries: the backend's own failure, the guard's
-/// refusal (MIK-8639), or the replacement backend's own message (MIK-8425
-/// MIG.2). All print value-free.
+/// What an adapter error carries: the guard's refusal (MIK-8639), or the
+/// backend's own message (MIK-8425 MIG.2). Both print value-free.
 enum Repr {
-    /// `serde_yaml`'s error, shown redacted exactly as before the guard.
-    Backend(serde_yaml::Error),
     /// The guard's refusal: which limit fired, and for Syntax the wording
     /// plus an optional fixed fix hint.
     Refused {
@@ -19,9 +16,8 @@ enum Repr {
         what: Option<String>,
         hint: Option<&'static str>,
     },
-    /// The replacement backend's refusal: a fixed wording or a serde
-    /// message, and where it points. Printed through `redact_message`, as
-    /// `Backend` is.
+    /// The backend's refusal: a fixed wording or a serde message, and
+    /// where it points. Always printed through `redact_message`.
     Message {
         text: String,
         location: Option<Location>,
@@ -35,7 +31,6 @@ enum Repr {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.0 {
-            Repr::Backend(err) => f.write_str(&redact_message(&err.to_string())),
             Repr::Message { .. } => f.write_str(&self.message_text()),
             Repr::Refused { limit, what, hint } => match limit {
                 Limit::Size { len, max } => {
@@ -85,10 +80,6 @@ impl std::fmt::Display for Error {
 impl std::fmt::Debug for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.0 {
-            Repr::Backend(err) => f
-                .debug_tuple("Error")
-                .field(&redact_message(&err.to_string()))
-                .finish(),
             // The limit only: never `what`'s source error.
             Repr::Refused { limit, .. } => f.debug_tuple("Error").field(limit).finish(),
             Repr::Message { .. } => f.debug_tuple("Error").field(&self.message_text()).finish(),
@@ -96,7 +87,7 @@ impl std::fmt::Debug for Error {
     }
 }
 
-// No `source()`: a chain printer must not reach serde_yaml's unredacted text.
+// No `source()`: a chain printer must not reach any text past the redaction.
 impl std::error::Error for Error {}
 
 impl serde::ser::Error for Error {
@@ -126,10 +117,6 @@ impl Error {
     /// Where the refusal points in the document, if the parser knows.
     pub(crate) fn location(&self) -> Option<Location> {
         match &self.0 {
-            Repr::Backend(err) => err.location().map(|at| Location {
-                line: at.line(),
-                column: at.column(),
-            }),
             Repr::Refused { limit, .. } => match limit {
                 Limit::Syntax { line, column } => Some(Location {
                     line: *line,
@@ -144,14 +131,9 @@ impl Error {
     /// Why the guard refused the text, when it did.
     pub(crate) fn limit(&self) -> Option<&Limit> {
         match &self.0 {
-            Repr::Backend(_) | Repr::Message { .. } => None,
+            Repr::Message { .. } => None,
             Repr::Refused { limit, .. } => Some(limit),
         }
-    }
-
-    /// The backend's own failure.
-    pub(super) fn backend(err: serde_yaml::Error) -> Self {
-        Self(Repr::Backend(err))
     }
 
     /// The replacement backend's own refusal, with no position.

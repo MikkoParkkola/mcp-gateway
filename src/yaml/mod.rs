@@ -2,18 +2,18 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The gateway's one YAML seam (MIK-8425).
 //!
-//! Every YAML read and write goes through here, so the parser behind it can
-//! be replaced in one place. Today the backend is `serde_yaml` 0.9.34. The
-//! tree types are re-exported and the parse and write functions delegate,
-//! keeping that crate's own behaviour. One function is the seam's own:
-//! `to_json`, the tree-to-JSON conversion that `ImportedSkill.extra` uses.
-//! A later stage swaps the backend behind this same surface.
-//! `tests/fixtures/mik_8425_yaml/` records what the delegating functions must
-//! reproduce, and the skills parser and registry tests pin `to_json`.
-//! The seam's own `Error` (every function here except `figment_data`)
-//! never prints the value that caused it (MIK-8425 B3); `figment_data`
-//! returns figment's error, which `config/load_error.rs` (`from_figment`)
-//! redacts.
+//! Every YAML read and write goes through here. Since MIG.2 the backend is
+//! the adapter's own (`next/`): granit-parser's events read into a parse
+//! representation, a serde `Deserializer` and `Serializer` with the replaced
+//! backend's rules, and a writer byte-equal to its output.
+//! `tests/fixtures/mik_8425_yaml/` records what every function must
+//! reproduce, and `tests/mik_8425_mig2_parity.rs` holds the backend to it.
+//! One function is the seam's own: `to_json`, the tree-to-JSON conversion
+//! that `ImportedSkill.extra` uses, pinned by the skills parser and
+//! registry tests. The seam's own `Error` (every function here except
+//! `figment_data`) never prints the value that caused it (MIK-8425 B3);
+//! `figment_data` returns figment's error, which `config/load_error.rs`
+//! (`from_figment`) redacts.
 //!
 //! These files name nothing under `crate::`. Integration tests compile it
 //! directly (`tests/common/yaml.rs`), so tests and the gateway always share
@@ -21,55 +21,43 @@
 #![allow(
     dead_code,
     unused_imports,
-    reason = "MIK-8425: consumers are routed through this seam in MIG.1b to MIG.1f; \
-              until then parts of it have no caller. Integration-test crates compile their \
-              own copy through tests/common/yaml.rs and never call all of it. Delete this \
-              allow in MIG.2, when the swap re-examines the surface."
+    reason = "integration-test crates compile their own copy through tests/common/yaml.rs \
+              and never call all of it, and the tree keeps the replaced backend's whole \
+              accessor surface, which the gateway does not use in full"
 )]
 
 mod error;
 mod guard;
 pub(crate) mod next;
-mod provider;
 
 pub(crate) use error::{Error, Limit, Location, redact_message};
 use guard::guard;
 #[cfg(test)]
 pub(crate) use guard::guard_work;
-pub(crate) use provider::{figment_data, from_str_loose};
+pub(crate) use next::{Mapping, Value, figment_data, from_str_loose};
 
-use figment::Provider as _;
-use figment::providers::{Format as _, Yaml};
-use figment::value::{Dict, Map};
-use granit_parser::{ErrorKind, Event, Marker, ScanError, Tag, TokenType};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use std::collections::{HashMap, HashSet};
-
-/// The YAML tree and its mapping. They stay `serde_yaml`'s own until the
-/// backend swap, which keeps routing a pure path rename.
-pub(crate) use serde_yaml::{Mapping, Value};
 
 /// Parse `text` into `T`. A key repeated in a struct or in a `Value` is
 /// refused; a key repeated in a map keeps its last value.
 pub(crate) fn from_str<T: DeserializeOwned>(text: &str) -> Result<T, Error> {
-    guard(text)?;
-    serde_yaml::from_str(text).map_err(Error::backend)
+    next::from_str(text)
 }
 
 /// Write `value` as YAML.
 pub(crate) fn to_string<T: Serialize + ?Sized>(value: &T) -> Result<String, Error> {
-    serde_yaml::to_string(value).map_err(Error::backend)
+    next::to_string(value)
 }
 
 /// Convert `value` to a YAML tree.
 pub(crate) fn to_value<T: Serialize>(value: T) -> Result<Value, Error> {
-    serde_yaml::to_value(value).map_err(Error::backend)
+    next::to_value(value)
 }
 
 /// Read `T` out of a YAML tree.
 pub(crate) fn from_value<T: DeserializeOwned>(value: Value) -> Result<T, Error> {
-    serde_yaml::from_value(value).map_err(Error::backend)
+    next::from_value(value)
 }
 
 /// Convert a YAML tree value to a JSON value (MIK-8425).
@@ -86,8 +74,6 @@ pub(crate) fn from_value<T: DeserializeOwned>(value: Value) -> Result<T, Error> 
 /// `"1000.0"`, `-0.0` to `"-0.0"`), and any other key (null, non-finite
 /// float, sequence, mapping, tagged) drops its entry.
 ///
-/// MIG.2 re-implements this function over its own tree against the
-/// parser/registry tests.
 pub(crate) fn to_json(value: &Value) -> serde_json::Value {
     match value {
         Value::Null => serde_json::Value::Null,
@@ -141,25 +127,9 @@ fn json_key(key: &Value) -> Option<String> {
     }
 }
 
-/// Every document of a multi-document stream, in order, ending after the
-/// first refusal. `serde_yaml`'s own stream can keep yielding after a
-/// malformed document, so a caller that does not stop grows without bound;
-/// this iterator stops for it. There is no document count cap: a long
-/// manifest is read in full.
+/// Every document of a multi-document stream, in order, an empty one as
+/// null, ending after the first refusal. There is no document count cap: a
+/// long manifest is read in full.
 pub(crate) fn documents(text: &str) -> impl Iterator<Item = Result<Value, Error>> + '_ {
-    let mut early = guard(text).err();
-    let mut stream = serde_yaml::Deserializer::from_str(text);
-    let mut refused = early.is_some();
-    std::iter::from_fn(move || {
-        if let Some(err) = early.take() {
-            return Some(Err(err));
-        }
-        if refused {
-            return None;
-        }
-        let document = stream.next()?;
-        let reading = <Value as serde::Deserialize>::deserialize(document).map_err(Error::backend);
-        refused = reading.is_err();
-        Some(reading)
-    })
+    next::documents(text)
 }

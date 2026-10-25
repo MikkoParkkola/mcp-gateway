@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 /// now on every path. A text of exactly this length is accepted.
 const MAX_YAML_BYTES: usize = 16 * 1024 * 1024;
 
-/// Deepest nesting the guard lets through, matching `serde_yaml`'s own cap.
+/// Deepest nesting the guard lets through, matching the backend's own cap.
 const MAX_DEPTH: usize = 128;
 
 /// Most alias references the guard lets through in one stream.

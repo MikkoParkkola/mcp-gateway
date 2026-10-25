@@ -1,15 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8425 MIG.2: the replacement YAML backend reproduces every golden the
-//! guarded adapter recorded over the old backend (plan
+//! MIK-8425 MIG.2: the YAML backend reproduces every golden the guarded
+//! adapter recorded over the replaced backend (plan
 //! `docs/internal/plans/2026-10-24-mik-8425-mig2-swap.md`, sections 3 and 3b).
 //!
-//! Each row compiles a baseline suite's own report over `yaml::next`
-//! (`tests/common/yaml_next.rs`) and compares it with that suite's golden,
-//! so the baseline crate and this one run one report over two backends.
-//! Until step 4 every `next` entry point is a stub, and every row here is
-//! red while the baseline suites stay green. At the switch the binding moves
-//! to the adapter itself.
+//! Each row compiles a baseline suite's own report and compares it with that
+//! suite's golden. Before the switch this crate bound the reports to
+//! `yaml::next`, the backend under construction; since the switch that is
+//! the adapter itself, so it binds `tests/common/yaml.rs` like the baseline
+//! suites.
 //!
 //! A reading the design allows to change (D13, D14) is never fixed by
 //! editing a golden: it is a row in `deviations.tsv` (`golden`, `key`, the
@@ -19,7 +18,7 @@
 #[path = "common/mik_8425_golden.rs"]
 mod golden;
 
-#[path = "common/yaml_next.rs"]
+#[path = "common/yaml.rs"]
 mod yaml;
 
 #[path = "mik_8425_yaml_baseline_behaviour/report.rs"]

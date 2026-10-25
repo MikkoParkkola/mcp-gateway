@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8425 MIG.1a: the YAML adapter (`src/yaml/`) behaves exactly as
-//! `serde_yaml` and figment do today, and no new file bypasses it.
+//! MIK-8425 MIG.1a: the YAML adapter (`src/yaml/`) reads and writes as the
+//! replaced backend (`serde_yaml` and figment's provider) did, recorded in
+//! `adapter.txt`, and no file bypasses it.
 //!
 //! T1 to T3 and T5 of the MIG.1a test plan
 //! (`docs/internal/plans/2026-10-18-mik-8425-mig1a-adapter.md`).
@@ -15,9 +16,6 @@ mod golden;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use figment::Provider as _;
-use figment::providers::{Format as _, Yaml};
-
 /// T1: a stream yields every document and ends at its first refusal.
 /// MIK-8639: the guard refuses the stream as a whole, so a refused stream
 /// yields exactly one refusal and no document.
@@ -29,7 +27,7 @@ fn documents_stops_at_the_first_refusal() {
     assert_eq!(read, [false], "one refusal, nothing yielded");
 
     // Joined, not terminated: a trailing `---` would start a 301st, empty
-    // document, in serde_yaml as here.
+    // document.
     let many = vec!["a: 1"; 300].join("\n---\n");
     let read = yaml::documents(&many).collect::<Vec<_>>();
     assert_eq!(
@@ -71,60 +69,6 @@ fn from_str_refuses_a_repeated_key_in_a_tree() {
     assert!(yaml::from_str::<yaml::Value>("a: 1\na: 2\n").is_err());
 }
 
-/// T2b: the config loader's provider call, through the adapter, is
-/// identical to figment's own: profiles and values, or kind and message.
-/// MIK-8639: inputs the guard refuses carry the guard refusal instead.
-#[test]
-fn figment_data_matches_the_yaml_provider() {
-    let cases = [
-        "server:\n  port: 39400\n",
-        "server:\n  port: 1\nserver:\n  port: 2\n",
-        "server: \"unterminated\n",
-        "a: [1, 2\n",
-        "- not\n- a map\n",
-        "default:\n  port: 39400\nglobal:\n  log: info\n",
-        "",
-    ];
-    for text in cases {
-        // The guard refuses these two before figment's provider runs.
-        if text == "a: [1, 2\n" {
-            let err = yaml::figment_data(text).unwrap_err();
-            assert_eq!(
-                err.to_string(),
-                "YAML refused: unclosed bracket at line 1 column 4",
-                "guard refusal for {text:?}"
-            );
-            continue;
-        }
-        if text == "server: \"unterminated\n" {
-            let err = yaml::figment_data(text).unwrap_err();
-            assert!(
-                err.to_string().starts_with("YAML refused: "),
-                "guard refusal for {text:?}, got: {err}"
-            );
-            continue;
-        }
-        let ours = yaml::figment_data(text);
-        let theirs = Yaml::string(text).data();
-        match (ours, theirs) {
-            (Ok(a), Ok(b)) => assert_eq!(a, b, "same profiles and values for {text:?}"),
-            (Err(a), Err(b)) => {
-                assert_eq!(
-                    a.kind.to_string(),
-                    b.kind.to_string(),
-                    "same kind for {text:?}"
-                );
-                assert_eq!(a.to_string(), b.to_string(), "same message for {text:?}");
-            }
-            (a, b) => panic!(
-                "{text:?}: adapter {:?} vs provider {:?}",
-                a.is_ok(),
-                b.is_ok()
-            ),
-        }
-    }
-}
-
 /// The MIG.0 behaviour inputs: duplicates, merge keys, scalars, documents,
 /// limits and both enum forms.
 const BEHAVIOUR_INPUTS: &[&str] = &[
@@ -149,92 +93,6 @@ fn tree_or_refusal(r: Result<yaml::Value, impl std::fmt::Display>) -> String {
     r.map_or_else(|e| format!("ERR {e}"), |v| format!("OK {v:?}"))
 }
 
-/// T3: on every recorded behaviour input the adapter reads what `serde_yaml`
-/// reads, as a tree, as a `Dict`, as a stream and as a typed map.
-/// MIK-8639: the input the guard refuses carries the guard refusal instead.
-#[test]
-fn adapter_reads_like_serde_yaml_on_the_behaviour_cases() {
-    for text in BEHAVIOUR_INPUTS {
-        // The guard refuses the unclosed flow sequence on every reading.
-        if *text == "x: [1, 2\n" {
-            let refused = "YAML refused: unclosed bracket at line 1 column 4";
-            assert_eq!(
-                tree_or_refusal(yaml::from_str::<yaml::Value>(text)),
-                format!("ERR {refused}"),
-                "tree reading of {text:?}"
-            );
-            assert_eq!(
-                format!(
-                    "{:?}",
-                    yaml::from_str_loose(text).map_err(|e| e.to_string())
-                ),
-                format!("Err({refused:?})"),
-                "Dict reading of {text:?}"
-            );
-            let ours: Vec<String> = yaml::documents(text).map(tree_or_refusal).collect();
-            assert_eq!(
-                ours,
-                [format!("ERR {refused}")],
-                "stream reading of {text:?}"
-            );
-            assert_eq!(
-                format!(
-                    "{:?}",
-                    yaml::from_str::<BTreeMap<String, String>>(text).map_err(|e| e.to_string())
-                ),
-                format!("Err({refused:?})"),
-                "typed reading of {text:?}"
-            );
-            continue;
-        }
-        assert_eq!(
-            tree_or_refusal(yaml::from_str::<yaml::Value>(text)),
-            tree_or_refusal(
-                serde_yaml::from_str::<serde_yaml::Value>(text)
-                    .map_err(|e| yaml::redact_message(&e.to_string()))
-            ),
-            "tree reading of {text:?}"
-        );
-        assert_eq!(
-            format!(
-                "{:?}",
-                yaml::from_str_loose(text).map_err(|e| e.to_string())
-            ),
-            format!(
-                "{:?}",
-                Yaml::from_str::<figment::value::Dict>(text).map_err(|e| e.to_string())
-            ),
-            "Dict reading of {text:?}"
-        );
-        let ours: Vec<String> = yaml::documents(text).map(tree_or_refusal).collect();
-        let mut theirs = Vec::new();
-        for document in serde_yaml::Deserializer::from_str(text) {
-            let reading = tree_or_refusal(
-                <serde_yaml::Value as serde::Deserialize>::deserialize(document)
-                    .map_err(|e| yaml::redact_message(&e.to_string())),
-            );
-            let refused = reading.starts_with("ERR");
-            theirs.push(reading);
-            if refused {
-                break;
-            }
-        }
-        assert_eq!(ours, theirs, "stream reading of {text:?}");
-        assert_eq!(
-            format!(
-                "{:?}",
-                yaml::from_str::<BTreeMap<String, String>>(text).map_err(|e| e.to_string())
-            ),
-            format!(
-                "{:?}",
-                serde_yaml::from_str::<BTreeMap<String, String>>(text)
-                    .map_err(|e| yaml::redact_message(&e.to_string()))
-            ),
-            "typed reading of {text:?}"
-        );
-    }
-}
-
 /// T3, limits: the nesting depth and alias-expansion refusal points recorded
 /// in MIG.0 (`behaviour.txt`) hold through the adapter.
 /// MIK-8639: depth 129 is refused by the guard now, with the guard's text.
@@ -255,10 +113,6 @@ fn adapter_keeps_the_recorded_refusal_points() {
     );
     for (doc, refused) in [(nested(128), false), (fanout(3), false), (fanout(4), true)] {
         assert_eq!(yaml::from_str::<yaml::Value>(&doc).is_err(), refused);
-        assert_eq!(
-            tree_or_refusal(yaml::from_str::<yaml::Value>(&doc)),
-            tree_or_refusal(serde_yaml::from_str::<serde_yaml::Value>(&doc))
-        );
     }
 }
 
@@ -268,50 +122,6 @@ enum Shape {
     Unit,
     Newtype(String),
     Pair { x: u8, y: u8 },
-}
-
-/// T3, enums and the write side: typed enums read, and `to_string`,
-/// `to_value` and `from_value` give exactly what `serde_yaml` gives.
-#[test]
-fn adapter_writes_and_converts_like_serde_yaml() {
-    for doc in [
-        "unit",
-        "!newtype hi",
-        "{newtype: hi}",
-        "!pair {x: 1, y: 2}",
-        "{pair: {x: 1, y: 2}}",
-    ] {
-        assert_eq!(
-            format!(
-                "{:?}",
-                yaml::from_str::<Shape>(doc).map_err(|e| e.to_string())
-            ),
-            format!(
-                "{:?}",
-                serde_yaml::from_str::<Shape>(doc).map_err(|e| e.to_string())
-            ),
-            "typed enum reading of {doc:?}"
-        );
-    }
-    let shapes = vec![
-        Shape::Unit,
-        Shape::Newtype("hi".into()),
-        Shape::Pair { x: 1, y: 2 },
-    ];
-    assert_eq!(
-        yaml::to_string(&shapes).expect("serialises"),
-        serde_yaml::to_string(&shapes).expect("serialises")
-    );
-    let value = yaml::to_value(&shapes).expect("to a tree");
-    assert_eq!(value, serde_yaml::to_value(&shapes).expect("to a tree"));
-    let back: Vec<Shape> = yaml::from_value(value).expect("from a tree");
-    assert_eq!(back, shapes);
-    let bad = serde_yaml::Value::String("no_such_variant".to_owned());
-    assert_eq!(
-        yaml::from_value::<Shape>(bad.clone()).map_err(|e| e.to_string()),
-        serde_yaml::from_value::<Shape>(bad).map_err(|e| yaml::redact_message(&e.to_string())),
-        "from_value refuses exactly as serde_yaml does"
-    );
 }
 
 /// The inputs of `figment_data_matches_the_yaml_provider`.
@@ -333,10 +143,10 @@ fn structure_or_refusal(r: Result<yaml::Value, impl std::fmt::Display>) -> Strin
     )
 }
 
-/// Every reading the `serde_yaml` and figment comparisons above make, through
-/// the adapter alone. Recorded while the adapter is `serde_yaml` (the tests
-/// above prove it reads the same), it keeps them checkable after MIK-8425
-/// MIG.2 removes `serde_yaml` from the build.
+/// Every reading this suite's `serde_yaml` and figment comparisons made,
+/// through the adapter alone. Recorded while the adapter still delegated to
+/// them (those comparisons proved it read the same), it keeps them checkable
+/// now MIK-8425 MIG.2 has removed `serde_yaml` from the build.
 fn adapter_report() -> String {
     let mut out = String::new();
     let mut row = |case: String, reading: String| {
@@ -502,11 +312,11 @@ fn direct_users(root: &std::path::Path) -> Vec<String> {
 /// scans for it, does not name it itself.
 const NEW_BACKEND: &str = concat!("granit", "_parser");
 
-/// MIK-8425 MIG.2: the replacement backend may be named only inside the
-/// adapter and by the parity suite that drives it before the switch. A fixed
-/// rule, not an allowlist file, so a new user cannot be recorded into it.
+/// MIK-8425 MIG.2: the backend's parser may be named only inside the adapter.
+/// A fixed rule, not an allowlist file, so a new user cannot be recorded
+/// into it.
 fn may_name_the_new_backend(path: &str) -> bool {
-    path.starts_with("src/yaml/") || path == "tests/mik_8425_mig2_parity.rs"
+    path.starts_with("src/yaml/")
 }
 
 fn new_backend_bypasses(root: &std::path::Path) -> Vec<String> {
@@ -654,8 +464,9 @@ fn only_the_adapter_names_the_new_backend() {
     );
 }
 
-/// The new-backend scan's negative control: on a synthetic tree it flags a
-/// use outside the adapter, in `src/` and in `tests/`, and nothing else.
+/// The parser scan's negative control: on a synthetic tree it flags a use
+/// outside the adapter, in `src/` and in `tests/` (the parity suite
+/// included), and nothing else.
 #[test]
 fn the_new_backend_scan_flags_a_use_outside_the_adapter() {
     let root = tempfile::tempdir().expect("tempdir");
@@ -663,7 +474,7 @@ fn the_new_backend_scan_flags_a_use_outside_the_adapter() {
         ("src/yaml/tree.rs", format!("use {NEW_BACKEND}::Parser;\n")),
         (
             "tests/mik_8425_mig2_parity.rs",
-            format!("// drives {NEW_BACKEND} through yaml::next\n"),
+            format!("// drives {NEW_BACKEND} directly\n"),
         ),
         (
             "src/config/load.rs",
@@ -686,7 +497,11 @@ fn the_new_backend_scan_flags_a_use_outside_the_adapter() {
     }
     assert_eq!(
         new_backend_bypasses(root.path()),
-        ["src/config/load.rs", "tests/other.rs"]
+        [
+            "src/config/load.rs",
+            "tests/mik_8425_mig2_parity.rs",
+            "tests/other.rs"
+        ]
     );
 }
 
