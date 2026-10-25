@@ -125,8 +125,8 @@ fn current_day() -> u64 {
 }
 
 /// The day `secs` (seconds since the UNIX epoch) falls on: the one day
-/// boundary the live accumulators and a restore of saved totals both read
-/// (MIK-8904), so moving it moves both.
+/// boundary the live accumulators and a restore of saved totals both read,
+/// so moving it moves both.
 fn day_of(secs: u64) -> u64 {
     secs / 86_400
 }
@@ -380,7 +380,7 @@ impl BudgetEnforcer {
         }
     }
 
-    /// Puts back the daily totals a previous run saved (MIK-8904).
+    /// Puts back the daily totals a previous run saved.
     ///
     /// Call it once, on a fresh enforcer, before any spend is recorded: it adds
     /// to the live totals, so a second call or a late one counts twice.
@@ -615,7 +615,7 @@ mod tests {
         crate::cost_accounting::persistence::now_secs()
     }
 
-    // MIK-8904.COST.1: what was spent today before a restart is spent today
+    // What was spent today before a restart is spent today
     // after it. The global total is the sum of the per-tool totals, which
     // `record_spend` keeps equal; the file carries no global total of its own.
     #[test]
@@ -634,7 +634,7 @@ mod tests {
         assert!((snap.key_daily["k2"] - 0.25).abs() < 1e-6);
     }
 
-    // MIK-8904.COST.2: a cap reached before the restart still refuses after it,
+    // A cap reached before the restart still refuses after it,
     // for a key, a tool and the global budget.
     #[test]
     fn a_cap_reached_before_a_restart_still_refuses_after_it() {
@@ -708,7 +708,7 @@ mod tests {
         assert!(snap.tool_daily.contains_key("ok"), "{snap:?}");
     }
 
-    // MIK-8904.COST.3: a day that ended while the gateway was down is not
+    // A day that ended while the gateway was down is not
     // carried into the next one. The day is the enforcer's own day function.
     #[test]
     fn a_restore_after_the_day_changed_starts_every_total_at_zero() {

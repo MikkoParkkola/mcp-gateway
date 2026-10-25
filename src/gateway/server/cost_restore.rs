@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Restores the daily cost totals a previous run saved (MIK-8904).
+//! Restores the daily cost totals a previous run saved.
 
 /// Puts the daily totals a previous run saved back into `enforcer`, so a
-/// restart does not reset a budget (MIK-8904).
+/// restart does not reset a budget.
 pub(super) fn restore_persisted_costs(
     enforcer: &crate::cost_accounting::enforcer::BudgetEnforcer,
     path: &std::path::Path,
@@ -39,7 +39,7 @@ mod tests {
         BudgetEnforcer::new(cfg, registry)
     }
 
-    // MIK-8904.COST.1: spend recorded for two keys, saved the way a graceful
+    // Spend recorded for two keys, saved the way a graceful
     // shutdown saves it, reads back as the same global, per-tool and per-key
     // daily totals on the next start.
     #[test]
@@ -71,7 +71,7 @@ mod tests {
         }
     }
 
-    // MIK-8904.COST.4: an unreadable costs.json does not stop the gateway; it
+    // An unreadable costs.json does not stop the gateway; it
     // starts at zero, with one warning that says where the damaged data is.
     #[test]
     fn an_unreadable_costs_json_starts_at_zero_with_one_warning_naming_it() {
