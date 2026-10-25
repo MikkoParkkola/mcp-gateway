@@ -667,7 +667,7 @@ async fn build_headers_trace_flag_gates_trace_header() {
 /// When the backend daemon restarts, the stored session ID is dead and the
 /// backend answers `-32015 Session not found`. The transport must drop the
 /// session, re-run the initialize handshake, and retry the original request
-/// once. Regression test for the 2026-06-11 incident (hebb unreachable 6.5h
+/// once. Regression test for the 2026-06-11 incident (a backend unreachable 6.5h
 /// behind a permanently re-opening circuit breaker).
 #[tokio::test]
 async fn request_reinitializes_session_and_retries_on_session_not_found() {
