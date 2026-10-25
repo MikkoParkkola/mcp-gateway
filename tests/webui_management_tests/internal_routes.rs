@@ -510,6 +510,14 @@ const ROWS: &[Row] = &[
         Payload::Import,
         [401, 403, 403, 200],
     ),
+    // src/gateway/ui/shell.rs:51 (asset): static, outside auth like /ui (MIK-8870)
+    row(
+        "/ui/assets/{file}",
+        Method::GET,
+        "/ui/assets/shell.59b6e0f80d81.css",
+        Payload::None,
+        [200, 200, 200, 200],
+    ),
 ];
 
 /// Send one row as one caller and record any answer that is not today's.
