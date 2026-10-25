@@ -130,6 +130,18 @@ async fn polled(agent: &Agent, from: usize, n: usize) {
     }
 }
 
+/// The baseline after a subscribe: the backend starts lazily, and the F24
+/// drain announces its first stored tool list as a change, as it does for
+/// every backend that starts after a `tools_changed` subscription. Three
+/// polls settle it; at most that one announcement is allowed.
+async fn first_fill(agent: &Agent, receiver: &Receiver, id: &str) -> usize {
+    polled(agent, agent.fetches(), 3).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let base = delivered(receiver, id, TOOLS).len();
+    assert!(base <= 1, "at most the first fill is announced, got {base}");
+    base
+}
+
 /// A1: the resource and prompt kinds are refused with the capability reason.
 #[tokio::test]
 async fn a1_a2a_resource_and_prompt_kinds_are_refused() {
@@ -175,17 +187,17 @@ async fn a2_a_changed_card_announces_tools_changed() {
     let agent = Agent::start().await;
     let gw = start(dir.path(), &receiver, &agent).await;
     let id = sub(&gw, ALICE, TOOLS, &receiver, json!({})).await;
-    // A4: the listener polls (a baseline and two more reads), and nothing
-    // changed, so nothing is announced.
-    let from = agent.fetches();
-    polled(&agent, from, 3).await;
-    assert!(
-        delivered(&receiver, &id, TOOLS).is_empty(),
+    let base = first_fill(&agent, &receiver, &id).await;
+    // A4: three more polls of an unchanged card announce nothing.
+    polled(&agent, agent.fetches(), 3).await;
+    assert_eq!(
+        delivered(&receiver, &id, TOOLS).len(),
+        base,
         "an unchanged card is quiet"
     );
     // A2: a changed skill description changes the translated tool.
     agent.set(|card| card["skills"][0]["description"] = json!("Answers two questions"));
-    expect_events(&receiver, &id, TOOLS, 1).await;
+    expect_events(&receiver, &id, TOOLS, base + 1).await;
 }
 
 /// A3: a change outside the description (the card's name, which becomes the
@@ -197,9 +209,9 @@ async fn a3_any_translated_field_counts() {
     let agent = Agent::start().await;
     let gw = start(dir.path(), &receiver, &agent).await;
     let id = sub(&gw, ALICE, TOOLS, &receiver, json!({})).await;
-    polled(&agent, agent.fetches(), 3).await;
+    let base = first_fill(&agent, &receiver, &id).await;
     agent.set(|card| card["name"] = json!("Renamed Agent"));
-    expect_events(&receiver, &id, TOOLS, 1).await;
+    expect_events(&receiver, &id, TOOLS, base + 1).await;
 }
 
 /// A5: failed reads are not absence. Recovery to the same card is quiet;
@@ -212,19 +224,20 @@ async fn a5_a_failed_read_keeps_the_baseline() {
     let agent = Agent::start().await;
     let gw = start(dir.path(), &receiver, &agent).await;
     let id = sub(&gw, ALICE, TOOLS, &receiver, json!({})).await;
-    polled(&agent, agent.fetches(), 2).await;
+    let base = first_fill(&agent, &receiver, &id).await;
     agent.failing.store(true, Ordering::SeqCst);
     polled(&agent, agent.fetches(), 2).await;
     agent.failing.store(false, Ordering::SeqCst);
     polled(&agent, agent.fetches(), 2).await;
     tokio::time::sleep(INTERVALS).await;
-    assert!(
-        delivered(&receiver, &id, TOOLS).is_empty(),
+    assert_eq!(
+        delivered(&receiver, &id, TOOLS).len(),
+        base,
         "same card after failure: quiet"
     );
     agent.failing.store(true, Ordering::SeqCst);
     polled(&agent, agent.fetches(), 2).await;
     agent.set(|card| card["description"] = json!("Answers questions, now in Dutch."));
     agent.failing.store(false, Ordering::SeqCst);
-    expect_events(&receiver, &id, TOOLS, 1).await;
+    expect_events(&receiver, &id, TOOLS, base + 1).await;
 }

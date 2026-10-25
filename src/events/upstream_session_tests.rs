@@ -121,13 +121,21 @@ impl Reload {
         }
     }
 
-    /// Rewrite the file with backend `b` (Streamable HTTP or not), then reload.
-    async fn to(&self, streamable: bool) {
+    /// Rewrite the file with backend `b`, then reload: eligible (Streamable
+    /// HTTP), or ineligible through identity propagation. (The ineligible
+    /// form was `streamable_http: false` until MIK-8835 made SSE eligible.)
+    async fn to(&self, eligible: bool) {
+        let refused = if eligible {
+            ""
+        } else {
+            "    identity_propagation:\n      strategy: passthrough\n      \
+             audience: https://a\n      session_mode: per_user\n"
+        };
         crate::gateway::test_helpers::write_owner_only(
             &self.path,
             format!(
                 "backends:\n  b:\n    http_url: \"http://127.0.0.1:9/mcp\"\n    \
-                 streamable_http: {streamable}\n"
+                 streamable_http: true\n{refused}"
             ),
         )
         .expect("write");
@@ -403,7 +411,7 @@ async fn a_real_reload_making_the_backend_ineligible_stops_its_listener() {
             .is_ok()
     );
 
-    // Reload 2: the file drops Streamable HTTP, so `b` is ineligible.
+    // Reload 2: the file adds identity propagation, so `b` is ineligible.
     reload.to(false).await;
     assert!(
         ineligible().contains("b"),
