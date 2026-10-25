@@ -362,4 +362,130 @@ printf '# Notes\n' >"$repo/docs/internal/notes.md"
 printf 'docs/internal/\tprivate-path\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
 git -C "$repo" add .gitignore scripts/dev docs/internal/notes.md
 assert_pass "$repo"
+# A debt entry with a count covers that many hits and no more.
+repo="$(make_repo debt-count-exceeded)"
+mkdir -p "$repo/docs"
+printf 'the hebb notes\n' >"$repo/docs/a.md"
+printf 'docs/a.md\tprivate-name\t1\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
+git -C "$repo" add .gitignore scripts/dev docs/a.md
+assert_pass "$repo"
+printf 'more hebb notes\n' >>"$repo/docs/a.md"
+assert_fail_contains "$repo" "more than its 1"
+
+# Debt on a directory covers what the base already carried, never a file the
+# change adds under it.
+repo="$(make_repo debt-dir-new-file)"
+mkdir -p "$repo/docs/internal"
+printf '# Old\n' >"$repo/docs/internal/old.md"
+printf 'docs/internal/\tprivate-path\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
+commit_all "$repo" "seed"
+assert_base_pass "$repo" HEAD
+printf '# New\n' >"$repo/docs/internal/new.md"
+commit_all "$repo" "change"
+assert_base_fail_contains "$repo" HEAD~1 "docs/internal/new.md is a private path"
+
+# A name git would quote is still compared as the literal path.
+repo="$(make_repo private-path-quoted-name)"
+mkdir -p "$repo/tickets"
+printf '# Notes\n' >"$repo/tickets/ä.md"
+git -C "$repo" add .gitignore scripts/dev tickets
+assert_fail_contains "$repo" "tickets/ä.md is a private path"
+
+# A clean file renamed to a ticket-id name is judged as an addition.
+repo="$(make_repo ticket-id-by-rename)"
+mkdir -p "$repo/tests"
+printf 'fn main() { let reload = 1; let _ = reload; }\n' >"$repo/tests/reload.rs"
+commit_all "$repo" "seed"
+git -C "$repo" mv tests/reload.rs tests/mik_9999_reload.rs
+commit_all "$repo" "change"
+assert_base_fail_contains "$repo" HEAD~1 "tests/mik_9999_reload.rs names a ticket id"
+
+# An added line whose text starts with "++ " is content, not a file header.
+repo="$(make_repo ticket-id-after-plus-plus)"
+mkdir -p "$repo/docs"
+printf 'notes\n' >"$repo/docs/n.txt"
+commit_all "$repo" "seed"
+printf '++ follow MIK-5678\n' >>"$repo/docs/n.txt"
+commit_all "$repo" "change"
+assert_base_fail_contains "$repo" HEAD~1 "adds a ticket id"
+
+# Where a CI check keys a file by ticket number, the number is allowed: a
+# changelog or UPGRADING fragment and an inventory row file, by name and in
+# their text, and an acceptance-criterion id anywhere.
+ticket_keyed_cases=(
+  "changelog.d/9999.fixed.md::- Refuse a stale handle (MIK-9999)."
+  "upgrading.d/9999-handles.md::Handles from before MIK-9999 are refused."
+  "docs/release/inventory.d/9999.handles.tsv::src/x.rs	refuse	MIK-9999"
+  "tests/handles.rs::// MIK-9999.HANDLE.1: a stale handle is refused."
+)
+for i in "${!ticket_keyed_cases[@]}"; do
+  case_spec="${ticket_keyed_cases[$i]}"
+  target="${case_spec%%::*}"
+  line="${case_spec#*::}"
+  repo="$(make_repo "ticket-keyed-$i")"
+  commit_all "$repo" "seed"
+  mkdir -p "$repo/$(dirname "$target")"
+  printf '%s\n' "$line" >"$repo/$target"
+  commit_all "$repo" "change"
+  assert_base_pass "$repo" HEAD~1
+done
+
+# The same id as a citation in a docs page is still refused.
+repo="$(make_repo ticket-id-in-doc-refused)"
+commit_all "$repo" "seed"
+mkdir -p "$repo/docs/adr"
+printf 'Decided in MIK-9999.\n' >"$repo/docs/adr/ADR-099.md"
+commit_all "$repo" "change"
+assert_base_fail_contains "$repo" HEAD~1 "docs/adr/ADR-099.md:1 adds a ticket id"
+
+# Debt counts occurrences: a second name on an indebted line is a new hit.
+repo="$(make_repo debt-counts-occurrences)"
+mkdir -p "$repo/docs"
+printf 'the hebb notes\n' >"$repo/docs/b.md"
+printf 'docs/b.md\tprivate-name\t1\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
+git -C "$repo" add .gitignore scripts/dev docs/b.md
+assert_pass "$repo"
+printf 'the hebb and botnaut notes\n' >"$repo/docs/b.md"
+assert_fail_contains "$repo" "more than its 1"
+
+# A count above the hits left must come down, or the slack could regrow.
+repo="$(make_repo debt-count-must-shrink)"
+mkdir -p "$repo/docs"
+printf 'the hebb notes\n' >"$repo/docs/c.md"
+printf 'docs/c.md\tprivate-name\t2\n' >"$repo/scripts/dev/public-hygiene-debt.tsv"
+git -C "$repo" add .gitignore scripts/dev docs/c.md
+assert_fail_contains "$repo" "lower its count to 1"
+
+# A path holding a colon is read whole, so it cannot pose as an exempt file.
+repo="$(make_repo content-in-colon-path)"
+mkdir -p "$repo/scripts/dev"
+printf 'see the hebb notes\n' >"$repo/scripts/dev/public-hygiene-patterns.sh:extra.md"
+git -C "$repo" add .gitignore scripts/dev
+assert_fail_contains "$repo" "names a private project"
+
+# Renaming a file does not re-add the ticket ids it already carried.
+repo="$(make_repo ticket-id-kept-across-rename)"
+mkdir -p "$repo/src"
+printf '// Guard the reload path (MIK-1234).\nfn reload() {}\nfn a() {}\nfn b() {}\n' >"$repo/src/old.rs"
+commit_all "$repo" "seed"
+git -C "$repo" mv src/old.rs src/reload.rs
+commit_all "$repo" "change"
+assert_base_pass "$repo" HEAD~1
+
+# A removed XMIK-1234 is not the id MIK-1234, so adding the id is refused.
+repo="$(make_repo ticket-id-boundary-on-removal)"
+mkdir -p "$repo/src"
+printf '// token XMIK-1234\n' >"$repo/src/d.rs"
+commit_all "$repo" "seed"
+printf '// Guard the reload path (MIK-1234).\n' >"$repo/src/d.rs"
+commit_all "$repo" "change"
+assert_base_fail_contains "$repo" HEAD~1 "src/d.rs:1 adds a ticket id"
+
+# The whole check runs on every push, so its time on this tree is shown here,
+# where a slow regression is visible. Informational: the verdict on the real
+# tree is the CI step's job, not this fixture suite's.
+start="$(date +%s)"
+(cd "$source_repo" && scripts/dev/check-public-repo-hygiene.sh >/dev/null 2>&1) || true
+printf 'timing: the full-tree check took %ss on this tree\n' "$(( $(date +%s) - start ))"
+
 echo "public repo hygiene fixtures OK"
