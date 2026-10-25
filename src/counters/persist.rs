@@ -39,6 +39,14 @@ pub(crate) struct CounterFile {
 pub(crate) struct Restored {
     pub store: CounterStore,
     pub file: CounterFile,
+    /// Warnings the restore logged; the server reads only the log.
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "read by the restore tests; the server reads the log"
+        )
+    )]
     pub warnings: usize,
 }
 

@@ -7,7 +7,9 @@
 //! zone is a parameter, `chrono::Local` in production, so a test names its
 //! zone instead of depending on the host's.
 
-use chrono::{Datelike, NaiveDate, TimeZone};
+#[cfg(any(test, feature = "webui"))]
+use chrono::NaiveDate;
+use chrono::{Datelike, TimeZone};
 
 /// The local date of unix second `at` in `zone`, as days from the common
 /// era, or `None` outside chrono's range.
@@ -18,12 +20,14 @@ pub(crate) fn day_key<Tz: TimeZone>(at: u64, zone: &Tz) -> Option<u64> {
 }
 
 /// The date a [`day_key`] names.
+#[cfg(any(test, feature = "webui"))]
 pub(crate) fn date_of(key: u64) -> Option<NaiveDate> {
     NaiveDate::from_num_days_from_ce_opt(i32::try_from(key).ok()?)
 }
 
 /// The unix second local day `key` starts in `zone`: its midnight, or the
 /// first instant after it when the zone skips midnight that day.
+#[cfg(any(test, feature = "webui"))]
 pub(crate) fn day_start<Tz: TimeZone>(key: u64, zone: &Tz) -> Option<u64> {
     let date = date_of(key)?;
     let midnight = date.and_hms_opt(0, 0, 0)?;

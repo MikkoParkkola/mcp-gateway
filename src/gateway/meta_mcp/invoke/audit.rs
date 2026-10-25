@@ -93,7 +93,9 @@ pub(crate) fn note_process(process: ProcessNote) {
 
 #[path = "audit_counting.rs"]
 mod counting;
-pub(crate) use counting::{note_cache_hit, note_replay, note_request_firewall};
+#[cfg(feature = "firewall")]
+pub(crate) use counting::note_request_firewall;
+pub(crate) use counting::{note_cache_hit, note_replay};
 
 #[cfg(test)]
 #[path = "audit_settlement_tests.rs"]

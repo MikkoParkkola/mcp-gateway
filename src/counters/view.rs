@@ -42,6 +42,7 @@ pub(crate) struct Query<'a> {
     pub compare: bool,
 }
 
+#[cfg(test)]
 impl<'a> Query<'a> {
     /// A read with no previous period.
     pub(crate) const fn new(metric: Metric, window: Window, filter: Filter<'a>) -> Self {

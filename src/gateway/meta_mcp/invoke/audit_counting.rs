@@ -34,6 +34,7 @@ pub(crate) fn note_cache_hit() {
 }
 
 /// This call is refused by the request firewall.
+#[cfg(feature = "firewall")]
 pub(crate) fn note_request_firewall() {
     note(|notes| notes.counting.request_firewall = true);
 }

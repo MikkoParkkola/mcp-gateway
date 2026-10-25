@@ -59,6 +59,7 @@ impl<const W: u64> Ring<W> {
     }
 
     /// The counts in `bucket`, if held.
+    #[cfg(any(test, feature = "webui"))]
     pub(crate) fn get(&self, bucket: u64) -> Option<[u64; 5]> {
         self.0
             .binary_search_by_key(&bucket, |(b, _)| *b)
@@ -67,6 +68,7 @@ impl<const W: u64> Ring<W> {
     }
 
     /// The first bucket this ring would still hold at `now_bucket`.
+    #[cfg(any(test, feature = "webui"))]
     pub(crate) fn window_start(&self, now_bucket: u64) -> u64 {
         Self::first_held(self.newest().map_or(now_bucket, |n| n.max(now_bucket)))
     }

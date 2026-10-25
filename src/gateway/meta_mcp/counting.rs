@@ -24,6 +24,7 @@ impl MetaMcp {
     }
 
     /// The counter store, when the server attached one.
+    #[cfg(feature = "webui")]
     pub(crate) fn counters(&self) -> Option<&Arc<CounterStore>> {
         self.counters.get()
     }

@@ -24,10 +24,15 @@ mod day;
 pub(crate) mod persist;
 mod ring;
 mod snapshot;
+// The readers serve the web UI's history routes; without them nothing reads.
+#[cfg(any(test, feature = "webui"))]
 mod view;
 
 pub(crate) use ring::Series;
-pub(crate) use view::{Filter, Point, Query, SeriesView, Window};
+#[cfg(any(test, feature = "webui"))]
+pub(crate) use view::{Filter, Query, Window};
+#[cfg(test)]
+pub(crate) use view::{Point, SeriesView};
 
 /// Labels one dimension keeps before new ones add to its overflow count.
 pub(crate) const MAX_LABELS: usize = 512;
@@ -46,6 +51,7 @@ const MARKER_SECS: u64 = 30 * 86_400;
 pub(crate) const HALF: u64 = 1_800;
 
 /// What a series counts.
+#[cfg(any(test, feature = "webui"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Metric {
     Calls,
@@ -55,8 +61,10 @@ pub(crate) enum Metric {
     CacheHits,
 }
 
+#[cfg(any(test, feature = "webui"))]
 impl Metric {
     /// Every metric, in bucket order.
+    #[cfg(test)]
     pub(crate) const ALL: [Self; 5] = [
         Self::Calls,
         Self::Blocks,
@@ -72,6 +80,7 @@ impl Metric {
 
 /// How one finished call moves the counters. A replay is the delivery of an
 /// answer its first execution already counted, so it moves none.
+#[allow(clippy::struct_excessive_bools)] // Each flag is one metric's increment, independent of the others.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct Tally {
     pub blocked: bool,
@@ -207,6 +216,7 @@ pub(crate) fn normalize(label: &str) -> String {
 }
 
 /// A dimension the store keeps labels for.
+#[cfg(any(test, feature = "webui"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Dim {
     Server,
@@ -392,6 +402,7 @@ impl CounterStore {
     }
 
     /// Markers at or after `from`, oldest first.
+    #[cfg(any(test, feature = "webui"))]
     pub(crate) fn markers(&self, from: u64) -> Vec<Marker> {
         let inner = self.inner.lock();
         inner
@@ -403,6 +414,7 @@ impl CounterStore {
     }
 
     /// When coverage began.
+    #[cfg(test)]
     pub(crate) fn since(&self) -> u64 {
         self.inner.lock().since
     }
@@ -415,6 +427,7 @@ impl CounterStore {
 
     /// The file bytes for this store: the snapshot is taken under the lock,
     /// serialized after it is released.
+    #[cfg(test)]
     pub(crate) fn to_bytes(&self, binary_version: &str, saved_at: u64) -> Vec<u8> {
         snapshot::to_bytes(&self.snapshot(), binary_version, saved_at)
     }

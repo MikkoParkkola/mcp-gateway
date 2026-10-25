@@ -162,8 +162,8 @@ async fn post_modern_as(
 #[derive(Default)]
 struct Setup {
     auth: Option<AuthConfig>,
-    /// MIK-8854 T21: no transparency log on either route.
-    no_log: bool,
+    /// MIK-8854 T21: whether either route has a transparency log.
+    log: Log,
     fail_closed: bool,
     backend_error: Option<i32>,
     /// MIK-7979: the backends' transport fails after counting each call.
@@ -201,6 +201,14 @@ struct Setup {
     caller_identity: Option<crate::security::caller_identity::CallerIdentityConfig>,
     /// `security.sanitize_input` on both routes (MIK-8387 N1).
     sanitize: Sanitize,
+}
+
+/// Whether both routes have a transparency log (MIK-8854 T21).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Log {
+    #[default]
+    On,
+    Off,
 }
 
 /// Whether both routes sanitize input (`security.sanitize_input`).
@@ -260,10 +268,18 @@ impl MetaMode {
 }
 
 /// Backends `alpha` and `beta`, one logger shared by both routes.
-async fn fixture(setup: Setup) -> Fixture {
+/// The logger both routes share, in its own directory, failing closed when
+/// `fail_closed`.
+fn audit_log(
+    fail_closed: bool,
+) -> (
+    tempfile::TempDir,
+    std::path::PathBuf,
+    Arc<TransparencyLogger>,
+) {
     let audit = tempfile::tempdir().unwrap();
     let path = audit.path().join("audit.jsonl");
-    let policy = if setup.fail_closed {
+    let policy = if fail_closed {
         AuditFailurePolicy::FailClosed
     } else {
         AuditFailurePolicy::BestEffort
@@ -278,6 +294,11 @@ async fn fixture(setup: Setup) -> Fixture {
         .expect("open log")
         .with_failure_policy(policy),
     );
+    (audit, path, log)
+}
+
+async fn fixture(setup: Setup) -> Fixture {
+    let (audit, path, log) = audit_log(setup.fail_closed);
     let (mut state, store) = match &setup.auth {
         Some(auth) => super::tests::test_router_app_state_with_auth(auth).await,
         None => super::tests::test_router_app_state().await,
@@ -327,7 +348,7 @@ async fn fixture(setup: Setup) -> Fixture {
             .with_continuations(meta.continuation()),
         ));
     }
-    if !setup.no_log {
+    if setup.log == Log::On {
         meta.enable_transparency_log(Arc::clone(&log));
     }
     meta = arm_extras(meta, extras);
@@ -351,7 +372,7 @@ async fn fixture(setup: Setup) -> Fixture {
         meta = meta.with_caller_identity(config);
     }
     state_mut.meta_mcp = Arc::new(setup.meta_mode.arm(meta));
-    state_mut.transparency_log = (!setup.no_log).then(|| Arc::clone(&log));
+    state_mut.transparency_log = (setup.log == Log::On).then(|| Arc::clone(&log));
     let router = create_router(Arc::clone(&state));
     Fixture {
         state,

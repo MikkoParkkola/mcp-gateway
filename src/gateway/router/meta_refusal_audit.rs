@@ -63,6 +63,7 @@ impl<'a> Refused<'a> {
     }
 
     /// MIK-8854: mark this refusal as the request firewall's.
+    #[cfg(feature = "firewall")]
     pub(super) const fn firewall(mut self) -> Self {
         self.firewall = true;
         self

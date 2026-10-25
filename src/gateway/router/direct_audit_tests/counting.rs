@@ -250,7 +250,7 @@ async fn t11_an_uncatalogued_tool_counts_in_overflow() {
 #[tokio::test]
 async fn t21_counting_needs_no_audit_log() {
     let fx = fixture(Setup {
-        no_log: true,
+        log: Log::Off,
         auth: Some(key_for_alpha(None)),
         ..Setup::default()
     })
