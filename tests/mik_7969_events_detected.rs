@@ -368,6 +368,7 @@ async fn a_recovery_onto_sse_reconnects_a_quiet_listener() {
         "the listener opened its own SSE session after the switch: {}",
         gw.stall_report()
     );
+    // timing: absence
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!(
         records(dir.path(), "subs").len(),

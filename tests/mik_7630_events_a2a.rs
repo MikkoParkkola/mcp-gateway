@@ -255,6 +255,7 @@ async fn a6_the_poll_keeps_the_one_second_floor() {
     let id = sub(&gw, ALICE, TOOLS, &receiver, json!({})).await;
     let _ = first_fill(&agent, &receiver, &id).await;
     let from = agent.fetches();
+    // timing: absence
     tokio::time::sleep(Duration::from_secs(5)).await;
     let polls = agent.fetches() - from;
     assert!(
@@ -273,8 +274,10 @@ async fn a9_the_poll_stops_with_the_last_subscriber() {
     let id = sub(&gw, ALICE, TOOLS, &receiver, json!({})).await;
     let _ = first_fill(&agent, &receiver, &id).await;
     unsub(&gw, ALICE, TOOLS, &receiver, json!({})).await;
+    // timing: precondition
     tokio::time::sleep(Duration::from_secs(3)).await;
     let after = agent.fetches();
+    // timing: absence
     tokio::time::sleep(INTERVALS).await;
     // A running poll reads about once a second (A6), so ~5 here; the
     // backend's own health check may still ping (a card read) once.

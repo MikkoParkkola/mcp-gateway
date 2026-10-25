@@ -127,6 +127,7 @@ async fn s1_sse_resource_updates_become_events() {
     let got = expect_events(&receiver, &alice, &updated, 1).await;
     assert_eq!(got[0]["data"], json!({"uri": URI_A}));
     peer.push(session, UPDATED, json!({"uri": URI_B}));
+    // timing: absence
     tokio::time::sleep(QUIET).await;
     assert_eq!(
         delivered(&receiver, &alice, &updated).len(),
@@ -258,6 +259,7 @@ async fn s8_a_cross_origin_endpoint_is_refused() {
             ),
         )
         .await;
+    // timing: absence
     tokio::time::sleep(QUIET).await;
     assert!(
         elsewhere.seen().is_empty(),
@@ -337,6 +339,7 @@ async fn k3_the_calls_stream_outlives_the_request_timeout() {
     let gw = start_cfg(dir.path(), &receiver, cfg).await;
     assert!(invoke(&gw).await.get("error").is_none());
     let gets = peer.gets();
+    // timing: precondition
     tokio::time::sleep(Duration::from_secs(4)).await;
     assert!(
         invoke(&gw).await.get("error").is_none(),
