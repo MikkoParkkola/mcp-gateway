@@ -56,6 +56,20 @@ pub struct Redactor {
     member_value: Regex,
 }
 
+/// The connection-string rule's prefix, one text for the rule and for the
+/// barrier [`Spliced`] writes (MIK-8794).
+macro_rules! connection_prefix {
+    () => {
+        "(?i)(?:postgres|mysql|mongodb|redis)://"
+    };
+}
+
+// MIK-8794: the writer every redaction insertion goes through; declared
+// after the macro it uses.
+#[path = "redactor_splice.rs"]
+mod splice;
+use splice::{Spliced, collision_suffix, ends_open};
+
 /// What [`Redactor::redact_json_text`] did with a leaf.
 enum JsonText {
     /// Not a JSON document the walk takes: today's whole-leaf path applies.
@@ -67,7 +81,7 @@ enum JsonText {
 }
 
 /// The replacement every redaction writes.
-const REDACTED: &str = "[REDACTED:credential]";
+pub(crate) const REDACTED: &str = "[REDACTED:credential]";
 
 // The generic API-key rule's two halves, shared by its text pattern and by the
 // JSON-member pairing, so the two cannot drift apart (MIK-8756).
@@ -128,7 +142,7 @@ const CREDENTIAL_PATTERNS: &[(&str, &str)] = &[
     (r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{20,}", "Bearer Token"),
     // Database connection strings (postgres, mysql, mongodb, redis)
     (
-        r"(?i)(?:postgres|mysql|mongodb|redis)://[^\s]{10,}",
+        concat!(connection_prefix!(), r"[^\s]{10,}"),
         "Database Connection String",
     ),
     // OpenAI project API keys (sk-proj-...)
@@ -477,8 +491,10 @@ impl Redactor {
                 map.insert(key, value);
                 continue;
             };
-            let name = match names.claim(&candidate) {
-                Some(n) => format!("{candidate}#{n}"),
+            // A parsed key is its own document, so its end is judged alone.
+            let spaced = ends_open(&candidate);
+            let name = match names.claim(&candidate, spaced) {
+                Some(n) => format!("{candidate}{}", collision_suffix(n, spaced)),
                 None => candidate,
             };
             map.insert(name, value);
@@ -492,7 +508,9 @@ impl Redactor {
 #[derive(Default)]
 struct KeyNames {
     taken: HashSet<String>,
-    next: HashMap<String, usize>,
+    /// Per candidate and spacing: the two spellings of a suffix never
+    /// collide, so each keeps its own first free `n`.
+    next: HashMap<(String, bool), usize>,
 }
 
 impl KeyNames {
@@ -504,16 +522,20 @@ impl KeyNames {
         }
     }
 
-    /// Claim `candidate`, or else the first free `<candidate>#n`: `None`
-    /// when `candidate` itself was free, else the `n`.
-    fn claim(&mut self, candidate: &str) -> Option<usize> {
+    /// Claim `candidate`, or else the first free `<candidate><suffix>`, the
+    /// suffix [`collision_suffix`] writes for `spaced`: `None` when
+    /// `candidate` itself was free, else the `n`.
+    fn claim(&mut self, candidate: &str, spaced: bool) -> Option<usize> {
         if self.taken.insert(candidate.to_owned()) {
             return None;
         }
-        let n = self.next.entry(candidate.to_owned()).or_insert(1);
+        let n = self.next.entry((candidate.to_owned(), spaced)).or_insert(1);
         loop {
             *n += 1;
-            if self.taken.insert(format!("{candidate}#{n}")) {
+            if self
+                .taken
+                .insert(format!("{candidate}{}", collision_suffix(*n, spaced)))
+            {
                 return Some(*n);
             }
         }
@@ -693,41 +715,46 @@ fn rename_keys(text: &str, ranges: &[(usize, usize)], literals: &[Literal]) -> S
             objects.entry(lit.container).or_default().taken.insert(name);
         }
     }
-    let mut renamed: Vec<(usize, usize, String)> = Vec::new();
-    for lit in keys.filter(|lit| covers(ranges, lit)) {
-        let (lo, hi) = (
-            ranges.partition_point(|range| range.0 < lit.start),
-            ranges.partition_point(|range| range.0 < lit.end),
-        );
-        let inside: Vec<(usize, usize)> = ranges[lo..hi]
-            .iter()
-            .map(|range| (range.0 - lit.start, range.1 - lit.start))
-            .collect();
-        let mut raw = replace_spans(&text[lit.start..lit.end], &inside);
-        if let Some(candidate) = decode(&raw)
-            && let Some(n) = objects.entry(lit.container).or_default().claim(&candidate)
-        {
-            raw = format!("{raw}#{n}");
-        }
-        renamed.push((lit.start, lit.end, raw));
-    }
-    let mut out = String::with_capacity(text.len());
+    let mut renamed = keys.filter(|lit| covers(ranges, lit)).peekable();
+    // The key being written, and where its text starts in `out`. A key is
+    // written into the document's own output, so its markers and its suffix
+    // see what precedes it (MIK-8794).
+    let mut open: Option<(&Literal, usize)> = None;
+    let mut out = Spliced::with_capacity(text.len());
     let mut cursor = 0;
-    let mut keys = renamed.into_iter().peekable();
-    for &(start, end) in ranges {
-        if start < cursor {
-            continue; // inside a key already written whole
+    let mut close = |out: &mut Spliced, cursor: &mut usize, (lit, from): (&Literal, usize)| {
+        out.push(&text[*cursor..lit.end]);
+        *cursor = lit.end;
+        let spaced = out.barrier();
+        if let Some(candidate) = decode(&out.out[from..])
+            && let Some(n) = objects
+                .entry(lit.container)
+                .or_default()
+                .claim(&candidate, spaced)
+        {
+            out.push(&collision_suffix(n, spaced));
         }
-        let (from, to, with) = match keys.next_if(|key| key.0 <= start && start < key.1) {
-            Some(key) => key,
-            None => (start, end, "[REDACTED:credential]".to_owned()),
-        };
-        out.push_str(&text[cursor..from]);
-        out.push_str(&with);
-        cursor = to;
+    };
+    for &(start, end) in ranges {
+        if let Some(key) = open.take_if(|(lit, _)| start >= lit.end) {
+            close(&mut out, &mut cursor, key);
+        }
+        if open.is_none()
+            && let Some(lit) = renamed.next_if(|lit| lit.start <= start && start < lit.end)
+        {
+            out.push(&text[cursor..lit.start]);
+            cursor = lit.start;
+            open = Some((lit, out.out.len()));
+        }
+        out.push(&text[cursor..start]);
+        out.insert_marker();
+        cursor = end;
     }
-    out.push_str(&text[cursor..]);
-    out
+    if let Some(key) = open {
+        close(&mut out, &mut cursor, key);
+    }
+    out.push(&text[cursor..]);
+    out.out
 }
 
 /// The escape in `escapes` (in order, disjoint) that `at` falls strictly
@@ -741,17 +768,18 @@ fn escape_around(escapes: &[(usize, usize)], at: usize) -> Option<(usize, usize)
 }
 
 /// `text` with every range in `ranges` (merged, in order) replaced by the
-/// redaction marker.
+/// redaction marker. `text` is always a whole leaf, never a slice of one,
+/// so the barrier sees everything before each range.
 fn replace_spans(text: &str, ranges: &[(usize, usize)]) -> String {
-    let mut out = String::with_capacity(text.len());
+    let mut out = Spliced::with_capacity(text.len());
     let mut cursor = 0;
     for &(start, end) in ranges {
-        out.push_str(&text[cursor..start]);
-        out.push_str(REDACTED);
+        out.push(&text[cursor..start]);
+        out.insert_marker();
         cursor = end;
     }
-    out.push_str(&text[cursor..]);
-    out
+    out.push(&text[cursor..]);
+    out.out
 }
 
 /// Merge sorted spans that overlap or touch, so no character between two
