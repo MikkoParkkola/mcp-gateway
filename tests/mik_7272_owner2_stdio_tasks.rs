@@ -3,7 +3,7 @@
 //! MIK-7272.OWNER.2 (I4), store rows: the stdio local operator's task store
 //! reopens, relocates, stays separate from another store, and degrades
 //! honestly when its lease is held. Rows T1–T5, T7, T8, T12 and T13 of
-//! `docs/design/2026-09-30-sub4-stdio-owner-test-plan.md`; design D6 rev 5.
+//! the sub4 stdio owner test plan; design D6 rev 5.
 
 #[path = "mik_7272_owner2_stdio_tasks/helper.rs"]
 mod helper;

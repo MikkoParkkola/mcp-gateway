@@ -12,7 +12,7 @@ use super::*;
 //
 // Governing plan: docs/design/2026-08-31-cluster-b-connection-invariance
 // -test-plan.md S-02 (forwarding) and S-03 (per-request isolation).
-// Design: docs/design/2026-09-09-sub2b-request-scoped-notifications.md.
+// Design: the sub2b request scoped notifications design.
 // =========================================================================
 
 /// A notification seen ahead of the response is CAPTURED, not dropped.

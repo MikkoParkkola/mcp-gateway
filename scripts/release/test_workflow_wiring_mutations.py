@@ -1186,7 +1186,7 @@ CASES = [
     ),
 ]
 
-# The rehearsal verify (docs/design/2026-09-26-rehearsal-readonly-verify.md)
+# The rehearsal verify (the rehearsal readonly verify design)
 # repeats the release verify body verbatim, so an anchor inside that body now
 # matches twice. These cases are about the release step: each anchor is widened
 # with context only that step has, so it still names one site.

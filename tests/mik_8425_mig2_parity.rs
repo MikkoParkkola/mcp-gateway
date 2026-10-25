@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8425 MIG.2: the YAML backend reproduces every golden the guarded
 //! adapter recorded over the replaced backend (plan
-//! `docs/internal/plans/2026-10-24-mik-8425-mig2-swap.md`, sections 3 and 3b).
+//! the YAML backend swap plan, sections 3 and 3b).
 //!
 //! Each row compiles a baseline suite's own report and compares it with that
 //! suite's golden. Before the switch this crate bound the reports to

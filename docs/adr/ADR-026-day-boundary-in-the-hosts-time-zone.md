@@ -1,6 +1,6 @@
 # ADR-026: A "day" is the gateway host's day
 
-- **Status**: Decided, recorded here, 2026-10-25 (lead ruling on the D11 copy; implemented by MIK-8901). Not reopened by this ADR.
+- **Status**: Decided, recorded here, 2026-10-25 (maintainer decision on the D11 copy; implemented by MIK-8901). Not reopened by this ADR.
 - **Ticket**: MIK-8839 (lead's addition); binding on MIK-8901, U1 (MIK-8854, via ADR-017's daily buckets) and U10 (MIK-8863)
 - **Base**: `docs/ranking-1-release-line` at `d13b042cb`
 

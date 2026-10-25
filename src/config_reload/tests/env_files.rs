@@ -8,8 +8,8 @@ use super::*;
 // -------------------------------------------------------------------------
 // MIK-7256 — env files on a failed load (§P2 failing tests)
 //
-// Rows from `docs/design/mik-7256-test-plan.md`, against the design in
-// `docs/design/mik-7256-env-files-on-a-failed-load.md`. The design's types do
+// Rows from the env-files-on-a-failed-load test plan, against the design in
+// the env files on a failed load design. The design's types do
 //
 // Seam naming: the design requires that expansion reach its home "through an
 // injected resolver rather than calling `dirs::home_dir()` inline"

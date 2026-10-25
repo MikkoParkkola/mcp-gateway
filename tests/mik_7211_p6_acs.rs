@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-7211.PARENT.6: no delivered `cacheScope` is `public`.
 //!
-//! Design: `docs/design/2026-09-30-parent-6-cache-scope-type-guard.md`. Every
+//! Design: the parent 6 cache scope type guard design. Every
 //! wire case here has a stub backend answer `"cacheScope": "public"` and asserts
 //! a successful response carrying exactly `"private"`.
 

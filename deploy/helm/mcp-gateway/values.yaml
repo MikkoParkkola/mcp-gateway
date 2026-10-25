@@ -30,7 +30,7 @@ image:
   # Prefer a digest for immutable, supply-chain-safe deploys (set by A5/6684).
   # When `digest` is set it takes precedence over `tag`. Empty here on purpose:
   # the chart published for a release carries that release's image digest
-  # (MIK-6684; docs/release/v4.0.0-gate-day-procedure.md).
+  # (MIK-6684; the 4.0.0 gate day procedure).
   tag: "4.0.0-beta.3"
   digest: ""
   pullPolicy: IfNotPresent
