@@ -127,7 +127,11 @@ impl SseChannel {
                 .find(|e| e.event.as_deref() == Some("endpoint"))
             {
                 early.extend(events);
-                break resolve(found.data.trim())?;
+                // The last data line: a `data:` line before the event's
+                // `event: endpoint` in the same block is not the endpoint, as
+                // the line reader this replaced held (and its test pins).
+                let endpoint = found.data.lines().last().unwrap_or_default();
+                break resolve(endpoint.trim())?;
             }
         };
         let channel = Arc::new(Self {
