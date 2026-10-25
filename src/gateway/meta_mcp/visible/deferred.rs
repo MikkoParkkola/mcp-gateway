@@ -26,6 +26,9 @@ pub(crate) struct DeferredReplayKey {
 pub(crate) struct DeferredReplay {
     pub(crate) response: crate::protocol::JsonRpcResponse,
     pub(crate) audit: Option<super::super::admission::ReplayAudit>,
+    /// The server a `Named` target was admitted for, derived once by
+    /// `defer_or_serve_replay`; the lift records under it (MIK-8520).
+    pub(crate) audit_server: Option<String>,
     pub(crate) tool_name: String,
     pub(crate) arguments: serde_json::Value,
     /// The binding each step of the stored result ran under, which the lift
@@ -61,6 +64,7 @@ mod tests {
         DeferredReplay {
             response: JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({})),
             audit: None,
+            audit_server: None,
             tool_name: "gateway_invoke".to_string(),
             arguments: serde_json::json!({}),
             bindings: Vec::new(),
