@@ -173,7 +173,7 @@ async fn test_import_preview_rejects_neither_url_nor_spec() {
     );
 }
 
-/// MIK-8838 AC4: the spec preview carries the same `preview` block as a
+/// The spec preview carries the same `preview` block as a
 /// server preview, and each tool a class from the generated capability's
 /// `metadata.read_only` (GET and HEAD read, everything else write).
 #[tokio::test]
@@ -217,7 +217,7 @@ async fn the_spec_preview_has_the_preview_block_and_a_class_per_tool() {
     }
 }
 
-/// MIK-8838 AC4: a fetched spec's URL is echoed without its query, so a
+/// A fetched spec's URL is echoed without its query, so a
 /// query-authenticated spec still fetches and its key never comes back.
 #[tokio::test]
 async fn the_spec_preview_echoes_the_url_without_its_query() {
@@ -248,7 +248,7 @@ async fn the_spec_preview_echoes_the_url_without_its_query() {
     assert!(!body.to_string().contains("s3cr3t-value"), "{body}");
 }
 
-/// MIK-8838: a fetched spec is counted while it is read; one byte over the
+/// A fetched spec is counted while it is read; one byte over the
 /// 32 MiB spec budget is a 502 naming the budget, for preview and import.
 #[tokio::test]
 async fn a_spec_over_its_budget_is_a_502_naming_the_budget() {

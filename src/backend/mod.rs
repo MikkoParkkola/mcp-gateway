@@ -66,7 +66,7 @@ impl Backend {
 
 pub(crate) use catalogue_verdict::CatalogueVerdict;
 pub(crate) use era::removed_method_refusal_message;
-// The web UI's start-once preview (MIK-8838): a slotless HTTP start and a
+// The web UI's start-once preview: a slotless HTTP start and a
 // listing that neither caches nor commits verdicts.
 pub(crate) use era::start_detached_http;
 pub(crate) use input_keys::Lens;

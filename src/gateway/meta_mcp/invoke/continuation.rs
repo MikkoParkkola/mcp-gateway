@@ -312,7 +312,7 @@ pub(in crate::gateway::meta_mcp) fn retry_origin_backend(
     // backend with the whole chain array as its arguments and skip every
     // binding `plan_chain_resume` exists to check.
     //
-    // A preview confirmation (MIK-8838) belongs to the web UI's start-once
+    // A preview confirmation belongs to the web UI's start-once
     // preview and continues no backend exchange at all.
     //
     // Exhaustive and without a wildcard: a new purpose must be routed here on

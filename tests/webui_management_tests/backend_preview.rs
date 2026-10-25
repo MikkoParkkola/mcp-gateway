@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8838 (U6): `POST /ui/api/previews` starts a server once, lists
+//! `POST /ui/api/previews` starts a server once, lists
 //! its tools with a read/write class, and stops. These cover the URL arm and
-//! the route's contract; the command arm's sandbox is MIK-8905's (ADR-027),
+//! the route's contract; the command arm's sandbox is ADR-027's,
 //! and until it lands a command preview is refused.
 
 use std::sync::{Arc, Mutex};
@@ -320,7 +320,7 @@ async fn an_env_secret_is_withheld_and_named() {
     }
 }
 
-/// T12: before MIK-8905's sandbox launcher lands, a command preview is refused,
+/// T12: before the ADR-027 sandbox launcher lands, a command preview is refused,
 /// naming why, and nothing is started.
 #[tokio::test]
 async fn a_command_preview_is_refused_until_the_sandbox_lands() {

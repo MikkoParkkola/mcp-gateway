@@ -56,7 +56,7 @@ pub struct ToolPreview {
     /// Query/path/body parameter names.
     pub parameters: Vec<String>,
     /// `read` for an operation the converter marks `read_only` (GET and
-    /// HEAD), else `write` (MIK-8838).
+    /// HEAD), else `write`.
     pub class: &'static str,
     /// Always `inferred`: a spec declares no MCP annotations.
     pub class_source: &'static str,
@@ -121,7 +121,7 @@ async fn preview_handler(
     };
 
     let tools: Vec<ToolPreview> = caps.iter().map(tool_preview_from_cap).collect();
-    // The same block a server preview carries (MIK-8838). The URL is fetched
+    // The same block a server preview carries. The URL is fetched
     // as supplied, but echoed without userinfo, query or fragment, so a
     // query-authenticated spec never returns its key.
     let preview = json!({
@@ -339,7 +339,7 @@ async fn fetch_spec(url: &str, ssrf_protection: bool) -> Result<String, (StatusC
     read_spec_body(resp).await
 }
 
-/// The most a fetched spec may carry, counted while it is read (MIK-8838).
+/// The most a fetched spec may carry, counted while it is read.
 /// Sized for large public API specs, not for MCP listings; an inline `spec`
 /// is not counted here.
 const SPEC_BUDGET: usize = 32 * 1024 * 1024;

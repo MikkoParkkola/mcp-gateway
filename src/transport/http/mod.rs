@@ -279,7 +279,7 @@ pub struct HttpTransport {
     /// the `debug_assert!` at the session-write site below for the invariant
     /// this hint unlocks.
     single_tenant_hint: AtomicBool,
-    /// The start-once preview's byte budget (MIK-8838); unset everywhere
+    /// The start-once preview's byte budget; unset everywhere
     /// else, so a live backend reads its bodies as before.
     body_budget: std::sync::OnceLock<Arc<budget::ByteBudget>>,
 

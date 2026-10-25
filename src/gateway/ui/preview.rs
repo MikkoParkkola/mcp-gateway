@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! `POST /ui/api/previews` (MIK-8838, U6): start a server once to list
+//! `POST /ui/api/previews`: start a server once to list
 //! its tools before it is added, with nothing secret and nothing persisted.
 //!
-//! A command server runs only inside the ADR-027 sandbox launcher (MIK-8905);
+//! A command server runs only inside the ADR-027 sandbox launcher;
 //! until that lands a command preview is refused, so no command ever runs
 //! unsandboxed. A URL server is reached under the SSRF guard with no
 //! credentials of any kind.

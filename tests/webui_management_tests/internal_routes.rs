@@ -496,7 +496,7 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 404],
     ),
-    // src/gateway/ui/preview.rs (preview_backend): describe step, MIK-8838
+    // src/gateway/ui/preview.rs (preview_backend): describe step
     row(
         "/ui/api/previews",
         Method::POST,

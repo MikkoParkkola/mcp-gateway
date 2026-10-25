@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The start-once preview's tool listing (MIK-8838): the live fill's parse and
+//! The start-once preview's tool listing: the live fill's parse and
 //! judgement, with nothing cached and no verdict committed.
 
 use serde_json::Value;
@@ -8,7 +8,7 @@ use serde_json::Value;
 use super::{ListFamily, drain_list_pages, prepare_tool_metadata};
 use crate::Result;
 
-/// What a start-once preview listed (MIK-8838): the tools as the gateway would
+/// What a start-once preview listed: the tools as the gateway would
 /// serve them, which of them declared `readOnlyHint` themselves, the names
 /// withheld, and whether paging stopped short.
 pub(crate) struct PreviewListing {

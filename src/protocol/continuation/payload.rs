@@ -30,7 +30,7 @@ pub enum ContinuationPurpose {
     /// must not stand in for the confirmation the gated step still owes.
     ChainResume,
     /// Confirms the web UI's start-once preview of a server before it is
-    /// added (MIK-8838). It continues no backend exchange and holds nothing:
+    /// added. It continues no backend exchange and holds nothing:
     /// the second request carries the same body and this token, single use.
     PreviewConfirm,
 }

@@ -733,7 +733,7 @@ fn bench_continuation(c: &mut Criterion) {
     group.finish();
 }
 
-/// MIK-8838: one `tools/list` round trip through `HttpTransport` against a
+/// One `tools/list` round trip through `HttpTransport` against a
 /// loopback stub, answered as JSON and as one SSE event: the two body-read
 /// branches a live backend takes, so a change to either shows here.
 fn bench_http_request_path(c: &mut Criterion) {

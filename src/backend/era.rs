@@ -399,7 +399,7 @@ fn probe_cap() -> Duration {
 }
 
 /// Start an HTTP transport that belongs to no backend slot (the web UI's
-/// start-once preview, MIK-8838): attach a fresh era cache, connect, probe the
+/// start-once preview): attach a fresh era cache, connect, probe the
 /// peer's era once, and finish startup with that verdict. The same sequence
 /// `Backend::start_entry` runs, so a modern stateless server that refuses
 /// `initialize` previews like a legacy one.

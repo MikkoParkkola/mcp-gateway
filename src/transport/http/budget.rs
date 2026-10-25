@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A byte budget for every body a transport reads (MIK-8838, U6 preview).
+//! A byte budget for every body a transport reads, for the start-once preview.
 //!
 //! Counted while reading, before anything is parsed, so an over-budget peer
 //! is refused without its whole body ever held in memory. Only the start-once
