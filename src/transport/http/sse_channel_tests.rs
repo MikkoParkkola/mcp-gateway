@@ -190,3 +190,60 @@ async fn the_stream_ending_fails_what_waits() {
         "a closed channel refuses"
     );
 }
+
+/// What the stream carries that is not an answer is ignored: an event whose
+/// data is not JSON, and a result frame with no id. The real answer after
+/// them still reaches its request.
+#[tokio::test]
+async fn non_json_and_id_less_frames_are_ignored() {
+    let (url, tx) = stream_server().await;
+    tx.send("event: endpoint\ndata: /m\n\n".into())
+        .expect("send");
+    let channel = open(&url, None).await.expect("open");
+    let waiting = channel.register(&RequestId::Number(3)).expect("register");
+    tx.send("event: message\ndata: not json at all\n\n".into())
+        .expect("send");
+    tx.send(event(
+        &json!({"jsonrpc": "2.0", "result": {"orphan": true}}),
+    ))
+    .expect("send");
+    tx.send(event(
+        &json!({"jsonrpc": "2.0", "id": 3, "result": {"mine": true}}),
+    ))
+    .expect("send");
+    let response = tokio::time::timeout(std::time::Duration::from_secs(10), waiting.response())
+        .await
+        .expect("answered")
+        .expect("paired");
+    assert_eq!(response.result, Some(json!({"mine": true})));
+    assert!(
+        !channel.is_closed(),
+        "ignored frames do not end the channel"
+    );
+}
+
+/// The replacing task's own request, meeting a stream that ended at once,
+/// fails rather than wait on the lock its own caller holds.
+#[tokio::test]
+async fn the_replacing_tasks_own_request_fails_fast() {
+    use super::super::sse_send_tests::{peer, wait_closed};
+    let (url, _log, streams) = peer().await;
+    let transport = super::super::HttpTransport::new(
+        &url,
+        std::collections::HashMap::new(),
+        std::time::Duration::from_secs(10),
+        false,
+    )
+    .expect("transport");
+    transport
+        .initialize()
+        .await
+        .expect("handshake on session 1");
+    streams.lock().expect("streams").insert(1, None);
+    wait_closed(&transport).await;
+    let refused = super::REPLACING
+        .scope((), transport.live_sse_channel())
+        .await
+        .expect_err("fails fast inside the replacement");
+    assert!(refused.to_string().contains("being replaced"), "{refused}");
+}

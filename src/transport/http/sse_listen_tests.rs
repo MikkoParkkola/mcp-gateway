@@ -24,7 +24,8 @@ use crate::transport::upstream_tap::{
 type Log = Arc<Mutex<Vec<(String, Option<String>)>>>;
 
 /// A one-session spec SSE peer: `GET /sse` names `/messages` and keeps the
-/// stream; each POST is answered 202 with its response on the stream.
+/// stream; each POST is answered 202 with its response on the stream, except
+/// `resources/unsubscribe`, which is refused with HTTP 500.
 async fn peer() -> (String, Log) {
     let log: Log = Arc::default();
     let stream: Arc<Mutex<Option<mpsc::UnboundedSender<String>>>> = Arc::default();
@@ -60,7 +61,11 @@ async fn peer() -> (String, Log) {
                 let (log, stream) = (Arc::clone(&post_log), Arc::clone(&post_stream));
                 async move {
                     let method = frame["method"].as_str().unwrap_or_default().to_owned();
-                    log.lock().expect("log").push((method, cred(&headers)));
+                    log.lock().expect("log").push((method.clone(), cred(&headers)));
+                    // A refusal to answer as an error status (the request row).
+                    if method == "resources/unsubscribe" {
+                        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    }
                     if let Some(id) = frame.get("id") {
                         let answer = json!({"jsonrpc": "2.0", "id": id, "result": {}});
                         if let Some(tx) = stream.lock().expect("stream").as_ref() {
@@ -226,4 +231,25 @@ async fn c5_a_later_refusal_sends_nothing_more() {
         ["GET", "initialize", "notifications/initialized"]
     );
     assert!(session.channel().is_ok(), "the stream is still up");
+}
+
+/// A listener request the peer refuses with an error status fails with that
+/// status named, and nothing waits on the stream for it.
+#[tokio::test]
+async fn a_refused_listener_request_names_the_status() {
+    let (url, _log) = peer().await;
+    let (_transport, session) = session(&url, None);
+    let _stream = Arc::clone(&session)
+        .unsolicited(Watched::default())
+        .await
+        .map_err(|_| "refused")
+        .expect("handshake");
+    let refused = Arc::clone(&session)
+        .legacy_interest(LegacyPin::default(), "file:///a", false)
+        .await
+        .expect_err("a 500 is an error");
+    assert!(
+        refused.to_string().contains("returned HTTP 500"),
+        "names the status: {refused}"
+    );
 }

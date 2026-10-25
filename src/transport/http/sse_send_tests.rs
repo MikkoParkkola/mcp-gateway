@@ -18,13 +18,13 @@ use super::HttpTransport;
 use crate::protocol::{JsonRpcRequest, RequestId};
 
 /// The posts the peer saw: `(session, method)`, in order.
-type Log = Arc<Mutex<Vec<(u32, String)>>>;
+pub(super) type Log = Arc<Mutex<Vec<(u32, String)>>>;
 /// Each session's stream sender; `None` once the row ended it.
-type Streams = Arc<Mutex<HashMap<u32, Option<mpsc::UnboundedSender<String>>>>>;
+pub(super) type Streams = Arc<Mutex<HashMap<u32, Option<mpsc::UnboundedSender<String>>>>>;
 
 /// A spec SSE peer: each GET is a new session; every POST is answered 202
 /// with its response on that session's stream.
-async fn peer() -> (String, Log, Streams) {
+pub(super) async fn peer() -> (String, Log, Streams) {
     let log: Log = Arc::default();
     let streams: Streams = Arc::default();
     let (get_streams, post_streams, post_log) = (streams.clone(), streams.clone(), log.clone());
@@ -143,5 +143,76 @@ async fn k4b_a_stream_closed_before_the_post_sends_on_the_replacement() {
         lists,
         [2],
         "posted once, on the new session, never on the dead one"
+    );
+}
+
+/// The transport's channel once its reader has seen the stream end.
+pub(super) async fn wait_closed(transport: &HttpTransport) {
+    crate::test_pause::within("the channel saw the end", async {
+        while !transport
+            .sse_channel
+            .read()
+            .as_ref()
+            .is_some_and(|c| c.is_closed())
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+}
+
+/// Before any handshake in SSE mode there is no stream: body mode.
+#[tokio::test]
+async fn no_stream_before_the_first_handshake_means_body_mode() {
+    let (url, _log, _streams) = peer().await;
+    let transport = HttpTransport::new(&url, HashMap::new(), Duration::from_secs(10), false)
+        .expect("transport");
+    assert!(
+        transport
+            .live_sse_channel()
+            .await
+            .expect("no error")
+            .is_none()
+    );
+}
+
+/// A caller that waited on `reinit_lock` while another replaced the dead
+/// stream uses that replacement: one shared replacement, not a second.
+#[tokio::test]
+async fn a_caller_that_waited_uses_the_replacement_made_meanwhile() {
+    let (url, _log, streams) = peer().await;
+    let transport = HttpTransport::new(&url, HashMap::new(), Duration::from_secs(10), false)
+        .expect("transport");
+    transport
+        .initialize()
+        .await
+        .expect("handshake on session 1");
+    streams.lock().expect("streams").insert(1, None);
+    wait_closed(&transport).await;
+    let held = transport.reinit_lock.lock().await;
+    let waiting = {
+        let transport = Arc::clone(&transport);
+        tokio::spawn(async move { transport.live_sse_channel().await })
+    };
+    // Let the caller reach the lock this row holds.
+    // timing: precondition
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The replacement the other caller would make, under the held lock.
+    transport.connect_sse().await.expect("new stream");
+    transport
+        .legacy_handshake()
+        .await
+        .expect("handshake on session 2");
+    drop(held);
+    let got = crate::test_pause::within("the waiting caller", waiting)
+        .await
+        .expect("task")
+        .expect("no error")
+        .expect("a channel");
+    assert!(!got.is_closed(), "the replacement made while it waited");
+    assert_eq!(
+        streams.lock().expect("streams").len(),
+        2,
+        "one replacement, not two"
     );
 }
