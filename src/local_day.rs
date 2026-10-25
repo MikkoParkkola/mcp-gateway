@@ -58,7 +58,7 @@ fn local_date<Z: TimeZone>(zone: &Z, secs: i64) -> NaiveDate {
 /// lies within two days of midnight read as UTC.
 ///
 /// ponytail: a date the zone re-enters after rolling back across midnight
-/// (America/St_Johns used 00:01 transitions until 2011) keeps only its first
+/// (`America/St_Johns` used 00:01 transitions until 2011) keeps only its first
 /// stretch; split a day into several intervals if such dates ever matter.
 fn first_instant<Z: TimeZone>(zone: &Z, date: NaiveDate) -> u64 {
     let midnight = date.and_time(NaiveTime::MIN);
