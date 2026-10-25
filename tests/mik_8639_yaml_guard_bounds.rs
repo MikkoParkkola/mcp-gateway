@@ -332,10 +332,10 @@ fn many_documents_accepted() {
             input.push_str("---\na: 1\n");
         }
     }
+    // 1100 is the count the parser replaced in MIK-8425 MIG.2 yielded for
+    // this input, pinned so the bound outlives that parser.
     let results: Vec<_> = yaml::documents(&input).collect();
-    let expected = serde_yaml::Deserializer::from_str(&input).count();
-    assert_eq!(expected, 1100, "fixture must hold 1100 documents");
-    assert_eq!(results.len(), expected, "all documents must be yielded");
+    assert_eq!(results.len(), 1100, "all documents must be yielded");
     assert!(
         results.iter().all(std::result::Result::is_ok),
         "1100 documents must be accepted"
