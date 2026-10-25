@@ -94,7 +94,8 @@ fn loaded(text: &str) -> String {
     let text = helm_gateway_yaml(text).unwrap_or_else(|| text.to_owned());
     let dir = tempfile::tempdir().expect("a temporary directory");
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(&path, text).expect("write the config");
+    // Owner-only, as the loader requires of a config it reads (CONFIG.2).
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, text).expect("write the config");
     match Config::load_literal(Some(&path)) {
         Ok(config) => match golden::canonical_digest(&config) {
             Ok(digest) => digest,
