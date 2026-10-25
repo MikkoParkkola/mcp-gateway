@@ -112,9 +112,11 @@ fn compare_keyed(name: &str, read: impl Fn(&str) -> String) -> Outcome {
             panic!("{name}: malformed row {row:?}");
         };
         let Ok(text) = std::fs::read_to_string(golden::repo_root().join(path)) else {
+            eprintln!("{name}: skipped {path} (gone since recording)");
             continue;
         };
         if golden::digest(text.as_bytes()) != sha {
+            eprintln!("{name}: skipped {path} (edited since recording)");
             continue;
         }
         outcome.compared += 1;
@@ -231,6 +233,12 @@ fn p6_every_repository_tree_round_trips() {
     );
 }
 
+/// The `trees.tsv` rows whose file is unchanged since recording: the exact
+/// count, so any further skip fails until it is reviewed. 184 rows were
+/// recorded; skipped today, each printed by name when the test runs:
+/// `capabilities/linear/linear_get_issue.yaml` (edited on the release line).
+const P2_UNEDITED: usize = 183;
+
 /// P2: every repository YAML file's tree, `Dict` and stream, as recorded
 /// with the replaced backend.
 ///
@@ -238,11 +246,11 @@ fn p6_every_repository_tree_round_trips() {
 /// a seat finding), and every recorded row matched; that is the swap's
 /// evidence. After it, there is no old backend to re-record with, so a file
 /// another change edits or removes is skipped, as the baseline suites do,
-/// and the floor keeps the comparison from passing nearly empty.
+/// and `P2_UNEDITED` fails any skip beyond the reviewed ones.
 #[test]
 fn p2_trees_as_recorded() {
     let outcome = compare_keyed("trees.tsv", trees::readings);
-    assert_outcome("P2 trees", &outcome, trees::MIN_COMPARED);
+    assert_outcome("P2 trees", &outcome, P2_UNEDITED);
 }
 
 /// P13: the `Config` each shipped config and Helm `ConfigMap` extracts to.

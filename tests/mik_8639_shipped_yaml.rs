@@ -110,7 +110,8 @@ fn read(path: &str) -> String {
 /// Every file the replaced backend accepted, the seam accepts with the same
 /// document count. A file added, edited or removed since the recording is
 /// skipped (there is no old backend left to re-record it with, MIK-8425
-/// MIG.2), and at least `MIN_COMPARED` recorded files must still be compared.
+/// MIG.2) and printed by name, and exactly the reviewed skips are allowed
+/// (`MIN_COMPARED`).
 #[test]
 fn shipped_yaml_accepted_by_backend_stays_accepted() {
     if is_packaged_crate(&package_root()) {
@@ -181,9 +182,11 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
 
 const GOLDEN: &str = "tests/fixtures/mik_8425_yaml/shipped.tsv";
 
-/// Rows recorded on 2026-10-25: 184. At least this many must still match the
-/// files on disk.
-const MIN_COMPARED: usize = 160;
+/// The recorded rows whose file is unchanged on disk: the exact count, so any
+/// further skip fails until it is reviewed. 184 rows were recorded on
+/// 2026-10-25; skipped today, each printed by name when the test runs:
+/// `capabilities/linear/linear_get_issue.yaml` (edited on the release line).
+const MIN_COMPARED: usize = 183;
 
 fn digest(content: &str) -> String {
     use sha2::Digest as _;
