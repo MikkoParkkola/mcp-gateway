@@ -32,6 +32,12 @@ owned_routes! {
     AUTH_TOKEN_JTI = "/auth/token/{jti}",
     AUTH_TOKENS = "/auth/tokens",
     UI = "/ui",
+    /// The classic page, kept for one release beside the new UI (MIK-8870).
+    UI_CLASSIC = "/ui/classic",
+    /// The new UI's content-hashed static files (MIK-8870).
+    UI_ASSET = "/ui/assets/{file}",
+    /// Every other `/ui` deep link: the new UI's shell document (MIK-8870).
+    UI_SHELL = "/ui/{*path}",
     DASHBOARD = "/dashboard",
     DASHBOARD_HANDOFF = "/dashboard/handoff",
     DASHBOARD_LOGOUT = "/dashboard/logout",
