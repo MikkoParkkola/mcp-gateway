@@ -825,35 +825,30 @@ const DYING_CHILD: &str = r#"printf 'Error: Cannot find module %s\n' "'/root/.np
 exit 3
 "#;
 
-fn dying_transport() -> Arc<StdioTransport> {
+/// A transport that runs `dying.sh` from `dir`.
+fn dying_transport(dir: &std::path::Path) -> Arc<StdioTransport> {
     StdioTransport::new(
         "sh dying.sh",
         HashMap::new(),
-        Some(
-            std::env::temp_dir()
-                .join(format!("stdio-tail-{}", std::process::id()))
-                .to_string_lossy()
-                .into_owned(),
-        ),
+        Some(dir.to_string_lossy().into_owned()),
         std::time::Duration::from_secs(5),
         None,
     )
 }
 
-/// Writes the dying child where `dying_transport` runs it.
-fn write_dying_child() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("stdio-tail-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create the scratch directory");
-    let script = dir.join("dying.sh");
-    std::fs::write(&script, DYING_CHILD).expect("write the dying child");
-    script
+/// Writes the dying child into a directory of its own, so tests running at
+/// once never share one, and the directory goes when the test ends.
+fn write_dying_child() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("create the scratch directory");
+    std::fs::write(dir.path().join("dying.sh"), DYING_CHILD).expect("write the dying child");
+    dir
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn a_failed_start_keeps_the_childs_stderr_for_classifying_it() {
-    write_dying_child();
-    let transport = dying_transport();
+    let dir = write_dying_child();
+    let transport = dying_transport(dir.path());
 
     transport
         .start()
@@ -871,8 +866,8 @@ async fn a_failed_start_keeps_the_childs_stderr_for_classifying_it() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_failed_start_records_how_the_child_exited() {
-    write_dying_child();
-    let transport = dying_transport();
+    let dir = write_dying_child();
+    let transport = dying_transport(dir.path());
 
     transport
         .start()
@@ -892,8 +887,8 @@ async fn a_failed_start_records_how_the_child_exited() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_start_drops_what_the_previous_attempt_said() {
-    write_dying_child();
-    let transport = dying_transport();
+    let dir = write_dying_child();
+    let transport = dying_transport(dir.path());
 
     transport.start().await.expect_err("the child dies");
     assert!(
@@ -901,22 +896,21 @@ async fn a_start_drops_what_the_previous_attempt_said() {
         "the first attempt left a tail to drop"
     );
 
-    // The command now fails before it spawns anything, so nothing overwrites
-    // the tail: only the clearing can empty it.
-    let silent = StdioTransport::new(
-        "/nonexistent/definitely-not-a-real-binary",
-        HashMap::new(),
-        None,
-        std::time::Duration::from_secs(1),
-        None,
-    );
-    silent
+    // The same transport starts again, now running a child that exits
+    // without a word: only the clearing can empty the tail.
+    std::fs::write(dir.path().join("dying.sh"), "exit 3\n").expect("silence the child");
+    transport
         .start()
         .await
-        .expect_err("a missing binary cannot start");
+        .expect_err("a child that exits before the handshake cannot start");
     assert!(
-        silent.stderr_tail().is_empty(),
-        "a start that never spawned reads nothing from a child, so it must not report the \
-         previous attempt's words as its own"
+        transport.stderr_tail().is_empty(),
+        "a start whose child said nothing must not report the previous attempt's words as \
+         its own: {:?}",
+        transport.stderr_tail()
+    );
+    assert!(
+        transport.exit_status().is_some(),
+        "the second attempt saw its own child exit"
     );
 }

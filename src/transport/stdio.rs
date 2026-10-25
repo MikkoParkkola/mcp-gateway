@@ -398,9 +398,13 @@ impl StdioTransport {
         self.assigned_cache.as_deref()
     }
 
-    /// The cache directory the child is given, whoever chose it.
+    /// The cache directory the child is given, whoever chose it, under any
+    /// spelling npm reads as its cache setting.
     pub(crate) fn package_cache_dir(&self) -> Option<PathBuf> {
-        self.env.get(CACHE_ENV).map(PathBuf::from)
+        self.env
+            .iter()
+            .find(|(key, _)| npm_setting(key) == npm_setting(CACHE_ENV))
+            .map(|(_, dir)| PathBuf::from(dir))
     }
 
     /// How the child exited, if a failed start saw it exit.
