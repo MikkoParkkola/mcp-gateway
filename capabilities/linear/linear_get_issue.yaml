@@ -1,7 +1,7 @@
-sha256: 1ecc9b9985a69f64eb40a558a3d2d5644e10e02862495a5103eefc0fdbf8aa63
+sha256: b176adfa8be05c12daa47b3251ea0c672376757dab2507dddc9fdc71356dbf0f
 fulcrum: "1.0"
 name: linear_get_issue
-description: "Get a single Linear issue by identifier (e.g., 'ENG-123') with full details and comments"
+description: "Get a single Linear issue by UUID or identifier (e.g., 'ENG-123') with full details and comments; an archived issue is returned too"
 
 schema:
   input:
@@ -9,9 +9,10 @@ schema:
     properties:
       identifier:
         type: string
-        description: "Issue identifier like 'ENG-123' or 'BOT-42'"
+        description: "Issue UUID, or identifier like 'ENG-123' or 'BOT-42'"
         examples:
           - "ENG-123"
+          - "9cf1e2a4-6b3d-4f8e-a1c7-2d5b8e0f3a61"
     required: [identifier]
   output:
     type: object
@@ -20,15 +21,9 @@ schema:
         type: object
         description: Full issue details
 
-transform:
-  project:
-    - nodes[0]
-  rename:
-    nodes[0]: issue
-
 # Canonical projection (MIK-5877). Maps the issue payload onto the gateway's
 # canonical schema (actor/subject/env_time/url). Paths are relative to the
-# transformed payload above ({issue: {...}}). DORMANT unless the gateway runs
+# response payload ({issue: {...}}). DORMANT unless the gateway runs
 # with meta_mcp.projection_mode = on | experimental; at the default `off` this
 # block changes no response. The untouched payload is always preserved under
 # _raw. NOTE: enabling experimental projects this tool for ~50% of sessions —
@@ -67,39 +62,40 @@ providers:
       headers:
         Content-Type: "application/json"
       body:
+        # A lookup by key, never a text search's first hit (MIK-8706):
+        # issue(id:) takes the UUID or the identifier, and a key no issue
+        # has fails with "Entity not found" instead of returning another.
         query: >
-          query GetIssue($term: String!) {
-            searchIssues(term: $term, first: 1, includeArchived: false, includeComments: true) {
-              nodes {
-                id identifier title description priority priorityLabel estimate
-                state { id name type color }
-                team { id name key }
-                assignee { id name displayName email }
-                labels { nodes { id name color } }
-                project { id name }
-                parent { id identifier title }
-                children { nodes { id identifier title state { name } } }
-                comments {
-                  nodes {
-                    id body createdAt
-                    user { id name displayName }
-                    resolvedAt
-                  }
+          query GetIssue($id: String!) {
+            issue(id: $id) {
+              id identifier title description priority priorityLabel estimate
+              state { id name type color }
+              team { id name key }
+              assignee { id name displayName email }
+              labels { nodes { id name color } }
+              project { id name }
+              parent { id identifier title }
+              children { nodes { id identifier title state { name } } }
+              comments {
+                nodes {
+                  id body createdAt
+                  user { id name displayName }
+                  resolvedAt
                 }
-                relations {
-                  nodes {
-                    type
-                    relatedIssue { id identifier title }
-                  }
-                }
-                createdAt updatedAt completedAt dueDate
-                url
               }
+              relations {
+                nodes {
+                  type
+                  relatedIssue { id identifier title }
+                }
+              }
+              createdAt updatedAt completedAt dueDate
+              url
             }
           }
         variables:
-          term: "{identifier}"
-      response_path: data.searchIssues
+          id: "{identifier}"
+      response_path: data
 
 cache:
   strategy: exact
