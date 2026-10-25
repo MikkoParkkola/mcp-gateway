@@ -18,7 +18,7 @@ For a gateway in Europe/Amsterdam, limits reset at 01:00 or 02:00 local time, an
 ## Decision
 
 - Every "day" the gateway counts (budget windows, `costs.json` restore, ADR-017's daily buckets, "today" in the UI) is local midnight to local midnight in the host's time zone, taken from the system. No new setting.
-  - Amendment, MIK-8901 (2026-10-25): a per-key budget's rolling window (`BudgetWindow` Day, Week and Month: the last 24 hours, 7 days or 30 days) is a duration, not a calendar day, and keeps rolling. "Budget windows" above means the enforcer's daily limits.
+  - Amendment (2026-10-25): a per-key budget's rolling window (`BudgetWindow` Day, Week and Month: the last 24 hours, 7 days or 30 days) is a duration, not a calendar day, and keeps rolling. "Budget windows" above means the enforcer's daily limits.
 - The costs API names the zone it counts in, so the UI prints it.
 - A test covers both daylight-saving days (in Europe/Amsterdam, 25 hours on 2026-10-25 and 23 hours on 2027-03-28): one reset at local midnight, no double reset, no skipped day.
 - A host in UTC behaves exactly as today.

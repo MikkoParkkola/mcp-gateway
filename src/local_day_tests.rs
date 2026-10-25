@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Local-day bounds on DST days and fractional-offset zones (MIK-8901).
+//! Local-day bounds on DST days and fractional-offset zones.
 //! Instants computed independently with Python's `zoneinfo`.
 
 use super::*;
-use chrono_tz::{America, Asia, Europe, Pacific};
+use chrono_tz::{Africa, America, Asia, Europe, Pacific};
 
 fn date(y: i32, m: u32, d: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(y, m, d).expect("a valid date")
@@ -77,7 +77,7 @@ fn a_skipped_midnight_starts_the_day_at_the_first_valid_instant() {
     assert_eq!(day.end - day.start, 82_800);
     // The day before ends where this one starts: no gap, no overlap.
     assert_eq!(local_day(&America::Havana, day.start - 1).end, day.start);
-    // `start` is in the day it opens, never in the day before (MIK-8854 U1).
+    // `start` is in the day it opens, never in the day before: a chart draws each day from its start.
     assert_eq!(local_day(&America::Havana, day.start).date, day.date);
     assert_eq!(
         local_day(&America::Havana, day.start - 1).date,
@@ -98,9 +98,43 @@ fn a_repeated_midnight_starts_the_day_at_the_first_one() {
         local_day(&America::Havana, day.start - 1).date,
         date(2023, 11, 4)
     );
+    // Both 00:30s, an hour apart, are on that day, and the next day starts
+    // where it ends.
+    for repeated_0030 in [1_699_158_600, 1_699_162_200] {
+        assert_eq!(local_day(&America::Havana, repeated_0030), day);
+    }
+    assert_eq!(local_day(&America::Havana, day.end).start, day.end);
 }
 
-/// U1 walks a chart back one day at a time from `start - 1`: across the
+/// A gap that ends off the minute is found to the second: Monrovia moved
+/// from -00:44:30 to GMT on 1972-01-07, so that day began at 00:44:30 GMT.
+#[test]
+fn a_skipped_midnight_is_found_to_the_second() {
+    let day = local_day(&Africa::Monrovia, 63_600_000);
+    assert_eq!(day.date, date(1972, 1, 7));
+    assert_eq!(day.start, 63_593_070);
+    assert_eq!(
+        local_day(&Africa::Monrovia, 63_593_069).date,
+        date(1972, 1, 6)
+    );
+}
+
+/// The largest inputs never panic, in zones far ahead of and behind UTC:
+/// they count as 9999-12-31T23:59:59Z.
+#[test]
+fn extreme_instants_clamp_without_panicking() {
+    let kiritimati = local_day(&Pacific::Kiritimati, u64::MAX);
+    assert_eq!(kiritimati.date, date(10_000, 1, 1));
+    let pago_pago = local_day(&Pacific::Pago_Pago, u64::MAX);
+    assert_eq!(pago_pago.date, date(9999, 12, 31));
+    assert_eq!(
+        local_day(&Europe::Amsterdam, u64::MAX),
+        local_day(&Europe::Amsterdam, 253_402_300_799)
+    );
+    assert!(pago_pago.start < pago_pago.end);
+}
+
+/// A daily chart walks back one day at a time from `start - 1`: across the
 /// 25-hour day each step lands on the previous date, none repeated or skipped.
 #[test]
 fn walking_back_from_start_visits_every_date_once() {
@@ -143,6 +177,15 @@ fn the_test_zone_defaults_to_utc_and_is_scoped() {
     {
         let _amsterdam = test_zone(Europe::Amsterdam);
         assert_eq!(host_zone_name(), "Europe/Amsterdam");
+        {
+            let _kolkata = test_zone(Asia::Kolkata);
+            assert_eq!(host_zone_name(), "Asia/Kolkata");
+        }
+        assert_eq!(
+            host_zone_name(),
+            "Europe/Amsterdam",
+            "a nested guard restores the outer zone"
+        );
     }
     assert_eq!(host_zone_name(), "UTC");
 }
@@ -153,4 +196,12 @@ fn the_system_zone_reads_as_a_named_zone() {
     let zone = system_zone();
     assert_eq!(zone.name().parse::<chrono_tz::Tz>(), Ok(zone));
     assert_eq!(system_zone(), zone);
+    // A name the system reports and chrono-tz knows is that zone, not the
+    // UTC fallback.
+    if let Some(named) = iana_time_zone::get_timezone()
+        .ok()
+        .and_then(|name| name.parse::<chrono_tz::Tz>().ok())
+    {
+        assert_eq!(zone, named);
+    }
 }
