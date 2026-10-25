@@ -540,7 +540,7 @@ implementation from an empty one, so it is labelled rather than counted.
 
 - **Status**: Proposed. Amends §2, §3 and the Acceptance list. The reviewed
   body above is not reopened; only what this section names changes.
-- **Reviewed**: `gpt-review` and `kimi-review`, 2026-09-10, both
+- **Reviewed**: two independent model reviews, 2026-09-10, both
   SHIP-WITH-FIXES on the first draft. Every finding is answered in place; the
   one that changed the decision is answered in *"What S-03 can and cannot
   discriminate over stdio"*, below.
