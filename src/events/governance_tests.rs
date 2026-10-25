@@ -44,3 +44,39 @@ fn a_running_firewall_names_block_redacted_or_pass() {
     assert_eq!(s.firewall_verdict(Scan::Pass, true), "redacted");
     assert_eq!(s.firewall_verdict(Scan::Pass, false), "pass");
 }
+
+/// MIK-8794: a replay's verdict. The fresh scan decides `block`; a fresh
+/// `pass` over a stored body that was redacted and still holds the marker
+/// stays `redacted`; a stored verdict adds nothing otherwise.
+#[test]
+fn a_replay_verdict_carries_a_redaction_forward() {
+    for (fresh, stored, holds_marker, want) in [
+        ("block", Some("redacted"), true, "block"),
+        ("block", Some("pass"), false, "block"),
+        ("redacted", Some("pass"), false, "redacted"),
+        ("pass", Some("redacted"), true, "redacted"),
+        ("pass", Some("block"), true, "redacted"),
+        ("pass", Some("block"), false, "pass"),
+        ("pass", Some("redacted"), false, "pass"),
+        ("pass", Some("pass"), true, "pass"),
+        ("pass", None, true, "pass"),
+        ("none", Some("redacted"), true, "none"),
+    ] {
+        assert_eq!(
+            carried(fresh, stored, holds_marker),
+            want,
+            "fresh {fresh}, stored {stored:?}, marker {holds_marker}"
+        );
+    }
+}
+
+/// Without a firewall a replay records `none`, whatever was stored.
+#[test]
+fn a_replay_without_a_firewall_records_none() {
+    let s = services(false);
+    let body = br#"{"data":"[REDACTED:credential]"}"#;
+    assert_eq!(
+        s.replay_verdict(Scan::Pass, false, Some("redacted"), body),
+        "none"
+    );
+}
