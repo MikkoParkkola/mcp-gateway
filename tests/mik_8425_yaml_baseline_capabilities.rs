@@ -18,10 +18,11 @@
 #[path = "common/mik_8425_golden.rs"]
 mod golden;
 
-// Not called here: `golden` names `crate::yaml::Value`, so this crate
-// declares the module it resolves.
 #[path = "common/yaml.rs"]
 mod yaml;
+
+#[path = "mik_8425_yaml_baseline_capabilities/report.rs"]
+mod report;
 
 use mcp_gateway::capability::parse_capability;
 
@@ -44,6 +45,13 @@ fn reading(text: &str) -> String {
 #[test]
 fn every_capability_parses_as_recorded() {
     golden::assert_keyed_golden("capabilities.tsv", MIN_COMPARED, reading);
+}
+
+/// The parity suite's reading, which repeats `parse_capability` over its own
+/// binding, matches the same golden on every row.
+#[test]
+fn the_parity_reading_matches_parse_capability() {
+    golden::assert_keyed_golden("capabilities.tsv", MIN_COMPARED, report::reading);
 }
 
 /// Prints the golden for review; never part of a normal run.

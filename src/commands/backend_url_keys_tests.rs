@@ -413,3 +413,29 @@ fn a_rename_that_breaks_the_strict_parse_is_rolled_back() {
     assert!(out.skipped.contains(&"ok".to_string()), "{:?}", out.skipped);
     assert!(out.skipped.contains(&"fs".to_string()), "{:?}", out.skipped);
 }
+
+/// MIK-8425 MIG.2 G2: what `upgrade` reports from a rewrite (the backend
+/// names it skipped or kept, the removed keys, and the redacted `Debug`)
+/// never carries a value from the file, whether or not the file parses. The
+/// control is a parsable file whose alias is rewritten, proving the path ran.
+#[test]
+fn a_rewrite_report_never_carries_a_value() {
+    const SENTINEL: &str = "MIK8425-SENTINEL-7f3a";
+    let report =
+        |out: &UrlRewrite| format!("{:?} {:?} {:?} {out:?}", out.skipped, out.kept, out.removed);
+    let broken = format!("backends:\n  a:\n    http_url: \"{SENTINEL}\n");
+    let out = rewrite_url_aliases(&broken, None);
+    assert!(
+        !report(&out).contains(SENTINEL),
+        "an unparsable file: {}",
+        report(&out)
+    );
+    let good = format!("backends:\n  a:\n    http_url: http://{SENTINEL}.test/mcp\n");
+    let out = rewrite_url_aliases(&good, None);
+    assert!(!out.changed.is_empty(), "the control's alias is rewritten");
+    assert!(
+        !report(&out).contains(SENTINEL),
+        "a rewritten file: {}",
+        report(&out)
+    );
+}
