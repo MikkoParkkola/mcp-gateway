@@ -314,6 +314,17 @@ impl Redactor {
         if b2_gate(text).is_none() {
             return JsonText::NotJson;
         }
+        self.redact_collected(text, exempt, findings)
+    }
+
+    /// [`Self::redact_json_text`] on a document already validated: its
+    /// literals collected, projected, and keys renamed where a match starts.
+    fn redact_collected(
+        &self,
+        text: &str,
+        exempt: &dyn Fn(&str) -> bool,
+        findings: &mut Vec<Finding>,
+    ) -> JsonText {
         let literals = json_literal::string_literals(text);
         // A value literal whose decoded text is exempt keeps every byte, and a
         // pattern counts only where it still redacts something (MIK-8756).

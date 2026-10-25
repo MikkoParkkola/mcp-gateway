@@ -6,10 +6,9 @@
 //! memory added over base's whole-value path is one token's decoding and the
 //! nesting stack, whatever the document's structure. Pass 1 sizes the output
 //! and collects member findings; pass 2 writes the output into exactly that
-//! capacity. No key is renamed here: where a key would be, and where a span
-//! crosses an exempt value or the document is led by `serde_json`'s raw-value
-//! token, the walk replaces the spans unclipped (base's output) and still
-//! redacts every member value.
+//! capacity. Where the walk would rename a key, a span crosses an exempt
+//! value, or a span starts outside a literal, the leaf takes the walk under
+//! the cap instead, on its collected literals (lead ruling, 2026-10-25).
 
 use super::super::json_valid;
 use std::borrow::Cow;
@@ -18,15 +17,6 @@ use super::json_literal::{self, Literal};
 use super::{
     Family, Finding, JsonText, REDACTED, Redactor, Site, Spliced, decoded, trimmed_content,
 };
-
-/// Where the walk puts a span's replacement.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Placement {
-    /// Inside each value literal the span covers, widened to whole escapes.
-    Clip,
-    /// Over the whole span, as base's whole-value path replaces it.
-    Raw,
-}
 
 /// How a pass finds the member values it redacts whole.
 #[derive(Clone, Copy)]
@@ -132,24 +122,14 @@ impl Redactor {
             return JsonText::NotJson;
         }
         let spans = self.credential_spans(text);
-        let mut placement = Placement::Clip;
-        let plan = loop {
-            let pass = self.walk(
-                text,
-                &spans,
-                placement,
-                Members::Classify,
-                exempt,
-                &mut |_, _| {},
-            );
-            if let Some(tally) = pass {
-                break tally;
-            }
-            tracing::debug!(
-                "a credential span over the size cap reaches a key or an exempt value; \
-                 replacing spans whole"
-            );
-            placement = Placement::Raw;
+        let Some(plan) = self.walk(text, &spans, Members::Classify, exempt, &mut |_, _| {}) else {
+            // A key to rename, an exempt value crossed, or a span starting
+            // outside a literal: the walk under the cap does all three. Its
+            // literal list (32 bytes a literal, each at least 3 bytes of text)
+            // and ranges cost at most about 11x the leaf at worst, a document
+            // of tiny strings, on a leaf already in memory; the Value tree
+            // that set the cap is never built (lead ruling, 2026-10-25).
+            return self.redact_collected(text, exempt, findings);
         };
         if plan.ranges == 0 {
             return JsonText::Kept;
@@ -164,7 +144,7 @@ impl Redactor {
             cursor = to;
         };
         let replay = Members::Replay(&plan.members);
-        let again = self.walk(text, &spans, placement, replay, exempt, &mut write);
+        let again = self.walk(text, &spans, replay, exempt, &mut write);
         // Pass 2 reads only what pass 1 settled, so it emits the same ranges.
         if again.is_none_or(|tally| (tally.ranges, tally.covered) != (plan.ranges, plan.covered)) {
             tracing::warn!("the second redaction pass disagreed; redacting the leaf whole");
@@ -183,15 +163,12 @@ impl Redactor {
     }
 
     /// One pass over `text`'s literals, handing every merged range to `emit`
-    /// in order. `None`: under [`Placement::Clip`], a span starts outside a
-    /// literal, a match starts in a key it covers, or it covers an exempt
-    /// value; the caller walks again with [`Placement::Raw`], which never
-    /// returns `None`.
+    /// in order. `None`: a span starts outside a literal, a match starts in a
+    /// key it covers, or it covers an exempt value.
     fn walk(
         &self,
         text: &str,
         spans: &[(usize, usize)],
-        placement: Placement,
         known: Members<'_>,
         exempt: &dyn Fn(&str) -> bool,
         emit: &mut dyn FnMut(usize, usize),
@@ -207,16 +184,13 @@ impl Redactor {
             pending: None,
             emit: &mut counted,
         };
-        // `first`: the first span not wholly before the current literal.
-        // `checked`: under Clip, spans whose start is known to lie in a
-        // literal; under Raw, spans already handed to the merger.
+        // `first`: the first span not wholly before the current literal;
+        // `checked`: spans whose start is known to lie in a literal.
         let (mut first, mut checked) = (0, 0);
         let mut prev: Option<Literal> = None;
         for lit in json_literal::literals(text) {
             while checked < spans.len() && spans[checked].0 < lit.start {
-                if placement == Placement::Raw {
-                    merger.push(spans[checked].0, spans[checked].1);
-                } else if prev.as_ref().is_none_or(|p| spans[checked].0 >= p.end) {
+                if prev.as_ref().is_none_or(|p| spans[checked].0 >= p.end) {
                     return None;
                 }
                 checked += 1;
@@ -225,9 +199,8 @@ impl Redactor {
                 first += 1;
             }
             let overlapped = spans.get(first).is_some_and(|span| span.0 < lit.end);
-            let clip = placement == Placement::Clip && overlapped;
             if lit.key {
-                if clip && self.match_starts_in(text, &lit) {
+                if overlapped && self.match_starts_in(text, &lit) {
                     return None;
                 }
                 prev = Some(lit);
@@ -240,7 +213,7 @@ impl Redactor {
                     hit.then_some(None)
                 }
                 Members::Classify => self
-                    .member_of(text, prev.as_ref(), &lit, clip, exempt)?
+                    .member_of(text, prev.as_ref(), &lit, overlapped, exempt)?
                     .map(Some),
             };
             // The member's whole value goes first, so every range of this
@@ -250,12 +223,8 @@ impl Redactor {
             }
             let trimmed = trimmed_content(text, &lit);
             let contains = |(a, b): (usize, usize)| a <= trimmed.0 && trimmed.1 <= b;
-            let is_covered = if clip {
-                clip_into(text, &spans[first..], &lit, &mut merger, contains)
-            } else {
-                let after = spans.partition_point(|span| span.0 <= trimmed.0);
-                member.is_some() && after.checked_sub(1).is_some_and(|i| contains(spans[i]))
-            };
+            let is_covered =
+                overlapped && clip_into(text, &spans[first..], &lit, &mut merger, contains);
             // As under the cap: one secret, one finding, except family 1.
             if let Some(Some(family)) = member {
                 members.push(Member {
@@ -266,12 +235,11 @@ impl Redactor {
             }
             prev = Some(lit);
         }
-        for &(start, end) in &spans[checked..] {
-            if placement == Placement::Raw {
-                merger.push(start, end);
-            } else if prev.as_ref().is_none_or(|p| start >= p.end) {
-                return None;
-            }
+        if spans[checked..]
+            .iter()
+            .any(|&(start, _)| prev.as_ref().is_none_or(|p| start >= p.end))
+        {
+            return None;
         }
         merger.finish();
         Some(Tally {
@@ -286,7 +254,7 @@ impl Redactor {
     /// The family of the member whose value is `lit`, paired as
     /// `member_values` pairs it: the literal before is a key, then only `:`.
     /// `None` when `lit` is an exempt value a span covers (`clip`), which
-    /// sends the walk to [`Placement::Raw`]; an exempt value is no member.
+    /// sends the leaf to the walk under the cap; an exempt value is no member.
     fn member_of(
         &self,
         text: &str,

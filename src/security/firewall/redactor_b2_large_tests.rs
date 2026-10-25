@@ -288,13 +288,18 @@ fn s3_a_key_span_over_the_cap_is_renamed_as_under_it() {
         format!("[{greedy},{{{key}:1}}]"),
         format!(r#"{{"v":{greedy},"ghp_{}":1}}"#, "a".repeat(36)),
         format!(r#"{{{key}:1,{key}:2,"{MARK}":3}}"#),
-        format!(r#"{{"password":"{PASS}",{key}:1}}"#),
     ] {
         let text = over_cap(&doc);
         let out = assert_projected(&text);
         assert!(parses(&out), "{doc}");
         assert_as_under_cap(&doc, &|_| false);
     }
+    // The oracle predates member pairing (MIK-8757), so a member beside the
+    // renamed key is checked against the same document under the cap.
+    let doc = format!(r#"{{"password":"{PASS}",{key}:1}}"#);
+    assert_as_under_cap(&doc, &|_| false);
+    let (out, _) = deliver(&over_cap(&doc));
+    assert!(parses(&out) && !out.contains(PASS), "{doc}");
 }
 
 /// Residual (c): an object led by the raw-value token is read as `Value`
@@ -401,4 +406,18 @@ fn s12_a_span_crossing_an_exempt_value_still_redacts_the_rest() {
     assert_eq!(out, doc);
     assert!(findings.is_empty(), "{findings:?}");
     assert_as_under_cap(&doc, &exempt);
+}
+
+/// The collected walk's worst case over the cap (lead ruling 2026-10-25): a
+/// document of tiny strings, one literal every four bytes, whose key a match
+/// starts in, so the leaf takes the walk under the cap on all its literals.
+#[test]
+fn s13_a_key_rename_in_a_document_of_tiny_strings_over_the_cap() {
+    let key = serde_json::to_string(&pg_url()).expect("encodes");
+    let tiny = vec![r#""a""#; (CAP / 4) + 1024].join(",");
+    let text = format!("[{tiny},{{{key}:1,\"n\":3}}]");
+    assert!(text.len() > CAP);
+    let out = assert_projected(&text);
+    assert!(parses(&out));
+    assert!(!out.contains("u:pw@"), "the key is renamed");
 }
