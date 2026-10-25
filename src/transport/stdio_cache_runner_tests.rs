@@ -221,8 +221,13 @@ async fn a_cache_path_npm_would_expand_is_assigned_to_no_runner() {
     let scratch = tempfile::tempdir().expect("scratch directory");
     run_nested(
         "interpolated_home_scenario",
-        &[("HOME", scratch.path().join("${HOME}").into_os_string())],
-        &["MCP_GATEWAY_CONFIG_DIR"],
+        // The override, not HOME: Windows resolves home from its profile,
+        // which no variable here reaches. Either puts `${` in the data dir.
+        &[(
+            "MCP_GATEWAY_CONFIG_DIR",
+            scratch.path().join("${HOME}").into_os_string(),
+        )],
+        &[],
         scratch.path(),
     )
     .await;
