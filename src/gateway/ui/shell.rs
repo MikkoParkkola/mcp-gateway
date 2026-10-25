@@ -25,6 +25,10 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/fonts/BigShoulders-700.5faff1f81ec2.woff2"),
     ),
     (
+        "BigShoulders-800.dee5cd68621c.woff2",
+        include_bytes!("shell/fonts/BigShoulders-800.dee5cd68621c.woff2"),
+    ),
+    (
         "Overpass-400.3d4945e84023.woff2",
         include_bytes!("shell/fonts/Overpass-400.3d4945e84023.woff2"),
     ),
@@ -33,12 +37,12 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/fonts/OverpassMono-400.9b51e031ff0d.woff2"),
     ),
     (
-        "shell.3efa39073c27.css",
-        include_bytes!("shell/shell.3efa39073c27.css"),
+        "shell.44ab6fa510f8.css",
+        include_bytes!("shell/shell.44ab6fa510f8.css"),
     ),
     (
-        "shell.d51d72483502.js",
-        include_bytes!("shell/shell.d51d72483502.js"),
+        "shell.a978b27a9b6e.js",
+        include_bytes!("shell/shell.a978b27a9b6e.js"),
     ),
 ];
 

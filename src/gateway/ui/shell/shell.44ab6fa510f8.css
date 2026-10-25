@@ -545,7 +545,8 @@ table.t { width: 100%; border-collapse: collapse; }
 .fm-hub { fill: var(--color-plate-fill); } .fm-hub-key { fill: none; stroke: var(--color-plate-keyline); stroke-width: var(--size-plate-keyline); }
 .fm-hub-name { fill: var(--color-plate-on); font: var(--type-plate-sm); letter-spacing: var(--type-plate-sm-tracking); }
 /* ---- Shell layout (frames r6 "all", 40 at 390/820/1440). ---- */
-@font-face { font-family: "Big Shoulders"; font-weight: 700 800; font-display: swap; src: url(/ui/assets/BigShoulders-700.5faff1f81ec2.woff2) format("woff2"); }
+@font-face { font-family: "Big Shoulders"; font-weight: 700; font-display: swap; src: url(/ui/assets/BigShoulders-700.5faff1f81ec2.woff2) format("woff2"); }
+@font-face { font-family: "Big Shoulders"; font-weight: 800; font-display: swap; src: url(/ui/assets/BigShoulders-800.dee5cd68621c.woff2) format("woff2"); }
 @font-face { font-family: Overpass; font-weight: 400 700; font-display: swap; src: url(/ui/assets/Overpass-400.3d4945e84023.woff2) format("woff2"); }
 @font-face { font-family: "Overpass Mono"; font-weight: 400 700; font-display: swap; src: url(/ui/assets/OverpassMono-400.9b51e031ff0d.woff2) format("woff2"); }
 
@@ -585,13 +586,16 @@ a { color: inherit; text-decoration: none; }
 @media (max-width: 1100px) {
   .side { width: 172px; padding: 18px 10px; }
   .brand { font-size: 15px; padding: 2px 6px 14px; }
-  .head h1 .plate { font: var(--type-plate-sm); letter-spacing: var(--type-plate-sm-tracking); }
+  /* The frames keep the large plate's tracking at the small size. */
+  .head h1 .plate { font: var(--type-plate-sm); }
 }
 
 /* Phone: no sidebar; the menu button opens the pages as a sheet. */
 @media (max-width: 640px) {
   body { display: block; }
   .side { display: none; }
+  .menu-open .side { display: flex; position: fixed; inset: 56px 0 0 0; width: auto; z-index: 6; background: var(--color-bg-canvas); border: 0; overflow-y: auto; }
+  .menu-open .side .brand { display: none; }
   .top { height: 56px; padding: 0 8px 0 4px; gap: 4px; position: sticky; top: 0; background: var(--color-bg-canvas); z-index: 5; }
   .menu { display: grid; place-items: center; width: 44px; height: 44px; font-size: 18px; color: var(--color-text-primary); background: none; border: 0; }
   .mbrand { display: flex; align-items: center; font: var(--type-title); letter-spacing: var(--type-title-tracking); text-transform: uppercase; font-size: 15px; }

@@ -15,11 +15,21 @@ import { withFixturePages } from '../tests/shell.mjs';
 
 const FRAMES = process.env.FRAMES_DIR;
 
-// [frame file, width, height, colour scheme, regions as [name, x, y, w, h]]
+// The ticket's limit is 2% of a region. A region above it carries its own
+// ceiling, the measured share plus a little, and the named cause, which the
+// pull request lists as an intended difference.
+const LIMIT = 0.02;
+// [frame file, width, height, colour scheme, regions as [name, x, y, w, h, ceiling?, cause?]]
 const CASES = [
-  ['40-overview-1440.png', 1440, 1100, 'dark', [['sidebar', 0, 0, 232, 400], ['title', 232, 52, 500, 70]]],
-  ['37-overview-light.png', 1440, 1100, 'light', [['sidebar', 0, 0, 232, 400], ['title', 232, 52, 500, 70]]],
-  ['40-overview-390.png', 390, 844, 'dark', [['top bar', 0, 0, 390, 56], ['title', 0, 56, 390, 60]]],
+  ['40-overview-1440.png', 1440, 1100, 'dark', [
+    ['sidebar', 0, 0, 232, 400, 0.03, 'no logo mark; the frame shows a sample decisions count'],
+    ['title', 232, 52, 500, 70]]],
+  ['37-overview-light.png', 1440, 1100, 'light', [
+    ['sidebar', 0, 0, 232, 400, 0.03, 'no logo mark; the frame shows a sample decisions count'],
+    ['title', 232, 52, 500, 70]]],
+  ['40-overview-390.png', 390, 844, 'dark', [
+    ['top bar', 0, 0, 390, 56, 0.07, 'no logo, search box or Live indicator yet'],
+    ['title', 0, 56, 390, 60]]],
 ];
 
 test.describe('frames', () => {
@@ -61,7 +71,8 @@ test.describe('frames', () => {
           c.getContext('2d').drawImage(img, x, y, w, h, 0, 0, w, h);
           return c.toDataURL('image/png').split(',')[1];
         };
-        return regions.map(([name, ...box]) => {
+        return regions.map(([name, x, y, w, h]) => {
+          const box = [x, y, w, h];
           const p = pixels(a, box);
           const q = pixels(b, box);
           let diff = 0;
@@ -76,6 +87,10 @@ test.describe('frames', () => {
         const slug = `${file.replace('.png', '')}-${name.replace(' ', '-')}`;
         writeFileSync(test.info().outputPath(`${slug}-shell.png`), Buffer.from(shotCrop, 'base64'));
         writeFileSync(test.info().outputPath(`${slug}-frame.png`), Buffer.from(frameCrop, 'base64'));
+      }
+      for (const [i, [name, ratio]] of ratios.entries()) {
+        const [, , , , , ceiling = LIMIT, cause = ''] = regions[i];
+        expect(ratio, `${file} ${name}${cause ? ` (${cause})` : ''}`).toBeLessThanOrEqual(ceiling);
       }
       for (const [name, ratio] of ratios) console.log(`visual: ${file} ${name} ${(ratio * 100).toFixed(2)}% differs`);
       test.info().annotations.push(...ratios.map(([name, ratio]) => ({ type: 'diff', description: `${file} ${name} ${(ratio * 100).toFixed(2)}%` })));

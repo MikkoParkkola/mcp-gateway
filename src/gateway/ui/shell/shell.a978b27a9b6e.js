@@ -70,7 +70,7 @@ const STATE_COPY = {
 /** A page state (loading, empty, error, forbidden, stale, not-built). */
 export function state(kind, { title, body, action } = {}) {
   const [defTitle, defBody] = STATE_COPY[kind] ?? STATE_COPY.error;
-  const role = kind === 'loading' || kind === 'stale' ? 'status' : kind === 'error' ? 'alert' : null;
+  const role = kind === 'loading' || kind === 'stale' ? 'status' : kind === 'error' || kind === 'forbidden' ? 'alert' : null;
   const node = el('section', { class: 'state', 'data-state': kind, role }, el('h2', {}, title ?? defTitle));
   const text = body ?? defBody;
   if (text) node.append(el('p', { class: 'muted' }, text));
@@ -128,8 +128,8 @@ function pathFor({ page, object, tab }) {
 /** Links the router owns: same origin, a registered sidebar page as the first segment. */
 function owned(a) {
   if (!a || a.target || a.hasAttribute('download') || a.origin !== location.origin) return false;
-  // A query, or a fragment on this same page, keeps the browser's own behaviour.
-  if (a.search || (a.hash && a.pathname === location.pathname)) return false;
+  // A query or a fragment keeps the browser's own behaviour (and its scroll).
+  if (a.search || a.hash) return false;
   const first = a.pathname.split('/')[2];
   return a.pathname.startsWith('/ui/') && PAGE_IDS.has(first);
 }
@@ -154,8 +154,10 @@ export function render() {
   const tabsNav = document.querySelector('nav.tabs');
   tabsNav.replaceChildren();
 
-  if (!label) {
+  const tabNamed = route.tab === null || TABS.some(([t]) => t === route.tab);
+  if (!label || !tabNamed) {
     plate.textContent = 'Not found';
+    document.title = 'Not found · MCP Gateway';
     document.querySelector('.head .sub').hidden = true;
     content.replaceChildren(mark(state('empty', { title: 'No such page', body: 'Pick a page from the list.' })));
     return;
@@ -241,16 +243,40 @@ async function loadWho() {
   }
 }
 
+/** The phone menu: the sidebar shown as a sheet under the top bar. */
+function openMenu() {
+  document.body.classList.add('menu-open');
+  document.querySelector('button.menu').setAttribute('aria-expanded', 'true');
+  document.querySelector('nav.route-nav a')?.focus();
+}
+
+function closeMenu() {
+  document.body.classList.remove('menu-open');
+  document.querySelector('button.menu').setAttribute('aria-expanded', 'false');
+}
+
 function boot() {
   document.addEventListener('click', (ev) => {
     if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
     const a = ev.target.closest?.('a');
     if (!owned(a)) return;
     ev.preventDefault();
-    if (a.pathname !== location.pathname) go(a.pathname + a.hash);
-    // A tab keeps focus so the next tab is one key away; any other link
-    // hands focus to the new content, as a page load would.
-    if (!a.closest('nav.tabs')) document.getElementById('content').focus({ preventScroll: true });
+    // Read where the link sits before rendering replaces it.
+    const fromTabs = Boolean(a.closest('nav.tabs'));
+    closeMenu();
+    if (a.pathname !== location.pathname) go(a.pathname);
+    // A tab keeps focus (on its replacement) so the next tab is one key
+    // away; any other link hands focus to the new content, as a load would.
+    if (fromTabs) document.querySelector('nav.tabs a[aria-current="page"]')?.focus();
+    else document.getElementById('content').focus({ preventScroll: true });
+  });
+  const menu = document.querySelector('button.menu');
+  menu.addEventListener('click', () => (document.body.classList.contains('menu-open') ? closeMenu() : openMenu()));
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && document.body.classList.contains('menu-open')) {
+      closeMenu();
+      menu.focus();
+    }
   });
   addEventListener('popstate', render);
   document.querySelector('a.skip').addEventListener('click', (ev) => {

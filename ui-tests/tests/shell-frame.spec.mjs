@@ -199,6 +199,61 @@ test('F7d a link with a query is left to the browser', async ({ page }) => {
   await load; // a full document load: the router did not take it
 });
 
+test('F7e a keyboard-followed tab keeps focus on the new active tab', async ({ page }) => {
+  await withFixturePages(page);
+  await page.goto('/ui/overview/status');
+  await shellReady(page);
+  await page.locator('nav.tabs a', { hasText: /actions/i }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL('/ui/overview/actions');
+  await expect(page.locator('nav.tabs a[aria-current="page"]')).toBeFocused();
+});
+
+test('F6c a third segment naming no tab renders not-found with its own title', async ({ page }) => {
+  await withFixturePages(page);
+  await page.goto('/ui/servers/github/bogus');
+  await shellReady(page);
+  await expect(page).toHaveURL('/ui/servers/github/bogus');
+  await expect(page.locator('h1')).toContainText('Not found');
+  await expect(page).toHaveTitle('Not found · MCP Gateway');
+});
+
+test('F7f a link with a fragment to another page is left to the browser', async ({ page }) => {
+  await page.goto('/ui/overview/status');
+  await shellReady(page);
+  await page.evaluate(() => {
+    const a = document.createElement('a');
+    a.href = '/ui/servers/status#limits';
+    a.textContent = 'fragment link';
+    document.getElementById('content').append(a);
+  });
+  const load = page.waitForRequest((r) => r.resourceType() === 'document' && r.url().includes('/ui/servers/status'));
+  await page.getByText('fragment link').click();
+  await load;
+});
+
+test.describe('phone menu', () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+  test('P5 the menu opens the pages, a choice navigates and closes it, Esc returns focus', async ({ page }) => {
+    await withFixturePages(page);
+    await page.goto('/ui/overview/status');
+    await shellReady(page);
+    const menu = page.locator('button.menu');
+    await expect(menu).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.locator('nav.route-nav')).toBeHidden();
+    await menu.click();
+    await expect(menu).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.locator('nav.route-nav a')).toHaveCount(9);
+    await page.locator('nav.route-nav a[href="/ui/costs"]').click();
+    await expect(page).toHaveURL('/ui/costs/status');
+    await expect(page.locator('nav.route-nav')).toBeHidden();
+    await menu.click();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('nav.route-nav')).toBeHidden();
+    await expect(menu).toBeFocused();
+  });
+});
+
 test.describe('route line', () => {
   test('F8 the current station is copper and the To do badge follows the count', async ({ page }) => {
     await page.goto('/ui/servers/status');
@@ -341,6 +396,7 @@ test.describe('page states and safety', () => {
     }
     expect(kinds.find((k) => k.kind === 'loading').role).toBe('status');
     expect(kinds.find((k) => k.kind === 'error').role).toBe('alert');
+    expect(kinds.find((k) => k.kind === 'forbidden').role).toBe('alert');
   });
 
   test('F13b a 403 from an API renders the forbidden state in place', async ({ page }) => {

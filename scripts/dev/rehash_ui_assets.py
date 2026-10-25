@@ -7,7 +7,7 @@ The gateway serves src/gateway/ui/shell/ assets from an exact-name table in
 shell.rs, each name carrying the first 12 hex digits of the SHA-256 of its
 bytes (a test holds this), so a cached copy never goes stale. After editing
 an asset, run this from the repository root: it renames every asset to its
-current hash, rewrites the references in the stylesheets and index.html, and
+current hash, rewrites the references in index.html, the stylesheets and the scripts, and
 regenerates the ASSETS table. Fonts go first because the stylesheet names
 them, so its own hash covers theirs.
 
@@ -36,7 +36,7 @@ def assets():
 def rewrite_refs(stem: str, ext: str, new: str) -> None:
     """Point every reference to this asset, hashed or not, at `<new>`."""
     pattern = re.compile(r"/ui/assets/" + re.escape(stem) + r"(?:\.[0-9a-f]{12})?\." + ext + r"(?![\w.-])")
-    for text in [SHELL / "index.html", *SHELL.rglob("*.css")]:
+    for text in [SHELL / "index.html", *SHELL.rglob("*.css"), *SHELL.rglob("*.js")]:
         body = text.read_text()
         updated = pattern.sub(f"/ui/assets/{new}", body)
         if updated != body:
