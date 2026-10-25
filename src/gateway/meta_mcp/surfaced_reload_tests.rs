@@ -318,3 +318,26 @@ async fn l2_a_watcher_driven_reload_applies_surfaced_tools() {
         "L2: a watcher-driven reload left the surfaced set as it was"
     );
 }
+
+/// L15 (pin scope): a task's pin lasts only as long as its dispatch. A resume
+/// reuses its answering request's memo, so a pin left in it would route the
+/// rest of that request to the recorded server after a reload moved the name.
+#[tokio::test]
+async fn l15_a_pin_is_lifted_when_its_dispatch_ends_in_a_reused_memo() {
+    use crate::gateway::meta_mcp::visible::memo::{
+        pin_surfaced, surfaced_pin, with_visibility_memo,
+    };
+    with_visibility_memo(async {
+        let outer = pin_surfaced("search", "alpha");
+        assert_eq!(surfaced_pin("search"), Some("alpha"));
+        with_visibility_memo(async {
+            let _inner = pin_surfaced("search", "beta");
+            assert_eq!(surfaced_pin("search"), Some("beta"));
+        })
+        .await;
+        assert_eq!(surfaced_pin("search"), Some("alpha"), "inner pin leaked");
+        drop(outer);
+        assert_eq!(surfaced_pin("search"), None, "outer pin leaked");
+    })
+    .await;
+}

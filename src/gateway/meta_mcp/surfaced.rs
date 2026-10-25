@@ -149,7 +149,7 @@ impl MetaMcp {
             return dispatch.await;
         };
         super::visible::memo::with_visibility_memo(async move {
-            super::visible::memo::pin_surfaced(tool, server);
+            let _pin = super::visible::memo::pin_surfaced(tool, server);
             dispatch.await
         })
         .await

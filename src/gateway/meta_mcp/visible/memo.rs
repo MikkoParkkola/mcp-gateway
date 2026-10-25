@@ -234,17 +234,40 @@ pub(crate) fn surfaced_pin(tool_name: &str) -> Option<&'static str> {
     in_memo(|memo| memo.surfaced_pins.lock().get(tool_name).copied()).flatten()
 }
 
-/// Pin `tool_name` to `server` in the active memo. A resume
-/// runs inside its answering request's memo, and a nested scope would reuse
-/// that one, so the pin is recorded into whichever memo is active. Returns
-/// whether one was: the caller opens a memo first when none is.
-pub(crate) fn pin_surfaced(tool_name: &str, server: &'static str) -> bool {
-    in_memo(|memo| {
-        memo.surfaced_pins
+/// A pin on one surfaced name; dropping it restores the name's earlier pin,
+/// or its absence. A resume reuses its answering request's memo, so a pin
+/// left behind would keep routing the rest of that request to the recorded
+/// server after a reload moved the name.
+#[must_use = "the pin is lifted when this is dropped"]
+pub(crate) struct SurfacedPin {
+    tool_name: String,
+    prior: Option<&'static str>,
+}
+
+impl Drop for SurfacedPin {
+    fn drop(&mut self) {
+        in_memo(|memo| {
+            let mut pins = memo.surfaced_pins.lock();
+            match self.prior {
+                Some(prior) => pins.insert(std::mem::take(&mut self.tool_name), prior),
+                None => pins.remove(&self.tool_name),
+            };
+        });
+    }
+}
+
+/// Pin `tool_name` to `server` in the active memo until the returned guard
+/// drops. A resume runs inside its answering request's memo, and a nested
+/// scope would reuse that one, so the pin is recorded into whichever memo is
+/// active. `None` when no memo is: the caller opens one first.
+pub(crate) fn pin_surfaced(tool_name: &str, server: &'static str) -> Option<SurfacedPin> {
+    in_memo(|memo| SurfacedPin {
+        tool_name: tool_name.to_owned(),
+        prior: memo
+            .surfaced_pins
             .lock()
-            .insert(tool_name.to_owned(), server);
+            .insert(tool_name.to_owned(), server),
     })
-    .is_some()
 }
 
 /// Run `read` with `tool_name` pinned to `server`, in the active memo or in
@@ -256,11 +279,11 @@ pub(crate) fn with_surfaced_pin_sync<R>(
     server: &'static str,
     read: impl FnOnce() -> R,
 ) -> R {
-    if pin_surfaced(tool_name, server) {
+    if let Some(_pin) = pin_surfaced(tool_name, server) {
         return read();
     }
     VISIBILITY_MEMO.sync_scope(VisibilityMemo::default(), || {
-        pin_surfaced(tool_name, server);
+        let _pin = pin_surfaced(tool_name, server);
         read()
     })
 }
