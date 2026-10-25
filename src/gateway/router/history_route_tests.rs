@@ -144,7 +144,7 @@ async fn t51_a_late_label_answers_the_same_shape_with_a_later_since() {
     for name in &names {
         at(name, base);
     }
-    at("late", base + DAY);
+    at("late", base + 5 * DAY);
     at("new-1", now() - 10);
     at("late", now() - 5);
     let uri = "/ui/api/metrics/series?metric=calls&window=30d";
@@ -164,7 +164,7 @@ async fn t51_a_late_label_answers_the_same_shape_with_a_later_since() {
     assert_eq!(keys(&late), keys(&global), "the same fields");
     assert_eq!(late["folded"], false);
     assert!(
-        late["since"].as_u64().unwrap() > base + DAY,
+        late["since"].as_u64().unwrap() > base + 5 * DAY,
         "since starts after the overflowed call: {late}"
     );
     assert_eq!(

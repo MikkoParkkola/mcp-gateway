@@ -512,3 +512,31 @@ fn t42_real_calls_and_a_kill_store_no_secret_and_no_caller_chosen_name() {
     assert!(audit.contains(SENTINEL), "the audit log is the real one");
     assert!(!audit.contains(BEARER_TOKEN), "the secret in the audit log");
 }
+
+/// T11 for a per-user backend: a tool listed only in a caller's own
+/// catalogue slot keeps its label; the shared slot holds nothing.
+#[tokio::test]
+async fn t11_a_tool_in_a_per_user_catalogue_keeps_its_label() {
+    let (state, _store) = crate::gateway::router::tests::direct_route_state_with_identity(
+        crate::config::AgentIdentityConfig::default(),
+    )
+    .await;
+    let store = Arc::new(CounterStore::new(
+        crate::clock::unix_secs().expect("a readable clock"),
+    ));
+    state.meta_mcp.set_counters(Arc::clone(&store));
+    let backend = state.backends.get("demo").expect("fixture backend");
+    let tool: crate::protocol::Tool = serde_json::from_value(json!({
+        "name": "x", "description": "one", "inputSchema": {"type": "object"}
+    }))
+    .expect("tool");
+    backend.store_per_user_tools_for_test("idp:1:u:1:a", vec![tool]);
+    state.meta_mcp.count_call(
+        "demo",
+        Some("x"),
+        &crate::security::audit::AuditWho::gateway(),
+        crate::counters::Outcome::AdmissionRefused,
+    );
+    assert_eq!(store.labels(Dim::Tool), 1, "the catalogued tool is a label");
+    assert_eq!(count(&store, Metric::Calls, Filter::Overflow(Dim::Tool)), 0);
+}

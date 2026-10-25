@@ -604,15 +604,16 @@ fn t49_a_bucket_older_than_the_window_is_kept_nowhere() {
     );
 }
 
-/// A store whose tool dimension filled, sent `late` to the overflow, then
-/// swept every old label free 31 days on: `late` is not held, the dimension
-/// is no longer full, and its one call is in the overflow.
+/// A store whose tool dimension filled, sent `late` to the overflow on day
+/// 5, then swept every old label free 31 days on: `late` is not held, the
+/// dimension is no longer full, and its one call is in the overflow, inside
+/// the 30-day window.
 fn swept_after_overflow() -> (CounterStore, u64) {
     let store = CounterStore::new(T0);
     for i in 0..MAX_LABELS {
         store.record(&ok("key:a", "s", &format!("old-{i}")), T0 + 10, &UTC);
     }
-    store.record(&ok("key:a", "s", "late"), T0 + DAY, &UTC);
+    store.record(&ok("key:a", "s", "late"), T0 + 5 * DAY, &UTC);
     let swept = T0 + 31 * DAY;
     store.record(&ok("key:a", "s", "new-1"), swept, &UTC);
     assert_eq!(store.labels(Dim::Tool), 1, "the old labels were swept");
