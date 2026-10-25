@@ -1,18 +1,35 @@
 <!doctype html>
 <!-- SPDX-FileCopyrightText: 2026 Mikko Parkkola -->
 <!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
-<!-- MIK-8870: the shell document every /ui deep link answers with. Until the
-     new UI ships (UI1, MIK-8875) it hands the visitor to /ui, so nobody sees
-     an empty shell. No script: the refresh works with JavaScript off. -->
+<!-- The shell document every /ui deep link answers with. It holds no gateway
+     data: the module reads /ui/api after load. The theme follows the
+     system's colour-scheme and contrast settings in CSS, so it needs no
+     script. /ui itself stays the classic page until the cutover. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="0; url=/ui">
 <title>MCP Gateway</title>
-<link rel="stylesheet" href="/ui/assets/shell.59b6e0f80d81.css">
+<link rel="stylesheet" href="/ui/assets/shell.dab3d4070565.css">
+<script type="module" src="/ui/assets/shell.62c90ff99317.js"></script>
 </head>
 <body>
-<p><a href="/ui">Open the gateway UI</a></p>
+<a class="skip" href="#content">Skip to content</a>
+<aside class="side">
+  <div class="brand">mcp-gateway</div>
+  <nav class="route-nav" aria-label="Pages"></nav>
+</aside>
+<div class="main">
+  <header class="top">
+    <button class="menu" type="button" aria-label="Menu" aria-haspopup="dialog">&#9776;</button>
+    <span class="mbrand">mcp-gateway</span>
+    <span class="who muted"></span>
+  </header>
+  <div class="head"><h1><span class="plate"></span></h1></div>
+  <nav class="tabs" aria-label="Tabs"></nav>
+  <main id="content" tabindex="-1">
+    <noscript><p>This page needs JavaScript. <a href="/ui/classic">Open the classic page</a>.</p></noscript>
+  </main>
+</div>
 </body>
 </html>

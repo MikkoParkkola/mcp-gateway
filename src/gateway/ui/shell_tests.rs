@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8870 T5/T6: the asset table's names are honest content hashes, and
-//! nothing the shell serves reaches outside this origin.
+//! T5/T6: the asset table's names are honest content hashes, and nothing
+//! the shell serves reaches outside this origin.
 
 use super::*;
 
@@ -34,8 +34,16 @@ fn t6_the_shell_references_nothing_off_origin() {
         }
     }
     assert!(
-        DOCUMENT.contains(r#"<meta http-equiv="refresh" content="0; url=/ui">"#),
-        "until UI1 the document hands the visitor to /ui"
+        !DOCUMENT.contains("http-equiv=\"refresh\""),
+        "the shell renders in place; it no longer hands the visitor to /ui"
+    );
+    assert!(
+        DOCUMENT.contains("<noscript>") && DOCUMENT.contains(r#"href="/ui/classic""#),
+        "without JavaScript the document points to the classic page"
+    );
+    assert!(
+        DOCUMENT.contains(r#"<script type="module" src="/ui/assets/shell."#),
+        "the shell's module is loaded from the asset table"
     );
     for (name, _) in ASSETS {
         assert!(

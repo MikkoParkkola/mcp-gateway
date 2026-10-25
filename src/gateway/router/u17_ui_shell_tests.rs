@@ -19,7 +19,6 @@ use super::{AppState, create_router};
 use crate::config::AuthConfig;
 
 /// The one asset U17 ships, by its content-hashed name.
-const ASSET: &str = "/ui/assets/shell.59b6e0f80d81.css";
 const SHELL: &[u8] = include_bytes!("../ui/shell/index.html");
 const CLASSIC: &[u8] = include_bytes!("../ui/index.html");
 /// The shell's policy as the design states it, written out here so the
@@ -138,27 +137,66 @@ async fn t2_the_classic_page_is_also_at_ui_classic() {
     }
 }
 
+/// Every asset the shell names, and the fonts its stylesheet names, read
+/// from the document rather than pinned, so a rehash cannot strand a test.
+fn shell_asset_names() -> Vec<String> {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway/ui/shell");
+    let mut texts = vec![String::from_utf8_lossy(SHELL).into_owned()];
+    let mut names = Vec::new();
+    while let Some(text) = texts.pop() {
+        for reference in text.split("/ui/assets/").skip(1) {
+            let name = reference
+                .split(['"', '\'', ')', ' '])
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            if name.ends_with(".css") {
+                texts.push(std::fs::read_to_string(dir.join(&name)).expect("stylesheet"));
+            }
+            names.push(name);
+        }
+    }
+    names
+}
+
+fn shell_asset_bytes(name: &str) -> Vec<u8> {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway/ui/shell");
+    std::fs::read(dir.join(name))
+        .or_else(|_| std::fs::read(dir.join("fonts").join(name)))
+        .expect("asset file")
+}
+
 #[tokio::test]
 async fn t3_a_hashed_asset_is_served_immutable() {
     let (state, _dir) = fixture().await;
-    let reply = send(&state, "GET", ASSET).await;
-    assert_eq!(reply.status, StatusCode::OK);
-    assert_eq!(
-        reply.body,
-        include_bytes!("../ui/shell/shell.59b6e0f80d81.css")
-    );
-    assert_eq!(
-        reply.header(header::CONTENT_TYPE),
-        Some("text/css; charset=utf-8")
-    );
-    assert_eq!(
-        reply.header(header::CACHE_CONTROL),
-        Some("public, max-age=31536000, immutable")
-    );
-    assert_eq!(
-        reply.header(header::X_CONTENT_TYPE_OPTIONS),
-        Some("nosniff")
-    );
+    let names = shell_asset_names();
+    for ext in [".css", ".js", ".woff2"] {
+        assert!(
+            names.iter().any(|n| n.ends_with(ext)),
+            "the shell names a {ext}"
+        );
+    }
+    for name in names {
+        let reply = send(&state, "GET", &format!("/ui/assets/{name}")).await;
+        assert_eq!(reply.status, StatusCode::OK, "{name}");
+        assert_eq!(reply.body, shell_asset_bytes(&name), "{name}");
+        let want = match name.rsplit('.').next() {
+            Some("css") => "text/css; charset=utf-8",
+            Some("js") => "text/javascript; charset=utf-8",
+            _ => "font/woff2",
+        };
+        assert_eq!(reply.header(header::CONTENT_TYPE), Some(want), "{name}");
+        assert_eq!(
+            reply.header(header::CACHE_CONTROL),
+            Some("public, max-age=31536000, immutable"),
+            "{name}"
+        );
+        assert_eq!(
+            reply.header(header::X_CONTENT_TYPE_OPTIONS),
+            Some("nosniff"),
+            "{name}"
+        );
+    }
 }
 
 /// PIN: 404 on the base too. No asset path ever answers HTML.

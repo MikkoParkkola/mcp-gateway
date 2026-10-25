@@ -1,0 +1,398 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//
+// The shell frame: sidebar, tabs in the address, object paths, history,
+// not-built pages, themes, skip link, hit areas, page states and the
+// accessibility and budget checks. Rows F1-F19 of the shell test plan.
+import { test, expect, WIDTHS, blockingViolations } from './base.mjs';
+import { PAGES, TABS, HIDDEN, shellModuleUrl, withFixturePages, shellReady } from './shell.mjs';
+
+const TODO = PAGES[1][0];
+
+test.describe('sidebar and tabs', () => {
+  test('F2 the matrix covers 9 pages and 26 tab addresses', () => {
+    expect(PAGES).toHaveLength(9);
+    const urls = PAGES.flatMap(([id]) => TABS.filter((t) => !(id === HIDDEN.page && t === HIDDEN.tab)).map((t) => `/ui/${id}/${t}`));
+    expect(urls).toHaveLength(26);
+  });
+
+  test('F1 the sidebar lists the nine pages in order, as links', async ({ page }) => {
+    await page.goto('/ui/overview/status');
+    const links = page.locator('nav.route-nav a');
+    await expect(links).toHaveCount(PAGES.length);
+    expect(await links.allTextContents()).toEqual(PAGES.map(([, label]) => expect.stringContaining(label)));
+    for (const [i, [id]] of PAGES.entries()) {
+      await expect(links.nth(i)).toHaveAttribute('href', `/ui/${id}`);
+    }
+  });
+
+  for (const [id, label] of PAGES) {
+    for (const tab of TABS) {
+      if (id === HIDDEN.page && tab === HIDDEN.tab) continue;
+      test(`F2 a cold load of /ui/${id}/${tab} shows that page and tab`, async ({ page }) => {
+        await withFixturePages(page);
+        await page.goto(`/ui/${id}/${tab}`);
+        await shellReady(page);
+        await expect(page).toHaveURL(`/ui/${id}/${tab}`);
+        await expect(page.locator('h1')).toContainText(label);
+        const tabs = page.locator('nav.tabs a');
+        const want = TABS.filter((t) => !(id === HIDDEN.page && t === HIDDEN.tab));
+        expect((await tabs.allTextContents()).map((t) => t.trim().toLowerCase())).toEqual(want);
+        await expect(page.locator(`nav.tabs a[aria-current="page"]`)).toHaveAttribute('href', `/ui/${id}/${tab}`);
+        await expect(page.locator('#content')).toContainText(`${id} - ${tab}`);
+      });
+    }
+  }
+
+  test('F3 a hidden tab replaces to the first visible tab without a history entry', async ({ page }) => {
+    await withFixturePages(page);
+    await page.goto('/ui/overview/status');
+    const before = await page.evaluate(() => history.length);
+    await withFixturePages(page);
+    await page.goto(`/ui/${HIDDEN.page}/${HIDDEN.tab}`);
+    await shellReady(page);
+    await expect(page).toHaveURL(`/ui/${HIDDEN.page}/status`);
+    await expect(page.locator('nav.tabs a', { hasText: /settings/i })).toHaveCount(0);
+    expect(await page.evaluate(() => history.length)).toBe(before + 1);
+  });
+
+  test('F3 a bare page address replaces to its first visible tab', async ({ page }) => {
+    await withFixturePages(page);
+    await page.goto('/ui/servers');
+    await shellReady(page);
+    await expect(page).toHaveURL('/ui/servers/status');
+  });
+});
+
+test.describe('not-built pages', () => {
+  for (const [id] of PAGES) {
+    test(`F4 /ui/${id}/* renders the not-built state at that address`, async ({ page }) => {
+      for (const tab of TABS) {
+        await page.goto(`/ui/${id}/${tab}`);
+        await shellReady(page);
+        await expect(page).toHaveURL(`/ui/${id}/${tab}`);
+        const state = page.locator('#content [data-state="not-built"]');
+        await expect(state).toBeVisible();
+        await expect(state.locator('a[href="/ui/classic"]')).toBeVisible();
+      }
+    });
+  }
+
+  test('F4 the document no longer redirects', async ({ request }) => {
+    const doc = await (await request.get('/ui/overview/status')).text();
+    expect(doc).not.toMatch(/http-equiv="refresh"/i);
+  });
+
+  test('F5 the classic link leaves the shell', async ({ page }) => {
+    await page.goto('/ui/servers/status');
+    await shellReady(page);
+    await page.locator('#content a[href="/ui/classic"]').click();
+    await expect(page).toHaveURL('/ui/classic');
+    await expect(page.locator('h1')).toHaveText('Classic page stand-in');
+  });
+});
+
+test.describe('addresses and history', () => {
+  test('F6 an object path lands on that object and tab, also after a reload', async ({ page }) => {
+    await withFixturePages(page);
+    await page.goto('/ui/servers/github/actions');
+    await shellReady(page);
+    await expect(page.locator('#content')).toContainText('servers github actions');
+    await page.reload();
+    await shellReady(page);
+    await expect(page).toHaveURL('/ui/servers/github/actions');
+    await expect(page.locator('#content')).toContainText('servers github actions');
+  });
+
+  test('F6 an object named like a tab is reachable with an explicit tab', async ({ page }) => {
+    await withFixturePages(page);
+    await page.goto('/ui/servers/status/actions');
+    await shellReady(page);
+    await expect(page.locator('#content')).toContainText('servers status actions');
+  });
+
+  test('F7 back and forward restore page and tab without reloading the document', async ({ page }) => {
+    const documents = [];
+    page.on('request', (r) => { if (r.resourceType() === 'document') documents.push(r.url()); });
+    await withFixturePages(page);
+    await page.goto('/ui/overview/status');
+    await shellReady(page);
+    await page.locator('nav.tabs a', { hasText: /actions/i }).click();
+    await expect(page).toHaveURL('/ui/overview/actions');
+    await page.locator('nav.route-nav a[href="/ui/servers"]').click();
+    await expect(page).toHaveURL('/ui/servers/status');
+    await page.goBack();
+    await expect(page).toHaveURL('/ui/overview/actions');
+    await expect(page.locator('#content')).toContainText('overview - actions');
+    await page.goForward();
+    await expect(page.locator('#content')).toContainText('servers - status');
+    expect(documents).toHaveLength(1);
+  });
+});
+
+test('F7b modified clicks and new-tab links are left to the browser', async ({ page }) => {
+  await withFixturePages(page);
+  await page.goto('/ui/overview/status');
+  await shellReady(page);
+  const prevented = await page.evaluate(() => {
+    const a = document.querySelector('nav.route-nav a[href="/ui/servers"]');
+    const results = [];
+    for (const init of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { button: 1 }]) {
+      const ev = new MouseEvent('click', { bubbles: true, cancelable: true, ...init });
+      a.dispatchEvent(ev);
+      results.push(ev.defaultPrevented);
+    }
+    const blank = document.createElement('a');
+    blank.href = '/ui/servers';
+    blank.target = '_blank';
+    document.body.append(blank);
+    const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
+    blank.dispatchEvent(ev);
+    results.push(ev.defaultPrevented);
+    blank.remove();
+    return results;
+  });
+  // None was taken over by the router; the browser handles each itself.
+  expect(prevented).toEqual([false, false, false, false, false]);
+});
+
+test.describe('route line', () => {
+  test('F8 the current station is copper and the To do badge follows the count', async ({ page }) => {
+    await page.goto('/ui/servers/status');
+    await shellReady(page);
+    const copper = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--color-accent-default').trim());
+    expect(copper).not.toBe('');
+    const station = page.locator('nav.route-nav a[aria-current="page"] > i');
+    const colour = await station.evaluate((el) => getComputedStyle(el).backgroundColor);
+    const want = await page.evaluate((c) => {
+      const probe = document.createElement('span');
+      probe.style.color = c;
+      document.body.append(probe);
+      const rgb = getComputedStyle(probe).color;
+      probe.remove();
+      return rgb;
+    }, copper);
+    expect(colour).toBe(want);
+    await expect(page.locator(`nav.route-nav a[href="/ui/${TODO}"] .count`)).toHaveCount(0);
+  });
+
+  test('F8 the To do badge shows a served count', async ({ page }) => {
+    await page.route('**/ui/api/decisions/count', (r) => r.fulfill({ json: { count: 3 } }));
+    await page.goto('/ui/servers/status');
+    await shellReady(page);
+    await expect(page.locator(`nav.route-nav a[href="/ui/${TODO}"] .count`)).toHaveText('3');
+  });
+});
+
+test.describe('layout and themes', () => {
+  test.describe.configure({ mode: 'serial' });
+  const backgrounds = {};
+  for (const [width, labels, sidebar] of [[1440, true, true], [1101, true, true], [1099, true, true], [820, true, true], [641, true, true], [639, false, false], [390, false, false]]) {
+    test(`F9 at ${width} px the layout follows the breakpoints`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/ui/overview/status');
+      await shellReady(page);
+      if (sidebar) {
+        await expect(page.locator('nav.route-nav')).toBeVisible();
+        await expect(page.locator('nav.route-nav a .lbl').first()).toBeVisible({ visible: labels });
+        await expect(page.locator('button.menu')).toBeHidden();
+      } else {
+        await expect(page.locator('nav.route-nav')).toBeHidden();
+        await expect(page.locator('button.menu')).toBeVisible();
+      }
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+      expect(overflow).toBeLessThanOrEqual(0);
+    });
+  }
+
+  for (const [name, media] of [['dark', { colorScheme: 'dark' }], ['light', { colorScheme: 'light' }], ['hc', { colorScheme: 'dark', contrast: 'more' }]]) {
+    test(`F10 the ${name} theme applies with JavaScript off`, async ({ browser, baseURL }) => {
+      const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
+      const page = await context.newPage();
+      await page.emulateMedia(media);
+      await page.goto('/ui/overview/status');
+      const [bg, token] = await page.evaluate(() => {
+        const probe = document.createElement('div');
+        probe.style.background = 'var(--color-bg-canvas)';
+        document.body.append(probe);
+        return [getComputedStyle(document.body).backgroundColor, getComputedStyle(probe).backgroundColor];
+      });
+      expect(token).not.toBe('rgba(0, 0, 0, 0)');
+      expect(bg).toBe(token);
+      backgrounds[name] = bg;
+      await context.close();
+    });
+  }
+
+  test('F10 the three themes differ', () => {
+    expect(new Set(Object.values(backgrounds)).size).toBe(3);
+  });
+});
+
+test.describe('keyboard and touch', () => {
+  test('F11 the first Tab focuses the skip link, and Enter moves to the content', async ({ page }) => {
+    await page.goto('/ui/overview/status');
+    await shellReady(page);
+    await page.keyboard.press('Tab');
+    const skip = page.locator('a.skip');
+    await expect(skip).toBeFocused();
+    await expect(skip).toHaveText('Skip to content');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#content')).toBeFocused();
+  });
+
+  test('F16 Tab reaches every visible link and button', async ({ page }) => {
+    await withFixturePages(page);
+    await page.goto('/ui/overview/status');
+    await shellReady(page);
+    const targets = await page.locator('a:visible, button:visible').count();
+    const seen = new Set();
+    for (let i = 0; i < targets + 5; i++) {
+      await page.keyboard.press('Tab');
+      seen.add(await page.evaluate(() => {
+        const el = document.activeElement;
+        return el ? el.outerHTML.slice(0, 120) : '';
+      }));
+    }
+    const reached = await page.evaluate((seenList) => {
+      const all = [...document.querySelectorAll('a, button')].filter((el) => el.checkVisibility());
+      return all.filter((el) => !seenList.includes(el.outerHTML.slice(0, 120))).map((el) => el.outerHTML.slice(0, 80));
+    }, [...seen]);
+    expect(reached).toEqual([]);
+  });
+});
+
+test.describe('touch targets', () => {
+  test.use({ isMobile: true, hasTouch: true, viewport: { width: 390, height: 844 } });
+  test('F12 on a coarse pointer every link, tab and button is at least 44 px', async ({ page }) => {
+    await withFixturePages(page);
+    await page.goto('/ui/overview/status');
+    await shellReady(page);
+    expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(true);
+    const small = await page.evaluate(() => [...document.querySelectorAll('a, button')]
+      .filter((el) => el.checkVisibility())
+      .map((el) => ({ el: el.outerHTML.slice(0, 60), r: el.getBoundingClientRect() }))
+      .filter(({ r }) => r.width < 44 || r.height < 44)
+      .map(({ el, r }) => `${el} ${Math.round(r.width)}x${Math.round(r.height)}`));
+    expect(small).toEqual([]);
+  });
+});
+
+test.describe('page states and safety', () => {
+  test('F13 state() renders every kind with its heading and role', async ({ page }) => {
+    await page.goto('/ui/overview/status');
+    await shellReady(page);
+    const url = await shellModuleUrl(page);
+    const kinds = await page.evaluate(async (url) => {
+      const { state } = await import(url);
+      return ['loading', 'empty', 'error', 'forbidden', 'stale', 'not-built'].map((kind) => {
+        const el = state(kind, { title: `t-${kind}` });
+        return { kind, data: el.dataset.state, role: el.getAttribute('role'), heading: el.querySelector('h2')?.textContent ?? '' };
+      });
+    }, url);
+    for (const k of kinds) {
+      expect(k.data, k.kind).toBe(k.kind);
+      expect(k.heading, k.kind).not.toBe('');
+    }
+    expect(kinds.find((k) => k.kind === 'loading').role).toBe('status');
+    expect(kinds.find((k) => k.kind === 'error').role).toBe('alert');
+  });
+
+  test('F13b a 403 from an API renders the forbidden state in place', async ({ page }) => {
+    await page.route('**/ui/api/forbidden-probe', (r) => r.fulfill({ status: 403, json: { error: 'forbidden' } }));
+    await withFixturePages(page);
+    await page.goto('/ui/access/status');
+    await shellReady(page);
+    await expect(page).toHaveURL('/ui/access/status');
+    await expect(page.locator('#content [data-state="forbidden"]')).toBeVisible();
+  });
+
+  test('F14 a page title is text, never markup', async ({ page }) => {
+    await withFixturePages(page, { title: '<img src=x onerror="window.pwned=1">' });
+    await page.goto('/ui/overview/status');
+    await shellReady(page);
+    await expect(page.locator('h1 img')).toHaveCount(0);
+    await expect(page.locator('h1')).toContainText('<img src=x');
+    expect(await page.evaluate(() => window.pwned)).toBeUndefined();
+  });
+});
+
+test.describe('accessibility', () => {
+  for (const width of WIDTHS) {
+    for (const registered of [false, true]) {
+      test(`F15 axe at ${width} px, ${registered ? 'with' : 'without'} registered pages`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 900 });
+        if (registered) await withFixturePages(page);
+        await page.goto('/ui/servers/status');
+        await shellReady(page);
+        expect(await blockingViolations(page)).toEqual([]);
+      });
+    }
+  }
+});
+
+test.describe('budgets', () => {
+  test('F18 first paint, tab switch, script size and reduced motion', async ({ page }) => {
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+    await cdp.send('Network.enable');
+    await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: 150, downloadThroughput: (1.6 * 1024 * 1024) / 8, uploadThroughput: (750 * 1024) / 8 });
+    let scriptBytes = 0;
+    page.on('response', async (r) => {
+      if (r.request().resourceType() === 'script') scriptBytes += (await r.body()).length;
+    });
+    await withFixturePages(page);
+    await page.goto('/ui/overview/status');
+    await shellReady(page);
+    const fcp = await page.evaluate(() => performance.getEntriesByName('first-contentful-paint')[0]?.startTime ?? Infinity);
+    expect(fcp).toBeLessThan(1000);
+    // Feedback: click to the selected tab. Tab switch: click to the new
+    // content on screen. CI takes the best of two samples for noise.
+    const samples = process.env.CI ? 2 : 1;
+    let feedback = Infinity;
+    let switchMs = Infinity;
+    for (let i = 0; i < samples; i++) {
+      const target = i % 2 ? '/ui/overview/status' : '/ui/overview/actions';
+      const [f, t] = await page.evaluate(async (target) => {
+        const t0 = performance.now();
+        let selectedAt = Infinity;
+        const seen = new MutationObserver(() => {
+          if (selectedAt === Infinity && document.querySelector('nav.tabs a[aria-current="page"]')?.getAttribute('href') === target) selectedAt = performance.now();
+        });
+        seen.observe(document.querySelector('nav.tabs'), { subtree: true, attributes: true, childList: true });
+        document.querySelector(`nav.tabs a[href="${target}"]`).click();
+        const tab = target.split('/').pop();
+        while (!document.querySelector('#content')?.textContent.includes(`overview - ${tab}`)) {
+          await new Promise((ok) => requestAnimationFrame(ok));
+          if (performance.now() - t0 > 2000) break;
+        }
+        await new Promise((ok) => requestAnimationFrame(ok));
+        seen.disconnect();
+        return [selectedAt - t0, performance.now() - t0];
+      }, target);
+      feedback = Math.min(feedback, f);
+      switchMs = Math.min(switchMs, t);
+    }
+    console.log(`budgets: fcp ${Math.round(fcp)} ms, feedback ${Math.round(feedback)} ms, tab switch ${Math.round(switchMs)} ms, script ${scriptBytes} B`);
+    expect(feedback).toBeLessThan(100);
+    expect(switchMs).toBeLessThan(200);
+    expect(scriptBytes).toBeGreaterThan(0);
+    expect(scriptBytes).toBeLessThan(200 * 1024);
+  });
+
+  test('F18 reduced motion leaves nothing animating', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await withFixturePages(page);
+    await page.goto('/ui/overview/status');
+    await shellReady(page);
+    await page.locator('nav.tabs a', { hasText: /actions/i }).click();
+    expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);
+  });
+});
+
+test('F19 the shell reads fixtures only', async ({ page, offsite }) => {
+  await page.goto('/ui/overview/status');
+  await shellReady(page);
+  await page.waitForLoadState('networkidle');
+  expect(offsite).toEqual([]);
+});
