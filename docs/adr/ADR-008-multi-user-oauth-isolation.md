@@ -86,7 +86,7 @@ single-user and disabled the INV-2 guard. The previous formula was
   is mixed into response + idempotency cache keys.
 - **INV-4** — the gateway stores tokens ONLY for the gateway-brokered rung (3).
   Passthrough (rung 2) and SSO reuse (rung 1) store nothing.
-  *One scoped exception (MIK-8833):* to run a
+  *One scoped exception:* to run a
   subscriber's MCP Events listener on a passthrough backend, the gateway may
   hold that subscriber's own token **in memory only**, and only when the
   subscriber hands it over with `events/lease` for their own live subscription.

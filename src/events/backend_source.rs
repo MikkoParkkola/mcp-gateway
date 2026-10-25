@@ -173,7 +173,7 @@ impl EventSource for BackendSource {
 
     async fn authorize_row(&self, sub: &super::records::Subscription) -> Result<(), RpcError> {
         // A per-user row is judged by its own listener, and a row whose
-        // observation can no longer be had is refused (MIK-8833 B3).
+        // observation can no longer be had is refused.
         let observed = match (parse_name(&sub.name), &self.upstream) {
             (Some((backend, _)), Some(up)) if sub.obs_basis.is_some() => {
                 let config = up.listeners.live_config().ok_or_else(RpcError::forbidden)?;
@@ -204,7 +204,7 @@ impl EventSource for BackendSource {
     /// A per-user backend's row keys by the subscriber's observation,
     /// `[obs, name, arguments]`, re-derived from its stored identity and the
     /// live config; a shared one by `[name, arguments]` as before. A row
-    /// whose observation cannot be had holds no key (MIK-8833 §2.2, B3).
+    /// whose observation cannot be had holds no key.
     fn key_of_row(
         &self,
         sub: &super::records::Subscription,
@@ -243,7 +243,7 @@ impl EventSource for BackendSource {
         let listener = listener_of(key, backend);
         // A per-user A2A listener has no read of its own to poll the agent
         // card with, so its `tools_changed` would never fire: refused, never
-        // a silent subscription (MIK-8833).
+        // a silent subscription.
         if listener.obs.is_some() && is_a2a(up, backend) {
             return Err(RpcError::unsupported_backend_events(
                 name,
@@ -376,7 +376,7 @@ fn is_a2a(up: &Upstream, backend: &str) -> bool {
 /// The lifecycle key of a backend event: `[name, arguments]`, or
 /// `[obs, name, arguments]` for a per-user listener. Rows and occurrences
 /// both key through this, so a listener's occurrence reaches exactly the rows
-/// it was observed for (MIK-8833 §2.2, A4).
+/// it was observed for.
 pub(super) fn backend_key(obs: Option<&str>, name: &str, arguments: &Value) -> Option<String> {
     let parts = match obs {
         Some(obs) => json!([obs, name, arguments]),

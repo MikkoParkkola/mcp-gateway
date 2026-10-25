@@ -235,7 +235,7 @@ pub async fn run_doctor_command(
     results.extend(check_shadow_radar(&config, config_path).await);
     // ── 9. Remote backend provenance (#1943) ──────────────────────────────
     results.extend(provenance::check_remote_provenance(&config));
-    // ── 10. Passthrough event-lease custody (MIK-8833) ────────────────────
+    // ── 10. Passthrough event-lease custody ────────────────────
     results.extend(lease_custody::check_passthrough_custody(&config));
 
     // ── Print and summarize ────────────────────────────────────────────────

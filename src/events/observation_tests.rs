@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8833 §2.1 and B3: a backend's binding from live config, and the key
+//! A backend's binding from live config, and the key
 //! each subscriber is observed under on it.
 
 use super::{ObsRefusal, binding, observe_row, observe_subscriber};

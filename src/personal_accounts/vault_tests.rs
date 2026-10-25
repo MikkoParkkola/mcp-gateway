@@ -744,7 +744,7 @@ mod custody_order;
 #[path = "vault_propagation_tests.rs"]
 mod propagation;
 
-/// MIK-8833 B3: a vault listener observes by account and audience, so a lease
+/// A vault listener observes by account and audience, so a lease
 /// rotation keeps its route while the call binding moves.
 #[test]
 fn the_observation_key_survives_a_lease_rotation() {

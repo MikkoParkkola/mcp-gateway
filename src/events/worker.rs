@@ -350,7 +350,7 @@ impl EventsHub {
             .await;
             return true;
         }
-        // MIK-8833 A2/B3: after every wait, the row must still be observed as
+        // After every wait, the row must still be observed as
         // it was at fan-out (same grant, identity config and lease); nothing
         // awaits between this and the send. A shared row compares `None`.
         if self.observed_now(current, &services.live.get()) != Ok(record.observed.clone()) {

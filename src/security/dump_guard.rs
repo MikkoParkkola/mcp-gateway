@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The core-dump guard a passthrough token lease requires (MIK-8833, design
-//! E8). A lease holds a subscriber's own backend token in memory; a core dump
+//! The core-dump guard a passthrough token lease requires. A lease holds a subscriber's own backend token in memory; a core dump
 //! or a same-uid ptrace would copy it out. Before any lease exists the process
 //! sets its core-file limit to zero (every Unix rustix covers) and, on Linux
 //! and Android, marks itself not dumpable. If either cannot be applied, no

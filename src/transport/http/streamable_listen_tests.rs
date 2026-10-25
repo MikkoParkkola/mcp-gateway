@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8833 D7 and C6 on Streamable HTTP: a per-user listener's own session
+//! Streamable HTTP: a per-user listener's own session
 //! handshakes, listens and subscribes with its subscriber's credential on
 //! its own session bucket, and sends nothing of the gateway's.
 

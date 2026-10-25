@@ -32,8 +32,8 @@ impl MetaMcp {
             .0)
     }
 
-    /// The headers an events listener of `server` sends as `identity`
-    /// (MIK-8833 B2): the audited mint a call uses, with the same transport
+    /// The headers an events listener of `server` sends as `identity`:
+    /// the audited mint a call uses, with the same transport
     /// check, header validation, audit record and refusals. Fail-closed even
     /// on a non-required backend: a listener with nothing minted sends
     /// nothing, never the gateway's own credential.

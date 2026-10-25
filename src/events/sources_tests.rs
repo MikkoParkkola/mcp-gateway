@@ -431,7 +431,7 @@ fn a_verification_record_is_named_by_the_hex_sha256_of_principal_and_url() {
     );
 }
 
-/// MIK-8833 A4: an occurrence keys exactly as the rows it is for. A shared
+/// An occurrence keys exactly as the rows it is for. A shared
 /// listener's key is the shared rows' key; a per-user listener's adds its
 /// observation and never equals a shared or another user's row key.
 #[test]
@@ -461,7 +461,7 @@ fn an_occurrence_keys_as_its_rows() {
     }
 }
 
-/// MIK-8833 ISO-T5 (A4): no product code builds a backend-notification
+/// No product code builds a backend-notification
 /// occurrence without a lifecycle key: a keyless one would reach every shared
 /// row and bypass the per-user routing. Each literal names its key.
 #[test]

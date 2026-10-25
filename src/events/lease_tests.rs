@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8833 lease custody at the store (design §11, §13-§15): LEASE-T1, the
-//! store half of T3 and T4, the C3 cap, E5's races and E8's guard refusal.
+//! Lease custody at the store: install and replace, the per-subscriber cap,
+//! wipe and drain, races between a replace and an expiry, and the refusal
+//! without the core-dump guard.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

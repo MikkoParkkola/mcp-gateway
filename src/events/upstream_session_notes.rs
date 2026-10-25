@@ -136,7 +136,7 @@ impl State<'_> {
             if self.shared.key.obs.is_some() {
                 // A per-user listener's tool set is its subscriber's own:
                 // reported for its rows alone, never through the gateway's
-                // shared announcement (MIK-8833 ISO-T4a).
+                // shared announcement.
                 let backend = self.shared.name.clone();
                 let name = event_name(&backend, super::NoteKind::ToolsChanged);
                 let lifecycle_key = self.key_of(&name, &json!({}));

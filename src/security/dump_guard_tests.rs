@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8833 E8/E8.1: the core-dump guard. LEASE-T10 judges each call's failure
+//! The core-dump guard. LEASE-T10 judges each call's failure
 //! through `classify`; LEASE-T11 applies the real guard in a child process and
 //! reads the result back with rustix's own getters.
 

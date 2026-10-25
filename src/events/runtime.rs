@@ -47,7 +47,7 @@ pub(crate) struct Runtime {
     /// The gateway's controls, once [`EventsHub::start`] ran.
     pub services: std::sync::OnceLock<Arc<Services>>,
     /// Mints a per-user listener's credential through the gateway's audited
-    /// path (MIK-8833 B2); set once at events wiring.
+    /// path; set once at events wiring.
     pub listener_mint: std::sync::OnceLock<Arc<dyn super::ListenerMint>>,
     /// The backends the upstream-notification source listens on, once it is
     /// installed: their live connections decide HTTP eligibility (MIK-7969).
@@ -200,7 +200,7 @@ impl EventsHub {
         let hub = Arc::clone(self);
         tokio::spawn(async move {
             // Before replay: a row observed under config that changed while
-            // the gateway was down is revoked, not started (MIK-8833 B3).
+            // the gateway was down is revoked, not started.
             hub.revoke_unobservable(None).await;
             hub.revoke_inadmissible(None).await;
             hub.replay_starts().await;

@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A per-user listener's credential (MIK-8833 design §2.3, B1, B2, C4, C5):
+//! A per-user listener's credential:
 //! every request it sends carries its subscriber's own credential, minted
 //! fresh through the gateway's audited path, or lent from their passthrough
 //! lease. Never the gateway's.

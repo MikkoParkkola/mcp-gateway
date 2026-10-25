@@ -441,7 +441,7 @@ pub(super) fn route<'a>(
     })
 }
 
-/// Answers `events/lease` (MIK-8833 E3) itself, never forwarded,
+/// Answers `events/lease` itself, never forwarded,
 /// so the backend sees no request. The owner is the events owner principal
 /// subscribe keys rows by (D4); the token is the caller's own passthrough
 /// header, moved straight into a wiping buffer.

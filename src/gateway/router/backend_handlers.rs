@@ -334,7 +334,7 @@ fn charged_binding(
 }
 
 /// The inbound header a capable client attaches its backend credential in
-/// (advertised via RFC 9728 protected-resource metadata, MIK-6750). Distinct
+/// (advertised via RFC 9728 protected-resource metadata). Distinct
 /// from `Authorization` so the gateway-auth token is never forwarded.
 const PASSTHROUGH_HEADER: &str = "x-mcp-passthrough-authorization";
 
@@ -506,7 +506,7 @@ async fn backend_handler_inner(
         .id
         .take()
         .expect("id should exist for non-notification requests");
-    // MIK-8833 E3: after authentication and the scope route, before any
+    // After authentication and the scope route, before any
     // propagation or dispatch, so the backend never sees it.
     if envelope.method == "events/lease" {
         return direct_caller::events_lease(state, &name, &caller, envelope.params.as_ref(), id)

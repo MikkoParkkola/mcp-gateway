@@ -52,7 +52,7 @@ impl HttpTransport {
 
     /// [`Self::build_mcp_headers`] for a request whose credential a
     /// [`CredentialSource`](crate::transport::upstream_tap::CredentialSource)
-    /// lends (MIK-8833 C6): protocol headers only. It never reads the
+    /// lends: protocol headers only. It never reads the
     /// gateway's OAuth token, so it never starts a login, and never adds the
     /// operator's static headers; the source's own headers are merged later.
     pub(super) async fn build_lent_headers(
@@ -386,7 +386,7 @@ impl HttpTransport {
     /// The answer to `request` from its `response`: the caller's session id
     /// bound to its bucket, a refusal typed, and a JSON or SSE body read. Split
     /// from [`Self::post_and_read`] so a send a credential source makes is
-    /// read the same way (MIK-8833 D7).
+    /// read the same way.
     pub(super) async fn read_answer(
         &self,
         request: &JsonRpcRequest,

@@ -19,7 +19,7 @@ use super::worker::{CustodyError, CustodyHandle};
 use super::{AccountError, AccountKey, GrantRecord, PersonalAccountStore};
 
 /// Every provider token a revoked grant still held, refresh first. Each is
-/// wiped on drop by `zeroize` (MIK-8834).
+/// wiped on drop by `zeroize`.
 pub(crate) struct RevocationMaterial {
     tokens: Vec<(Zeroizing<String>, TokenTypeHint)>,
 }

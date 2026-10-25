@@ -154,7 +154,7 @@ fn revoke_capturing_reads_and_tombstones_under_one_authority_acquisition() {
     assert!(material.is_some());
 }
 
-/// MIK-8834.ZERO.2: the captured tokens are `zeroize::Zeroizing`, so their
+/// The captured tokens are `zeroize::Zeroizing`, so their
 /// bytes are wiped on drop by volatile writes, not a hand-written loop.
 #[test]
 fn revocation_tokens_are_zeroizing() {

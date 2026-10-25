@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Which upstream listener a subscription is served by, and how many per-user
-//! listeners a backend runs (MIK-8833 §2.2, A5).
+//! listeners a backend runs.
 
 /// Which listener: a backend, and on a per-user backend the observation it
-/// listens as (MIK-8833 §2.2). One task per key, so two subscribers on one
+/// listens as. One task per key, so two subscribers on one
 /// per-user backend never share a session, snapshot, ledger or debt.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ListenerKey {
@@ -23,7 +23,7 @@ impl ListenerKey {
     }
 }
 
-// Not derived: `obs` is an identity digest (MIK-8697 class).
+// Not derived: `obs` is an identity digest and stays out of logs.
 impl std::fmt::Debug for ListenerKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ListenerKey")
@@ -34,7 +34,7 @@ impl std::fmt::Debug for ListenerKey {
 }
 
 /// The most per-user listeners one backend runs: the identity-slot budget
-/// with one principal's share left for calls (MIK-8833 A5). Each is a task
+/// with one principal's share left for calls. Each is a task
 /// and an open stream of its own.
 pub(crate) const MAX_PER_USER_LISTENERS: usize =
     crate::backend::MAX_IDENTITY_SLOTS - crate::backend::MAX_SLOTS_PER_PRINCIPAL;

@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The passthrough token lease (MIK-8833, design §11 and §13-§15): a
+//! The passthrough token lease: a
 //! subscriber's own backend token, held in memory only so that subscriber's
 //! event listener can run. Never serialized, cloned, logged or written; wiped
 //! with `zeroize` on every wipe trigger and on drop. A lease is refused unless

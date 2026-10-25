@@ -268,7 +268,7 @@ impl LiveConfig {
             );
         }
         drop(gate);
-        // An API key or identity provider may have gone with it (MIK-8833 C8).
+        // An API key or identity provider may have gone with it.
         crate::events::credentials_changed();
         // A large config is freed after the gate opens, never while a send
         // waits on it.

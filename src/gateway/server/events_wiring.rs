@@ -73,8 +73,8 @@ pub(super) fn install(
     if config.events.sources.schedule {
         hub.install_schedule_source(&store_dir);
     }
-    // A per-user listener mints through the same audited path a call uses
-    // (MIK-8833 B2). Weak: the hub never keeps the meta layer alive.
+    // A per-user listener mints through the same audited path a call uses.
+    // Weak: the hub never keeps the meta layer alive.
     hub.set_listener_mint(Arc::new(ListenerMint(Arc::downgrade(meta_mcp))));
     hub.start(meta_mcp.events_services(Arc::clone(live_config), credentials));
     meta_mcp.set_events(hub);

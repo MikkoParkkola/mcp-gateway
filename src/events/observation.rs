@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Which identity a backend's events are observed under (MIK-8833 design
-//! §2.1-§2.3 and B3). A per-user backend's listener observes as one
+//! Which identity a backend's events are observed under. A per-user backend's listener observes as one
 //! subscriber; the key it observes under, `obs`, is derived wherever it is
 //! needed from the row's stored identity and the live config, never stored.
 //! The row keeps `ObsBasis`, the non-secret config the key was derived from,
@@ -152,7 +151,7 @@ impl super::EventsHub {
     }
 }
 
-/// What a subscribe on `backend` records for `identity` (MIK-8833 §2.1):
+/// What a subscribe on `backend` records for `identity`:
 /// the basis its observation comes from, `None` for a shared backend. The
 /// key itself is derived again wherever it is needed, never stored.
 ///
@@ -175,7 +174,7 @@ pub(crate) fn observe_subscriber(
 }
 
 impl super::Caller {
-    /// The identity a per-user row stores (MIK-8833 §2.3): none for a shared
+    /// The identity a per-user row stores: none for a shared
     /// backend, and none when its OIDC bearer binding already carries it.
     pub(super) fn stored_identity(
         &self,
@@ -191,7 +190,7 @@ impl super::Caller {
 
 impl super::EventsHub {
     /// How `caller` observes the backend behind event `name`: `None` for a
-    /// shared backend or another source's event (MIK-8833 §2.1).
+    /// shared backend or another source's event.
     pub(super) fn observe(
         &self,
         caller: &super::Caller,

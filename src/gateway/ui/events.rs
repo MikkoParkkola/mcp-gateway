@@ -104,7 +104,7 @@ async fn held(
     Json(json!({ "held": hub.list_held() })).into_response()
 }
 
-/// Every passthrough subscription's held credential (MIK-8833 L5): backend,
+/// Every passthrough subscription's held credential: backend,
 /// subscription handle, state and expiry; never the token or a digest of it.
 async fn leases(
     State(state): State<Arc<AppState>>,

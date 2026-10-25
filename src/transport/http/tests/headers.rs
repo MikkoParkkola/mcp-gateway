@@ -298,7 +298,7 @@ async fn build_headers_trace_flag_gates_trace_header() {
     );
 }
 
-/// MIK-8833 C6: a lent credential's headers are protocol headers only: the
+/// A lent credential's headers are protocol headers only: the
 /// operator's static headers (an API key here) never ride along with a
 /// subscriber's request, and the gateway's own credential is never read.
 #[tokio::test]

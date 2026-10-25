@@ -214,7 +214,7 @@ pub enum PropagationStrategyKind {
     /// attaches its OWN backend credential per request; the gateway forwards it
     /// verbatim and stores/mints NOTHING (INV-4). The primary path for capable
     /// MCP clients that run their own OAuth flow. One scoped exception
-    /// (MIK-8833, ADR-008 INV-4): a subscriber's own token, handed over with
+    /// to ADR-008 INV-4: a subscriber's own token, handed over with
     /// `events/lease`, is held in memory only to run their events listener,
     /// and wiped on every end of that subscription.
     Passthrough,
@@ -323,8 +323,8 @@ fn cache_binding(subject_key: &str, audience: &str) -> String {
     )
 }
 
-/// The events observation key for `identity` on a backend with `config`
-/// (MIK-8833 design §2.1): the binding a call's minted credential caches
+/// The events observation key for `identity` on a backend with `config`:
+/// the binding a call's minted credential caches
 /// under, so a listener isolates users exactly as calls do. A passthrough
 /// backend observes by the subscriber's gateway identity, never the token.
 /// `None` for a vault backend, which observes by account (`vault.rs`).

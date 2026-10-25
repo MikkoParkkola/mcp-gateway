@@ -690,7 +690,7 @@ async fn the_held_listing_is_admin_only() {
     assert!(body["held"].is_array(), "{body}");
 }
 
-/// MIK-8833 L5: the held passthrough credentials listing is admin only, like
+/// The held passthrough credentials listing is admin only, like
 /// the held listing; an admin gets the list (empty with no passthrough row).
 #[tokio::test]
 async fn the_lease_listing_is_admin_only() {

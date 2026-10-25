@@ -40,7 +40,7 @@ impl EventsHub {
     pub(in crate::events) async fn sweep(&self, services: &Services) {
         self.sweep_dead_letters(services).await;
         self.sweep_lifecycle().await;
-        // The fallback to the pushed revocation (MIK-8833 C8): a per-user
+        // The fallback to the pushed revocation: a per-user
         // listener whose subscriber lost their credential stops here.
         if let Some(hub) = self.me.upgrade() {
             hub.revoke_inadmissible(None).await;

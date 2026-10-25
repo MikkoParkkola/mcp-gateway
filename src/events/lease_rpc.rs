@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! `events/lease` (MIK-8833 design C1, D4, E3): the one request that hands
+//! `events/lease`: the one request that hands
 //! the gateway a subscriber's own passthrough token for their listener.
 
 use serde_json::{Value, json};
@@ -9,7 +9,7 @@ use super::types::RpcError;
 use super::{EventsHub, lease, observation, upstream};
 
 impl EventsHub {
-    /// `events/lease` on `POST /mcp/{backend}` (MIK-8833 C1, E3): hold the
+    /// `events/lease` on `POST /mcp/{backend}`: hold the
     /// caller's own passthrough token, in memory only, for the listener of
     /// their live subscription `params.subscription` on this backend. Answered
     /// by the gateway, never forwarded. Ownership and the observation come from

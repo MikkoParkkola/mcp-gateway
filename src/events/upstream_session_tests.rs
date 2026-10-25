@@ -103,7 +103,7 @@ impl Reload {
     fn new(dir: &std::path::Path) -> Self {
         let path = dir.join("gateway.yaml");
         // Started multi-user (a restart-only posture), so a personal login
-        // added by a reload is refused (MIK-8833).
+        // added by a reload is refused.
         let live = Arc::new(crate::config_reload::LiveConfig::new(
             crate::yaml::from_str("auth:\n  enabled: true\n").expect("config"),
         ));
@@ -126,8 +126,8 @@ impl Reload {
 
     /// Rewrite the file with backend `b`, then reload: eligible (Streamable
     /// HTTP), or ineligible through a personal OAuth login on the multi-user
-    /// gateway. (It was identity propagation until MIK-8833 observed that per
-    /// subscriber, and `streamable_http: false` before MIK-8835.)
+    /// gateway. (Identity-propagated backends are now observed per
+    /// subscriber, so they no longer serve as the ineligible case.)
     async fn to(&self, eligible: bool) {
         let refused = if eligible {
             ""

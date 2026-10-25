@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A per-user listener's own session on a Streamable HTTP transport
-//! (MIK-8833 design D7): every request it sends (its `initialize`, the
+//! A per-user listener's own session on a Streamable HTTP transport:
+//! every request it sends (its `initialize`, the
 //! listen POST, the session GET and legacy interest) carries its
 //! subscriber's credential, on its own session bucket, and nothing of the
 //! gateway's (C6).

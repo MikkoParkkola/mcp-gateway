@@ -284,9 +284,8 @@ fn canonical_is_the_libraries_jcs_within_2_pow_53() {
 }
 
 /// The T16 hub: upstream events on `u` (unset key, never connected), `s`
-/// (a personal OAuth login on a multi-user gateway, refused; it was identity
-/// propagation until MIK-8833 observed that per subscriber, and explicit SSE
-/// before MIK-8835) and `c` (stdio), with the live services a commit reads.
+/// (a personal OAuth login on a multi-user gateway, refused; identity-propagated
+/// backends are now observed per subscriber) and `c` (stdio), with the live services a commit reads.
 async fn t16_hub() -> (
     Arc<EventsHub>,
     crate::config::EventsConfig,

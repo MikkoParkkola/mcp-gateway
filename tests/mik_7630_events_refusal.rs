@@ -96,7 +96,7 @@ async fn ineligible_backends_refuse_upstream_events_with_the_reason() {
             );
         }
     }
-    // MIK-8833: an identity-propagating backend is observed per subscriber,
+    // An identity-propagating backend is observed per subscriber,
     // so it is no longer refused for its credential; this one cannot connect.
     for kind in ["resource_updated", "resources_changed", "prompts_changed"] {
         let name = format!("backend.idp.{kind}");

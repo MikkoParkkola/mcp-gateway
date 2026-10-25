@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8833 `events/lease` at the hub (C1, D4, E3, LEASE-T9): only the
+//! `events/lease` at the hub: only the
 //! owner's live row on that passthrough backend takes a lease, and only a
 //! token with an `exp`.
 

@@ -113,7 +113,7 @@ impl EventsHub {
                     // key whatever the catalogue says now (MIK-8122).
                     match event.lifecycle_key.as_deref() {
                         // An unkeyed occurrence never reaches a row observed
-                        // as one subscriber (MIK-8833 E4).
+                        // as one subscriber.
                         None => s.obs_basis.is_none(),
                         Some(key) => {
                             source
@@ -180,7 +180,7 @@ impl EventsHub {
         now: DateTime<Utc>,
     ) {
         // What the row is observed under now, stamped so its send can check
-        // it still is (MIK-8833 A2); a row that cannot be observed gets none.
+        // it still is; a row that cannot be observed gets none.
         let Ok(observed) = self.observed_now(sub, &services.live.get()) else {
             return;
         };

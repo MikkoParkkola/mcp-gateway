@@ -82,7 +82,7 @@ pub(crate) struct OutboxRecord {
     /// so it reads as one and is kept rather than dropped.
     #[serde(default = "may_be_a_replay")]
     pub replayed: bool,
-    /// What its row was observed under at fan-out (MIK-8833 A2, B3): it is
+    /// What its row was observed under at fan-out: it is
     /// sent only while the row still is. `None` for a shared row, and on
     /// records written before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -150,7 +150,7 @@ pub(crate) enum DeadReason {
     #[serde(rename = "subscription_expired")]
     Expired,
     /// The row it was observed for changed under it: re-granted, a new
-    /// identity config, or a rotated lease (MIK-8833 A2, B3).
+    /// identity config, or a rotated lease.
     #[serde(rename = "observation_changed")]
     Observation,
 }

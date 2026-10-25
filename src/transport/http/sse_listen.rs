@@ -66,7 +66,7 @@ impl SseListenSession {
             .and_then(|s| s.identity_key())
             .or(self.credential.identity_key.as_deref());
         // A lent credential's session carries protocol headers and the
-        // source's only: never the gateway's own (MIK-8833 C6).
+        // source's only: never the gateway's own.
         let mut headers = if self.credential.source.is_some() {
             t.build_lent_headers(mode, identity).await?
         } else {

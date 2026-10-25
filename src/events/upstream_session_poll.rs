@@ -25,7 +25,7 @@ pub(super) async fn poll(
     registry: &crate::backend::BackendRegistry,
 ) -> Outcome {
     // A per-user A2A listener has no credential-bearing read of its own: it
-    // sends nothing rather than poll as the gateway (MIK-8833 §2.3).
+    // sends nothing rather than poll as the gateway.
     if shared.key.obs.is_some() {
         shared.stop.cancelled().await;
         return Outcome::Stopped;

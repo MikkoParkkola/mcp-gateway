@@ -81,7 +81,7 @@ pub(super) struct Shared {
 impl Shared {
     /// What a log line may say of `error`: a per-user listener's transport
     /// errors can echo its subscriber's credential, so only that the error
-    /// happened is logged (MIK-8833 C9).
+    /// happened is logged.
     pub(super) fn error_text(&self, error: &dyn std::fmt::Display) -> String {
         if self.key.obs.is_some() {
             "withheld".to_owned()
@@ -211,8 +211,7 @@ impl EventsHub {
             .subscriptions()
             .into_iter()
             .filter(|s| s.name == name && s.live(now) && s.incarnation <= granted_by)
-            // One subscriber's catalogue read judges only their own rows
-            // (MIK-8833 ISO-T4).
+            // One subscriber's catalogue read judges only their own rows.
             .filter(|s| self.listens_as(s, key))
             .filter(|s| {
                 s.arguments
@@ -520,7 +519,7 @@ impl UpstreamListeners {
         self.hub.upgrade()
     }
 
-    /// The live config, to re-derive a row's observation (MIK-8833 §2.2);
+    /// The live config, to re-derive a row's observation;
     /// `None` before the events services are wired.
     pub(super) fn live_config(&self) -> Option<Arc<crate::config::Config>> {
         let hub = self.hub.upgrade()?;
@@ -602,7 +601,7 @@ impl UpstreamListeners {
         }
         // A per-user listener's catalogue is read only as its subscriber, by
         // its own task: a read here would be the gateway's, so it admits, as
-        // a backend that cannot be read does (§7, MIK-8833 §2.3).
+        // a backend that cannot be read does.
         if key.obs.is_some() {
             return Ok(());
         }

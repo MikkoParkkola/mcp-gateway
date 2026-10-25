@@ -625,9 +625,8 @@ fn cache_binding(
     ))
 }
 
-/// The events observation key for `account` on `audience` (MIK-8833 design
-/// B3): the account digest and audience only. No lease field is in it, so a
-/// rotation keeps the listener's route; the lease is fenced separately (§2.5).
+/// The events observation key for `account` on `audience`: the account digest and audience only. No lease field is in it, so a
+/// rotation keeps the listener's route; the lease is fenced separately.
 ///
 /// # Errors
 /// The account key cannot be digested.

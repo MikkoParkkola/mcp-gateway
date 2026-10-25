@@ -67,7 +67,7 @@ impl EventsHub {
             };
         };
         // A row that holds no key (its observation cannot be had) is never
-        // started as anyone else (MIK-8833 §2.3).
+        // started as anyone else.
         let Some(key) = source.key_of_row(row, now) else {
             return Err(RpcError::forbidden());
         };

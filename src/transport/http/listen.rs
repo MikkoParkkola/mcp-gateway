@@ -51,7 +51,7 @@ impl HttpTransport {
         self.open_listen_as(requested, &OpenAs::Gateway).await
     }
 
-    /// [`Self::open_listen`] sending as `who` (MIK-8833 D7).
+    /// [`Self::open_listen`] sending as `who`.
     pub(super) async fn open_listen_as(
         &self,
         requested: Requested,
@@ -194,7 +194,7 @@ impl HttpTransport {
         self.open_session_stream_as(watched, &OpenAs::Gateway).await
     }
 
-    /// [`Self::open_session_stream`] sending as `who` (MIK-8833 D7).
+    /// [`Self::open_session_stream`] sending as `who`.
     pub(super) async fn open_session_stream_as(
         &self,
         watched: Watched,
@@ -314,9 +314,9 @@ impl UpstreamListen for HttpTransport {
         self.streamable()
     }
 
-    /// The listener's own session once the SSE handshake is detected
-    /// (MIK-8835.SSE.1), and for a per-user listener on Streamable HTTP
-    /// (MIK-8833 D7); a shared listener on Streamable HTTP uses this transport.
+    /// The listener's own session once the SSE handshake is detected, and
+    /// for a per-user listener on Streamable HTTP; a shared listener on
+    /// Streamable HTTP uses this transport.
     fn own_session(
         self: std::sync::Arc<Self>,
         credential: crate::transport::upstream_tap::ListenerCredential,
@@ -324,7 +324,7 @@ impl UpstreamListen for HttpTransport {
         match self.streamable() {
             Some(false) => Some(std::sync::Arc::new(self.sse_listen_session(credential))),
             // A per-user listener on Streamable HTTP gets a session of its
-            // own too (MIK-8833 D7); the shared one uses this transport.
+            // own too; the shared one uses this transport.
             Some(true) if credential.source.is_some() => self
                 .streamable_listen_session(credential)
                 .map(|s| std::sync::Arc::new(s) as std::sync::Arc<dyn UpstreamListen>),
@@ -503,7 +503,7 @@ mod session_heal_tests;
 #[path = "legacy_pin_tests.rs"]
 mod legacy_pin_tests;
 
-/// Who a stream open sends as (MIK-8833 D7): the gateway on its shared
+/// Who a stream open sends as: the gateway on its shared
 /// session, or one subscriber on their own session bucket with the
 /// credential a source lends, and nothing of the gateway's (C6).
 pub(super) enum OpenAs<'a> {

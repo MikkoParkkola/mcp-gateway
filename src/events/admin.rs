@@ -78,7 +78,7 @@ impl EventsHub {
     }
 
     /// Each passthrough subscription's held credential, as the admin view
-    /// lists it (MIK-8833 L5): its backend, its handle (never the stored id),
+    /// lists it: its backend, its handle (never the stored id),
     /// its state (`active`, `credential_needed`, `credential_rejected`) and,
     /// while active, when the lease ends. Never the token or a digest of it.
     #[cfg_attr(

@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8833 E4 at fan-out. Split from `fanout_tests.rs` (file-size ceiling).
+//! Per-user occurrences at fan-out reach only rows observed as their
+//! subscriber. Split from `fanout_tests.rs` (file-size ceiling).
 
 use super::*;
 
-/// MIK-8833 E4: an occurrence with no lifecycle key (a shared listener's)
+/// An occurrence with no lifecycle key (a shared listener's)
 /// never reaches a row observed as one subscriber; a shared row still gets it.
 #[tokio::test]
 async fn a_keyless_occurrence_skips_rows_observed_per_user() {

@@ -81,7 +81,7 @@ impl RpcError {
         )
     }
 
-    /// `-32014` for a passthrough token the lease refuses (MIK-8833 L2, E8),
+    /// `-32014` for a passthrough token the lease refuses,
     /// naming why and, for the core-dump guard, which call failed.
     pub(crate) fn lease_refused(refusal: super::lease::LeaseRefusal) -> Self {
         let (reason, detail) = refusal.reason();

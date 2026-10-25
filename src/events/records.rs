@@ -87,7 +87,7 @@ pub(crate) struct Subscription {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watch_class: Option<WatchClass>,
     /// The identity a per-user backend observes this subscriber as, when
-    /// `binding` does not already carry it (MIK-8833 design §2.3). `Debug`
+    /// `binding` does not already carry it. `Debug`
     /// leaves it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_identity: Option<crate::key_server::oidc::VerifiedIdentity>,

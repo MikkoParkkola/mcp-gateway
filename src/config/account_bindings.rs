@@ -59,8 +59,7 @@ pub(crate) struct BoundAccountBackend {
     /// `None` for `shared`: static behaviour is unchanged.
     pub(crate) propagation: Option<IdentityPropagationConfig>,
     /// The five-field account-key descriptor, for `personal_managed` only.
-    /// The events observation key binds a subscriber's account with it
-    /// (MIK-8833).
+    /// The events observation key binds a subscriber's account with it.
     pub(crate) account: Option<AccountKeyDescriptor>,
 }
 

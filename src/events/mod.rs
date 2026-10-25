@@ -27,7 +27,7 @@ pub(crate) mod lease;
 /// Bumped whenever a gateway credential may have been revoked: a key-server
 /// revocation or a config change (an API key removed, an identity provider
 /// changed). Every hub re-checks its per-user listeners at once rather than
-/// at its next sweep (MIK-8833 C8). Process-wide on purpose: a second hub in
+/// at its next sweep. Process-wide on purpose: a second hub in
 /// one process only re-checks once more.
 static CREDENTIALS_CHANGED: std::sync::LazyLock<tokio::sync::watch::Sender<u64>> =
     std::sync::LazyLock::new(|| tokio::sync::watch::channel(0).0);
@@ -100,8 +100,7 @@ pub(crate) struct EventsHub {
     /// Sources' started lifecycle keys; see [`lifecycle`].
     lifecycle: lifecycle::Started,
     debounce: backend_source::Debounce,
-    /// Passthrough tokens held for subscribers' listeners, memory only
-    /// (MIK-8833 §11).
+    /// Passthrough tokens held for subscribers' listeners, memory only.
     leases: lease::LeaseStore,
     /// Held while the catalogue changes or is read to delete from it.
     catalogue_gate: parking_lot::Mutex<()>,
@@ -199,7 +198,7 @@ pub(crate) trait EventSource: Send + Sync {
     }
     /// The lifecycle key a row holds while its type is offered: the one key
     /// subscribe, replay, stop reconciliation and fan-out all compute, so
-    /// they cannot disagree (MIK-8833 §2.2). By default
+    /// they cannot disagree. By default
     /// [`Self::lifecycle_key`] of its principal, name and arguments; `None`
     /// when the row holds no key, so nothing is started or delivered for it.
     fn key_of_row(
@@ -373,7 +372,7 @@ impl EventsHub {
         }
     }
 
-    /// Attach the gateway's audited listener mint (MIK-8833 B2). Without
+    /// Attach the gateway's audited listener mint. Without
     /// one, no per-user listener of a minting backend runs.
     pub(crate) fn set_listener_mint(&self, mint: Arc<dyn ListenerMint>) {
         let _ = self.runtime.listener_mint.set(mint);

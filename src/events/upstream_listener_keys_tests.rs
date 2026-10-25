@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8833 §2.2 and ISO-T4b/c at the listener map: two subscribers of one
+//! The listener map: two subscribers of one
 //! per-user backend, and its shared listener, are three listeners with their
 //! own entry, URI ledger and confirm clock.
 

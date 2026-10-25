@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! `doctor` findings for passthrough token custody (MIK-8833 E8 and the
-//! swap rule): a gateway with a `passthrough` backend may hold
+//! `doctor` findings for passthrough token custody: a gateway with a `passthrough` backend may hold
 //! its event subscribers' own tokens in memory. The gateway lowers its own
 //! core-file limit before the first lease and refuses leases where it cannot;
 //! swap is the host's, so it is reported here: a warning unless every active

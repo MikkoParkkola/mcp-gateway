@@ -22,7 +22,7 @@ pub(crate) struct Caller {
     /// (or authentication is off).
     pub principal: Option<String>,
     /// The identity the key server or OIDC verified for this caller, if any:
-    /// what a per-user backend observes it as (MIK-8833 §2.3).
+    /// what a per-user backend observes it as.
     pub identity: Option<crate::key_server::oidc::VerifiedIdentity>,
     /// The caller key the read verdict judges this caller's frames under;
     /// `None` when the verdict is off or the caller has no identity.

@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8833 §2.1: the events observation key is the binding a call's minted
+//! The events observation key is the binding a call's minted
 //! credential caches under, per user and per backend identity config.
 
 use super::{

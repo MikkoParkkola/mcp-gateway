@@ -61,7 +61,7 @@ impl EventsHub {
     /// whose observation can no longer be had: its backend's identity config
     /// is not the one it was observed under, the backend moved between shared
     /// and per-user, or its identity is gone. Such a row is never re-keyed
-    /// silently (MIK-8833 B3); its key then stops, which wipes its lease.
+    /// silently; its key then stops, which wipes its lease.
     pub(crate) async fn revoke_unobservable(self: &Arc<Self>, backend: Option<&str>) {
         let Some(services) = self.runtime.services.get() else {
             return;
@@ -84,8 +84,8 @@ impl EventsHub {
     }
 
     /// Revoke (`-32012`) every per-user row of `backend` (every backend when
-    /// `None`) whose subscriber's credential no longer passes admission
-    /// (MIK-8833 §2.9, C8): its listener stops and its lease is wiped, rather
+    /// `None`) whose subscriber's credential no longer passes admission:
+    /// its listener stops and its lease is wiped, rather
     /// than observing until its next delivery. A refusal the clock may have
     /// caused keeps the row.
     pub(crate) async fn revoke_inadmissible(self: &Arc<Self>, backend: Option<&str>) {

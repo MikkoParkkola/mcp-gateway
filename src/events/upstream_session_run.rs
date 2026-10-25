@@ -55,7 +55,7 @@ pub(super) async fn begin_run(
     };
     let flavour = backend.connected_streamable();
     // A per-user key listens only as its subscriber, never as the gateway:
-    // with no credential to be had it does not run (MIK-8833 §2.3).
+    // with no credential to be had it does not run.
     let Some(credential) = crate::events::listener_credential::for_key(&shared.key, hub) else {
         debug!(backend = %shared.name, "upstream listener: no credential for a per-user key");
         return None;
@@ -65,7 +65,7 @@ pub(super) async fn begin_run(
         return None;
     };
     // An SSE own session speaks the legacy handshake; a Streamable HTTP one
-    // (a per-user listener, MIK-8833 D7) the era the slot detected.
+    // (a per-user listener's) the era the slot detected.
     let sse_own = own
         .as_ref()
         .is_some_and(|o| o.detected_streamable() != Some(true));

@@ -62,7 +62,7 @@ pub(crate) enum Ineligible {
     /// The backend's credential is one person's raw OAuth login and the
     /// gateway serves several callers (D3): no listener can observe as each
     /// subscriber. A backend reached with a propagated identity or a managed
-    /// account is observed per subscriber instead (MIK-8833).
+    /// account is observed per subscriber instead.
     PerUserCredential,
 }
 
@@ -205,8 +205,8 @@ pub(crate) fn judged_backends(
 /// Why `backend` cannot offer the events yet, if it cannot. The identity
 /// reasons come first, so a subscribe never connects a backend they refuse.
 fn judge(backend: &BackendConfig, multi_user: bool, detected: Option<bool>) -> Option<Judged> {
-    // A propagated identity or a managed account is observed per subscriber
-    // (MIK-8833); only a raw personal login, with no identity to listen as
+    // A propagated identity or a managed account is observed per subscriber;
+    // only a raw personal login, with no identity to listen as
     // each subscriber, stays refused on a multi-user gateway.
     let personal = backend.identity_propagation.is_none()
         && (backend
@@ -283,7 +283,7 @@ mod tests {
         assert_eq!(
             judge(&idp, true, Some(true)),
             None,
-            "observed per subscriber (MIK-8833)"
+            "observed per subscriber"
         );
         let oauth =
             backend("http_url: http://h/mcp\nstreamable_http: true\noauth:\n  enabled: true\n");
@@ -316,7 +316,7 @@ mod tests {
         assert_eq!(judge(&off, false, None), None);
     }
 
-    /// MIK-8833: an identity-bound backend is judged by its transport like
+    /// An identity-bound backend is judged by its transport like
     /// any other; a personal login with a propagated identity is not refused.
     #[test]
     fn an_identity_backend_is_judged_by_its_transport() {
@@ -356,7 +356,7 @@ mod tests {
 
     /// Accounts compile before the verdict: a personal or external account
     /// is identity propagation, observed per subscriber whatever the auth
-    /// posture (MIK-8833); a shared one is the static credential it names.
+    /// posture; a shared one is the static credential it names.
     #[test]
     fn account_bindings_are_judged_as_they_compile() {
         let yaml = "accounts:\n  schema_version: accounts.v1\n  enabled: true\n  \
@@ -408,7 +408,7 @@ mod tests {
         );
     }
 
-    /// U1 (MIK-8835.A2A.1, MIK-8833): an identity-bound A2A backend is
+    /// U1: an identity-bound A2A backend is
     /// refused its resource and prompt kinds as A2A, like a shared one; its
     /// per-user `tools_changed` is refused at the listener start instead.
     #[cfg(feature = "a2a")]

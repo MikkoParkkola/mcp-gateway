@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A burial's governance record survives an eviction by the caps (MIK-7805
-//! AC5). Split from `worker_tests.rs` (file-size ceiling).
+//! A burial's governance record survives an eviction by the caps. Split from `worker_tests.rs` (file-size ceiling).
 
 use super::*;
 
-/// MIK-7805 AC5: a burial the caps evict in the same instant still leaves its
+/// A burial the caps evict in the same instant still leaves its
 /// governance record, because the receipt comes from the burial itself and not
 /// from a later read of the store.
 #[tokio::test]

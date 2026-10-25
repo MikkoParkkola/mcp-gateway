@@ -572,7 +572,7 @@ impl<'a> State<'a> {
         // A per-user listener reads no catalogue through the backend's shared
         // transport, whose credential is the gateway's: its URIs are admitted
         // (an unread catalogue proves nothing, §7) rather than judged by the
-        // gateway's view (MIK-8833 §2.3).
+        // gateway's view.
         if self.shared.key.obs.is_some() || requested(self.shared).uris.is_empty() {
             return;
         }
