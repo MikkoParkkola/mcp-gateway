@@ -1119,6 +1119,10 @@ mod tests;
 #[path = "stdio_tail_tests.rs"]
 mod tail_tests;
 
+#[cfg(all(test, unix))]
+#[path = "stdio_tree_tests.rs"]
+mod tree_tests;
+
 #[cfg(test)]
 #[path = "stdio_cache_tests.rs"]
 mod cache_tests;
