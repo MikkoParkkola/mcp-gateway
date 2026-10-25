@@ -28,6 +28,11 @@ type Log = Arc<Mutex<Vec<Seen>>>;
 /// `list_notes` is a read by name; `delete_all` is a write by name; `stamp` declares
 /// `readOnlyHint: true` itself.
 async fn stub(log: &Log) -> String {
+    stub_with(log, answer).await
+}
+
+/// [`stub`] answering every request with `reply`.
+async fn stub_with(log: &Log, reply: fn(&Value) -> Response) -> String {
     let log = Arc::clone(log);
     let app = axum::Router::new().fallback(move |uri: Uri, headers: HeaderMap, body: Bytes| {
         let log = Arc::clone(&log);
@@ -39,7 +44,7 @@ async fn stub(log: &Log) -> String {
                 headers: headers.keys().map(ToString::to_string).collect(),
             });
             let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-            answer(&request)
+            reply(&request)
         }
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -356,4 +361,170 @@ async fn a_backend_named_preview_keeps_its_routes() {
         let (docs, _) = send_json(&router, method.clone(), "/ui/api/backends/docs", body).await;
         assert_eq!(preview, docs, "{method} on a backend named preview");
     }
+}
+
+/// A JSON-RPC result for `request` whose `tools/list` page carries one tool
+/// with a `pad`-byte description, and `next` as its next page token.
+fn padded_page(request: &Value, pad: usize, next: Option<&str>) -> Response {
+    let Some(id) = request.get("id").cloned() else {
+        return StatusCode::ACCEPTED.into_response();
+    };
+    if request.get("method").and_then(Value::as_str) != Some("tools/list") {
+        return answer(request);
+    }
+    let page = request["params"]["cursor"]
+        .as_str()
+        .unwrap_or("p0")
+        .to_owned();
+    let mut result = json!({"tools": [{
+        "name": format!("list_{page}"),
+        "description": "x".repeat(pad),
+        "inputSchema": {"type": "object"},
+    }]});
+    if let Some(next) = next {
+        result["nextCursor"] = json!(next);
+    }
+    Json(json!({"jsonrpc": "2.0", "id": id, "result": result})).into_response()
+}
+
+/// One `tools/list` answer just over the 4 MiB response budget.
+fn oversized_list(request: &Value) -> Response {
+    padded_page(request, 4 * 1024 * 1024 + 1, None)
+}
+
+/// The same oversized answer, sent as one SSE event.
+fn oversized_sse(request: &Value) -> Response {
+    if request.get("method").and_then(Value::as_str) != Some("tools/list") {
+        return answer(request);
+    }
+    let pad = "x".repeat(4 * 1024 * 1024 + 1);
+    let id = request["id"].clone();
+    let event = json!({"jsonrpc": "2.0", "id": id, "result": {"tools": [
+        {"name": "list_big", "description": pad, "inputSchema": {"type": "object"}}]}});
+    (
+        [("content-type", "text/event-stream")],
+        format!("event: message\ndata: {event}\n\n"),
+    )
+        .into_response()
+}
+
+/// Three pages of 3 MiB each: every response is under 4 MiB, the preview
+/// together is over 8 MiB.
+fn three_large_pages(request: &Value) -> Response {
+    let next = match request["params"]["cursor"].as_str() {
+        None => Some("p1"),
+        Some("p1") => Some("p2"),
+        _ => None,
+    };
+    padded_page(request, 3 * 1024 * 1024, next)
+}
+
+/// An `initialize` refusal whose error body is over the 4 MiB budget.
+fn oversized_error(request: &Value) -> Response {
+    if request.get("method").and_then(Value::as_str) == Some("initialize") {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "e".repeat(4 * 1024 * 1024 + 1),
+        )
+            .into_response();
+    }
+    answer(request)
+}
+
+/// A `tools/list` answer whose body never ends.
+fn hanging_list(request: &Value) -> Response {
+    if request.get("method").and_then(Value::as_str) != Some("tools/list") {
+        return answer(request);
+    }
+    (
+        [("content-type", "application/json")],
+        Body::from_stream(futures::stream::pending::<Result<Bytes, std::io::Error>>()),
+    )
+        .into_response()
+}
+
+/// T11: each over-budget shape is a 502 naming the budget it broke.
+#[tokio::test]
+async fn an_over_budget_preview_is_a_502_naming_the_budget() {
+    let cases: [(&str, fn(&Value) -> Response, &str); 4] = [
+        ("one response", oversized_list, "4 MiB"),
+        ("one SSE response", oversized_sse, "4 MiB"),
+        ("an error body", oversized_error, "4 MiB"),
+        ("the whole preview", three_large_pages, "8 MiB"),
+    ];
+    for (shape, reply, budget) in cases {
+        let log = Log::default();
+        let url = stub_with(&log, reply).await;
+        let (router, _store) = router_with(false).await;
+        let (status, body) = confirmed(&router, &json!({"name": "big", "url": url})).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{shape}: {body}");
+        let message = body.to_string();
+        assert!(
+            message.contains(budget) && message.contains("budget"),
+            "{shape} names the {budget} budget: {body}"
+        );
+    }
+}
+
+/// T11 positive control: pages just under both budgets list in full.
+#[tokio::test]
+async fn a_preview_under_both_budgets_lists_every_page() {
+    fn two_pages(request: &Value) -> Response {
+        let next = request["params"]["cursor"]
+            .as_str()
+            .is_none()
+            .then_some("p1");
+        padded_page(request, 3 * 1024 * 1024, next)
+    }
+    let log = Log::default();
+    let url = stub_with(&log, two_pages).await;
+    let (router, _store) = router_with(false).await;
+    let (status, body) = confirmed(&router, &json!({"name": "big", "url": url})).await;
+    assert_eq!(status, StatusCode::OK, "{}", body["error"]);
+    let names: Vec<&str> = body["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert_eq!(names, ["list_p0", "list_p1"]);
+}
+
+/// T13: a failed redeem frees the busy guard at once.
+#[tokio::test]
+async fn a_failed_redeem_frees_the_guard_for_the_next_preview() {
+    let log = Log::default();
+    let url = stub(&log).await;
+    let (router, _store) = router_with(false).await;
+    let body = json!({"name": "stub", "url": url, "confirm": "not-a-token"});
+    let (status, answer) = preview_as(&router, Some(ADMIN_TOKEN), &body).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{answer}");
+    let (status, answer) = confirmed(&router, &json!({"name": "stub", "url": url})).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the next preview is admitted: {answer}"
+    );
+}
+
+/// T8b: a client that disconnects mid-preview frees the guard; the next
+/// preview is admitted.
+#[tokio::test]
+async fn a_disconnected_preview_frees_the_guard() {
+    let log = Log::default();
+    let hanging = stub_with(&log, hanging_list).await;
+    let (router, _store) = router_with(false).await;
+    let first = tokio::time::timeout(
+        Duration::from_millis(500),
+        confirmed(&router, &json!({"name": "slow", "url": hanging})),
+    )
+    .await;
+    assert!(first.is_err(), "the hanging preview is still running");
+    let url = stub(&log).await;
+    let (status, answer) = confirmed(&router, &json!({"name": "stub", "url": url})).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "admitted after the disconnect: {answer}"
+    );
 }
