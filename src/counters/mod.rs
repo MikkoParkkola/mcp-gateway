@@ -482,3 +482,7 @@ mod persist_tests;
 #[cfg(test)]
 #[path = "view_tests.rs"]
 mod view_tests;
+
+#[cfg(test)]
+#[path = "timing_tests.rs"]
+mod timing_tests;

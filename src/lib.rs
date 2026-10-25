@@ -45,7 +45,6 @@ pub mod config;
 pub mod config_persistence;
 #[doc(hidden)]
 pub mod config_reload;
-mod counters;
 #[doc(hidden)]
 pub mod context_compression;
 #[doc(hidden)]
@@ -54,6 +53,7 @@ pub mod context_integrity;
 pub mod control_plane;
 #[doc(hidden)]
 pub mod cost_accounting;
+mod counters;
 mod debug_trust_roots;
 #[doc(hidden)]
 pub mod discovery;
