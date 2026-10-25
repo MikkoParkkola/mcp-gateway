@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Daily spend resets at the host's local midnight (MIK-8901, ADR-026),
+//! Daily spend resets at the host's local midnight (ADR-026),
 //! including the 25- and 23-hour DST days. Each step fixes the clock at one
 //! instant, since a spend or a snapshot reads the clock more than once.
 
@@ -101,7 +101,6 @@ fn snapshot(saved_at: u64, usd: f64, basis: Option<&str>) -> PersistedCosts {
 
 /// A fresh process at `secs` that restores `saved`.
 fn booted(secs: u64, saved: &PersistedCosts) -> BudgetEnforcer {
-    forget_legacy_utc_day();
     let _clock = at_secs(secs);
     let e = enforcer();
     e.restore(saved);
@@ -147,7 +146,7 @@ fn a_pre_upgrade_snapshot_resets_once_at_utc_midnight_east_of_utc() {
     let e = booted(1_794_353_400, &snapshot(1_794_340_800, 1.0, None));
     {
         let _clock = at_secs(1_794_353_400);
-        assert_eq!(day_zone(), "UTC");
+        assert_eq!(e.day_zone(), "UTC");
     }
     steps(
         &e,
@@ -155,6 +154,22 @@ fn a_pre_upgrade_snapshot_resets_once_at_utc_midnight_east_of_utc() {
             (1_794_353_400, "11-11 00:30 CET", 0.0, 1.0),
             (1_794_353_400, "11-11 00:30 CET", 1.0, 2.0),
             (1_794_355_199, "11-11 00:59:59 CET", 0.0, 2.0),
+        ],
+    );
+    // Key "k" is not in the snapshot: its row, made after the restore, resets
+    // with the global total, so the two allowances never drift apart.
+    let key = |secs| {
+        let _clock = at_secs(secs);
+        e.snapshot().key_daily.get("k").copied().unwrap_or(0.0)
+    };
+    assert!((key(1_794_355_199) - 1.0).abs() < 1e-9);
+    assert!(
+        key(1_794_355_200).abs() < 1e-9,
+        "the key row resets at 00:00 UTC too"
+    );
+    steps(
+        &e,
+        &[
             (1_794_355_200, "11-11 01:00 CET, 00:00 UTC", 0.0, 0.0),
             (1_794_355_200, "11-11 01:00 CET", 0.5, 0.5),
             (1_794_437_999, "11-11 23:59:59 CET", 0.0, 0.5),
@@ -162,7 +177,7 @@ fn a_pre_upgrade_snapshot_resets_once_at_utc_midnight_east_of_utc() {
         ],
     );
     let _clock = at_secs(1_794_355_200);
-    assert_eq!(day_zone(), "Europe/Amsterdam");
+    assert_eq!(e.day_zone(), "Europe/Amsterdam");
 }
 
 /// T4, west of UTC: restored at 17:00 EST, the UTC day resets at 19:00 EST
@@ -279,22 +294,22 @@ fn a_local_snapshot_restores_by_the_local_date_in_the_zone_at_load() {
 /// T6 (TZ.5): a spend that read its day at 23:59:59 local and lands after
 /// midnight is dated to the earlier day, so the new day reads 0, unless
 /// another spend has already rolled over, when it counts on the newer day
-/// (forward only, MIK-7880). Under Europe/Amsterdam, on local days.
+/// (a rollover only moves forward). Under Europe/Amsterdam, on local days.
 #[test]
 fn a_spend_straddling_local_midnight_keeps_its_earlier_day() {
     let _zone = crate::local_day::test_zone(Europe::Amsterdam);
-    let before_midnight = day_key(1_794_437_999);
-    let fresh = || {
+    let before_midnight = local_day_key(1_794_437_999);
+    // Built before the clock moves on: the test clock holds one reading per
+    // thread, and a guard dropped inside another clears both.
+    let (alone, overtaken) = {
         let _clock = at_secs(1_794_437_999);
-        DailyAccumulator::new()
+        (DailyAccumulator::new(), DailyAccumulator::new())
     };
     let _midnight = at_secs(1_794_438_000);
 
-    let alone = fresh();
     alone.add_on(Some(before_midnight), 1_000_000);
     assert_eq!(alone.current(), 0, "dated to 11-11, read on 11-12");
 
-    let overtaken = fresh();
     overtaken.add(500_000);
     overtaken.add_on(Some(before_midnight), 1_000_000);
     assert_eq!(

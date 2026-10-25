@@ -182,6 +182,16 @@ impl MetaMcp {
         Arc::clone(&self.cost_tracker)
     }
 
+    /// The zone daily budgets count days in (ADR-026): the budget enforcer's,
+    /// or the host's when none runs.
+    pub(crate) fn day_zone(&self) -> &'static str {
+        #[cfg(feature = "cost-governance")]
+        if let Some(enforcer) = &self.budget_enforcer {
+            return enforcer.day_zone();
+        }
+        crate::local_day::host_zone_name()
+    }
+
     /// Return a [`StatsSnapshot`] for the operator dashboard and other external consumers.
     ///
     /// `total_backend_tools` should be the current sum of cached tools across all backends.

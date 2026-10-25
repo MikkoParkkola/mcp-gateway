@@ -69,7 +69,7 @@ async fn a_key_or_session_with_no_spend_answers_no_data() {
     assert_eq!(body["error"], "No data for key ''");
 }
 
-/// The aggregate names the zone daily budgets count days in (MIK-8901.TZ.4):
+/// The aggregate names the zone daily budgets count days in:
 /// the host's IANA zone, UTC on a UTC host. Mutant: the field is dropped.
 #[tokio::test]
 async fn the_aggregate_names_the_zone_days_are_counted_in() {

@@ -85,18 +85,32 @@ impl DailyAccumulator {
     /// fresh day). A stored day ahead of this read's clock is still counted,
     /// and so is any day on a clock before 1970 (MIK-8202).
     pub fn current(&self) -> u64 {
-        let today = current_day();
+        self.current_on(current_day().ok())
+    }
+
+    /// [`Self::current`] on the day key `today`; `None` is a clock before
+    /// 1970, which reads the stored day.
+    fn current_on(&self, today: Option<u64>) -> u64 {
         let state = self.lock();
-        if today.is_ok_and(|today| state.0 < today) {
+        if today.is_some_and(|today| state.0 < today) {
             0
         } else {
             state.1
         }
     }
 
-    /// False once the stored day is before today: [`Self::current`] reads 0.
-    fn is_current(&self) -> bool {
-        !current_day().is_ok_and(|today| self.lock().0 < today)
+    /// False once the stored day is before `today`: [`Self::current_on`]
+    /// reads 0.
+    fn is_current_on(&self, today: Option<u64>) -> bool {
+        !today.is_some_and(|today| self.lock().0 < today)
+    }
+
+    /// An empty accumulator on `day`; day 0 on a clock before 1970, as
+    /// [`Self::new`] does.
+    fn on(day: Option<u64>) -> Self {
+        Self {
+            state: Mutex::new((day.unwrap_or(0), 0)),
+        }
     }
 
     /// File an accumulator that holds no spend under `day`, earlier or later.
@@ -160,82 +174,23 @@ fn usd(micro: u64) -> f64 {
     micro as f64 / 1_000_000.0
 }
 
-/// Today's day key; `Err` on a clock before 1970.
+/// Today's local day key, for an accumulator read outside an enforcer;
+/// `Err` on a clock before 1970.
 fn current_day() -> Result<u64, crate::clock::ClockBeforeEpoch> {
-    crate::clock::unix_secs().map(day_key)
+    crate::clock::unix_secs().map(local_day_key)
 }
 
-/// The day key of `secs` (ADR-026). Keys are only ever compared, and a local
-/// day is always newer than a legacy UTC day of the same or an earlier number:
-/// - a local day is `2 × days + 1`, `days` counted from 1970-01-01 to the
-///   local date of `secs` in the host zone;
-/// - the legacy UTC day restored from a pre-upgrade snapshot is
-///   `2 × (secs / 86_400)` while that UTC day lasts, so it resets once at UTC
-///   midnight, east or west of UTC, and local days follow.
-fn day_key(secs: u64) -> u64 {
-    let utc_day = secs / 86_400;
-    if legacy_utc_day() == Some(utc_day) {
-        return 2 * utc_day;
-    }
+/// The local day key of `secs` (ADR-026): `2 × days + 1`, `days` counted
+/// from 1970-01-01 to the local date of `secs` in the host zone. A legacy UTC
+/// day restored from a pre-upgrade snapshot is keyed `2 × (secs / 86_400)`,
+/// so every local day is newer than a legacy day of the same or an earlier
+/// number. Keys are only ever compared.
+fn local_day_key(secs: u64) -> u64 {
     let date = crate::local_day::local_day(&crate::local_day::host_zone(), secs).date;
     let days = date
         .signed_duration_since(chrono::NaiveDate::default())
         .num_days();
     2 * u64::try_from(days).unwrap_or(0) + 1
-}
-
-/// Whether `secs` falls on the open legacy UTC day: a save then records no
-/// `day_basis`, and the costs API names UTC.
-fn on_legacy_utc_day(secs: u64) -> bool {
-    legacy_utc_day() == Some(secs / 86_400)
-}
-
-/// The `day_basis` a save at `secs` records: none while the legacy UTC day
-/// is open, so a restart keeps that day's one UTC reset.
-pub(crate) fn day_basis_at(secs: u64) -> Option<String> {
-    (!on_legacy_utc_day(secs)).then(|| "local".to_owned())
-}
-
-/// The zone today's spend is counted in: the host's, or UTC while the legacy
-/// UTC day restored at start-up is still open.
-pub(crate) fn day_zone() -> &'static str {
-    match crate::clock::unix_secs() {
-        Ok(secs) if on_legacy_utc_day(secs) => "UTC",
-        _ => crate::local_day::host_zone_name(),
-    }
-}
-
-/// The open legacy UTC day as `utc_day + 1`; 0 is none. Set once by a
-/// restore of a snapshot saved before the upgrade; never cleared, since it
-/// stops matching when that day ends. One enforcer per process.
-#[cfg(not(test))]
-static LEGACY_UTC_DAY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-#[cfg(test)]
-thread_local! {
-    /// Per test thread, so parallel tests never see each other's restores.
-    static LEGACY_UTC_DAY: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-fn legacy_utc_day() -> Option<u64> {
-    #[cfg(not(test))]
-    let stored = LEGACY_UTC_DAY.load(std::sync::atomic::Ordering::Relaxed);
-    #[cfg(test)]
-    let stored = LEGACY_UTC_DAY.with(std::cell::Cell::get);
-    stored.checked_sub(1)
-}
-
-fn set_legacy_utc_day(utc_day: u64) {
-    #[cfg(not(test))]
-    LEGACY_UTC_DAY.store(utc_day + 1, std::sync::atomic::Ordering::Relaxed);
-    #[cfg(test)]
-    LEGACY_UTC_DAY.with(|d| d.set(utc_day + 1));
-}
-
-/// A process restart, for a test: the legacy UTC day lives in a static.
-#[cfg(test)]
-fn forget_legacy_utc_day() {
-    LEGACY_UTC_DAY.with(|d| d.set(0));
 }
 
 // ── EnforcementResult ────────────────────────────────────────────────────────
@@ -472,6 +427,10 @@ pub struct BudgetEnforcer {
     /// The day an overflowing spend last swept each map (MIK-8045).
     tool_overflow_swept: std::sync::atomic::AtomicU64,
     key_overflow_swept: std::sync::atomic::AtomicU64,
+    /// The legacy UTC day a pre-upgrade snapshot was restored on, as
+    /// `utc_day + 1`; 0 is none (ADR-026). Set by `restore` before the
+    /// enforcer is shared, never cleared: it stops matching when that day ends.
+    legacy_utc_day: std::sync::atomic::AtomicU64,
 }
 
 #[cfg(feature = "cost-governance")]
@@ -492,6 +451,46 @@ impl BudgetEnforcer {
             key_overflow: DailyAccumulator::new(),
             tool_overflow_swept: std::sync::atomic::AtomicU64::new(0),
             key_overflow_swept: std::sync::atomic::AtomicU64::new(0),
+            legacy_utc_day: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// The day key of `secs`: the legacy UTC day a pre-upgrade snapshot was
+    /// restored on, while it lasts, so its budgets reset once at UTC midnight,
+    /// east or west of UTC; the local day otherwise.
+    fn day_key(&self, secs: u64) -> u64 {
+        if self.on_legacy_utc_day(secs) {
+            2 * (secs / 86_400)
+        } else {
+            local_day_key(secs)
+        }
+    }
+
+    /// Whether `secs` falls on the open legacy UTC day.
+    fn on_legacy_utc_day(&self, secs: u64) -> bool {
+        let stored = self
+            .legacy_utc_day
+            .load(std::sync::atomic::Ordering::Relaxed);
+        stored.checked_sub(1) == Some(secs / 86_400)
+    }
+
+    /// Today's day key; `Err` on a clock before 1970.
+    fn today(&self) -> Result<u64, crate::clock::ClockBeforeEpoch> {
+        crate::clock::unix_secs().map(|secs| self.day_key(secs))
+    }
+
+    /// The `day_basis` a save at `secs` records: none while the legacy UTC
+    /// day is open, so a restart keeps that day's one UTC reset.
+    pub(crate) fn day_basis_at(&self, secs: u64) -> Option<String> {
+        (!self.on_legacy_utc_day(secs)).then(|| "local".to_owned())
+    }
+
+    /// The zone today's spend is counted in: the host's, or UTC while the
+    /// legacy UTC day is open.
+    pub(crate) fn day_zone(&self) -> &'static str {
+        match crate::clock::unix_secs() {
+            Ok(secs) if self.on_legacy_utc_day(secs) => "UTC",
+            _ => crate::local_day::host_zone_name(),
         }
     }
 
@@ -536,6 +535,7 @@ impl BudgetEnforcer {
 
         // One step from here to the reservation below. Nothing in it waits or
         // writes a log: alerts are recorded and emitted after the lock is gone.
+        let today = self.today().ok();
         let mut pending = locked(&self.ledger);
         let mut logs: Vec<DeferredLog> = Vec::new();
         let mut warnings: Vec<String> = Vec::new();
@@ -544,8 +544,11 @@ impl BudgetEnforcer {
 
         // Check 1: per-tool daily limit
         if let Some(&limit) = self.config.budgets.per_tool.get(tool_name) {
-            let acc = self.tool_daily.entry(tool_name.to_string()).or_default();
-            let current_usd = usd(acc.current() + pending.tool(tool_name));
+            let acc = self
+                .tool_daily
+                .entry(tool_name.to_string())
+                .or_insert_with(|| DailyAccumulator::on(today));
+            let current_usd = usd(acc.current_on(today) + pending.tool(tool_name));
             let projected = current_usd + cost;
 
             if let Some(action) = self.evaluate_alerts(projected, limit) {
@@ -572,7 +575,7 @@ impl BudgetEnforcer {
 
         // Check 2: global daily limit
         if !blocked && let Some(limit) = self.config.budgets.daily {
-            let current_usd = usd(self.global_daily.current() + pending.global);
+            let current_usd = usd(self.global_daily.current_on(today) + pending.global);
             let projected = current_usd + cost;
 
             if let Some(action) = self.evaluate_alerts(projected, limit) {
@@ -601,8 +604,11 @@ impl BudgetEnforcer {
             && let Some(key_name) = api_key_name
             && let Some(&limit) = self.config.budgets.per_key.get(key_name)
         {
-            let acc = self.key_daily.entry(key_name.to_string()).or_default();
-            let current_usd = usd(acc.current() + pending.key(key_name));
+            let acc = self
+                .key_daily
+                .entry(key_name.to_string())
+                .or_insert_with(|| DailyAccumulator::on(today));
+            let current_usd = usd(acc.current_on(today) + pending.key(key_name));
             let projected = current_usd + cost;
 
             if let Some(action) = self.evaluate_alerts(projected, limit) {
@@ -681,7 +687,7 @@ impl BudgetEnforcer {
         // shard lock.
         // The new day is published only after the sweep, so every spend that
         // reads the old day sweeps first; concurrent sweeps are idempotent.
-        let today = current_day().ok();
+        let today = self.today().ok();
         let swept = self.swept_day.load(std::sync::atomic::Ordering::Relaxed);
         let new_day = today.is_some_and(|today| swept < today);
         let time_due = crate::clock::unix_secs();
@@ -690,7 +696,7 @@ impl BudgetEnforcer {
                 (&self.tool_daily, &budgets.per_tool),
                 (&self.key_daily, &budgets.per_key),
             ] {
-                rows::sweep_stale(map, limits);
+                rows::sweep_stale(map, limits, today);
             }
             self.swept_day
                 .fetch_max(today.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);

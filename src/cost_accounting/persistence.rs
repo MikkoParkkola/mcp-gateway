@@ -91,14 +91,18 @@ pub(crate) struct EnforcerSaveSnapshot {
 impl EnforcerSaveSnapshot {
     /// Split the save's persistable slice out of a UI snapshot taken at the
     /// save's own reading.
-    pub(crate) fn from_snapshot(snap: super::enforcer::EnforcerSnapshot, taken_at: u64) -> Self {
+    pub(crate) fn from_snapshot(
+        snap: super::enforcer::EnforcerSnapshot,
+        taken_at: u64,
+        day_basis: Option<String>,
+    ) -> Self {
         Self {
             tool_daily: snap.tool_daily,
             key_daily: snap.key_daily,
             taken_at,
             tool_overflow_usd: snap.tool_overflow_usd,
             key_overflow_usd: snap.key_overflow_usd,
-            day_basis: super::enforcer::day_basis_at(taken_at),
+            day_basis,
         }
     }
 }

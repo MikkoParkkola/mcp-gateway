@@ -34,7 +34,7 @@ impl BudgetEnforcer {
             acc.redate_if_empty(day);
         }
         for map in [&self.tool_daily, &self.key_daily] {
-            for acc in map.iter() {
+            for acc in map {
                 acc.redate_if_empty(day);
             }
         }
@@ -44,7 +44,7 @@ impl BudgetEnforcer {
         // Through the cap: a snapshot saved before the cap existed may hold
         // more names than it allows. Filed under the snapshot's own day, so
         // spend restored on a clock before 1970 still counts once the clock
-        // reads that day (MIK-8202).
+        // reads that day.
         let budgets = &self.config.budgets;
         // A zero row (a name saved after midnight before it spent again) is
         // not restored: it would take a place in the cap and read 0 anyway.
@@ -69,16 +69,17 @@ impl BudgetEnforcer {
 
     /// The day key to file `persisted` under, or `None` when it is from an
     /// earlier day. A clock it cannot read keeps the saved spend counting
-    /// (MIK-8202): discarding it would restart the budgets at zero.
+    /// instead: discarding it would restart the budgets at zero.
     fn restore_day(&self, persisted: &super::super::persistence::PersistedCosts) -> Option<u64> {
         let now = crate::clock::unix_secs();
         let saved = persisted.saved_at;
         let same_day = match persisted.day_basis.as_deref() {
-            Some("local") => now.map(|now| super::day_key(now) == super::day_key(saved)),
+            Some("local") => now.map(|now| self.day_key(now) == self.day_key(saved)),
             None => {
                 let same = now.map(|now| now / 86_400 == saved / 86_400);
                 if same != Ok(false) {
-                    super::set_legacy_utc_day(saved / 86_400);
+                    self.legacy_utc_day
+                        .store(saved / 86_400 + 1, std::sync::atomic::Ordering::Relaxed);
                 }
                 same
             }
@@ -100,7 +101,7 @@ impl BudgetEnforcer {
             );
             return None;
         }
-        Some(super::day_key(saved))
+        Some(self.day_key(saved))
     }
 
     /// The per-tool day rows.
@@ -137,15 +138,17 @@ impl BudgetEnforcer {
         Ok(EnforcerSaveSnapshot::from_snapshot(
             self.snapshot_at(Some(taken_at)),
             taken_at,
+            self.day_basis_at(taken_at),
         ))
     }
 
     fn snapshot_at(&self, taken_at: Option<u64>) -> EnforcerSnapshot {
-        let global_daily_usd = usd(self.global_daily.current());
+        let today = taken_at.map(|secs| self.day_key(secs));
+        let global_daily_usd = usd(self.global_daily.current_on(today));
 
-        let tool_daily = daily_usd(&self.tool_daily);
+        let tool_daily = daily_usd(&self.tool_daily, today);
 
-        let key_daily = daily_usd(&self.key_daily);
+        let key_daily = daily_usd(&self.key_daily, today);
 
         EnforcerSnapshot {
             global_daily_usd,
@@ -155,8 +158,8 @@ impl BudgetEnforcer {
             taken_at,
             key_daily,
             key_limits: self.config.budgets.per_key.clone(),
-            tool_overflow_usd: usd(self.tool_overflow.current()),
-            key_overflow_usd: usd(self.key_overflow.current()),
+            tool_overflow_usd: usd(self.tool_overflow.current_on(today)),
+            key_overflow_usd: usd(self.key_overflow.current_on(today)),
         }
     }
 
@@ -187,8 +190,8 @@ impl BudgetEnforcer {
     }
 }
 
-fn daily_usd(map: &DashMap<String, DailyAccumulator>) -> HashMap<String, f64> {
+fn daily_usd(map: &DashMap<String, DailyAccumulator>, today: Option<u64>) -> HashMap<String, f64> {
     map.iter()
-        .map(|e| (e.key().clone(), usd(e.value().current())))
+        .map(|e| (e.key().clone(), usd(e.value().current_on(today))))
         .collect()
 }
