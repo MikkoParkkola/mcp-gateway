@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Gateway server
 
+#[cfg(feature = "cost-governance")]
+mod cost_restore;
 mod persistence;
 mod support;
 // Two questions leave this module, both to `config_reload`, and each is
@@ -487,7 +489,7 @@ impl Gateway {
             if cg_cfg.enabled {
                 let registry = Arc::new(CostRegistry::new(&cg_cfg));
                 let enforcer = Arc::new(BudgetEnforcer::new(cg_cfg, Arc::clone(&registry)));
-                support::restore_persisted_costs(&enforcer, &data_dir.join("costs.json"));
+                cost_restore::restore_persisted_costs(&enforcer, &data_dir.join("costs.json"));
                 info!("Cost governance enabled");
                 (Some(registry), Some(enforcer))
             } else {

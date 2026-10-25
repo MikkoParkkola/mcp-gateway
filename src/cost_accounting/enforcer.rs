@@ -98,11 +98,31 @@ impl DailyAccumulator {
 }
 
 fn current_day() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_secs()
-        / 86_400
+    day_of(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs(),
+    )
+}
+
+/// The day `secs` (seconds since the UNIX epoch) falls on: the one day
+/// boundary the live accumulators and a restore of saved totals both read
+/// (MIK-8904), so moving it moves both.
+fn day_of(secs: u64) -> u64 {
+    secs / 86_400
+}
+
+/// `usd` as micro-USD, or 0 for a value a saved file should never hold
+/// (negative, NaN or infinite), which restores nothing rather than wrapping.
+fn saved_micro(usd: f64) -> u64 {
+    if usd.is_finite() && usd > 0.0 {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let micro = (usd * 1_000_000.0).round() as u64;
+        micro
+    } else {
+        0
+    }
 }
 
 // ── EnforcementResult ────────────────────────────────────────────────────────
@@ -340,8 +360,29 @@ impl BudgetEnforcer {
     }
 
     /// Puts back the daily totals a previous run saved (MIK-8904).
+    ///
+    /// Only a save from today counts: a day that ended while the gateway was
+    /// down is not carried into this one. The global total is the sum of the
+    /// per-tool totals, which `record_spend` keeps equal, so the file needs no
+    /// global total of its own.
     pub fn restore(&self, persisted: &crate::cost_accounting::persistence::PersistedCosts) {
-        let _ = persisted;
+        if day_of(persisted.saved_at) != current_day() {
+            return;
+        }
+        for (tool, total) in &persisted.tool_totals {
+            let micro = saved_micro(total.total_cost_usd);
+            if micro == 0 {
+                continue;
+            }
+            self.global_daily.add(micro);
+            self.tool_daily.entry(tool.clone()).or_default().add(micro);
+        }
+        for (key, usd) in &persisted.key_totals {
+            let micro = saved_micro(*usd);
+            if micro > 0 {
+                self.key_daily.entry(key.clone()).or_default().add(micro);
+            }
+        }
     }
 
     /// Snapshot current accumulator state for persistence and the UI endpoint.
