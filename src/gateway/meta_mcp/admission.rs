@@ -301,7 +301,7 @@ impl MetaMcp {
                 Ok(Some(ReplayTarget {
                     server: server.to_owned(),
                     tool: tool.to_owned(),
-                    origin: replay::ReplayOrigin::Named,
+                    origin: ReplayOrigin::Named,
                 }))
             },
         )
