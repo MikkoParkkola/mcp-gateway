@@ -45,18 +45,23 @@ https://<random>.trycloudflare.com/mcp`. Leave it running. (If the lead started
 it on Spark, take the URL from them and skip this step; steps 4 and 5 then run
 on Spark over SSH, in the same account, because `fire` and `evidence` read the
 run directory and talk to the gateway on 127.0.0.1.) Terminal B must be on the
-same machine and use the same `--dir` as terminal A. Evidence lands in
-`~/events8-run/`.
+same machine and use the same `--dir` as terminal A. `--dir` goes before the
+subcommand (`events8_run.py --dir X fire`, not `fire --dir X`). Evidence lands in
+`~/events8-run/` by default.
 
-**2. Connect ChatGPT.** In ChatGPT, create a plugin (or developer-mode
-connector) with that MCP server URL and OAuth. Click through the sign-in; it
-approves itself. The plugin page should list `webhook.github.push.received`
-next to the gateway's tools. (If ChatGPT insists on an OAuth client ID or
+**2. Connect ChatGPT.** Open chatgpt.com/plugins, choose Add, then "Add custom
+MCP server". Enter that MCP server URL, choose OAuth, tick the risk box, choose
+"Create as a plugin", then Connect. Click through the sign-in; it approves
+itself. The plugin page should list `webhook.github.push.received` next to the
+gateway's tools. (If ChatGPT insists on an OAuth client ID or
 refuses the server, stop: that is the result, send back what it says.)
 
-**3. Subscribe (a Work chat).** Send: "Subscribe to
-webhook.github.push.received with repo demo/repo. When one arrives, tell me
-its ref."
+**3. Subscribe (a Work chat).** ChatGPT subscribes through a monitoring task,
+so ask for a task. In a Work chat, @-mention the plugin and send: "Set up a task
+that monitors webhook.github.push.received for repo demo/repo, and each time
+one arrives, tell me its ref." A plain "subscribe to" request does not create
+one: in the 2026-10-24 rehearsal ChatGPT answered that the session "exposes no
+event subscription tool" and sent no `events/subscribe`.
 
 **4. Fire the event (terminal B, same checkout).**
 
@@ -69,7 +74,8 @@ It refuses until ChatGPT's subscribe was accepted. Then it prints
 ref: refs/heads/events8-<hex>` (a fresh ref per run). Within seconds
 ChatGPT's chat should state that ref. Copy the reply.
 
-**5. Unsubscribe, then capture.** Send: "Stop monitoring that." Then, in
+**5. Unsubscribe, then capture.** Send: "Stop monitoring that. Cancel the
+task." Then, in
 terminal B:
 
 ```
