@@ -402,5 +402,350 @@ class PublishingGuards(unittest.TestCase):
             check_docker(text)
 
 
+
+# The `-full` variant stage, as main pins it (MIK-8831 REL, ported from
+# scripts/release/test_check_tag_manifest.py on main).
+DOCKERFILE = pathlib.Path(
+    os.environ.get("MCPGW_DOCKERFILE")
+    or pathlib.Path(__file__).parents[2] / "Dockerfile"
+)
+TINI_INSTALLED = r"apt-get install(?:[^&\n\\]|\\.|\\\n)*?\btini\b"
+
+
+class VariantStage(unittest.TestCase):
+    """The third stage, read rather than assumed.
+
+    Docker builds the file’s last stage when a build names none, so the
+    variant being last is what makes an untargeted build dangerous -- and what
+    makes the base stage’s name load-bearing.
+    """
+
+    def setUp(self):
+        self.body = DOCKERFILE.read_text()
+
+    def test_the_variant_is_the_last_stage_and_runtime_is_named(self):
+        stages = re.findall(r"(?m)^FROM\s+(\S+)(?:\s+AS\s+(\S+))?\s*$", self.body)
+        self.assertTrue(stages, "the Dockerfile declares no stage")
+        self.assertEqual(
+            stages[-1][1],
+            "runtime-full",
+            "the variant is not the file's last stage",
+        )
+        names = [name for _, name in stages]
+        self.assertIn("runtime", names, "the base stage is no longer named")
+
+    def variant_stage(self):
+        # Comments dropped: an instruction installs a tool, a comment naming one
+        # installs nothing.
+        body = "\n".join(
+            line
+            for line in self.body.splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        return body[body.index("FROM runtime AS runtime-full") :]
+
+    def test_the_variant_installs_what_its_smoke_gate_exercises(self):
+        stage = self.variant_stage()
+        for tool in ("nodejs", "git", "openssh-client"):
+            self.assertRegex(
+                stage,
+                rf"apt-get install[^\n]*(?:\n[^\n]*)*?\b{re.escape(tool)}\b",
+                f"the variant stage does not apt-get install {tool}",
+            )
+        self.assertRegex(
+            stage,
+            r"COPY --from=ghcr\.io/astral-sh/uv:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}\s+/uv\s+/uvx\s",
+            "the variant stage does not install uv from a digest-pinned image",
+        )
+
+    def test_the_variant_executes_no_downloaded_installer(self):
+        # A fetched script runs whatever its URL serves on the day of the build.
+        # Node's integrity rests on apt verifying packages against a key whose
+        # fingerprint is pinned here, and uv's on an image digest.
+        stage = self.variant_stage()
+        for script in (r"setup_\d+\.x", r"install\.sh"):
+            self.assertNotRegex(
+                stage, script, f"the variant stage executes a downloaded {script}"
+            )
+        self.assertIn(
+            "6F71F525282841EEDAF851B42F59B5F99B1BE0B4",
+            stage,
+            "the variant stage does not pin the NodeSource signing key fingerprint",
+        )
+
+    def test_the_nodesource_key_guard_binds_the_primary_fingerprint(self):
+        # The pin must name the key apt will trust, which is the key file's one
+        # primary key. A subkey's fingerprint is printed too, so a file whose
+        # primary is someone else's and which carries NodeSource's key as a
+        # subkey would pass a check that matched any `fpr` line. The guard is run
+        # as the Dockerfile writes it, against gpg's colon output.
+        match = re.search(
+            r"gpg --show-keys --with-colons /tmp/nodesource\.key \| awk -F: \\\n\s*'([^']*)'",
+            self.variant_stage(),
+        )
+        self.assertIsNotNone(match, "the variant stage has no NodeSource key guard")
+        pinned = "6F71F525282841EEDAF851B42F59B5F99B1BE0B4"
+        other = "0123456789ABCDEF0123456789ABCDEF01234567"
+        subkey = "0FA5ECC8C0CA58863C0AC5867E9656125E955B26"
+        pub = "pub:-:2048:1:2F59B5F99B1BE0B4:1464022864:::-:::scESC::::::23::0:"
+        sub = "sub:-:2048:1:7E9656125E955B26:1464022864::::::e::::::23:"
+        uid = "uid:-::::1464022864::0::NodeSource <gpg@nodesource.com>::::::::::0:"
+        cases = {
+            "the published key": ([pub, f"fpr:::::::::{pinned}:", uid, sub, f"fpr:::::::::{subkey}:"], True),
+            "another primary key": ([pub, f"fpr:::::::::{other}:", uid], False),
+            "two primary keys": ([pub, f"fpr:::::::::{other}:", pub, f"fpr:::::::::{pinned}:"], False),
+            "NodeSource's key as a subkey": ([pub, f"fpr:::::::::{other}:", uid, sub, f"fpr:::::::::{pinned}:"], False),
+            "an empty key file": ([], False),
+        }
+        for label, (lines, accepted) in cases.items():
+            run = subprocess.run(
+                ["awk", "-F:", match.group(1)],
+                input="".join(f"{line}\n" for line in lines),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(run.returncode == 0, accepted, f"{label}: exit {run.returncode}")
+
+    def test_apt_trusts_only_the_pinned_nodesource_key(self):
+        # `gpg --show-keys` leaves out a primary key that has no user ID, while
+        # `gpg --dearmor` keeps every key in the file, so the guard above cannot
+        # see everything apt would trust. A fingerprint in Signed-By makes apt
+        # itself select only that key (and its subkeys) from the keyring.
+        self.assertRegex(
+            self.variant_stage(),
+            r"Signed-By: /usr/share/keyrings/nodesource\.gpg 6F71F525282841EEDAF851B42F59B5F99B1BE0B4'",
+            "apt trusts every key in the NodeSource keyring, not only the pinned one",
+        )
+
+    def test_the_variant_installs_what_a_deployment_declares(self):
+        stage = self.variant_stage()
+        self.assertRegex(
+            stage,
+            r"COPY[^\n]*docker/entrypoint-full\.sh",
+            "the variant does not copy the entrypoint into the image",
+        )
+        self.assertRegex(
+            stage,
+            r"ENTRYPOINT \[[^\]]*entrypoint-full\.sh",
+            "the variant does not run its own entrypoint",
+        )
+        script = (
+            pathlib.Path(__file__).parents[2] / "docker" / "entrypoint-full.sh"
+        ).read_text()
+        self.assertIn(
+            "EXTRA_APT_PACKAGES",
+            script,
+            "the entrypoint ignores the packages a deployment declares",
+        )
+        self.assertRegex(
+            script,
+            r"apt-get install",
+            "the entrypoint never installs anything",
+        )
+        # Installing needs root, but the image must not *default* to it: a
+        # deployment asks for root itself, and the entrypoint drops back.
+        self.assertEqual(
+            re.findall(r"(?m)^USER\s+(\S+)\s*$", stage)[-1],
+            "gateway",
+            "the variant leaves the image declaring root as its user",
+        )
+
+    def test_a_deployment_gets_its_startup_steps_before_the_gateway(self):
+        script = (
+            pathlib.Path(__file__).parents[2] / "docker" / "entrypoint-full.sh"
+        ).read_text()
+        self.assertRegex(
+            script,
+            r"/docker-entrypoint\.d",
+            "the entrypoint has no drop-in directory for a deployment's steps",
+        )
+        self.assertRegex(
+            script,
+            r"\.envsh\)\s*\.\s*\"\$f\"|\.\s*\"\$f\"",
+            "the entrypoint does not source an envsh drop-in",
+        )
+        self.assertRegex(
+            script,
+            r"\[ ! -x \"\$f\" \]",
+            "the entrypoint runs a drop-in that arrived without the exec bit",
+        )
+        run = script.index("run_dropins\n")
+        drop = script.index("setpriv --reuid=gateway")
+        self.assertLess(
+            run,
+            drop,
+            "the entrypoint drops privileges before a deployment's steps run, "
+            "so a step that needs root would fail",
+        )
+        self.assertEqual(
+            script.count("run_dropins\n"),
+            2,
+            "a path through the entrypoint skips the drop-ins: root and "
+            "non-root each call them once",
+        )
+
+    def test_tini_is_pid_1_of_the_variant_only(self):
+        # MIK-8352 TINI.1: tini -g in front of the entrypoint, so a stop reaches
+        # a sourced step's foreground command. The default image keeps the
+        # gateway itself as PID 1.
+        stage = self.variant_stage()
+        self.assertRegex(
+            stage,
+            TINI_INSTALLED,
+            "the variant does not install tini",
+        )
+        self.assertRegex(
+            stage,
+            r'(?m)^ENTRYPOINT \["/usr/bin/tini", "-g", "--", '
+            r'"/usr/local/bin/entrypoint-full\.sh"\]$',
+            "the variant's PID 1 is not tini -g in front of its entrypoint",
+        )
+        base = self.body[: self.body.index("FROM runtime AS runtime-full")]
+        self.assertRegex(
+            base,
+            r'(?m)^ENTRYPOINT \["mcp-gateway"\]$',
+            "the default image's PID 1 is no longer the gateway",
+        )
+
+    def test_the_tini_pin_reads_only_the_install_command(self):
+        # The command ends at `&&` or at a newline that is not escaped: a
+        # `tini` after it (the ENTRYPOINT, a comment) installs nothing.
+        installs = (
+            "RUN apt-get install -y \\\n    curl \\\n    tini \\\n    && rm -rf x\n",
+            "RUN apt-get install -y curl tini\n",
+        )
+        for stage in installs:
+            with self.subTest(stage=stage):
+                self.assertRegex(stage, TINI_INSTALLED)
+        installs_nothing = (
+            "RUN apt-get install -y curl\n"
+            'ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/x"]\n',
+            "RUN apt-get install -y curl \\\n    && echo tini\n",
+        )
+        for stage in installs_nothing:
+            with self.subTest(stage=stage):
+                self.assertNotRegex(stage, TINI_INSTALLED)
+
+    def test_the_variant_keeps_the_default_invocation(self):
+        # An ENTRYPOINT declared in the stage resets the CMD the base stage set.
+        # The variant's own invocation carries no arguments, so a variant
+        # without it execs a gateway with no config that starts and never exits.
+        self.assertRegex(
+            self.variant_stage(),
+            r'(?m)^CMD \["--config", "/config\.yaml"\]',
+            "the variant declares an ENTRYPOINT without the base stage's CMD, "
+            "so its default invocation is not the image's",
+        )
+
+    def test_a_startup_that_cannot_finish_stops_the_container(self):
+        script = self.entrypoint_script()
+        self.assertRegex(
+            script,
+            r"apt-get update[^\n]*&&[^\n]*apt-get install",
+            "the entrypoint does not run the update and install as one chain",
+        )
+        # `set -e` does not end the script on a failing link of an `&&` list, so
+        # the chain's status has to be carried to an explicit exit.
+        self.assertRegex(
+            script,
+            r"install failed[^\n]*\n\s*exit 1",
+            "the entrypoint does not stop the container when the install fails",
+        )
+        self.assertRegex(
+            script,
+            r"DEBIAN_FRONTEND=noninteractive",
+            "the entrypoint lets apt prompt, which no container can answer",
+        )
+        self.assertRegex(
+            script,
+            r"timeout -k \d+ \"\$INSTALL_TIMEOUT\"",
+            "the entrypoint leaves the install unbounded",
+        )
+        # PID 1 ignores SIGTERM with no handler installed, so without a trap a
+        # stop during the install waits out the grace period and SIGKILLs.
+        self.assertRegex(
+            script,
+            r"trap \w+ TERM",
+            "the entrypoint does not handle a stop while the install runs",
+        )
+
+    def test_the_privilege_drop_names_the_user_it_drops_to(self):
+        script = self.entrypoint_script()
+        # A numeric group id is whatever this distribution put in it, and Debian
+        # puts an unrelated `users` there.
+        self.assertRegex(
+            script,
+            r"setpriv --reuid=gateway --regid=gateway --init-groups",
+            "the entrypoint drops to a fixed id rather than the image's user",
+        )
+        self.assertNotRegex(
+            script,
+            r"--groups=\d",
+            "the entrypoint drops to a fixed group id",
+        )
+
+    def test_the_lists_cleanup_removes_the_directory(self):
+        script = self.entrypoint_script()
+        self.assertRegex(
+            script,
+            r"(?m)^\s*rm -rf /var/lib/apt/lists\s*$",
+            "the entrypoint leaves the apt indexes it fetched in the image",
+        )
+        self.assertNotRegex(
+            script,
+            r"/var/lib/apt/lists/\*",
+            "the cleanup globs a directory whose indexes stay while globbing is "
+            "off in that shell",
+        )
+
+    def entrypoint_script(self):
+        return (
+            pathlib.Path(__file__).parents[2] / "docker" / "entrypoint-full.sh"
+        ).read_text()
+
+    def test_the_node_and_npm_assertions_are_at_build_time(self):
+        self.assertRegex(
+            self.body,
+            r"node --version \| grep -q '\^v24\\\.'",
+            "the variant stage does not assert the Node major at build time",
+        )
+        self.assertRegex(
+            self.body,
+            r'npm install -g \./npm-\d+\.\d+\.\d+\.tgz',
+            "the variant stage does not install npm from its verified tarball",
+        )
+
+    def test_every_npm_tarball_is_verified_against_a_pinned_hash(self):
+        # A pinned version is still the registry's word on the bytes; the
+        # sha512 (as in the registry's `dist.integrity`) is this repo's.
+        # Continuations folded as Docker folds them, before the shell runs.
+        stage = self.variant_stage().replace("\\\n", "")
+        found = re.search(r'pins="([^"]*)"', stage)
+        self.assertIsNotNone(found, "the variant stage declares no npm pins")
+        pins = found.group(1).split()
+        self.assertTrue(pins, "the variant stage's npm pin list is empty")
+        for pin in pins:
+            self.assertRegex(
+                pin,
+                r"^[a-z0-9._-]+@\d+\.\d+\.\d+:sha512-[A-Za-z0-9+/]{86}==$",
+                f"{pin!r} is not name@version:sha512-<integrity>",
+            )
+        names = {pin.split("@")[0] for pin in pins}
+        for name in ("npm", "brace-expansion", "ip-address", "tar", "undici"):
+            self.assertIn(name, names, f"{name} is fetched without a pinned hash")
+        # A pin that is never compared is text: the tarball must be hashed and
+        # the result checked against it, as an exact string.
+        self.assertIn("createHash('sha512')", stage)
+        self.assertIn('test "${got}" = "${want}"', stage)
+        # Every fetch goes through the verified list; a literal spec on an npm
+        # command line would bypass it.
+        self.assertNotRegex(
+            stage,
+            r"npm\s+(?:install|i|pack)\b[^\n]*[a-z]@\d",
+            "an npm command fetches a spec that is not in the verified list",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
