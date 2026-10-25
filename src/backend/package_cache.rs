@@ -395,10 +395,12 @@ fn retire_now(dir: &Path) -> Retired {
         return Retired::Refused;
     };
     // Written before the rename, so a tombstone a crash leaves behind is
-    // provably the gateway's. A cache that cannot take the file is still moved
-    // aside and deleted by this run's `discard`; a crash then leaks it rather
-    // than letting the sweep delete what it cannot prove.
-    if let Err(error) = std::fs::write(dir.join(TOMBSTONE_PROOF), b"") {
+    // provably the gateway's. Created new, never opened: a link or a file
+    // already at that name is neither followed nor truncated. A cache that
+    // cannot take the file is still moved aside and deleted by this run's
+    // `discard`; a crash then leaks it rather than letting the sweep delete
+    // what it cannot prove.
+    if let Err(error) = crate::config_persistence::create_new_private(&dir.join(TOMBSTONE_PROOF)) {
         warn!(%error, "could not mark the package cache before moving it aside");
     }
     let tombstone = parent.join(format!(
@@ -439,20 +441,24 @@ fn sweep_tombstones_once(root: &Path) {
         return;
     }
     let root = root.to_path_buf();
-    drop(tokio::task::spawn_blocking(move || {
-        let Ok(entries) = std::fs::read_dir(&root) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if entry.file_name().to_string_lossy().contains(TOMBSTONE_MARK)
-                && is_gateway_tombstone(&path)
-                && !remove_now(&path)
-            {
-                warn!(path = %path.display(), "could not delete a package cache tombstone");
-            }
+    drop(tokio::task::spawn_blocking(move || sweep_now(&root)));
+}
+
+/// One pass of the sweep over `root`, on the caller's thread: deletes the
+/// tombstones the gateway marked and nothing else.
+fn sweep_now(root: &Path) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if entry.file_name().to_string_lossy().contains(TOMBSTONE_MARK)
+            && is_gateway_tombstone(&path)
+            && !remove_now(&path)
+        {
+            warn!(path = %path.display(), "could not delete a package cache tombstone");
         }
-    }));
+    }
 }
 
 /// Whether `path` holds the proof the gateway writes before a rename, as a
