@@ -8,7 +8,7 @@ use super::*;
 // MIK-7272.ORDER.2b — a connection's tool set must not vary as a side effect
 // of other requests on that same connection.
 //
-// Plan: docs/design/2026-09-06-order-2-per-connection-list-variance-test-plan.md
+// Plan: the order 2 per connection list variance test plan
 // ============================================================================
 
 /// A mock streamable-http MCP backend that answers `tools/list` and
@@ -148,7 +148,7 @@ const B10_EXPECTED_TOOLS: &[&str] = &[
 // MIK-7272.ORDER.2a — a tool promoted for one connection must not surface on
 // another connection's list.
 //
-// Plan: docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md
+// Plan: the cluster b connection invariance test plan
 // ============================================================================
 
 /// A gateway whose mock backend is invokable but absent from a filtered

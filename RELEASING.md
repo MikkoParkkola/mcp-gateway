@@ -181,9 +181,9 @@ off a tag it is `continue-on-error`, and a dispatch counts as a publishing conte
 ### 3. Deploy the release build to the listening gateway (NFR.SEC.7)
 
 NFR.SEC.7 closes when the gateway actually listening on `127.0.0.1:39401` carries the
-merged security controls. The cutover is the operator's step. Follow
-[`docs/runbooks/nfr-sec-7-cutover.md`](docs/runbooks/nfr-sec-7-cutover.md), not the
-superseded `docs/internal/release/2026-09-17-nfr-sec-7-closure-runbook.md`. Before the tag,
+merged security controls. The cutover is the maintainer's step: replace the install
+answering on that port, then re-run the probe that sends a foreign `Origin` and `Host`.
+The cutover runbook is kept with the maintainer's private release records. Before the tag,
 use the runbook's self-build option (1b) on the release commit. After the tag (step 6
 below), repeat with option 1a against the `v4.0.0` `mcp-gateway-darwin-arm64` asset: set
 `NEW` to the release version and check the digest against that release's

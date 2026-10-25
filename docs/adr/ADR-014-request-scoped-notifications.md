@@ -366,7 +366,7 @@ request-scoped in `_meta` (a `logLevel`, or a progress token). Otherwise the
 response is byte-identical to today's and captured notifications are dropped
 with a debug line. This **narrows** the test plan rather than restating it. Row S-01 says *"POST
 `tools/call` honours `Accept`: JSON when no stream offered, SSE when
-offered"* (`docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md:57`)
+offered"* (the cluster b connection invariance test plan)
 — negotiation on `Accept` alone, with nothing said about `_meta`. The extra
 condition is deliberate: an `Accept`-yes / `_meta`-nothing request would get a
 stream that can never carry anything, so it keeps today's JSON body instead.
@@ -446,7 +446,7 @@ implementation from an empty one, so it is labelled rather than counted.
 3. **Negative control — isolation.** Two `tools/call`s in flight on one
    connection, each with its own event-stream response. A notification caused
    by call A appears on A's stream and **never** on B's. This is test-plan row
-   S-03 (`docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md:59`).
+   S-03 (the cluster b connection invariance test plan).
 4. **The criterion, in its own words.** A test named for it asserting that a
    request-scoped notification flows *on the response stream of its own
    request* — a `notifications/progress` raised by the backend during call A
@@ -512,7 +512,7 @@ implementation from an empty one, so it is labelled rather than counted.
 10. **Negotiation prerequisite, as narrowed.** A POST `tools/call` returns JSON
     when no stream is offered, and an event-stream when one is offered **and
     the request declared something request-scoped in `_meta`** — test-plan row
-    S-01 (`docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md:57`)
+    S-01 (the cluster b connection invariance test plan)
     with the narrowing above. The third case is the one that matters here:
     `Accept` offers a stream, `_meta` declares nothing, and the body is still
     byte-identical JSON. This is the row that pins the default not changing.
@@ -585,7 +585,7 @@ the end deadlocks here instead of passing"*, and that is the outcome.
 **(ii) The loop is sequential, so no second call can be in flight.**
 Test-plan row S-03 requires *"two concurrent calls on one connection, both
 proven in flight … for both notification methods and both transports"*
-(`docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md:59`).
+(the cluster b connection invariance test plan).
 The loop awaits each dispatch to completion before reading the next line.
 
 Both are properties of the client-facing loop alone. Neither touches the
@@ -1026,7 +1026,7 @@ only (f) can.
 **Row 4's "over HTTP" is the client leg, and the Acceptance section settles it
 by construction.** The deadlock above depends on that reading, so it is cited
 rather than assumed. Test-plan row S-02
-(`docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md:58`)
+(the cluster b connection invariance test plan)
 requires that the backend's notification "reaches that call's response stream,
 before the result, over **stdio** and over **HTTP**" — the call is the client's
 `tools/call` and its response stream is the client leg. The section's own
