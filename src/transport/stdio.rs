@@ -77,7 +77,9 @@ fn configure_child_environment(cmd: &mut Command, backend_env: &HashMap<String, 
 #[path = "stdio_cache.rs"]
 mod cache;
 use cache::CACHE_ENV;
+#[cfg(test)]
 pub(crate) use cache::assigned_package_cache_dir;
+pub(crate) use cache::isolated_env_and_assigned_cache;
 pub use cache::isolated_package_manager_env;
 
 /// How many stderr lines are kept from a child, for classifying a failure.
