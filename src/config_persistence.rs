@@ -49,7 +49,7 @@ fn resolve_gateway_data_dir(
 /// failure cannot replace an operator's config with defaults. The reviewed
 /// production callers remaining here are CLI list/get, and legacy remove/update
 /// whose missing-backend guards reject the empty default before any write.
-/// See `docs/design/issue-462-config-preservation.md` for the caller inventory.
+/// See the issue 462 config preservation design for the caller inventory.
 /// Literal loading, per [`Config::load_literal`], preserves secret references.
 #[must_use]
 pub fn load_config_or_default(path: &Path) -> Config {

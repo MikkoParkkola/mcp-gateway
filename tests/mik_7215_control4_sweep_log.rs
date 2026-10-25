@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! T6 of the `MIK-7215.CONTROL.4` test plan
-//! (`docs/design/2026-09-08-control4-session-lifecycle-test-plan.md:57`).
+//! (the control4 session lifecycle test plan).
 //!
 //! The sweep log carries the COUNT of what it reclaimed, and is ABSENT on an
 //! empty sweep. The negative half is the hard half, and it is why D7 of the

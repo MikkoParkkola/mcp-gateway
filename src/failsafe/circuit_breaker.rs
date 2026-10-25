@@ -222,7 +222,7 @@ impl CircuitBreaker {
     /// meta-tool (MIK-5983): the `CIRCUIT_OPEN` error message directs operators
     /// to that tool, so reviving a backend must also close a tripped breaker.
     /// Without this, the documented recovery path was a no-op for breaker trips
-    /// (observed live 2026-06-11: hebb breaker wedged open 6.5h).
+    /// (observed live 2026-06-11: a memory backend's breaker wedged open 6.5h).
     #[tracing::instrument(skip(self), fields(backend = %self.name))]
     pub fn reset(&self) {
         if !self.enabled {

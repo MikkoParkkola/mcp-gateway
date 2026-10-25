@@ -440,7 +440,7 @@ MCP Gateway can ingest [Agent Skills](https://agentskills.io) and Claude Code `S
 
 ```bash
 # Import a local skill directory (auto-discovers SKILL.md + resources/)
-mcp-gateway skills import ~/.claude/skills/gws-gmail-send
+mcp-gateway skills import ./skills/my-skill
 
 # Import a single SKILL.md file
 mcp-gateway skills import ./path/to/SKILL.md

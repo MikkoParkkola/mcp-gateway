@@ -44,7 +44,7 @@ pub(super) fn confirmation_refusal_response(id: &RequestId, message: String) -> 
 /// The version travels in the key, not in a new envelope field: a `v2` question
 /// can then coexist with this one and an old client's answer is never ambiguous
 /// about which question it answers
-/// (`docs/design/2026-09-09-confirm-2-in-band-schema-and-wiring.md:44-60`).
+/// (the confirm 2 in band schema and wiring design).
 /// Spelled once — a second spelling is a discriminator that can disagree with
 /// itself.
 pub(super) const CONFIRMATION_INPUT_KEY: &str = "io.mcp-gateway.destructive-confirmation.v1";

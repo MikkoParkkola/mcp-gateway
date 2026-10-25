@@ -3,7 +3,7 @@
 //! Failing-tests leg (§P2) for release criterion `MIK-7272.TASK.1` — the
 //! `io.modelcontextprotocol/tasks` extension.
 //!
-//! Plan: `docs/design/2026-08-31-task-1-tasks-extension.md` §8, one module per
+//! Plan: the task 1 tasks extension design §8, one module per
 //! acceptance-criterion row.
 //!
 //! Written before the implementation, so a case that fails here fails because
@@ -21,7 +21,7 @@
 //! This file still asserts neither half, and that is deliberate, not an
 //! omission: both are behaviours of a store and a reaper that do not exist
 //! yet, so their cases live in the test plan as rows `.14`–`.17`
-//! (`docs/design/2026-09-06-task-1-tasks-extension-test-plan.md`), not here.
+//! (the task 1 tasks extension test plan), not here.
 //! The settled half (`ttlMs: number | null` present-and-nullable,
 //! `pollIntervalMs?: number`) is in scope and is asserted below.
 //!

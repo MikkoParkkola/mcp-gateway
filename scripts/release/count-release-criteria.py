@@ -18,9 +18,6 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 STATUS = ROOT / "docs/requirements/RELEASE-4.0.0-criteria-status.md"
 REQUIREMENTS = ROOT / "docs/requirements/RELEASE-4.0.0-requirements.md"
-PLAN = ROOT / "docs/internal/requirements/RELEASE-4.0.0-plan.md"
-ROLLUP = ROOT / "docs/internal/requirements/RELEASE-4.0.0-blocking-rollup.md"
-BOARD = ROOT / "docs/internal/requirements/RELEASE-4.0.0-readiness-board.md"
 # Three identifier families: Linear tickets, non-functional requirements, and
 # GitHub issues. `GH<n>` is admitted because a criterion set can be published
 # on an issue before it has a Linear ticket, and the identifier the reporter
@@ -292,203 +289,11 @@ def method_mismatches(text, methods):
     return bad
 
 
-# A cluster row in the rollup: a single-letter id or an em dash, then the
-# cluster name, the parent-criterion key, and the count of ledger rows.
-CLUSTER = re.compile(r"^\|\s*(?:[A-Z]|—)\s*\|[^|]*\|[^|]*\|\s*(\d+)\s*\|", re.MULTILINE)
-
-# What a cluster row IS, before asking whether it parses. A skip on non-match
-# is invisible: an invalid cluster id or a non-numeric count drops the row
-# and its criteria out of the accounting entirely, and the totals still
-# balance because nothing knows the row was there. COLUMN COUNT decides,
-# not the id's shape -- a shape test has to guess how wrong an id may be
-# and stays wrong for everything it did not imagine (`ABCD` and `A!` both
-# escaped a one-to-three-character guess). The cluster table is the only
-# five-column table in the rollup; the rest carry two or three.
-CLUSTER_CELLS = 5
-
-
 # A criterion key as a rollup cluster names it: optionally MIK-prefixed, and
 # possibly a range (`MRTR.1-8`) standing for the rows between its endpoints.
 NAMED = re.compile(
     r"`((?:MIK-\d+\.|NFR\.|GH\d+\.)?[A-Z][A-Z0-9]*\.\d+[a-z]?)(?:-(\d+))?`"
 )
-
-
-def rollup_membership(criteria, text):
-    """Derive each cluster's rows from the ledger and check the rollup against them.
-
-    Every blocking row belongs to exactly one cluster, and a cluster's declared
-    count is whatever its named criteria resolve to. Checking the SUM alone
-    passes two cancelling errors -- the observed failure padded one cluster with
-    a waived row while a blocking row sat in no cluster at all -- and checking
-    only the names a cluster lists cannot see a row nobody listed. Deriving the
-    membership answers both, and a range is expanded rather than sampled at its
-    endpoints, because a middle row going non-blocking is how a range goes stale.
-    """
-    blocking = [(parent, full) for parent, flag, full in criteria if flag == "yes"]
-    problems = []
-    claimed = {}
-    saw_cluster = False
-    for line in text.splitlines():
-        match = CLUSTER.match(line)
-        if not match:
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
-            # The table's own header carries the same five cells. It is the one
-            # row whose id column is the literal `#`, which no cluster uses.
-            header_or_rule = cells[0] in ("#", "") or line.startswith("|---")
-            if len(cells) == CLUSTER_CELLS and not header_or_rule:
-                problems.append(
-                    f"cluster row {cells[0]!r} does not parse: "
-                    f"id must be a single capital or an em dash and the count cell "
-                    f"a bare number, not {cells[3]!r}"
-                )
-            continue
-        saw_cluster = True
-        # The criteria column only. A cluster's notes legitimately name rows that
-        # LEFT it -- a waiver, a re-homing -- and reading the whole row reports
-        # each of those as a stray, which teaches the reader to ignore the check.
-        cluster, declared = line.split("|")[1].strip(), int(match.group(1))
-        members = []
-        names, unreadable = named_criteria(line.split("|")[3])
-        # A cell holding no backticked span at all yields neither a name nor an
-        # unreadable token, so a declared zero would match an empty membership
-        # and the row would pass while naming nothing.
-        if not names and not unreadable:
-            problems.append(f"cluster {cluster} names no criteria")
-        for token in unreadable:
-            problems.append(
-                f"cluster {cluster} names {token}, which is not a criterion name"
-            )
-        for name in names:
-            # Granularity decides which ledger key answers: a parent name covers
-            # every clause under it, a named clause only itself. Matching a
-            # clause against parents would let a met clause ride in on a
-            # blocking sibling.
-            matched = [
-                (full if name[-1].isalpha() else parent, full)
-                for parent, full in blocking
-                if _names(full if name[-1].isalpha() else parent, name)
-            ]
-            rows = [full for _key, full in matched]
-            if not rows:
-                # A cluster emptied by closure has no other honest spelling.
-                # Naming nothing trips `names no criteria`; naming the row that
-                # closed lands here. So the first cluster to reach zero could
-                # not be written down at all, and the only way to keep this gate
-                # green was to leave a met row marked blocking -- the check
-                # arguing for the drift it exists to catch. Recognised by the
-                # name resolving to a row the ledger HAS, never by the count
-                # being zero: otherwise `| H | ... | 0 |` would accept any
-                # string and a typo would read as a closure.
-                closed = declared == 0 and any(
-                    _names(full if name[-1].isalpha() else parent, name)
-                    for parent, _flag, full in criteria
-                )
-                if not closed:
-                    problems.append(
-                        f"cluster {cluster} names {name}, "
-                        f"which no ledger row calls blocking"
-                    )
-            # An unqualified name binds by suffix, so `CACHE.4` would claim rows
-            # from every ticket that has a `CACHE.4` -- silently, and the counts
-            # would still add up. No live name is ambiguous today; the check is
-            # what keeps a second ticket reusing a component name from rewriting
-            # a cluster's membership without saying so.
-            # The owner is what precedes the matched name, so a fully
-            # qualified name owns itself and cannot be ambiguous. Splitting the
-            # full row id instead would make each clause of a parent its own
-            # owner, and the one unambiguous spelling would be the one rejected.
-            owners = {key[: -len(name) - 1] for key, _full in matched}
-            if len(owners) > 1:
-                problems.append(
-                    f"cluster {cluster} names {name}, which matches rows under "
-                    f"{len(owners)} tickets"
-                )
-            members += rows
-        if len(members) != declared:
-            problems.append(
-                f"cluster {cluster} declares {declared} rows, "
-                f"its criteria resolve to {len(members)}"
-            )
-        for full in members:
-            claimed[full] = claimed.get(full, 0) + 1
-    if not saw_cluster:
-        return ["no cluster table found in the rollup"]
-    for _parent, full in blocking:
-        if not claimed.get(full):
-            problems.append(f"{full} is blocking and sits in no cluster")
-        elif claimed[full] > 1:
-            problems.append(f"{full} is claimed by {claimed[full]} clusters")
-    return problems
-
-
-def copied_counts(rollup_text, board_text, ledger):
-    """The rollup's cluster counts are derived; every other copy of them is not.
-
-    `rollup_membership` proves the rollup's own table against the ledger, which
-    leaves each cluster count true in exactly one file and transcribed in the
-    others. The readiness board carries the same eight numbers in its `rows`
-    column and the rollup's residue prose carries one bullet per residue name,
-    and both went stale against a table this script had already checked -- the
-    board's row count and a residue name with no bullet at all. A transcribed
-    number is only as good as whatever compares it to its source.
-    """
-    problems = []
-    source = {}
-    residue_names = []
-    for line in rollup_text.splitlines():
-        match = CLUSTER.match(line)
-        if not match:
-            continue
-        cells = line.split("|")
-        source[cells[1].strip()] = int(match.group(1))
-        if cells[1].strip() == "—":
-            residue_names = named_criteria(cells[3])[0]
-    seen = set()
-    for line in board_text.splitlines():
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cells) < 3 or cells[0] not in source:
-            continue
-        seen.add(cells[0])
-        # Skipping a cell that will not parse is how this check would pass a
-        # board whose count had been replaced by prose. An unreadable count is
-        # a disagreement, not an absence of one.
-        if not cells[2].isdigit():
-            problems.append(
-                f"readiness board states cluster {cells[0]}'s row count as "
-                f"{cells[2]!r}, which is not a number"
-            )
-        elif int(cells[2]) != source[cells[0]]:
-            problems.append(
-                f"readiness board says cluster {cells[0]} has {cells[2]} rows, "
-                f"the rollup derives {source[cells[0]]}"
-            )
-    # A cluster the board never mentions is the failure the per-row comparison
-    # cannot see: it agrees with every row it finds, and finds nothing.
-    for cluster in sorted(set(source) - seen):
-        problems.append(f"readiness board has no row for cluster {cluster}")
-    # The bullets are the rollup's own prose, so the name it lists is the name
-    # the bullet must open with -- a bullet for a row the cluster cell does not
-    # name is a different defect and is left to the membership check.
-    bullets = set(re.findall(r"^- `([^`]+)`", rollup_text, re.MULTILINE))
-    for name in residue_names:
-        # Both sides resolve against the ledger before they are compared. A bare
-        # suffix match lets an invented `MIK-9999.HEADER.9` stand in for the
-        # residue's `HEADER.9`, so the wrong criterion answers for the right one.
-        explained = [
-            b
-            for b in bullets
-            if _names(b, name) and any(_names(full, b) for full in ledger)
-        ]
-        if not explained:
-            problems.append(
-                f"residue names {name}, which no line in the rollup explains"
-            )
-    return problems
-
-
-def _names(key, name):
-    return key == name or key.endswith("." + name)
 
 
 # Every backtick-quoted token in a criteria cell. A token the criterion-name
@@ -531,7 +336,7 @@ def named_criteria(cell):
 
 def main():
     text = STATUS.read_text()
-    headings = heading_counts(text) + heading_counts(PLAN.read_text())
+    headings = heading_counts(text)
     if headings:
         print(
             "heading states a count that says nothing about what it counts:\n  "
@@ -595,17 +400,6 @@ def main():
         return 1
     mismatched = method_mismatches(text, methods)
     stale_sections = section_counts(text)
-    rollup_text = ROLLUP.read_text()
-    membership = rollup_membership(criteria, rollup_text)
-    membership += copied_counts(
-        rollup_text,
-        BOARD.read_text(),
-        # Both spellings of every blocking row. A rollup line may name the
-        # parent (`HEADER.9`, whose only rows are `.9a` and `.9b`) or the
-        # suffixed row itself (`IDENT.1a`), and either is a real criterion.
-        {p for p, b, _s in criteria if b == "yes"}
-        | {s for _p, b, s in criteria if b == "yes"},
-    )
     uncovered = sorted(declared - ids)
 
     totals = (len(declared), len(criteria), len(criteria) - blocking, blocking)
@@ -630,8 +424,6 @@ def main():
             f"section headings disagreeing with their own rows: {'; '.join(stale_sections)}",
             file=sys.stderr,
         )
-    for complaint in membership:
-        print(complaint, file=sys.stderr)
 
     if "--check" not in sys.argv:
         return 0
@@ -647,7 +439,7 @@ def main():
             file=sys.stderr,
         )
         return 1
-    return 1 if uncovered or mismatched or stale_sections or membership else 0
+    return 1 if uncovered or mismatched or stale_sections else 0
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ that context regardless of which version it names.
 """
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -31,6 +32,14 @@ SCOPE = DOCS / "RELEASE-4.0.0-scope-update.md"
 STATUS = DOCS / "RELEASE-4.0.0-scope-status.json"
 BASELINE = DOCS / "RELEASE-4.0.0-criteria-status.md"
 MANIFEST = pathlib.Path("Cargo.toml")
+# Evidence that left the public tree for the private companion repository is
+# cited by path and pinned by sha256 here. Where that repository is cloned at
+# its ignored path, the file itself is hashed; elsewhere the pin is accepted
+# and counted, and the gate says it did not read the file.
+PRIVATE_EVIDENCE = pathlib.Path("docs/release/private-evidence.tsv")
+PRIVATE_CHECKOUT = pathlib.Path("internal")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
+UNVERIFIED_PRIVATE = set()
 REQUIRED_DECISIONS = {"reference_personal_account_journey"}
 ID = re.compile(r"^\| ((?:MIK-\d+|NFR|GH\d+)\.[A-Z0-9]+\.\d+[a-z]?) \|", re.M)
 VERSION_400 = re.compile(r"^4\.0\.0([+-].*)?$")
@@ -118,6 +127,32 @@ def stage_burnup(criteria):
     return line + (f"; held: {', '.join(held)}" if held else "; held: none")
 
 
+def private_evidence(root):
+    """Cited path -> (pinned sha256, path inside the private clone).
+
+    The clone keeps one version per path at the path itself and other branches'
+    versions elsewhere, so a row may name where its version sits.
+    """
+    table = root / PRIVATE_EVIDENCE
+    pins = {}
+    if table.is_file():
+        for line in table.read_text().splitlines():
+            if line and not line.startswith("#"):
+                cells = line.split("\t")
+                pins[cells[0]] = (cells[1].strip(), cells[2].strip() if len(cells) > 2 else cells[0])
+    return pins
+
+
+def span_errors(label, item, text, span):
+    first, last = span
+    if first > last:
+        return [f"{label}: evidence range runs backwards: {item}"]
+    lines = len(text.splitlines())
+    if last > lines:
+        return [f"{label}: evidence cites line {last} of a {lines}-line file: {item}"]
+    return []
+
+
 def evidence_errors(root, evidence, label, required):
     if not isinstance(evidence, list):
         return [f"{label}: evidence must be a list of repository file paths"]
@@ -138,19 +173,33 @@ def evidence_errors(root, evidence, label, required):
             errors.append(
                 f"{label}: evidence must remain inside the repository: {item}"
             )
-        elif not resolved.is_file():
+        elif resolved.is_file():
+            if span:
+                errors += span_errors(label, item, resolved.read_text(errors="replace"), span)
+        elif cite not in (pins := private_evidence(root)):
             errors.append(f"{label}: evidence file does not exist: {item}")
-        elif span:
-            first, last = span
-            if first > last:
-                errors.append(f"{label}: evidence range runs backwards: {item}")
-                continue
-            lines = len(resolved.read_text(errors="replace").splitlines())
-            if last > lines:
+        elif not SHA256.match(pins[cite][0]):
+            errors.append(f"{label}: private evidence pin is not a sha256: {item}")
+        elif span and span[0] > span[1]:
+            errors.append(f"{label}: evidence range runs backwards: {item}")
+        elif (root / PRIVATE_CHECKOUT).is_dir():
+            # The clone is here, so the file is read: absent or altered fails.
+            private = root / PRIVATE_CHECKOUT / pins[cite][1]
+            if not private.is_file():
                 errors.append(
-                    f"{label}: evidence cites line {last} of a"
-                    f" {lines}-line file: {item}"
+                    f"{label}: private evidence is missing from the clone at"
+                    f" {PRIVATE_CHECKOUT}/: {item}"
                 )
+                continue
+            data = private.read_bytes()
+            if hashlib.sha256(data).hexdigest() != pins[cite][0]:
+                errors.append(
+                    f"{label}: private evidence does not match its pinned sha256: {item}"
+                )
+            elif span:
+                errors += span_errors(label, item, data.decode(errors="replace"), span)
+        else:
+            UNVERIFIED_PRIVATE.add(cite)
     return errors
 
 
@@ -370,6 +419,11 @@ def main(argv=None):
         f"{len(pending)} pending criteria/decisions; {len(blockers)} baseline blocking rows."
     )
     print("Stage burnup: " + stage_burnup(data["criteria"]))
+    if UNVERIFIED_PRIVATE:
+        print(
+            f"private evidence: {len(UNVERIFIED_PRIVATE)} rows, hash-pinned,"
+            " not verified here"
+        )
     if require_acceptance and (pending or blockers):
         print(
             "Release acceptance incomplete:\n  " + "\n  ".join(pending + blockers),

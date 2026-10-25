@@ -220,7 +220,7 @@ const ATTEMPT_REQUEST_BUDGET: u32 = 20;
 ///
 /// The bound is kept rather than dropped in favour of the transport's own
 /// timeouts, because a hang that outlives those is exactly what was observed on
-/// this machine: the gateway logged `Health probe timed out` against hebb 29
+/// this machine: the gateway logged `Health probe timed out` against a memory backend 29
 /// times. An attempt that never returns is an attempt that never retries.
 fn effective_attempt_timeout(floor: Duration, backend_timeout: Duration) -> Duration {
     floor.max(backend_timeout.saturating_mul(ATTEMPT_REQUEST_BUDGET))
