@@ -525,8 +525,9 @@ async fn a_disconnected_preview_frees_the_guard() {
     let (router, _store) = router_with(false).await;
     // The first preview is dropped, as a disconnect drops it, once the
     // server has been asked for its tools: from then on it holds the guard.
+    let slow = json!({"name": "slow", "url": hanging});
     tokio::select! {
-        (status, body) = confirmed(&router, &json!({"name": "slow", "url": hanging})) => {
+        (status, body) = confirmed(&router, &slow) => {
             panic!("the hanging preview answered: {status} {body}");
         }
         () = LIST_ARRIVED.notified() => {}
