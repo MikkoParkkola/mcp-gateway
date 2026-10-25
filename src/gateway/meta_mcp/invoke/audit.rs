@@ -57,12 +57,8 @@ pub(crate) struct DispatchNotes {
     data_classes: BTreeSet<String>,
     /// Served from a cache: no gate ran, so the delivered value is attributed.
     cached: bool,
-    /// MIK-8854: an idempotency replay of an answer its first call delivered.
-    replay: bool,
-    /// MIK-8854: answered by the gateway's response cache.
-    cache_hit: bool,
-    /// MIK-8854: refused by the request firewall.
-    request_firewall: bool,
+    /// MIK-8854: what the web UI's counters need from the gates.
+    counting: counting::CountNotes,
     /// MIN.1: the response held text over the attribution parse bound, so its
     /// tenants were not read.
     uninspected: bool,
@@ -94,6 +90,10 @@ pub(crate) fn note_process(process: ProcessNote) {
         }
     });
 }
+
+#[path = "audit_counting.rs"]
+mod counting;
+pub(crate) use counting::{note_cache_hit, note_replay, note_request_firewall};
 
 #[cfg(test)]
 #[path = "audit_settlement_tests.rs"]
@@ -187,21 +187,6 @@ pub(crate) fn note_cached() {
     note(|notes| notes.cached = true);
 }
 
-/// MIK-8854: this call replays an answer its first call delivered.
-pub(crate) fn note_replay() {
-    note(|notes| notes.replay = true);
-}
-
-/// MIK-8854: this call is answered by the gateway's response cache.
-pub(crate) fn note_cache_hit() {
-    note(|notes| notes.cache_hit = true);
-}
-
-/// MIK-8854: this call is refused by the request firewall.
-pub(crate) fn note_request_firewall() {
-    note(|notes| notes.request_firewall = true);
-}
-
 /// MIK-7636: the member a stored failure carries when its call was noted
 /// uninspected. Never on the wire: a replay answers `code`, `message` and
 /// `data` only.
@@ -244,23 +229,6 @@ impl DispatchNotes {
     /// MIN.2: whether a backend answered this call.
     pub(crate) const fn responded(&self) -> bool {
         self.responded
-    }
-
-    /// MIK-8854: how this call moves the web UI's counters, given the outcome
-    /// its record carries and whether a firewall refused it.
-    pub(crate) const fn counted(
-        &self,
-        outcome: AuditOutcome,
-        firewall: bool,
-    ) -> crate::counters::Outcome {
-        if self.replay {
-            return crate::counters::Outcome::Replay;
-        }
-        crate::counters::Outcome::Audited {
-            outcome,
-            firewall: firewall || self.request_firewall,
-            cache_hit: self.cache_hit,
-        }
     }
 
     /// The outcome of a call whose result read as `outcome`: a backend failure
@@ -517,17 +485,7 @@ impl MetaMcp {
     ) -> Result<Value> {
         // D4: counted before the log check, so auth off still counts.
         let withheld = super::gate::count_meta_denial(args, &result);
-        if let Some(outcome) = withheld.or_else(|| AuditOutcome::from_result(&result)) {
-            let firewall = matches!(result, Err(Error::ResponseFirewallRefused));
-            self.count_call(
-                args.get("server")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-                args.get("tool").and_then(Value::as_str),
-                &AuditWho::from_caller(caller),
-                notes.counted(notes.outcome(outcome), firewall),
-            );
-        }
+        self.count_invocation(args, caller, &result, &notes, withheld);
         let Some(log) = self.transparency_logger.as_ref() else {
             return result;
         };
