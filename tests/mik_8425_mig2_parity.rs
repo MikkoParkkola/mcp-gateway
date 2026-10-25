@@ -236,8 +236,9 @@ fn p6_every_repository_tree_round_trips() {
 /// The `trees.tsv` rows whose file is unchanged since recording: the exact
 /// count, so any further skip fails until it is reviewed. 184 rows were
 /// recorded; skipped today, each printed by name when the test runs:
-/// `capabilities/linear/linear_get_issue.yaml` (edited on the release line).
-const P2_UNEDITED: usize = 183;
+/// `capabilities/linear/linear_get_issue.yaml` (edited on the release line,
+/// #4133) and `examples/token-exchange-live.yaml` (#4150).
+const P2_UNEDITED: usize = 182;
 
 /// P2: every repository YAML file's tree, `Dict` and stream, as recorded
 /// with the replaced backend.
@@ -253,13 +254,18 @@ fn p2_trees_as_recorded() {
     assert_outcome("P2 trees", &outcome, P2_UNEDITED);
 }
 
+/// The `configs.tsv` rows whose file was edited since recording, so P13
+/// compares exactly the rest, as `P2_UNEDITED` does. Skipped today:
+/// `examples/token-exchange-live.yaml` (#4150).
+const P13_EDITED: usize = 1;
+
 /// P13: the `Config` each shipped config and Helm `ConfigMap` extracts to.
 #[test]
 fn p13_configs_as_recorded() {
     assert_outcome(
         "P13 configs",
         &compare_keyed("configs.tsv", configs::reading),
-        configs::CONFIGS.len(),
+        configs::CONFIGS.len() - P13_EDITED,
     );
 }
 
