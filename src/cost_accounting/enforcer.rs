@@ -339,6 +339,11 @@ impl BudgetEnforcer {
         }
     }
 
+    /// Puts back the daily totals a previous run saved (MIK-8904).
+    pub fn restore(&self, persisted: &crate::cost_accounting::persistence::PersistedCosts) {
+        let _ = persisted;
+    }
+
     /// Snapshot current accumulator state for persistence and the UI endpoint.
     #[must_use]
     pub fn snapshot(&self) -> EnforcerSnapshot {
@@ -508,6 +513,100 @@ mod tests {
             result.warnings.is_empty(),
             "Log-only tier must NOT inject response warnings"
         );
+    }
+
+    /// A `costs.json` as the server writes it: per-tool and per-key daily
+    /// totals, saved at `saved_at`.
+    fn persisted(
+        saved_at: u64,
+        tools: &[(&str, f64)],
+        keys: &[(&str, f64)],
+    ) -> crate::cost_accounting::persistence::PersistedCosts {
+        use crate::cost_accounting::persistence::{PersistedCosts, ToolTotal};
+        PersistedCosts {
+            saved_at,
+            tool_totals: tools
+                .iter()
+                .map(|(name, usd)| {
+                    (
+                        (*name).to_string(),
+                        ToolTotal {
+                            call_count: 0,
+                            total_cost_usd: *usd,
+                            avg_cost_usd: 0.0,
+                        },
+                    )
+                })
+                .collect(),
+            key_totals: keys.iter().map(|(k, v)| ((*k).to_string(), *v)).collect(),
+        }
+    }
+
+    fn now_secs() -> u64 {
+        crate::cost_accounting::persistence::now_secs()
+    }
+
+    // MIK-8904.COST.1: what was spent today before a restart is spent today
+    // after it. The global total is the sum of the per-tool totals, which
+    // `record_spend` keeps equal; the file carries no global total of its own.
+    #[test]
+    fn a_restore_on_the_same_day_brings_back_every_daily_total() {
+        let e = enforcer_with(true, Some(10.0), &[], &[], &[]);
+        e.restore(&persisted(
+            now_secs(),
+            &[("a", 0.30), ("b", 0.20)],
+            &[("k1", 0.25), ("k2", 0.25)],
+        ));
+        let snap = e.snapshot();
+        assert!((snap.global_daily_usd - 0.50).abs() < 1e-6, "{snap:?}");
+        assert!((snap.tool_daily["a"] - 0.30).abs() < 1e-6);
+        assert!((snap.tool_daily["b"] - 0.20).abs() < 1e-6);
+        assert!((snap.key_daily["k1"] - 0.25).abs() < 1e-6);
+        assert!((snap.key_daily["k2"] - 0.25).abs() < 1e-6);
+    }
+
+    // MIK-8904.COST.2: a cap reached before the restart still refuses after it,
+    // for a key, a tool and the global budget.
+    #[test]
+    fn a_cap_reached_before_a_restart_still_refuses_after_it() {
+        let saved = persisted(now_secs(), &[("t", 0.10)], &[("k1", 0.10)]);
+
+        let per_key = enforcer_with(true, None, &[], &[("k1", 0.10)], &[("other", 0.05)]);
+        per_key.restore(&saved);
+        assert!(
+            !per_key.check("other", Some("k1")).allowed,
+            "the key's cap was forgotten"
+        );
+
+        let per_tool = enforcer_with(true, None, &[("t", 0.10)], &[], &[("t", 0.05)]);
+        per_tool.restore(&saved);
+        assert!(
+            !per_tool.check("t", None).allowed,
+            "the tool's cap was forgotten"
+        );
+
+        let global = enforcer_with(true, Some(0.10), &[], &[], &[("other", 0.05)]);
+        global.restore(&saved);
+        assert!(
+            !global.check("other", None).allowed,
+            "the global cap was forgotten"
+        );
+    }
+
+    // MIK-8904.COST.3: a day that ended while the gateway was down is not
+    // carried into the next one. The day is the enforcer's own day function.
+    #[test]
+    fn a_restore_after_the_day_changed_starts_every_total_at_zero() {
+        let e = enforcer_with(true, Some(10.0), &[], &[], &[]);
+        e.restore(&persisted(
+            now_secs() - 2 * 86_400,
+            &[("a", 0.30)],
+            &[("k1", 0.30)],
+        ));
+        let snap = e.snapshot();
+        assert!(snap.global_daily_usd.abs() < 1e-9, "{snap:?}");
+        assert!(snap.tool_daily.get("a").is_none_or(|usd| usd.abs() < 1e-9));
+        assert!(snap.key_daily.get("k1").is_none_or(|usd| usd.abs() < 1e-9));
     }
 
     #[test]
