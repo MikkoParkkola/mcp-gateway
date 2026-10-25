@@ -425,6 +425,17 @@ pub(crate) mod seams {
         static AFTER_INTAKE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static AT_TASK_START: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static AFTER_LIST_SNAPSHOT: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+        static INSPECTED_SERVERS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Record the servers a settled task result was inspected under.
+    pub(crate) fn inspected_under(servers: Vec<String>) {
+        INSPECTED_SERVERS.with(|slot| slot.borrow_mut().extend(servers));
+    }
+
+    /// The servers settled task results on this thread were inspected under.
+    pub(crate) fn take_inspected() -> Vec<String> {
+        INSPECTED_SERVERS.with(|slot| std::mem::take(&mut *slot.borrow_mut()))
     }
 
     /// Run `hook` once, the next time `served_tools_list` on this thread has

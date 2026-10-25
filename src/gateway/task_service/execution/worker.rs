@@ -164,6 +164,11 @@ async fn run_dispatched(
     let mut job = executor
         .recovery()
         .and_then(|_| state.meta_mcp().direct_job(&call.tool, &call.arguments));
+    // Asked of the recorded server, before trust is asked below: the live
+    // lookup may already name another one.
+    if let (Some(job), Some(recorded)) = (job.as_mut(), recorded) {
+        recorded.clone_into(&mut job.server);
+    }
     // Trust is a live question with an await in it, so it cannot be a match
     // guard: asked here, after the shape is known and before anything is armed.
     // The verdict is computed first and the option cleared after, so nothing
@@ -174,9 +179,6 @@ async fn run_dispatched(
     };
     if !claimed {
         job = None;
-    }
-    if let (Some(job), Some(recorded)) = (job.as_mut(), recorded) {
-        recorded.clone_into(&mut job.server);
     }
 
     // Capacity for the WHOLE recovery descriptor, reserved before the peer is
@@ -614,6 +616,22 @@ pub(super) fn inspect_settled(
     state: &crate::gateway::task_service::host::LiveHost,
     call: &TaskCall,
     id: &str,
+    response: crate::protocol::JsonRpcResponse,
+) -> crate::protocol::JsonRpcResponse {
+    // A surfaced task's result is inspected as the recorded server's answer:
+    // a reload that moved the name during the call must not lend it the new
+    // server's targets.
+    state
+        .meta_mcp()
+        .with_surfaced_pin_sync(&call.tool, call.surfaced_server.as_deref(), || {
+            inspect_settled_pinned(state, call, id, response)
+        })
+}
+
+fn inspect_settled_pinned(
+    state: &crate::gateway::task_service::host::LiveHost,
+    call: &TaskCall,
+    id: &str,
     mut response: crate::protocol::JsonRpcResponse,
 ) -> crate::protocol::JsonRpcResponse {
     if response.error.is_some() || response.egress_scanned {
@@ -627,6 +645,10 @@ pub(super) fn inspect_settled(
         &call.tool,
         &call.arguments,
         crate::gateway::meta_mcp::visible::TargetView::Dispatched,
+    );
+    #[cfg(test)]
+    crate::gateway::meta_mcp::visible::seams::inspected_under(
+        backend.iter().map(|target| target.server.clone()).collect(),
     );
     let targets =
         crate::gateway::meta_mcp::response_security::meta_response_targets(&call.tool, &backend);

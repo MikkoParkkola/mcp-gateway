@@ -267,3 +267,25 @@ async fn l14_one_tools_list_holds_the_surfaced_set_it_started_with() {
         "premise: the withdrawal applies to the next list: {after}"
     );
 }
+
+/// L10e: the name moves to beta while alpha is answering. The settled result
+/// is inspected as alpha's answer, under alpha's targets, not beta's.
+#[tokio::test]
+async fn l10e_a_move_during_the_call_keeps_the_result_inspected_as_alpha() {
+    let (alpha, mut gate) = MockBackend::holding(Answer::ok());
+    let beta = MockBackend::answering(Answer::ok());
+    let (state, _store) = surfaced_state(&alpha, &beta).await;
+    let _ = crate::gateway::meta_mcp::visible::seams::take_inspected();
+    let created = post(&state, "key-a", surfaced_task("l10e")).await;
+    gate.wait_for_dispatch().await;
+    state.meta_mcp.resurface_for_test(TOOL, BETA);
+    gate.release();
+    let fetched = poll_until_terminal(&state, "key-a", &task_id(&created)).await;
+    assert_carries_the_backend_result(&fetched);
+    std::assert_eq!(
+        crate::gateway::meta_mcp::visible::seams::take_inspected(),
+        vec![ALPHA.to_owned()],
+        "L10e: the settled result was inspected under the moved name's server"
+    );
+    std::assert_eq!((alpha.calls(), beta.calls()), (1, 0), "{fetched}");
+}

@@ -247,6 +247,24 @@ pub(crate) fn pin_surfaced(tool_name: &str, server: &'static str) -> bool {
     .is_some()
 }
 
+/// Run `read` with `tool_name` pinned to `server`, in the active memo or in
+/// one opened for the call. For the synchronous readers after a surfaced
+/// task's dispatch (the settled result's inspection), which run once the
+/// dispatch's own memo has ended.
+pub(crate) fn with_surfaced_pin_sync<R>(
+    tool_name: &str,
+    server: &'static str,
+    read: impl FnOnce() -> R,
+) -> R {
+    if pin_surfaced(tool_name, server) {
+        return read();
+    }
+    VISIBILITY_MEMO.sync_scope(VisibilityMemo::default(), || {
+        pin_surfaced(tool_name, server);
+        read()
+    })
+}
+
 /// The account a target's dispatch would use (MIK-8392): a managed
 /// descriptor's id, from an identity-propagation backend's `account` or a
 /// capability's `auth.account`.

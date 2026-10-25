@@ -156,6 +156,23 @@ impl MetaMcp {
     }
 }
 
+impl MetaMcp {
+    /// [`Self::with_surfaced_pin`] for a synchronous read. A surfaced task's
+    /// settled result is inspected under the targets of the server that
+    /// produced it, even when a reload moved the name during the call.
+    pub(crate) fn with_surfaced_pin_sync<R>(
+        &self,
+        tool: &str,
+        recorded: Option<&str>,
+        read: impl FnOnce() -> R,
+    ) -> R {
+        match recorded.map(super::visible::intern) {
+            Some(server) => super::visible::memo::with_surfaced_pin_sync(tool, server, read),
+            None => read(),
+        }
+    }
+}
+
 /// The plain answer for a surfaced task whose name a reload moved or removed
 /// after the task was created: no backend is called.
 pub(crate) fn surfaced_target_changed() -> crate::protocol::JsonRpcResponse {
