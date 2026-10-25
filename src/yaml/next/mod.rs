@@ -18,8 +18,10 @@ mod mapping;
 mod number;
 mod rep;
 mod resolve;
+mod ser;
 mod tagged;
 mod value;
+mod value_de;
 
 pub(crate) use super::{Error, Limit, Location, redact_message};
 pub(crate) use mapping::Mapping;
@@ -68,12 +70,15 @@ pub(crate) fn to_string<T: Serialize + ?Sized>(_value: &T) -> Result<String, Err
     Err(not_yet())
 }
 
-pub(crate) fn to_value<T: Serialize>(_value: T) -> Result<Value, Error> {
-    Err(not_yet())
+/// `value` as a tree: unit variants as their names, other variants under
+/// their `!variant` tag (D5).
+pub(crate) fn to_value<T: Serialize>(value: T) -> Result<Value, Error> {
+    ser::to_value(&value)
 }
 
-pub(crate) fn from_value<T: DeserializeOwned>(_value: Value) -> Result<T, Error> {
-    Err(not_yet())
+/// `T` from a tree the caller already has.
+pub(crate) fn from_value<T: DeserializeOwned>(value: Value) -> Result<T, Error> {
+    T::deserialize(value)
 }
 
 /// Every document in `text` as a tree, an empty one as null, ending at the

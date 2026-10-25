@@ -99,6 +99,17 @@ impl std::fmt::Debug for Error {
 // No `source()`: a chain printer must not reach serde_yaml's unredacted text.
 impl std::error::Error for Error {}
 
+impl serde::ser::Error for Error {
+    /// A serializer's message, printed through `redact_message`.
+    fn custom<T: std::fmt::Display>(msg: T) -> Self {
+        Self(Repr::Message {
+            text: msg.to_string(),
+            location: None,
+            fixable: false,
+        })
+    }
+}
+
 impl serde::de::Error for Error {
     /// A serde message, placed by the deserializer that sees it and printed
     /// through `redact_message`, so a quoted value never shows.
