@@ -13,6 +13,21 @@ test('a deep link answers the shell document with the gateway CSP', async ({ req
   expect(csp).toContain("script-src 'self'");
   expect(csp).not.toContain('\\');
   expect(reply.headers()['cache-control']).toContain('no-store');
+  expect(reply.headers()['x-content-type-options']).toBe('nosniff');
+  expect(reply.headers()['referrer-policy']).toBe('no-referrer');
+});
+
+test('a fixture under fixtures/api answers as JSON', async ({ request }) => {
+  const reply = await request.get('/ui/api/status');
+  expect(reply.status()).toBe(200);
+  expect(reply.headers()['content-type']).toBe('application/json');
+  expect((await reply.json()).auth).toEqual({ enabled: true, signed_in: true, admin: true });
+});
+
+test('another method on the classic routes answers 405, as axum does', async ({ request }) => {
+  for (const path of ['/ui', '/ui/classic']) {
+    expect((await request.post(path)).status(), path).toBe(405);
+  }
 });
 
 test('api and asset paths outside the fixtures answer 404, never the shell', async ({ request }) => {

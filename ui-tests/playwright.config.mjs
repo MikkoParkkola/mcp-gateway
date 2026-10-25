@@ -5,7 +5,7 @@
 // refuses requests to any host but the fixture server (tests/base.mjs).
 import { defineConfig, devices } from '@playwright/test';
 
-const PORT = 4173;
+const PORT = Number(process.env.UI_TESTS_PORT ?? 4173);
 
 export default defineConfig({
   testDir: 'tests',

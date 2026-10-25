@@ -52,6 +52,8 @@ function handle(req, res) {
   const path = new URL(req.url, 'http://fixture').pathname;
   const get = req.method === 'GET' || req.method === 'HEAD';
   if (path === '/ui' || path === '/ui/classic') {
+    // axum's get() route: another method answers 405.
+    if (!get) return send(res, 405, { allow: 'GET,HEAD' }, '');
     return send(res, 200, { 'content-type': 'text/html; charset=utf-8' }, readFileSync(join(FIXTURES, 'classic.html')));
   }
   if (path.startsWith('/ui/assets/')) {
