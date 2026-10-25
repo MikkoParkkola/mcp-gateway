@@ -412,7 +412,7 @@ pub struct SecurityConfig {
     /// Rationale: a URL that the operator put into the on-disk config is a
     /// declared trust boundary; re-validating it at every proxy hop is
     /// friendly fire that blocks legitimate same-host backends (e.g. a local
-    /// `hebb` daemon on `127.0.0.1`). See MIK-3529.
+    /// memory daemon on `127.0.0.1`). See MIK-3529.
     ///
     /// Tool-argument URLs (LLM-supplied, capability fetch tools, UI imports of
     /// *new* backend specs) keep going through `validate_url_not_ssrf` —

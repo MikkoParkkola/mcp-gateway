@@ -1862,7 +1862,7 @@ async fn a_bootstrap_link_is_not_redeemable_through_a_published_host() {
 /// router's authentication, and one `Arc<LiveConfig>` is shared by the router
 /// and the reload — the arrangement `Gateway::run` builds.
 ///
-/// See docs/design/unauthenticated-network-posture.md, Decision C.
+/// See the unauthenticated network posture design, Decision C.
 #[tokio::test]
 async fn a_reload_does_not_change_request_time_authentication() {
     let dir = tempfile::tempdir().unwrap();

@@ -13,7 +13,7 @@ schema:
     properties:
       topic_pattern:
         type: string
-        description: "Topic prefix to subscribe to, e.g. bus.global or bus.proj.botnaut"
+        description: "Topic prefix to subscribe to, e.g. bus.global or bus.proj.example"
       agent_id:
         type: string
         description: "Subscribing agent id (for DM delivery, e.g. claude-code:mbp)"

@@ -214,7 +214,7 @@ const ATTEMPT_REQUEST_BUDGET: u32 = 20;
 ///
 /// The bound is kept rather than dropped in favour of the transport's own
 /// timeouts, because a hang that outlives those is exactly what was observed on
-/// this machine: the gateway logged `Health probe timed out` against hebb 29
+/// this machine: the gateway logged `Health probe timed out` against a memory backend 29
 /// times. An attempt that never returns is an attempt that never retries.
 fn effective_attempt_timeout(floor: Duration, backend_timeout: Duration) -> Duration {
     floor.max(backend_timeout.saturating_mul(ATTEMPT_REQUEST_BUDGET))
@@ -655,7 +655,7 @@ mod tests {
     #[test]
     fn readiness_errors_are_retried() {
         // All five can mean the sibling daemon has not finished booting. The two
-        // observed in production were Transport (hebb, netdata) and
+        // observed in production were Transport (a memory server, netdata) and
         // BackendTimeout (context7); BackendUnavailable comes from start_entry's
         // shutdown-race path, which `chains::retry_step` would have treated as
         // permanent -- the reason that helper was not reused.
@@ -663,7 +663,7 @@ mod tests {
             Error::Transport("refused".to_string()),
             Error::BackendTimeout("hebb".to_string()),
             Error::BackendUnavailable("hebb".to_string()),
-            // The shape hebb actually produced: the port was not yet bound.
+            // The shape the memory server actually produced: the port was not yet bound.
             Error::Io(std::io::Error::new(
                 std::io::ErrorKind::ConnectionRefused,
                 "connection refused",
@@ -778,7 +778,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_backend_that_becomes_reachable_later_is_still_cached() {
-        // The production race: hebb-serve was loading ONNX models while the
+        // The production race: a memory server was loading ONNX models while the
         // gateway made its single attempt, so the tool cache stayed empty for
         // the whole 1.5-day process lifetime.
         let (calls, attempt) = flaky(4, 7);

@@ -1,4 +1,4 @@
-sha256: 2decc01b588a91aca68dd53095ab5b686824ed49c26406a979eb9958125c50e8
+sha256: 0076ba8814e01fc4a8d1926d56828208642840e62aad4cb9d81dfbd466cec3bc
 fulcrum: "1.0"
 name: wayback_save
 description: |
@@ -55,9 +55,9 @@ auth:
   description: >
     Internet Archive locked anonymous Save Page Now in 2024. SPN2 requires an
     S3-style credential. Set IA_S3_AUTH to the literal Authorization value
-    "LOW <accesskey>:<secret>". Keys: 1Password "Claude Elite" ->
-    "Internet Archive S3 Keys" (username=accesskey, credential=secret).
-    Provisioned (export-prefixed) into ~/.claude/secrets.env, the gateway env_file.
+    "LOW <accesskey>:<secret>", using the access key and secret from your
+    Internet Archive S3 keys page (https://archive.org/account/s3.php).
+    Export it in the gateway's environment or in a file listed under env_files.
 
 metadata:
   category: knowledge
