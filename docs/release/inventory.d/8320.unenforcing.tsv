@@ -1,0 +1,4 @@
+src/oauth/client/discovery.rs	resource_metadata_hint	1	Returns the resource_metadata parameter of a Bearer challenge; the URL it returns is checked by check_destination and the document held to the configured resource by names, so it decides nothing.
+src/oauth/client/discovery.rs	bearer_hint	1	Picks the resource_metadata parameter from one parsed challenge; decides nothing (the URL is checked downstream).
+src/oauth/client/discovery.rs	challenges	1	Splits a WWW-Authenticate value into challenges and parameters; a parser whose output is checked downstream.
+src/oauth/client/discovery.rs	quoted_string	1	Unescapes an RFC 9110 quoted-string; decides nothing.

@@ -1,0 +1,1 @@
+src/gateway/router/backend_handlers/direct_list.rs	drop	1	critical	d	Abandoned::drop	Revokes resend permission and cache admission from the pages a direct tools/list drain read when it ends without being remembered (error frame, lost transport, page cap, cancellation, unwind); stores nothing (MIK-8399)

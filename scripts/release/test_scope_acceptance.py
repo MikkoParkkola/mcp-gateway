@@ -157,6 +157,37 @@ class AcceptanceTests(unittest.TestCase):
         errors = self.inspect()[0]
         self.assertTrue(any("does not match its pinned sha256" in e for e in errors), errors)
 
+    def test_private_evidence_at_a_named_clone_path_is_hashed_there(self):
+        self.cite_private("main version\n")
+        table = self.root / gate.PRIVATE_EVIDENCE
+        digest = gate.hashlib.sha256(b"main version\n").hexdigest()
+        table.write_text(f"docs/internal/proof.md\t{digest}\tvariants/main/docs/internal/proof.md\n")
+        variant = self.root / gate.PRIVATE_CHECKOUT / "variants/main/docs/internal/proof.md"
+        variant.parent.mkdir(parents=True, exist_ok=True)
+        variant.write_text("main version\n")
+        self.assertEqual(self.inspect()[0], [])
+        variant.write_text("edited\n")
+        errors = self.inspect()[0]
+        self.assertTrue(any("does not match its pinned sha256" in e for e in errors), errors)
+
+    def test_private_evidence_missing_from_a_present_clone_fails(self):
+        self.cite_private("reviewed result\n")
+        (self.root / gate.PRIVATE_CHECKOUT).mkdir()
+        errors = self.inspect()[0]
+        self.assertTrue(any("missing from the clone" in e for e in errors), errors)
+
+    def test_a_pin_that_is_not_a_sha256_fails(self):
+        self.cite_private("reviewed result\n")
+        (self.root / gate.PRIVATE_EVIDENCE).write_text("docs/internal/proof.md\t\n")
+        errors = self.inspect()[0]
+        self.assertTrue(any("pin is not a sha256" in e for e in errors), errors)
+
+    def test_a_backwards_range_on_private_evidence_fails_without_a_clone(self):
+        self.cite_private("reviewed result\n")
+        self.data["criteria"][0]["evidence"] = ["docs/internal/proof.md:20-10"]
+        errors = self.inspect()[0]
+        self.assertTrue(any("range runs backwards" in e for e in errors), errors)
+
     def test_unlisted_missing_evidence_fails(self):
         self.data["criteria"][0]["evidence"] = ["docs/internal/absent.md"]
         errors = self.inspect()[0]

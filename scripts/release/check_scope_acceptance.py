@@ -48,6 +48,7 @@ MANIFEST = pathlib.Path("Cargo.toml")
 # and counted, and the gate says it did not read the file.
 PRIVATE_EVIDENCE = pathlib.Path("docs/release/private-evidence.tsv")
 PRIVATE_CHECKOUT = pathlib.Path("internal")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
 UNVERIFIED_PRIVATE = set()
 REQUIRED_DECISIONS = {"reference_personal_account_journey"}
 ID = re.compile(r"^\| ((?:MIK-\d+|NFR|GH\d+)\.[A-Z0-9]+\.\d+[a-z]?) \|", re.M)
@@ -249,14 +250,18 @@ def waiver_lines(criteria):
 
 
 def private_evidence(root):
-    """Cited path -> pinned sha256, for evidence kept in the private repository."""
+    """Cited path -> (pinned sha256, path inside the private clone).
+
+    The clone keeps one version per path at the path itself and other branches'
+    versions elsewhere, so a row may name where its version sits.
+    """
     table = root / PRIVATE_EVIDENCE
     pins = {}
     if table.is_file():
         for line in table.read_text().splitlines():
             if line and not line.startswith("#"):
-                path, _, digest = line.partition("\t")
-                pins[path] = digest.strip()
+                cells = line.split("\t")
+                pins[cells[0]] = (cells[1].strip(), cells[2].strip() if len(cells) > 2 else cells[0])
     return pins
 
 
@@ -295,9 +300,21 @@ def evidence_errors(root, evidence, label, required):
                 errors += span_errors(label, item, resolved.read_text(errors="replace"), span)
         elif cite not in (pins := private_evidence(root)):
             errors.append(f"{label}: evidence file does not exist: {item}")
-        elif (private := root / PRIVATE_CHECKOUT / path).is_file():
+        elif not SHA256.match(pins[cite][0]):
+            errors.append(f"{label}: private evidence pin is not a sha256: {item}")
+        elif span and span[0] > span[1]:
+            errors.append(f"{label}: evidence range runs backwards: {item}")
+        elif (root / PRIVATE_CHECKOUT).is_dir():
+            # The clone is here, so the file is read: absent or altered fails.
+            private = root / PRIVATE_CHECKOUT / pins[cite][1]
+            if not private.is_file():
+                errors.append(
+                    f"{label}: private evidence is missing from the clone at"
+                    f" {PRIVATE_CHECKOUT}/: {item}"
+                )
+                continue
             data = private.read_bytes()
-            if hashlib.sha256(data).hexdigest() != pins[cite]:
+            if hashlib.sha256(data).hexdigest() != pins[cite][0]:
                 errors.append(
                     f"{label}: private evidence does not match its pinned sha256: {item}"
                 )

@@ -1,0 +1,1 @@
+src/oauth/client/token_access.rs	has_refresh_token	1	Reports whether the cached token holds a refresh token; chooses refresh over re-authorization and gates no access.
