@@ -375,11 +375,15 @@ impl BudgetEnforcer {
         if day_of(persisted.saved_at) != current_day() {
             return;
         }
+        // Valid values can still sum past u64; a value that would wrap the
+        // global total is skipped like any other value no run could hold.
+        let mut global = 0u64;
         for (tool, total) in &persisted.tool_totals {
             let micro = saved_micro(total.total_cost_usd);
-            if micro == 0 {
+            let Some(sum) = global.checked_add(micro).filter(|_| micro > 0) else {
                 continue;
-            }
+            };
+            global = sum;
             self.global_daily.add(micro);
             self.tool_daily.entry(tool.clone()).or_default().add(micro);
         }
@@ -662,6 +666,28 @@ mod tests {
             assert!(!snap.tool_daily.contains_key(tool), "{tool}: {snap:?}");
         }
         assert!(!snap.key_daily.contains_key("k"), "{snap:?}");
+    }
+
+    // Two values each in range can still overflow the global total; the one
+    // that would wrap it is skipped instead of wrapping the global to near zero.
+    #[test]
+    fn saved_values_that_sum_past_the_counter_skip_the_one_that_overflows() {
+        let e = enforcer_with(true, Some(10.0), &[], &[], &[]);
+        e.restore(&persisted(
+            now_secs(),
+            &[("a", 1e13), ("b", 1e13), ("ok", 0.25)],
+            &[],
+        ));
+        let snap = e.snapshot();
+        assert!(
+            (snap.global_daily_usd - (1e13 + 0.25)).abs() < 1.0,
+            "{snap:?}"
+        );
+        let huge = ["a", "b"]
+            .iter()
+            .filter(|t| snap.tool_daily.contains_key(**t));
+        assert_eq!(huge.count(), 1, "{snap:?}");
+        assert!(snap.tool_daily.contains_key("ok"), "{snap:?}");
     }
 
     // MIK-8904.COST.3: a day that ended while the gateway was down is not
