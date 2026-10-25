@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **tokio 1.53.3 (RUSTSEC-2026-0386).** tokio 1.53.3 deprecates `AsyncFd`'s safe
+  constructors, which accepted any raw file descriptor and could break I/O safety. The
+  gateway does not call them. Lockfile only. Ported from the release line (#4081).
+
 - **ctutils 0.4.5 (RUSTSEC-2026-0385).** ctutils 0.4.2 could compile its constant-time
   mask generation to a branch. HMAC verification of attestation tokens, receipts and
   signed log entries reaches it through `digest`. Lockfile only. Ported from the release
