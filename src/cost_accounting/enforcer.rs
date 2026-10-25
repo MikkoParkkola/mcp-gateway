@@ -11,9 +11,9 @@
 //!
 //! `DailyAccumulator` stores (`day_number`, `micro_usd`) as separate atomics.
 //! On each `add()` call the current day is compared to the stored day:
-//! - If equal: `fetch_add` on the counter.
+//! - If equal: a saturating add on the counter.
 //! - If different: `compare_exchange` to win the reset race, then `swap(0)`
-//!   + `fetch_add`.  Losers of the CAS fall through to `fetch_add` on the
+//!   + add.  Losers of the CAS fall through to the add on the
 //!     already-reset counter — no spend is lost.
 
 use std::collections::HashMap;
@@ -62,9 +62,9 @@ impl DailyAccumulator {
     /// Returns the new running total **after** the add.
     ///
     /// Race-safety: `compare_exchange` ensures only one winner resets the
-    /// counter.  The winner uses `swap(0)` then `fetch_add(micro)` so any
-    /// concurrent `fetch_add` calls that arrive between the swap and our add
-    /// are preserved.  Losers of the CAS simply `fetch_add` on the
+    /// counter.  The winner uses `swap(0)` then adds `micro`, so any
+    /// concurrent adds that arrive between the swap and ours are preserved.
+    /// Losers of the CAS simply add to the
     /// already-reset accumulator.
     pub fn add(&self, micro: u64) -> u64 {
         let today = current_day();
@@ -78,11 +78,29 @@ impl DailyAccumulator {
             {
                 // Won: zero the counter, then add our spend
                 self.micro_usd.swap(0, Ordering::AcqRel);
-                return self.micro_usd.fetch_add(micro, Ordering::AcqRel) + micro;
+                return self.add_saturating(micro);
             }
-            // Lost: another thread already reset — fall through to fetch_add
+            // Lost: another thread already reset — fall through to the add
         }
-        self.micro_usd.fetch_add(micro, Ordering::AcqRel) + micro
+        self.add_saturating(micro)
+    }
+
+    /// Adds without wrapping: a total that would pass `u64::MAX` stays there,
+    /// so an overflowing day refuses instead of resetting to near zero.
+    fn add_saturating(&self, micro: u64) -> u64 {
+        let mut current = self.micro_usd.load(Ordering::Acquire);
+        loop {
+            let next = current.saturating_add(micro);
+            match self.micro_usd.compare_exchange_weak(
+                current,
+                next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return next,
+                Err(actual) => current = actual,
+            }
+        }
     }
 
     /// Current daily spend in micro-USD.
@@ -98,11 +116,34 @@ impl DailyAccumulator {
 }
 
 fn current_day() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_secs()
-        / 86_400
+    day_of(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs(),
+    )
+}
+
+/// The day `secs` (seconds since the UNIX epoch) falls on: the one day
+/// boundary the live accumulators and a restore of saved totals both read,
+/// so moving it moves both.
+fn day_of(secs: u64) -> u64 {
+    secs / 86_400
+}
+
+/// `usd` as micro-USD, or 0 for a value a saved file should never hold
+/// (negative, NaN, infinite, or too large for a micro-USD count), which
+/// restores nothing rather than saturating into a cap that refuses all day.
+fn saved_micro(usd: f64) -> u64 {
+    #[allow(clippy::cast_precision_loss)]
+    let ceiling = u64::MAX as f64;
+    if usd.is_finite() && usd > 0.0 && usd * 1_000_000.0 < ceiling {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let micro = (usd * 1_000_000.0).round() as u64;
+        micro
+    } else {
+        0
+    }
 }
 
 // ── EnforcementResult ────────────────────────────────────────────────────────
@@ -339,6 +380,39 @@ impl BudgetEnforcer {
         }
     }
 
+    /// Puts back the daily totals a previous run saved.
+    ///
+    /// Call it once, on a fresh enforcer, before any spend is recorded: it adds
+    /// to the live totals, so a second call or a late one counts twice.
+    ///
+    /// Only a save from today counts: a day that ended while the gateway was
+    /// down is not carried into this one. The global total is the sum of the
+    /// per-tool totals, which `record_spend` keeps equal, so the file needs no
+    /// global total of its own.
+    pub fn restore(&self, persisted: &crate::cost_accounting::persistence::PersistedCosts) {
+        if day_of(persisted.saved_at) != current_day() {
+            return;
+        }
+        // Valid values can still sum past u64; a value that would wrap the
+        // global total is skipped like any other value no run could hold.
+        let mut global = 0u64;
+        for (tool, total) in &persisted.tool_totals {
+            let micro = saved_micro(total.total_cost_usd);
+            let Some(sum) = global.checked_add(micro).filter(|_| micro > 0) else {
+                continue;
+            };
+            global = sum;
+            self.global_daily.add(micro);
+            self.tool_daily.entry(tool.clone()).or_default().add(micro);
+        }
+        for (key, usd) in &persisted.key_totals {
+            let micro = saved_micro(*usd);
+            if micro > 0 {
+                self.key_daily.entry(key.clone()).or_default().add(micro);
+            }
+        }
+    }
+
     /// Snapshot current accumulator state for persistence and the UI endpoint.
     #[must_use]
     pub fn snapshot(&self) -> EnforcerSnapshot {
@@ -510,6 +584,146 @@ mod tests {
         );
     }
 
+    /// A `costs.json` as the server writes it: per-tool and per-key daily
+    /// totals, saved at `saved_at`.
+    fn persisted(
+        saved_at: u64,
+        tools: &[(&str, f64)],
+        keys: &[(&str, f64)],
+    ) -> crate::cost_accounting::persistence::PersistedCosts {
+        use crate::cost_accounting::persistence::{PersistedCosts, ToolTotal};
+        PersistedCosts {
+            saved_at,
+            tool_totals: tools
+                .iter()
+                .map(|(name, usd)| {
+                    (
+                        (*name).to_string(),
+                        ToolTotal {
+                            call_count: 0,
+                            total_cost_usd: *usd,
+                            avg_cost_usd: 0.0,
+                        },
+                    )
+                })
+                .collect(),
+            key_totals: keys.iter().map(|(k, v)| ((*k).to_string(), *v)).collect(),
+        }
+    }
+
+    fn now_secs() -> u64 {
+        crate::cost_accounting::persistence::now_secs()
+    }
+
+    // What was spent today before a restart is spent today
+    // after it. The global total is the sum of the per-tool totals, which
+    // `record_spend` keeps equal; the file carries no global total of its own.
+    #[test]
+    fn a_restore_on_the_same_day_brings_back_every_daily_total() {
+        let e = enforcer_with(true, Some(10.0), &[], &[], &[]);
+        e.restore(&persisted(
+            now_secs(),
+            &[("a", 0.30), ("b", 0.20)],
+            &[("k1", 0.25), ("k2", 0.25)],
+        ));
+        let snap = e.snapshot();
+        assert!((snap.global_daily_usd - 0.50).abs() < 1e-6, "{snap:?}");
+        assert!((snap.tool_daily["a"] - 0.30).abs() < 1e-6);
+        assert!((snap.tool_daily["b"] - 0.20).abs() < 1e-6);
+        assert!((snap.key_daily["k1"] - 0.25).abs() < 1e-6);
+        assert!((snap.key_daily["k2"] - 0.25).abs() < 1e-6);
+    }
+
+    // A cap reached before the restart still refuses after it,
+    // for a key, a tool and the global budget.
+    #[test]
+    fn a_cap_reached_before_a_restart_still_refuses_after_it() {
+        let saved = persisted(now_secs(), &[("t", 0.10)], &[("k1", 0.10)]);
+
+        let per_key = enforcer_with(true, None, &[], &[("k1", 0.10)], &[("other", 0.05)]);
+        per_key.restore(&saved);
+        assert!(
+            !per_key.check("other", Some("k1")).allowed,
+            "the key's cap was forgotten"
+        );
+
+        let per_tool = enforcer_with(true, None, &[("t", 0.10)], &[], &[("t", 0.05)]);
+        per_tool.restore(&saved);
+        assert!(
+            !per_tool.check("t", None).allowed,
+            "the tool's cap was forgotten"
+        );
+
+        let global = enforcer_with(true, Some(0.10), &[], &[], &[("other", 0.05)]);
+        global.restore(&saved);
+        assert!(
+            !global.check("other", None).allowed,
+            "the global cap was forgotten"
+        );
+    }
+
+    // A damaged or tampered file restores nothing for a value no run could
+    // have saved, rather than wrapping or saturating into a cap.
+    #[test]
+    fn a_saved_value_out_of_range_restores_nothing() {
+        let e = enforcer_with(true, Some(10.0), &[], &[], &[]);
+        e.restore(&persisted(
+            now_secs(),
+            &[
+                ("neg", -1.0),
+                ("nan", f64::NAN),
+                ("inf", f64::INFINITY),
+                ("huge", 1e15),
+                ("ok", 0.25),
+            ],
+            &[("k", f64::NAN)],
+        ));
+        let snap = e.snapshot();
+        assert!((snap.global_daily_usd - 0.25).abs() < 1e-6, "{snap:?}");
+        for tool in ["neg", "nan", "inf", "huge"] {
+            assert!(!snap.tool_daily.contains_key(tool), "{tool}: {snap:?}");
+        }
+        assert!(!snap.key_daily.contains_key("k"), "{snap:?}");
+    }
+
+    // Two values each in range can still overflow the global total; the one
+    // that would wrap it is skipped instead of wrapping the global to near zero.
+    #[test]
+    fn saved_values_that_sum_past_the_counter_skip_the_one_that_overflows() {
+        let e = enforcer_with(true, Some(10.0), &[], &[], &[]);
+        e.restore(&persisted(
+            now_secs(),
+            &[("a", 1e13), ("b", 1e13), ("ok", 0.25)],
+            &[],
+        ));
+        let snap = e.snapshot();
+        assert!(
+            (snap.global_daily_usd - (1e13 + 0.25)).abs() < 1.0,
+            "{snap:?}"
+        );
+        let huge = ["a", "b"]
+            .iter()
+            .filter(|t| snap.tool_daily.contains_key(**t));
+        assert_eq!(huge.count(), 1, "{snap:?}");
+        assert!(snap.tool_daily.contains_key("ok"), "{snap:?}");
+    }
+
+    // A day that ended while the gateway was down is not
+    // carried into the next one. The day is the enforcer's own day function.
+    #[test]
+    fn a_restore_after_the_day_changed_starts_every_total_at_zero() {
+        let e = enforcer_with(true, Some(10.0), &[], &[], &[]);
+        e.restore(&persisted(
+            now_secs() - 2 * 86_400,
+            &[("a", 0.30)],
+            &[("k1", 0.30)],
+        ));
+        let snap = e.snapshot();
+        assert!(snap.global_daily_usd.abs() < 1e-9, "{snap:?}");
+        assert!(snap.tool_daily.get("a").is_none_or(|usd| usd.abs() < 1e-9));
+        assert!(snap.key_daily.get("k1").is_none_or(|usd| usd.abs() < 1e-9));
+    }
+
     #[test]
     fn enforcer_record_spend_accumulates() {
         let e = enforcer_with(true, Some(1.0), &[], &[], &[("tool", 0.01)]);
@@ -542,6 +756,14 @@ mod tests {
         acc.add(500_000); // $0.50
         acc.add(300_000); // $0.30
         assert_eq!(acc.current(), 800_000);
+    }
+
+    #[test]
+    fn daily_accumulator_add_saturates_instead_of_wrapping() {
+        let acc = DailyAccumulator::new();
+        acc.add(u64::MAX - 1);
+        assert_eq!(acc.add(5), u64::MAX);
+        assert_eq!(acc.current(), u64::MAX);
     }
 
     #[test]
