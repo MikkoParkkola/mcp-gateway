@@ -7,7 +7,7 @@ use super::{
     Retired, TOMBSTONE_MARK, install_failure_needle, is_a_tree_to_walk, remove_now, retire_now,
     sweep_tombstones_once,
 };
-use super::{attempt_bound, lock_hold_bound, rename_bound};
+use super::{TOMBSTONE_PROOF, attempt_bound, is_gateway_tombstone, lock_hold_bound, rename_bound};
 use crate::Error;
 
 // Verbatim texts Node and npm print when a package tree is missing, half
@@ -406,6 +406,11 @@ async fn the_startup_sweep_deletes_tombstones_and_nothing_else() {
         .path()
         .join(format!("backend-0123456789abcdef{TOMBSTONE_MARK}1-0"));
     std::fs::create_dir_all(tombstone.join("_npx")).expect("a leftover tombstone");
+    std::fs::write(tombstone.join(TOMBSTONE_PROOF), b"").expect("the gateway's proof");
+    // An operator's cache can sit under `pkg-cache` too, named anything: one
+    // whose name happens to hold the mark carries no proof and is kept.
+    let operator = root.path().join(format!("operator{TOMBSTONE_MARK}keep"));
+    std::fs::create_dir_all(operator.join("_npx")).expect("an operator's cache");
 
     sweep_tombstones_once(root.path());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -414,6 +419,24 @@ async fn the_startup_sweep_deletes_tombstones_and_nothing_else() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     assert!(live.join("_npx").is_dir(), "a live cache is never swept");
+    assert!(
+        operator.join("_npx").is_dir(),
+        "a directory the gateway did not retire is never swept, whatever its name"
+    );
+}
+
+#[test]
+fn a_retired_cache_carries_the_gateways_proof() {
+    let root = tempfile::tempdir().expect("root");
+    let dir = root.path().join("backend-0123456789abcdef");
+    std::fs::create_dir_all(dir.join("_npx")).expect("a cache");
+    let Retired::Moved(tombstone) = retire_now(&dir) else {
+        panic!("the cache is moved aside");
+    };
+    assert!(
+        is_gateway_tombstone(&tombstone),
+        "the sweep may delete it after a crash"
+    );
 }
 
 #[test]
