@@ -235,22 +235,13 @@ fn node_place(
             };
         }
     }
-    // A block scalar (`|` or `>`) is placed at its indicator, the last token
-    // of the line before its content once a trailing comment is cut off.
+    // A block scalar (`|` or `>`) is placed at its indicator, on the line
+    // before its content.
     if shape == Shape::Block {
         let before = text[..byte].trim_end();
         let line_start = before.rfind(['\n', '\r']).map_or(0, |i| i + 1);
-        let line = &before[line_start..];
-        let code = line
-            .find(" #")
-            .or_else(|| line.find("\t#"))
-            .map_or(line, |i| &line[..i])
-            .trim_end();
-        let token = code.rfind(char::is_whitespace).map_or(0, |i| {
-            i + code[i..].chars().next().map_or(1, char::len_utf8)
-        });
-        if code[token..].starts_with(['|', '>']) {
-            byte = line_start + token;
+        if let Some(at_indicator) = block_indicator(&before[line_start..]) {
+            byte = line_start + at_indicator;
         }
     }
     if properties == 0 {
@@ -274,6 +265,55 @@ fn node_place(
         }
     }
     at(byte)
+}
+
+/// Where a block scalar's indicator (`|` or `>`, with any `-`, `+` or digit
+/// hints) sits on its header `line`: the last one outside quotes and before
+/// a comment. Quoted text is skipped, so a key like `" #"` or `"a | b"` is
+/// not read as a comment or an indicator.
+fn block_indicator(line: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let mut found = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'"' {
+                    i += if bytes[i] == b'\\' { 2 } else { 1 };
+                }
+            }
+            b'\'' => {
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'\'' {
+                        if bytes.get(i + 1) == Some(&b'\'') {
+                            i += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    i += 1;
+                }
+            }
+            b'#' if i == 0 || matches!(bytes[i - 1], b' ' | b'\t') => break,
+            b'|' | b'>' if i == 0 || matches!(bytes[i - 1], b' ' | b'\t') => {
+                let hints = bytes[i + 1..]
+                    .iter()
+                    .take_while(|b| matches!(b, b'-' | b'+' | b'0'..=b'9'))
+                    .count();
+                if bytes
+                    .get(i + 1 + hints)
+                    .is_none_or(|b| matches!(b, b' ' | b'\t'))
+                {
+                    found = Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    found
 }
 
 /// An open collection while its events arrive.

@@ -244,7 +244,13 @@ impl ser::Serializer for ValueSerializer {
         })
     }
     fn serialize_struct(self, _name: &'static str, _len: usize) -> Result<SerializeStruct, Error> {
-        Ok(SerializeStruct(Mapping::new(), self.0))
+        Ok(SerializeStruct(SerializeMap {
+            mode: self.0,
+            state: MapState::Untagged {
+                mapping: Mapping::new(),
+                next_key: None,
+            },
+        }))
     }
     fn serialize_struct_variant(
         self,
@@ -258,8 +264,13 @@ impl ser::Serializer for ValueSerializer {
         }
         Ok(SerializeStructVariant {
             tag: variant,
-            mapping: Mapping::new(),
-            mode: self.0,
+            fields: SerializeMap {
+                mode: self.0,
+                state: MapState::Untagged {
+                    mapping: Mapping::new(),
+                    next_key: None,
+                },
+            },
         })
     }
 }
@@ -450,7 +461,9 @@ impl ser::SerializeMap for SerializeMap {
     }
 }
 
-pub(crate) struct SerializeStruct(Mapping, Mode);
+/// A struct's fields, kept as the map serializer keeps entries (in text,
+/// a repeated field keeps both).
+pub(crate) struct SerializeStruct(SerializeMap);
 
 impl ser::SerializeStruct for SerializeStruct {
     type Ok = Value;
@@ -460,19 +473,18 @@ impl ser::SerializeStruct for SerializeStruct {
         key: &'static str,
         value: &T,
     ) -> Result<(), Error> {
-        let value = serialize_in(self.1, value)?;
+        let value = serialize_in(self.0.mode, value)?;
         self.0.insert(Value::String(key.to_owned()), value);
         Ok(())
     }
     fn end(self) -> Result<Value, Error> {
-        Ok(Value::Mapping(self.0))
+        ser::SerializeMap::end(self.0)
     }
 }
 
 pub(crate) struct SerializeStructVariant {
     tag: &'static str,
-    mapping: Mapping,
-    mode: Mode,
+    fields: SerializeMap,
 }
 
 impl ser::SerializeStructVariant for SerializeStructVariant {
@@ -483,12 +495,12 @@ impl ser::SerializeStructVariant for SerializeStructVariant {
         key: &'static str,
         value: &T,
     ) -> Result<(), Error> {
-        let value = serialize_in(self.mode, value)?;
-        self.mapping.insert(Value::String(key.to_owned()), value);
+        let value = serialize_in(self.fields.mode, value)?;
+        self.fields.insert(Value::String(key.to_owned()), value);
         Ok(())
     }
     fn end(self) -> Result<Value, Error> {
-        Ok(tagged(self.tag, Value::Mapping(self.mapping)))
+        Ok(tagged(self.tag, ser::SerializeMap::end(self.fields)?))
     }
 }
 

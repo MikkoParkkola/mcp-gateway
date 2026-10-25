@@ -165,7 +165,15 @@ const GROUPS: &[(&str, &[&str])] = &[
     ("P11 tags", &["mig2/tag/"]),
     ("P7 figment", &["mig2/figment/"]),
     ("P12 from_value", &["mig2/from-value/"]),
-    ("P6 writer", &["write/", "mig2/r1/write/", "mig2/r2/write/"]),
+    (
+        "P6 writer",
+        &[
+            "write/",
+            "mig2/r1/write/",
+            "mig2/r2/write/",
+            "mig2/r3/write/",
+        ],
+    ),
 ];
 
 fn in_group(key: &str, prefixes: &[&str]) -> bool {
