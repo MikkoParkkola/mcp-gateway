@@ -613,7 +613,12 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    ExitCode::SUCCESS
+    // Exit here rather than return: `tokio::io::stdin` reads on a blocking
+    // thread that cannot be cancelled, and runtime shutdown waits for it. A
+    // session ended by SIGTERM or Ctrl+C has an open stdin, so returning
+    // would hang until the client wrote a line (MIK-8895). `run_stdio` has
+    // already drained, stopped every backend and joined the stdout writer.
+    std::process::exit(0)
 }
 
 /// Run the gateway server.
