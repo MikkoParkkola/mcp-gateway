@@ -36,10 +36,13 @@ tokio::task_local! {
 /// (the handshake's bound before the stream was kept).
 const HANDSHAKE_CAP: usize = 64 * 1024;
 
+/// Turns a stream notification into a listener note, or drops it.
+pub(super) type NoteMap = Box<dyn Fn(&str) -> Option<UpstreamNote> + Send + Sync>;
+
 /// How a notification on the stream becomes a listener note, and where it goes.
 pub(super) struct Sink {
     pub tx: mpsc::Sender<UpstreamNote>,
-    pub map: Box<dyn Fn(&str) -> Option<UpstreamNote> + Send + Sync>,
+    pub map: NoteMap,
 }
 
 /// The requests waiting on a channel, by pairing key.

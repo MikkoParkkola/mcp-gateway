@@ -287,34 +287,12 @@ fn requested(shared: &Shared) -> Requested {
 
 /// One connection's life.
 async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<EventsHub>) -> Outcome {
-    shared.refresh_ledger();
-    let _lease = backend.listen_lease();
-    let target = match backend.listen_target().await {
-        Ok(target) => target,
-        Err(error) => {
-            debug!(backend = %shared.name, %error, "upstream listener: backend not reachable");
-            return failed();
-        }
-    };
-    let started = Instant::now();
-    let Some(Run {
-        flavour,
-        handle,
-        modern,
-        own: _own,
-        retire: _retire,
-    }) = begin_run(shared, backend, &target)
-    else {
+    let Some(run) = begin_run(shared, backend).await else {
         return failed();
     };
-    let mut state = State::new(
-        shared,
-        if modern {
-            PeerEra::Modern
-        } else {
-            PeerEra::Legacy
-        },
-    );
+    let started = Instant::now();
+    let modern = run.era == PeerEra::Modern;
+    let mut state = State::new(shared, run.era);
     // The first catalogue read doubles as the legacy HTTP session's first
     // request on the shared bucket (§3).
     state.read_snapshot(backend, hub, false).await;
@@ -323,13 +301,13 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
         // first, even when no URI is watched (§3).
         let _ = backend.read_resource_snapshot(false).await;
     }
-    if let Err(ended) = open_first(shared, &mut state, &handle, modern).await {
+    if let Err(ended) = open_first(shared, &mut state, &run.handle, modern).await {
         return ended;
     }
-    state.handle = Some(handle.clone());
+    state.handle = Some(run.handle.clone());
     let synced = tokio::select! {
         () = shared.stop.cancelled() => false,
-        () = state.sync_legacy(backend, &handle) => true,
+        () = state.sync_legacy(backend, &run.handle) => true,
     };
     if !synced {
         state.release(backend).await;
@@ -378,17 +356,17 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
         if refill.is_none() {
             refill = start_due_refill(&mut state, backend);
         }
-        if !backend_still_current(backend, &target.handle) {
+        if !backend_still_current(backend, &run.transport) {
             debug!(backend = %shared.name, "upstream listener: transport replaced");
             return finish_refill(&mut state, shared, backend, hub, refill, started).await;
         }
-        if backend.connected_streamable() != flavour {
+        if backend.connected_streamable() != run.flavour {
             debug!(backend = %shared.name, "upstream listener: transport flavour changed; reconnecting");
             return finish_refill(&mut state, shared, backend, hub, refill, started).await;
         }
         let stopped = tokio::select! {
             () = shared.stop.cancelled() => true,
-            () = state.maintain(backend, hub, &handle, modern) => false,
+            () = state.maintain(backend, hub, &run.handle, modern) => false,
         };
         if stopped {
             state.release(backend).await;
@@ -435,35 +413,57 @@ fn failed() -> Outcome {
 
 /// What a run listens on, chosen once at its start.
 struct Run {
+    /// Keeps the idle reaper off the shared slot while the run lasts.
+    _lease: crate::backend::listen::ListenLease,
+    /// The shared slot's transport: a replaced one ends the run.
+    transport: Weak<dyn UpstreamListen>,
+    /// What the run's calls go to: an own session, or `transport` itself.
+    handle: Weak<dyn UpstreamListen>,
+    /// An own session speaks the legacy transport whatever the slot's cached
+    /// era says (B12).
+    era: PeerEra,
     /// The transport flavour the run starts on: a recovery that switches it
     /// in place keeps the same transport, so only this read sees it (B2).
     flavour: Option<bool>,
-    handle: Weak<dyn UpstreamListen>,
-    modern: bool,
     /// An own session, kept alive for the run.
-    own: Option<Arc<dyn UpstreamListen>>,
+    _own: Option<Arc<dyn UpstreamListen>>,
     /// An own session's subscriptions end with it, however the run ends; any
     /// `release` runs first, inside the run (B14').
-    retire: Option<RetireOnEnd>,
+    _retire: Option<RetireOnEnd>,
 }
 
-/// Choose a run's session. P3 listens with the gateway's own credential;
-/// MIK-8833 passes the key's. `None`: an identity credential has no session
-/// of its own, and the run fails closed.
-fn begin_run(shared: &Arc<Shared>, backend: &Backend, target: &ListenTarget) -> Option<Run> {
+/// Start a run: reach the backend and choose its session. P3 listens with
+/// the gateway's own credential; MIK-8833 passes the key's. `None`: the
+/// backend is not reachable, or an identity credential has no session of its
+/// own and the run fails closed.
+async fn begin_run(shared: &Arc<Shared>, backend: &Backend) -> Option<Run> {
+    shared.refresh_ledger();
+    let lease = backend.listen_lease();
+    let target: ListenTarget = match backend.listen_target().await {
+        Ok(target) => target,
+        Err(error) => {
+            debug!(backend = %shared.name, %error, "upstream listener: backend not reachable");
+            return None;
+        }
+    };
     let flavour = backend.connected_streamable();
     let Some((own, handle)) = pick_session(&target.handle, ListenerCredential::shared()) else {
         debug!(backend = %shared.name, "upstream listener: an identity credential has no session of its own");
         return None;
     };
+    let era = if runs_modern(own.is_some(), target.era) {
+        PeerEra::Modern
+    } else {
+        PeerEra::Legacy
+    };
     Some(Run {
-        flavour,
+        _lease: lease,
+        transport: target.handle,
         handle,
-        // An own session speaks the legacy transport whatever the slot's
-        // cached era says (B12).
-        modern: runs_modern(own.is_some(), target.era),
-        retire: own.is_some().then(|| RetireOnEnd(Arc::clone(shared))),
-        own,
+        era,
+        flavour,
+        _retire: own.is_some().then(|| RetireOnEnd(Arc::clone(shared))),
+        _own: own,
     })
 }
 
