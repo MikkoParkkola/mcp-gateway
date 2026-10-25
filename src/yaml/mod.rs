@@ -3,7 +3,7 @@
 //! The gateway's one YAML seam (MIK-8425).
 //!
 //! Every YAML read and write goes through here. Since MIG.2 the backend is
-//! the adapter's own (`next/`): granit-parser's events read into a parse
+//! the adapter's own: granit-parser's events read into a parse
 //! representation, a serde `Deserializer` and `Serializer` with the replaced
 //! backend's rules, and a writer byte-equal to its output.
 //! `tests/fixtures/mik_8425_yaml/` records what every function must
@@ -26,39 +26,31 @@
               accessor surface, which the gateway does not use in full"
 )]
 
+mod de;
+mod emit;
 mod error;
 mod guard;
-pub(crate) mod next;
+mod mapping;
+mod number;
+mod rep;
+mod resolve;
+mod ser;
+mod tagged;
+mod value;
+mod value_de;
 
 pub(crate) use error::{Error, Limit, Location, redact_message};
 use guard::guard;
 #[cfg(test)]
 pub(crate) use guard::guard_work;
-pub(crate) use next::{Mapping, Value, figment_data, from_str_loose};
+pub(crate) use mapping::Mapping;
+pub(crate) use number::Number;
+pub(crate) use tagged::{Tag, TaggedValue};
+pub(crate) use value::{Sequence, Value};
 
+use figment::value::{Dict, Map};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-
-/// Parse `text` into `T`. A key repeated in a struct or in a `Value` is
-/// refused; a key repeated in a map keeps its last value.
-pub(crate) fn from_str<T: DeserializeOwned>(text: &str) -> Result<T, Error> {
-    next::from_str(text)
-}
-
-/// Write `value` as YAML.
-pub(crate) fn to_string<T: Serialize + ?Sized>(value: &T) -> Result<String, Error> {
-    next::to_string(value)
-}
-
-/// Convert `value` to a YAML tree.
-pub(crate) fn to_value<T: Serialize>(value: T) -> Result<Value, Error> {
-    next::to_value(value)
-}
-
-/// Read `T` out of a YAML tree.
-pub(crate) fn from_value<T: DeserializeOwned>(value: Value) -> Result<T, Error> {
-    next::from_value(value)
-}
 
 /// Convert a YAML tree value to a JSON value (MIK-8425).
 ///
@@ -127,9 +119,71 @@ fn json_key(key: &Value) -> Option<String> {
     }
 }
 
-/// Every document of a multi-document stream, in order, an empty one as
-/// null, ending after the first refusal. There is no document count cap: a
-/// long manifest is read in full.
+/// The replaced backend's refusal of a second document where one is read.
+const MORE_THAN_ONE: &str =
+    "deserializing from YAML containing more than one document is not supported";
+
+/// `T` from the only document in `text`. The first document is read before
+/// a second one is refused, so its own error wins, as before.
+pub(crate) fn from_str<T: DeserializeOwned>(text: &str) -> Result<T, Error> {
+    guard(text)?;
+    let documents = rep::parse(text)?;
+    let value = de::from_document(&documents[0])?;
+    if documents.len() > 1 {
+        return Err(Error::message(MORE_THAN_ONE));
+    }
+    Ok(value)
+}
+
+/// figment's `Dict` from `text`: a repeated key keeps its last value, at
+/// every level (D4).
+pub(crate) fn from_str_loose(text: &str) -> Result<Dict, Error> {
+    from_str(text)
+}
+
+#[allow(
+    clippy::result_large_err,
+    reason = "figment's own `Provider::data` signature, which the config loader returns"
+)]
+pub(crate) fn figment_data(text: &str) -> figment::Result<Map<figment::Profile, Dict>> {
+    let dict = from_str_loose(text).map_err(|err| figment::Error::from(err.to_string()))?;
+    Ok(figment::Profile::Default.collect(dict))
+}
+
+/// `value` as YAML text, byte-equal to the replaced backend's output (D20).
+pub(crate) fn to_string<T: Serialize + ?Sized>(value: &T) -> Result<String, Error> {
+    emit::emit(&ser::to_text_tree(value)?)
+}
+
+/// `value` as a tree: unit variants as their names, other variants under
+/// their `!variant` tag (D5).
+pub(crate) fn to_value<T: Serialize>(value: T) -> Result<Value, Error> {
+    ser::to_value(&value)
+}
+
+/// `T` from a tree the caller already has.
+pub(crate) fn from_value<T: DeserializeOwned>(value: Value) -> Result<T, Error> {
+    T::deserialize(value)
+}
+
+/// Every document in `text` as a tree, an empty one as null, ending at the
+/// first refusal (D19). The guard refuses the stream as a whole.
 pub(crate) fn documents(text: &str) -> impl Iterator<Item = Result<Value, Error>> + '_ {
-    next::documents(text)
+    let parsed = guard(text).and_then(|()| rep::parse(text));
+    let readings: Vec<Result<Value, Error>> = match parsed {
+        Err(error) => vec![Err(error)],
+        Ok(documents) => {
+            let mut out = Vec::with_capacity(documents.len());
+            for document in &documents {
+                let reading = de::from_document(document);
+                let refused = reading.is_err();
+                out.push(reading);
+                if refused {
+                    break;
+                }
+            }
+            out
+        }
+    };
+    readings.into_iter()
 }
