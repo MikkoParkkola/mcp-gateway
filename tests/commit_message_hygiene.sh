@@ -120,6 +120,10 @@ run_case private_address fail 'fix(router): reject a credential-bearing URL
 
 - Point the smoke test at 100.101.102.103'
 
+run_case acceptance_criterion_id_after_cutoff pass 'test(router): cover the loopback refusal
+
+- Pin MIK-1234.ROUTE.1 with a unit test'
+
 # A merge commit and a co-author line are read too.
 merge_case() {
   local repo="$tmp_root/merge_with_ticket_id" status=0
@@ -175,6 +179,9 @@ pr_body_case agent_config fail 'See $HOME/.claude/rules for the gate.'
 pr_body_case private_address fail 'Measured against 100.64.1.2.'
 pr_body_case learning_rule_is_not_a_name pass 'Uses a Hebbian decay for ranking.'
 pr_body_case empty_body pass ''
+pr_body_case acceptance_criterion_id pass 'Covers MIK-9999.HANDLE.1 and MIK-9999.HANDLE.2a.'
+pr_body_case acceptance_id_beside_a_citation fail 'Covers MIK-9999.HANDLE.1, see MIK-9999.'
+
 
 if (( failures > 0 )); then
   printf 'Commit message hygiene fixtures failed: %d case(s).\n' "$failures" >&2

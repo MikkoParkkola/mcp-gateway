@@ -40,7 +40,9 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     fi
     shopt -u nocasematch
   done
-  if [[ "$line" =~ $ticket_id_regex ]]; then
+  bare="$line"
+  while [[ "$bare" =~ $ac_id_regex ]]; do bare="${bare/"${BASH_REMATCH[0]}"/}"; done
+  if [[ "$bare" =~ $ticket_id_regex ]]; then
     report "$n" "cites a tracker id: ${BASH_REMATCH[0]}"
   fi
 done <<<"$body"

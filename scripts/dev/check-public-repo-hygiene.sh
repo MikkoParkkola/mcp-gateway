@@ -508,13 +508,40 @@ while IFS= read -r file; do
   fi
 done < <(git_lit ls-files | awk '!/\//')
 
+# A change may shrink the debt list, never grow it: no new entry, no higher
+# count than the base carried.
+# A base without the list is the change that introduces it.
+if [[ -n "$merge_base" ]] && git cat-file -e "$merge_base:$debt_file" 2>/dev/null; then
+  declare -A base_most=()
+  while IFS=$'\t' read -r where id most; do
+    [[ -z "$where" || "$where" == \#* ]] && continue
+    base_most["$where"$'\t'"$id"]="${most:-0}"
+  done < <(git show "$merge_base:$debt_file" 2>/dev/null || true)
+  for entry in ${debt_entries[@]+"${debt_entries[@]}"}; do
+    key="${entry%$'\t'*}"
+    [[ "$entry" == *$'\t'*$'\t'* ]] || key="$entry"
+    most="${entry##*$'\t'}"
+    if [[ -z "${base_most[$key]+set}" ]]; then
+      report_failure "debt entry is new in this change; reword or remove the hit instead: ${entry//$'\t'/ }"
+    elif [[ "$entry" == *$'\t'*$'\t'* ]] && [[ "$most" =~ ^[0-9]+$ && "${base_most[$key]}" =~ ^[0-9]+$ ]] &&
+      (( 10#$most > 10#${base_most[$key]} )); then
+      report_failure "debt entry count rose from ${base_most[$key]} to $most in this change: ${entry//$'\t'/ }"
+    fi
+  done
+fi
+
 for entry in ${debt_entries[@]+"${debt_entries[@]}"}; do
   if [[ -z "${debt_used[$entry]:-}" ]]; then
     report_failure "debt entry no longer matches anything; delete it from $debt_file: ${entry//$'\t'/ }"
     continue
   fi
   most="${entry#*$'\t'}"
-  [[ "$most" == *$'\t'* ]] || continue
+  if [[ "$most" != *$'\t'* || ! "${most#*$'\t'}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+    # Plain decimal only: a leading zero would be read as octal and break the
+    # comparisons below.
+    report_failure "debt entry has no plain decimal hit count; every entry states how many hits it covers: ${entry//$'\t'/ }"
+    continue
+  fi
   most="${most#*$'\t'}"
   if (( ${debt_hits[$entry]} > most )); then
     report_failure "debt entry covers ${debt_hits[$entry]} hits, more than its $most; the change adds private material: ${entry//$'\t'/ }"
