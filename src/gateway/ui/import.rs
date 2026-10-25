@@ -55,6 +55,11 @@ pub struct ToolPreview {
     pub path: String,
     /// Query/path/body parameter names.
     pub parameters: Vec<String>,
+    /// `read` for an operation the converter marks `read_only` (GET and
+    /// HEAD), else `write` (MIK-8838).
+    pub class: &'static str,
+    /// Always `inferred`: a spec declares no MCP annotations.
+    pub class_source: &'static str,
 }
 
 /// Response from `POST /ui/api/import/openapi/preview`.
@@ -116,8 +121,20 @@ async fn preview_handler(
     };
 
     let tools: Vec<ToolPreview> = caps.iter().map(tool_preview_from_cap).collect();
+    // The same block a server preview carries (MIK-8838). The URL is fetched
+    // as supplied, but echoed without userinfo, query or fragment, so a
+    // query-authenticated spec never returns its key.
+    let preview = json!({
+        "transport": "openapi",
+        "url": body.url.as_deref().map(crate::security::sanitize::redact_url_keep_path),
+        "publisher": {"verified": false, "source": null},
+    });
 
-    (StatusCode::OK, Json(json!({"tools": tools}))).into_response()
+    (
+        StatusCode::OK,
+        Json(json!({"preview": preview, "tools": tools})),
+    )
+        .into_response()
 }
 
 /// `POST /ui/api/import/openapi`
@@ -343,9 +360,11 @@ fn tool_preview_from_cap(cap: &GeneratedCapability) -> ToolPreview {
     let mut method = String::new();
     let mut path = String::new();
     let mut parameters: Vec<String> = Vec::new();
+    let mut read_only = false;
 
     for line in cap.yaml.lines() {
         let trimmed = line.trim();
+        read_only |= trimmed == "read_only: true";
         if method.is_empty()
             && let Some(rest) = trimmed.strip_prefix("method: ")
         {
@@ -388,6 +407,8 @@ fn tool_preview_from_cap(cap: &GeneratedCapability) -> ToolPreview {
         method,
         path,
         parameters,
+        class: if read_only { "read" } else { "write" },
+        class_source: "inferred",
     }
 }
 
