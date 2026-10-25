@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8425 MIG.2 step 2 (P13, MIG.3 Config identity): the `Config` each
-//! shipped gateway config extracts to through the adapter's `figment_data`,
-//! recorded with the current backend before the swap.
+//! shipped gateway config, and each rendered Helm ConfigMap, extracts to
+//! through the adapter's `figment_data`, recorded with the current backend
+//! before the swap.
 //!
 //! The extract uses `figment_data` alone over the defaults, with no
 //! environment overlay, so the digest is the same on every machine. A
@@ -38,11 +39,38 @@ const CONFIGS: &[&str] = &[
     "examples/gateway-full.yaml",
     "examples/servers.yaml",
     "examples/per-client-tool-scopes.yaml",
+    "examples/config-bundles.yaml",
+    "examples/config-fulcrum.yaml",
+    "examples/gateway-minimal.yaml",
+    "examples/minimal.yaml",
+    "examples/token-exchange-live.yaml",
     "benchmarks/workload/gateway.workload.yaml",
     "benchmarks/workload/gateway.workload.mixed.yaml",
+    "tests/fixtures/helm-golden/credential.yaml",
+    "tests/fixtures/helm-golden/mesh.yaml",
 ];
 
+/// The `gateway.yaml` a rendered Helm manifest's ConfigMap carries, when
+/// `text` is such a manifest: the chart's configs are extracted as the
+/// gateway reads them once mounted.
+fn helm_gateway_yaml(text: &str) -> Option<String> {
+    yaml::documents(text).find_map(|document| {
+        let document = document.ok()?;
+        if document.get("kind")?.as_str()? != "ConfigMap" {
+            return None;
+        }
+        Some(
+            document
+                .get("data")?
+                .get("gateway.yaml")?
+                .as_str()?
+                .to_owned(),
+        )
+    })
+}
+
 fn reading(text: &str) -> String {
+    let text = helm_gateway_yaml(text).unwrap_or_else(|| text.to_owned());
     let extracted = Figment::from(figment::providers::Serialized::defaults(Config::default()))
         .merge(AdapterYaml(text.to_owned()))
         .extract::<Config>();
