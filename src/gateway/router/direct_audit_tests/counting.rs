@@ -200,16 +200,21 @@ async fn t24_a_meta_replay_counts_nothing() {
 /// T24, direct route: the guard's replay counts nothing either.
 #[tokio::test]
 async fn t24_a_direct_replay_counts_nothing() {
-    let fx = fixture(Setup::default()).await;
+    let fx = fixture(Setup {
+        meta_mode: MetaMode::Idempotent,
+        ..Setup::default()
+    })
+    .await;
     let store = attach(&fx);
     for _ in 0..2 {
-        let _ = post_modern_as(
+        let (status, body) = post(
             &fx,
-            "/mcp/alpha",
+            "alpha",
             &direct_call("c", Some("k-8854")),
             &Caller::Oidc,
         )
         .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
     }
     assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "the second is a replay");
     assert_eq!(totals(&store)[0], 1);
