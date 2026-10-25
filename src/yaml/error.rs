@@ -172,6 +172,18 @@ impl Error {
         })
     }
 
+    /// The replacement backend's own wording, still to take the key path
+    /// and place of the node that refused (as a serde `custom` message
+    /// does). For fixed wordings that name the document's structure, never
+    /// its values.
+    pub(super) fn placed(text: impl Into<String>) -> Self {
+        Self(Repr::Message {
+            text: text.into(),
+            location: None,
+            fixable: true,
+        })
+    }
+
     /// Give a serde message its place, the first time one is offered: the
     /// key path (`.` is the root, printed as nothing) and the node's line
     /// and column. Any other error passes through unchanged.
