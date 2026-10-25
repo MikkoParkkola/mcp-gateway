@@ -107,7 +107,7 @@ pub(super) fn arm_extras(mut meta: MetaMcp, extras: &[Extra]) -> MetaMcp {
     meta
 }
 
-/// Whether both routes have a transparency log (MIK-8854 T21).
+/// Whether both routes have a transparency log (T21).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Log {
     #[default]

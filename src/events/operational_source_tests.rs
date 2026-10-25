@@ -522,7 +522,7 @@ async fn standing_is_judged_on_one_clock_reading() {
     }
 }
 
-/// MIK-8854 T30, both on: one observer per slot feeds the markers and the
+/// T30, both on: one observer per slot feeds the markers and the
 /// events alike; neither side is silenced by the other.
 #[tokio::test]
 async fn markers_and_events_share_the_one_observer_slot() {

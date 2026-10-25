@@ -57,7 +57,7 @@ pub(crate) struct DispatchNotes {
     data_classes: BTreeSet<String>,
     /// Served from a cache: no gate ran, so the delivered value is attributed.
     cached: bool,
-    /// MIK-8854: what the web UI's counters need from the gates.
+    /// What the web UI's counters need from the gates.
     counting: counting::CountNotes,
     /// MIN.1: the response held text over the attribution parse bound, so its
     /// tenants were not read.

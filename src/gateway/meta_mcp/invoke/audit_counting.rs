@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8854: what one call's gates note for the web UI's counters, and the
+//! What one call's gates note for the web UI's counters, and the
 //! meta writer's counting step, which runs beside its "counted before the log
 //! check" step so a gateway with no audit log counts the same calls.
 

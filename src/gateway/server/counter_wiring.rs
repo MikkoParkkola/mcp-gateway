@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8854: the HTTP server's call counters. Restored from
+//! The HTTP server's call counters. Restored from
 //! `<data_dir>/counters.json` before anything is served, saved every
 //! [`COUNTER_SAVE_INTERVAL`] and once more at shutdown. A stdio gateway does
 //! not build them: their readers are HTTP routes.

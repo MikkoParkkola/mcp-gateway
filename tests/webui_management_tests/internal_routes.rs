@@ -510,7 +510,7 @@ const ROWS: &[Row] = &[
         Payload::Import,
         [401, 403, 403, 200],
     ),
-    // src/gateway/ui/history.rs (markers). MIK-8854: the codes come from the
+    // src/gateway/ui/history.rs (markers). The codes come from the
     // design (admin only: no credential 401, non-admin 403). This fixture
     // never runs the server's start, so no counter store is attached and the
     // admin is told counting is off (503), as /ui/api/events/held answers 404

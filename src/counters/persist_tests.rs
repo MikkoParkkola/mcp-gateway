@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8854 `counters.json` (test plan T12, T14-T18, T32): what a save keeps,
+//! `counters.json` (test plan T12, T14-T18, T32): what a save keeps,
 //! what a bad file costs, and that a save never holds the store's lock.
 
 use chrono_tz::UTC;

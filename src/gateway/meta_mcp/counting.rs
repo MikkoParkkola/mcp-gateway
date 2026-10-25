@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8854: where a finished call reaches the web UI's counters.
+//! Where a finished call reaches the web UI's counters.
 //!
 //! Every writer of a call's one invocation record calls [`MetaMcp::count_call`]
 //! in its "counted before the log check" step, so the counters cover exactly
@@ -44,7 +44,7 @@ impl MetaMcp {
         if tally.is_empty() {
             return;
         }
-        // A recorder writes nothing on a clock it cannot read (MIK-8202).
+        // A recorder writes nothing on a clock it cannot read.
         let Ok(now) = crate::clock::unix_secs() else {
             return;
         };

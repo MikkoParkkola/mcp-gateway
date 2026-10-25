@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8854 T28-T30: the kill switch and the breakers mark every chart in
+//! T28-T30: the kill switch and the breakers mark every chart in
 //! every events configuration, the default (events on, operational off)
 //! included.
 

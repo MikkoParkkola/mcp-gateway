@@ -80,7 +80,7 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
     ("/ui/api/control-plane/grants", Method::POST, CP_WRITES),
     ("/ui/api/control-plane/policies", Method::POST, CP_WRITES),
     ("/ui/api/control-plane/decisions", Method::POST, CP_WRITES),
-    // MIK-8854: the admin's 200 with a counter store attached, and the 400
+    // The admin's 200 with a counter store attached, and the 400
     // for an unsupported query, which this fixture's row also records.
     (
         "/ui/api/markers",

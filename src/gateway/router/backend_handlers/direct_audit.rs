@@ -324,7 +324,7 @@ pub(super) async fn record(
         use crate::security::security_metrics::{DenialRoute, denied};
         denied(DenialRoute::Direct, reason);
     }
-    // MIK-8854: the web UI's counters move here too, once per call.
+    // The web UI's counters move here too, once per call.
     state.meta_mcp.count_call(
         server,
         call.tool.as_deref(),

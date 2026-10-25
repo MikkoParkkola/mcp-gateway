@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8854: windowed, persisted call counters and the marker ledger the web
+//! Windowed, persisted call counters and the marker ledger the web
 //! UI draws its history from (ADR-017, ADR-026).
 //!
 //! Each logical call is counted once, where its one invocation record is
@@ -428,7 +428,7 @@ impl CounterStore {
     }
 
     /// Record a marker now. On a clock that cannot be read, nothing: a
-    /// recorder writes nothing (MIK-8202).
+    /// recorder writes nothing.
     pub(crate) fn mark_now(&self, kind: MarkerKind, subject: Option<&str>) {
         if let Ok(now) = crate::clock::unix_secs() {
             self.mark(kind, subject, now);

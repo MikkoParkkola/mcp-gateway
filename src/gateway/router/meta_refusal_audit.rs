@@ -34,7 +34,7 @@ pub(super) struct Refused<'a> {
     /// credential kind, principal, key name and verified subject.
     who: AuditWho,
     session_id: &'a str,
-    /// MIK-8854: the request firewall refused it, for the web UI's counters.
+    /// The request firewall refused it, for the web UI's counters.
     firewall: bool,
 }
 
@@ -62,7 +62,7 @@ impl<'a> Refused<'a> {
         }
     }
 
-    /// MIK-8854: mark this refusal as the request firewall's.
+    /// Mark this refusal as the request firewall's.
     #[cfg(feature = "firewall")]
     pub(super) const fn firewall(mut self) -> Self {
         self.firewall = true;
@@ -238,7 +238,7 @@ impl<'a> Refused<'a> {
         state: &AppState,
         refusal: Refusal<'_>,
     ) -> Option<Result<(), crate::Error>> {
-        // MIK-8854: every router refusal is written here, with or without a
+        // Every router refusal is written here, with or without a
         // log, so the web UI's counters move here once per refused call.
         state.meta_mcp.count_call(
             refusal.server,

@@ -25,7 +25,7 @@ pub(super) fn install(
     credentials: crate::events::LiveCredentials,
     counters: &Arc<crate::counters::CounterStore>,
 ) -> Result<()> {
-    // MIK-8854: the kill switch and breakers mark the charts in every events
+    // The kill switch and breakers mark the charts in every events
     // configuration. Their observer slots are set once: when the operational
     // source is installed below it carries the markers, otherwise this does.
     if !(config.events.enabled && config.events.sources.operational) {

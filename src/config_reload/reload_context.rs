@@ -178,7 +178,7 @@ pub struct ReloadContext {
     pub(super) capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
     /// Told which backends each applied reload registered (`MIK-8054`).
     pub(super) on_registered: Option<super::reload_warm_hook::OnRegistered>,
-    /// MIK-8854: where an applied reload marks the web UI's charts.
+    /// Where an applied reload marks the web UI's charts.
     pub(super) markers: Option<Arc<crate::counters::CounterStore>>,
 }
 
@@ -253,7 +253,7 @@ impl ReloadContext {
         })
     }
 
-    /// Mark every applied reload on `markers` (MIK-8854).
+    /// Mark every applied reload on `markers`.
     #[must_use]
     pub(crate) fn with_markers(
         mut self,
@@ -397,7 +397,7 @@ impl ReloadContext {
         };
         let mut outcome = match self.reload_outcome_locked().await {
             Ok(outcome) => {
-                // MIK-8854: an applied reload marks the charts; a refused one
+                // An applied reload marks the charts; a refused one
                 // returns below and marks nothing.
                 if let Some(markers) = &self.markers {
                     markers.mark_now(crate::counters::MarkerKind::ConfigReload, None);

@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8854: what one `record` costs on the invoke path, with the store at
+//! What one `record` costs on the invoke path, with the store at
 //! every cap. Ignored: it only prints numbers. Run on the bench host:
 //! `cargo test --release --lib -- --ignored --exact counters::timing_tests::record_timing --nocapture`.
 
@@ -58,5 +58,5 @@ fn record_timing() {
         };
         store.record(&call, T0 + 30, &Amsterdam);
     });
-    println!("MIK-8854 record_hit_ns={hit} record_overflow_ns={overflow}");
+    println!("counters record_hit_ns={hit} record_overflow_ns={overflow}");
 }

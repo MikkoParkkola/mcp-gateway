@@ -162,7 +162,7 @@ async fn post_modern_as(
 #[derive(Default)]
 struct Setup {
     auth: Option<AuthConfig>,
-    /// MIK-8854 T21: whether either route has a transparency log.
+    /// T21: whether either route has a transparency log.
     log: Log,
     fail_closed: bool,
     backend_error: Option<i32>,

@@ -222,7 +222,7 @@ impl EventSource for OperationalSource {
 
 impl EventsHub {
     /// Offer the operational events and attach the kill-switch and breaker
-    /// hooks, which also mark `markers` (MIK-8854); budgets attach with
+    /// hooks, which also mark `markers`; budgets attach with
     /// [`OperationalSource::report_budgets`].
     pub(crate) fn install_operational_source(
         self: &Arc<Self>,
@@ -239,7 +239,7 @@ impl EventsHub {
     }
 }
 
-/// MIK-8854: the kill switch and the breakers mark the web UI's charts when
+/// The kill switch and the breakers mark the web UI's charts when
 /// the operational events source is not installed. Each takes one observer,
 /// set once (`crate::observer`), so when the source is installed it carries
 /// the markers itself and this must not be called.

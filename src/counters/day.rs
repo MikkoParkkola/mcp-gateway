@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The host-local day an instant falls on.
 //!
-//! Private stand-in for `crate::local_day`, which MIK-8901 owns and lands
+//! Private stand-in for `crate::local_day`, which the host-local day change owns and lands
 //! first (ADR-026). The signature is that API's, exactly, so U1 swaps this
 //! file for one import at rebase and lands no second implementation. The
 //! zone is a parameter, so a test names its zone instead of the host's.

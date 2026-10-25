@@ -1419,8 +1419,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `/ui/api/events/held` | INTERNAL | private JSON API of the bundled web UI | admin only, like the dead-letter listing; held webhook subscriptions per type (MIK-8057) | src/gateway/routes.rs:65 |
 | `/ui/api/import/openapi` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:67 |
 | `/ui/api/import/openapi/preview` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:66 |
-| `/ui/api/markers` | INTERNAL | private JSON API of the bundled web UI | admin only; restarts, upgrades, reloads, pauses and switch-offs for the charts (MIK-8854) | src/gateway/routes.rs:71 |
-| `/ui/api/metrics/series` | INTERNAL | private JSON API of the bundled web UI | admin only; windowed call counters for the charts (MIK-8854, ADR-017) | src/gateway/routes.rs:69 |
+| `/ui/api/markers` | INTERNAL | private JSON API of the bundled web UI | admin only; restarts, upgrades, reloads, pauses and switch-offs for the charts | src/gateway/routes.rs:71 |
+| `/ui/api/metrics/series` | INTERNAL | private JSON API of the bundled web UI | admin only; windowed call counters for the charts (ADR-017) | src/gateway/routes.rs:69 |
 | `/ui/api/registry` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:60 |
 | `/ui/api/registry/search` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:61 |
 | `/ui/api/reload` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:47 |

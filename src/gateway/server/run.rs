@@ -83,7 +83,7 @@ impl Gateway {
             record_key,
             transparency_log,
         } = self.build_meta_mcp().await?;
-        // MIK-8854: restored before anything is served or reloaded.
+        // Restored before anything is served or reloaded.
         let (counters, counter_saver) =
             counter_wiring::start(&data_dir, &meta_mcp, shutdown_tx.subscribe());
         // F24: this mode delivers tools/list_changed, so it may advertise it.

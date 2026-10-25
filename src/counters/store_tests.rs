@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8854 store rules (test plan T1-T11, T45, T46): buckets, rings, local
+//! Store rules (test plan T1-T11, T45, T46): buckets, rings, local
 //! days, caps, labels and classification, all on explicit times and zones.
 
 use chrono::TimeZone;

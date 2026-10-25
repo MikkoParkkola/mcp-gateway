@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! `GET /ui/api/metrics/series` and `GET /ui/api/markers` (MIK-8854): the web
+//! `GET /ui/api/metrics/series` and `GET /ui/api/markers`: the web
 //! UI's history, read from the counter store. Admin only: no credential is
 //! 401, a non-admin credential 403, as the other admin UI routes answer.
 

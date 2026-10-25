@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8854 counting sites (test plan T20-T27): each logical call moves the
+//! Counting sites (test plan T20-T27): each logical call moves the
 //! counters once, where its one invocation record is written, refusals and
 //! audit-off gateways included, replays never.
 
@@ -237,7 +237,7 @@ async fn t11_an_uncatalogued_tool_counts_in_overflow() {
     assert_eq!(count(&store, Metric::Calls, Filter::Overflow(Dim::Tool)), 1);
     assert_eq!(count(&store, Metric::Calls, Filter::Server("alpha")), 1);
     assert_eq!(store.labels(Dim::Tool), 0);
-    // MIK-8854.API1.5: the audit log keeps recording the target the caller
+    // The audit log keeps recording the target the caller
     // named; U1 neither hides nor changes it.
     assert_eq!(
         only_invocation(&fx)["tool"],

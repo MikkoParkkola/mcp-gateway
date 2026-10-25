@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8854 T31: an applied reload marks the charts; a refused one does not.
+//! T31: an applied reload marks the charts; a refused one does not.
 
 use super::*;
 

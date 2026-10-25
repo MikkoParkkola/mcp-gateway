@@ -125,7 +125,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ),
     (
         "src/counters/persist.rs",
-        "call counters and markers (MIK-8854); no secret",
+        "call counters and markers; no secret",
     ),
     (
         "src/debug_trust_roots.rs",

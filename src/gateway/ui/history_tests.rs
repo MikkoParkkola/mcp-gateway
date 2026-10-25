@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8854 series parameters (test plan T36-T38): every bad value or
+//! Series parameters (test plan T36-T38): every bad value or
 //! unsupported combination is refused with what is allowed, never answered
 //! with a default or a broader aggregate.
 

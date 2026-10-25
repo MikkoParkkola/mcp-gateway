@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8854 T13: a call counted by one gateway run is still counted after a
+//! T13: a call counted by one gateway run is still counted after a
 //! graceful shutdown and a restart on the same data directory, and the
 //! restart is marked.
 

@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8854 history routes over HTTP (test plan T34 shape, T40-T43): admin
+//! History routes over HTTP (test plan T34 shape, T40-T43): admin
 //! only, the series and markers as read, and no secret or caller-chosen name
 //! in anything U1 writes or answers.
 

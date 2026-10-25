@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8854 previous period and coverage (test plan T34, T35, T39): the
+//! Previous period and coverage (test plan T34, T35, T39): the
 //! previous period maps by local wall-clock time, with its own `t` values,
 //! and nothing is drawn before coverage began.
 
