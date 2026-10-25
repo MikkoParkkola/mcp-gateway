@@ -407,6 +407,10 @@ where
         Ok((retired, held)) => (retired, Some(held)),
         Err(error) => {
             warn!(%error, "package cache rename task failed");
+            // The task did not reach its own re-arm, so this is the refused
+            // rename's re-arm: without it the backend stays marked repaired
+            // with nothing cleared (MIK-8831.REL.8).
+            arm_again(dir);
             (Retired::Refused, None)
         }
     }
