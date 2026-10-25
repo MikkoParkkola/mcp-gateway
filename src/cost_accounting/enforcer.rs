@@ -102,7 +102,7 @@ impl DailyAccumulator {
     /// False once the stored day is before `today`: [`Self::current_on`]
     /// reads 0.
     fn is_current_on(&self, today: Option<u64>) -> bool {
-        !today.is_some_and(|today| self.lock().0 < today)
+        today.is_none_or(|today| self.lock().0 >= today)
     }
 
     /// An empty accumulator on `day`; day 0 on a clock before 1970, as
