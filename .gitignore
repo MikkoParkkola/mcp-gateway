@@ -40,6 +40,8 @@ history.txt
 # Internal planning docs, strategic positioning, and competitive intelligence
 docs/plans/
 docs/submissions/
+# The private companion repository's clone, see CONTRIBUTING.md.
+/internal/
 docs/strategy/
 docs/competitive/
 docs/competitive-intelligence/
