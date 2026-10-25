@@ -471,6 +471,15 @@ fn a_crashed_runs_tombstone_with_this_pid_does_not_block_a_retire() {
             .is_some_and(|name| name.to_string_lossy().contains(TOMBSTONE_MARK)),
         "and the mark the sweep matches: {tombstone:?}"
     );
+    sweep_now(root.path());
+    assert!(!tombstone.exists(), "the sweep clears the new name");
+    assert!(
+        root.path()
+            .join(format!("{leaf}{TOMBSTONE_MARK}{}-0", std::process::id()))
+            .join("_npx")
+            .is_dir(),
+        "an unmarked leftover is still not the sweep's to delete"
+    );
 }
 
 #[cfg(unix)]
