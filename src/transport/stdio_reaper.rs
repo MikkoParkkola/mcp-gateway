@@ -76,7 +76,14 @@ fn start_once(
 /// Needs no runtime and never blocks.
 pub(super) fn hand_over(tree: ChildTree) -> watch::Receiver<Reaped> {
     let (done, receiver) = watch::channel(Reaped::Pending);
-    let job = Job { tree, done };
+    let mut job = Job { tree, done };
+    // The first step runs here, on the caller's thread, not on the reaper's:
+    // it sends the ownership-checked group signal now, so a gateway that
+    // exits right after dropping a transport has already signalled the
+    // backend's group (MIK-8895). The reaper takes the rest of the order.
+    if !step(&mut job, Instant::now()) {
+        return receiver;
+    }
     let refused = match REAPER.get() {
         Some(sender) => sender.send(job).err().map(|mpsc::SendError(job)| job),
         None => Some(job),
@@ -101,21 +108,13 @@ fn run(receiver: &mpsc::Receiver<Job>) {
                 Err(mpsc::RecvError) => return,
             }
         }
-        // A new job is stepped before the tick's sleep, so its first group
-        // signal goes out at once: a gateway that drops a transport on its
-        // way out may exit before a tick passes (MIK-8895).
+        match receiver.recv_timeout(TICK) {
+            Ok(job) => jobs.push(job),
+            Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
+        }
         jobs.extend(receiver.try_iter());
         let now = Instant::now();
         jobs.retain_mut(|job| step(job, now));
-        if jobs.is_empty() {
-            continue;
-        }
-        match receiver.recv_timeout(TICK) {
-            Ok(job) => jobs.push(job),
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            // Every sender is gone; keep the held trees' pace without a spin.
-            Err(mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(TICK),
-        }
     }
 }
 

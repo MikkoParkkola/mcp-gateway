@@ -2455,6 +2455,16 @@ impl Gateway {
         // Why the loop can end before EOF: see `run_stdout_writer`.
         let mut stdout_died = false;
 
+        // Ctrl+C and SIGTERM end stdio the way stdin EOF does: stop reading,
+        // drain what was accepted, then `stop_all`. Without this a signal
+        // killed stdio outright, and since each backend leads its own process
+        // group (MIK-8895) nothing else would end the backends' trees. The
+        // release line does the same (MIK-8364).
+        let (signal_tx, _) = tokio::sync::broadcast::channel(1);
+        let stop_signal = support::shutdown_signal(signal_tx);
+        tokio::pin!(stop_signal);
+        let mut signalled = false;
+
         loop {
             // A closed queue means the stdout writer has exited, so every
             // answer from here on would be written nowhere. Executing the
@@ -2472,6 +2482,10 @@ impl Gateway {
                 biased;
                 () = writer.closed() => {
                     stdout_died = true;
+                    break;
+                }
+                () = &mut stop_signal => {
+                    signalled = true;
                     break;
                 }
                 read = reader.next_line() => match read {
@@ -2659,6 +2673,8 @@ impl Gateway {
         // one message that hides why the session ended.
         if stdout_died || writer.is_closed() {
             warn!("stdio: stdout is gone, refusing further requests and shutting down");
+        } else if signalled {
+            info!("stdio: shutdown signal received, draining and shutting down");
         } else {
             info!("stdio: EOF reached, shutting down");
         }

@@ -23,12 +23,22 @@ const TOOL: &str = "slow_answer";
 const ANSWER: &str = "answered-after-the-stop";
 const READY_BOUND: Duration = Duration::from_secs(60);
 const EXIT_BOUND: Duration = Duration::from_secs(60);
+/// How long a descendant may outlive the gateway: the reaper's grace and
+/// settle with room for a loaded host, well short of the descendant's own
+/// `sleep 600`.
+const GONE_BOUND: Duration = Duration::from_secs(20);
 
 /// A stdio MCP server in Python: it answers `initialize`, `ping` and
 /// `tools/list`, and answers `tools/call` two seconds after marking the call
 /// started, so a stop can land while the call is in flight. A TERM that
 /// reaches it ends it before it answers.
-const BACKEND_SCRIPT: &str = r#"import json, sys, time
+const BACKEND_SCRIPT: &str = r#"import json, subprocess, sys, time
+# A descendant in the backend's tree that ignores stdin EOF, as an npx
+# launcher's node child can: only a group signal ends it. Its pid in d.pid.
+grandchild = subprocess.Popen(["sleep", "600"], stdin=subprocess.DEVNULL,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+with open("d.pid", "w") as f:
+    f.write(str(grandchild.pid))
 for line in sys.stdin:
     msg = json.loads(line)
     if "id" not in msg:
@@ -220,6 +230,13 @@ async fn a_stop_to_the_gateways_group_drains_the_backend_call() {
         }
     }
 
+    let grandchild: u32 = std::fs::read_to_string(root.join("d.pid"))
+        .expect("the backend wrote its descendant's pid")
+        .trim()
+        .parse()
+        .expect("a pid");
+    let _reap_grandchild = KillPid(grandchild);
+
     // What `tini -g` sends on `docker stop`: SIGTERM to the whole group.
     let signalled = std::process::Command::new("kill")
         .args(["-TERM", "--", &format!("-{pgid}")])
@@ -247,6 +264,40 @@ async fn a_stop_to_the_gateways_group_drains_the_backend_call() {
         "the gateway exits after the drain\n{}",
         logs(root)
     );
+    // The gateway's shutdown ended the backend's whole tree, not only the
+    // process it spoke to.
+    let gone_by = tokio::time::Instant::now() + GONE_BOUND;
+    while alive(grandchild) {
+        assert!(
+            tokio::time::Instant::now() < gone_by,
+            "the backend's descendant {grandchild} outlived the gateway\n{}",
+            logs(root)
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Whether `pid` is a live process (not gone, not a zombie).
+fn alive(pid: u32) -> bool {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .expect("ps");
+    let stat = String::from_utf8_lossy(&out.stdout);
+    let stat = stat.trim();
+    !stat.is_empty() && !stat.starts_with('Z')
+}
+
+/// SIGKILLs a pid when the row ends, so a red run leaks no descendant.
+struct KillPid(u32);
+
+impl Drop for KillPid {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", &self.0.to_string()])
+            .stderr(Stdio::null())
+            .status();
+    }
 }
 
 /// SIGKILLs the gateway's group when the row ends, so a red run leaks no
@@ -259,5 +310,98 @@ impl Drop for KillGroup {
             .args(["-KILL", "--", &format!("-{}", self.0)])
             .stderr(Stdio::null())
             .status();
+    }
+}
+
+/// gpt seat (MIK-8895): in stdio mode (`serve --stdio`, how an MCP client runs
+/// the gateway) a SIGTERM to the gateway alone must still end the backend's
+/// tree. Red before MIK-8895: stdio mode had no signal handler, so the gateway
+/// died at once and the backend's descendant outlived it.
+#[tokio::test]
+async fn a_sigterm_in_stdio_mode_ends_the_backends_tree() {
+    use tokio::io::AsyncWriteExt as _;
+
+    let root = tempfile::tempdir().expect("temp root");
+    let root = root.path();
+    let config = write_config(root, free_port());
+    let log = std::fs::File::create(root.join("gateway.log")).expect("log");
+
+    let mut gateway = tokio::process::Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("MCP_GATEWAY_") {
+            gateway.env_remove(key);
+        }
+    }
+    let mut gateway = gateway
+        .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
+        .current_dir(root)
+        .arg("--config")
+        .arg(&config)
+        .arg("serve")
+        .arg("--stdio")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(log))
+        .process_group(0)
+        .kill_on_drop(true)
+        .spawn()
+        .expect("the gateway binary spawns");
+    let _cleanup = KillGroup(gateway.id().expect("gateway pid"));
+    let mut stdin = gateway.stdin.take().expect("gateway stdin");
+    for message in [
+        json!({ "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
+            "protocolVersion": PROTOCOL_VERSION, "capabilities": {},
+            "clientInfo": { "name": "StopDrainTest", "version": "1.0.0" } } }),
+        json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+        invoke(1),
+    ] {
+        stdin
+            .write_all(format!("{message}\n").as_bytes())
+            .await
+            .expect("write to the gateway");
+    }
+
+    let pid_file = root.join("d.pid");
+    let started_by = tokio::time::Instant::now() + READY_BOUND;
+    let grandchild: u32 = loop {
+        if let Some(pid) = std::fs::read_to_string(&pid_file)
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+        {
+            break pid;
+        }
+        assert!(
+            tokio::time::Instant::now() < started_by,
+            "the backend never started\n{}",
+            logs(root)
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    let _reap_grandchild = KillPid(grandchild);
+
+    // What an MCP client sends to stop a stdio server: SIGTERM to its pid
+    // only. stdin stays open, so only the signal ends the session.
+    let pid = gateway.id().expect("gateway pid");
+    let signalled = std::process::Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status()
+        .expect("kill runs");
+    assert!(signalled.success(), "the signal was delivered");
+    let exited = tokio::time::timeout(EXIT_BOUND, gateway.wait()).await;
+    assert!(
+        matches!(exited, Ok(Ok(_))),
+        "the gateway exits after the signal\n{}",
+        logs(root)
+    );
+    drop(stdin);
+
+    let gone_by = tokio::time::Instant::now() + GONE_BOUND;
+    while alive(grandchild) {
+        assert!(
+            tokio::time::Instant::now() < gone_by,
+            "the backend's descendant {grandchild} outlived a stdio gateway's SIGTERM\n{}",
+            logs(root)
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
