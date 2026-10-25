@@ -98,5 +98,8 @@ async fn a_ui_edit_leaves_a_file_it_cannot_load_unchanged() {
         broken,
         "a file that does not load was rewritten ({result})"
     );
-    assert_ne!(result, "applied", "the edit reported success");
+    assert!(
+        result.contains("does not load, so it was not changed"),
+        "the edit was not refused for the file not loading: {result}"
+    );
 }
