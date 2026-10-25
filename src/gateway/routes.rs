@@ -65,6 +65,10 @@ owned_routes! {
     UI_EVENTS_HELD = "/ui/api/events/held",
     UI_IMPORT_PREVIEW = "/ui/api/import/openapi/preview",
     UI_IMPORT = "/ui/api/import/openapi",
+    /// The web UI's windowed call counters (MIK-8854).
+    UI_METRICS_SERIES = "/ui/api/metrics/series",
+    /// Restarts, upgrades, reloads, pauses and switch-offs (MIK-8854).
+    UI_MARKERS = "/ui/api/markers",
     /// The bare prefix, which the catch-all does not match; claimed so it
     /// never reaches the main router's full-URI trace span.
     ACCOUNTS_ROOT = "/accounts/v1",
