@@ -100,14 +100,18 @@ impl Gateway {
             super::super::meta_mcp::grant_audit::slot_rpc(
                 meta_mcp.transparency_logger.as_ref(),
                 id.clone(),
-                Box::pin(Self::dispatch_tools_call(
-                    meta_mcp,
-                    tool_policy,
-                    &mut request,
-                    id,
-                    client,
-                    &mut signing_context,
-                    &request_shape,
+                // In one route decision scope for the whole call, as on `/mcp`:
+                // inside the existing box, so nothing new is nested or boxed.
+                Box::pin(crate::gateway::meta_mcp::invoke::audit::with_route_scope(
+                    Self::dispatch_tools_call(
+                        meta_mcp,
+                        tool_policy,
+                        &mut request,
+                        id,
+                        client,
+                        &mut signing_context,
+                        &request_shape,
+                    ),
                 )),
             )
             .await
@@ -622,18 +626,15 @@ impl Gateway {
             // firewall, X14 (route-check-parity P3). A refusal here took no
             // key, lease or task, and gives back the nonce admitted above,
             // unless X14 spent a grant first.
-            // In a route decision scope, as on `/mcp`: a refusal here names
-            // the check that made it.
-            let (stage, witness) =
-                crate::gateway::meta_mcp::invoke::audit::with_route_scope(Self::stdio_route_stage(
-                    meta_mcp,
-                    &id,
-                    (&tool_name, arguments.as_ref(), task_member.as_ref()),
-                    &caller,
-                    client,
-                    witness,
-                ))
-                .await;
+            let (stage, witness) = Self::stdio_route_stage(
+                meta_mcp,
+                &id,
+                (&tool_name, arguments.as_ref(), task_member.as_ref()),
+                &caller,
+                client,
+                witness,
+            )
+            .await;
             match stage {
                 RouteStage::Answer(answer) => {
                     if let Some(witness) = witness {
