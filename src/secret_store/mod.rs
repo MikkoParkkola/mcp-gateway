@@ -26,6 +26,11 @@ pub(crate) trait SecretStore {
     fn kind(&self) -> StoreKind;
     /// The largest value this store keeps intact, in bytes (ADR-028 rule 2).
     fn limit(&self) -> usize;
+    /// Whether this store can keep `value` byte for byte; checked, with the
+    /// limit, before anything is written.
+    fn accepts(&self, _value: &[u8]) -> Result<(), StoreError> {
+        Ok(())
+    }
     /// Whether the store can take a write now (ADR-028 rule 7).
     fn probe(&self) -> Result<(), StoreError>;
     /// Whether an entry `name` exists.
@@ -66,8 +71,10 @@ pub(crate) enum StoreError {
     Empty,
     /// The value is not UTF-8, which every reader requires.
     NotUtf8,
-    /// The value is longer than the store keeps intact.
-    TooLarge { limit: usize },
+    /// The value is longer than `store` keeps intact.
+    TooLarge { limit: usize, store: StoreKind },
+    /// The store cannot keep this value byte for byte: why.
+    Unrepresentable(&'static str),
     /// The store failed: the operation and the OS reason, never a value.
     Failed(String),
 }
@@ -77,17 +84,20 @@ impl StoreError {
     pub(crate) fn reason(&self) -> String {
         match self {
             Self::Exists => "an entry with that name already exists".to_owned(),
-            Self::Unavailable(why) => {
-                format!("the keychain is unavailable: {why}; {SWITCH}")
-            }
+            Self::Unavailable(why) => format!("the secret store is unavailable: {why}; {SWITCH}"),
             Self::NotYetAvailable => {
                 format!("the keychain store is not yet available on this build; {SWITCH}")
             }
             Self::Empty => "the value is empty; empty secrets are refused".to_owned(),
             Self::NotUtf8 => "the value is not UTF-8".to_owned(),
-            Self::TooLarge { limit } => {
-                format!("the value is longer than this store's limit of {limit} bytes; {SWITCH}")
+            Self::TooLarge { limit, store } => {
+                let base = format!("the value is longer than this store's limit of {limit} bytes");
+                match store {
+                    StoreKind::Keychain => format!("{base}; {SWITCH}"),
+                    StoreKind::Files => base,
+                }
             }
+            Self::Unrepresentable(why) => (*why).to_owned(),
             Self::Failed(why) => why.clone(),
         }
     }

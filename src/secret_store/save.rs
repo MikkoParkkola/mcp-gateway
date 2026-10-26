@@ -29,10 +29,10 @@ impl Vault {
     ///
     /// # Errors
     ///
-    /// [`StoreError::Unavailable`] when there is no home directory.
+    /// [`StoreError::Failed`] when there is no home directory.
     pub(crate) fn for_config_dir(config_dir: &Path) -> Result<Self, StoreError> {
         let home = crate::home_dir::home_dir().ok_or_else(|| {
-            StoreError::Unavailable("there is no home directory for the vault lock".to_owned())
+            StoreError::Failed("there is no home directory for the vault lock".to_owned())
         })?;
         Ok(Self::with_lock(
             config_dir,
@@ -105,11 +105,12 @@ pub(crate) fn save_secrets<T, E>(
         } else if secret.value.len() > store.limit() {
             Some(StoreError::TooLarge {
                 limit: store.limit(),
+                store: store.kind(),
             })
         } else if std::str::from_utf8(secret.value).is_err() {
             Some(StoreError::NotUtf8)
         } else {
-            None
+            store.accepts(secret.value).err()
         };
         if let Some(refusal) = refusal {
             return Err(SaveError::Refused(refusal));
@@ -142,18 +143,21 @@ struct Written {
 }
 
 impl Written {
-    /// Deletes what this save created, newest first, and marks each name it
-    /// indexed as removed. A name whose delete failed stays live in the
-    /// index, so the unused listing still finds it.
+    /// Deletes what this save created, newest first, then marks as removed
+    /// each indexed name that is gone. A name whose delete failed, or one
+    /// that collided with an entry this save did not create, stays live in
+    /// the index, so the unused listing still finds it.
     fn roll_back(&self, vault: &Vault, store: &dyn SecretStore) {
-        let mut kept = BTreeSet::new();
         for name in self.created.iter().rev() {
             if let Err(error) = store.delete(name) {
                 tracing::warn!(entry = %name, %error, "a rolled-back secret entry could not be removed");
-                kept.insert(name.as_str());
             }
         }
-        for name in self.indexed.iter().filter(|n| !kept.contains(n.as_str())) {
+        for name in self
+            .indexed
+            .iter()
+            .filter(|n| matches!(store.exists(n), Ok(false)))
+        {
             if let Err(error) = vault.index.append_removed(name) {
                 tracing::warn!(entry = %name, %error, "a rolled-back secret entry stays in the index");
             }
@@ -205,6 +209,9 @@ pub(crate) fn unused_entries(
     stores: &[&dyn SecretStore],
     referenced: &BTreeSet<String>,
 ) -> Result<Vec<String>, StoreError> {
+    // A save holding the lock may have created entries it has not committed.
+    let _lock = ExclusiveFileLock::acquire(&vault.lock_path)
+        .map_err(|e| StoreError::Failed(format!("cannot take the vault lock: {e}")))?;
     let mut unused = Vec::new();
     for (name, kind) in vault.index.live()? {
         if referenced.contains(&name) {

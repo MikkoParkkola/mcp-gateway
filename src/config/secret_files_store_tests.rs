@@ -56,3 +56,37 @@ fn b1_secrets_store_is_a_known_key_and_a_typo_under_it_is_refused() {
     let refused = super::Config::load(Some(&path)).expect_err("a typo is refused");
     assert!(refused.to_string().contains("secrets.stor"), "{refused}");
 }
+
+#[test]
+fn b2_a_value_ending_in_cr_is_refused_and_an_inner_crlf_round_trips() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let vault = Vault::with_lock(dir.path(), dir.path().join("vault.lock"));
+    let store = FilesStore::new(dir.path());
+    let save = |value: &'static [u8]| {
+        save_secrets(
+            &vault,
+            &store,
+            &[NewSecret {
+                field: "auth.bearer_token",
+                value,
+            }],
+            |refs| Ok::<_, ()>(refs.to_vec()),
+        )
+    };
+    let refused = save(b"pasted\r").expect_err("a final CR cannot round-trip");
+    assert!(
+        matches!(
+            refused,
+            crate::secret_store::SaveError::Refused(StoreError::Unrepresentable(_))
+        ),
+        "{refused:?}"
+    );
+    assert!(
+        !dir.path().join("secrets").exists(),
+        "written before the refusal"
+    );
+    let refs = save(b"a\r\nb").expect("an inner CRLF is kept");
+    let path = PathBuf::from(refs[0].strip_prefix("file:").unwrap());
+    let read = super::secret_ref::read_file_ref("auth.bearer_token", &path).expect("read");
+    assert_eq!(read.as_bytes(), b"a\r\nb");
+}

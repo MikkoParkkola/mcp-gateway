@@ -37,6 +37,8 @@ struct Fake {
     limit: usize,
     probe: Result<(), StoreError>,
     index: Option<PathBuf>,
+    /// The first name asked about is taken by an entry this save did not make.
+    collide: bool,
 }
 
 impl Fake {
@@ -49,6 +51,7 @@ impl Fake {
             limit: 64,
             probe: Ok(()),
             index: None,
+            collide: false,
         }
     }
 
@@ -78,7 +81,11 @@ impl SecretStore for Fake {
     }
     fn exists(&self, name: &str) -> Result<bool, StoreError> {
         self.call("exists", name);
-        Ok(self.entries.lock().unwrap().contains_key(name))
+        let mut entries = self.entries.lock().unwrap();
+        if self.collide && entries.is_empty() {
+            entries.insert(name.to_owned(), b"foreign".to_vec());
+        }
+        Ok(entries.contains_key(name))
     }
     fn create(&self, name: &str, value: &[u8]) -> Result<String, StoreError> {
         self.call("create", name);
@@ -342,7 +349,14 @@ fn b7_b21_bad_values_are_refused_before_anything_is_written() {
     let over = [b'x'; 65];
     for (label, value, want) in [
         ("empty", &b""[..], StoreError::Empty),
-        ("over", &over[..], StoreError::TooLarge { limit: 64 }),
+        (
+            "over",
+            &over[..],
+            StoreError::TooLarge {
+                limit: 64,
+                store: StoreKind::Keychain,
+            },
+        ),
         ("not utf-8", &b"\xff\xfe"[..], StoreError::NotUtf8),
     ] {
         let (dir, vault) = vault();
@@ -368,8 +382,19 @@ fn b7_b21_bad_values_are_refused_before_anything_is_written() {
         value: &at_limit,
     }];
     save_secrets(&vault, &store, &secret, |_| Ok::<_, ()>(())).expect("a value at the limit");
-    let refused = StoreError::TooLarge { limit: 64 }.reason();
+    let refused = StoreError::TooLarge {
+        limit: 64,
+        store: StoreKind::Keychain,
+    }
+    .reason();
     assert!(refused.contains("64 bytes") && refused.contains("secrets.store: files"));
+    // Files is already the switch: its refusal does not offer it again.
+    let files = StoreError::TooLarge {
+        limit: 65_535,
+        store: StoreKind::Files,
+    }
+    .reason();
+    assert!(!files.contains("secrets.store"), "{files}");
 }
 
 #[test]
@@ -503,4 +528,28 @@ fn b19_a_second_process_meets_the_vault_lock() {
     let rest: Vec<String> = lines.map_while(Result::ok).collect();
     assert!(child.wait().expect("child exit").success(), "{rest:?}");
     assert!(crate::fs_lock::ExclusiveFileLock::try_acquire(&lock).is_ok());
+}
+
+#[test]
+fn b15_a_collision_is_not_retried_and_the_foreign_entry_stays_listed() {
+    let (dir, vault) = vault();
+    let mut store = Fake::new();
+    store.collide = true;
+    let result = save_secrets(&vault, &store, &three(), |_| Ok::<_, ()>(()));
+    assert!(
+        matches!(result, Err(SaveError::Store(StoreError::Exists))),
+        "{result:?}"
+    );
+    let calls = store.calls();
+    assert_eq!(count(&calls, "create"), 0, "{calls:?}");
+    assert_eq!(
+        count(&calls, "delete"),
+        0,
+        "a foreign entry was deleted: {calls:?}"
+    );
+    assert_eq!(store.names().len(), 1, "the foreign entry is gone");
+    // Still live in the index: the unused listing can find it.
+    let live = super::index::Index::at(dir.path()).live().unwrap();
+    assert_eq!(live.len(), 1, "{live:?}");
+    assert_eq!(live[0].0, store.names()[0]);
 }

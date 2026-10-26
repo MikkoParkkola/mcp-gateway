@@ -140,11 +140,6 @@ LOG_MARKER_RE = re.compile(r"//\s*ci-allow-secret-log:\s*(\S.*)$")
 
 DERIVE_RE = re.compile(r"#\[derive\(([^)]*)\)\]")
 STRUCT_RE = re.compile(r"\b(?:pub(?:\([^)]*\))?\s+)?struct\s+(\w+)")
-# A type alias, enum or union: names a field type could use without being a
-# struct whose named fields this lint reads.
-OTHER_TYPE_ITEM_RE = re.compile(
-    r"\b(?:pub(?:\([^)]*\))?\s+)?(?:type|enum|union)\s+(\w+)"
-)
 MANUAL_DEBUG_IMPL_RE = re.compile(
     r"impl(?:<[^>]*>)?\s+(?:std::fmt::Debug|fmt::Debug|Debug)\s+for\s+(\w+)"
 )
@@ -291,69 +286,6 @@ def is_numeric_or_bool_type(type_text: str) -> bool:
     return bool(NUMERIC_OR_BOOL_TYPE_RE.match(t))
 
 
-def base_type_name(type_text: str) -> str:
-    """The struct a field's type names, wrappers and path stripped:
-    `Option<crate::config::SecretsConfig>` -> `SecretsConfig`."""
-    t = type_text.strip().lstrip("&").strip()
-    for _ in range(4):
-        m = TYPE_WRAPPER_RE.match(t)
-        if not m:
-            break
-        t = m.group(1).strip()
-    return t.split("::")[-1].strip()
-
-
-def derived_debug_structs(lines: list[str]) -> tuple[set[str], set[str]]:
-    """(structs whose derived Debug this lint scans, structs it does not).
-
-    A struct is scanned when it derives Debug with no allow marker on the
-    derive and has named fields, which are what this lint reads. Not scanned:
-    a manual Debug impl, a marked derive, a tuple struct (its fields are not
-    read), and every name a type alias, enum or union also uses, so a field
-    typed through one of those can never pass as a scanned struct.
-    """
-    manual = find_manual_debug_impls(lines)
-    scanned: set[str] = set()
-    unscanned: set[str] = set(manual)
-    for line in lines:
-        other = OTHER_TYPE_ITEM_RE.search(line)
-        if other:
-            unscanned.add(other.group(1))
-    n = len(lines)
-    for i, line in enumerate(lines):
-        if "#[derive(" not in line:
-            continue
-        combined, k = line, i
-        while ")]" not in combined and k + 1 < n and k < i + 12:
-            k += 1
-            combined += "\n" + lines[k]
-        dm = DERIVE_RE.search(combined)
-        if not dm or "Debug" not in [p.strip() for p in dm.group(1).split(",")]:
-            continue
-        for j in range(k + 1, min(k + 13, n)):
-            sm = STRUCT_RE.search(lines[j])
-            if sm:
-                name = sm.group(1)
-                tail = lines[j][sm.end():].lstrip()
-                tuple_struct = tail.startswith("(") or (
-                    tail.startswith("<") and re.search(r">\s*\(", tail) is not None
-                )
-                if (
-                    name in manual
-                    or tuple_struct
-                    or has_marker_above_or_on(lines, i, DEBUG_MARKER_RE)
-                ):
-                    unscanned.add(name)
-                else:
-                    scanned.add(name)
-                break
-            if re.search(r"\b(fn|enum|impl|trait|mod)\b", lines[j]) and not lines[
-                j
-            ].strip().startswith("#["):
-                break
-    return scanned, unscanned
-
-
 def has_marker_above_or_on(lines: list[str], idx: int, marker_re: re.Pattern) -> bool:
     """Check line idx (0-based) and the line immediately above for a marker."""
     for i in (idx, idx - 1):
@@ -371,19 +303,7 @@ def find_manual_debug_impls(lines: list[str]) -> set[str]:
     return names
 
 
-def scan_struct_debug(
-    path: str,
-    lines: list[str],
-    manual_impls: set[str],
-    delegated: frozenset[str] = frozenset(),
-) -> list[Finding]:
-    """Findings for derived Debug over secret-shaped fields.
-
-    A field whose type is in `delegated`, a struct whose own derived Debug
-    this lint scans, is skipped: its fields are checked at that derive, so a
-    config section such as `secrets: SecretsConfig` holding no value is not a
-    finding, while a secret-shaped field inside the section still is.
-    """
+def scan_struct_debug(path: str, lines: list[str], manual_impls: set[str]) -> list[Finding]:
     findings: list[Finding] = []
     n = len(lines)
     i = 0
@@ -452,7 +372,6 @@ def scan_struct_debug(
                             SECRET_RE.search(fname)
                             and not is_safe_by_name(fname)
                             and not is_numeric_or_bool_type(ftype)
-                            and base_type_name(ftype) not in delegated
                         ):
                             if has_marker_above_or_on(lines, fline_idx, DEBUG_MARKER_RE):
                                 continue
@@ -791,7 +710,7 @@ def scan_log_macros(path: str, lines: list[str]) -> list[Finding]:
     return findings
 
 
-def scan_file(path: Path, delegated: frozenset[str] = frozenset()) -> list[Finding]:
+def scan_file(path: Path) -> list[Finding]:
     # Fail CLOSED: read errors propagate to the caller so an unreadable /
     # undecodable file becomes a non-zero outcome, never a silent "clean"
     # result. A file the gate cannot inspect is treated as a gate failure,
@@ -799,7 +718,7 @@ def scan_file(path: Path, delegated: frozenset[str] = frozenset()) -> list[Findi
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines()
     manual_impls = find_manual_debug_impls(lines)
-    findings = scan_struct_debug(str(path), lines, manual_impls, delegated)
+    findings = scan_struct_debug(str(path), lines, manual_impls)
     findings += scan_log_macros(str(path), lines)
     return findings
 
@@ -842,22 +761,9 @@ def main(argv: list[str]) -> int:
 
     all_findings: list[Finding] = []
     read_errors: list[tuple[str, str]] = []
-    # A struct name is delegated only if every struct of that name in the
-    # tree has a scanned derive: a same-named one with a manual impl anywhere
-    # keeps the field flagged.
-    scanned: set[str] = set()
-    unscanned: set[str] = set()
     for f in files:
         try:
-            got, missed = derived_debug_structs(f.read_text(encoding="utf-8").splitlines())
-        except (UnicodeDecodeError, OSError):
-            continue
-        scanned |= got
-        unscanned |= missed
-    delegated = frozenset(scanned - unscanned)
-    for f in files:
-        try:
-            all_findings.extend(scan_file(f, delegated))
+            all_findings.extend(scan_file(f))
         except (UnicodeDecodeError, OSError) as exc:
             read_errors.append((str(f), f"{type(exc).__name__}: {exc}"))
 

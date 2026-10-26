@@ -110,7 +110,6 @@ where
 pub struct Config {
     /// Environment files to load before processing config.
     /// Paths support ~ expansion. Loaded in order, later files override earlier.
-    #[serde(default)]
     pub env_files: Vec<String>,
     /// Server configuration.
     pub server: ServerConfig,
@@ -140,6 +139,7 @@ pub struct Config {
     /// Security policy configuration.
     pub security: SecurityConfig,
     /// Where secrets saved through the gateway are written (ADR-028).
+    // ci-allow-secret-debug: the store choice only, never a value
     pub secrets: SecretsConfig,
     /// Webhook receiver configuration.
     pub webhooks: WebhookConfig,

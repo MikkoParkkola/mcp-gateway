@@ -43,9 +43,34 @@ impl SecretStore for FilesStore {
         LIMIT
     }
 
+    fn accepts(&self, value: &[u8]) -> Result<(), StoreError> {
+        // The `file:` reader drops one trailing `\r\n` as readily as `\n`, so
+        // a final CR would be lost once the newline is added.
+        if value.ends_with(b"\r") {
+            return Err(StoreError::Unrepresentable(
+                "a value ending in a carriage return cannot be stored as a secret file",
+            ));
+        }
+        Ok(())
+    }
+
     fn probe(&self) -> Result<(), StoreError> {
         crate::events::create_private_dir(&self.dir)
-            .map_err(|e| failed("cannot create the secrets directory", &e))
+            .map_err(|e| failed("cannot create the secrets directory", &e))?;
+        // An existing directory is reused only if it is owner-only: unix
+        // forces 0700 above, Windows judges the DACL here.
+        #[cfg(windows)]
+        {
+            let handle = crate::private_fs::open_dir(&self.dir)
+                .map_err(|e| failed("cannot open the secrets directory", &e))?;
+            crate::private_fs::judge_dir(&handle, &self.dir).map_err(|reason| {
+                StoreError::Failed(format!(
+                    "the secrets directory {} is not owner-only: {reason:?}",
+                    self.dir.display()
+                ))
+            })?;
+        }
+        Ok(())
     }
 
     fn exists(&self, name: &str) -> Result<bool, StoreError> {
