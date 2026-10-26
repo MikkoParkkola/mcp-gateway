@@ -97,9 +97,9 @@ fn compare_rows(name: &str, now: &str, keep: impl Fn(&str) -> bool) -> Outcome {
     outcome
 }
 
-/// A keyed golden (`path \t sha256 \t reading`); a row whose file is gone
-/// or edited since recording is skipped only when `reviewed_skips.tsv` lists
-/// it, as `assert_keyed_golden` does.
+/// A keyed golden (`path \t sha256 \t reading`); a row whose file is gone,
+/// or edited since recording so that it reads differently, is skipped only
+/// when `reviewed_skips.tsv` lists it, as `assert_keyed_golden` does.
 fn compare_keyed(name: &str, read: impl Fn(&str) -> String) -> Outcome {
     let allowed = deviations(name);
     let mut outcome = Outcome {
@@ -126,13 +126,15 @@ fn compare_keyed(name: &str, read: impl Fn(&str) -> String) -> Outcome {
             continue;
         };
         rows.push(path);
-        if golden::digest(text.as_bytes()) != sha {
+        let expected = allowed.get(path).map_or(recorded, String::as_str);
+        let same = read(&text) == expected;
+        // An edited file that still reads as recorded is compared, not skipped.
+        if golden::digest(text.as_bytes()) != sha && !same {
             skipped.push(path);
             continue;
         }
         outcome.compared += 1;
-        let expected = allowed.get(path).map_or(recorded, String::as_str);
-        if read(&text) != expected {
+        if !same {
             outcome.differ.push(path.to_owned());
         }
     }

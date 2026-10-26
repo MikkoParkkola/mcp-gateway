@@ -205,8 +205,8 @@ pub fn assert_skips_reviewed<'a>(
 }
 
 /// A golden keyed by input file: each row is `path \t sha256-of-file \t
-/// readings`. A row whose file is gone or whose bytes changed since the
-/// recording is skipped, and every skip must be reviewed
+/// readings`. A row whose file is gone, or whose bytes and readings both
+/// changed since the recording, is skipped, and every skip must be reviewed
 /// (`assert_skips_reviewed`). The readings of every unchanged file must
 /// match. `read` gives the readings for one file's text.
 pub fn assert_keyed_golden(name: &str, read: impl Fn(&str) -> String) {
@@ -233,11 +233,15 @@ pub fn assert_keyed_golden(name: &str, read: impl Fn(&str) -> String) {
             continue;
         };
         rows.push(path);
+        let actual = read(&text);
+        // An edited file that still reads exactly as recorded (a comment
+        // edit) is compared, not skipped; only a changed reading needs review.
         if digest(text.as_bytes()) != content {
-            skipped.push(path);
+            if actual != expected {
+                skipped.push(path);
+            }
             continue;
         }
-        let actual = read(&text);
         if actual != expected {
             differ.push(format!(
                 "{path}\n  recorded: {expected}\n  now:      {actual}"

@@ -13,6 +13,9 @@ mod golden;
 #[path = "common/yaml.rs"]
 mod yaml;
 
+#[path = "mik_8425_yaml_baseline_trees/report.rs"]
+mod trees;
+
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -116,9 +119,9 @@ fn read(path: &str) -> String {
 }
 
 /// Every file the replaced backend accepted, the seam accepts with the same
-/// document count. A recorded file edited or removed since the recording is
-/// skipped only when `reviewed_skips.tsv` lists it (there is no old backend
-/// left to re-record it with). A new file has no row, but the
+/// document count. A recorded file removed, or edited so that its tree reads
+/// differently, is skipped only when `reviewed_skips.tsv` lists it (there is
+/// no old backend left to re-record it with). A new file has no row, but the
 /// seam must still accept it, unless it is a Helm template.
 #[test]
 fn shipped_yaml_accepted_by_backend_stays_accepted() {
@@ -137,6 +140,17 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
         };
         recorded.insert(path.to_owned(), (sha.to_owned(), reading.to_owned()));
     }
+    let tree_readings: std::collections::BTreeMap<String, String> = std::fs::read_to_string(TREES)
+        .expect("the trees golden")
+        .lines()
+        .map(|row| {
+            let cols: Vec<&str> = row.splitn(3, '\t').collect();
+            let [path, _, readings] = cols[..] else {
+                panic!("{TREES}: malformed row {row:?}");
+            };
+            (path.to_owned(), readings.to_owned())
+        })
+        .collect();
     let files = shipped_files();
     assert!(!files.is_empty(), "expected to find shipped YAML files");
     let rows: Vec<String> = recorded.keys().cloned().collect();
@@ -156,7 +170,10 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
             new_files.push(format!("{path} (reads as {new_reading})"));
             continue;
         };
-        if sha != digest(&content) {
+        // A verdict is too coarse to tell a comment edit from a value edit,
+        // so an edited file is still checked only when its full `trees.tsv`
+        // reading is unchanged.
+        if sha != digest(&content) && tree_readings.get(path) != Some(&trees::readings(&content)) {
             skipped.push(path.clone());
             continue;
         }
@@ -194,6 +211,7 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
 }
 
 const GOLDEN: &str = "tests/fixtures/mik_8425_yaml/shipped.tsv";
+const TREES: &str = "tests/fixtures/mik_8425_yaml/trees.tsv";
 
 fn digest(content: &str) -> String {
     use sha2::Digest as _;
