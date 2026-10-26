@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MRTR.8b Change A — the `InFlight` table's bounded lifetime.
 //!
-//! Plan: `docs/design/2026-09-06-mrtr-8b-lifetime-test-plan.md`. Row numbers
+//! Plan: the mrtr 8b lifetime test plan. Row numbers
 //! below are that plan's. Every `now` is supplied by the test and anchored to
 //! one synthetic epoch, never `SystemTime::now()`: a `guard` that read the
 //! clock itself would answer identically to a correct one under a real-clock

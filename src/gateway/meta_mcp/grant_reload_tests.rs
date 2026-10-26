@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `MIK-7334.CATALOGUE.1` revocation conjunct — the live grant-reload trigger.
 //!
-//! Cells from `docs/internal/design/2026-09-22-live-identity-grant-reload.md`
+//! Cells from the live identity grant reload design
 //! §3. T1-T5, T2b, T3b, T7, T8, T8b, T9, T11 and R (the §4 rollback delta)
 //! are here. T6, T10b and W (the watcher entry point) need `config_reload`
 //! internals and live in `config_reload/grant_reload_trigger_tests.rs`, which

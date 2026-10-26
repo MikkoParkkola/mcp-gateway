@@ -3,12 +3,12 @@
 //! `MIK-7334.CATALOGUE.1` revocation conjunct — identity-keyed slot eviction.
 //!
 //! Cells C1–C12 of
-//! `docs/internal/design/2026-09-22-identity-keyed-slot-eviction.md` §3.2 that
+//! the identity keyed slot eviction design §3.2 that
 //! are observable at the `Backend` level. C4a/C4b live in
 //! `identity_propagation/token_exchange.rs` and C7/C8/C10a/C10b beside
 //! `cache_binding`, because both depend on private functions there.
 //!
-//! T9 of `docs/internal/design/2026-09-22-live-identity-grant-reload.md` §3 —
+//! T9 of the live identity grant reload design §3 —
 //! the cell that COMPOSES the two designs, driving the reload trigger and
 //! observing THESE slots — sits in the sibling `grant_reload_eviction_tests`.
 //! A separate file only because this one is at the 800-line ceiling; it reuses
