@@ -154,6 +154,7 @@ fn g2_every_prefix_routes_as_the_value_read_did() {
         esc("d800")
     );
     assert_eq!(json_valid::walkable(&valid), Some(true), "{valid}");
+    assert_ne!(json_valid::walkable(&invalid), Some(true), "{invalid}");
     for doc in [&valid, &invalid] {
         for end in (0..=doc.len()).filter(|&at| doc.is_char_boundary(at)) {
             routes_alike(&doc[..end]);
@@ -186,6 +187,8 @@ fn every_pair(r: &Redactor, text: &str, exempt: &dyn Fn(&str) -> bool) -> Vec<(u
 #[test]
 fn g3_the_key_cache_decides_as_every_pair_did() {
     let pass = "hunter2-long-enough";
+    // In the generic API-key rule's value class, so its keys match too.
+    let generic = "AbCdEfGhIjKlMnOpQrStUv0123";
     let underscore = esc("005f");
     let lone = esc("d800");
     let docs = [
@@ -208,10 +211,14 @@ fn g3_the_key_cache_decides_as_every_pair_did() {
             r#"{{"next_token":"{pass}","page_token":"{pass}","token":"{pass}","token" : "{pass}"}}"#
         ),
         format!(r#"{{"api_key":"{lone}","api_key":"{pass}","token":"{pass}{lone}"}}"#),
+        format!(
+            r#"{{"api{underscore}key":"{generic}","api_key":"{generic}","x_api_key":"{generic}","api_key":"short"}}"#
+        ),
     ];
     let r = redactor();
     let exempts: [&dyn Fn(&str) -> bool; 3] =
         [&|_| false, &|v| v.starts_with("hunter"), &|v| v.len() < 5];
+    let mut generic_seen = false;
     for doc in &docs {
         let literals = json_literal::string_literals(doc);
         for exempt in exempts {
@@ -221,8 +228,10 @@ fn g3_the_key_cache_decides_as_every_pair_did() {
                 .map(|(lit, family)| (lit.start(), family))
                 .collect();
             assert_eq!(cached, every_pair(&r, doc, exempt), "{doc}");
+            generic_seen |= cached.iter().any(|&(_, family)| family == Family::Generic);
         }
     }
+    assert!(generic_seen, "a generic API-key member matched");
 }
 
 /// Seeded random spans over a document of empty and short values: what each
@@ -240,6 +249,7 @@ fn g4_crossed_exempt_values_decide_as_every_exempt_value_did() {
     // xorshift64: a fixed seed, so a failure reproduces.
     let mut state = 0x2545_f491_4f6c_dd1d_u64;
     let mut next = |below: usize| {
+        assert!(below > 0, "a bound of at least one");
         state ^= state << 13;
         state ^= state >> 7;
         state ^= state << 17;
@@ -248,7 +258,21 @@ fn g4_crossed_exempt_values_decide_as_every_exempt_value_did() {
     let crosses = |found: &[(usize, usize)], holes: &[(usize, usize)]| {
         (found.iter()).any(|&(start, end)| holes.iter().any(|&(a, b)| a < end && start < b))
     };
-    for case in 0..3000 {
+    // Spans ending or starting exactly at each literal's edges, alone and
+    // touching end to end, then seeded random ones.
+    let mut sets: Vec<Vec<(usize, Vec<(usize, usize)>)>> = Vec::new();
+    for lit in &literals {
+        let (a, b) = (lit.start(), lit.end());
+        for found in [
+            vec![(a - 1, a)],
+            vec![(b, b + 1)],
+            vec![(a - 1, a), (a, b + 1)],
+            vec![(a, b.max(a + 1))],
+        ] {
+            sets.push(vec![(0, found)]);
+        }
+    }
+    for _ in 0..3000 {
         let found_by: Vec<(usize, Vec<(usize, usize)>)> = (0..=next(3))
             .map(|idx| {
                 let mut found: Vec<(usize, usize)> = (0..next(5))
@@ -261,8 +285,11 @@ fn g4_crossed_exempt_values_decide_as_every_exempt_value_did() {
                 (idx, found)
             })
             .collect();
-        let crossed = exempt_crossed(text, &literals, &found_by, &exempt);
-        for (_, found) in &found_by {
+        sets.push(found_by);
+    }
+    for (case, found_by) in sets.iter().enumerate() {
+        let crossed = exempt_crossed(text, &literals, found_by, &exempt);
+        for (_, found) in found_by {
             assert_eq!(
                 without(found, &crossed),
                 without(found, &every),
