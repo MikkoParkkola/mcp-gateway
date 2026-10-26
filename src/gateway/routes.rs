@@ -49,6 +49,7 @@ owned_routes! {
     UI_COSTS = "/ui/api/costs",
     UI_CAPABILITIES = "/ui/api/capabilities",
     UI_CAPABILITY = "/ui/api/capabilities/{name}",
+    UI_CAPABILITY_VALIDATE = "/ui/api/capabilities/{name}/validate",
     UI_CONTROL_PLANE = "/ui/api/control-plane",
     UI_CONTROL_PLANE_GRANTS = "/ui/api/control-plane/grants",
     UI_CONTROL_PLANE_POLICIES = "/ui/api/control-plane/policies",

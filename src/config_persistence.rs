@@ -75,6 +75,8 @@ pub(crate) mod comments;
 
 #[path = "config_persistence_atomic.rs"]
 mod atomic;
+#[cfg(test)]
+pub(crate) use atomic::write_atomic_observed_for_test;
 pub use atomic::{FileMode, Symlink, write_atomic};
 
 /// Take the config lock for a CLI write, waiting up to [`CLI_LOCK_WAIT`].

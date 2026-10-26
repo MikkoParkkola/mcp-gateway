@@ -18,6 +18,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "capability YAML; public definitions",
     ),
     (
+        "src/capability/file_writer.rs",
+        "capability YAML; public definitions; written under the directory lock",
+    ),
+    (
         "src/capability/openapi/convert.rs",
         "OpenAPI spec input; public",
     ),

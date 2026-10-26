@@ -3,7 +3,7 @@
 //! Capability directory loader
 
 use super::{
-    CapabilityDefinition, IssueSeverity, parse_capability_file, validate_capability,
+    CapabilityDefinition, Issue, IssueSeverity, parse_capability_file, validate_capability,
     validate_capability_definition,
 };
 use crate::{Error, Result};
@@ -153,6 +153,30 @@ pub(crate) enum IssueLog {
     Quiet,
 }
 
+/// The structural errors that make [`refuse_unloadable`] refuse `capability`,
+/// one per issue, for a caller that shows them (the capability editor).
+///
+/// # Errors
+///
+/// The legacy `validate_capability` error, which refuses before any issue.
+pub(crate) fn unloadable_issues(
+    capability: &CapabilityDefinition,
+    path: &Path,
+) -> Result<Vec<Issue>> {
+    let issues = loader_issues(capability, &path.to_string_lossy())?;
+    Ok(issues
+        .into_iter()
+        .filter(|i| i.severity == IssueSeverity::Error)
+        .collect())
+}
+
+/// Both checks behind [`refuse_unloadable`] and [`unloadable_issues`], so the
+/// two can never disagree on what loads.
+fn loader_issues(capability: &CapabilityDefinition, path: &str) -> Result<Vec<Issue>> {
+    validate_capability(capability)?;
+    Ok(validate_capability_definition(capability, Some(path)))
+}
+
 /// The checks a parsed capability file must pass to be served: the legacy
 /// `validate_capability` and the structural validator's errors. Warnings do
 /// not refuse; `log` says whether each issue is logged. The loader and the
@@ -168,9 +192,8 @@ pub(crate) fn refuse_unloadable(
     path: &Path,
     log: IssueLog,
 ) -> Result<()> {
-    validate_capability(capability)?;
     let path_str = path.to_string_lossy();
-    let issues = validate_capability_definition(capability, Some(&path_str));
+    let issues = loader_issues(capability, &path_str)?;
     for issue in issues.iter().filter(|_| log == IssueLog::EachIssue) {
         let kind = if issue.severity == IssueSeverity::Error {
             "error"

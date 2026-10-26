@@ -16,6 +16,7 @@
 //! | PUT | `/ui/api/capabilities/:name` | Validate + write YAML |
 //! | POST | `/ui/api/capabilities` | Create from template or provided YAML |
 //! | DELETE | `/ui/api/capabilities/:name` | Delete a capability file |
+//! | POST | `/ui/api/capabilities/:name/validate` | Validate only; writes nothing |
 
 use crate::gateway::routes;
 use std::path::{Path, PathBuf};
@@ -24,7 +25,7 @@ use std::sync::Arc;
 use axum::extract::{Extension, Path as AxumPath, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -33,6 +34,10 @@ use super::super::auth::AuthenticatedClient;
 use super::super::router::AppState;
 use super::errors::{admin_auth_required, structured_error};
 use super::is_admin;
+use crate::capability::file_writer::{
+    self, Base, Change, Committed, Edit, FieldError, PinChange, PinUpdate, Refused,
+};
+use crate::key_server::oidc::VerifiedIdentity;
 
 // ── Public router builder ─────────────────────────────────────────────────────
 
@@ -48,6 +53,10 @@ pub fn capabilities_router() -> Router<Arc<AppState>> {
             get(get_capability)
                 .put(put_capability)
                 .delete(delete_capability),
+        )
+        .route(
+            routes::UI_CAPABILITY_VALIDATE,
+            post(validate_capability_route),
         )
 }
 
@@ -174,6 +183,10 @@ pub struct CapabilityMeta {
     pub description: Option<String>,
     /// Absolute path to the file on disk.
     pub path: String,
+    /// `verified`, `mismatch` or `unpinned`.
+    pub pin: &'static str,
+    /// SHA-256 of the raw bytes: the editor's base for `If-Match`.
+    pub sha256: String,
 }
 
 // ── Parse helpers ─────────────────────────────────────────────────────────────
@@ -259,6 +272,8 @@ pub async fn list_capabilities(
                 size_bytes,
                 description,
                 path: path.to_string_lossy().into_owned(),
+                pin: file_writer::pin_state(&yaml),
+                sha256: file_writer::sha256_of(&yaml),
             });
         }
     }
@@ -302,7 +317,16 @@ pub async fn get_capability(
     match tokio::fs::read_to_string(&path).await {
         Ok(content) => (
             StatusCode::OK,
-            [(axum::http::header::CONTENT_TYPE, "text/yaml; charset=utf-8")],
+            [
+                (
+                    axum::http::header::CONTENT_TYPE,
+                    "text/yaml; charset=utf-8".to_owned(),
+                ),
+                (
+                    axum::http::header::ETAG,
+                    format!("\"{}\"", file_writer::sha256_of(&content)),
+                ),
+            ],
             content,
         )
             .into_response(),
@@ -315,15 +339,97 @@ pub async fn get_capability(
     }
 }
 
-/// `PUT /ui/api/capabilities/:name` — validate YAML and write to disk.
+// ── The editor's write path (the capability writer) ──────────────────────────
+
+/// How long a write waits for its directory's lock.
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The base an `If-Match` names. Strong comparison only: a weak tag or `*`
+/// names no file's bytes and never matches; a bare hash is read as the tag.
+/// `None` when the header is absent (the caller answers 428).
+fn if_match(headers: &HeaderMap) -> Option<Base> {
+    let raw = headers
+        .get(axum::http::header::IF_MATCH)?
+        .to_str()
+        .ok()?
+        .trim();
+    if raw.starts_with("W/") || raw == "*" {
+        return Some(Base::Bytes(String::new()));
+    }
+    Some(Base::Bytes(raw.trim_matches('"').to_ascii_lowercase()))
+}
+
+fn etag(sha256: &str) -> [(axum::http::HeaderName, String); 1] {
+    [(axum::http::header::ETAG, format!("\"{sha256}\""))]
+}
+
+fn not_found(name: &str) -> axum::response::Response {
+    structured_error(
+        StatusCode::NOT_FOUND,
+        "not_found",
+        format!("Capability '{name}' not found"),
+    )
+    .into_response()
+}
+
+fn precondition_required() -> axum::response::Response {
+    structured_error(
+        StatusCode::PRECONDITION_REQUIRED,
+        "precondition_required",
+        "Send If-Match with the ETag (the sha256) of the file you loaded",
+    )
+    .into_response()
+}
+
+fn pin_name(pin: PinChange) -> &'static str {
+    match pin {
+        PinChange::Kept => "kept",
+        PinChange::Updated => "updated",
+        PinChange::Added => "added",
+        PinChange::None => "none",
+    }
+}
+
+/// The editor's `capability_editor` record (D5): what changed, never the
+/// content.
+fn record_edit(
+    state: &AppState,
+    client: Option<&AuthenticatedClient>,
+    identity: Option<&VerifiedIdentity>,
+    action: &str,
+    name: &str,
+    committed: &Committed,
+) -> Result<(), axum::response::Response> {
+    let mut fields = serde_json::Map::new();
+    fields.insert("action".into(), action.into());
+    fields.insert("capability".into(), name.into());
+    fields.insert("sha256_before".into(), json!(committed.before));
+    fields.insert("sha256_after".into(), json!(committed.after));
+    fields.insert("pin".into(), pin_name(committed.pin).into());
+    super::admin_audit::record_admin_action(state, "capability_editor", client, identity, fields)
+}
+
+/// Where `name` lives, or where a new one would go: its file's directory, or
+/// the primary write directory.
+fn capability_dir(dirs: &[String], name: &str) -> Option<(PathBuf, Option<PathBuf>)> {
+    if let Some(file) = find_capability_file(dirs, name) {
+        let dir = file.parent()?.to_path_buf();
+        return Some((dir, Some(file)));
+    }
+    primary_write_dir(dirs).map(|dir| (PathBuf::from(dir), None))
+}
+
+/// `PUT /ui/api/capabilities/:name` — save through the capability writer.
 ///
 /// With `?validate=1` or an `X-Validate-Only` header it validates and writes
-/// nothing: the editor validates on blur, and a blur must never save. Either
-/// signal, with any value, means validate-only, so a caller that asked only
-/// to validate can never get a write.
+/// nothing: the classic editor validates on blur, and a blur must never save.
+/// That check runs before `If-Match`, so a blur never answers 428. A save
+/// needs `If-Match` (428 without it) and an existing file (404; `POST`
+/// creates).
 pub async fn put_capability(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
+    identity: Option<Extension<VerifiedIdentity>>,
     AxumPath(name): AxumPath<String>,
     Query(query): Query<std::collections::HashMap<String, String>>,
     headers: HeaderMap,
@@ -333,59 +439,128 @@ pub async fn put_capability(
     if !is_admin(client.as_ref()) {
         return admin_auth_required().into_response();
     }
-
     if !is_safe_name(&name) {
         return bad_name(&name).into_response();
     }
-
-    // Validate YAML structure before writing.
-    let validation = validate_yaml_body(&body);
-    if let Some(err) = validation {
-        return structured_error(StatusCode::UNPROCESSABLE_ENTITY, "validation_error", err)
-            .into_response();
-    }
+    let accounts = state.meta_mcp.account_strategies();
+    let dirs = state.capability_dirs.as_slice();
+    let Some((dir, file)) = capability_dir(dirs, &name) else {
+        return not_found(&name);
+    };
 
     if query.contains_key("validate") || headers.contains_key("x-validate-only") {
-        return Json(json!({ "status": "valid", "name": name })).into_response();
+        let path = file.unwrap_or_else(|| dir.join(format!("{name}.yaml")));
+        return match file_writer::validate(&body, &path, Some(&accounts)) {
+            Ok(()) => Json(json!({ "status": "valid", "name": name })).into_response(),
+            Err(errors) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({
+                    "error": "invalid",
+                    "message": format!("Capability '{name}' would not load"),
+                    "errors": field_errors(&errors),
+                })),
+            )
+                .into_response(),
+        };
     }
 
+    if file.is_none() {
+        return not_found(&name);
+    }
+    let Some(base) = if_match(&headers) else {
+        return precondition_required();
+    };
+    let edit = Edit {
+        dir: &dir,
+        name: &name,
+        base,
+        change: Change::Write(body),
+        pin: PinUpdate::InPlace,
+    };
+    match file_writer::commit(edit, Some(&accounts), std::time::Instant::now() + LOCK_WAIT).await {
+        Ok(committed) => {
+            let identity = identity.map(|Extension(i)| i);
+            if let Err(withheld) = record_edit(
+                &state,
+                client.as_ref(),
+                identity.as_ref(),
+                "save",
+                &name,
+                &committed,
+            ) {
+                return withheld;
+            }
+            let after = committed.after.unwrap_or_default();
+            (
+                StatusCode::OK,
+                etag(&after),
+                Json(json!({ "status": "saved", "name": name, "sha256": after })),
+            )
+                .into_response()
+        }
+        Err(refusal) => refused(&name, refusal),
+    }
+}
+
+/// `POST /ui/api/capabilities/:name/validate` — validate only (D4a). This
+/// handler has no writer: it reads the current file and answers what a save
+/// would write. The admin audit layer does not record it (by route).
+pub async fn validate_capability_route(
+    State(state): State<Arc<AppState>>,
+    client: Option<Extension<AuthenticatedClient>>,
+    AxumPath(name): AxumPath<String>,
+    body: String,
+) -> impl IntoResponse {
+    let client = client.map(|Extension(c)| c);
+    if !is_admin(client.as_ref()) {
+        return admin_auth_required().into_response();
+    }
+    if !is_safe_name(&name) {
+        return bad_name(&name).into_response();
+    }
+    let accounts = state.meta_mcp.account_strategies();
     let dirs = state.capability_dirs.as_slice();
-
-    // Find existing file, or choose primary write dir.
-    let target_path = find_capability_file(dirs, &name).unwrap_or_else(|| {
-        let dir = primary_write_dir(dirs).unwrap_or("capabilities");
-        Path::new(dir).join(format!("{name}.yaml"))
-    });
-
-    // Ensure parent directory exists.
-    if let Some(parent) = target_path.parent()
-        && let Err(e) = tokio::fs::create_dir_all(parent).await
-    {
-        return structured_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "io_error",
-            format!("Failed to create directory: {e}"),
-        )
-        .into_response();
-    }
-
-    match tokio::fs::write(&target_path, body.as_bytes()).await {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(json!({
-                "status": "saved",
-                "path": target_path.to_string_lossy(),
-                "name": name,
-            })),
-        )
-            .into_response(),
-        Err(e) => structured_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "write_error",
-            format!("Failed to write capability file: {e}"),
-        )
-        .into_response(),
-    }
+    let Some((dir, file)) = capability_dir(dirs, &name) else {
+        return not_found(&name);
+    };
+    let current = match &file {
+        Some(path) => tokio::fs::read_to_string(path).await.ok(),
+        None => None,
+    };
+    let path = file.unwrap_or_else(|| dir.join(format!("{name}.yaml")));
+    let pin_before = current.as_deref().map(file_writer::pin_state);
+    let (bytes, errors) = match file_writer::preview(&body, current.as_deref()) {
+        Ok((bytes, _)) => {
+            let errors = file_writer::validate(&bytes, &path, Some(&accounts)).err();
+            (Some(bytes), errors.unwrap_or_default())
+        }
+        Err(refusal) => {
+            let message = match refusal {
+                Refused::Unpin { .. } => "a save would remove the pin, which an edit cannot do",
+                _ => "more than one pin line, or text after a line break on the pin line",
+            };
+            (
+                None,
+                vec![FieldError {
+                    line: None,
+                    column: None,
+                    field: Some("sha256".into()),
+                    message: message.into(),
+                }],
+            )
+        }
+    };
+    let diff = bytes
+        .as_deref()
+        .map(|b| file_writer::unified_diff(current.as_deref().unwrap_or_default(), b));
+    Json(json!({
+        "valid": errors.is_empty(),
+        "errors": field_errors(&errors),
+        "diff": diff,
+        "pin": { "before": pin_before, "after": bytes.as_deref().map(file_writer::pin_state) },
+        "sha256": bytes.as_deref().map(file_writer::sha256_of),
+    }))
+    .into_response()
 }
 
 /// Request body for `POST /ui/api/capabilities`.
@@ -408,6 +583,7 @@ pub struct CreateCapabilityBody {
 pub async fn create_capability(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
+    identity: Option<Extension<VerifiedIdentity>>,
     body: Option<Json<CreateCapabilityBody>>,
 ) -> impl IntoResponse {
     let client = client.map(|Extension(c)| c);
@@ -442,15 +618,9 @@ pub async fn create_capability(
         return bad_name(&name).into_response();
     }
 
-    // Validate YAML
-    if let Some(err) = validate_yaml_body(&yaml) {
-        return structured_error(StatusCode::UNPROCESSABLE_ENTITY, "validation_error", err)
-            .into_response();
-    }
-
     let dirs = state.capability_dirs.as_slice();
 
-    // Conflict check
+    // Conflict check across every directory, not only the one written to.
     if find_capability_file(dirs, &name).is_some() {
         return structured_error(
             StatusCode::CONFLICT,
@@ -460,12 +630,8 @@ pub async fn create_capability(
         .into_response();
     }
 
-    let dir = primary_write_dir(dirs).unwrap_or("capabilities");
-    let target_path = Path::new(dir).join(format!("{name}.yaml"));
-
-    if let Some(parent) = target_path.parent()
-        && let Err(e) = tokio::fs::create_dir_all(parent).await
-    {
+    let dir = PathBuf::from(primary_write_dir(dirs).unwrap_or("capabilities"));
+    if let Err(e) = tokio::fs::create_dir_all(&dir).await {
         return structured_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "io_error",
@@ -474,304 +640,92 @@ pub async fn create_capability(
         .into_response();
     }
 
-    match tokio::fs::write(&target_path, yaml.as_bytes()).await {
-        Ok(()) => (
-            StatusCode::CREATED,
-            Json(json!({
-                "status": "created",
-                "path": target_path.to_string_lossy(),
-                "name": name,
-            })),
-        )
-            .into_response(),
-        Err(e) => structured_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "write_error",
-            format!("Failed to write capability file: {e}"),
-        )
-        .into_response(),
+    let accounts = state.meta_mcp.account_strategies();
+    let edit = Edit {
+        dir: &dir,
+        name: &name,
+        base: Base::Absent,
+        change: Change::Write(yaml),
+        pin: PinUpdate::InPlace,
+    };
+    match file_writer::commit(edit, Some(&accounts), std::time::Instant::now() + LOCK_WAIT).await {
+        Ok(committed) => {
+            let identity = identity.map(|Extension(i)| i);
+            if let Err(withheld) = record_edit(
+                &state,
+                client.as_ref(),
+                identity.as_ref(),
+                "create",
+                &name,
+                &committed,
+            ) {
+                return withheld;
+            }
+            let after = committed.after.unwrap_or_default();
+            (
+                StatusCode::CREATED,
+                etag(&after),
+                Json(json!({ "status": "created", "name": name, "sha256": after })),
+            )
+                .into_response()
+        }
+        Err(refusal) => refused(&name, refusal),
     }
 }
 
-/// `DELETE /ui/api/capabilities/:name` — remove a capability YAML file.
+/// `DELETE /ui/api/capabilities/:name` — remove the named file through the
+/// writer: `If-Match` required, never follows a link.
 pub async fn delete_capability(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
+    identity: Option<Extension<VerifiedIdentity>>,
     AxumPath(name): AxumPath<String>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     let client = client.map(|Extension(c)| c);
     if !is_admin(client.as_ref()) {
         return admin_auth_required().into_response();
     }
-
     if !is_safe_name(&name) {
         return bad_name(&name).into_response();
     }
-
     let dirs = state.capability_dirs.as_slice();
-    let Some(path) = find_capability_file(dirs, &name) else {
-        return structured_error(
-            StatusCode::NOT_FOUND,
-            "not_found",
-            format!("Capability '{name}' not found"),
-        )
-        .into_response();
+    let Some((dir, Some(_))) = capability_dir(dirs, &name) else {
+        return not_found(&name);
     };
-
-    match tokio::fs::remove_file(&path).await {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(json!({
-                "status": "deleted",
-                "name": name,
-                "path": path.to_string_lossy(),
-            })),
-        )
-            .into_response(),
-        Err(e) => structured_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "delete_error",
-            format!("Failed to delete capability file: {e}"),
-        )
-        .into_response(),
-    }
-}
-
-// ── YAML validation ───────────────────────────────────────────────────────────
-
-/// Validate YAML content for capability definitions.
-///
-/// Returns `Some(error_message)` on failure, `None` on success.
-fn validate_yaml_body(yaml: &str) -> Option<String> {
-    if yaml.trim().is_empty() {
-        return Some("YAML content must not be empty".to_owned());
-    }
-
-    // 1. Parse as generic YAML to catch syntax errors.
-    let val: crate::yaml::Value = match crate::yaml::from_str(yaml) {
-        Ok(v) => v,
-        Err(e) => return Some(format!("YAML syntax error: {e}")),
+    let Some(base) = if_match(&headers) else {
+        return precondition_required();
     };
-
-    // 2. Must be a mapping at the top level.
-    let crate::yaml::Value::Mapping(ref map) = val else {
-        return Some("YAML must be a mapping (key-value document)".to_owned());
+    let edit = Edit {
+        dir: &dir,
+        name: &name,
+        base,
+        change: Change::Delete,
+        pin: PinUpdate::InPlace,
     };
-
-    // 3. Attempt to deserialize into CapabilityDefinition.
-    let parsed = match crate::capability::parse_capability(yaml) {
-        Ok(cap) => {
-            // 4. Run structural validate_capability check.
-            if let Err(e) = crate::capability::validate_capability(&cap) {
-                return Some(format!("Capability validation error: {e}"));
+    match file_writer::commit(edit, None, std::time::Instant::now() + LOCK_WAIT).await {
+        Ok(committed) => {
+            let identity = identity.map(|Extension(i)| i);
+            if let Err(withheld) = record_edit(
+                &state,
+                client.as_ref(),
+                identity.as_ref(),
+                "delete",
+                &name,
+                &committed,
+            ) {
+                return withheld;
             }
-
-            // 5. Run AX-rules structural validator.
-            let issues = crate::capability::validate_capability_definition(&cap, None);
-            let errors: Vec<String> = issues
-                .iter()
-                .filter(|i| i.severity == crate::capability::IssueSeverity::Error)
-                .map(|i| format!("[{}] {}", i.code, i.message))
-                .collect();
-
-            if !errors.is_empty() {
-                return Some(format!("Structural errors:\n{}", errors.join("\n")));
-            }
-
-            None
+            Json(json!({ "status": "deleted", "name": name })).into_response()
         }
-        Err(e) => Some(format!("Capability parse error: {e}")),
-    };
-    if parsed.is_some() {
-        return parsed;
+        Err(refusal) => refused(&name, refusal),
     }
-
-    // 6. Basic structure checks: `name` key must be present.
-    if !map.contains_key("name") {
-        return Some("Missing required field: 'name'".to_owned());
-    }
-
-    None
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+#[path = "capabilities_answers.rs"]
+mod answers;
+use answers::{field_errors, refused};
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    // ── is_safe_name ──────────────────────────────────────────────────────────
-
-    #[test]
-    fn safe_name_accepts_lowercase_alphanumeric_hyphen_underscore() {
-        assert!(is_safe_name("my-tool"));
-        assert!(is_safe_name("github_create_issue"));
-        assert!(is_safe_name("tool123"));
-        assert!(is_safe_name("a"));
-    }
-
-    #[test]
-    fn safe_name_rejects_path_traversal_patterns() {
-        // Classic path traversal
-        assert!(!is_safe_name("../etc/passwd"));
-        assert!(!is_safe_name("../../secrets"));
-        assert!(!is_safe_name("foo/bar"));
-        assert!(!is_safe_name("foo\\bar"));
-        assert!(!is_safe_name(".hidden"));
-        assert!(!is_safe_name("foo.yaml"));
-    }
-
-    #[test]
-    fn safe_name_rejects_uppercase_and_special_chars() {
-        assert!(!is_safe_name("MyTool"));
-        assert!(!is_safe_name("tool name"));
-        assert!(!is_safe_name("tool!"));
-        assert!(!is_safe_name("tool@example"));
-        assert!(!is_safe_name("<script>"));
-    }
-
-    #[test]
-    fn safe_name_rejects_empty_and_too_long() {
-        assert!(!is_safe_name(""));
-        assert!(!is_safe_name(&"a".repeat(129)));
-    }
-
-    #[test]
-    fn safe_name_accepts_max_length_128() {
-        let name = "a".repeat(128);
-        assert!(is_safe_name(&name));
-    }
-
-    #[test]
-    fn safe_name_rejects_null_bytes() {
-        assert!(!is_safe_name("foo\0bar"));
-    }
-
-    // ── validate_yaml_body ────────────────────────────────────────────────────
-
-    #[test]
-    fn validate_yaml_body_rejects_empty() {
-        assert!(validate_yaml_body("").is_some());
-        assert!(validate_yaml_body("   ").is_some());
-    }
-
-    #[test]
-    fn validate_yaml_body_rejects_syntax_errors() {
-        let bad = "name: foo\n  bad indent\n::broken";
-        assert!(validate_yaml_body(bad).is_some());
-    }
-
-    #[test]
-    fn validate_yaml_body_accepts_valid_capability() {
-        let yaml = r#"
-fulcrum: "1.0"
-name: test_tool
-description: A test capability
-providers:
-  primary:
-    service: rest
-    config:
-      base_url: https://api.example.com
-      path: /test
-"#;
-        // parse_capability may warn but should not error on this minimal input
-        // (validate_capability requires providers.primary which is present)
-        let result = validate_yaml_body(yaml);
-        assert!(result.is_none(), "Expected no error, got: {result:?}");
-    }
-
-    /// A text with a `name:` key that does not deserialize as a capability
-    /// is refused: the parse error was computed and then discarded.
-    #[test]
-    fn validate_yaml_body_refuses_text_that_does_not_parse() {
-        let result = validate_yaml_body("name: kept\nproviders: 5\n");
-        assert!(
-            result.as_deref().is_some_and(|e| e.contains("parse error")),
-            "expected the parse error, got: {result:?}"
-        );
-    }
-
-    #[test]
-    fn validate_yaml_body_requires_name_key() {
-        let yaml = "description: no name here\n";
-        let result = validate_yaml_body(yaml);
-        assert!(result.is_some());
-    }
-
-    // ── count_tools ───────────────────────────────────────────────────────────
-
-    #[test]
-    fn count_tools_returns_zero_for_invalid_yaml() {
-        // A document that is syntactically unparseable (bad indentation / tab char)
-        let bad = "key:\n\t- broken\n  - [unterminated";
-        assert_eq!(count_tools(bad), 0);
-    }
-
-    #[test]
-    fn count_tools_returns_one_for_single_provider() {
-        let yaml = r"
-name: t
-providers:
-  primary:
-    service: rest
-";
-        assert_eq!(count_tools(yaml), 1);
-    }
-
-    #[test]
-    fn count_tools_counts_named_providers() {
-        let yaml = r"
-name: t
-providers:
-  primary:
-    service: rest
-  secondary:
-    service: rest
-";
-        assert_eq!(count_tools(yaml), 2);
-    }
-
-    // ── extract_description ───────────────────────────────────────────────────
-
-    #[test]
-    fn extract_description_returns_none_when_absent() {
-        let yaml = "name: foo\n";
-        assert_eq!(extract_description(yaml), None);
-    }
-
-    #[test]
-    fn extract_description_returns_value_when_present() {
-        let yaml = "name: foo\ndescription: Does something useful.\n";
-        assert_eq!(
-            extract_description(yaml),
-            Some("Does something useful.".to_owned())
-        );
-    }
-
-    // ── find_capability_file ──────────────────────────────────────────────────
-
-    #[test]
-    fn find_capability_file_returns_none_when_no_dirs() {
-        let result = find_capability_file(&[], "my-tool");
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn find_capability_file_returns_none_for_missing_file() {
-        let result = find_capability_file(&["/nonexistent/dir".to_owned()], "my-tool");
-        assert!(result.is_none());
-    }
-
-    // ── MIK-8639 DEPTH.2 ──────────────────────────────────────────────────────
-
-    #[test]
-    fn validate_yaml_body_refuses_deep_unread_field() {
-        let deep = format!(
-            "name: probe\nprobe: {}1{}\n",
-            "[".repeat(10_000),
-            "]".repeat(10_000)
-        );
-        let err = validate_yaml_body(&deep).expect("10k-deep YAML must be refused");
-        assert!(err.contains("nesting deeper than 128"), "got: {err}");
-    }
-}
+#[path = "capabilities_tests.rs"]
+mod tests;

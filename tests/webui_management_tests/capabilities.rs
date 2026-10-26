@@ -4,6 +4,8 @@
 
 use super::*;
 
+use super::capability_editor::{call, sha256_hex};
+
 // ── Capability tests ──────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -84,11 +86,15 @@ async fn test_capability_create_read_delete_lifecycle() {
     );
 
     // WHEN: DELETE /ui/api/capabilities/test-cap
-    let (del_status, del_body) = send_json(
+    let base = create_body["sha256"]
+        .as_str()
+        .expect("a create answers its sha256");
+    let (del_status, _, del_body) = call(
         &router,
         Method::DELETE,
         "/ui/api/capabilities/test-cap",
-        None,
+        &[("if-match", base)],
+        "",
     )
     .await;
     assert_eq!(
@@ -121,11 +127,11 @@ async fn test_capability_put_updates_content() {
         "Test capability for integration tests",
         "Updated description",
     );
-    let (put_status, put_body) = send_raw(
+    let (put_status, _, put_body) = call(
         &router,
         Method::PUT,
         "/ui/api/capabilities/updatable",
-        "text/yaml",
+        &[("if-match", &sha256_hex(VALID_YAML.as_bytes()))],
         &updated_yaml,
     )
     .await;
@@ -184,20 +190,21 @@ async fn test_capability_path_traversal_rejected() {
 
 #[tokio::test]
 async fn test_capability_invalid_yaml_rejected_on_put() {
-    // GIVEN: a temp dir
+    // GIVEN: a temp dir holding the file the save replaces
     let tmp = TempDir::new().unwrap();
     let cap_dir = tmp.path().to_str().unwrap().to_string();
+    write_owner_only(&tmp.path().join("test-invalid.yaml"), VALID_YAML).unwrap();
 
     let (state, _store) = make_app_state(Some(&cap_dir), None).await;
     let router = create_router(state);
 
     // WHEN: PUT with invalid YAML (unclosed bracket = parse error)
     let bad_yaml = "not: valid: yaml: [unclosed";
-    let (status, body) = send_raw(
+    let (status, _, body) = call(
         &router,
         Method::PUT,
         "/ui/api/capabilities/test-invalid",
-        "text/plain",
+        &[("if-match", &sha256_hex(VALID_YAML.as_bytes()))],
         bad_yaml,
     )
     .await;

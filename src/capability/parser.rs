@@ -40,15 +40,29 @@ pub async fn parse_capability_file(path: &std::path::Path) -> Result<CapabilityD
             path.display()
         ))
     })?;
+    parse_capability_text(&content, path)
+}
 
-    let mut capability = parse_capability(&content)?;
+/// [`parse_capability_file`] over text already in hand: parse, pin check and
+/// the name from `path`'s stem. The editor's writer and validate route accept
+/// exactly what the loader accepts because both come through here.
+///
+/// # Errors
+///
+/// Returns an error if `content` is not a valid capability or its embedded
+/// `sha256:` pin does not match it.
+pub(crate) fn parse_capability_text(
+    content: &str,
+    path: &std::path::Path,
+) -> Result<CapabilityDefinition> {
+    let mut capability = parse_capability(content)?;
 
     // ── Rug-pull guard: SHA-256 pin verification ────────────────────────────
     //
     // Computed over the file content with CRLF read as LF and the top-level
     // `sha256:` line stripped, so pinning is stable across `cap pin` rewrites
     // and line-ending conversion.
-    let actual_hash = compute_capability_hash(&content);
+    let actual_hash = compute_capability_hash(content);
     match capability.sha256.as_deref() {
         Some(expected) if !expected.eq_ignore_ascii_case(&actual_hash) => {
             return Err(Error::CapabilityHashMismatch {

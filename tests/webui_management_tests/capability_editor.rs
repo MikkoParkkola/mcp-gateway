@@ -8,7 +8,7 @@ use mcp_gateway::capability::{compute_capability_hash, rewrite_with_pin};
 use sha2::{Digest, Sha256};
 
 /// Send `body` with `headers` as the admin; `(status, ETag, JSON body)`.
-async fn call(
+pub(super) async fn call(
     router: &Router,
     method: Method,
     uri: &str,
@@ -43,7 +43,7 @@ async fn call(
     )
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(super) fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
