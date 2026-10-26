@@ -343,8 +343,8 @@ src/identity_propagation/account_strategies.rs	declared_installed	1	critical	a	A
 src/identity_propagation/account_strategies.rs	mint	1	critical	a	AccountStrategyRegistry::mint	An external descriptor mints only for a verified caller
 src/identity_propagation/account_strategies.rs	principal	1	critical	a	AccountStrategyRegistry::principal	Who a dispatch is made as; external needs a verified identity
 src/identity_propagation/account_strategies.rs	published_lifetime_open	1	critical	d	PreparedAccountCredential::published_lifetime_open	Expiry check; an external credential must be strictly unexpired
-src/identity_propagation/account_strategies.rs	resolve	1	critical	a/d	AccountStrategyRegistry::resolve	Refuses with no principal; refuses an already-expired external credential
-src/identity_propagation/account_strategies.rs	revalidate	1	critical	a/c/d	AccountStrategyRegistry::revalidate	Rechecks descriptor, provider, strategy, audience, actor and lifetime, plus durable lease
+src/identity_propagation/account_strategies_resolve.rs	resolve	1	critical	a/d	AccountStrategyRegistry::resolve	Refuses with no principal; refuses an already-expired external credential
+src/identity_propagation/account_strategies_resolve.rs	revalidate	1	critical	a/c/d	AccountStrategyRegistry::revalidate	Rechecks descriptor, provider, strategy, audience, actor and lifetime, plus durable lease
 src/identity_propagation/account_strategies.rs	validate_and_audit_mint	1	critical	d	AccountStrategyRegistry::validate_and_audit_mint	Refuses empty or invalid headers, and a required mint without a durable audit
 src/identity_propagation/account_strategies.rs	install	1	standard	borderline	AccountStrategyRegistry::install	Records the declared mode the resolver trusts
 src/identity_propagation/caller_proof.rs	classify	1	critical	a	CallerProvenance::classify	Empty or absent credential principal maps to Anonymous

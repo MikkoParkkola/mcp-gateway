@@ -27,20 +27,21 @@ mod yaml;
 #[path = "mik_8425_yaml_baseline_trees/report.rs"]
 mod report;
 
-use report::{MIN_COMPARED, ROOT_FILES, ROOTS, paths, readings};
+use report::{ROOT_FILES, ROOTS, paths, readings};
 
 /// Every unchanged repository YAML file reads exactly as `serde-yaml` 0.9.34
 /// read it when the golden was recorded.
 #[test]
 fn every_repository_yaml_file_reads_as_recorded() {
-    golden::assert_keyed_golden("trees.tsv", MIN_COMPARED, readings);
+    golden::assert_keyed_golden("trees.tsv", readings);
 }
 
 /// Compares the recorded paths with the YAML files on disk, and requires
 /// every root to be represented. A file added after the recording has no
-/// row and is NOT baselined: it is listed here, and MIG.2 re-records the
-/// golden on the last commit that still has `serde-yaml`. Failing on every new
-/// file would break unrelated PRs that add a capability.
+/// row and is NOT baselined: it is listed here. `serde-yaml` left the build
+/// with the backend swap, so no new row can be recorded; the new backend
+/// still reads every tree in the MIG.2 parity suite's P6 round trip.
+/// Failing on every new file would break unrelated PRs that add a capability.
 #[test]
 fn the_golden_is_compared_with_the_yaml_files_on_disk() {
     let recorded =
@@ -68,10 +69,6 @@ fn the_golden_is_compared_with_the_yaml_files_on_disk() {
     for file in ROOT_FILES {
         assert!(recorded.contains(*file), "{file} not recorded");
     }
-    assert!(
-        recorded.intersection(&on_disk).count() >= MIN_COMPARED,
-        "fewer than {MIN_COMPARED} recorded files still exist; re-record the golden"
-    );
 }
 
 /// Prints the golden for review; never part of a normal run.
