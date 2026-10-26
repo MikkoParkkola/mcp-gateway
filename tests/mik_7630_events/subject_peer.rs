@@ -34,6 +34,9 @@ struct Inner {
     seen: Vec<Request>,
     streams: Vec<(String, mpsc::UnboundedSender<String>)>,
     subscribed: BTreeMap<String, Vec<String>>,
+    /// Subjects whose session the peer dropped: their next request that
+    /// carries a session id is answered 404, as a backend that lost it.
+    expired: std::collections::BTreeSet<String>,
 }
 
 #[derive(Clone, Default)]
@@ -90,12 +93,24 @@ impl SubjectPeer {
             axum::routing::post(
                 move |headers: HeaderMap, axum::Json(frame): axum::Json<Value>| {
                     let state = post_state.clone();
-                    async move { answer(&state, &subject_of(&headers), &frame) }
+                    async move {
+                        let subject = subject_of(&headers);
+                        if lost_session(&state, &subject, &headers) {
+                            return axum::http::StatusCode::NOT_FOUND.into_response();
+                        }
+                        answer(&state, &subject, &frame)
+                    }
                 },
             )
             .get(move |headers: HeaderMap| {
                 let state = get_state.clone();
-                async move { stream(&state, subject_of(&headers)) }
+                async move {
+                    let subject = subject_of(&headers);
+                    if lost_session(&state, &subject, &headers) {
+                        return axum::http::StatusCode::NOT_FOUND.into_response();
+                    }
+                    stream(&state, subject)
+                }
             }),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -121,6 +136,16 @@ impl SubjectPeer {
         })
     }
 
+    /// Drop `subject`'s session as a restarted backend would: its open streams
+    /// end, and its next request carrying a session id is answered 404, so a
+    /// client must initialize again.
+    pub fn expire_session(&self, subject: &str) {
+        self.state.with(|s| {
+            s.streams.retain(|(who, _)| who != subject);
+            s.expired.insert(subject.to_owned());
+        });
+    }
+
     /// Send `method` to `subject`'s open streams only, as the backend would
     /// when that user's view changed. A resource update goes only where that
     /// subject subscribed to the URI.
@@ -144,6 +169,11 @@ impl SubjectPeer {
             }
         });
     }
+}
+
+/// Whether this request rides a session the peer dropped; it is refused once.
+fn lost_session(state: &State, subject: &str, headers: &HeaderMap) -> bool {
+    headers.contains_key("mcp-session-id") && state.with(|s| s.expired.remove(subject))
 }
 
 fn reply(id: &Value, result: &Value) -> Response {

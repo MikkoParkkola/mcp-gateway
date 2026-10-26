@@ -244,3 +244,67 @@ async fn iso_t6_a_revoked_user_holds_no_listener_open() {
     );
     assert!(peer.open_streams("u2") > 0, "u2 keeps its listener");
 }
+
+/// Requests from index `from` on that carried no user's own subject.
+fn as_anyone_else(peer: &SubjectPeer, from: usize) -> Vec<subject_peer::Request> {
+    peer.seen()
+        .into_iter()
+        .skip(from)
+        .filter(|r| !["u1", "u2"].contains(&r.subject.as_str()))
+        .collect()
+}
+
+/// ISO-T7: a required backend is never reached as the gateway for a per-user
+/// listener. Every request after the users subscribe carries a user's own
+/// subject: the listener's cold start, its stream, and the re-initialization
+/// after the backend drops one user's session.
+#[tokio::test]
+async fn iso_t7_a_per_user_listener_only_ever_presents_its_users_credential() {
+    let root = tempfile::tempdir().expect("root");
+    let issuer = issuer::Issuer::start(root.path()).await;
+    let rx = Receiver::start(root.path()).await;
+    let peer = SubjectPeer::start().await;
+    let gw = start(root.path(), &rx, &issuer, signed_backend(&peer), &[]).await;
+    let from = peer.seen().len();
+    for user in ["u1", "u2"] {
+        let bearer = issuer.mint(user, &email(user));
+        sub(&gw, &bearer, TOOLS, &rx, json!({})).await;
+        listening(&peer, &gw, user).await;
+    }
+    let cold: Vec<_> = peer.seen().into_iter().skip(from).collect();
+    for user in ["u1", "u2"] {
+        assert!(
+            cold.iter()
+                .any(|r| r.subject == user && r.method == "initialize"),
+            "{user}'s listener initialized as {user}: {cold:?}"
+        );
+    }
+    assert!(
+        as_anyone_else(&peer, from).is_empty(),
+        "cold start: {:?}",
+        as_anyone_else(&peer, from)
+    );
+
+    let before = peer.seen().len();
+    peer.expire_session("u1");
+    let recovered = wait_until(DEADLINE, || {
+        peer.open_streams("u1") > 0
+            && peer
+                .seen()
+                .iter()
+                .skip(before)
+                .any(|r| r.subject == "u1" && r.method == "initialize")
+    })
+    .await;
+    assert!(
+        recovered,
+        "u1's listener re-initialized after its session was dropped; peer saw {:?}\n{}",
+        peer.seen(),
+        gw.logs()
+    );
+    assert!(
+        as_anyone_else(&peer, from).is_empty(),
+        "after recovery: {:?}",
+        as_anyone_else(&peer, from)
+    );
+}
