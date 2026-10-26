@@ -76,7 +76,7 @@ fn spend(kc: &KeyCost, rec: &CostRecord) {
 
 #[test]
 fn key_cost_window_totals_exclude_old_records() {
-    let kc = KeyCost::new("k1", BudgetConfig::default());
+    let kc = KeyCost::new("k1");
     // Insert a record manually with a very old timestamp
     let mut old_rec = CostRecord::new("s", "t", 9_999, 15.0);
     old_rec.timestamp = Some(1); // epoch + 1 second — definitely older than 24 h
@@ -91,51 +91,8 @@ fn key_cost_window_totals_exclude_old_records() {
 }
 
 #[test]
-fn key_cost_budget_status_ok_when_no_limit() {
-    let kc = KeyCost::new(
-        "k2",
-        BudgetConfig {
-            hard_limit_usd: None,
-            ..Default::default()
-        },
-    );
-    spend(&kc, &CostRecord::new("s", "t", 1_000_000, 15.0)); // $15
-    assert_eq!(kc.budget_status(), BudgetStatus::Ok);
-}
-
-#[test]
-fn key_cost_budget_status_warning_at_80_percent() {
-    let kc = KeyCost::new(
-        "k3",
-        BudgetConfig {
-            hard_limit_usd: Some(10.0),
-            warning_fraction: 0.8,
-            window: BudgetWindow::Day,
-        },
-    );
-    // $8.5 = 85 % of $10 → Warning
-    spend(&kc, &CostRecord::new("s", "t", 566_667, 15.0)); // ≈ $8.50
-    let status = kc.budget_status();
-    assert!(matches!(status, BudgetStatus::Warning { .. }));
-}
-
-#[test]
-fn key_cost_budget_status_exceeded_at_100_percent() {
-    let kc = KeyCost::new(
-        "k4",
-        BudgetConfig {
-            hard_limit_usd: Some(1.0),
-            warning_fraction: 0.8,
-            window: BudgetWindow::Day,
-        },
-    );
-    spend(&kc, &CostRecord::new("s", "t", 100_000, 15.0)); // $1.50
-    assert!(matches!(kc.budget_status(), BudgetStatus::Exceeded { .. }));
-}
-
-#[test]
 fn key_cost_keeps_no_bucket_for_spend_past_the_month() {
-    let kc = KeyCost::new("k5", BudgetConfig::default());
+    let kc = KeyCost::new("k5");
     let mut old = CostRecord::new("s", "t", 100, 15.0);
     old.timestamp = Some(1);
     spend(&kc, &old);
@@ -173,29 +130,6 @@ fn cost_tracker_session_without_key() {
     assert!(tracker.session_snapshot("session-anon").is_some());
     // No key entry created
     assert_eq!(tracker.per_key.len(), 0);
-}
-
-#[test]
-fn cost_tracker_check_budget_ok_for_unknown_key() {
-    let tracker = CostTracker::new();
-    assert_eq!(tracker.check_budget("nonexistent"), BudgetStatus::Ok);
-}
-
-#[test]
-fn cost_tracker_check_budget_exceeded() {
-    let tracker = CostTracker::new();
-    tracker.set_key_budget(
-        "bob",
-        BudgetConfig {
-            hard_limit_usd: Some(0.001),
-            ..Default::default()
-        },
-    );
-    tracker.record("s", Some("bob"), "srv", "t", 100, 15.0); // > $0.001
-    assert!(matches!(
-        tracker.check_budget("bob"),
-        BudgetStatus::Exceeded { .. }
-    ));
 }
 
 #[test]
@@ -342,7 +276,7 @@ fn many_calls_in_one_session_hold_a_bounded_number_of_entries() {
 #[test]
 fn a_key_idle_for_a_month_reports_zero_windows_but_keeps_its_tool_rows() {
     // GIVEN: a key whose only spend was 31 days ago
-    let kc = KeyCost::new("idle", BudgetConfig::default());
+    let kc = KeyCost::new("idle");
     let mut old = CostRecord::new("srv", "t", 7, 15.0);
     old.timestamp = Some(crate::clock::unix_secs().expect("a readable clock") - 31 * 86_400);
     spend(&kc, &old);
@@ -360,25 +294,19 @@ fn a_key_idle_for_a_month_reports_zero_windows_but_keeps_its_tool_rows() {
 }
 
 #[test]
-fn the_sweep_drops_idle_keys_and_keeps_budgeted_ones() {
+fn the_sweep_drops_idle_keys_and_keeps_active_ones() {
     let tracker = CostTracker::new();
     let month_ago = crate::clock::unix_secs().expect("a readable clock") - 31 * 86_400;
-    // GIVEN: an idle key, and an idle key with a set budget
-    tracker.set_key_budget("budgeted", BudgetConfig::default());
-    for name in ["idle", "budgeted"] {
-        let key = tracker.per_key.get(name).map(|k| Arc::clone(&k));
-        let key = key.unwrap_or_else(|| {
-            let fresh = Arc::new(KeyCost::new(name, BudgetConfig::default()));
-            tracker.per_key.insert(name.to_string(), Arc::clone(&fresh));
-            fresh
-        });
-        key.last_spend.store(month_ago, Ordering::Relaxed);
-    }
+    // GIVEN: a key idle for a month
+    let idle = Arc::new(KeyCost::new("idle"));
+    tracker
+        .per_key
+        .insert("idle".to_string(), Arc::clone(&idle));
+    idle.last_spend.store(month_ago, Ordering::Relaxed);
     // WHEN: another key spends, which runs the due sweep
     tracker.record("", Some("active"), "srv", "t", 1, 15.0);
-    // THEN: the idle key is gone; the budgeted and the active keys stay
+    // THEN: the idle key is gone; the active key stays
     assert!(tracker.key_snapshot("idle").is_none());
-    assert!(tracker.key_snapshot("budgeted").is_some());
     assert!(tracker.key_snapshot("active").is_some());
 }
 
@@ -397,32 +325,4 @@ fn key_and_session_breakdowns_fold_tools_past_the_cap() {
         assert_eq!(by_tool.iter().map(|row| row.call_count).sum::<u64>(), 300);
     }
     assert_eq!(session.call_count, 300);
-}
-
-#[test]
-fn setting_a_budget_on_a_spending_key_keeps_its_spend_and_shields_it() {
-    // GIVEN: a key that has spent, idle for a month on the sweep's clock
-    let tracker = CostTracker::new();
-    tracker.record("", Some("k"), "srv", "t", 40, 15.0);
-    let limited = BudgetConfig {
-        hard_limit_usd: Some(5.0),
-        ..BudgetConfig::default()
-    };
-    // WHEN: a budget is set on it
-    tracker.set_key_budget("k", limited);
-    let key = tracker.per_key.get("k").map(|k| Arc::clone(&k)).unwrap();
-    key.last_spend.store(
-        crate::clock::unix_secs().expect("a readable clock") - 31 * 86_400,
-        Ordering::Relaxed,
-    );
-    // The first record ran the sweep: make the next one due again
-    tracker.next_key_sweep.store(0, Ordering::Relaxed);
-    tracker.record("", Some("other"), "srv", "t", 1, 15.0);
-    // THEN: the spend moved across, the budget applies, and the sweep kept it
-    let snap = tracker
-        .key_snapshot("k")
-        .expect("a budgeted key is never swept");
-    assert_eq!(snap.window_24h.tokens, Some(40));
-    assert_eq!(snap.by_tool[0].token_count, 40);
-    assert_eq!(snap.hard_limit_usd, Some(5.0));
 }
