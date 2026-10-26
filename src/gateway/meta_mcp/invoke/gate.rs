@@ -524,7 +524,12 @@ impl MetaMcp {
         crate::gateway::meta_mcp::visible::memo::record_absent(server, tool);
         let scoped = self.scoped(caller.scope().authorizer.backend_grant());
         if scoped.absence(server) == Some(Absence::OutOfScope) {
-            note_denial_code(server, tool, -32003);
+            note_denial_code(
+                server,
+                tool,
+                -32003,
+                Some(crate::security::decision_record::DecisionKind::BackendScope),
+            );
         }
         self.record_withheld(server, tool, Withholding::Absent, caller, session_id)
             .await;
@@ -579,7 +584,12 @@ impl MetaMcp {
         if let Some(refusal) = &refusal {
             // The call's one record names it (MIK-8361); a code the route
             // stage kept first stands.
-            note_denial_code(server, tool, refusal.to_rpc_code());
+            note_denial_code(
+                server,
+                tool,
+                refusal.to_rpc_code(),
+                crate::gateway::meta_mcp::invoke::audit::current_refusal_kind(),
+            );
         }
         if let Some(cap) = self.get_capabilities()
             && server == cap.name

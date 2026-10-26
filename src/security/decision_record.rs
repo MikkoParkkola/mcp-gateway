@@ -39,7 +39,58 @@ pub(crate) enum DecisionKind {
     DefaultAllow,
     /// A refusal whose check noted no kind: never `default_allow`.
     Unrecorded,
+    /// The target matches nothing: no backend or tool by that name.
+    NotFound,
 }
+
+impl DecisionKind {
+    /// Whether a refusal of this kind can answer the caller as an absent
+    /// name; a caller-scoped view shows all of these as one line, so a
+    /// record cannot tell a missing target from a withheld one.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "wired in the receipt reader, this PR; removed before push"
+        )
+    )]
+    pub(crate) const fn can_look_absent(self) -> bool {
+        matches!(
+            self,
+            Self::NotFound
+                | Self::BackendScope
+                | Self::ClientToolScope
+                | Self::DescriptorBlock
+                | Self::ToolPolicy
+                | Self::RoutingProfile
+        )
+    }
+}
+
+/// Who reads a decision: an operator (Admin, Auditor) sees the true kind and
+/// rule; a caller reading its own records sees no existence oracle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired in the receipt reader, this PR; removed before push"
+    )
+)]
+pub(crate) enum Viewer {
+    Operator,
+    CallerScoped,
+}
+
+/// The one line a caller-scoped view shows for every absent-looking refusal.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired in the receipt reader, this PR; removed before push"
+    )
+)]
+pub(crate) const NOT_AVAILABLE: &str = "refused: not available to you";
 
 /// What the tool's own annotations say the call could change. A claim by the
 /// tool, never a gateway guarantee.
@@ -132,6 +183,17 @@ impl Noted {
     /// Whether a gate refused.
     pub(crate) const fn has_refusal(&self) -> bool {
         self.refusal.is_some()
+    }
+
+    /// The check that refused, if one did.
+    pub(crate) fn refusal_kind(&self) -> Option<DecisionKind> {
+        self.refusal.as_ref().map(|(kind, _)| *kind)
+    }
+
+    /// The check a request's memo kept for this target: it names the refusal
+    /// the record's outcome code came from, so it wins over any later note.
+    pub(crate) fn refused_by_memo(&mut self, kind: DecisionKind) {
+        self.refusal = Some((kind, None));
     }
 
     /// The gate that refused; only the first one counts.
@@ -241,6 +303,7 @@ pub(crate) fn rule_line(decision: &Decision) -> &'static str {
         (DecisionKind::Unrecorded, _) => {
             "refused; the check was not recorded by this gateway version"
         }
+        (DecisionKind::NotFound, _) => "refused: no such backend or tool",
         (_, true) => "decided by the rule named below",
         (_, false) => "rule not recorded for this check",
     }
@@ -260,6 +323,40 @@ pub(crate) fn findings_line(decision: Option<&Decision>) -> &'static str {
         None => "findings not recorded by this gateway version",
         Some(found) if found.is_empty() => "none",
         Some(_) => "listed below",
+    }
+}
+
+/// The decision as `viewer` may see it: a caller-scoped view of an
+/// absent-looking refusal keeps neither its kind nor its rule.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired in the receipt reader, this PR; removed before push"
+    )
+)]
+pub(crate) fn line_for(decision: &Decision, viewer: Viewer) -> &'static str {
+    if viewer == Viewer::CallerScoped && decision.kind.can_look_absent() {
+        NOT_AVAILABLE
+    } else {
+        rule_line(decision)
+    }
+}
+
+/// The rule id `viewer` may see: none for a caller-scoped view of an
+/// absent-looking refusal.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired in the receipt reader, this PR; removed before push"
+    )
+)]
+pub(crate) fn rule_for(decision: &Decision, viewer: Viewer) -> Option<&str> {
+    if viewer == Viewer::CallerScoped && decision.kind.can_look_absent() {
+        None
+    } else {
+        decision.rule_id.as_deref()
     }
 }
 

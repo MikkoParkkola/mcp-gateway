@@ -349,7 +349,12 @@ impl MetaMcp {
         let recorded_trace = trace_id.clone();
         let recorded = trace::with_trace_id(trace_id, async move {
             if absence == Some(crate::gateway::meta_mcp::scoped_backends::Absence::OutOfScope) {
-                crate::gateway::meta_mcp::visible::memo::note_denial_code(server, tool, -32003);
+                crate::gateway::meta_mcp::visible::memo::note_denial_code(
+                    server,
+                    tool,
+                    -32003,
+                    Some(crate::security::decision_record::DecisionKind::BackendScope),
+                );
             }
             let missing = Err(Error::BackendNotFound(server.to_owned()));
             self.audit_invocation(

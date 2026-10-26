@@ -152,7 +152,12 @@ async fn guard_tool_call(
     let (withheld_code, withheld) = withheld_verdict(state, auth, target, (backend, session_id));
     if let Some(code) = withheld_code {
         // The call's one record names it (MIK-8361).
-        crate::gateway::meta_mcp::visible::memo::note_denial_code(backend_name, tool_name, code);
+        crate::gateway::meta_mcp::visible::memo::note_denial_code(
+            backend_name,
+            tool_name,
+            code,
+            crate::gateway::meta_mcp::invoke::audit::current_refusal_kind(),
+        );
         warn!(backend = %backend_name, tool = %tool_name, "Tool withheld by authorization; answered as absent");
     }
 

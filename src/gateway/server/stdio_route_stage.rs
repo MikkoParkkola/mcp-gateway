@@ -184,6 +184,7 @@ fn authorize_targets(
                             checked.server,
                             checked.tool,
                             withheld.to_rpc_code(),
+                            crate::gateway::meta_mcp::invoke::audit::current_refusal_kind(),
                         );
                     }
                 })

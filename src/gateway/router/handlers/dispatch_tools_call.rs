@@ -224,6 +224,7 @@ pub(super) async fn tools_call(
                             checked.server,
                             checked.tool,
                             code,
+                            crate::gateway::meta_mcp::invoke::audit::current_refusal_kind(),
                         );
                     } else {
                         refused.note_withheld(state, checked, code).await;

@@ -319,7 +319,12 @@ pub(super) async fn read_envelope(
             && method == "tools/call"
             && let Some(tool) = tool
         {
-            crate::gateway::meta_mcp::visible::memo::note_denial_code(name, tool, -32003);
+            crate::gateway::meta_mcp::visible::memo::note_denial_code(
+                name,
+                tool,
+                -32003,
+                Some(crate::security::decision_record::DecisionKind::BackendScope),
+            );
         }
         if absence == crate::gateway::meta_mcp::scoped_backends::Absence::OutOfScope {
             crate::gateway::meta_mcp::invoke::audit::note_refused_by(

@@ -81,7 +81,9 @@ pub(crate) struct DispatchNotes {
 mod decision;
 #[path = "audit_replay.rs"]
 mod replay;
-pub(crate) use decision::{note_refused_by, take_route_noted, with_route_scope};
+pub(crate) use decision::{
+    current_refusal_kind, note_refused_by, take_route_noted, with_route_scope,
+};
 
 /// Most process notes one record carries (a playbook may run many).
 const MAX_PROCESS_NOTES: usize = 16;
@@ -482,7 +484,7 @@ impl MetaMcp {
         caller: &MetaMcpCallerContext<'_>,
         trace_id: &str,
         result: Result<Value>,
-        notes: DispatchNotes,
+        mut notes: DispatchNotes,
     ) -> Result<Value> {
         // D4: counted before the log check, so auth off still counts.
         let withheld = super::gate::count_meta_denial(args, &result);
@@ -493,6 +495,18 @@ impl MetaMcp {
             return result;
         };
         let outcome = notes.outcome(outcome);
+        // A withheld target's record carries the memo's code, so its check.
+        if withheld.is_some()
+            && let Some(kind) = args
+                .get("server")
+                .and_then(Value::as_str)
+                .zip(args.get("tool").and_then(Value::as_str))
+                .and_then(|(server, tool)| {
+                    crate::gateway::meta_mcp::visible::memo::denial_kind(server, tool)
+                })
+        {
+            notes.refused_by_memo(kind);
+        }
         let decision = notes.decided(self, outcome);
         // MIK-7116.MIN.1: the tool's own arguments, as the firewall walks them.
         let arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments(args);

@@ -43,6 +43,21 @@ tokio::task_local! {
     static ROUTE: RefCell<crate::security::decision_record::Noted>;
 }
 
+/// The check noted as refusing so far: the dispatch's, else the route
+/// stage's. Read, not taken.
+pub(crate) fn current_refusal_kind() -> Option<crate::security::decision_record::DecisionKind> {
+    super::NOTES
+        .try_with(|notes| notes.borrow().decision.refusal_kind())
+        .ok()
+        .flatten()
+        .or_else(|| {
+            ROUTE
+                .try_with(|route| route.borrow().refusal_kind())
+                .ok()
+                .flatten()
+        })
+}
+
 /// Run a request's route stage with a decision scope of its own.
 pub(crate) async fn with_route_scope<F: std::future::Future>(future: F) -> F::Output {
     ROUTE
@@ -63,6 +78,12 @@ pub(crate) fn take_route_noted() -> crate::security::decision_record::Noted {
 }
 
 impl DispatchNotes {
+    /// The check the request's memo kept for a withheld target: it names
+    /// the refusal the record's outcome code came from.
+    pub(crate) fn refused_by_memo(&mut self, kind: crate::security::decision_record::DecisionKind) {
+        self.decision.refused_by_memo(kind);
+    }
+
     /// The decision object for this call's record: a cache hit ran no gate,
     /// so it was not decided again.
     pub(crate) fn decided(

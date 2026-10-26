@@ -134,3 +134,37 @@ fn the_wire_names_are_the_agreed_ones() {
     assert!(v.get("rule_id").is_none(), "absent, not null");
     assert!(v.get("audit_required").is_none() && v.get("rollback_applies").is_none());
 }
+
+#[test]
+fn api2a_7_a_caller_scoped_view_cannot_tell_missing_from_withheld() {
+    use super::{NOT_AVAILABLE, Viewer, line_for, rule_for};
+    let missing = decision(DecisionKind::NotFound, None);
+    let withheld = decision(
+        DecisionKind::BackendScope,
+        Some("backend_scope:3f9a0c12be47"),
+    );
+    let policy = decision(DecisionKind::ToolPolicy, Some("tool_policy:51c7e09d2a84"));
+    for d in [&missing, &withheld, &policy] {
+        assert_eq!(
+            line_for(d, Viewer::CallerScoped),
+            NOT_AVAILABLE,
+            "{:?}",
+            d.kind
+        );
+        assert_eq!(rule_for(d, Viewer::CallerScoped), None, "{:?}", d.kind);
+    }
+    assert_eq!(
+        line_for(&missing, Viewer::Operator),
+        "refused: no such backend or tool"
+    );
+    assert_eq!(
+        rule_for(&withheld, Viewer::Operator),
+        Some("backend_scope:3f9a0c12be47")
+    );
+    let firewall = decision(DecisionKind::Firewall, Some("firewall:9e2b47d0c615"));
+    assert_eq!(
+        rule_for(&firewall, Viewer::CallerScoped),
+        Some("firewall:9e2b47d0c615"),
+        "a refusal that never looks absent keeps its rule"
+    );
+}

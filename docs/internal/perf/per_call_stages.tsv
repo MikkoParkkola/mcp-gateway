@@ -63,7 +63,9 @@ src/gateway/meta_mcp/invoke/admin.rs	run_playbook	-	gateway_run_playbook meta-to
 src/gateway/meta_mcp/invoke/admin.rs	set_playbook_engine	-	startup wiring, set once when the gateway is built
 src/gateway/meta_mcp/invoke/admin.rs	webhook_status	-	gateway_webhook_status meta-tool only, not the tools/call path
 src/gateway/meta_mcp/invoke/audit_replay.rs	audit_replay	-	on-path, untimed: replayed executions only; the timed rows execute fresh
+src/gateway/meta_mcp/invoke/audit_decision.rs	current_refusal_kind	-	on-path, untimed: withheld targets only; the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/audit_decision.rs	decided	-	on-path, untimed: the invocation record's decision, built only with a transparency logger, which the harness does not configure
+src/gateway/meta_mcp/invoke/audit_decision.rs	refused_by_memo	-	on-path, untimed: withheld targets only; the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/audit_decision.rs	note_allowed_by	-	on-path, untimed: an explicit allow rule's note; the timed calls match no explicit allow rule
 src/gateway/meta_mcp/invoke/audit_decision.rs	note_decision	-	on-path, untimed: called only by note_refused_by and note_allowed_by
 src/gateway/meta_mcp/invoke/audit_decision.rs	note_refused_by	-	on-path, untimed: refusals only; the timed rows are allowed calls
