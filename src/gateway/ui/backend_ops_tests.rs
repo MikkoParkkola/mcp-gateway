@@ -567,3 +567,85 @@ mod stop_when_idle_ui_tests {
         );
     }
 }
+
+// ── secret references (ADR-028, MIK-8908 B3) ─────────────────────────────
+
+const GONE: &str = "file:/nonexistent/mcp-gateway-b3/token";
+
+fn env(key: &str, value: &str) -> HashMap<String, String> {
+    HashMap::from([(key.to_string(), value.to_string())])
+}
+
+#[test]
+fn b3i_add_refuses_a_reference_that_does_not_resolve_and_writes_nothing() {
+    let mut cfg = empty_config();
+    let refused = add_backend(
+        &mut cfg,
+        "tool",
+        stdio_transport("node server.js"),
+        String::new(),
+        env("API_KEY", GONE),
+    )
+    .expect_err("an unresolvable reference is refused");
+    assert!(refused.contains(UNRESOLVED_SECRETS), "{refused}");
+    assert!(refused.contains("backends.tool.env.API_KEY"), "{refused}");
+    assert!(cfg.backends.is_empty(), "the backend went in anyway");
+}
+
+#[test]
+fn b3i_a_disabled_add_is_checked_too_and_an_unset_template_still_adds_disabled() {
+    let mut cfg = empty_config();
+    let backend = BackendConfig {
+        enabled: false,
+        transport: stdio_transport("node server.js"),
+        env: env("API_KEY", GONE),
+        ..Default::default()
+    };
+    let refused = super::add_backend(
+        &mut cfg,
+        "off",
+        ResolvedBackend {
+            backend,
+            entry: None,
+        },
+    )
+    .expect_err("checked while disabled");
+    assert!(refused.contains(UNRESOLVED_SECRETS), "{refused}");
+    // MIK-7816 is unchanged: an unset ${VAR} adds the backend disabled.
+    let notes = add_backend(
+        &mut cfg,
+        "templated",
+        stdio_transport("node server.js"),
+        String::new(),
+        env("API_KEY", "${MCP_GW_B3_SURELY_UNSET}"),
+    );
+    assert!(notes.is_ok(), "{notes:?}");
+    assert!(!cfg.backends["templated"].enabled);
+}
+
+#[test]
+fn b3i_update_refuses_a_reference_that_does_not_resolve_and_leaves_the_backend() {
+    let mut cfg = empty_config();
+    add_backend(
+        &mut cfg,
+        "tool",
+        stdio_transport("node server.js"),
+        String::new(),
+        HashMap::new(),
+    )
+    .unwrap();
+    let refused = update_backend(
+        &mut cfg,
+        "tool",
+        BackendUpdate {
+            env: Some(env("API_KEY", GONE)),
+            ..Default::default()
+        },
+    )
+    .expect_err("refused");
+    assert!(refused.contains(UNRESOLVED_SECRETS), "{refused}");
+    assert!(
+        cfg.backends["tool"].env.is_empty(),
+        "the update was applied"
+    );
+}

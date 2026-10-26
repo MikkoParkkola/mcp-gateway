@@ -114,7 +114,9 @@ pub struct BackendUpdate {
 ///
 /// # Errors
 ///
-/// `Err(String)` when `name` already exists in `config.backends`.
+/// `Err(String)` when `name` already exists in `config.backends`, or when a
+/// secret reference in its `env` or `headers` does not resolve (the message
+/// then carries [`UNRESOLVED_SECRETS`]).
 pub fn add_backend(
     config: &mut Config,
     name: &str,
@@ -176,8 +178,30 @@ pub fn add_backend(
             notes.extend(unresolved);
         }
     }
+    // Enabled or not: a secret reference that does not resolve would break
+    // the start after it is enabled (ADR-028, MIK-8908 B3).
+    refuse_unresolved_secrets(&backend, name, &config.env_overlay())?;
     config.backends.insert(name.to_string(), backend);
     Ok(notes)
+}
+
+/// The phrase every unresolved-secret refusal carries, so a caller can tell
+/// it from a duplicate or a missing backend.
+pub(crate) const UNRESOLVED_SECRETS: &str = "has secret references that do not resolve";
+
+fn refuse_unresolved_secrets(
+    backend: &crate::config::BackendConfig,
+    name: &str,
+    overlay: &crate::config::EnvOverlay,
+) -> Result<(), String> {
+    backend
+        .check_secret_references(name, overlay)
+        .map_err(|refused| {
+            format!(
+                "Backend '{name}' {UNRESOLVED_SECRETS}: {}",
+                refused.join("; ")
+            )
+        })
 }
 
 /// Remove a backend from the in-memory config.
@@ -198,7 +222,9 @@ pub fn remove_backend(config: &mut Config, name: &str) -> Result<(), String> {
 ///
 /// # Errors
 ///
-/// `Err(String)` when no backend with `name` exists.
+/// `Err(String)` when no backend with `name` exists, or when a secret
+/// reference in the updated backend does not resolve (the message then
+/// carries [`UNRESOLVED_SECRETS`]).
 pub fn update_backend(
     config: &mut Config,
     name: &str,
@@ -251,6 +277,7 @@ pub fn update_backend(
         }
     }
 
+    refuse_unresolved_secrets(&backend, name, &overlay)?;
     *slot = backend;
     Ok(())
 }

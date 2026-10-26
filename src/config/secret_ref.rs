@@ -318,6 +318,11 @@ pub(crate) fn evaluate_backend_value(
     }
 }
 
+/// Whether `written` is a whole-value `env:`, `file:` or `keychain:` reference.
+pub(crate) fn is_reference(written: &str) -> bool {
+    !matches!(SecretRef::parse(written), SecretRef::Literal(_))
+}
+
 impl super::Config {
     /// Every required secret that resolves to nothing (an unresolvable `env:`
     /// reference or an empty literal), one message each, so the operator fixes

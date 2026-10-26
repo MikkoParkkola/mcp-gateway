@@ -804,6 +804,17 @@ pub fn write_discovered_to_config(
                 continue;
             }
             let backend_config = server.to_backend_config();
+            // Before any byte is written: a secret reference that does not
+            // resolve would break the next start (ADR-028).
+            backend_config
+                .check_secret_references(&server.name, &config.env_overlay())
+                .map_err(|refused| {
+                    format!(
+                        "discovered server {:?} has secret references that do not resolve: {}",
+                        server.name,
+                        refused.join("; ")
+                    )
+                })?;
             config.backends.insert(server.name.clone(), backend_config);
             written += 1;
         }
