@@ -3,7 +3,7 @@
 //! MCP Events (MIK-7630): event types offered to clients as webhook
 //! subscriptions (`events/list`, `events/subscribe`, `events/unsubscribe`).
 //!
-//! Design: `docs/design/2026-10-01-mik-7630-mcp-events.md`. I1 is the
+//! Design: the mcp events design. I1 is the
 //! protocol surface, the store and callback verification; I2 the delivery
 //! pipeline: emission, fan-out, the outbox and the worker. Served over HTTP
 //! only: webhook mode needs an authenticated principal, which a stdio

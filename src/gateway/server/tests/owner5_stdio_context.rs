@@ -3,7 +3,7 @@
 //! MIK-7272.OWNER.5: what the context stdio builds carries, and what it is
 //! refused because of it.
 //!
-//! Test plan: `docs/design/2026-09-30-sub4-stdio-owner-test-plan.md` (I1).
+//! Test plan: the sub4 stdio owner test plan (I1).
 //! The sole-operator deployment account stays served on stdio
 //! (`stdio_sole_operator.rs`, `stdio_run_path_serves_its_operator_the_managed_account`):
 //! "no personal account" means no per-user account, not that the deployment's

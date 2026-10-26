@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Grant-change auditor cells (MIK-7570.AUDIT.4), gateway half.
 //!
-//! Plan: `docs/design/2026-09-28-grant-change-journal-test-plan.md`. The
+//! Plan: the grant change journal test plan. The
 //! auditor is driven directly here; reload and startup wiring have their own
 //! cells.
 

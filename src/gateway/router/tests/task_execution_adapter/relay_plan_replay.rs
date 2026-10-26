@@ -8,7 +8,7 @@
 //! (P1), re-reads, proves the re-read ran nothing (P2: no backend call), and
 //! only then asserts the renewal.
 //!
-//! Test plan: docs/internal/design/2026-10-12-mik-8408-test-plan.md.
+//! Test plan: the relay replay test plan.
 use super::super::*;
 use super::support::*;
 use pretty_assertions::assert_eq;
