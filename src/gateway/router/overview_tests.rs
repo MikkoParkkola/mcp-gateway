@@ -38,6 +38,10 @@ const FIELD: usize = 2 + 6 * 256;
 /// text field, a needs-you row two (subject, name), an action row seven (at,
 /// route, method, outcome, authority, subject, account). The rest of the body
 /// (KPIs, `more`, `complete`, `degraded`) fits in 4 KiB.
+/// A fixed instant for the budget tests: the enforcer's day must not roll
+/// over between recording spend and reading the overview.
+#[cfg(feature = "cost-governance")]
+const BUDGET_NOW: u64 = 1_800_000_000;
 const WORST_BODY: usize = SERVER_ROWS * (FIELD + 64)
     + NEEDS_YOU_ROWS * (2 * FIELD + 256)
     + ACTION_ROWS * (7 * FIELD + 256)
@@ -346,6 +350,7 @@ async fn o3e_a_worst_case_body_stays_under_the_ceiling() {
     for tool in &tools {
         cfg.budgets.per_tool.insert(tool.clone(), 1.0);
     }
+    let _clock = crate::clock::test_clock::at_secs(BUDGET_NOW);
     let enforcer = Arc::new(BudgetEnforcer::new(
         cfg.clone(),
         Arc::new(CostRegistry::new(&cfg)),
@@ -557,6 +562,7 @@ async fn o4_a_budget_at_its_notify_percent_needs_you() {
             ..Default::default()
         };
         cfg.budgets.daily = Some(1.0);
+        let _clock = crate::clock::test_clock::at_secs(BUDGET_NOW);
         let enforcer = Arc::new(BudgetEnforcer::new(
             cfg.clone(),
             Arc::new(CostRegistry::new(&cfg)),
@@ -613,6 +619,7 @@ async fn o4b_limit_rows_come_highest_percent_first() {
     };
     cfg.budgets.daily = Some(1.0);
     cfg.budgets.per_key.insert("ops".to_string(), 1.125);
+    let _clock = crate::clock::test_clock::at_secs(BUDGET_NOW);
     let enforcer = Arc::new(BudgetEnforcer::new(
         cfg.clone(),
         Arc::new(CostRegistry::new(&cfg)),
@@ -644,6 +651,7 @@ async fn governed(
     use crate::cost_accounting::registry::CostRegistry;
 
     let (mut state, _dir) = fixture(1, false).await;
+    let _clock = crate::clock::test_clock::at_secs(BUDGET_NOW);
     let enforcer = Arc::new(BudgetEnforcer::new(
         cfg.clone(),
         Arc::new(CostRegistry::new(&cfg)),
@@ -658,7 +666,7 @@ async fn governed(
     overview(&state).await
 }
 
-/// O4c: the row's threshold is the configured Notify percent, not a fixed 80.
+/// O4c: the threshold is the lowest configured Notify percent, not a fixed 80.
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn o4c_the_threshold_is_the_configured_notify_percent() {
@@ -669,10 +677,22 @@ async fn o4c_the_threshold_is_the_configured_notify_percent() {
         ..Default::default()
     };
     cfg.budgets.daily = Some(1.0);
-    cfg.alerts = vec![AlertRule {
-        at_percent: 60,
-        action: AlertAction::Notify,
-    }];
+    // The lowest Notify percent counts: not the higher Notify, and not the
+    // Log rule below both.
+    cfg.alerts = vec![
+        AlertRule {
+            at_percent: 50,
+            action: AlertAction::Log,
+        },
+        AlertRule {
+            at_percent: 60,
+            action: AlertAction::Notify,
+        },
+        AlertRule {
+            at_percent: 70,
+            action: AlertAction::Notify,
+        },
+    ];
     let rows = |body: &Value| {
         body["needs_you"]["rows"]
             .as_array()
