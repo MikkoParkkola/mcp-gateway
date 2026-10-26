@@ -246,8 +246,10 @@ fn r5_each_server_and_events_field_alone_is_restart_pending() {
     ] {
         let (reports, stuck) = each_field_alone(section, skip);
         for (key, pending, changed) in &reports {
-            if pending.is_empty() {
-                failures.push(format!("{section}.{key}: not restart-pending"));
+            if !pending.contains(&section) {
+                failures.push(format!(
+                    "{section}.{key}: pending {pending:?}, not {section}"
+                ));
             }
             if !changed {
                 failures.push(format!("{section}.{key}: not a change"));

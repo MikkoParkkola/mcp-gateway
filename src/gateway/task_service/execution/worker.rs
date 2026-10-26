@@ -219,13 +219,19 @@ async fn run_dispatched(
     // result rather than the synchronous wrapper: design §4 settles a task on
     // that result verbatim, `isError` included, and classifies an interim
     // `input_required` round from it before anything is committed.
-    // The first dispatch is an admission point, as a resume is: its arguments
-    // get intake's rule under this step's generation, so a task admitted while
-    // sanitizing was off is sanitized if a reload turned it on (ADR-023). A
+    // A task whose intake judged nothing (sanitising was off, or nothing was
+    // exempt) is re-admitted under this step's generation, as a resume is, so
+    // one admitted while sanitising was off is sanitised if a reload turned
+    // it on (ADR-023). One whose intake judged an exemption keeps that
+    // judgement: the dispatch compares against it and refuses a change. A
     // refusal is the dispatch's answer, and nothing is sent.
-    let readmitted = state
-        .readmit(&call, &caller, (session_id.as_deref(), &generation))
-        .await;
+    let readmitted = if intent.owned.judged().is_empty() {
+        state
+            .readmit(&call, &caller, (session_id.as_deref(), &generation))
+            .await
+    } else {
+        Ok((call.arguments.clone(), Default::default()))
+    };
     let dispatch = async {
         let (arguments, judged) = match readmitted {
             Ok(readmitted) => readmitted,

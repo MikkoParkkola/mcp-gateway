@@ -83,6 +83,10 @@ async fn f1_direct_sanitize_input_follows_a_reload() {
     )
     .await;
     assert!(body.get("error").is_none(), "off after reload: {body}");
+    assert!(
+        calls(&fx) > ran,
+        "off after reload: nothing reached the backend"
+    );
 }
 
 /// F1 (`/mcp` `gateway_invoke`): the same through the meta route.
@@ -116,26 +120,23 @@ async fn f1_mcp_sanitize_input_follows_a_reload() {
     .await;
     assert_eq!(message(&body), NUL_REFUSED, "on after reload: {body}");
     assert_eq!(calls(&fx), ran, "on after reload: dispatched");
-}
 
-/// F7: a reload whose new config fails to load never reaches the published
-/// config, so the running flag is unchanged; here the published value is the
-/// only path, and an unchanged publish leaves the next call as it was.
-#[tokio::test]
-async fn f7_an_unchanged_publish_keeps_the_running_flag() {
-    let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
-    reload(&fx, |_| {});
-    let (_, body) = post_direct(
+    reload(&fx, |c| c.security.sanitize_input = false);
+    let (_, body) = post_meta_invoke(
         &fx,
-        "alpha",
         "k-std",
+        "alpha",
         "read",
         json!({"cmd": NUL}),
         None,
         None,
     )
     .await;
-    assert_eq!(message(&body), NUL_REFUSED, "{body}");
+    assert!(body.get("error").is_none(), "off after reload: {body}");
+    assert!(
+        calls(&fx) > ran,
+        "off after reload: nothing reached the backend"
+    );
 }
 
 /// F4: with `trust_configured_backends` off (the fixture's state), a reload
@@ -203,8 +204,18 @@ async fn f4_ssrf_protection_follows_a_reload() {
     );
 
     reload(&fx, |c| c.security.ssrf_protection = false);
+    let refused_at = calls.load(Ordering::SeqCst);
     let (_, body) = call().await;
     assert!(body.get("error").is_none(), "off after reload: {body}");
+    assert_ne!(
+        body.pointer("/result/isError"),
+        Some(&json!(true)),
+        "off after reload: {body}"
+    );
+    assert!(
+        calls.load(Ordering::SeqCst) > refused_at,
+        "off after reload: nothing reached the backend"
+    );
 }
 
 /// F3 (HTTP resume): a task stored while `sanitize_input` was off, resumed

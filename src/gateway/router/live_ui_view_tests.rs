@@ -28,15 +28,17 @@ async fn fixture() -> (Arc<AppState>, tempfile::TempDir) {
     test_router_app_state_with_auth_and_key_server(&auth, None).await
 }
 
-/// `GET /ui/api/config` as the admin bearer.
-async fn view(state: &Arc<AppState>) -> Value {
+/// `GET /ui/api/config` as the admin bearer, on `router`: one router per
+/// test, kept across reloads as the long-lived server keeps it.
+async fn view(router: &axum::Router) -> Value {
     let request = Request::builder()
         .uri("/ui/api/config")
         .header(header::AUTHORIZATION, format!("Bearer {BEARER}"))
         .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 52_346))))
         .body(Body::empty())
         .expect("request builds");
-    let response = create_router(Arc::clone(state))
+    let response = router
+        .clone()
         .oneshot(request)
         .await
         .expect("the router is infallible");
@@ -62,23 +64,25 @@ fn reload_top(state: &AppState, key: &str, value: Value) {
 #[tokio::test]
 async fn e1_the_environment_name_follows_reloads() {
     let (state, _dir) = Box::pin(fixture()).await;
-    assert_eq!(view(&state).await["environment"], Value::Null, "unset");
+    let router = create_router(Arc::clone(&state));
+    assert_eq!(view(&router).await["environment"], Value::Null, "unset");
 
     reload_top(&state, "environment", "staging".into());
-    assert_eq!(view(&state).await["environment"], "staging");
+    assert_eq!(view(&router).await["environment"], "staging");
 
     reload_top(&state, "environment", "prod".into());
-    assert_eq!(view(&state).await["environment"], "prod");
+    assert_eq!(view(&router).await["environment"], "prod");
 
     reload_top(&state, "environment", Value::Null);
-    assert_eq!(view(&state).await["environment"], Value::Null, "removed");
+    assert_eq!(view(&router).await["environment"], Value::Null, "removed");
 }
 
 // F8 (view): the flags the view reports are the published ones.
 #[tokio::test]
 async fn f8_the_view_reports_the_flags_after_a_reload() {
     let (state, _dir) = Box::pin(fixture()).await;
-    let before = view(&state).await;
+    let router = create_router(Arc::clone(&state));
+    let before = view(&router).await;
     let (sanitize, ssrf) = (
         before["sanitize_input"].as_bool().expect("bool"),
         before["ssrf_protection"].as_bool().expect("bool"),
@@ -89,7 +93,7 @@ async fn f8_the_view_reports_the_flags_after_a_reload() {
     config.security.ssrf_protection = !ssrf;
     state.live_config.set(config);
 
-    let after = view(&state).await;
+    let after = view(&router).await;
     assert_eq!(after["sanitize_input"], !sanitize, "{after}");
     assert_eq!(after["ssrf_protection"], !ssrf, "{after}");
 }
@@ -122,7 +126,7 @@ async fn spec_server() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
 
 /// `POST` the import preview for `url` as the admin bearer: the status and
 /// the body text.
-async fn preview(state: &Arc<AppState>, url: &str) -> (axum::http::StatusCode, String) {
+async fn preview(router: &axum::Router, url: &str) -> (axum::http::StatusCode, String) {
     let request = Request::builder()
         .method("POST")
         .uri("/ui/api/import/openapi/preview")
@@ -133,7 +137,7 @@ async fn preview(state: &Arc<AppState>, url: &str) -> (axum::http::StatusCode, S
         .expect("request builds");
     let response = tokio::time::timeout(
         crate::test_wait::HANG_BOUND,
-        create_router(Arc::clone(state)).oneshot(request),
+        router.clone().oneshot(request),
     )
     .await
     .expect("bounded")
@@ -158,15 +162,16 @@ fn set_ssrf(state: &AppState, on: bool) {
 async fn f5_the_ui_import_follows_ssrf_protection() {
     use std::sync::atomic::Ordering;
     let (state, _dir) = Box::pin(fixture()).await;
+    let router = create_router(Arc::clone(&state));
     let (url, hits) = spec_server().await;
 
     set_ssrf(&state, false);
-    let (status, body) = preview(&state, &url).await;
+    let (status, body) = preview(&router, &url).await;
     assert!(status.is_success(), "off: {body}");
     assert_eq!(hits.load(Ordering::SeqCst), 1, "off: fetched");
 
     set_ssrf(&state, true);
-    let (status, body) = preview(&state, &url).await;
+    let (status, body) = preview(&router, &url).await;
     assert!(
         !status.is_success() && body.contains("SSRF protection blocked URL"),
         "on after reload: not the SSRF refusal: {status} {body}"
@@ -174,7 +179,7 @@ async fn f5_the_ui_import_follows_ssrf_protection() {
     assert_eq!(hits.load(Ordering::SeqCst), 1, "on after reload: fetched");
 
     set_ssrf(&state, false);
-    let (status, body) = preview(&state, &url).await;
+    let (status, body) = preview(&router, &url).await;
     assert!(status.is_success(), "off after reload: {body}");
     assert_eq!(hits.load(Ordering::SeqCst), 2, "off after reload: fetched");
 }
@@ -226,6 +231,7 @@ async fn f8_a_response_reads_only_the_request_generation() {
     pinned.security.ssrf_protection = !published.security.ssrf_protection;
     pinned.environment = Some("pinned-only".to_string());
     let pinned = crate::config_reload::LiveConfig::new(pinned).generation();
+    assert_ne!(published.environment.as_deref(), Some("pinned-only"));
 
     let v = view_pinned(&state, "/ui/api/config", Arc::clone(&pinned)).await;
     assert_eq!(v["sanitize_input"], pinned.sanitize_input(), "{v}");

@@ -89,7 +89,7 @@ pub(super) async fn open(
     ),
 ) -> Option<(Arc<StdioTasks>, ExpirySweep)> {
     let dir = store_dir(config);
-    let subscriptions = subscriptions(config, overlay, record_key);
+    let subscriptions = subscriptions(config, overlay, (record_key, live_config));
     // No upstream adapter on stdio: every interrupted row it holds is settled
     // on open, and none is kept for an upstream read (D6 rev 5 item 4).
     let opened = super::task_runtime::open(config, &dir, subscriptions, meta_mcp, &[]).await;
@@ -136,7 +136,10 @@ pub(super) async fn open(
 fn subscriptions(
     config: &Config,
     overlay: &crate::config::EnvOverlay,
-    record_key: &Arc<crate::gateway::record_principal::RecordPrincipalKey>,
+    (record_key, live_config): (
+        &Arc<crate::gateway::record_principal::RecordPrincipalKey>,
+        &Arc<crate::config_reload::LiveConfig>,
+    ),
 ) -> Arc<crate::gateway::subscription_registry::SubscriptionRegistry> {
     use crate::gateway::auth::{AuthState, DashboardBootstrap, ResolvedAuthConfig};
     let auth_config = ResolvedAuthConfig::try_from_config_keyed(
@@ -153,7 +156,9 @@ fn subscriptions(
                 key_server: None,
                 dashboard_bootstrap: Arc::new(DashboardBootstrap::new()),
                 tls_enabled: false,
-                live_config: Arc::new(crate::config_reload::LiveConfig::new(config.clone())),
+                // The session's own config, so a reload reaches what this
+                // registry re-validates listeners with (ADR-023).
+                live_config: Arc::clone(live_config),
                 // stdio has no agent middleware: nothing presents an agent token.
                 agent_auth: crate::gateway::oauth::AgentAuthState::new(false, Arc::default()),
             },

@@ -165,6 +165,12 @@ fn sanitised(reply: &Value) -> bool {
     reply.to_string().contains("null bytes")
 }
 
+/// Past the sanitiser: the call went on to resolve its server, which does
+/// not exist, so it failed there and not for any earlier reason.
+fn reached_resolution(reply: &Value) -> bool {
+    !sanitised(reply) && reply.to_string().contains("absent")
+}
+
 /// F2: over stdio, a reload turns sanitising off and on again, each applying
 /// to the next call, with no restart.
 #[tokio::test]
@@ -182,7 +188,7 @@ async fn f2_stdio_sanitise_input_follows_a_reload() {
     s.reload().await;
     let id = s.send_nul().await;
     let reply = s.answer(id).await;
-    assert!(!sanitised(&reply), "off after reload: {reply}");
+    assert!(reached_resolution(&reply), "off after reload: {reply}");
 
     write_flag(&path, true);
     s.reload().await;
@@ -223,5 +229,5 @@ async fn g4_a_held_stdio_line_keeps_the_generation_it_was_read_under() {
     assert!(sanitised(&reply), "on then off: {reply}");
 
     let reply = held_across_a_flip(&mut s, &path, true).await;
-    assert!(!sanitised(&reply), "off then on: {reply}");
+    assert!(reached_resolution(&reply), "off then on: {reply}");
 }
