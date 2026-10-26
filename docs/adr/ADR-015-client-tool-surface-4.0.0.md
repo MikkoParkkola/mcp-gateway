@@ -86,9 +86,9 @@ default is a breaking change for anyone who never set the key.
 
 ## Review record
 
-- `gpt-review`, design stage, verdict **SHIP-WITH-FIXES** — the fixes are the
-  three defects above. Run file:
-  `<review-archive>/runs/gpt-20260916T004124Z-23867.md`.
+- An independent model review, design stage, verdict **SHIP-WITH-FIXES** — the
+  fixes are the three defects above. The run file is kept in the maintainer's
+  review archive.
 - The second reviewer produced no valid verdict (the model emitted raw tool-call
   tokens instead of a review), so this decision rests on one independent review
   plus source verification of its two citable claims. Both were confirmed at the

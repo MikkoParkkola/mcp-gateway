@@ -13,7 +13,7 @@ delivery?
   selftest  loopback run of serve + receiver; exit 0 only if the round trip holds
 
 Every request the stub receives is appended to --log as one JSON line; that
-log is the evidence. See docs/design/2026-10-01-mik-7630-mcp-events.md.
+log is the evidence. See the mcp events design.
 
 Wire shapes follow the draft extension at commit 28ec35e9
 (modelcontextprotocol/experimental-ext-triggers-events,

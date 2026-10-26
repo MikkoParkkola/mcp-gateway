@@ -5,7 +5,7 @@
 //! `adapter.txt`, and no file bypasses it.
 //!
 //! T1 to T3 and T5 of the MIG.1a test plan
-//! (`docs/internal/plans/2026-10-18-mik-8425-mig1a-adapter.md`).
+//! (the YAML adapter plan).
 
 #[path = "common/yaml.rs"]
 mod yaml;

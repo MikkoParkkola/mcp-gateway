@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The compacted meta-tool surface
-//! (`docs/design/2026-09-16-meta-tool-surface-compaction.md`).
+//! (the meta tool surface compaction design).
 //!
 //! Two questions, and the second is what makes the first safe to answer.
 //! What does the shipped default gate configuration list to an admin caller,
