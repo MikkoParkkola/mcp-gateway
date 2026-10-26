@@ -252,20 +252,28 @@ pub fn run_get_command(name: &str, config: &Path) -> ExitCode {
         println!("URL:         {url}");
     }
 
-    // Names and presence, never values. This output is routinely pasted into
-    // bug reports and CI logs, which is what made the previous `{k}={v}` a
-    // credential disclosure rather than a cosmetic issue (MIK-7221).
+    // Names and references, never values. This output is routinely pasted
+    // into bug reports and CI logs, which is what made the previous `{k}={v}`
+    // a credential disclosure rather than a cosmetic issue. A
+    // secret reference is shown as written (ADR-028); a value never is.
+    let backend = &gateway_config.backends[name];
+    let shown = |map: &std::collections::HashMap<String, String>, key: &str| {
+        map.get(key).map_or_else(
+            || "<set>".to_owned(),
+            |v| mcp_gateway::config::secret_slot(v),
+        )
+    };
     if !info.env.is_empty() {
         println!("Environment:");
         for key in &info.env {
-            println!("  {key}=<set>");
+            println!("  {key}={}", shown(&backend.env, key));
         }
     }
 
     if !info.headers.is_empty() {
         println!("Headers:");
         for key in &info.headers {
-            println!("  {key}=<set>");
+            println!("  {key}={}", shown(&backend.headers, key));
         }
     }
 
