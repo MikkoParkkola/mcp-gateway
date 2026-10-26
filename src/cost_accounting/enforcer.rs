@@ -429,7 +429,7 @@ pub struct BudgetEnforcer {
     key_overflow_swept: std::sync::atomic::AtomicU64,
     /// The legacy UTC day a pre-upgrade snapshot was restored on, as
     /// `utc_day + 1`; 0 is none (ADR-026). Set by `restore` before the
-    /// enforcer is shared, never cleared: it stops matching when that day ends.
+    /// enforcer is shared, and cleared on the first read after that day.
     legacy_utc_day: std::sync::atomic::AtomicU64,
 }
 
@@ -466,12 +466,22 @@ impl BudgetEnforcer {
         }
     }
 
-    /// Whether `secs` falls on the open legacy UTC day.
+    /// Whether `secs` falls on the open legacy UTC day. The first read on a
+    /// later UTC day closes it for good, so a clock set back into that day
+    /// cannot reopen it and repeat its UTC reset after a save and restart.
     fn on_legacy_utc_day(&self, secs: u64) -> bool {
-        let stored = self
-            .legacy_utc_day
-            .load(std::sync::atomic::Ordering::Relaxed);
-        stored.checked_sub(1) == Some(secs / 86_400)
+        use std::sync::atomic::Ordering::Relaxed;
+        let stored = self.legacy_utc_day.load(Relaxed);
+        let Some(day) = stored.checked_sub(1) else {
+            return false;
+        };
+        if secs / 86_400 > day {
+            // A failed exchange means another reader already closed it.
+            let _ = self
+                .legacy_utc_day
+                .compare_exchange(stored, 0, Relaxed, Relaxed);
+        }
+        day == secs / 86_400
     }
 
     /// Today's day key; `Err` on a clock before 1970.

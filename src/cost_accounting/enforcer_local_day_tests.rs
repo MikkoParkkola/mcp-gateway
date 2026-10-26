@@ -201,6 +201,21 @@ fn a_pre_upgrade_snapshot_resets_once_at_utc_midnight_west_of_utc() {
     );
 }
 
+/// T4c: once a read on the next UTC day has closed the legacy day, a clock
+/// set back into it stays local: a save records "local" and the costs API
+/// names the host zone. Mutant: the legacy day is matched by date alone (the
+/// save at 00:40 CET records no basis, and a restart repeats the UTC reset).
+#[test]
+fn a_clock_set_back_does_not_reopen_the_legacy_day() {
+    let _zone = crate::local_day::test_zone(Europe::Amsterdam);
+    let e = booted(1_794_353_400, &snapshot(1_794_340_800, 1.0, None));
+    assert!((at(&e, 1_794_355_200, 0.5) - 0.5).abs() < 1e-9);
+    let set_back = saved_at(&e, 1_794_354_000);
+    assert_eq!(set_back.day_basis.as_deref(), Some("local"));
+    let _clock = at_secs(1_794_354_000);
+    assert_eq!(e.day_zone(), "Europe/Amsterdam");
+}
+
 /// T4b: a save while the legacy UTC day is open records no basis, so a
 /// restart still resets once at UTC midnight; a save after it records
 /// "local", and a later restart keeps that spend until local midnight, with
