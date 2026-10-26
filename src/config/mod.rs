@@ -18,6 +18,7 @@ mod env_overlay;
 mod features;
 pub(crate) mod load_error;
 pub(crate) use features::DEFAULT_TASK_TTL_MS;
+pub(crate) mod display;
 mod flagged_tools;
 mod input_schema;
 pub(crate) mod keychain;
