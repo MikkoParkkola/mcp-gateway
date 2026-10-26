@@ -6,6 +6,11 @@
 # tracked tree, and may not cite a tracker id.
 #
 #   PR_BODY="$(gh pr view N --json body -q .body)" scripts/dev/check-pr-body-hygiene.sh
+#   scripts/dev/check-pr-body-hygiene.sh body.md
+#
+# Exactly one source: $PR_BODY or one file. A call that names no body, an
+# empty body, two sources, a missing file or an option is refused, because a
+# check that reads nothing and prints OK is worse than no check.
 #
 # CI passes the body through the environment, never by interpolating it into
 # the script, so the body is data and cannot become shell.
@@ -14,7 +19,24 @@ set -euo pipefail
 # shellcheck source=scripts/dev/public-hygiene-patterns.sh
 source "$(dirname "${BASH_SOURCE[0]}")/public-hygiene-patterns.sh"
 
-body="${PR_BODY-}"
+usage() {
+  printf 'usage: PR_BODY=<text> %s  |  %s <file>\n' "$0" "$0" >&2
+  exit 2
+}
+if (( $# > 1 )) || [[ "${1:-}" == -* ]]; then
+  usage
+fi
+if (( $# == 1 )); then
+  [[ -z "${PR_BODY:-}" ]] || { printf 'check-pr-body-hygiene: give the body in PR_BODY or a file, not both\n' >&2; exit 2; }
+  [[ -f "$1" ]] || { printf 'check-pr-body-hygiene: no such file: %s\n' "$1" >&2; exit 2; }
+  body="$(cat -- "$1")"
+else
+  body="${PR_BODY-}"
+fi
+if [[ -z "${body//[[:space:]]/}" ]]; then
+  printf 'check-pr-body-hygiene: the pull request body is empty; there is nothing to check\n' >&2
+  exit 2
+fi
 failures=0
 
 report() {
