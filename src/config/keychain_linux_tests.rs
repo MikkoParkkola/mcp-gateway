@@ -23,6 +23,10 @@ fn stub(dir: &Path, name: &str, body: &str) -> PathBuf {
         calls.display(),
         calls.display()
     );
+    // No spawn while the stub's write descriptor is open (ETXTBSY).
+    let _gate = super::keychain_linux::SPAWN_GATE
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     std::fs::write(&path, script).expect("write stub");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).expect("chmod stub");
     path

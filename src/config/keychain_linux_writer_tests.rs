@@ -28,6 +28,10 @@ fn stub(dir: &Path, name: &str, body: &str) -> PathBuf {
         "#!/bin/sh\nprintf '%s' \"{name}\" >> '{c}'\nfor a in \"$@\"; do printf ' %s' \"$a\" >> '{c}'; done\necho >> '{c}'\n{body}\n",
         c = calls.display(),
     );
+    // No spawn while the stub's write descriptor is open (ETXTBSY).
+    let _gate = super::SPAWN_GATE
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     std::fs::write(&path, script).expect("write stub");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).expect("chmod stub");
     path
@@ -256,4 +260,22 @@ fn b9_a_probe_that_times_out_is_unavailable_not_a_pending_write() {
     let secret_tool = stub(dir.path(), "secret-tool", "exit 0");
     let keychain = LinuxKeychain::with_programs(gdbus, secret_tool, Duration::from_millis(300));
     assert!(matches!(keychain.probe(), Err(StoreError::Unavailable(_))));
+}
+
+#[test]
+fn a_spawn_error_is_final_and_names_the_tool() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let missing = dir.path().join("no-such-gdbus");
+    let secret_tool = stub(dir.path(), "secret-tool", "exit 0");
+    let keychain = LinuxKeychain::with_programs(missing, secret_tool, two_seconds());
+    let refused = keychain.probe().expect_err("no gdbus");
+    assert!(
+        matches!(&refused, StoreError::Unavailable(why) if why.contains("no-such-gdbus could not start")),
+        "{refused:?}"
+    );
+    assert!(
+        !calls(dir.path()).contains("secret-tool"),
+        "{}",
+        calls(dir.path())
+    );
 }
