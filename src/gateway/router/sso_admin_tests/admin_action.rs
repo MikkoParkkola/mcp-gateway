@@ -634,3 +634,28 @@ async fn capability_validate_is_exempt_by_route() {
         .await;
     assert_audit_unavailable_ui(status, &body);
 }
+
+/// T13: a save that adds a pin line to an unpinned file records `pin: added`.
+#[tokio::test]
+async fn capability_save_adding_a_pin_records_added() {
+    let mut fx = audited(AuditFailurePolicy::FailClosed, &[]).await;
+    let (_dir, before) = with_capability(&mut fx);
+    let after = format!("sha256: 0\n{before}");
+    let (status, body) = fx
+        .send(yaml_request(
+            "PUT",
+            "/ui/api/capabilities/kept",
+            &fx.alice(),
+            Some(&sha256_of(&before)),
+            &after,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let records = fx.admin_actions();
+    let editor: Vec<&Value> = records
+        .iter()
+        .filter(|r| r["surface"] == "capability_editor")
+        .collect();
+    assert_eq!(editor.len(), 1, "{records:#?}");
+    assert_eq!(editor[0]["pin"], "added", "{}", editor[0]);
+}

@@ -359,3 +359,80 @@ async fn unresolved_account_binding_is_invalid() {
     }
     assert_eq!(std::fs::read_to_string(&file).unwrap(), TEXT);
 }
+
+// ── T17: `cap pin` takes the resolved directory's lock ────────────────
+
+#[cfg(unix)]
+#[tokio::test]
+async fn cap_pin_follows_the_link_under_the_real_directory_lock() {
+    let (real_dir, real_file) = dir_with(TEXT);
+    let links = tempfile::tempdir().unwrap();
+    let link = links.path().join("link.yaml");
+    std::os::unix::fs::symlink(&real_file, &link).unwrap();
+
+    let held = lock_config(&real_dir.path().join("capabilities"), soon())
+        .await
+        .unwrap();
+    let refused = super::pin_file_until(&link, Instant::now());
+    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(
+        std::fs::read_to_string(&real_file).unwrap(),
+        TEXT,
+        "nothing written while held"
+    );
+    assert!(
+        !links.path().join(".capabilities.lock").exists(),
+        "the link's directory is not the lock"
+    );
+    drop(held);
+
+    let hash = super::pin_file_until(&link, soon()).expect("pins once the lock is free");
+    assert_eq!(hash, compute_capability_hash(TEXT));
+    assert_eq!(std::fs::read_to_string(&real_file).unwrap(), pinned(TEXT));
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+// ── T21: on Windows a save never widens a private file ────────────────
+
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_save_keeps_a_private_file_private() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    // The directory others can read: what an inheriting write would copy.
+    let granted = std::process::Command::new("icacls")
+        .arg(dir.path())
+        .args(["/grant", "*S-1-1-0:(OI)(CI)R"])
+        .status()
+        .expect("icacls runs");
+    assert!(granted.success(), "the directory is readable by Everyone");
+    let file = dir.path().join("kept.yaml");
+    crate::config_persistence::create_new_private(&file)
+        .unwrap()
+        .write_all(TEXT.as_bytes())
+        .unwrap();
+    let private = |path: &Path| {
+        crate::private_fs::privacy_refusals(&crate::private_fs::open_file_read(path).unwrap()).len()
+    };
+    assert_eq!(private(&file), 0, "the fixture starts private");
+
+    let result = commit(
+        edit(
+            dir.path(),
+            Base::Bytes(sha(TEXT)),
+            Change::Write(described(TEXT, "Edited")),
+            PinUpdate::InPlace,
+        ),
+        None,
+        soon(),
+    )
+    .await;
+
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(private(&file), 0, "the save widened a private file");
+}

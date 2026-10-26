@@ -455,6 +455,11 @@ fn write(
 ///
 /// The file cannot be resolved, locked, read or written, or is not YAML.
 pub fn pin_file(file: &Path) -> Result<String, String> {
+    pin_file_until(file, Instant::now() + std::time::Duration::from_secs(30))
+}
+
+/// [`pin_file`], waiting for the lock until `deadline`.
+fn pin_file_until(file: &Path, deadline: Instant) -> Result<String, String> {
     let real = std::fs::canonicalize(file)
         .map_err(|e| format!("cannot resolve {}: {e}", file.display()))?;
     let dir = real
@@ -462,7 +467,7 @@ pub fn pin_file(file: &Path) -> Result<String, String> {
         .ok_or_else(|| format!("{} has no directory", real.display()))?;
     let _held = crate::config_persistence::lock::lock_config_blocking(
         &dir.join("capabilities"),
-        Instant::now() + std::time::Duration::from_secs(30),
+        deadline,
         |lock| eprintln!("Waiting for {} (another write holds it)", lock.display()),
     )
     .map_err(|e| match e {

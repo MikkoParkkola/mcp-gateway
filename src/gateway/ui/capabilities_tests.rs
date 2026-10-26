@@ -182,7 +182,7 @@ fn find_capability_file_returns_none_for_missing_file() {
     assert!(result.is_none());
 }
 
-// ── MIK-8639 DEPTH.2 ──────────────────────────────────────────────────────
+// ── Nesting depth ──────────────────────────────────────────────────────
 
 #[test]
 fn validate_yaml_body_refuses_deep_unread_field() {
