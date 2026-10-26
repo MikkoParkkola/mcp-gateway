@@ -151,12 +151,6 @@ impl MetaMcp {
         // idempotency short-circuit both return below this point: a gate under
         // a cache read decides nothing on a hit.
         self.identity_grant_rule(server, tool, caller.scope(), Emit::Audit)
-            .inspect_err(|_| {
-                super::audit::note_refused_by(
-                    crate::security::decision_record::DecisionKind::Grant,
-                    None,
-                );
-            })
     }
 
     /// Validate the per-action attestation token presented at `boundary`

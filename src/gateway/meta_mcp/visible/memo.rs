@@ -455,11 +455,7 @@ pub(crate) async fn with_visibility_memo<F: std::future::Future>(request: F) -> 
 ///
 /// [`absent_name`] when the memo records `server`'s `tool` as withheld.
 pub(crate) fn refuse_withheld(server: &str, tool: &str) -> crate::Result<()> {
-    let judged = recorded_visibility(server, tool);
-    if let Some(Visibility::Withheld(reason)) = judged {
-        crate::gateway::meta_mcp::invoke::audit::note_refused_by(reason.kind(), None);
-    }
-    absent_if_withheld(judged, tool)
+    absent_if_withheld(recorded_visibility(server, tool), tool)
 }
 
 /// The absent answer for an already-judged [`Visibility`] (MIK-8392.STORED.3):
@@ -471,7 +467,11 @@ pub(crate) fn refuse_withheld(server: &str, tool: &str) -> crate::Result<()> {
 /// [`absent_name`] when `judged` is withheld.
 pub(crate) fn absent_if_withheld(judged: Option<Visibility>, tool: &str) -> crate::Result<()> {
     match judged {
-        Some(Visibility::Withheld(_)) => Err(absent_name(tool)),
+        Some(Visibility::Withheld(reason)) => {
+            // The record names the real reason; the caller sees an absent name.
+            crate::gateway::meta_mcp::invoke::audit::note_refused_by(reason.kind(), None);
+            Err(absent_name(tool))
+        }
         _ => Ok(()),
     }
 }

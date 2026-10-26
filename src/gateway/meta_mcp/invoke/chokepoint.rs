@@ -353,10 +353,6 @@ impl MetaMcp {
             .is_err()
         {
             // Re-run to write the refusal's own record, as the route would.
-            super::audit::note_refused_by(
-                crate::security::decision_record::DecisionKind::Grant,
-                None,
-            );
             return self.identity_grant_rule(server, tool, scope, Emit::Audit);
         }
         Ok(())

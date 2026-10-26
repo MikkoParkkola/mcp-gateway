@@ -424,6 +424,10 @@ impl MetaMcp {
         // A clock before 1970 can judge no grant expiry and date no decision,
         // so no grant authorizes on it: refused like a denied grant (MIK-8202).
         let Ok(now) = crate::clock::utc_now() else {
+            crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+                crate::security::decision_record::DecisionKind::Grant,
+                None,
+            );
             return Err(Error::json_rpc(
                 -32004,
                 format!(
@@ -486,6 +490,10 @@ impl MetaMcp {
                 "Identity grant denied personal capability dispatch"
             );
         }
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Grant,
+            None,
+        );
         Err(Error::json_rpc(
             -32004,
             format!(
