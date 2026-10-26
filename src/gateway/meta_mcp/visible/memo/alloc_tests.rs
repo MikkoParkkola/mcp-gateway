@@ -60,7 +60,8 @@ use super::{Pair, slot, target};
 /// A memo with one denial code and one account outcome recorded.
 fn stocked(account: &DescriptorId) -> VisibilityMemo {
     let memo = VisibilityMemo::default();
-    memo.denial_code.set(target_key("alpha", "read"), -32003);
+    memo.denial_code
+        .set(target_key("alpha", "read"), (-32003, None));
     memo.offer_pending
         .set(account_slot("alpha", account), AccountOutcome::Live);
     memo
@@ -72,7 +73,9 @@ fn a_memo_with_allocates_no_key() {
     let memo = stocked(&account);
     let (code, measured) = measure(|| {
         memo.denial_code
-            .with(&target("alpha", "read") as &(dyn Pair + '_), |code| *code)
+            .with(&target("alpha", "read") as &(dyn Pair + '_), |(code, _)| {
+                *code
+            })
     });
     assert_eq!(code, Some(-32003), "premise: the entry is read in place");
     assert_eq!(
@@ -128,7 +131,11 @@ fn a_memo_take_allocates_no_key() {
         memo.denial_code
             .take(&target("alpha", "read") as &(dyn Pair + '_))
     });
-    assert_eq!(code, Some(-32003), "premise: the entry is taken");
+    assert_eq!(
+        code.map(|(code, _)| code),
+        Some(-32003),
+        "premise: the entry is taken"
+    );
     assert_eq!(
         measured.calls, 0,
         "a target-keyed `take` allocated: {measured:?}"
