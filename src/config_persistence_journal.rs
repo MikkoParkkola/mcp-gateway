@@ -160,6 +160,12 @@ pub(crate) fn mark_all_renamed(target: &Path) -> std::io::Result<()> {
 /// Remove the journal, durably, then the staged original. A crash between
 /// the two leaves only debris, which the next recovery or staging removes.
 pub(crate) fn finish(target: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if matches!(fault::get(target), Some(fault::Fault::FailJournalRemove)) {
+        return Err(std::io::Error::other(
+            "injected: the journal cannot be removed",
+        ));
+    }
     let path = journal_path(target);
     std::fs::remove_file(&path)?;
     sync_dir_of(&path)?;
@@ -220,6 +226,10 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, String> {
     }
     let recovered = match journal.state {
         State::Staged => {
+            #[cfg(test)]
+            if let Some(fault::Fault::Pause(pause)) = fault::get(&target) {
+                pause.enter_and_wait();
+            }
             let bytes = std::fs::read(&original).map_err(|e| {
                 format!("{} cannot be read ({e}); {}", original.display(), manual())
             })?;
@@ -288,5 +298,81 @@ fn sync_dir_of(path: &Path) -> std::io::Result<()> {
     #[cfg(not(windows))]
     {
         std::fs::File::open(dir)?.sync_all()
+    }
+}
+
+/// Test-only faults, keyed by the resolved target so parallel tests never see
+/// each other's. A global rather than a thread-local: recovery runs on a
+/// blocking-pool thread, not the test's.
+#[cfg(test)]
+pub(crate) mod fault {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Condvar, Mutex};
+
+    #[derive(Clone)]
+    pub(crate) enum Fault {
+        /// `finish` fails before removing the journal.
+        FailJournalRemove,
+        /// Recovery of a `staged` journal stops until released.
+        Pause(Arc<Pause>),
+    }
+
+    /// A gate recovery waits at: the test sees it entered, then releases it.
+    #[derive(Default)]
+    pub(crate) struct Pause {
+        /// (entered, released)
+        state: Mutex<(bool, bool)>,
+        changed: Condvar,
+    }
+
+    impl Pause {
+        pub(super) fn enter_and_wait(&self) {
+            let mut state = self.state.lock().expect("pause");
+            state.0 = true;
+            self.changed.notify_all();
+            while !state.1 {
+                state = self.changed.wait(state).expect("pause");
+            }
+        }
+
+        /// Block until recovery has reached the gate.
+        pub(crate) fn wait_entered(&self) {
+            let mut state = self.state.lock().expect("pause");
+            while !state.0 {
+                state = self.changed.wait(state).expect("pause");
+            }
+        }
+
+        pub(crate) fn release(&self) {
+            self.state.lock().expect("pause").1 = true;
+            self.changed.notify_all();
+        }
+    }
+
+    static FAULTS: Mutex<Option<HashMap<PathBuf, Fault>>> = Mutex::new(None);
+
+    pub(crate) fn set(config: &Path, fault: Fault) {
+        let key = crate::identity_grants::journal::resolved(config);
+        FAULTS
+            .lock()
+            .expect("faults")
+            .get_or_insert_with(HashMap::new)
+            .insert(key, fault);
+    }
+
+    pub(crate) fn clear(config: &Path) {
+        let key = crate::identity_grants::journal::resolved(config);
+        if let Some(map) = FAULTS.lock().expect("faults").as_mut() {
+            map.remove(&key);
+        }
+    }
+
+    pub(super) fn get(target: &Path) -> Option<Fault> {
+        FAULTS
+            .lock()
+            .expect("faults")
+            .as_ref()
+            .and_then(|map| map.get(target).cloned())
     }
 }
