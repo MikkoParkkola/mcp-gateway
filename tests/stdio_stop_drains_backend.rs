@@ -167,6 +167,28 @@ fn logs(root: &Path) -> String {
     std::fs::read_to_string(root.join("gateway.log")).unwrap_or_default()
 }
 
+/// The port the gateway reported binding, once it answers `/health` there.
+async fn ready_port(client: &reqwest::Client, root: &Path) -> u16 {
+    let ready_by = tokio::time::Instant::now() + READY_BOUND;
+    loop {
+        if let Some(port) = gateway_bin::logged_port(&root.join("gateway.log"))
+            && client
+                .get(format!("http://127.0.0.1:{port}/health"))
+                .send()
+                .await
+                .is_ok()
+        {
+            return port;
+        }
+        assert!(
+            tokio::time::Instant::now() < ready_by,
+            "the gateway never became ready\n{}",
+            logs(root)
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 #[tokio::test]
 async fn a_stop_to_the_gateways_group_drains_the_backend_call() {
     let root = tempfile::tempdir().expect("temp root");
@@ -195,25 +217,7 @@ async fn a_stop_to_the_gateways_group_drains_the_backend_call() {
     let _cleanup = KillGroup(pgid);
 
     let client = reqwest::Client::new();
-    let ready_by = tokio::time::Instant::now() + READY_BOUND;
-    let port = loop {
-        if let Some(port) = gateway_bin::logged_port(&root.join("gateway.log"))
-            && client
-                .get(format!("http://127.0.0.1:{port}/health"))
-                .send()
-                .await
-                .is_ok()
-        {
-            break port;
-        }
-        assert!(
-            tokio::time::Instant::now() < ready_by,
-            "the gateway never became ready\n{}",
-            logs(root)
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
-    let base = format!("http://127.0.0.1:{port}");
+    let base = format!("http://127.0.0.1:{}", ready_port(&client, root).await);
 
     let session = open_session(&client, &base, root).await;
     let mut call = tokio::spawn({
