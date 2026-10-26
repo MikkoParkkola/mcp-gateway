@@ -355,6 +355,8 @@ fn an_alias_is_kept_only_while_every_link_is_shown() {
         reachable_inside(&out.join("dir-link").join("same-dir"), &shown),
         Some(root.join("same-dir"))
     );
+    // Every row is checked before the test fails, so a red run names them all.
+    let mut wrong = Vec::new();
     for (name, kept) in [
         ("real", true),
         ("same-dir", true),
@@ -366,12 +368,12 @@ fn an_alias_is_kept_only_while_every_link_is_shown() {
         ("plain-climb", false),
         ("loop-a", false),
     ] {
-        assert_eq!(
-            reachable_inside(&root.join(name), &shown),
-            kept.then(|| root.join(name)),
-            "{name}"
-        );
+        let got = reachable_inside(&root.join(name), &shown);
+        if got != kept.then(|| root.join(name)) {
+            wrong.push(format!("{name}: {got:?}"));
+        }
     }
+    assert!(wrong.is_empty(), "wrong rows: {wrong:?}");
 }
 
 /// The helper subcommands are recognised only as the first argument.
