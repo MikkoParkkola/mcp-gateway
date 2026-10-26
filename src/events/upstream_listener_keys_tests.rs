@@ -157,3 +157,17 @@ async fn a_parked_key_refuses_a_uri_past_the_budget() {
     assert!(l.hold(&p, &watched("file:///over")).is_err());
     assert!(l.hold(&p, &Interest::ToolsChanged).is_ok(), "no URI budget");
 }
+
+/// ISO-T4a, map half: two subscribers' tools interest on one per-user backend
+/// keeps two listener entries, so their coalescers, snapshots and tasks are
+/// two. A key that ignored the observation would fold them into one.
+#[tokio::test]
+async fn iso_t4a_two_subscribers_tools_interest_keeps_two_listeners() {
+    let l = listeners();
+    let (p, q) = (as_user("p"), as_user("q"));
+    l.hold(&p, &Interest::ToolsChanged).expect("counted");
+    l.hold(&q, &Interest::ToolsChanged).expect("counted");
+    let map = l.backends.lock();
+    assert_eq!(map.len(), 2, "one listener per subscriber");
+    assert!(!Arc::ptr_eq(&map[&p], &map[&q]), "no shared listener state");
+}

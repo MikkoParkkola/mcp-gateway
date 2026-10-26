@@ -751,3 +751,7 @@ mod tests;
 #[cfg(test)]
 #[path = "upstream_session_seam_tests.rs"]
 mod seam_tests;
+
+#[cfg(test)]
+#[path = "upstream_session_iso_tests.rs"]
+mod iso_tests;
