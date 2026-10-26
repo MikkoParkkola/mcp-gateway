@@ -77,6 +77,8 @@ mod anomaly_posture_tests;
 mod response_observer;
 #[cfg(test)]
 pub(crate) mod response_tests;
+#[cfg(test)]
+mod rule_glob_tests;
 
 // ─── Runtime types ───────────────────────────────────────────────────────────
 
