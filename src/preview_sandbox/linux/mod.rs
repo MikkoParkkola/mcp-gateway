@@ -201,15 +201,12 @@ fn build_plan(
     // it); one that crosses anything unshown is replaced by the real file.
     let shown = |p: &Path| {
         let under = |set: &[String]| set.iter().any(|r| p.starts_with(r));
-        (under(&read_only) || under(&bound_back))
-            && !(under(&masked) && !under(&bound_back))
-            && !under(&hidden)
+        if under(&hidden) {
+            return false;
+        }
+        under(&bound_back) || (under(&read_only) && !under(&masked))
     };
-    let exec = if reachable_inside(&program, &shown) {
-        program
-    } else {
-        real
-    };
+    let exec = reachable_inside(&program, &shown).unwrap_or(real);
     if let Some(dir) = exec.parent() {
         path_dirs.push(utf8(dir)?);
     }
@@ -245,10 +242,12 @@ fn build_plan(
     })
 }
 
-/// Whether `path` and every link on its way to a file are `shown` inside the
-/// root, so the path itself still leads to the program there.
-fn reachable_inside(path: &Path, shown: &dyn Fn(&Path) -> bool) -> bool {
+/// `path` with its directory links resolved, if it and every link on its way
+/// to a file are `shown` inside the root, so that spelling still leads to the
+/// program there (a raw spelling through an unshown directory link would not).
+fn reachable_inside(path: &Path, shown: &dyn Fn(&Path) -> bool) -> Option<PathBuf> {
     let mut at = path.to_path_buf();
+    let mut first = None;
     // The kernel's own symlink-hop ceiling.
     for _ in 0..40 {
         // Directory links resolved, so `..` and a linked parent cannot lead
@@ -259,17 +258,20 @@ fn reachable_inside(path: &Path, shown: &dyn Fn(&Path) -> bool) -> bool {
             .zip(at.file_name())
             .map(|(dir, name)| dir.join(name))
         else {
-            return false;
+            return None;
         };
         if !shown(&here) {
-            return false;
+            return None;
+        }
+        if first.is_none() {
+            first = Some(here.clone());
         }
         match fs::read_link(&here) {
             Ok(next) => at = here.parent().unwrap_or(Path::new("/")).join(next),
-            Err(_) => return here.is_file(),
+            Err(_) => return if here.is_file() { first } else { None },
         }
     }
-    false
+    None
 }
 
 /// What the sandbox binds for a program, by where its real file is.
@@ -754,6 +756,13 @@ mod tests {
         link("outside", "../out/hop");
         std::os::unix::fs::symlink("../root/real", out.join("hop")).expect("hop");
         let shown = |p: &Path| p.starts_with(&root);
+        // Reached through a directory link the root does not show: kept, but
+        // spelled through the real directory, which the root does show.
+        std::os::unix::fs::symlink(&root, out.join("dir-link")).expect("dir link");
+        assert_eq!(
+            reachable_inside(&out.join("dir-link").join("same-dir"), &shown),
+            Some(root.join("same-dir"))
+        );
         for (name, kept) in [
             ("real", true),
             ("same-dir", true),
@@ -761,7 +770,11 @@ mod tests {
             ("dangling", false),
             ("outside", false),
         ] {
-            assert_eq!(reachable_inside(&root.join(name), &shown), kept, "{name}");
+            assert_eq!(
+                reachable_inside(&root.join(name), &shown),
+                kept.then(|| root.join(name)),
+                "{name}"
+            );
         }
     }
 
