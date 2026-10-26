@@ -672,3 +672,33 @@ async fn a_per_user_a2a_tools_subscription_is_refused() {
         Some(&json!("a2a_no_such_capability"))
     );
 }
+
+/// ISO-T6, the fallback's bound: with no revocation signal, a subscriber who
+/// lost access is revoked by the worker's sweep within its 30-second period,
+/// and not before it, so the row pins the cadence and not merely "eventually".
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn iso_t6_the_sweep_revokes_a_lost_subscriber_within_its_period() {
+    use crate::events::services::{AccessVerdict, forced_verdict};
+    let f = fixture();
+    let _ = subscribe(&f, "p", "pt", "p");
+    let services = Arc::clone(f.hub.runtime.services.get().expect("services"));
+    let worker = Arc::clone(&f.hub);
+    // The worker sweeps once as it starts, while the subscriber still has access.
+    let admits = forced_verdict::answer(AccessVerdict::Admits);
+    tokio::spawn(async move { worker.deliver_forever(&services).await });
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    assert_eq!(f.hub.store.subscriptions().len(), 1, "admitted at start");
+    drop(admits);
+    let _refused = forced_verdict::answer(AccessVerdict::Refuses);
+    tokio::time::sleep(std::time::Duration::from_secs(28)).await;
+    assert_eq!(
+        f.hub.store.subscriptions().len(),
+        1,
+        "29 s in: the next sweep has not run, and nothing else revoked it"
+    );
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    assert!(
+        f.hub.store.subscriptions().is_empty(),
+        "31 s in: the sweep at 30 s revoked it"
+    );
+}
