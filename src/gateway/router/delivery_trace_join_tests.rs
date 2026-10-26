@@ -74,6 +74,13 @@ async fn a_delivery_joins_exactly_one_invocation_by_its_trace() {
             &recorded.rows,
             &recorded.entries,
         ));
+        // An error envelope carries the trace too, not only a result.
+        let recorded = signed_recorded_answer(route, Answer::RpcError(-32050)).await;
+        failures.extend(join_failure(
+            &format!("{route:?} error"),
+            &recorded.rows,
+            &recorded.entries,
+        ));
     }
     let (_, rows, dir) =
         crate::gateway::server::route_matrix_driver_tests::response::stdio_signed_recorded().await;
