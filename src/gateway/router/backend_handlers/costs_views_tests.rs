@@ -69,6 +69,25 @@ async fn a_key_or_session_with_no_spend_answers_no_data() {
     assert_eq!(body["error"], "No data for key ''");
 }
 
+/// The aggregate names the zone daily budgets count days in:
+/// the host's IANA zone, UTC on a UTC host. Mutant: the field is dropped.
+#[tokio::test]
+async fn the_aggregate_names_the_zone_days_are_counted_in() {
+    let (state, _store) = admin_state().await;
+    let (status, all) = call(&state, "/api/costs", None).await;
+    assert_eq!(status, StatusCode::OK, "{all}");
+    assert_eq!(all["day_zone"], "UTC", "{all}");
+    let _zone = crate::local_day::test_zone(chrono_tz::Europe::Amsterdam);
+    let (_, all) = call(&state, "/api/costs", None).await;
+    assert_eq!(all["day_zone"], "Europe/Amsterdam", "{all}");
+    #[cfg(feature = "cost-governance")]
+    {
+        let (status, ui) = call(&state, "/ui/api/costs", None).await;
+        assert_eq!(status, StatusCode::OK, "{ui}");
+        assert_eq!(ui["day_zone"], "Europe/Amsterdam", "{ui}");
+    }
+}
+
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn a_recorded_key_and_the_aggregate_carry_the_spend() {
