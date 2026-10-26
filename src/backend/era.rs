@@ -408,12 +408,21 @@ pub(crate) async fn start_detached_http(
     name: &str,
     timeout: Duration,
 ) -> Result<()> {
-    transport.attach_era(Arc::new(crate::protocol::era::EraCache::for_backend(name)));
+    let cache = Arc::new(crate::protocol::era::EraCache::for_backend(name));
+    transport.attach_era(Arc::clone(&cache));
     transport.connect().await?;
-    let peer: Arc<dyn Transport> = transport.clone();
     let cap = timeout.min(probe_cap());
-    let decided = crate::protocol::era::EraCache::probe_detached(|| probe(&peer, cap)).await;
-    transport.finish_startup(decided.era()).await
+    // The preview's byte budget refusing the probe's answer is that refusal,
+    // not the silence that falls back to a handshake.
+    let outcome = match tokio::time::timeout(cap, transport.request(DISCOVER_METHOD, None)).await {
+        Ok(Ok(response)) => outcome_of(response),
+        Ok(Err(error)) if crate::transport::is_budget_refusal(&error) => return Err(error),
+        Ok(Err(_)) | Err(_) => ProbeOutcome::NoAnswer,
+    };
+    // Installed in the attached cache, as a slot's start does: every request
+    // after the probe is shaped for that verdict.
+    let era = cache.resolve_with(|| async { outcome }).await;
+    transport.finish_startup(era).await
 }
 
 /// What a refusal of a method the 2026-07-28 revision removed carries, so the

@@ -593,6 +593,7 @@ mod client;
 /// The guarded client, for the A2A transport (MIK-8063): the same redirect
 /// policy and pinned resolution as every HTTP backend.
 #[cfg(feature = "a2a")]
+pub(crate) use budget::is_budget_refusal;
 pub(crate) use client::build as guarded_client;
 mod extra_headers;
 #[allow(
