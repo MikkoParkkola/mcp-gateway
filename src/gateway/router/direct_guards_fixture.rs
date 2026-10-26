@@ -319,6 +319,22 @@ pub(crate) async fn fixture_firewalled_with_built(
     fx
 }
 
+/// [`fixture_firewalled_with_built`] with `log` as the state's transparency
+/// log; `build` arms the same log on the `MetaMcp`, so both routes record
+/// their deliveries in one file.
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_firewalled_logged(
+    answer: Answer,
+    rule: Option<crate::security::firewall::FirewallAction>,
+    log: Arc<crate::security::TransparencyLogger>,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    STATE_LOG.with(|l| *l.borrow_mut() = Some(log));
+    let fx = fixture_firewalled_with_built(answer, rule, build).await;
+    STATE_LOG.with(|l| *l.borrow_mut() = None);
+    fx
+}
+
 #[path = "direct_guards_fixture_answers.rs"]
 mod answers;
 #[path = "direct_guards_fixture_egress.rs"]

@@ -211,6 +211,36 @@ pub(crate) async fn signed_recorded_answer(route: HttpRoute, answer: Answer) -> 
     }
 }
 
+/// One `read` on `route` (modern) under the firewall with `rule` on `read`,
+/// the backend answering `answer`, with one transparency log shared by the
+/// `MetaMcp` and the state.
+pub(crate) async fn firewalled_recorded_call(
+    route: HttpRoute,
+    answer: Answer,
+    rule: Option<crate::security::firewall::FirewallAction>,
+) -> Recorded {
+    let (dir, log) = temp_log(None);
+    let meta_log = Arc::clone(&log);
+    let fx = fixture::fixture_firewalled_logged(answer, rule, Arc::clone(&log), move |mut meta| {
+        meta.enable_transparency_log(meta_log);
+        meta
+    })
+    .await;
+    let body = call_read(&fx, route, Era::Modern).await;
+    let rows = delivery_rows(&log).await;
+    let entries = std::fs::read_to_string(log.path())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect();
+    Recorded {
+        body,
+        rows,
+        entries,
+        _dir: dir,
+    }
+}
+
 /// A transparency log in a fresh directory, under `policy` when one is given
 /// (otherwise the logger's own default).
 pub(crate) fn temp_log(
