@@ -252,10 +252,10 @@ fn directory_refusal(dir: &Path, found: &[PrivacyRefusal]) -> io::Error {
             )),
             P::ForeignOwner(owner) => why.push(format!("is owned by {owner}")),
             P::ReparsePoint | P::PathMismatch => {
-                why.push("is a link, or a link sits in its path".into())
+                why.push("is a link, or a link sits in its path".into());
             }
             P::NotLocal => {
-                why.push("is on a network volume, or one that keeps no access lists".into())
+                why.push("is on a network volume, or one that keeps no access lists".into());
             }
             P::NotRegular => why.push("is not a directory".into()),
             other => why.push(format!("fails {other:?}")),
