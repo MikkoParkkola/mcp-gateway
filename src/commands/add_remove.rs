@@ -672,4 +672,49 @@ mod tests {
             "backends:\n  bad/name:\n    command: echo original\n",
         );
     }
+
+    /// A real CLI edit after a crashed byte write: `remove` meets a pending
+    /// replace journal over an unparseable candidate, the config lock puts
+    /// the original back first, and the edit then lands on it, with its
+    /// comments kept and no journal left. The journal is planted by hand in
+    /// its on-disk form, so this also pins that format.
+    #[test]
+    fn remove_recovers_a_crashed_byte_write_first() {
+        use sha2::Digest as _;
+        let dir = TempDir::new().unwrap();
+        let config = dir.path().join("gateway.yaml");
+        let original = "# operator's note\nbackends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n  b:\n    http_url: \"http://127.0.0.1:9/mcp\"\n";
+        std::fs::write(&config, "backends: [not: yaml\n").unwrap();
+        let target = std::fs::canonicalize(&config).unwrap();
+        let staged = target.with_file_name(".gateway.yaml.replace-original");
+        std::fs::write(&staged, original).unwrap();
+        let journal = target.with_file_name(".gateway.yaml.replace-journal");
+        let revision = hex::encode(sha2::Sha256::digest(original.as_bytes()));
+        std::fs::write(
+            &journal,
+            serde_json::json!({
+                "version": 1,
+                "state": "staged",
+                "target": target,
+                "original": staged,
+                "original_revision": revision,
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let _ = run_remove_command("b", &config, CommentLoss::Refuse);
+
+        let text = std::fs::read_to_string(&config).unwrap();
+        assert!(
+            text.contains("# operator's note"),
+            "the comment survives: {text}"
+        );
+        assert!(
+            text.contains("a:") && !text.contains("  b:"),
+            "b removed from the original: {text}"
+        );
+        assert!(!journal.exists(), "the journal is gone");
+        assert!(!staged.exists(), "the staged original is gone");
+    }
 }
