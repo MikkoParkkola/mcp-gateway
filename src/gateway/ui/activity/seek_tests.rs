@@ -120,15 +120,16 @@ fn c2_a_counter_not_in_the_kept_log_is_none() {
 
 #[test]
 fn c1_bad_lines_never_hide_the_records_after_them() {
-    // A torn line after counter 10 and a line over the record cap after
-    // counter 25: every counter on both sides is still found.
+    // A torn line after every third counter, and a line over the record cap
+    // after counter 25: every counter on both sides is still found.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("inv.jsonl");
     let mut body = String::new();
     for c in 1..=40 {
         body.push_str(&(json!({"counter": c, "pad": "p".repeat(200)}).to_string() + "\n"));
-        if c == 10 {
-            body.push_str("{\"counter\": 10.5, torn\n");
+        // Torn lines dense enough that the bisection lands on them.
+        if c % 3 == 0 {
+            body.push_str("{\"counter\": torn\n");
         }
         if c == 25 {
             body.push_str(&"x".repeat(5 * 1024 * 1024));
