@@ -219,7 +219,7 @@ async fn f8_a_response_reads_only_the_request_generation() {
     pinned.security.sanitize_input = !published.security.sanitize_input;
     pinned.security.ssrf_protection = !published.security.ssrf_protection;
     pinned.environment = Some("pinned-only".to_string());
-    let pinned = Arc::new(crate::config_reload::LiveConfig::new(pinned).generation());
+    let pinned = crate::config_reload::LiveConfig::new(pinned).generation();
 
     let v = view_pinned(&state, "/ui/api/config", Arc::clone(&pinned)).await;
     assert_eq!(v["sanitize_input"], pinned.sanitize_input(), "{v}");

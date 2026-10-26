@@ -358,7 +358,9 @@ async fn g6_a_refused_preparation_changes_nothing_and_g5_one_publish() {
 async fn g7_the_meta_tool_and_the_watcher_both_publish_the_flag() {
     use std::sync::Arc;
     use std::time::Duration;
-    let write = crate::gateway::test_helpers::write_owner_only;
+    let write = |path: &std::path::Path, text: &str| {
+        crate::gateway::test_helpers::write_owner_only(path, text)
+    };
     let flag = |on: bool| format!("security:\n  sanitize_input: {on}\n");
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
