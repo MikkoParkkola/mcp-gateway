@@ -35,6 +35,23 @@ pub(crate) struct ExclusiveFileLock {
     pins: Vec<DirPin>,
 }
 
+/// Why `dir` would be warned about (broad local groups may create files in
+/// it) or refused as a lock directory, for `doctor`; `None` when it is fine,
+/// absent, or the platform judges no lock directory.
+#[cfg(windows)]
+#[must_use]
+pub fn lock_directory_finding(dir: &Path) -> Option<String> {
+    windows::lock_directory_finding(dir)
+}
+
+/// See the Windows [`lock_directory_finding`]: no lock directory is judged
+/// here.
+#[cfg(not(windows))]
+#[must_use]
+pub fn lock_directory_finding(_dir: &Path) -> Option<String> {
+    None
+}
+
 /// One [`ExclusiveFileLock::try_lease`] attempt.
 pub(crate) enum Attempt {
     /// The lock is this caller's.

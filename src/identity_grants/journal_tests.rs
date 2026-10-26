@@ -714,7 +714,7 @@ fn a_refused_journal_lock_directory_is_busy_not_unreadable() {
     crate::private_fs::test_support::plant_any(
         "journal dir",
         &dir,
-        &format!("O:{user}D:P(A;OICI;FA;;;{user})(A;OICI;0x1301bf;;;BU)"),
+        &format!("O:{user}D:P(A;OICI;FA;;;{user})(A;OICI;0x1301bf;;;WD)"),
     );
     let grants = dir.join("grants.yaml");
     let runtime = tokio::runtime::Builder::new_current_thread()

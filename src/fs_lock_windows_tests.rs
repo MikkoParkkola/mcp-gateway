@@ -205,9 +205,10 @@ fn concurrent_healers_serialize_and_leave_an_owner_only_sidecar() {
     assert_owner_only("healers", &path, false);
 }
 
-/// Item 1: a lock directory another non-admin account could plant a sidecar
-/// in, or that cannot be judged, is refused by every constructor with
-/// `PermissionDenied` naming the directory, and no command in the text.
+/// Item 1: a lock directory Everyone (or a specific foreign account) could
+/// plant a sidecar in, or that cannot be judged, is refused by every
+/// constructor with `PermissionDenied` naming the directory, and no command
+/// in the text.
 #[test]
 fn a_lock_directory_others_can_write_is_refused() {
     let user = user_sid();
@@ -215,12 +216,12 @@ fn a_lock_directory_others_can_write_is_refused() {
     let cases = [
         ("null DACL", format!("O:{user}D:NO_ACCESS_CONTROL")),
         (
-            "users modify",
-            format!("O:{user}D:P{profile}(A;OICI;0x1301bf;;;BU)"),
+            "everyone modify",
+            format!("O:{user}D:P{profile}(A;OICI;0x1301bf;;;WD)"),
         ),
         (
             "delete-child only",
-            format!("O:{user}D:P{profile}(A;;0x100040;;;BU)"),
+            format!("O:{user}D:P{profile}(A;;0x100040;;;WD)"),
         ),
         (
             "object ACE",
@@ -344,4 +345,34 @@ fn a_healer_that_loses_the_race_reads_held() {
     ));
     assert!(winner.borrow().is_some(), "the seam ran");
     assert_owner_only("race", &path, false);
+}
+
+/// A lock directory only broad local groups (`BUILTIN\Users`) may create files
+/// in is common outside the profile: every constructor takes the lock there,
+/// and one warning names the directory and the group.
+#[test]
+fn a_lock_directory_broad_local_groups_may_write_warns_and_proceeds() {
+    let user = user_sid();
+    let profile = format!("(A;OICI;FA;;;S-1-5-18)(A;OICI;FA;;;S-1-5-32-544)(A;OICI;FA;;;{user})");
+    let parent = tempfile::tempdir().expect("dir");
+    let dir = parent.path().join("data");
+    std::fs::create_dir(&dir).expect("data dir");
+    plant_any(
+        "broad",
+        &dir,
+        &format!("O:{user}D:P{profile}(A;OICI;0x1301bf;;;BU)"),
+    );
+    let ((), warnings) = crate::test_log_capture::capture_warnings(|| {
+        for how in CONSTRUCTORS {
+            drop(take(how, &dir.join(".store.lock")).expect(how));
+        }
+    });
+    assert_eq!(
+        warnings.matches("lock directory").count(),
+        1,
+        "one warning per directory: {warnings}"
+    );
+    assert!(warnings.contains(&dir.display().to_string()), "{warnings}");
+    assert!(warnings.contains("BUILTIN\\Users"), "{warnings}");
+    assert_owner_only("broad", &dir.join(".store.lock"), false);
 }

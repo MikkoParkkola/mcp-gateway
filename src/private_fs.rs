@@ -494,7 +494,7 @@ pub(crate) fn refusal_detail(
 }
 
 /// The characters a printed, runnable repair line may carry in its path.
-fn runnable_path(path: &str) -> bool {
+pub(crate) fn runnable_path(path: &str) -> bool {
     path.chars().all(|c| {
         c.is_ascii_alphanumeric() || matches!(c, ' ' | '\\' | ':' | '.' | '_' | '-' | '(' | ')')
     })

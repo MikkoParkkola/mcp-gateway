@@ -52,9 +52,12 @@ pub(super) fn probe(lock_path: &Path) -> io::Result<Attempt> {
         }
         Err(error) => return Err(error),
     };
-    Ok(match sidecar(lock_path)? {
+    let sidecar = sidecar(lock_path)?;
+    // Held from the judgement to the sidecar's open only.
+    drop(pin);
+    Ok(match sidecar {
         Sidecar::Private(file) => match file.try_lock() {
-            Ok(()) => Attempt::Taken(ExclusiveFileLock::held(file).pinning(pin)),
+            Ok(()) => Attempt::Taken(ExclusiveFileLock::held(file)),
             Err(std::fs::TryLockError::WouldBlock) => Attempt::Held,
             Err(std::fs::TryLockError::Error(error)) => return Err(error),
         },
@@ -69,10 +72,14 @@ pub(super) fn acquire(lock_path: &Path) -> io::Result<ExclusiveFileLock> {
     let deadline = Instant::now() + HEAL_LIMIT;
     loop {
         let pin = lock_dir(lock_path)?;
-        let refused = match sidecar(lock_path)? {
+        let sidecar = sidecar(lock_path)?;
+        // Held from the judgement to the sidecar's open only, never across a
+        // wait for a holder.
+        drop(pin);
+        let refused = match sidecar {
             Sidecar::Private(file) => {
                 super::lock_exclusive(&file)?;
-                return Ok(ExclusiveFileLock::held(file).pinning(pin));
+                return Ok(ExclusiveFileLock::held(file));
             }
             Sidecar::Held => None,
             Sidecar::Refused(error) => Some(error),
@@ -90,7 +97,6 @@ pub(super) fn acquire(lock_path: &Path) -> io::Result<ExclusiveFileLock> {
                 )
             }));
         }
-        drop(pin);
         std::thread::sleep(HEAL_POLL.min(deadline - now));
     }
 }
@@ -104,16 +110,105 @@ fn parent_of(lock_path: &Path) -> &Path {
         .unwrap_or_else(|| Path::new("."))
 }
 
-/// Open and judge the lock's directory; the handle is held for the lock's
-/// lifetime so the directory cannot be renamed or swapped under it.
+/// Open and judge the lock's directory. The handle is held while the
+/// sidecar is opened, so the directory judged is the one the sidecar is in.
+/// A directory only broad local groups may write proceeds with one warning.
 fn lock_dir(lock_path: &Path) -> io::Result<DirPin> {
     let configured = std::path::absolute(parent_of(lock_path))?;
     let dir = crate::private_fs::open_dir(&configured)?;
     let found = judge_lock_dir(&dir, &configured);
     if found.is_empty() {
-        Ok(DirPin(dir))
-    } else {
-        Err(directory_refusal(&configured, &found))
+        return Ok(DirPin(dir));
+    }
+    match broad_groups(&found) {
+        Some(groups) => {
+            warn_once(&configured, &groups);
+            Ok(DirPin(dir))
+        }
+        None => Err(directory_refusal(&configured, &found)),
+    }
+}
+
+/// The local groups every account on the host belongs to. A lock directory
+/// that lets only these (beside the user, SYSTEM and Administrators) write is
+/// common outside the profile (another drive, `ProgramData`), so refusing it
+/// would stop the gateway starting after an upgrade; it is warned about
+/// instead. Everyone, Anonymous and any specific account are still refused.
+const BROAD_GROUPS: [(&str, &str); 2] = [
+    ("S-1-5-32-545", "BUILTIN\\Users"),
+    ("S-1-5-11", "Authenticated Users"),
+];
+
+/// The broad groups behind `found`, when every rule broken is one of their
+/// writes; `None` when anything else is refused.
+fn broad_groups(found: &[PrivacyRefusal]) -> Option<Vec<&'static str>> {
+    let mut groups = found
+        .iter()
+        .map(|refusal| match refusal {
+            PrivacyRefusal::ForeignSid(sid) => BROAD_GROUPS
+                .iter()
+                .find(|(group, _)| group == sid)
+                .map(|(_, name)| *name),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    groups.sort_unstable();
+    groups.dedup();
+    (!groups.is_empty()).then_some(groups)
+}
+
+/// One warning per directory per process.
+fn warn_once(dir: &Path, groups: &[&str]) {
+    static WARNED: parking_lot::Mutex<Vec<std::path::PathBuf>> =
+        parking_lot::Mutex::new(Vec::new());
+    {
+        let mut warned = WARNED.lock();
+        if warned.iter().any(|seen| seen == dir) {
+            return;
+        }
+        warned.push(dir.to_path_buf());
+    }
+    let text = broad_warning(dir, groups);
+    tracing::warn!(directory = %dir.display(), "{text}");
+}
+
+/// What `doctor` reports for `dir` as a lock directory: the warning for one
+/// only broad local groups may write, the refusal for one that is refused,
+/// `None` when it is fine or does not exist.
+pub(super) fn lock_directory_finding(dir: &Path) -> Option<String> {
+    let configured = std::path::absolute(dir).ok()?;
+    let handle = crate::private_fs::open_dir(&configured).ok()?;
+    let found = judge_lock_dir(&handle, &configured);
+    if found.is_empty() {
+        return None;
+    }
+    Some(match broad_groups(&found) {
+        Some(groups) => broad_warning(&configured, &groups),
+        None => directory_refusal(&configured, &found).to_string(),
+    })
+}
+
+/// The warning text, with the repair as `icacls` lines only when the path is
+/// plain enough to quote safely; prose otherwise. The lines first copy the
+/// inherited entries and give this account full control, so removing the
+/// groups never removes this account's own access.
+fn broad_warning(dir: &Path, groups: &[&str]) -> String {
+    let shown = dir.display().to_string();
+    let head = format!(
+        "lock directory {shown} lets {} create files in it, so another local account could \
+         hold a lock file there and stall the gateway's writes; the gateway proceeds",
+        groups.join(" and ")
+    );
+    match crate::private_fs::user_sid_string() {
+        Some(me) if crate::private_fs::runnable_path(&shown) => format!(
+            "{head}. To close it, run: icacls \"{shown}\" /inheritance:d then icacls \"{shown}\" \
+             /grant *{me}:(OI)(CI)F then icacls \"{shown}\" /remove:g *S-1-5-32-545 *S-1-5-11"
+        ),
+        _ => format!(
+            "{head}. To close it, in the folder's Security settings disable inheritance (copying \
+             the entries), give this account Full control, and remove {}",
+            groups.join(" and ")
+        ),
     }
 }
 
