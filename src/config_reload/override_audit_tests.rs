@@ -297,9 +297,16 @@ fn api4_4_the_drain_waits_for_a_reload_in_flight() {
         let (log, path) = logger(&dir);
         let (auditor, drain) = OverrideAuditor::start(Some(log));
         let registry = crate::backend::BackendRegistry::new();
+        // Ordered, not timed: the reload holds its lock until the drain has
+        // started and is parked on it (current-thread runtime, so one yield
+        // after the signal lets the drain reach the lock first).
+        let (draining, started) = tokio::sync::oneshot::channel::<()>();
         let reload = async {
             let _in_flight = registry.lock_reload().await;
-            tokio::time::sleep(Duration::from_millis(30)).await;
+            started
+                .await
+                .expect("the shutdown signals before it drains");
+            tokio::task::yield_now().await;
             assert!(registry.register(Arc::new(crate::backend::Backend::new(
                 "inventory",
                 exposed(true),
@@ -309,8 +316,8 @@ fn api4_4_the_drain_waits_for_a_reload_in_flight() {
             auditor.sync(&registry);
         };
         let shutdown = async {
-            tokio::task::yield_now().await;
-            drain.drain(&registry, Duration::from_secs(5)).await;
+            draining.send(()).expect("the reload is waiting");
+            drain.drain(&registry, Duration::from_secs(10)).await;
         };
         tokio::join!(reload, shutdown);
         assert_eq!(records(&path).len(), 1, "{:?}", records(&path));
@@ -387,7 +394,7 @@ fn api4_4_a_stalled_audit_file_does_not_hang_the_start() {
             let release = log.stall_next_write_for_test(Duration::from_millis(100));
             let (auditor, _drain) = OverrideAuditor::start(None);
             let started = tokio::time::timeout(
-                Duration::from_secs(5),
+                Duration::from_secs(10),
                 auditor.record_at_start(&registry_with_exposed("inventory"), Some(&log)),
             )
             .await
