@@ -81,3 +81,20 @@ async fn a_contract_refusal_records_refused() {
     let event = only_attempt(&fx);
     assert_eq!(event["response_effect"], "refused", "{event}");
 }
+
+/// A notification refused for want of a caller slot (a 429 with the body
+/// `{}`) is the gateway's refusal, classed by its status.
+#[tokio::test]
+async fn a_refused_direct_notification_records_refused() {
+    let fx = fixture(Setup {
+        notify_refused: true,
+        ..Setup::default()
+    })
+    .await;
+    let note =
+        json!({"jsonrpc": "2.0", "method": "notifications/roots/list_changed", "params": {}});
+    let (status, body) = post(&fx, "alpha", &note.to_string(), &Caller::Anonymous).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "premise: {body}");
+    let event = only_attempt(&fx);
+    assert_eq!(event["response_effect"], "refused", "{event}");
+}
