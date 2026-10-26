@@ -169,17 +169,21 @@ impl ReloadContext {
                     "identity grants reload busy: a grant change is in progress; retry".to_string(),
                 ));
             };
-            (read.grants, Some((read.guard, read.journal)))
+            (
+                read.grants
+                    .map(|file| (file, read.bytes.unwrap_or_default())),
+                Some((read.guard, read.journal)),
+            )
         } else {
             (
-                crate::identity_grants::read_identity_grants_file(&sink.path).await,
+                crate::identity_grants::read_identity_grants_file_with_bytes(&sink.path).await,
                 None,
             )
         };
-        let file = match file {
-            Ok(file) => {
+        let (file, bytes) = match file {
+            Ok(read) => {
                 *sink.read_errors.lock() = env_poll::WarnLimiter::default();
-                file
+                read
             }
             Err(reason) => {
                 env_poll::report_grants_refusal(&sink.read_errors, &sink.path, &reason);
@@ -206,6 +210,9 @@ impl ReloadContext {
         let outgoing: Vec<_> = sink.store.read().values().cloned().collect();
         let incoming_rows: Vec<_> = incoming.values().cloned().collect();
         if outgoing == incoming_rows {
+            // The rows are the same but the file may not be: the revision
+            // names the bytes, so a comment-only edit is a new revision.
+            self.live_config.set_grants(Some(&bytes));
             // Still recorded: an identical-content `--replace` has an entry.
             let clause = audit_clause(sink.auditor.as_deref(), prepared);
             return Some(Ok(format!("identity grants unchanged{clause}")));
@@ -214,6 +221,8 @@ impl ReloadContext {
         let subjects = changed_grant_subjects(&outgoing, &incoming_rows);
         let delta = grant_delta::grant_delta(&outgoing, &incoming_rows);
         crate::gateway::publish_identity_grants(&sink.store, &sink.epoch, incoming);
+        self.live_config.set_grants(Some(&bytes));
+        drop(bytes);
 
         // Three distinct outcomes, and they must not share a counter:
         // "skipped by construction" is expected for a non-issuer authority,

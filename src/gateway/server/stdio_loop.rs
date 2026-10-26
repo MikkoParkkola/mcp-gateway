@@ -53,12 +53,14 @@ impl Gateway {
             ..
         } = self.build_meta_mcp().await?;
         // Held for the whole serve: it owns the governance store's lease.
-        let grant_sink = identity_grants::stdio_identity_grants(
+        let (grant_sink, grants_read) = identity_grants::stdio_identity_grants(
             &self.config,
             self.config_path.as_deref(),
             &meta_mcp,
         )
         .await?;
+        // Published later, with the stdio session's config.
+        grants_read.into_startup(&self.env);
         // MIK-8278: this session announces tool-list changes to an
         // initialize-era client, so it may say so; the feed is installed
         // before warm-start and the capability load, so their nudges count.

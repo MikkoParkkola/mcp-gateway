@@ -182,13 +182,16 @@ impl Gateway {
         // (MIK-6750 r4). ONE grant sink for meta-tool and watcher (its mutex
         // serializes grant reloads), built after the store it records into.
         let control_plane_store = build_control_plane_store(&self.config, &control_plane_base)?;
-        let identity_grant_sink = identity_grants::start_identity_grant_audit(
+        let (identity_grant_sink, grants_read) = identity_grants::start_identity_grant_audit(
             &self.config,
             &meta_mcp,
             control_plane_store.as_ref(),
             &control_plane_base.path,
         )
         .await?;
+        // The live config exists already: the audited rows' bytes go straight
+        // into its revision.
+        grants_read.publish(&live_config);
         if let Some(path) = self.reload_path() {
             // Ends this context's reload waits on shutdown (#1808): axum's
             // graceful shutdown waits for every handler, and an admin or

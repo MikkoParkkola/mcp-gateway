@@ -621,6 +621,21 @@ impl LiveEnv {
         }
     }
 
+    /// The grants startup served, into the startup inputs not yet taken.
+    pub(crate) fn set_startup_grants(
+        &self,
+        grants: Option<crate::config_reload::revision::RawBytes>,
+    ) {
+        if let Some(inputs) = self
+            .startup_inputs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+        {
+            inputs.grants = grants;
+        }
+    }
+
     /// The startup load's inputs, once: every later call returns `None`.
     pub(crate) fn take_startup_inputs(&self) -> Option<crate::config_reload::revision::RawInputs> {
         self.startup_inputs
