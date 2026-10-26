@@ -52,11 +52,50 @@ fn last_error() -> CredError {
     }
 }
 
-/// A credential from a successful `CredReadW`, freed exactly once on drop.
+/// A credential from a successful `CredReadW`. On drop, on every path, its
+/// blob is zeroed and then it is freed, exactly once.
 struct Read(*mut CREDENTIALW);
+
+impl Read {
+    /// The blob pointer and its length; null or 0 when there is none.
+    fn blob(&self) -> (*mut u8, usize) {
+        // SAFETY: `self.0` came from a CredReadW that returned TRUE, so it
+        // points to a CREDENTIALW that stays valid until this guard drops.
+        let credential = unsafe { &*self.0 };
+        (
+            credential.CredentialBlob,
+            credential.CredentialBlobSize as usize,
+        )
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// For each guard dropped on this thread: whether its blob was all zero
+    /// at the moment `CredFree` ran.
+    pub(crate) static FREED: std::cell::RefCell<Vec<bool>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
 
 impl Drop for Read {
     fn drop(&mut self) {
+        let (blob, len) = self.blob();
+        if !blob.is_null() && len > 0 {
+            // SAFETY: the blob is `len` bytes owned by this credential until
+            // CredFree, and nothing else holds a reference into it now.
+            unsafe { std::ptr::write_bytes(blob, 0, len) };
+        }
+        #[cfg(test)]
+        {
+            let zero = if blob.is_null() {
+                true
+            } else {
+                // SAFETY: as above; the bytes are read before CredFree runs.
+                let bytes = unsafe { std::slice::from_raw_parts(blob, len) };
+                bytes.iter().all(|byte| *byte == 0)
+            };
+            FREED.with(|freed| freed.borrow_mut().push(zero));
+        }
         // SAFETY: the pointer came from a CredReadW that returned TRUE and is
         // freed only here, once.
         unsafe { CredFree(self.0.cast()) }
@@ -73,26 +112,16 @@ pub(crate) fn read(name: &str) -> Result<WipedBytes, CredError> {
     if unsafe { CredReadW(target.as_ptr(), CRED_TYPE_GENERIC, 0, &raw mut found) } == 0 {
         return Err(last_error());
     }
+    // The guard zeroes the blob and frees it however this function returns.
     let read = Read(found);
-    // SAFETY: CredReadW returned TRUE, so `read.0` points to a CREDENTIALW
-    // that stays valid until `read` drops. Its blob is `CredentialBlobSize`
-    // bytes, or null when that is 0. Nothing else aliases it: the slice is
-    // copied, then the same bytes are zeroed through the one pointer.
-    let bytes = unsafe {
-        let credential = &*read.0;
-        let (blob, len) = (
-            credential.CredentialBlob,
-            credential.CredentialBlobSize as usize,
-        );
-        if blob.is_null() || len == 0 {
-            Vec::new()
-        } else {
-            let copy = std::slice::from_raw_parts(blob, len).to_vec();
-            std::ptr::write_bytes(blob, 0, len);
-            copy
-        }
-    };
-    Ok(WipedBytes::new(bytes))
+    let (blob, len) = read.blob();
+    if blob.is_null() || len == 0 {
+        return Ok(WipedBytes::new(Vec::new()));
+    }
+    // SAFETY: the blob is `len` bytes valid until `read` drops, and it is
+    // only read here; the copy is taken before the guard zeroes it.
+    let copy = unsafe { std::slice::from_raw_parts(blob, len) }.to_vec();
+    Ok(WipedBytes::new(copy))
 }
 
 /// Stores `bytes` under `name`, refusing a name that already exists.

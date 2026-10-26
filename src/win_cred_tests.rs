@@ -45,3 +45,25 @@ fn a_name_with_a_nul_is_refused() {
     assert_eq!(win_cred::read("a\0b").expect_err("nul"), CredError::BadName);
     assert_eq!(win_cred::create("a\0b", b"x"), Err(CredError::BadName));
 }
+
+#[test]
+fn a17_the_blob_is_zero_before_the_single_free() {
+    let freed = || win_cred::FREED.with(|f| std::mem::take(&mut *f.borrow_mut()));
+    let name = fresh("wipe");
+    win_cred::create(&name, b"wipe-me").expect("create");
+    let _ = freed();
+    let read = win_cred::read(&name).expect("read");
+    assert_eq!(read.as_bytes(), b"wipe-me");
+    // One successful CredReadW, one free, and the blob was zero at that free.
+    assert_eq!(freed(), vec![true]);
+    win_cred::delete(&name).expect("delete");
+    // A read that finds nothing frees nothing.
+    assert_eq!(
+        win_cred::read(&name).expect_err("gone"),
+        CredError::NotFound
+    );
+    assert_eq!(freed(), Vec::<bool>::new());
+    // A refused name never reaches CredReadW.
+    assert_eq!(win_cred::read("a\0b").expect_err("nul"), CredError::BadName);
+    assert_eq!(freed(), Vec::<bool>::new());
+}
