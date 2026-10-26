@@ -115,3 +115,21 @@ async fn a_backend_cannot_set_the_delivery_trace_or_effect() {
         );
     }
 }
+
+/// The trace marker is the gateway's own: a result and an error serialize to
+/// the same client bytes with it set as without it.
+#[test]
+fn the_invocation_trace_never_reaches_the_wire() {
+    use crate::protocol::{JsonRpcResponse, RequestId};
+    let answers = [
+        JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({"isError": false})),
+        JsonRpcResponse::error(Some(RequestId::Number(2)), -32050, "failed"),
+    ];
+    for plain in answers {
+        let marked = plain.clone().with_invocation_trace("gw-trace".into());
+        assert_eq!(
+            serde_json::to_vec(&plain).expect("serializable"),
+            serde_json::to_vec(&marked).expect("serializable"),
+        );
+    }
+}

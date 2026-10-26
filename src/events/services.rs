@@ -347,6 +347,7 @@ impl Services {
             external_server: subject.backend,
             external_tool: subject.name,
             subject: None,
+            trace_id: None,
         };
         match firewall.check_response_artifact(
             data,

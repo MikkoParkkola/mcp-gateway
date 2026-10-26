@@ -312,3 +312,38 @@ async fn meta_replay_of_a_surfaced_tool_writes_an_invocation_record() {
         assert_eq!(replay[field], original[field], "{field}: {replay}");
     }
 }
+
+/// MIK-8929.EFFECT.4: a replayed answer's delivery record names the replaying
+/// request's own trace, so it joins that request's invocation record and not
+/// the first execution's.
+#[tokio::test]
+async fn meta_replay_delivery_joins_the_replaying_invocation() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(None)),
+        ..Setup::default()
+    })
+    .await;
+    let (status, first) = post_modern(&fx, &keyed_invoke(1).0).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let (status, second) = post_modern(&fx, &keyed_invoke(2).0).await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "a replay: {second}");
+
+    let traces = |rows: Vec<Value>| -> Vec<Value> {
+        rows.into_iter()
+            .map(|row| row["trace_id"].clone())
+            .collect()
+    };
+    let invoked = traces(invocations(&fx));
+    let delivered = traces(
+        std::fs::read_to_string(&fx.path)
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
+            .filter(|entry| entry["event"] == "response_delivery_attempt")
+            .collect(),
+    );
+    assert_eq!(invoked.len(), 2, "{invoked:?}");
+    assert_ne!(invoked[0], invoked[1], "{invoked:?}");
+    assert_eq!(delivered, invoked, "each delivery joins its own invocation");
+}
