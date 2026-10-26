@@ -127,10 +127,18 @@ async fn guard_tool_call(
 ) -> Result<Option<BackendRejection>, BackendRejection> {
     let named = params.and_then(|params| Some((params, params.get("name")?.as_str()?)));
     let Some((params, tool_name)) = named.filter(|(_, tool)| !tool.is_empty()) else {
+        crate::gateway::meta_mcp::invoke::audit::note_refusal(
+            crate::security::decision_record::DecisionKind::Syntax,
+            None,
+        );
         return Err(unnamed_call(id));
     };
 
     if let Err(e) = validate_tool_name(tool_name) {
+        crate::gateway::meta_mcp::invoke::audit::note_refusal(
+            crate::security::decision_record::DecisionKind::Syntax,
+            None,
+        );
         warn!(backend = %backend_name, tool = %tool_name, "Tool name rejected by validation");
         return Err(backend_security_error(id, &e));
     }
@@ -149,17 +157,34 @@ async fn guard_tool_call(
         target,
     )
     .err()
-    .map(|refusal| refusal.code)
+    .map(|refusal| {
+        crate::gateway::meta_mcp::invoke::audit::note_refusal(refusal.kind, None);
+        refusal.code
+    })
     .or_else(|| {
         state
             .meta_mcp
             .profile_refusal(backend_name, tool_name, session_id)
-            .map(|refusal| refusal.to_rpc_code())
+            .map(|refusal| {
+                crate::gateway::meta_mcp::invoke::audit::note_refusal(
+                    crate::security::decision_record::DecisionKind::RoutingProfile,
+                    None,
+                );
+                refusal.to_rpc_code()
+            })
     });
     // A name its description withholds is the gate's too, judged here before
     // any credential (MIK-8356's caller verdict leaves it to the gate).
-    let withheld =
-        withheld_code.is_some() || backend.blocked_tool_refusal(None, tool_name).is_some();
+    let withheld = withheld_code.is_some() || {
+        let blocked = backend.blocked_tool_refusal(None, tool_name).is_some();
+        if blocked {
+            crate::gateway::meta_mcp::invoke::audit::note_refusal(
+                crate::security::decision_record::DecisionKind::DescriptorBlock,
+                None,
+            );
+        }
+        blocked
+    };
     if let Some(code) = withheld_code {
         // The call's one record names it (MIK-8361).
         crate::gateway::meta_mcp::visible::memo::note_denial_code(backend_name, tool_name, code);
@@ -188,6 +213,10 @@ async fn guard_tool_call(
             );
         }
         if let Some((code, message)) = verdict.request_refusal() {
+            crate::gateway::meta_mcp::invoke::audit::note_refusal(
+                crate::security::decision_record::DecisionKind::Firewall,
+                None,
+            );
             // The shared wording's code, ASI10's -32002 included, with this
             // route's own HTTP status (403).
             return Err(backend_security_error_with_status(
