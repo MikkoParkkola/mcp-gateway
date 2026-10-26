@@ -5,3 +5,4 @@ src/transport/http/streamable_listen.rs	unsolicited	1	Runs ensure_session and op
 src/transport/http/streamable_listen.rs	detected_streamable	1	Reports Some(true): this session is the Streamable HTTP transport.
 src/transport/http/streamable_listen.rs	legacy_pin	1	Hashes the subscriber's session id as the D5 ledger's holder id; bookkeeping, not a security decision.
 src/transport/http/streamable_listen.rs	legacy_interest	1	Forwards a resources/subscribe or unsubscribe through call, which enforces.
+src/transport/http/streamable_listen.rs	probe	1	Sends server/discover through call, which enforces, and maps the answer for classify.
