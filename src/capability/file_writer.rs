@@ -150,9 +150,9 @@ enum YamlPin {
     /// A string of 64 hex digits: the pin to compare.
     Value(String),
     /// Anything else under the key (a number, a boolean, null, a list, a
-    /// map, a string of another length or not hex), or a `sha256` key in
-    /// text that is not YAML (a duplicate key is not YAML here). It can
-    /// never verify.
+    /// map, a string of another length or not hex), or text that is not
+    /// YAML and mentions `sha256` at all (a duplicate key is not YAML
+    /// here). It can never verify.
     Unreadable,
 }
 
@@ -161,7 +161,10 @@ enum YamlPin {
 /// judged.
 fn yaml_pin(text: &str) -> YamlPin {
     let Ok(doc) = crate::yaml::from_str::<crate::yaml::Value>(text) else {
-        return if names_a_pin_key(text) {
+        // Text that is not YAML cannot have its key located safely (it may
+        // be indented, quoted, BOM-prefixed or an explicit `? sha256`), so
+        // any mention of the key fails closed.
+        return if text.contains("sha256") {
             YamlPin::Unreadable
         } else {
             YamlPin::Absent
@@ -176,17 +179,6 @@ fn yaml_pin(text: &str) -> YamlPin {
             _ => YamlPin::Unreadable,
         },
     }
-}
-
-/// Whether a line starts a top-level `sha256` key, bare or quoted: what text
-/// that is not YAML can still claim as a pin.
-fn names_a_pin_key(text: &str) -> bool {
-    text.split('\n').any(|line| {
-        ["sha256", "\"sha256\"", "'sha256'"].iter().any(|key| {
-            line.strip_prefix(key)
-                .is_some_and(|rest| rest.trim_start().starts_with(':'))
-        })
-    })
 }
 
 /// The pin as the loader reads it, or `None` when there is none or the text
@@ -507,7 +499,7 @@ fn read_current(path: &Path, sent: &str) -> Result<(Option<String>, bool), Refus
     #[cfg(unix)]
     let private = {
         use std::os::unix::fs::PermissionsExt;
-        meta.permissions().mode() & 0o077 == 0
+        meta.permissions().mode().trailing_zeros() >= 6
     };
     #[cfg(not(unix))]
     let private = false;
@@ -519,12 +511,14 @@ fn read_current(path: &Path, sent: &str) -> Result<(Option<String>, bool), Refus
 
 /// `<dir>/<name>.yaml`, or the `.yml` file when only that one exists.
 fn target_path(dir: &Path, name: &str) -> PathBuf {
-    let yaml = dir.join(format!("{name}.yaml"));
-    let yml = dir.join(format!("{name}.yml"));
-    if std::fs::symlink_metadata(&yaml).is_err() && std::fs::symlink_metadata(&yml).is_ok() {
-        yml
+    let long_ext = dir.join(format!("{name}.yaml"));
+    let short_ext = dir.join(format!("{name}.yml"));
+    if std::fs::symlink_metadata(&long_ext).is_err()
+        && std::fs::symlink_metadata(&short_ext).is_ok()
+    {
+        short_ext
     } else {
-        yaml
+        long_ext
     }
 }
 
@@ -562,7 +556,7 @@ pub(crate) fn sha256_of(text: &str) -> String {
 /// [`commit`] with `observe` called on the target path once the scratch is
 /// written and before the rename: the seam for the swap race and the
 /// rename failure (lead ruling 2026-10-26).
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) async fn commit_observed(
     edit: Edit<'_>,
     accounts: Option<&AccountStrategyRegistry>,
@@ -598,8 +592,8 @@ async fn commit_with(
     // Under the lock: which file, whether it is a link, its bytes and its
     // mode all come from one look, so nothing installed while the lock was
     // awaited is read or replaced (lead ruling 2026-10-26: never a link).
-    let path = target_path(&dir, edit.name);
-    let (current, private) = read_current(&path, sent)?;
+    let target = target_path(&dir, edit.name);
+    let (current, private) = read_current(&target, sent)?;
     let patch = || unified_diff(current.as_deref().unwrap_or_default(), sent);
     let in_place = edit.pin == PinUpdate::InPlace && matches!(edit.change, Change::Write(_));
     if in_place && current.as_deref().is_some_and(pin_broken) {
@@ -618,7 +612,7 @@ async fn commit_with(
     }
     let before = current.as_deref().map(sha);
     let Change::Write(_) = edit.change else {
-        std::fs::remove_file(&path).map_err(|e| unwritable(e, patch()))?;
+        std::fs::remove_file(&target).map_err(|e| unwritable(e, patch()))?;
         return Ok(Committed {
             before,
             after: None,
@@ -626,7 +620,7 @@ async fn commit_with(
         });
     };
     let (bytes, pin) = final_bytes(sent, current.as_deref(), edit.pin)?;
-    validate(&bytes, &path, accounts).map_err(|errors| Refused::Invalid {
+    validate(&bytes, &target, accounts).map_err(|errors| Refused::Invalid {
         errors,
         patch: patch(),
     })?;
@@ -640,7 +634,7 @@ async fn commit_with(
     } else {
         FileMode::Inherit
     };
-    write(&path, &bytes, mode, observe).map_err(|e| unwritable(e, patch()))?;
+    write(&target, &bytes, mode, observe).map_err(|e| unwritable(e, patch()))?;
     Ok(Committed {
         before,
         after: Some(sha(&bytes)),

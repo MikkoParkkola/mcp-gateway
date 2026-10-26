@@ -10,6 +10,8 @@ const MUTATION: &str = "tests/webui_management_tests/backend_mutation.rs";
 const EVENTS_ADMIN: &str = "tests/mik_7630_events_admin.rs";
 const EVENTS_RECONCILE: &str = "tests/mik_7630_events_reconcile.rs";
 const CP_AUTHORITY: &str = "tests/e2min_control_plane_authority.rs";
+const EDITOR: &str = "tests/webui_management_tests/capability_editor.rs";
+const CAPABILITIES: &str = "tests/webui_management_tests/capabilities.rs";
 const CP_WRITES: &[Citation] = &[(
     CP_AUTHORITY,
     "admin_grant_and_policy_writes_are_refused_and_point_at_config",
@@ -23,6 +25,18 @@ const CP_WRITES: &[Citation] = &[(
 type Citation = (&'static str, &'static str);
 
 const SERVED_BY: &[(&str, Method, &[Citation])] = &[
+    // The table sends no If-Match, so its admin answer is 428; these tests
+    // send the base and pin the served save and delete.
+    (
+        "/ui/api/capabilities/{name}",
+        Method::PUT,
+        &[(EDITOR, "test_save_answers_the_next_base")],
+    ),
+    (
+        "/ui/api/capabilities/{name}",
+        Method::DELETE,
+        &[(CAPABILITIES, "test_capability_create_read_delete_lifecycle")],
+    ),
     (
         "/ui/api/reload",
         Method::POST,

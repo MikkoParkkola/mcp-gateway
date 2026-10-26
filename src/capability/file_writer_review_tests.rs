@@ -3,11 +3,21 @@
 //! The capability writer: the cases code review found (pin shapes, the
 //! no-follow read, the patch).
 
-use super::super::{Base, Change, PinUpdate, Refused, commit, commit_observed};
+#[cfg(unix)]
+use super::super::commit_observed;
+use super::super::{Base, Change, PinUpdate, Refused, commit};
 #[cfg(unix)]
 use super::set_mode;
 use super::{TEXT, described, dir_with, edit, pinned, sha, soon};
 use crate::capability::compute_capability_hash;
+
+/// `count` lines from `line`, into one buffer.
+fn lines_of(count: usize, line: impl Fn(usize) -> String) -> String {
+    (0..count).fold(String::new(), |mut out, i| {
+        out.push_str(&line(i));
+        out
+    })
+}
 
 // ── Code review r1 ────────────────────────────────────────────────────
 
@@ -123,8 +133,8 @@ fn patch_marks_a_missing_final_newline_and_keeps_terminators() {
 
 #[test]
 fn patch_of_two_large_unrelated_files_stays_bounded() {
-    let from: String = (0..3000).map(|i| format!("a{i}\n")).collect();
-    let to: String = (0..3000).map(|i| format!("b{i}\n")).collect();
+    let from = lines_of(3000, |i| format!("a{i}\n"));
+    let to = lines_of(3000, |i| format!("b{i}\n"));
     let patch = super::super::unified_diff(&from, &to);
     assert_eq!(
         patch.lines().filter(|l| l.starts_with('-')).count(),
@@ -325,16 +335,14 @@ fn a_large_middle_falls_back_to_a_full_replace() {
     // Half the lines are shared, so an LCS would keep them as context; the
     // fallback keeps none. Past the cell budget, no context line remains
     // after the shared first line.
-    let from: String = (0..3000).map(|i| format!("x{i}\n")).collect();
-    let to: String = (0..3000)
-        .map(|i| {
-            if i % 2 == 0 {
-                format!("x{i}\n")
-            } else {
-                format!("y{i}\n")
-            }
-        })
-        .collect();
+    let from = lines_of(3000, |i| format!("x{i}\n"));
+    let to = lines_of(3000, |i| {
+        if i % 2 == 0 {
+            format!("x{i}\n")
+        } else {
+            format!("y{i}\n")
+        }
+    });
     let patch = super::super::unified_diff(&from, &to);
     let context = patch.lines().filter(|l| l.starts_with(' ')).count();
     assert_eq!(context, 1, "only the shared prefix line is context");

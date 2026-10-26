@@ -36,7 +36,7 @@ fn dir_with(text: &str) -> (tempfile::TempDir, PathBuf) {
     (dir, file)
 }
 
-fn edit<'a>(dir: &'a Path, base: Base, change: Change, pin: PinUpdate) -> Edit<'a> {
+fn edit(dir: &Path, base: Base, change: Change, pin: PinUpdate) -> Edit<'_> {
     Edit {
         dir,
         name: "kept",

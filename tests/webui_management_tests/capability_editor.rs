@@ -112,13 +112,14 @@ async fn test_validate_route_answers_and_never_writes() {
 async fn test_validate_reports_the_syntax_error_line() {
     let (_tmp, _file, router, _store) = editor_with(VALID_YAML).await;
 
-    // A tab cannot indent YAML: the scanner stops on line 3.
+    // A second `: ` on one line: "mapping values are not allowed here",
+    // located on line 3 itself.
     let (status, _, body) = call(
         &router,
         Method::POST,
         "/ui/api/capabilities/kept/validate",
         &[],
-        "name: kept\ndescription: ok\n\tbad: 1\n",
+        "name: kept\ndescription: ok\nkey: value: other\n",
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");

@@ -399,7 +399,7 @@ fn record_edit(
     action: &str,
     name: &str,
     committed: &Committed,
-) -> Result<(), axum::response::Response> {
+) -> Option<axum::response::Response> {
     let mut fields = serde_json::Map::new();
     fields.insert("action".into(), action.into());
     fields.insert("capability".into(), name.into());
@@ -487,7 +487,7 @@ pub async fn put_capability(
     match file_writer::commit(edit, Some(&accounts), std::time::Instant::now() + LOCK_WAIT).await {
         Ok(committed) => {
             let identity = identity.map(|Extension(i)| i);
-            if let Err(withheld) = record_edit(
+            if let Some(withheld) = record_edit(
                 &state,
                 client.as_ref(),
                 identity.as_ref(),
@@ -661,7 +661,7 @@ pub async fn create_capability(
     match file_writer::commit(edit, Some(&accounts), std::time::Instant::now() + LOCK_WAIT).await {
         Ok(committed) => {
             let identity = identity.map(|Extension(i)| i);
-            if let Err(withheld) = record_edit(
+            if let Some(withheld) = record_edit(
                 &state,
                 client.as_ref(),
                 identity.as_ref(),
@@ -716,7 +716,7 @@ pub async fn delete_capability(
     match file_writer::commit(edit, None, std::time::Instant::now() + LOCK_WAIT).await {
         Ok(committed) => {
             let identity = identity.map(|Extension(i)| i);
-            if let Err(withheld) = record_edit(
+            if let Some(withheld) = record_edit(
                 &state,
                 client.as_ref(),
                 identity.as_ref(),

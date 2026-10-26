@@ -114,19 +114,15 @@ async fn admin_action_layer(
 /// layer does: the capability editor's record of what a save changed (D5).
 /// With no audit log configured there is nothing to append.
 ///
-/// # Errors
-///
-/// The layer's 503 "withheld" answer when the append fails.
+/// `Some` is the layer's 503 "withheld" answer, when the append failed.
 pub(super) fn record_admin_action(
     state: &AppState,
     surface: &'static str,
     client: Option<&AuthenticatedClient>,
     identity: Option<&VerifiedIdentity>,
     fields: serde_json::Map<String, serde_json::Value>,
-) -> Result<(), Response> {
-    let Some(log) = state.transparency_log.as_ref() else {
-        return Ok(());
-    };
+) -> Option<Response> {
+    let log = state.transparency_log.as_ref()?;
     let subject =
         identity.and_then(|id| GrantSubject::checked(id.issuer.clone(), id.subject.clone(), None));
     let envelope = AuditEnvelope::ok(AuditWho::from_request(
@@ -135,7 +131,8 @@ pub(super) fn record_admin_action(
         state.auth_config.record_key(),
     ));
     log.append_admin_action(surface, fields, &envelope)
-        .map_err(|error| withheld(&error))
+        .err()
+        .map(|error| withheld(&error))
 }
 
 /// The `AuditUnavailable` answer: the action may have run, its result is
