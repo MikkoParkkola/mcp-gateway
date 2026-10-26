@@ -14,22 +14,31 @@ pub(crate) use crate::wiped_bytes::WipedBytes;
 pub(crate) enum KeychainError {
     /// No entry has that name.
     #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "constructed by the OS readers, which land next")
+        all(not(test), windows),
+        expect(
+            dead_code,
+            reason = "constructed by the Windows reader, which lands next"
+        )
     )]
     Missing,
     /// The store holding the entry is locked, and the gateway never prompts.
     #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "constructed by the OS readers, which land next")
+        all(not(test), windows),
+        expect(
+            dead_code,
+            reason = "constructed by the Windows reader, which lands next"
+        )
     )]
     Locked,
     /// The store cannot be reached: no tool, no session bus, or a refusal.
     Unavailable(String),
     /// The store did not answer within the bound (ADR-028 rule 7).
     #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "constructed by the OS readers, which land next")
+        all(not(test), windows),
+        expect(
+            dead_code,
+            reason = "constructed by the Windows reader, which lands next"
+        )
     )]
     Timeout,
 }
