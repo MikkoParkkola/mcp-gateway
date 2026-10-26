@@ -9,6 +9,7 @@
 //!
 //! All UI code is gated behind the `webui` feature flag.
 
+mod activity;
 pub mod admin_audit;
 pub mod backend_ops;
 pub mod backends;
