@@ -8,7 +8,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use super::segments::{list_segments, sealed_path};
+use super::segments::{active_segment_seq, list_segments, sealed_path};
 
 /// Where a page starts reading: bytes below `end` in `file` are unread.
 pub(crate) struct Position {
@@ -28,7 +28,9 @@ pub(crate) struct Position {
 /// rotation is honoured only while nothing is sealed.
 pub(crate) fn position(log: &Path, cursor: Option<(u64, Option<u64>)>) -> io::Result<Position> {
     let sealed = list_segments(log)?;
-    let active_seq = sealed.last().map_or(0, |s| s.seq + 1);
+    // The active file's own open record names its number: retention or the
+    // disk-full path can leave no sealed sibling to count from.
+    let active_seq = active_segment_seq(log, sealed.last().map_or(0, |s| s.seq + 1));
     let len_of = |p: &Path| match std::fs::metadata(p) {
         Ok(m) => Ok(m.len()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(0),
@@ -166,4 +168,24 @@ pub(crate) fn lines_newest_first(body: &[u8], body_start: u64) -> Vec<(u64, &[u8
     }
     lines.reverse();
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::position;
+
+    /// Every sealed segment expired (retention or the disk-full path): the
+    /// active file is numbered by its open record, not by counting siblings.
+    #[test]
+    fn the_active_segment_is_numbered_by_its_open_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("audit.jsonl");
+        let opened = serde_json::json!({"event": "audit_segment_opened", "segment_seq": 7});
+        std::fs::write(&log, format!("{opened}\n")).unwrap();
+        assert_eq!(position(&log, None).unwrap().segment, Some(7));
+        // A cursor into that segment resolves to the active file.
+        let at = position(&log, Some((3, Some(7)))).unwrap();
+        assert_eq!(at.file, log);
+        assert!(!at.reset);
+    }
 }
