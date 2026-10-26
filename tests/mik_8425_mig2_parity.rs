@@ -107,7 +107,7 @@ fn compare_keyed(name: &str, read: impl Fn(&str) -> String) -> Outcome {
         differ: Vec::new(),
     };
     let table = fixture(name);
-    let mut rows = Vec::new();
+    let mut unchanged = Vec::new();
     let mut skipped = Vec::new();
     for row in table.lines() {
         let mut cols = row.splitn(3, '\t');
@@ -116,20 +116,20 @@ fn compare_keyed(name: &str, read: impl Fn(&str) -> String) -> Outcome {
             panic!("{name}: malformed row {row:?}");
         };
         let Ok(text) = std::fs::read_to_string(golden::repo_root().join(path)) else {
-            // The package does not ship it: neither a skip nor a listed row.
+            // The package does not ship it: not a skip the list must name.
             if golden::in_packaged_crate() {
                 eprintln!("{name}: {path} is not in the package");
             } else {
-                rows.push(path);
                 skipped.push(path);
             }
             continue;
         };
-        rows.push(path);
         let expected = allowed.get(path).map_or(recorded, String::as_str);
         let same = read(&text) == expected;
         // An edited file that still reads as recorded is compared, not skipped.
-        if golden::digest(text.as_bytes()) != sha && !same {
+        if golden::digest(text.as_bytes()) == sha {
+            unchanged.push(path);
+        } else if !same {
             skipped.push(path);
             continue;
         }
@@ -138,7 +138,7 @@ fn compare_keyed(name: &str, read: impl Fn(&str) -> String) -> Outcome {
             outcome.differ.push(path.to_owned());
         }
     }
-    golden::assert_skips_reviewed(name, rows, &skipped);
+    golden::assert_skips_reviewed(name, unchanged, &skipped);
     outcome
 }
 

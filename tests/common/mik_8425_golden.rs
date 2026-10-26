@@ -166,14 +166,17 @@ pub fn reviewed_skips() -> std::collections::BTreeMap<String, String> {
         .collect()
 }
 
-/// A keyed golden skips exactly the reviewed rows. `rows` are the golden's
-/// paths and `skipped` those it could not compare (gone or edited). Fails on
-/// a skip `reviewed_skips.tsv` does not list, and on a listed path of this
-/// golden that compares again. The old backend has left the build, so an
-/// edited file cannot be re-recorded; a reviewer adds its line instead.
+/// A keyed golden skips exactly the reviewed rows. `skipped` are the paths
+/// it could not compare (gone, or edited so they read differently) and
+/// `unchanged` those whose bytes still match the recording. Fails on a skip
+/// `reviewed_skips.tsv` does not list, and on a listed path whose bytes are
+/// back to the recording. One list serves every golden, so a listed edit
+/// that reads as recorded in this golden is no failure: another may need
+/// the line. The old backend has left the build, so an edited file cannot
+/// be re-recorded; a reviewer adds its line instead.
 pub fn assert_skips_reviewed<'a>(
     name: &str,
-    rows: impl IntoIterator<Item = &'a str>,
+    unchanged: impl IntoIterator<Item = &'a str>,
     skipped: &[&str],
 ) {
     let reviewed = reviewed_skips();
@@ -193,13 +196,13 @@ pub fn assert_skips_reviewed<'a>(
         "golden {name}: recorded files edited or removed since recording: {unlisted:?}; \
          review each and add `path<TAB>PR` to tests/fixtures/mik_8425_yaml/reviewed_skips.tsv"
     );
-    let compares_again: Vec<&str> = rows
+    let restored: Vec<&str> = unchanged
         .into_iter()
-        .filter(|path| reviewed.contains_key(*path) && !skipped.contains(path))
+        .filter(|path| reviewed.contains_key(*path))
         .collect();
     assert!(
-        compares_again.is_empty(),
-        "golden {name}: listed in reviewed_skips.tsv but compared again: {compares_again:?}; \
+        restored.is_empty(),
+        "golden {name}: listed in reviewed_skips.tsv but unchanged since recording: {restored:?}; \
          remove their lines"
     );
 }
@@ -211,7 +214,7 @@ pub fn assert_skips_reviewed<'a>(
 /// match. `read` gives the readings for one file's text.
 pub fn assert_keyed_golden(name: &str, read: impl Fn(&str) -> String) {
     let golden = read_golden(name);
-    let mut rows = Vec::new();
+    let mut unchanged = Vec::new();
     let mut skipped = Vec::new();
     let mut not_packaged = Vec::new();
     let mut differ = Vec::new();
@@ -222,17 +225,15 @@ pub fn assert_keyed_golden(name: &str, read: impl Fn(&str) -> String) {
             panic!("golden {name}: malformed row {row:?}");
         };
         let Ok(text) = std::fs::read_to_string(repo_root().join(path)) else {
-            // The package does not ship it: neither a skip nor a row the
-            // reviewed list can be checked against.
+            // The package does not ship it: not a skip the reviewed list
+            // must name.
             if in_packaged_crate() {
                 not_packaged.push(path);
             } else {
-                rows.push(path);
                 skipped.push(path);
             }
             continue;
         };
-        rows.push(path);
         let actual = read(&text);
         // An edited file that still reads exactly as recorded (a comment
         // edit) is compared, not skipped; only a changed reading needs review.
@@ -242,6 +243,7 @@ pub fn assert_keyed_golden(name: &str, read: impl Fn(&str) -> String) {
             }
             continue;
         }
+        unchanged.push(path);
         if actual != expected {
             differ.push(format!(
                 "{path}\n  recorded: {expected}\n  now:      {actual}"
@@ -254,7 +256,7 @@ pub fn assert_keyed_golden(name: &str, read: impl Fn(&str) -> String) {
             not_packaged.len()
         );
     }
-    assert_skips_reviewed(name, rows, &skipped);
+    assert_skips_reviewed(name, unchanged, &skipped);
     assert!(
         differ.is_empty(),
         "golden {name}: {} file(s) read differently from the recording:\n{}",

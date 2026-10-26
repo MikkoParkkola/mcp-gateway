@@ -153,7 +153,7 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
         .collect();
     let files = shipped_files();
     assert!(!files.is_empty(), "expected to find shipped YAML files");
-    let rows: Vec<String> = recorded.keys().cloned().collect();
+    let mut unchanged = Vec::new();
     let mut skipped = Vec::new();
     let mut new_files = Vec::new();
     let mut refused = Vec::new();
@@ -173,7 +173,9 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
         // A verdict is too coarse to tell a comment edit from a value edit,
         // so an edited file is still checked only when its full `trees.tsv`
         // reading is unchanged.
-        if sha != digest(&content) && tree_readings.get(path) != Some(&trees::readings(&content)) {
+        if sha == digest(&content) {
+            unchanged.push(path.clone());
+        } else if tree_readings.get(path) != Some(&trees::readings(&content)) {
             skipped.push(path.clone());
             continue;
         }
@@ -192,7 +194,11 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
     }
     skipped.extend(recorded.into_keys());
     let skipped: Vec<&str> = skipped.iter().map(String::as_str).collect();
-    golden::assert_skips_reviewed("shipped.tsv", rows.iter().map(String::as_str), &skipped);
+    golden::assert_skips_reviewed(
+        "shipped.tsv",
+        unchanged.iter().map(String::as_str),
+        &skipped,
+    );
     if !new_files.is_empty() {
         eprintln!(
             "shipped-yaml: {} new file(s) without a row: {new_files:?}",

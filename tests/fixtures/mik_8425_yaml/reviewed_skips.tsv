@@ -1,6 +1,7 @@
 # Recorded YAML files edited since their golden rows were recorded, each with
-# the PR that edited it. The old backend has left the build,
-# so these rows cannot be re-recorded. Every keyed golden fails on a skip not
-# listed here, and on a listed path that compares again. Format: path<TAB>PR.
+# the PR that edited it. The old backend has left the build, so these rows
+# cannot be re-recorded. An edited file that still reads as recorded needs no
+# line. Every keyed golden fails on a skip not listed here, and on a listed
+# path whose bytes are back to the recording. Format: path<TAB>PR.
 capabilities/linear/linear_get_issue.yaml	#4133
 examples/token-exchange-live.yaml	#4150
