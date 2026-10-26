@@ -86,7 +86,10 @@ fn creation_targets(intent: &TaskIntent, call: &TaskCall) -> Vec<Target> {
         .upgrade()
         .and_then(|host| host.meta_mcp().direct_job(&call.tool, &call.arguments))
         .map(|job| Target {
-            server: call.surfaced_server.clone().unwrap_or(job.server),
+            server: call
+                .surfaced_server
+                .as_ref()
+                .map_or(job.server, |target| target.server.clone()),
             tool: job.tool,
         })
         .into_iter()
@@ -142,7 +145,7 @@ async fn run_dispatched(
     // moved or removed that name since.
     #[cfg(test)]
     crate::gateway::meta_mcp::visible::seams::task_starts();
-    let recorded = call.surfaced_server.as_deref();
+    let recorded = call.surfaced_server.as_ref();
     if !state.meta_mcp().surfaced_target_holds(&call.tool, recorded) {
         settle_surfaced_refused(&executor, &principal, &id, revision, &mut cancel_rx).await;
         return;
@@ -623,7 +626,7 @@ pub(super) fn inspect_settled(
     // server's targets.
     state
         .meta_mcp()
-        .with_surfaced_pin_sync(&call.tool, call.surfaced_server.as_deref(), || {
+        .with_surfaced_pin_sync(&call.tool, call.surfaced_server.as_ref(), || {
             inspect_settled_pinned(state, call, id, response)
         })
 }

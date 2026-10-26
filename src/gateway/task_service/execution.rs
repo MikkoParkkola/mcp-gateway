@@ -56,11 +56,11 @@ const EXECUTION_TARGET: &str = module_path!();
 pub(crate) struct TaskCall {
     pub tool: String,
     pub arguments: Value,
-    /// The server a surfaced `tool` resolved to at intake, read
+    /// Where a surfaced `tool` resolved at intake, read
     /// inside the request's snapshot. The worker and a resume dispatch there
     /// or refuse; `None` for a non-surfaced call and for a record from before
     /// the field, which resolves live as before.
-    pub surfaced_server: Option<String>,
+    pub surfaced_server: Option<super::record::SurfacedTarget>,
 }
 
 /// `'static` intent: nothing borrowed from the request-thread caller.

@@ -49,7 +49,7 @@ src/gateway/meta_mcp/surfaced.rs	apply_surfaced_reload	get_for	Visibility
 src/gateway/meta_mcp/surfaced.rs	list_servers	all_for	Visibility
 src/gateway/meta_mcp/surfaced.rs	resolve_surfaced_tool	get_for	Visibility
 src/gateway/meta_mcp/surfaced.rs	surfaced_schema_withheld	get_for	Visibility
-src/gateway/meta_mcp/surfaced.rs	surfaced_target_holds	get_for	Visibility
+src/gateway/meta_mcp/surfaced.rs	surfaced_kind	get_for	Visibility
 src/gateway/meta_mcp/task_confirmation.rs	classify_surfaced	get_for	Visibility
 src/gateway/meta_mcp/task_replay.rs	cold_lease_remaining	scoped_get	scoped
 src/gateway/meta_mcp/task_replay.rs	settle_caller_view	scoped_get	scoped

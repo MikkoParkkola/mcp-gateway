@@ -66,10 +66,15 @@ fn started_in(
 
 /// Rewrite the file to `pairs` and reload it.
 async fn reload_to(dir: &tempfile::TempDir, context: &ReloadContext, pairs: &[(&str, &str)]) {
+    reload_config(dir, context, &config_with(pairs)).await;
+}
+
+/// Rewrite the file to `config` and reload it.
+async fn reload_config(dir: &tempfile::TempDir, context: &ReloadContext, config: &Config) {
     let path = dir.path().join("gateway.yaml");
     crate::gateway::test_helpers::write_owner_only(
         &path,
-        crate::yaml::to_string(&config_with(pairs)).expect("yaml"),
+        crate::yaml::to_string(config).expect("yaml"),
     )
     .expect("write");
     context
@@ -230,7 +235,14 @@ async fn l3_a_changed_list_nudges_once_and_an_identical_one_never() {
         count
     };
     let _ = surfaced_nudges();
-    reload_to(&dir, &context, &[("t1", "alpha")]).await;
+    // The same list beside an unrelated edit, so the reload reaches the hook
+    // rather than returning early on an empty patch.
+    let beside = |pairs: &[(&str, &str)], warm: &str| {
+        let mut config = config_with(pairs);
+        config.meta_mcp.warm_start = vec![warm.to_owned()];
+        config
+    };
+    reload_config(&dir, &context, &beside(&[("t1", "alpha")], "w1")).await;
     assert_eq!(surfaced_nudges(), 0, "L3: an identical list nudged");
     reload_to(&dir, &context, &[("t1", "beta")]).await;
     assert_eq!(
@@ -238,7 +250,7 @@ async fn l3_a_changed_list_nudges_once_and_an_identical_one_never() {
         1,
         "L3: a changed list must nudge exactly once"
     );
-    reload_to(&dir, &context, &[("t1", "beta")]).await;
+    reload_config(&dir, &context, &beside(&[("t1", "beta")], "w2")).await;
     assert_eq!(
         surfaced_nudges(),
         0,

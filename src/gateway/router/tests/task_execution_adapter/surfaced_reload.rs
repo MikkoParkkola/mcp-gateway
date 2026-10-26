@@ -289,3 +289,64 @@ async fn l10e_a_move_during_the_call_keeps_the_result_inspected_as_alpha() {
     );
     std::assert_eq!((alpha.calls(), beta.calls()), (1, 0), "{fetched}");
 }
+
+/// A capability set named `name` holding [`TOOL`].
+fn capabilities_named(name: &str) -> Arc<crate::capability::CapabilityBackend> {
+    let caps = crate::capability::CapabilityBackend::new(
+        name,
+        Arc::new(crate::capability::CapabilityExecutor::new()),
+    );
+    let yaml = format!(
+        "name: {TOOL}\ndescription: Test capability\nproviders:\n  primary:\n    \
+         service: rest\n    config:\n      base_url: https://example.invalid\n      path: /echo\n"
+    );
+    caps.register_capability(crate::capability::parse_capability(&yaml).expect("capability"))
+        .expect("registered");
+    Arc::new(caps)
+}
+
+/// L10f (Nk, Nc): a target that keeps its server name but changes kind does
+/// not hold. A backend swapped for a capability set of the same name, and the
+/// reverse, are both changed targets; a capability set under another name
+/// never holds a target recorded for this one.
+#[tokio::test]
+async fn l10f_a_target_that_changes_kind_does_not_hold() {
+    use crate::gateway::task_service::SurfacedKind;
+    let alpha = MockBackend::answering(Answer::ok());
+    let beta = MockBackend::answering(Answer::ok());
+    let (state, _store) = surfaced_state(&alpha, &beta).await;
+    let meta = &state.meta_mcp;
+    let backend = meta.surfaced_target_at_intake(TOOL).expect("surfaced");
+    std::assert_eq!(backend.kind, SurfacedKind::Backend);
+    assert!(meta.surfaced_target_holds(TOOL, Some(&backend)), "premise");
+
+    assert!(
+        state.backends.remove(ALPHA),
+        "premise: alpha was registered"
+    );
+    meta.set_capabilities(capabilities_named("other"));
+    assert!(
+        !meta.surfaced_target_holds(TOOL, Some(&backend)),
+        "a removed backend held through a capability of the tool's name"
+    );
+    let capability = meta.surfaced_target_at_intake(TOOL).expect("surfaced");
+    assert!(
+        !meta.surfaced_target_holds(TOOL, Some(&capability)),
+        "a capability set named other held a target recorded for alpha"
+    );
+
+    meta.set_capabilities(capabilities_named(ALPHA));
+    assert!(
+        !meta.surfaced_target_holds(TOOL, Some(&backend)),
+        "a backend swapped for a same-named capability held"
+    );
+    assert!(
+        meta.surfaced_target_holds(TOOL, Some(&capability)),
+        "premise"
+    );
+    register(&state, ALPHA, &alpha);
+    assert!(
+        !meta.surfaced_target_holds(TOOL, Some(&capability)),
+        "a capability swapped for a same-named backend held"
+    );
+}

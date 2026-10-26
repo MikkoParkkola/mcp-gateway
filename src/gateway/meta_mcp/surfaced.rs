@@ -15,6 +15,7 @@ use tracing::{debug, warn};
 
 use crate::capability::validator::input_schema_is_structurally_valid;
 use crate::config::SurfacedToolConfig;
+use crate::gateway::task_service::{SurfacedKind, SurfacedTarget};
 use crate::{Result, protocol::Tool};
 
 use super::MetaMcp;
@@ -120,24 +121,55 @@ impl MetaMcp {
 }
 
 impl MetaMcp {
-    /// Whether a task's recorded surfaced server still holds,
+    /// Where a surfaced `tool` resolves for a task admitted now: its server in
+    /// this request's snapshot, and what serves it there. `None` for a
+    /// non-surfaced name.
+    pub(crate) fn surfaced_target_at_intake(&self, tool: &str) -> Option<SurfacedTarget> {
+        let server = self.surfaced_server_unscoped(tool)?;
+        Some(SurfacedTarget {
+            server: server.to_owned(),
+            kind: self.surfaced_kind(server),
+        })
+    }
+
+    /// What kind of target serves `server` right now: a registered backend of
+    /// that name, else the capability fallback. The hold then also requires
+    /// the capability set to be named `server` and to hold the tool, the
+    /// invoke gate's own test.
+    fn surfaced_kind(&self, server: &str) -> SurfacedKind {
+        if self
+            .backends
+            .get_for(super::scoped_backends::Unscoped::Visibility, server)
+            .is_some()
+        {
+            SurfacedKind::Backend
+        } else {
+            SurfacedKind::Capability
+        }
+    }
+
+    /// Whether a task's recorded surfaced target still holds,
     /// read memo-blind so a request snapshot cannot hide a reload: the live
-    /// map still surfaces `tool` from `recorded`, and what serves it is still
-    /// configured: the backend `recorded`, or, as `resolve_surfaced_tool`
-    /// falls back, a loaded capability named `tool`. `None` (no recorded
-    /// server) always holds and resolves live.
-    pub(crate) fn surfaced_target_holds(&self, tool: &str, recorded: Option<&str>) -> bool {
+    /// map still surfaces `tool` from the recorded server, and the same kind
+    /// of target still serves it there: the registered backend, or the
+    /// capability set named after that server holding `tool`. A backend
+    /// swapped for a same-named capability, or the reverse, is a changed
+    /// target. `None` (no recorded target) always holds and resolves live.
+    pub(crate) fn surfaced_target_holds(
+        &self,
+        tool: &str,
+        recorded: Option<&SurfacedTarget>,
+    ) -> bool {
         let Some(recorded) = recorded else {
             return true;
         };
-        self.surfaced_state_live().map.unscoped(tool) == Some(recorded)
-            && (self
-                .backends
-                .get_for(super::scoped_backends::Unscoped::Visibility, recorded)
-                .is_some()
+        let server = recorded.server.as_str();
+        self.surfaced_state_live().map.unscoped(tool) == Some(server)
+            && self.surfaced_kind(server) == recorded.kind
+            && (recorded.kind == SurfacedKind::Backend
                 || self
                     .get_capabilities()
-                    .is_some_and(|cap| cap.has_capability(tool)))
+                    .is_some_and(|cap| cap.name == server && cap.has_capability(tool)))
     }
 
     /// Run `dispatch` with `tool` pinned to its recorded server in the active
@@ -147,10 +179,10 @@ impl MetaMcp {
     pub(crate) async fn with_surfaced_pin<F: std::future::Future>(
         &self,
         tool: &str,
-        recorded: Option<&str>,
+        recorded: Option<&SurfacedTarget>,
         dispatch: F,
     ) -> F::Output {
-        let Some(server) = recorded.map(super::visible::intern) else {
+        let Some(server) = recorded.map(|target| super::visible::intern(&target.server)) else {
             return dispatch.await;
         };
         super::visible::memo::with_visibility_memo(async move {
@@ -168,10 +200,10 @@ impl MetaMcp {
     pub(crate) fn with_surfaced_pin_sync<R>(
         &self,
         tool: &str,
-        recorded: Option<&str>,
+        recorded: Option<&SurfacedTarget>,
         read: impl FnOnce() -> R,
     ) -> R {
-        match recorded.map(super::visible::intern) {
+        match recorded.map(|target| super::visible::intern(&target.server)) {
             Some(server) => super::visible::memo::with_surfaced_pin_sync(tool, server, read),
             None => read(),
         }

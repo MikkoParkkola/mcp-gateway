@@ -88,7 +88,7 @@ impl MetaMcp {
             arguments,
             // Read in this request's snapshot, so the task runs
             // where it was admitted or is refused.
-            surfaced_server: self.surfaced_server_unscoped(tool_name).map(str::to_owned),
+            surfaced_server: self.surfaced_target_at_intake(tool_name),
         };
         match executor.begin(intent, task, backend, call).await {
             Ok(BeginOutcome::Existing(held)) => {

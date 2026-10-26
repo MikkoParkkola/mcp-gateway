@@ -343,7 +343,7 @@ async fn dispatch(
     // all when a reload has moved or removed that surfaced name since. The pin
     // covers the readmission as well as the dispatch.
     let meta = state.meta_mcp();
-    let recorded = call.surfaced_server.as_deref();
+    let recorded = call.surfaced_server.as_ref();
     if !meta.surfaced_target_holds(&call.tool, recorded) {
         return Some(crate::gateway::meta_mcp::surfaced_target_changed());
     }

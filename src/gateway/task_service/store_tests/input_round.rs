@@ -780,21 +780,21 @@ async fn a_round_that_fits_exactly_is_taken_and_answerable() {
     );
 }
 
-/// L13 (N13, pin): a round written before `surfacedServer` existed decodes
-/// with no recorded server and writes no member, so parked tasks load
-/// unchanged; a set server round-trips under its camelCase name.
+/// L13 (N13, pin): a round from before `surfacedServer` decodes with none and
+/// writes no member; a set target round-trips as `{server, kind}`.
 #[test]
 fn l13_the_surfaced_server_field_is_absent_when_none_and_round_trips_when_set() {
     let old = json!({ "requestState": "s", "tool": "t", "arguments": {} });
     let loaded: InputRound = serde_json::from_value(old.clone()).unwrap();
     assert_eq!(loaded.surfaced_server, None);
     assert_eq!(serde_json::to_value(&loaded).unwrap(), old);
+    let target = json!({ "server": "alpha", "kind": "capability" });
     let set = InputRound {
-        surfaced_server: Some("alpha".to_owned()),
+        surfaced_server: Some(serde_json::from_value(target.clone()).unwrap()),
         ..loaded
     };
     let written = serde_json::to_value(&set).unwrap();
-    assert_eq!(written["surfacedServer"], json!("alpha"));
+    assert_eq!(written["surfacedServer"], target);
     let back: InputRound = serde_json::from_value(written).unwrap();
     assert_eq!(back, set);
 }
