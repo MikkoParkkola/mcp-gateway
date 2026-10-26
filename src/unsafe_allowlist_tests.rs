@@ -1,14 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! ADR-016: `unsafe` lives in exactly the scoped modules named here. A new
-//! site fails this test until an ADR names it (ADR-028 rule 10 adds the
-//! Windows credential module when it lands).
+//! site fails this test until an ADR names it (ADR-028 rule 10 added the
+//! Windows credential module).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// Product and test-helper files allowed to hold `unsafe`.
-const ALLOWED: &[&str] = &["src/win_acl.rs", "src/gateway/server/tests/alloc_meter.rs"];
+const ALLOWED: &[&str] = &[
+    "src/win_acl.rs",
+    "src/win_cred.rs",
+    "src/gateway/server/tests/alloc_meter.rs",
+];
 
 /// Integration tests with their own `unsafe` exemption (environment mutation
 /// in single-threaded test binaries), recorded so a new one is a decision.
@@ -199,4 +203,33 @@ fn the_scan_sees_every_form_of_unsafe() {
     ] {
         assert!(!uses_unsafe(path, source), "false hit: {source}");
     }
+}
+
+#[test]
+fn a11_every_unsafe_block_in_win_cred_names_its_contract() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/win_cred.rs");
+    let text = std::fs::read_to_string(&path).expect("read src/win_cred.rs");
+    let lines: Vec<&str> = text.lines().collect();
+    let mut blocks = 0;
+    for (index, line) in lines.iter().enumerate() {
+        if !line.contains("unsafe {") {
+            continue;
+        }
+        blocks += 1;
+        // The comment run directly above the block holds the SAFETY line.
+        let named = lines[..index]
+            .iter()
+            .rev()
+            .take_while(|above| above.trim_start().starts_with("//"))
+            .any(|above| above.trim_start().starts_with("// SAFETY:"));
+        assert!(
+            named,
+            "src/win_cred.rs:{}: unsafe block without a // SAFETY: comment",
+            index + 1
+        );
+    }
+    assert!(
+        blocks > 0,
+        "no unsafe block found: the scan is reading the wrong file"
+    );
 }

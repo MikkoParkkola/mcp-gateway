@@ -21,8 +21,8 @@ use crate::gateway::routes;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use axum::extract::{Extension, Path as AxumPath, State};
-use axum::http::StatusCode;
+use axum::extract::{Extension, Path as AxumPath, Query, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
@@ -315,11 +315,25 @@ pub async fn get_capability(
     }
 }
 
+/// `?validate=` on `PUT`: present with any value means validate only.
+#[derive(Debug, Deserialize)]
+pub struct ValidateQuery {
+    /// Any value, empty included, asks for validation without a write.
+    pub validate: Option<String>,
+}
+
 /// `PUT /ui/api/capabilities/:name` — validate YAML and write to disk.
+///
+/// With `?validate=1` or an `X-Validate-Only` header it validates and writes
+/// nothing: the editor validates on blur, and a blur must never save. Either
+/// signal, with any value, means validate-only, so a caller that asked only
+/// to validate can never get a write.
 pub async fn put_capability(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
     AxumPath(name): AxumPath<String>,
+    Query(query): Query<ValidateQuery>,
+    headers: HeaderMap,
     body: String,
 ) -> impl IntoResponse {
     let client = client.map(|Extension(c)| c);
@@ -336,6 +350,10 @@ pub async fn put_capability(
     if let Some(err) = validation {
         return structured_error(StatusCode::UNPROCESSABLE_ENTITY, "validation_error", err)
             .into_response();
+    }
+
+    if query.validate.is_some() || headers.contains_key("x-validate-only") {
+        return Json(json!({ "status": "valid", "name": name })).into_response();
     }
 
     let dirs = state.capability_dirs.as_slice();
@@ -548,7 +566,7 @@ fn validate_yaml_body(yaml: &str) -> Option<String> {
     };
 
     // 3. Attempt to deserialize into CapabilityDefinition.
-    match crate::capability::parse_capability(yaml) {
+    let parsed = match crate::capability::parse_capability(yaml) {
         Ok(cap) => {
             // 4. Run structural validate_capability check.
             if let Err(e) = crate::capability::validate_capability(&cap) {
@@ -571,6 +589,9 @@ fn validate_yaml_body(yaml: &str) -> Option<String> {
         }
         Err(e) => Some(format!("Capability parse error: {e}")),
     };
+    if parsed.is_some() {
+        return parsed;
+    }
 
     // 6. Basic structure checks: `name` key must be present.
     if !map.contains_key("name") {
@@ -664,6 +685,17 @@ providers:
         // (validate_capability requires providers.primary which is present)
         let result = validate_yaml_body(yaml);
         assert!(result.is_none(), "Expected no error, got: {result:?}");
+    }
+
+    /// A text with a `name:` key that does not deserialize as a capability
+    /// is refused: the parse error was computed and then discarded.
+    #[test]
+    fn validate_yaml_body_refuses_text_that_does_not_parse() {
+        let result = validate_yaml_body("name: kept\nproviders: 5\n");
+        assert!(
+            result.as_deref().is_some_and(|e| e.contains("parse error")),
+            "expected the parse error, got: {result:?}"
+        );
     }
 
     #[test]

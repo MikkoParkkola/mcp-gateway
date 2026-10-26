@@ -300,7 +300,7 @@ fn import_servers(
     }
     let mut added = 0;
     super::config_write::write(output, mode, |config| {
-        added = merge_servers_into_config(config, selected);
+        added = merge_servers_into_config(config, selected)?;
         Ok(())
     })
     .map_err(|e| {
@@ -313,20 +313,47 @@ fn import_servers(
 /// Merge selected servers into `config.backends`, skipping duplicates.
 ///
 /// Returns the number of newly-added backends.
-fn merge_servers_into_config(config: &mut Config, selected: &[&DiscoveredServer]) -> usize {
+///
+/// # Errors
+///
+/// A server holding a secret reference that does not resolve, naming the
+/// field and entry (ADR-028): nothing is written, since the closure fails.
+fn merge_servers_into_config(
+    config: &mut Config,
+    selected: &[&DiscoveredServer],
+) -> Result<usize, String> {
+    // Every server the loop below will add is checked before anything is
+    // added or printed, so a refusal leaves no half-reported import. Skipped
+    // ones (already configured, or a repeat name) are never checked.
+    let overlay = config.env_overlay();
+    let mut seen = std::collections::HashSet::new();
+    for server in selected {
+        if config.backends.contains_key(&server.name) || !seen.insert(&server.name) {
+            continue;
+        }
+        server
+            .to_backend_config()
+            .check_secret_references(&server.name, &overlay)
+            .map_err(|refused| {
+                format!(
+                    "'{}' has secret references that do not resolve: {}",
+                    server.name,
+                    refused.join("; ")
+                )
+            })?;
+    }
     let mut added = 0usize;
     for server in selected {
         if config.backends.contains_key(&server.name) {
             println!("  Skipping '{}' (already in config)", server.name);
             continue;
         }
-        config
-            .backends
-            .insert(server.name.clone(), server.to_backend_config());
+        let backend = server.to_backend_config();
+        config.backends.insert(server.name.clone(), backend);
         println!("  Added '{}'", server.name);
         added += 1;
     }
-    added
+    Ok(added)
 }
 
 // ── Output helpers ─────────────────────────────────────────────────────────────
@@ -425,6 +452,50 @@ mod tests {
     }
 
     #[test]
+    fn b3j_merge_refuses_a_server_whose_secret_reference_does_not_resolve() {
+        let mut config = Config::default();
+        let server = unresolved_server("tool");
+        let refused =
+            merge_servers_into_config(&mut config, &[&server]).expect_err("refused before writing");
+        assert!(refused.contains("backends.tool.env.API_KEY"), "{refused}");
+        assert!(config.backends.is_empty());
+    }
+
+    fn unresolved_server(name: &str) -> DiscoveredServer {
+        let mut server = make_stdio_server(name, DiscoverySource::ClaudeDesktop);
+        server.env = [(
+            "API_KEY".to_string(),
+            "file:/nonexistent/mcp-gateway-b3/token".to_string(),
+        )]
+        .into_iter()
+        .collect();
+        server
+    }
+
+    #[test]
+    fn b3j_merge_skips_an_existing_server_without_checking_its_references() {
+        let mut config = Config::default();
+        config
+            .backends
+            .insert("x".to_string(), BackendConfig::default());
+        let x = unresolved_server("x");
+        let y = make_stdio_server("y", DiscoverySource::ClaudeCode);
+        let added = merge_servers_into_config(&mut config, &[&x, &y]).expect("merged");
+        assert_eq!(added, 1);
+        assert!(config.backends.contains_key("y"));
+    }
+
+    #[test]
+    fn b3j_merge_checks_only_the_first_of_a_repeated_name() {
+        let mut config = Config::default();
+        let first = make_stdio_server("x", DiscoverySource::ClaudeCode);
+        let repeat = unresolved_server("x");
+        let added = merge_servers_into_config(&mut config, &[&first, &repeat]).expect("merged");
+        assert_eq!(added, 1);
+        assert!(config.backends.contains_key("x"));
+    }
+
+    #[test]
     fn merge_servers_adds_new_backends() {
         // GIVEN: an empty config and two discovered servers
         let mut config = Config::default();
@@ -433,7 +504,7 @@ mod tests {
         let selected: Vec<&DiscoveredServer> = vec![&s1, &s2];
 
         // WHEN: merging
-        let added = merge_servers_into_config(&mut config, &selected);
+        let added = merge_servers_into_config(&mut config, &selected).expect("merged");
 
         // THEN: two backends are created
         assert_eq!(added, 2);
@@ -453,7 +524,7 @@ mod tests {
         let selected: Vec<&DiscoveredServer> = vec![&s];
 
         // WHEN: merging
-        let added = merge_servers_into_config(&mut config, &selected);
+        let added = merge_servers_into_config(&mut config, &selected).expect("merged");
 
         // THEN: nothing new is added
         assert_eq!(added, 0);
@@ -469,7 +540,7 @@ mod tests {
             .insert("existing".to_string(), BackendConfig::default());
 
         // WHEN: merging an empty selection
-        let added = merge_servers_into_config(&mut config, &[]);
+        let added = merge_servers_into_config(&mut config, &[]).expect("merged");
 
         // THEN: nothing changes
         assert_eq!(added, 0);
