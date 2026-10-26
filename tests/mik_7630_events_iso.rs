@@ -66,6 +66,20 @@ fn signed_backend(peer: &SubjectPeer) -> Value {
     })
 }
 
+/// Backend `x` on `peer` with each credential exchanged at `endpoint`.
+fn exchanged_backend(peer: &SubjectPeer, endpoint: &TokenEndpoint) -> Value {
+    json!({
+        "http_url": peer.url,
+        "identity_propagation": {
+            "strategy": "token_exchange",
+            "audience": "https://subject-peer.test",
+            "token_exchange_endpoint": endpoint.url,
+            "required": true,
+            "session_mode": "per_user",
+        },
+    })
+}
+
 /// A gateway with backend `x` = `backend`, verifying `issuer`'s bearers, and
 /// trusting both the receiver's CA and the issuer's.
 async fn start(
@@ -130,16 +144,7 @@ async fn iso_t1_token_exchange_each_user_receives_only_their_own_changes() {
     let rx = Receiver::start(root.path()).await;
     let peer = SubjectPeer::start().await;
     let endpoint = TokenEndpoint::start(root.path()).await;
-    let backend = json!({
-        "http_url": peer.url,
-        "identity_propagation": {
-            "strategy": "token_exchange",
-            "audience": "https://subject-peer.test",
-            "token_exchange_endpoint": endpoint.url,
-            "required": true,
-            "session_mode": "per_user",
-        },
-    });
+    let backend = exchanged_backend(&peer, &endpoint);
     let gw = start(root.path(), &rx, &issuer, backend, &[&endpoint.ca_file]).await;
     each_user_only_their_own(&peer, &gw, &rx, &issuer).await;
     for user in ["u1", "u2"] {
@@ -216,9 +221,10 @@ async fn iso_t6_a_revoked_user_holds_no_listener_open() {
     let rx = Receiver::start(root.path()).await;
     let peer = SubjectPeer::start().await;
     let mut gw = start(root.path(), &rx, &issuer, signed_backend(&peer), &[]).await;
+    let mut subs = Vec::new();
     for user in ["u1", "u2"] {
         let bearer = issuer.mint(user, &email(user));
-        sub(&gw, &bearer, TOOLS, &rx, json!({})).await;
+        subs.push(sub(&gw, &bearer, TOOLS, &rx, json!({})).await);
         listening(&peer, &gw, user).await;
     }
 
@@ -243,6 +249,17 @@ async fn iso_t6_a_revoked_user_holds_no_listener_open() {
         "u1's listener did not come back"
     );
     assert!(peer.open_streams("u2") > 0, "u2 keeps its listener");
+
+    // Nothing is emitted for u1 after the refusal; u2 is still served.
+    for user in ["u1", "u2"] {
+        peer.push_to(user, "notifications/tools/list_changed", json!({}));
+    }
+    expect_events(&rx, &subs[1], TOOLS, 1).await;
+    tokio::time::sleep(QUIET).await;
+    assert!(
+        delivered(&rx, &subs[0], TOOLS).is_empty(),
+        "nothing delivered to u1 after it lost access"
+    );
 }
 
 /// Requests from index `from` on that carried no user's own subject.
@@ -259,17 +276,47 @@ fn as_anyone_else(peer: &SubjectPeer, from: usize) -> Vec<subject_peer::Request>
 /// subject: the listener's cold start, its stream, and the re-initialization
 /// after the backend drops one user's session.
 #[tokio::test]
-async fn iso_t7_a_per_user_listener_only_ever_presents_its_users_credential() {
+async fn iso_t7_signed_assertion_listener_only_presents_its_users_credential() {
     let root = tempfile::tempdir().expect("root");
     let issuer = issuer::Issuer::start(root.path()).await;
     let rx = Receiver::start(root.path()).await;
     let peer = SubjectPeer::start().await;
     let gw = start(root.path(), &rx, &issuer, signed_backend(&peer), &[]).await;
+    only_its_users_credential(&peer, &gw, &rx, &issuer).await;
+}
+
+/// ISO-T7, token_exchange: the same, each credential exchanged first.
+#[tokio::test]
+async fn iso_t7_token_exchange_listener_only_presents_its_users_credential() {
+    let root = tempfile::tempdir().expect("root");
+    let issuer = issuer::Issuer::start(root.path()).await;
+    let rx = Receiver::start(root.path()).await;
+    let peer = SubjectPeer::start().await;
+    let endpoint = TokenEndpoint::start(root.path()).await;
+    let gw = start(
+        root.path(),
+        &rx,
+        &issuer,
+        exchanged_backend(&peer, &endpoint),
+        &[&endpoint.ca_file],
+    )
+    .await;
+    only_its_users_credential(&peer, &gw, &rx, &issuer).await;
+}
+
+/// Every request after the users subscribe carries a user's own subject:
+/// cold start, stream, and re-initialization after a dropped session.
+async fn only_its_users_credential(
+    peer: &SubjectPeer,
+    gw: &Gateway,
+    rx: &Receiver,
+    issuer: &issuer::Issuer,
+) {
     let from = peer.seen().len();
     for user in ["u1", "u2"] {
         let bearer = issuer.mint(user, &email(user));
-        sub(&gw, &bearer, TOOLS, &rx, json!({})).await;
-        listening(&peer, &gw, user).await;
+        sub(gw, &bearer, TOOLS, rx, json!({})).await;
+        listening(peer, gw, user).await;
     }
     let cold: Vec<_> = peer.seen().into_iter().skip(from).collect();
     for user in ["u1", "u2"] {
@@ -280,9 +327,9 @@ async fn iso_t7_a_per_user_listener_only_ever_presents_its_users_credential() {
         );
     }
     assert!(
-        as_anyone_else(&peer, from).is_empty(),
+        as_anyone_else(peer, from).is_empty(),
         "cold start: {:?}",
-        as_anyone_else(&peer, from)
+        as_anyone_else(peer, from)
     );
 
     let before = peer.seen().len();
@@ -303,8 +350,8 @@ async fn iso_t7_a_per_user_listener_only_ever_presents_its_users_credential() {
         gw.logs()
     );
     assert!(
-        as_anyone_else(&peer, from).is_empty(),
+        as_anyone_else(peer, from).is_empty(),
         "after recovery: {:?}",
-        as_anyone_else(&peer, from)
+        as_anyone_else(peer, from)
     );
 }
