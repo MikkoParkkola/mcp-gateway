@@ -164,12 +164,21 @@ async fn a_second_preview_while_one_runs_is_refused_unspent() {
             assert_eq!(body["error"], "a preview is already running");
         } => {}
     }
-    let (status, body) = preview_as(&router, Some(ADMIN_TOKEN), &second).await;
-    assert_eq!(
-        status,
-        StatusCode::OK,
-        "the unspent token still works: {body}"
-    );
+    // The dropped first preview still runs to its cap and teardown; the
+    // unspent token works once that has freed the guard.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+    loop {
+        let (status, body) = preview_as(&router, Some(ADMIN_TOKEN), &second).await;
+        if status == StatusCode::OK {
+            break;
+        }
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the unspent token never worked: {body}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
 }
 
 /// T4: a server that never answers is a 504 at the 30 s cap, and the guard
