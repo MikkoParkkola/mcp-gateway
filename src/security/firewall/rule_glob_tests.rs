@@ -67,3 +67,42 @@ fn an_invalid_allow_glob_does_not_allow_an_unrelated_tool() {
         "a broken allow glob let a shell injection through: {verdict:?}"
     );
 }
+
+/// A `block` rule with a broken glob is refused the same way: its fallback
+/// matches no tool, so the load is what keeps it from failing open.
+#[test]
+fn an_invalid_block_glob_is_refused_at_load() {
+    let cfg = FirewallConfig {
+        rules: vec![FirewallRule {
+            action: FirewallAction::Block,
+            ..allow_rule(BAD_GLOB)
+        }],
+        ..FirewallConfig::default()
+    };
+    let err = cfg.validate().expect_err("an invalid glob must not load");
+    assert!(err.contains("security.firewall.rules[0].match"), "{err}");
+}
+
+/// Through `Config::load`, the path start-up and hot reload share.
+#[test]
+fn gateway_yaml_with_an_invalid_rule_glob_does_not_load() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    let yaml = format!(
+        "security:\n  firewall:\n    enabled: true\n    rules:\n      - match: \"{BAD_GLOB}\"\n        action: allow\n"
+    );
+    crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
+    let err = crate::config::Config::load(Some(&path))
+        .expect_err("an invalid glob must not load")
+        .to_string();
+    assert!(err.contains("security.firewall.rules[0].match"), "{err}");
+}
+
+/// A rule whose glob does not parse matches no tool, its own text included.
+#[test]
+fn an_invalid_glob_compiles_to_a_rule_that_matches_nothing() {
+    let rule = compile_rule(&allow_rule("exec_*["));
+    for tool in ["exec_*[", "exec_run", "exec_", "anything"] {
+        assert!(!rule_matches(&rule, tool), "matched {tool}");
+    }
+}

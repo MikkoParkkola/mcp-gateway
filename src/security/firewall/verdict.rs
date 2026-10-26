@@ -94,12 +94,11 @@ impl FirewallVerdict {
 // ─── Rule helpers ─────────────────────────────────────────────────────────────
 
 pub(super) fn compile_rule(rule: &FirewallRule) -> CompiledRule {
-    // The load refuses an invalid glob; should one get here anyway, it
-    // matches only its own literal text, never every tool.
-    let pattern = glob::Pattern::new(&rule.tool_match).unwrap_or_else(|_| {
-        glob::Pattern::new(&glob::Pattern::escape(&rule.tool_match))
-            .expect("an escaped pattern compiles")
-    });
+    // The guarantee is the load: `FirewallConfig::validate` refuses an invalid
+    // glob while the firewall is on. Should one get here anyway, it matches no
+    // tool. That backstop fails safe for an `allow` rule and open for a `block`
+    // rule, which is acceptable only because the load refusal comes first.
+    let pattern = glob::Pattern::new(&rule.tool_match).ok();
     CompiledRule {
         pattern,
         action: rule.action,
@@ -109,7 +108,7 @@ pub(super) fn compile_rule(rule: &FirewallRule) -> CompiledRule {
 }
 
 pub(super) fn rule_matches(rule: &CompiledRule, tool: &str) -> bool {
-    rule.pattern.matches(tool)
+    rule.pattern.as_ref().is_some_and(|p| p.matches(tool))
 }
 
 pub(super) fn first_matching_rule_action(
