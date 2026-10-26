@@ -348,8 +348,8 @@ async fn meta_replay_delivery_joins_the_replaying_invocation() {
     assert_eq!(delivered, invoked, "each delivery joins its own invocation");
 }
 
-/// A meta tool this gateway does not expose (`gateway_execute`, code mode
-/// off) whose one target the caller's key denies: the route stage writes the
+/// A meta tool this gateway does not expose (`gateway_invoke`, outside the
+/// exposure allow-list) whose one target the caller's key denies: the route stage writes the
 /// call's one invocation record, `denied`, and the absent name's answer
 /// carries its trace, so the delivery joins it. (A surfaced name the caller
 /// cannot see is no target at all; its one record is the meta layer's grant
@@ -358,15 +358,16 @@ async fn meta_replay_delivery_joins_the_replaying_invocation() {
 async fn a_withheld_target_delivery_joins_its_denied_record() {
     let fx = fixture(Setup {
         auth: Some(key_for_alpha(Some(vec!["t".to_string()]))),
+        meta_mode: MetaMode::InvokeHidden,
         ..Setup::default()
     })
     .await;
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                      "params": {"name": "gateway_execute",
-                                 "arguments": {"tool": "alpha:t", "arguments": {"q": 1}},
+                      "params": {"name": "gateway_invoke",
+                                 "arguments": {"server": "alpha", "tool": "t", "arguments": {"q": 1}},
                                  "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
                                            "io.modelcontextprotocol/clientCapabilities": {}}}});
-    let (_, answer) = post_modern_named(&fx, "gateway_execute", &body.to_string()).await;
+    let (_, answer) = post_modern_named(&fx, "gateway_invoke", &body.to_string()).await;
     assert!(
         answer.contains("-32601"),
         "the absent name's answer: {answer}"
