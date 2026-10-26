@@ -53,6 +53,13 @@ mod runtime;
 mod yaml;
 use runtime::RuntimeShutdown;
 fn main() -> ExitCode {
+    // The preview sandbox's helpers run before the CLI parser, the main-stack
+    // thread and any runtime: they change their own privileges, which must
+    // happen while the process has one thread (ADR-027).
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if let Some(code) = mcp_gateway::preview_sandbox::dispatch_helper(&args) {
+        return code;
+    }
     on_main_stack(|| {
         // Parsed here, so the shutdown mode is known before the runtime exists.
         let cli = Cli::parse();

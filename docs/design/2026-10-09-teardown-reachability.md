@@ -17,6 +17,7 @@ and (2) a deadline on every wait.
 | stdio task workers (`run_stdio_on`) | `a_dropped_stdio_session_stops_its_task_workers` | `a_sealed_worker_takes_no_step_when_it_wakes` | `stdio_teardown_bound` |
 | HTTP shutdown saves | N/A: saves run on detached OS threads | N/A: same | `a_stuck_shutdown_save_is_abandoned_at_the_deadline` |
 | Runtime drop, non-stdio modes | N/A: the runtime itself | N/A | MIK-8084 tests |
+| Command preview sandbox (`preview_sandbox::Started`, Linux) | `a_dropped_preview_kills_its_namespace` | `a_preview_dropped_after_its_runtime_still_ends` | N/A: teardown is one `SIGKILL` sent in `Drop`, with no wait to bound; `--kill-child` then kills the namespace's first process, and the kernel every process in it |
 
 A new teardown path adds a row here and fills all three cells (a named test, or N/A with the
 reason) before its change merges.

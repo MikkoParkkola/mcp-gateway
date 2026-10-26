@@ -95,6 +95,8 @@ pub(crate) mod personal_accounts;
 #[doc(hidden)]
 pub mod playbook;
 #[doc(hidden)]
+pub mod preview_sandbox;
+#[doc(hidden)]
 pub mod projection;
 #[doc(hidden)]
 pub mod protocol;
