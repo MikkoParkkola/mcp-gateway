@@ -45,6 +45,7 @@ mod session_less;
 mod slot_release;
 #[cfg(feature = "firewall")]
 mod tenants;
+mod unvouched_effect;
 
 /// A backend that answers `tools/list` with its one tool `t` and anything
 /// else with a text result, or with a JSON-RPC error when `error` is set.

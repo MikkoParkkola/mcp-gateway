@@ -176,9 +176,11 @@ pub(crate) fn note_refusal(result: &Result<Value>) {
     }
 }
 
-/// MIK-7116.MIN.1: this call is answered from a cache, past every gate.
+/// MIK-7116.MIN.1: this call is answered from a cache, past every gate. The
+/// answer is not this request's, so its delivery states no effect or findings.
 pub(crate) fn note_cached() {
     note(|notes| notes.cached = true);
+    crate::gateway::delivery_facts::unvouched();
 }
 
 /// MIK-7636: the member a stored failure carries when its call was noted
@@ -697,6 +699,8 @@ impl MetaMcp {
         replay: JsonRpcResponse,
         facts: super::super::admission::ReplayFacts,
     ) -> JsonRpcResponse {
+        // A replay delivers a first run's answer: not this request's to state.
+        crate::gateway::delivery_facts::unvouched();
         let server = facts.server.as_deref();
         self.stage_replay((tool_name, server), arguments, session_id, caller, &replay);
         let Some(log) = self.transparency_logger.as_ref() else {

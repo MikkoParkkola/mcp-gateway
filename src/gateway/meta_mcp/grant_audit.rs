@@ -634,7 +634,9 @@ impl super::MetaMcp {
         caller: &super::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
         // Plans and code mode deliver through their own arm: their delivery
-        // record names no invocation trace.
+        // record names no invocation trace, and states no effect or findings,
+        // as no one step's facts describe what the composite delivers.
+        crate::gateway::delivery_facts::unvouched();
         let trace_id = crate::gateway::trace::generate();
         let sourced = self
             .invoke_tool_with_source(args, session_id, caller, trace_id)
