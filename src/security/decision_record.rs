@@ -97,7 +97,8 @@ pub(crate) struct Decision {
 /// Whether the record being written is of a refused call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Refused {
-    Yes,
+    /// Refused, with the record's outcome (named in the guard's message).
+    Yes(crate::security::audit::AuditOutcome),
     No,
 }
 
@@ -106,7 +107,7 @@ impl Refused {
     pub(crate) const fn of(outcome: crate::security::audit::AuditOutcome) -> Self {
         use crate::security::audit::AuditOutcome;
         match outcome {
-            AuditOutcome::Denied(_) | AuditOutcome::Invalid(_) => Self::Yes,
+            AuditOutcome::Denied(_) | AuditOutcome::Invalid(_) => Self::Yes(outcome),
             _ => Self::No,
         }
     }
@@ -146,7 +147,7 @@ impl Noted {
     /// The decision object for this call under the published config `live`.
     ///
     /// A refused call that noted no check records `unrecorded`, never an
-    /// allow; under test that is a failure, so a refusal site that forgot to
+    /// allow; in a debug build that is a failure, so a refusal site that forgot to
     /// note its kind cannot ship silently.
     pub(crate) fn decision(
         &self,
@@ -160,10 +161,13 @@ impl Noted {
                 .allow
                 .clone()
                 .unwrap_or((DecisionKind::DefaultAllow, None)),
-            (None, Refused::Yes) => {
-                if cfg!(test) {
-                    panic!("a refused call noted no check (MIK-8914.API2A.7)");
-                }
+            (None, Refused::Yes(outcome)) => {
+                // Every debug build, integration tests included; never a
+                // release build, which records `unrecorded` instead.
+                debug_assert!(
+                    self.refusal.is_some(),
+                    "a refused call ({outcome:?}) noted no check (MIK-8914.API2A.7)"
+                );
                 (DecisionKind::Unrecorded, None)
             }
         };
@@ -194,9 +198,12 @@ impl Noted {
 /// The decision a record carries; `None` for a record written before this
 /// field existed ("no evidence recorded"), and for one that does not parse,
 /// never an error.
-#[expect(
-    dead_code,
-    reason = "wired in the receipt reader, this PR; removed before push"
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired in the receipt reader, this PR; removed before push"
+    )
 )]
 pub(crate) fn decision_evidence(entry: &Value) -> Option<Decision> {
     serde_json::from_value(entry.get(FIELD)?.clone()).ok()
@@ -204,9 +211,12 @@ pub(crate) fn decision_evidence(entry: &Value) -> Option<Decision> {
 
 /// Whether `entry` was decided by the rule `rule_id`. Exact match only; a
 /// record with no rule id matches nothing.
-#[expect(
-    dead_code,
-    reason = "wired in the receipt reader, this PR; removed before push"
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired in the receipt reader, this PR; removed before push"
+    )
 )]
 pub(crate) fn matches_rule(entry: &Value, rule_id: &str) -> bool {
     entry
@@ -217,9 +227,12 @@ pub(crate) fn matches_rule(entry: &Value, rule_id: &str) -> bool {
 }
 
 /// The receipt's line for which rule decided. Never blank, never a guess.
-#[expect(
-    dead_code,
-    reason = "wired in the receipt reader, this PR; removed before push"
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired in the receipt reader, this PR; removed before push"
+    )
 )]
 pub(crate) fn rule_line(decision: &Decision) -> &'static str {
     match (decision.kind, decision.rule_id.is_some()) {
@@ -235,9 +248,12 @@ pub(crate) fn rule_line(decision: &Decision) -> &'static str {
 
 /// The receipt's line for the request findings: "not recorded" (no evidence,
 /// or the check did not run) is never shown as "none".
-#[expect(
-    dead_code,
-    reason = "wired in the receipt reader, this PR; removed before push"
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired in the receipt reader, this PR; removed before push"
+    )
 )]
 pub(crate) fn findings_line(decision: Option<&Decision>) -> &'static str {
     match decision.and_then(|d| d.findings.as_ref()) {
