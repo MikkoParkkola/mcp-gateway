@@ -172,10 +172,14 @@ impl EnvSecrets {
 
 impl SecretSource for EnvSecrets {
     fn resolve(&self, reference: &str) -> Option<String> {
-        // `env:` or `file:` (C9), exactly as the configuration layer documents.
-        // A literal is not accepted here: accepting one would make a mistyped
-        // secret in a config file work, which is how it ends up committed.
-        if !(reference.starts_with("env:") || reference.starts_with("file:")) {
+        // `env:`, `file:` (C9) or `keychain:` (ADR-028), exactly as the
+        // configuration layer documents. A literal is not accepted here:
+        // accepting one would make a mistyped secret in a config file work,
+        // which is how it ends up committed.
+        if !["env:", "file:", "keychain:"]
+            .iter()
+            .any(|prefix| reference.starts_with(prefix))
+        {
             return None;
         }
         // The guard is taken and dropped inside this synchronous call, so no
