@@ -70,7 +70,7 @@ impl AccountStrategyRegistry {
         let minted = Self::mint(installed.as_ref(), principal, &backend).await;
         let (credential, managed) = match minted {
             Ok(minted) => minted,
-            // A busy custody at the mint (MIK-8428): see `transient_mint_refusal`.
+            // A busy custody at the mint: see `transient_mint_refusal`.
             Err(crate::personal_accounts::MintError::Busy(error)) => {
                 return Err(self
                     .transient_mint_refusal(logger.as_ref(), descriptor_id, caller, &error)
@@ -106,7 +106,7 @@ impl AccountStrategyRegistry {
         // either kind — an external strategy that publishes no usable expiry
         // publishes no usable credential.
         // A clock before 1970 can judge no expiry and stamp no mint time, so
-        // the credential is refused, managed or not (MIK-8202).
+        // the credential is refused, managed or not.
         let minted_at = match crate::clock::utc_now() {
             Err(_) => Err("the gateway clock reads before 1970, so no expiry can be judged"),
             Ok(now) if managed.is_none() && credential.expires_at <= now.timestamp() => {
@@ -252,7 +252,7 @@ impl AccountStrategyRegistry {
         if principal.stable_actor_id() != prepared.actor_id {
             return refuse("it was minted for a different caller");
         }
-        // An unreadable clock reads as a lifetime that has run out (MIK-8202).
+        // An unreadable clock reads as a lifetime that has run out.
         let lifetime = crate::clock::expired_by_utc(|now| {
             if prepared.published_lifetime_open(now.timestamp()) {
                 crate::clock::Validity::Live
@@ -271,7 +271,7 @@ impl AccountStrategyRegistry {
         if let Some((lease, current)) = custody
             && let Err(error) = lease.recheck(current).await
         {
-            // Nothing is sent before it: a busy custody frees the key (MIK-8428).
+            // Nothing is sent before it: a busy custody frees the key.
             let crate::personal_accounts::MintError::Busy(error) = error else {
                 let error = error.into_error();
                 return refuse(&format!("durable custody refused its lease: {error}"));
