@@ -3,6 +3,7 @@
 //! The UI config read never carries a configured key's digest, current or
 //! previous (ADR-022): a digest is all an offline guess needs.
 use super::*;
+use pretty_assertions::assert_eq;
 
 #[tokio::test]
 async fn ui_config_read_shows_no_key_digest() {
