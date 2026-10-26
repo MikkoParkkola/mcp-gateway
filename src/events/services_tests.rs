@@ -27,6 +27,7 @@ fn key(
         denied_tools: None,
         admin: false,
         kind: ApiKeyKind::Shared,
+        ..Default::default()
     }
 }
 
@@ -683,5 +684,23 @@ fn an_event_charge_settles_its_reservation_with_its_spend() {
     assert!(
         competing.admitted(),
         "the charge was counted twice inside its settle"
+    );
+}
+
+/// ADR-022 (MIK-8862.ROT.5, .ROT.6): a watch recorded before a rotation, under
+/// the key's principal at the time, is still admitted once the key has a new
+/// digest and keeps that principal explicitly.
+#[test]
+fn a_watch_survives_its_keys_rotation() {
+    let watch = presented("alice", "s1");
+    let mut rotated = key("alice", "s2", None);
+    rotated.principal = Some(watch.principal.clone());
+    rotated.previous_key_sha256 = Some(api_key_digest_spec(b"s1"));
+    rotated.previous_expires_at =
+        Some(chrono::Utc::now() + crate::duration_bound::delta!(minutes, 15));
+    assert!(services(vec![rotated]).admits(Some(&watch), "x"));
+    assert!(
+        !services(vec![key("alice", "s2", None)]).admits(Some(&watch), "x"),
+        "control: without the explicit principal the re-keyed watch is refused"
     );
 }

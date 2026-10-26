@@ -23,6 +23,7 @@ fn config_with_key_names(names: &[&str]) -> Config {
             denied_tools: None,
             admin: false,
             kind: crate::config::ApiKeyKind::Shared,
+            ..Default::default()
         })
         .collect();
     config
