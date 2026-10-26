@@ -97,6 +97,17 @@ pub(crate) struct Inspection {
     pub(crate) protected: bool,
 }
 
+/// What `inspect_for_copy` read: the owner and DACL as `inspect` reads them,
+/// how many access-enforcing SACL entries the descriptor carries (integrity
+/// label, scoped policy, resource attribute, trust label, access filter), and
+/// the self-relative descriptor itself, to create a sibling with.
+pub(crate) struct CopySource {
+    pub(crate) inspection: Inspection,
+    pub(crate) enforcing_sacl_aces: usize,
+    /// u64 words keep the descriptor aligned for its SIDs and ACLs.
+    pub(super) descriptor: Vec<u64>,
+}
+
 /// UTF-16, NUL-terminated; refuses an interior NUL (ADR-016 contract 5).
 pub(super) fn wide(path: &Path) -> io::Result<Vec<u16>> {
     let w: Vec<u16> = OsStr::new(path).encode_wide().collect();

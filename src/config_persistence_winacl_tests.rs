@@ -212,3 +212,130 @@ fn a_file_moved_in_from_another_folder_is_refused() {
     std::fs::rename(&old, &path).unwrap();
     assert_refused(row, &path, "acl-mismatch");
 }
+
+/// A12: on a volume that keeps no access lists the save falls back to a
+/// default create, with no check (the seam answers for FAT/exFAT).
+#[test]
+fn a_volume_without_access_lists_saves_with_a_default_create() {
+    use super::windows::test_seams::VOLUME;
+    let row = "WINACL-A12";
+    let dir = everyone_full_dir(row);
+    let path = dir.path().join("caps.yaml");
+    std::fs::write(&path, b"old").unwrap();
+    plant_owner_only(row, &path);
+    VOLUME.with(|v| v.set(Some(false)));
+    let result = write_atomic(&path, b"new", FileMode::Inherit, Symlink::Replace);
+    VOLUME.with(|v| v.set(None));
+    result.unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"new");
+    // The default create took the folder's list, which grants Everyone.
+    let got = parse_sddl(&read_sddl(row, &path));
+    assert!(
+        got.aces.iter().any(|ace| ace.3 == "S-1-1-0"),
+        "{row}: the default create did not run: {got:?}"
+    );
+}
+
+/// A13: when the check finds the copy differs, the save is refused before
+/// any byte is written: old file unchanged, no scratch left.
+#[test]
+fn a_copy_that_differs_is_refused_with_nothing_written() {
+    use super::windows::test_seams::FORCE_MISMATCH;
+    let row = "WINACL-A13";
+    let dir = everyone_full_dir(row);
+    let path = dir.path().join("caps.yaml");
+    std::fs::write(&path, b"old").unwrap();
+    plant_owner_only(row, &path);
+    FORCE_MISMATCH.with(|f| f.set(true));
+    let listing = |d: &Path| {
+        let mut n: Vec<_> = std::fs::read_dir(d)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        n.sort();
+        n
+    };
+    let before = listing(dir.path());
+    let result = write_atomic(&path, b"new", FileMode::Inherit, Symlink::Replace);
+    FORCE_MISMATCH.with(|f| f.set(false));
+    let err = result.expect_err("WINACL-A13: the save was not refused");
+    assert!(err.to_string().contains("acl-mismatch"), "{row}: {err}");
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        b"old",
+        "{row}: old file changed"
+    );
+    assert_eq!(listing(dir.path()), before, "{row}: scratch left");
+}
+
+/// The comparison: order matters, a NULL list and an empty list differ, and
+/// a differing protection bit is a difference.
+#[test]
+fn the_comparison_reads_order_null_and_protection() {
+    use super::windows::first_difference;
+    use crate::win_acl::{Ace, Inspection, Sid};
+    let user = Sid::from_parts(5, &[21, 1, 2, 3, 1001]);
+    let users = Sid::from_parts(5, &[32, 545]);
+    let allow = Ace::Allowed {
+        flags: 0,
+        mask: 0x1F_01FF,
+        sid: users.clone(),
+    };
+    let deny = Ace::Denied {
+        flags: 0,
+        mask: 0x1F_01FF,
+        sid: users,
+    };
+    let list = |aces: Option<Vec<Ace>>, protected| Inspection {
+        owner: Some(user.clone()),
+        dacl: aces,
+        protected,
+    };
+    let a = list(Some(vec![deny.clone(), allow.clone()]), true);
+    assert!(first_difference(&a, &a.clone()).is_none());
+    let reversed = list(Some(vec![allow, deny]), true);
+    assert!(first_difference(&a, &reversed).is_some(), "order ignored");
+    let null = list(None, true);
+    let empty = list(Some(Vec::new()), true);
+    assert!(
+        first_difference(&null, &empty).is_some(),
+        "NULL equals empty"
+    );
+    assert!(
+        first_difference(&empty, &null).is_some(),
+        "empty equals NULL"
+    );
+    let unprotected = list(a.dacl.clone(), false);
+    assert!(
+        first_difference(&a, &unprotected).is_some(),
+        "protection ignored"
+    );
+}
+
+/// A8: a trust-label or access-filter entry (or any access-enforcing SACL
+/// entry) refuses the copy. A live fixture is impossible on CI runners: only
+/// a protected process can set a trust label. So the refusal is pinned over
+/// a synthetic inspection, and the query bits in `win_acl`'s own tests.
+#[test]
+fn an_access_enforcing_sacl_entry_refuses_the_copy() {
+    use super::windows::source_refusal;
+    use crate::win_acl::{Ace, Inspection, Sid};
+    let plain = Inspection {
+        owner: Some(Sid::from_parts(5, &[18])),
+        dacl: Some(Vec::new()),
+        protected: true,
+    };
+    assert_eq!(source_refusal(&plain, 0), None);
+    assert_eq!(
+        source_refusal(&plain, 1).map(|r| r.0),
+        Some("security-label")
+    );
+    let other = Inspection {
+        dacl: Some(vec![Ace::Other { ace_type: 9 }]),
+        ..plain
+    };
+    assert_eq!(
+        source_refusal(&other, 0).map(|r| r.0),
+        Some("undecodable-ace")
+    );
+}

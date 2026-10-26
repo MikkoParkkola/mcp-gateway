@@ -18,14 +18,15 @@ use windows_sys::Win32::Foundation::{
     ERROR_INSUFFICIENT_BUFFER, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Security::{
-    ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_REVISION, AddAccessAllowedAceEx,
-    CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, GetAce, GetKernelObjectSecurity,
-    GetLengthSid, GetSecurityDescriptorControl, GetSecurityDescriptorDacl,
-    GetSecurityDescriptorLength, GetSecurityDescriptorOwner, GetTokenInformation, InitializeAcl,
-    InitializeSecurityDescriptor, IsValidSid, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
-    PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR,
-    SetSecurityDescriptorControl, SetSecurityDescriptorDacl, SetSecurityDescriptorOwner,
-    TOKEN_QUERY, TOKEN_USER, TokenUser,
+    ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_REVISION, ATTRIBUTE_SECURITY_INFORMATION,
+    AddAccessAllowedAceEx, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, GetAce,
+    GetKernelObjectSecurity, GetLengthSid, GetSecurityDescriptorControl, GetSecurityDescriptorDacl,
+    GetSecurityDescriptorLength, GetSecurityDescriptorOwner, GetSecurityDescriptorSacl,
+    GetTokenInformation, InitializeAcl, InitializeSecurityDescriptor, IsValidSid,
+    LABEL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR, PSID, SCOPE_SECURITY_INFORMATION, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
+    SECURITY_DESCRIPTOR, SetSecurityDescriptorControl, SetSecurityDescriptorDacl,
+    SetSecurityDescriptorOwner, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE, FILE_ALL_ACCESS, FILE_DISPOSITION_INFO,
@@ -45,6 +46,10 @@ const ACCESS_DENIED_ACE_TYPE: u8 = 1;
 const DRIVE_REMOVABLE: u32 = 2;
 const DRIVE_FIXED: u32 = 3;
 const FILE_PERSISTENT_ACLS: u32 = 8;
+/// `SystemServices` values for the two SACL classes `Security` does not
+/// export (winnt.h); readable with `READ_CONTROL`, as the other three are.
+const PROCESS_TRUST_LABEL_SECURITY_INFORMATION: u32 = 0x80;
+const ACCESS_FILTER_SECURITY_INFORMATION: u32 = 0x100;
 /// Fixed part of a SID: revision, sub-authority count, 6-byte authority.
 const SID_HEADER: usize = 8;
 
@@ -327,7 +332,13 @@ pub(crate) fn create_file_private(path: &Path, user: &Sid, share: Share) -> io::
 /// one read: the stored bit decides, and a DACL without it is refused as not
 /// protected.
 pub(crate) fn inspect(file: &File) -> io::Result<Inspection> {
-    let info = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+    let mut buf = read_descriptor(file, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION)?;
+    decode(&mut buf)
+}
+
+/// The self-relative descriptor stored on `file`, for the parts `info` names.
+/// The handle is borrowed for the whole call, so it stays open and valid.
+fn read_descriptor(file: &File, info: u32) -> io::Result<Vec<u64>> {
     // u64 words keep the self-relative descriptor aligned for its SIDs/ACL.
     let mut buf: Vec<u64> = Vec::new();
     loop {
@@ -365,6 +376,12 @@ pub(crate) fn inspect(file: &File) -> io::Result<Inspection> {
             "empty descriptor",
         ));
     }
+    Ok(buf)
+}
+
+/// Owner, DACL and protection decoded from a descriptor `read_descriptor`
+/// returned.
+fn decode(buf: &mut [u64]) -> io::Result<Inspection> {
     let sd: PSECURITY_DESCRIPTOR = buf.as_mut_ptr().cast();
     let mut control = 0_u16;
     let mut revision = 0_u32;
@@ -426,6 +443,105 @@ pub(crate) fn inspect(file: &File) -> io::Result<Inspection> {
         dacl: aces,
         protected: control & SE_DACL_PROTECTED != 0,
     })
+}
+
+/// Every SACL class that can restrict access and is readable with
+/// `READ_CONTROL`. `SACL_SECURITY_INFORMATION` (audit entries) is never
+/// requested: it needs `ACCESS_SYSTEM_SECURITY`, and audits restrict nothing.
+const ENFORCING_SACL_INFO: u32 = LABEL_SECURITY_INFORMATION
+    | SCOPE_SECURITY_INFORMATION
+    | ATTRIBUTE_SECURITY_INFORMATION
+    | PROCESS_TRUST_LABEL_SECURITY_INFORMATION
+    | ACCESS_FILTER_SECURITY_INFORMATION;
+
+/// Owner, DACL and every access-enforcing SACL entry of an open handle that
+/// carries `READ_CONTROL`, with the descriptor kept for `create_file_like`
+/// A query that fails is an error, never an empty answer.
+pub(crate) fn inspect_for_copy(file: &File) -> io::Result<CopySource> {
+    // What the copy is created with carries no owner: setting another
+    // account's owner needs a privilege, so the creator's owner applies and the
+    // caller compares owners instead. The owner is read on its own.
+    let mut descriptor = read_descriptor(file, DACL_SECURITY_INFORMATION | ENFORCING_SACL_INFO)?;
+    let mut inspection = decode(&mut descriptor)?;
+    inspection.owner = decode(&mut read_descriptor(file, OWNER_SECURITY_INFORMATION)?)?.owner;
+    let enforcing_sacl_aces = sacl_ace_count(&mut descriptor)?;
+    Ok(CopySource {
+        inspection,
+        enforcing_sacl_aces,
+        descriptor,
+    })
+}
+
+/// How many entries the SACL in `buf` holds; 0 when there is none.
+fn sacl_ace_count(buf: &mut [u64]) -> io::Result<usize> {
+    let sd: PSECURITY_DESCRIPTOR = buf.as_mut_ptr().cast();
+    let mut present = 0;
+    let mut defaulted = 0;
+    let mut sacl: *mut ACL = std::ptr::null_mut();
+    // SAFETY: contract 4/6 — `buf` holds the descriptor `read_descriptor`
+    // returned and outlives this call; `sacl` is an out-pointer on this frame
+    // and ends up null or pointing into `buf`; BOOL checked.
+    if unsafe { GetSecurityDescriptorSacl(sd, &raw mut present, &raw mut sacl, &raw mut defaulted) }
+        == 0
+    {
+        return Err(last());
+    }
+    if present == 0 || sacl.is_null() {
+        return Ok(0);
+    }
+    // The SACL lies inside the self-relative descriptor: bound it there, as
+    // `decode` bounds the owner and DACL, then count with the same decoder.
+    // SAFETY: contract 4 — `buf` holds a valid descriptor for this call.
+    let sd_len = (unsafe { GetSecurityDescriptorLength(sd) } as usize).min(buf.len() * 8);
+    let start = buf.as_ptr() as usize;
+    let at = sacl as usize;
+    if at < start || at >= start + sd_len {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "SACL outside descriptor",
+        ));
+    }
+    // SAFETY: contract 3/4 — `start + sd_len - at` bytes from `sacl` lie
+    // inside the live descriptor.
+    Ok(unsafe { read_aces(sacl, start + sd_len - at) }?.len())
+}
+
+/// Create `path` (`CREATE_NEW`, unshared, reparse points not followed) with
+/// the owner-less descriptor `model` was read with, so the new file carries
+/// the model's DACL and access-enforcing SACL entries; the owner is the
+/// creator's, as for every other scratch. The caller compares the result
+/// with the model before trusting it.
+pub(crate) fn create_file_like(path: &Path, model: &CopySource) -> io::Result<File> {
+    let mut descriptor = model.descriptor.clone();
+    let w = wide(path)?;
+    let attrs = SECURITY_ATTRIBUTES {
+        nLength: u32::try_from(std::mem::size_of::<SECURITY_ATTRIBUTES>()).unwrap_or(u32::MAX),
+        lpSecurityDescriptor: descriptor.as_mut_ptr().cast(),
+        bInheritHandle: 0,
+    };
+    // SAFETY: contract 1/5/6 — `descriptor` is a self-relative descriptor as
+    // `GetKernelObjectSecurity` stored it (the form `lpSecurityDescriptor`
+    // accepts), aligned in u64 words, and with `w` and `attrs` it lives on
+    // this frame until the call returns; the result is checked against
+    // INVALID_HANDLE_VALUE (never null) before it is owned.
+    let raw = unsafe {
+        CreateFileW(
+            w.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE | READ_CONTROL | DELETE,
+            0,
+            &raw const attrs,
+            CREATE_NEW,
+            FILE_FLAG_OPEN_REPARSE_POINT,
+            std::ptr::null_mut(),
+        )
+    };
+    if raw == INVALID_HANDLE_VALUE {
+        return Err(last());
+    }
+    // SAFETY: contract 1 — a valid handle, owned exactly once.
+    let file = File::from(unsafe { OwnedHandle::from_raw_handle(raw) });
+    after_create(path, Some(&file));
+    Ok(file)
 }
 
 /// Decode every ACE, bounded by `AceCount` and `AclSize` (contract 3).
@@ -633,7 +749,7 @@ pub(crate) fn file_identity(file: &File) -> io::Result<(u64, u128)> {
 }
 
 mod shapes;
-pub(crate) use shapes::{Ace, Inspection, ObjectKind, Share, Sid};
+pub(crate) use shapes::{Ace, CopySource, Inspection, ObjectKind, Share, Sid};
 use shapes::{aligned, wide};
 
 #[cfg(test)]

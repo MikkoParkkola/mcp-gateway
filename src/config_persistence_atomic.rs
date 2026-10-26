@@ -105,6 +105,11 @@ fn write_atomic_observed(
     Ok(())
 }
 
+// Windows `Inherit` keeps the target's access list.
+#[cfg(windows)]
+#[path = "config_persistence_atomic_windows.rs"]
+mod windows;
+
 /// How a scratch file is created.
 #[derive(Clone, Copy)]
 enum ScratchCreate {
@@ -113,6 +118,10 @@ enum ScratchCreate {
     /// Default creation: the umask mode on unix, the directory's inherited
     /// ACL on Windows.
     Default,
+    /// Windows `Inherit` over an existing target: the target's access list,
+    /// checked before any byte is written.
+    #[cfg(windows)]
+    KeepTarget,
 }
 
 /// How the scratch for a (`mode`, `target`) write is created: private
@@ -120,10 +129,12 @@ enum ScratchCreate {
 fn scratch_create_for(mode: FileMode, target: Option<&std::fs::Metadata>) -> ScratchCreate {
     match mode {
         FileMode::Private => ScratchCreate::Private,
-        // Unix only: the mode step narrows the scratch after the sync, so the
-        // bytes sit in a private file until then. A Windows `Inherit` takes
-        // the directory's ACL from creation instead, with or without a target.
+        // Unix: the mode step narrows the scratch after the sync, so the bytes
+        // sit in a private file until then. Windows: the scratch is created
+        // with the target's access list and checked before the write.
         FileMode::Inherit if target.is_some() && cfg!(unix) => ScratchCreate::Private,
+        #[cfg(windows)]
+        FileMode::Inherit if target.is_some() => ScratchCreate::KeepTarget,
         FileMode::Inherit => ScratchCreate::Default,
     }
 }
@@ -147,6 +158,8 @@ fn create_scratch(
             .write(true)
             .create_new(true)
             .open(candidate),
+        #[cfg(windows)]
+        ScratchCreate::KeepTarget => create_kept(path, candidate),
     })
     .map_err(|e| match e {
         super::ScratchClaimError::AllTaken => std::io::Error::other(format!(
@@ -156,6 +169,31 @@ fn create_scratch(
         )),
         super::ScratchClaimError::Io(e) => e,
     })
+}
+
+/// The Windows `KeepTarget` scratch: the target's list when it is protected,
+/// else a default create checked against the target. Refused before any byte
+/// is written, with no scratch left.
+#[cfg(windows)]
+fn create_kept(target: &Path, candidate: &Path) -> std::io::Result<std::fs::File> {
+    use windows::KeptScratch;
+    match windows::prepare(target, candidate)? {
+        KeptScratch::Kept(file) => Ok(file),
+        KeptScratch::Default => {
+            // Read as well as write, so the check below can read the list.
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(candidate)?;
+            if let Err(e) = windows::verify_default(&file, target) {
+                drop(file);
+                let _ = std::fs::remove_file(candidate);
+                return Err(e);
+            }
+            Ok(file)
+        }
+    }
 }
 
 /// Whether the scratch ended up in the target's group.
