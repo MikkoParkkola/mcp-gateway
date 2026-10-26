@@ -29,7 +29,7 @@ use std::{path::Path, process::ExitCode};
 
 use clap::Parser;
 use mcp_gateway::{
-    cli::{AuditCommand, Cli, Command, SetupCommand, SkillsCommand},
+    cli::{Cli, Command, SetupCommand, SkillsCommand},
     config::{Config, EnvOverlay},
     gateway::Gateway,
     setup_tracing,
@@ -343,7 +343,9 @@ async fn run(cli: Cli) -> ExitCode {
             data_dir.as_deref(),
             cli.config.as_deref(),
         ),
-        Some(Command::Audit(audit_cmd)) => run_audit_command(audit_cmd, cli.config.as_deref()),
+        Some(Command::Audit(audit_cmd)) => {
+            commands::run_audit_command(audit_cmd, cli.config.as_deref())
+        }
         #[cfg(feature = "runtime-substrate")]
         Some(Command::Runtime(rt_cmd)) => run_runtime_command(rt_cmd),
         Some(Command::Serve { stdio: true }) => Box::pin(run_stdio_server(cli)).await,
@@ -391,167 +393,6 @@ fn run_runtime_command(cmd: mcp_gateway::cli::RuntimeCommand) -> ExitCode {
                 Err(e) => {
                     eprintln!("error: {e}");
                     ExitCode::FAILURE
-                }
-            }
-        }
-    }
-}
-
-/// Resolve the audit log path: use the provided `--path` flag, or fall back to
-/// the default `~/.mcp-gateway/transparency/transparency.jsonl`.
-fn resolve_audit_log_path(path: Option<std::path::PathBuf>) -> std::path::PathBuf {
-    use std::path::PathBuf;
-    path.unwrap_or_else(|| {
-        crate::home_dir::home_dir().map_or_else(
-            || PathBuf::from("transparency.jsonl"),
-            |h| {
-                h.join(".mcp-gateway")
-                    .join("transparency")
-                    .join("transparency.jsonl")
-            },
-        )
-    })
-}
-
-/// `audit verify`: every segment of the log, live or archive mode (D6).
-fn run_audit_verify(
-    log_path: &std::path::Path,
-    archive: bool,
-    anchor: Option<&std::path::Path>,
-    config_path: Option<&std::path::Path>,
-) -> ExitCode {
-    use mcp_gateway::security::transparency_log::{VerifyMode, verify_audit_log};
-    let resolve_log_config = Config::audit_verify_config;
-    let verify_mode = if archive {
-        VerifyMode::Archive
-    } else {
-        VerifyMode::Live
-    };
-    let log_config = match resolve_log_config(config_path) {
-        Ok(c) => c,
-        Err(e) => {
-            // Fail closed: a config we cannot load must NOT downgrade to
-            // hash-only and report success (MIK-6700 review finding #2).
-            eprintln!(
-                "Error: could not load gateway config for signed verification: {e}. Refusing to verify (a load failure must not silently downgrade to hash-only)."
-            );
-            return ExitCode::FAILURE;
-        }
-    };
-    let signed = !log_config.shared_secret.is_empty();
-    // Fail closed on the root danger: a log that WAS signed, verified
-    // without a secret, would silently degrade to hash-only and pass a
-    // stale-sig forgery with exit 0 — regardless of why the secret is
-    // absent (no config discovered, wrong config, unset env).
-    // (MIK-6700 review finding #2, residual no-config path.)
-    if !signed {
-        match mcp_gateway::security::transparency_log::log_contains_signed_entry(log_path) {
-            Ok(true) => {
-                eprintln!(
-                    "Error: log at {} has signed entries but no shared secret is configured — refusing hash-only verify (HMAC unauthenticated). Set security.transparency_log.shared_secret.",
-                    log_path.display()
-                );
-                return ExitCode::FAILURE;
-            }
-            Ok(false) => {}
-            Err(e) => {
-                eprintln!("Error reading log: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
-    }
-    match verify_audit_log(log_path, &log_config, verify_mode, anchor) {
-        // Neither the log nor any sealed segment exists (D6: sealed segments
-        // alone are still a log to verify).
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!(
-                "Error: transparency log not found at {}",
-                log_path.display()
-            );
-            ExitCode::FAILURE
-        }
-        Err(e) => {
-            eprintln!("Error reading log: {e}");
-            ExitCode::FAILURE
-        }
-        Ok(result) if result.ok => {
-            let mode = if signed {
-                "hash chain + per-entry HMAC"
-            } else {
-                "hash chain (no secret configured; HMAC not checked)"
-            };
-            let scope = match verify_mode {
-                VerifyMode::Live => "live log",
-                VerifyMode::Archive => "archive copy; tail completeness not checked",
-            };
-            println!(
-                "✓ Chain verified ({mode}; {scope}) — {} entries checked across {} \
-                 segments, {} expired by retention, no tampering detected.",
-                result.entries_checked, result.segments_checked, result.segments_expired
-            );
-            for warning in &result.warnings {
-                eprintln!("warning: {warning}");
-            }
-            ExitCode::SUCCESS
-        }
-        Ok(result) => {
-            let at = result
-                .error_at_counter
-                .map_or_else(|| "?".to_string(), |n| n.to_string());
-            let msg = result
-                .error_message
-                .unwrap_or_else(|| "unknown error".to_string());
-            eprintln!("✗ Chain verification FAILED at counter {at}: {msg}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
-/// Dispatch an `audit` subcommand (transparency log chain verification / session query).
-fn run_audit_command(cmd: AuditCommand, config_path: Option<&std::path::Path>) -> ExitCode {
-    use mcp_gateway::security::transparency_log::show_session_entries;
-
-    let resolve_path = resolve_audit_log_path;
-
-    match cmd {
-        AuditCommand::Verify {
-            export: Some(export),
-            jwk,
-            ..
-        } => mcp_gateway::trust::run_verify_export(&export, jwk.as_deref(), config_path),
-        AuditCommand::Verify {
-            path,
-            archive,
-            anchor,
-            ..
-        } => run_audit_verify(&resolve_path(path), archive, anchor.as_deref(), config_path),
-
-        AuditCommand::Show { session, path } => {
-            let log_path = resolve_path(path);
-            match show_session_entries(&log_path, &session) {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    eprintln!(
-                        "Error: transparency log not found at {}",
-                        log_path.display()
-                    );
-                    ExitCode::FAILURE
-                }
-                Err(e) => {
-                    eprintln!("Error reading log: {e}");
-                    ExitCode::FAILURE
-                }
-                Ok(entries) if entries.is_empty() => {
-                    println!("No entries found for session '{session}'.");
-                    ExitCode::SUCCESS
-                }
-                Ok(entries) => {
-                    for entry in &entries {
-                        match serde_json::to_string_pretty(entry) {
-                            Ok(pretty) => println!("{pretty}"),
-                            Err(e) => eprintln!("Serialisation error: {e}"),
-                        }
-                    }
-                    ExitCode::SUCCESS
                 }
             }
         }

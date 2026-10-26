@@ -200,7 +200,6 @@ backend" and "fails a capability file" first.**
 | 173 | `meta_mcp.cache_tools` is retired: nothing ever read it. A config that sets it loads and logs one warning; `upgrade` removes it, or names it when it cannot do so safely, and `init` no longer writes it | Run `mcp-gateway upgrade`, or delete the key. To change how long tool lists are cached, set `meta_mcp.cache_ttl` |
 | 174 | Every frame a backend's text reaches a client in passes one screen (content inspection, context integrity, response firewall) on every route. Over HTTP `/mcp` an interim question the firewall would rewrite is refused (-32600), as over stdio, instead of delivered redacted; backend errors, `prompts/get` and `resources/read` bodies, catalogue listings and notifications streamed during a call can now arrive redacted or be refused | None by default. To allow flagged text in a prompt, resource or listing, add a firewall rule whose `tool_match` names the method (`prompts/get`, `resources/read`, ...) |
 | 175 | The per-backend route `POST /mcp/{name}` refuses what `/mcp` refuses under every security posture, with the same code and status: a malformed request, a contradicted or doubled protocol header, an unsupported revision, or a 2026-07-28 request missing its required `_meta`. Before, only `hardened` checked these; elsewhere the route forwarded them to the backend | None for a client whose requests `/mcp` accepts. A client that sent such a request to `/mcp/{name}` gets the refusal `/mcp` gives it and fixes the request |
-| 176 | New Activity routes (`/ui/api/activity`, its receipts and its export) serve a role only when a `control_plane.role_mapping` rule matched: an API key that is not an admin key, and an OIDC identity no rule matches, get 403, though the control plane reads them as `auditor`. Governance audit records now carry a `timestamp` | To give someone Activity, map them to `auditor` (or `developer` for their own calls), or use an admin key. To check an export offline: `mcp-gateway audit verify --export <file> --jwk <file>` |
 
 Changes not yet numbered wait in `upgrading.d/` at the repository root, one file per pull request; release preparation numbers them into this list.
 
@@ -4606,61 +4605,6 @@ A client whose requests `/mcp` accepts sees no change. Only `hardened` still
 refuses a plain legacy request on this route that is not an `initialize`
 declaring elicitation, as before.
 
-## 176. Activity: who can read it, and checking an export offline
-
-**Startup:** no notice
-
-The admin UI's Activity routes are new: `GET /ui/api/activity` lists calls, config
-changes and admin actions from the transparency log and the governance log, newest first;
-`GET /ui/api/activity/{id}` returns one row's receipt; `GET /ui/api/activity/export`
-downloads the same rows as signed NDJSON or as CSV. Each row holds only named fields and
-the hashes of a call's request and response, never its arguments or result.
-
-Who can read them:
-
-| Caller | List, receipts, export |
-|---|---|
-| An admin API key, the dashboard session, the static bearer | Every row |
-| An OIDC identity a `control_plane.role_mapping` rule maps to `auditor` | Every row |
-| An OIDC identity a rule maps to `developer` | Its own calls only, matched on issuer and subject |
-| Any other API key, an OIDC identity no rule matches | 403 |
-| No credential | 401 |
-
-The control plane gives an API key that is not an admin key, and an OIDC identity no rule
-matches, read access as `auditor`. Activity does not: it serves a role only when a rule
-matched, because Activity shows every caller's calls.
-
-Governance audit records now carry a `timestamp`, so config changes sort among calls by
-time. Records written before 4.0 have none; Activity places them just before the oldest
-timed governance record, in file order. `audit verify` and the SIEM export accept a log
-that holds both.
-
-The NDJSON export is signed with the gateway's provenance key. With
-`GATEWAY_PROVENANCE_SIGNING_SEED` unset it answers 409 naming that variable; CSV, which is
-unsigned, still downloads. The gateway does not generate a key for exports: a key nobody
-has published makes a signature nobody can check.
-
-**Action:** to give someone Activity, add a `control_plane.role_mapping` rule mapping their
-identity to `auditor` (or `developer` for their own calls only), or give them an admin key.
-
-To check an export away from the gateway, use the one new flag on `audit verify`:
-
-```bash
-mcp-gateway provenance public-key > provenance-key.json
-mcp-gateway audit verify --export activity.ndjson --jwk provenance-key.json
-```
-
-It prints `VALID export: <rows> rows, truncated=<state>, ...` and exits 0, or
-`INVALID <reason>` and exits 1. It checks the bundle: the manifest's signature, and that
-the manifest's digest names every row before it, so an edited or removed row, an edited
-manifest, a removed or cut-off manifest, or another key's export each fail. Without
-`--jwk` it uses the key this gateway's configuration names. Each row keeps its log entry's
-own HMAC (`sig`), which authenticates the original entry and needs the gateway's
-`transparency_log.shared_secret`; `--export` does not check it, and a row is a projection
-of its entry, not the entry itself. The flag lives on `audit verify` because that command
-already owns checking the audit trail, and an export is of little use to an outside
-auditor without an offline check.
-
 ## Upgrading from 3.5.x: a walkthrough
 
 This is the path CI rehearses on every change: `scripts/release/nfr_upgrade_1_rehearsal.sh`
@@ -4823,6 +4767,9 @@ mounted. Derived items work out their value when unset. Removed items are refuse
 | Item | Class | What 4.0 does | Why |
 |---|---|---|---|
 | `/sse` | hidden | unchanged; listed as a deprecation helper |  |
+| `/ui/api/activity` | hidden | the Activity list: admin, a mapped auditor, or a mapped developer's own calls; any other credential 403 (UPGRADING 176); documented as the bundled UI's private API, not an integration surface |  |
+| `/ui/api/activity/export` | hidden | the Activity export: signed NDJSON (409 without a provenance key) or CSV, same access as the list; checked offline by `audit verify --export` |  |
+| `/ui/api/activity/{id}` | hidden | one Activity row's receipt, same access as the list; 404 for a row the caller may not read |  |
 | `/ui/api/backends`, `/ui/api/backends/{name}`, `/ui/api/backends/{name}/revive`, `/ui/api/capabilities`, `/ui/api/capabilities/{name}`, `/ui/api/config`, `/ui/api/control-plane`, `/ui/api/control-plane/decisions`, `/ui/api/control-plane/export-status`, `/ui/api/control-plane/grants`, `/ui/api/control-plane/policies`, `/ui/api/costs`, `/ui/api/dashboard-link`, `/ui/api/events/dead-letters/replay`, `/ui/api/events/dead-letters/{id}/replay`, `/ui/api/import/openapi`, `/ui/api/import/openapi/preview`, `/ui/api/registry`, `/ui/api/registry/search`, `/ui/api/reload`, `/ui/api/status`, `/ui/api/tools` | hidden | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface |  |
 | `/ui/api/events/dead-letters` | hidden | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface; MIK-8697: a row names its subscription as `subscriptionAlias` (keyed) and `subscriptionId` is removed, and the `subscription` filter takes the alias or a stored id |  |
 | `/ui/api/events/held` | hidden | admin only, like the dead-letter listing; held webhook subscriptions per type (MIK-8057) |  |
