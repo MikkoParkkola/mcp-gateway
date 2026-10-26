@@ -13,7 +13,7 @@ pub(crate) mod seccomp;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::os::unix::fs::MetadataExt as _;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{ExitCode, Stdio};
 
 use plan::{HostNamespaces, Plan};
@@ -276,10 +276,15 @@ fn reachable_inside(path: &Path, shown: &dyn Fn(&Path) -> bool) -> Option<PathBu
             Ok(next) => {
                 // The kernel walks a link's target as written: a directory link
                 // on that walk must exist inside too, which is only certain
-                // when there is none, so the target must already be resolved.
+                // when there is none. A target with no `.` or `..` that already
+                // equals its resolved form has none; a `..` could cancel one in
+                // the text, so any climb runs the real file instead.
+                let climbs = next
+                    .components()
+                    .any(|c| matches!(c, Component::CurDir | Component::ParentDir));
                 let target = here.parent().unwrap_or(Path::new("/")).join(next);
                 here = resolve(&target)?;
-                if lexical(&target) != here {
+                if climbs || target != here {
                     return None;
                 }
             }
@@ -287,22 +292,6 @@ fn reachable_inside(path: &Path, shown: &dyn Fn(&Path) -> bool) -> Option<PathBu
         }
     }
     None
-}
-
-/// `path` with `.` and `..` applied to the text alone, as a walk with no
-/// links in it would resolve them.
-fn lexical(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for part in path.components() {
-        match part {
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            std::path::Component::CurDir => {}
-            other => out.push(other),
-        }
-    }
-    out
 }
 
 /// What the sandbox binds for a program, by where its real file is.

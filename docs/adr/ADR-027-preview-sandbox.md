@@ -138,9 +138,9 @@ and then, inside the namespaces, in this order:
    pyenv version, a Homebrew keg), that tree alone; anywhere else, the file alone, never the directory around it,
    so a home or any other private directory is excluded without having to be found. The drop execs the program under the name
    it was asked for (`argv[0]`): by the path asked for (its directory links resolved) when that path and every link after it
-   lie where the root shows them and no later link's target passes through a directory link (a kernel-started script
-   sees the exec path as its `$0`), and by its real file otherwise; so on Debian a program reached through
-   `/etc/alternatives` runs as its real file. The run phase's `PATH`
+   lie where the root shows them and every later link's target is written with no `.`, no `..` and no directory link
+   (a kernel-started script sees the exec path as its `$0`), and by its real file otherwise; so on Debian a program
+   reached through `/etc/alternatives`, and an alias whose link climbs with `..` (an nvm `npm`), runs as its real file. The run phase's `PATH`
    names the exec path's directory, so an alias outside the binds never puts its own directory there. Every masking mount is a tmpfs with `size=4k`, mounted writable only long enough to create the
    mountpoints of any bind-back under it, then remounted `MS_RDONLY`: one over `/usr/local` (with that
    interpreter directory bound back if it lies there), one each over `/etc/ssl/private` and
