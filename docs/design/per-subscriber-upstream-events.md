@@ -395,8 +395,9 @@ only when a test exists that fails on its mutant.
   `lifecycle_key` from the listener's key and none is built with `None`; every
   listener send passes a credential; every `lifecycle_key` call site is covered.
   Fixture rows prove the scan fails when either is dropped.
-- **ISO-T6.** *Required; partly covered.* A revoked U1 has no connection open within one snapshot interval, even
-  with a silent backend; stop on the last subscriber is covered too.
+- **ISO-T6.** *Required; partly covered.* A revoked U1 has no connection open once the revocation runs (at once
+  on a pushed revocation, at the latest on the next 30-second sweep), even
+  with a silent backend, and nothing is emitted for U1 after it; stop on the last subscriber is covered too.
 - **ISO-T7.** A required backend never connects as the gateway for an `obs` key. The
   fixture records the presented credential on every request, and the test asserts
   the minted subject on each, including cold start, era probe, SSE handshake and a
