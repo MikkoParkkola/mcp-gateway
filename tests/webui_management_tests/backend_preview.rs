@@ -20,6 +20,7 @@ const PREVIEW: &str = "/ui/api/previews";
 /// One request the stub saw: path with query, and its header names.
 #[derive(Clone, Debug)]
 struct Seen {
+    method: Method,
     target: String,
     headers: Vec<String>,
 }
@@ -47,20 +48,23 @@ where
     F: Fn(&Value) -> Response + Clone + Send + Sync + 'static,
 {
     let log = Arc::clone(log);
-    let app = axum::Router::new().fallback(move |uri: Uri, headers: HeaderMap, body: Bytes| {
-        let log = Arc::clone(&log);
-        let reply = reply.clone();
-        async move {
-            log.lock().unwrap().push(Seen {
-                target: uri
-                    .path_and_query()
-                    .map_or_else(String::new, ToString::to_string),
-                headers: headers.keys().map(ToString::to_string).collect(),
-            });
-            let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-            reply(&request)
-        }
-    });
+    let app = axum::Router::new().fallback(
+        move |method: Method, uri: Uri, headers: HeaderMap, body: Bytes| {
+            let log = Arc::clone(&log);
+            let reply = reply.clone();
+            async move {
+                log.lock().unwrap().push(Seen {
+                    method,
+                    target: uri
+                        .path_and_query()
+                        .map_or_else(String::new, ToString::to_string),
+                    headers: headers.keys().map(ToString::to_string).collect(),
+                });
+                let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                reply(&request)
+            }
+        },
+    );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -543,15 +547,16 @@ async fn a_failed_redeem_frees_the_guard_for_the_next_preview() {
     );
 }
 
-/// T8b: a client that disconnects mid-preview frees the guard; the next
-/// preview is admitted.
+/// T8b: a client that disconnects mid-preview does not end it: the guard
+/// stays held (409) until the preview's own cap and teardown are done, and
+/// the next preview is admitted only then.
 #[tokio::test]
-async fn a_disconnected_preview_frees_the_guard() {
+async fn a_disconnected_preview_keeps_the_guard_until_teardown() {
     let log = Log::default();
     let (hanging, arrived) = hanging_stub(&log, Hang::ToolsList).await;
     let (router, _store) = router_with(false).await;
     // The first preview is dropped, as a disconnect drops it, once the
-    // server has been asked for its tools: from then on it holds the guard.
+    // server has been asked for its tools.
     let slow = json!({"name": "slow", "url": hanging});
     tokio::select! {
         (status, body) = confirmed(&router, &slow) => {
@@ -560,12 +565,66 @@ async fn a_disconnected_preview_frees_the_guard() {
         () = arrived.notified() => {}
     }
     let url = stub(&log).await;
-    let (status, answer) = confirmed(&router, &json!({"name": "stub", "url": url})).await;
+    let next = json!({"name": "stub", "url": url});
+    let (status, described) = preview_as(&router, Some(ADMIN_TOKEN), &next).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{described}");
+    let mut next = next;
+    next["confirm"] = described["confirm"].clone();
+    let (status, body) = preview_as(&router, Some(ADMIN_TOKEN), &next).await;
     assert_eq!(
         status,
-        StatusCode::OK,
-        "admitted after the disconnect: {answer}"
+        StatusCode::CONFLICT,
+        "still running after the disconnect: {body}"
     );
+    // A busy answer leaves the token unspent: retry until the first
+    // preview's 30 s cap and its teardown have released the guard.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+    loop {
+        let (status, body) = preview_as(&router, Some(ADMIN_TOKEN), &next).await;
+        if status == StatusCode::OK {
+            break;
+        }
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the guard was never released"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+}
+
+/// T4b: a listing cut off by the 30 s cap still tears its session down
+/// (DELETE) before the 504 is sent.
+#[tokio::test]
+async fn a_capped_preview_tears_its_session_down_before_the_504() {
+    let log = Log::default();
+    let url = serve(&log, |request: &Value| {
+        match request.get("method").and_then(Value::as_str) {
+            Some("initialize") => {
+                let mut response = answer(request);
+                response
+                    .headers_mut()
+                    .insert("mcp-session-id", "s-1".parse().unwrap());
+                response
+            }
+            Some("tools/list") => (
+                [("content-type", "application/json")],
+                Body::from_stream(futures::stream::pending::<Result<Bytes, std::io::Error>>()),
+            )
+                .into_response(),
+            _ => answer(request),
+        }
+    })
+    .await;
+    let (router, _store) = router_with(false).await;
+    let (status, body) = confirmed(&router, &json!({"name": "capped", "url": url})).await;
+    assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{body}");
+    let deleted = log
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|seen| seen.method == Method::DELETE);
+    assert!(deleted, "no session teardown before the 504");
 }
 
 /// T2b: a catalogue HTTP entry's header template is withheld and named at
