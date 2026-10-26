@@ -226,12 +226,12 @@ fn last_actions(path: &std::path::Path) -> io::Result<Value> {
     let mut skipped = false;
     let mut rows = Vec::new();
     while end > 0 && rows.len() < ACTION_ROWS && scanned < ACTION_SCAN_BYTES {
-        let (tail, spanned) = tail_window(path, end, ACTION_WINDOW_BYTES)?;
-        scanned += spanned;
+        let (tail, window_len) = tail_window(path, end, ACTION_WINDOW_BYTES)?;
+        scanned += window_len;
         let Tail::Lines { start, .. } = &tail else {
             // One line longer than a window: skip past it rather than loop.
             skipped = true;
-            end -= spanned;
+            end -= window_len;
             continue;
         };
         for (_, line) in lines_newest_first(tail.body(), *start) {
