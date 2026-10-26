@@ -46,6 +46,18 @@ obligation attaches.
    **not** covered by this project's PolyForm-Noncommercial default. The
    Noncommercial default scopes to first-party original material only.
 
+## Bundled fonts (web UI shell)
+
+The web UI shell embeds four font files in the binary (`src/gateway/ui/shell/fonts/`, served from `/ui/assets/`). They are third-party and ship in every release channel, so they are recorded here beside the crates. All are the latin subset served by Google Fonts (`fonts.gstatic.com`), under the SIL Open Font License 1.1; the licence texts sit beside the files.
+
+| Family | Weights | Copyright | Licence file |
+|---|---|---|---|
+| Big Shoulders | 700, 800 | 2019 The Big Shoulders Project Authors | `OFL-bigshoulders.txt` |
+| Overpass | 400 | 2021 The Overpass Project Authors | `OFL-overpass.txt` |
+| Overpass Mono | 400 | 2021 The Overpass Project Authors | `OFL-overpass.txt` |
+
+OFL 1.1 lets the fonts be bundled and sold with software, provided the copyright notice and licence travel with them and the fonts are not sold on their own. Both licence texts travel inside the binary: the shell's stylesheet, served beside the fonts, carries them verbatim in its header comment. The font files are unmodified. The shell's stylesheet otherwise comes from the project's own design language (first-party).
+
 ## Regeneration
 
 ```
