@@ -49,9 +49,11 @@ pub(super) fn dispatch(args: &[OsString]) -> Option<ExitCode> {
             Ok(plan) => helper::run(&plan),
             Err(e) => refuse(&e),
         }),
-        DROP => Some(match (decode(args.get(2)), args.get(3)) {
-            (Ok(limits), Some(dashes)) if dashes == "--" => drop::run(limits, &args[4..]),
-            (Err(e), _) => refuse(&e),
+        DROP => Some(match (decode(args.get(2)), args.get(3), args.get(4)) {
+            (Ok(limits), Some(program), Some(dashes)) if dashes == "--" => {
+                drop::run(limits, program, &args[5..])
+            }
+            (Err(e), ..) => refuse(&e),
             _ => refuse("reading the drop arguments"),
         }),
         _ => None,
@@ -132,7 +134,13 @@ fn build_plan(
     protected: &[PathBuf],
     path: Option<&OsStr>,
 ) -> Result<Plan, Refusal> {
-    let program = resolve(&target.program, path)?;
+    // The name exactly as asked for: the program's `argv[0]`.
+    let requested = target
+        .program
+        .to_str()
+        .ok_or_else(|| Refusal::Step("finding the program (not UTF-8)".to_owned()))?;
+    let program = resolve_command(requested, path, None)
+        .map_err(|e| Refusal::Step(format!("finding {requested} ({e})")))?;
     let mut read_only: Vec<String> = READ_ONLY.iter().map(ToString::to_string).collect();
     read_only.extend(top_level_libs());
     let masked: Vec<String> = MASKED.iter().map(ToString::to_string).collect();
@@ -149,31 +157,23 @@ fn build_plan(
     }
     // Bound on an allowlist: what the program needs and nothing around it, so
     // a home or any other private directory is excluded without being found.
-    let argv0 = match program_bind(&real, &read_only) {
+    // Every arm leaves the real file reachable. An alias to it is never bound:
+    // it is exec'd only where the root already shows it (below).
+    match program_bind(&real, &read_only) {
         ProgramBind::Refused => {
             return Err(Refusal::Step(format!(
                 "placing {} (it lies under a masked secret path)",
                 real.display()
             )));
         }
-        ProgramBind::System => program.clone(),
+        ProgramBind::System => {}
         ProgramBind::UsrLocal(dirs) => {
             for dir in dirs {
                 bound_back.push(utf8(&dir)?);
             }
-            real.clone()
         }
-        ProgramBind::Runtime(prefix) => {
-            read_only.push(utf8(&prefix)?);
-            real.clone()
-        }
-        ProgramBind::File(file) => {
-            read_only.push(utf8(&file)?);
-            real.clone()
-        }
-    };
-    if let Some(dir) = argv0.parent() {
-        path_dirs.push(utf8(dir)?);
+        ProgramBind::Runtime(prefix) => read_only.push(utf8(&prefix)?),
+        ProgramBind::File(file) => read_only.push(utf8(&file)?),
     }
     let gateway_paths = [
         Some(crate::config_persistence::gateway_data_dir()),
@@ -196,6 +196,23 @@ fn build_plan(
         hidden.push(utf8(&path)?);
     }
 
+    // A kernel-started script sees the exec path as its `$0`, so an alias
+    // the root shows is exec'd as itself (a launcher keeps dispatching on
+    // it); one that crosses anything unshown is replaced by the real file.
+    let shown = |p: &Path| {
+        let under = |set: &[String]| set.iter().any(|r| p.starts_with(r));
+        (under(&read_only) || under(&bound_back))
+            && !(under(&masked) && !under(&bound_back))
+            && !under(&hidden)
+    };
+    let exec = if reachable_inside(&program, &shown) {
+        program
+    } else {
+        real
+    };
+    if let Some(dir) = exec.parent() {
+        path_dirs.push(utf8(dir)?);
+    }
     for system in ["/usr/bin", "/bin"] {
         if !path_dirs.iter().any(|d| d == system) {
             path_dirs.push(system.to_owned());
@@ -207,7 +224,7 @@ fn build_plan(
         ("TMPDIR".to_owned(), "/tmp".to_owned()),
     ];
 
-    let mut argv = vec![utf8(&argv0)?];
+    let mut argv = vec![requested.to_owned()];
     for arg in &target.args {
         argv.push(
             arg.to_str()
@@ -223,38 +240,35 @@ fn build_plan(
         bound_back,
         limits: plan::limits(user_process_count() + 256),
         env,
-        program: utf8(&argv0)?,
+        program: utf8(&exec)?,
         target: argv,
     })
 }
 
-/// An absolute program as given, or the first match on `path`.
-fn resolve(program: &Path, path: Option<&OsStr>) -> Result<PathBuf, Refusal> {
-    let not_found = || Refusal::Step(format!("finding {}", program.display()));
-    if program.is_absolute() {
-        return program
-            .is_file()
-            .then(|| program.to_owned())
-            .ok_or_else(not_found);
-    }
-    // A bare name only, as the capability executor's resolver takes: `./tool`
-    // and `bin/tool` name the gateway's working directory, which the preview
-    // never sees, and so does a match through a relative PATH entry.
-    if program.components().count() != 1 {
-        return Err(Refusal::Step(format!(
-            "finding {} (a bare name or an absolute path)",
-            program.display()
-        )));
-    }
-    std::env::split_paths(path.ok_or_else(not_found)?)
-        .map(|dir| dir.join(program))
-        .find(|candidate| candidate.is_absolute() && candidate.is_file())
-        .ok_or_else(not_found)
-}
-
 /// Whether `path` and every link on its way to a file are `shown` inside the
-/// root. A stub until the alias rule lands: never.
-fn reachable_inside(_path: &Path, _shown: &dyn Fn(&Path) -> bool) -> bool {
+/// root, so the path itself still leads to the program there.
+fn reachable_inside(path: &Path, shown: &dyn Fn(&Path) -> bool) -> bool {
+    let mut at = path.to_path_buf();
+    // The kernel's own symlink-hop ceiling.
+    for _ in 0..40 {
+        // Directory links resolved, so `..` and a linked parent cannot lead
+        // the check somewhere the exec does not go.
+        let Some(here) = at
+            .parent()
+            .and_then(|dir| fs::canonicalize(dir).ok())
+            .zip(at.file_name())
+            .map(|(dir, name)| dir.join(name))
+        else {
+            return false;
+        };
+        if !shown(&here) {
+            return false;
+        }
+        match fs::read_link(&here) {
+            Ok(next) => at = here.parent().unwrap_or(Path::new("/")).join(next),
+            Err(_) => return here.is_file(),
+        }
+    }
     false
 }
 
@@ -689,7 +703,7 @@ mod tests {
     }
 
     /// The preview and the capability executor take the same program for
-    /// every name, or refuse it alike. `a\b` is a file on the injected PATH,
+    /// every name (the same file, once links are followed), or refuse it alike. `a\b` is a file on the injected PATH,
     /// which only a one-component check would accept.
     #[test]
     fn the_preview_resolves_as_the_executor_does() {
@@ -708,8 +722,8 @@ mod tests {
             "",
             "no-such-tool-8905",
         ] {
-            let preview =
-                build_plan(&target(name), &[], Some(&path)).map(|p| PathBuf::from(p.program));
+            let preview = build_plan(&target(name), &[], Some(&path))
+                .map(|p| fs::canonicalize(p.program).expect("canonical"));
             let executor = resolve_command(name, Some(&path), None)
                 .map(|p| fs::canonicalize(p).expect("canonical"));
             match (preview, executor) {

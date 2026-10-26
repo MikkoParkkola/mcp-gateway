@@ -136,7 +136,10 @@ and then, inside the namespaces, in this order:
    command's program binds on an allowlist, by where its real file is: under those roots, nothing more; under
    `/usr/local`, its directory and a sibling `lib`, bound back; inside a known runtime tree (an NVM node version, a
    pyenv version, a Homebrew keg), that tree alone; anywhere else, the file alone, never the directory around it,
-   so a home or any other private directory is excluded without having to be found. Every masking mount is a tmpfs with `size=4k`, mounted writable only long enough to create the
+   so a home or any other private directory is excluded without having to be found. The drop execs the program under the name
+   it was asked for (`argv[0]`): by the path asked for when that path and every link after it lie where the root shows
+   them (a kernel-started script sees the exec path as its `$0`), and by its real file otherwise. The run phase's `PATH`
+   names the exec path's directory, so an alias outside the binds never puts its own directory there. Every masking mount is a tmpfs with `size=4k`, mounted writable only long enough to create the
    mountpoints of any bind-back under it, then remounted `MS_RDONLY`: one over `/usr/local` (with that
    interpreter directory bound back if it lies there), one each over `/etc/ssl/private` and
    `/etc/pki/tls/private`, and one over every resolved gateway state, config and data path that falls under any
@@ -155,7 +158,7 @@ and then, inside the namespaces, in this order:
    or data path exists inside, wherever those paths live.
 4. Brings `lo` up with iproute2's `ip link set lo up` (present wherever util-linux is; rustix's only interface
    call is an unsafe ioctl), for the fetch.
-5. Starts every phase child as `<gateway binary> __preview-drop <limits> -- <target argv>` (by `/proc/self/exe`,
+5. Starts every phase child as `<gateway binary> __preview-drop <limits> <program> -- <target argv>` (by `/proc/self/exe`,
    which the private root keeps reachable as the helper's own image), so the helper itself keeps its namespace
    capabilities for the step-6 unmount and never runs untrusted code. `__preview-drop` drops every privilege, in
    the order the kernel needs (clearing `CAP_SETPCAP` first would make the later calls fail): the secure bits

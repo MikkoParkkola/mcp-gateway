@@ -10,7 +10,7 @@
 //! seccomp filters, and execs the target. Every call is a safe rustix or std
 //! function, and any failure refuses: the target never starts half-dropped.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::os::unix::process::CommandExt as _;
 use std::process::{Command, ExitCode};
 
@@ -28,9 +28,10 @@ fn fail(step: &'static str) -> impl FnOnce(rustix::io::Errno) -> String {
     move |e| format!("{step} ({e})")
 }
 
-/// Run the drop and exec `target`. Returns only on failure.
-pub(super) fn run(limits: Limits, target: &[OsString]) -> ExitCode {
-    match drop_then_exec(limits, target) {
+/// Run the drop and exec `program` with the argv `target`. Returns only on
+/// failure.
+pub(super) fn run(limits: Limits, program: &OsStr, target: &[OsString]) -> ExitCode {
+    match drop_then_exec(limits, program, target) {
         Err(step) => {
             // The helper relays this line to the gateway as the refusal.
             eprintln!("preview-sandbox: refused at {step}");
@@ -39,8 +40,14 @@ pub(super) fn run(limits: Limits, target: &[OsString]) -> ExitCode {
     }
 }
 
-fn drop_then_exec(limits: Limits, target: &[OsString]) -> Result<std::convert::Infallible, String> {
-    let (program, args) = target.split_first().ok_or("an empty target")?;
+fn drop_then_exec(
+    limits: Limits,
+    program: &OsStr,
+    target: &[OsString],
+) -> Result<std::convert::Infallible, String> {
+    // `name` is the program's `argv[0]`, the name it was asked for; `program`
+    // is the path the plan chose to exec (that name, or the file behind it).
+    let (name, args) = target.split_first().ok_or("an empty target")?;
 
     // Secure bits and their locks first: root in the namespace can then never
     // regain capabilities by uid tricks, and the bits cannot be cleared.
@@ -91,6 +98,6 @@ fn drop_then_exec(limits: Limits, target: &[OsString]) -> Result<std::convert::I
     super::seccomp::apply().map_err(|e| format!("installing the seccomp filter ({e})"))?;
 
     // `exec` returns only on failure; the environment the helper set is kept.
-    let error = Command::new(program).args(args).exec();
+    let error = Command::new(program).arg0(name).args(args).exec();
     Err(format!("starting {} ({error})", program.to_string_lossy()))
 }

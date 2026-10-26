@@ -110,6 +110,7 @@ fn supervise(plan: &Plan) -> ExitCode {
     let child = Command::new("/proc/self/exe")
         .arg(super::DROP)
         .arg(limits)
+        .arg(&plan.program)
         .arg("--")
         .args(&plan.target)
         .env_clear()
