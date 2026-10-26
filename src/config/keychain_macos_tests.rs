@@ -55,14 +55,47 @@ fn a_missing_name_is_missing() {
     assert_eq!(err, KeychainError::Missing);
 }
 
+/// Set in the child that [`guard_child`] runs in.
+const GUARD_CHILD: &str = "MCP_GW_TEST_KEYCHAIN_GUARD_CHILD";
+
+/// The prompt flag is process-wide, so it is checked in a fresh process where
+/// no other test can have set it: on before any backend, off after two
+/// backends and an overlay are built and dropped.
 #[test]
-fn prompts_stay_off_after_every_backend_is_dropped() {
+#[ignore = "run by prompts_stay_off_after_every_backend_is_dropped, in a child"]
+fn guard_child() {
+    if std::env::var_os(GUARD_CHILD).is_none() {
+        return;
+    }
+    let allowed = || SecKeychain::user_interaction_allowed().expect("read the prompt flag");
+    assert!(allowed(), "a fresh process already had prompts off");
     let (_dir, keychain) = temporary_keychain(&[]);
     drop(backend(&keychain, Duration::from_secs(2), Duration::ZERO));
     drop(MacKeychain::search_list());
+    drop(super::EnvOverlay::none());
+    assert!(!allowed(), "keychain prompts came back on");
+    // Printed only after both checks, so a child that ran nothing fails.
+    println!("keychain guard child ok");
+}
+
+#[test]
+fn prompts_stay_off_after_every_backend_is_dropped() {
+    let out = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "--exact",
+            "config::keychain_macos_tests::guard_child",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env(GUARD_CHILD, "1")
+        .output()
+        .expect("run the child");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "child failed:\n{stdout}\n{stderr}");
     assert!(
-        !SecKeychain::user_interaction_allowed().expect("read the prompt flag"),
-        "keychain prompts came back on"
+        stdout.contains("keychain guard child ok"),
+        "the child ran no check:\n{stdout}\n{stderr}"
     );
 }
 
