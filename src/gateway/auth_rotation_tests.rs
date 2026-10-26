@@ -254,9 +254,16 @@ fn client_for_key_finds_a_rotated_key_by_its_principal() {
 }
 
 // ROT.5 (b): no code derives a configured key's principal by slicing a digest
-// outside the one function in auth.rs.
+// outside the one function in auth.rs. Whitespace is removed first, so a slice
+// split across lines is still seen; inline test modules are left out.
 #[test]
 fn no_digest_prefix_slice_outside_auth_rs() {
+    // A 6-byte prefix of anything named for a digest, or 12 hex characters of
+    // an encoded hash: the two shapes a digest-derived principal takes.
+    let shapes = regex::Regex::new(
+        r"(?i)digest\w*\)?\[0?\.\.6\]|(sha256_hex|encode)\(.{0,80}?\)\[0?\.\.12\]",
+    )
+    .expect("pattern compiles");
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut offenders = Vec::new();
     let mut stack = vec![root.clone()];
@@ -276,10 +283,10 @@ fn no_digest_prefix_slice_outside_auth_rs() {
                 continue;
             }
             let text = std::fs::read_to_string(&path).expect("source is readable");
-            for (number, line) in text.lines().enumerate() {
-                if line.contains("encode(&") && line.contains("digest[..6]") {
-                    offenders.push(format!("src/{name}:{}", number + 1));
-                }
+            let production = text.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
+            let compact: String = production.split_whitespace().collect();
+            if shapes.is_match(&compact) {
+                offenders.push(format!("src/{name}"));
             }
         }
     }
@@ -287,6 +294,9 @@ fn no_digest_prefix_slice_outside_auth_rs() {
         offenders.is_empty(),
         "digest-prefix principals outside auth.rs: {offenders:?}"
     );
+    // Control: the scan sees the one derivation it exempts.
+    let own = std::fs::read_to_string(root.join("gateway/auth.rs")).expect("auth.rs is readable");
+    assert!(shapes.is_match(&own.split_whitespace().collect::<String>()));
 }
 
 // ROT.7: two keys cannot share a principal through an explicit one.
@@ -372,6 +382,27 @@ fn equal_credential_digests_are_refused() {
         load_refusal(&previous_is_bearer).is_some(),
         "a key's previous digest = the bearer's"
     );
+
+    // The same two cases for an `auto` bearer, which exists only once it is
+    // generated at resolution: the generated token is fixed so a key can equal it.
+    let auto_cases = [
+        (
+            "a key's current digest = the auto bearer's",
+            key("a", bearer, None),
+        ),
+        (
+            "a key's previous digest = the auto bearer's",
+            key("a", NEW, Some((bearer, grace_end()))),
+        ),
+    ];
+    for (case, entry) in auto_cases {
+        let config = auth(&[p(entry, "01")], Some("auto"));
+        let refusal = super::resolved::with_auto_bearer(bearer, || load_refusal(&config));
+        assert!(refusal.is_some(), "{case}");
+        let control =
+            super::resolved::with_auto_bearer("another-auto-bearer", || load_refusal(&config));
+        assert_eq!(control, None, "control, {case}: no collision, no refusal");
+    }
 }
 
 // ROT.8 (guard): with no explicit principal, a key equal to the bearer already
@@ -444,6 +475,22 @@ fn previous_secret_is_refused_on_an_unreadable_clock() {
     assert!(
         config.validate_token(NEW).is_some(),
         "current secret needs no clock"
+    );
+}
+
+// ROT.1: the wall-clock path judges the key's expiry and the grace at one clock
+// reading. The second queued read falls after the grace; a path that read the
+// clock again for the grace would refuse the previous secret.
+#[test]
+fn key_expiry_and_grace_are_judged_at_one_clock_reading() {
+    let mut entry = key("ops", NEW, Some((OLD, grace_end())));
+    entry["expires_at"] = serde_json::Value::String(rfc3339(far_future()));
+    let config = resolved(&[entry]);
+    let end = u64::try_from(grace_end().timestamp()).expect("after 1970");
+    let _clock = crate::clock::test_clock::queued(&[Some(end - 1), Some(end + 1)]);
+    assert!(
+        config.validate_token(OLD).is_some(),
+        "the grace is judged at the reading the key's expiry used"
     );
 }
 
