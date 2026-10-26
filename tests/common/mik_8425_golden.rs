@@ -228,7 +228,7 @@ pub fn assert_skips_reviewed(name: &str, fates: &[(&str, Fate)]) {
     for &(path, fate) in fates {
         match (fate, reviewed.get(path)) {
             (Fate::Unchanged, Some(_)) => restored.push(path),
-            (Fate::Unchanged, None) | (Fate::ReadsAsRecorded, None) => {}
+            (Fate::Unchanged | Fate::ReadsAsRecorded, None) => {}
             (Fate::Skipped, None) => {
                 unreviewed.push(format!("{path}\t{}\t(not listed)", current_sha(path)));
             }
