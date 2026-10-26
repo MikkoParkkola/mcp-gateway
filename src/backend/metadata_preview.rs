@@ -15,7 +15,8 @@ pub(crate) struct PreviewListing {
     pub(crate) tools: Vec<crate::protocol::Tool>,
     /// Names whose `readOnlyHint` the server set itself, before normalisation.
     pub(crate) hint_declared: std::collections::HashSet<String>,
-    pub(crate) withheld: std::collections::BTreeSet<String>,
+    /// Each withheld name with why it was withheld.
+    pub(crate) withheld: std::collections::BTreeMap<String, Vec<String>>,
     pub(crate) truncated: bool,
 }
 
@@ -58,8 +59,8 @@ pub(crate) async fn list_tools_for_preview(
         &mut tools,
     );
     prepared.verdicts.add_unparseable(unparseable);
-    let withheld = prepared.verdicts.withheld_names();
-    tools.retain(|tool| !withheld.contains(&tool.name));
+    let withheld = prepared.verdicts.withheld_issues();
+    tools.retain(|tool| !withheld.contains_key(&tool.name));
     Ok(PreviewListing {
         tools,
         hint_declared,

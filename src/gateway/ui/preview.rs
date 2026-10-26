@@ -409,6 +409,10 @@ fn listed_body(listing: &PreviewListing, mut preview: Value, elapsed: Duration) 
     json!({
         "preview": preview,
         "tools": tools,
-        "withheld_tools": listing.withheld.iter().map(|name| json!({"name": name})).collect::<Vec<_>>(),
+        "withheld_tools": listing
+            .withheld
+            .iter()
+            .map(|(name, issues)| json!({"name": name, "issues": issues}))
+            .collect::<Vec<_>>(),
     })
 }
