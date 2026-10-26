@@ -111,7 +111,12 @@ struct CachedExchange {
 /// string stays collision-safe even if `endpoint` or `scope` embeds the `:`
 /// separator.
 #[must_use]
-fn exchange_cache_key(subject_key: &str, audience: &str, endpoint: &str, scope: &str) -> String {
+pub(super) fn exchange_cache_key(
+    subject_key: &str,
+    audience: &str,
+    endpoint: &str,
+    scope: &str,
+) -> String {
     format!(
         "{}:{}:{}:{}:{}",
         cache_binding(subject_key, audience),
