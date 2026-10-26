@@ -289,7 +289,7 @@ fn the_preview_resolves_as_the_executor_does() {
 #[test]
 fn shown_inside_follows_hidden_then_bind_backs_then_masks() {
     let set = |paths: &[&str]| -> Vec<String> { paths.iter().map(|p| (*p).to_owned()).collect() };
-    let read_only = set(&["/usr", "/bin"]);
+    let read_only = set(&["/usr", "/bin", "/etc/ssl"]);
     let masked = set(&["/usr/local", "/etc/ssl/private"]);
     let bound_back = set(&["/usr/local/bin"]);
     let hidden = set(&["/usr/share/gateway", "/usr/local/bin/state"]);
@@ -330,7 +330,11 @@ fn an_alias_is_kept_only_while_every_link_is_shown() {
     link("chained", "same-dir");
     link("dangling", "missing");
     link("outside", "../out/hop");
+    // A later hop through a directory link the root does not show: the kernel
+    // would walk `out/dir-hop`, which is absent inside, so nothing is kept.
+    link("later-dir-link", "../out/dir-hop/real");
     std::os::unix::fs::symlink("../root/real", out.join("hop")).expect("hop");
+    std::os::unix::fs::symlink(&root, out.join("dir-hop")).expect("dir hop");
     let shown = |p: &Path| p.starts_with(&root);
     // Reached through a directory link the root does not show: kept, but
     // spelled through the real directory, which the root does show.
@@ -345,6 +349,7 @@ fn an_alias_is_kept_only_while_every_link_is_shown() {
         ("chained", true),
         ("dangling", false),
         ("outside", false),
+        ("later-dir-link", false),
     ] {
         assert_eq!(
             reachable_inside(&root.join(name), &shown),
