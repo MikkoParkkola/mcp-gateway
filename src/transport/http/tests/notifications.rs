@@ -123,17 +123,6 @@ async fn sse_decode_delivers_no_notifications_when_the_server_sent_none() {
 // MIK-7272.SUB.4 -- a connect failure is pre-dispatch only without a redirect
 // =========================================================================
 
-/// The falsifier for the pre-dispatch signal, at the only level where a
-/// redirect can actually be followed.
-///
-/// `safe_request_error_for` is told whether the transport's redirect counter
-/// moved across the send. That claim is worth nothing unless the policy
-/// closure really increments on a followed hop, and the classifier's own unit
-/// rows cannot show it -- they pass the bit in by hand. This row builds the
-/// real client, makes it follow a real 307 into a closed port, and asserts
-/// both halves: the counter moved, and the resulting connect failure was NOT
-/// released as pre-dispatch. A 307 re-submits the body, so the origin that
-/// redirected may already have executed the call.
 /// Reads one HTTP/1.1 request (head, then `content-length` body bytes) so the
 /// fake server answers only after the client finished sending.
 async fn drain_request(stream: &mut tokio::net::TcpStream) {
@@ -166,6 +155,17 @@ async fn drain_request(stream: &mut tokio::net::TcpStream) {
     }
 }
 
+/// The falsifier for the pre-dispatch signal, at the only level where a
+/// redirect can actually be followed.
+///
+/// `safe_request_error_for` is told whether the transport's redirect counter
+/// moved across the send. That claim is worth nothing unless the policy
+/// closure really increments on a followed hop, and the classifier's own unit
+/// rows cannot show it -- they pass the bit in by hand. This row builds the
+/// real client, makes it follow a real 307 into a closed port, and asserts
+/// both halves: the counter moved, and the resulting connect failure was NOT
+/// released as pre-dispatch. A 307 re-submits the body, so the origin that
+/// redirected may already have executed the call.
 #[tokio::test]
 async fn a_connect_failure_after_a_followed_redirect_is_not_pre_dispatch() {
     use tokio::io::AsyncWriteExt;
