@@ -122,13 +122,13 @@ async fn test_validate_reports_the_syntax_error_line() {
         "name: kept\ndescription: ok\nkey: value: other\n",
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     assert_eq!(body["valid"], false, "{body}");
     assert_eq!(body["errors"][0]["line"], 3, "{body}");
     assert!(body["errors"][0]["column"].is_u64(), "{body}");
 
     // A structural error names a field, not a position.
-    let (_, _, body) = call(
+    let (status, _, body) = call(
         &router,
         Method::POST,
         "/ui/api/capabilities/kept/validate",
@@ -136,9 +136,40 @@ async fn test_validate_reports_the_syntax_error_line() {
         "name: kept\nproviders: 5\n",
     )
     .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     assert_eq!(body["valid"], false, "{body}");
     assert!(body["errors"][0].get("line").is_none(), "{body}");
     assert!(body["errors"][0]["message"].is_string(), "{body}");
+}
+
+/// Both validate forms share one contract: same status, same body.
+#[tokio::test]
+async fn test_both_validate_forms_answer_alike() {
+    let (_tmp, cap_file, router, _store) = editor_with(VALID_YAML).await;
+    let broken = "name: kept\ndescription: ok\nkey: value: other\n";
+    let edited = VALID_YAML.replace(EDITED_FROM, "Unsaved edit");
+
+    for text in [broken, edited.as_str()] {
+        let post = call(
+            &router,
+            Method::POST,
+            "/ui/api/capabilities/kept/validate",
+            &[],
+            text,
+        )
+        .await;
+        let put = call(
+            &router,
+            Method::PUT,
+            "/ui/api/capabilities/kept?validate=1",
+            &[],
+            text,
+        )
+        .await;
+        assert_eq!(post.0, put.0, "{} vs {}", post.2, put.2);
+        assert_eq!(post.2, put.2);
+    }
+    assert_eq!(std::fs::read_to_string(&cap_file).unwrap(), VALID_YAML);
 }
 
 // ── T7: an edit-save never blesses a tampered file ───────────────────────────
@@ -592,7 +623,7 @@ async fn test_validate_over_a_mismatched_pin_is_not_valid() {
     )
     .await;
 
-    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     assert_eq!(body["valid"], false, "a save would be refused: {body}");
     assert_eq!(std::fs::read_to_string(&cap_file).unwrap(), tampered);
 }

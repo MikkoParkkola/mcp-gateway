@@ -456,19 +456,7 @@ pub async fn put_capability(
     };
 
     if query.validate.is_some() || headers.contains_key("x-validate-only") {
-        let path = file.unwrap_or_else(|| dir.join(format!("{name}.yaml")));
-        return match file_writer::validate(&body, &path, Some(&accounts)) {
-            Ok(()) => Json(json!({ "status": "valid", "name": name })).into_response(),
-            Err(errors) => (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(json!({
-                    "error": "invalid",
-                    "message": format!("Capability '{name}' would not load"),
-                    "errors": field_errors(&errors),
-                })),
-            )
-                .into_response(),
-        };
+        return validate_only(&state, &name, &body, &dir, file).await;
     }
 
     if file.is_none() {
@@ -525,18 +513,32 @@ pub async fn validate_capability_route(
     if !is_safe_name(&name) {
         return bad_name(&name).into_response();
     }
-    let accounts = state.meta_mcp.account_strategies();
     let dirs = state.capability_dirs.as_slice();
     let Some((dir, file)) = capability_dir(dirs, &name) else {
         return not_found(&name);
     };
+    validate_only(&state, &name, &body, &dir, file).await
+}
+
+/// The one validate contract, shared by `POST .../validate` and `PUT` with
+/// `?validate` or `X-Validate-Only`: it judges the bytes a save would write
+/// (pin updated), never the raw body, so a check and the save that follows it
+/// agree. 200 when valid, 422 when not; both carry the same body.
+async fn validate_only(
+    state: &AppState,
+    name: &str,
+    body: &str,
+    dir: &Path,
+    file: Option<PathBuf>,
+) -> axum::response::Response {
+    let accounts = state.meta_mcp.account_strategies();
     let current = match &file {
         Some(path) => tokio::fs::read_to_string(path).await.ok(),
         None => None,
     };
     let path = file.unwrap_or_else(|| dir.join(format!("{name}.yaml")));
     let pin_before = current.as_deref().map(file_writer::pin_state);
-    let (bytes, errors) = match file_writer::preview(&body, current.as_deref()) {
+    let (bytes, errors) = match file_writer::preview(body, current.as_deref()) {
         Ok((bytes, _)) => {
             let errors = file_writer::validate(&bytes, &path, Some(&accounts)).err();
             (Some(bytes), errors.unwrap_or_default())
@@ -563,14 +565,26 @@ pub async fn validate_capability_route(
     let diff = bytes
         .as_deref()
         .map(|b| file_writer::unified_diff(current.as_deref().unwrap_or_default(), b));
-    Json(json!({
-        "valid": errors.is_empty(),
+    let valid = errors.is_empty();
+    let status = if valid {
+        StatusCode::OK
+    } else {
+        StatusCode::UNPROCESSABLE_ENTITY
+    };
+    let mut answer = json!({
+        "status": if valid { "valid" } else { "invalid" },
+        "name": name,
+        "valid": valid,
         "errors": field_errors(&errors),
         "diff": diff,
         "pin": { "before": pin_before, "after": bytes.as_deref().map(file_writer::pin_state) },
         "sha256": bytes.as_deref().map(file_writer::sha256_of),
-    }))
-    .into_response()
+    });
+    if !valid {
+        answer["error"] = json!("invalid");
+        answer["message"] = json!(format!("Capability '{name}' would not load"));
+    }
+    (status, Json(answer)).into_response()
 }
 
 /// Request body for `POST /ui/api/capabilities`.
