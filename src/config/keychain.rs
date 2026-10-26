@@ -13,33 +13,16 @@ pub(crate) use crate::wiped_bytes::WipedBytes;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum KeychainError {
     /// No entry has that name.
-    #[cfg_attr(
-        all(not(test), windows),
-        expect(
-            dead_code,
-            reason = "constructed by the Windows reader, which lands next"
-        )
-    )]
     Missing,
     /// The store holding the entry is locked, and the gateway never prompts.
     #[cfg_attr(
         all(not(test), windows),
-        expect(
-            dead_code,
-            reason = "constructed by the Windows reader, which lands next"
-        )
+        expect(dead_code, reason = "Credential Manager has no locked state")
     )]
     Locked,
     /// The store cannot be reached: no tool, no session bus, or a refusal.
     Unavailable(String),
     /// The store did not answer within the bound (ADR-028 rule 7).
-    #[cfg_attr(
-        all(not(test), windows),
-        expect(
-            dead_code,
-            reason = "constructed by the Windows reader, which lands next"
-        )
-    )]
     Timeout,
 }
 
