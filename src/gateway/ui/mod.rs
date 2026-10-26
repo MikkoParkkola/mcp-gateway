@@ -537,12 +537,13 @@ async fn config(
     // the literal file: never a resolved value (ADR-028).
     let secret_references = match state.config_path.clone() {
         Some(path) => tokio::task::spawn_blocking(move || {
-            crate::config::Config::load_literal(Some(&path))
-                .map(|literal| crate::config::display::backend_secret_references(&literal))
-                .unwrap_or_else(|e| {
-                    tracing::warn!(error = %e, "secret references not shown: gateway.yaml did not load");
+            crate::config::Config::load_literal(Some(&path)).map_or_else(
+                |e| {
+                    tracing::warn!(error = %e, "secret references hidden: config did not load");
                     std::collections::BTreeMap::new()
-                })
+                },
+                |literal| crate::config::display::backend_secret_references(&literal),
+            )
         })
         .await
         .unwrap_or_default(),
