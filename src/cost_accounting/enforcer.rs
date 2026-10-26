@@ -132,12 +132,14 @@ fn day_of(secs: u64) -> u64 {
 }
 
 /// `usd` as micro-USD, or 0 for a value a saved file should never hold
-/// (negative, NaN, infinite, or too large for a micro-USD count), which
-/// restores nothing rather than saturating into a cap that refuses all day.
+/// (negative, NaN, infinite, or larger than a micro-USD count can be).
+///
+/// The ceiling is exactly what a saturated counter saves, so that one comes
+/// back saturated; the cast below clamps it to `u64::MAX`.
 fn saved_micro(usd: f64) -> u64 {
     #[allow(clippy::cast_precision_loss)]
-    let ceiling = u64::MAX as f64;
-    if usd.is_finite() && usd > 0.0 && usd * 1_000_000.0 < ceiling {
+    let ceiling = u64::MAX as f64 / 1_000_000.0;
+    if usd.is_finite() && usd > 0.0 && usd <= ceiling {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let micro = (usd * 1_000_000.0).round() as u64;
         micro
@@ -393,15 +395,13 @@ impl BudgetEnforcer {
         if day_of(persisted.saved_at) != current_day() {
             return;
         }
-        // Valid values can still sum past u64; a value that would wrap the
-        // global total is skipped like any other value no run could hold.
-        let mut global = 0u64;
+        // Valid values can still sum past u64. Each is restored anyway, since
+        // skipping one reopens its own cap; the global total saturates.
         for (tool, total) in &persisted.tool_totals {
             let micro = saved_micro(total.total_cost_usd);
-            let Some(sum) = global.checked_add(micro).filter(|_| micro > 0) else {
+            if micro == 0 {
                 continue;
-            };
-            global = sum;
+            }
             self.global_daily.add(micro);
             self.tool_daily.entry(tool.clone()).or_default().add(micro);
         }
