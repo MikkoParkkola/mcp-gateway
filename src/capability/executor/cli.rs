@@ -723,9 +723,7 @@ pub(crate) fn redact(text: &str, secrets: &[String], caller: &[String]) -> Strin
     {
         cut = end;
     }
-    while !text.is_char_boundary(cut) {
-        cut += 1;
-    }
+    cut = text.ceil_char_boundary(cut);
     text[cut..].to_owned()
 }
 
