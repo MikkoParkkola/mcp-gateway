@@ -249,8 +249,11 @@ fn a_two_phase_save_and_a_secret_only_save_both_complete_under_contention() {
     // A second save whose deadline has passed meets the held lock once and
     // is refused, having written nothing.
     let refused = create_secrets(vault.clone(), store.clone(), &two(), Instant::now());
-    let Err(SaveError::Refused(StoreError::Failed(why))) = refused else {
-        panic!("a second save ran while the first held the vault: {refused:?}");
+    let Err(SaveError::Refused(StoreError::Failed(why))) = refused.as_ref().map(|_| ()) else {
+        panic!(
+            "a second save ran while the first held the vault: {:?}",
+            refused.as_ref().err()
+        );
     };
     assert!(why.contains("held the vault lock"), "{why}");
     assert_eq!(store.names().len(), 2, "the refused save created entries");
