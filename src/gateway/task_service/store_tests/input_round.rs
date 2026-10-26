@@ -780,10 +780,9 @@ async fn a_round_that_fits_exactly_is_taken_and_answerable() {
     );
 }
 
-/// L13 (N13, pin): a round written before `surfacedServer` existed
-/// decodes with no recorded server, and a `None` round writes no member, so
-/// existing parked tasks load unchanged. A set server round-trips under its
-/// camelCase name.
+/// L13 (N13, pin): a round written before `surfacedServer` existed decodes
+/// with no recorded server and writes no member, so parked tasks load
+/// unchanged; a set server round-trips under its camelCase name.
 #[test]
 fn l13_the_surfaced_server_field_is_absent_when_none_and_round_trips_when_set() {
     let old = json!({ "requestState": "s", "tool": "t", "arguments": {} });
