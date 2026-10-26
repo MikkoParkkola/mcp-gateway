@@ -83,7 +83,9 @@ fn os_keychain() -> Arc<dyn KeychainRead> {
     OS.get_or_init(|| {
         #[cfg(target_os = "linux")]
         let os: Arc<dyn KeychainRead> = Arc::new(super::keychain_linux::LinuxKeychain::from_path());
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
+        let os: Arc<dyn KeychainRead> = Arc::new(super::keychain_macos::MacKeychain::search_list());
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let os: Arc<dyn KeychainRead> = Arc::new(Unsupported);
         os
     })
@@ -114,10 +116,10 @@ pub(crate) fn with_test_keychain<T>(reader: Arc<dyn KeychainRead>, body: impl Fn
 }
 
 /// A target with no keychain reader yet: every read is refused by name.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 struct Unsupported;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 impl KeychainRead for Unsupported {
     fn read(&self, _name: &str) -> Result<WipedBytes, KeychainError> {
         Err(KeychainError::Unavailable(

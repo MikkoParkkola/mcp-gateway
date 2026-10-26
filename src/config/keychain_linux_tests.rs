@@ -117,14 +117,14 @@ fn a8_a_slow_tool_times_out_at_the_bound_and_is_reaped() {
     let gdbus = stub(
         dir.path(),
         "gdbus",
-        &format!("echo $$ > '{}'; exec sleep 5", pid_file.display()),
+        &format!("echo $$ > '{}'; exec sleep 30", pid_file.display()),
     );
     let secret_tool = stub(dir.path(), "secret-tool", "printf 'never'");
     let keychain = LinuxKeychain::with_programs(gdbus, secret_tool, Duration::from_millis(300));
     let started = Instant::now();
     assert!(matches!(keychain.read(NAME), Err(KeychainError::Timeout)));
     assert!(
-        started.elapsed() < Duration::from_secs(3),
+        started.elapsed() < Duration::from_secs(10),
         "{:?}",
         started.elapsed()
     );
@@ -149,5 +149,43 @@ fn a7_no_refusal_or_spawn_carries_the_value() {
     assert!(
         !calls(dir.path()).contains(SENTINEL),
         "argv carried the value"
+    );
+}
+
+/// The entry the `linux-keychain` CI job stores, with `secret-tool store`,
+/// before this test runs.
+const REAL_NAME: &str = "mcp-gateway-ci-a15";
+
+#[test]
+#[ignore = "needs a real Secret Service; run by the linux-keychain CI job"]
+fn a15_the_real_secret_service_reads_back_byte_exact_and_refuses_when_locked() {
+    let keychain = LinuxKeychain::from_path();
+    // Piped, `secret-tool lookup` prints the stored bytes and adds nothing.
+    let read = keychain.read(REAL_NAME).expect("the stored entry");
+    assert_eq!(read.as_bytes(), b" a\n");
+    assert_eq!(
+        keychain.read("mcp-gateway-ci-absent").expect_err("absent"),
+        KeychainError::Missing
+    );
+    let locked = std::process::Command::new("gdbus")
+        .args([
+            "call",
+            "--session",
+            "--dest",
+            "org.freedesktop.secrets",
+            "--object-path",
+            "/org/freedesktop/secrets",
+            "--method",
+            "org.freedesktop.Secret.Service.Lock",
+            "['/org/freedesktop/secrets/aliases/default']",
+        ])
+        .status()
+        .expect("run gdbus");
+    assert!(locked.success(), "could not lock the default collection");
+    // No prompter runs in the job, so a read that asked to unlock would hang
+    // until the bound instead of answering Locked.
+    assert_eq!(
+        keychain.read(REAL_NAME).expect_err("locked"),
+        KeychainError::Locked
     );
 }

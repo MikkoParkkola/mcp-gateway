@@ -256,6 +256,12 @@ mimalloc = { version = "0.1.52", default-features = false }
 # ADR-016: the Win32 security calls behind owner-only stores on Windows, used only
 # by `src/win_acl.rs`. Already in the lock file through mio, socket2 and others;
 # promoted to direct so the features below are requested explicitly.
+# ADR-028: the macOS keychain behind `keychain:` references, used only by
+# `src/config/keychain_macos.rs`. Already in the lock file through rustls;
+# promoted to direct, with no features beyond what is already built.
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { version = "3.7", default-features = false }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",

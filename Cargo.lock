@@ -1946,6 +1946,7 @@ dependencies = [
  "rustix",
  "rustls",
  "ryu",
+ "security-framework",
  "serde",
  "serde_ignored",
  "serde_json",

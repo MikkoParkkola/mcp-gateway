@@ -23,6 +23,8 @@ mod input_schema;
 mod keychain;
 #[cfg(target_os = "linux")]
 mod keychain_linux;
+#[cfg(target_os = "macos")]
+mod keychain_macos;
 pub(crate) mod log_once;
 mod meta_mcp_config;
 mod pattern_grammar;
@@ -827,6 +829,8 @@ mod backend_url_tests;
 mod keychain_linux_tests;
 #[cfg(test)]
 mod keychain_load_tests;
+#[cfg(all(test, target_os = "macos"))]
+mod keychain_macos_tests;
 #[cfg(test)]
 mod keychain_ref_tests;
 #[cfg(test)]
