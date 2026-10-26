@@ -443,5 +443,8 @@ mod handle_alias_tests;
 #[path = "clock_entry_tests.rs"]
 mod clock_entry_tests;
 #[cfg(test)]
+#[path = "listener_scan_tests.rs"]
+mod listener_scan_tests;
+#[cfg(test)]
 #[path = "sources_tests.rs"]
 mod sources_tests;
