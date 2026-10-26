@@ -49,6 +49,10 @@ const QUIET: Duration = Duration::from_secs(3);
 const TOOLS: &str = "backend.x.tools_changed";
 const UPDATED: &str = "backend.x.resource_updated";
 
+fn email(user: &str) -> String {
+    format!("{user}@example.test")
+}
+
 /// An identity-bound backend `x` on `peer`, observed per subscriber.
 fn signed_backend(peer: &SubjectPeer) -> Value {
     json!({
@@ -78,8 +82,10 @@ async fn start(
         "max_oidc_token_age_secs": 3600,
         "oidc": [{"issuer": issuer.url, "auto_discover": true,
                   "audiences": [issuer::AUDIENCE]}],
-        "policies": [{"match": {"issuer": issuer.url},
-                      "scopes": {"backends": ["x"], "tools": ["*"]}}],
+        "policies": ["u1", "u2"].map(|user| json!({
+            "match": {"issuer": issuer.url, "email": email(user)},
+            "scopes": {"backends": ["x"], "tools": ["*"]},
+        })),
     });
     let both = root.join("trust-both.pem");
     let mut pem = std::fs::read_to_string(&rx.ca_file).expect("receiver CA");
@@ -157,7 +163,7 @@ async fn each_user_only_their_own(
     let users = ["u1", "u2"];
     let mut subs = Vec::new();
     for user in users {
-        let bearer = issuer.mint(user, &format!("{user}@example.test"));
+        let bearer = issuer.mint(user, &email(user));
         let tools = sub(gw, &bearer, TOOLS, rx, json!({})).await;
         let updated = sub(gw, &bearer, UPDATED, rx, json!({"uri": resource_of(user)})).await;
         subs.push((user, tools, updated));
@@ -199,4 +205,42 @@ async fn each_user_only_their_own(
         .filter(|r| r.method == "GET" && !users.contains(&r.subject.as_str()))
         .collect();
     assert!(gateway_streams.is_empty(), "{gateway_streams:?}");
+}
+
+/// ISO-T6: removing one user's access on reload closes that user's listener
+/// with the backend silent, and leaves the other user's open.
+#[tokio::test]
+async fn iso_t6_a_revoked_user_holds_no_listener_open() {
+    let root = tempfile::tempdir().expect("root");
+    let issuer = issuer::Issuer::start(root.path()).await;
+    let rx = Receiver::start(root.path()).await;
+    let peer = SubjectPeer::start().await;
+    let mut gw = start(root.path(), &rx, &issuer, signed_backend(&peer), &[]).await;
+    for user in ["u1", "u2"] {
+        let bearer = issuer.mint(user, &email(user));
+        sub(&gw, &bearer, TOOLS, &rx, json!({})).await;
+        listening(&peer, &gw, user).await;
+    }
+
+    let mut cfg = gw.config().clone();
+    let policies = cfg["key_server"]["policies"]
+        .as_array_mut()
+        .expect("policies");
+    policies.retain(|p| p["match"]["email"] != email("u1"));
+    gw.rewrite_config(cfg);
+
+    let closed = wait_until(DEADLINE, || peer.open_streams("u1") == 0).await;
+    assert!(
+        closed,
+        "u1's listener stayed open after u1 lost access; peer saw {:?}\n{}",
+        peer.seen(),
+        gw.logs()
+    );
+    tokio::time::sleep(QUIET).await;
+    assert_eq!(
+        peer.open_streams("u1"),
+        0,
+        "u1's listener did not come back"
+    );
+    assert!(peer.open_streams("u2") > 0, "u2 keeps its listener");
 }
