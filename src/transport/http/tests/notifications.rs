@@ -134,6 +134,38 @@ async fn sse_decode_delivers_no_notifications_when_the_server_sent_none() {
 /// both halves: the counter moved, and the resulting connect failure was NOT
 /// released as pre-dispatch. A 307 re-submits the body, so the origin that
 /// redirected may already have executed the call.
+/// Reads one HTTP/1.1 request (head, then `content-length` body bytes) so the
+/// fake server answers only after the client finished sending.
+async fn drain_request(stream: &mut tokio::net::TcpStream) {
+    use tokio::io::AsyncReadExt;
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let head_end = loop {
+        if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            break i + 4;
+        }
+        match stream.read(&mut chunk).await {
+            Ok(0) | Err(_) => return,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+        }
+    };
+    let length = String::from_utf8_lossy(&buf[..head_end])
+        .lines()
+        .find_map(|l| {
+            let (name, value) = l.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().ok())
+                .flatten()
+        })
+        .unwrap_or(0);
+    while buf.len() < head_end + length {
+        match stream.read(&mut chunk).await {
+            Ok(0) | Err(_) => return,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+        }
+    }
+}
+
 #[tokio::test]
 async fn a_connect_failure_after_a_followed_redirect_is_not_pre_dispatch() {
     use tokio::io::AsyncWriteExt;
@@ -152,15 +184,16 @@ async fn a_connect_failure_after_a_followed_redirect_is_not_pre_dispatch() {
             // Close the port BEFORE answering, so the hop the client is about to
             // take is deterministically refused rather than racing this task.
             drop(listener);
+            // Read the whole request first: answering and closing with request
+            // bytes unread resets the connection (tokio 1.54), and the reset can
+            // overtake the 307, so the FIRST request fails and no hop is taken.
+            drain_request(&mut stream).await;
             let response = format!(
                 "HTTP/1.1 307 Temporary Redirect\r\nLocation: {target}\r\n\
                  Content-Length: 0\r\nConnection: close\r\n\r\n"
             );
             let _ = stream.write_all(response.as_bytes()).await;
             let _ = stream.shutdown().await;
-            // Drain before drop: closing with the request unread sends RST, which
-            // can overtake the 307, so the FIRST request fails and no hop is taken.
-            let _ = tokio::io::copy(&mut stream, &mut tokio::io::sink()).await;
         }
     });
 
