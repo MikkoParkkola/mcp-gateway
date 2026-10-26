@@ -54,6 +54,8 @@ owned_routes! {
     UI_CONTROL_PLANE_POLICIES = "/ui/api/control-plane/policies",
     UI_CONTROL_PLANE_DECISIONS = "/ui/api/control-plane/decisions",
     UI_CONTROL_PLANE_EXPORT_STATUS = "/ui/api/control-plane/export-status",
+    /// The Activity list over both transparency logs.
+    UI_ACTIVITY = "/ui/api/activity",
     UI_BACKENDS = "/ui/api/backends",
     UI_BACKEND = "/ui/api/backends/{name}",
     UI_BACKEND_REVIVE = "/ui/api/backends/{name}/revive",
