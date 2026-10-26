@@ -521,6 +521,14 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 404],
     ),
+    // events.rs (leases), :59, :71
+    row(
+        "/ui/api/events/leases",
+        Method::GET,
+        "/ui/api/events/leases",
+        Payload::None,
+        [401, 403, 403, 404],
+    ),
     // src/gateway/ui/preview.rs (preview_backend): describe step
     row(
         "/ui/api/previews",
