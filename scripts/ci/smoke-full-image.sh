@@ -341,7 +341,7 @@ in_volume 'test ! -e /case/started && test ! -e /case/release && test ! -e /case
 docker run -d --name "${CALL_CASE}" --pull never -p "127.0.0.1::39400" \
   -v "${CALL_VOLUME}:/case" "${IMAGE}" --config /case/gateway.yaml > /dev/null
 CALL_PORT="$(docker port "${CALL_CASE}" 39400/tcp | head -1 | sed 's/.*://')"
-[ -n "${CALL_PORT}" ] || fail "docker published no host port for 39400/tcp"
+[ -n "${CALL_PORT}" ] || fail "docker published no host port for 39400/tcp: $(call_log_tail)"
 # Polled from the host, not with wait_for_gateway: on a 0.0.0.0 bind with no
 # public_url the Host gate admits only numeric hosts, so its in-container
 # `localhost` probe is refused however ready the gateway is.
@@ -371,7 +371,7 @@ mcp_post 10 '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVe
   || fail "the call case did not answer initialize: $(call_log_tail)"
 INIT_BODY="$(cat "${CALLDIR}/init.body")"
 [[ "${INIT_BODY}" == *'"jsonrpc"'* ]] \
-  || fail "the call case answered initialize with no JSON-RPC body: ${INIT_BODY}"
+  || fail "the call case answered initialize with no JSON-RPC body: ${INIT_BODY} $(call_log_tail)"
 SESSION="$(tr -d '\r' < "${CALLDIR}/init.headers" | sed -n 's/^[Mm][Cc][Pp]-[Ss]ession-[Ii][Dd]: *//p' | head -1)"
 mcp_post 10 '{"jsonrpc":"2.0","method":"notifications/initialized"}' -o /dev/null
 mcp_post 90 '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"gateway_invoke","arguments":{"server":"slow","tool":"slow_answer","arguments":{}}}}' \
@@ -402,17 +402,27 @@ done
 echo "call case: the gateway logged the stop; releasing the held call"
 docker exec "${CALL_CASE}" touch /case/release 2> /dev/null \
   || fail "SMOKE.1: the container was gone before the held call could be released, so the stop ended it with the call unanswered: $(call_log_tail)"
-wait "${STOP_PID}" || true
+# Both background commands' statuses are kept: a container still running after
+# a failed `docker stop` reports ExitCode 0 too, and a cut-off reply can still
+# hold the answer token.
+STOP_RC=0
+wait "${STOP_PID}" || STOP_RC=$?
 ELAPSED="$(( $(date +%s) - STARTED ))"
+CALL_RUNNING="$(docker inspect -f '{{.State.Running}}' "${CALL_CASE}")"
 CALL_EXIT="$(docker inspect -f '{{.State.ExitCode}}' "${CALL_CASE}")"
-wait "${CALL_PID}" || true
+CALL_RC=0
+wait "${CALL_PID}" || CALL_RC=$?
 CALL_BODY="$(cat "${CALLDIR}/call.body" 2> /dev/null || true)"
-[[ "${CALL_BODY}" == *'answered-after-the-stop'* ]] \
-  || fail "SMOKE.1: a stop during a backend call lost the call's answer (exit ${CALL_EXIT} after ${ELAPSED}s): ${CALL_BODY} $(cat "${CALLDIR}/call.err" 2> /dev/null) $(call_log_tail)"
+ID2_RE='"id"[[:space:]]*:[[:space:]]*2[^0-9]'
+RESULT_RE='"result"[[:space:]]*:'
+if [ "${CALL_RC}" != 0 ] || ! [[ "${CALL_BODY}" =~ ${ID2_RE} ]] || ! [[ "${CALL_BODY}" =~ ${RESULT_RE} ]] \
+   || [[ "${CALL_BODY}" != *'answered-after-the-stop'* ]]; then
+  fail "SMOKE.1: a stop during a backend call lost the call's answer (curl exit ${CALL_RC}, container exit ${CALL_EXIT} after ${ELAPSED}s): ${CALL_BODY} $(cat "${CALLDIR}/call.err" 2> /dev/null) $(call_log_tail)"
+fi
 in_volume 'test -e /case/done' \
   || fail "SMOKE.1: the answer arrived but the backend never recorded finishing the call: $(call_log_tail)"
-if [ "${CALL_EXIT}" != 0 ] || [ "${ELAPSED}" -ge 15 ]; then
-  fail "SMOKE.2: a stop during a backend call took ${ELAPSED}s and exited ${CALL_EXIT}; a drained stop answers and exits 0 well inside the grace period: $(call_log_tail)"
+if [ "${STOP_RC}" != 0 ] || [ "${CALL_RUNNING}" != false ] || [ "${CALL_EXIT}" != 0 ] || [ "${ELAPSED}" -ge 15 ]; then
+  fail "SMOKE.2: a stop during a backend call took ${ELAPSED}s (docker stop exit ${STOP_RC}, still running: ${CALL_RUNNING}) and exited ${CALL_EXIT}; a drained stop answers and exits 0 well inside the grace period: $(call_log_tail)"
 fi
 docker rm -f "${CALL_CASE}" > /dev/null
 docker volume rm "${CALL_VOLUME}" > /dev/null
