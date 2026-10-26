@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use super::{Base, Change, Committed, Edit, PinUpdate, Refused, commit, commit_observed};
 use crate::capability::{compute_capability_hash, rewrite_with_pin};
-use crate::config_persistence_lock::{lock_config, lock_path, waiters_for_test};
+use crate::config_persistence::lock::{lock_config, lock_path, waiters_for_test};
 use crate::identity_propagation::AccountStrategyRegistry;
 
 const TEXT: &str = "fulcrum: \"1.0\"\nname: kept\ndescription: Original\n\nschema:\n  input:\n    type: object\n  output:\n    type: object\n\nproviders:\n  primary:\n    service: rest\n    config:\n      base_url: https://api.example\n      path: /api\n      method: GET\n";
@@ -174,7 +174,8 @@ async fn restore_of_an_unloadable_version_is_invalid() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn create_race_has_one_winner() {
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().to_path_buf();
+    // Canonical, as the writer locks it (a temp dir can sit behind a link).
+    let root = std::fs::canonicalize(dir.path()).unwrap();
     let pseudo = root.join("capabilities");
     let held = lock_config(&pseudo, soon())
         .await
