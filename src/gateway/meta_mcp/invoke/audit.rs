@@ -507,7 +507,8 @@ impl MetaMcp {
         {
             notes.refused_by_memo(kind);
         }
-        let decision = notes.decided(self, outcome);
+        // Boxed: held across the write, it would grow every dispatch future.
+        let decision = Box::new(notes.decided(self, outcome));
         // MIK-7116.MIN.1: the tool's own arguments, as the firewall walks them.
         let arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments(args);
         let tenants = self.request_tenants(arguments.as_ref().unwrap_or(&Value::Null));
@@ -558,7 +559,7 @@ impl MetaMcp {
         trace_id: &str,
         facts: &super::super::admission::ReplayAudit,
         attribution: Map<String, Value>,
-        decision: crate::security::decision_record::Decision,
+        decision: Box<crate::security::decision_record::Decision>,
     ) -> Result<()> {
         let server = args
             .get("server")
@@ -600,7 +601,7 @@ impl MetaMcp {
                     &request_hash,
                     response_hash.as_deref(),
                     attribution,
-                    Some(&decision),
+                    Some(decision.as_ref()),
                 )
             })
             .await;

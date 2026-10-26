@@ -265,11 +265,11 @@ impl<'a> Refused<'a> {
         {
             noted.refused(kind, None);
         }
-        let decision = noted.decision(
+        let decision = Box::new(noted.decision(
             crate::security::decision_record::Decided::Fresh,
             crate::security::decision_record::Refused::of(refusal.outcome),
             state.meta_mcp.live_config().as_deref(),
-        );
+        ));
         let session = self.session_id.to_string();
         // The meta writer's correlation ladder; a modern call's session is
         // `""`, so it falls to the minted trace id (MIK-7640).
@@ -288,7 +288,7 @@ impl<'a> Refused<'a> {
                     &request_hash,
                     None,
                     attribution,
-                    Some(&decision),
+                    Some(decision.as_ref()),
                 )
             })
             .await;
