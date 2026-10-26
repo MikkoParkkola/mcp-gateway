@@ -347,3 +347,38 @@ async fn meta_replay_delivery_joins_the_replaying_invocation() {
     assert_ne!(invoked[0], invoked[1], "{invoked:?}");
     assert_eq!(delivered, invoked, "each delivery joins its own invocation");
 }
+
+/// A surfaced tool withheld from the caller answers as an absent name, and
+/// its one invocation record is the route's `denied` record: the answer's
+/// delivery record names that record's trace.
+#[tokio::test]
+async fn a_withheld_surfaced_name_delivery_joins_its_denied_record() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(Some(vec!["t".to_string()]))),
+        meta_mode: MetaMode::SurfacedT,
+        ..Setup::default()
+    })
+    .await;
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                      "params": {"name": "t", "arguments": {"q": 1},
+                                 "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                                           "io.modelcontextprotocol/clientCapabilities": {}}}});
+    let (status, answer) = post_modern_named(&fx, "t", &body.to_string()).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "never dispatched");
+    let invoked = invocations(&fx);
+    let [denied] = invoked.as_slice() else {
+        panic!("one invocation record: {invoked:?}");
+    };
+    assert_eq!(denied["outcome"], "denied", "{denied}");
+    let delivered: Vec<Value> = std::fs::read_to_string(&fx.path)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
+        .filter(|entry| entry["event"] == "response_delivery_attempt")
+        .collect();
+    let [delivery] = delivered.as_slice() else {
+        panic!("one delivery record: {delivered:?}");
+    };
+    assert_eq!(delivery["trace_id"], denied["trace_id"], "{delivery}");
+}

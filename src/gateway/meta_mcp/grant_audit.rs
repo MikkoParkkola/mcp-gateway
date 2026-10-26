@@ -564,10 +564,14 @@ pub(crate) async fn slot_rpc<'a, X: Send + 'a>(
         // The same answer a failed record gets on the meta path, status data
         // included, so a withheld call's slot cannot tell itself apart
         // (MIK-8361 review F4).
-        ((_, extra), Err(error), _) => (
-            super::response_security::error_response_preserving_status(id, &error),
-            extra,
-        ),
+        // It still answers the recorded invocation: its delivery keeps that
+        // invocation's trace.
+        ((response, extra), Err(error), _) => {
+            let mut refusal =
+                super::response_security::error_response_preserving_status(id, &error);
+            refusal.invocation_trace = response.invocation_trace;
+            (refusal, extra)
+        }
     }
 }
 

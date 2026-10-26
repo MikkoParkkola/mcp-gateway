@@ -195,6 +195,9 @@ pub(super) async fn tools_call(
     backend_targets.extend(state.meta_mcp.playbook_step_targets(tool_name, &arguments));
     // Authorize every target before scanning any, so a refused later target
     // charges no earlier one's budget.
+    // The withheld target's record is this call's invocation record: the
+    // answer the missing name's path gives carries its trace.
+    let mut withheld_trace = None;
     for (index, target) in backend_targets.iter().enumerate() {
         // The one route-stage authorize /mcp and stdio share (P3). A surfaced
         // name withheld from this caller is not a target (MIK-8340): the meta
@@ -226,7 +229,7 @@ pub(super) async fn tools_call(
                             code,
                         );
                     } else {
-                        refused.note_withheld(state, checked, code).await;
+                        withheld_trace = refused.note_withheld(state, checked, code).await;
                     }
                     Ok(())
                 }
@@ -760,5 +763,10 @@ pub(super) async fn tools_call(
         ))
         .await
     };
-    Ok(response)
+    Ok(match withheld_trace {
+        Some(trace) if response.invocation_trace.is_none() => {
+            response.with_invocation_trace(trace.into())
+        }
+        _ => response,
+    })
 }

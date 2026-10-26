@@ -133,3 +133,34 @@ fn the_invocation_trace_never_reaches_the_wire() {
         );
     }
 }
+
+/// A whole JSON-RPC answer carrying a member named like the marker is read
+/// with no invocation trace: deserialization never sets it.
+#[test]
+fn a_wire_answer_cannot_carry_an_invocation_trace() {
+    let wire = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "result": {"isError": false},
+        "invocation_trace": "gw-forged",
+    });
+    let answer: crate::protocol::JsonRpcResponse =
+        serde_json::from_value(wire).expect("a JSON-RPC answer");
+    assert!(answer.invocation_trace.is_none(), "{answer:?}");
+}
+
+/// When the grant slot's write fails, the -32005 answer that replaces the
+/// call's still names the call's invocation, so its delivery joins it.
+#[tokio::test]
+async fn a_failed_grant_write_keeps_the_invocation_trace() {
+    use crate::gateway::meta_mcp::grant_audit::{seams, slot_rpc};
+    use crate::protocol::{JsonRpcResponse, RequestId};
+    use crate::security::audit::AuditFailurePolicy;
+    let (_dir, log) =
+        super::route_matrix_driver_tests::response::temp_log(Some(AuditFailurePolicy::FailClosed));
+    seams::inject_note_for_test("alpha", "read", seams::Inject::NextSlotOpen);
+    seams::fail_append_at_for_test(1);
+    let answer = JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({}))
+        .with_invocation_trace("gw-call".into());
+    let (response, ()) = slot_rpc(Some(&log), RequestId::Number(1), async { (answer, ()) }).await;
+    assert!(response.error.is_some(), "premise: replaced: {response:?}");
+    assert_eq!(response.invocation_trace.as_deref(), Some("gw-call"));
+}
