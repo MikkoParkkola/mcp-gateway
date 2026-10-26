@@ -419,6 +419,13 @@ fn capability_dir(dirs: &[String], name: &str) -> Option<(PathBuf, Option<PathBu
     primary_write_dir(dirs).map(|dir| (PathBuf::from(dir), None))
 }
 
+/// `?validate=` on `PUT`: present with any value means validate only.
+#[derive(Debug, Deserialize)]
+pub struct ValidateQuery {
+    /// Any value, empty included, asks for validation without a write.
+    pub validate: Option<String>,
+}
+
 /// `PUT /ui/api/capabilities/:name` — save through the capability writer.
 ///
 /// With `?validate=1` or an `X-Validate-Only` header it validates and writes
@@ -431,7 +438,7 @@ pub async fn put_capability(
     client: Option<Extension<AuthenticatedClient>>,
     identity: Option<Extension<VerifiedIdentity>>,
     AxumPath(name): AxumPath<String>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
+    Query(query): Query<ValidateQuery>,
     headers: HeaderMap,
     body: String,
 ) -> impl IntoResponse {
@@ -448,7 +455,7 @@ pub async fn put_capability(
         return not_found(&name);
     };
 
-    if query.contains_key("validate") || headers.contains_key("x-validate-only") {
+    if query.validate.is_some() || headers.contains_key("x-validate-only") {
         let path = file.unwrap_or_else(|| dir.join(format!("{name}.yaml")));
         return match file_writer::validate(&body, &path, Some(&accounts)) {
             Ok(()) => Json(json!({ "status": "valid", "name": name })).into_response(),

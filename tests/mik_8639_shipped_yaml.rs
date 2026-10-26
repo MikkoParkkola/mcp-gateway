@@ -7,8 +7,14 @@
 //! `tests/fixtures/mik_8425_yaml/shipped.tsv` (MIK-8425 MIG.2), so the
 //! no-false-refusal contract outlives the parser it was measured against.
 
+#[path = "common/mik_8425_golden.rs"]
+mod golden;
+
 #[path = "common/yaml.rs"]
 mod yaml;
+
+#[path = "mik_8425_yaml_baseline_trees/report.rs"]
+mod trees;
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -102,16 +108,21 @@ fn backend_reading(content: &str) -> String {
     }
 }
 
+/// A Helm chart template: Go template text, so not YAML until rendered.
+fn is_helm_template(path: &str) -> bool {
+    path.starts_with("deploy/helm/") && path.contains("/templates/")
+}
+
 fn read(path: &str) -> String {
     std::fs::read_to_string(path)
         .unwrap_or_else(|err| panic!("shipped file {path} unreadable: {err}"))
 }
 
 /// Every file the replaced backend accepted, the seam accepts with the same
-/// document count. A file added, edited or removed since the recording is
-/// skipped (there is no old backend left to re-record it with, MIK-8425
-/// MIG.2) and printed by name, and exactly the reviewed skips are allowed
-/// (`MIN_COMPARED`).
+/// document count. A recorded file removed, or edited so that its tree reads
+/// differently, is skipped only when `reviewed_skips.tsv` lists it (there is
+/// no old backend left to re-record it with). A new file has no row, but the
+/// seam must still accept it, unless it is a Helm template.
 #[test]
 fn shipped_yaml_accepted_by_backend_stays_accepted() {
     if is_packaged_crate(&package_root()) {
@@ -120,28 +131,53 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
         );
         return;
     }
-    let golden = std::fs::read_to_string(GOLDEN).expect("the shipped-YAML golden");
+    let table = std::fs::read_to_string(GOLDEN).expect("the shipped-YAML golden");
     let mut recorded = std::collections::BTreeMap::new();
-    for row in golden.lines() {
+    for row in table.lines() {
         let cols: Vec<&str> = row.split('\t').collect();
         let [path, sha, reading] = cols[..] else {
             panic!("{GOLDEN}: malformed row {row:?}");
         };
         recorded.insert(path.to_owned(), (sha.to_owned(), reading.to_owned()));
     }
+    let tree_readings: std::collections::BTreeMap<String, String> = std::fs::read_to_string(TREES)
+        .expect("the trees golden")
+        .lines()
+        .map(|row| {
+            let cols: Vec<&str> = row.splitn(3, '\t').collect();
+            let [path, _, readings] = cols[..] else {
+                panic!("{TREES}: malformed row {row:?}");
+            };
+            (path.to_owned(), readings.to_owned())
+        })
+        .collect();
     let files = shipped_files();
     assert!(!files.is_empty(), "expected to find shipped YAML files");
-    let mut stale = Vec::new();
+    let mut fates: Vec<(String, golden::Fate)> = Vec::new();
+    let mut new_files = Vec::new();
     let mut refused = Vec::new();
     let mut accepted = 0usize;
     for path in &files {
         let content = read(path);
         let Some((sha, reading)) = recorded.remove(path) else {
-            stale.push(format!("{path} (no row)"));
+            // No golden can be recorded for a new file, but it still has to
+            // load. Helm templates are Go template text, refused by design.
+            let new_reading = backend_reading(&content);
+            if new_reading == "refused" && !is_helm_template(path) {
+                refused.push(path.clone());
+            }
+            new_files.push(format!("{path} (reads as {new_reading})"));
             continue;
         };
-        if sha != digest(&content) {
-            stale.push(format!("{path} (edited since recording)"));
+        // A verdict is too coarse to tell a comment edit from a value edit,
+        // so an edited file is still checked only when its full `trees.tsv`
+        // reading is unchanged.
+        if sha == digest(&content) {
+            fates.push((path.clone(), golden::Fate::Unchanged));
+        } else if tree_readings.get(path) == Some(&trees::readings(&content)) {
+            fates.push((path.clone(), golden::Fate::ReadsAsRecorded));
+        } else {
+            fates.push((path.clone(), golden::Fate::Skipped));
             continue;
         }
         let ok = if reading == "single" {
@@ -157,18 +193,23 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
             refused.push(path.clone());
         }
     }
-    stale.extend(recorded.keys().map(|path| format!("{path} (gone)")));
-    if !stale.is_empty() {
+    // A recorded file the walk no longer finds is gone.
+    fates.extend(
+        recorded
+            .into_keys()
+            .map(|path| (path, golden::Fate::Skipped)),
+    );
+    let fates: Vec<(&str, golden::Fate)> = fates
+        .iter()
+        .map(|(path, fate)| (path.as_str(), *fate))
+        .collect();
+    golden::assert_skips_reviewed("shipped.tsv", &fates);
+    if !new_files.is_empty() {
         eprintln!(
-            "mik-8639 shipped-yaml: {} row(s) skipped: {stale:?}",
-            stale.len()
+            "shipped-yaml: {} new file(s) without a row: {new_files:?}",
+            new_files.len()
         );
     }
-    let compared = files.len() + recorded.len() - stale.len();
-    assert!(
-        compared >= MIN_COMPARED,
-        "only {compared} recorded files still compare (need {MIN_COMPARED}): {stale:?}"
-    );
     eprintln!(
         "mik-8639 shipped-yaml: {accepted} backend-accepted files of {}, {} refused",
         files.len(),
@@ -181,15 +222,7 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
 }
 
 const GOLDEN: &str = "tests/fixtures/mik_8425_yaml/shipped.tsv";
-
-/// The recorded rows whose file is unchanged on disk: the exact count, so any
-/// further skip fails until it is reviewed. 184 rows were recorded on
-/// 2026-10-25; skipped today, each printed by name when the test runs:
-/// `capabilities/linear/linear_get_issue.yaml` (edited on the release line,
-/// #4133), `examples/token-exchange-live.yaml` (#4150), and
-/// `capabilities/automation/bus_pull.yaml` and `bus_subscribe.yaml`, whose
-/// example topic stopped naming a private project (#4168).
-const MIN_COMPARED: usize = 180;
+const TREES: &str = "tests/fixtures/mik_8425_yaml/trees.tsv";
 
 fn digest(content: &str) -> String {
     use sha2::Digest as _;

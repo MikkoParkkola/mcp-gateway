@@ -195,8 +195,13 @@ impl SseListenSession {
             tx,
             map: Box::new(move |data| unsolicited_frame(data).filter(|note| watched.admits(note))),
         };
-        let channel =
-            SseChannel::open(response, |data| t.resolve_message_url(data), Some(sink)).await?;
+        let channel = SseChannel::open(
+            response,
+            |data| t.resolve_message_url(data),
+            Some(sink),
+            t.body_budget.get().cloned(),
+        )
+        .await?;
         *self.channel.lock() = Some(Arc::clone(&channel));
         let version = t.protocol_version.read().clone();
         let initialized = self
