@@ -610,7 +610,19 @@ fn validate_managed(
         .as_ref()
         .is_some_and(|value| !is_reference(value))
     {
-        return Err(fail("client_secret_ref must be an env: or file: reference"));
+        return Err(fail(
+            "client_secret_ref must be an env:, file: or keychain: reference",
+        ));
+    }
+    if descriptor
+        .client_secret_ref
+        .as_deref()
+        .and_then(|value| value.strip_prefix("keychain:"))
+        .is_some_and(|name| !crate::config::is_keychain_name(name))
+    {
+        return Err(fail(
+            "client_secret_ref keychain: must name a valid keychain entry",
+        ));
     }
     // A file: path is judged at load, as `config::secret_ref` judges one at
     // resolution: an empty or relative path would otherwise load and fail only
@@ -696,7 +708,8 @@ fn decode_key(key_id: &str, encoded: &str) -> Result<Vec<u8>, AccountsConfigErro
 pub(crate) trait SecretOverlay {
     /// A whole reference: `env:NAME` looked up in the overlay
     /// (`Ok(None)` when unset), `file:PATH` read under the C2 mode rule (C9),
-    /// anything else the literal. `Err` is a message naming `field`, never a
+    /// `keychain:NAME` read from the OS keychain (ADR-028), anything else the
+    /// literal. `Err` is a message naming `field`, never a
     /// value.
     fn resolve_reference(&self, field: &str, reference: &str) -> Result<Option<String>, String>;
 }

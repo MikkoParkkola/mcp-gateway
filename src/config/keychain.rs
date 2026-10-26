@@ -1,0 +1,155 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! The OS keychain behind `keychain:NAME` references (ADR-028).
+//!
+//! Only reads live here. Values cross this module as [`WipedBytes`], and no
+//! error carries one: an error names a reason, and the caller names the entry.
+
+use std::sync::Arc;
+
+pub(crate) use crate::wiped_bytes::WipedBytes;
+
+/// Why a keychain read did not return a value. Never holds the value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum KeychainError {
+    /// No entry has that name.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "constructed by the OS readers, which land next")
+    )]
+    Missing,
+    /// The store holding the entry is locked, and the gateway never prompts.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "constructed by the OS readers, which land next")
+    )]
+    Locked,
+    /// The store cannot be reached: no tool, no session bus, or a refusal.
+    Unavailable(String),
+    /// The store did not answer within the bound (ADR-028 rule 7).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "constructed by the OS readers, which land next")
+    )]
+    Timeout,
+}
+
+impl KeychainError {
+    /// A short reason for an operator-facing message.
+    pub(crate) fn reason(&self) -> String {
+        match self {
+            Self::Missing => "it does not exist".to_owned(),
+            Self::Locked => "the keychain is locked".to_owned(),
+            Self::Unavailable(why) => format!("the keychain is unavailable: {why}"),
+            Self::Timeout => "the keychain timed out".to_owned(),
+        }
+    }
+}
+
+/// Reads keychain entries by name.
+pub(crate) trait KeychainRead: Send + Sync {
+    /// The entry's exact bytes.
+    fn read(&self, name: &str) -> Result<WipedBytes, KeychainError>;
+}
+
+/// The reader an [`EnvOverlay`](super::EnvOverlay) resolves through. The
+/// default is the OS keychain.
+#[derive(Clone)]
+pub(crate) struct KeychainReader(Arc<dyn KeychainRead>);
+
+impl KeychainReader {
+    pub(crate) fn new(reader: Arc<dyn KeychainRead>) -> Self {
+        Self(reader)
+    }
+
+    pub(crate) fn get(&self) -> &dyn KeychainRead {
+        self.0.as_ref()
+    }
+}
+
+impl Default for KeychainReader {
+    fn default() -> Self {
+        #[cfg(test)]
+        if let Some(reader) = TEST_READER.with(|slot| slot.borrow().clone()) {
+            return Self(reader);
+        }
+        Self::new(Arc::new(OsKeychain))
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The reader every overlay built on this thread gets, so a test can load
+    /// a whole config against a fake (`Config::load` builds its own overlay).
+    static TEST_READER: std::cell::RefCell<Option<Arc<dyn KeychainRead>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `body` with every overlay built on this thread reading from `reader`.
+#[cfg(test)]
+pub(crate) fn with_test_keychain<T>(reader: Arc<dyn KeychainRead>, body: impl FnOnce() -> T) -> T {
+    struct Restore(Option<Arc<dyn KeychainRead>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            TEST_READER.with(|slot| *slot.borrow_mut() = previous);
+        }
+    }
+    let previous = TEST_READER.with(|slot| slot.borrow_mut().replace(reader));
+    let _restore = Restore(previous);
+    body()
+}
+
+/// The platform keychain.
+struct OsKeychain;
+
+impl KeychainRead for OsKeychain {
+    fn read(&self, _name: &str) -> Result<WipedBytes, KeychainError> {
+        Err(KeychainError::Unavailable("not implemented".to_owned()))
+    }
+}
+
+/// An in-memory keychain for tests: entries, forced failures, and every name
+/// asked for.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct FakeKeychain {
+    entries: std::sync::Mutex<std::collections::BTreeMap<String, Result<Vec<u8>, KeychainError>>>,
+    asked: std::sync::Mutex<Vec<String>>,
+}
+
+#[cfg(test)]
+impl FakeKeychain {
+    pub(crate) fn insert(&self, name: &str, bytes: &[u8]) {
+        self.entries
+            .lock()
+            .unwrap()
+            .insert(name.to_owned(), Ok(bytes.to_vec()));
+    }
+
+    pub(crate) fn fail(&self, name: &str, error: KeychainError) {
+        self.entries
+            .lock()
+            .unwrap()
+            .insert(name.to_owned(), Err(error));
+    }
+
+    pub(crate) fn asked(&self) -> Vec<String> {
+        self.asked.lock().unwrap().clone()
+    }
+
+    fn lookup(&self, name: &str) -> Option<Result<Vec<u8>, KeychainError>> {
+        self.asked.lock().unwrap().push(name.to_owned());
+        self.entries.lock().unwrap().get(name).cloned()
+    }
+}
+
+#[cfg(test)]
+impl KeychainRead for FakeKeychain {
+    fn read(&self, name: &str) -> Result<WipedBytes, KeychainError> {
+        match self.lookup(name) {
+            None => Err(KeychainError::Missing),
+            Some(entry) => entry.map(WipedBytes::new),
+        }
+    }
+}
