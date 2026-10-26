@@ -163,10 +163,10 @@ fn build_plan(target: &Target, protected: &[PathBuf]) -> Result<Plan, Refusal> {
         // Masked where it is named and where it really is: a state directory
         // that is a symlink into a bound prefix (`/usr/...`) would otherwise
         // stay readable at its real path.
-        if let Ok(real) = fs::canonicalize(&path) {
-            if real != path {
-                masked.push(utf8(&real)?);
-            }
+        if let Ok(real) = fs::canonicalize(&path)
+            && real != path
+        {
+            masked.push(utf8(&real)?);
         }
         masked.push(utf8(&path)?);
     }
