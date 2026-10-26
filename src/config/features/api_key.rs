@@ -177,11 +177,16 @@ pub(crate) fn api_key_expired_now(expires_at: Option<DateTime<Utc>>) -> bool {
 }
 
 fn malformed(name: &str, spec: &str) -> Error {
-    if spec.starts_with("file:") {
+    if spec.starts_with("file:") || spec.starts_with("keychain:") {
+        let holder = if spec.starts_with("file:") {
+            "the file"
+        } else {
+            "the entry"
+        };
         return Error::ConfigValidation(format!(
             "auth.api_keys['{name}'].key_sha256 references {spec}, whose content is not a \
              sha256:<64 lowercase hex> digest; store the output of `mcp-gateway hash-key` in \
-             the file, not the key itself"
+             {holder}, not the key itself"
         ));
     }
     match spec.strip_prefix("env:") {
@@ -232,9 +237,10 @@ impl AuthConfig {
                             Some(value) => value,
                             None => continue,
                         },
-                        // A file holding the digest (C9). An unreadable file
-                        // is the required-reference check's to report.
-                        None if spec.starts_with("file:") => {
+                        // A file (C9) or keychain entry (ADR-028) holding the
+                        // digest. An unreadable one is the required-reference
+                        // check's to report.
+                        None if spec.starts_with("file:") || spec.starts_with("keychain:") => {
                             let field = format!("auth.api_keys['{name}'].key_sha256");
                             match crate::config::secret_ref::SecretRef::parse(spec)
                                 .resolve(&field, overlay)
