@@ -65,7 +65,9 @@ jobs:
       - name: Run the browser tests
         env:
           CI: 'true'
-        run: npx playwright test
+        # The `visual` project needs the design frames, which are not in
+        # this repository; it runs locally.
+        run: npx playwright test --project=chromium
       - name: Keep the report of a failed run
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

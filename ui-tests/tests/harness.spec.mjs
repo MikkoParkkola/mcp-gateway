@@ -47,8 +47,9 @@ test('every asset the shell document names is served, cached immutable', async (
   }
   // In the browser too: no asset request may fail, with or without a response.
   const failed = [];
-  page.on('requestfailed', (r) => failed.push(`failed ${r.url()}`));
-  page.on('response', (r) => { if (r.status() >= 400) failed.push(`${r.status()} ${r.url()}`); });
+  const asset = (url) => new URL(url).pathname.startsWith('/ui/assets/');
+  page.on('requestfailed', (r) => { if (asset(r.url())) failed.push(`failed ${r.url()}`); });
+  page.on('response', (r) => { if (asset(r.url()) && r.status() >= 400) failed.push(`${r.status()} ${r.url()}`); });
   await page.goto('/ui/overview');
   await page.waitForLoadState('networkidle');
   expect(failed).toEqual([]);
