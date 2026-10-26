@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-7217.ERA.1 / ERA.2 / ERA.3: a re-probe's answer from a replaced transport is refused.
 //!
-//! Design: `docs/design/2026-09-30-era-1-2-stale-probe-refusal.md`. The probe holds the era
+//! Design: the era 1 2 stale probe refusal design. The probe holds the era
 //! lock while it waits, so reading the era observation after the peer has answered blocks until
 //! the detached task has decided: that is the completion barrier, never a sleep.
 

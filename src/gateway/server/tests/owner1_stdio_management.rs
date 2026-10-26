@@ -4,7 +4,7 @@
 //! writes execute every time, and each management branch keeps its keyed
 //! behaviour over stdio.
 //!
-//! Test plan: `docs/design/2026-09-30-sub4-stdio-owner-test-plan.md` (I2).
+//! Test plan: the sub4 stdio owner test plan (I2).
 //! Keyed once and replay are already pinned by `dispatcher_admission_arms.rs`;
 //! the reload rows with an installed context live in `owner1_stdio_reload.rs`.
 

@@ -3,7 +3,7 @@
 //! Acceptance tests for MIK-3274.RANKING.1 — fuzzy ranking for abbreviations
 //! and word boundaries.
 //!
-//! Design: `docs/design/2026-09-12-mik-3274-ranking-abbreviations.md`, §5 is
+//! Design: the ranking abbreviations design, §5 is
 //! the acceptance mapping and this file is one test per row of it.
 //!
 //! The corpus is read from a fixture frozen in its own commit before the
