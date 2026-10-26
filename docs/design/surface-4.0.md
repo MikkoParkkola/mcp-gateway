@@ -180,7 +180,7 @@ counts, and `/sse` answers 410 Gone pointing to `POST /mcp` (MIK-8044.SURF.4b).
 | `/metrics` | 1 |  |  |  |  |
 | `/readyz` | 1 |  |  |  |  |
 | `/sse` |  |  |  | `/sse` |  |
-| `/ui` | 3 |  |  | `/ui/api/backends`; `/ui/api/backends/{name}`; `/ui/api/backends/{name}/revive`; `/ui/api/capabilities`; `/ui/api/capabilities/{name}`; `/ui/api/config`; `/ui/api/control-plane`; `/ui/api/control-plane/decisions`; `/ui/api/control-plane/export-status`; `/ui/api/control-plane/grants`; `/ui/api/control-plane/policies`; `/ui/api/costs`; `/ui/api/dashboard-link`; `/ui/api/events/dead-letters`; `/ui/api/events/dead-letters/replay`; `/ui/api/events/dead-letters/{id}/replay`; `/ui/api/events/held`; `/ui/api/import/openapi`; `/ui/api/import/openapi/preview`; `/ui/api/registry`; `/ui/api/registry/search`; `/ui/api/reload`; `/ui/api/status`; `/ui/api/tools`; `/ui/assets/{file}` |  |
+| `/ui` | 3 |  |  | `/ui/api/activity`; `/ui/api/activity/export`; `/ui/api/activity/{id}`; `/ui/api/backends`; `/ui/api/backends/{name}`; `/ui/api/backends/{name}/revive`; `/ui/api/capabilities`; `/ui/api/capabilities/{name}`; `/ui/api/config`; `/ui/api/control-plane`; `/ui/api/control-plane/decisions`; `/ui/api/control-plane/export-status`; `/ui/api/control-plane/grants`; `/ui/api/control-plane/policies`; `/ui/api/costs`; `/ui/api/dashboard-link`; `/ui/api/events/dead-letters`; `/ui/api/events/dead-letters/replay`; `/ui/api/events/dead-letters/{id}/replay`; `/ui/api/events/held`; `/ui/api/import/openapi`; `/ui/api/import/openapi/preview`; `/ui/api/registry`; `/ui/api/registry/search`; `/ui/api/reload`; `/ui/api/status`; `/ui/api/tools`; `/ui/assets/{file}` |  |
 | `config-driven` | 3 |  |  |  |  |
 
 ### lib
@@ -1400,6 +1400,9 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `/readyz` | KEEP | liveness and readiness probes for supervisors and Kubernetes | - | src/gateway/routes.rs:23 |
 | `/sse` | INTERNAL | not a transport: answers a pointer to `/mcp` for clients configured for the removed SSE endpoint; SSE-transport clients use `/mcp` (Streamable HTTP; `GET /mcp` opens the stream) | unchanged; listed as a deprecation helper | src/gateway/routes.rs:28 |
 | `/ui` | KEEP | the web dashboard and its sign-in hand-off | - | src/gateway/routes.rs:34 |
+| `/ui/api/activity` | INTERNAL | private JSON API of the bundled web UI | the Activity list: admin, a mapped auditor, or a mapped developer's own calls; any other credential 403 (UPGRADING 176); documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:58 |
+| `/ui/api/activity/export` | INTERNAL | private JSON API of the bundled web UI | the Activity export: signed NDJSON (409 without a provenance key) or CSV, same access as the list; checked offline by `audit verify --export` | src/gateway/routes.rs:60 |
+| `/ui/api/activity/{id}` | INTERNAL | private JSON API of the bundled web UI | one Activity row's receipt, same access as the list; 404 for a row the caller may not read | src/gateway/routes.rs:62 |
 | `/ui/api/backends` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:57 |
 | `/ui/api/backends/{name}` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:58 |
 | `/ui/api/backends/{name}/revive` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:59 |

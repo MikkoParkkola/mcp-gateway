@@ -117,6 +117,14 @@ fn trust_set(jwk: Option<&Path>, config: Option<&Path>) -> Result<TrustSet, Stri
             None => return Err("no public key: pass --jwk (from `provenance public-key`)".into()),
         },
     };
+    // `provenance public-key` prints `{"jwk": ..., "thumbprint": ...}`: its
+    // output is taken as it is, as well as a bare JWK or a JWKS.
+    let text = match serde_json::from_str::<Value>(&text) {
+        Ok(Value::Object(mut printed)) if printed.contains_key("thumbprint") => {
+            printed.remove("jwk").map_or(text, |jwk| jwk.to_string())
+        }
+        _ => text,
+    };
     TrustSet::from_json(&text).map_err(|_| "the --jwk file is not a public Ed25519 JWK".into())
 }
 

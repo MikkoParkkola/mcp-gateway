@@ -39,6 +39,17 @@ fn exits_zero_on_a_valid_export_and_non_zero_otherwise() {
         code(run_verify_export(&file, Some(&jwk), None)),
         code(ExitCode::SUCCESS)
     );
+    // The `provenance public-key` output, as printed, works as the key file.
+    let printed = dir.path().join("printed.json");
+    std::fs::write(
+        &printed,
+        serde_json::json!({"jwk": s.public_jwk(), "thumbprint": s.jwk_thumbprint()}).to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        code(run_verify_export(&file, Some(&printed), None)),
+        code(ExitCode::SUCCESS)
+    );
     std::fs::write(&file, &good[..good.len() - 3]).unwrap();
     assert_eq!(
         code(run_verify_export(&file, Some(&jwk), None)),
