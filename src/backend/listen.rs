@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The events listener's reach into a backend (MIK-7630 I5 design §5): the
 //! one place `src/events` touches this module, so no backend item's
-//! visibility widens. Everything runs on the shared slot.
+//! visibility widens. Everything runs on the shared slot but a per-user
+//! listener's own transport.
 
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
@@ -138,6 +139,39 @@ impl Backend {
         let mut slot = entry.transport.write();
         *entry.listen.write() = Some(handle_of(transport));
         *slot = Some(erased);
+    }
+
+    /// A per-user listener's own HTTP transport, unstarted: the backend's URL,
+    /// timeout, flavour and protocol version under its live destination
+    /// policy, and nothing of the gateway's own credential (no static
+    /// headers, no OAuth). Built per run, so the shared slot is never started
+    /// or read for a listener that observes as one subscriber.
+    ///
+    /// # Errors
+    /// The backend is not reached over HTTP, or its URL cannot be sent to.
+    pub(crate) fn listener_transport(&self) -> Result<Arc<crate::transport::HttpTransport>> {
+        let crate::config::TransportConfig::Http {
+            http_url,
+            streamable_http,
+            protocol_version,
+        } = &self.config.transport
+        else {
+            return Err(Error::Transport(
+                "a per-user listener needs an HTTP backend".to_owned(),
+            ));
+        };
+        super::lifecycle::http_target(http_url)?;
+        let transport = crate::transport::HttpTransport::with_destination(
+            http_url,
+            std::collections::HashMap::new(),
+            self.config.timeout,
+            *streamable_http,
+            None,
+            protocol_version.clone(),
+            self.destination(),
+        )?;
+        transport.mark_single_tenant();
+        Ok(transport)
     }
 
     /// Start the shared slot as a client request would, so an events

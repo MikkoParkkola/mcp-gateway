@@ -229,7 +229,13 @@ fn judge(backend: &BackendConfig, multi_user: bool, detected: Option<bool>) -> O
     else {
         return None;
     };
-    // Both HTTP transports offer the events (MIK-8835.SSE.1). With no live
+    // A per-user listener connects on a transport of its own, with its
+    // subscriber's credential: a subscribe never starts the shared slot,
+    // with the gateway's, to learn the transport.
+    if backend.identity_propagation.is_some() {
+        return None;
+    }
+    // Both HTTP transports offer the events. With no live
     // connection only an explicit `false` is known; an unset key or an
     // explicit `true` still waits for a connect to learn the transport.
     match detected.or(streamable_http.filter(|s| !s)) {
@@ -324,7 +330,7 @@ mod tests {
             "http_url: http://h/mcp\nidentity_propagation:\n  \
              strategy: passthrough\n  audience: https://a\n  session_mode: per_user\n",
         );
-        assert_eq!(judge(&idp, true, None), Some(Judged::Unresolved));
+        assert_eq!(judge(&idp, true, None), None, "never waits on a connect");
         assert_eq!(judge(&idp, true, Some(false)), None);
         let both = backend(
             "http_url: http://h/mcp\nstreamable_http: true\noauth:\n  enabled: true\n\

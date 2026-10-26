@@ -185,7 +185,7 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
         let outcome = if backend.is_a2a() {
             poll::poll(&shared, &backend, &hub, &registry).await
         } else {
-            session(&shared, &backend, &hub).await
+            session(&shared, &backend, &hub, &registry).await
         };
         let delay = match outcome {
             Outcome::Stopped => return,
@@ -284,7 +284,12 @@ fn requested(shared: &Shared) -> Requested {
 }
 
 /// One connection's life.
-async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<EventsHub>) -> Outcome {
+async fn session(
+    shared: &Arc<Shared>,
+    backend: &Arc<Backend>,
+    hub: &Weak<EventsHub>,
+    registry: &BackendRegistry,
+) -> Outcome {
     let Some(run) = begin_run(shared, backend, hub).await else {
         return failed();
     };
@@ -355,11 +360,17 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
         if refill.is_none() {
             refill = start_due_refill(&mut state, backend);
         }
-        if !backend_still_current(backend, &run.transport) {
+        // A per-user run's transport is its own: only a replaced backend
+        // (a reload) ends it.
+        let current = match &run.transport {
+            Some(transport) => backend_still_current(backend, transport),
+            None => !registered_anew(registry, &shared.name, backend),
+        };
+        if !current {
             debug!(backend = %shared.name, "upstream listener: transport replaced");
             return finish_refill(&mut state, shared, backend, hub, refill, started).await;
         }
-        if backend.connected_streamable() != run.flavour {
+        if run.transport.is_some() && backend.connected_streamable() != run.flavour {
             debug!(backend = %shared.name, "upstream listener: transport flavour changed; reconnecting");
             return finish_refill(&mut state, shared, backend, hub, refill, started).await;
         }

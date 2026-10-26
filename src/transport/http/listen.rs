@@ -314,22 +314,16 @@ impl UpstreamListen for HttpTransport {
         self.streamable()
     }
 
-    /// The listener's own session once the SSE handshake is detected, and
-    /// for a per-user listener on Streamable HTTP; a shared listener on
-    /// Streamable HTTP uses this transport.
+    /// The listener's own session once the SSE handshake is detected; a
+    /// shared listener on Streamable HTTP uses this transport. A per-user
+    /// listener never comes here: it has a transport of its own
+    /// ([`HttpTransport::per_user_session`]).
     fn own_session(
         self: std::sync::Arc<Self>,
         credential: crate::transport::upstream_tap::ListenerCredential,
     ) -> Option<std::sync::Arc<dyn UpstreamListen>> {
-        match self.streamable() {
-            Some(false) => Some(std::sync::Arc::new(self.sse_listen_session(credential))),
-            // A per-user listener on Streamable HTTP gets a session of its
-            // own too; the shared one uses this transport.
-            Some(true) if credential.source.is_some() => self
-                .streamable_listen_session(credential)
-                .map(|s| std::sync::Arc::new(s) as std::sync::Arc<dyn UpstreamListen>),
-            _ => None,
-        }
+        (self.streamable() == Some(false))
+            .then(|| std::sync::Arc::new(self.sse_listen_session(credential)) as _)
     }
 }
 

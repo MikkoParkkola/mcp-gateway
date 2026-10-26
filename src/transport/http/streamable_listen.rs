@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use super::listen::{OpenAs, refused_as};
 use super::{HeaderMode, HttpTransport};
-use crate::protocol::era::PeerEra;
+use crate::protocol::era::{EraCache, PeerEra, ProbeOutcome};
 use crate::protocol::{JsonRpcRequest, JsonRpcResponse};
 use crate::transport::upstream_tap::{
     CredentialSource, FrameStream, LegacyPin, ListenerCredential, Refused, Requested,
@@ -48,6 +48,30 @@ impl HttpTransport {
             source,
             handshake: tokio::sync::Mutex::new(()),
         })
+    }
+}
+
+impl HttpTransport {
+    /// A per-user listener's session on its own transport (built by
+    /// `Backend::listener_transport`), and the era it speaks: the SSE
+    /// handshake, legacy, when the backend is configured for it; Streamable
+    /// HTTP otherwise, its era probed with the subscriber's credential into a
+    /// cache of this transport's own. `None` without a credential to lend.
+    pub(crate) async fn per_user_session(
+        self: &Arc<Self>,
+        backend: &str,
+        credential: ListenerCredential,
+    ) -> Option<(Arc<dyn UpstreamListen>, PeerEra)> {
+        credential.source.as_ref()?;
+        if self.streamable() == Some(false) {
+            let session = Arc::new(self.sse_listen_session(credential));
+            return Some((session, PeerEra::Legacy));
+        }
+        let session = self.streamable_listen_session(credential)?;
+        let era = Arc::new(EraCache::for_slot(backend, "listener"));
+        self.attach_era(Arc::clone(&era));
+        let era = era.resolve_with(|| session.probe()).await;
+        Some((Arc::new(session), era))
     }
 }
 
@@ -87,6 +111,20 @@ impl StreamableListenSession {
             .await?;
         t.read_answer(&request, response, &url, Some(&self.bucket), None)
             .await
+    }
+
+    /// `server/discover` as the subscriber, read as the start path's probe
+    /// is; the meaning of the answer stays in `classify`.
+    async fn probe(&self) -> ProbeOutcome {
+        let Ok(answer) = self.call("server/discover", None).await else {
+            return ProbeOutcome::NoAnswer;
+        };
+        if let Some(error) = answer.error {
+            return ProbeOutcome::Error(error.code);
+        }
+        answer
+            .result
+            .map_or(ProbeOutcome::NoAnswer, ProbeOutcome::Result)
     }
 
     async fn notify(&self, method: &str) -> Result<()> {

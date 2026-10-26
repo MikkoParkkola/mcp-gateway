@@ -58,10 +58,14 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
+    fixture_with(CONFIG)
+}
+
+fn fixture_with(yaml: &str) -> Fixture {
     let dir = tempfile::tempdir().expect("dir");
     let events = crate::config::EventsConfig::default();
     let hub = EventsHub::open(&events, dir.path()).expect("hub");
-    let config: crate::config::Config = crate::yaml::from_str(CONFIG).expect("config");
+    let config: crate::config::Config = crate::yaml::from_str(yaml).expect("config");
     let live = Arc::new(crate::config_reload::LiveConfig::new(config));
     let config = live.get();
     let _ = hub.runtime.services.set(Arc::new(Services {
@@ -363,6 +367,156 @@ async fn lease_t8_no_listener_runs_until_the_lease() {
         .await
         .expect("leased");
     assert_eq!(starts(), 1, "the lease started the listener");
+}
+
+/// What a bearer-only peer saw: `(request, carried the token, carried the
+/// backend's static header)`.
+type Seen = Vec<(String, bool, bool)>;
+
+/// A legacy Streamable HTTP peer at `/mcp` that answers nothing, its
+/// `initialize` included, without `expected` as the `Authorization` header.
+async fn bearer_only_peer(expected: String) -> (String, Arc<std::sync::Mutex<Seen>>) {
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::response::IntoResponse;
+    let log: Arc<std::sync::Mutex<Seen>> = Arc::default();
+    let check = move |what: &str, h: &HeaderMap, log: &std::sync::Mutex<Seen>| {
+        let authorized =
+            h.get("authorization").and_then(|v| v.to_str().ok()) == Some(expected.as_str());
+        let statics = h.contains_key("x-static");
+        log.lock()
+            .expect("log")
+            .push((what.to_owned(), authorized, statics));
+        authorized
+    };
+    let (get_check, get_log) = (check.clone(), Arc::clone(&log));
+    let post_log = Arc::clone(&log);
+    let app = axum::Router::new().route(
+        "/mcp",
+        axum::routing::get(move |headers: HeaderMap| async move {
+            if !get_check("GET", &headers, &get_log) {
+                return StatusCode::UNAUTHORIZED.into_response();
+            }
+            let body = async_stream::stream! {
+                yield Ok::<_, std::io::Error>(": open\n\n".to_owned());
+                std::future::pending::<()>().await;
+            };
+            (
+                [("content-type", "text/event-stream")],
+                axum::body::Body::from_stream(body),
+            )
+                .into_response()
+        })
+        .post(
+            move |headers: HeaderMap, axum::Json(frame): axum::Json<serde_json::Value>| async move {
+                let method = frame["method"].as_str().unwrap_or_default().to_owned();
+                if !check(&method, &headers, &post_log) {
+                    return StatusCode::UNAUTHORIZED.into_response();
+                }
+                let Some(id) = frame.get("id") else {
+                    return StatusCode::ACCEPTED.into_response();
+                };
+                let answer = if method == "server/discover" {
+                    json!({"jsonrpc": "2.0", "id": id,
+                        "error": {"code": -32601, "message": "not found"}})
+                } else {
+                    json!({"jsonrpc": "2.0", "id": id, "result": {}})
+                };
+                ([("mcp-session-id", "s-1")], axum::Json(answer)).into_response()
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let url = format!("http://{}/mcp", listener.local_addr().expect("address"));
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (url, log)
+}
+
+/// A per-user listener reaches a backend that refuses every request without
+/// its subscriber's own bearer: the era probe, `initialize` and the session
+/// stream all carry the leased token on a transport of the listener's own,
+/// none carries the backend's static header, and the shared slot (the
+/// gateway's credential) never sends at all.
+#[tokio::test]
+async fn a_per_user_listener_handshakes_with_the_leased_token_alone() {
+    let token = token(Some(in_an_hour()));
+    let (url, seen) = bearer_only_peer(token.to_string()).await;
+    let f = fixture_with(&format!(
+        "backends:\n  pt:\n    http_url: {url}\n    streamable_http: true\n    \
+         headers:\n      X-Static: gateway-key\n    identity_propagation:\n      \
+         strategy: passthrough\n      audience: https://pt\n      session_mode: per_user\n"
+    ));
+    let handle = subscribe(&f, "p", "pt", "p");
+    let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let backend = Arc::new(crate::backend::Backend::new(
+        "pt",
+        f.config.backends["pt"].clone(),
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    ));
+    assert!(registry.register(Arc::clone(&backend)));
+    let listeners = crate::events::upstream_listener::UpstreamListeners::new(
+        registry,
+        Arc::downgrade(&f.hub),
+        Arc::new(std::collections::BTreeSet::new),
+    );
+    f.hub
+        .register_source(Arc::new(crate::events::backend_source::BackendSource {
+            names: Arc::new(|| vec!["pt".to_owned()]),
+            upstream: Some(crate::events::backend_source::Upstream {
+                listeners: Arc::clone(&listeners),
+                ineligible: Arc::new(std::collections::BTreeSet::new),
+            }),
+        }));
+    let source = f
+        .hub
+        .source(crate::events::types::SourceKind::BackendNotification)
+        .expect("registered");
+    let key = lease_key(&f, "p");
+    let name = "backend.pt.tools_changed";
+    let lifecycle =
+        crate::events::backend_source::backend_key(Some(&key.obs), name, &json!({})).expect("key");
+    source
+        .on_first_subscriber(&lifecycle, "p", name, &json!({}))
+        .await
+        .expect("parked");
+    f.hub
+        .lease(
+            Some("p"),
+            "pt",
+            Some(&json!({ "subscription": handle })),
+            Some(token),
+        )
+        .await
+        .expect("leased");
+    let opened = || seen.lock().expect("log").iter().any(|s| s.0 == "GET");
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !opened() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let seen = seen.lock().expect("log").clone();
+    let methods: Vec<&str> = seen.iter().map(|s| s.0.as_str()).collect();
+    assert!(
+        methods.starts_with(&[
+            "server/discover",
+            "initialize",
+            "notifications/initialized",
+            "GET"
+        ]),
+        "{seen:?}"
+    );
+    for (method, authorized, statics) in &seen {
+        assert!(authorized, "{method}: the subscriber's own token: {seen:?}");
+        assert!(!statics, "{method}: no static header of the gateway's");
+    }
+    assert_eq!(
+        backend.connected_streamable(),
+        None,
+        "the shared slot never started"
+    );
 }
 
 /// B3: a reload that changes a backend's identity config revokes the rows

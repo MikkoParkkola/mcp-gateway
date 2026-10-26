@@ -676,7 +676,7 @@ fn warn_if_configured_transport_refused(
 /// Refuse an HTTP backend URL no request can be sent to (a scheme other than
 /// `http`/`https`, or no host). Such a start fails without connecting, so it
 /// is refused before anything is built or marked (MIK-7855).
-fn http_target(http_url: &str) -> Result<()> {
+pub(super) fn http_target(http_url: &str) -> Result<()> {
     if url::Url::parse(http_url)
         .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.has_host())
     {

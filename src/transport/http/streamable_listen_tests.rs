@@ -116,7 +116,13 @@ fn lent() -> ListenerCredential {
 async fn d7_a_per_user_listener_gets_its_own_streamable_session() {
     let (url, _log) = peer().await;
     let t = transport(&url);
-    assert!(Arc::clone(&t).own_session(lent()).is_some());
+    assert!(t.per_user_session("b", lent()).await.is_some());
+    assert!(
+        t.per_user_session("b", ListenerCredential::shared())
+            .await
+            .is_none(),
+        "nothing to lend, no session"
+    );
     assert!(
         Arc::clone(&t)
             .own_session(ListenerCredential::shared())
@@ -125,14 +131,17 @@ async fn d7_a_per_user_listener_gets_its_own_streamable_session() {
     );
 }
 
-/// D7 + C6: initialize, initialized, the session GET and a subscribe all
-/// carry a fresh lent credential and the subscriber's own session, never the
-/// operator's static header; the shared bucket gets no session.
+/// D7 + C6: the era probe, initialize, initialized, the session GET and a
+/// subscribe all carry a fresh lent credential, and all after the handshake
+/// the subscriber's own session, never the operator's static header; the
+/// shared bucket gets no session. A probe answer naming no modern version is
+/// legacy, so the session handshakes.
 #[tokio::test]
 async fn d7_every_request_is_the_subscribers_on_their_own_session() {
     let (url, log) = peer().await;
     let t = transport(&url);
-    let session = Arc::clone(&t).own_session(lent()).expect("own session");
+    let (session, era) = t.per_user_session("b", lent()).await.expect("own session");
+    assert_eq!(era, crate::protocol::era::PeerEra::Legacy);
     let _stream = Arc::clone(&session)
         .unsolicited(Watched::default())
         .await
@@ -147,6 +156,7 @@ async fn d7_every_request_is_the_subscribers_on_their_own_session() {
     assert_eq!(
         methods,
         [
+            "server/discover",
             "initialize",
             "notifications/initialized",
             "GET",
@@ -157,7 +167,7 @@ async fn d7_every_request_is_the_subscribers_on_their_own_session() {
         assert!(cred.is_some(), "{method}: the subscriber's credential");
         assert!(statics.is_none(), "{method}: no gateway header");
     }
-    for (method, _, _, session) in &seen[1..] {
+    for (method, _, _, session) in &seen[2..] {
         assert_eq!(session.as_deref(), Some("s-1"), "{method}: their session");
     }
     let sessions = t.sessions.read();
