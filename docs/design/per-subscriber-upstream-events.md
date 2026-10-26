@@ -175,8 +175,9 @@ a rotation yet.
   reload, a key-server token revoked, an OIDC provider configuration change)
   signals the events runtime from the same hooks that fire -32012. On its next
   scheduler turn it revokes the rows that can no longer be observed or admitted,
-  which cancels their listeners and wipes their leases. A quiet listener also
-  re-checks admission on the snapshot interval, as a fallback.
+  which cancels their listeners and wipes their leases. As a fallback, the
+  events worker's housekeeping sweep (every 30 seconds) runs the same
+  revocation, so a quiet listener stops even if a signal was missed.
 
 ### 2.10 Listener ceiling
 
