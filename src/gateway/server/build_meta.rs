@@ -447,7 +447,7 @@ impl Gateway {
         // Reaching a guard is not the whole criterion: the direct route still
         // RELEASES the client's key when the backend call fails, which is the
         // broken-stream case SUB.4 is written about, so the row is PARTIAL —
-        // see `docs/design/2026-08-31-sub-4-idempotency-wiring.md`.
+        // see the sub 4 idempotency wiring design.
         Arc::get_mut(&mut meta_mcp)
             .expect("no other Arc references at this point")
             .enable_idempotency(

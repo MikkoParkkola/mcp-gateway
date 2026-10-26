@@ -235,3 +235,89 @@ async fn test_capability_not_found_returns_404() {
         "Expected 404 for missing capability, got: {body}"
     );
 }
+
+/// The classic editor validates on blur with `?validate=1`: that must never
+/// write, or every blur saves the textarea unreviewed (and breaks a pin).
+#[tokio::test]
+async fn test_capability_validate_query_never_writes() {
+    let tmp = TempDir::new().unwrap();
+    let cap_dir = tmp.path().to_str().unwrap().to_string();
+    let cap_file = tmp.path().join("kept.yaml");
+    write_owner_only(&cap_file, VALID_YAML).unwrap();
+    let (state, _store) = make_app_state(Some(&cap_dir), None).await;
+    let router = create_router(state);
+
+    let edited = VALID_YAML.replace("Test capability for integration tests", "Unsaved edit");
+    let (status, body) = send_raw(
+        &router,
+        Method::PUT,
+        "/ui/api/capabilities/kept?validate=1",
+        "application/x-yaml",
+        &edited,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "valid text validates: {body}");
+    assert_eq!(body["status"], "valid");
+    assert_eq!(std::fs::read_to_string(&cap_file).unwrap(), VALID_YAML);
+
+    // Validating a name with no file creates nothing.
+    let (status, body) = send_raw(
+        &router,
+        Method::PUT,
+        "/ui/api/capabilities/never-created?validate=1",
+        "application/x-yaml",
+        VALID_YAML,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!tmp.path().join("never-created.yaml").exists());
+}
+
+/// The same with the `X-Validate-Only` header the classic editor also sends.
+#[tokio::test]
+async fn test_capability_validate_header_never_writes() {
+    let tmp = TempDir::new().unwrap();
+    let cap_dir = tmp.path().to_str().unwrap().to_string();
+    let cap_file = tmp.path().join("kept.yaml");
+    write_owner_only(&cap_file, VALID_YAML).unwrap();
+    let (state, _store) = make_app_state(Some(&cap_dir), None).await;
+    let router = create_router(state);
+
+    let edited = VALID_YAML.replace("Test capability for integration tests", "Unsaved edit");
+    let req = Request::builder()
+        .method(Method::PUT)
+        .uri("/ui/api/capabilities/kept")
+        .header("authorization", format!("Bearer {ADMIN_TOKEN}"))
+        .header("content-type", "application/x-yaml")
+        .header("x-validate-only", "1")
+        .body(Body::from(edited))
+        .unwrap();
+    let resp = Router::clone(&router).oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(std::fs::read_to_string(&cap_file).unwrap(), VALID_YAML);
+}
+
+/// Validate-only still refuses invalid text, and still writes nothing.
+#[tokio::test]
+async fn test_capability_validate_only_reports_invalid_without_writing() {
+    let tmp = TempDir::new().unwrap();
+    let cap_dir = tmp.path().to_str().unwrap().to_string();
+    let cap_file = tmp.path().join("kept.yaml");
+    write_owner_only(&cap_file, VALID_YAML).unwrap();
+    let (state, _store) = make_app_state(Some(&cap_dir), None).await;
+    let router = create_router(state);
+
+    let (status, body) = send_raw(
+        &router,
+        Method::PUT,
+        "/ui/api/capabilities/kept?validate=1",
+        "application/x-yaml",
+        "name: kept\nproviders: 5\n",
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(std::fs::read_to_string(&cap_file).unwrap(), VALID_YAML);
+}

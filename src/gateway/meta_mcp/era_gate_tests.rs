@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Row 13 of `docs/design/2026-09-11-outbound-era-gated-health-probe.md`. Rows
+//! Row 13 of the outbound era gated health probe design. Rows
 //! 14 to 15c pinned the `resources/*` verbs, which F24 refuses at dispatch.
 //!
 //! These rows live here rather than in `src/backend/tests.rs` because the send

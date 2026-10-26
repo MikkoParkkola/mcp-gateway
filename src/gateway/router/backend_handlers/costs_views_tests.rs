@@ -69,6 +69,25 @@ async fn a_key_or_session_with_no_spend_answers_no_data() {
     assert_eq!(body["error"], "No data for key ''");
 }
 
+/// The aggregate names the zone daily budgets count days in:
+/// the host's IANA zone, UTC on a UTC host. Mutant: the field is dropped.
+#[tokio::test]
+async fn the_aggregate_names_the_zone_days_are_counted_in() {
+    let (state, _store) = admin_state().await;
+    let (status, all) = call(&state, "/api/costs", None).await;
+    assert_eq!(status, StatusCode::OK, "{all}");
+    assert_eq!(all["day_zone"], "UTC", "{all}");
+    let _zone = crate::local_day::test_zone(chrono_tz::Europe::Amsterdam);
+    let (_, all) = call(&state, "/api/costs", None).await;
+    assert_eq!(all["day_zone"], "Europe/Amsterdam", "{all}");
+    #[cfg(feature = "cost-governance")]
+    {
+        let (status, ui) = call(&state, "/ui/api/costs", None).await;
+        assert_eq!(status, StatusCode::OK, "{ui}");
+        assert_eq!(ui["day_zone"], "Europe/Amsterdam", "{ui}");
+    }
+}
+
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn a_recorded_key_and_the_aggregate_carry_the_spend() {
@@ -151,5 +170,49 @@ async fn an_escaped_session_parameter_is_refused_like_the_plain_one() {
             body["error"], "Pass the session id in the X-Cost-Session-Id header, not ?session=",
             "{uri}"
         );
+    }
+}
+
+/// A key's report keeps its shape: the same fields, with no limit and an
+/// "Ok" status, since nothing enforces a per-key rolling limit. Scripts and
+/// the dashboard read these fields, so removing the dead limit code must not
+/// change them.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn a_key_report_keeps_its_fields_with_no_limit_and_an_ok_status() {
+    let (state, _store) = admin_state().await;
+    state
+        .meta_mcp
+        .cost_tracker()
+        .record("sess-1", Some("ops"), "srv", "tool", 1_000, 3.0);
+
+    let (status, by_key) = call(&state, "/api/costs?key=ops", None).await;
+    assert_eq!(status, StatusCode::OK, "{by_key}");
+    let (status, all) = call(&state, "/api/costs", None).await;
+    assert_eq!(status, StatusCode::OK, "{all}");
+
+    for report in [&by_key, &all["keys"][0]] {
+        let mut fields: Vec<&str> = report
+            .as_object()
+            .expect("a key report is an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        fields.sort_unstable();
+        assert_eq!(
+            fields,
+            [
+                "api_key_name",
+                "budget_status",
+                "by_tool",
+                "hard_limit_usd",
+                "window_24h",
+                "window_30d",
+                "window_7d"
+            ],
+            "{report}"
+        );
+        assert_eq!(report["hard_limit_usd"], Value::Null, "{report}");
+        assert_eq!(report["budget_status"], "Ok", "{report}");
     }
 }

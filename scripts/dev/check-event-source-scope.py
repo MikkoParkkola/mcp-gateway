@@ -4,7 +4,7 @@
 """A change that adds an event source leaves the events core alone (MIK-7720 U10).
 
 Each new source is one `EventSource` implementation and nothing else
-(docs/design/2026-10-01-mik-7630-event-sources-4.0.0.md section 1). A change
+(the event sources 4.0.0 design section 1). A change
 counts as adding a source when a Rust file under `src/` ends it implementing
 `EventSource` for a type it did not before (a new file or an existing one; a split header, a comment inside it, an alias imported anywhere
 in the tree, or one impl swapped for another all count). Such a change may

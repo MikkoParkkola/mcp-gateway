@@ -3,8 +3,8 @@
 //! MIK-7217.STDIO.1: the stdio `server/discover` answer advertises 2026-07-28
 //! when the modern protocol is on, asserted by exact version lists.
 //!
-//! Test plan: `docs/design/2026-09-30-sub4-stdio-owner-test-plan.md` (I5);
-//! design D7 in `docs/design/2026-09-30-sub4-stdio-owner.md`. Driven through
+//! Test plan: the sub4 stdio owner test plan (I5);
+//! design D7 in the sub4 stdio owner design. Driven through
 //! `Gateway::run_stdio_on` over in-memory pipes, so the rows compile before and
 //! after the fix.
 

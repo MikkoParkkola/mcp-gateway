@@ -12,7 +12,6 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-pub use crate::config_persistence::load_config_or_default;
 #[allow(deprecated)] // the deprecated writer stays reachable by name until 5.0
 pub use crate::config_persistence::write_config;
 use crate::{
@@ -114,7 +113,9 @@ pub struct BackendUpdate {
 ///
 /// # Errors
 ///
-/// `Err(String)` when `name` already exists in `config.backends`.
+/// `Err(String)` when `name` already exists in `config.backends`, or when a
+/// secret reference in its `env` or `headers` does not resolve (the message
+/// then carries [`UNRESOLVED_SECRETS`]).
 pub fn add_backend(
     config: &mut Config,
     name: &str,
@@ -176,8 +177,30 @@ pub fn add_backend(
             notes.extend(unresolved);
         }
     }
+    // Enabled or not: a secret reference that does not resolve would break
+    // the start after it is enabled (ADR-028).
+    refuse_unresolved_secrets(&backend, name, &config.env_overlay())?;
     config.backends.insert(name.to_string(), backend);
     Ok(notes)
+}
+
+/// The phrase every unresolved-secret refusal carries, so a caller can tell
+/// it from a duplicate or a missing backend.
+pub(crate) const UNRESOLVED_SECRETS: &str = "has secret references that do not resolve";
+
+fn refuse_unresolved_secrets(
+    backend: &crate::config::BackendConfig,
+    name: &str,
+    overlay: &crate::config::EnvOverlay,
+) -> Result<(), String> {
+    backend
+        .check_secret_references(name, overlay)
+        .map_err(|refused| {
+            format!(
+                "Backend '{name}' {UNRESOLVED_SECRETS}: {}",
+                refused.join("; ")
+            )
+        })
 }
 
 /// Remove a backend from the in-memory config.
@@ -198,7 +221,9 @@ pub fn remove_backend(config: &mut Config, name: &str) -> Result<(), String> {
 ///
 /// # Errors
 ///
-/// `Err(String)` when no backend with `name` exists.
+/// `Err(String)` when no backend with `name` exists, or when a secret
+/// reference in the updated backend does not resolve (the message then
+/// carries [`UNRESOLVED_SECRETS`]).
 pub fn update_backend(
     config: &mut Config,
     name: &str,
@@ -251,6 +276,7 @@ pub fn update_backend(
         }
     }
 
+    refuse_unresolved_secrets(&backend, name, &overlay)?;
     *slot = backend;
     Ok(())
 }
@@ -336,7 +362,7 @@ pub fn resolve_backend<S: std::hash::BuildHasher>(
     // Registry lookup.
     if let Some(entry) = server_registry::lookup(name) {
         return Ok(ResolvedBackend {
-            backend: registry_backend(entry, desc, env),
+            backend: registry_backend(entry, desc, env)?,
             entry: Some(entry),
         });
     }
@@ -359,7 +385,7 @@ fn registry_backend(
     entry: &server_registry::ServerCatalogEntry,
     desc: Option<&str>,
     mut env: HashMap<String, String>,
-) -> BackendConfig {
+) -> Result<BackendConfig, String> {
     use server_registry::{Auth, CatalogTransport, HttpFlavor};
 
     // An empty `-e VAR=` for a required variable is no value: the reference
@@ -399,7 +425,17 @@ fn registry_backend(
                     let mut value = value.to_string();
                     for var in entry.required_env {
                         if let Some(given) = env.remove(*var) {
-                            value = value.replace(&format!("${{{var}}}"), &given);
+                            let placeholder = format!("${{{var}}}");
+                            // A reference is a whole-value secret slot: spliced
+                            // into text it would never resolve (ADR-028).
+                            if crate::config::is_reference(&given) && value != placeholder {
+                                return Err(format!(
+                                    "{var} is a secret reference, which cannot go inside the \
+                                     '{name}' header; give the whole header value as one \
+                                     reference instead, holding the full header text"
+                                ));
+                            }
+                            value = value.replace(&placeholder, &given);
                         }
                     }
                     backend.headers.insert(name.to_string(), value);
@@ -409,7 +445,7 @@ fn registry_backend(
             backend.env = env;
         }
     }
-    backend
+    Ok(backend)
 }
 
 /// Transport and description only, for tests that check routing.

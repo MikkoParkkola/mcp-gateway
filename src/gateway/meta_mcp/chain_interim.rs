@@ -8,7 +8,7 @@
 //! seam here is what the loop consults instead: one classifier per step result,
 //! one driver that owns the stop, and one validator for the sealed resume.
 //!
-//! Design: `docs/design/2026-09-16-mrtr-12-chain-interim-stop.md`.
+//! Design: the mrtr 12 chain interim stop design.
 
 use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS};
 use std::future::Future;

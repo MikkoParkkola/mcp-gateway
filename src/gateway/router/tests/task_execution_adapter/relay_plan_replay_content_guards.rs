@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8408 stage 4: the content guard rows of the test plan
-//! (docs/internal/design/2026-10-12-mik-8408-test-plan.md): what a
+//! (the relay replay test plan): what a
 //! replay does with a stored answer's content (G1, G11/G41, G18,
 //! G21, G26, G27). Split from `relay_plan_replay_guards`, whose
 //! shared helpers these rows reuse. The rig is

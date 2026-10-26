@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8425 MIG.2: the YAML backend reproduces every golden the guarded
 //! adapter recorded over the replaced backend (plan
-//! `docs/internal/plans/2026-10-24-mik-8425-mig2-swap.md`, sections 3 and 3b).
+//! the YAML backend swap plan, sections 3 and 3b).
 //!
 //! Each row compiles a baseline suite's own report and compares it with that
 //! suite's golden. Before the switch this crate bound the reports to
@@ -69,8 +69,6 @@ fn deviations(name: &str) -> std::collections::BTreeMap<String, String> {
 /// (after deviations), and how many rows were compared.
 struct Outcome {
     compared: usize,
-    /// Rows whose file the packaged crate does not ship (`in_packaged_crate`).
-    not_packaged: usize,
     differ: Vec<String>,
 }
 
@@ -81,7 +79,6 @@ fn compare_rows(name: &str, now: &str, keep: impl Fn(&str) -> bool) -> Outcome {
         now.lines().filter_map(|r| r.split_once('\t')).collect();
     let mut outcome = Outcome {
         compared: 0,
-        not_packaged: 0,
         differ: Vec::new(),
     };
     for row in fixture(name).lines() {
@@ -100,51 +97,65 @@ fn compare_rows(name: &str, now: &str, keep: impl Fn(&str) -> bool) -> Outcome {
     outcome
 }
 
-/// A keyed golden (`path \t sha256 \t reading`); a row whose file is gone
-/// or edited since recording is skipped, as `assert_keyed_golden` does.
+/// A keyed golden (`path \t sha256 \t reading`); a row whose file is gone,
+/// or edited since recording so that it reads differently, is skipped only
+/// when `reviewed_skips.tsv` lists it, as `assert_keyed_golden` does.
 fn compare_keyed(name: &str, read: impl Fn(&str) -> String) -> Outcome {
     let allowed = deviations(name);
     let mut outcome = Outcome {
         compared: 0,
-        not_packaged: 0,
         differ: Vec::new(),
     };
-    for row in fixture(name).lines() {
+    let table = fixture(name);
+    let mut fates = Vec::new();
+    for row in table.lines() {
         let mut cols = row.splitn(3, '\t');
         let (Some(path), Some(sha), Some(recorded)) = (cols.next(), cols.next(), cols.next())
         else {
             panic!("{name}: malformed row {row:?}");
         };
-        let Ok(text) = std::fs::read_to_string(golden::repo_root().join(path)) else {
+        let Some(text) = golden::read_recorded(path) else {
+            // The package does not ship it: not a skip the list must name.
             if golden::in_packaged_crate() {
                 eprintln!("{name}: {path} is not in the package");
-                outcome.not_packaged += 1;
             } else {
-                eprintln!("{name}: skipped {path} (gone since recording)");
+                fates.push((path, golden::Fate::Skipped));
             }
             continue;
         };
-        if golden::digest(text.as_bytes()) != sha {
-            eprintln!("{name}: skipped {path} (edited since recording)");
+        let expected = allowed.get(path).map_or(recorded, String::as_str);
+        let same = read(&text) == expected;
+        // An edited file that still reads as recorded is compared, not skipped.
+        if golden::digest(text.as_bytes()) == sha {
+            fates.push((path, golden::Fate::Unchanged));
+        } else if same {
+            fates.push((path, golden::Fate::ReadsAsRecorded));
+        } else {
+            fates.push((path, golden::Fate::Skipped));
             continue;
         }
         outcome.compared += 1;
-        let expected = allowed.get(path).map_or(recorded, String::as_str);
-        if read(&text) != expected {
+        if !same {
             outcome.differ.push(path.to_owned());
         }
     }
+    golden::assert_skips_reviewed(name, &fates);
     outcome
 }
 
 fn assert_outcome(group: &str, outcome: &Outcome, min_compared: usize) {
-    // A file the package does not ship still counts toward the floor, so
-    // only a reviewed edit lowers it.
-    let counted = outcome.compared + outcome.not_packaged;
     assert!(
-        counted >= min_compared,
-        "{group}: only {counted} rows comparable (need {min_compared})"
+        outcome.compared >= min_compared,
+        "{group}: only {} rows comparable (need {min_compared})",
+        outcome.compared
     );
+    assert_no_differ(group, outcome);
+}
+
+/// A keyed group has no floor: `assert_skips_reviewed` already accounts for
+/// every row it did not compare, and in the packaged crate a group may
+/// compare none at all.
+fn assert_no_differ(group: &str, outcome: &Outcome) {
     assert!(
         outcome.differ.is_empty(),
         "{group}: {} of {} rows differ: {:?}",
@@ -244,49 +255,34 @@ fn p6_every_repository_tree_round_trips() {
     );
 }
 
-/// The `trees.tsv` rows whose file is unchanged since recording: the exact
-/// count, so any further skip fails until it is reviewed. 184 rows were
-/// recorded; skipped today, each printed by name when the test runs:
-/// `capabilities/linear/linear_get_issue.yaml` (edited on the release line,
-/// #4133) and `examples/token-exchange-live.yaml` (#4150).
-const P2_UNEDITED: usize = 182;
-
 /// P2: every repository YAML file's tree, `Dict` and stream, as recorded
 /// with the replaced backend.
 ///
 /// Before the swap this compared the walked files exactly (MIK-8425 MIG.2,
 /// a seat finding), and every recorded row matched; that is the swap's
 /// evidence. After it, there is no old backend to re-record with, so a file
-/// another change edits or removes is skipped, as the baseline suites do,
-/// and `P2_UNEDITED` fails any skip beyond the reviewed ones.
+/// another change edits or removes is skipped only when
+/// `reviewed_skips.tsv` lists it, as the baseline suites do.
 #[test]
 fn p2_trees_as_recorded() {
-    let outcome = compare_keyed("trees.tsv", trees::readings);
-    assert_outcome("P2 trees", &outcome, P2_UNEDITED);
+    assert_no_differ("P2 trees", &compare_keyed("trees.tsv", trees::readings));
 }
-
-/// The `configs.tsv` rows whose file was edited since recording, so P13
-/// compares exactly the rest, as `P2_UNEDITED` does. Skipped today:
-/// `examples/token-exchange-live.yaml` (#4150).
-const P13_EDITED: usize = 1;
 
 /// P13: the `Config` each shipped config and Helm `ConfigMap` extracts to.
 #[test]
 fn p13_configs_as_recorded() {
-    assert_outcome(
+    assert_no_differ(
         "P13 configs",
         &compare_keyed("configs.tsv", configs::reading),
-        configs::CONFIGS.len() - P13_EDITED,
     );
 }
 
 /// P9: every shipped capability reads to the recorded definition.
 #[test]
 fn p9_capabilities_as_recorded() {
-    assert_outcome(
+    assert_no_differ(
         "P9 capabilities",
         &compare_keyed("capabilities.tsv", capabilities::reading),
-        120,
     );
 }
 
@@ -335,6 +331,46 @@ fn rows_matching_per_group() {
             "{group}: {} of {} match",
             outcome.compared - outcome.differ.len(),
             outcome.compared
+        );
+    }
+}
+
+/// The keyed goldens, pinned to their bytes. They are the only record of how
+/// the replaced backend read each file, and with that backend gone they can
+/// never be re-recorded, so a deleted or edited row would erase evidence
+/// without failing any comparison.
+const GOLDEN_PINS: &[(&str, &str)] = &[
+    (
+        "trees.tsv",
+        "sha256:797e5a977518cb4bb9489bf1710983c973df5196b3a799d86196ba0d8fd2a927",
+    ),
+    (
+        "capabilities.tsv",
+        "sha256:411dbe54bb563e8ac722760714f3e824524126f18efe668ebc7eeabe5b790e75",
+    ),
+    (
+        "configs.tsv",
+        "sha256:9c80862fdb7c792f722ee8df54183b91213d6a547e571a737d15580667037afa",
+    ),
+    (
+        "configs_loaded.tsv",
+        "sha256:438b953a8fded8fd4248f3a2848bd0261a9b78a910092aca2fc273a52fe5e4c1",
+    ),
+    (
+        "shipped.tsv",
+        "sha256:ec16d566c0ae50f3bba66e12853b390674c80f06b3ff28801284ae85c9ef086b",
+    ),
+];
+
+#[test]
+fn keyed_goldens_are_unchanged() {
+    for (name, pin) in GOLDEN_PINS {
+        let now = golden::digest(fixture(name).as_bytes());
+        assert_eq!(
+            &now, pin,
+            "golden {name} changed. It records the replaced YAML backend, which has left \
+             the build, so it cannot be re-recorded; changing this pin needs a reviewed \
+             reason. Current sha: {now}"
         );
     }
 }

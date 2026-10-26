@@ -224,6 +224,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "runtime provisioning manifest; public",
     ),
     (
+        "src/secret_store/index.rs",
+        "the secret-entry index: names, stores and timestamps, never a value; created owner-only",
+    ),
+    (
         "src/security/firewall/audit.rs",
         "append-only audit log; no secret",
     ),
@@ -238,6 +242,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/security/transparency_log_hwm_scan.rs",
         "reads audit log segments for a missing-mark finding; no secret",
+    ),
+    (
+        "src/security/transparency_log_pager.rs",
+        "reads audit log windows to page it backward; no secret",
     ),
     (
         "src/security/transparency_log_rotation.rs",

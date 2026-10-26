@@ -4,6 +4,7 @@
 # A "-" reason starting "on-path, untimed" is a per-call production cost the harness does not exercise; it is not a claim that the cost is zero.
 # file	fn	row (or -)	reason
 src/gateway/server/account_bindings.rs	declare_account_descriptors	-	startup account-strategy installation, before serving
+src/gateway/server/account_bindings.rs	install_account_bindings	-	startup account-strategy installation, before serving
 src/gateway/server/account_bindings.rs	install_account_strategies	-	startup account-strategy installation, before serving
 src/gateway/server/account_bindings.rs	install_descriptor	-	startup account-strategy installation, before serving
 src/gateway/server/account_bindings.rs	sole_operator_asserted	-	startup account-strategy installation, before serving

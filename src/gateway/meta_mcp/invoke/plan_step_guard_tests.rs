@@ -261,7 +261,7 @@ fn staging_entry_points_have_only_their_authorized_callers() {
     let expected: BTreeSet<(String, String, String)> = [
         (
             "stage_stored_receipt(",
-            "src/gateway/meta_mcp/task_replay.rs",
+            "src/gateway/meta_mcp/task_replay/judging.rs",
             "refuse_stored",
         ),
         (

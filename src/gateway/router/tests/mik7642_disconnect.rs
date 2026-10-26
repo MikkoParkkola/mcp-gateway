@@ -75,6 +75,7 @@ fn auth() -> AuthConfig {
             denied_tools: None,
             admin: false,
             kind: crate::config::ApiKeyKind::Shared,
+            ..Default::default()
         }],
         ..AuthConfig::default()
     }

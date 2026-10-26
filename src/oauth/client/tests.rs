@@ -675,7 +675,7 @@ fn a_client_id_stored_without_an_issuer_is_not_reused() {
 }
 
 // =============================================================================
-// Re-initializing onto a different authorization server (gpt-review, v4.0.0)
+// Re-initializing onto a different authorization server (found in review, v4.0.0)
 // =============================================================================
 
 fn injected_token() -> TokenInfo {

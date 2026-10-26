@@ -96,6 +96,9 @@ pub struct EnvOverlay {
     /// with a SHA-256 of the value read (`None`: unreadable). Reload compares
     /// these to report a rotated file no running holder can take (C9).
     secret_files: SecretFileDigests,
+    /// Where `keychain:` references are read (ADR-028): the OS keychain,
+    /// or a fake in tests.
+    keychain: super::keychain::KeychainReader,
 }
 
 /// `file:` reference paths and a digest of each value read. Never printed.
@@ -122,7 +125,8 @@ impl std::fmt::Debug for EnvOverlay {
                 "secret_files",
                 &self.secret_files.keys().collect::<Vec<_>>(),
             )
-            .finish()
+            // The keychain reader holds no state worth printing.
+            .finish_non_exhaustive()
     }
 }
 
@@ -139,7 +143,8 @@ impl crate::personal_accounts::config::SecretOverlay for EnvOverlay {
 impl EnvOverlay {
     /// A whole-value secret in the one grammar (C4, C9), for callers outside
     /// `config`: `env:NAME` looks `NAME` up (`Ok(None)` when unset), `file:PATH`
-    /// reads the file under the C2 mode rule, and anything else is the literal.
+    /// reads the file under the C2 mode rule, `keychain:NAME` reads the OS
+    /// keychain entry (ADR-028), and anything else is the literal.
     ///
     /// # Errors
     ///
@@ -154,6 +159,12 @@ impl EnvOverlay {
         match SecretRef::parse(reference) {
             SecretRef::Env(name) => Ok(self.resolve(name)),
             SecretRef::File(path) => super::secret_ref::read_file_ref(field, path)
+                .map(Some)
+                .map_err(|error| match error {
+                    Error::ConfigValidation(message) => message,
+                    other => other.to_string(),
+                }),
+            SecretRef::Keychain(name) => super::secret_ref::read_keychain_ref(field, name, self)
                 .map(Some)
                 .map_err(|error| match error {
                     Error::ConfigValidation(message) => message,
@@ -359,6 +370,18 @@ impl EnvOverlay {
             .get(name)
             .cloned()
             .or_else(|| std::env::var(name).ok())
+    }
+
+    /// The reader `keychain:` references resolve through.
+    pub(crate) fn keychain(&self) -> &dyn super::keychain::KeychainRead {
+        self.keychain.get()
+    }
+
+    /// This overlay reading `keychain:` references from `reader`.
+    #[cfg(test)]
+    pub(crate) fn with_keychain(mut self, reader: Arc<dyn super::keychain::KeychainRead>) -> Self {
+        self.keychain = super::keychain::KeychainReader::new(reader);
+        self
     }
 
     /// Records the `file:` secrets a config evaluated against this overlay read.

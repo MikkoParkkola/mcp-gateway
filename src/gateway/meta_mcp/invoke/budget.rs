@@ -273,7 +273,7 @@ impl MetaMcp {
         //
         // An enforced input round is rebuilt here but never delivered: the
         // response gates refuse it (MIK-8325, decision (i) in
-        // docs/release/v4.0.0-decision-docket.md), so the rebuild carries no
+        // the 4.0.0 decision docket), so the rebuild carries no
         // continuation handle and no question (`inputRequests`).
         //
         // `resultType` and `isError` describe the round. Their VALUES cross

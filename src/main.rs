@@ -794,6 +794,7 @@ pub fn write_discovered_to_config(
                 continue;
             }
             let backend_config = server.to_backend_config();
+            discovered_config::refuse_unresolved(&backend_config, &server.name, config)?;
             config.backends.insert(server.name.clone(), backend_config);
             written += 1;
         }

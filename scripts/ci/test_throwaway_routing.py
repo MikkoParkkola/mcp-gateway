@@ -216,11 +216,12 @@ HEAVY = (
     ("docker.yml", "build-gate", "build", None),
     ("alert-rules.yml", "promtool", "Alert rules (promtool)", "promtool"),
     ("rustdoc.yml", "rustdoc", "Rustdoc intra-doc links (MIK-8008)", "rustdoc"),
+    ("ui-tests.yml", "playwright", "UI tests (Playwright)", "ui-tests"),
 )
 
 
 def heavy_jobs_skip_throwaway(rc: list) -> None:
-    """Image, alert-rule and rustdoc jobs skip a same-repo throwaway PR into
+    """Image, alert-rule, rustdoc and UI-test jobs skip a same-repo throwaway PR into
     the release line, run for every other event, and run for a throwaway
     head that names their opt-in word."""
     for workflow, job_id, name, opt_in in HEAVY:

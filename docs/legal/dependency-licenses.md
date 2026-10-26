@@ -28,6 +28,8 @@ carrying each dependency's own notice.
 | CDLA-Permissive-2.0 (webpki-roots — data) | 3 | Notice (data) | Yes |
 | **MPL-2.0** (`option-ext`) | 1 | **File-level** weak copyleft | Yes — obligation is limited to modifications of MPL files themselves; using the crate as a dependency does not affect first-party code |
 
+The browser tests under `ui-tests/` add five npm dev dependencies that are never shipped: Playwright (`@playwright/test`, `playwright`, `playwright-core`, Apache-2.0) and axe-core (`axe-core`, `@axe-core/playwright`, MPL-2.0). They run only in CI against fixtures; the MPL-2.0 file-level obligation would apply only to modified copies of those files, and none are modified or distributed.
+
 `r-efi` appears with an LGPL option but is offered as `Apache-2.0 OR
 LGPL-2.1-or-later OR MIT`; the permissive option is selected, so no LGPL
 obligation attaches.
@@ -43,6 +45,18 @@ obligation attaches.
 3. **No relicensing** — third-party crates retain their own licenses and are
    **not** covered by this project's PolyForm-Noncommercial default. The
    Noncommercial default scopes to first-party original material only.
+
+## Bundled fonts (web UI shell)
+
+The web UI shell embeds four font files in the binary (`src/gateway/ui/shell/fonts/`, served from `/ui/assets/`). They are third-party and ship in every release channel, so they are recorded here beside the crates. All are the latin subset served by Google Fonts (`fonts.gstatic.com`), under the SIL Open Font License 1.1; the licence texts sit beside the files.
+
+| Family | Weights | Copyright | Licence file |
+|---|---|---|---|
+| Big Shoulders | 700, 800 | 2019 The Big Shoulders Project Authors | `OFL-bigshoulders.txt` |
+| Overpass | 400 | 2021 The Overpass Project Authors | `OFL-overpass.txt` |
+| Overpass Mono | 400 | 2021 The Overpass Project Authors | `OFL-overpass.txt` |
+
+OFL 1.1 lets the fonts be bundled and sold with software, provided the copyright notice and licence travel with them and the fonts are not sold on their own. Both licence texts travel inside the binary: the shell's stylesheet, served beside the fonts, carries them verbatim in its header comment. The font files are unmodified. The shell's stylesheet otherwise comes from the project's own design language (first-party).
 
 ## Regeneration
 

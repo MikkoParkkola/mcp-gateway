@@ -226,7 +226,7 @@ async fn envfile_10c_a_byte_identical_patch_still_reports_the_rotated_startup_on
             );
         } else if key.ends_with("APIKEY") {
             assert_eq!(
-                holder.api_keys.first().map(|k| hex::encode(k.digest)),
+                holder.api_keys().first().map(|k| hex::encode(k.digest)),
                 old.strip_prefix("sha256:").map(str::to_string),
                 "{key}: the running holder must keep the startup value"
             );
