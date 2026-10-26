@@ -328,6 +328,31 @@ async fn a_gateway_path_covers_an_interpreter_bind_back() {
     );
 }
 
+/// A program outside the system roots binds as its file alone: it runs,
+/// while a file beside it (a home's secret, here a canary) is absent. The
+/// canary is readable outside (positive control).
+#[tokio::test]
+async fn a_program_beside_a_secret_binds_as_its_file_alone() {
+    let dir = Path::new("/var/tmp").join(format!("sbx-home-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let program = dir.join("sh");
+    std::fs::copy("/bin/sh", &program).unwrap();
+    std::fs::write(dir.join("secret"), "token").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.join("secret")).unwrap(),
+        "token"
+    );
+    let script = format!(
+        "ls -A '{}'; cat '{}/secret' 2>/dev/null && echo LEAK",
+        dir.display(),
+        dir.display()
+    );
+    let out = sandboxed(program.to_str().unwrap(), &["-c", &script]).await;
+    std::fs::remove_dir_all(&dir).unwrap();
+    let Some(out) = out else { return };
+    assert_eq!(out.stdout, "sh\n", "{}", out.stderr);
+}
+
 /// Bounds: `/tmp` stops at 256 MiB.
 #[tokio::test]
 async fn tmp_is_bounded() {
