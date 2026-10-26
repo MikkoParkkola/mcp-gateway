@@ -1,0 +1,24 @@
+# Debt: tracked material that is on its way to the private companion
+# repository, or text that is being reworded. One <path or directory/> TAB
+# <check id> TAB <most hits> per line. A line that no longer matches anything, or covers more hits than its count, fails the
+# hygiene check, so this list only shrinks; it is not a place to add to.
+docs/blog/sovereign-stack-2026-04.md	private-name	24
+docs/research/hebb-1bit-factual-compensation.md	private-name	24
+docs/runtime/descriptor_spec.md	private-name	6
+docs/runtime/substrate_mapping.md	private-name	3
+docs/show-hn.md	private-name	12
+src/backend/annotations.rs	private-name	2
+src/backend/tests.rs	private-name	1
+src/config/tests.rs	agent-config	2
+src/config_reload/tests.rs	agent-config	2
+src/failsafe/circuit_breaker.rs	private-name	2
+src/gateway/server/warmstart.rs	private-name	4
+src/runtime/compiler.rs	private-name	5
+src/runtime/compiler_tests.rs	private-name	8
+src/runtime/descriptor.rs	private-name	13
+src/runtime/descriptor_tests.rs	private-name	15
+src/runtime/mod.rs	private-name	2
+src/security/firewall/memory_scanner.rs	private-name	1
+src/transport/http/mod.rs	private-name	1
+src/transport/http/tests.rs	private-name	1
+tests/mik_5226_acs.rs	private-name	24
