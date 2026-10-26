@@ -318,6 +318,32 @@ pub(crate) fn evaluate_backend_value(
     }
 }
 
+/// [`evaluate_backend_value`] over every enabled backend's `headers` and
+/// `env`, in place, collecting each unresolved one's message: backend env
+/// and headers are secret slots too (ADR-028).
+pub(crate) fn evaluate_backends(
+    backends: &mut std::collections::HashMap<String, super::BackendConfig>,
+    overlay: &EnvOverlay,
+    unresolved: &mut Vec<String>,
+) {
+    for (name, backend) in backends.iter_mut().filter(|(_, b)| b.enabled) {
+        let headers = backend
+            .headers
+            .iter_mut()
+            .map(|(key, value)| (format!("backends.{name}.headers.{key}"), value));
+        let env = backend
+            .env
+            .iter_mut()
+            .map(|(key, value)| (format!("backends.{name}.env.{key}"), value));
+        for (field, value) in headers.chain(env) {
+            match evaluate_backend_value(&field, value, overlay) {
+                Ok(evaluated) => *value = evaluated,
+                Err(message) => unresolved.push(message),
+            }
+        }
+    }
+}
+
 /// Whether `written` is a whole-value `env:`, `file:` or `keychain:` reference.
 pub(crate) fn is_reference(written: &str) -> bool {
     !matches!(SecretRef::parse(written), SecretRef::Literal(_))

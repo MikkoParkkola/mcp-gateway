@@ -708,26 +708,7 @@ impl Config {
         // Every unresolved reference in one error: fixing them one restart at a
         // time is the experience this replaces.
         let mut unresolved = Vec::new();
-        // Backend env and headers are secret slots too (ADR-028): a whole
-        // reference resolves once, verbatim; anything else expands as before.
-        for (name, backend) in self.backends.iter_mut().filter(|(_, b)| b.enabled) {
-            let fields = backend
-                .headers
-                .iter_mut()
-                .map(|(key, value)| (format!("backends.{name}.headers.{key}"), value))
-                .chain(
-                    backend
-                        .env
-                        .iter_mut()
-                        .map(|(key, value)| (format!("backends.{name}.env.{key}"), value)),
-                );
-            for (field, value) in fields {
-                match secret_ref::evaluate_backend_value(&field, value, overlay) {
-                    Ok(evaluated) => *value = evaluated,
-                    Err(message) => unresolved.push(message),
-                }
-            }
-        }
+        secret_ref::evaluate_backends(&mut self.backends, overlay, &mut unresolved);
         let mut expand = |field: String, value: &mut String| match secret_ref::expand_field(
             &field, value, overlay,
         ) {
