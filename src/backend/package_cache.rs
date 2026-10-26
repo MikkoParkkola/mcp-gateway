@@ -382,6 +382,22 @@ where
     }
 }
 
+/// This run's part of a tombstone name: a random value drawn once per
+/// process. A container restart reuses the pid and the counter starts again
+/// at zero, so pid and counter alone can name a tombstone a crashed run left
+/// behind, and the rename onto it fails (MIK-8831.REL.7). The standard
+/// library seeds `RandomState` from the OS per process, so the value differs
+/// across restarts without a clock that could read zero.
+fn run_nonce() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    static NONCE: OnceLock<u64> = OnceLock::new();
+    *NONCE.get_or_init(|| {
+        std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish()
+    })
+}
+
 /// Renames the cache to a sibling tombstone: one atomic step on one filesystem,
 /// however large the tree, so the next start installs into a fresh directory.
 fn retire_now(dir: &Path) -> Retired {
@@ -404,9 +420,10 @@ fn retire_now(dir: &Path) -> Retired {
         warn!(%error, "could not mark the package cache before moving it aside");
     }
     let tombstone = parent.join(format!(
-        "{}{TOMBSTONE_MARK}{}-{}",
+        "{}{TOMBSTONE_MARK}{}-{}-{}",
         leaf.to_string_lossy(),
         std::process::id(),
+        run_nonce(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     match std::fs::rename(dir, &tombstone) {
