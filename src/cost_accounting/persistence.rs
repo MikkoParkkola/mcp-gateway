@@ -33,7 +33,8 @@ pub struct PersistedCosts {
     pub key_overflow_usd: f64,
     /// `"local"` when `saved_at`'s day is the host's local day. Absent in a
     /// snapshot saved before ADR-026, and in one saved while the UTC day such
-    /// a snapshot restored is still open: both count UTC days.
+    /// a snapshot restored is still open: both count UTC days. Any other
+    /// value also counts a UTC day, with a warning, so its spend is kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub day_basis: Option<String>,
 }

@@ -75,21 +75,22 @@ impl BudgetEnforcer {
         let saved = persisted.saved_at;
         let same_day = match persisted.day_basis.as_deref() {
             Some("local") => now.map(|now| self.day_key(now) == self.day_key(saved)),
-            None => {
+            // A basis this build does not recognise counts as a pre-upgrade
+            // UTC day: discarding it would restart the budgets at zero.
+            basis => {
+                if let Some(other) = basis {
+                    tracing::warn!(
+                        target: "mcp_gateway::cost_accounting::enforcer",
+                        day_basis = other,
+                        "Persisted cost data names a day basis this gateway does not recognise; restoring it as a UTC day"
+                    );
+                }
                 let same = now.map(|now| now / 86_400 == saved / 86_400);
                 if same != Ok(false) {
                     self.legacy_utc_day
                         .store(saved / 86_400 + 1, std::sync::atomic::Ordering::Relaxed);
                 }
                 same
-            }
-            Some(other) => {
-                tracing::warn!(
-                    target: "mcp_gateway::cost_accounting::enforcer",
-                    day_basis = other,
-                    "Persisted cost data names a day basis this gateway does not know; budgets start at zero"
-                );
-                return None;
             }
         };
         if same_day == Ok(false) {
