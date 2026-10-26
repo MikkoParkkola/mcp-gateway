@@ -17,8 +17,9 @@ impl WipedBytes {
     /// Overwrite the whole allocation with `zeroize`'s volatile writes, which
     /// the optimiser may not drop as stores to memory about to be freed.
     /// `zeroize` on the `Vec` itself (not a slice of it) wipes the contents,
-    /// then the spare capacity past `len` (bytes a truncated buffer left),
-    /// then clears it; the allocation is kept until the `Vec` drops.
+    /// clears the `Vec`, then wipes the whole buffer through its spare
+    /// capacity (which covers bytes a truncated buffer left past `len`); the
+    /// allocation is kept until the `Vec` drops.
     fn wipe(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.0);
     }
@@ -53,6 +54,7 @@ mod tests {
         let mut bytes = b"s3cret-token-and-more".to_vec();
         bytes.truncate(12);
         let capacity = bytes.capacity();
+        assert!(capacity > bytes.len(), "the fixture leaves bytes past len");
         let mut secret = WipedBytes::new(bytes);
         secret.wipe();
         assert!(
