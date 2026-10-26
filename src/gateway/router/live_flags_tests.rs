@@ -221,7 +221,10 @@ async fn f3_a_resume_takes_the_flag_current_at_resume() {
         arguments: json!({"ser\u{7}ver": "alpha", "tool": "read", "arguments": {}}),
     };
     let caller = crate::gateway::meta_mcp::anonymous_caller();
-    let refused = match host.readmit(&call, &caller, None).await {
+    let refused = match host
+        .readmit(&call, &caller, (None, &host.generation()))
+        .await
+    {
         Ok((arguments, _)) => panic!("f3: re-admitted as {arguments}"),
         Err(refused) => serde_json::to_value(&*refused).expect("a response serializes"),
     };
@@ -230,4 +233,74 @@ async fn f3_a_resume_takes_the_flag_current_at_resume() {
         "f3: not the key validation's refusal: {refused}"
     );
     assert_eq!(calls(&fx), 0, "f3: dispatched");
+}
+
+/// Submit `gateway_invoke alpha read {cmd: NUL}` as a task on `/mcp` and
+/// return the last `tasks/get` body once it leaves `working`.
+async fn task_with_nul(fx: &Fx, key: &str) -> Value {
+    use super::direct_guards_fixture::send_with_headers;
+    let modern = json!({
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {
+            "extensions": {"io.modelcontextprotocol/tasks": {}}
+        },
+    });
+    let mut submit_meta = modern.clone();
+    submit_meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+    let submit = json!({
+        "name": "gateway_invoke",
+        "arguments": {"server": "alpha", "tool": "read", "arguments": {"cmd": NUL}},
+        "task": {},
+        "_meta": submit_meta,
+    });
+    let headers = [
+        ("mcp-protocol-version", "2026-07-28"),
+        ("mcp-method", "tools/call"),
+        ("mcp-name", "gateway_invoke"),
+    ];
+    let (_, created) =
+        send_with_headers(fx, "/mcp", "k-std", "tools/call", submit, None, &headers).await;
+    let id = created
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("the submit was refused: {created}"))
+        .to_owned();
+    let get_headers = [
+        ("mcp-protocol-version", "2026-07-28"),
+        ("mcp-method", "tasks/get"),
+        ("mcp-name", id.as_str()),
+    ];
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let get = json!({"taskId": id, "_meta": modern});
+            let (_, body) =
+                send_with_headers(fx, "/mcp", "k-std", "tasks/get", get, None, &get_headers).await;
+            if body.pointer("/result/status").and_then(Value::as_str) != Some("working") {
+                return body;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the task never settled")
+}
+
+/// F3 (first dispatch): a task admitted while sanitizing is off, with a
+/// reload turning it on before the worker dispatches, is judged by the
+/// generation current at dispatch: the NUL is refused and nothing is sent.
+/// Admission could not have refused it, so only a live first dispatch passes.
+#[tokio::test]
+async fn f3_a_first_dispatch_takes_the_flag_current_at_dispatch() {
+    let fx = Box::pin(sanitizing(false, fixture_built(Answer::Ok, |meta| meta))).await;
+    let live = std::sync::Arc::clone(&fx.state.live_config);
+    crate::gateway::meta_mcp::visible::seams::before_task_dispatch(move || {
+        live.edit(|c| c.security.sanitize_input = true);
+    });
+    let got = task_with_nul(&fx, "f3-first").await;
+    assert!(
+        fx.state.live_config.get().security.sanitize_input,
+        "the seam never ran, so this row tested nothing"
+    );
+    assert!(got.to_string().contains("null bytes"), "{got}");
+    assert_eq!(calls(&fx), 0, "dispatched");
 }

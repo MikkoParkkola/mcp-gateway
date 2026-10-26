@@ -297,6 +297,12 @@ impl Gateway {
                 },
             };
 
+            // ADR-023: this line is judged by the generation current as it is
+            // read, held for its whole dispatch; taken before parsing, so a
+            // reload while the line is parsed cannot reach it.
+            let sanitize = super::stdio_single::InputSanitizing::from_setting(
+                live_config.generation().sanitize_input(),
+            );
             let line = line.trim().to_string();
             if line.is_empty() {
                 continue;
@@ -393,11 +399,6 @@ impl Gateway {
                     stdout_died = true;
                     break;
                 }
-                // ADR-023: this line is judged by the generation current as it is
-                // read, held for its whole dispatch.
-                let sanitize = super::stdio_single::InputSanitizing::from_setting(
-                    live_config.generation().sanitize_input(),
-                );
                 let meta_mcp = Arc::clone(&meta_mcp);
                 let tool_policy = Arc::clone(&tool_policy);
                 let mtls_policy = Arc::clone(&mtls_policy);
@@ -488,11 +489,6 @@ impl Gateway {
                 .get("id")
                 .and_then(|id| serde_json::from_value(id.clone()).ok());
             let task = {
-                // ADR-023: this line is judged by the generation current as it is
-                // read, held for its whole dispatch.
-                let sanitize = super::stdio_single::InputSanitizing::from_setting(
-                    live_config.generation().sanitize_input(),
-                );
                 let meta_mcp = Arc::clone(&meta_mcp);
                 let tool_policy = Arc::clone(&tool_policy);
                 let mtls_policy = Arc::clone(&mtls_policy);

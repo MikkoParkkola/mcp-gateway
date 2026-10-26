@@ -33,6 +33,21 @@ fn reload_to(fx: &Fx, on: bool) -> impl FnOnce() + 'static {
     move || live.edit(|c| c.security.sanitize_input = on)
 }
 
+/// The call reached the backend and its tool answered without an error, so
+/// "not refused" cannot be a tool failure carried inside the result.
+fn assert_ran(fx: &Fx, body: &Value, what: &str) {
+    assert!(body.get("error").is_none(), "{what}: {body}");
+    assert_ne!(
+        body.pointer("/result/isError"),
+        Some(&json!(true)),
+        "{what}: {body}"
+    );
+    assert!(
+        fx.calls.load(Ordering::SeqCst) > 0,
+        "{what}: nothing reached the backend"
+    );
+}
+
 /// The reload ran: the published value is the flipped one.
 fn assert_reloaded(fx: &Fx, on: bool) {
     assert_eq!(
@@ -90,7 +105,7 @@ async fn g2_mcp_held_off_then_on_is_still_unsanitised() {
     seams::after_intake(reload_to(&fx, true));
     let body = meta_call(&fx).await;
     assert_reloaded(&fx, true);
-    assert!(body.get("error").is_none(), "{body}");
+    assert_ran(&fx, &body, "g2");
 }
 
 /// F1d (held, direct route): on at arrival, off by a reload once the caller
@@ -113,7 +128,7 @@ async fn f1d_direct_held_off_then_on_is_still_unsanitised() {
     seams::after_caller(reload_to(&fx, true));
     let body = direct_call(&fx).await;
     assert_reloaded(&fx, true);
-    assert!(body.get("error").is_none(), "{body}");
+    assert_ran(&fx, &body, "f1d off then on");
 }
 
 /// Lead ruling: with authentication off, nothing authenticates the request,
@@ -135,7 +150,7 @@ async fn auth_off_mcp_held_request_keeps_its_generation() {
     seams::after_intake(reload_to(&fx, true));
     let body = meta_call(&fx).await;
     assert_reloaded(&fx, true);
-    assert!(body.get("error").is_none(), "off then on: {body}");
+    assert_ran(&fx, &body, "off then on");
 }
 
 /// F4 (held, direct route): `ssrf_protection` on at arrival for a backend
@@ -168,9 +183,21 @@ async fn f4_direct_held_ssrf_on_then_off_is_still_refused() {
         !fx.state.live_config.get().security.ssrf_protection,
         "the seam never ran, so this row tested nothing"
     );
+    // The direct route answers a refused target as absent, by design.
     assert!(
-        body.pointer("/result/isError") == Some(&json!(true)),
+        body.pointer("/result/isError") == Some(&json!(true))
+            && body
+                .to_string()
+                .contains("does not list a tool named `read`"),
         "admitted: {body}"
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0, "dispatched");
+
+    // The next call arrives with protection off, and runs.
+    let (_, body) = post_direct(&fx, "alpha", "k-std", "read", json!({}), None, None).await;
+    assert!(body.get("error").is_none(), "after: {body}");
+    assert!(
+        calls.load(Ordering::SeqCst) > 0,
+        "after: nothing reached the backend"
+    );
 }

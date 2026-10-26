@@ -78,14 +78,16 @@ impl LiveHost {
     /// The exemption is judged again on the caller's view; still exempt, the
     /// call is sent as stored under the instances judged now; otherwise its
     /// arguments are sanitized first (a NUL refuses the resume). Returns the
-    /// arguments to send and the judgement to send them under.
+    /// arguments to send and the judgement to send them under. `generation`
+    /// is the one this resume step took, the same one its authorizer judges
+    /// by, so one step never mixes two (ADR-023).
     pub(crate) async fn readmit(
         &self,
         call: &super::execution::TaskCall,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
-        session_id: Option<&str>,
+        (session_id, generation): (Option<&str>, &crate::config_reload::Generation),
     ) -> Result<(serde_json::Value, Judged), Box<JsonRpcResponse>> {
-        if !self.generation().sanitize_input() {
+        if !generation.sanitize_input() {
             return Ok((call.arguments.clone(), Judged::default()));
         }
         let request = serde_json::json!({"jsonrpc": "2.0", "method": "tools/call",

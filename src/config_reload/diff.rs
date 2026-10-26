@@ -211,7 +211,6 @@ pub(super) fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'stat
         "mtls" => mtls,
         "key_server" => key_server,
         "agent_auth" => agent_auth,
-        "security" => security,
         "webhooks" => webhooks,
         "meta_mcp" => meta_mcp,
         "capabilities" => capabilities,
@@ -239,10 +238,12 @@ pub(super) fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'stat
     sections[0].1 = running.auth.restart_only_json() != wanted.auth.restart_only_json();
     // ADR-023: the two request-path flags apply on reload, so `security` is
     // compared without them; a change to any other field in it still counts.
-    if let Some(security) = sections.iter_mut().find(|(name, _)| *name == "security") {
-        security.1 = security_restart_only_json(&running.security)
-            != security_restart_only_json(&wanted.security);
-    }
+    // Pushed here, not listed above, so nothing has to find it to mask it.
+    sections.push((
+        "security",
+        security_restart_only_json(&running.security)
+            != security_restart_only_json(&wanted.security),
+    ));
     sections
 }
 

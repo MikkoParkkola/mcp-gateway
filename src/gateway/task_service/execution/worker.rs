@@ -195,6 +195,10 @@ async fn run_dispatched(
         return;
     }
 
+    // The test seam a reload lands in before this dispatch takes its
+    // generation (the C2e2 and F3 rows).
+    #[cfg(test)]
+    crate::gateway::meta_mcp::visible::seams::task_dispatch_starts();
     // A queued dispatch is judged by the generation current now (ADR-023).
     let generation = state.generation();
     let authorizer = state.authorizer(intent.owned.authorizer(), &generation);
@@ -215,15 +219,30 @@ async fn run_dispatched(
     // result rather than the synchronous wrapper: design §4 settles a task on
     // that result verbatim, `isError` included, and classifies an interim
     // `input_required` round from it before anything is committed.
-    #[cfg(test)]
-    crate::gateway::meta_mcp::visible::seams::task_dispatch_starts();
-    let dispatch = state.meta_mcp().dispatch_below_gate_native_result(
-        RequestId::Number(0),
-        &call.tool,
-        call.arguments.clone(),
-        session_id.as_deref(),
-        &caller,
-    );
+    // The first dispatch is an admission point, as a resume is: its arguments
+    // get intake's rule under this step's generation, so a task admitted while
+    // sanitizing was off is sanitized if a reload turned it on (ADR-023). A
+    // refusal is the dispatch's answer, and nothing is sent.
+    let readmitted = state
+        .readmit(&call, &caller, (session_id.as_deref(), &generation))
+        .await;
+    let dispatch = async {
+        let (arguments, judged) = match readmitted {
+            Ok(readmitted) => readmitted,
+            Err(refused) => return *refused,
+        };
+        crate::gateway::meta_mcp::visible::memo::with_judged(
+            judged,
+            state.meta_mcp().dispatch_below_gate_native_result(
+                RequestId::Number(0),
+                &call.tool,
+                arguments,
+                session_id.as_deref(),
+                &caller,
+            ),
+        )
+        .await
+    };
     let dispatch = async {
         match submission.as_ref() {
             Some(submission) => {

@@ -413,3 +413,34 @@ async fn g7_the_meta_tool_and_the_watcher_both_publish_the_flag() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
+
+// F7: a reload of a file that does not parse is refused, and the running
+// generation, the flag it carries included, stays published.
+#[tokio::test]
+async fn f7_a_malformed_file_leaves_the_running_generation() {
+    use std::sync::Arc;
+    let write = |path: &std::path::Path, text: &str| {
+        crate::gateway::test_helpers::write_owner_only(path, text)
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    write(&path, "security:\n  sanitize_input: true\n").expect("write");
+    let live = Arc::new(LiveConfig::new(Config::load(Some(&path)).expect("loads")));
+    let ctx = super::ReloadContext::new(
+        path.clone(),
+        Arc::clone(&live),
+        Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    )
+    .expect("the registry pairs with the config");
+    let before = live.generation();
+
+    write(&path, "security:\n  sanitize_input: false\n  : [unclosed\n").expect("write");
+    ctx.reload_outcome()
+        .await
+        .expect_err("a malformed file is refused");
+    assert!(Arc::ptr_eq(&before, &live.generation()), "published");
+    assert!(live.generation().sanitize_input(), "the flag changed");
+    assert_eq!(live.seq(), 0, "a refused reload published");
+}
