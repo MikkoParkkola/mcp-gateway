@@ -298,6 +298,9 @@ mod replica_restart_tests;
 #[cfg(test)]
 mod restart_required_tests;
 
+#[cfg(test)]
+mod live_sections_tests;
+
 /// Apply a [`ConfigPatch`] against the live [`BackendRegistry`].
 ///
 /// - **Added backends**: registered immediately (lazy-connect, identical to
