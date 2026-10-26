@@ -367,23 +367,17 @@ async fn a_withheld_target_delivery_joins_its_denied_record() {
                                  "arguments": {"server": "alpha", "tool": "t", "arguments": {"q": 1}},
                                  "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
                                            "io.modelcontextprotocol/clientCapabilities": {}}}});
-    let (_, answer) = post_modern_named(&fx, "gateway_invoke", &body.to_string()).await;
-    assert!(
-        answer.contains("-32601"),
-        "the absent name's answer: {answer}"
-    );
+    let (status, answer) = post_modern_named(&fx, "gateway_invoke", &body.to_string()).await;
+    // The absent name's answer, as for any name that matches no tool.
+    assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+    assert_eq!(sse_error_code(&answer), Some(-32601), "{answer}");
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "never dispatched");
     let invoked = invocations(&fx);
     let [denied] = invoked.as_slice() else {
         panic!("one invocation record: {invoked:?}");
     };
     assert_eq!(denied["outcome"], "denied", "{denied}");
-    let delivered: Vec<Value> = std::fs::read_to_string(&fx.path)
-        .unwrap_or_default()
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
-        .filter(|entry| entry["event"] == "response_delivery_attempt")
-        .collect();
+    let delivered = deliveries(&fx);
     let [delivery] = delivered.as_slice() else {
         panic!("one delivery record: {delivered:?}");
     };
@@ -411,14 +405,67 @@ async fn a_surfaced_tool_delivery_joins_its_invocation() {
     let [invocation] = invoked.as_slice() else {
         panic!("one invocation record: {invoked:?}");
     };
-    let delivered: Vec<Value> = std::fs::read_to_string(&fx.path)
-        .unwrap_or_default()
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
-        .filter(|entry| entry["event"] == "response_delivery_attempt")
-        .collect();
+    let delivered = deliveries(&fx);
     let [delivery] = delivered.as_slice() else {
         panic!("one delivery record: {delivered:?}");
     };
     assert_eq!(delivery["trace_id"], invocation["trace_id"], "{delivery}");
+}
+
+/// The JSON-RPC error code of a one-event SSE answer.
+fn sse_error_code(answer: &str) -> Option<i64> {
+    let data = answer
+        .lines()
+        .find_map(|line| line.strip_prefix("data: "))?;
+    serde_json::from_str::<Value>(data).ok()?["error"]["code"].as_i64()
+}
+
+/// The deliveries in `fx`'s log.
+fn deliveries(fx: &Fixture) -> Vec<Value> {
+    std::fs::read_to_string(&fx.path)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
+        .filter(|entry| entry["event"] == "response_delivery_attempt")
+        .collect()
+}
+
+/// A hidden meta tool naming two targets, both withheld: one `denied` record
+/// per target and no single invocation, so the delivery joins none of them
+/// (read as "not linked to a single call", as a plan is).
+#[tokio::test]
+async fn an_all_withheld_multi_target_delivery_joins_no_record() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(Some(vec!["t".to_string(), "u".to_string()]))),
+        meta_mode: MetaMode::InvokeHidden,
+        ..Setup::default()
+    })
+    .await;
+    let chain = json!([{"tool": "alpha:t", "arguments": {}}, {"tool": "alpha:u", "arguments": {}}]);
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                      "params": {"name": "gateway_execute", "arguments": {"chain": chain},
+                                 "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                                           "io.modelcontextprotocol/clientCapabilities": {}}}});
+    let (_, answer) = post_modern_named(&fx, "gateway_execute", &body.to_string()).await;
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        0,
+        "never dispatched: {answer}"
+    );
+    let invoked = invocations(&fx);
+    assert_eq!(
+        invoked.len(),
+        2,
+        "one denied record per target: {invoked:?}"
+    );
+    let delivered = deliveries(&fx);
+    let [delivery] = delivered.as_slice() else {
+        panic!("one delivery record: {delivered:?}");
+    };
+    assert!(
+        invoked
+            .iter()
+            .all(|row| row["trace_id"] != delivery["trace_id"]),
+        "joined one target's record: {delivery}"
+    );
 }
