@@ -75,8 +75,13 @@ impl CsvWriter {
             }
             match *c {
                 Cell::Text(t) => push_cell(&mut self.out, t),
-                Cell::Int(n) => push_cell(&mut self.out, &n.to_string()),
-                Cell::Float(x) => push_cell(&mut self.out, &x.to_string()),
+                // A number never needs quoting and must never be guarded.
+                Cell::Int(n) => {
+                    let _ = write!(self.out, "{n}");
+                }
+                Cell::Float(x) => {
+                    let _ = write!(self.out, "{x}");
+                }
             }
         }
         self.out.push_str("\r\n");
