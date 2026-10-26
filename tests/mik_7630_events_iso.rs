@@ -21,6 +21,9 @@ mod gateway;
 #[path = "task_upstream_recovery_sdk/issuer.rs"]
 #[allow(dead_code, reason = "shared fixture; this binary uses a subset")]
 mod issuer;
+#[path = "mik_7630_events/oidc_gateway.rs"]
+#[allow(dead_code, reason = "shared harness; each binary uses a subset")]
+mod oidc_gateway;
 #[path = "task_upstream_recovery_sdk/pins.rs"]
 #[allow(dead_code, reason = "shared fixture; this binary uses a subset")]
 mod pins;
@@ -34,24 +37,20 @@ mod subject_peer;
 #[allow(dead_code, reason = "shared helpers; each binary uses a subset")]
 mod upstream_sub;
 
-use std::path::Path;
 use std::time::Duration;
 
 use delivery::{DEADLINE, wait_until};
 use gateway::Gateway;
-use receiver::{Receiver, TRUST_CA};
+use oidc_gateway::{email, start};
+use receiver::Receiver;
 use serde_json::{Value, json};
 use subject_peer::{SubjectPeer, TokenEndpoint, resource_of};
-use upstream_sub::{delivered, expect_events, sub, upstream_config};
+use upstream_sub::{delivered, expect_events, sub};
 
 /// Past the 1 s coalescing window plus delivery: "nothing more arrived".
 const QUIET: Duration = Duration::from_secs(3);
 const TOOLS: &str = "backend.x.tools_changed";
 const UPDATED: &str = "backend.x.resource_updated";
-
-fn email(user: &str) -> String {
-    format!("{user}@example.test")
-}
 
 /// An identity-bound backend `x` on `peer`, observed per subscriber.
 fn signed_backend(peer: &SubjectPeer) -> Value {
@@ -78,38 +77,6 @@ fn exchanged_backend(peer: &SubjectPeer, endpoint: &TokenEndpoint) -> Value {
             "session_mode": "per_user",
         },
     })
-}
-
-/// A gateway with backend `x` = `backend`, verifying `issuer`'s bearers, and
-/// trusting both the receiver's CA and the issuer's.
-async fn start(
-    root: &Path,
-    rx: &Receiver,
-    issuer: &issuer::Issuer,
-    backend: Value,
-    extra_trust: &[&Path],
-) -> Gateway {
-    let mut cfg = upstream_config(root, backend, &[]);
-    cfg["key_server"] = json!({
-        "enabled": true,
-        "delegated_bearer": true,
-        "max_oidc_token_age_secs": 3600,
-        "oidc": [{"issuer": issuer.url, "auto_discover": true,
-                  "audiences": [issuer::AUDIENCE]}],
-        "policies": ["u1", "u2"].map(|user| json!({
-            "match": {"issuer": issuer.url, "email": email(user)},
-            "scopes": {"backends": ["x"], "tools": ["*"]},
-        })),
-    });
-    let both = root.join("trust-both.pem");
-    let mut pem = std::fs::read_to_string(&rx.ca_file).expect("receiver CA");
-    pem.push_str(&std::fs::read_to_string(&issuer.ca_file).expect("issuer CA"));
-    for ca in extra_trust {
-        pem.push_str(&std::fs::read_to_string(ca).expect("extra CA"));
-    }
-    std::fs::write(&both, pem).expect("combined trust file");
-    let trust = both.to_string_lossy();
-    Gateway::start_with_env(root, cfg, &[("SSL_CERT_FILE", &trust), (TRUST_CA, &trust)]).await
 }
 
 /// Wait until `subject` holds an open stream on `peer`, or panic with the log.
