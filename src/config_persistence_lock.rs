@@ -105,6 +105,20 @@ enum Owners {
     UserOnly,
 }
 
+/// A per-user sidecar must belong to `expected_uid`, the effective user,
+/// whatever its mode and with no exception for root. Pure, so it is tested
+/// without a second account.
+#[cfg(unix)]
+fn judge_owner(file_uid: u32, expected_uid: u32) -> io::Result<()> {
+    if file_uid == expected_uid {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        "it belongs to another user; remove it so the gateway recreates it as yours",
+    ))
+}
+
 #[cfg(unix)]
 fn keep_private(lock: &Path, owners: Owners) -> io::Result<()> {
     use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
@@ -126,11 +140,8 @@ fn keep_private(lock: &Path, owners: Owners) -> io::Result<()> {
     };
     let meta = file.metadata()?;
     let me = rustix::process::geteuid().as_raw();
-    if owners == Owners::UserOnly && meta.is_file() && meta.uid() != me {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "it belongs to another user; remove it so the gateway recreates it as yours",
-        ));
+    if owners == Owners::UserOnly && meta.is_file() {
+        judge_owner(meta.uid(), me)?;
     }
     let shared = meta.mode() & 0o077 != 0;
     if !meta.is_file() || !shared {
@@ -319,6 +330,33 @@ mod tests {
         let held = super::lock_config_blocking(&config, std::time::Instant::now(), |_| {});
 
         assert!(held.is_ok(), "the lock is taken");
+        let mode = std::fs::metadata(&lock).expect("stat").permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "mode {mode:o}");
+    }
+
+    /// The per-user owner rule, without a second account: a sidecar owned by
+    /// another uid is refused, the user's own is accepted.
+    #[cfg(unix)]
+    #[test]
+    fn a_per_user_lock_accepts_only_the_users_own_sidecar() {
+        let refused = super::judge_owner(1000, 1001).expect_err("another user's sidecar");
+        assert_eq!(refused.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(refused.to_string().contains("belongs to another user"));
+        super::judge_owner(1001, 1001).expect("the user's own sidecar");
+    }
+
+    /// The vault lock passes the real effective uid: a sidecar this user
+    /// created, then loosened, is accepted and tightened, never refused.
+    #[cfg(unix)]
+    #[test]
+    fn the_vault_lock_passes_the_real_uid() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lock = dir.path().join("vault.lock");
+        std::fs::write(&lock, "").expect("write");
+        std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+        let held = super::lock_file_blocking(&lock, std::time::Instant::now());
+        assert!(held.is_ok(), "the user's own sidecar was refused");
         let mode = std::fs::metadata(&lock).expect("stat").permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "mode {mode:o}");
     }

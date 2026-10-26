@@ -8,11 +8,10 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Barrier};
 use std::time::Instant;
 
-use super::{NewSecretOwned, PendingSecrets, create_secrets};
-use crate::secret_store::tests::{Fake, count, index_text, three, vault};
+use crate::secret_store::tests::{Fake, count, index_text, three, vault as fresh_vault};
 use crate::secret_store::{
-    FilesStore, LOCK_WAIT, SaveError, SecretStore, StoreError, StoreKind, Vault, save_secrets,
-    unused_entries,
+    FilesStore, LOCK_WAIT, NewSecretOwned, PendingSecrets, SaveError, SecretStore, StoreError,
+    StoreKind, UnusedEntry, Vault, create_secrets, save_secrets, unused_entries,
 };
 use crate::wiped_bytes::WipedBytes;
 
@@ -53,7 +52,7 @@ fn live_names(dir: &std::path::Path) -> Vec<String> {
 
 #[test]
 fn keep_leaves_the_entries_live_and_frees_the_lock() {
-    let (dir, vault) = vault();
+    let (dir, vault) = fresh_vault();
     let store = Arc::new(Fake::new());
     let saved = pending(&vault, &store);
     assert_eq!(saved.refs().len(), 2);
@@ -66,7 +65,7 @@ fn keep_leaves_the_entries_live_and_frees_the_lock() {
 
 #[test]
 fn discard_removes_only_this_saves_entries_and_reports_what_stays() {
-    let (dir, vault) = vault();
+    let (dir, vault) = fresh_vault();
     let store = Arc::new(Fake::new());
     pending(&vault, &store).discard();
     assert!(store.names().is_empty(), "{:?}", store.names());
@@ -74,7 +73,7 @@ fn discard_removes_only_this_saves_entries_and_reports_what_stays() {
     assert!(lock_is_free(&vault));
 
     // A delete that fails leaves the name live, so the listing still shows it.
-    let (dir, vault) = vault();
+    let (dir, vault) = fresh_vault();
     let mut failing = Fake::new();
     failing.fail_delete = true;
     let store = Arc::new(failing);
@@ -85,7 +84,7 @@ fn discard_removes_only_this_saves_entries_and_reports_what_stays() {
 
 #[test]
 fn an_undecided_drop_discards() {
-    let (dir, vault) = vault();
+    let (dir, vault) = fresh_vault();
     let store = Arc::new(Fake::new());
     drop(pending(&vault, &store));
     assert!(
@@ -99,7 +98,7 @@ fn an_undecided_drop_discards() {
 
 #[test]
 fn abandon_keeps_the_entries_for_an_unconfirmed_rollback() {
-    let (dir, vault) = vault();
+    let (dir, vault) = fresh_vault();
     let store = Arc::new(Fake::new());
     pending(&vault, &store).abandon();
     assert_eq!(store.names().len(), 2);
@@ -109,7 +108,7 @@ fn abandon_keeps_the_entries_for_an_unconfirmed_rollback() {
 
 #[test]
 fn a_panic_inside_the_commit_removes_this_saves_entries() {
-    let (_dir, vault) = vault();
+    let (_dir, vault) = fresh_vault();
     let store = Fake::new();
     let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = save_secrets(&vault, &store, &three(), |_| -> Result<(), ()> {
@@ -123,7 +122,7 @@ fn a_panic_inside_the_commit_removes_this_saves_entries() {
 
 #[test]
 fn an_async_commit_that_fails_discards_across_threads() {
-    let (_dir, vault) = vault();
+    let (_dir, vault) = fresh_vault();
     let store = Arc::new(Fake::new());
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -148,7 +147,7 @@ fn an_async_commit_that_fails_discards_across_threads() {
 
 #[test]
 fn a_held_vault_lock_refuses_at_the_deadline_before_any_store_call() {
-    let (dir, vault) = vault();
+    let (dir, vault) = fresh_vault();
     let _held = crate::fs_lock::ExclusiveFileLock::try_acquire(vault.lock_path()).expect("hold");
     let store = Arc::new(Fake::new());
     let refused = create_secrets(vault.clone(), store.clone(), &two(), Instant::now())
@@ -170,7 +169,7 @@ fn a_held_vault_lock_refuses_at_the_deadline_before_any_store_call() {
 
 #[test]
 fn the_unused_listing_carries_write_times_in_index_order() {
-    let (dir, vault) = vault();
+    let (dir, vault) = fresh_vault();
     let store = FilesStore::new(dir.path());
     let one = save_secrets(&vault, &store, &three()[..1], |r| Ok::<_, ()>(r[0].clone())).unwrap();
     // A line with no time, as a clock before the epoch writes it, stays in place.
@@ -181,7 +180,8 @@ fn the_unused_listing_carries_write_times_in_index_order() {
     std::fs::write(&index, text).unwrap();
     std::fs::write(dir.path().join("secrets").join(zero), "z\n").unwrap();
     let two = save_secrets(&vault, &store, &three()[..1], |r| Ok::<_, ()>(r[0].clone())).unwrap();
-    let unused = unused_entries(&vault, &[&store], &BTreeSet::new()).expect("listed");
+    let unused: Vec<UnusedEntry> =
+        unused_entries(&vault, &[&store], &BTreeSet::new()).expect("listed");
     let base = |r: &str| r.rsplit('/').next().unwrap().to_owned();
     let names: Vec<&str> = unused.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(names, vec![base(&one).as_str(), zero, base(&two).as_str()]);
@@ -192,7 +192,7 @@ fn the_unused_listing_carries_write_times_in_index_order() {
 
 #[test]
 fn a_crash_between_delete_and_removal_line_is_filtered_by_exists() {
-    let (dir, vault) = vault();
+    let (dir, vault) = fresh_vault();
     let store = Arc::new(Fake::new());
     let saved = pending(&vault, &store);
     // The deletes succeed; the removal lines cannot be written, as after a
@@ -216,7 +216,7 @@ fn a_crash_between_delete_and_removal_line_is_filtered_by_exists() {
 
 #[test]
 fn a_two_phase_save_and_a_secret_only_save_both_complete_under_contention() {
-    let (dir, vault) = vault();
+    let (dir, vault) = fresh_vault();
     let config = dir.path().join("gateway.yaml");
     std::fs::write(&config, "{}\n").unwrap();
     let store = Arc::new(Fake::new());
