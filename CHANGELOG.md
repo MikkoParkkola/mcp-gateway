@@ -233,6 +233,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enumerates `tools/list` and refuses to call anything absent from it will stop
   reaching these six until the corresponding feature is configured.
 
+### Security
+
+- **A crafted `costs.json` can no longer reset an exhausted daily budget.**
+  Restoring the saved totals skipped a valid per-tool total when it would
+  overflow the restored global sum, and restored a counter that had saturated
+  as zero; either reopened a per-tool or per-key cap after a restart. Every
+  in-range saved total now comes back, the global total saturates instead of
+  dropping one, and a saturated counter comes back saturated.
+
 ## [4.0.0] - 2026-09-19
 
 > Upgrading from 3.x: see [`docs/UPGRADING-4.0.md`](docs/UPGRADING-4.0.md). A 3.x `gateway.yaml`
