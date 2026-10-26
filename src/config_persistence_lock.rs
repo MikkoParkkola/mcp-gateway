@@ -307,15 +307,24 @@ async fn off_runtime_in<T: Send + 'static>(
         .name("config-lock".into())
         .spawn(move || {
             let out = work();
-            // Marked returned before the result is sent, so a caller that
-            // receives it never counts this thread as abandoned. A panic
-            // marks it too, as the guard drops.
+            // A result nobody received (a held lock) is dropped before the
+            // thread counts as returned: closing it can stall on the same
+            // mount. A panic marks it returned too, as the guard drops.
+            if let Err(out) = done.send(out) {
+                drop(out);
+            }
             drop(ended);
-            let _ = done.send(out);
         })
         .map_err(|_| NoResult::Lost)?;
-    let _caller = Left { state, abandoned };
-    result.await.map_err(|_| NoResult::Lost)
+    let mut caller = Left {
+        state,
+        abandoned,
+        armed: true,
+    };
+    let out = result.await;
+    // Received: the thread's send succeeded and it is returning.
+    caller.armed = out.is_err();
+    out.map_err(|_| NoResult::Lost)
 }
 
 /// Held by the thread: marks it returned, and uncounts it if its caller
@@ -334,16 +343,18 @@ impl Drop for Returned {
 }
 
 /// Held by the caller: counts the thread as abandoned if the caller leaves
-/// first. Counted before the state turns, so the thread's uncount can never
-/// run ahead of it.
+/// before receiving its result. Counted before the state turns, so the
+/// thread's uncount can never run ahead of it.
 struct Left {
     state: Arc<AtomicU8>,
     abandoned: &'static Abandoned,
+    /// Cleared once the result is received.
+    armed: bool,
 }
 
 impl Drop for Left {
     fn drop(&mut self) {
-        if self.state.load(SeqCst) == RETURNED {
+        if !self.armed || self.state.load(SeqCst) == RETURNED {
             return;
         }
         self.abandoned.0.fetch_add(1, SeqCst);
@@ -620,5 +631,49 @@ mod tests {
         }
         assert_eq!(MINE.0.load(SeqCst), 0, "returned threads are uncounted");
         assert_eq!(off_runtime_in(&MINE, || 7).await, Ok(7));
+    }
+
+    /// A result its caller never received (a held lock) is dropped while
+    /// the thread still counts as abandoned: closing it can stall on the
+    /// same mount, so the thread is not uncounted until that drop returns.
+    #[tokio::test]
+    async fn an_undelivered_result_is_dropped_before_the_thread_is_uncounted() {
+        use super::{Abandoned, off_runtime_in};
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        use std::sync::mpsc;
+        static MINE: Abandoned = Abandoned(AtomicUsize::new(0));
+        /// Drops only once released, saying first that it has started.
+        struct SlowClose(mpsc::Sender<()>, mpsc::Receiver<()>);
+        impl Drop for SlowClose {
+            fn drop(&mut self) {
+                let _ = self.0.send(());
+                let _ = self.1.recv();
+            }
+        }
+        let (closing, closed) = mpsc::channel();
+        let (release, wait) = mpsc::channel::<()>();
+        let (start, begin) = mpsc::channel::<()>();
+        let mut call = Box::pin(off_runtime_in(&MINE, move || {
+            let _ = begin.recv();
+            SlowClose(closing, wait)
+        }));
+        tokio::select! {
+            biased;
+            _ = call.as_mut() => panic!("the thread waits to start"),
+            () = std::future::ready(()) => {}
+        }
+        // The caller leaves before the thread has a result.
+        drop(call);
+        start.send(()).expect("the thread is waiting");
+
+        closed
+            .recv()
+            .expect("the undelivered result is being dropped");
+        assert_eq!(
+            MINE.0.load(SeqCst),
+            1,
+            "still counted while its result closes"
+        );
+        drop(release);
     }
 }

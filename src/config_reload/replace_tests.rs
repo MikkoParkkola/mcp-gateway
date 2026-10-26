@@ -683,13 +683,17 @@ async fn repointed_mid_reload(
     link: &Path,
     reload: impl std::future::Future<Output = bool> + Send + 'static,
 ) -> Vec<PathBuf> {
+    const BOUND: Duration = Duration::from_secs(30); // fail, never hang
     let pause = super::reload_pause::arm(link);
     let reload = tokio::spawn(reload);
-    pause.reached.notified().await;
+    tokio::time::timeout(BOUND, pause.reached.notified())
+        .await
+        .expect("the reload reaches its pause");
     std::fs::remove_file(link).expect("unlink");
     std::os::unix::fs::symlink(dir.join("other.yaml"), link).expect("re-point");
     pause.release.notify_one();
-    assert!(reload.await.expect("reload task"), "the reload applies");
+    let applied = tokio::time::timeout(BOUND, reload).await.expect("ends");
+    assert!(applied.expect("reload task"), "the reload applies");
     let dir = crate::identity_grants::journal::resolved(dir);
     LOADED
         .lock()
