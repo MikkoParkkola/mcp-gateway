@@ -187,7 +187,6 @@ const PUBLIC_CLAIM_SURFACES: &[&str] = &[
     "codebase-map.md",
     "docs/blog/security-aware-mcp-gateway.md",
     "docs/design/RFC-0081-intelligent-tool-surfacing.md",
-    "CLAUDE.md",
     "docs/legal/dependency-licenses.tsv",
     "src/commands/mod.rs",
     "src/gateway/meta_mcp_helpers.rs",

@@ -3,7 +3,7 @@
 //! MIK-7597 (#1452): the direct route `POST /mcp/{name}` runs the controls
 //! meta dispatch runs. Every cell runs against a normal backend (`alpha`) and
 //! a passthrough one (`alpha-pt`) and asserts how many calls reached it.
-//! Test plan: `docs/design/2026-09-27-direct-route-guards-test-plan.md`.
+//! Test plan: the direct route guards test plan.
 
 use std::sync::atomic::Ordering;
 

@@ -7,8 +7,8 @@ use super::*;
 // -------------------------------------------------------------------------
 // MIK-7256 — env files on a failed load (§P2 failing tests)
 //
-// Written against `docs/design/mik-7256-env-files-on-a-failed-load.md` and the
-// rows in `docs/design/mik-7256-test-plan.md`. The design's types do not exist
+// Written against the env files on a failed load design and the
+// rows in the env-files-on-a-failed-load test plan. The design's types do not exist
 // yet, so these are expected to fail to COMPILE until implementation lands.
 //
 // The design states that expansion must reach its home "through an injected

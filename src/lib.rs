@@ -82,6 +82,14 @@ pub mod key_server;
 pub mod kill_switch;
 #[doc(hidden)]
 pub mod kubernetes;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "its first callers are the budget enforcer and the UI counter store"
+    )
+)]
+pub(crate) mod local_day;
 #[cfg(feature = "metrics")]
 #[doc(hidden)]
 pub mod metrics;
@@ -155,6 +163,8 @@ mod transport_key;
 mod truncate;
 #[doc(hidden)]
 pub mod trust;
+#[cfg(test)]
+mod unsafe_allowlist_tests;
 #[doc(hidden)]
 pub mod validator;
 // Windows owner-only store custody; `win_acl` is the one module allowed
@@ -163,6 +173,7 @@ pub mod validator;
 mod private_fs;
 #[cfg(windows)]
 mod win_acl;
+mod wiped_bytes;
 /// The one YAML seam (MIK-8425); crate-private.
 mod yaml;
 

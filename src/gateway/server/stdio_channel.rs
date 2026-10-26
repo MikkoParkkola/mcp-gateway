@@ -4,7 +4,7 @@
 //! The stdio end of [`ClientChannel`]: ask the client that spawned us, over
 //! the same two pipes it already talks on.
 //!
-//! Design: `docs/design/2026-09-13-mik-7387-stdio-concurrent-dispatch.md`.
+//! Design: the stdio concurrent dispatch design.
 //!
 //! Two halves that only work together. A request goes out through the single
 //! writer task that owns stdout — nothing else may write there, or two

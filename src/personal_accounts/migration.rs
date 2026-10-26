@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-6744.STORE.1 — building a `GrantRecord` from a 3.x credential record.
 //!
-//! Design: `docs/internal/design/2026-09-21-store-1-3x-credential-migration.md`
+//! Design: the store 1 3x credential migration design
 //! §7.2 (field construction) and §7.2a (the two seeds that could make a working
 //! 3.x grant stop working).
 //!
