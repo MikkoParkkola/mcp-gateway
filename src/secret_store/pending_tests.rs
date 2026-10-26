@@ -231,8 +231,15 @@ fn a_two_phase_save_and_a_secret_only_save_both_complete_under_contention() {
     let store = Arc::new(Fake::new());
     let held = Arc::new(Barrier::new(2));
     let kept = Arc::new(AtomicBool::new(false));
+    let started = Arc::new(AtomicBool::new(false));
     let writer = {
-        let (vault, store, held, kept) = (vault.clone(), store.clone(), held.clone(), kept.clone());
+        let (vault, store, held, kept, started) = (
+            vault.clone(),
+            store.clone(),
+            held.clone(),
+            kept.clone(),
+            started.clone(),
+        );
         std::thread::spawn(move || {
             // Reload, then the config sidecar, then the vault: the global order.
             let reload = std::sync::Mutex::new(());
@@ -246,7 +253,11 @@ fn a_two_phase_save_and_a_secret_only_save_both_complete_under_contention() {
             let saved = create_secrets(vault, store, &two(), soon()).expect("phase one");
             // The secret-only save starts while this one holds the vault lock.
             held.wait();
-            std::thread::sleep(std::time::Duration::from_millis(200));
+            // Keep only once the other save has begun: it is then at, or on
+            // its way to, the vault lock this save still holds.
+            while !started.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
             kept.store(true, Ordering::SeqCst);
             saved.keep();
         })
@@ -255,6 +266,7 @@ fn a_two_phase_save_and_a_secret_only_save_both_complete_under_contention() {
         let (vault, store, held, kept) = (vault.clone(), store.clone(), held.clone(), kept.clone());
         std::thread::spawn(move || {
             held.wait();
+            started.store(true, Ordering::SeqCst);
             save_secrets(&vault, store.as_ref(), &three(), |_| {
                 // Its entries exist only once the vault lock was free, after
                 // the two-phase save kept: without the lock this runs first.
