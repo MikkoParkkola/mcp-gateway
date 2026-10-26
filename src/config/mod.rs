@@ -242,7 +242,14 @@ impl Config {
 
         Self::load_env_files_from_paths(&env_file_config.env_files);
 
-        let mut config: Self = Self::figment(resolved.as_deref())
+        let figment = match expansion {
+            Expansion::Resolved => Self::figment(resolved.as_deref()),
+            // An edit writes the whole struct back. Merging `MCP_GATEWAY_*`
+            // here would put on it a value the file never spelled, and the
+            // write would persist it: an environment-only token on disk.
+            Expansion::Literal => Self::yaml(resolved.as_deref()),
+        };
+        let mut config: Self = figment
             .extract()
             .map_err(|e| Error::Config(e.to_string()))?;
         if expansion == Expansion::Resolved {
@@ -324,13 +331,16 @@ impl Config {
         Self::load_env_files_from_paths(&self.env_files);
     }
 
-    fn figment(path: Option<&Path>) -> Figment {
+    fn yaml(path: Option<&Path>) -> Figment {
         let mut figment = Figment::new();
         if let Some(path) = path {
             figment = figment.merge(Yaml::file(path));
         }
+        figment
+    }
 
-        figment.merge(Env::prefixed("MCP_GATEWAY_").split("__"))
+    fn figment(path: Option<&Path>) -> Figment {
+        Self::yaml(path).merge(Env::prefixed("MCP_GATEWAY_").split("__"))
     }
 
     fn load_env_files_from_paths(env_files: &[String]) {
