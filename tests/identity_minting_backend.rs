@@ -21,17 +21,18 @@
 
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
+#[path = "common/journey.rs"]
+#[allow(dead_code, reason = "shared harness; each journey uses a subset")]
+mod journey;
 #[path = "common/mcp_http_servers.rs"]
 #[allow(dead_code, reason = "shared fixtures; each binary uses a subset")]
 mod mcp_http_servers;
 
-use std::path::PathBuf;
-use std::process::Stdio;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use axum::http::HeaderMap;
 use axum::routing::{get, post};
+use journey::{Gateway, Workspace};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use mcp_gateway::gateway::oauth::GatewayKeyPair;
 use serde_json::{Value, json};
@@ -41,7 +42,6 @@ const AUDIENCE: &str = "urn:test:minted";
 const CLIENT_ID: &str = "gateway-under-test";
 const SUBJECT: &str = "user-7f3a";
 const EMAIL: &str = "alice@example.test";
-const READY_BOUND: Duration = Duration::from_secs(60);
 const PROTOCOL: &str = "2026-07-28";
 
 /// Each JSON-RPC method the backend saw, with the `Authorization` it carried.
@@ -110,162 +110,88 @@ fn id_token(keys: &GatewayKeyPair, issuer: &str) -> String {
     jsonwebtoken::encode(&header, &claims, &key).expect("ID token signs")
 }
 
-struct Gateway {
-    _tmp: tempfile::TempDir,
-    child: tokio::process::Child,
-    log: PathBuf,
-    url: String,
-    http: reqwest::Client,
+/// A workspace whose `gateway.yaml` has one HTTP backend at `backend_url`,
+/// `propagation` its `identity_propagation` block (or none), and the key
+/// server trusting `issuer` for delegated bearers.
+fn workspace(backend_url: &str, issuer: &str, propagation: &str) -> Workspace {
+    use std::os::unix::fs::PermissionsExt as _;
+    let ws = Workspace::new();
+    let config = ws.root.join("gateway.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "server:\n  host: 127.0.0.1\n\
+             auth:\n  enabled: true\n  public_paths: [\"/health\"]\n\
+             key_server:\n  enabled: true\n  delegated_bearer: true\n\
+             \x20 oidc:\n    - issuer: \"{issuer}\"\n      audiences: [\"{CLIENT_ID}\"]\n\
+             \x20 policies:\n    - match:\n        issuer: \"{issuer}\"\n        email: \"{EMAIL}\"\n\
+             \x20     scopes:\n        backends: [\"{BACKEND}\"]\n\
+             backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n{propagation}"
+        ),
+    )
+    .expect("config");
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600)).expect("chmod 600");
+    ws
 }
 
-impl Gateway {
-    /// The binary with one HTTP backend, `propagation` its
-    /// `identity_propagation` block (or none), and the key server trusting
-    /// `issuer` for delegated bearers.
-    async fn start(backend_url: &str, issuer: &str, propagation: &str) -> Self {
-        use std::os::unix::fs::PermissionsExt as _;
-        let tmp = tempfile::tempdir().expect("temp root");
-        let root = tmp.path().to_path_buf();
-        let config = root.join("gateway.yaml");
-        std::fs::write(
-            &config,
-            format!(
-                "server:\n  host: 127.0.0.1\n\
-                 auth:\n  enabled: true\n  public_paths: [\"/health\"]\n\
-                 key_server:\n  enabled: true\n  delegated_bearer: true\n\
-                 \x20 oidc:\n    - issuer: \"{issuer}\"\n      audiences: [\"{CLIENT_ID}\"]\n\
-                 \x20 policies:\n    - match:\n        issuer: \"{issuer}\"\n        email: \"{EMAIL}\"\n\
-                 \x20     scopes:\n        backends: [\"{BACKEND}\"]\n\
-                 backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n{propagation}"
-            ),
-        )
-        .expect("config");
-        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600))
-            .expect("chmod 600");
-        let log = root.join("serve.log");
-        let out = std::fs::File::create(&log).expect("serve log");
-        let err = out.try_clone().expect("log handle");
-        let mut command = tokio::process::Command::from(gateway_bin::command(
-            &root,
-            gateway_bin::Inherit::Environment,
-        ));
-        let child = command
-            .current_dir(&root)
-            .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
-            .args(["-c", "gateway.yaml", "-p", "0", "serve"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(out))
-            .stderr(Stdio::from(err))
-            .kill_on_drop(true)
-            .spawn()
-            .expect("serve spawns");
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .no_proxy()
-            .build()
-            .expect("an HTTP client");
-        let mut gateway = Self {
-            _tmp: tmp,
-            child,
-            log,
-            url: String::new(),
-            http,
-        };
-        gateway.wait_ready().await;
-        gateway
-    }
+/// `gateway_invoke` of the backend's `ping` as the holder of `bearer`,
+/// required to be a result, not a tool error, carrying the backend's answer;
+/// otherwise a panic with the gateway's log.
+async fn invoke(gateway: &Gateway, bearer: &str) {
+    let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+        "name": "gateway_invoke",
+        "arguments": { "server": BACKEND, "tool": "ping", "arguments": {} },
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": PROTOCOL,
+            "io.modelcontextprotocol/clientCapabilities": {},
+            "io.modelcontextprotocol/clientInfo": { "name": "minting-row", "version": "1" },
+        },
+    }});
+    let response = journey::http_client()
+        .post(format!("{}/mcp", gateway.url))
+        .header("content-type", "application/json")
+        .header("accept", "application/json")
+        .header("mcp-protocol-version", PROTOCOL)
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", "gateway_invoke")
+        .bearer_auth(bearer)
+        .json(&body)
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("the gateway answers ({e})\n{}", gateway.logs()));
+    let status = response.status();
+    let text = response.text().await.expect("a body");
+    let answer: Value = serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("not JSON ({e}): {text}\n{}", gateway.logs()));
+    assert!(
+        status.is_success() && answer.get("error").is_none(),
+        "{status}: {answer}\n{}",
+        gateway.logs()
+    );
+    let result = &answer["result"];
+    assert_ne!(result["isError"], true, "{answer}\n{}", gateway.logs());
+    assert!(
+        result.to_string().contains("pong-minted"),
+        "the backend's answer: {answer}\n{}",
+        gateway.logs()
+    );
+}
 
-    fn logs(&self) -> String {
-        std::fs::read_to_string(&self.log).unwrap_or_default()
-    }
-
-    /// Read the port the child bound (`-p 0`) from its log, then wait for
-    /// `/health` on it.
-    async fn wait_ready(&mut self) {
-        let deadline = tokio::time::Instant::now() + READY_BOUND;
-        loop {
-            if let Some(status) = self.child.try_wait().expect("child status") {
-                panic!("serve exited before ready ({status})\n{}", self.logs());
-            }
-            if self.url.is_empty()
-                && let Some(port) = gateway_bin::logged_port(&self.log)
-            {
-                self.url = format!("http://127.0.0.1:{port}");
-            }
-            if !self.url.is_empty()
-                && self
-                    .http
-                    .get(format!("{}/health", self.url))
-                    .send()
-                    .await
-                    .is_ok_and(|r| r.status().is_success())
-            {
-                return;
-            }
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "serve not ready\n{}",
-                self.logs()
-            );
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    }
-
-    /// `gateway_invoke` of the backend's `ping` as the holder of `bearer`.
-    async fn invoke(&self, bearer: &str) -> Value {
-        let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
-            "name": "gateway_invoke",
-            "arguments": { "server": BACKEND, "tool": "ping", "arguments": {} },
-            "_meta": {
-                "io.modelcontextprotocol/protocolVersion": PROTOCOL,
-                "io.modelcontextprotocol/clientCapabilities": {},
-                "io.modelcontextprotocol/clientInfo": { "name": "minting-row", "version": "1" },
-            },
-        }});
-        let text = self
-            .http
-            .post(format!("{}/mcp", self.url))
-            .header("content-type", "application/json")
-            .header("accept", "application/json")
-            .header("mcp-protocol-version", PROTOCOL)
-            .header("mcp-method", "tools/call")
-            .header("mcp-name", "gateway_invoke")
-            .bearer_auth(bearer)
-            .json(&body)
-            .send()
-            .await
-            .expect("the gateway answers")
-            .text()
-            .await
-            .expect("a body");
-        let json = text
-            .lines()
-            .find_map(|line| line.strip_prefix("data:"))
-            .unwrap_or(&text);
-        serde_json::from_str(json.trim())
-            .unwrap_or_else(|e| panic!("not JSON ({e}): {text}\n{}", self.logs()))
-    }
-
-    /// The gateway's published signing key with id `kid`.
-    async fn published_key(&self, kid: &str) -> DecodingKey {
-        let jwks: Value = self
-            .http
-            .get(format!("{}/.well-known/jwks.json", self.url))
-            .send()
-            .await
-            .expect("jwks answers")
-            .json()
-            .await
-            .expect("jwks is JSON");
-        let key = (jwks["keys"].as_array().expect("a key set").iter())
-            .find(|key| key["kid"] == kid)
-            .unwrap_or_else(|| panic!("no published key {kid}: {jwks}"));
-        DecodingKey::from_ec_components(
-            key["x"].as_str().expect("x"),
-            key["y"].as_str().expect("y"),
-        )
+/// The gateway's published signing key with id `kid`.
+async fn published_key(gateway: &Gateway, kid: &str) -> DecodingKey {
+    let jwks: Value = journey::http_client()
+        .get(format!("{}/.well-known/jwks.json", gateway.url))
+        .send()
+        .await
+        .expect("jwks answers")
+        .json()
+        .await
+        .expect("jwks is JSON");
+    let key = (jwks["keys"].as_array().expect("a key set").iter())
+        .find(|key| key["kid"] == kid)
+        .unwrap_or_else(|| panic!("no published key {kid}: {jwks}\n{}", gateway.logs()));
+    DecodingKey::from_ec_components(key["x"].as_str().expect("x"), key["y"].as_str().expect("y"))
         .expect("a P-256 key")
-    }
 }
 
 /// The `Authorization` of each `tools/call` the backend received.
@@ -276,10 +202,6 @@ fn calls(seen: &Seen) -> Vec<Option<String>> {
         .collect()
 }
 
-fn answered_pong(answer: &Value) -> bool {
-    answer.to_string().contains("pong-minted")
-}
-
 #[tokio::test]
 async fn a_minting_backend_receives_a_gateway_signed_assertion_for_the_caller() {
     let issuer_keys = GatewayKeyPair::generate().expect("issuer key");
@@ -287,18 +209,17 @@ async fn a_minting_backend_receives_a_gateway_signed_assertion_for_the_caller() 
     let bearer = id_token(&issuer_keys, &issuer);
     let seen = Seen::default();
     let backend = recording_backend(&seen).await;
-    let gateway = Gateway::start(
+    let ws = workspace(
         &backend,
         &issuer,
         &format!(
             "    identity_propagation:\n      strategy: signed_assertion\n      \
              audience: \"{AUDIENCE}\"\n      required: false\n      session_mode: stateless\n"
         ),
-    )
-    .await;
+    );
+    let gateway = Gateway::start(&ws).await;
 
-    let answer = gateway.invoke(&bearer).await;
-    assert!(answered_pong(&answer), "{answer}\n{}", gateway.logs());
+    invoke(&gateway, &bearer).await;
     let calls = calls(&seen);
     let [Some(authorization)] = calls.as_slice() else {
         panic!("one tools/call with an Authorization header: {calls:?}");
@@ -314,10 +235,15 @@ async fn a_minting_backend_receives_a_gateway_signed_assertion_for_the_caller() 
         .expect("a kid");
     let mut validation = Validation::new(Algorithm::ES256);
     validation.set_audience(&[AUDIENCE]);
-    let claims =
-        jsonwebtoken::decode::<Value>(token, &gateway.published_key(&kid).await, &validation)
-            .expect("the assertion verifies against the gateway's published key")
-            .claims;
+    let key = published_key(&gateway, &kid).await;
+    let claims = jsonwebtoken::decode::<Value>(token, &key, &validation)
+        .unwrap_or_else(|e| {
+            panic!(
+                "the assertion verifies against the gateway's published key ({e})\n{}",
+                gateway.logs()
+            )
+        })
+        .claims;
     assert_eq!(claims["sub"], SUBJECT);
     assert_eq!(claims["email"], EMAIL);
     assert_eq!(claims["tenant"], issuer.as_str());
@@ -327,9 +253,14 @@ async fn a_minting_backend_receives_a_gateway_signed_assertion_for_the_caller() 
         "{claims}"
     );
     let now = now();
-    let (nbf, exp) = (claims["nbf"].as_u64(), claims["exp"].as_u64());
-    assert!(nbf.is_some_and(|nbf| nbf <= now + 5), "{claims}");
-    assert!(exp.is_some_and(|exp| exp > now), "{claims}");
+    assert!(
+        claims["nbf"].as_u64().is_some_and(|nbf| nbf <= now),
+        "{claims}"
+    );
+    assert!(
+        claims["exp"].as_u64().is_some_and(|exp| exp > now),
+        "{claims}"
+    );
     assert!(
         claims["jti"]
             .as_str()
@@ -345,9 +276,15 @@ async fn without_propagation_the_backend_receives_no_authorization() {
     let bearer = id_token(&issuer_keys, &issuer);
     let seen = Seen::default();
     let backend = recording_backend(&seen).await;
-    let gateway = Gateway::start(&backend, &issuer, "").await;
+    let ws = workspace(&backend, &issuer, "");
+    let gateway = Gateway::start(&ws).await;
 
-    let answer = gateway.invoke(&bearer).await;
-    assert!(answered_pong(&answer), "{answer}\n{}", gateway.logs());
-    assert_eq!(calls(&seen), [None], "the call carried no Authorization");
+    invoke(&gateway, &bearer).await;
+    assert_eq!(calls(&seen).len(), 1, "one tools/call reached the backend");
+    let seen = seen.lock().expect("seen");
+    assert!(
+        seen.iter()
+            .all(|(_, authorization)| authorization.is_none()),
+        "no backend request of any method carried Authorization: {seen:?}"
+    );
 }
