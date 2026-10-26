@@ -53,7 +53,8 @@ impl LinuxKeychain {
         })?;
         // The name is ADR-028's grammar, so it needs no quoting beyond the
         // GVariant string's own quotes.
-        let attributes = format!("{{'service': <'{name}'>}}");
+        // `SearchItems` takes `a{ss}`: a plain string value, not a variant.
+        let attributes = format!("{{'service': '{name}'}}");
         let output = run(
             gdbus,
             &[
