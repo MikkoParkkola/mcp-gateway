@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-7272.OWNER.3: stdio results are keyed by the transport, not by a name.
 //!
-//! Test plan: `docs/design/2026-09-30-sub4-stdio-owner-test-plan.md` (I1).
+//! Test plan: the sub4 stdio owner test plan (I1).
 //!
 //! The stdio transport marks the contexts it builds with its process nonce.
 //! A context carrying the same principal text but no nonce was not built by

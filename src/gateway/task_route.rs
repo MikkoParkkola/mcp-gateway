@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The `tasks/*` bodies both transports serve (MIK-7272.OWNER.2, design D6
-//! rev 5 items 3–4, `docs/design/2026-09-30-sub4-stdio-owner.md`).
+//! rev 5 items 3–4, the sub4 stdio owner design).
 //!
 //! HTTP and stdio differ only in who owns a task and in how a read is
 //! re-authorized before delivery; both are handed in. Everything an owner

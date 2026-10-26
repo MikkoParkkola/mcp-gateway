@@ -160,6 +160,12 @@ pub(crate) fn mark_all_renamed(target: &Path) -> std::io::Result<()> {
 /// Remove the journal, durably, then the staged original. A crash between
 /// the two leaves only debris, which the next recovery or staging removes.
 pub(crate) fn finish(target: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if matches!(fault::get(target), Some(fault::Fault::FailJournalRemove)) {
+        return Err(std::io::Error::other(
+            "injected: the journal cannot be removed",
+        ));
+    }
     let path = journal_path(target);
     std::fs::remove_file(&path)?;
     sync_dir_of(&path)?;
@@ -220,14 +226,19 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, String> {
     }
     let recovered = match journal.state {
         State::Staged => {
+            #[cfg(test)]
+            if let Some(fault::Fault::Pause(pause)) = fault::get(&target) {
+                pause.enter_and_wait();
+            }
             let bytes = std::fs::read(&original).map_err(|e| {
                 format!("{} cannot be read ({e}); {}", original.display(), manual())
             })?;
             if crate::hashing::sha256_hex(&bytes) != journal.original_revision {
                 return Err(format!(
-                    "{} does not match its journal; {}",
+                    "{} does not match the digest its journal {} records, so it was not restored; compare it with {} by hand before restoring anything, then delete the journal",
                     original.display(),
-                    manual()
+                    path.display(),
+                    target.display()
                 ));
             }
             write_atomic(&target, &bytes, FileMode::Private, Symlink::Replace)
@@ -238,6 +249,17 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, String> {
         State::AllRenamed => Recovered::KeptNew,
     };
     if let Err(e) = finish(&target) {
+        if recovered == Recovered::RolledBack {
+            // A `staged` journal left behind would roll back whatever the
+            // next writer saves. Refuse until it is gone: each later lock
+            // retries, and restoring the same original again is harmless.
+            return Err(format!(
+                "{} was restored, but its journal {} could not be removed ({e}); no config write proceeds until it is: delete the journal",
+                target.display(),
+                path.display()
+            ));
+        }
+        // An `all_renamed` journal left behind only keeps the current file.
         tracing::warn!(error = %e, journal = %path.display(), "cleaning up a recovered replace journal failed; the next config write retries");
     }
     Ok(recovered)
@@ -276,5 +298,108 @@ fn sync_dir_of(path: &Path) -> std::io::Result<()> {
     #[cfg(not(windows))]
     {
         std::fs::File::open(dir)?.sync_all()
+    }
+}
+
+/// Test-only faults, keyed by the resolved target so parallel tests never see
+/// each other's. A global rather than a thread-local: recovery runs on a
+/// blocking-pool thread, not the test's.
+#[cfg(test)]
+pub(crate) mod fault {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Condvar, Mutex};
+
+    #[derive(Clone)]
+    pub(crate) enum Fault {
+        /// `finish` fails before removing the journal.
+        FailJournalRemove,
+        /// Recovery of a `staged` journal stops until released.
+        Pause(Arc<Pause>),
+    }
+
+    /// A gate recovery waits at: the test sees it entered, then releases it.
+    #[derive(Default)]
+    pub(crate) struct Pause {
+        /// (entered, released)
+        state: Mutex<(bool, bool)>,
+        changed: Condvar,
+    }
+
+    impl Pause {
+        pub(super) fn enter_and_wait(&self) {
+            let mut state = self.state.lock().expect("pause");
+            state.0 = true;
+            self.changed.notify_all();
+            while !state.1 {
+                state = self.changed.wait(state).expect("pause");
+            }
+        }
+
+        /// Block until recovery has reached the gate, at most 20 s: a test
+        /// whose recovery never gets there fails by name instead of leaving
+        /// this thread waiting forever.
+        pub(crate) fn wait_entered(&self) {
+            let (state, timeout) = self
+                .changed
+                .wait_timeout_while(
+                    self.state.lock().expect("pause"),
+                    std::time::Duration::from_secs(20),
+                    |state| !state.0,
+                )
+                .expect("pause");
+            assert!(
+                state.0 && !timeout.timed_out(),
+                "recovery never reached the pause within 20 s"
+            );
+        }
+
+        pub(crate) fn release(&self) {
+            self.state.lock().expect("pause").1 = true;
+            self.changed.notify_all();
+        }
+    }
+
+    static FAULTS: Mutex<Option<HashMap<PathBuf, Fault>>> = Mutex::new(None);
+
+    /// Set `fault` for `config` until the returned guard drops. Dropping it,
+    /// on a panic too, clears the entry and releases a pause, so a failing
+    /// test never leaves recovery parked or its fault visible to another.
+    #[must_use]
+    pub(crate) fn set(config: &Path, fault: Fault) -> Armed {
+        let key = crate::identity_grants::journal::resolved(config);
+        FAULTS
+            .lock()
+            .expect("faults")
+            .get_or_insert_with(HashMap::new)
+            .insert(key.clone(), fault.clone());
+        Armed { key, fault }
+    }
+
+    /// An armed fault; see [`set`].
+    pub(crate) struct Armed {
+        key: PathBuf,
+        fault: Fault,
+    }
+
+    impl Drop for Armed {
+        fn drop(&mut self) {
+            if let Ok(mut faults) = FAULTS.lock()
+                && let Some(map) = faults.as_mut()
+            {
+                map.remove(&self.key);
+            }
+            if let Fault::Pause(pause) = &self.fault {
+                pause.release();
+            }
+        }
+    }
+
+    pub(super) fn get(target: &Path) -> Option<Fault> {
+        FAULTS
+            .lock()
+            .expect("faults")
+            .as_ref()
+            .and_then(|map| map.get(target).cloned())
     }
 }

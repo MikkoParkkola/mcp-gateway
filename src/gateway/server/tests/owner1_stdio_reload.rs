@@ -4,7 +4,7 @@
 //! only the stdio serve loop installs a reload context and a capability
 //! backend, so these rows drive `Gateway::run_stdio_on` over in-memory pipes.
 //!
-//! Test plan: `docs/design/2026-09-30-sub4-stdio-owner-test-plan.md` (I2,
+//! Test plan: the sub4 stdio owner test plan (I2,
 //! T1.8 and T1.10). Each row makes the second keyed call distinguishable from
 //! a re-execution: the file on disk changes between the calls, and a third,
 //! unkeyed call proves the change is visible to a real reload.

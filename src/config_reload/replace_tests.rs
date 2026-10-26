@@ -423,10 +423,113 @@ async fn a_tampered_original_is_never_written_back() {
 
     match lock_now(&path).await {
         Err(crate::config_persistence::lock::NotLocked::Failed(message)) => {
-            assert!(message.contains("does not match its journal"), "{message}");
+            assert!(message.contains("does not match the digest"), "{message}");
         }
         Err(other) => panic!("expected a refusal, got {other:?}"),
         Ok(_) => panic!("a tampered original must refuse the lock"),
     }
     assert_eq!(read(&path), NEXT);
+}
+
+/// A rollback whose journal cannot be removed refuses the lock, so no save
+/// can land while a `staged` journal still waits to undo it; a later lock
+/// recovers again, harmlessly, and a save after that is never undone.
+#[tokio::test]
+async fn a_journal_that_cannot_be_removed_blocks_writes_until_it_is() {
+    within_hang_bound(
+        "a_journal_that_cannot_be_removed_blocks_writes_until_it_is",
+        async {
+            use crate::config_persistence::journal::{self, fault};
+            let (_dir, path, _ctx) = setup();
+            crashed_after_rename(&path, NEXT);
+            let armed = fault::set(&path, fault::Fault::FailJournalRemove);
+
+            let refused = lock_now(&path).await;
+            drop(armed);
+
+            match refused {
+                Err(crate::config_persistence::lock::NotLocked::Failed(message)) => {
+                    assert!(message.contains("could not be removed"), "{message}");
+                }
+                Err(other) => panic!("expected a refusal, got {other:?}"),
+                Ok(_) => panic!("a journal left staged must refuse the lock"),
+            }
+            assert_eq!(read(&path), START, "the original is already back");
+            assert!(journal::exists(&path), "the journal stays until removed");
+
+            drop(lock_now(&path).await.expect("a later lock recovers it"));
+            assert!(!journal::exists(&path));
+            let target = crate::identity_grants::journal::resolved(&path);
+            {
+                let _held = lock_now(&path).await.expect("lock for a save");
+                write_owner_only(&target, NEXT).expect("a save");
+            }
+            drop(lock_now(&path).await.expect("the next lock"));
+            assert_eq!(read(&path), NEXT, "a save after recovery is never undone");
+        },
+    )
+    .await;
+}
+
+/// A caller cancelled while its lock recovers a journal never lets a second
+/// holder in: the lock travels with the recovery and is released only when
+/// recovery ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_lock_stays_held_until_its_recovery_ends() {
+    within_hang_bound(
+        "a_cancelled_lock_stays_held_until_its_recovery_ends",
+        async {
+            use crate::config_persistence::journal::{self, fault};
+            let (_dir, path, _ctx) = setup();
+            crashed_after_rename(&path, NEXT);
+            let pause = Arc::new(fault::Pause::default());
+            let armed = fault::set(&path, fault::Fault::Pause(Arc::clone(&pause)));
+            let locking = path.clone();
+            let task = tokio::spawn(async move {
+                crate::config_persistence::lock::lock_config_recovering(
+                    &locking,
+                    std::time::Instant::now() + WAIT,
+                )
+                .await
+                .map(drop)
+            });
+            let entered = Arc::clone(&pause);
+            tokio::task::spawn_blocking(move || entered.wait_entered())
+                .await
+                .expect("recovery reached the gate");
+
+            task.abort();
+            let _ = task.await;
+            let lock = crate::config_persistence::lock::lock_path(
+                &crate::identity_grants::journal::resolved(&path),
+            );
+            assert!(
+                ExclusiveFileLock::try_acquire(&lock).is_err(),
+                "no second holder while recovery runs"
+            );
+
+            drop(armed);
+            let mut freed = false;
+            for _ in 0..400 {
+                if let Ok(held) = ExclusiveFileLock::try_acquire(&lock) {
+                    drop(held);
+                    freed = true;
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            assert!(freed, "the lock is released once recovery ends");
+            assert_eq!(read(&path), START);
+            assert!(!journal::exists(&path));
+        },
+    )
+    .await;
+}
+
+/// A hang in these crash-path tests fails in seconds, by name, instead of
+/// holding a CI shard until its own timeout.
+async fn within_hang_bound(test: &str, body: impl std::future::Future<Output = ()>) {
+    tokio::time::timeout(Duration::from_secs(30), body)
+        .await
+        .unwrap_or_else(|_| panic!("{test} hung past 30 s"));
 }
