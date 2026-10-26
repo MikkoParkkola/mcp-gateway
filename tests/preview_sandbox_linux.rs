@@ -33,11 +33,9 @@ async fn sandboxed(program: &str, args: &[&str]) -> Option<Output> {
 }
 
 /// As [`sandboxed`], with `protected` passed to the launcher as gateway paths.
-async fn sandboxed_protecting(
-    program: &str,
-    args: &[&str],
-    protected: &[PathBuf],
-) -> Option<Output> {
+/// Run `program args` with `protected` as gateway paths and collect what it
+/// printed, a helper refusal included.
+async fn sandboxed_raw(program: &str, args: &[&str], protected: &[PathBuf]) -> Option<Output> {
     let target = Target {
         program: PathBuf::from(program),
         args: args.iter().map(Into::into).collect(),
@@ -65,12 +63,6 @@ async fn sandboxed_protecting(
     let (status, stdout, stderr) = tokio::time::timeout(Duration::from_secs(60), run)
         .await
         .expect("the sandboxed command finished within 60 s");
-    // The helper only runs once the namespaces exist, so a refusal it prints
-    // is a sandbox bug on a host that allows them, never a skip.
-    assert!(
-        !stderr.contains("preview-sandbox: refused at "),
-        "the sandbox refused a step on a working host: {stderr}"
-    );
     // `unshare` itself failing is the host refusing the namespaces.
     if stderr.starts_with("unshare:") {
         return skip_or_fail(&Refusal::Step(stderr));
@@ -80,6 +72,23 @@ async fn sandboxed_protecting(
         stdout,
         stderr,
     })
+}
+
+/// As [`sandboxed_raw`], where the helper refusing any step is a test failure:
+/// it only runs once the namespaces exist, so a refusal it prints is a sandbox
+/// bug on a host that allows them, never a skip.
+async fn sandboxed_protecting(
+    program: &str,
+    args: &[&str],
+    protected: &[PathBuf],
+) -> Option<Output> {
+    let out = sandboxed_raw(program, args, protected).await?;
+    assert!(
+        !out.stderr.contains("preview-sandbox: refused at "),
+        "the sandbox refused a step on a working host: {}",
+        out.stderr
+    );
+    Some(out)
 }
 
 fn skip_or_fail(refusal: &Refusal) -> Option<Output> {
@@ -211,11 +220,11 @@ fn host_has(marker: &str) -> bool {
         })
 }
 
-/// The host root is gone: no old root, no host file through /proc/1/root,
+/// The host root is gone: no old root, no host file through /proc/self/root,
 /// the working directory inside the new root; /proc/self/status readable.
 #[tokio::test]
 async fn the_host_root_is_unreachable() {
-    let script = "test -e /.old-root && echo old; test -e /proc/1/root/home && echo host; \
+    let script = "test -e /.old-root && echo old; test -e /proc/self/root/home && echo host; \
                   readlink /proc/self/cwd; cat /proc/self/status >/dev/null && echo status";
     let Some(out) = sh(script).await else { return };
     assert_eq!(out.stdout, "/preview-home\nstatus\n", "{}", out.stderr);
@@ -254,6 +263,7 @@ async fn a_symlinked_gateway_path_is_masked_where_it_really_is() {
     let real = Path::new("/usr/share/doc");
     let listed = std::fs::read_dir(real).map_or(0, Iterator::count);
     if listed == 0 {
+        has_tool("/usr/share/doc/<any entry>");
         return;
     }
     let link = Path::new("/var/tmp").join(format!("sbx-state-link-{}", std::process::id()));
@@ -269,6 +279,53 @@ async fn a_symlinked_gateway_path_is_masked_where_it_really_is() {
     let Some(out) = out else { return };
     assert!(out.status.success(), "{}", out.stderr);
     assert_eq!(out.stdout, "", "the real path stayed readable");
+}
+
+/// A gateway path over an interpreter's bind-back wins. A program under
+/// `/usr/local/bin` starts through its bind-back (positive control), and does
+/// not start once `/usr/local/bin` is a gateway path, which is hidden after
+/// the bind-back and binds nothing back itself.
+#[tokio::test]
+async fn a_gateway_path_covers_an_interpreter_bind_back() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let tool = std::fs::read_dir("/usr/local/bin")
+        .ok()
+        .and_then(|entries| {
+            entries.filter_map(Result::ok).map(|e| e.path()).find(|p| {
+                // A binary, not a script whose interpreter might be missing.
+                std::fs::symlink_metadata(p)
+                    .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+                    && std::fs::File::open(p)
+                        .and_then(|mut f| {
+                            let mut magic = [0_u8; 4];
+                            std::io::Read::read_exact(&mut f, &mut magic).map(|()| magic)
+                        })
+                        .is_ok_and(|magic| &magic == b"\x7fELF")
+            })
+        });
+    let Some(tool) = tool else {
+        has_tool("/usr/local/bin/<an executable>");
+        return;
+    };
+    let tool = tool.to_str().unwrap();
+    let Some(open) = sandboxed_raw(tool, &["--version"], &[]).await else {
+        return;
+    };
+    assert!(
+        !open.stderr.contains("refused at starting"),
+        "{}",
+        open.stderr
+    );
+    let Some(covered) =
+        sandboxed_raw(tool, &["--version"], &[PathBuf::from("/usr/local/bin")]).await
+    else {
+        return;
+    };
+    assert!(
+        covered.stderr.contains("refused at starting"),
+        "{tool}: {}",
+        covered.stderr
+    );
 }
 
 /// Bounds: `/tmp` stops at 256 MiB.
@@ -328,6 +385,24 @@ async fn the_filter_refuses_keyrings_and_ptrace() {
             out.stdout
         );
     }
+}
+
+/// seccomp: a vsock socket, which reaches the hypervisor's host outside any
+/// network namespace, is refused; a Unix socket opens (positive control).
+#[tokio::test]
+async fn the_filter_refuses_vsock() {
+    if !has_tool("/usr/bin/python3") {
+        return;
+    }
+    let script = "import socket\n\
+                  socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).close()\n\
+                  print('unix')\n\
+                  try:\n    socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)\n    print('vsock')\n\
+                  except PermissionError:\n    print('refused')\n";
+    let Some(out) = sandboxed("/usr/bin/python3", &["-c", script]).await else {
+        return;
+    };
+    assert_eq!(out.stdout, "unix\nrefused\n", "{}", out.stderr);
 }
 
 /// A helper started outside fresh namespaces refuses before any mount. Needs
