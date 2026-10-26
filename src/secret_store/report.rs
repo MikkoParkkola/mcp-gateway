@@ -116,16 +116,41 @@ fn count_unused(
     vault: &Vault,
     os: Option<&(dyn SecretStore + Send + Sync)>,
 ) -> Result<usize, String> {
-    let text = std::fs::read_to_string(config_path)
-        .map_err(|e| format!("cannot read {}: {e}", config_path.display()))?;
+    // The same mode-checked read the loader uses: no FIFO, no wide modes.
+    let text = crate::config::read_checked_file(config_path, crate::config::CheckedFile::Config)
+        .map_err(|e| e.to_string())?;
+    let named = named_in_yaml(&text)?;
+    // No lock file means no save ever ran, so nothing is indexed; taking the
+    // lock would create the file, and the report writes nothing.
+    if !vault.lock_exists() {
+        return Ok(0);
+    }
     let files = FilesStore::new(config_dir);
     let mut stores: Vec<&dyn SecretStore> = vec![&files];
     if let Some(os) = os {
         stores.push(os);
     }
-    let unused = unused_entries_until(vault, &stores, &named(&text), Instant::now() + LOCK_WAIT)
+    let unused = unused_entries_until(vault, &stores, &named, Instant::now() + LOCK_WAIT)
         .map_err(|e| e.reason())?;
     Ok(unused.len())
+}
+
+/// The entry names in every string of the parsed config, so a YAML escape
+/// cannot hide a live reference. A config that does not parse is not counted.
+fn named_in_yaml(text: &str) -> Result<BTreeSet<String>, String> {
+    let value: serde_json::Value = crate::yaml::from_str(text)
+        .map_err(|_| "gateway.yaml did not parse, so references were not read".to_owned())?;
+    let mut names = BTreeSet::new();
+    let mut pending = vec![&value];
+    while let Some(next) = pending.pop() {
+        match next {
+            serde_json::Value::String(s) => names.extend(named(s)),
+            serde_json::Value::Array(items) => pending.extend(items),
+            serde_json::Value::Object(map) => pending.extend(map.values()),
+            _ => {}
+        }
+    }
+    Ok(names)
 }
 
 /// Every entry name `text` mentions, as a `keychain:` reference or a

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use super::super::tests::Fake;
 use super::super::{FilesStore, NewSecret, SecretStore, StoreError, Vault, save_secrets};
-use super::{named, report_with};
+use super::{named, named_in_yaml, report_with};
 use crate::config::SecretStoreChoice;
 
 const SENTINEL: &[u8] = b"kc-sentinel-7f3a";
@@ -50,7 +50,19 @@ fn saved() -> (tempfile::TempDir, tempfile::TempDir, PathBuf) {
         })
         .expect("saved");
     }
+    owner_only(&path);
     (config, locks, path)
+}
+
+/// The mode the loader's checked read accepts for `gateway.yaml`.
+fn owner_only(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    }
+    #[cfg(not(unix))]
+    let _ = path;
 }
 
 fn vault_for(config: &Path, locks: &Path) -> Vault {
@@ -140,4 +152,35 @@ fn a_config_names_entries_by_keychain_reference_and_by_file_path() {
         "{names:?}"
     );
     assert!(names.contains("mcp-gateway.key-server.2.abcd"), "{names:?}");
+}
+
+#[test]
+fn a_reference_hidden_by_a_yaml_escape_is_still_named() {
+    let text = "auth:\n  bearer_token: \"keychain:mcp-gateway\\u002eauth-bearer-token.1.00ff\"\n";
+    let names = named_in_yaml(text).expect("parses");
+    assert!(
+        names.contains("mcp-gateway.auth-bearer-token.1.00ff"),
+        "{names:?}"
+    );
+    assert!(named_in_yaml("a: [unclosed").is_err());
+}
+
+#[test]
+fn with_no_vault_lock_yet_the_count_is_zero_and_no_lock_is_made() {
+    let config = tempfile::tempdir().expect("tempdir");
+    let locks = tempfile::tempdir().expect("tempdir");
+    let path = config.path().join("gateway.yaml");
+    std::fs::write(&path, "{}\n").expect("write");
+    owner_only(&path);
+    let report = report_with(
+        &path,
+        SecretStoreChoice::Files,
+        Ok(vault_for(config.path(), locks.path())),
+        None,
+    );
+    assert_eq!(report.unused, Some(0), "{report:?}");
+    assert!(
+        !locks.path().join("vault.lock").exists(),
+        "the report made the vault lock"
+    );
 }

@@ -43,6 +43,8 @@ pub(crate) enum SecretFile {
     IdentityGrants,
     /// A control-plane `grants.json` or `policies.json`.
     ControlPlaneCollection,
+    /// `gateway.yaml`, reread by a read-only report.
+    Config,
 }
 
 /// What a file's mode must protect.
@@ -463,6 +465,7 @@ fn checked_class(what: CheckedFile) -> SecretFile {
         CheckedFile::CredentialFile => SecretFile::CredentialFile,
         CheckedFile::IdentityGrants => SecretFile::IdentityGrants,
         CheckedFile::ControlPlaneCollection => SecretFile::ControlPlaneCollection,
+        CheckedFile::Config => SecretFile::Config,
     }
 }
 

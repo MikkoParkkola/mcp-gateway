@@ -65,6 +65,12 @@ impl Vault {
         &self.lock_path
     }
 
+    /// Whether any save ever ran for this user: each takes the lock first,
+    /// which creates its file.
+    pub(crate) fn lock_exists(&self) -> bool {
+        self.lock_path.exists()
+    }
+
     /// A vault whose lock is at `lock_path`, for tests that own a home.
     pub(crate) fn with_lock(config_dir: &Path, lock_path: PathBuf) -> Self {
         Self {
