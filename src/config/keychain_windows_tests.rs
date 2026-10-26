@@ -45,3 +45,29 @@ fn a_late_answer_times_out_and_leaks_nothing() {
     );
     assert!(!format!("{err:?} {}", err.reason()).contains("kc-sentinel-7f3a"));
 }
+
+/// B15/A17: the writer's round trip, collision and existence check over
+/// real credentials; an existence check zeroes the blob before its free.
+#[test]
+fn the_writer_round_trips_refuses_a_taken_name_and_wipes_on_exists() {
+    use crate::secret_store::{SecretStore, StoreError};
+    let store = WindowsKeychain::new();
+    store.probe().expect("Credential Manager answers");
+    let name = fresh("writer");
+    assert_eq!(store.exists(&name), Ok(false));
+    assert_eq!(store.create(&name, b" a\n"), Ok(format!("keychain:{name}")));
+    let _ = win_cred::FREED.with(|f| std::mem::take(&mut *f.borrow_mut()));
+    assert_eq!(store.exists(&name), Ok(true));
+    // `exists` runs on the bounded call's own thread, so its guard records
+    // there; read the oracle directly on this one.
+    assert_eq!(win_cred::exists(&name), Ok(true));
+    assert_eq!(
+        win_cred::FREED.with(|f| std::mem::take(&mut *f.borrow_mut())),
+        vec![true]
+    );
+    assert_eq!(store.create(&name, b"other"), Err(StoreError::Exists));
+    assert_eq!(store.read(&name).expect("kept").as_bytes(), b" a\n");
+    store.delete(&name).expect("delete");
+    assert_eq!(store.exists(&name), Ok(false));
+    assert_eq!(store.delete(&name), Ok(()), "already gone is gone");
+}

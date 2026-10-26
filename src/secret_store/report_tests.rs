@@ -53,8 +53,8 @@ fn saved() -> (tempfile::TempDir, tempfile::TempDir, PathBuf) {
     (config, locks, path)
 }
 
-fn vault_for(config: &Path, locks: &Path) -> Result<Vault, StoreError> {
-    Ok(Vault::with_lock(config, locks.join("vault.lock")))
+fn vault_for(config: &Path, locks: &Path) -> Vault {
+    Vault::with_lock(config, locks.join("vault.lock"))
 }
 
 fn os(probe: Result<(), StoreError>) -> Arc<dyn SecretStore + Send + Sync> {
@@ -75,7 +75,12 @@ fn the_report_writes_nothing_and_counts_the_entry_no_config_names() {
             Some(os(Err(StoreError::Unavailable("locked".into())))),
         ),
     ] {
-        let report = report_with(&path, choice, vault_for(config.path(), locks.path()), store);
+        let report = report_with(
+            &path,
+            choice,
+            Ok(vault_for(config.path(), locks.path())),
+            store.as_ref(),
+        );
         assert_eq!(report.unused, Some(1), "{report:?}");
         assert_eq!(
             snapshot(config.path()),
@@ -91,8 +96,8 @@ fn the_report_names_no_entry_and_carries_no_value() {
     let report = report_with(
         &path,
         SecretStoreChoice::Auto,
-        vault_for(config.path(), locks.path()),
-        Some(os(Err(StoreError::Unavailable("no session bus".into())))),
+        Ok(vault_for(config.path(), locks.path())),
+        Some(&os(Err(StoreError::Unavailable("no session bus".into())))),
     );
     assert!(report.fell_back);
     assert_eq!(report.chosen, Some("files"));
@@ -116,8 +121,8 @@ fn explicit_keychain_with_a_failing_probe_reports_that_saves_are_refused() {
     let report = report_with(
         &path,
         SecretStoreChoice::Keychain,
-        vault_for(config.path(), locks.path()),
-        Some(os(Err(StoreError::Unavailable("locked".into())))),
+        Ok(vault_for(config.path(), locks.path())),
+        Some(&os(Err(StoreError::Unavailable("locked".into())))),
     );
     assert_eq!(report.chosen, None, "{report:?}");
     assert!(report.reason.contains("saves are refused"), "{report:?}");

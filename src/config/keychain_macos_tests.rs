@@ -133,3 +133,45 @@ fn a_read_value_does_not_show_in_debug() {
     assert_eq!(read.as_bytes(), SENTINEL);
     assert!(!format!("{read:?}").contains("kc-sentinel-7f3a"));
 }
+
+/// B18: the writer's create, exists, collision and delete in a temporary
+/// keychain, read back through the production reader.
+#[test]
+fn b18_the_writer_round_trips_and_refuses_a_taken_name() {
+    use crate::secret_store::{SecretStore, StoreError};
+    let (_dir, keychain) = temporary_keychain(&[]);
+    let store = backend(&keychain, Duration::from_secs(2), Duration::ZERO);
+    store.probe().expect("an unlocked keychain probes clean");
+    let name = "mcp-gateway.b18.1.00ff";
+    assert_eq!(store.exists(name), Ok(false));
+    assert_eq!(store.create(name, b" a\n"), Ok(format!("keychain:{name}")));
+    assert_eq!(store.exists(name), Ok(true));
+    assert_eq!(store.read(name).expect("read back").as_bytes(), b" a\n");
+    assert_eq!(store.create(name, b"other"), Err(StoreError::Exists));
+    assert_eq!(store.read(name).expect("kept").as_bytes(), b" a\n");
+    store.delete(name).expect("delete");
+    assert_eq!(store.exists(name), Ok(false));
+    assert_eq!(store.delete(name), Ok(()), "already gone is gone");
+}
+
+/// The macOS limit: 65,535 bytes round trip exactly through the reader.
+#[test]
+fn b18_the_largest_value_round_trips_byte_exact() {
+    use crate::secret_store::SecretStore;
+    let (_dir, keychain) = temporary_keychain(&[]);
+    let store = backend(&keychain, Duration::from_secs(5), Duration::ZERO);
+    assert_eq!(store.limit(), 65_535);
+    let value: Vec<u8> = b"abcdefghijklmnopqrstuvwxyz"
+        .iter()
+        .copied()
+        .cycle()
+        .take(65_535)
+        .collect();
+    let name = "mcp-gateway.b18-large.1.00ff";
+    store.create(name, &value).expect("create");
+    assert_eq!(
+        store.read(name).expect("read back").as_bytes(),
+        value.as_slice()
+    );
+    store.delete(name).expect("delete");
+}

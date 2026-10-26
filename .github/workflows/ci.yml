@@ -900,10 +900,11 @@ jobs:
       - name: Every gws capability dry-runs against the real binary
         run: cargo test --all-features --lib -- --ignored every_gws_capability_is_accepted_by_the_real_binary_in_dry_run
 
-  # The Linux keychain reader against a real Secret Service (ADR-028): an
-  # unlocked gnome-keyring on a private session bus, one entry stored by
-  # `secret-tool`, read back byte-exact, then refused once the collection is
-  # locked. The shards run the same reader against stub programs only.
+  # The Linux keychain reader and writer against a real Secret Service
+  # (ADR-028): an unlocked gnome-keyring on a private session bus. The reader
+  # reads an entry stored by `secret-tool` byte-exact; the writer creates,
+  # reads back, refuses a taken name and deletes; each is refused once the
+  # collection is locked. The shards run both against stub programs only.
   linux-keychain:
     name: Linux keychain against gnome-keyring
     needs: scope
@@ -932,6 +933,13 @@ jobs:
             printf " a\n" | secret-tool store --label=a15 service mcp-gateway-ci-a15
             cargo test --all-features --lib -- --ignored --exact config::keychain_linux_tests::a15_the_real_secret_service_reads_back_byte_exact_and_refuses_when_locked 2>&1 | tee "$RUNNER_TEMP/a15.log"
             grep -Eq "^test result: ok\. 1 passed" "$RUNNER_TEMP/a15.log"
+          '
+      - name: Create, read back, refuse a taken name, delete, then refuse locked
+        run: |
+          dbus-run-session -- bash -euo pipefail -c '
+            printf "ci" | gnome-keyring-daemon --unlock --components=secrets > /dev/null
+            cargo test --all-features --lib -- --ignored --exact config::keychain_linux_writer_tests::b18_the_real_secret_service_round_trips_then_refuses_locked 2>&1 | tee "$RUNNER_TEMP/b18.log"
+            grep -Eq "^test result: ok\. 1 passed" "$RUNNER_TEMP/b18.log"
           '
 
   # Runs one SDK journey test that reads no documentation file, so a docs-only

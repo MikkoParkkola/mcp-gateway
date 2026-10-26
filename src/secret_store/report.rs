@@ -49,7 +49,12 @@ pub struct SecretStoreReport {
 pub fn doctor_report(config_path: &Path, choice: SecretStoreChoice) -> SecretStoreReport {
     let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
     let vault = Vault::for_config_dir(config_dir);
-    report_with(config_path, choice, vault, crate::config::os_secret_store())
+    report_with(
+        config_path,
+        choice,
+        vault,
+        crate::config::os_secret_store().as_ref(),
+    )
 }
 
 /// [`doctor_report`] over a given vault and OS store.
@@ -57,10 +62,10 @@ pub(super) fn report_with(
     config_path: &Path,
     choice: SecretStoreChoice,
     vault: Result<Vault, StoreError>,
-    os: Option<Arc<dyn SecretStore + Send + Sync>>,
+    os: Option<&Arc<dyn SecretStore + Send + Sync>>,
 ) -> SecretStoreReport {
     let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
-    let (chosen, reason, fell_back) = match choose_with(choice, config_dir, os.clone()) {
+    let (chosen, reason, fell_back) = match choose_with(choice, config_dir, os.cloned()) {
         Ok(chosen) => {
             log_choice(choice, &chosen);
             let kind = chosen.store.kind();
@@ -86,7 +91,7 @@ pub(super) fn report_with(
     };
     let counted = vault
         .map_err(|e| e.reason())
-        .and_then(|vault| count_unused(config_path, config_dir, &vault, os.as_deref()));
+        .and_then(|vault| count_unused(config_path, config_dir, &vault, os.map(|os| &**os)));
     let (unused, unused_error) = match counted {
         Ok(count) => (Some(count), None),
         Err(why) => (None, Some(why)),

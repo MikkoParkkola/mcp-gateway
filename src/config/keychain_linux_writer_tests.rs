@@ -189,3 +189,42 @@ fn b13_no_spawn_or_refusal_carries_the_value() {
         "argv carried the value"
     );
 }
+
+/// B18 on Linux: the production writer against a real Secret Service.
+#[test]
+#[ignore = "needs a real Secret Service; run by the linux-keychain CI job"]
+fn b18_the_real_secret_service_round_trips_then_refuses_locked() {
+    use super::keychain::KeychainRead as _;
+    let store = LinuxKeychain::from_path();
+    store.probe().expect("an unlocked collection probes clean");
+    let name = "mcp-gateway.ci-b18.1.00ff";
+    assert_eq!(store.exists(name), Ok(false));
+    assert_eq!(store.create(name, b" a\n"), Ok(format!("keychain:{name}")));
+    assert_eq!(store.exists(name), Ok(true));
+    assert_eq!(store.read(name).expect("read back").as_bytes(), b" a\n");
+    assert_eq!(store.create(name, b"other"), Err(StoreError::Exists));
+    assert_eq!(store.read(name).expect("kept").as_bytes(), b" a\n");
+    store.delete(name).expect("delete");
+    assert_eq!(store.exists(name), Ok(false));
+    let locked = std::process::Command::new("gdbus")
+        .args([
+            "call",
+            "--session",
+            "--dest",
+            "org.freedesktop.secrets",
+            "--object-path",
+            "/org/freedesktop/secrets",
+            "--method",
+            "org.freedesktop.Secret.Service.Lock",
+            "[objectpath '/org/freedesktop/secrets/aliases/default']",
+        ])
+        .status()
+        .expect("run gdbus");
+    assert!(locked.success(), "could not lock the default collection");
+    // Locked after a passing probe: refused before any store spawn.
+    assert!(store.probe().is_err());
+    assert!(matches!(
+        store.create("mcp-gateway.ci-b18-locked.1.00ff", b"v"),
+        Err(StoreError::Unavailable(_))
+    ));
+}
