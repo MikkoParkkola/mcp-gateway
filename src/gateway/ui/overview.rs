@@ -82,7 +82,7 @@ pub(super) async fn overview(
     }
     body.insert(
         "checklist".into(),
-        json!({ "has_key": !state.auth_config.api_keys.is_empty() }),
+        json!({ "has_key": !state.auth_config.api_keys().is_empty() }),
     );
     if !degraded.is_empty() {
         body.insert("degraded".into(), json!(degraded));
