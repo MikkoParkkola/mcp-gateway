@@ -1,7 +1,7 @@
 # Held-out evaluation corpus for MIK-3274.RANKING.1.
 #
-# Frozen before a single abbreviation table entry exists, per the freeze
-# protocol in docs/design/2026-09-12-mik-3274-ranking-abbreviations.md §3.2.
+# Frozen before a single abbreviation table entry exists, so the table
+# cannot be fitted to the cases that judge it.
 # Not edited after the freeze: not to add a case the table misses, not to
 # reword one. The unsupported-match control is drawn from this same file.
 #

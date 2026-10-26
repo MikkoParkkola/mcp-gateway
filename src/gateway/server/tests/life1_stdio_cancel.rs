@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-7272.LIFE.1 — a held legacy stdio RPC can be cancelled and joined.
 //!
-//! Test plan: `docs/design/2026-09-30-sub4-stdio-owner-test-plan.md` (I3);
-//! design D5 in `docs/design/2026-09-30-sub4-stdio-owner.md`. Driven through
+//! Test plan: the sub4 stdio owner test plan (I3);
+//! design D5 in the sub4 stdio owner design. Driven through
 //! `Gateway::run_stdio_on` over in-memory pipes. The loop's `pending` map and
 //! `JoinSet` are not visible from here, so "nothing left pending" is observed
 //! through behaviour that differs only when an entry or a task survives: a
