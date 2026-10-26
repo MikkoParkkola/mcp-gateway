@@ -29,11 +29,20 @@ struct Output {
 /// Run `program args` in the sandbox and collect what it printed, or `None`
 /// when this host refuses the sandbox and the tests are not required.
 async fn sandboxed(program: &str, args: &[&str]) -> Option<Output> {
+    sandboxed_protecting(program, args, &[]).await
+}
+
+/// As [`sandboxed`], with `protected` passed to the launcher as gateway paths.
+async fn sandboxed_protecting(
+    program: &str,
+    args: &[&str],
+    protected: &[PathBuf],
+) -> Option<Output> {
     let target = Target {
         program: PathBuf::from(program),
         args: args.iter().map(Into::into).collect(),
     };
-    let started = start_with_helper(Path::new(gateway_bin::path()), &target, &[]);
+    let started = start_with_helper(Path::new(gateway_bin::path()), &target, protected);
     let Started { mut child, .. } = match started {
         Ok(started) => started,
         Err(refusal) => return skip_or_fail(&refusal),
@@ -148,7 +157,15 @@ async fn the_run_phase_cannot_connect_anywhere() {
     }
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
-    std::net::TcpStream::connect(("127.0.0.1", port)).expect("the listener answers outside");
+    // Positive control: the same bash connect, run outside the sandbox, works.
+    let outside = std::process::Command::new("/bin/bash")
+        .args([
+            "-c",
+            &format!("(exec 3<>/dev/tcp/127.0.0.1/{port}) && echo reached"),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&outside.stdout), "reached\n");
     let script = format!(
         "for a in 127.0.0.1/{port} 169.254.169.254/80 1.1.1.1/443; do \
          (exec 3<>/dev/tcp/$a) 2>/dev/null && echo \"reached $a\"; done; echo done"
@@ -159,33 +176,38 @@ async fn the_run_phase_cannot_connect_anywhere() {
     assert_eq!(out.stdout, "done\n", "{}", out.stderr);
 }
 
-/// SBX.4: a descendant that calls `setsid` and double-forks is gone from the
-/// host after teardown.
+/// SBX.4: a descendant that calls `setsid` and double-forks is running on the
+/// host before teardown and gone after it.
 #[tokio::test]
 async fn a_setsid_descendant_is_gone_after_teardown() {
-    let marker = format!("{}.{}", 3600, std::process::id());
-    let script = format!("setsid sh -c 'sleep {marker} & exit' ; sleep 1; echo started");
-    let Some(out) = sh(&script).await else { return };
-    assert_eq!(out.stdout, "started\n", "{}", out.stderr);
-    // The target exited, so the helper did, and the namespace with it.
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while host_has(&marker) {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the escaped sleep survived teardown"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    let marker = format!("{}.{}0", 3600, std::process::id());
+    // The escapee double-forks into its own session; the target then waits on
+    // stdin, which the test holds open, so teardown is what ends it.
+    let script = format!("setsid sh -c 'sleep {marker} & exit' & exec cat");
+    let target = Target {
+        program: PathBuf::from("/bin/sh"),
+        args: vec!["-c".into(), script.into()],
+    };
+    let Some(started) = started_until(&target, &marker).await else {
+        return;
+    };
+    drop(started);
+    assert_gone_soon(&marker);
 }
 
-/// Some host process's command line contains `marker`.
+/// A host process is `sleep <marker>`, matched on its own argument vector, so
+/// the marker inside `unshare`'s serialized plan never counts.
 fn host_has(marker: &str) -> bool {
     std::fs::read_dir("/proc")
         .unwrap()
         .filter_map(Result::ok)
         .any(|e| {
-            std::fs::read(e.path().join("cmdline"))
-                .is_ok_and(|c| String::from_utf8_lossy(&c).contains(marker))
+            std::fs::read(e.path().join("cmdline")).is_ok_and(|c| {
+                let mut argv = c.split(|&b| b == 0);
+                let program = argv.next().unwrap_or_default();
+                program.rsplit(|&b| b == b'/').next() == Some(b"sleep".as_slice())
+                    && argv.next() == Some(marker.as_bytes())
+            })
         })
 }
 
@@ -222,6 +244,27 @@ async fn masked_system_paths_are_empty() {
         ""
     };
     assert_eq!(out.stdout, expected, "{}", out.stderr);
+}
+
+/// A gateway path that is a symlink into a bound prefix is masked at its real
+/// path too: here a link to `/usr/share/doc` stands in for a state directory
+/// placed under `/usr`. The directory is listed outside (positive control).
+#[tokio::test]
+async fn a_symlinked_gateway_path_is_masked_where_it_really_is() {
+    let real = Path::new("/usr/share/doc");
+    let listed = std::fs::read_dir(real).map(|d| d.count()).unwrap_or(0);
+    if listed == 0 {
+        return;
+    }
+    let link = Path::new("/var/tmp").join(format!("sbx-state-link-{}", std::process::id()));
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(real, &link).unwrap();
+    let out =
+        sandboxed_protecting("/bin/sh", &["-c", "ls -A /usr/share/doc"], &[link.clone()]).await;
+    std::fs::remove_file(&link).unwrap();
+    let Some(out) = out else { return };
+    assert!(out.status.success(), "{}", out.stderr);
+    assert_eq!(out.stdout, "", "the real path stayed readable");
 }
 
 /// Bounds: `/tmp` stops at 256 MiB.
@@ -294,7 +337,7 @@ fn the_helper_refuses_outside_fresh_namespaces() {
             .ino()
     };
     let plan = serde_json::json!({
-        "host": {"user": inode("user"), "mnt": inode("mnt"), "pid": inode("pid"), "net": inode("net")},
+        "host": {"user": inode("user"), "mnt": inode("mnt"), "pid": inode("pid"), "net": inode("net"), "ipc": inode("ipc"), "uts": inode("uts")},
         "read_only": [], "masked": [], "bound_back": [],
         "limits": {"address_space": 1, "file_size": 1, "open_files": 1, "processes": 1},
         "env": [], "target": ["/bin/true"]
@@ -319,7 +362,13 @@ async fn started_sleeper(marker: &str) -> Option<Started> {
         program: PathBuf::from("/bin/sleep"),
         args: vec![marker.into()],
     };
-    let started = match start_with_helper(Path::new(gateway_bin::path()), &target, &[]) {
+    started_until(&target, marker).await
+}
+
+/// Start `target` and wait until the host runs `sleep <marker>`, or `None`
+/// when the host refuses the sandbox.
+async fn started_until(target: &Target, marker: &str) -> Option<Started> {
+    let started = match start_with_helper(Path::new(gateway_bin::path()), target, &[]) {
         Ok(started) => started,
         Err(refusal) => {
             skip_or_fail(&refusal);
