@@ -75,7 +75,14 @@ fn start_once(
 /// Needs no runtime and never blocks.
 pub(super) fn hand_over(tree: ChildTree) -> watch::Receiver<Reaped> {
     let (done, receiver) = watch::channel(Reaped::Pending);
-    let job = Job { tree, done };
+    let mut job = Job { tree, done };
+    // The first step runs here, on the caller's thread, not on the reaper's:
+    // it sends the ownership-checked group signal now, so a gateway that
+    // exits right after dropping a transport has already signalled the
+    // backend's group. The reaper takes the rest of the order.
+    if !step(&mut job, Instant::now()) {
+        return receiver;
+    }
     let refused = match REAPER.get() {
         Some(sender) => sender.send(job).err().map(|mpsc::SendError(job)| job),
         None => Some(job),

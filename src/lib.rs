@@ -117,6 +117,19 @@ pub mod runtime;
 pub mod scheduler;
 #[doc(hidden)]
 pub mod secret_injection;
+// The UI save core is its first caller (ADR-024); until then only tests use it.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        unused_imports,
+        reason = "the UI save core is its first caller"
+    )
+)]
+mod secret_store;
+// The one read-only view `mcp-gateway doctor` takes of the store.
+#[doc(hidden)]
+pub use secret_store::{SecretStoreReport, doctor_report};
 #[doc(hidden)]
 pub mod secrets;
 #[doc(hidden)]
@@ -160,12 +173,16 @@ pub mod trust;
 mod unsafe_allowlist_tests;
 #[doc(hidden)]
 pub mod validator;
-// Windows owner-only store custody; `win_acl` is the one module allowed
-// `unsafe` (ADR-016).
+// Windows owner-only store custody and Credential Manager: `win_acl` and
+// `win_cred` are the modules allowed `unsafe` (ADR-016, ADR-028 §2a).
 #[cfg(windows)]
 mod private_fs;
 #[cfg(windows)]
 mod win_acl;
+#[cfg(windows)]
+mod win_cred;
+#[cfg(all(test, windows))]
+mod win_cred_tests;
 mod wiped_bytes;
 /// The one YAML seam (MIK-8425); crate-private.
 mod yaml;
