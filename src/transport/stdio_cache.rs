@@ -22,9 +22,10 @@ const YARN_CACHE: &str = "YARN_CACHE_FOLDER";
 /// tree. Each runner reads its own variable; `npm_config_cache` alone does
 /// nothing for bunx or yarn (#2258).
 ///
-/// A variable the operator already set, in any spelling that runner reads,
-/// is left alone. A cache path no runner could use as written is assigned to
-/// none of them (MIK-8147): the runner keeps its default cache.
+/// When the operator already set one of a runner's variables, in any spelling
+/// that runner reads, none of that runner's variables is filled in. A cache
+/// path no runner could use as written is assigned to none of them
+/// (MIK-8147): the runner keeps its default cache.
 #[must_use]
 pub fn isolated_package_manager_env<S: std::hash::BuildHasher>(
     backend_name: &str,
@@ -68,7 +69,7 @@ pub(crate) fn isolated_env_and_assigned_cache<S: std::hash::BuildHasher>(
                 assigned_cache = Some(PathBuf::from(&dir));
             }
             for var in vars {
-                backend_env.insert(var.to_owned(), dir.clone());
+                backend_env.insert((*var).to_owned(), dir.clone());
             }
             folder
         }
@@ -82,13 +83,13 @@ pub(crate) fn isolated_env_and_assigned_cache<S: std::hash::BuildHasher>(
 /// What the gateway assigns one backend: the one decision the environment
 /// writer and the repair both read, so they cannot disagree.
 enum Assignment {
-    /// The runner reads no cache variable, or the operator set every one.
+    /// The runner reads no cache variable, or the operator set one of them.
     None,
     /// Variables are left to the gateway, but no runner could use this path.
     Unusable(PathBuf),
     /// These variables, each set to this directory.
     To {
-        vars: Vec<&'static str>,
+        vars: &'static [&'static str],
         dir: String,
     },
 }
@@ -98,12 +99,11 @@ fn assignment<S: std::hash::BuildHasher>(
     command: &str,
     backend_env: &HashMap<String, String, S>,
 ) -> Assignment {
-    let vars: Vec<&'static str> = cache_vars_for(command)
-        .iter()
-        .copied()
-        .filter(|var| !operator_names(backend_env, var))
-        .collect();
-    if vars.is_empty() {
+    let vars = cache_vars_for(command);
+    // An operator who chose one of a runner's dirs keeps that choice whole:
+    // a second variable filled in beside it could override it or split the
+    // runner across two trees (MIK-8831.REL.6).
+    if vars.is_empty() || vars.iter().any(|var| operator_names(backend_env, var)) {
         return Assignment::None;
     }
     match usable_cache_dir(backend_name) {
@@ -227,6 +227,12 @@ fn names_setting(key: &str, var: &str) -> bool {
         // pnpm reads `PNPM_CONFIG_<SUFFIX>` and `pnpm_config_<suffix>` only
         // (pnpm `config/src/env_overlay/string_reader.rs` `read_env`).
         key == var || key == var.to_ascii_uppercase()
+    } else if var == "TMPDIR" {
+        // Bun falls back from `TMPDIR` to `TMP` and `TEMP`: any of them is the
+        // operator choosing the temp dir an injected `TMPDIR` would override.
+        ["TMPDIR", "TMP", "TEMP"]
+            .iter()
+            .any(|name| key == *name || (cfg!(windows) && key.eq_ignore_ascii_case(name)))
     } else if var.starts_with("YARN_") {
         yarn_setting(key).is_some_and(|setting| yarn_setting(var) == Some(setting))
     } else {
@@ -307,9 +313,20 @@ fn cache_vars_for(command: &str) -> &'static [&'static str] {
     };
     match runner_name(&program) {
         "npx" | "npm" => &["npm_config_cache"],
-        "bunx" => &["BUN_INSTALL_CACHE_DIR"],
+        // bunx installs the executable under the platform temp dir, read
+        // from `TMPDIR` first (MIK-8831.REL.6). Bun reads no narrower
+        // variable, so the whole child tree gets this temp dir; an operator
+        // `TMPDIR`, `TMP` or `TEMP` keeps the default instead.
+        "bunx" => &["BUN_INSTALL_CACHE_DIR", "TMPDIR"],
         "yarn" => &["YARN_CACHE_FOLDER"],
-        "pnpm" => &["pnpm_config_store_dir", "npm_config_store_dir"],
+        // `pnpm dlx` installs under `<cache-dir>/dlx`, apart from the store
+        // (MIK-8831.REL.6).
+        "pnpm" => &[
+            "pnpm_config_store_dir",
+            "npm_config_store_dir",
+            "pnpm_config_cache_dir",
+            "npm_config_cache_dir",
+        ],
         _ => &[],
     }
 }
