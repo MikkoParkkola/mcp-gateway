@@ -183,12 +183,31 @@ pub(super) fn begin(
     }
     store.probe().map_err(SaveError::Refused)?;
 
-    let mut written = Written::default();
-    match write_all(vault, store, secrets, &mut written) {
-        Ok(refs) => Ok((lock, written, refs)),
-        Err(error) => {
-            let _kept = written.roll_back(vault, store);
-            Err(SaveError::Store(error))
+    // Rolls back on an error return and on a panic inside a store or index
+    // call alike; disarmed only once every entry exists.
+    let mut undo = Rollback {
+        written: Written::default(),
+        vault,
+        store,
+        armed: true,
+    };
+    let refs = write_all(vault, store, secrets, &mut undo.written).map_err(SaveError::Store)?;
+    undo.armed = false;
+    Ok((lock, std::mem::take(&mut undo.written), refs))
+}
+
+/// Phase one's own rollback record, rolled back when dropped armed.
+struct Rollback<'a> {
+    written: Written,
+    vault: &'a Vault,
+    store: &'a dyn SecretStore,
+    armed: bool,
+}
+
+impl Drop for Rollback<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            let _kept = self.written.roll_back(self.vault, self.store);
         }
     }
 }

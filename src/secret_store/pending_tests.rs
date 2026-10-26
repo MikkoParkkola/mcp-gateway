@@ -284,3 +284,20 @@ fn the_store_core_takes_no_lock_but_the_vault_lock() {
         "one vault lock site"
     );
 }
+
+#[test]
+fn a_panic_inside_a_store_call_rolls_phase_one_back() {
+    let (_dir, vault) = fresh_vault();
+    let mut store = Fake::new();
+    store.panic_create = Some(2);
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = save_secrets(&vault, &store, &three(), |_| Ok::<_, ()>(()));
+    }));
+    assert!(unwound.is_err(), "the store did not panic");
+    assert!(
+        store.names().is_empty(),
+        "phase one left entries: {:?}",
+        store.names()
+    );
+    assert_eq!(count(&store.calls(), "delete"), 1, "{:?}", store.calls());
+}

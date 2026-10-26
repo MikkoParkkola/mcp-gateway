@@ -39,6 +39,8 @@ pub(super) struct Fake {
     index: Option<PathBuf>,
     /// Every delete fails, leaving the entry.
     pub(super) fail_delete: bool,
+    /// The Nth create panics, after the earlier ones succeeded.
+    pub(super) panic_create: Option<usize>,
     /// The first name asked about is taken by an entry this save did not make.
     collide: bool,
 }
@@ -55,6 +57,7 @@ impl Fake {
             index: None,
             collide: false,
             fail_delete: false,
+            panic_create: None,
         }
     }
 
@@ -106,6 +109,10 @@ impl SecretStore for Fake {
         }
         let mut creates = self.creates.lock().unwrap();
         *creates += 1;
+        assert!(
+            self.panic_create != Some(*creates),
+            "a store create panicked"
+        );
         if self.fail_create == Some(*creates) {
             return Err(StoreError::Failed("injected create failure".to_owned()));
         }

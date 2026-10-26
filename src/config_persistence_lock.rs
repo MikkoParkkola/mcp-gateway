@@ -249,7 +249,9 @@ pub(crate) fn lock_file_blocking(
     lock: &Path,
     deadline: Instant,
 ) -> Result<ExclusiveFileLock, NotLocked> {
-    poll_blocking(lock, lock, Owners::UserOnly, deadline, None::<fn(&Path)>)
+    // Named for what it guards; the path follows in the refusal.
+    let subject = Path::new("the secret vault");
+    poll_blocking(subject, lock, Owners::UserOnly, deadline, None::<fn(&Path)>)
 }
 
 #[cfg(test)]

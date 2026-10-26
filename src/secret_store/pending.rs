@@ -27,6 +27,11 @@ pub(crate) struct NewSecretOwned {
 
 /// Entries phase one created, held under the vault lock until the caller
 /// decides. Owns everything it needs: it crosses `spawn_blocking`.
+///
+/// Dropping it undecided deletes its entries with blocking store calls of
+/// up to 2 s each, so dropping it on an async worker stalls that worker. The
+/// expected path is an explicit `keep`, `discard` or `abandon` on a blocking
+/// thread; drop is the safety net for a panic or a cancel.
 pub(crate) struct PendingSecrets {
     vault: Vault,
     store: Arc<dyn SecretStore + Send + Sync>,
