@@ -56,6 +56,8 @@ owned_routes! {
     UI_CONTROL_PLANE_EXPORT_STATUS = "/ui/api/control-plane/export-status",
     /// The Activity list over both transparency logs.
     UI_ACTIVITY = "/ui/api/activity",
+    /// One Activity row's receipt.
+    UI_ACTIVITY_RECEIPT = "/ui/api/activity/{id}",
     UI_BACKENDS = "/ui/api/backends",
     UI_BACKEND = "/ui/api/backends/{name}",
     UI_BACKEND_REVIVE = "/ui/api/backends/{name}/revive",

@@ -8,12 +8,14 @@ mod access;
 mod csv;
 mod cursor;
 mod reader;
+mod receipt;
 mod rows;
+mod seek;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -42,7 +44,9 @@ const PAGE_SCAN_BYTES: u64 = 8 << 20;
 const SUPPORTED_OUTCOMES: [&str; 3] = ["ok", "failed", "blocked"];
 
 pub(super) fn activity_router() -> Router<Arc<AppState>> {
-    Router::new().route(routes::UI_ACTIVITY, get(list))
+    Router::new()
+        .route(routes::UI_ACTIVITY, get(list))
+        .route(routes::UI_ACTIVITY_RECEIPT, get(receipt_route))
 }
 
 /// The list's query, as sent. Parsed by [`parse`].
@@ -105,33 +109,86 @@ fn refused(r: Refused) -> Response {
     }
 }
 
+/// The caller's access and the logs to read, or the refusal.
+fn admit(
+    state: &AppState,
+    client: Option<&Extension<AuthenticatedClient>>,
+    identity: Option<&Extension<VerifiedIdentity>>,
+) -> Result<(Access, Logs), Response> {
+    let access = access::resolve(
+        client.map(|Extension(c)| c),
+        identity.map(|Extension(i)| i),
+        &state.live_config.get().control_plane.role_mapping,
+    )
+    .map_err(refused)?;
+    let logs = logs(state).ok_or_else(|| {
+        flat_error(StatusCode::NOT_FOUND, "no transparency log is configured").into_response()
+    })?;
+    Ok((access, logs))
+}
+
+/// Run a blocking read off the async runtime.
+async fn blocking(read: impl FnOnce() -> Response + Send + 'static) -> Response {
+    tokio::task::spawn_blocking(read).await.unwrap_or_else(|_| {
+        flat_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "the activity read failed",
+        )
+        .into_response()
+    })
+}
+
 async fn list(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
     identity: Option<Extension<VerifiedIdentity>>,
     Query(query): Query<ListQuery>,
 ) -> Response {
-    let access = match access::resolve(
-        client.as_ref().map(|Extension(c)| c),
-        identity.as_ref().map(|Extension(i)| i),
-        &state.live_config.get().control_plane.role_mapping,
-    ) {
-        Ok(access) => access,
-        Err(r) => return refused(r),
+    match admit(&state, client.as_ref(), identity.as_ref()) {
+        Ok((access, logs)) => blocking(move || list_page(&logs, &access, &query)).await,
+        Err(r) => r,
+    }
+}
+
+fn not_kept() -> Response {
+    flat_error(StatusCode::NOT_FOUND, "no such entry in the kept log").into_response()
+}
+
+async fn receipt_route(
+    State(state): State<Arc<AppState>>,
+    client: Option<Extension<AuthenticatedClient>>,
+    identity: Option<Extension<VerifiedIdentity>>,
+    Path(id): Path<String>,
+) -> Response {
+    let (access, logs) = match admit(&state, client.as_ref(), identity.as_ref()) {
+        Ok(admitted) => admitted,
+        Err(r) => return r,
     };
-    let Some(logs) = logs(&state) else {
-        return flat_error(StatusCode::NOT_FOUND, "no transparency log is configured")
-            .into_response();
+    let Some(id) = receipt::parse_id(&id) else {
+        return not_kept();
     };
-    tokio::task::spawn_blocking(move || list_page(&logs, &access, &query))
-        .await
-        .unwrap_or_else(|_| {
-            flat_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "the activity read failed",
-            )
-            .into_response()
-        })
+    let log = match id.log {
+        reader::Which::Invocation => logs.invocation.clone(),
+        reader::Which::Governance => match logs.governance.clone() {
+            Some(path) => path,
+            None => return not_kept(),
+        },
+    };
+    blocking(
+        move || match receipt::receipt(&log, &id, &access, logs.secret.as_deref()) {
+            Ok(Some(body)) => Json(body).into_response(),
+            Ok(None) => not_kept(),
+            Err(error) => {
+                tracing::warn!(%error, "activity receipt read failed");
+                flat_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "the activity log could not be read",
+                )
+                .into_response()
+            }
+        },
+    )
+    .await
 }
 
 /// A parsed query: the filter, the page size, and where to resume.
