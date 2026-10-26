@@ -92,3 +92,38 @@ fn backend_inspection_commands_never_print_config_secrets() {
         "the path must not survive: {combined}"
     );
 }
+
+/// A token set only through `MCP_GATEWAY_AUTH__BEARER_TOKEN` must stay in the
+/// environment. `add` rewrites gateway.yaml from what it loaded, so a load
+/// that merged the override writes the token to disk.
+#[test]
+fn add_keeps_an_environment_override_out_of_gateway_yaml() {
+    const ENV_TOKEN: &str = "SENTINEL_CLI_ENV_OVERRIDE_9b3e";
+    let dir = tempfile::tempdir().expect("create CLI workspace");
+    let config = dir.path().join("gateway.yaml");
+    std::fs::write(&config, "backends: {}\n").expect("write config");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+        .args(["add", "local", "--command", "echo hi", "--config"])
+        .arg(&config)
+        .env("MCP_GATEWAY_AUTH__BEARER_TOKEN", ENV_TOKEN)
+        .env("MCP_GATEWAY_SERVER__PORT", "39464")
+        .output()
+        .expect("run mcp-gateway");
+    assert!(
+        output.status.success(),
+        "add failed: {}",
+        combined_output(&output)
+    );
+
+    let written = std::fs::read_to_string(&config).expect("read config");
+    assert!(written.contains("local:"), "add wrote nothing:\n{written}");
+    assert!(
+        !written.contains(ENV_TOKEN),
+        "the environment-only token was written to disk:\n{written}"
+    );
+    assert!(
+        !written.contains("39464"),
+        "the environment-only port was written to disk:\n{written}"
+    );
+}
