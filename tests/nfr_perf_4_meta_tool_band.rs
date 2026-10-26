@@ -27,12 +27,12 @@ use mcp_gateway::{
 /// Quantified over **gate configuration at the admin ceiling**, and over
 /// nothing else. Every count here is what an admin caller is served; a
 /// Standard caller is served fewer, and that is a different question with a
-/// different answer (`docs/design/2026-09-16-meta-tool-surface-compaction.md`
+/// different answer (the meta tool surface compaction design
 /// §7). Nine is every gate off. The top is 17, not 16, because
 /// `webhooks.enabled` defaults to true, so an HTTP deployment serving
 /// `gateway_webhook_status` is the shipped default rather than an exotic
 /// combination. See
-/// `docs/design/2026-09-08-perf4-webhook-status-restoration.md`.
+/// the perf4 webhook status restoration design.
 const BAND: std::ops::RangeInclusive<usize> = 9..=17;
 
 fn decode_tools_list(response: JsonRpcResponse) -> ToolsListResult {

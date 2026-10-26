@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Tests for the dispatch authorization chokepoint (MIK-7252).
 //!
-//! Plan: `docs/design/authorize-at-dispatch-test-plan.md`. Test names follow
+//! Plan: the authorize at dispatch test plan. Test names follow
 //! its convention, `authz_<row>_<slug>`, so a row and its test are findable
 //! from each other.
 //!

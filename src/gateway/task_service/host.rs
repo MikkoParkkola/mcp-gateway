@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Who a durable task runs for: the HTTP router's state, or the stdio
 //! gateway's (MIK-7272.OWNER.2, design D6 rev 5 items 1–2,
-//! `docs/design/2026-09-30-sub4-stdio-owner.md`).
+//! the sub4 stdio owner design).
 //!
 //! The worker needs only the `MetaMcp` and an authorizer. Each transport keeps
 //! its own: HTTP's `RouterAuthorizer`, and stdio's `ToolPolicyAuthorizer`, so

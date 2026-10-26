@@ -370,7 +370,7 @@ fn composition_sites(schema: &serde_json::Value) -> Vec<String> {
 /// it.
 ///
 /// This asserts an OBSERVATION, not a bound. U9 is resolved as reading (c) by
-/// ruling R6 (`docs/design/2026-08-31-cluster-g-tool-schema-2020-12-validity-test-plan.md:410`):
+/// ruling R6 (the cluster g tool schema 2020 12 validity test plan):
 /// composition is legal 2020-12 and stays observed rather than bounded, and
 /// the published bound is `$ref` resolution (`src/trust/schema_bounds.rs`).
 /// The one known site is the `gateway_search_tools` output schema, whose rows
@@ -495,7 +495,7 @@ fn falsifier_a_composed_subschema_is_reported_by_the_same_walker() {
 ///
 /// AC1 (an unresolved local `$ref` from a backend is reported) and AC3 (the
 /// published schema is judged, never altered) of
-/// `docs/design/2026-09-07-schema-1c-forwarded-schema-bounds-test-plan.md`.
+/// the schema 1c forwarded schema bounds test plan.
 #[test]
 fn a_backend_forwarded_schema_is_inspected_before_it_reaches_the_client() {
     // Exactly what a remote server sends, deserialized the way the backend

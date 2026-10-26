@@ -67,7 +67,11 @@ pub(crate) fn hash_plaintext_api_keys(text: &str) -> (Option<String>, Vec<KeyRew
     let mut current = text.to_owned();
     let mut report = Vec::new();
     for (index, name, key, set_digest) in entries {
-        if key.starts_with("env:") || key.starts_with("file:") || key.contains("${") {
+        if ["env:", "file:", "keychain:"]
+            .iter()
+            .any(|prefix| key.starts_with(prefix))
+            || key.contains("${")
+        {
             report.push(KeyRewrite::Left {
                 name,
                 why: KeyLeft::Reference,

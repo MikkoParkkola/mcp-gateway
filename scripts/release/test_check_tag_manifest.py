@@ -3524,7 +3524,7 @@ class SmokeGateCoverage(unittest.TestCase):
         )
 
 
-# The read-only rehearsal verify (docs/design/2026-09-26-rehearsal-readonly-verify.md).
+# The read-only rehearsal verify (the rehearsal readonly verify design).
 # A rehearsal cannot sign (a public Rekor entry per dispatch), so it verifies a
 # release that is already signed, with the release step's own command.
 RELEASE_VERIFY = "Verify the release signature + SBOM attestation"

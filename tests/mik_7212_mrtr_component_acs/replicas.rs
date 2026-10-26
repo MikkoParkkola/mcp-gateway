@@ -9,7 +9,7 @@ use super::*;
 // ---------------------------------------------------------------------------
 //
 // The criterion offers two arms and the accepted design took the second:
-// `docs/design/2026-08-30-shared-continuation-state.md:116` forecloses affinity
+// the shared continuation state design forecloses affinity
 // and `:103-104` prices the consequence. `6e744936` deleted `Routing::Elsewhere`
 // accordingly, so "reach the holder" is not a behaviour this gateway can be
 // tested for. What remains testable is the half the criterion actually forbids:

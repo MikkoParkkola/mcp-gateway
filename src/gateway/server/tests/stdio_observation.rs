@@ -270,7 +270,7 @@ fn ac_obs_1_stdio_records_the_answer_not_the_ask() {
 
 // OBS.1 / MRTR, the stdio retry gap -- NOT closed by this change and
 // deliberately left red rather than pinned as correct. See
-// `docs/design/2026-09-02-cluster-g-stdio-dispatch-parity.md` §P3,
+// the cluster g stdio dispatch parity design §P3,
 // "`NO_RETRY` on stdio -- declared OUT, with something watching it":
 // closing it needs `RetryFields` built at the convergence point and
 // malformed retry fields refused pre-dispatch on both transports, which
