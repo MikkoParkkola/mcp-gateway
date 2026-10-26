@@ -363,27 +363,27 @@ only when a test exists that fails on its mutant.
 
 ### Isolation
 
-- **ISO-T1.** Users U1 and U2 subscribe to `tools_changed` and `resource_updated` on
+- **ISO-T1.** *Required, not yet implemented.* Users U1 and U2 subscribe to `tools_changed` and `resource_updated` on
   one identity-bound fixture whose catalogue and resources differ per asserted
   subject. U1's change reaches U1 only and U2's reaches U2 only, and each user is
   served (positive half); absence is checked with a window after the positive
   delivery. Once with `signed_assertion` and once with `token_exchange`.
-- **ISO-T2.** The same with managed accounts on a multi-user gateway, plus a lease
+- **ISO-T2.** *Required, not yet implemented.* The same with managed accounts on a multi-user gateway, plus a lease
   rotation mid-test: nothing observed under the old lease is delivered after it.
-- **ISO-T3.** Durable path: U1's occurrence is queued, then U1's row is re-granted or
+- **ISO-T3.** *Required, not yet implemented.* Durable path: U1's occurrence is queued, then U1's row is re-granted or
   its lease rotates. The queued record is buried as `observation_changed`, and
   dead-letter replay refuses it.
-- **ISO-T4.** U1's complete catalogue read never revokes U2's `resource_updated`
+- **ISO-T4.** *Required, not yet implemented for the cross-user revoke row.* U1's complete catalogue read never revokes U2's `resource_updated`
   rows. One row per shared-state class, each with the mutation that shares it:
-  - **ISO-T4a** overlapping tools notices across keys, against a shared debounce;
+  - **ISO-T4a** *(partly covered)* overlapping tools notices across keys, against a shared debounce;
   - **ISO-T4b** confirming reads across keys, against a shared confirm clock;
   - **ISO-T4c** legacy subscribe and unsubscribe across keys, against a shared
     legacy-holder ledger.
-- **ISO-T5 (source scan).** On listener paths, every backend notification sets
+- **ISO-T5 (source scan).** *Required, not yet implemented.* On listener paths, every backend notification sets
   `lifecycle_key` from the listener's key and none is built with `None`; every
   listener send passes a credential; every `lifecycle_key` call site is covered.
   Fixture rows prove the scan fails when either is dropped.
-- **ISO-T6.** A revoked U1 has no connection open within one snapshot interval, even
+- **ISO-T6.** *Required; partly covered.* A revoked U1 has no connection open within one snapshot interval, even
   with a silent backend; stop on the last subscriber is covered too.
 - **ISO-T7.** A required backend never connects as the gateway for an `obs` key. The
   fixture records the presented credential on every request, and the test asserts
@@ -397,21 +397,21 @@ stays listener-ineligible.
 
 ### Lease
 
-- **LEASE-T0.** A direct-route call with no `events/lease` leaves the lease store
+- **LEASE-T0.** *Required, not yet implemented.* A direct-route call with no `events/lease` leaves the lease store
   empty.
 - **LEASE-T1.** A token with no `exp`, or a malformed one, is refused.
-- **LEASE-T2.** A lease request from principal Q never touches P's lease, and Q's
+- **LEASE-T2.** *Required; partly covered.* A lease request from principal Q never touches P's lease, and Q's
   token never reaches P's listener (the fixture records presented tokens).
   **LEASE-T2b:** a replace closes and re-handshakes before the next emit.
 - **LEASE-T3.** Each wipe trigger clears the lease, with zero outbound requests
   after it, retries and legacy cleanup included.
 - **LEASE-T4.** A 401 from the backend wipes the lease and marks the rows credential
   rejected.
-- **LEASE-T5.** After a restart the rows are in credential needed, and nothing on
+- **LEASE-T5.** *Required, not yet implemented.* After a restart the rows are in credential needed, and nothing on
   disk contains the token (the store directory is scanned for its bytes).
 - **LEASE-T6.** The memory-only source scan (§3.3), plus a backend that echoes the
   presented token in an error body: no log line, span or answer contains it.
-- **LEASE-T7.** A rotation started while a delivery is in progress: no new callback
+- **LEASE-T7.** *Required, not yet implemented.* A rotation started while a delivery is in progress: no new callback
   handoff begins after the bump; an already-committed handoff completes as
   "possibly sent".
 - **LEASE-T8.** A subscribe with no lease makes zero outbound requests while
