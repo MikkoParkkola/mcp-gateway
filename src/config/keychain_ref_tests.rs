@@ -51,6 +51,15 @@ fn a1_invalid_names_are_refused_without_a_lookup() {
 }
 
 #[test]
+fn a1_an_invalid_name_never_reaches_the_error() {
+    // A literal secret that happens to start with `keychain:` is the case:
+    // the rest is the secret, and it is not a valid name.
+    let fake = Arc::new(FakeKeychain::default());
+    let error = message(resolve(&fake, &format!("keychain:{SENTINEL} with spaces")));
+    assert!(!error.contains(SENTINEL), "{error}");
+}
+
+#[test]
 fn a1_a_128_character_name_is_valid() {
     let name = "a".repeat(128);
     let fake = Arc::new(FakeKeychain::default());
