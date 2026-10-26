@@ -412,16 +412,33 @@ fn export_response(
     } else {
         export::ndjson_size
     };
+    // The cap covers the whole download: room is kept for the framing.
+    let framing = if csv {
+        export::csv_framing()
+    } else {
+        export::MANIFEST_RESERVE
+    };
+    let caps = export::Caps {
+        bytes: export::CAPS.bytes - framing,
+        ..export::CAPS
+    };
     let collected = match export::collect(
         &logs.invocation,
         logs.governance.as_deref(),
         &parsed.filter,
         access,
         logs.secret.as_deref(),
-        export::CAPS,
+        caps,
         size,
     ) {
         Ok(c) => c,
+        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+            return flat_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the log rotated past this export while it ran; start it again",
+            )
+            .into_response();
+        }
         Err(error) => {
             tracing::warn!(%error, "activity export read failed");
             return flat_error(

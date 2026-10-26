@@ -3,6 +3,7 @@
 //! E1-E6 of the U2 test plan: the signed NDJSON bundle and its offline check,
 //! domain separation, integrity marks, caps, and the exported field set.
 
+use std::cell::RefCell;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -370,4 +371,136 @@ fn manifest_counters_are_per_source_log() {
         inv_range.iter().all(|n| n.as_u64().unwrap() < 41),
         "{inv_range:?}"
     );
+}
+
+thread_local! {
+    /// Run once, between two passes of an export over the logs.
+    static BETWEEN: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+}
+
+/// The export's seam between passes.
+pub(super) fn between_passes() {
+    if let Some(hook) = BETWEEN.with(|h| h.borrow_mut().take()) {
+        hook();
+    }
+}
+
+#[test]
+fn a_reset_between_passes_aborts_instead_of_mixing_traversals() {
+    // Retention removes the segment the export is in between two passes.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("inv.jsonl");
+    let l = Arc::new(
+        TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: path.to_string_lossy().into_owned(),
+            key_id: "test".into(),
+            shared_secret: String::new(),
+            rotation: crate::security::audit_rotation_config::RotationConfig {
+                max_segment_bytes: 4096,
+                max_segment_age_secs: 0,
+                retain_segments: 20,
+                on_disk_full: crate::security::audit_rotation_config::OnDiskFull::ExpireOldest,
+            },
+        }))
+        .unwrap(),
+    );
+    // More rows kept than one pass reads, so the export takes a second pass.
+    for i in 0..300 {
+        l.log_invocation(
+            "s",
+            "c",
+            "srv",
+            &format!("tool_{i}"),
+            "sha256:aa",
+            "sha256:bb",
+        )
+        .unwrap();
+    }
+    let writer = Arc::clone(&l);
+    let log = path.clone();
+    BETWEEN.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move || {
+            // Rotate until every segment sealed now has expired.
+            let sealed = crate::security::transparency_log::segments::list_segments(&log).unwrap();
+            let newest_sealed = sealed.last().map_or(0, |s| s.seq);
+            let mut i = 1000;
+            while crate::security::transparency_log::segments::list_segments(&log)
+                .unwrap()
+                .first()
+                .is_some_and(|s| s.seq <= newest_sealed)
+            {
+                writer
+                    .log_invocation(
+                        "s",
+                        "c",
+                        "srv",
+                        &format!("tool_{i}"),
+                        "sha256:aa",
+                        "sha256:bb",
+                    )
+                    .unwrap();
+                i += 1;
+            }
+        }));
+    });
+    let refused = collect(
+        &path,
+        None,
+        &Filter::default(),
+        &Access::All,
+        None,
+        CAPS,
+        ndjson_size,
+    );
+    let err = refused.err().expect("the export aborts");
+    assert_eq!(err.kind(), std::io::ErrorKind::Interrupted);
+}
+
+#[test]
+fn an_unreadable_line_is_counted_in_the_signed_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log(&dir, 2);
+    let mut text = std::fs::read_to_string(&path).unwrap();
+    text.insert_str(0, "{not json\n");
+    std::fs::write(&path, text).unwrap();
+    let c = all(&path, CAPS, ndjson_size);
+    assert_eq!(c.unreadable, 1);
+    let out = String::from_utf8(ndjson(&c, json!({}), &signer())).unwrap();
+    let manifest: Value = serde_json::from_str(out.lines().last().unwrap()).unwrap();
+    assert_eq!(manifest["unreadable"], 1);
+}
+
+#[test]
+fn the_whole_download_stays_within_the_byte_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log(&dir, 12);
+    let cap = 3_000;
+    let c = all(
+        &path,
+        Caps {
+            bytes: cap - super::MANIFEST_RESERVE.min(cap / 2),
+            ..CAPS
+        },
+        ndjson_size,
+    );
+    let out = ndjson(&c, json!({}), &signer());
+    let manifest_len = out
+        .split(|b| *b == b'\n')
+        .rev()
+        .nth(1)
+        .map_or(0, <[u8]>::len)
+        + 1;
+    assert!(
+        manifest_len < super::MANIFEST_RESERVE,
+        "manifest {manifest_len} bytes"
+    );
+    let header_and_end = csv(&Collected {
+        rows: Vec::new(),
+        sources: Vec::new(),
+        unreadable: 0,
+        truncated: super::Truncated::Bytes,
+    })
+    .len();
+    assert!(header_and_end <= super::csv_framing());
 }

@@ -12,7 +12,8 @@ use serde_json::{Map, Value, json};
 use super::access::Access;
 use super::reader::{Line, Which};
 use super::rows::{Kind, kind_of, owned_by, row};
-use super::seek::{Reads, seek};
+use super::seek::{Reads, oldest_counter, seek};
+use crate::security::transparency_log::recompute_entry_hash;
 
 /// What a receipt says for evidence this gateway version does not record.
 pub(super) const NOT_RECORDED: &str = "not recorded by this gateway version";
@@ -48,9 +49,10 @@ fn hash_of(entry: &Value, key: &str) -> Option<String> {
 }
 
 /// How a record links to the one before it: `verified` when the kept log
-/// holds the predecessor and its hash is this record's `prev_entry_hash`;
-/// `broken` when it does not match; `first_in_kept_log` when nothing kept
-/// precedes it. Every rotated segment opens with an open record numbered
+/// holds the predecessor, intact, and its hash is this record's
+/// `prev_entry_hash`; `broken` when it does not match, is edited, or is
+/// missing from the middle of the kept log; `first_in_kept_log` when this is
+/// the oldest record kept. Every rotated segment opens with an open record numbered
 /// just below its first listed row, so a listed row's predecessor is kept.
 fn link(log: &Path, entry: &Value, reads: &mut Reads) -> std::io::Result<&'static str> {
     let prev = hash_of(entry, "prev_entry_hash");
@@ -59,9 +61,21 @@ fn link(log: &Path, entry: &Value, reads: &mut Reads) -> std::io::Result<&'stati
         return Ok("first_in_kept_log");
     }
     Ok(match seek(log, counter - 1, reads)? {
-        Some(before) if hash_of(&before.entry, "entry_hash") == prev => "verified",
-        Some(_) => "broken",
-        None => "first_in_kept_log",
+        // The predecessor's own hash is recomputed: a stored hash says
+        // nothing about fields edited beside it.
+        Some(before) => {
+            let stored = hash_of(&before.entry, "entry_hash");
+            let intact = recompute_entry_hash(&before.entry).ok() == stored;
+            if intact && stored == prev {
+                "verified"
+            } else {
+                "broken"
+            }
+        }
+        // Missing: the start of the kept log only if nothing older is kept;
+        // a gap in the middle is a broken chain, not a retention boundary.
+        None if oldest_counter(log, reads)? == Some(counter) => "first_in_kept_log",
+        None => "broken",
     })
 }
 

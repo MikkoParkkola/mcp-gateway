@@ -56,3 +56,27 @@ fn exits_zero_on_a_valid_export_and_non_zero_otherwise() {
         code(ExitCode::FAILURE)
     );
 }
+
+#[test]
+fn a_repeated_manifest_member_and_an_oversized_file_are_refused() {
+    use super::{ExportRefusal, read_bounded, verify_export};
+    let s = ProvenancePublicSigner::from_seed_for_test([3u8; 32], "cli-test-1");
+    let trust =
+        crate::trust::provenance_public::TrustSet::from_json(&s.public_jwk().to_string()).unwrap();
+    let good = signed_export(&s);
+    let text = String::from_utf8(good).unwrap();
+    // The same key twice: one value could verify while another is read.
+    let (rows, manifest) = text.trim_end().rsplit_once('\n').unwrap();
+    let doubled = format!("{rows}\n{{\"rows\":9,{}\n", &manifest[1..]);
+    assert_ne!(doubled, text);
+    assert_eq!(
+        verify_export(doubled.as_bytes(), &trust),
+        Err(ExportRefusal::DuplicateMember)
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let big = dir.path().join("big");
+    std::fs::write(&big, vec![b'x'; 11]).unwrap();
+    assert_eq!(read_bounded(&big, 10), Err("too_large".to_string()));
+    assert_eq!(read_bounded(&big, 11).unwrap().len(), 11);
+}

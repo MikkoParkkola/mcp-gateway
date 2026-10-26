@@ -288,3 +288,43 @@ fn l3_a_developer_reads_its_own_receipts_only() {
     assert!(read(&inv, Which::Invocation, &calls[1]).is_none());
     assert!(read(&gov, Which::Governance, &config[0]).is_none());
 }
+
+#[test]
+fn an_edited_predecessor_or_a_gap_in_the_middle_reads_broken() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("inv.jsonl");
+    let mut entries: Vec<Value> = (0..4)
+        .map(|i| json!({"tool": format!("tool_{i}"), "request_hash": "sha256:aa", "outcome": "ok"}))
+        .collect();
+    write_chained(&path, &mut entries);
+    let link = |e: &Value| {
+        receipt(&path, &id_of(Which::Invocation, e), &Access::All, None)
+            .unwrap()
+            .unwrap()["chain"]["link"]
+            .clone()
+    };
+    // Record 2 edited, its stored hash kept: record 3's link is broken.
+    let mut all = lines(&path);
+    all[1]["tool"] = "edited".into();
+    std::fs::write(
+        &path,
+        all.iter().map(|v| v.to_string() + "\n").collect::<String>(),
+    )
+    .unwrap();
+    assert_eq!(link(&entries[2]), "broken");
+    // Record 2 removed: record 3 is not the oldest kept, so a gap, not a start.
+    let kept: String = [&entries[0], &entries[2], &entries[3]]
+        .iter()
+        .map(|v| v.to_string() + "\n")
+        .collect();
+    std::fs::write(&path, kept).unwrap();
+    assert_eq!(link(&entries[2]), "broken");
+    assert_eq!(link(&entries[3]), "verified");
+    // Retention cut the log at record 3: now it is the start of the kept log.
+    let cut: String = [&entries[2], &entries[3]]
+        .iter()
+        .map(|v| v.to_string() + "\n")
+        .collect();
+    std::fs::write(&path, cut).unwrap();
+    assert_eq!(link(&entries[2]), "first_in_kept_log");
+}

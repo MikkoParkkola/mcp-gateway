@@ -356,6 +356,12 @@ pub(crate) enum TrustSetRefusal {
 /// A JSON value parsed without accepting a repeated member at any depth.
 struct NoDupValue(serde_json::Value);
 
+/// Parse JSON, refusing a repeated member at any depth: two readers of a
+/// signed document must never see different values for one key.
+pub(crate) fn from_slice_no_dup(bytes: &[u8]) -> serde_json::Result<serde_json::Value> {
+    serde_json::from_slice::<NoDupValue>(bytes).map(|v| v.0)
+}
+
 /// Rebuilds a [`serde_json::Value`] while refusing a repeated object key.
 struct NoDupVisitor;
 

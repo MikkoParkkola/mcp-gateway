@@ -32,6 +32,16 @@ pub(super) const CAPS: Caps = Caps {
     scan: 512 << 20,
 };
 
+/// Room kept inside the byte cap for the NDJSON manifest line, so the whole
+/// download stays within the cap.
+pub(super) const MANIFEST_RESERVE: usize = 4096;
+
+/// Room kept inside the byte cap for the CSV header and `#end` line.
+pub(super) fn csv_framing() -> usize {
+    // The longest `#end` line: a row count of the cap's width, the longest state.
+    CsvWriter::new(&COLUMNS).finish(Truncated::Bytes).len() + CAPS.rows.to_string().len()
+}
+
 /// Rows read per pass over the logs, so memory stays bounded by one pass.
 const PASS: usize = 100;
 
@@ -63,6 +73,9 @@ pub(super) struct Collected {
     pub(super) rows: Vec<Value>,
     /// The log each row came from, in step with `rows`.
     pub(super) sources: Vec<Which>,
+    /// Lines examined that could not be read, and matched records that could
+    /// not be projected: named in the signed manifest, never dropped silently.
+    pub(super) unreadable: usize,
     pub(super) truncated: Truncated,
 }
 
@@ -86,8 +99,16 @@ pub(super) fn collect(
                 }
         })
     };
-    let mut rows = Vec::new();
-    let mut sources = Vec::new();
+    let mut c = Collected {
+        rows: Vec::new(),
+        sources: Vec::new(),
+        unreadable: 0,
+        truncated: Truncated::None,
+    };
+    let done = |mut c: Collected, truncated| {
+        c.truncated = truncated;
+        Ok(c)
+    };
     let mut bytes = 0_usize;
     let mut scanned = 0_u64;
     let mut cursor: Option<Cursor> = None;
@@ -97,58 +118,43 @@ pub(super) fn collect(
             bytes: caps.scan.saturating_sub(scanned),
         };
         let page = read_page(inv, gov, cursor.as_ref(), limits, keep)?;
+        // A pass after the first that restarted (retention removed the
+        // segment the export was in) would append newer rows to older ones.
+        if cursor.is_some() && page.cursor_reset {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "the log rotated past this export while it ran",
+            ));
+        }
         scanned += page.bytes_examined;
+        c.unreadable += page.unreadable.len();
         for line in &page.lines {
             let Some(kind) = kind_of(line) else { continue };
+            // A matched record that cannot be projected (no counter or hash)
+            // is counted, never dropped silently.
             let Some(r) = export_row(line, kind, secret) else {
+                c.unreadable += 1;
                 continue;
             };
-            if rows.len() == caps.rows {
-                return Ok(Collected {
-                    rows,
-                    sources,
-                    truncated: Truncated::Rows,
-                });
+            if c.rows.len() == caps.rows {
+                return done(c, Truncated::Rows);
             }
             let n = size(&r);
             if bytes + n > caps.bytes {
-                return Ok(Collected {
-                    rows,
-                    sources,
-                    truncated: Truncated::Bytes,
-                });
+                return done(c, Truncated::Bytes);
             }
             bytes += n;
-            rows.push(r);
-            sources.push(line.log);
+            c.rows.push(r);
+            c.sources.push(line.log);
         }
+        #[cfg(test)]
+        tests::between_passes();
         match page.next {
-            None => {
-                return Ok(Collected {
-                    rows,
-                    sources,
-                    truncated: Truncated::None,
-                });
-            }
+            None => return done(c, Truncated::None),
             // The page stopped on the scan budget that was left: the cap.
-            Some(_) if page.scan_exhausted => {
-                return Ok(Collected {
-                    rows,
-                    sources,
-                    truncated: Truncated::Scan,
-                });
-            }
+            Some(_) if page.scan_exhausted => return done(c, Truncated::Scan),
             Some(next) => cursor = Some(next),
         }
-    }
-}
-
-fn truncated_str(t: Truncated) -> &'static str {
-    match t {
-        Truncated::None => "none",
-        Truncated::Rows => "rows",
-        Truncated::Bytes => "bytes",
-        Truncated::Scan => "scan",
     }
 }
 
@@ -199,10 +205,8 @@ pub(super) fn ndjson(
         json!({"invocation": counters(Which::Invocation), "governance": counters(Which::Governance)}),
     );
     manifest.insert("integrity_failed".into(), integrity_failed.into());
-    manifest.insert(
-        "truncated".into(),
-        truncated_str(collected.truncated).into(),
-    );
+    manifest.insert("unreadable".into(), collected.unreadable.into());
+    manifest.insert("truncated".into(), collected.truncated.as_str().into());
     manifest.insert("sha256".into(), hex::encode(Sha256::digest(&bytes)).into());
     manifest.insert("kid".into(), signer.kid().into());
     let canonical = serde_json_canonicalizer::to_vec(&Value::Object(manifest.clone()))

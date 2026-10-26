@@ -144,3 +144,14 @@ fn c1_bad_lines_never_hide_the_records_after_them() {
         assert_eq!(found.entry["counter"], counter);
     }
 }
+
+#[test]
+fn a_file_in_the_rotation_gap_is_found_under_its_sealed_name() {
+    use crate::security::transparency_log::segments::sealed_path;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("inv.jsonl");
+    std::fs::write(sealed_path(&log, 3), "{\"counter\": 1}\n").unwrap();
+    // The active name is gone for an instant; segment 3's bytes are sealed.
+    assert!(super::open_kept(&log, 3, &log).unwrap().is_some());
+    assert!(super::open_kept(&log, 4, &log).unwrap().is_none());
+}

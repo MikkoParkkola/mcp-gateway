@@ -127,14 +127,43 @@ fn files(log: &Path) -> io::Result<Vec<(u64, PathBuf)>> {
     Ok(files)
 }
 
+/// Open one of the log's files. The active file can be missing for an instant
+/// while rotation renames it to its sealed name and creates the next one; its
+/// bytes are then under the sealed name. `None` for a file no longer kept.
+fn open_kept(log: &Path, segment: u64, path: &Path) -> io::Result<Option<File>> {
+    match File::open(path) {
+        Ok(f) => Ok(Some(f)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            match File::open(sealed_path(log, segment)) {
+                Ok(f) => Ok(Some(f)),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+                Err(e) => Err(e),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// The counter of the oldest record the kept log holds.
+pub(super) fn oldest_counter(log: &Path, reads: &mut Reads) -> io::Result<Option<u64>> {
+    for (segment, path) in files(log)? {
+        let Some(mut file) = open_kept(log, segment, &path)? else {
+            continue;
+        };
+        let len = file.metadata()?.len();
+        if let Some((c, _, _)) = first_readable(&mut file, 0, len, reads)? {
+            return Ok(Some(c));
+        }
+    }
+    Ok(None)
+}
+
 /// The record numbered `counter` in `log`, if the kept log holds it.
 pub(super) fn seek(log: &Path, counter: u64, reads: &mut Reads) -> io::Result<Option<Found>> {
     let mut chosen = None;
     for (segment, path) in files(log)? {
-        let mut file = match File::open(&path) {
-            Ok(f) => f,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(e),
+        let Some(mut file) = open_kept(log, segment, &path)? else {
+            continue;
         };
         match line_at(&mut file, 0, reads)?.and_then(|(l, _)| counter_of(&l)) {
             Some(first) if first <= counter => chosen = Some((segment, file)),

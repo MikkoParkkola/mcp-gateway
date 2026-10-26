@@ -33,7 +33,7 @@ pub(crate) fn signature_state(entry: &Value, secret: Option<&[u8]>) -> Signature
     if !recompute_entry_hash(entry).is_ok_and(|h| h == stored) {
         return SignatureState::Invalid;
     }
-    if entry.get("sig").is_none() {
+    if !super::verify::is_signed_entry(entry) {
         return SignatureState::Unsigned;
     }
     match secret {

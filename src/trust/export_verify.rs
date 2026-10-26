@@ -18,7 +18,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::provenance_public::{
-    ACTIVITY_EXPORT_DOMAIN, TrustSet, VerifyRefusal, configured_signer,
+    ACTIVITY_EXPORT_DOMAIN, TrustSet, VerifyRefusal, configured_signer, from_slice_no_dup,
 };
 
 /// Why an export did not verify, naming the rule and never the data.
@@ -30,6 +30,8 @@ pub(crate) enum ExportRefusal {
     Torn,
     /// The last line is not a manifest.
     NoManifest,
+    /// The manifest repeats a member.
+    DuplicateMember,
     /// The manifest's digest does not name the bytes before it.
     DigestMismatch,
     /// The manifest's key id is not in the trust set.
@@ -44,6 +46,7 @@ impl ExportRefusal {
             Self::Empty => "empty",
             Self::Torn => "torn",
             Self::NoManifest => "no_manifest",
+            Self::DuplicateMember => "duplicate_member",
             Self::DigestMismatch => "digest_mismatch",
             Self::UnknownKid => "unknown_kid",
             Self::BadSignature => "bad_signature",
@@ -69,8 +72,12 @@ pub(crate) fn verify_export(bytes: &[u8], trust: &TrustSet) -> Result<ExportRepo
     }
     let start = body.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
     let (rows, manifest) = body.split_at(start);
-    let mut manifest: serde_json::Map<String, Value> = match serde_json::from_slice(manifest) {
+    // A repeated member could verify under one value and be read as another.
+    let mut manifest: serde_json::Map<String, Value> = match from_slice_no_dup(manifest) {
         Ok(Value::Object(m)) if m.get("kind").and_then(Value::as_str) == Some("manifest") => m,
+        Err(e) if e.to_string().contains("duplicate member") => {
+            return Err(ExportRefusal::DuplicateMember);
+        }
         _ => return Err(ExportRefusal::NoManifest),
     };
     let digest = hex::encode(Sha256::digest(rows));
@@ -109,9 +116,8 @@ pub(crate) fn verify_export(bytes: &[u8], trust: &TrustSet) -> Result<ExportRepo
 /// The trust set: the `--jwk` file, else the gateway's own configured key.
 fn trust_set(jwk: Option<&Path>, config: Option<&Path>) -> Result<TrustSet, String> {
     let text = match jwk {
-        Some(path) => {
-            std::fs::read_to_string(path).map_err(|_| "the --jwk file is unreadable".to_string())?
-        }
+        Some(path) => String::from_utf8(read_bounded(path, MAX_JWK_BYTES)?)
+            .map_err(|_| "the --jwk file is not UTF-8".to_string())?,
         None => match configured_signer(config)? {
             Some(signer) => signer.public_jwk().to_string(),
             None => return Err("no public key: pass --jwk (from `provenance public-key`)".into()),
@@ -128,6 +134,26 @@ fn trust_set(jwk: Option<&Path>, config: Option<&Path>) -> Result<TrustSet, Stri
     TrustSet::from_json(&text).map_err(|_| "the --jwk file is not a public Ed25519 JWK".into())
 }
 
+/// The largest export the gateway writes (64 MiB of rows plus its manifest),
+/// with room to spare; a bigger file is not one of its exports.
+const MAX_EXPORT_BYTES: u64 = 65 << 20;
+/// A JWK or JWKS file is a few hundred bytes per key.
+const MAX_JWK_BYTES: u64 = 1 << 20;
+
+/// Read `path` whole, refusing a file over `max` before reading it.
+fn read_bounded(path: &Path, max: u64) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+    let file = std::fs::File::open(path).map_err(|_| "unreadable_input".to_string())?;
+    let mut bytes = Vec::new();
+    file.take(max + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "unreadable_input".to_string())?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max {
+        return Err("too_large".into());
+    }
+    Ok(bytes)
+}
+
 fn say(line: &str) {
     use std::io::Write as _;
     let _ = writeln!(std::io::stdout().lock(), "{line}");
@@ -142,9 +168,12 @@ pub fn run_verify_export(file: &Path, jwk: Option<&Path>, config: Option<&Path>)
             return ExitCode::FAILURE;
         }
     };
-    let Ok(bytes) = std::fs::read(file) else {
-        say("INVALID unreadable_input");
-        return ExitCode::FAILURE;
+    let bytes = match read_bounded(file, MAX_EXPORT_BYTES) {
+        Ok(b) => b,
+        Err(why) => {
+            say(&format!("INVALID {why}"));
+            return ExitCode::FAILURE;
+        }
     };
     match verify_export(&bytes, &trust) {
         Ok(r) => {

@@ -15,7 +15,7 @@ pub(super) enum Truncated {
 }
 
 impl Truncated {
-    fn as_str(self) -> &'static str {
+    pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::None => "none",
             Self::Rows => "rows",
