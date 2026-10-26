@@ -185,6 +185,28 @@ async fn o3b_a_long_server_name_is_clipped() {
     assert_eq!(shown.len(), 256, "{body}");
 }
 
+/// O3c: the cut lands on a character boundary. A two-byte character that
+/// straddles byte 256 is dropped whole: the name comes back as the 255 bytes
+/// before it, valid UTF-8, and the request does not panic.
+#[tokio::test]
+async fn o3c_the_cut_never_splits_a_character() {
+    let (state, _dir) = fixture(0, false).await;
+    let name = format!("{}é{}", "a".repeat(255), "b".repeat(10));
+    let backend = Arc::new(Backend::new(
+        &name,
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    assert!(state.backends.register(backend), "register the name");
+    let body = overview(&state).await;
+    assert_eq!(
+        body["servers"]["rows"][0]["name"],
+        "a".repeat(255),
+        "{body}"
+    );
+}
+
 /// O6: a section with no source on this line is absent, never a zero or an
 /// empty list, and no `degraded` list appears when nothing failed.
 #[tokio::test]
