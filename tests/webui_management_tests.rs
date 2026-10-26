@@ -31,6 +31,8 @@ mod record_key;
 // `list` and `doctor` beside the UI config read.
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
+#[path = "common/windows_paths.rs"]
+mod windows_paths;
 
 #[path = "common/yaml.rs"]
 mod yaml;
