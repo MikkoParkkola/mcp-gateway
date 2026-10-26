@@ -315,6 +315,13 @@ pub async fn get_capability(
     }
 }
 
+/// `?validate=` on `PUT`: present with any value means validate only.
+#[derive(Debug, Deserialize)]
+pub struct ValidateQuery {
+    /// Any value, empty included, asks for validation without a write.
+    pub validate: Option<String>,
+}
+
 /// `PUT /ui/api/capabilities/:name` — validate YAML and write to disk.
 ///
 /// With `?validate=1` or an `X-Validate-Only` header it validates and writes
@@ -325,7 +332,7 @@ pub async fn put_capability(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
     AxumPath(name): AxumPath<String>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
+    Query(query): Query<ValidateQuery>,
     headers: HeaderMap,
     body: String,
 ) -> impl IntoResponse {
@@ -345,7 +352,7 @@ pub async fn put_capability(
             .into_response();
     }
 
-    if query.contains_key("validate") || headers.contains_key("x-validate-only") {
+    if query.validate.is_some() || headers.contains_key("x-validate-only") {
         return Json(json!({ "status": "valid", "name": name })).into_response();
     }
 
