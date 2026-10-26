@@ -156,6 +156,8 @@ async fn o3_a_140_server_gateway_returns_a_bounded_body() {
         "{raw}"
     );
     assert_eq!(body["servers"]["more"]["count"], 140 - SERVER_ROWS, "{raw}");
+    assert_eq!(body["servers"]["more"]["up"], 0, "{raw}");
+    assert_eq!(body["servers"]["more"]["down"], 140 - SERVER_ROWS, "{raw}");
     assert_eq!(body["kpi"]["servers_total"], 140, "{raw}");
     // Per server row: a 200-byte name plus at most ~64 bytes of fields.
     // Fixed sections: well under 4 KiB without U1/U4 data.
@@ -205,6 +207,63 @@ async fn o3c_the_cut_never_splits_a_character() {
         "a".repeat(255),
         "{body}"
     );
+}
+
+/// A transport that only reports itself connected, so a backend reads as up.
+struct Connected;
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for Connected {
+    async fn request(
+        &self,
+        _method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        Ok(crate::protocol::JsonRpcResponse::success(
+            crate::protocol::RequestId::Number(1),
+            json!({}),
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// O3d: rows are chosen on the full name, not the clipped one. Twenty-five
+/// names share their first 256 bytes; only the last by full name is up, so it
+/// is the one folded into `more`. A sort on the clipped name ties all 25 and
+/// keeps the registry's hash order, so it folds the up server only one run in
+/// 25 by chance.
+#[tokio::test]
+async fn o3d_the_fold_sorts_on_the_full_name() {
+    let (state, _dir) = fixture(0, false).await;
+    for i in 0..=SERVER_ROWS {
+        let name = format!("{}{i:02}", "s".repeat(256));
+        let backend = Arc::new(Backend::new(
+            &name,
+            BackendConfig::default(),
+            &FailsafeConfig::default(),
+            Duration::from_secs(300),
+        ));
+        if i == SERVER_ROWS {
+            backend.set_transport_for_test(Arc::new(Connected));
+        }
+        assert!(state.backends.register(backend), "register {i}");
+    }
+    let body = overview(&state).await;
+    assert_eq!(body["kpi"]["servers_up"], 1, "{body}");
+    assert_eq!(body["servers"]["more"]["count"], 1, "{body}");
+    assert_eq!(body["servers"]["more"]["up"], 1, "{body}");
+    assert_eq!(body["servers"]["more"]["down"], 0, "{body}");
 }
 
 /// O6: a section with no source on this line is absent, never a zero or an
@@ -460,4 +519,84 @@ async fn o4b_limit_rows_come_highest_percent_first() {
         .map(|row| row["subject"].as_str().expect("a subject"))
         .collect();
     assert_eq!(subjects, ["global", "key:ops"], "{body}");
+}
+
+/// The overview of a one-server fixture under `cfg`, after `spend` (tool,
+/// USD) is recorded.
+#[cfg(feature = "cost-governance")]
+async fn governed(
+    cfg: crate::cost_accounting::config::CostGovernanceConfig,
+    spend: &[(&str, f64)],
+) -> Value {
+    use crate::cost_accounting::enforcer::BudgetEnforcer;
+    use crate::cost_accounting::registry::CostRegistry;
+
+    let (mut state, _dir) = fixture(1, false).await;
+    let enforcer = Arc::new(BudgetEnforcer::new(
+        cfg.clone(),
+        Arc::new(CostRegistry::new(&cfg)),
+    ));
+    for (tool, usd) in spend {
+        enforcer.record_spend(tool, None, *usd);
+    }
+    let inner = Arc::get_mut(&mut state).expect("state is unique");
+    let mut meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::clone(&inner.backends));
+    meta.budget_enforcer = Some(enforcer);
+    inner.meta_mcp = Arc::new(meta);
+    overview(&state).await
+}
+
+/// O4c: the row's threshold is the configured Notify percent, not a fixed 80.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn o4c_the_threshold_is_the_configured_notify_percent() {
+    use crate::cost_accounting::config::{AlertAction, AlertRule, CostGovernanceConfig};
+
+    let mut cfg = CostGovernanceConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    cfg.budgets.daily = Some(1.0);
+    cfg.alerts = vec![AlertRule {
+        at_percent: 60,
+        action: AlertAction::Notify,
+    }];
+    let rows = |body: &Value| {
+        body["needs_you"]["rows"]
+            .as_array()
+            .expect("needs-you rows")
+            .iter()
+            .filter(|row| row["kind"] == "limit_80")
+            .count()
+    };
+    let at_60 = governed(cfg.clone(), &[("search", 0.60)]).await;
+    assert_eq!(rows(&at_60), 1, "inclusive at 60: {at_60}");
+    let at_59 = governed(cfg, &[("search", 0.59)]).await;
+    assert_eq!(rows(&at_59), 0, "59% is under a 60% Notify: {at_59}");
+}
+
+/// O4d: more needs-you rows than the cap keeps the cap and counts the rest.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn o4d_needs_you_folds_past_its_cap() {
+    use crate::cost_accounting::config::CostGovernanceConfig;
+
+    let mut cfg = CostGovernanceConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    let tools: Vec<String> = (0..NEEDS_YOU_ROWS + 2)
+        .map(|i| format!("tool-{i:02}"))
+        .collect();
+    for tool in &tools {
+        cfg.budgets.per_tool.insert(tool.clone(), 1.0);
+    }
+    let spend: Vec<(&str, f64)> = tools.iter().map(|tool| (tool.as_str(), 0.9)).collect();
+    let body = governed(cfg, &spend).await;
+    assert_eq!(
+        body["needs_you"]["rows"].as_array().map(Vec::len),
+        Some(NEEDS_YOU_ROWS),
+        "{body}"
+    );
+    assert_eq!(body["needs_you"]["more"]["count"], 2, "{body}");
 }

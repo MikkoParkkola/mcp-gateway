@@ -104,12 +104,14 @@ fn kpi_and_servers(state: &AppState) -> (Value, Value) {
         // Not `status()`: it also sorts latency samples this view never shows.
         .map(|backend| {
             (
-                clip(&backend.name),
+                backend.name.clone(),
                 backend.is_running(),
                 backend.cached_tools_count(),
             )
         })
         .collect();
+    // Sort on the full name; clipping first could tie or reorder names that
+    // differ only past the cut, and keep the wrong rows.
     rows.sort_by(|a, b| a.0.cmp(&b.0));
     let up = rows.iter().filter(|row| row.1).count();
     let tools: usize = rows.iter().map(|row| row.2).sum();
@@ -125,7 +127,7 @@ fn kpi_and_servers(state: &AppState) -> (Value, Value) {
     let servers = json!({
         "rows": rows
             .into_iter()
-            .map(|(name, up, tools)| json!({ "name": name, "up": up, "tools": tools }))
+            .map(|(name, up, tools)| json!({ "name": clip(&name), "up": up, "tools": tools }))
             .collect::<Vec<_>>(),
         "more": {
             "count": folded.len(),
