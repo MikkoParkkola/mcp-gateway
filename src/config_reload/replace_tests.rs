@@ -533,3 +533,86 @@ async fn within_hang_bound(test: &str, body: impl std::future::Future<Output = (
         .await
         .unwrap_or_else(|_| panic!("{test} hung past 30 s"));
 }
+
+/// Paths the recording loader below was asked to load.
+static LOADED: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+fn recording_load(
+    path: &Path,
+    live: &Arc<LiveConfig>,
+    env: &crate::config::LiveEnv,
+) -> Result<super::reload_context::EvaluatedReload, String> {
+    LOADED.lock().expect("loaded").push(path.to_path_buf());
+    super::reload_context::load_config_patch(path, live, env)
+}
+
+/// The write's reload loads the target the writer resolved and checked, not
+/// the symlink spelling: a link moved A→B→A during the reload can never make
+/// the writer report success on bytes the runtime did not load.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_writes_reload_reads_the_pinned_target_not_the_link() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let real = dir.path().join("real.yaml");
+    write_owner_only(&real, START).expect("write config");
+    let link = dir.path().join("gateway.yaml");
+    std::os::unix::fs::symlink(&real, &link).expect("symlink");
+    let running = Config::load(Some(&link)).expect("config loads");
+    let mut ctx = ReloadContext::new(
+        link.clone(),
+        Arc::new(LiveConfig::new(running)),
+        Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    )
+    .expect("context");
+    ctx.load = recording_load;
+
+    replace_detached(
+        Arc::new(ctx),
+        to(Expected::Any, NEXT, Replaced::Discard),
+        WAIT,
+    )
+    .await
+    .expect("applies");
+
+    let target = crate::identity_grants::journal::resolved(&link);
+    let mine: Vec<PathBuf> = LOADED
+        .lock()
+        .expect("loaded")
+        .iter()
+        .filter(|p| p.starts_with(dir.path()) || p.starts_with(target.parent().expect("dir")))
+        .cloned()
+        .collect();
+    assert!(
+        mine.contains(&target),
+        "the reload read the pinned target: {mine:?}"
+    );
+    assert!(!mine.contains(&link), "never the link spelling: {mine:?}");
+}
+
+/// A restore whose journal then cannot be removed refuses the lock, and the
+/// context still owes the reload that brings the runtime to the restored
+/// bytes.
+#[tokio::test]
+async fn a_restore_whose_journal_stays_still_owes_a_reload() {
+    use crate::config_persistence::journal::fault;
+    let (_dir, path, ctx) = setup();
+    crashed_after_rename(&path, NEXT);
+    let armed = fault::set(&path, fault::Fault::FailJournalRemove);
+
+    let refused = ctx
+        .mutate_and_reload_outcome_within(&path, WAIT, |_: &mut Config| Ok::<(), String>(()))
+        .await;
+    drop(armed);
+
+    assert!(
+        refused.is_err(),
+        "the lock is refused while the journal stays"
+    );
+    assert_eq!(read(&path), START, "the original is back on disk");
+    assert!(
+        ctx.reload_owed.load(std::sync::atomic::Ordering::SeqCst),
+        "the runtime still owes the reload to the restored bytes"
+    );
+}

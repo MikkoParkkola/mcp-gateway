@@ -422,6 +422,7 @@ impl ReloadContext {
             }
             crate::config_persistence::lock::ReaderLock::Unlocked => None,
             crate::config_persistence::lock::ReaderLock::Skip(why) => {
+                self.note_refused_lock();
                 return Err(format!(
                     "config reload skipped: {why}; the next change retries"
                 ));
@@ -486,7 +487,10 @@ impl ReloadContext {
     /// Both failure arms refuse the reload, as a failed load always has. A
     /// panicking load is a refusal only where panics unwind: the release
     /// profile aborts on any panic, here as everywhere else.
-    async fn load_off_worker(&self) -> std::result::Result<EvaluatedReload, String> {
+    async fn load_off_worker(
+        &self,
+        path: std::path::PathBuf,
+    ) -> std::result::Result<EvaluatedReload, String> {
         // The reload lock alone does not bound threads: a reload whose future
         // is dropped (a client that disconnects, a caller's timeout) releases
         // the lock while its read is still stalled. The permit travels into the
@@ -506,7 +510,7 @@ impl ReloadContext {
         let (done, result) = tokio::sync::oneshot::channel();
         let (load, path, live, env) = (
             self.load,
-            self.config_path.clone(),
+            path,
             Arc::clone(&self.live_config),
             Arc::clone(&self.env),
         );
@@ -530,7 +534,18 @@ impl ReloadContext {
     /// lock; taking it here as well would deadlock on the non-reentrant mutex.
     /// An accepted reload pays any reload a lock recovery left owed.
     async fn reload_outcome_locked(&self) -> std::result::Result<ReloadOutcome, String> {
-        let outcome = self.reload_transaction().await;
+        self.reload_outcome_locked_at(&self.config_path.clone())
+            .await
+    }
+
+    /// [`Self::reload_outcome_locked`], loading gateway.yaml from `path`: the
+    /// byte writer passes the target it resolved and checked, so its reload
+    /// reads that file even if a symlink at `config_path` moves meanwhile.
+    async fn reload_outcome_locked_at(
+        &self,
+        path: &std::path::Path,
+    ) -> std::result::Result<ReloadOutcome, String> {
+        let outcome = self.reload_transaction(path).await;
         if outcome.is_ok() {
             self.reload_owed
                 .store(false, std::sync::atomic::Ordering::SeqCst);
@@ -555,10 +570,23 @@ impl ReloadContext {
         }
     }
 
-    async fn reload_transaction(&self) -> std::result::Result<ReloadOutcome, String> {
+    /// A lock this context was refused may still have restored gateway.yaml
+    /// (its journal then could not be removed): owe the reload that brings
+    /// the runtime back to the restored bytes.
+    fn note_refused_lock(&self) {
+        if crate::config_persistence::journal::take_restored(&self.config_path) {
+            self.reload_owed
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    async fn reload_transaction(
+        &self,
+        path: &std::path::Path,
+    ) -> std::result::Result<ReloadOutcome, String> {
         #[cfg(test)]
         super::reload_pause::pause_here(&self.config_path).await;
-        let evaluated = self.load_off_worker().await?;
+        let evaluated = self.load_off_worker(path.to_path_buf()).await?;
         // First: a posture change also changes what the posture forces (signing
         // among it), and the posture is the cause the operator must act on.
         if let Some(refusal) =

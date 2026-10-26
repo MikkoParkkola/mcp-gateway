@@ -221,9 +221,12 @@ impl ReloadContext {
         })?;
         let (_held, recovered) = lock_config_recovering(&self.config_path, deadline)
             .await
-            .map_err(|e| match e {
-                NotLocked::Busy => ReplaceError::Busy,
-                NotLocked::Failed(message) => ReplaceError::Failed(message),
+            .map_err(|e| {
+                self.note_refused_lock();
+                match e {
+                    NotLocked::Busy => ReplaceError::Busy,
+                    NotLocked::Failed(message) => ReplaceError::Failed(message),
+                }
             })?;
         self.pay_owed_reload(recovered).await;
 
@@ -312,7 +315,7 @@ impl ReloadContext {
                 ReplaceError::Write(format!("writing {} failed: {e}", target.display())),
             ));
         }
-        let reloaded = self.reload_outcome_locked().await;
+        let reloaded = self.reload_outcome_locked_at(target).await;
         // The reload reads gateway.yaml through its configured path. If a
         // symlink there moved meanwhile, it loaded some other file: put ours
         // back, and owe a reload so the runtime leaves that other file too.

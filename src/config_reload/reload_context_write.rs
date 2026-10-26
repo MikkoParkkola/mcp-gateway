@@ -149,7 +149,10 @@ impl ReloadContext {
         let (held, recovered) =
             crate::config_persistence::lock::lock_config_recovering(path, deadline)
                 .await
-                .map_err(ConfigWriteError::from)?;
+                .map_err(|e| {
+                    self.note_refused_lock();
+                    ConfigWriteError::from(e)
+                })?;
         self.pay_owed_reload(recovered).await;
         let mut config = crate::config_persistence::load_existing_or_default(path)
             .map_err(|e| crate::config_reload::write::load_failure(path, &e, mode))?;
