@@ -38,14 +38,8 @@ use mcp_gateway::{
 };
 use tracing::{error, info};
 
-/// Stack for the thread that runs the async main body.
-///
-/// Clap's derived parser needs about 900 KB of stack in an unoptimized build
-/// (the generated `augment_subcommands` frames alone are ~650 KB), which is
-/// over the 1 MiB Windows gives a process's main thread. 8 MiB is the Linux
-/// default, so every platform gets the stack CI already exercises.
-const MAIN_STACK_BYTES: usize = 8 * 1024 * 1024;
-
+mod main_stack;
+use main_stack::on_main_stack;
 #[path = "main_runtime.rs"]
 mod runtime;
 /// The one YAML seam (MIK-8425): the binary compiles `commands` and
@@ -65,19 +59,6 @@ fn main() -> ExitCode {
         let cli = Cli::parse();
         runtime::block_on(RuntimeShutdown::of(cli.command.as_ref()), run(cli))
     })
-}
-
-/// Run `body` on a thread with [`MAIN_STACK_BYTES`] of stack and return its
-/// value. A panic in `body` is re-raised on the caller (the thread already
-/// printed it), so the exit status stays a panic's.
-fn on_main_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-    std::thread::Builder::new()
-        .name("main".into())
-        .stack_size(MAIN_STACK_BYTES)
-        .spawn(body)
-        .expect("spawn the main runtime thread")
-        .join()
-        .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
 }
 
 #[allow(clippy::too_many_lines)] // Feature-gated fallback arms inflate line count

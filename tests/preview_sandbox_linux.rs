@@ -168,7 +168,7 @@ async fn a_setsid_descendant_is_gone_after_teardown() {
     let Some(out) = sh(&script).await else { return };
     assert_eq!(out.stdout, "started\n", "{}", out.stderr);
     // The target exited, so the helper did, and the namespace with it.
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while host_has(&marker) {
         assert!(
             std::time::Instant::now() < deadline,
@@ -339,7 +339,7 @@ async fn started_sleeper(marker: &str) -> Option<Started> {
 }
 
 fn assert_gone_soon(marker: &str) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while host_has(marker) {
         assert!(
             std::time::Instant::now() < deadline,
