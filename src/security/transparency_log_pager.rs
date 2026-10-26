@@ -8,6 +8,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+#[cfg(any(test, feature = "webui"))]
 use super::rotation::MAX_RECORD_BYTES;
 use super::segments::{active_segment_seq, list_segments, sealed_path};
 
@@ -146,6 +147,7 @@ pub(crate) fn tail_window(file: &Path, end: u64, max: u64) -> io::Result<(Tail, 
 
 /// The longest window line assembly reads: one record at the logger's cap,
 /// its newline, and the newline ending the line before it.
+#[cfg(any(test, feature = "webui"))]
 pub(crate) const ASSEMBLY_WINDOW: u64 = MAX_RECORD_BYTES as u64 + 2;
 
 /// [`tail_window`] on an open file, with line assembly: when no line starts
@@ -153,6 +155,7 @@ pub(crate) const ASSEMBLY_WINDOW: u64 = MAX_RECORD_BYTES as u64 + 2;
 /// up to the record cap is returned whole. [`Tail::LineTooLong`] then means a
 /// line over the cap, which the logger never writes. The bytes returned count
 /// both reads.
+#[cfg(any(test, feature = "webui"))]
 pub(crate) fn tail_window_assembled(
     file: &std::fs::File,
     end: u64,

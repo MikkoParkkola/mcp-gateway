@@ -15,7 +15,6 @@ use super::{ListQuery, Logs, list_page};
 use crate::control_plane::ControlPlaneRole;
 use crate::control_plane::role_mapping::{ControlPlaneRoleMappingConfig, ControlPlaneRoleRule};
 use crate::gateway::auth::AuthenticatedClient;
-use crate::gateway::record_principal::InternalPrincipal;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::security::audit::CredentialKind;
 use crate::security::transparency_log::recompute_entry_hash;
@@ -99,7 +98,7 @@ fn client(admin: bool, authenticated: bool) -> AuthenticatedClient {
         allowed_tools: None,
         denied_tools: None,
         admin,
-        principal: InternalPrincipal::new("0123456789ab".into()),
+        principal: crate::gateway::auth::principal_of("activity-list-test"),
         quota_principal: None,
         authenticated,
         credential_kind: CredentialKind::ApiKey,

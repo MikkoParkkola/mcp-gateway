@@ -54,6 +54,7 @@ impl std::fmt::Debug for ProvenancePublicSigner {
 
 impl ProvenancePublicSigner {
     /// This signer's key id.
+    #[cfg(any(test, feature = "webui"))]
     pub(crate) fn kid(&self) -> &str {
         &self.kid
     }
@@ -122,6 +123,7 @@ impl ProvenancePublicSigner {
     /// Ed25519 over `domain || message`, as URL-safe-no-pad base64. Each
     /// caller passes its own domain tag, so a signature made for one envelope
     /// never verifies as another's.
+    #[cfg(any(test, feature = "webui"))]
     pub(crate) fn sign_bytes(&self, domain: &[u8], message: &[u8]) -> String {
         use base64::Engine as _;
         use base64::engine::general_purpose::URL_SAFE_NO_PAD;
