@@ -354,7 +354,8 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         if let Some(managed) = self.managed
             && is_upstream_unauthorized(&error)
         {
-            *self.account_refusal.lock() = Some(managed.after_upstream_401(error).await);
+            *self.account_refusal.lock() =
+                Some(super::audit::after_upstream_401(managed, error).await);
         }
         Err(classified)
     }

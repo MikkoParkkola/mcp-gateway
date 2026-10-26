@@ -18,6 +18,24 @@ pub(crate) fn note_refused_by(
     note_decision(|noted| noted.refused(kind, rule_id));
 }
 
+/// A managed account's answer to an upstream 401, noted when it turns the
+/// call into an account refusal (a reconnect): the caller's identity standing
+/// (MIK-8914.API2A.13), which no kind names yet. The upstream's own rejection,
+/// relayed, is the backend's answer and is not noted.
+pub(crate) async fn after_upstream_401(
+    managed: &crate::personal_accounts::ManagedLease,
+    error: crate::Error,
+) -> crate::Error {
+    let answer = managed.after_upstream_401(error).await;
+    if crate::personal_accounts::refusal::marked(&answer).is_some() {
+        note_refused_by(
+            crate::security::decision_record::DecisionKind::Unrecorded,
+            None,
+        );
+    }
+    answer
+}
+
 /// Note an explicit allow; the earliest in check order wins.
 #[expect(
     dead_code,

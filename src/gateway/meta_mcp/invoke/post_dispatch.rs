@@ -98,7 +98,9 @@ impl MetaMcp {
         // returned as the refusal it is) or tells the caller whether a
         // retry can help (the recovery hint below).
         let e = match managed {
-            Some(managed) if is_upstream_unauthorized(&e) => managed.after_upstream_401(e).await,
+            Some(managed) if is_upstream_unauthorized(&e) => {
+                super::audit::after_upstream_401(managed, e).await
+            }
             _ => e,
         };
         // MIK-8139: the account marker rides on the backend's own error, so

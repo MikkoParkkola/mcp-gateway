@@ -53,7 +53,7 @@ impl DirectFailure<'_> {
     ) -> (StatusCode, Json<Value>) {
         let error = match self.managed {
             Some(managed) if is_upstream_unauthorized(&error) => {
-                managed.after_upstream_401(error).await
+                crate::gateway::meta_mcp::invoke::audit::after_upstream_401(managed, error).await
             }
             _ => error,
         };
