@@ -90,13 +90,15 @@ pub(super) fn build_root(plan: &Plan) -> Step {
     let proc = staged("/proc");
     fs::create_dir_all(&proc).map_err(at("creating", &proc))?;
     // The PID namespace's own /proc (`--mount-proc` made one fully visible, so
-    // the kernel lets a user namespace mount another).
+    // the kernel lets a user namespace mount another). `hidepid=2` hides every
+    // process the viewer cannot ptrace: the target runs as the namespace's
+    // root, which owns a non-dumpable helper's `/proc/1/fd` and could list it.
     mount(
         "proc",
         &proc,
         "proc",
         MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
-        None,
+        c"hidepid=2",
     )
     .map_err(io::Error::from)
     .map_err(at("mounting proc on", &proc))?;

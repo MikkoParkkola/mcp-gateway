@@ -230,14 +230,16 @@ async fn the_host_root_is_unreachable() {
     assert_eq!(out.stdout, "/preview-home\nstatus\n", "{}", out.stderr);
 }
 
-/// The helper is non-dumpable: its environment and descriptors are closed to
-/// the processes it starts.
+/// The helper is non-dumpable and hidden from /proc: its environment and
+/// descriptors are closed to the processes it starts, which still see their
+/// own (positive control).
 #[tokio::test]
 async fn the_helper_cannot_be_read_from_inside() {
     let script = "cat /proc/1/environ >/dev/null 2>&1 && echo environ; \
-                  ls /proc/1/fd >/dev/null 2>&1 && echo fd; echo done";
+                  ls /proc/1/fd >/dev/null 2>&1 && echo fd; \
+                  ls /proc/self/fd >/dev/null 2>&1 && echo self; echo done";
     let Some(out) = sh(script).await else { return };
-    assert_eq!(out.stdout, "done\n", "{}", out.stderr);
+    assert_eq!(out.stdout, "self\ndone\n", "{}", out.stderr);
 }
 
 /// Masks: `/usr/local` and `/etc/ssl/private` are empty inside, while
