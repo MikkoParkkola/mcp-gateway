@@ -17,25 +17,16 @@ use super::worker::{CustodyError, CustodyHandle};
 use super::{AccountError, AccountKey, GrantRecord, PersonalAccountStore};
 
 /// A token copied out of a retained record. The bytes are overwritten on drop.
-struct WipedToken(Vec<u8>);
+struct WipedToken(crate::wiped_bytes::WipedBytes);
 
 impl WipedToken {
     fn new(token: String) -> Self {
-        Self(token.into_bytes())
+        Self(crate::wiped_bytes::WipedBytes::new(token.into_bytes()))
     }
 
     fn as_str(&self) -> &str {
         // Built only from a `String`, so the bytes are UTF-8 by construction.
-        std::str::from_utf8(&self.0).unwrap_or_default()
-    }
-}
-
-impl Drop for WipedToken {
-    fn drop(&mut self) {
-        // No `zeroize` crate in the tree; `black_box` keeps the stores from
-        // being elided as writes to memory about to be freed.
-        self.0.iter_mut().for_each(|byte| *byte = 0);
-        std::hint::black_box(&self.0);
+        std::str::from_utf8(self.0.as_bytes()).unwrap_or_default()
     }
 }
 

@@ -92,3 +92,60 @@ fn legacy_read_audit_cursor_after_rotation_resets() {
     );
     assert!(!page.events.is_empty(), "restarts at the newest record");
 }
+
+/// One shared paging engine (activity feed): every page's cursor is the
+/// byte offset of its event's line in that segment's file, found here by
+/// reading the files directly, so a move of the paging code that shifts an
+/// offset fails.
+#[test]
+fn read_audit_cursors_are_line_starts_in_their_segment() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = rotating_store(dir.path());
+    fill_until_rotated(&store, dir.path(), 2);
+    let log = dir.path().join("audit.jsonl");
+    let file_of = |segment: Option<u64>| {
+        let sealed = crate::security::transparency_log::segments::list_segments(&log).unwrap();
+        let active = sealed.last().map_or(0, |s| s.seq + 1);
+        match segment {
+            Some(seq) if seq != active => {
+                crate::security::transparency_log::segments::sealed_path(&log, seq)
+            }
+            _ => log.clone(),
+        }
+    };
+    let mut filter = AuditFilter::new(1);
+    let (mut pages, mut checked) = (0, 0);
+    while let Some(cursor) = {
+        let page = store.read_audit(&filter).unwrap();
+        // A window holding only a segment's seal record returns no event and
+        // moves the cursor to the older segment; only event pages are checked.
+        if let (Some(event), Some(next)) = (page.events.first(), page.next_cursor) {
+            let bytes = std::fs::read(file_of(next.segment)).unwrap();
+            let needle = format!("\"event_id\":\"{}\"", event.event_id);
+            let at = bytes
+                .windows(needle.len())
+                .position(|w| w == needle.as_bytes())
+                .map(|hit| {
+                    bytes[..hit]
+                        .iter()
+                        .rposition(|b| *b == b'\n')
+                        .map_or(0, |nl| nl + 1)
+                });
+            if let Some(line_start) = at {
+                assert_eq!(
+                    next.offset,
+                    u64::try_from(line_start).unwrap(),
+                    "{}",
+                    event.event_id
+                );
+                checked += 1;
+            }
+        }
+        pages += 1;
+        page.next_cursor
+    } {
+        filter = filter.resume(cursor);
+    }
+    assert!(pages > 3, "the log spans several segments");
+    assert!(checked > 3, "cursors were checked across segments");
+}
