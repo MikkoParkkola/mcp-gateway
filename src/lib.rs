@@ -126,6 +126,9 @@ pub mod secret_injection;
     )
 )]
 mod secret_store;
+// The one read-only view `mcp-gateway doctor` takes of the store.
+#[doc(hidden)]
+pub use secret_store::{SecretStoreReport, doctor_report};
 #[doc(hidden)]
 pub mod secrets;
 #[doc(hidden)]

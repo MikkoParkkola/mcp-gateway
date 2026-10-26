@@ -9,10 +9,10 @@ use super::tests::{Fake, three, vault};
 use super::{SaveError, SecretStore, StoreError, StoreKind, choose_with, log_choice, save_secrets};
 use crate::config::SecretStoreChoice;
 
-fn os(probe: Result<(), StoreError>) -> Option<Arc<dyn SecretStore + Send + Sync>> {
+fn os(probe: Result<(), StoreError>) -> Arc<dyn SecretStore + Send + Sync> {
     let mut fake = Fake::new();
     fake.probe = probe;
-    Some(Arc::new(fake))
+    Arc::new(fake)
 }
 
 fn no_bus() -> Result<(), StoreError> {
@@ -24,7 +24,8 @@ fn no_bus() -> Result<(), StoreError> {
 #[test]
 fn auto_takes_the_keychain_when_its_probe_passes() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let chosen = choose_with(SecretStoreChoice::Auto, dir.path(), os(Ok(()))).expect("chosen");
+    let chosen =
+        choose_with(SecretStoreChoice::Auto, dir.path(), Some(os(Ok(())))).expect("chosen");
     assert_eq!(chosen.store.kind(), StoreKind::Keychain);
     assert!(!chosen.fell_back);
     assert!(chosen.reason.contains("probe passed"), "{}", chosen.reason);
@@ -33,7 +34,8 @@ fn auto_takes_the_keychain_when_its_probe_passes() {
 #[test]
 fn auto_falls_back_to_files_naming_the_probe_reason() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let chosen = choose_with(SecretStoreChoice::Auto, dir.path(), os(no_bus())).expect("chosen");
+    let chosen =
+        choose_with(SecretStoreChoice::Auto, dir.path(), Some(os(no_bus()))).expect("chosen");
     assert_eq!(chosen.store.kind(), StoreKind::Files);
     assert!(chosen.fell_back);
     assert!(
@@ -59,7 +61,7 @@ fn explicit_keychain_is_never_switched_and_a_failing_probe_refuses_the_save() {
     );
 
     let chosen =
-        choose_with(SecretStoreChoice::Keychain, dir.path(), os(no_bus())).expect("chosen");
+        choose_with(SecretStoreChoice::Keychain, dir.path(), Some(os(no_bus()))).expect("chosen");
     assert_eq!(chosen.store.kind(), StoreKind::Keychain);
     let (_dir, vault) = vault();
     let result = save_secrets(&vault, chosen.store.as_ref(), &three(), |_| Ok::<_, ()>(()));
@@ -95,11 +97,13 @@ fn auto_passing_at_choice_then_failing_at_save_refuses_before_any_write() {
 #[test]
 fn files_is_files_and_the_choice_is_logged_once_at_its_level() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let files = choose_with(SecretStoreChoice::Files, dir.path(), os(Ok(()))).expect("chosen");
+    let files =
+        choose_with(SecretStoreChoice::Files, dir.path(), Some(os(Ok(())))).expect("chosen");
     assert_eq!(files.store.kind(), StoreKind::Files);
     assert!(!files.fell_back);
 
-    let fallback = choose_with(SecretStoreChoice::Auto, dir.path(), os(no_bus())).expect("chosen");
+    let fallback =
+        choose_with(SecretStoreChoice::Auto, dir.path(), Some(os(no_bus()))).expect("chosen");
     let records =
         crate::test_log_capture::records(|| log_choice(SecretStoreChoice::Auto, &fallback));
     assert_eq!(records.len(), 1, "{records:?}");
@@ -113,9 +117,17 @@ fn files_is_files_and_the_choice_is_logged_once_at_its_level() {
         "{records:?}"
     );
 
-    let passed = choose_with(SecretStoreChoice::Auto, dir.path(), os(Ok(()))).expect("chosen");
+    let passed =
+        choose_with(SecretStoreChoice::Auto, dir.path(), Some(os(Ok(())))).expect("chosen");
     let records = crate::test_log_capture::records(|| log_choice(SecretStoreChoice::Auto, &passed));
     assert_eq!(records.len(), 1, "{records:?}");
     assert_eq!(records[0]["level"], "INFO", "{records:?}");
     assert_eq!(records[0]["fields"]["store"], "keychain");
+}
+
+#[test]
+fn files_needs_no_keychain_on_any_target() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let chosen = super::choose_store(SecretStoreChoice::Files, dir.path()).expect("files");
+    assert_eq!(chosen.store.kind(), StoreKind::Files);
 }

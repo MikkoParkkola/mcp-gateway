@@ -277,16 +277,14 @@ fn run(
                 .spawn(move || {
                     let _ = pipe.write_all(value.as_bytes());
                 });
-            match spawned {
-                Ok(handle) => Some(handle),
-                Err(_) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(KeychainError::Unavailable(
-                        "no thread to write the keychain value".into(),
-                    ));
-                }
-            }
+            let Ok(handle) = spawned else {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(KeychainError::Unavailable(
+                    "no thread to write the keychain value".into(),
+                ));
+            };
+            Some(handle)
         }
         _ => None,
     };

@@ -28,6 +28,7 @@ mod npm_pin;
 mod posture;
 mod provenance;
 mod remedy;
+mod secret_store;
 mod shadow;
 mod ws_reach;
 
@@ -192,6 +193,10 @@ pub async fn run_doctor_command(
     };
     if let Some(path) = resolve_config_path(config_path) {
         results.extend(hidden_keys::check_hidden_keys(&path));
+        results.push(secret_store::check_secret_store(
+            &path,
+            config.secrets.store,
+        ));
     }
 
     // ── 2. Port and gateway runtime ────────────────────────────────────────

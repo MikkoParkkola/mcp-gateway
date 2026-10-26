@@ -336,8 +336,18 @@ pub(crate) fn unused_entries(
     stores: &[&dyn SecretStore],
     referenced: &BTreeSet<String>,
 ) -> Result<Vec<UnusedEntry>, StoreError> {
+    unused_entries_until(vault, stores, referenced, Instant::now() + LOCK_WAIT)
+}
+
+/// [`unused_entries`], waiting for the vault lock no later than `deadline`.
+pub(crate) fn unused_entries_until(
+    vault: &Vault,
+    stores: &[&dyn SecretStore],
+    referenced: &BTreeSet<String>,
+    deadline: Instant,
+) -> Result<Vec<UnusedEntry>, StoreError> {
     // A save holding the lock may have created entries it has not committed.
-    let _lock = take_lock(&vault.lock_path, Instant::now() + LOCK_WAIT)?;
+    let _lock = take_lock(&vault.lock_path, deadline)?;
     let mut unused = Vec::new();
     for live in vault.index.live()? {
         if referenced.contains(&live.name) {

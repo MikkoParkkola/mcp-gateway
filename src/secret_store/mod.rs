@@ -11,6 +11,7 @@
 mod files;
 mod index;
 mod pending;
+mod report;
 mod save;
 
 use std::path::Path;
@@ -20,8 +21,10 @@ use crate::config::SecretStoreChoice;
 
 pub(crate) use files::FilesStore;
 pub(crate) use pending::{NewSecretOwned, PendingSecrets, create_secrets};
+pub use report::{SecretStoreReport, doctor_report};
 pub(crate) use save::{
     LOCK_WAIT, NewSecret, SaveError, UnusedEntry, Vault, save_secrets, unused_entries,
+    unused_entries_until,
 };
 
 /// A store new secrets are written to. Every call is bounded and never
