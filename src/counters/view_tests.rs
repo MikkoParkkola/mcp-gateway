@@ -190,3 +190,35 @@ fn t39_no_points_before_since_and_zeros_after() {
     assert!(points.iter().all(|p| p.t + HALF_SECS > since));
     assert_eq!(points.iter().filter(|p| p.v == 0).count(), 6);
 }
+
+/// T35 with an overflow: a label admitted 12 hours ago, whose previous day
+/// had calls in its dimension's overflow, draws no previous point from
+/// before it was admitted, and says the period is incomplete.
+#[test]
+fn t35_the_previous_period_omits_what_the_overflow_may_hold() {
+    let store = CounterStore::new(T0);
+    let now = T0 + 3 * DAY;
+    let stray = Call {
+        caller: "key:a",
+        server: Label::Known("s"),
+        tool: Label::Untrusted,
+        tally: Tally::default(),
+    };
+    store.record(&stray, now - 36 * HOUR, &UTC);
+    let admitted = now - 12 * HOUR;
+    store.record(&call(), admitted, &UTC);
+    let mut query = Query::new(Metric::Calls, Window::Day, Filter::Tool("s", "t"));
+    query.compare = true;
+    let view = store.series(&query, now, &UTC);
+    assert!(!view.folded, "the label's own points are exact");
+    assert_eq!(view.points.len(), 48);
+    assert!(
+        !view.previous_complete,
+        "the overflow may hold its previous calls"
+    );
+    let start = admitted - admitted % HALF_SECS;
+    assert!(
+        view.previous.unwrap().iter().all(|p| p.t >= start),
+        "no previous point from before it was admitted"
+    );
+}
