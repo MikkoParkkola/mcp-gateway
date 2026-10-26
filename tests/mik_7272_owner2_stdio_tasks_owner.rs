@@ -4,7 +4,7 @@
 //! HTTP owners on the stdio store, interrupted tasks settled and never rerun,
 //! cancel and input rounds over stdio, one admission index, and creation
 //! rules matching HTTP. Rows T6, T9–T11 and T14–T17 of
-//! `docs/design/2026-09-30-sub4-stdio-owner-test-plan.md`; design D6 rev 5.
+//! the sub4 stdio owner test plan; design D6 rev 5.
 
 #[path = "mik_7272_owner2_stdio_tasks/helper.rs"]
 mod helper;

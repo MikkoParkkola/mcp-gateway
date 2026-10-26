@@ -28,7 +28,7 @@
 //! - A retention sweep skips its pass on `Err`: deleting what it cannot date
 //!   is the dangerous answer there.
 //!
-//! Design: `docs/internal/design/2026-10-09-mik-8202-clock-before-epoch.md`.
+//! Design: the clock before epoch design.
 #![allow(
     clippy::disallowed_methods,
     reason = "the one place the wall clock is read"
