@@ -198,8 +198,41 @@ fn which_command_returns_false_for_nonexistent() {
 #[test]
 fn check_backend_env_unknown_server_returns_empty() {
     let backend = mcp_gateway::config::BackendConfig::default();
-    let results = check_backend_env("totally-unknown-server-xyz", &backend);
+    let results = check_backend_env("totally-unknown-server-xyz", &backend, None);
     assert!(results.is_empty());
+}
+
+#[test]
+fn kc8_doctor_names_a_reference_never_the_value() {
+    let resolved = "kc-doctor-sentinel-7f3a";
+    let mut backend = mcp_gateway::config::BackendConfig::default();
+    backend
+        .env
+        .insert("TAVILY_API_KEY".to_string(), resolved.to_string());
+    let mut written = mcp_gateway::config::BackendConfig::default();
+    written.env.insert(
+        "TAVILY_API_KEY".to_string(),
+        "keychain:gw.tavily".to_string(),
+    );
+    let results = check_backend_env("tavily", &backend, Some(&written));
+    let shown = format!(
+        "{:?}",
+        results.iter().map(|r| &r.detail).collect::<Vec<_>>()
+    );
+    assert!(shown.contains("is set as keychain:gw.tavily"), "{shown}");
+    assert!(!shown.contains(resolved), "{shown}");
+    // A literal shows as plainly set.
+    let mut literal = written.clone();
+    literal
+        .env
+        .insert("TAVILY_API_KEY".to_string(), resolved.to_string());
+    let results = check_backend_env("tavily", &backend, Some(&literal));
+    let shown = format!(
+        "{:?}",
+        results.iter().map(|r| &r.detail).collect::<Vec<_>>()
+    );
+    assert!(shown.contains("is set"), "{shown}");
+    assert!(!shown.contains(resolved), "{shown}");
 }
 
 // ── MIK-8375: a config that will not load ─────────────────────────────────
