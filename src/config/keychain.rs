@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The OS keychain behind `keychain:NAME` references (ADR-028).
 //!
-//! Only reads live here. Values cross this module as [`WipedBytes`], and no
-//! error carries one: an error names a reason, and the caller names the entry.
+//! The readers, and the platform writer the store core chooses. Values cross
+//! this module as [`WipedBytes`], and no error carries one: an error names a
+//! reason, and the caller names the entry.
 
 use std::sync::Arc;
 
@@ -13,24 +14,16 @@ pub(crate) use crate::wiped_bytes::WipedBytes;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum KeychainError {
     /// No entry has that name.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "constructed by the OS readers, which land next")
-    )]
     Missing,
     /// The store holding the entry is locked, and the gateway never prompts.
     #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "constructed by the OS readers, which land next")
+        all(not(test), windows),
+        expect(dead_code, reason = "Credential Manager has no locked state")
     )]
     Locked,
     /// The store cannot be reached: no tool, no session bus, or a refusal.
     Unavailable(String),
     /// The store did not answer within the bound (ADR-028 rule 7).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "constructed by the OS readers, which land next")
-    )]
     Timeout,
 }
 
@@ -50,6 +43,39 @@ impl KeychainError {
 pub(crate) trait KeychainRead: Send + Sync {
     /// The entry's exact bytes.
     fn read(&self, name: &str) -> Result<WipedBytes, KeychainError>;
+}
+
+/// How long one keychain call may take (ADR-028 rule 7).
+#[cfg(any(target_os = "macos", windows))]
+pub(crate) const BOUND: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Runs a native keychain `call` on its own thread, after `delay` (a test
+/// seam), and waits at most `bound`. A late answer is dropped unread, and a
+/// value in it wiped; the thread itself is left to finish. A write that
+/// times out may still land, which the store core plans for.
+#[cfg(any(target_os = "macos", windows))]
+pub(crate) fn bounded<T: Send + 'static>(
+    bound: std::time::Duration,
+    delay: std::time::Duration,
+    call: impl FnOnce() -> Result<T, KeychainError> + Send + 'static,
+) -> Result<T, KeychainError> {
+    use std::sync::mpsc;
+    let (send, receive) = mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("keychain-call".into())
+        .spawn(move || {
+            std::thread::sleep(delay);
+            // A receiver that timed out is gone; the value is wiped on drop.
+            let _ = send.send(call());
+        })
+        .map_err(|_| KeychainError::Unavailable("no thread for the keychain call".into()))?;
+    match receive.recv_timeout(bound) {
+        Ok(found) => found,
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(KeychainError::Timeout),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(KeychainError::Unavailable(
+            "the keychain call ended without an answer".into(),
+        )),
+    }
 }
 
 /// The reader an [`EnvOverlay`](super::EnvOverlay) resolves through. The
@@ -73,8 +99,43 @@ impl Default for KeychainReader {
         if let Some(reader) = TEST_READER.with(|slot| slot.borrow().clone()) {
             return Self(reader);
         }
-        Self::new(Arc::new(OsKeychain))
+        Self::new(os_keychain())
     }
+}
+
+/// The platform keychain, once per process.
+fn os_keychain() -> Arc<dyn KeychainRead> {
+    static OS: std::sync::OnceLock<Arc<dyn KeychainRead>> = std::sync::OnceLock::new();
+    OS.get_or_init(|| {
+        #[cfg(target_os = "linux")]
+        let os: Arc<dyn KeychainRead> = Arc::new(super::keychain_linux::LinuxKeychain::from_path());
+        #[cfg(target_os = "macos")]
+        let os: Arc<dyn KeychainRead> = Arc::new(super::keychain_macos::MacKeychain::search_list());
+        #[cfg(windows)]
+        let os: Arc<dyn KeychainRead> = Arc::new(super::keychain_windows::WindowsKeychain::new());
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+        let os: Arc<dyn KeychainRead> = Arc::new(Unsupported);
+        os
+    })
+    .clone()
+}
+
+/// The platform keychain as a store new secrets are written to, `None` on
+/// a target without one. Each call builds a fresh client: `auto` probes it
+/// once per choice.
+pub(crate) fn os_secret_store() -> Option<Arc<dyn crate::secret_store::SecretStore + Send + Sync>> {
+    #[cfg(target_os = "linux")]
+    let os: Option<Arc<dyn crate::secret_store::SecretStore + Send + Sync>> =
+        Some(Arc::new(super::keychain_linux::LinuxKeychain::from_path()));
+    #[cfg(target_os = "macos")]
+    let os: Option<Arc<dyn crate::secret_store::SecretStore + Send + Sync>> =
+        Some(Arc::new(super::keychain_macos::MacKeychain::search_list()));
+    #[cfg(windows)]
+    let os: Option<Arc<dyn crate::secret_store::SecretStore + Send + Sync>> =
+        Some(Arc::new(super::keychain_windows::WindowsKeychain::new()));
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    let os = None;
+    os
 }
 
 #[cfg(test)]
@@ -100,12 +161,16 @@ pub(crate) fn with_test_keychain<T>(reader: Arc<dyn KeychainRead>, body: impl Fn
     body()
 }
 
-/// The platform keychain.
-struct OsKeychain;
+/// A target with no keychain reader yet: every read is refused by name.
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+struct Unsupported;
 
-impl KeychainRead for OsKeychain {
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+impl KeychainRead for Unsupported {
     fn read(&self, _name: &str) -> Result<WipedBytes, KeychainError> {
-        Err(KeychainError::Unavailable("not implemented".to_owned()))
+        Err(KeychainError::Unavailable(
+            "no keychain reader on this platform yet".to_owned(),
+        ))
     }
 }
 
