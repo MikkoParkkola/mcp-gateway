@@ -171,6 +171,9 @@ pub(crate) struct Locked {
     /// The configured path was a symlink to a missing target when it was
     /// resolved: damage, not absence (GH462).
     dangling: bool,
+    /// The target existed once the lock was held, so its disappearance
+    /// before the write is a deletion, not a config still to be created.
+    existed: bool,
 }
 
 impl Locked {
@@ -209,16 +212,22 @@ impl Locked {
         }
     }
 
-    /// Whether the holder may write the target now: the path still names it
-    /// and it is no dangling link's missing target. Checked last, just
-    /// before the write, so a target deleted while the writer worked is not
-    /// recreated.
+    /// Whether the holder may write the target now: the path still names it,
+    /// it is no dangling link's missing target, and it was not deleted since
+    /// the lock was held. Checked before the write, so a config deleted while
+    /// the writer worked is not recreated from its copy.
     ///
     /// # Errors
     ///
     /// As [`Self::absent`].
     pub(crate) fn may_write(&self, config: &Path) -> Result<(), String> {
-        self.absent(config).map(drop)
+        if self.absent(config)? && self.existed {
+            return Err(format!(
+                "Not saved: {} was deleted during the write; nothing was written",
+                config.display()
+            ));
+        }
+        Ok(())
     }
 
     /// Refuse a write whose configured path no longer names the target this
@@ -344,11 +353,13 @@ fn acquire(
             // An unusable journal releases the lock and refuses, naming what
             // to do by hand.
             let recovered = super::journal::recover(&target).map_err(NotLocked::Failed)?;
+            let existed = std::fs::symlink_metadata(&target).is_ok();
             return Ok(Locked {
                 target,
                 held,
                 recovered,
                 dangling,
+                existed,
             });
         }
         if let Some(say) = on_wait.take() {
@@ -607,191 +618,5 @@ pub(crate) fn journal_pending(config: &Path) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    /// The one line the filesystem tests cannot reach without a seam: which
-    /// create failures mean no writer can exist.
-    #[test]
-    fn only_a_read_only_or_unwritable_directory_blocks_every_writer() {
-        use std::io::{Error, ErrorKind};
-        assert_eq!(
-            super::creation_blocked(&Error::from(ErrorKind::ReadOnlyFilesystem)),
-            Some("read-only filesystem")
-        );
-        assert!(super::creation_blocked(&Error::from(ErrorKind::PermissionDenied)).is_some());
-        for other in [
-            ErrorKind::StorageFull,
-            ErrorKind::AlreadyExists,
-            ErrorKind::NotFound,
-        ] {
-            assert_eq!(
-                super::creation_blocked(&Error::from(other)),
-                None,
-                "{other:?}"
-            );
-        }
-    }
-
-    use super::lock_path;
-    use std::path::Path;
-
-    #[test]
-    fn the_sidecar_sits_next_to_the_config() {
-        assert_eq!(
-            lock_path(Path::new("/etc/mcp/gateway.yaml")),
-            Path::new("/etc/mcp/.gateway.yaml.lock")
-        );
-        assert_eq!(
-            lock_path(Path::new("gateway.yaml")),
-            Path::new(".gateway.yaml.lock")
-        );
-    }
-
-    /// MIK-8132: a sidecar with an inherited ACL (copied in, or checked out
-    /// by git) is refused with the repair to run, never with only the rule it
-    /// broke.
-    #[cfg(windows)]
-    #[test]
-    fn a_shared_sidecar_is_refused_with_its_repair() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let config = dir.path().join("gateway.yaml");
-        let lock = lock_path(&config);
-        std::fs::write(&lock, "").expect("sidecar with an inherited ACL");
-
-        let refused = super::lock_config_blocking(&config, std::time::Instant::now(), |_| {});
-
-        let Err(super::NotLocked::Failed(message)) = refused else {
-            panic!("a shared sidecar must refuse the lock");
-        };
-        assert!(
-            message.contains("To repair it") && message.contains(".gateway.yaml.lock"),
-            "{message}"
-        );
-    }
-
-    /// MIK-8153: a config named through a symlink and through its target is
-    /// one config, so both spellings meet one lock.
-    #[cfg(unix)]
-    #[test]
-    fn a_symlink_and_its_target_share_one_lock() {
-        let real = tempfile::tempdir().expect("real dir");
-        let other = tempfile::tempdir().expect("link dir");
-        let target = real.path().join("gateway.yaml");
-        std::fs::write(&target, "backends: {}\n").expect("config");
-        let link = other.path().join("gateway.yaml");
-        std::os::unix::fs::symlink(&target, &link).expect("link");
-
-        let now = std::time::Instant::now;
-        let held = super::lock_config_blocking(&target, now(), |_| {}).expect("lock via target");
-        let second = super::lock_config_blocking(&link, now(), |_| {});
-
-        assert!(
-            matches!(second, Err(super::NotLocked::Busy)),
-            "the link spelling must meet the target's lock"
-        );
-        drop(held);
-    }
-
-    /// A sidecar other accounts can open (a `0644` one checked out by git,
-    /// say) is one they can lock, stalling every config write. One this
-    /// user owns is made owner-only before it is locked.
-    #[cfg(unix)]
-    #[test]
-    fn a_readable_sidecar_is_made_owner_only() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let dir = tempfile::tempdir().expect("tempdir");
-        let config = dir.path().join("gateway.yaml");
-        let lock = lock_path(&config);
-        std::fs::write(&lock, "").expect("sidecar");
-        std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o644)).expect("chmod");
-
-        let held = super::lock_config_blocking(&config, std::time::Instant::now(), |_| {});
-
-        assert!(held.is_ok(), "the lock is taken");
-        let mode = std::fs::metadata(&lock).expect("stat").permissions().mode();
-        assert_eq!(mode & 0o777, 0o600, "mode {mode:o}");
-    }
-
-    /// Abandoned threads are capped: with [`super::MAX_ABANDONED`] callers
-    /// gone while their threads stay stuck, the next start is refused; once
-    /// those threads return, starts work again.
-    #[tokio::test]
-    async fn abandoned_threads_are_capped_until_they_return() {
-        use super::{Abandoned, MAX_ABANDONED, NoResult, off_runtime_in};
-        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
-        // This test's own count, so other tests' threads never touch it.
-        static MINE: Abandoned = Abandoned(AtomicUsize::new(0));
-        let mut stuck = Vec::new();
-        for _ in 0..MAX_ABANDONED {
-            let (release, wait) = std::sync::mpsc::channel::<()>();
-            stuck.push(release);
-            let call = off_runtime_in(&MINE, move || wait.recv().is_ok());
-            tokio::pin!(call);
-            // Polled once, which starts the thread, then dropped: the caller
-            // leaves, the thread stays.
-            tokio::select! {
-                biased;
-                _ = &mut call => panic!("the thread waits for its release"),
-                () = std::future::ready(()) => {}
-            }
-        }
-        assert_eq!(MINE.0.load(SeqCst), MAX_ABANDONED);
-        assert_eq!(
-            off_runtime_in(&MINE, || ()).await,
-            Err(NoResult::Stalled),
-            "refused past the cap"
-        );
-
-        drop(stuck);
-        let mut spins = 0_u32;
-        while MINE.0.load(SeqCst) != 0 && spins < 10_000_000 {
-            std::thread::yield_now();
-            spins += 1;
-        }
-        assert_eq!(MINE.0.load(SeqCst), 0, "returned threads are uncounted");
-        assert_eq!(off_runtime_in(&MINE, || 7).await, Ok(7));
-    }
-
-    /// A result its caller never received (a held lock) is dropped while
-    /// the thread still counts as abandoned: closing it can stall on the
-    /// same mount, so the thread is not uncounted until that drop returns.
-    #[tokio::test]
-    async fn an_undelivered_result_is_dropped_before_the_thread_is_uncounted() {
-        use super::{Abandoned, off_runtime_in};
-        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
-        use std::sync::mpsc;
-        static MINE: Abandoned = Abandoned(AtomicUsize::new(0));
-        /// Drops only once released, saying first that it has started.
-        struct SlowClose(mpsc::Sender<()>, mpsc::Receiver<()>);
-        impl Drop for SlowClose {
-            fn drop(&mut self) {
-                let _ = self.0.send(());
-                let _ = self.1.recv();
-            }
-        }
-        let (closing, closed) = mpsc::channel();
-        let (release, wait) = mpsc::channel::<()>();
-        let (start, begin) = mpsc::channel::<()>();
-        let mut call = Box::pin(off_runtime_in(&MINE, move || {
-            let _ = begin.recv();
-            SlowClose(closing, wait)
-        }));
-        tokio::select! {
-            biased;
-            _ = call.as_mut() => panic!("the thread waits to start"),
-            () = std::future::ready(()) => {}
-        }
-        // The caller leaves before the thread has a result.
-        drop(call);
-        start.send(()).expect("the thread is waiting");
-
-        closed
-            .recv()
-            .expect("the undelivered result is being dropped");
-        assert_eq!(
-            MINE.0.load(SeqCst),
-            1,
-            "still counted while its result closes"
-        );
-        drop(release);
-    }
-}
+#[path = "config_persistence_lock_tests.rs"]
+mod tests;

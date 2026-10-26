@@ -304,3 +304,39 @@ async fn a_whole_config_write_does_not_recreate_a_deleted_target() {
     assert!(refused.expect("writer task"), "the write refuses");
     assert!(!l.real.exists(), "the deleted target stays deleted");
 }
+
+/// A plain config deleted while the writer holds the lock is a deletion,
+/// not a config still to be created: it is not recreated from the copy.
+#[test]
+fn a_config_deleted_during_the_edit_is_not_recreated() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    write_owner_only(&path, START).expect("write config");
+    let at = path.clone();
+    let refused = crate::config_persistence::edit_config(&path, CommentLoss::Rewrite, move |c| {
+        std::fs::remove_file(&at).expect("delete");
+        add_b(c);
+        Ok(())
+    })
+    .expect_err("a deleted config refuses");
+    assert!(refused.contains("deleted during the write"), "{refused}");
+    assert!(!path.exists(), "the deleted config stays deleted");
+}
+
+/// An edit that changes nothing still reports on the config the path
+/// names: a link moved during it refuses rather than report success.
+#[test]
+fn a_no_op_edit_refuses_when_the_link_moves() {
+    let (l, held) = linked();
+    drop(held);
+    let at = l.link.clone();
+    let other = l.other.clone();
+    let refused = crate::config_persistence::edit_config_text(&l.link, move |_| {
+        std::fs::remove_file(&at).expect("unlink");
+        std::os::unix::fs::symlink(&other, &at).expect("re-point");
+        Ok(None)
+    })
+    .expect_err("a no-op edit whose link moved refuses");
+    assert!(refused.contains("moved during the write"), "{refused}");
+    wrote_neither(&l);
+}

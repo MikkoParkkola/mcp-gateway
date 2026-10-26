@@ -230,7 +230,7 @@ impl ReloadContext {
                     NotLocked::Failed(message) => ReplaceError::Failed(message),
                 }
             })?;
-        let target = locked.target;
+        let target = locked.target.clone();
         self.pay_owed_reload(locked.recovered, &target).await;
 
         if target != self.trusted_config {
@@ -256,6 +256,12 @@ impl ReloadContext {
                 "the new gateway.yaml is not UTF-8 text".to_string(),
             ));
         }
+        // The path may have moved, or the config been deleted, while the
+        // bytes were computed: refuse before anything is reloaded or staged,
+        // rather than report on a config the path no longer names.
+        locked
+            .may_write(&self.config_path)
+            .map_err(ReplaceError::Unsupported)?;
         if new == current {
             // Nothing to write, but still a reload, so a retry after a failed
             // one does not leave the runtime stale. Nothing was committed, so
@@ -269,14 +275,6 @@ impl ReloadContext {
                 kept_beside: None,
                 reload,
             });
-        }
-        // The path may have moved while the bytes were computed: refuse before
-        // anything is staged, rather than write and roll back.
-        if crate::identity_grants::journal::resolved(&self.config_path) != target {
-            return Err(ReplaceError::Unsupported(format!(
-                "{} was re-pointed during the write; nothing was written",
-                self.config_path.display()
-            )));
         }
         self.commit(&target, &current, &new, replace.replaced).await
     }
