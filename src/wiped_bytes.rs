@@ -14,10 +14,13 @@ impl WipedBytes {
         &self.0
     }
 
-    /// Overwrite the bytes in place with `zeroize`'s volatile writes, which
+    /// Overwrite the whole allocation with `zeroize`'s volatile writes, which
     /// the optimiser may not drop as stores to memory about to be freed.
+    /// `zeroize` on the `Vec` itself (not a slice of it) wipes the contents,
+    /// then the spare capacity past `len` (bytes a truncated buffer left),
+    /// then clears it; the allocation is kept until the `Vec` drops.
     fn wipe(&mut self) {
-        zeroize::Zeroize::zeroize(self.0.as_mut_slice());
+        zeroize::Zeroize::zeroize(&mut self.0);
     }
 }
 
@@ -40,13 +43,26 @@ impl std::fmt::Debug for WipedBytes {
 mod tests {
     use super::WipedBytes;
 
-    /// The wipe `Drop` runs overwrites every byte, keeping the buffer's
-    /// length: a no-op or a partial wipe leaves a secret byte here.
+    /// `wipe` (what `Drop` runs) goes through `zeroize`'s `Vec` impl, the one
+    /// that also covers the spare capacity: it leaves the buffer cleared with
+    /// its allocation kept, where a slice wipe keeps the length and a no-op
+    /// keeps the secret. Bytes past `len` cannot be read without `unsafe`;
+    /// that `Vec::zeroize` wipes them is `zeroize`'s documented behaviour.
     #[test]
-    fn the_wipe_overwrites_every_byte() {
-        let mut secret = WipedBytes::new(b"s3cret-token".to_vec());
+    fn the_wipe_goes_through_the_whole_allocation() {
+        let mut bytes = b"s3cret-token-and-more".to_vec();
+        bytes.truncate(12);
+        let capacity = bytes.capacity();
+        let mut secret = WipedBytes::new(bytes);
         secret.wipe();
-        assert_eq!(secret.as_bytes().len(), 12);
-        assert!(secret.as_bytes().iter().all(|byte| *byte == 0));
+        assert!(
+            secret.as_bytes().is_empty(),
+            "cleared, not just overwritten"
+        );
+        assert_eq!(
+            secret.0.capacity(),
+            capacity,
+            "the allocation it wiped is kept"
+        );
     }
 }
