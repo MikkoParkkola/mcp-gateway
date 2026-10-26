@@ -84,16 +84,16 @@ mod grant_decision_stdio;
 #[cfg(feature = "cost-governance")]
 mod http_cost_persistence;
 
-// MIK-7272.OWNER.3 and OWNER.5 (docs/design/2026-09-30-sub4-stdio-owner-test-plan.md, I1).
+// MIK-7272.OWNER.3 and OWNER.5 (the sub4 stdio owner test plan, I1).
 mod owner3_stdio_keying;
 mod owner5_stdio_context;
 
-// MIK-7272.OWNER.1 and OWNER.4 (docs/design/2026-09-30-sub4-stdio-owner-test-plan.md, I2).
+// MIK-7272.OWNER.1 and OWNER.4 (the sub4 stdio owner test plan, I2).
 mod owner1_stdio_management;
 mod owner1_stdio_reload;
 mod owner4_stdio_policy;
 
-// MIK-7272.LIFE.1 (docs/design/2026-09-30-sub4-stdio-owner-test-plan.md, I3).
+// MIK-7272.LIFE.1 (the sub4 stdio owner test plan, I3).
 mod life1_stdio_cancel;
 // MIK-8176 stage 3: stdio slots kept when written, given back otherwise.
 mod stdio_slot_release;
