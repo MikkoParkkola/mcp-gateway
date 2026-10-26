@@ -94,8 +94,12 @@ impl FirewallVerdict {
 // ─── Rule helpers ─────────────────────────────────────────────────────────────
 
 pub(super) fn compile_rule(rule: &FirewallRule) -> CompiledRule {
-    let pattern = glob::Pattern::new(&rule.tool_match)
-        .unwrap_or_else(|_| glob::Pattern::new("*").expect("fallback pattern compiles"));
+    // The load refuses an invalid glob; should one get here anyway, it
+    // matches only its own literal text, never every tool.
+    let pattern = glob::Pattern::new(&rule.tool_match).unwrap_or_else(|_| {
+        glob::Pattern::new(&glob::Pattern::escape(&rule.tool_match))
+            .expect("an escaped pattern compiles")
+    });
     CompiledRule {
         pattern,
         action: rule.action,
