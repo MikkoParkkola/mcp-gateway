@@ -35,6 +35,29 @@ pub(crate) struct ExclusiveFileLock {
     pins: Vec<DirPin>,
 }
 
+/// One [`ExclusiveFileLock::try_lease`] attempt.
+pub(crate) enum Attempt {
+    /// The lock is this caller's.
+    Taken(ExclusiveFileLock),
+    /// Another handle holds it.
+    Held,
+    /// The sidecar cannot be used now; the error (`PermissionDenied`) names
+    /// the path, the rule it fails and what to do.
+    #[expect(dead_code, reason = "the Windows sidecar judge builds it")]
+    Refused(io::Error),
+}
+
+#[cfg(test)]
+impl Attempt {
+    /// The lock, when this attempt took it.
+    pub(crate) fn taken(self) -> Option<ExclusiveFileLock> {
+        match self {
+            Self::Taken(lock) => Some(lock),
+            Self::Held | Self::Refused(_) => None,
+        }
+    }
+}
+
 /// A judged store directory. On Windows its handle, held without delete
 /// sharing for exactly the custody lifetime, so neither the directory nor any
 /// ancestor can be renamed or swapped for a junction while the store is open
@@ -147,12 +170,14 @@ impl ExclusiveFileLock {
     }
 
     /// One non-blocking attempt at an exclusive lease on `lock_path`, on
-    /// every platform: `Ok(None)` when another handle holds it, `Err` for any
-    /// other failure (a directory in the way, a read-only volume, locking
-    /// unsupported). A separate constructor from [`Self::try_acquire`], which
-    /// judges its sidecar's privacy on Windows and refuses on any platform
-    /// with neither unix nor Windows custody.
-    pub(crate) fn try_lease(lock_path: &Path) -> io::Result<Option<Self>> {
+    /// every platform: [`Attempt::Held`] when another handle holds it,
+    /// [`Attempt::Refused`] when the sidecar cannot be used now (Windows: not
+    /// owner-only and still open elsewhere, so it cannot be replaced), `Err`
+    /// for any other failure (a directory in the way or refused, a read-only
+    /// volume, locking unsupported). A separate constructor from
+    /// [`Self::try_acquire`], which refuses on any platform with neither unix
+    /// nor Windows custody.
+    pub(crate) fn try_lease(lock_path: &Path) -> io::Result<Attempt> {
         #[cfg(test)]
         count_attempt(lock_path);
         let mut opts = OpenOptions::new();
@@ -160,39 +185,77 @@ impl ExclusiveFileLock {
         set_owner_only(&mut opts);
         let file = opts.open(lock_path)?;
         match file.try_lock() {
-            Ok(()) => Ok(Some(Self::held(file))),
-            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            Ok(()) => Ok(Attempt::Taken(Self::held(file))),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(Attempt::Held),
             Err(std::fs::TryLockError::Error(e)) => Err(e),
         }
     }
 
     /// Wait for the lock by polling [`Self::try_lease`] every `poll` until
     /// `deadline`, never by blocking a thread: a dropped (cancelled or
-    /// timed-out) caller leaves no thread waiting behind it. Returns
-    /// `TimedOut` when the deadline passes before the lock is taken; the probe
-    /// runs before every sleep, so a lock released just before the deadline is
-    /// still taken.
+    /// timed-out) caller leaves no thread waiting behind it. At the deadline
+    /// a sidecar last refused returns that refusal (`PermissionDenied`), a
+    /// held one `TimedOut`; the probe runs before every sleep, so a lock
+    /// released just before the deadline is still taken.
     pub(crate) async fn lease(
         lock_path: &Path,
         poll: std::time::Duration,
         deadline: tokio::time::Instant,
     ) -> io::Result<Self> {
         loop {
-            if let Some(lock) = Self::try_lease(lock_path)? {
-                return Ok(lock);
-            }
-            // The bound: past it, the wait ends TimedOut rather than holding forever.
+            let refused = match Self::try_lease(lock_path)? {
+                Attempt::Taken(lock) => return Ok(lock),
+                Attempt::Held => None,
+                Attempt::Refused(error) => Some(error),
+            };
+            // The bound: past it, the wait ends rather than holding forever.
             if tokio::time::Instant::now() >= deadline {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "the credential lease wait reached its deadline",
-                ));
+                return Err(refused.unwrap_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "the credential lease wait reached its deadline",
+                    )
+                }));
             }
             // Wake at the next poll or the deadline, whichever comes first, so
             // the timeout fires at the deadline instead of a poll late.
             let next = tokio::time::Instant::now() + poll;
             let wake = if next < deadline { next } else { deadline };
             tokio::time::sleep_until(wake).await;
+        }
+    }
+
+    /// [`Self::lease`] for a synchronous caller: polls on the calling thread
+    /// until `deadline`, with the same outcome at the deadline (`TimedOut`
+    /// for a held lock, the `PermissionDenied` refusal for a refused one).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the per-user vault lock calls it once its branch lands"
+        )
+    )]
+    pub(crate) fn acquire_until(
+        lock_path: &Path,
+        poll: std::time::Duration,
+        deadline: std::time::Instant,
+    ) -> io::Result<Self> {
+        loop {
+            let refused = match Self::try_lease(lock_path)? {
+                Attempt::Taken(lock) => return Ok(lock),
+                Attempt::Held => None,
+                Attempt::Refused(error) => Some(error),
+            };
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return Err(refused.unwrap_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "the lock wait reached its deadline",
+                    )
+                }));
+            }
+            std::thread::sleep(poll.min(deadline - now));
         }
     }
 
@@ -419,6 +482,26 @@ mod tests {
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    /// `acquire_until` on every platform: a free lock is taken, a held one
+    /// times out at the deadline (`TimedOut`, never a refusal), and the lock
+    /// is taken again once released.
+    #[test]
+    fn acquire_until_takes_waits_out_and_retakes() {
+        use std::time::{Duration, Instant};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".until.lock");
+        let poll = Duration::from_millis(10);
+        let first = ExclusiveFileLock::acquire_until(&path, poll, Instant::now())
+            .expect("a free lock is taken");
+        let held = ExclusiveFileLock::acquire_until(&path, poll, Instant::now() + poll * 10)
+            .err()
+            .expect("held");
+        assert_eq!(held.kind(), io::ErrorKind::TimedOut, "{held}");
+        drop(first);
+        let _again = ExclusiveFileLock::acquire_until(&path, poll, Instant::now())
+            .expect("taken again once released");
     }
 
     #[test]

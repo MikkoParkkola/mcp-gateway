@@ -322,3 +322,38 @@ fn appends_across_rotations_do_not_deadlock_on_the_lease() {
     });
     assert!(verify(&path, false).ok);
 }
+
+/// Windows: a lease sidecar that is not owner-only and is still held by an
+/// older build is not "another logger": at the bound the lease returns the
+/// refusal (`PermissionDenied`, naming the lock file), not `LeaseHeld`.
+#[cfg(windows)]
+#[test]
+fn a_refused_lease_sidecar_reports_the_refusal_not_a_held_lease() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let lock = sibling(&path, "lock");
+    std::fs::write(&lock, b"").unwrap();
+    let user = crate::private_fs::test_support::user_sid();
+    crate::private_fs::test_support::plant_any("lease", &lock, &format!("O:{user}D:(A;;FA;;;WD)"));
+    let holder = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock)
+        .unwrap();
+    holder.try_lock().unwrap();
+    let now = Instant::now();
+    let error = acquire_with(&path, Duration::ZERO, &mut |_| {}, &|| now)
+        .err()
+        .expect("refused");
+    assert_eq!(
+        error.kind(),
+        std::io::ErrorKind::PermissionDenied,
+        "{error}"
+    );
+    assert!(!is_lease_held(&error), "{error}");
+    assert!(
+        error.to_string().contains(&lock.display().to_string()),
+        "{error}"
+    );
+    drop(holder);
+}

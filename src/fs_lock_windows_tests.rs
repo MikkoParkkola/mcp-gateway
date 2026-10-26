@@ -1,49 +1,81 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Windows: every lock constructor creates its sidecar owner-only, and an
-//! existing sidecar another account could open is replaced with an
-//! owner-only one before it is locked.
+//! Windows: every lock constructor (`acquire`, `try_lease`, `lease`,
+//! `acquire_until`) creates its sidecar owner-only, replaces an existing one
+//! another account could open only when nothing holds it, refuses one it
+//! cannot replace at the caller's deadline, and refuses a lock directory
+//! another account could plant a sidecar in. `try_acquire` is not one of
+//! them and is covered by its own rows.
 
+use std::io;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use super::ExclusiveFileLock;
-use crate::private_fs::test_support::{assert_owner_only, plant_any, user_sid};
+use super::{Attempt, ExclusiveFileLock};
+use crate::private_fs::test_support::{assert_owner_only, plant_any, plant_sddl, user_sid};
 
-/// The three constructors, each taking the lock once and dropping it.
-fn take(how: &str, path: &Path) {
+const CONSTRUCTORS: [&str; 4] = ["acquire", "try_lease", "lease", "acquire_until"];
+
+/// Take the lock through `how`; a refused or held lock is an error here
+/// (`try_lease` maps `Held` to `WouldBlock`, `Refused` to its error).
+fn take(how: &str, path: &Path) -> io::Result<ExclusiveFileLock> {
+    let wait = Duration::from_millis(300);
     match how {
-        "acquire" => drop(ExclusiveFileLock::acquire(path).expect("acquire")),
-        "try_lease" => drop(
-            ExclusiveFileLock::try_lease(path)
-                .expect("try_lease")
-                .expect("uncontended"),
-        ),
+        "acquire" => ExclusiveFileLock::acquire(path),
+        "try_lease" => match ExclusiveFileLock::try_lease(path)? {
+            Attempt::Taken(lock) => Ok(lock),
+            Attempt::Held => Err(io::ErrorKind::WouldBlock.into()),
+            Attempt::Refused(error) => Err(error),
+        },
         "lease" => {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_time()
                 .build()
                 .expect("runtime");
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-            let lease = runtime.block_on(ExclusiveFileLock::lease(
+            let deadline = tokio::time::Instant::now() + wait;
+            runtime.block_on(ExclusiveFileLock::lease(
                 path,
                 Duration::from_millis(10),
                 deadline,
-            ));
-            drop(lease.expect("lease"));
+            ))
+        }
+        "acquire_until" => {
+            ExclusiveFileLock::acquire_until(path, Duration::from_millis(10), Instant::now() + wait)
         }
         other => unreachable!("{other}"),
     }
 }
 
-const CONSTRUCTORS: [&str; 3] = ["acquire", "try_lease", "lease"];
+/// A sidecar file Everyone may open: what an older build left behind when
+/// its directory's ACL was inherited, or what another account planted.
+fn plant_open_sidecar(row: &str, path: &Path) {
+    std::fs::write(path, b"").expect("plant");
+    let user = user_sid();
+    let planted = plant_any(row, path, &format!("O:{user}D:(A;;FA;;;WD)"));
+    assert!(
+        planted.contains("S-1-1-0"),
+        "{row}: Everyone planted: {planted}"
+    );
+}
+
+/// A holder the way an older build opened the sidecar: std `OpenOptions`
+/// (read, write and delete sharing), locked.
+fn legacy_holder(path: &Path) -> std::fs::File {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .expect("legacy open");
+    file.try_lock().expect("legacy lock");
+    file
+}
 
 #[test]
 fn every_constructor_creates_an_owner_only_sidecar() {
     for how in CONSTRUCTORS {
         let dir = tempfile::tempdir().expect("dir");
         let path = dir.path().join(".store.lock");
-        take(how, &path);
+        drop(take(how, &path).expect(how));
         assert_owner_only(how, &path, false);
     }
 }
@@ -53,14 +85,226 @@ fn every_constructor_replaces_an_existing_sidecar_others_can_open() {
     for how in CONSTRUCTORS {
         let dir = tempfile::tempdir().expect("dir");
         let path = dir.path().join(".store.lock");
-        std::fs::write(&path, b"").expect("plant");
-        let user = user_sid();
-        let planted = plant_any(how, &path, &format!("O:{user}D:(A;;FA;;;WD)"));
-        assert!(
-            planted.contains("S-1-1-0"),
-            "{how}: Everyone planted: {planted}"
-        );
-        take(how, &path);
+        plant_open_sidecar(how, &path);
+        drop(take(how, &path).expect(how));
         assert_owner_only(how, &path, false);
     }
+}
+
+/// A sidecar whose DACL denies this account data access, in a directory the
+/// account may delete from, is replaced too.
+#[test]
+fn a_sidecar_denying_the_user_data_access_is_replaced() {
+    for how in CONSTRUCTORS {
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join(".store.lock");
+        std::fs::write(&path, b"").expect("plant");
+        let user = user_sid();
+        let sddl = format!("O:{user}D:P(D;;FRFW;;;{user})(A;;FA;;;{user})");
+        plant_any(how, &path, &sddl);
+        drop(take(how, &path).expect(how));
+        assert_owner_only(how, &path, false);
+    }
+}
+
+/// Item 3 (refusal mapping): an older build still holds the non-private
+/// sidecar. Deleting it by name would split the lock, so it is left in
+/// place: `try_lease` says `Refused`; the waiting constructors refuse at
+/// their deadline with `PermissionDenied` naming the path and the rule, and
+/// never advise deleting a file something holds. Once the holder is gone the
+/// next attempt replaces it.
+#[test]
+fn a_sidecar_an_older_build_holds_is_not_deleted_and_is_refused_at_the_deadline() {
+    for how in CONSTRUCTORS {
+        if how == "acquire" {
+            continue; // its 30 s heal bound has its own row
+        }
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join(".store.lock");
+        plant_open_sidecar(how, &path);
+        std::fs::write(&path, b"held").expect("marker");
+        let holder = legacy_holder(&path);
+        let error = take(how, &path).err().expect("refused while held");
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::PermissionDenied,
+            "{how}: {error}"
+        );
+        let text = error.to_string();
+        assert!(text.contains(&path.display().to_string()), "{how}: {text}");
+        assert!(!text.to_lowercase().contains("delete"), "{how}: {text}");
+        assert_eq!(std::fs::read(&path).expect("still there"), b"held", "{how}");
+        drop(holder);
+        drop(take(how, &path).expect("replaced once free"));
+        assert_owner_only(how, &path, false);
+    }
+}
+
+/// A private sidecar another handle holds is plain contention: `Held`, and
+/// `TimedOut` at a deadline, never a refusal.
+#[test]
+fn a_private_sidecar_held_elsewhere_is_contention() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join(".store.lock");
+    let _holder = ExclusiveFileLock::acquire(&path).expect("holder");
+    assert!(matches!(
+        ExclusiveFileLock::try_lease(&path).expect("probe"),
+        Attempt::Held
+    ));
+    for how in ["lease", "acquire_until"] {
+        let error = take(how, &path).err().expect("held");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut, "{how}: {error}");
+    }
+}
+
+/// Eight threads healing one non-private sidecar at once all take the lock,
+/// one at a time, and leave an owner-only sidecar.
+#[test]
+fn concurrent_healers_serialize_and_leave_an_owner_only_sidecar() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+    let dir = tempfile::tempdir().expect("dir");
+    let path = Arc::new(dir.path().join(".store.lock"));
+    plant_open_sidecar("healers", &path);
+    let inside = Arc::new(AtomicUsize::new(0));
+    let most = Arc::new(AtomicUsize::new(0));
+    let done = Arc::new(AtomicUsize::new(0));
+    let barrier = Arc::new(Barrier::new(8));
+    let threads: Vec<_> = (0..8)
+        .map(|_| {
+            let (path, inside, most, done, barrier) = (
+                Arc::clone(&path),
+                Arc::clone(&inside),
+                Arc::clone(&most),
+                Arc::clone(&done),
+                Arc::clone(&barrier),
+            );
+            std::thread::spawn(move || {
+                barrier.wait();
+                let _lock = ExclusiveFileLock::acquire(&path).expect("healer");
+                let now = inside.fetch_add(1, Ordering::SeqCst) + 1;
+                most.fetch_max(now, Ordering::SeqCst);
+                // timing: fixture
+                std::thread::sleep(Duration::from_millis(5));
+                inside.fetch_sub(1, Ordering::SeqCst);
+                done.fetch_add(1, Ordering::SeqCst);
+            })
+        })
+        .collect();
+    for thread in threads {
+        thread.join().expect("join");
+    }
+    assert_eq!(done.load(Ordering::SeqCst), 8, "every healer took the lock");
+    assert_eq!(most.load(Ordering::SeqCst), 1, "never two inside");
+    assert_owner_only("healers", &path, false);
+}
+
+/// Item 1: a lock directory another non-admin account could plant a sidecar
+/// in, or that cannot be judged, is refused by every constructor with
+/// `PermissionDenied` naming the directory, and no command in the text.
+#[test]
+fn a_lock_directory_others_can_write_is_refused() {
+    let user = user_sid();
+    let profile = format!("(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;{user})");
+    let cases = [
+        ("null DACL", format!("O:{user}D:NO_ACCESS_CONTROL")),
+        (
+            "users modify",
+            format!("O:{user}D:P{profile}(A;OICI;0x1301bf;;;BU)"),
+        ),
+        (
+            "delete-child only",
+            format!("O:{user}D:P{profile}(A;;0x100040;;;BU)"),
+        ),
+        (
+            "object ACE",
+            format!("O:{user}D:P{profile}(OA;;FA;00000000-0000-0000-0000-000000000001;;WD)"),
+        ),
+    ];
+    for (case, sddl) in cases {
+        for how in CONSTRUCTORS {
+            let row = format!("{case}/{how}");
+            let parent = tempfile::tempdir().expect("dir");
+            let dir = parent.path().join("store");
+            std::fs::create_dir(&dir).expect("store dir");
+            plant_any(&row, &dir, &sddl);
+            let error = take(how, &dir.join(".store.lock"))
+                .err()
+                .unwrap_or_else(|| panic!("{row}: a writable lock directory was accepted"));
+            assert_eq!(
+                error.kind(),
+                io::ErrorKind::PermissionDenied,
+                "{row}: {error}"
+            );
+            let text = error.to_string();
+            assert!(text.contains(&dir.display().to_string()), "{row}: {text}");
+            assert!(!text.contains("icacls"), "{row}: {text}");
+        }
+    }
+}
+
+/// The default profile-folder shape (user, SYSTEM, Administrators, all
+/// inherited to children) is accepted: the vault lock lives directly in the
+/// home folder.
+#[test]
+fn the_default_profile_folder_shape_is_accepted() {
+    let user = user_sid();
+    let sddl = format!("O:{user}D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;{user})");
+    for how in CONSTRUCTORS {
+        let parent = tempfile::tempdir().expect("dir");
+        let dir = parent.path().join("home");
+        std::fs::create_dir(&dir).expect("home dir");
+        plant_sddl(how, &dir, &sddl, &sddl);
+        drop(take(how, &dir.join(".mcp-gateway-secrets.lock")).expect(how));
+    }
+}
+
+/// Item 5: a junction among the lock path's ancestors is refused, naming the
+/// directory, as a store directory behind a link is.
+#[test]
+fn a_lock_behind_a_junction_is_refused() {
+    let parent = tempfile::tempdir().expect("dir");
+    let target = parent.path().join("real");
+    std::fs::create_dir(&target).expect("target");
+    let link = parent.path().join("link");
+    let made = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&link)
+        .arg(&target)
+        .output()
+        .expect("mklink");
+    assert!(made.status.success(), "junction: {made:?}");
+    for how in CONSTRUCTORS {
+        let error = take(how, &link.join(".store.lock"))
+            .err()
+            .unwrap_or_else(|| panic!("{how}: a lock behind a junction was accepted"));
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::PermissionDenied,
+            "{how}: {error}"
+        );
+        assert!(error.to_string().contains("link"), "{how}: {error}");
+    }
+}
+
+/// Item 2: `acquire` blocks only on a sidecar it judged. While an older
+/// build holds a non-private sidecar, `acquire` waits in its heal phase
+/// instead of locking that file; once the holder is gone it replaces the file
+/// and takes the lock on the owner-only one.
+#[test]
+fn acquire_never_blocks_on_an_unjudged_sidecar() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join(".store.lock");
+    plant_open_sidecar("acquire", &path);
+    let holder = legacy_holder(&path);
+    let waiter = {
+        let path = path.clone();
+        std::thread::spawn(move || ExclusiveFileLock::acquire(&path))
+    };
+    // timing: precondition
+    std::thread::sleep(Duration::from_millis(300));
+    drop(holder);
+    let lock = waiter.join().expect("join").expect("acquired once free");
+    assert_owner_only("acquire", &path, false);
+    drop(lock);
 }
