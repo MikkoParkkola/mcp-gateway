@@ -88,3 +88,38 @@ impl std::fmt::Debug for ResolvedApiKey {
             .finish_non_exhaustive()
     }
 }
+
+/// ADR-022: no two credential digests are equal, among every key's current and
+/// previous digest and the bearer's, so one presented secret can match at most
+/// one credential, whatever principals they carry.
+///
+/// The error names the two credentials, never a secret, digest or principal.
+pub(crate) fn refuse_shared_digests<'a>(
+    bearer: Option<&str>,
+    keys: impl IntoIterator<Item = (&'a str, [u8; 32], Option<[u8; 32]>)>,
+) -> crate::Result<()> {
+    let bearer = bearer.map(|token| {
+        let digest: [u8; 32] = <sha2::Sha256 as sha2::Digest>::digest(token.as_bytes()).into();
+        ("auth.bearer_token".to_owned(), digest)
+    });
+    let keys = keys.into_iter().flat_map(|(name, current, previous)| {
+        let current = (format!("auth.api_keys['{name}'].key_sha256"), current);
+        let previous = previous.map(|digest| {
+            (
+                format!("auth.api_keys['{name}'].previous_key_sha256"),
+                digest,
+            )
+        });
+        std::iter::once(current).chain(previous)
+    });
+    let mut seen = std::collections::HashMap::new();
+    for (label, digest) in bearer.into_iter().chain(keys) {
+        if let Some(first) = seen.insert(digest, label.clone()) {
+            return Err(crate::Error::ConfigValidation(format!(
+                "{first} and {label} are the same credential, so one secret would match both; \
+                 replace one of them"
+            )));
+        }
+    }
+    Ok(())
+}

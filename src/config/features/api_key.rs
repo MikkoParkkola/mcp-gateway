@@ -194,6 +194,14 @@ impl ApiKeyConfig {
         crate::gateway::auth::configured_key_principal(self.principal.as_deref(), digest)
     }
 
+    /// The key's digest slots, current then previous: a rotated key's previous
+    /// digest is a live credential too (ADR-022), so it is read like the current.
+    pub(crate) fn digest_specs_mut(&mut self) -> impl Iterator<Item = &mut String> {
+        self.key_sha256
+            .iter_mut()
+            .chain(&mut self.previous_key_sha256)
+    }
+
     /// True when `now` is at or past `expires_at`.
     #[must_use]
     pub(crate) fn is_expired_at(&self, now: DateTime<Utc>) -> bool {
