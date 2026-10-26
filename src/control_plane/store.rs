@@ -260,7 +260,7 @@ mod memory;
 pub use audit::{AuditCursor, AuditFilter, AuditPage};
 use audit::{audit_cursor, audit_event_from_entry, audit_fields, scan_audit};
 pub use file::FileControlPlaneStore;
-use file_io::{FaultPoint, read_window, reverse_audit_lines, write_atomic};
+use file_io::{FaultPoint, reverse_audit_lines, write_atomic};
 pub use memory::InMemoryControlPlaneStore;
 
 // ── Tests ────────────────────────────────────────────────────────────────────────

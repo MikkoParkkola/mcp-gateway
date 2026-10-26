@@ -153,16 +153,3 @@ fn revoke_capturing_reads_and_tombstones_under_one_authority_acquisition() {
     assert_eq!(acquisitions, 1, "a read-then-revoke takes the lock twice");
     assert!(material.is_some());
 }
-
-/// The captured tokens are `zeroize::Zeroizing`, so their
-/// bytes are wiped on drop by volatile writes, not a hand-written loop.
-#[test]
-fn revocation_tokens_are_zeroizing() {
-    let (_root, _settings, store) = empty_store(16);
-    let key = account("alice");
-    let record = grant();
-    store.commit_grant(&key, &record).unwrap();
-    let material = store.revoke_capturing(&key).unwrap().expect("tokens held");
-    let held: &[(zeroize::Zeroizing<String>, TokenTypeHint)] = material.held_for_test();
-    assert_eq!(held.len(), 2);
-}

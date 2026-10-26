@@ -10,18 +10,29 @@
 
 use std::sync::Arc;
 
-use zeroize::Zeroizing;
-
 use super::provider::{Clock, PersonalOAuthRefresh, ProviderHttp, SecretSource};
 use super::provider::{ProviderRevocation, TokenTypeHint};
 use super::service::{AccountServiceError, CredentialReleaseObserver};
 use super::worker::{CustodyError, CustodyHandle};
 use super::{AccountError, AccountKey, GrantRecord, PersonalAccountStore};
 
-/// Every provider token a revoked grant still held, refresh first. Each is
-/// wiped on drop by `zeroize`.
+/// A token copied out of a retained record. The bytes are overwritten on drop.
+struct WipedToken(crate::wiped_bytes::WipedBytes);
+
+impl WipedToken {
+    fn new(token: String) -> Self {
+        Self(crate::wiped_bytes::WipedBytes::new(token.into_bytes()))
+    }
+
+    fn as_str(&self) -> &str {
+        // Built only from a `String`, so the bytes are UTF-8 by construction.
+        std::str::from_utf8(self.0.as_bytes()).unwrap_or_default()
+    }
+}
+
+/// Every provider token a revoked grant still held, refresh first.
 pub(crate) struct RevocationMaterial {
-    tokens: Vec<(Zeroizing<String>, TokenTypeHint)>,
+    tokens: Vec<(WipedToken, TokenTypeHint)>,
 }
 
 impl std::fmt::Debug for RevocationMaterial {
@@ -37,11 +48,11 @@ impl RevocationMaterial {
     fn take_from(mut record: GrantRecord) -> Option<Self> {
         let mut tokens = Vec::with_capacity(2);
         if let Some(refresh) = record.refresh_token.take().filter(|t| !t.is_empty()) {
-            tokens.push((Zeroizing::new(refresh), TokenTypeHint::RefreshToken));
+            tokens.push((WipedToken::new(refresh), TokenTypeHint::RefreshToken));
         }
         let access = std::mem::take(&mut record.access_token);
         if !access.is_empty() {
-            tokens.push((Zeroizing::new(access), TokenTypeHint::AccessToken));
+            tokens.push((WipedToken::new(access), TokenTypeHint::AccessToken));
         }
         (!tokens.is_empty()).then_some(Self { tokens })
     }
@@ -53,12 +64,6 @@ impl RevocationMaterial {
             .iter()
             .map(|(token, hint)| (token.as_str().to_string(), *hint))
             .collect()
-    }
-
-    /// The held buffers themselves, so a test can pin their wiping type.
-    #[cfg(test)]
-    pub(crate) fn held_for_test(&self) -> &[(Zeroizing<String>, TokenTypeHint)] {
-        &self.tokens
     }
 }
 
