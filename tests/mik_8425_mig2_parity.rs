@@ -334,3 +334,43 @@ fn rows_matching_per_group() {
         );
     }
 }
+
+/// The keyed goldens, pinned to their bytes. They are the only record of how
+/// the replaced backend read each file, and with that backend gone they can
+/// never be re-recorded, so a deleted or edited row would erase evidence
+/// without failing any comparison.
+const GOLDEN_PINS: &[(&str, &str)] = &[
+    (
+        "trees.tsv",
+        "sha256:797e5a977518cb4bb9489bf1710983c973df5196b3a799d86196ba0d8fd2a927",
+    ),
+    (
+        "capabilities.tsv",
+        "sha256:411dbe54bb563e8ac722760714f3e824524126f18efe668ebc7eeabe5b790e75",
+    ),
+    (
+        "configs.tsv",
+        "sha256:9c80862fdb7c792f722ee8df54183b91213d6a547e571a737d15580667037afa",
+    ),
+    (
+        "configs_loaded.tsv",
+        "sha256:438b953a8fded8fd4248f3a2848bd0261a9b78a910092aca2fc273a52fe5e4c1",
+    ),
+    (
+        "shipped.tsv",
+        "sha256:ec16d566c0ae50f3bba66e12853b390674c80f06b3ff28801284ae85c9ef086b",
+    ),
+];
+
+#[test]
+fn keyed_goldens_are_unchanged() {
+    for (name, pin) in GOLDEN_PINS {
+        let now = golden::digest(fixture(name).as_bytes());
+        assert_eq!(
+            &now, pin,
+            "golden {name} changed. It records the replaced YAML backend, which has left \
+             the build, so it cannot be re-recorded; changing this pin needs a reviewed \
+             reason. Current sha: {now}"
+        );
+    }
+}
