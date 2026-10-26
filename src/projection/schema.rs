@@ -4,7 +4,7 @@
 //! Canonical projection schema (MIK-3530 / MIK-3531).
 //!
 //! The gateway proxies the union of many heterogeneous backend tool surfaces
-//! (linear, github, gws-*, slack, hebb, ...). The same concept wears different
+//! (linear, github, gws-*, slack, ...). The same concept wears different
 //! field names across them — an "actor" is `assignee.email` on one backend,
 //! `user.login` on another, `organizer.email` on a third. This module defines a
 //! small canonical vocabulary those shapes can be projected onto so agents see

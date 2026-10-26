@@ -20,12 +20,30 @@ jobs:
     runs-on: avrea-ubuntu-latest-4-vcpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - name: Validate public repo hygiene scripts
-        run: bash -n scripts/dev/check-public-repo-hygiene.sh tests/public_repo_hygiene.sh
+        run: bash -n scripts/dev/check-public-repo-hygiene.sh scripts/dev/public-hygiene-patterns.sh scripts/dev/check-pr-body-hygiene.sh tests/public_repo_hygiene.sh scripts/dev/check-commit-message-hygiene.sh tests/commit_message_hygiene.sh
       - name: Validate public repo hygiene fixtures
         run: tests/public_repo_hygiene.sh
+      - name: Validate commit message hygiene fixtures
+        run: tests/commit_message_hygiene.sh
+      - name: Validate the commit messages this branch adds
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: scripts/dev/check-commit-message-hygiene.sh "origin/$BASE_REF..HEAD"
+      # On a pull request the change itself is also checked: no added line or
+      # new file name may carry a tracker id.
       - name: Validate tracked public docs boundary
-        run: scripts/dev/check-public-repo-hygiene.sh
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ -n "$BASE_REF" ]; then
+            scripts/dev/check-public-repo-hygiene.sh --base "origin/$BASE_REF"
+          else
+            scripts/dev/check-public-repo-hygiene.sh
+          fi
       - name: Assert the image publishing guards
         run: python3 scripts/release/test_full_variant.py
       - name: Run the -full entrypoint against stub commands

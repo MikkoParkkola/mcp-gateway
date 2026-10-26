@@ -21,7 +21,7 @@ Two facts reshape this:
    (identity grants, config). Introducing Postgres would bolt a mandatory
    *external service* onto a single-binary, minimal-ops, `#![deny(unsafe_code)]`
    gateway — a heavier product — and would add a *second* database technology to
-   the portfolio (hebb already uses SurrealDB).
+   the maintainer's projects (a sibling project already uses SurrealDB).
 2. **A tamper-evident audit log already exists.** `TransparencyLogger`
    (`src/security/transparency_log.rs`) is an append-only, hash-chained
    (`prev_hash` → genesis), independently verifiable (`verify_log`) NDJSON log.
