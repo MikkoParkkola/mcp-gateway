@@ -331,3 +331,7 @@ fn on_path(name: &str) -> Option<PathBuf> {
         .map(|dir| dir.join(name))
         .find(|candidate| candidate.is_absolute() && candidate.is_file())
 }
+
+#[cfg(test)]
+#[path = "keychain_linux_writer_tests.rs"]
+mod writer_tests;

@@ -938,7 +938,7 @@ jobs:
         run: |
           dbus-run-session -- bash -euo pipefail -c '
             printf "ci" | gnome-keyring-daemon --unlock --components=secrets > /dev/null
-            cargo test --all-features --lib -- --ignored --exact config::keychain_linux_writer_tests::b18_the_real_secret_service_round_trips_then_refuses_locked 2>&1 | tee "$RUNNER_TEMP/b18.log"
+            cargo test --all-features --lib -- --ignored --exact config::keychain_linux::writer_tests::b18_the_real_secret_service_round_trips_then_refuses_locked 2>&1 | tee "$RUNNER_TEMP/b18.log"
             grep -Eq "^test result: ok\. 1 passed" "$RUNNER_TEMP/b18.log"
           '
 

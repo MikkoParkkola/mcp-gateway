@@ -8,7 +8,7 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use super::keychain_linux::LinuxKeychain;
+use super::LinuxKeychain;
 use crate::secret_store::{SecretStore, StoreError};
 
 const NAME: &str = "mcp-gateway.auth-bearer-token.1761418800123.9f3a1c2e04b7d815";
@@ -194,7 +194,7 @@ fn b13_no_spawn_or_refusal_carries_the_value() {
 #[test]
 #[ignore = "needs a real Secret Service; run by the linux-keychain CI job"]
 fn b18_the_real_secret_service_round_trips_then_refuses_locked() {
-    use super::keychain::KeychainRead as _;
+    use super::super::keychain::KeychainRead as _;
     let store = LinuxKeychain::from_path();
     store.probe().expect("an unlocked collection probes clean");
     let name = "mcp-gateway.ci-b18.1.00ff";
