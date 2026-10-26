@@ -114,7 +114,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renewal.
 - **Supply-chain hardening of the release workflow.** Every action is pinned to
   a commit SHA, including `cosign-installer` v4.1.2 and `download-syft`
-  v0.24.3. One guarded publisher pushes images: it publishes the image it
+  v0.24.3. The MCP Registry publisher binary is pinned to v1.8.1 and its
+  checksum verified before it runs. One guarded publisher pushes images: it
+  publishes the image it
   scanned, and `latest` goes only to the highest stable tag, so a 3.5.x
   release never takes `latest` from a newer line.
 
