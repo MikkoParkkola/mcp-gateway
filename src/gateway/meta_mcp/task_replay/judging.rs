@@ -26,9 +26,9 @@ impl MetaMcp {
         if !stored.serves_backend_output() {
             return None;
         }
-        // MIK-8387 S7: a stored target whose backend is absent for a scoped
+        // A stored target whose backend is absent for a scoped
         // key answers as the live call does, the same for all three cells:
-        // -32001 carrying the live call's own text (MIK-8392 F1 ruling), which
+        // -32001 carrying the live call's own text, which
         // for an absent backend is the catalogue's miss text. An out-of-scope
         // one first writes the scope refusal the stored policy check writes
         // (an audit line only, no log record).
@@ -45,8 +45,8 @@ impl MetaMcp {
             return Some(JsonRpcResponse::error(Some(id.clone()), -32001, missing));
         }
         // Visibility first, as on the live path: a Descriptor, Schema or Lacked
-        // target answers as absent even where policy would also refuse
-        // (MIK-8392 T12). A Refused target falls through to the policy check;
+        // target answers as absent even where policy would also refuse.
+        // A Refused target falls through to the policy check;
         // a cold one defers its retry until after policy and accounts, as the
         // live path fills a cold slot only after route policy.
         let (cold, caller_catalogue) = match self.judge_stored_visibility(stored, session, caller) {
@@ -58,7 +58,7 @@ impl MetaMcp {
         if let Err(error) = self.authorize_stored(stored, attestation, session, caller) {
             return Some(error_response_preserving_status(id.clone(), &error));
         }
-        // MIK-8392 F1: a removed backend answers as the live call does
+        // A removed backend answers as the live call does
         // (`BackendNotFound`, the invoke path's answer for an unknown
         // server), after policy, as the live call refuses on policy before
         // it dispatches.
@@ -68,7 +68,7 @@ impl MetaMcp {
         ) {
             return Some(error_response_preserving_status(id.clone(), &error));
         }
-        // MIK-8407: the stored output only under the bindings that produced
+        // The stored output only under the bindings that produced
         // it, judged for a read and a repeat alike (a repeat's site-5 proof
         // proves the CURRENT account, never the recorded one).
         if let Err(error) = self.judge_stored_provenance(stored, caller) {
@@ -88,14 +88,14 @@ impl MetaMcp {
         }
         // The caller's own catalogue is judged after its account, as the
         // live caller verdict resolves the credential before it reads the
-        // caller's slot (MIK-8392 Ub).
+        // caller's slot.
         if let Some(error) = caller_catalogue {
             return Some(error_response_preserving_status(id.clone(), &error));
         }
         if let Some(after) = cold {
             return Some(retry_later(id, after));
         }
-        // MIK-8474: the error-rate cooldown of a per-user tool is met last,
+        // The error-rate cooldown of a per-user tool is met last,
         // as on the live call (it waits for the credential step): a caller
         // with no view of the tool has already been answered as a missing
         // name above, so the cooldown cannot tell it the tool exists. A
@@ -109,7 +109,7 @@ impl MetaMcp {
         None
     }
 
-    /// Each recorded target against this caller's current catalogue (MIK-8392):
+    /// Each recorded target against this caller's current catalogue:
     /// through the one judgement [`MetaMcp::stored_target_view`], refused
     /// through the one guard [`visible::memo::absent_if_withheld`], except a Refused
     /// view, which falls through to [`Self::authorize_stored`]. A cold view
@@ -134,7 +134,7 @@ impl MetaMcp {
             };
             // A Refused view is policy, not visibility: it falls through to
             // `authorize_stored`, so the read refuses as the live call does
-            // and writes its record (MIK-8392 lead ruling 2026-10-12).
+            // and writes its record.
             if judged == visible::Visibility::Withheld(visible::Withholding::Refused) {
                 continue;
             }
@@ -163,7 +163,7 @@ impl MetaMcp {
 
     /// The live call's answer for a target whose server is neither a
     /// registered backend nor the capability provider offering that tool:
-    /// `BackendNotFound` (MIK-8392 F1), the invoke path's answer for an
+    /// `BackendNotFound`, the invoke path's answer for an
     /// unknown server (`dispatch.rs` answers it when no backend was
     /// captured). A capability tool still judges through the catalogue and
     /// policy path; a personal-account backend that was removed answers
@@ -189,7 +189,7 @@ impl MetaMcp {
     }
 
     /// Each recorded target's account (task reads only) as the pre-pass
-    /// recorded it (MIK-8392). Runs after [`Self::authorize_stored`], as the
+    /// recorded it. Runs after [`Self::authorize_stored`], as the
     /// live path refuses on policy before the account/caller verdict: route
     /// authorize before caller verdicts, and the dispatch policy before its
     /// resolution.
@@ -219,7 +219,7 @@ impl MetaMcp {
                         .map_or(StoredWithheld::Retry(None), StoredWithheld::Refused));
                 }
                 // A busy custody: the same retryable answer the live call
-                // gives (MIK-8392 Busy parity), never a permanent refusal.
+                // gives, never a permanent refusal.
                 Some(AccountOutcome::Transient) => {
                     return Err(StoredWithheld::Retry(None));
                 }
@@ -265,8 +265,8 @@ impl MetaMcp {
             // An older row's empty list means it has no upstream descriptor to
             // name its call (`CommittedTask::of`): `task.tool()` is the meta
             // tool, and the backend's current list is no record of what ran, so
-            // nothing can prove the caller may read it. Refused, plan or not
-            // (MIK-7686, fail closed).
+            // nothing can prove the caller may read it. Refused, plan or not:
+            // fail closed.
             return if stored.targets_recorded {
                 Ok(())
             } else {
@@ -277,9 +277,9 @@ impl MetaMcp {
                 })
             };
         }
-        // MIK-7692: a poll that meets the same decision again is not written
+        // A poll that meets the same decision again is not written
         // again inside the window (`grant_audit` module docs).
-        // MIK-7826: explicit identity fields, JSON-encoded so no value can
+        // Explicit identity fields, JSON-encoded so no value can
         // forge a separator. A subject's label is display only, so it is not
         // part of the caller; a Debug rendering would carry it.
         let task_and_caller = json!([
