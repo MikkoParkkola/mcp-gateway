@@ -559,7 +559,7 @@ async fn search_registry(
 ///
 /// Allowed: ASCII alphanumerics, hyphens, underscores, dots.
 /// Max length: 128 characters.
-fn validate_backend_name(name: &str) -> Result<(), String> {
+pub(super) fn validate_backend_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("Backend name must not be empty".to_string());
     }
