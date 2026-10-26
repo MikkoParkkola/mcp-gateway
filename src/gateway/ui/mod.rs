@@ -539,7 +539,10 @@ async fn config(
         Some(path) => tokio::task::spawn_blocking(move || {
             crate::config::Config::load_literal(Some(&path))
                 .map(|literal| crate::config::display::backend_secret_references(&literal))
-                .unwrap_or_default()
+                .unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "secret references not shown: gateway.yaml did not load");
+                    std::collections::BTreeMap::new()
+                })
         })
         .await
         .unwrap_or_default(),

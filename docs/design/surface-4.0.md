@@ -198,7 +198,7 @@ Response-code changes from backend secret references (ADR-028). Only the new con
 
 Two items are `pub` beyond the module items above, both for backend secret references (ADR-028), under the `#[doc(hidden)]` `config` module:
 - `mcp_gateway::config::BackendConfig::check_secret_references`, the pre-write reference check. It is `pub` only for the binary's two writers of `backends`, `discover --write` and the setup import, and it returns to `pub(crate)` once no binary-side writer of `backends` remains.
-- `mcp_gateway::config::secret_slot(&str) -> String`, the display projection: a reference as written, an empty value as `<empty>`, anything else as `<set>`. It is pure. `mcp-gateway get`, `doctor` and the web UI's config read use it, and configuration history will.
+- `mcp_gateway::config::secret_slot(&str) -> String`, the display projection: a reference as written, an empty value as `<empty>`, anything else as `<set>`. It is pure. `mcp-gateway get`, `doctor` and the web UI's config read use it. Configuration history is to use it too, in a separate change.
 
 
 ## Findings filed on the way (0-bug rule)

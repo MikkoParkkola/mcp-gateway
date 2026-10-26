@@ -67,16 +67,22 @@ mod tests {
     #[test]
     fn kc8_no_part_of_a_literal_ever_shows() {
         let mid = format!("Bearer keychain:{SENTINEL}");
-        for literal in [SENTINEL, mid.as_str(), "x", "keychainz", " keychain:x"] {
+        for literal in [
+            SENTINEL,
+            mid.as_str(),
+            "x",
+            "keychainz",
+            " keychain:x",
+            "pässwörd-ключ",
+        ] {
             let shown = secret_slot(literal);
             assert_eq!(shown, "<set>", "{literal:?}");
-            // Every substring of length 3 or more of the literal is absent.
+            // Every byte window of length 3 or more of the literal is absent.
             let bytes = literal.as_bytes();
-            for start in 0..bytes.len() {
-                for end in (start + 3)..=bytes.len() {
-                    let part = &literal[start..end];
+            for len in 3..=bytes.len() {
+                for part in bytes.windows(len) {
                     assert!(
-                        !shown.contains(part),
+                        !shown.as_bytes().windows(len).any(|w| w == part),
                         "{part:?} of {literal:?} shown as {shown:?}"
                     );
                 }
