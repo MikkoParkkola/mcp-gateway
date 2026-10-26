@@ -592,6 +592,7 @@ fn a_saved_value_out_of_range_restores_nothing() {
         ("inf", f64::INFINITY),
         ("huge", 1e15),
         ("ok", 0.25),
+        ("large", 1e10),
     ] {
         let total = ToolTotal {
             call_count: 1,
@@ -605,7 +606,11 @@ fn a_saved_value_out_of_range_restores_nothing() {
     let e = enforcer_with(true, Some(10.0), &[], &[], &[]);
     e.restore(&saved);
     let snap = e.snapshot();
-    assert!((snap.global_daily_usd - 0.25).abs() < 1e-9, "{snap:?}");
+    // 1e10 USD is large but a micro-USD count holds it, so it restores.
+    assert!(
+        (snap.global_daily_usd - (0.25 + 1e10)).abs() < 1e-3,
+        "{snap:?}"
+    );
     for tool in ["neg", "nan", "inf", "huge"] {
         assert!(!snap.tool_daily.contains_key(tool), "{tool}: {snap:?}");
     }
