@@ -697,4 +697,28 @@ mod mik_8659_caller_tests {
         assert_eq!(ctx.cost_key(), Some("k-user"));
         assert_eq!(ctx.scope().grant_key, Some("k-user"));
     }
+
+    /// ADR-022 (MIK-8862.ROT.5): a rotated admin key with an explicit
+    /// principal mints a dashboard link with either secret inside its grace.
+    /// The dashboard-link handler finds the key by the caller's principal, so
+    /// it must read the key's principal, not derive one from its new digest.
+    #[tokio::test]
+    async fn a_rotated_admin_key_mints_a_dashboard_link_with_either_secret() {
+        let (old, new) = ("rot-dashboard-old-secret", "rot-dashboard-new-secret");
+        let mut auth = auth_with_api_key(new, "k-admin", true);
+        let old_digest = crate::config::api_key_digest_spec(old.as_bytes());
+        let key = &mut auth.api_keys[0];
+        key.principal = Some(old_digest["sha256:".len().."sha256:".len() + 12].to_owned());
+        key.previous_key_sha256 = Some(old_digest);
+        key.previous_expires_at = Some(
+            chrono::DateTime::parse_from_rfc3339("2999-01-01T00:00:00Z")
+                .expect("fixed instant")
+                .with_timezone(&chrono::Utc),
+        );
+        let (state, _dir) = super::super::tests::test_router_app_state_with_auth(&auth).await;
+        for secret in [new, old] {
+            let (status, body) = post_dashboard_link(&state, secret).await;
+            assert_eq!(status, axum::http::StatusCode::OK, "{secret}: {body}");
+        }
+    }
 }

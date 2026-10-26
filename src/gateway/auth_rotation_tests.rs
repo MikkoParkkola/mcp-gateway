@@ -406,3 +406,24 @@ fn key_entry_without_digest_is_refused() {
     let refusal = load_refusal(&config).expect("refused");
     assert!(refusal.contains("has no key_sha256"), "{refusal}");
 }
+
+// ROT.1: a previous secret is refused when the clock cannot be read, while a
+// key with no expiry still needs no clock. The readable-clock half is the
+// control: without it, a matcher that never accepts a previous secret passes.
+#[test]
+fn previous_secret_is_refused_on_an_unreadable_clock() {
+    let config = resolved(&[key("ops", NEW, Some((OLD, far_future())))]);
+    assert!(
+        config.validate_token(OLD).is_some(),
+        "control: readable clock"
+    );
+    let _clock = crate::clock::test_clock::before_epoch();
+    assert!(
+        config.validate_token(OLD).is_none(),
+        "previous secret, clock before 1970"
+    );
+    assert!(
+        config.validate_token(NEW).is_some(),
+        "current secret needs no clock"
+    );
+}
