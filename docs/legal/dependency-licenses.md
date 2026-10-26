@@ -28,6 +28,8 @@ carrying each dependency's own notice.
 | CDLA-Permissive-2.0 (webpki-roots — data) | 3 | Notice (data) | Yes |
 | **MPL-2.0** (`option-ext`) | 1 | **File-level** weak copyleft | Yes — obligation is limited to modifications of MPL files themselves; using the crate as a dependency does not affect first-party code |
 
+The browser tests under `ui-tests/` add five npm dev dependencies that are never shipped: Playwright (`@playwright/test`, `playwright`, `playwright-core`, Apache-2.0) and axe-core (`axe-core`, `@axe-core/playwright`, MPL-2.0). They run only in CI against fixtures; the MPL-2.0 file-level obligation would apply only to modified copies of those files, and none are modified or distributed.
+
 `r-efi` appears with an LGPL option but is offered as `Apache-2.0 OR
 LGPL-2.1-or-later OR MIT`; the permissive option is selected, so no LGPL
 obligation attaches.

@@ -7,3 +7,5 @@
 # Format: path<TAB>sha256:<hex><TAB>PR.
 capabilities/linear/linear_get_issue.yaml	sha256:8b702d958a83df5dc3c3dc541fe2804f650d31ec92855875dabc5e46a3f9d5da	#4133
 examples/token-exchange-live.yaml	sha256:3b8b85941d837cefe592267f5885a4ecb334d7346fe919bfac7b04dd6dc2d87f	#4150
+capabilities/automation/bus_pull.yaml	sha256:e73500939acfc6899929e94b8f17bd101b4fa8a1e34ef57d0e4b683e3e826431	#4168
+capabilities/automation/bus_subscribe.yaml	sha256:1bcdb0c9380210928dbe89a23945cc16803196d99f2b3d6ae4ee6c2add3f8574	#4168

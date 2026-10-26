@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 //! Cross-tenant read history (MIK-7116.MIN.2, design
-//! docs/design/2026-10-01-min2-min4-tenant-reads.md §4.4-§4.5).
+//! the min2 min4 tenant reads design §4.4-§4.5).
 //!
 //! Inside `window_secs`, the frames committed to one `caller_key` may name at
 //! most one tenant. This module holds the attribution a frame carries and the

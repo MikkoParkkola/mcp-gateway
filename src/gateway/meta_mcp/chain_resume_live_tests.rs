@@ -3,7 +3,7 @@
 //! MIK-7212.MRTR.12 — the resume half of a chain interim stop, against a live
 //! backend transport.
 //!
-//! Design: `docs/design/2026-09-16-mrtr-12-chain-interim-stop.md` §"Revision 2".
+//! Design: the mrtr 12 chain interim stop design §"Revision 2".
 //!
 //! Revision 1 shipped the stop and is pinned by rows that hand-build the
 //! envelope. Nothing there drives a resume, so the defect these rows exist for

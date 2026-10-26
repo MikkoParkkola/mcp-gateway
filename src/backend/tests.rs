@@ -141,7 +141,7 @@ mod prepare_tool_metadata_tests;
 // ── MIK-7217 OUTBOUND.1/.2 — era-gated health probe ─────────────────────
 //
 // Rows from section 6 of
-// `docs/design/2026-09-11-outbound-era-gated-health-probe.md`. Each test names
+// the outbound era gated health probe design. Each test names
 // the row it pins. Rows marked fail-first there must fail against HEAD; a row
 // that passes today is pinning something other than the defect it names.
 

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 //! The outbound writer (MIK-7116.MIN.2, design option C,
-//! docs/design/2026-10-01-min2-min4-tenant-reads.md §4).
+//! the min2 min4 tenant reads design §4).
 //!
 //! Every frame the gateway sends a caller is an [`OutboundFrame`], and only
 //! the judge in this module builds one. A frame is judged once, on its final
