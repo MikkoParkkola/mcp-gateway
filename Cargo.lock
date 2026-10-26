@@ -1911,6 +1911,7 @@ dependencies = [
  "chrono-tz",
  "clap",
  "clap_complete",
+ "core-foundation",
  "criterion",
  "dashmap",
  "dirs",

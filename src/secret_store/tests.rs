@@ -9,8 +9,8 @@ use std::sync::Mutex;
 
 use super::index::sync_seam;
 use super::{
-    FilesStore, NewSecret, SaveError, SecretStore, StoreError, StoreKind, Vault, choose_store,
-    fresh_name, random_suffix, save_secrets, unused_entries,
+    FilesStore, NewSecret, SaveError, SecretStore, StoreError, StoreKind, Vault, fresh_name,
+    random_suffix, save_secrets, unused_entries,
 };
 use crate::config::{Config, SecretStoreChoice};
 
@@ -193,25 +193,6 @@ fn b1_secrets_store_parses_and_defaults_to_auto() {
     let error = parse("secrets:\n  store: vault\n").expect_err("an invalid value");
     let shown = error.to_string();
     assert!(shown.contains("store"), "{shown}");
-}
-
-#[test]
-fn b1_keychain_is_refused_by_name_until_its_writers_land_and_auto_is_files() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let refused = choose_store(SecretStoreChoice::Keychain, dir.path())
-        .err()
-        .expect("keychain refused");
-    assert_eq!(refused, StoreError::NotYetAvailable);
-    assert!(
-        refused.reason().contains("not yet available on this build"),
-        "{}",
-        refused.reason()
-    );
-    assert!(refused.reason().contains("secrets.store: files"));
-    for choice in [SecretStoreChoice::Auto, SecretStoreChoice::Files] {
-        let store = choose_store(choice, dir.path()).expect("files");
-        assert_eq!(store.kind(), StoreKind::Files);
-    }
 }
 
 #[test]

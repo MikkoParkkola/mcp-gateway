@@ -9,15 +9,10 @@
 //! A value never enters an error: Win32 failures are reported by code.
 #![allow(unsafe_code)]
 
-#[cfg(test)]
-use windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER;
-use windows_sys::Win32::Foundation::{ERROR_NOT_FOUND, GetLastError};
-#[cfg(test)]
+use windows_sys::Win32::Foundation::{ERROR_INVALID_PARAMETER, ERROR_NOT_FOUND, GetLastError};
 use windows_sys::Win32::Security::Credentials::{
-    CRED_PERSIST_LOCAL_MACHINE, CredDeleteW, CredWriteW,
-};
-use windows_sys::Win32::Security::Credentials::{
-    CRED_TYPE_GENERIC, CREDENTIALW, CredFree, CredReadW,
+    CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC, CREDENTIALW, CredDeleteW, CredFree, CredReadW,
+    CredWriteW,
 };
 
 use crate::wiped_bytes::WipedBytes;
@@ -30,7 +25,6 @@ pub(crate) enum CredError {
     /// The name holds a NUL, which a Win32 string cannot carry.
     BadName,
     /// A credential with that target already exists; it is left unchanged.
-    #[cfg(test)]
     Exists,
     /// Any other failure, by its `GetLastError` code.
     Win32(u32),
@@ -124,10 +118,20 @@ pub(crate) fn read(name: &str) -> Result<WipedBytes, CredError> {
     Ok(WipedBytes::new(copy))
 }
 
+/// Whether a credential `name` exists. The blob is copied, zeroed through
+/// the read guard, and the copy wiped, before this returns.
+pub(crate) fn exists(name: &str) -> Result<bool, CredError> {
+    match read(name) {
+        Ok(_) => Ok(true),
+        Err(CredError::NotFound) => Ok(false),
+        Err(other) => Err(other),
+    }
+}
+
 /// Stores `bytes` under `name`, refusing a name that already exists.
-// ponytail: check-then-write is not atomic; ADR-028 makes it create-only under
-// the vault lock, which arrives with the write side.
-#[cfg(test)]
+// ponytail: check-then-write is not atomic, since CredWriteW overwrites. Gateway
+// writers hold the vault lock around it; another program writing the same
+// random name is outside ADR-028's threat model.
 pub(crate) fn create(name: &str, bytes: &[u8]) -> Result<(), CredError> {
     match read(name) {
         Ok(_) => return Err(CredError::Exists),
@@ -157,7 +161,6 @@ pub(crate) fn create(name: &str, bytes: &[u8]) -> Result<(), CredError> {
 }
 
 /// Removes the credential `name`.
-#[cfg(test)]
 pub(crate) fn delete(name: &str) -> Result<(), CredError> {
     let target = wide(name)?;
     // SAFETY: `target` is NUL-terminated UTF-16 owned here and outlives the

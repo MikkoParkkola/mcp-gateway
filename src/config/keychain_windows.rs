@@ -6,7 +6,14 @@
 use std::time::Duration;
 
 use super::keychain::{BOUND, KeychainError, KeychainRead, WipedBytes, bounded};
+use crate::secret_store::{SecretStore, StoreError, StoreKind};
 use crate::win_cred::{self, CredError};
+
+/// The largest blob Credential Manager keeps (ADR-028 rule 2).
+const LIMIT: usize = 2_560;
+
+/// A name no entry is ever created under, for the read-only probe.
+const PROBE_NAME: &str = "mcp-gateway.probe.absent";
 
 /// Credential Manager's generic credentials.
 pub(crate) struct WindowsKeychain {
@@ -39,5 +46,78 @@ impl KeychainRead for WindowsKeychain {
                 other => KeychainError::Unavailable(format!("Credential Manager: {other:?}")),
             })
         })
+    }
+}
+
+impl SecretStore for WindowsKeychain {
+    fn kind(&self) -> StoreKind {
+        StoreKind::Keychain
+    }
+
+    fn limit(&self) -> usize {
+        LIMIT
+    }
+
+    /// A read of a name that never exists: "not found" means Credential
+    /// Manager answers for this logon session.
+    fn probe(&self) -> Result<(), StoreError> {
+        match self.read(PROBE_NAME) {
+            Err(KeychainError::Missing) => Ok(()),
+            Ok(_) => Err(StoreError::Unavailable(
+                "Credential Manager holds the probe's reserved name".into(),
+            )),
+            Err(error) => Err(store_error(error)),
+        }
+    }
+
+    fn exists(&self, name: &str) -> Result<bool, StoreError> {
+        let name = name.to_owned();
+        bounded(self.bound, self.delay, move || {
+            win_cred::exists(&name).map_err(unavailable)
+        })
+        .map_err(store_error)
+    }
+
+    fn create(&self, name: &str, value: &[u8]) -> Result<String, StoreError> {
+        // The thread owns a wiped copy, so a call that outlives the bound
+        // still wipes it when it ends.
+        let (name, value) = (name.to_owned(), WipedBytes::new(value.to_vec()));
+        let reference = format!("keychain:{name}");
+        let written = bounded(self.bound, self.delay, move || {
+            Ok(win_cred::create(&name, value.as_bytes()))
+        })
+        .map_err(store_error)?;
+        match written {
+            Ok(()) => Ok(reference),
+            Err(CredError::Exists) => Err(StoreError::Exists),
+            Err(other) => Err(store_error(unavailable(other))),
+        }
+    }
+
+    fn delete(&self, name: &str) -> Result<(), StoreError> {
+        let name = name.to_owned();
+        bounded(self.bound, self.delay, move || {
+            match win_cred::delete(&name) {
+                // Already gone is durably gone.
+                Ok(()) | Err(CredError::NotFound) => Ok(()),
+                Err(other) => Err(unavailable(other)),
+            }
+        })
+        .map_err(store_error)
+    }
+}
+
+fn unavailable(error: CredError) -> KeychainError {
+    KeychainError::Unavailable(format!("Credential Manager: {error:?}"))
+}
+
+/// A reader error as a writer error. A timeout stays a timeout: the call is
+/// still running and may yet write.
+fn store_error(error: KeychainError) -> StoreError {
+    match error {
+        KeychainError::Timeout => StoreError::TimedOut,
+        KeychainError::Unavailable(why) => StoreError::Unavailable(why),
+        KeychainError::Locked => StoreError::Unavailable("Credential Manager is locked".into()),
+        KeychainError::Missing => StoreError::Failed("the entry vanished mid-call".into()),
     }
 }

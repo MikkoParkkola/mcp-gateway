@@ -66,8 +66,6 @@ pub(crate) enum StoreError {
     Exists,
     /// The store cannot take a write: the reason, for the operator.
     Unavailable(String),
-    /// This build has no writer for the chosen store.
-    NotYetAvailable,
     /// An empty value; refused on every store.
     Empty,
     /// The value is not UTF-8, which every reader requires.
@@ -87,9 +85,6 @@ impl StoreError {
         match self {
             Self::Exists => "an entry with that name already exists".to_owned(),
             Self::Unavailable(why) => format!("the secret store is unavailable: {why}; {SWITCH}"),
-            Self::NotYetAvailable => {
-                format!("the keychain store is not yet available on this build; {SWITCH}")
-            }
             Self::Empty => "the value is empty; empty secrets are refused".to_owned(),
             Self::NotUtf8 => "the value is not UTF-8".to_owned(),
             Self::TooLarge { limit, store } => {
@@ -126,23 +121,90 @@ fn now_ms() -> u64 {
 
 const SWITCH: &str = "set `secrets.store: files`, or unlock or install the keychain";
 
-/// The store a save with `choice` writes to, for a config in `config_dir`.
+/// The store a save writes to, and why it was chosen.
+pub(crate) struct Chosen {
+    pub(crate) store: Arc<dyn SecretStore + Send + Sync>,
+    /// The operator-facing reason: the setting, or the probe's answer.
+    /// Never a value, an entry name or a path under `secrets/`.
+    pub(crate) reason: String,
+    /// `auto` fell back to files because the keychain did not answer.
+    pub(crate) fell_back: bool,
+}
+
+/// The store a save with `choice` writes to, for a config in `config_dir`,
+/// logged once per call so a fallback to files is never silent.
 ///
-/// The keychain writers have not landed yet, so `keychain` is refused by
-/// name and `auto` resolves to files; no half-working keychain write ships.
+/// `auto` probes the OS keychain now and takes files when it fails;
+/// `keychain` is probed again by every save, which refuses rather than
+/// switching (ADR-028 rule 7).
 ///
 /// # Errors
 ///
-/// [`StoreError::NotYetAvailable`] for `keychain`.
+/// [`StoreError::Unavailable`] for `keychain` on a target without one.
 pub(crate) fn choose_store(
     choice: SecretStoreChoice,
     config_dir: &Path,
-) -> Result<Arc<dyn SecretStore + Send + Sync>, StoreError> {
+) -> Result<Chosen, StoreError> {
+    let chosen = choose_with(choice, config_dir, crate::config::os_secret_store())?;
+    log_choice(choice, &chosen);
+    Ok(chosen)
+}
+
+/// One line per choice: `warn` when `auto` fell back to files, else `info`.
+pub(crate) fn log_choice(choice: SecretStoreChoice, chosen: &Chosen) {
+    let (setting, store) = (choice_str(choice), chosen.store.kind().as_str());
+    if chosen.fell_back {
+        tracing::warn!(setting, store, reason = %chosen.reason, "secrets go to files");
+    } else {
+        tracing::info!(setting, store, reason = %chosen.reason, "secret store chosen");
+    }
+}
+
+/// [`choose_store`] over a given OS store, `None` where the target has none.
+pub(crate) fn choose_with(
+    choice: SecretStoreChoice,
+    config_dir: &Path,
+    os: Option<Arc<dyn SecretStore + Send + Sync>>,
+) -> Result<Chosen, StoreError> {
+    let files = |reason: String, fell_back: bool| Chosen {
+        store: Arc::new(FilesStore::new(config_dir)),
+        reason,
+        fell_back,
+    };
+    match (choice, os) {
+        (SecretStoreChoice::Files, _) => Ok(files("set to files".to_owned(), false)),
+        (SecretStoreChoice::Keychain, None) => Err(StoreError::Unavailable(
+            "this platform has no keychain store".to_owned(),
+        )),
+        (SecretStoreChoice::Keychain, Some(store)) => Ok(Chosen {
+            store,
+            reason: "set to keychain; every save probes it first".to_owned(),
+            fell_back: false,
+        }),
+        (SecretStoreChoice::Auto, None) => Ok(files(
+            "auto: this platform has no keychain store".to_owned(),
+            true,
+        )),
+        (SecretStoreChoice::Auto, Some(store)) => match store.probe() {
+            Ok(()) => Ok(Chosen {
+                store,
+                reason: "auto: the keychain probe passed".to_owned(),
+                fell_back: false,
+            }),
+            Err(error) => Ok(files(
+                format!("auto: the keychain probe failed: {error}"),
+                true,
+            )),
+        },
+    }
+}
+
+/// The setting as written in `gateway.yaml`.
+pub(crate) fn choice_str(choice: SecretStoreChoice) -> &'static str {
     match choice {
-        SecretStoreChoice::Keychain => Err(StoreError::NotYetAvailable),
-        SecretStoreChoice::Auto | SecretStoreChoice::Files => {
-            Ok(Arc::new(FilesStore::new(config_dir)))
-        }
+        SecretStoreChoice::Auto => "auto",
+        SecretStoreChoice::Keychain => "keychain",
+        SecretStoreChoice::Files => "files",
     }
 }
 
@@ -185,5 +247,7 @@ pub(crate) fn random_suffix() -> Result<u64, StoreError> {
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod choose_tests;
 #[cfg(test)]
 mod rollback_tests;

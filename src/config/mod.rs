@@ -21,6 +21,7 @@ pub(crate) use features::DEFAULT_TASK_TTL_MS;
 mod flagged_tools;
 mod input_schema;
 mod keychain;
+pub(crate) use keychain::os_secret_store;
 #[cfg(target_os = "linux")]
 mod keychain_linux;
 #[cfg(target_os = "macos")]
