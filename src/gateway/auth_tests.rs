@@ -133,7 +133,7 @@ fn debug_output_redacts_bearer_and_api_keys() {
             denied_tools: None,
             admin: false,
             personal: false,
-            principal: super::principal_of_digest(&test_digest("api-key-SECRET-VALUE")),
+            explicit_principal: None,
             previous: None,
         }],
         public_paths: vec![],
@@ -222,7 +222,7 @@ fn constant_time_token_comparison_accepts_correct_rejects_wrong() {
             denied_tools: None,
             admin: false,
             personal: false,
-            principal: super::principal_of_digest(&test_digest("apikey-EXACT")),
+            explicit_principal: None,
             previous: None,
         }],
         public_paths: vec![],
@@ -283,7 +283,7 @@ fn test_api_key_validation() {
                 denied_tools: None,
                 admin: false,
                 personal: false,
-                principal: super::principal_of_digest(&test_digest("key1")),
+                explicit_principal: None,
                 previous: None,
             },
             ResolvedApiKey {
@@ -297,7 +297,7 @@ fn test_api_key_validation() {
                 denied_tools: None,
                 admin: false,
                 personal: false,
-                principal: super::principal_of_digest(&test_digest("key2")),
+                explicit_principal: None,
                 previous: None,
             },
         ],
@@ -627,7 +627,7 @@ fn admin_key(admin: bool) -> ResolvedApiKey {
         denied_tools: None,
         admin,
         personal: false,
-        principal: super::principal_of_digest(&test_digest("key-value")),
+        explicit_principal: None,
         previous: None,
     }
 }
@@ -691,9 +691,6 @@ fn a_key_reissued_under_the_same_name_is_another_caller() {
     );
     let mut reissued = admin_key(false);
     reissued.digest = test_digest("new-value");
-    // Re-issued, not rotated: no explicit principal, so load derives it from
-    // the new digest (ADR-022), as `admin_key` did for the old one.
-    reissued.principal = super::principal_of_digest(&reissued.digest);
     let (state, _) = bootstrap_state(None, vec![reissued]);
     assert!(
         state

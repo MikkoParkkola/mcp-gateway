@@ -379,7 +379,7 @@ const CENSUS: &[(&str, &str, usize, Class, &str)] = &[
     ("src/events/worker.rs", "credential_principal: self.sub.credential_principal.as_deref()", 1, Decl, "into Attempt.credential_principal, keyed at services.rs record_form"),
     ("src/events/services.rs", ".storage_form()", 1, Store, "bearer principal for live-binding comparison"),
     ("src/events/services.rs", "k.principal_for(&digest).storage_form() == key.principal", 1, Store, "a watch's configured key still holds its recorded principal (ADR-022)"),
-    ("src/gateway/auth_resolved.rs", "k.principal.storage_form() == principal", 2, Store, "client_for_key and client_for_key_at find a key by its stored principal"),
+    ("src/gateway/auth_resolved.rs", "k.principal().storage_form() == principal", 2, Store, "client_for_key and client_for_key_at find a key by its stored principal"),
     ("src/events/services.rs", "sub.credential_principal.as_deref() == Some(live)", 1, Store, "live-binding comparison"),
     ("src/events/services.rs", "pub credential_principal: Option<&'a str>", 1, Decl, "Attempt field, keyed where recorded"),
     ("src/events/services.rs", "attempt.credential_principal.unwrap_or_default().to_owned()", 1, Keyed, "InternalPrincipal::new(..).record_form(key) for who.principal"),

@@ -142,7 +142,7 @@ pub(super) async fn dashboard_link(
             .iter()
             // By the credential, not the name: two keys may share a name
             // when a config skipped load validation (MIK-8489).
-            .find(|k| k.principal == client.principal)
+            .find(|k| k.principal() == client.principal)
         else {
             return admin_auth_required().into_response();
         };

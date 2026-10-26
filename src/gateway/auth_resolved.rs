@@ -101,7 +101,7 @@ impl ResolvedAuthConfig {
                     denied_tools: k.denied_tools.clone(),
                     admin: k.admin,
                     personal: k.kind == crate::config::ApiKeyKind::Personal,
-                    principal: k.principal_for(&digest),
+                    explicit_principal: k.principal.clone(),
                     previous,
                 })
             })
@@ -110,9 +110,7 @@ impl ResolvedAuthConfig {
         // is known.
         super::refuse_shared_principals(
             bearer_token.as_deref(),
-            api_keys
-                .iter()
-                .map(|k| (k.name.as_str(), k.principal.clone())),
+            api_keys.iter().map(|k| (k.name.as_str(), k.principal())),
         )?;
         super::refuse_shared_digests(
             bearer_token.as_deref(),
@@ -311,7 +309,7 @@ impl ResolvedAuthConfig {
             name: key.name.clone(),
             // MIK-6704.IDENT.1a: the key's principal, stable across rotations
             // (ADR-022): derived from its digest unless set explicitly.
-            principal: key.principal.clone(),
+            principal: key.principal(),
             rate_limit: key.rate_limit,
             backends: key.backends.clone(),
             allowed_tools: key.allowed_tools.clone(),
@@ -336,7 +334,7 @@ impl ResolvedAuthConfig {
         let keys = self.api_keys();
         let key = keys
             .iter()
-            .find(|k| k.name == name && k.principal.storage_form() == principal)?;
+            .find(|k| k.name == name && k.principal().storage_form() == principal)?;
         (!crate::config::api_key_expired_now(key.expires_at)).then(|| Self::client_of(key))
     }
 
@@ -351,7 +349,7 @@ impl ResolvedAuthConfig {
         let keys = self.api_keys();
         let key = keys
             .iter()
-            .find(|k| k.name == name && k.principal.storage_form() == principal)?;
+            .find(|k| k.name == name && k.principal().storage_form() == principal)?;
         (!crate::config::api_key_expired(key.expires_at, now)).then(|| Self::client_of(key))
     }
 

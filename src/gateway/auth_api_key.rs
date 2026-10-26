@@ -26,9 +26,11 @@ pub struct ResolvedApiKey {
     pub admin: bool,
     /// Configured `kind: personal`: one holder, so a per-caller identity.
     pub(super) personal: bool,
-    /// The key's principal, from the one derivation
-    /// (`ApiKeyConfig::principal_from`): stable across rotations (ADR-022).
-    pub(crate) principal: super::InternalPrincipal,
+    /// The principal the key records, written at its first rotation
+    /// (ADR-022). `None` for a key never rotated: [`Self::principal`] then
+    /// derives it from the current digest, so a new digest under an old name
+    /// never inherits the old identity.
+    pub(crate) explicit_principal: Option<String>,
     /// The digest before the last rotation and the end of its grace.
     pub(crate) previous: Option<PreviousDigest>,
 }
@@ -51,6 +53,16 @@ impl std::fmt::Debug for PreviousDigest {
     }
 }
 
+impl ResolvedApiKey {
+    /// The key's principal, by the one derivation: the recorded one when the
+    /// key was rotated, otherwise derived from its current digest. Computed,
+    /// never stored, so it cannot fall out of step with the digest.
+    #[must_use]
+    pub(crate) fn principal(&self) -> super::InternalPrincipal {
+        super::configured_key_principal(self.explicit_principal.as_deref(), &self.digest)
+    }
+}
+
 impl std::fmt::Debug for ResolvedApiKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ResolvedApiKey")
@@ -65,7 +77,10 @@ impl std::fmt::Debug for ResolvedApiKey {
             .field("admin", &self.admin)
             .field("personal", &self.personal)
             // The principal is persisted as owner keys; out of logs like the digest.
-            .field("principal", &"<redacted>")
+            .field(
+                "explicit_principal",
+                &self.explicit_principal.as_ref().map(|_| "<redacted>"),
+            )
             .field("previous", &self.previous)
             .finish_non_exhaustive()
     }
