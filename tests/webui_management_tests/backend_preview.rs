@@ -168,6 +168,46 @@ async fn an_unconfirmed_preview_starts_nothing_and_returns_a_token() {
     );
 }
 
+/// T7b: a token is bound to the credential that asked for it, not its
+/// display name: another admin key with the same name cannot spend it, while
+/// the key it was issued to can (positive control).
+#[tokio::test]
+async fn a_token_is_bound_to_its_credential_not_its_name() {
+    let twin = |key: &str| mcp_gateway::config::ApiKeyConfig {
+        key: None,
+        key_sha256: Some(mcp_gateway::config::api_key_digest_spec(key.as_bytes())),
+        expires_at: None,
+        name: "twin".to_string(),
+        rate_limit: 0,
+        backends: vec!["*".to_string()],
+        allowed_tools: None,
+        denied_tools: None,
+        admin: true,
+        kind: mcp_gateway::config::ApiKeyKind::Shared,
+    };
+    let log = Log::default();
+    let url = stub(&log).await;
+    let auth = AuthConfig {
+        api_keys: vec![twin("twin-key-a"), twin("twin-key-b")],
+        ..admin_auth_config()
+    };
+    let (state, _store) = make_app_state_with_auth_config(&auth).await;
+    let router = create_router(state);
+    let body = json!({"name": "stub", "url": url});
+    let (status, described) = preview_as(&router, Some("twin-key-a"), &body).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{described}");
+    let mut confirm = body.clone();
+    confirm["confirm"] = described["confirm"].clone();
+    let (other, refused) = preview_as(&router, Some("twin-key-b"), &confirm).await;
+    assert_eq!(
+        other,
+        StatusCode::CONFLICT,
+        "another key named twin: {refused}"
+    );
+    let (own, answer) = preview_as(&router, Some("twin-key-a"), &confirm).await;
+    assert_eq!(own, StatusCode::OK, "the key it was issued to: {answer}");
+}
+
 /// T7: a token is single-use, and bound to the body it was issued for.
 #[tokio::test]
 async fn a_token_is_single_use_and_bound_to_its_body() {
