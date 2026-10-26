@@ -178,6 +178,9 @@ mod u17_ui_shell_tests;
 // MIK-8697: the credential canary over the router's request paths.
 #[cfg(test)]
 mod canary_tests;
+/// A delivery record joins its invocation by trace, on both routes.
+#[cfg(all(test, feature = "firewall"))]
+mod delivery_trace_join_tests;
 /// MIK-8154 PR 2 rows: sanitize parity and passthrough on every route.
 #[cfg(all(test, feature = "firewall"))]
 mod mik8154_rows_tests;

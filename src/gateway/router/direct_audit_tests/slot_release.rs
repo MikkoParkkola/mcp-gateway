@@ -340,6 +340,7 @@ async fn the_fixtures_firewalls_deliver_a_minted_continuation() {
             external_server: "alpha",
             external_tool: "t",
             subject: None,
+            trace_id: None,
         },
         signing: None,
         chain_source: crate::protocol::ChainSource::default(),

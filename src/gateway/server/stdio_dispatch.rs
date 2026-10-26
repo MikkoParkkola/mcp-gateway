@@ -182,13 +182,15 @@ impl Gateway {
             super::super::meta_mcp::invoke::relay::GatewayStamps::Legacy
         };
         let chain_source = response.chain_source;
+        // Taken before finalizing, which may replace the answer.
+        let invocation_trace = response.invocation_trace.clone();
         // The caller verdicts are taken now: a withheld name is attributed
         // as an absent one (MIK-8356).
         let response_targets = super::super::meta_mcp::response_security::without_withheld(
             &external_tool,
             response_targets,
         );
-        let response = meta_mcp.finalize_content(
+        let mut response = meta_mcp.finalize_content(
             response,
             &super::super::meta_mcp::response_security::ResponseDeliveryContext {
                 method: &method,
@@ -199,6 +201,7 @@ impl Gateway {
                     external_server: "gateway",
                     external_tool: &external_tool,
                     subject: None,
+                    trace_id: invocation_trace.as_deref(),
                 },
                 signing: signing_context.as_ref(),
                 chain_source,
@@ -213,6 +216,8 @@ impl Gateway {
         }
         // MIK-7920: recorded after the judge, then settled, by the caller
         // (`judge_and_commit`), as `POST /mcp` does.
+        // Kept across a replacement made while finalizing.
+        response.invocation_trace = invocation_trace;
         Some(stdio_delivery::StdioAnswer::finalized(
             response,
             external_tool,
