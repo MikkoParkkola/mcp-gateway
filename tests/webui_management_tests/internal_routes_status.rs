@@ -40,7 +40,7 @@ async fn ui_status_redacts_for_a_non_admin() {
             ],
             "{caller:?} got a field beyond the counts: {text}"
         );
-        // MIK-8786: `auth` states only three facts about the caller, never a
+        // `auth` states only three facts about the caller, never a
         // backend detail.
         let auth = json["auth"].as_object().expect("auth is an object");
         let mut facts: Vec<&str> = auth.keys().map(String::as_str).collect();
