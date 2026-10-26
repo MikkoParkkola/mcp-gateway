@@ -15,8 +15,7 @@ events:
   store_dir: ~/.mcp-gateway/events
 ```
 
-The design is `docs/design/2026-10-01-mik-7630-mcp-events.md`. The sources
-below are opt-in; each is off until its `events.sources.*` switch is on.
+The sources below are opt-in; each is off until its `events.sources.*` switch is on.
 
 ## Scheduled wake-ups: `schedule.tick`
 

@@ -1,0 +1,80 @@
+name: UI tests
+
+# Browser tests for the web UI shell: Playwright with axe-core, in Chromium,
+# against ui-tests/server.mjs, which answers /ui like the gateway and serves
+# /ui/api from fixture JSON. Every test aborts requests to any other host
+# (ui-tests/tests/base.mjs), so the job reads fixtures only.
+#
+# Supply chain: exact versions in ui-tests/package-lock.json (with integrity
+# hashes), installed by `npm ci --ignore-scripts` so no package runs an
+# install script. Only Chromium is downloaded, by Playwright's own installer,
+# and cached under the locked Playwright version.
+on:
+  pull_request:
+    paths:
+      - 'src/gateway/ui/**'
+      - 'ui-tests/**'
+      - '.github/workflows/ui-tests.yml'
+  push:
+    branches: [main, docs/ranking-1-release-line]
+    paths:
+      - 'src/gateway/ui/**'
+      - 'ui-tests/**'
+      - '.github/workflows/ui-tests.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  playwright:
+    name: UI tests (Playwright)
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) || contains(github.head_ref, 'ui-tests') }}
+    runs-on: ubuntu-latest
+    # 15, not 5: a cold Chromium install exceeds 5 min, and the cache saves only on success.
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ui-tests
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6.0.0
+        with:
+          node-version: 24
+      - name: Install the locked packages without install scripts
+        run: npm ci --ignore-scripts
+      - name: Read the locked Playwright version
+        id: pw
+        run: echo "version=$(node -p "require('./package-lock.json').packages['node_modules/playwright-core'].version")" >> "$GITHUB_OUTPUT"
+      - name: Cache Chromium
+        id: browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ steps.pw.outputs.version }}
+      - name: Install Chromium and its system libraries
+        if: steps.browsers.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+      - name: Install Chromium's system libraries (browser from cache)
+        if: steps.browsers.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+      - name: Run the browser tests
+        env:
+          CI: 'true'
+        # The `visual` project needs the design frames, which are not in
+        # this repository; it runs locally.
+        run: npx playwright test --project=chromium
+      - name: Keep the report of a failed run
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ui-tests-report
+          path: |
+            ui-tests/playwright-report
+            ui-tests/test-results
+          retention-days: 7

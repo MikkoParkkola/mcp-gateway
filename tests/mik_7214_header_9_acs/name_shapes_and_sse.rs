@@ -66,7 +66,7 @@ fn every_name_shape_round_trips_and_only_the_safe_one_stays_plain() {
 /// streamable-HTTP fixtures above speak. `tools/list`'s second call expires
 /// the session, the same way `spawn_expiring_peer` does, so a reconnect is
 /// forced — the only way the `Modern`/`Sse` cell in
-/// `docs/design/2026-09-03-header-9-era-conditional-outbound-test-plan.md` can
+/// the header 9 era conditional outbound test plan can
 /// be proved: a primed first connect never reaches the code under test.
 async fn spawn_sse_expiring_peer() -> (String, Recorder) {
     let recorder: Recorder = Arc::new(Mutex::new(Vec::new()));

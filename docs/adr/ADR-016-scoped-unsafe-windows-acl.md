@@ -4,7 +4,7 @@
   `unsafe` code). Vetoable until the implementing PR merges; that PR states the exception
   at the top of its summary.
 - **Relates to**: `#![deny(unsafe_code)]` (`src/lib.rs:24`), `SECURITY.md` "Windows file
-  permissions", design `docs/design/2026-09-26-windows-owner-only-stores.md`.
+  permissions", and the windows owner-only stores design.
 
 ## Context
 

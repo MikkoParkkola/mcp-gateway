@@ -5,7 +5,7 @@
 //! (`docs/requirements/RELEASE-4.0.0-requirements.md:292`).
 //!
 //! Written from the reviewed plan at
-//! `docs/design/2026-09-04-nfr-obs-3-test-plan.md`, BEFORE the implementation.
+//! the nfr obs 3 test plan, BEFORE the implementation.
 //! Every case here fails now. That order is the point: a test written after the
 //! code agrees with the code, and one written first agrees with the criterion.
 //!

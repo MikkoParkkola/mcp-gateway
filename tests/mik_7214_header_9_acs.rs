@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-7214.HEADER.9a / .9b — era-conditional outbound headers and `_meta`.
 //!
-//! Design: `docs/design/2026-09-03-header-9-era-conditional-outbound.md`.
+//! Design: the header 9 era conditional outbound design.
 //! Plan: the same name with `-test-plan`.
 //!
 //! Every assertion here reads the **captured wire request**, never

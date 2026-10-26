@@ -145,8 +145,33 @@ paths:
           description: User found
 "#;
 
+/// A row's URI that names no fixed asset: the shell's assets carry content
+/// hashes that change with every edit, so this is resolved per run to the
+/// stylesheet the shell document links.
+const SHELL_STYLESHEET: &str = "/ui/assets/{the shell stylesheet}";
+
+/// The concrete URI to send: the placeholder becomes the linked stylesheet.
+fn concrete_uri(uri: &str) -> String {
+    if uri != SHELL_STYLESHEET {
+        return uri.to_string();
+    }
+    let document = include_str!("../../src/gateway/ui/shell/index.html");
+    let name = document
+        .split("/ui/assets/")
+        .skip(1)
+        .filter_map(|rest| rest.split(['"', '\'']).next())
+        .find(|name| {
+            std::path::Path::new(name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("css"))
+        })
+        .expect("the shell document links a stylesheet");
+    format!("/ui/assets/{name}")
+}
+
 fn request(method: &Method, uri: &str, caller: Caller, payload: Payload) -> Request<Body> {
-    let mut builder = Request::builder().method(method.clone()).uri(uri);
+    let uri = concrete_uri(uri);
+    let mut builder = Request::builder().method(method.clone()).uri(uri.as_str());
     let token = match caller {
         Caller::Admin => Some(ADMIN_TOKEN),
         Caller::Auditor => Some(AUDITOR_KEY),
@@ -227,6 +252,8 @@ const DECISION: &str = r#"{"target_kind":"grant","target_id":"grant-1","decision
 /// `AddBackendRequest` / `UpdateBackendRequest` (src/gateway/ui/backends.rs:48, :67).
 const ADD_BACKEND: &str = r#"{"name":"probe","url":"http://127.0.0.1:9/probe"}"#;
 const UPDATE_BACKEND: &str = r#"{"description":"probe"}"#;
+/// An unconfirmed preview: the admin gets a 202 and a token, and nothing starts.
+const PREVIEW_BACKEND: &str = r#"{"name":"probe","url":"http://127.0.0.1:9/mcp"}"#;
 
 const fn row(
     path: &'static str,
@@ -494,6 +521,14 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 404],
     ),
+    // src/gateway/ui/preview.rs (preview_backend): describe step
+    row(
+        "/ui/api/previews",
+        Method::POST,
+        "/ui/api/previews",
+        Payload::Json(PREVIEW_BACKEND),
+        [401, 403, 403, 202],
+    ),
     // src/gateway/ui/import.rs:95 (preview_handler)
     row(
         "/ui/api/import/openapi/preview",
@@ -510,11 +545,11 @@ const ROWS: &[Row] = &[
         Payload::Import,
         [401, 403, 403, 200],
     ),
-    // src/gateway/ui/shell.rs:51 (asset): static, outside auth like /ui (MIK-8870)
+    // src/gateway/ui/shell.rs, fn asset: static, outside auth like /ui
     row(
         "/ui/assets/{file}",
         Method::GET,
-        "/ui/assets/shell.59b6e0f80d81.css",
+        SHELL_STYLESHEET,
         Payload::None,
         [200, 200, 200, 200],
     ),
