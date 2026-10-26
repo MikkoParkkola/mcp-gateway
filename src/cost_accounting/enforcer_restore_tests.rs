@@ -5,7 +5,6 @@
 //! damaged or out-of-range `costs.json` cannot do to a cap.
 
 use super::tests::enforcer_with;
-use super::*;
 
 /// A `costs.json` as the server writes it: per-tool and per-key daily
 /// totals, saved at `saved_at`.
