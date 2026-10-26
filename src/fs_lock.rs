@@ -43,7 +43,10 @@ pub(crate) enum Attempt {
     Held,
     /// The sidecar cannot be used now; the error (`PermissionDenied`) names
     /// the path, the rule it fails and what to do.
-    #[expect(dead_code, reason = "the Windows sidecar judge builds it")]
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "only the Windows sidecar judge refuses")
+    )]
     Refused(io::Error),
 }
 
@@ -177,6 +180,16 @@ impl ExclusiveFileLock {
     /// volume, locking unsupported). A separate constructor from
     /// [`Self::try_acquire`], which refuses on any platform with neither unix
     /// nor Windows custody.
+    #[cfg(windows)]
+    pub(crate) fn try_lease(lock_path: &Path) -> io::Result<Attempt> {
+        #[cfg(test)]
+        count_attempt(lock_path);
+        windows::probe(lock_path)
+    }
+
+    /// See the Windows [`Self::try_lease`]; here the sidecar is opened (and
+    /// created `0600` on unix) and locked.
+    #[cfg(not(windows))]
     pub(crate) fn try_lease(lock_path: &Path) -> io::Result<Attempt> {
         #[cfg(test)]
         count_attempt(lock_path);
@@ -261,6 +274,15 @@ impl ExclusiveFileLock {
 
     /// Block until an exclusive lock on `lock_path` is acquired, creating the
     /// sidecar file (owner-only, `0600` on unix) if it does not exist yet.
+    #[cfg(windows)]
+    pub(crate) fn acquire(lock_path: &Path) -> io::Result<Self> {
+        #[cfg(test)]
+        count_attempt(lock_path);
+        windows::acquire(lock_path)
+    }
+
+    /// See the Windows [`Self::acquire`].
+    #[cfg(not(windows))]
     pub(crate) fn acquire(lock_path: &Path) -> io::Result<Self> {
         #[cfg(test)]
         count_attempt(lock_path);
@@ -299,8 +321,9 @@ fn set_owner_only(opts: &mut OpenOptions) {
     opts.mode(0o600);
 }
 
-/// No-op on non-unix: file permissions are managed by the platform ACLs.
-#[cfg(not(unix))]
+/// No-op where there is neither unix nor Windows custody (Windows creates its
+/// sidecars through `private_fs`).
+#[cfg(not(any(unix, windows)))]
 fn set_owner_only(_opts: &mut OpenOptions) {}
 
 /// Take an exclusive `flock` on unix. `rustix` is an already-present
@@ -565,6 +588,10 @@ mod tests {
         );
     }
 }
+
+#[cfg(windows)]
+#[path = "fs_lock_windows.rs"]
+mod windows;
 
 #[cfg(all(test, windows))]
 #[path = "fs_lock_windows_tests.rs"]

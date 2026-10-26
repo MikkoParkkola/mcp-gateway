@@ -308,3 +308,27 @@ fn acquire_never_blocks_on_an_unjudged_sidecar() {
     assert_owner_only("acquire", &path, false);
     drop(lock);
 }
+
+/// Item 3 (race mapping): another healer replaces the sidecar and takes the
+/// lock between this probe's judgement and its replacement attempt. This
+/// probe then meets an owner-only file held elsewhere: `Held`, not `Refused`.
+#[test]
+fn a_healer_that_loses_the_race_reads_held() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join(".store.lock");
+    plant_open_sidecar("race", &path);
+    let winner: Rc<RefCell<Option<ExclusiveFileLock>>> = Rc::default();
+    let (kept, at) = (Rc::clone(&winner), path.clone());
+    super::windows::after_judge_once(move || {
+        std::fs::remove_file(&at).expect("nothing holds the original");
+        *kept.borrow_mut() = Some(ExclusiveFileLock::acquire(&at).expect("the winner"));
+    });
+    assert!(matches!(
+        ExclusiveFileLock::try_lease(&path).expect("probe"),
+        Attempt::Held
+    ));
+    assert!(winner.borrow().is_some(), "the seam ran");
+    assert_owner_only("race", &path, false);
+}
