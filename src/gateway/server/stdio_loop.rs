@@ -252,9 +252,7 @@ impl Gateway {
 
         loop {
             if signalled_early {
-                info!(
-                    "stdio: shutdown signal received during startup; finishing accepted requests"
-                );
+                info!("stdio: shutdown signal received during startup; shutting down");
                 break;
             }
             // A closed queue means the stdout writer has exited, so every
