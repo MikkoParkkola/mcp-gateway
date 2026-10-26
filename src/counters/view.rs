@@ -187,11 +187,19 @@ impl CounterStore {
             Ok((series, overflow)) => {
                 // A label admitted after its dimension overflowed may have
                 // earlier calls in the overflow: it is covered from its own
-                // first count on.
-                let first = slots
-                    .iter()
-                    .position(|slot| counts(series, query.window, slot.key).is_some())
-                    .unwrap_or(slots.len());
+                // oldest bucket on. A label is never unheld but by a sweep, so
+                // one whose ring holds nothing older was held all along, and an
+                // empty ring means it was held since before the ring began.
+                let oldest = match query.window {
+                    Window::Day | Window::TwoDays => series.half.buckets().next(),
+                    Window::Month => series.day.buckets().next(),
+                };
+                let first = oldest.map_or(0, |(key, _)| {
+                    slots
+                        .iter()
+                        .position(|slot| slot.key >= key)
+                        .unwrap_or(slots.len())
+                });
                 if let Some(overflow) = overflow
                     && slots[..first].iter().any(|slot| overflowed(overflow, slot))
                 {
