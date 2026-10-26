@@ -132,7 +132,7 @@ fn build_plan(target: &Target, protected: &[PathBuf]) -> Result<Plan, Refusal> {
     let masked: Vec<String> = MASKED.iter().map(ToString::to_string).collect();
     let mut hidden = Vec::new();
     let mut bound_back = Vec::new();
-    let homes = home_roots();
+    let homes = home_roots()?;
     // The run phase's PATH: the interpreter's directories, then the system's.
     let mut path_dirs = Vec::new();
     for dir in interpreter_dirs(&program) {
@@ -259,26 +259,60 @@ fn interpreter_dirs(program: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-/// Where homes live: the system's home roots, every user's home directly
-/// under `/home` (another user's, not only the gateway user's), and the
-/// gateway user's own wherever it is. Each is canonical, so a symlinked home
-/// is found at its real path.
-///
-/// Not `/etc/passwd`: service accounts name system directories as their home
-/// (Debian's `sync` has `/bin`), which would forbid binding `/bin` itself.
-fn home_roots() -> Vec<PathBuf> {
+/// Where homes live, read from the host: `/home`, `/root`, every entry under
+/// `/home`, every home `/etc/passwd` names, and the gateway user's own. A
+/// read that fails refuses the preview rather than leaving a home unlisted.
+fn home_roots() -> Result<Vec<PathBuf>, Refusal> {
+    let listing = match fs::read_dir("/home") {
+        Ok(entries) => entries
+            .map(|e| e.map(|e| e.path()))
+            .collect::<std::io::Result<Vec<_>>>()
+            .map_err(|e| Refusal::Step(format!("listing /home ({e})")))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(Refusal::Step(format!("listing /home ({e})"))),
+    };
+    let passwd = fs::read_to_string("/etc/passwd")
+        .map_err(|e| Refusal::Step(format!("reading /etc/passwd ({e})")))?;
+    let own = crate::home_dir::home_dir();
+    Ok(home_roots_from(&passwd, listing, own)
+        .into_iter()
+        .map(|home| fs::canonicalize(&home).unwrap_or(home))
+        .collect())
+}
+
+/// A service account's home that is a system directory, or no real home at
+/// all (`/`, `/bin` for Debian's `sync`, `/usr/sbin`, `/var/...`,
+/// `/nonexistent`); counting it as a home would forbid binding `/bin`.
+fn is_system_placeholder(home: &Path) -> bool {
+    const SYSTEM: [&str; 12] = [
+        "/bin",
+        "/sbin",
+        "/usr",
+        "/lib",
+        "/lib32",
+        "/lib64",
+        "/etc",
+        "/var",
+        "/run",
+        "/proc",
+        "/dev",
+        "/nonexistent",
+    ];
+    home == Path::new("/") || SYSTEM.iter().any(|system| home.starts_with(system))
+}
+
+/// The home list from its inputs, so the rule is tested without the host.
+fn home_roots_from(passwd: &str, listing: Vec<PathBuf>, own: Option<PathBuf>) -> Vec<PathBuf> {
     let mut homes = vec![PathBuf::from("/home"), PathBuf::from("/root")];
-    if let Ok(entries) = fs::read_dir("/home") {
-        homes.extend(
-            entries
-                .filter_map(Result::ok)
-                .map(|e| e.path())
-                .map(|p| fs::canonicalize(&p).unwrap_or(p)),
-        );
-    }
-    if let Some(home) = crate::home_dir::home_dir() {
-        homes.push(fs::canonicalize(&home).unwrap_or(home));
-    }
+    homes.extend(listing);
+    homes.extend(
+        passwd
+            .lines()
+            .filter_map(|line| line.split(':').nth(5))
+            .map(PathBuf::from)
+            .filter(|home| home.is_absolute() && !is_system_placeholder(home)),
+    );
+    homes.extend(own);
     homes
 }
 
@@ -457,7 +491,7 @@ mod tests {
         assert!(refusal.to_string().contains("container"));
     }
 
-    /// An Ubuntu 24.04 container reports the host's AppArmor sysctl; the fix
+    /// An Ubuntu 24.04 container reports the host's `AppArmor` sysctl; the fix
     /// it needs is to preview from a host install, not the profile.
     #[test]
     fn a_container_on_an_apparmor_host_says_container() {
@@ -527,20 +561,44 @@ mod tests {
         }
     }
 
-    /// Every user's home under `/home` is a home root, not only the gateway
-    /// user's, so none of them can be bound whole.
+    /// Every account's home counts, under `/home` or elsewhere; a system
+    /// placeholder home (Debian's `sync` has `/bin`) does not.
     #[test]
-    fn every_home_under_slash_home_is_a_home_root() {
-        let roots = home_roots();
-        for entry in fs::read_dir("/home")
-            .into_iter()
-            .flatten()
-            .filter_map(Result::ok)
-        {
-            let home = fs::canonicalize(entry.path()).unwrap_or_else(|_| entry.path());
-            assert!(roots.contains(&home), "{} is missing", home.display());
-            assert!(covered_home(&home, &roots).is_some(), "{}", home.display());
+    fn homes_come_from_the_listing_passwd_and_the_own_home() {
+        let passwd = "root:x:0:0:root:/root:/bin/bash\n\
+                      sync:x:4:65534:sync:/bin:/bin/sync\n\
+                      man:x:6:12:man:/var/cache/man:/usr/sbin/nologin\n\
+                      nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n\
+                      alice:x:1001:1001::/srv/users/alice:/bin/bash\n\
+                      odd:x:9:9::relative:/bin/sh\n";
+        let homes = home_roots_from(
+            passwd,
+            vec![PathBuf::from("/home/bob")],
+            Some(PathBuf::from("/opt/gateway-user")),
+        );
+        for home in [
+            "/home",
+            "/root",
+            "/home/bob",
+            "/srv/users/alice",
+            "/opt/gateway-user",
+        ] {
+            assert!(homes.contains(&PathBuf::from(home)), "{home} missing");
+            assert!(covered_home(Path::new(home), &homes).is_some(), "{home}");
         }
+        for system in ["/bin", "/var/cache/man", "/nonexistent", "relative"] {
+            assert!(!homes.contains(&PathBuf::from(system)), "{system} counted");
+        }
+        // The system directories still bind; an interpreter inside a home does.
+        for dir in [
+            "/bin",
+            "/usr/bin",
+            "/usr/local/bin",
+            "/srv/users/alice/.nvm/bin",
+        ] {
+            assert!(covered_home(Path::new(dir), &homes).is_none(), "{dir}");
+        }
+        assert!(covered_home(Path::new("/srv"), &homes).is_some());
     }
 
     #[test]
