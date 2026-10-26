@@ -226,7 +226,15 @@ pub(crate) async fn firewalled_recorded_call(
         meta
     })
     .await;
-    let body = call_read(&fx, route, Era::Modern).await;
+    // `read` is not surfaced here, so the meta route invokes it by name.
+    let body = match route {
+        HttpRoute::Mcp => {
+            fixture::post_meta_invoke(&fx, "k-std", "alpha", "read", json!({}), None, None)
+                .await
+                .1
+        }
+        HttpRoute::Direct => call_read(&fx, route, Era::Modern).await,
+    };
     let rows = delivery_rows(&log).await;
     let entries = std::fs::read_to_string(log.path())
         .unwrap_or_default()

@@ -27,6 +27,11 @@ fn only_delivery(route: HttpRoute, rows: &[Value]) -> Value {
 async fn a_clean_answer_records_delivered_and_no_findings() {
     for route in [HttpRoute::Mcp, HttpRoute::Direct] {
         let recorded = firewalled_recorded_call(route, Answer::Ok, None).await;
+        let body = &recorded.body;
+        assert!(
+            body.get("error").is_none(),
+            "{route:?}: premise: answered: {body}"
+        );
         let row = only_delivery(route, &recorded.rows);
         assert_eq!(row["response_effect"], "delivered", "{route:?}: {row}");
         assert_eq!(
@@ -45,9 +50,10 @@ async fn a_redacted_answer_records_rewritten_and_its_finding() {
         let leak = planted_credential();
         let recorded =
             firewalled_recorded_call(route, Answer::Text(leak), Some(FirewallAction::Warn)).await;
+        let body = recorded.body.to_string();
         assert!(
-            !recorded.body.to_string().contains(leak),
-            "{route:?}: premise: redacted"
+            !body.contains(leak) && body.contains("[REDACTED"),
+            "{route:?}: premise: redacted and delivered: {body}"
         );
         let row = only_delivery(route, &recorded.rows);
         assert_eq!(row["response_effect"], "rewritten", "{route:?}: {row}");
@@ -79,6 +85,8 @@ async fn a_blocked_answer_records_refused() {
         let leak = planted_credential();
         let recorded =
             firewalled_recorded_call(route, Answer::Text(leak), Some(FirewallAction::Block)).await;
+        let body = recorded.body.to_string();
+        assert!(!body.contains(leak), "{route:?}: premise: withheld: {body}");
         let row = only_delivery(route, &recorded.rows);
         assert_eq!(row["response_effect"], "refused", "{route:?}: {row}");
     }
