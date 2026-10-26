@@ -27,6 +27,11 @@
 #[path = "common/record_key.rs"]
 mod record_key;
 
+// `webui_management_tests/secret_slot_surfaces.rs` runs the binary's `get`,
+// `list` and `doctor` beside the UI config read.
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 #[path = "common/yaml.rs"]
 mod yaml;
 
@@ -73,6 +78,8 @@ mod internal_routes;
 mod openapi_import;
 #[path = "webui_management_tests/registry.rs"]
 mod registry;
+#[path = "webui_management_tests/secret_slot_surfaces.rs"]
+mod secret_slot_surfaces;
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
