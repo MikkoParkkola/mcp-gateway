@@ -333,3 +333,39 @@ async fn o4_a_budget_at_its_notify_percent_needs_you() {
         "governance off: {body}"
     );
 }
+
+/// O4b: several budgets at or past their percent come highest first, so the
+/// fold drops the least urgent: a global budget at 90% before a key at 80%.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn o4b_limit_rows_come_highest_percent_first() {
+    use crate::cost_accounting::config::CostGovernanceConfig;
+    use crate::cost_accounting::enforcer::BudgetEnforcer;
+    use crate::cost_accounting::registry::CostRegistry;
+
+    let (mut state, _dir) = fixture(1, false).await;
+    let mut cfg = CostGovernanceConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    cfg.budgets.daily = Some(1.0);
+    cfg.budgets.per_key.insert("ops".to_string(), 1.125);
+    let enforcer = Arc::new(BudgetEnforcer::new(
+        cfg.clone(),
+        Arc::new(CostRegistry::new(&cfg)),
+    ));
+    enforcer.record_spend("search", Some("ops"), 0.9);
+    let inner = Arc::get_mut(&mut state).expect("state is unique");
+    let mut meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::clone(&inner.backends));
+    meta.budget_enforcer = Some(enforcer);
+    inner.meta_mcp = Arc::new(meta);
+    let body = overview(&state).await;
+    let subjects: Vec<&str> = body["needs_you"]["rows"]
+        .as_array()
+        .expect("needs-you rows")
+        .iter()
+        .filter(|row| row["kind"] == "limit_80")
+        .map(|row| row["subject"].as_str().expect("a subject"))
+        .collect();
+    assert_eq!(subjects, ["global", "key:ops"], "{body}");
+}
