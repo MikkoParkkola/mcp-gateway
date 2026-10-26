@@ -35,7 +35,7 @@ struct Job {
 }
 
 static REAPER: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
-static START: parking_lot::Mutex<()> = parking_lot::const_mutex(());
+static START: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
 /// Start the reaper thread if it is not running yet. Called by every stdio
 /// start before it spawns a child, so no child exists that the reaper could
@@ -142,7 +142,7 @@ fn step(job: &mut Job, now: Instant) -> bool {
 /// status by leader pid, since the tree itself is dropped once done.
 #[cfg(all(test, unix))]
 pub(super) static FINISHED: parking_lot::Mutex<Vec<super::child_tree::Counts>> =
-    parking_lot::const_mutex(Vec::new());
+    parking_lot::Mutex::new(Vec::new());
 
 /// A transport's child tree and the reaps it started (MIK-7923, design P2).
 /// Every hold of its lock is sync and spans no await. The tree leaves the slot
