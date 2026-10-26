@@ -222,3 +222,34 @@ fn t35_the_previous_period_omits_what_the_overflow_may_hold() {
         "no previous point from before it was admitted"
     );
 }
+
+/// T35, partial overlap: overflow older than the previous period does not
+/// cut it short. Admitted 36 hours ago, with overflow 60 hours ago, the
+/// previous period keeps its points from the admission bucket on.
+#[test]
+fn t35_stale_overflow_leaves_the_previous_period_whole() {
+    let store = CounterStore::new(T0);
+    let now = T0 + 4 * DAY;
+    let stray = Call {
+        caller: "key:a",
+        server: Label::Known("s"),
+        tool: Label::Untrusted,
+        tally: Tally::default(),
+    };
+    store.record(&stray, now - 60 * HOUR, &UTC);
+    store.record(&call(), now - 36 * HOUR, &UTC);
+    let mut query = Query::new(Metric::Calls, Window::Day, Filter::Tool("s", "t"));
+    query.compare = true;
+    let view = store.series(&query, now, &UTC);
+    assert!(
+        view.previous_complete,
+        "every bucket in the period is covered"
+    );
+    let previous = view.previous.unwrap();
+    assert_eq!(previous.len(), 48, "every previous point kept");
+    assert_eq!(
+        previous.iter().map(|p| p.v).sum::<u64>(),
+        1,
+        "and the label's own call in it"
+    );
+}
