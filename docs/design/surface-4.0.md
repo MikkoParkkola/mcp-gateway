@@ -127,7 +127,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `(global)` | 13 |  | `mcp-gateway --protocol-revision-window` |  |  |
 | `accounts` | 13 |  |  |  |  |
 | `add` | 11 |  |  |  | `mcp-gateway add --config`; `mcp-gateway add -c` |
-| `audit` | 15 |  |  |  |  |
+| `audit` | 17 |  |  |  |  |
 | `cap` | 73 |  |  |  |  |
 | `dashboard-link` | 8 |  |  |  |  |
 | `doctor` | 12 |  |  |  |  |
@@ -836,6 +836,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway audit verify -h` | KEEP | short alias of `--help` | - | src/cli/subcommands.rs:708 |
 | `mcp-gateway audit verify --anchor` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:708 |
 | `mcp-gateway audit verify --archive` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:708 |
+| `mcp-gateway audit verify --export` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:708 |
+| `mcp-gateway audit verify --jwk` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:708 |
 | `mcp-gateway audit verify --path` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:708 |
 | `mcp-gateway cap` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:240 |
 | `mcp-gateway cap --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:240 |
