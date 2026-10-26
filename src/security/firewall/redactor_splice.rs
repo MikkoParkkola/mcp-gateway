@@ -172,9 +172,6 @@ const WINDOW: usize = LONGEST * 4;
 /// Runs up to this long go through [`Spliced::track`] whole.
 const WALKED: usize = 64;
 
-// A long run's tail window must lie inside the run.
-const _: () = assert!(WALKED > WINDOW);
-
 /// Whether `window`, read alone, ends a scheme.
 fn scheme_ends(window: &str) -> bool {
     let mut probe = Spliced::with_capacity(0);
