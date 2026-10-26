@@ -170,7 +170,7 @@ async fn run_dispatched(
     // Asked of the recorded server, before trust is asked below: the live
     // lookup may already name another one.
     if let (Some(job), Some(recorded)) = (job.as_mut(), recorded) {
-        recorded.clone_into(&mut job.server);
+        recorded.server.clone_into(&mut job.server);
     }
     // Trust is a live question with an await in it, so it cannot be a match
     // guard: asked here, after the shape is known and before anything is armed.
