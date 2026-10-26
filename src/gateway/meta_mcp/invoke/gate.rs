@@ -576,6 +576,53 @@ impl MetaMcp {
             .await
     }
 
+    /// [`Self::named_gate_answer`] on a backend that keeps a catalogue per
+    /// caller: `None` hands the name to MIK-8356's caller-slot check.
+    async fn per_user_withheld_answer(
+        &self,
+        (server, tool): (&str, &str),
+        backend: &crate::backend::Backend,
+        refused: bool,
+        caller: &MetaMcpCallerContext<'_>,
+        session_id: Option<&str>,
+    ) -> Option<Result<GuardedValue>> {
+        let scope = caller.scope();
+        // Lead ruling (8356 x 8361): a policy- or descriptor-withheld name
+        // answers -32601 at once, with no fill and no credential; every
+        // other name is MIK-8356's caller-slot check's.
+        let reason = if refused {
+            Withholding::Refused
+        } else {
+            match self.tool_visible_to(server, tool, scope, session_id) {
+                Visibility::Withheld(Withholding::Descriptor) => Withholding::Descriptor,
+                _ => return None,
+            }
+        };
+        self.record_withheld(server, tool, reason, caller, session_id)
+            .await;
+        // Ruling B (A5): a caller with no view of this backend cannot
+        // tell names apart, so a withheld name it names gets the connect
+        // offer a missing one gets; -32601 at once is for a caller with a
+        // view. Resolution mints nothing without a grant.
+        let proof = crate::identity_propagation::CallerProof::new(
+            caller.verified_identity,
+            caller.provenance(),
+        );
+        if self.has_no_view_for(backend, proof).await
+            && let Err(offer) = self
+                .resolve_dispatch(
+                    (server, tool),
+                    Some(backend),
+                    proof,
+                    caller.verified_identity,
+                )
+                .await
+        {
+            return Some(Err(offer));
+        }
+        Some(Err(absent_name(tool)))
+    }
+
     /// [`Self::gate_answer`] for a name that is not absent.
     async fn named_gate_answer(
         &self,
@@ -585,15 +632,14 @@ impl MetaMcp {
     ) -> Option<Result<GuardedValue>> {
         let scope = caller.scope();
         // Policy, profile, admin rule, grants: known without a catalogue.
-        let refusal = self
+        let refused = self
             .may_invoke_explained(server, tool, scope, session_id)
-            .err();
-        let refused = refusal.is_some();
-        if let Some((refusal, kind)) = &refusal {
-            // The call's one record names it (MIK-8361); a code the route
-            // stage kept first stands.
-            note_denial_code(server, tool, refusal.to_rpc_code(), Some(*kind));
-        }
+            .inspect_err(|(refusal, kind)| {
+                // The call's one record names it (MIK-8361); a code the route
+                // stage kept first stands.
+                note_denial_code(server, tool, refusal.to_rpc_code(), Some(*kind));
+            })
+            .is_err();
         if let Some(cap) = self.get_capabilities()
             && server == cap.name
         {
@@ -616,40 +662,9 @@ impl MetaMcp {
             return Some(Err(refusal));
         }
         if backend.keeps_per_user_catalogues() {
-            // Lead ruling (8356 x 8361): a policy- or descriptor-withheld name
-            // answers -32601 at once, with no fill and no credential; every
-            // other name is MIK-8356's caller-slot check's.
-            let reason = if refused {
-                Withholding::Refused
-            } else {
-                match self.tool_visible_to(server, tool, scope, session_id) {
-                    Visibility::Withheld(Withholding::Descriptor) => Withholding::Descriptor,
-                    _ => return None,
-                }
-            };
-            self.record_withheld(server, tool, reason, caller, session_id)
+            return self
+                .per_user_withheld_answer((server, tool), &backend, refused, caller, session_id)
                 .await;
-            // Ruling B (A5): a caller with no view of this backend cannot
-            // tell names apart, so a withheld name it names gets the connect
-            // offer a missing one gets; -32601 at once is for a caller with a
-            // view. Resolution mints nothing without a grant.
-            let proof = crate::identity_propagation::CallerProof::new(
-                caller.verified_identity,
-                caller.provenance(),
-            );
-            if self.has_no_view_for(&backend, proof).await
-                && let Err(offer) = self
-                    .resolve_dispatch(
-                        (server, tool),
-                        Some(&backend),
-                        proof,
-                        caller.verified_identity,
-                    )
-                    .await
-            {
-                return Some(Err(offer));
-            }
-            return Some(Err(absent_name(tool)));
         }
         let headers = backend.gate_headers();
         // One judgement per request: a verdict the route stage recorded
