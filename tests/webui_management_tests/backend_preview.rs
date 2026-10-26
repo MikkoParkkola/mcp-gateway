@@ -835,7 +835,15 @@ async fn a_poisoned_duplicate_withholds_both_entries() {
         .filter_map(|t| t["name"].as_str())
         .collect();
     assert_eq!(names, ["list_notes"], "neither duplicate is listed");
-    assert_eq!(body["withheld_tools"], json!([{"name": "fetch_data"}]));
+    let withheld = body["withheld_tools"].as_array().expect("withheld_tools");
+    assert_eq!(withheld.len(), 1, "{body}");
+    assert_eq!(withheld[0]["name"], "fetch_data");
+    assert!(
+        withheld[0]["issues"]
+            .as_array()
+            .is_some_and(|issues| !issues.is_empty() && issues.iter().all(Value::is_string)),
+        "each withheld tool says why: {body}"
+    );
 }
 
 /// T4: a server that never answers is a 504 at the 30 s cap, and the guard
