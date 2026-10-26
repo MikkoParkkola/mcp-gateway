@@ -363,6 +363,10 @@ impl super::Config {
                 if let Some(spec) = key.key_sha256.as_deref() {
                     slots.push((format!("auth.api_keys['{}'].key_sha256", key.name), spec));
                 }
+                if let Some(spec) = key.previous_key_sha256.as_deref() {
+                    let field = format!("auth.api_keys['{}'].previous_key_sha256", key.name);
+                    slots.push((field, spec));
+                }
             }
         }
         if self.agent_auth.enabled {

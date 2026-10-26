@@ -252,6 +252,7 @@ fn key(secret: &[u8], name: &str) -> ApiKeyConfig {
         denied_tools: None,
         admin: false,
         kind: crate::config::ApiKeyKind::default(),
+        ..Default::default()
     }
 }
 
