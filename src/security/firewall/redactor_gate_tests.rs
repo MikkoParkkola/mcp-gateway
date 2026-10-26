@@ -276,3 +276,20 @@ fn g4_crossed_exempt_values_decide_as_every_exempt_value_did() {
         }
     }
 }
+
+/// Tripwire: serde_json's `arbitrary_precision` feature is off. Under it a
+/// `Value` keeps a number's exact digits, and an object whose first key is
+/// the parser's private number token reads as a number, which
+/// `json_valid::walkable` does not follow. A crate turning the feature on
+/// through feature unification makes this fail before routing drifts.
+#[test]
+fn g5_numbers_read_without_arbitrary_precision() {
+    let digits = "1234567890123456789012345678901234567890";
+    let value: serde_json::Value = serde_json::from_str(digits).expect("parses");
+    assert_ne!(
+        value.to_string(),
+        digits,
+        "serde_json now keeps exact digits (arbitrary_precision is on): re-check that \
+         json_valid::walkable routes the private number token as the Value read does"
+    );
+}
