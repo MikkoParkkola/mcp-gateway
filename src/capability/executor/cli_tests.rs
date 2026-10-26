@@ -383,10 +383,12 @@ fn every_marker_path_avoids_the_secrets() {
     assert!(secrets.iter().all(|s| !out.contains(s.as_str())), "{out}");
 }
 
-/// The excerpt's cut lands inside "€" (bytes 1..4 of a 2051-byte text): it
-/// moves up past the char, so the excerpt starts on a whole char.
+/// The excerpt's cut lands inside "€" (bytes 1..4): the text is "a€" plus
+/// one byte less than the excerpt, so the cut is at byte 3 whatever
+/// `EXCERPT_BYTES` is. It moves up past the char to a whole one.
 #[test]
 fn the_excerpt_cut_never_splits_a_multibyte_char() {
-    let text = format!("a€{}", "b".repeat(2047));
-    assert_eq!(super::redact(&text, &[], &[]), "b".repeat(2047));
+    let tail = "b".repeat(super::EXCERPT_BYTES - 1);
+    let text = format!("a€{tail}");
+    assert_eq!(super::redact(&text, &[], &[]), tail);
 }

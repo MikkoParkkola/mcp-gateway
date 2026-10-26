@@ -504,3 +504,14 @@ fn the_overlap_floor_never_splits_a_multibyte_char() {
         vec![(300, 302), (301, 302), (305, 307), (306, 307)]
     );
 }
+
+/// A match longer than the overlap window: the restart floor (300 - 256 = 44)
+/// lands inside a "€" and beats the next-char restart, so rounding it down to
+/// 42 (not up to 45) is what puts (42, 300) among the spans.
+#[test]
+fn a_floor_past_the_next_char_rounds_down_to_a_whole_char() {
+    let re = Regex::new("€+").expect("compiles");
+    let spans = super::overlapping_spans(&re, &"€".repeat(100));
+    assert_eq!(spans[..3], [(0, 300), (42, 300), (45, 300)]);
+    assert_eq!(spans.len(), 87, "starts 0, then 42..=297 by 3");
+}
