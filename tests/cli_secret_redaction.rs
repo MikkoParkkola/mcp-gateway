@@ -50,8 +50,10 @@ fn backend_inspection_commands_never_print_config_secrets() {
     command: "/usr/bin/example --token '{ARG_SECRET}' --mode safe"
     env:
       SAFE_ENV_NAME: "{ENV_SECRET}"
+      FROM_KEYCHAIN: "keychain:gw.cli-ref"
     headers:
       Authorization: "{HEADER_SECRET}"
+      X-Token: "env:CLI_REF_TOKEN"
   http-secret:
     http_url: "https://user:{URL_USER_SECRET}@svc.example.com/services/{URL_PATH_SECRET}?token={URL_QUERY_SECRET}#{URL_FRAGMENT_SECRET}"
 "#
@@ -89,6 +91,14 @@ fn backend_inspection_commands_never_print_config_secrets() {
     }
     assert!(combined.contains("SAFE_ENV_NAME=<set>"));
     assert!(combined.contains("Authorization=<set>"));
+    // A secret reference is shown as written by `get` (ADR-028),
+    // and `list --json` stays names-only.
+    let get = combined_output(&outputs[0]);
+    assert!(get.contains("FROM_KEYCHAIN=keychain:gw.cli-ref"), "{get}");
+    assert!(get.contains("X-Token=env:CLI_REF_TOKEN"), "{get}");
+    let list = combined_output(&outputs[2]);
+    assert!(!list.contains("keychain:gw.cli-ref"), "{list}");
+    assert!(!list.contains("env:CLI_REF_TOKEN"), "{list}");
     assert!(combined.contains("argument(s) redacted"));
     // The origin is kept so the endpoint is still identifiable; the path is not,
     // because that is where a webhook secret lives.
