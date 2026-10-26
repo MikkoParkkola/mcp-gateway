@@ -41,7 +41,7 @@ function parseAssets(src) {
 
 const CSP = parseCsp(SHELL_RS);
 const ASSETS = parseAssets(SHELL_RS);
-const TYPES = { css: 'text/css; charset=utf-8', js: 'text/javascript; charset=utf-8', woff2: 'font/woff2', svg: 'image/svg+xml', png: 'image/png' };
+const TYPES = { json: 'application/json', css: 'text/css; charset=utf-8', js: 'text/javascript; charset=utf-8', woff2: 'font/woff2', svg: 'image/svg+xml', png: 'image/png' };
 
 /** The shell document, plus the fixture pages when the test asked for them. */
 function shellDocument(req) {
@@ -62,6 +62,12 @@ function handle(req, res) {
     // axum's get() route: another method answers 405.
     if (!get) return send(res, 405, { allow: 'GET,HEAD' }, '');
     return send(res, 200, { 'content-type': 'text/html; charset=utf-8' }, readFileSync(join(FIXTURES, 'classic.html')));
+  }
+  // Test-only static page: tipMarkup()'s output with the shell stylesheet, no script.
+  if (path === '/ui/assets/fixture-tooltip.html' && get) {
+    const css = [...ASSETS.keys()].find((n) => /^shell\.[0-9a-f]{12}\.css$/.test(n));
+    const src = readFileSync(join(FIXTURES, 'fixture-tooltip.html'), 'utf8').replaceAll('__STYLESHEET__', `/ui/assets/${css}`);
+    return send(res, 200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': CSP }, src);
   }
   // Test-only page registrations (fixtures/fixture-pages.mjs), never in ASSETS.
   if (path === '/ui/assets/fixture-pages.mjs' && get) {

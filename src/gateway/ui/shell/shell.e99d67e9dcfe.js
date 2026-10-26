@@ -239,6 +239,178 @@ export function segmented({ label, options, value, onChange }) {
   return group;
 }
 
+// ---------------------------------------------------------------- tooltips
+
+/** How long the first render waits for the tooltip copy before going on without it. */
+const TIPS_WAIT_MS = 1_500;
+let tipsCopy = null; // id -> entry, once loaded; stays null if loading failed or was late
+let tipsDone = null;
+let tipSeq = 0;
+
+/**
+ * Start loading the copy once and resolve when it has loaded, failed, or
+ * taken longer than TIPS_WAIT_MS, whichever comes first. A failure or a
+ * late answer leaves no copy, so every tip call draws nothing, and the page
+ * renders regardless.
+ */
+export function tipsReady() {
+  if (tipsDone) return tipsDone;
+  let settled = false;
+  tipsDone = new Promise((resolve) => {
+    const finish = (copy, why) => {
+      if (settled) return;
+      settled = true;
+      tipsCopy = copy;
+      if (why) console.warn(`tooltip copy not loaded (${why}); tooltips are left out`);
+      resolve();
+    };
+    setTimeout(() => finish(null, `no answer in ${TIPS_WAIT_MS} ms`), TIPS_WAIT_MS);
+    fetch('/ui/assets/tips.eed0441539d0.json', { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((copy) => finish(copy, null), (err) => finish(null, err.message));
+  });
+  return tipsDone;
+}
+
+const warnedIds = new Set();
+
+function tipEntry(id) {
+  const entry = tipsCopy?.[id];
+  if (!entry && tipsCopy && !warnedIds.has(id)) {
+    warnedIds.add(id);
+    console.warn(`tooltip copy has no entry ${id}; its trigger is left out`);
+  }
+  return entry && typeof entry.title === 'string' ? entry : null;
+}
+
+function tipBody(entry) {
+  if (Array.isArray(entry.rows)) {
+    const dl = el('dl', { class: 'tip-rows' });
+    for (const [label, value] of entry.rows) dl.append(el('div', {}, el('dt', {}, String(label)), el('dd', {}, String(value))));
+    return dl;
+  }
+  return el('span', { class: 'tip-body' }, String(entry.text ?? ''));
+}
+
+/**
+ * The (i) trigger for a copy id: a button named "About {title}", described by
+ * one role="tooltip" element holding the copy, inside a .has-tip wrapper. The
+ * title is hidden from the description because the name already says it. It
+ * returns null when there is no copy for the id, so no empty description is
+ * ever announced. Call with a literal id; the copy check reads them.
+ */
+export function tip(id) {
+  const entry = tipEntry(id);
+  if (!entry) return null;
+  const tid = `tip-${++tipSeq}`;
+  return el('span', { class: 'has-tip' },
+    el('button', { type: 'button', class: 'tip-i', 'aria-label': `About ${entry.title}`, 'aria-describedby': tid }, 'i'),
+    el('span', { class: 'tip', role: 'tooltip', id: tid }, el('strong', { class: 'tip-title', 'aria-hidden': 'true' }, entry.title), tipBody(entry)));
+}
+
+/**
+ * The same trigger as HTML text, for pages rendered without JavaScript:
+ * the stylesheet shows it on hover and focus there. Every value is escaped.
+ */
+export function tipMarkup(id) {
+  const entry = tipEntry(id);
+  if (!entry) return '';
+  const esc = (v) => String(v).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  const tid = `tip-${id.replace(/[^a-z0-9-]/g, '-')}`;
+  const body = Array.isArray(entry.rows)
+    ? `<dl class="tip-rows">${entry.rows.map(([l, v]) => `<div><dt>${esc(l)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>`
+    : `<span class="tip-body">${esc(entry.text ?? '')}</span>`;
+  return `<span class="has-tip"><button type="button" class="tip-i" aria-label="About ${esc(entry.title)}" aria-describedby="${tid}">i</button>`
+    + `<span class="tip" role="tooltip" id="${tid}"><strong class="tip-title" aria-hidden="true">${esc(entry.title)}</strong>${body}</span></span>`;
+}
+
+/** Hover opens after 300 ms; leaving closes after 150 ms; focus, Enter, Space and tap open at once; Esc closes. */
+const TIP_OPEN_MS = 300;
+const TIP_CLOSE_MS = 150;
+/** The popup keeps this far from the viewport's sides (its width leaves 2 x 8 px). */
+const TIP_MARGIN = 8;
+let openTip = null;
+let tipTimer = 0;
+
+function showTip(wrap) {
+  clearTimeout(tipTimer);
+  if (openTip && openTip !== wrap) hideTip(openTip);
+  openTip = wrap;
+  const pop = wrap.querySelector('.tip');
+  pop.classList.add('open');
+  placeTip(wrap, pop);
+}
+
+function hideTip(wrap) {
+  wrap.querySelector('.tip')?.classList.remove('open', 'flip-y');
+  if (openTip === wrap) openTip = null;
+}
+
+/** Below the trigger, left edges aligned; slide left and flip up to stay inside the viewport, never over the trigger. */
+function placeTip(wrap, pop) {
+  pop.classList.remove('flip-y');
+  pop.style.left = '';
+  const r = pop.getBoundingClientRect();
+  // Slide left by what overflows the right edge, never past the left margin:
+  // on a narrow screen a mid-line trigger fits neither edge-aligned placement.
+  const shift = Math.max(0, Math.min(r.right - (innerWidth - TIP_MARGIN), r.left - TIP_MARGIN));
+  if (shift) pop.style.left = `${-shift}px`;
+  if (r.bottom > innerHeight) pop.classList.add('flip-y');
+}
+
+function wireTips() {
+  const wrapOf = (t) => t.closest?.('.has-tip');
+  document.addEventListener('pointerover', (ev) => {
+    const wrap = wrapOf(ev.target);
+    if (!wrap || ev.pointerType === 'touch') return;
+    clearTimeout(tipTimer);
+    if (openTip === wrap) return;
+    // Moving straight from one open tooltip to the next skips the delay.
+    if (openTip) showTip(wrap);
+    else tipTimer = setTimeout(() => showTip(wrap), TIP_OPEN_MS);
+  });
+  document.addEventListener('pointerout', (ev) => {
+    const wrap = wrapOf(ev.target);
+    if (!wrap || wrap.contains(ev.relatedTarget) || ev.pointerType === 'touch') return;
+    clearTimeout(tipTimer);
+    if (openTip === wrap && !wrap.contains(document.activeElement)) tipTimer = setTimeout(() => hideTip(wrap), TIP_CLOSE_MS);
+  });
+  document.addEventListener('focusin', (ev) => {
+    const wrap = wrapOf(ev.target);
+    if (wrap) showTip(wrap);
+    else if (openTip) hideTip(openTip);
+  });
+  document.addEventListener('focusout', (ev) => {
+    const wrap = wrapOf(ev.target);
+    if (wrap && !wrap.contains(ev.relatedTarget)) hideTip(wrap);
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (!openTip) return;
+    if (ev.key === 'Escape') {
+      hideTip(openTip);
+      ev.stopPropagation();
+    } else if ((ev.key === 'Enter' || ev.key === ' ') && wrapOf(ev.target)) {
+      ev.preventDefault();
+      showTip(wrapOf(ev.target));
+    }
+  }, true);
+  // A tap focuses (which opens) before it clicks, so the toggle reads the
+  // state from before the tap.
+  let tapWasOpen = false;
+  document.addEventListener('pointerdown', (ev) => {
+    if (ev.pointerType === 'touch') tapWasOpen = Boolean(openTip && openTip === wrapOf(ev.target));
+  }, true);
+  document.addEventListener('click', (ev) => {
+    const wrap = wrapOf(ev.target);
+    if (wrap && ev.target.closest('.tip-i')) {
+      if (ev.pointerType === 'touch' && tapWasOpen) hideTip(wrap);
+      else showTip(wrap);
+    } else if (openTip && !wrap) {
+      hideTip(openTip);
+    }
+  });
+}
+
 // ---------------------------------------------------------------- router
 
 /**
@@ -481,6 +653,10 @@ function closeMenu() {
 }
 
 function boot() {
+  // Scripted page: the stylesheet's hover/focus fallback stands down so the
+  // controller's delays apply.
+  document.documentElement.setAttribute('data-js', '');
+  wireTips();
   document.addEventListener('click', (ev) => {
     if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
     const a = ev.target.closest?.('a');
@@ -519,7 +695,9 @@ function boot() {
     ev.preventDefault();
     document.getElementById('content').focus();
   });
-  render();
+  drawNav(parse(location.pathname).page);
+  // The first render waits for the tooltip copy: loaded, failed or late.
+  tipsReady().then(render);
   loadCounts();
   loadWho();
 }

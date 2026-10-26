@@ -116,21 +116,21 @@ fn t6_the_shell_references_nothing_off_origin() {
         DOCUMENT.contains(r#"<script type="module" src="/ui/assets/shell."#),
         "the shell's module is loaded from the asset table"
     );
-    // Every asset is named by the document or by a stylesheet it loads
-    // (the fonts), so none ships unused.
-    let stylesheets: Vec<String> = ASSETS
+    // Every asset is named by the document, by a stylesheet it loads (the
+    // fonts) or by a script it runs (the tooltip copy), so none ships unused.
+    let loaders: Vec<String> = ASSETS
         .iter()
         .filter(|(n, _)| {
-            std::path::Path::new(n)
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("css"))
+            std::path::Path::new(n).extension().is_some_and(|ext| {
+                ext.eq_ignore_ascii_case("css") || ext.eq_ignore_ascii_case("js")
+            })
         })
         .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
         .collect();
     for (name, _) in ASSETS {
         let reference = format!("/ui/assets/{name}");
         assert!(
-            DOCUMENT.contains(&reference) || stylesheets.iter().any(|css| css.contains(&reference)),
+            DOCUMENT.contains(&reference) || loaders.iter().any(|text| text.contains(&reference)),
             "{name} is linked"
         );
     }
@@ -170,6 +170,7 @@ fn t6c_an_asset_type_follows_its_extension() {
         ("a.1.woff2", "font/woff2"),
         ("a.1.svg", "image/svg+xml"),
         ("a.1.png", "image/png"),
+        ("a.1.json", "application/json"),
         ("a.1.html", "application/octet-stream"),
         ("noext", "application/octet-stream"),
     ] {

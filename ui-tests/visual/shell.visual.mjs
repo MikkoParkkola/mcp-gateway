@@ -11,7 +11,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, expect } from '../tests/base.mjs';
-import { withFixturePages } from '../tests/shell.mjs';
+import { withFixturePages, shellModuleUrl } from '../tests/shell.mjs';
 
 const FRAMES = process.env.FRAMES_DIR;
 
@@ -43,7 +43,20 @@ const CASES = [
     ['key form', 546, 446, 348, 135, 0.02, '', 546, 467]], 'signin'],
   ['32-sign-in-390.png', 390, 800, 'dark', [
     ['key form', 42, 346, 306, 135, 0.02, '', 42, 367]], 'signin'],
+  // Frame 36 draws its tooltips as a sheet. The shell's own tip() draws the
+  // "Calls today" one with the frame's copy, its box placed on the frame's.
+  ['36-tooltip-sheet.png', 1440, 1000, 'dark', [
+    ['tooltip', 388, 142, 300, 182]], 'tooltip'],
 ];
+
+const FRAME_COPY = {
+  _pending: {},
+  'fixture.status.calls': { title: 'Calls today', rows: [
+    ['What', 'Tool calls github answered or refused.'],
+    ['Window', 'Since 00:00 CEST, per call.'],
+    ['Source', "The gateway's call log."],
+    ['Compared', '↘ 48% against yesterday by the same time.']] },
+};
 
 test.describe('frames', () => {
   test('FRAMES_DIR points at the r6 frames', () => {
@@ -59,6 +72,7 @@ test.describe('frames', () => {
       if (act === 'signin') {
         await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: false, admin: false } } }));
       }
+      if (act === 'tooltip') await page.route('**/ui/assets/tips.*.json', (r) => r.fulfill({ json: FRAME_COPY }));
       // The fixture pages give Overview its subtitle, as a real screen will.
       await withFixturePages(page);
       await page.goto('/ui/overview/status');
@@ -66,6 +80,20 @@ test.describe('frames', () => {
       if (act?.startsWith('palette:')) {
         await page.keyboard.press('Control+KeyK');
         await page.keyboard.type(act.slice('palette:'.length));
+      }
+      if (act === 'tooltip') {
+        const url = await shellModuleUrl(page);
+        await page.evaluate(async (url) => {
+          const shell = await import(url);
+          await shell.tipsReady();
+          const t = shell.tip('fixture.status.calls');
+          // The box opens 6 px under its 14 px trigger: wrapper top = 142 - 20,
+          // plus the half pixel the frame's own flow layout puts its box at.
+          Object.assign(t.style, { position: 'fixed', left: '388px', top: '122.5px' });
+          document.body.append(t);
+        }, url);
+        await page.locator('.has-tip button').focus();
+        await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)));
       }
       // Focus is state, not look: the frames draw the controls unfocused.
       if (act === 'signin') await page.evaluate(() => document.activeElement?.blur());

@@ -22,13 +22,13 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SHELL = ROOT / "src/gateway/ui/shell"
 SHELL_RS = ROOT / "src/gateway/ui/shell.rs"
-HASHED = re.compile(r"^(?P<stem>.+?)(?:\.[0-9a-f]{12})?\.(?P<ext>css|js|woff2|svg|png)$")
+HASHED = re.compile(r"^(?P<stem>.+?)(?:\.[0-9a-f]{12})?\.(?P<ext>css|js|json|woff2|svg|png)$")
 TABLE = re.compile(r"pub\(super\) const ASSETS: &\[\(&str, &\[u8\]\)\] = &\[.*?\];", re.S)
 
 
 def assets():
-    """Asset files in dependency order: fonts and images, then CSS, then JS."""
-    order = {"woff2": 0, "svg": 0, "png": 0, "css": 1, "js": 2}
+    """Asset files in dependency order: fonts, images and data, then CSS, then JS."""
+    order = {"woff2": 0, "svg": 0, "png": 0, "json": 0, "css": 1, "js": 2}
     found = [p for p in SHELL.rglob("*") if p.is_file() and HASHED.match(p.name)]
     return sorted(found, key=lambda p: (order[HASHED.match(p.name)["ext"]], str(p)))
 

@@ -37,12 +37,16 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/fonts/OverpassMono-400.9b51e031ff0d.woff2"),
     ),
     (
-        "shell.90e613a8bf67.css",
-        include_bytes!("shell/shell.90e613a8bf67.css"),
+        "tips.eed0441539d0.json",
+        include_bytes!("shell/tips.eed0441539d0.json"),
     ),
     (
-        "shell.f36502dd89f5.js",
-        include_bytes!("shell/shell.f36502dd89f5.js"),
+        "shell.3b4bd0c7da55.css",
+        include_bytes!("shell/shell.3b4bd0c7da55.css"),
+    ),
+    (
+        "shell.e99d67e9dcfe.js",
+        include_bytes!("shell/shell.e99d67e9dcfe.js"),
     ),
 ];
 
@@ -96,6 +100,7 @@ fn content_type(file: &str) -> &'static str {
         Some("woff2") => "font/woff2",
         Some("svg") => "image/svg+xml",
         Some("png") => "image/png",
+        Some("json") => "application/json",
         _ => "application/octet-stream",
     }
 }
