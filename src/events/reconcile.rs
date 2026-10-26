@@ -121,9 +121,9 @@ impl EventsHub {
             let held = self.store.live_subscription_ids(now);
             self.runtime.rates.retain(&held);
             self.runtime.failures.retain(&held);
-        }
-        if let Ok(now) = crate::clock::unix_secs() {
-            self.leases.wipe_expired(now).await;
+            // `utc_now` is never before 1970, so its seconds are unsigned.
+            let secs = u64::try_from(now.timestamp()).unwrap_or_default();
+            self.leases.wipe_expired(secs).await;
         }
         self.reconcile_stops().await;
         // After the stops, so freed slots are free: a watch key whose

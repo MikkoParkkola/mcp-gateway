@@ -77,12 +77,12 @@ impl EventsHub {
         // to wipe. Unsubscribe removes the row before its last-interest wipe
         // runs, so either that wipe sees this lease or this check sees no
         // live row of the caller's on the backend and wipes it here.
-        let still_live = crate::clock::utc_now().is_ok_and(|now| {
-            self.store.subscriptions().iter().any(|s| {
-                s.principal == principal
-                    && s.live(now)
-                    && upstream::parse_name(&s.name).is_some_and(|(b, _)| b == backend)
-            })
+        // Judged at the decision's `now`: a row that expired since still
+        // counts here, and the lease's own deadline bounds it.
+        let still_live = self.store.subscriptions().iter().any(|s| {
+            s.principal == principal
+                && s.live(now)
+                && upstream::parse_name(&s.name).is_some_and(|(b, _)| b == backend)
         });
         if !still_live {
             self.leases.wipe(&key, lease::WipeReason::Released).await;
