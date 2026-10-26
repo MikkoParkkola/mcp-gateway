@@ -8,7 +8,7 @@ use crate::error::rpc_codes::METHOD_NOT_FOUND;
 // =============================================================================
 // MIK-7272.SUB.2b — the outbound half over HTTP.
 //
-// Plan rows: docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md
+// Plan rows: the cluster b connection invariance test plan
 // :58 (S-02, "over stdio and over HTTP") and :59 (S-03, per-request isolation).
 // The correlation here is the framing, not a token: every frame on a response
 // stream belongs to the request that opened it.

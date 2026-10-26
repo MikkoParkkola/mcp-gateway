@@ -3,7 +3,7 @@
 //! The stdio dispatcher's four admission arms, observed at the dispatcher
 //! rather than at the gate that produces them.
 //!
-//! Design and review: `docs/release/v4.0.0-dispatcher-regression-design.md`.
+//! Design and review: the 4.0.0 dispatcher regression design.
 //!
 //! `src/gateway/meta_mcp/admission_tests.rs` already pins what `admit` decides.
 //! What nothing pinned until now is what the dispatcher DOES with each of the
@@ -75,7 +75,7 @@ fn assert_ok(phase: &str, response: &Value) {
 /// holds no lease, is NOT asserted here: `dispatch_single_for_client` does not
 /// return the `Option<SyncLease>` that `dispatch_tools_call` produces, so the
 /// lease is unobservable from the production entry point. See D24/D26 in
-/// `docs/release/v4.0.0-dispatcher-regression-design.md`.
+/// the 4.0.0 dispatcher regression design.
 #[tokio::test]
 async fn an_unkeyed_read_only_call_dispatches_exactly_once() {
     let fixture = Fixture::start(false).await;
