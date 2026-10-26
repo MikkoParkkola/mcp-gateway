@@ -44,21 +44,10 @@ fn resolve_gateway_data_dir(
 }
 
 /// Load config from `path` for editing, with references kept as written,
-/// returning `Config::default()` when the file is absent or cannot be parsed.
-#[must_use]
-pub fn load_config_or_default(path: &Path) -> Config {
-    if path.exists() {
-        Config::load_literal(Some(path)).unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "Could not load config, using defaults");
-            Config::default()
-        })
-    } else {
-        Config::default()
-    }
-}
-
-/// Load config from `path` for editing, with references kept as written,
 /// returning `Config::default()` when the file is absent.
+///
+/// A file that exists but does not load is an error, never the defaults: an
+/// edit built on the defaults would write them over the operator's file.
 ///
 /// # Errors
 ///

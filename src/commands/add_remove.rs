@@ -14,8 +14,8 @@ use std::process::ExitCode;
 use mcp_gateway::{
     config::TransportConfig,
     gateway::ui::backend_ops::{
-        self, BackendUpdate, add_backend, get_backend, list_backends, parse_env_vars,
-        remove_backend, resolve_transport, update_backend, write_config,
+        BackendUpdate, add_backend, get_backend, list_backends, load_existing_or_default,
+        parse_env_vars, remove_backend, resolve_transport, update_backend, write_config,
     },
     registry::server_registry,
 };
@@ -68,7 +68,13 @@ pub async fn run_add_command(
     // credential is not generated here on purpose; minting one as a side effect
     // of adding a backend is a surprise. Saying so is not.
     let creating_config = !config.exists();
-    let mut gateway_config = backend_ops::load_config_or_default(config);
+    let mut gateway_config = match load_existing_or_default(config) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Error: Failed to load {}: {e}", config.display());
+            return ExitCode::FAILURE;
+        }
+    };
 
     // ── Insert backend ─────────────────────────────────────────────────────
     if let Err(msg) = add_backend(
@@ -133,7 +139,13 @@ fn report_env_status(required: &[&str], provided_env: &std::collections::HashMap
 
 /// Run `mcp-gateway remove`.
 pub fn run_remove_command(name: &str, config: &Path) -> ExitCode {
-    let mut gateway_config = backend_ops::load_config_or_default(config);
+    let mut gateway_config = match load_existing_or_default(config) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Error: Failed to load {}: {e}", config.display());
+            return ExitCode::FAILURE;
+        }
+    };
 
     if let Err(msg) = remove_backend(&mut gateway_config, name) {
         eprintln!("Error: {msg} (in {})", config.display());
@@ -153,7 +165,13 @@ pub fn run_remove_command(name: &str, config: &Path) -> ExitCode {
 
 /// Run `mcp-gateway list`.
 pub fn run_list_command(json: bool, config: &Path) -> ExitCode {
-    let gateway_config = backend_ops::load_config_or_default(config);
+    let gateway_config = match load_existing_or_default(config) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Error: Failed to load {}: {e}", config.display());
+            return ExitCode::FAILURE;
+        }
+    };
 
     if gateway_config.backends.is_empty() {
         if json {
@@ -191,7 +209,13 @@ pub fn run_list_command(json: bool, config: &Path) -> ExitCode {
 
 /// Run `mcp-gateway get`.
 pub fn run_get_command(name: &str, config: &Path) -> ExitCode {
-    let gateway_config = backend_ops::load_config_or_default(config);
+    let gateway_config = match load_existing_or_default(config) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Error: Failed to load {}: {e}", config.display());
+            return ExitCode::FAILURE;
+        }
+    };
 
     let info = match get_backend(&gateway_config, name) {
         Ok(i) => i,
@@ -251,7 +275,8 @@ pub fn run_get_command(name: &str, config: &Path) -> ExitCode {
 /// Will be called from HTTP handlers in Task 1.2.
 #[allow(dead_code)]
 pub fn run_update_backend(name: &str, update: BackendUpdate, config: &Path) -> Result<(), String> {
-    let mut gateway_config = backend_ops::load_config_or_default(config);
+    let mut gateway_config = load_existing_or_default(config)
+        .map_err(|e| format!("Failed to load {}: {e}", config.display()))?;
     update_backend(&mut gateway_config, name, update)?;
     write_config(config, &gateway_config)
 }
