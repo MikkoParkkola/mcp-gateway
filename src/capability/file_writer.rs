@@ -110,16 +110,50 @@ fn sha(bytes: &str) -> String {
     crate::hashing::sha256_hex(bytes.as_bytes())
 }
 
-/// The top-level pin lines: (line index, value without quotes).
-fn pin_lines(text: &str) -> Vec<(usize, String)> {
+/// A top-level `sha256:` line as text: where it is, its value, and the
+/// byte span of the value in the line, so a save replaces only the value and
+/// keeps its quotes, spacing, comment and terminator.
+struct PinLine {
+    index: usize,
+    value: String,
+    span: (usize, usize),
+}
+
+/// The top-level pin lines, found as text: what a splice can rewrite.
+fn pin_lines(text: &str) -> Vec<PinLine> {
     text.split('\n')
         .enumerate()
-        .filter_map(|(i, line)| {
-            let rest = line.strip_prefix(PIN_KEY)?;
-            let value = rest.trim().trim_matches(|c| c == '"' || c == '\'');
-            Some((i, value.to_string()))
+        .filter_map(|(index, line)| {
+            let after = line.strip_prefix(PIN_KEY)?;
+            let gap = after.len() - after.trim_start_matches([' ', '\t']).len();
+            let start = PIN_KEY.len() + gap;
+            let rest = &line[start..];
+            let (from, len) = match rest.chars().next() {
+                Some(q @ ('"' | '\'')) => (start + 1, rest[1..].find(q)?),
+                _ => (
+                    start,
+                    rest.find([' ', '\t', '#', '\r']).unwrap_or(rest.len()),
+                ),
+            };
+            Some(PinLine {
+                index,
+                value: line[from..from + len].to_string(),
+                span: (from, from + len),
+            })
         })
         .collect()
+}
+
+/// The pin as the loader reads it (`parser.rs`): the parsed `sha256` field.
+/// `None` when the text has none, or does not parse.
+fn loader_pin(text: &str) -> Option<String> {
+    super::parse_capability(text).ok()?.sha256
+}
+
+/// Whether the text carries a pin, by the loader's reading or, for text that
+/// does not parse, by a pin line.
+fn is_pinned(text: &str) -> bool {
+    loader_pin(text).is_some() || !pin_lines(text).is_empty()
 }
 
 /// Whether a pin line carries text after a YAML line break other than `\n`
@@ -130,12 +164,11 @@ fn smuggles(text: &str, index: usize) -> bool {
     body.contains(['\r', '\u{85}', '\u{2028}', '\u{2029}'])
 }
 
-/// Whether the current file's pin no longer matches its bytes.
+/// Whether the file's pin no longer matches its bytes: the loader's own
+/// comparison (`parser.rs`), so the editor refuses exactly what would not load.
 fn pin_broken(current: &str) -> bool {
-    match pin_lines(current).as_slice() {
-        [(_, value)] => !value.eq_ignore_ascii_case(&compute_capability_hash(current)),
-        _ => false,
-    }
+    loader_pin(current)
+        .is_some_and(|pin| !pin.eq_ignore_ascii_case(&compute_capability_hash(current)))
 }
 
 /// The sent text in the base's style: its BOM kept, and LF made CRLF when
@@ -156,40 +189,87 @@ fn in_base_style(text: &str, base: Option<&str>) -> String {
     out
 }
 
-/// A unified diff from `from` to `to`, one hunk over the whole file.
-// ponytail: O(n*m) LCS, fine for capability files (hundreds of lines); a
-// hunked diff library when files grow past a few thousand lines.
-pub(crate) fn unified_diff(from: &str, to: &str) -> String {
-    let a: Vec<&str> = from.lines().collect();
-    let b: Vec<&str> = to.lines().collect();
-    let mut lcs = vec![vec![0usize; b.len() + 1]; a.len() + 1];
+/// Past this many table cells the middle of a diff is a full replace: the
+/// patch still applies, and memory stays bounded (4M `u32` cells, 16 MB).
+const DIFF_MAX_CELLS: usize = 4_000_000;
+
+/// One line of a patch: its tag and its bytes, terminator included.
+fn patch_line(out: &mut String, tag: char, line: &str) {
+    out.push(tag);
+    out.push_str(line);
+    if !line.ends_with('\n') {
+        out.push_str("\n\\ No newline at end of file\n");
+    }
+}
+
+/// The middle of a diff as tagged lines, by longest common subsequence.
+fn lcs_lines<'a>(a: &[&'a str], b: &[&'a str]) -> Vec<(char, &'a str)> {
+    let width = b.len() + 1;
+    let mut table = vec![0u32; (a.len() + 1) * width];
     for i in (0..a.len()).rev() {
         for j in (0..b.len()).rev() {
-            lcs[i][j] = if a[i] == b[j] {
-                lcs[i + 1][j + 1] + 1
+            table[i * width + j] = if a[i] == b[j] {
+                table[(i + 1) * width + j + 1] + 1
             } else {
-                lcs[i + 1][j].max(lcs[i][j + 1])
+                table[(i + 1) * width + j].max(table[i * width + j + 1])
             };
         }
     }
+    let mut out = Vec::with_capacity(a.len() + b.len());
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() || j < b.len() {
+        if i < a.len() && j < b.len() && a[i] == b[j] {
+            out.push((' ', a[i]));
+            i += 1;
+            j += 1;
+        } else if j < b.len()
+            && (i == a.len() || table[i * width + j + 1] >= table[(i + 1) * width + j])
+        {
+            out.push(('+', b[j]));
+            j += 1;
+        } else {
+            out.push(('-', a[i]));
+            i += 1;
+        }
+    }
+    out
+}
+
+/// A unified diff from `from` to `to`, one hunk over the whole file, line
+/// terminators kept, a missing final newline marked.
+pub(crate) fn unified_diff(from: &str, to: &str) -> String {
+    let a: Vec<&str> = from.split_inclusive('\n').collect();
+    let b: Vec<&str> = to.split_inclusive('\n').collect();
+    let prefix = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    let suffix = a[prefix..]
+        .iter()
+        .rev()
+        .zip(b[prefix..].iter().rev())
+        .take_while(|(x, y)| x == y)
+        .count();
+    let (mid_a, mid_b) = (&a[prefix..a.len() - suffix], &b[prefix..b.len() - suffix]);
+    let middle = if mid_a.len().saturating_mul(mid_b.len()) <= DIFF_MAX_CELLS {
+        lcs_lines(mid_a, mid_b)
+    } else {
+        mid_a
+            .iter()
+            .map(|l| ('-', *l))
+            .chain(mid_b.iter().map(|l| ('+', *l)))
+            .collect()
+    };
     let mut out = format!(
         "--- current\n+++ sent\n@@ -1,{} +1,{} @@\n",
         a.len(),
         b.len()
     );
-    let (mut i, mut j) = (0, 0);
-    while i < a.len() || j < b.len() {
-        if i < a.len() && j < b.len() && a[i] == b[j] {
-            out.push_str(&format!(" {}\n", a[i]));
-            i += 1;
-            j += 1;
-        } else if j < b.len() && (i == a.len() || lcs[i][j + 1] >= lcs[i + 1][j]) {
-            out.push_str(&format!("+{}\n", b[j]));
-            j += 1;
-        } else {
-            out.push_str(&format!("-{}\n", a[i]));
-            i += 1;
-        }
+    for line in &a[..prefix] {
+        patch_line(&mut out, ' ', line);
+    }
+    for (tag, line) in middle {
+        patch_line(&mut out, tag, line);
+    }
+    for line in &a[a.len() - suffix..] {
+        patch_line(&mut out, ' ', line);
     }
     out
 }
@@ -244,16 +324,15 @@ fn final_bytes(
     pin: PinUpdate,
 ) -> Result<(String, PinChange), Refused> {
     let patch = || unified_diff(current.unwrap_or_default(), sent);
-    let was_pinned = current.is_some_and(|c| !pin_lines(c).is_empty());
-    let pins = pin_lines(sent);
+    let was_pinned = current.is_some_and(is_pinned);
     if pin == PinUpdate::Verbatim {
-        if was_pinned && pins.is_empty() {
+        if was_pinned && !is_pinned(sent) {
             return Err(Refused::Unpin { patch: patch() });
         }
-        let change = if pins.is_empty() {
-            PinChange::None
-        } else {
+        let change = if is_pinned(sent) {
             PinChange::Kept
+        } else {
+            PinChange::None
         };
         return Ok((sent.to_string(), change));
     }
@@ -261,25 +340,26 @@ fn final_bytes(
     // A pin on the first line must stay a line the loader's strip sees: a
     // restored BOM in front of it would hide it, and the pin would never
     // verify. The BOM a textarea dropped stays dropped in that one case.
-    if pins.first().is_some_and(|(index, _)| *index == 0) && text.starts_with('\u{feff}') {
+    if pin_lines(sent).first().is_some_and(|p| p.index == 0) && text.starts_with('\u{feff}') {
         text.remove(0);
     }
+    let pins = pin_lines(&text);
     match pins.as_slice() {
+        // The loader sees a pin no `sha256:` line carries (a quoted key):
+        // there is no line to rewrite, so nothing can be saved in place.
+        [] if loader_pin(&text).is_some() => Err(Refused::PinAmbiguous { patch: patch() }),
         [] if was_pinned => Err(Refused::Unpin { patch: patch() }),
         [] => Ok((text, PinChange::None)),
-        [(index, old)] if !smuggles(&text, *index) => {
+        [line] if !smuggles(&text, line.index) => {
             let hash = compute_capability_hash(&text);
             let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
-            let cr = if lines[*index].ends_with('\r') {
-                "\r"
-            } else {
-                ""
-            };
-            lines[*index] = format!("{PIN_KEY} {hash}{cr}");
-            let change = match (was_pinned, old.eq_ignore_ascii_case(&hash)) {
-                (false, _) => PinChange::Added,
-                (true, true) => PinChange::Kept,
-                (true, false) => PinChange::Updated,
+            lines[line.index].replace_range(line.span.0..line.span.1, &hash);
+            let before =
+                current.and_then(|c| loader_pin(c).or_else(|| pin_lines(c).pop().map(|p| p.value)));
+            let change = match before {
+                None => PinChange::Added,
+                Some(old) if old.eq_ignore_ascii_case(&hash) => PinChange::Kept,
+                Some(_) => PinChange::Updated,
             };
             Ok((lines.join("\n"), change))
         }
@@ -294,6 +374,58 @@ pub(crate) async fn commit(
     deadline: Instant,
 ) -> Result<Committed, Refused> {
     commit_with(edit, accounts, deadline, |_| {}).await
+}
+
+/// The current file, read without following a link: its text and whether
+/// its mode is owner-only. `None` when there is no file.
+///
+/// # Errors
+///
+/// `Symlinked` for a link; `Unwritable` for anything that is not a readable
+/// regular file.
+fn read_current(path: &Path, sent: &str) -> Result<(Option<String>, bool), Refused> {
+    use std::io::Read;
+    let symlinked = || Refused::Symlinked {
+        real_path: std::fs::canonicalize(path)
+            .map_or_else(|_| path.display().to_string(), |p| p.display().to_string()),
+    };
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(symlinked());
+    }
+    let mut open = std::fs::OpenOptions::new();
+    open.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        open.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
+    }
+    let mut file = match open.open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((None, false)),
+        // A link swapped in after the look above: O_NOFOLLOW refuses it.
+        #[cfg(unix)]
+        Err(e) if e.raw_os_error() == Some(rustix::io::Errno::LOOP.raw_os_error()) => {
+            return Err(symlinked());
+        }
+        Err(e) => return Err(unwritable(e, unified_diff("", sent))),
+    };
+    let meta = file
+        .metadata()
+        .map_err(|e| unwritable(e, unified_diff("", sent)))?;
+    if !meta.is_file() {
+        return Err(unwritable("not a regular file", unified_diff("", sent)));
+    }
+    #[cfg(unix)]
+    let private = {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o077 == 0
+    };
+    #[cfg(not(unix))]
+    let private = false;
+    let mut text = String::new();
+    file.read_to_string(&mut text)
+        .map_err(|e| unwritable(e, unified_diff("", sent)))?;
+    Ok((Some(text), private))
 }
 
 /// `<dir>/<name>.yaml`, or the `.yml` file when only that one exists.
@@ -312,8 +444,13 @@ fn target_path(dir: &Path, name: &str) -> PathBuf {
 ///
 /// # Errors
 ///
-/// `Unpin` or `PinAmbiguous`, as [`commit`] would answer.
+/// `PinMismatch`, `Unpin` or `PinAmbiguous`, as [`commit`] would answer.
 pub(crate) fn preview(sent: &str, current: Option<&str>) -> Result<(String, PinChange), Refused> {
+    if current.is_some_and(pin_broken) {
+        return Err(Refused::PinMismatch {
+            patch: unified_diff(current.unwrap_or_default(), sent),
+        });
+    }
     final_bytes(sent, current, PinUpdate::InPlace)
 }
 
@@ -364,23 +501,16 @@ async fn commit_with(
         Change::Delete => "",
     };
     let dir = std::fs::canonicalize(edit.dir).map_err(|e| unwritable(e, String::new()))?;
-    let path = target_path(&dir, edit.name);
-    // The editor never writes through a link (lead ruling 2026-10-26).
-    if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
-        let real_path = std::fs::canonicalize(&path)
-            .map_or_else(|_| path.display().to_string(), |p| p.display().to_string());
-        return Err(Refused::Symlinked { real_path });
-    }
     let _held = match lock_config(&dir.join("capabilities"), deadline).await {
         Ok(held) => held,
         Err(NotLocked::Busy) => return Err(Refused::LockBusy),
         Err(NotLocked::Failed(error)) => return Err(unwritable(error, unified_diff("", sent))),
     };
-    let current = match std::fs::read_to_string(&path) {
-        Ok(text) => Some(text),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(unwritable(e, unified_diff("", sent))),
-    };
+    // Under the lock: which file, whether it is a link, its bytes and its
+    // mode all come from one look, so nothing installed while the lock was
+    // awaited is read or replaced (lead ruling 2026-10-26: never a link).
+    let path = target_path(&dir, edit.name);
+    let (current, private) = read_current(&path, sent)?;
     let patch = || unified_diff(current.as_deref().unwrap_or_default(), sent);
     let in_place = edit.pin == PinUpdate::InPlace && matches!(edit.change, Change::Write(_));
     if in_place && current.as_deref().is_some_and(pin_broken) {
@@ -412,8 +542,11 @@ async fn commit_with(
         patch: patch(),
     })?;
     // Windows `Inherit` takes the directory's ACL and could widen a private
-    // file; Private never widens (lead ruling (A); the shared writer's cause is tracked on its own).
-    let mode = if cfg!(windows) {
+    // file; Private never widens (lead ruling (A); the shared writer's cause
+    // is tracked on its own). On Unix a file read as private is written
+    // private, so a file swapped or removed before the rename never falls
+    // back to the umask.
+    let mode = if cfg!(windows) || private {
         FileMode::Private
     } else {
         FileMode::Inherit

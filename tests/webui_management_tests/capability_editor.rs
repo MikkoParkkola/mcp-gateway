@@ -343,7 +343,9 @@ async fn test_save_keeps_crlf_and_bom_from_the_base() {
 
 #[tokio::test]
 async fn test_pinned_save_rewrites_the_pin_in_place() {
-    let pinned = format!("# kept comment\n{}", pinned_yaml());
+    // The comment is part of what the pin covers, so it goes in first.
+    let commented = format!("# kept comment\n{VALID_YAML}");
+    let pinned = rewrite_with_pin(&commented, &compute_capability_hash(&commented));
     let (_tmp, cap_file, router, _store) = editor_with(&pinned).await;
     let pin_index = pinned
         .lines()
@@ -570,5 +572,53 @@ async fn test_save_keeps_mode() {
         assert_eq!(status, StatusCode::OK, "{mode:o}: {body}");
         let now = std::fs::metadata(&cap_file).unwrap().permissions().mode() & 0o777;
         assert_eq!(now, mode, "mode {mode:o} was not kept");
+    }
+}
+
+// ── Code review r1: validate agrees with a save ──────────────────────────────
+
+#[tokio::test]
+async fn test_validate_over_a_mismatched_pin_is_not_valid() {
+    let tampered = pinned_yaml().replace(EDITED_FROM, "Tampered on disk");
+    let (_tmp, cap_file, router, _store) = editor_with(&tampered).await;
+
+    let (status, _, body) = call(
+        &router,
+        Method::POST,
+        "/ui/api/capabilities/kept/validate",
+        &[],
+        &tampered,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["valid"], false, "a save would be refused: {body}");
+    assert_eq!(std::fs::read_to_string(&cap_file).unwrap(), tampered);
+}
+
+/// Every form of `?validate` means validate only, for valid and for refused
+/// text alike.
+#[tokio::test]
+async fn test_every_validate_query_form_writes_nothing() {
+    for query in ["?validate", "?validate=", "?validate=1", "?validate=no"] {
+        let (_tmp, cap_file, router, _store) = editor_with(VALID_YAML).await;
+        let uri = format!("/ui/api/capabilities/kept{query}");
+        let edited = VALID_YAML.replace(EDITED_FROM, "Unsaved edit");
+        let (status, _, body) = call(&router, Method::PUT, &uri, &[], &edited).await;
+        assert_eq!(status, StatusCode::OK, "{query}: {body}");
+        let (status, _, body) = call(
+            &router,
+            Method::PUT,
+            &uri,
+            &[],
+            "name: kept\nproviders: 5\n",
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{query}: {body}");
+        assert_eq!(
+            std::fs::read_to_string(&cap_file).unwrap(),
+            VALID_YAML,
+            "{query}"
+        );
     }
 }

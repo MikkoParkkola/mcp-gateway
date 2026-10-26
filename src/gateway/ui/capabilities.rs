@@ -543,6 +543,9 @@ pub async fn validate_capability_route(
         }
         Err(refusal) => {
             let message = match refusal {
+                Refused::PinMismatch { .. } => {
+                    "the file no longer matches its pin; review it, then run `cap pin` or restore a version"
+                }
                 Refused::Unpin { .. } => "a save would remove the pin, which an edit cannot do",
                 _ => "more than one pin line, or text after a line break on the pin line",
             };

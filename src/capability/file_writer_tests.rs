@@ -471,3 +471,132 @@ async fn first_line_pin_in_a_bom_file_verifies_after_a_save() {
         crate::capability::Integrity::Verified
     );
 }
+
+// ── Code review r1 ────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn pin_rewrite_keeps_quotes_and_comment() {
+    let base = format!(
+        "sha256: \"{}\"  # pinned by ops\n{TEXT}",
+        compute_capability_hash(TEXT)
+    );
+    let (dir, file) = dir_with(&base);
+    let sent = base.replace("description: Original", "description: Edited");
+
+    let result = commit(
+        edit(
+            dir.path(),
+            Base::Bytes(sha(&base)),
+            Change::Write(sent.clone()),
+            PinUpdate::InPlace,
+        ),
+        None,
+        soon(),
+    )
+    .await;
+
+    assert!(result.is_ok(), "{result:?}");
+    let on_disk = std::fs::read_to_string(&file).unwrap();
+    let edited = described(TEXT, "Edited");
+    assert_eq!(
+        on_disk.lines().next().unwrap(),
+        format!(
+            "sha256: \"{}\"  # pinned by ops",
+            compute_capability_hash(&edited)
+        ),
+        "only the value changes"
+    );
+    let cap = crate::capability::parser::parse_capability_text(&on_disk, &file).unwrap();
+    assert_eq!(
+        cap.providers.integrity,
+        crate::capability::Integrity::Verified
+    );
+}
+
+#[tokio::test]
+async fn quoted_pin_key_is_refused_not_bypassed() {
+    // The loader reads a quoted key as the pin; no `sha256:` line carries it.
+    let base = format!("\"sha256\": {}\n{TEXT}", compute_capability_hash(TEXT));
+    let (dir, file) = dir_with(&base);
+    let sent = base.replace("description: Original", "description: Edited");
+
+    let result = commit(
+        edit(
+            dir.path(),
+            Base::Bytes(sha(&base)),
+            Change::Write(sent),
+            PinUpdate::InPlace,
+        ),
+        None,
+        soon(),
+    )
+    .await;
+
+    assert!(
+        matches!(
+            result,
+            Err(Refused::PinMismatch { .. } | Refused::PinAmbiguous { .. })
+        ),
+        "{result:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), base);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_private_file_removed_before_the_rename_is_written_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let (dir, file) = dir_with(TEXT);
+    set_mode(&file, 0o600);
+
+    let result = commit_observed(
+        edit(
+            dir.path(),
+            Base::Bytes(sha(TEXT)),
+            Change::Write(described(TEXT, "Edited")),
+            PinUpdate::InPlace,
+        ),
+        None,
+        soon(),
+        |target| std::fs::remove_file(target).unwrap(),
+    )
+    .await;
+
+    assert!(result.is_ok(), "{result:?}");
+    let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        mode, 0o600,
+        "the umask must not widen a file read as private"
+    );
+}
+
+#[test]
+fn patch_marks_a_missing_final_newline_and_keeps_terminators() {
+    let patch = super::unified_diff("a\r\nb", "a\r\nc");
+    assert!(patch.contains(" a\r\n"), "{patch:?}");
+    assert!(
+        patch.contains("-b\n\\ No newline at end of file\n"),
+        "{patch:?}"
+    );
+    assert!(
+        patch.contains("+c\n\\ No newline at end of file\n"),
+        "{patch:?}"
+    );
+}
+
+#[test]
+fn patch_of_two_large_unrelated_files_stays_bounded() {
+    let from: String = (0..3000).map(|i| format!("a{i}\n")).collect();
+    let to: String = (0..3000).map(|i| format!("b{i}\n")).collect();
+    let patch = super::unified_diff(&from, &to);
+    assert_eq!(
+        patch.lines().filter(|l| l.starts_with('-')).count(),
+        3001,
+        "--- header plus 3000"
+    );
+    assert_eq!(
+        patch.lines().filter(|l| l.starts_with('+')).count(),
+        3001,
+        "+++ header plus 3000"
+    );
+}
