@@ -182,3 +182,20 @@ async fn d7_every_request_is_the_subscribers_on_their_own_session() {
         "the shared bucket is untouched"
     );
 }
+
+/// A backend configured for the SSE handshake gets a legacy SSE session: no
+/// era probe is sent, and nothing reaches the peer until the session opens.
+#[tokio::test]
+async fn a_per_user_listener_on_an_sse_backend_is_legacy_and_sends_nothing_yet() {
+    let (url, log) = peer().await;
+    let statics = HashMap::from([("X-Static".to_owned(), "gateway-key".to_owned())]);
+    let t = HttpTransport::new(&url, statics, Duration::from_secs(5), false).expect("transport");
+    let (session, era) = t.per_user_session("b", lent()).await.expect("own session");
+    assert_eq!(era, crate::protocol::era::PeerEra::Legacy);
+    assert_eq!(
+        session.detected_streamable(),
+        Some(false),
+        "the SSE session"
+    );
+    assert!(log.lock().expect("log").is_empty(), "no probe on SSE");
+}
