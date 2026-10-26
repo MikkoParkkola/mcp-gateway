@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Backend `env` and `headers` as secret slots (ADR-028, MIK-8908 B3): a
+//! Backend `env` and `headers` as secret slots (ADR-028): a
 //! whole-value `env:`, `file:` or `keychain:` resolves once, for an enabled
 //! backend, and its bytes are used verbatim; anything else keeps `${VAR}`.
 

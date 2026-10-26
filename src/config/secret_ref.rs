@@ -293,8 +293,8 @@ pub(crate) fn expand_field(
     })
 }
 
-/// One backend `env` or `headers` value as the backend receives it (ADR-028,
-/// MIK-8908 B3). The written text is classified once: a whole-value `env:`,
+/// One backend `env` or `headers` value as the backend receives it
+/// (ADR-028). The written text is classified once: a whole-value `env:`,
 /// `file:` or `keychain:` reference resolves once, and its bytes are used
 /// verbatim, never read again as a reference; anything else is a template
 /// and gets [`expand_field`]'s `${VAR}` expansion, whose result is never

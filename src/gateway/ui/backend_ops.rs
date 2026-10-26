@@ -179,7 +179,7 @@ pub fn add_backend(
         }
     }
     // Enabled or not: a secret reference that does not resolve would break
-    // the start after it is enabled (ADR-028, MIK-8908 B3).
+    // the start after it is enabled (ADR-028).
     refuse_unresolved_secrets(&backend, name, &config.env_overlay())?;
     config.backends.insert(name.to_string(), backend);
     Ok(notes)

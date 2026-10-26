@@ -91,8 +91,8 @@ fn backend_inspection_commands_never_print_config_secrets() {
     }
     assert!(combined.contains("SAFE_ENV_NAME=<set>"));
     assert!(combined.contains("Authorization=<set>"));
-    // A secret reference is shown as written by `get` (ADR-028, MIK-8908.KC.8),
-    // and `list --json` stays names-only (MIK-7221).
+    // A secret reference is shown as written by `get` (ADR-028),
+    // and `list --json` stays names-only.
     let get = combined_output(&outputs[0]);
     assert!(get.contains("FROM_KEYCHAIN=keychain:gw.cli-ref"), "{get}");
     assert!(get.contains("X-Token=env:CLI_REF_TOKEN"), "{get}");

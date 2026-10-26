@@ -203,7 +203,7 @@ pub async fn run_doctor_command(
     results.extend(check_port_and_gateway_runtime(&config).await);
 
     // ── 3. Backend env vars ────────────────────────────────────────────────
-    // References are shown as written, from a literal load (MIK-8908.KC.8);
+    // References are shown as written, from a literal load;
     // the evaluated `config` holds their values.
     let literal = resolve_config_path(config_path)
         .and_then(|path| mcp_gateway::config::Config::load_literal(Some(&path)).ok());

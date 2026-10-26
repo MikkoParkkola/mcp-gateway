@@ -601,7 +601,7 @@ mod tests {
     use super::*;
     use crate::gateway::ui::backend_ops::resolve_parts;
 
-    // ── refusal codes (ADR-028, MIK-8908 B3) ───────────────────────────────
+    // ── refusal codes (ADR-028) ───────────────────────────────
 
     #[test]
     fn b3i_an_unresolved_secret_is_422_on_add_and_patch() {

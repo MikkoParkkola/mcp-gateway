@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! How a secret slot is shown (ADR-028, MIK-8908.KC.8): a reference as
+//! How a secret slot is shown (ADR-028): a reference as
 //! written, a literal as `<set>`. Every surface that shows or exports config
 //! reads the literal config and shows its secret slots through this, so a
 //! resolved value is never shown.

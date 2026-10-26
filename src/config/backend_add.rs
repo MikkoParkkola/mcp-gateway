@@ -3,7 +3,7 @@
 //! Pieces `mcp-gateway add` needs to write a whole backend (MIK-7787): the
 //! default OAuth stanza, whether one backend's `${VAR}` references would
 //! resolve at the next load, and the pre-write check that its secret
-//! references resolve (ADR-028, MIK-8908 B3).
+//! references resolve (ADR-028).
 
 use super::OAuthConfig;
 use super::{BackendConfig, EnvOverlay, secret_ref};
@@ -61,7 +61,7 @@ impl BackendConfig {
     /// read and dropped, through the load's own evaluator, enabled or not, so
     /// a reference that does not resolve never reaches gateway.yaml or the
     /// next start. `${VAR}` templates are not checked here: an unset one keeps
-    /// add-disabled (MIK-7816).
+    /// add-disabled.
     ///
     /// `pub` only for the binary's discover and setup writers; it returns to
     /// `pub(crate)` once no binary-side writer of `backends` remains.

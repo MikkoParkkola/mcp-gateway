@@ -242,7 +242,7 @@ pub fn run_get_command(name: &str, config: &Path) -> ExitCode {
 
     // Names and references, never values. This output is routinely pasted
     // into bug reports and CI logs, which is what made the previous `{k}={v}`
-    // a credential disclosure rather than a cosmetic issue (MIK-7221). A
+    // a credential disclosure rather than a cosmetic issue. A
     // secret reference is shown as written (ADR-028); a value never is.
     let backend = &gateway_config.backends[name];
     let shown = |map: &std::collections::HashMap<String, String>, key: &str| {

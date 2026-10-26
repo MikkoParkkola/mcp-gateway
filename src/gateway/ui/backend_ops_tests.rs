@@ -568,7 +568,7 @@ mod stop_when_idle_ui_tests {
     }
 }
 
-// ── secret references (ADR-028, MIK-8908 B3) ─────────────────────────────
+// ── secret references (ADR-028) ─────────────────────────────
 
 const GONE: &str = "file:/nonexistent/mcp-gateway-b3/token";
 
@@ -611,7 +611,7 @@ fn b3i_a_disabled_add_is_checked_too_and_an_unset_template_still_adds_disabled()
     )
     .expect_err("checked while disabled");
     assert!(refused.contains(UNRESOLVED_SECRETS), "{refused}");
-    // MIK-7816 is unchanged: an unset ${VAR} adds the backend disabled.
+    // Unchanged: an unset ${VAR} still adds the backend disabled.
     let notes = add_backend(
         &mut cfg,
         "templated",

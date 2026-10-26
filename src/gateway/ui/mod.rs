@@ -534,7 +534,7 @@ async fn config(
         .collect();
 
     // Each backend secret slot that holds a reference, as written, read from
-    // the literal file: never a resolved value (ADR-028, MIK-8908.KC.8).
+    // the literal file: never a resolved value (ADR-028).
     let secret_references = match state.config_path.clone() {
         Some(path) => tokio::task::spawn_blocking(move || {
             crate::config::Config::load_literal(Some(&path))
