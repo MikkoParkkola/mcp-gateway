@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Cached metadata accessors: tools, resources, resource templates, and
 //! prompts, each backed by a single-flight [`super::cached_metadata::CachedMetadata`]
-//! slot on [`super::Backend`].
+//! slot on [`super::Backend`]. The tools path lives here; the resources,
+//! resource-template and prompts accessors are in `metadata_catalogues.rs`.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,10 +25,7 @@ mod stored_view;
 use crate::Error;
 use crate::Result;
 use crate::oauth::login_gate::{Provenance, fill_scope};
-use crate::protocol::{
-    Prompt, PromptsListResult, Resource, ResourceTemplate, ResourcesListResult,
-    ResourcesTemplatesListResult, Tool, ToolsListResult,
-};
+use crate::protocol::{Tool, ToolsListResult};
 
 // MIK-8014 PERF.12: the fresh-slot answer and completeness `tools_for_check` reads.
 #[path = "metadata_fresh_check.rs"]
@@ -38,6 +36,9 @@ mod preview;
 #[path = "metadata_read_only.rs"]
 mod read_only;
 pub(crate) use preview::{PreviewListing, list_tools_for_preview};
+// The resources, resource-template and prompts accessors.
+#[path = "metadata_catalogues.rs"]
+mod catalogues;
 
 impl Backend {
     /// The tool cache belonging to `binding`'s pool slot.
@@ -610,171 +611,6 @@ impl Backend {
         self.get_tools_shared()
             .await
             .map(|tools| tools.as_ref().clone())
-    }
-
-    /// The resource catalogue the SHARED slot serves.
-    ///
-    /// For readers that hold no caller: startup prefetch, the operator UI and
-    /// the provider adapter.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the backend cannot start or the resources request fails.
-    pub async fn get_resources_shared(&self) -> Result<Arc<Vec<Resource>>> {
-        self.get_resources_for_binding(None, &[]).await
-    }
-
-    /// The resource catalogue THIS CALLER's pool slot serves.
-    ///
-    /// Same contract as [`Self::get_tools_for_binding`]: `binding` is the
-    /// caller's `PropagatedCredential::cache_binding`, everything that is not a
-    /// propagating backend with a binding collapses to the shared slot, and `extra_headers` are the headers that slot's transport was
-    /// opened with — carried on a `PerUser` slot, dropped on the shared one.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the backend cannot start or the resources request fails.
-    pub async fn get_resources_for_binding(
-        &self,
-        binding: Option<&str>,
-        extra_headers: &[(String, String)],
-    ) -> Result<Arc<Vec<Resource>>> {
-        self.get_cached_list_for(
-            binding,
-            |entry| &entry.resources_cache,
-            ListFamily {
-                method: "resources/list",
-                kind: "resources",
-                list_key: "resources",
-                truncated_flag: Some(resources_truncated_flag),
-                cooldown: false,
-                stale_hit: false,
-            },
-            extra_headers,
-            FillBound::DrainBudget,
-            |result| {
-                Ok((
-                    serde_json::from_value::<ResourcesListResult>(result)?.resources,
-                    None,
-                ))
-            },
-        )
-        .await
-    }
-
-    /// Get cached resources (or fetch if needed)
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the backend cannot start or the resources request fails.
-    pub async fn get_resources(&self) -> Result<Vec<Resource>> {
-        self.get_resources_shared()
-            .await
-            .map(|resources| resources.as_ref().clone())
-    }
-
-    /// The resource-template catalogue the SHARED slot serves.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the backend cannot start or the templates request fails.
-    pub async fn get_resource_templates_shared(&self) -> Result<Arc<Vec<ResourceTemplate>>> {
-        self.get_resource_templates_for_binding(None, &[]).await
-    }
-
-    /// The resource-template catalogue THIS CALLER's pool slot serves.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the backend cannot start or the templates request fails.
-    pub async fn get_resource_templates_for_binding(
-        &self,
-        binding: Option<&str>,
-        extra_headers: &[(String, String)],
-    ) -> Result<Arc<Vec<ResourceTemplate>>> {
-        self.get_cached_list_for(
-            binding,
-            |entry| &entry.resource_templates_cache,
-            ListFamily {
-                method: "resources/templates/list",
-                kind: "resource_templates",
-                list_key: "resourceTemplates",
-                truncated_flag: None,
-                cooldown: false,
-                stale_hit: false,
-            },
-            extra_headers,
-            FillBound::DrainBudget,
-            |result| {
-                let templates = serde_json::from_value::<ResourcesTemplatesListResult>(result)?;
-                Ok((templates.resource_templates, None))
-            },
-        )
-        .await
-    }
-
-    /// Get cached resource templates (or fetch if needed)
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the backend cannot start or the templates request fails.
-    pub async fn get_resource_templates(&self) -> Result<Vec<ResourceTemplate>> {
-        self.get_resource_templates_shared()
-            .await
-            .map(|templates| templates.as_ref().clone())
-    }
-
-    /// The prompt catalogue the SHARED slot serves.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the backend cannot start or the prompts request fails.
-    pub async fn get_prompts_shared(&self) -> Result<Arc<Vec<Prompt>>> {
-        self.get_prompts_for_binding(None, &[]).await
-    }
-
-    /// The prompt catalogue THIS CALLER's pool slot serves.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the backend cannot start or the prompts request fails.
-    pub async fn get_prompts_for_binding(
-        &self,
-        binding: Option<&str>,
-        extra_headers: &[(String, String)],
-    ) -> Result<Arc<Vec<Prompt>>> {
-        self.get_cached_list_for(
-            binding,
-            |entry| &entry.prompts_cache,
-            ListFamily {
-                method: "prompts/list",
-                kind: "prompts",
-                list_key: "prompts",
-                truncated_flag: None,
-                cooldown: false,
-                stale_hit: false,
-            },
-            extra_headers,
-            FillBound::DrainBudget,
-            |result| {
-                Ok((
-                    serde_json::from_value::<PromptsListResult>(result)?.prompts,
-                    None,
-                ))
-            },
-        )
-        .await
-    }
-
-    /// Get cached prompts (or fetch if needed)
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the backend cannot start or the prompts request fails.
-    pub async fn get_prompts(&self) -> Result<Vec<Prompt>> {
-        self.get_prompts_shared()
-            .await
-            .map(|prompts| prompts.as_ref().clone())
     }
 }
 
