@@ -190,7 +190,7 @@ impl Gateway {
             &external_tool,
             response_targets,
         );
-        let mut response = meta_mcp.finalize_content(
+        let response = meta_mcp.finalize_content(
             response,
             &super::super::meta_mcp::response_security::ResponseDeliveryContext {
                 method: &method,
@@ -217,7 +217,10 @@ impl Gateway {
         // MIK-7920: recorded after the judge, then settled, by the caller
         // (`judge_and_commit`), as `POST /mcp` does.
         // Kept across a replacement made while finalizing.
-        response.invocation_trace = invocation_trace;
+        let response = JsonRpcResponse {
+            invocation_trace,
+            ..response
+        };
         Some(stdio_delivery::StdioAnswer::finalized(
             response,
             external_tool,
