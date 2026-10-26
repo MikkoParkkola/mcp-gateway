@@ -558,6 +558,9 @@ mod idem_rows;
 #[path = "redactor_b2_large_tests.rs"]
 mod large_rows;
 
+#[path = "redactor_gate_tests.rs"]
+mod gate_rows;
+
 // ── D: properties ─────────────────────────────────────────────────────────
 
 /// A small deterministic generator (no new dependency).

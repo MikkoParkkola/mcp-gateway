@@ -314,7 +314,8 @@ impl Redactor {
         if text.len() > B2_MAX_LEAF_BYTES {
             return self.redact_large_json(text, exempt, findings);
         }
-        if b2_gate(text).is_none() {
+        // An object, an array or a string, as `Value` would read it.
+        if !json_literal::is_document(text) {
             return JsonText::NotJson;
         }
         self.redact_collected(text, exempt, findings)
@@ -329,21 +330,19 @@ impl Redactor {
         findings: &mut Vec<Finding>,
     ) -> JsonText {
         let literals = json_literal::string_literals(text);
+        let found_by: Vec<(usize, Vec<(usize, usize)>)> = (self.set.matches(text).iter())
+            .map(|idx| (idx, overlapping_spans(&self.regexes[idx], text)))
+            .collect();
         // A value literal whose decoded text is exempt keeps every byte, and a
         // pattern counts only where it still redacts something (MIK-8756).
-        let exempt_contents: Vec<(usize, usize)> = literals
-            .iter()
-            .filter(|lit| !lit.key && decoded(text, lit).is_some_and(|v| exempt(&v)))
-            .map(|lit| (lit.start(), lit.end()))
-            .collect();
+        let exempt_contents = exempt_crossed(text, &literals, &found_by, exempt);
         let starts_in_literal = |at: usize| {
             let after = literals.partition_point(|lit| lit.start() <= at);
             after.checked_sub(1).is_some_and(|i| at < literals[i].end())
         };
         let mut matched = Vec::new();
         let mut spans = Vec::new();
-        for idx in &self.set.matches(text) {
-            let found = overlapping_spans(&self.regexes[idx], text);
+        for (idx, found) in found_by {
             // Judged on the matches as found: a piece left after an exempt
             // value is cut out can start on that value's closing quote. No
             // pattern starts on a quote (P2 pins their text), so a match in
@@ -432,10 +431,24 @@ impl Redactor {
         literals: &'a [Literal],
         exempt: &dyn Fn(&str) -> bool,
     ) -> Vec<(&'a Literal, Family)> {
+        // Whether a key can name a credential at all depends on its text
+        // alone, and a document repeats few keys, so each is decided once; a
+        // key that names none makes [`Self::credential_member`] refuse any value.
+        let mut names: HashMap<&str, bool> = HashMap::new();
         literals
             .windows(2)
             .filter(|pair| pair[0].key && !pair[1].key)
             .filter(|pair| text[pair[0].end() + 1..pair[1].start() - 1].trim() == ":")
+            .filter(|pair| {
+                *names
+                    .entry(&text[pair[0].start()..pair[0].end()])
+                    .or_insert_with(|| {
+                        decoded(text, &pair[0]).is_some_and(|key| {
+                            self.member_key.is_match(&key)
+                                || credential_names::family_of(&key).is_some()
+                        })
+                    })
+            })
             .filter_map(
                 |pair| match (decoded(text, &pair[0]), decoded(text, &pair[1])) {
                     (Some(key), Some(value)) if !exempt(&value) => self
@@ -643,22 +656,6 @@ fn overlapping_spans(re: &Regex, text: &str) -> Vec<(usize, usize)> {
     spans
 }
 
-/// The parsed document when `text` is JSON whose credential spans can be
-/// redacted inside its string values: an object, an array or a string, within
-/// the size cap. One function, so MIK-8756 can widen the entry.
-fn b2_gate(text: &str) -> Option<Value> {
-    let opens = matches!(
-        text.trim_start().as_bytes().first(),
-        Some(b'{' | b'[' | b'"')
-    );
-    if text.len() > B2_MAX_LEAF_BYTES || !opens {
-        return None;
-    }
-    serde_json::from_str::<Value>(text)
-        .ok()
-        .filter(|value| value.is_object() || value.is_array() || value.is_string())
-}
-
 /// `spans` (merged, in order) clipped to every value literal they overlap
 /// and to every overlapped key `redact_key` takes (one merged span can cover
 /// several keys), each piece widened to whole escapes so no escape is cut,
@@ -791,7 +788,10 @@ fn replace_spans(text: &str, ranges: &[(usize, usize)]) -> String {
 
 #[path = "redactor_spans.rs"]
 mod spans;
-use spans::{covers, escape_around, merge_spans, overlaps, spliced_capacity, spliced_len, without};
+use spans::{
+    covers, escape_around, exempt_crossed, merge_spans, overlaps, spliced_capacity, spliced_len,
+    without,
+};
 
 #[path = "redactor_large.rs"]
 mod large;
