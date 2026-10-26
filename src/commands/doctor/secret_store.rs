@@ -37,8 +37,14 @@ fn row(report: &SecretStoreReport) -> CheckResult {
     let row = match (report.chosen, report.fell_back, report.unused) {
         (None, _, _) => CheckResult::fail("secret-store", detail)
             .with_hint("set `secrets.store: files`, or unlock or install the keychain"),
-        (Some(_), true, _) => CheckResult::warn("secret-store", detail)
-            .with_hint("secrets go to files; unlock or install the keychain to keep them there"),
+        (Some(_), true, counted) => {
+            CheckResult::warn("secret-store", detail).with_hint(if counted.is_some() {
+                "secrets go to files; unlock or install the keychain to keep them there"
+            } else {
+                "secrets go to files; unlock or install the keychain to keep them there. \
+                 The unused entries could not be counted; run doctor again"
+            })
+        }
         (Some(_), false, Some(count)) if count > 0 => CheckResult::warn("secret-store", detail)
             .with_hint("unused entries stay until an admin removes them"),
         (Some(_), false, None) => CheckResult::warn("secret-store", detail)

@@ -71,6 +71,11 @@ impl Vault {
         self.lock_path.exists()
     }
 
+    /// Whether this config directory has a secrets index.
+    pub(crate) fn index_exists(&self) -> bool {
+        self.index.exists()
+    }
+
     /// A vault whose lock is at `lock_path`, for tests that own a home.
     pub(crate) fn with_lock(config_dir: &Path, lock_path: PathBuf) -> Self {
         Self {

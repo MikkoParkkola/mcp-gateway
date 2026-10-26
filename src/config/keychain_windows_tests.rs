@@ -71,3 +71,12 @@ fn the_writer_round_trips_refuses_a_taken_name_and_wipes_on_exists() {
     assert_eq!(store.exists(&name), Ok(false));
     assert_eq!(store.delete(&name), Ok(()), "already gone is gone");
 }
+
+/// A probe that times out reports Credential Manager unavailable, not a
+/// pending write: a probe writes nothing.
+#[test]
+fn a_probe_that_times_out_is_unavailable() {
+    use crate::secret_store::{SecretStore, StoreError};
+    let store = WindowsKeychain::with_timing(Duration::from_millis(100), Duration::from_secs(30));
+    assert!(matches!(store.probe(), Err(StoreError::Unavailable(_))));
+}

@@ -61,8 +61,8 @@ fn owner_only(path: &Path) {
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
     }
-    #[cfg(not(unix))]
-    let _ = path;
+    #[cfg(windows)]
+    crate::private_fs::test_support::plant_owner_only("doctor-report", path);
 }
 
 fn vault_for(config: &Path, locks: &Path) -> Vault {
@@ -183,4 +183,50 @@ fn with_no_vault_lock_yet_the_count_is_zero_and_no_lock_is_made() {
         !locks.path().join("vault.lock").exists(),
         "the report made the vault lock"
     );
+}
+
+#[test]
+fn an_index_without_a_vault_lock_is_not_counted_as_zero() {
+    let (config, locks, path) = saved();
+    std::fs::remove_file(locks.path().join("vault.lock")).expect("drop the lock");
+    let report = report_with(
+        &path,
+        SecretStoreChoice::Files,
+        Ok(vault_for(config.path(), locks.path())),
+        None,
+    );
+    assert_eq!(report.unused, None, "{report:?}");
+    assert!(
+        !locks.path().join("vault.lock").exists(),
+        "the report made the vault lock"
+    );
+}
+
+#[test]
+fn an_escaped_reference_and_a_broken_config_go_through_the_whole_report() {
+    let (config, locks, path) = saved();
+    let text = std::fs::read_to_string(&path).expect("read");
+    // The live reference, with its dots written as YAML escapes.
+    std::fs::write(&path, text.replace("mcp-gateway.", "mcp-gateway\\u002e")).expect("write");
+    owner_only(&path);
+    let report = report_with(
+        &path,
+        SecretStoreChoice::Files,
+        Ok(vault_for(config.path(), locks.path())),
+        None,
+    );
+    assert_eq!(
+        report.unused,
+        Some(1),
+        "the escaped live entry counted as unused: {report:?}"
+    );
+    std::fs::write(&path, "auth: [unclosed\n").expect("write");
+    owner_only(&path);
+    let report = report_with(
+        &path,
+        SecretStoreChoice::Files,
+        Ok(vault_for(config.path(), locks.path())),
+        None,
+    );
+    assert_eq!(report.unused, None, "{report:?}");
 }

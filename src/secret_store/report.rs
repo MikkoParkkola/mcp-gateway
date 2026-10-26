@@ -121,9 +121,17 @@ fn count_unused(
         .map_err(|e| e.to_string())?;
     let named = named_in_yaml(&text)?;
     // No lock file means no save ever ran, so nothing is indexed; taking the
-    // lock would create the file, and the report writes nothing.
+    // lock would create the file, and the report writes nothing. An index
+    // with no lock beside it is not counted rather than reported as zero.
     if !vault.lock_exists() {
-        return Ok(0);
+        return if vault.index_exists() {
+            Err(
+                "the index exists but the vault lock does not, so entries were not counted"
+                    .to_owned(),
+            )
+        } else {
+            Ok(0)
+        };
     }
     let files = FilesStore::new(config_dir);
     let mut stores: Vec<&dyn SecretStore> = vec![&files];
@@ -138,6 +146,8 @@ fn count_unused(
 /// The entry names in every string of the parsed config, so a YAML escape
 /// cannot hide a live reference. A config that does not parse is not counted.
 fn named_in_yaml(text: &str) -> Result<BTreeSet<String>, String> {
+    // A parser error can quote the config text around it, which may hold a
+    // literal secret, so only a fixed sentence is reported.
     let value: serde_json::Value = crate::yaml::from_str(text)
         .map_err(|_| "gateway.yaml did not parse, so references were not read".to_owned())?;
     let mut names = BTreeSet::new();
@@ -155,8 +165,9 @@ fn named_in_yaml(text: &str) -> Result<BTreeSet<String>, String> {
 
 /// Every entry name `text` mentions, as a `keychain:` reference or a
 /// `file:secrets/` path alike: each maximal run of name characters that
-/// starts with the fresh-name prefix (ADR-028 rule 1). A name in a comment
-/// counts as named, so the count errs low, never high.
+/// starts with the fresh-name prefix (ADR-028 rule 1). Applied to each
+/// decoded string value, so a commented-out reference is not live and its
+/// entry counts as unused.
 fn named(text: &str) -> BTreeSet<String> {
     const PREFIX: &str = "mcp-gateway.";
     let is_name = |c: char| c.is_ascii_alphanumeric() || c == '.' || c == '-';

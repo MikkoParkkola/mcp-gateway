@@ -40,6 +40,11 @@ impl Index {
         }
     }
 
+    /// Whether the index file is there.
+    pub(super) fn exists(&self) -> bool {
+        self.path.exists()
+    }
+
     /// Records that `name` is about to be created in `kind`, durably.
     pub(super) fn append_created(&self, name: &str, kind: StoreKind) -> Result<(), StoreError> {
         self.append(&Line {

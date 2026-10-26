@@ -145,7 +145,7 @@ The value never appears in argv, logs or error text. Readers and writers pass it
 
 7. **The probe.** Read-only, non-interactive, bounded at 2 s, run before anything is written. The same bound applies to every store and read call.
    - A timed-out child is killed and reaped before the vault lock is released.
-   - A store that timed out is treated as possibly written: its name is already in the index, so rollback checks `exists()` and deletes it.
+   - (Superseded by the amendment below.) A store that timed out is treated as possibly written: its name is already in the index, so rollback checks `exists()` and deletes it.
    - Amended 2026-10-26 (B2b): a create that timed out is never deleted, whatever `exists()` reads, and its index row is never marked removed. The abandoned native call (SecItemAdd, CredWriteW, or a killed `secret-tool store`) can land after rollback has looked. Deleting on `exists()` could then remove an entry the call answered as a duplicate. Marking the row removed would leave a late landing outside the index, where no listing could find it. The live row makes a late landing an unused entry instead, which the listing reports and `mcp-gateway doctor` counts. A create the store refused as a duplicate retires its row, so the listing never offers another program's entry. A create that returned success is rolled back by delete, as is one that failed outright and is then seen to exist; only a timed-out create is never deleted.
    - The probe is a fast refusal, not the guarantee. A later failure still rolls back through ADR-024's sequence.
    - **macOS:** every keychain call runs with `SecKeychain::disable_user_interaction()` held (`security-framework` 3.7, `os/macos/keychain.rs:98`).

@@ -175,3 +175,17 @@ fn b18_the_largest_value_round_trips_byte_exact() {
     );
     store.delete(name).expect("delete");
 }
+
+/// A probe that times out reports the keychain unavailable, not a pending
+/// write: a probe writes nothing.
+#[test]
+fn a_probe_that_times_out_is_unavailable() {
+    use crate::secret_store::{SecretStore, StoreError};
+    let (_dir, keychain) = temporary_keychain(&[]);
+    let store = backend(
+        &keychain,
+        Duration::from_millis(100),
+        Duration::from_secs(30),
+    );
+    assert!(matches!(store.probe(), Err(StoreError::Unavailable(_))));
+}
