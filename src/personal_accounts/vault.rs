@@ -467,6 +467,12 @@ impl VaultStrategy {
         }
     }
 
+    /// The events fence: the mint-free read of the grant a delivery and a
+    /// listener run are fenced on.
+    pub(crate) async fn fence_binding(&self, principal: Principal<'_>) -> ViewBinding {
+        self.view_binding_classified(principal).await
+    }
+
     /// Refuse a grant stored under a descriptor revision other than the live
     /// one. Nothing is written: the fence is a function of the stored revision
     /// and the installed configuration, so reverting the edit restores service
