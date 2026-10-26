@@ -38,14 +38,14 @@ const FIELD: usize = 2 + 6 * 256;
 /// text field, a needs-you row two (subject, name), an action row seven (at,
 /// route, method, outcome, authority, subject, account). The rest of the body
 /// (KPIs, `more`, `complete`, `degraded`) fits in 4 KiB.
-/// A fixed instant for the budget tests: the enforcer's day must not roll
-/// over between recording spend and reading the overview.
-#[cfg(feature = "cost-governance")]
-const BUDGET_NOW: u64 = 1_800_000_000;
 const WORST_BODY: usize = SERVER_ROWS * (FIELD + 64)
     + NEEDS_YOU_ROWS * (2 * FIELD + 256)
     + ACTION_ROWS * (7 * FIELD + 256)
     + 4096;
+/// A fixed instant for the budget tests: the enforcer's day must not roll
+/// over between recording spend and reading the overview.
+#[cfg(feature = "cost-governance")]
+const BUDGET_NOW: u64 = 1_800_000_000;
 
 fn api_key(key: &str, admin: bool) -> ApiKeyConfig {
     ApiKeyConfig {
