@@ -47,6 +47,32 @@ async fn a_direct_idempotent_replay_states_no_effect() {
     assert_first_vouched_replay_not(&fx);
 }
 
+/// A keyed direct call whose backend failed replays the stored failure: the
+/// replay states no effect either.
+#[tokio::test]
+async fn a_direct_cached_failure_replay_states_no_effect() {
+    let fx = fixture(Setup {
+        meta_mode: MetaMode::Idempotent,
+        backend_error: Some(-32010),
+        ..Setup::default()
+    })
+    .await;
+    for _ in 0..2 {
+        let call = direct_call("cust-1", Some("k-unvouched-failure"));
+        let (_, answer) = post_modern_as(&fx, "/mcp/alpha", &call, &Caller::ModernOidc).await;
+        assert!(answer.get("error").is_some(), "premise: failed: {answer}");
+    }
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "premise: a replay");
+    let rows = deliveries(&fx);
+    let [first, replay] = rows.as_slice() else {
+        panic!("two delivery records: {rows:?}");
+    };
+    assert!(first.get("response_effect").is_some(), "{first}");
+    for field in ["response_effect", "response_findings"] {
+        assert!(replay.get(field).is_none(), "{field}: {replay}");
+    }
+}
+
 /// A meta admission replay serves the first run's answer.
 #[tokio::test]
 async fn a_meta_admission_replay_states_no_effect() {
