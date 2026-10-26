@@ -8,16 +8,25 @@
 //! spawned that could unlock: a locked item is refused, and `secret-tool
 //! lookup` runs only for an unlocked one. Each child is bounded at 2 s and is
 //! killed and reaped on this thread before the call returns.
+//!
+//! The writer is the same client. Before each spawn, `gdbus` confirms the
+//! default collection exists and is unlocked, and `SearchItems` that the
+//! name is free. Then `secret-tool store` takes the value on stdin, never in
+//! argv.
 
-use std::io::Read as _;
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use super::keychain::{KeychainError, KeychainRead, WipedBytes};
+use crate::secret_store::{SecretStore, StoreError, StoreKind};
 
 /// How long one child may take (ADR-028 rule 7).
 const BOUND: Duration = Duration::from_secs(2);
+
+/// The largest value the Secret Service store takes (ADR-028 rule 2).
+const LIMIT: usize = 8_192;
 
 /// The Secret Service through its command-line tools.
 pub(crate) struct LinuxKeychain {
@@ -48,9 +57,7 @@ impl LinuxKeychain {
 
     /// `(unlocked, locked)` item counts for `name`, from `SearchItems`.
     fn search(&self, name: &str) -> Result<(usize, usize), KeychainError> {
-        let gdbus = self.gdbus.as_deref().ok_or_else(|| {
-            KeychainError::Unavailable("gdbus is not installed (package libglib2.0-bin)".into())
-        })?;
+        let gdbus = self.gdbus()?;
         // The name is ADR-028's grammar, so it needs no quoting beyond the
         // GVariant string's own quotes.
         // `SearchItems` takes `a{ss}`: a plain string value, not a variant.
@@ -68,6 +75,7 @@ impl LinuxKeychain {
                 "org.freedesktop.Secret.Service.SearchItems",
                 &attributes,
             ],
+            None,
             self.bound,
         )?;
         if !output.success {
@@ -79,6 +87,124 @@ impl LinuxKeychain {
             KeychainError::Unavailable("the Secret Service gave an unreadable answer".into())
         })
     }
+    fn gdbus(&self) -> Result<&Path, KeychainError> {
+        self.gdbus.as_deref().ok_or_else(|| {
+            KeychainError::Unavailable("gdbus is not installed (package libglib2.0-bin)".into())
+        })
+    }
+
+    fn secret_tool(&self) -> Result<&Path, KeychainError> {
+        self.secret_tool.as_deref().ok_or_else(|| {
+            KeychainError::Unavailable(
+                "secret-tool is not installed (package libsecret-tools)".into(),
+            )
+        })
+    }
+
+    /// The write gate: the default collection exists and its `Locked`
+    /// property reads false. Reading a property never prompts to unlock.
+    fn default_unlocked(&self) -> Result<(), KeychainError> {
+        let output = run(
+            self.gdbus()?,
+            &[
+                "call",
+                "--session",
+                "--dest",
+                "org.freedesktop.secrets",
+                "--object-path",
+                "/org/freedesktop/secrets/aliases/default",
+                "--method",
+                "org.freedesktop.DBus.Properties.Get",
+                "org.freedesktop.Secret.Collection",
+                "Locked",
+            ],
+            None,
+            self.bound,
+        )?;
+        let reply = String::from_utf8_lossy(output.stdout.as_bytes()).into_owned();
+        match (output.success, reply.trim()) {
+            (true, "(<false>,)") => Ok(()),
+            (true, "(<true>,)") => Err(KeychainError::Locked),
+            _ => Err(KeychainError::Unavailable(
+                "the Secret Service has no default collection on the session bus".into(),
+            )),
+        }
+    }
+}
+
+impl SecretStore for LinuxKeychain {
+    fn kind(&self) -> StoreKind {
+        StoreKind::Keychain
+    }
+
+    fn limit(&self) -> usize {
+        LIMIT
+    }
+
+    fn probe(&self) -> Result<(), StoreError> {
+        self.secret_tool().map_err(store_error)?;
+        self.default_unlocked().map_err(store_error)
+    }
+
+    fn exists(&self, name: &str) -> Result<bool, StoreError> {
+        let (unlocked, locked) = self.search(name).map_err(store_error)?;
+        Ok(unlocked + locked > 0)
+    }
+
+    fn create(&self, name: &str, value: &[u8]) -> Result<String, StoreError> {
+        let secret_tool = self.secret_tool().map_err(store_error)?;
+        self.default_unlocked().map_err(store_error)?;
+        // `secret-tool store` replaces an item with the same attributes, so
+        // create-only is this check plus the vault lock around it.
+        if self.exists(name)? {
+            return Err(StoreError::Exists);
+        }
+        let label = format!("--label={name}");
+        let output = run(
+            secret_tool,
+            &["store", &label, "service", name],
+            Some(value),
+            self.bound,
+        )
+        .map_err(store_error)?;
+        if !output.success {
+            return Err(StoreError::Failed("secret-tool store failed".into()));
+        }
+        Ok(format!("keychain:{name}"))
+    }
+
+    fn delete(&self, name: &str) -> Result<(), StoreError> {
+        match self.search(name).map_err(store_error)? {
+            (0, 0) => return Ok(()),
+            (0, _) => {
+                return Err(StoreError::Unavailable(
+                    "the entry is in a locked collection".into(),
+                ));
+            }
+            _ => {}
+        }
+        let secret_tool = self.secret_tool().map_err(store_error)?;
+        let output =
+            run(secret_tool, &["clear", "service", name], None, self.bound).map_err(store_error)?;
+        // Durable means gone: the search, not the exit status, decides.
+        match (output.success, self.search(name).map_err(store_error)?) {
+            (true, (0, 0)) => Ok(()),
+            _ => Err(StoreError::Failed(
+                "secret-tool clear left the entry in place".into(),
+            )),
+        }
+    }
+}
+
+/// A reader error as a writer error. A timeout stays a timeout: a killed
+/// `secret-tool store` may already have asked the service to create.
+fn store_error(error: KeychainError) -> StoreError {
+    match error {
+        KeychainError::Timeout => StoreError::TimedOut,
+        KeychainError::Locked => StoreError::Unavailable("the keychain is locked".into()),
+        KeychainError::Unavailable(why) => StoreError::Unavailable(why),
+        KeychainError::Missing => StoreError::Failed("the entry vanished mid-call".into()),
+    }
 }
 
 impl KeychainRead for LinuxKeychain {
@@ -88,12 +214,8 @@ impl KeychainRead for LinuxKeychain {
             (0, _) => return Err(KeychainError::Locked),
             _ => {}
         }
-        let secret_tool = self.secret_tool.as_deref().ok_or_else(|| {
-            KeychainError::Unavailable(
-                "secret-tool is not installed (package libsecret-tools)".into(),
-            )
-        })?;
-        let output = run(secret_tool, &["lookup", "service", name], self.bound)?;
+        let secret_tool = self.secret_tool()?;
+        let output = run(secret_tool, &["lookup", "service", name], None, self.bound)?;
         // An exit status cannot tell "not found" from a bus failure, and the
         // search already said the item exists, so a failure here is the store's.
         if !output.success {
@@ -122,18 +244,52 @@ struct Finished {
     stdout: WipedBytes,
 }
 
-/// Runs `program` with `args` and no stdin, waiting at most `bound`. A child
-/// past the bound is killed and reaped before this returns. Stderr is drained
-/// and dropped: it can carry nothing an operator needs that the reason lacks.
-fn run(program: &Path, args: &[&str], bound: Duration) -> Result<Finished, KeychainError> {
+/// Runs `program` with `args`, writing `stdin` to it if given, waiting at
+/// most `bound` for the write and the exit together. A child past the bound
+/// is killed and reaped before this returns. Stderr is dropped: it can carry
+/// nothing an operator needs that the reason lacks.
+fn run(
+    program: &Path,
+    args: &[&str],
+    stdin: Option<&[u8]>,
+    bound: Duration,
+) -> Result<Finished, KeychainError> {
+    let deadline = Instant::now() + bound;
     let mut child = Command::new(program)
         .args(args)
-        .stdin(Stdio::null())
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .map_err(|_| KeychainError::Unavailable(format!("{} could not start", display(program))))?;
-    let deadline = Instant::now() + bound;
+    // The value is written on its own thread, so a child that never reads
+    // cannot stall past the bound; killing it breaks the pipe and ends the
+    // write. The thread owns a wiped copy, and closes stdin when done.
+    let writer = match (stdin, child.stdin.take()) {
+        (Some(value), Some(mut pipe)) => {
+            let value = WipedBytes::new(value.to_vec());
+            let spawned = std::thread::Builder::new()
+                .name("keychain-stdin".into())
+                .spawn(move || {
+                    let _ = pipe.write_all(value.as_bytes());
+                });
+            match spawned {
+                Ok(handle) => Some(handle),
+                Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(KeychainError::Unavailable(
+                        "no thread to write the keychain value".into(),
+                    ));
+                }
+            }
+        }
+        _ => None,
+    };
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -141,10 +297,16 @@ fn run(program: &Path, args: &[&str], bound: Duration) -> Result<Finished, Keych
             Ok(None) | Err(_) => {
                 let _ = child.kill();
                 let _ = child.wait();
+                if let Some(writer) = writer {
+                    let _ = writer.join();
+                }
                 return Err(KeychainError::Timeout);
             }
         }
     };
+    if let Some(writer) = writer {
+        let _ = writer.join();
+    }
     // ponytail: stdout is read after exit, so a child that writes more than
     // the pipe buffer (64 KiB) blocks until the bound. Replies here are a few
     // hundred bytes and secrets at most 8 KiB; read on a thread if that changes.

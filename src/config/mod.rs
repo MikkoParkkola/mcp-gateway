@@ -828,6 +828,8 @@ pub mod humantime_serde;
 mod backend_url_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod keychain_linux_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod keychain_linux_writer_tests;
 #[cfg(test)]
 mod keychain_load_tests;
 #[cfg(all(test, target_os = "macos"))]
