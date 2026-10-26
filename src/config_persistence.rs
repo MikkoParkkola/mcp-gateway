@@ -102,6 +102,44 @@ pub(crate) mod comments;
 mod atomic;
 pub use atomic::{FileMode, Symlink, write_atomic};
 
+/// Recover a byte write a crash left behind, before a serving gateway first
+/// loads `config` (ADR-024). Exists for the bundled binary's two serve paths;
+/// not a stable API. Read-only commands (`validate`, `doctor`) never call it,
+/// so they never write.
+///
+/// With no journal pending there is nothing to do and no lock is taken: the
+/// file is whole, since every writer replaces it by atomic rename. With one,
+/// the config lock is taken (waiting up to [`CLI_LOCK_WAIT`]) and recovers it
+/// ([`journal::recover`]): back to the original, or keeping bytes a reload
+/// accepted.
+///
+/// # Errors
+///
+/// A pending journal that cannot be resolved: unusable, held by another
+/// writer past the wait, or beside a file this account cannot lock (fix it
+/// from the side that can write). The message says what to do; the gateway
+/// must not start on either version.
+pub fn recover_before_start(config: &Path) -> Result<(), String> {
+    if !lock::journal_pending(config) {
+        return Ok(());
+    }
+    match lock::lock_config_blocking(config, Instant::now() + CLI_LOCK_WAIT, |_| {}) {
+        Ok(_held) => Ok(()),
+        Err(lock::NotLocked::Busy) => Err(format!(
+            "{} has a pending write and another writer holds its lock; start again when it finishes",
+            config.display()
+        )),
+        Err(lock::NotLocked::Failed(message)) => Err(match lock::no_writer_possible(config) {
+            Some(why) => format!(
+                "a pending write's journal {} sits beside {}, which this gateway cannot lock ({why}); resolve the pending write from the writable side",
+                journal::journal_path(config).display(),
+                config.display()
+            ),
+            None => message,
+        }),
+    }
+}
+
 /// Take the config lock for a CLI write, waiting up to [`CLI_LOCK_WAIT`].
 fn cli_lock(path: &Path) -> Result<ExclusiveFileLock, String> {
     lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |lock| {

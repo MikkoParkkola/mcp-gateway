@@ -260,7 +260,7 @@ pub(crate) async fn reader_lock(config: &Path, deadline: Instant) -> ReaderLock 
 /// on a read-only filesystem, or because this account cannot write the
 /// directory. `None` for any other failure, or when the sidecar exists (the
 /// failure was then the lock itself, not its creation).
-fn no_writer_possible(config: &Path) -> Option<&'static str> {
+pub(crate) fn no_writer_possible(config: &Path) -> Option<&'static str> {
     let lock = lock_path(&resolved(config));
     if std::fs::symlink_metadata(&lock).is_ok() {
         return None;
@@ -277,7 +277,7 @@ fn no_writer_possible(config: &Path) -> Option<&'static str> {
 }
 
 /// A journal beside `config`, or one whose absence cannot be established.
-fn journal_pending(config: &Path) -> bool {
+pub(crate) fn journal_pending(config: &Path) -> bool {
     !matches!(
         std::fs::symlink_metadata(super::journal::journal_path(config)),
         Err(e) if e.kind() == io::ErrorKind::NotFound
