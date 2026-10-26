@@ -322,10 +322,15 @@ fn merge_servers_into_config(
     config: &mut Config,
     selected: &[&DiscoveredServer],
 ) -> Result<usize, String> {
-    // The whole selection is checked before anything is added or printed,
-    // so a refusal leaves no half-reported import.
+    // Every server the loop below will add is checked before anything is
+    // added or printed, so a refusal leaves no half-reported import. Skipped
+    // ones (already configured, or a repeat name) are never checked.
     let overlay = config.env_overlay();
+    let mut seen = std::collections::HashSet::new();
     for server in selected {
+        if config.backends.contains_key(&server.name) || !seen.insert(&server.name) {
+            continue;
+        }
         server
             .to_backend_config()
             .check_secret_references(&server.name, &overlay)
@@ -449,17 +454,45 @@ mod tests {
     #[test]
     fn b3j_merge_refuses_a_server_whose_secret_reference_does_not_resolve() {
         let mut config = Config::default();
-        let mut server = make_stdio_server("tool", DiscoverySource::ClaudeDesktop);
+        let server = unresolved_server("tool");
+        let refused =
+            merge_servers_into_config(&mut config, &[&server]).expect_err("refused before writing");
+        assert!(refused.contains("backends.tool.env.API_KEY"), "{refused}");
+        assert!(config.backends.is_empty());
+    }
+
+    fn unresolved_server(name: &str) -> DiscoveredServer {
+        let mut server = make_stdio_server(name, DiscoverySource::ClaudeDesktop);
         server.env = [(
             "API_KEY".to_string(),
             "file:/nonexistent/mcp-gateway-b3/token".to_string(),
         )]
         .into_iter()
         .collect();
-        let refused =
-            merge_servers_into_config(&mut config, &[&server]).expect_err("refused before writing");
-        assert!(refused.contains("backends.tool.env.API_KEY"), "{refused}");
-        assert!(config.backends.is_empty());
+        server
+    }
+
+    #[test]
+    fn b3j_merge_skips_an_existing_server_without_checking_its_references() {
+        let mut config = Config::default();
+        config
+            .backends
+            .insert("x".to_string(), BackendConfig::default());
+        let x = unresolved_server("x");
+        let y = make_stdio_server("y", DiscoverySource::ClaudeCode);
+        let added = merge_servers_into_config(&mut config, &[&x, &y]).expect("merged");
+        assert_eq!(added, 1);
+        assert!(config.backends.contains_key("y"));
+    }
+
+    #[test]
+    fn b3j_merge_checks_only_the_first_of_a_repeated_name() {
+        let mut config = Config::default();
+        let first = make_stdio_server("x", DiscoverySource::ClaudeCode);
+        let repeat = unresolved_server("x");
+        let added = merge_servers_into_config(&mut config, &[&first, &repeat]).expect("merged");
+        assert_eq!(added, 1);
+        assert!(config.backends.contains_key("x"));
     }
 
     #[test]
