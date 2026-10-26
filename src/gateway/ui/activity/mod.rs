@@ -7,6 +7,7 @@
 mod access;
 mod csv;
 mod cursor;
+mod export;
 mod reader;
 mod receipt;
 mod rows;
@@ -46,6 +47,7 @@ const SUPPORTED_OUTCOMES: [&str; 3] = ["ok", "failed", "blocked"];
 pub(super) fn activity_router() -> Router<Arc<AppState>> {
     Router::new()
         .route(routes::UI_ACTIVITY, get(list))
+        .route(routes::UI_ACTIVITY_EXPORT, get(export_route))
         .route(routes::UI_ACTIVITY_RECEIPT, get(receipt_route))
 }
 
@@ -314,6 +316,120 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
         "order": "recorded",
     }))
     .into_response()
+}
+
+/// The export's query: the list's filters and the format.
+#[derive(Debug, Default, Deserialize)]
+struct ExportQuery {
+    #[serde(flatten)]
+    list: ListQuery,
+    format: Option<String>,
+}
+
+/// The filters an export ran under, as sent, for its manifest.
+fn filters_sent(q: &ListQuery) -> Value {
+    json!({
+        "outcome": q.outcome, "server": q.server, "caller": q.caller,
+        "q": q.q, "from": q.from, "to": q.to,
+    })
+}
+
+async fn export_route(
+    State(state): State<Arc<AppState>>,
+    client: Option<Extension<AuthenticatedClient>>,
+    identity: Option<Extension<VerifiedIdentity>>,
+    Query(query): Query<ExportQuery>,
+) -> Response {
+    let (access, logs) = match admit(&state, client.as_ref(), identity.as_ref()) {
+        Ok(admitted) => admitted,
+        Err(r) => return r,
+    };
+    let signer = state.meta_mcp.public_provenance_signer();
+    blocking(move || export_response(&logs, &access, &query, signer.as_deref())).await
+}
+
+/// One export. NDJSON is signed with the provenance key and refused without
+/// one; the gateway never makes a key nobody publishes. CSV is unsigned.
+fn export_response(
+    logs: &Logs,
+    access: &Access,
+    query: &ExportQuery,
+    signer: Option<&crate::trust::provenance_public::ProvenancePublicSigner>,
+) -> Response {
+    use axum::http::header;
+    let parsed = match parse(&query.list) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    let csv = match query.format.as_deref() {
+        None | Some("ndjson") => false,
+        Some("csv") => true,
+        Some(_) => return bad_request(json!({"error": "`format` is ndjson or csv"})),
+    };
+    let signer = match (csv, signer) {
+        (false, None) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": format!(
+                        "{} is not set: the NDJSON export is signed and this gateway has no signing key",
+                        crate::trust::provenance_public::PROVENANCE_SEED_ENV
+                    ),
+                    "csv": "CSV is unsigned: evidence to read, not to verify",
+                })),
+            )
+                .into_response();
+        }
+        (_, signer) => signer,
+    };
+    let size = if csv {
+        export::csv_size
+    } else {
+        export::ndjson_size
+    };
+    let collected = match export::collect(
+        &logs.invocation,
+        logs.governance.as_deref(),
+        &parsed.filter,
+        access,
+        logs.secret.as_deref(),
+        export::CAPS,
+        size,
+    ) {
+        Ok(c) => c,
+        Err(error) => {
+            tracing::warn!(%error, "activity export read failed");
+            return flat_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "the activity log could not be read",
+            )
+            .into_response();
+        }
+    };
+    match signer {
+        Some(signer) if !csv => (
+            [
+                (header::CONTENT_TYPE, "application/x-ndjson"),
+                (
+                    header::CONTENT_DISPOSITION,
+                    "attachment; filename=\"activity.ndjson\"",
+                ),
+            ],
+            export::ndjson(&collected, filters_sent(&query.list), signer),
+        )
+            .into_response(),
+        _ => (
+            [
+                (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+                (
+                    header::CONTENT_DISPOSITION,
+                    "attachment; filename=\"activity.csv\"",
+                ),
+            ],
+            export::csv(&collected),
+        )
+            .into_response(),
+    }
 }
 
 #[cfg(test)]

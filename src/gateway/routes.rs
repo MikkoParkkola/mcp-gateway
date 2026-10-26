@@ -56,6 +56,8 @@ owned_routes! {
     UI_CONTROL_PLANE_EXPORT_STATUS = "/ui/api/control-plane/export-status",
     /// The Activity list over both transparency logs.
     UI_ACTIVITY = "/ui/api/activity",
+    /// The Activity export: signed NDJSON or CSV.
+    UI_ACTIVITY_EXPORT = "/ui/api/activity/export",
     /// One Activity row's receipt.
     UI_ACTIVITY_RECEIPT = "/ui/api/activity/{id}",
     UI_BACKENDS = "/ui/api/backends",

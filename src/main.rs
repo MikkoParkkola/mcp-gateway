@@ -515,9 +515,15 @@ fn run_audit_command(cmd: AuditCommand, config_path: Option<&std::path::Path>) -
 
     match cmd {
         AuditCommand::Verify {
+            export: Some(export),
+            jwk,
+            ..
+        } => mcp_gateway::trust::run_verify_export(&export, jwk.as_deref(), config_path),
+        AuditCommand::Verify {
             path,
             archive,
             anchor,
+            ..
         } => run_audit_verify(&resolve_path(path), archive, anchor.as_deref(), config_path),
 
         AuditCommand::Show { session, path } => {

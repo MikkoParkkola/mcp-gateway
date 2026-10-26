@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::access::Access;
 use super::reader::{Line, Which};
@@ -72,6 +72,23 @@ fn recorded(entry: &Value, key: &str) -> Value {
     }
 }
 
+/// What a receipt and an export row add to a list row: for a call, the
+/// decision evidence (not recorded yet); for a config change, whether a
+/// reason and a rollback summary were recorded, never their text.
+pub(super) fn add_evidence(body: &mut Map<String, Value>, kind: Kind, e: &Value) {
+    match kind {
+        Kind::Config => {
+            body.insert("reason".into(), recorded(e, "reason"));
+            body.insert("rollback_summary".into(), recorded(e, "rollback_summary"));
+        }
+        Kind::Call => {
+            body.insert("decision".into(), NOT_RECORDED.into());
+            body.insert("reach".into(), NOT_RECORDED.into());
+        }
+        Kind::AdminAction => {}
+    }
+}
+
 /// The receipt for `id`, or `None` (404) when the kept log does not hold it
 /// or the caller may not read it.
 pub(super) fn receipt(
@@ -116,17 +133,7 @@ pub(super) fn receipt(
             "link": link(log, e, &mut reads)?,
         }),
     );
-    match kind {
-        Kind::Config => {
-            body.insert("reason".into(), recorded(e, "reason"));
-            body.insert("rollback_summary".into(), recorded(e, "rollback_summary"));
-        }
-        Kind::Call => {
-            body.insert("decision".into(), NOT_RECORDED.into());
-            body.insert("reach".into(), NOT_RECORDED.into());
-        }
-        Kind::AdminAction => {}
-    }
+    add_evidence(&mut body, kind, e);
     Ok(Some(body.into()))
 }
 
