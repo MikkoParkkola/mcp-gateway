@@ -353,20 +353,30 @@ async fn a_fifth_read_waits_until_one_of_four_finishes() {
     use axum::response::IntoResponse;
     use std::sync::mpsc;
     assert_eq!(super::MAX_CONCURRENT_READS, 4);
-    // Four reads that hold their permit until released.
+    // Four reads that hold their permit until released. Waiting on their own
+    // start count, not on the permits, so a looser limit fails the assertion
+    // below instead of hanging here.
+    let started = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut releases = Vec::new();
     let mut held = Vec::new();
     for _ in 0..4 {
         let (tx, rx) = mpsc::channel::<()>();
         releases.push(tx);
+        let started = std::sync::Arc::clone(&started);
         held.push(tokio::spawn(super::blocking(move || {
+            started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let _ = rx.recv();
             StatusCode::OK.into_response()
         })));
     }
-    while super::READS.available_permits() > 0 {
+    while started.load(std::sync::atomic::Ordering::SeqCst) < 4 {
         tokio::task::yield_now().await;
     }
+    assert_eq!(
+        super::READS.available_permits(),
+        0,
+        "four reads fill the limit"
+    );
     // The fifth does not start while four run.
     let (ran_tx, ran_rx) = mpsc::channel::<()>();
     let mut fifth = Box::pin(super::blocking(move || {
