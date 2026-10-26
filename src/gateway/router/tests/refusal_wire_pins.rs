@@ -3,7 +3,7 @@
 //! Wire pins for every authorization refusal: the JSON-RPC code, the HTTP
 //! status and the message a client sees. Recording which check refused must
 //! never change any of the three, so these hold byte for byte across that
-//! change. One row per refusal site, cited by file:line on the base it was
+//! change. One row per refusal site, cited by `file:line` on the base it was
 //! pinned against.
 
 use super::*;
