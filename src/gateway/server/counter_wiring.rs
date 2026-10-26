@@ -38,8 +38,12 @@ pub(super) fn start(
     // An unreadable clock starts coverage at the epoch; nothing is counted
     // until the clock reads again (every recorder skips on `Err`).
     let now = crate::clock::unix_secs().unwrap_or_default();
-    let Restored { store, file, .. } =
-        CounterFile::restore(data_dir.join("counters.json"), now, VERSION, &chrono::Local);
+    let Restored { store, file, .. } = CounterFile::restore(
+        data_dir.join("counters.json"),
+        now,
+        VERSION,
+        &crate::local_day::host_zone(),
+    );
     let (store, file) = (Arc::new(store), Arc::new(file));
     meta_mcp.set_counters(Arc::clone(&store));
     let saver = spawn_periodic_save("counter save", COUNTER_SAVE_INTERVAL, Some(shutdown), {

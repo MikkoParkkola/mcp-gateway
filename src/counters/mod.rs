@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::security::audit::{AuditOutcome, CredentialKind};
 
-mod day;
+use crate::local_day as day;
 pub(crate) mod persist;
 mod ring;
 mod snapshot;

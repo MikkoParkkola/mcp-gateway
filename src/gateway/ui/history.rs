@@ -117,7 +117,13 @@ fn unavailable(why: &str) -> Response {
 fn zone() -> String {
     crate::clock::utc_now().map_or_else(
         |_| String::new(),
-        |now| now.with_timezone(&chrono::Local).offset().to_string(),
+        |now| {
+            use chrono::Offset as _;
+            now.with_timezone(&crate::local_day::host_zone())
+                .offset()
+                .fix()
+                .to_string()
+        },
     )
 }
 
@@ -139,7 +145,7 @@ async fn series(
     let Ok(now) = crate::clock::unix_secs() else {
         return unavailable("the system clock reads before 1970");
     };
-    let view = store.series(&query, now, &chrono::Local);
+    let view = store.series(&query, now, &crate::local_day::host_zone());
     let (bucket_secs, day_basis) = match query.window {
         Window::Day | Window::TwoDays => (Some(crate::counters::HALF), None),
         Window::Month => (None, Some("local")),

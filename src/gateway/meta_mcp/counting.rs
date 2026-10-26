@@ -59,7 +59,7 @@ impl MetaMcp {
             tool,
             tally,
         };
-        store.record(&call, now, &chrono::Local);
+        store.record(&call, now, &crate::local_day::host_zone());
     }
 
     /// Whether `server` is a name this gateway was configured with. The one
