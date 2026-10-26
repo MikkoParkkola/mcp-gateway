@@ -19,7 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as root (`--user root`), it installs any `EXTRA_APT_PACKAGES` and runs
   `/docker-entrypoint.d` drop-ins, then drops privileges to the gateway user;
   an apt option or a package removal in `EXTRA_APT_PACKAGES` is refused.
-  Under the image's default non-root user both are skipped. It is published beside
+  Under the image's default non-root user, packages are not installed and the
+  drop-ins run as that user. It is published beside
   the default image with a `-full` suffix, and CI builds, scans and smokes it
   on every pull request. A new image variant in a patch release: the default
   image is unchanged. By [@terafin](https://github.com/terafin)
@@ -37,7 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runner reads. Two backends installing at once used to tear one shared cache,
   and every later start then failed as "Backend timeout" with zero tools. A
   cache path the child cannot use goes to no runner, with one warning, and an
-  operator's own setting wins in any spelling its runner reads. By
+  operator's own setting wins in any spelling its runner reads. Each backend's
+  first start after the upgrade installs into its new cache from cold. By
   [@terafin](https://github.com/terafin)
   ([#622](https://github.com/MikkoParkkola/mcp-gateway/pull/622)), ported in
   [#4140](https://github.com/MikkoParkkola/mcp-gateway/pull/4140),
@@ -90,7 +92,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gateway.yaml`.** A value set only in the environment, such as
   `MCP_GATEWAY_AUTH__BEARER_TOKEN`, was merged into the struct an edit writes
   back, so the token landed in the file in plain text. An edit now reads the
-  file alone; the overrides still apply at runtime.
+  file alone; the overrides still apply at runtime. If you edited the config
+  from the dashboard or with `add`, `remove` or `setup` while such a variable
+  was set, check `gateway.yaml` for the value and rotate any token found there.
   ([#4174](https://github.com/MikkoParkkola/mcp-gateway/pull/4174))
 - **An overflowing or saturated total in `costs.json` no longer resets an
   exhausted daily budget.** Restore skipped a valid per-tool total that would overflow the global sum
