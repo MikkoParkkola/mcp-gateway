@@ -43,8 +43,6 @@ pub(crate) enum SecretFile {
     IdentityGrants,
     /// A control-plane `grants.json` or `policies.json`.
     ControlPlaneCollection,
-    /// `gateway.yaml`, reread by a read-only report.
-    Config,
 }
 
 /// What a file's mode must protect.
@@ -434,6 +432,8 @@ pub(crate) enum CheckedFile {
     IdentityGrants,
     /// A control-plane `grants.json` or `policies.json`.
     ControlPlaneCollection,
+    /// `gateway.yaml`, reread by a read-only report.
+    Config,
 }
 
 /// The one mode-checked read for files outside `config` (F18): open once,
