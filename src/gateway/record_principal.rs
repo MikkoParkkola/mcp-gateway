@@ -84,6 +84,7 @@ impl RecordPrincipalKey {
     /// ids never share a key with record principals.
     pub(crate) fn config_revision_key(&self) -> [u8; 32] {
         let mut key = [0u8; 32];
+        // invariant: HKDF-SHA256 expands to at most 8160 bytes; 32 are asked for.
         hkdf::Hkdf::<sha2::Sha256>::new(None, &self.0)
             .expand(crate::config_reload::revision::TAG, &mut key)
             .expect("32 bytes is well within HKDF-SHA256's 8160-byte max output");

@@ -105,6 +105,7 @@ pub(crate) struct AppliedInputs {
 /// `D(x)`: the keyed digest of one part.
 pub(crate) fn part_digest(key: &[u8; 32], bytes: &[u8]) -> PartDigest {
     use hmac::{KeyInit as _, Mac as _};
+    // invariant: HMAC-SHA256 takes a key of any length, and this one is 32 bytes.
     let mut mac =
         crate::hashing::HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(PART_TAG);
