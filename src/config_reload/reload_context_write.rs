@@ -64,6 +64,7 @@ impl ReloadContext {
         // Written and reloaded through the target the lock resolved: one file,
         // even if a symlink at `path` is re-pointed meanwhile.
         let locked = lock_config(path, deadline).await?;
+        locked.still_named_by(path)?;
         crate::config_persistence::write_config_with(
             &locked.target,
             config,
@@ -145,16 +146,10 @@ impl ReloadContext {
         // process's write can neither land between this load and this write
         // nor between this write and the reload that reads it back.
         // A file that does not load is refused before the config lock is
-        // taken, so the refusal adds no lock file (GH462); it is loaded again
-        // under the lock.
-        // Skipped while a replace journal is pending: the file may be a
-        // refused candidate, which the lock recovers before the load below.
-        if !crate::config_persistence::journal::exists(path) {
-            crate::config_persistence::load_existing_or_default(path)
-                .map_err(|e| crate::config_reload::write::load_failure(path, &e, mode))?;
-        }
-        let locked = crate::config_persistence::lock::lock_config(path, deadline)
+        // taken, on the lock thread (GH462); it is loaded again under the lock.
+        let locked = crate::config_persistence::lock::lock_config_loading(path, deadline)
             .await
+            .map_err(|e| crate::config_reload::write::load_failure(path, &e, mode))?
             .map_err(|e| {
                 self.note_refused_lock();
                 ConfigWriteError::from(e)
@@ -163,7 +158,7 @@ impl ReloadContext {
         // one file, even if a symlink at `path` is re-pointed meanwhile.
         let target = &locked.target;
         self.pay_owed_reload(locked.recovered, target).await;
-        let mut config = crate::config_persistence::load_existing_or_default(target)
+        let mut config = crate::config_persistence::load_locked(path, &locked)
             .map_err(|e| crate::config_reload::write::load_failure(path, &e, mode))?;
         let value = match mutate(&mut config) {
             Ok(value) => value,
@@ -171,6 +166,7 @@ impl ReloadContext {
         };
         // A write that changes nothing still reloads: a retry after a failed
         // reload finds its value on disk and must not leave the runtime stale.
+        locked.still_named_by(path)?;
         crate::config_persistence::write_config_with(target, &config, mode, &locked.held)?;
         let outcome = self
             .reload_outcome_locked_at(target)

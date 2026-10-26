@@ -52,9 +52,12 @@ pub fn load_existing_or_default(path: &Path) -> crate::Result<Config> {
     note = "replaces gateway.yaml from the caller's snapshot with no concurrency check; use edit_config"
 )]
 pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
-    let held = lock_for_cli(path)?;
-    write_config_with(path, config, CommentLoss::Rewrite, &held).map_err(|e| match e {
-        Unwritten::Failed(message) | Unwritten::CommentLoss(message) => message,
+    let locked = lock_for_cli(path)?;
+    locked.still_named_by(path)?;
+    write_config_with(&locked.target, config, CommentLoss::Rewrite, &locked.held).map_err(|e| {
+        match e {
+            Unwritten::Failed(message) | Unwritten::CommentLoss(message) => message,
+        }
     })
 }
 
@@ -104,7 +107,7 @@ pub fn recover_before_start(config: &Path) -> Result<(), String> {
         return Ok(());
     }
     match lock::lock_config_blocking(config, Instant::now() + CLI_LOCK_WAIT, |_| {}) {
-        Ok(_held) => Ok(()),
+        Ok(_locked) => Ok(()),
         Err(lock::NotLocked::Busy) => Err(format!(
             "{} has a pending write and another writer holds its lock; start again when it finishes",
             config.display()
@@ -121,7 +124,9 @@ pub fn recover_before_start(config: &Path) -> Result<(), String> {
 }
 
 /// Take the config lock for a CLI write, waiting up to [`CLI_LOCK_WAIT`].
-fn cli_lock(path: &Path) -> Result<ExclusiveFileLock, String> {
+/// The holder reads and writes the lock's target, never `path` again: a
+/// symlink at `path` re-pointed meanwhile would name another file.
+fn cli_lock(path: &Path) -> Result<lock::Locked, String> {
     lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |lock| {
         say_waiting(path, lock);
     })
@@ -137,11 +142,24 @@ pub(crate) const CLI_LOCK_WAIT: Duration = Duration::from_secs(30);
 /// The command loaded the file before it waited for the lock, so a file that
 /// no longer loads was changed meanwhile: it is refused, not replaced by the
 /// command's older copy. A missing file is still created.
-fn lock_for_cli(path: &Path) -> Result<ExclusiveFileLock, String> {
-    let held = cli_lock(path)?;
-    load_existing_or_default(path)
-        .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
-    Ok(held)
+fn lock_for_cli(path: &Path) -> Result<lock::Locked, String> {
+    let locked = cli_lock(path)?;
+    load_locked(path, &locked).map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
+    Ok(locked)
+}
+
+/// [`load_existing_or_default`] for a lock holder: loads the target `path`'s
+/// lock resolved, or the default when it is absent ([`lock::Locked::absent`]),
+/// so a dangling link at `path` still refuses (GH462).
+///
+/// # Errors
+///
+/// As [`load_existing_or_default`].
+pub(crate) fn load_locked(path: &Path, locked: &lock::Locked) -> crate::Result<Config> {
+    if locked.absent(path).map_err(crate::Error::Config)? {
+        return Ok(Config::default());
+    }
+    Config::load_literal(Some(&locked.target))
 }
 
 /// Tell a CLI user, once, why their command is not finishing yet.
@@ -305,24 +323,29 @@ where
             .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
     }
     let mut dropped = Vec::new();
-    edit_locked(path, read_config, |current| {
-        let mut config = current
-            .as_ref()
-            .map_or_else(Config::default, |(c, _)| c.clone());
-        edit(&mut config)?;
-        let (before, text) = current.as_ref().map(|(c, t)| (c, t.as_str())).unzip();
-        let rendered =
-            render(path, before, text, &config, mode, Splice::NoRemoval).map_err(|e| match e {
-                Unwritten::CommentLoss(message) => message,
-                Unwritten::Failed(message) => {
-                    format!("Failed to write {}: {message}", path.display())
-                }
-            })?;
-        Ok(rendered.map(|(yaml, lines)| {
-            dropped = lines;
-            yaml
-        }))
-    })?;
+    edit_locked(
+        path,
+        |locked| read_config(path, locked),
+        |current| {
+            let mut config = current
+                .as_ref()
+                .map_or_else(Config::default, |(c, _)| c.clone());
+            edit(&mut config)?;
+            let (before, text) = current.as_ref().map(|(c, t)| (c, t.as_str())).unzip();
+            let rendered = render(path, before, text, &config, mode, Splice::NoRemoval).map_err(
+                |e| match e {
+                    Unwritten::CommentLoss(message) => message,
+                    Unwritten::Failed(message) => {
+                        format!("Failed to write {}: {message}", path.display())
+                    }
+                },
+            )?;
+            Ok(rendered.map(|(yaml, lines)| {
+                dropped = lines;
+                yaml
+            }))
+        },
+    )?;
     Ok(dropped)
 }
 
@@ -344,20 +367,26 @@ pub fn edit_config_text<F>(path: &Path, edit: F) -> Result<bool, String>
 where
     F: FnOnce(Option<&str>) -> Result<Option<String>, String>,
 {
-    edit_locked(path, read_text, |current| edit(current.as_deref()))
+    // The text path follows the link, as it always has: `init` through a
+    // dangling link creates the target and keeps the link.
+    edit_locked(
+        path,
+        |locked| read_text(&locked.target),
+        |current| edit(current.as_deref()),
+    )
 }
 
-/// The one locked write path: take the config lock, `read` the file, let
+/// The one locked write path: take the config lock, `read` its target, let
 /// `edit` give its new text (`None` writes nothing), prove that text parses
 /// as a config, and write it atomically, all in one hold. Returns whether
 /// the file was written.
 fn edit_locked<T>(
     path: &Path,
-    read: impl FnOnce(&Path) -> Result<T, String>,
+    read: impl FnOnce(&lock::Locked) -> Result<T, String>,
     edit: impl FnOnce(T) -> Result<Option<String>, String>,
 ) -> Result<bool, String> {
-    let _held = cli_lock(path)?;
-    let Some(text) = edit(read(path)?)? else {
+    let locked = cli_lock(path)?;
+    let Some(text) = edit(read(&locked)?)? else {
         return Ok(false);
     };
     // Fail closed (GH462): bytes that do not parse are never written.
@@ -367,23 +396,20 @@ fn edit_locked<T>(
             path.display()
         )
     })?;
-    write_yaml(path, &text)?;
+    locked.still_named_by(path)?;
+    write_yaml(&locked.target, &text)?;
     Ok(true)
 }
 
-/// The config at `path` and the text it loaded from, or `None` when there is
-/// no file. A dangling symlink is an existing entry, not absence.
-fn read_config(path: &Path) -> Result<Option<(Config, String)>, String> {
-    match std::fs::symlink_metadata(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(format!(
-            "Cannot inspect config file {}: {e}",
-            path.display()
-        )),
-        Ok(_) => Config::load_literal_with_text(path)
-            .map(Some)
-            .map_err(|e| format!("Failed to load {}: {e}", path.display())),
+/// The config at the target `path`'s lock resolved, and the text it loaded
+/// from, or `None` when there is no file ([`lock::Locked::absent`]).
+fn read_config(path: &Path, locked: &lock::Locked) -> Result<Option<(Config, String)>, String> {
+    if locked.absent(path)? {
+        return Ok(None);
     }
+    Config::load_literal_with_text(&locked.target)
+        .map(Some)
+        .map_err(|e| format!("Failed to load {}: {e}", path.display()))
 }
 
 /// `path`'s text, or `None` when there is no file. A FIFO or a device would

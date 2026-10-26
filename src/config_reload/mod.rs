@@ -493,6 +493,8 @@ mod reload_pause;
 mod webhook_base_path_reload_tests;
 #[cfg(test)]
 mod writer_lock_tests;
+#[cfg(all(test, unix))]
+mod writer_symlink_tests;
 
 #[cfg(test)]
 mod replace_tests;

@@ -168,6 +168,67 @@ pub(crate) struct Locked {
     /// is on bytes that are no longer on disk, and a live gateway owes a
     /// reload.
     pub(crate) recovered: Recovered,
+    /// The configured path was a symlink to a missing target when it was
+    /// resolved: damage, not absence (GH462).
+    dangling: bool,
+}
+
+impl Locked {
+    /// Whether there is no config to load: the target is missing, and the
+    /// configured path is no dangling link to it. A dangling link refuses:
+    /// its target is never created from defaults (GH462). It counts if it
+    /// dangled when the path was resolved, or dangles now because the target
+    /// was deleted while the writer waited.
+    ///
+    /// # Errors
+    ///
+    /// A dangling link, or a target whose metadata cannot be read.
+    pub(crate) fn absent(&self, config: &Path) -> Result<bool, String> {
+        let dangling = || {
+            Err(format!(
+                "{} is a symlink to {}, which does not exist",
+                config.display(),
+                self.target.display()
+            ))
+        };
+        if self.dangling {
+            return dangling();
+        }
+        match std::fs::symlink_metadata(&self.target) {
+            Ok(_) => Ok(false),
+            Err(e)
+                if e.kind() == io::ErrorKind::NotFound
+                    && std::fs::symlink_metadata(config)
+                        .is_ok_and(|m| m.file_type().is_symlink()) =>
+            {
+                dangling()
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(true),
+            Err(e) => Err(format!(
+                "Cannot inspect config file {}: {e}",
+                self.target.display()
+            )),
+        }
+    }
+
+    /// Refuse a write whose configured path no longer names the target this
+    /// lock holds: the link was re-pointed while the writer waited or
+    /// worked, and writing the old target would report success for a file
+    /// the path no longer names.
+    ///
+    /// # Errors
+    ///
+    /// The path moved; nothing may be written.
+    pub(crate) fn still_named_by(&self, config: &Path) -> Result<(), String> {
+        if resolved(config) == self.target {
+            return Ok(());
+        }
+        Err(format!(
+            "Not saved: {} moved during the write (it no longer names {}); nothing was written, retry",
+            config.display(),
+            self.target.display()
+        ))
+    }
 }
 
 /// Take the lock for `config`, waiting until `deadline` while another writer
@@ -184,12 +245,55 @@ pub(crate) struct Locked {
 /// leaves recovery running unlocked, and the thread stops waiting within one
 /// poll of the cancel.
 pub(crate) async fn lock_config(config: &Path, deadline: Instant) -> Result<Locked, NotLocked> {
+    match lock_with(config, deadline, Preflight::None).await {
+        Ok(locked) => locked,
+        // Preflight::None loads nothing, so it refuses nothing.
+        Err(e) => Err(NotLocked::Failed(e.to_string())),
+    }
+}
+
+/// [`lock_config`] for a writer that loads the config under the lock: the
+/// config must load first (the outer `Err`, the load's own error), so a
+/// file that does not is refused with no lock file made (GH462). Skipped
+/// while a replace journal is pending: the file may be a refused candidate,
+/// which the lock recovers before the holder's own load.
+///
+/// The check runs on the lock thread, not the async worker. It reads bytes
+/// another writer can still change before the lock is held, so the holder's
+/// load under the lock is the one that decides; a file broken in that gap
+/// is refused after the lock file exists, the one exception to GH462.
+pub(crate) async fn lock_config_loading(
+    config: &Path,
+    deadline: Instant,
+) -> crate::Result<Result<Locked, NotLocked>> {
+    lock_with(config, deadline, Preflight::Loads).await
+}
+
+/// What the lock thread checks before it opens the sidecar.
+#[derive(Clone, Copy)]
+enum Preflight {
+    None,
+    /// The config loads, or is absent, unless a replace journal is pending.
+    Loads,
+}
+
+async fn lock_with(
+    config: &Path,
+    deadline: Instant,
+    preflight: Preflight,
+) -> crate::Result<Result<Locked, NotLocked>> {
     let config = config.to_path_buf();
     let waiting = Arc::new(AtomicBool::new(true));
     let _cancel = StopWaiting(Arc::clone(&waiting));
-    off_runtime(move || acquire(&config, deadline, &|| waiting.load(SeqCst), |_| {}))
-        .await
-        .unwrap_or_else(|why| match why {
+    off_runtime(move || {
+        if matches!(preflight, Preflight::Loads) && !super::journal::exists(&config) {
+            super::load_existing_or_default(&config)?;
+        }
+        Ok(acquire(&config, deadline, &|| waiting.load(SeqCst), |_| {}))
+    })
+    .await
+    .unwrap_or_else(|why| {
+        Ok(match why {
             // Retryable, as a lock held past the wait is.
             NoResult::Stalled => Err(NotLocked::Busy),
             NoResult::Lost => Err(NotLocked::Failed(
@@ -197,6 +301,7 @@ pub(crate) async fn lock_config(config: &Path, deadline: Instant) -> Result<Lock
                     .to_owned(),
             )),
         })
+    })
 }
 
 /// Tells the locking thread to stop waiting once its caller is gone.
@@ -220,6 +325,8 @@ fn acquire(
     // Resolved once: the lock, the recovery and the holder's work are about
     // the same file, even if a symlink is re-pointed meanwhile.
     let target = resolved(config);
+    let dangling = std::fs::symlink_metadata(config).is_ok_and(|m| m.file_type().is_symlink())
+        && std::fs::metadata(config).is_err_and(|e| e.kind() == io::ErrorKind::NotFound);
     let lock = lock_path(&target);
     let mut on_wait = Some(on_wait);
     loop {
@@ -231,6 +338,7 @@ fn acquire(
                 target,
                 held,
                 recovered,
+                dangling,
             });
         }
         if let Some(say) = on_wait.take() {
@@ -375,8 +483,8 @@ pub(crate) fn lock_config_blocking(
     config: &Path,
     deadline: Instant,
     on_wait: impl FnOnce(&Path),
-) -> Result<ExclusiveFileLock, NotLocked> {
-    acquire(config, deadline, &|| true, on_wait).map(|locked| locked.held)
+) -> Result<Locked, NotLocked> {
+    acquire(config, deadline, &|| true, on_wait)
 }
 
 /// What a reload that did not start the write may do about the lock.

@@ -676,13 +676,13 @@ fn linked_context() -> (tempfile::TempDir, PathBuf, PathBuf, Arc<ReloadContext>)
 }
 
 /// Run `reload` until it has taken its locks, re-point `link` at
-/// `other.yaml`, let it finish, and return the paths this test's loads read.
+/// `other.yaml`, let it finish: whether it applied, and the paths it loaded.
 #[cfg(unix)]
 async fn repointed_mid_reload(
     dir: &Path,
     link: &Path,
     reload: impl std::future::Future<Output = bool> + Send + 'static,
-) -> Vec<PathBuf> {
+) -> (bool, Vec<PathBuf>) {
     const BOUND: Duration = Duration::from_secs(30); // fail, never hang
     let pause = super::reload_pause::arm(link);
     let reload = tokio::spawn(reload);
@@ -693,15 +693,15 @@ async fn repointed_mid_reload(
     std::os::unix::fs::symlink(dir.join("other.yaml"), link).expect("re-point");
     pause.release.notify_one();
     let applied = tokio::time::timeout(BOUND, reload).await.expect("ends");
-    assert!(applied.expect("reload task"), "the reload applies");
     let dir = crate::identity_grants::journal::resolved(dir);
-    LOADED
+    let loaded = LOADED
         .lock()
         .expect("loaded")
         .iter()
         .filter(|p| p.starts_with(&dir) || p.as_path() == link)
         .cloned()
-        .collect()
+        .collect();
+    (applied.expect("reload task"), loaded)
 }
 
 /// Every load this test saw read `real`, the target its lock resolved:
@@ -728,7 +728,8 @@ async fn a_write_reloads_what_it_locked_when_the_link_moves() {
             .await
             .is_ok()
     };
-    let loaded = repointed_mid_reload(dir.path(), &link, write).await;
+    let (applied, loaded) = repointed_mid_reload(dir.path(), &link, write).await;
+    assert!(applied, "the reload applies");
     only_the_locked_target(&loaded, &real);
 }
 
@@ -739,7 +740,8 @@ async fn a_write_reloads_what_it_locked_when_the_link_moves() {
 async fn a_watcher_reload_stays_put_when_the_link_moves() {
     let (dir, real, link, ctx) = linked_context();
     let reload = async move { ctx.reload_outcome().await.is_ok() };
-    let loaded = repointed_mid_reload(dir.path(), &link, reload).await;
+    let (applied, loaded) = repointed_mid_reload(dir.path(), &link, reload).await;
+    assert!(applied, "the reload applies");
     only_the_locked_target(&loaded, &real);
 }
 
@@ -755,7 +757,8 @@ async fn a_whole_config_write_reloads_what_it_locked_when_the_link_moves() {
             .await
             .is_ok()
     };
-    let loaded = repointed_mid_reload(dir.path(), &link, write).await;
+    let (applied, loaded) = repointed_mid_reload(dir.path(), &link, write).await;
+    assert!(applied, "the reload applies");
     only_the_locked_target(&loaded, &real);
 }
 
@@ -773,12 +776,10 @@ async fn an_owed_reload_loads_what_the_writer_locked_when_the_link_moves() {
             .await
             .is_ok()
     };
-    let loaded = repointed_mid_reload(dir.path(), &link, write).await;
-    assert_eq!(
-        loaded.len(),
-        2,
-        "the owed reload, then the write's own: {loaded:?}"
-    );
+    let (applied, loaded) = repointed_mid_reload(dir.path(), &link, write).await;
+    // Moved before the write: the write refuses after the owed reload.
+    assert!(!applied, "a write whose path moved refuses");
+    assert_eq!(loaded.len(), 1, "only the owed reload: {loaded:?}");
     only_the_locked_target(&loaded, &real);
 }
 
@@ -793,6 +794,7 @@ async fn an_unchanged_replace_reloads_what_it_locked_when_the_link_moves() {
             .await
             .is_ok()
     };
-    let loaded = repointed_mid_reload(dir.path(), &link, replace).await;
+    let (applied, loaded) = repointed_mid_reload(dir.path(), &link, replace).await;
+    assert!(applied, "the reload applies");
     only_the_locked_target(&loaded, &real);
 }
