@@ -49,10 +49,12 @@ pub(crate) async fn with_route_scope<F: std::future::Future>(future: F) -> F::Ou
         .await
 }
 
-/// The route stage's decision so far; empty outside a route scope.
-pub(crate) fn route_noted() -> crate::security::decision_record::Noted {
+/// The route stage's decision so far, taken: the next target of the same
+/// request starts from nothing, so its record never names another target's
+/// check. Empty outside a route scope.
+pub(crate) fn take_route_noted() -> crate::security::decision_record::Noted {
     ROUTE
-        .try_with(|route| route.borrow().clone())
+        .try_with(|route| std::mem::take(&mut *route.borrow_mut()))
         .unwrap_or_default()
 }
 

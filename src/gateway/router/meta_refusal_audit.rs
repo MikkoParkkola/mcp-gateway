@@ -258,7 +258,7 @@ impl<'a> Refused<'a> {
         let tool = refusal.tool.map(str::to_string);
         let attribution =
             DispatchNotes::default().attribution(&state.meta_mcp, refusal.tenants, None);
-        let mut noted = crate::gateway::meta_mcp::invoke::audit::route_noted();
+        let mut noted = crate::gateway::meta_mcp::invoke::audit::take_route_noted();
         if !noted.has_refusal() {
             noted.refused(refusal.unnoted, None);
         }
