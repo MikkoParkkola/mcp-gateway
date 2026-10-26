@@ -38,10 +38,15 @@ pub(super) struct LogPos {
 }
 
 /// Both logs' positions. `None` is a log read to its oldest kept line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct Cursor {
     pub(super) inv: Option<LogPos>,
     pub(super) gov: Option<LogPos>,
+    /// The time of the oldest timed governance record already read: an
+    /// untimed one below it (written before governance records were timed,
+    /// so always older) sorts just below this time.
+    #[serde(default)]
+    pub(super) gov_bound: Option<String>,
 }
 
 /// One line the reader returns.
@@ -271,8 +276,11 @@ fn timestamp(entry: &Value) -> Option<DateTime<FixedOffset>> {
 
 /// Read one page. `keep` decides which entries count as matches; the others
 /// are examined and skipped. Across the logs, the later timestamp comes
-/// first; a tie or a missing timestamp takes the invocation log first, and
-/// each log keeps its own recorded order.
+/// first; a tie or a missing invocation time takes the invocation log first,
+/// and each log keeps its own recorded order. An untimed governance record
+/// sorts just below the oldest timed governance record already read (it was
+/// written before governance records were timed); with none read, the
+/// invocation log goes first.
 pub(super) fn read_page(
     inv: &Path,
     gov: Option<&Path>,
@@ -282,8 +290,8 @@ pub(super) fn read_page(
 ) -> io::Result<Page> {
     let mut cursor_reset = false;
     let open_both = |c: Option<Cursor>| -> io::Result<Option<Tails>> {
-        let inv_pos = c.map(|c| c.inv);
-        let gov_pos = c.map(|c| c.gov);
+        let inv_pos = c.as_ref().map(|c| c.inv);
+        let gov_pos = c.as_ref().map(|c| c.gov);
         let inv_tail = match inv_pos {
             Some(None) => None,
             pos => match LogTail::open(Which::Invocation, inv, pos.flatten())? {
@@ -300,10 +308,15 @@ pub(super) fn read_page(
         };
         Ok(Some((inv_tail, gov_tail)))
     };
-    let (mut inv_tail, mut gov_tail) = match open_both(cursor)? {
+    let mut gov_bound = cursor
+        .as_ref()
+        .and_then(|c| c.gov_bound.as_deref())
+        .and_then(|t| DateTime::parse_from_rfc3339(t).ok());
+    let (mut inv_tail, mut gov_tail) = match open_both(cursor.clone())? {
         Some(tails) => tails,
         None => {
             cursor_reset = true;
+            gov_bound = None;
             open_both(None)?.unwrap_or((None, None))
         }
     };
@@ -332,14 +345,20 @@ pub(super) fn read_page(
             (None, None) => break,
             (Some(_), None) => 0,
             (None, Some(_)) => 1,
-            (Some((a, _)), Some((b, _))) => match (item_time(a), item_time(b)) {
-                (Some(a), Some(b)) if b > a => 1,
+            (Some((a, _)), Some((b, _))) => match (item_time(a), item_time(b), gov_bound) {
+                (Some(a), Some(b), _) if b > a => 1,
+                (Some(a), None, Some(bound)) if a < bound => 1,
                 _ => 0,
             },
         };
         let Some((item, _)) = heads[pick].take() else {
             break;
         };
+        if pick == 1
+            && let Some(t) = item_time(&item)
+        {
+            gov_bound = Some(t);
+        }
         match item {
             Item::Entry(line) => {
                 if keep(&line) {
@@ -363,9 +382,10 @@ pub(super) fn read_page(
     };
     let inv_pos = resume(&inv_tail, &heads[0]);
     let gov_pos = resume(&gov_tail, &heads[1]);
-    let next = (inv_pos.is_some() || gov_pos.is_some()).then_some(Cursor {
+    let next = (inv_pos.is_some() || gov_pos.is_some()).then(|| Cursor {
         inv: inv_pos,
         gov: gov_pos,
+        gov_bound: gov_bound.map(|t| t.to_rfc3339()),
     });
     Ok(Page {
         lines,

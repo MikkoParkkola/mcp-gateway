@@ -26,7 +26,7 @@ struct Wire {
     cursor: Cursor,
 }
 
-pub(super) fn encode(cursor: Cursor) -> String {
+pub(super) fn encode(cursor: &Cursor) -> String {
     encode_with(&*KEY, cursor)
 }
 
@@ -38,8 +38,12 @@ fn mac(key: &[u8]) -> Hmac<Sha256> {
     <Hmac<Sha256> as KeyInit>::new_from_slice(key).expect("HMAC accepts any key length")
 }
 
-fn encode_with(key: &[u8], cursor: Cursor) -> String {
-    let body = serde_json::to_vec(&Wire { v: 1, cursor }).expect("a cursor serialises");
+fn encode_with(key: &[u8], cursor: &Cursor) -> String {
+    let body = serde_json::to_vec(&Wire {
+        v: 1,
+        cursor: cursor.clone(),
+    })
+    .expect("a cursor serialises");
     let mut m = mac(key);
     m.update(&body);
     format!(
@@ -72,6 +76,7 @@ mod tests {
                 offset: 1234,
             }),
             gov: None,
+            gov_bound: Some("2026-10-26T10:00:00+00:00".into()),
         }
     }
 
@@ -79,7 +84,7 @@ mod tests {
     fn a_token_round_trips_under_its_key() {
         let key = [7u8; 32];
         assert_eq!(
-            decode_with(&key, &encode_with(&key, cursor())),
+            decode_with(&key, &encode_with(&key, &cursor())),
             Some(cursor())
         );
     }
@@ -87,7 +92,7 @@ mod tests {
     #[test]
     fn a_flipped_byte_or_another_key_decodes_as_nothing() {
         let key = [7u8; 32];
-        let token = encode_with(&key, cursor());
+        let token = encode_with(&key, &cursor());
         assert_eq!(
             decode_with(&[8u8; 32], &token),
             None,

@@ -380,3 +380,38 @@ fn p7_a_sparse_filter_stops_at_the_budget_and_resumes_to_an_older_match() {
     let resumed = read_page(&path, None, page.next, ALL, needle).unwrap();
     assert_eq!(resumed.lines.len(), 1);
 }
+
+#[test]
+fn p6_untimed_governance_records_sort_just_below_the_oldest_timed_one() {
+    let ts = |t: &str| Some(format!("2026-10-26T{t}Z"));
+    let dir = tempfile::tempdir().unwrap();
+    let inv = log_path(&dir, "inv.jsonl");
+    let gov = log_path(&dir, "gov.jsonl");
+    // Governance: two records from before the upgrade (untimed), then two timed.
+    write_lines(
+        &gov,
+        &[
+            entry("u1", None),
+            entry("u2", None),
+            entry("s1", ts("10:00:10").as_deref()),
+            entry("s2", ts("10:00:30").as_deref()),
+        ],
+    );
+    write_lines(
+        &inv,
+        &[
+            entry("i1", ts("10:00:00").as_deref()),
+            entry("i2", ts("10:00:05").as_deref()),
+            entry("i3", ts("10:00:20").as_deref()),
+            entry("i4", ts("10:00:40").as_deref()),
+        ],
+    );
+    // u1 and u2 are older than s1 (10:00:10) with no recorded time: they come
+    // right below s1, before every call older than it, in file order.
+    let expected = ["i4", "s2", "i3", "s1", "u2", "u1", "i2", "i1"];
+    for matches in [1, 2, 3, 50] {
+        let got = merged(&inv, &gov, matches);
+        let ids: Vec<&str> = got.iter().map(|(_, i)| i.as_str()).collect();
+        assert_eq!(ids, expected, "page size {matches}");
+    }
+}
