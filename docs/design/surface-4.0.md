@@ -316,6 +316,9 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `auth.api_keys[].key_sha256` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:74 |
 | `auth.api_keys[].kind` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:101 |
 | `auth.api_keys[].name` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:81 |
+| `auth.api_keys[].previous_expires_at` | KEEP | — | end of a rotated key's grace; written by key rotation, absent on an unrotated key | - | src/config/features/api_key.rs:121 |
+| `auth.api_keys[].previous_key_sha256` | KEEP | — | a rotated key's previous digest, accepted until previous_expires_at; written by key rotation | - | src/config/features/api_key.rs:117 |
+| `auth.api_keys[].principal` | KEEP | — | keeps a rotated key's identity across digests; written by key rotation, derived when absent | - | src/config/features/api_key.rs:113 |
 | `auth.api_keys[].rate_limit` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:84 |
 | `auth.bearer_token` | KEEP | `None` | who may call the gateway | - | src/config/features/auth.rs:22 |
 | `auth.client_circuit_breaker` | KEEP | `None` | opt-in per-client circuit breaker | - | src/config/features/auth.rs:32 |

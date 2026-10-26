@@ -106,10 +106,23 @@ impl ResolvedAuthConfig {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        // MIK-7973: the one place every bearer form, `auto` included, is known.
+        // MIK-7973 and ADR-022: the one place every bearer form, `auto` included,
+        // is known.
         super::refuse_shared_principals(
             bearer_token.as_deref(),
-            api_keys.iter().map(|k| (k.name.as_str(), &k.digest)),
+            api_keys
+                .iter()
+                .map(|k| (k.name.as_str(), k.principal.clone())),
+        )?;
+        super::refuse_shared_digests(
+            bearer_token.as_deref(),
+            api_keys.iter().map(|k| {
+                (
+                    k.name.as_str(),
+                    k.digest,
+                    k.previous.as_ref().map(|p| p.digest),
+                )
+            }),
         )?;
 
         Ok(Self {
@@ -204,7 +217,7 @@ impl ResolvedAuthConfig {
         token: &str,
         expired: impl Fn(Option<chrono::DateTime<chrono::Utc>>) -> bool,
     ) -> Option<(AuthenticatedClient, Option<NamedApiKey>)> {
-        use subtle::ConstantTimeEq;
+        use subtle::{Choice, ConditionallySelectable, ConstantTimeEq};
 
         // Check bearer token first. Constant-time comparison prevents a timing
         // side-channel (CWE-208) on the primary auth path — every request,
@@ -231,17 +244,48 @@ impl ResolvedAuthConfig {
             ));
         }
 
-        // API keys: hash once, then compare against EVERY digest in constant time,
-        // so neither a match nor its position is visible in the timing.
+        // API keys: hash once, then compare against EVERY key's current and
+        // previous digest in constant time (ADR-022), so neither a match, its
+        // position nor which digest matched is visible in the timing. A key with
+        // no previous digest is compared against a dummy whose result is masked
+        // off, and nothing is turned into a bool until after the loop.
         let presented = <sha2::Sha256 as sha2::Digest>::digest(token.as_bytes());
-        let key = self.api_keys.iter().fold(None, |hit, k| {
-            let eq: bool = presented.as_slice().ct_eq(k.digest.as_slice()).into();
-            hit.or(eq.then_some(k))
-        })?;
-        // After the match: an expired key is never an authenticated caller.
+        let presented = presented.as_slice();
+        let keys = &self.api_keys;
+        let dummy = dummy_previous_digest();
+        let mut found = Choice::from(0);
+        let mut index = 0u32;
+        let mut via_previous = Choice::from(0);
+        for (position, k) in keys.iter().enumerate() {
+            let current = presented.ct_eq(k.digest.as_slice());
+            let has_previous = Choice::from(u8::from(k.previous.is_some()));
+            let previous = presented
+                .ct_eq(k.previous.as_ref().map_or(&dummy, |p| &p.digest).as_slice())
+                & has_previous;
+            let hit = (current | previous) & !found;
+            let position = u32::try_from(position).unwrap_or(u32::MAX);
+            index = u32::conditional_select(&index, &position, hit);
+            via_previous = Choice::conditional_select(&via_previous, &(previous & !current), hit);
+            found |= hit;
+        }
+        if !bool::from(found) {
+            return None;
+        }
+        // The same list the loop read; `index` is a position it wrote.
+        let key = usize::try_from(index).ok().and_then(|i| keys.get(i))?;
+        let via_previous = bool::from(via_previous);
+        // After the match: an expired key is never an authenticated caller,
+        // whichever digest matched.
         if expired(key.expires_at) {
             warn!(target: AUTH_TARGET, key = %key.name, "expired API key");
             return None;
+        }
+        // A previous digest is accepted only until its grace ends.
+        if via_previous && expired(key.previous.as_ref().map(|p| p.expires_at)) {
+            return None;
+        }
+        if via_previous {
+            tracing::debug!(target: AUTH_TARGET, key = %key.name, "API key authenticated with its previous secret");
         }
         Some((
             Self::client_of(key),
@@ -258,8 +302,9 @@ impl ResolvedAuthConfig {
         AuthenticatedClient {
             quota_principal: Some(key.quota_principal.clone()),
             name: key.name.clone(),
-            // MIK-6704.IDENT.1a: the validated key's digest, = principal_of(key).
-            principal: super::principal_of_digest(&key.digest),
+            // MIK-6704.IDENT.1a: the key's principal, stable across rotations
+            // (ADR-022): derived from its digest unless set explicitly.
+            principal: key.principal.clone(),
             rate_limit: key.rate_limit,
             backends: key.backends.clone(),
             allowed_tools: key.allowed_tools.clone(),
@@ -270,8 +315,9 @@ impl ResolvedAuthConfig {
         }
     }
 
-    /// The caller an API key named `name` with principal `principal` (the
-    /// first 6 bytes of its digest, hex) authenticates as now, for work done
+    /// The caller an API key named `name` with principal `principal` (its
+    /// storage form: the explicit one, or the first 6 bytes of its digest, hex)
+    /// authenticates as now, for work done
     /// on its behalf without a request (an event watch's poll). `None` when no
     /// live key matches both, or the key expired: a key re-issued under the
     /// same name has another digest and does not match.
@@ -283,7 +329,7 @@ impl ResolvedAuthConfig {
         let key = self
             .api_keys
             .iter()
-            .find(|k| k.name == name && hex::encode(&k.digest[..6]) == principal)?;
+            .find(|k| k.name == name && k.principal.storage_form() == principal)?;
         (!crate::config::api_key_expired_now(key.expires_at)).then(|| Self::client_of(key))
     }
 
@@ -298,7 +344,7 @@ impl ResolvedAuthConfig {
         let key = self
             .api_keys
             .iter()
-            .find(|k| k.name == name && hex::encode(&k.digest[..6]) == principal)?;
+            .find(|k| k.name == name && k.principal.storage_form() == principal)?;
         (!crate::config::api_key_expired(key.expires_at, now)).then(|| Self::client_of(key))
     }
 
@@ -397,6 +443,22 @@ fn client_state_key(client: &AuthenticatedClient) -> String {
         || format!("label:{}", client.name),
         |quota| quota.as_store_key().to_owned(),
     )
+}
+
+/// The digest a key with no previous secret is compared against, so every key
+/// costs the same two compares. Its result is always masked off.
+const DUMMY_PREVIOUS_DIGEST: [u8; 32] = [0xA5; 32];
+
+#[cfg(not(test))]
+fn dummy_previous_digest() -> [u8; 32] {
+    DUMMY_PREVIOUS_DIGEST
+}
+
+#[cfg(test)]
+fn dummy_previous_digest() -> [u8; 32] {
+    DUMMY_DIGEST_OVERRIDE
+        .with(std::cell::Cell::get)
+        .unwrap_or(DUMMY_PREVIOUS_DIGEST)
 }
 
 #[cfg(test)]

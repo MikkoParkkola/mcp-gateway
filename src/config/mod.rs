@@ -772,6 +772,10 @@ impl Config {
             if let Some(digest) = key.key_sha256.as_mut() {
                 subst(digest, &mut seen);
             }
+            // A rotated key's previous digest is a live credential too (ADR-022).
+            if let Some(digest) = key.previous_key_sha256.as_mut() {
+                subst(digest, &mut seen);
+            }
         }
         for agent in &mut self.agent_auth.agents {
             if let Some(secret) = agent.hs256_secret.as_mut() {

@@ -191,12 +191,7 @@ impl ApiKeyConfig {
         &self,
         digest: &[u8; 32],
     ) -> crate::gateway::record_principal::InternalPrincipal {
-        match self.principal.as_deref() {
-            Some(principal) => {
-                crate::gateway::record_principal::InternalPrincipal::new(principal.to_owned())
-            }
-            None => crate::gateway::auth::principal_of_digest(digest),
-        }
+        crate::gateway::auth::configured_key_principal(self.principal.as_deref(), digest)
     }
 
     /// True when `now` is at or past `expires_at`.
@@ -262,6 +257,45 @@ fn malformed_field(name: &str, field: &str, spec: &str) -> Error {
     }
 }
 
+/// A digest field's configured text names a sha256 digest: a literal, or an
+/// `env:`, `file:` or `keychain:` reference that resolves to one. An unset or
+/// unreadable reference is the required-reference check's to report.
+fn check_digest_spec(name: &str, field: &str, spec: &str, overlay: &EnvOverlay) -> Result<()> {
+    let value = match spec.strip_prefix("env:") {
+        Some(var) => match overlay.resolve(var) {
+            Some(value) => value,
+            None => return Ok(()),
+        },
+        // A file (C9) or keychain entry (ADR-028) holding the digest.
+        None if spec.starts_with("file:") || spec.starts_with("keychain:") => {
+            let path = format!("auth.api_keys['{name}'].{field}");
+            match crate::config::secret_ref::SecretRef::parse(spec).resolve(&path, overlay) {
+                Ok(value) => value,
+                Err(_) => return Ok(()),
+            }
+        }
+        // The C4 wording for an empty secret, so it reads the same.
+        None if spec.is_empty() => {
+            return Err(Error::ConfigValidation(format!(
+                "auth.api_keys['{name}'].{field} is empty."
+            )));
+        }
+        None => spec.to_owned(),
+    };
+    match parse_api_key_digest(&value) {
+        Some(_) => Ok(()),
+        None => Err(malformed_field(name, field, spec)),
+    }
+}
+
+/// The storage form of a principal: 12 lowercase hex digits.
+fn is_principal_form(principal: &str) -> bool {
+    principal.len() == 12
+        && principal
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
 impl AuthConfig {
     /// Refuse API key material the gateway will not hold (E4, APIKEY.1).
     ///
@@ -291,42 +325,40 @@ impl AuthConfig {
                          and set key_sha256"
                     )));
                 }
-                (None, Some(spec)) => {
-                    let value = match spec.strip_prefix("env:") {
-                        Some(var) => match overlay.resolve(var) {
-                            Some(value) => value,
-                            None => continue,
-                        },
-                        // A file (C9) or keychain entry (ADR-028) holding the
-                        // digest. An unreadable one is the required-reference
-                        // check's to report.
-                        None if spec.starts_with("file:") || spec.starts_with("keychain:") => {
-                            let field = format!("auth.api_keys['{name}'].key_sha256");
-                            match crate::config::secret_ref::SecretRef::parse(spec)
-                                .resolve(&field, overlay)
-                            {
-                                Ok(value) => value,
-                                Err(_) => continue,
-                            }
-                        }
-                        // The C4 wording for an empty secret, so it reads the same.
-                        None if spec.is_empty() => {
-                            return Err(Error::ConfigValidation(format!(
-                                "auth.api_keys['{name}'].key_sha256 is empty."
-                            )));
-                        }
-                        None => spec.clone(),
-                    };
-                    if parse_api_key_digest(&value).is_none() {
-                        return Err(malformed(name, spec));
-                    }
+                (None, Some(spec)) => check_digest_spec(name, "key_sha256", spec, overlay)?,
+            }
+            if let Some(principal) = key.principal.as_deref()
+                && !is_principal_form(principal)
+            {
+                return Err(Error::ConfigValidation(format!(
+                    "auth.api_keys['{name}'].principal must be 12 lowercase hex digits: the \
+                     principal the key had before its first rotation"
+                )));
+            }
+            match (&key.previous_key_sha256, key.previous_expires_at) {
+                (Some(_), None) => {
+                    return Err(Error::ConfigValidation(format!(
+                        "auth.api_keys['{name}'] sets previous_key_sha256 without \
+                         previous_expires_at; a previous digest is accepted only until \
+                         previous_expires_at, so set it or delete previous_key_sha256"
+                    )));
                 }
+                (Some(spec), Some(_)) => {
+                    check_digest_spec(name, "previous_key_sha256", spec, overlay)?;
+                }
+                // An end of grace with nothing to end keeps no secret valid.
+                (None, Some(_)) => tracing::warn!(
+                    key = %name,
+                    "API key sets previous_expires_at without previous_key_sha256; it has no effect"
+                ),
+                (None, None) => {}
             }
         }
         self.dashboard_session.validate()
     }
 
-    /// MIK-7973 at load and reload: no two credentials may share a principal.
+    /// MIK-7973 at load and reload: no two credentials may share a principal,
+    /// explicit or derived, and (ADR-022) no two may share a digest.
     ///
     /// An `auto` bearer does not exist until startup and is checked there
     /// (`ResolvedAuthConfig::try_from_config`). A reference that does not
@@ -336,14 +368,25 @@ impl AuthConfig {
             None | Some("auto") => None,
             Some(_) => self.resolve_bearer_token(overlay).ok().flatten(),
         };
-        let digests: Vec<_> = self
+        // A key whose digests do not resolve is left to the checks that report it.
+        let keys: Vec<_> = self
             .api_keys
             .iter()
-            .filter_map(|key| Some((key.name.as_str(), key.resolve_digest(overlay).ok()?)))
+            .filter_map(|key| {
+                let current = key.resolve_digest(overlay).ok()?;
+                let previous = key.resolve_previous_digest(overlay).ok()?;
+                Some((key, current, previous))
+            })
             .collect();
         crate::gateway::auth::refuse_shared_principals(
             bearer.as_deref(),
-            digests.iter().map(|(name, digest)| (*name, digest)),
+            keys.iter()
+                .map(|(key, current, _)| (key.name.as_str(), key.principal_for(current))),
+        )?;
+        crate::gateway::auth::refuse_shared_digests(
+            bearer.as_deref(),
+            keys.iter()
+                .map(|(key, current, previous)| (key.name.as_str(), *current, *previous)),
         )
     }
 

@@ -368,7 +368,7 @@ const CENSUS_TEST_ONLY: &[&str] = &[
 const CENSUS: &[(&str, &str, usize, Class, &str)] = &[
     ("src/events/rpc.rs", "credential_principal: Some(caller.credential.principal.clone())", 1, Store, "subscription row field: the store's owner binding"),
     ("src/events/rpc_held.rs", "credential_principal: Some(caller.credential.principal.clone())", 1, Store, "held subscription row field: the store's owner binding"),
-    ("src/events/operational_source.rs", "principal_of_digest(&digest).storage_form() == principal", 1, Store, "compares a configured key digest to a stored principal"),
+    ("src/events/operational_source.rs", "k.principal_for(&digest).storage_form() == principal", 1, Store, "compares a configured key's principal (explicit or digest-derived, ADR-022) to a stored principal"),
     ("src/events/fanout.rs", "row.credential_principal == snapshot.credential_principal", 1, Store, "store row identity comparison"),
     ("src/gateway/router/handlers/session_end.rs", "c.credential_principal().is_none()", 1, Store, "presence test only"),
     ("src/gateway/server/stdio_dispatch.rs", "credential_principal: Some(STDIO_CREDENTIAL_PRINCIPAL)", 1, Decl, "context owner key; the record field beside it is keyed"),
@@ -378,6 +378,8 @@ const CENSUS: &[(&str, &str, usize, Class, &str)] = &[
     ("src/events/records.rs", "pub credential_principal: Option<String>", 1, Decl, "subscription store field"),
     ("src/events/worker.rs", "credential_principal: self.sub.credential_principal.as_deref()", 1, Decl, "into Attempt.credential_principal, keyed at services.rs record_form"),
     ("src/events/services.rs", ".storage_form()", 1, Store, "bearer principal for live-binding comparison"),
+    ("src/events/services.rs", "k.principal_for(&digest).storage_form() == key.principal", 1, Store, "a watch's configured key still holds its recorded principal (ADR-022)"),
+    ("src/gateway/auth_resolved.rs", "k.principal.storage_form() == principal", 2, Store, "client_for_key and client_for_key_at find a key by its stored principal"),
     ("src/events/services.rs", "sub.credential_principal.as_deref() == Some(live)", 1, Store, "live-binding comparison"),
     ("src/events/services.rs", "pub credential_principal: Option<&'a str>", 1, Decl, "Attempt field, keyed where recorded"),
     ("src/events/services.rs", "attempt.credential_principal.unwrap_or_default().to_owned()", 1, Keyed, "InternalPrincipal::new(..).record_form(key) for who.principal"),

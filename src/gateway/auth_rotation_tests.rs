@@ -77,11 +77,12 @@ fn resolved(keys: &[serde_json::Value]) -> ResolvedAuthConfig {
     resolve(&auth(keys, None)).expect("resolves")
 }
 
-/// Every load-time refusal the config path applies, as one message.
+/// Every load-time refusal the config path applies, in its order
+/// (config validation, then resolution), as one message.
 fn load_refusal(config: &AuthConfig) -> Option<String> {
     let overlay = crate::config::EnvOverlay::none();
     config
-        .validate()
+        .validate_api_key_material(&overlay)
         .and_then(|()| config.validate_distinct_principals(&overlay))
         .and_then(|()| resolve(config).map(|_| ()))
         .err()

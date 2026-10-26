@@ -75,8 +75,22 @@ fn bearer_token_fingerprint(token: &str) -> String {
 /// Persisted as the key of sessions, grants, journals and task owners, so it
 /// is never lengthened; two credentials that share one are refused instead
 /// ([`refuse_shared_principals`], MIK-7973).
-pub(crate) fn principal_of_digest(digest: &[u8; 32]) -> InternalPrincipal {
+fn principal_of_digest(digest: &[u8; 32]) -> InternalPrincipal {
     InternalPrincipal::new(hex::encode(&digest[..6]))
+}
+
+/// A configured key's principal (ADR-022): `explicit` when the key records
+/// one, written at its first rotation, otherwise derived from `digest`, its
+/// current digest. The only way any code outside this file turns a configured
+/// key into a principal.
+pub(crate) fn configured_key_principal(
+    explicit: Option<&str>,
+    digest: &[u8; 32],
+) -> InternalPrincipal {
+    explicit.map_or_else(
+        || principal_of_digest(digest),
+        |principal| InternalPrincipal::new(principal.to_owned()),
+    )
 }
 
 /// The prefix of a credential caller's owner key, `credential:<principal>`: a
@@ -94,22 +108,55 @@ pub(crate) const CREDENTIAL_OWNER_PREFIX: &str = "credential:";
 /// The error names the two credentials, never a secret, digest or principal.
 pub(crate) fn refuse_shared_principals<'a>(
     bearer: Option<&str>,
-    keys: impl IntoIterator<Item = (&'a str, &'a [u8; 32])>,
+    keys: impl IntoIterator<Item = (&'a str, InternalPrincipal)>,
 ) -> crate::Result<()> {
     let bearer = bearer.map(|token| ("auth.bearer_token".to_owned(), principal_of(token)));
-    let keys = keys.into_iter().map(|(name, digest)| {
-        (
-            format!("auth.api_keys['{name}']"),
-            principal_of_digest(digest),
-        )
-    });
+    let keys = keys
+        .into_iter()
+        .map(|(name, principal)| (format!("auth.api_keys['{name}']"), principal));
     let mut seen = std::collections::HashMap::new();
     for (label, principal) in bearer.into_iter().chain(keys) {
         if let Some(first) = seen.insert(principal, label.clone()) {
             return Err(crate::Error::ConfigValidation(format!(
                 "{first} and {label} resolve to the same credential principal (the first 48 \
-                 bits of the SHA-256 digest), so the gateway could not tell their callers \
-                 apart; replace one of the two credentials or remove the duplicate entry"
+                 bits of the SHA-256 digest, or an explicit principal), so the gateway could \
+                 not tell their callers apart; replace one of the two credentials or remove \
+                 the duplicate entry"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// ADR-022: no two credential digests are equal, among every key's current and
+/// previous digest and the bearer's, so one presented secret can match at most
+/// one credential, whatever principals they carry.
+///
+/// The error names the two credentials, never a secret, digest or principal.
+pub(crate) fn refuse_shared_digests<'a>(
+    bearer: Option<&str>,
+    keys: impl IntoIterator<Item = (&'a str, [u8; 32], Option<[u8; 32]>)>,
+) -> crate::Result<()> {
+    let bearer = bearer.map(|token| {
+        let digest: [u8; 32] = <sha2::Sha256 as sha2::Digest>::digest(token.as_bytes()).into();
+        ("auth.bearer_token".to_owned(), digest)
+    });
+    let keys = keys.into_iter().flat_map(|(name, current, previous)| {
+        let current = (format!("auth.api_keys['{name}'].key_sha256"), current);
+        let previous = previous.map(|digest| {
+            (
+                format!("auth.api_keys['{name}'].previous_key_sha256"),
+                digest,
+            )
+        });
+        std::iter::once(current).chain(previous)
+    });
+    let mut seen = std::collections::HashMap::new();
+    for (label, digest) in bearer.into_iter().chain(keys) {
+        if let Some(first) = seen.insert(digest, label.clone()) {
+            return Err(crate::Error::ConfigValidation(format!(
+                "{first} and {label} are the same credential, so one secret would match both; \
+                 replace one of them"
             )));
         }
     }
