@@ -6,7 +6,9 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use super::{Base, Change, Committed, Edit, PinUpdate, Refused, commit, commit_observed};
+#[cfg(unix)]
+use super::commit_observed;
+use super::{Base, Change, Committed, Edit, PinUpdate, Refused, commit};
 use crate::capability::{compute_capability_hash, rewrite_with_pin};
 use crate::config_persistence::lock::{lock_config, lock_path, waiters_for_test};
 use crate::identity_propagation::AccountStrategyRegistry;
