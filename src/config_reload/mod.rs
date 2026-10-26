@@ -290,7 +290,9 @@ impl LiveConfig {
     /// both the running and the published one.
     #[must_use]
     pub(crate) fn with_applied(mut self, raw: RawInputs) -> Self {
-        let applied = self.applied(raw);
+        let applied = self
+            .digest_over(raw, None)
+            .and_then(|inputs| self.applied(inputs));
         self.running_revision = applied.as_ref().map(|a| a.revision.clone());
         self.inner.get_mut().applied = applied;
         self
@@ -313,49 +315,98 @@ impl LiveConfig {
         self.running_revision.as_deref()
     }
 
-    fn applied(&self, raw: RawInputs) -> Option<Arc<Applied>> {
+    fn applied(&self, inputs: AppliedInputs) -> Option<Arc<Applied>> {
         let key = self.revision_key?;
-        let inputs = AppliedInputs::digest(&key, raw);
         let revision = revision::config_revision(&key, &inputs);
         Some(Arc::new(Applied { inputs, revision }))
+    }
+
+    /// `raw` digested, with the grants and capability digests their own sinks
+    /// last published carried over from `current`: a config reload reads
+    /// neither.
+    fn digest_over(&self, raw: RawInputs, current: Option<&Applied>) -> Option<AppliedInputs> {
+        let key = self.revision_key?;
+        let mut inputs = AppliedInputs::digest(&key, raw);
+        if let Some(current) = current {
+            inputs.grants = current.inputs.grants;
+            inputs.capabilities.clone_from(&current.inputs.capabilities);
+        }
+        Some(inputs)
     }
 
     /// Atomically replace the current config with one built from `raw`; the
     /// raw bytes are reduced to digests here and dropped.
     pub(crate) fn set_applied(&self, config: Config, raw: RawInputs) {
-        let applied = self.applied(raw);
-        self.publish(Published {
-            config: Arc::new(config),
-            applied,
+        self.publish(config, |current| {
+            self.digest_over(raw, current)
+                .and_then(|inputs| self.applied(inputs))
         });
+    }
+
+    /// The env files changed under an unchanged config file: same config,
+    /// new inputs, new revision.
+    pub(crate) fn set_inputs(&self, raw: RawInputs) {
+        let _gate = self.admission.write();
+        let mut inner = self.inner.write();
+        let inputs = self.digest_over(raw, inner.applied.as_deref());
+        inner.applied = inputs.and_then(|i| self.applied(i));
     }
 
     /// New grants over the published config: only the grants part changes,
     /// and the revision is recomputed under the same gate as a reload.
-    pub(crate) fn set_grants(&self, grants: Option<revision::RawBytes>) {
+    pub(crate) fn set_grants(&self, grants: Option<&[u8]>) {
+        self.replace_part(|key, inputs| {
+            inputs.grants = grants.map(|g| revision::part_digest(key, g));
+        });
+    }
+
+    /// The capability definitions the capability sink loaded, as
+    /// (configured directory joined with the relative path, bytes).
+    pub(crate) fn set_capabilities(&self, files: &[(String, Vec<u8>)]) {
+        self.replace_part(|key, inputs| {
+            inputs.capabilities = files
+                .iter()
+                .map(|(path, bytes)| (path.clone(), revision::part_digest(key, bytes)))
+                .collect();
+        });
+    }
+
+    fn replace_part(&self, change: impl FnOnce(&[u8; 32], &mut AppliedInputs)) {
         let _gate = self.admission.write();
         let mut inner = self.inner.write();
-        let (Some(key), Some(current)) = (self.revision_key, inner.applied.as_ref()) else {
+        let (Some(key), Some(current)) = (self.revision_key, inner.applied.as_deref()) else {
             return;
         };
         let mut inputs = current.inputs.clone();
-        inputs.grants = grants.as_deref().map(|g| revision::part_digest(&key, g));
-        let revision = revision::config_revision(&key, &inputs);
-        inner.applied = Some(Arc::new(Applied { inputs, revision }));
+        change(&key, &mut inputs);
+        inner.applied = self.applied(inputs);
     }
 
     /// Atomically replace the current config. It carries no revision: only
     /// [`LiveConfig::set_applied`] knows the inputs.
     pub fn set(&self, config: Config) {
-        self.publish(Published {
-            config: Arc::new(config),
-            applied: None,
-        });
+        self.publish(config, |_| None);
     }
 
-    fn publish(&self, published: Published) {
+    /// Swap in `config` with the revision `applied` builds from the current
+    /// one, both under the admission gate and the one write lock.
+    fn publish(
+        &self,
+        config: Config,
+        applied: impl FnOnce(Option<&Applied>) -> Option<Arc<Applied>>,
+    ) {
         let gate = self.admission.write();
-        let old = std::mem::replace(&mut *self.inner.write(), published);
+        let old = {
+            let mut inner = self.inner.write();
+            let applied = applied(inner.applied.as_deref());
+            std::mem::replace(
+                &mut *inner,
+                Published {
+                    config: Arc::new(config),
+                    applied,
+                },
+            )
+        };
         if let Some(epoch) = &self.policy_epoch {
             let prev = epoch.fetch_add(1, Ordering::Release);
             debug_assert!(

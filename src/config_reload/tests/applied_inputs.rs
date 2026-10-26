@@ -87,7 +87,7 @@ fn the_published_revision_names_the_published_inputs() {
     assert_eq!(live.revision().as_deref(), Some(first.as_str()));
 
     // New grants over the same config get their own id.
-    live.set_grants(Some(b"[]\n".to_vec()));
+    live.set_grants(Some(b"[]\n"));
     let with_grants = RawInputs {
         grants: Some(b"[]\n".to_vec()),
         ..inputs
@@ -104,4 +104,50 @@ fn without_a_revision_key_no_revision_is_published() {
     let live = LiveConfig::new(Config::default());
     live.set_applied(Config::default(), RawInputs::default());
     assert_eq!(live.revision(), None);
+}
+
+#[test]
+fn a_reload_keeps_the_grants_and_capabilities_their_sinks_published() {
+    let live = LiveConfig::new(Config::default())
+        .with_revision_key(revision_key())
+        .with_applied(RawInputs::default());
+    live.set_grants(Some(b"[]\n"));
+    live.set_capabilities(&[("caps/a.yaml".to_owned(), b"name: a\n".to_vec())]);
+    let reloaded = RawInputs {
+        gateway_yaml: b"server:\n  port: 2\n".to_vec(),
+        ..RawInputs::default()
+    };
+    live.set_applied(Config::default(), reloaded.clone());
+    let expected = RawInputs {
+        grants: Some(b"[]\n".to_vec()),
+        capabilities: vec![("caps/a.yaml".to_owned(), b"name: a\n".to_vec())],
+        ..reloaded
+    };
+    assert_eq!(
+        live.revision(),
+        Some(config_revision(
+            &revision_key(),
+            &AppliedInputs::digest(&revision_key(), expected)
+        ))
+    );
+}
+
+#[test]
+fn rotated_env_files_under_an_unchanged_config_get_a_new_revision() {
+    let env = |bytes: &[u8]| RawInputs {
+        env_files: vec![("/e/.env".to_owned(), Some(bytes.to_vec()))],
+        ..RawInputs::default()
+    };
+    let live = LiveConfig::new(Config::default())
+        .with_revision_key(revision_key())
+        .with_applied(env(b"K=1\n"));
+    let before = live.revision();
+    assert_eq!(before.as_deref(), live.running_revision());
+    live.set_inputs(env(b"K=2\n"));
+    assert_ne!(live.revision(), before);
+    assert_eq!(
+        live.running_revision(),
+        before.as_deref(),
+        "startup's stays"
+    );
 }
