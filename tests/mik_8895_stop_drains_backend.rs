@@ -17,6 +17,9 @@ use std::time::Duration;
 use mcp_gateway::config::{BackendConfig, Config, TransportConfig};
 use serde_json::{Value, json};
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 const PROTOCOL_VERSION: &str = "2025-11-25";
 const BACKEND: &str = "slow";
 const TOOL: &str = "slow_answer";
@@ -75,7 +78,8 @@ fn write_config(root: &Path, port: u16) -> std::path::PathBuf {
     config.server.shutdown_timeout = Duration::from_secs(20);
     config.auth.enabled = false;
     config.capabilities.enabled = false;
-    config.cache.enabled = false;
+    // The response cache is always on; a zero TTL keeps the call live.
+    config.cache.default_ttl = Duration::ZERO;
     config.tasks.store_dir = root.join("tasks").display().to_string();
     config.backends.insert(
         BACKEND.to_string(),
@@ -91,7 +95,7 @@ fn write_config(root: &Path, port: u16) -> std::path::PathBuf {
         },
     );
     let path = root.join("gateway.yaml");
-    std::fs::write(&path, serde_yaml::to_string(&config).expect("config yaml")).expect("write");
+    std::fs::write(&path, yaml::to_string(&config).expect("config yaml")).expect("write");
     path
 }
 
