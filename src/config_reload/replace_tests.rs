@@ -321,12 +321,12 @@ fn crashed_after_rename(path: &Path, bytes: &str) {
     write_owner_only(crate::identity_grants::journal::resolved(path), bytes).expect("rename");
 }
 
-fn lock_now(
+async fn lock_now(
     path: &Path,
-) -> impl std::future::Future<
-    Output = Result<ExclusiveFileLock, crate::config_persistence::lock::NotLocked>,
-> + '_ {
+) -> Result<ExclusiveFileLock, crate::config_persistence::lock::NotLocked> {
     crate::config_persistence::lock::lock_config(path, std::time::Instant::now() + WAIT)
+        .await
+        .map(|locked| locked.held)
 }
 
 /// T7: a `staged` journal is rolled back by the next holder of the config
@@ -486,7 +486,7 @@ async fn a_cancelled_lock_stays_held_until_its_recovery_ends() {
             let armed = fault::set(&path, fault::Fault::Pause(Arc::clone(&pause)));
             let locking = path.clone();
             let task = tokio::spawn(async move {
-                crate::config_persistence::lock::lock_config_recovering(
+                crate::config_persistence::lock::lock_config(
                     &locking,
                     std::time::Instant::now() + WAIT,
                 )
@@ -649,5 +649,88 @@ async fn a_watcher_reload_loads_the_target_it_locked() {
     assert!(
         !loaded.contains(&link),
         "never the link spelling: {loaded:?}"
+    );
+}
+
+/// A gateway on `gateway.yaml`, a symlink to `real.yaml`, with a second
+/// config beside it to re-point the link at, and every load recorded.
+#[cfg(unix)]
+fn linked_context() -> (tempfile::TempDir, PathBuf, PathBuf, Arc<ReloadContext>) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let real = dir.path().join("real.yaml");
+    write_owner_only(&real, START).expect("write config");
+    write_owner_only(dir.path().join("other.yaml"), START).expect("write other");
+    let link = dir.path().join("gateway.yaml");
+    std::os::unix::fs::symlink(&real, &link).expect("symlink");
+    let running = Config::load(Some(&link)).expect("config loads");
+    let mut ctx = ReloadContext::new(
+        link.clone(),
+        Arc::new(LiveConfig::new(running)),
+        Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    )
+    .expect("context");
+    ctx.load = recording_load;
+    (dir, real, link, Arc::new(ctx))
+}
+
+/// Run `reload` until it has taken its locks, re-point `link` at
+/// `other.yaml`, let it finish, and return the paths this test's loads read.
+#[cfg(unix)]
+async fn repointed_mid_reload(
+    dir: &Path,
+    link: &Path,
+    reload: impl std::future::Future<Output = bool> + Send + 'static,
+) -> Vec<PathBuf> {
+    let pause = super::reload_pause::arm(link);
+    let reload = tokio::spawn(reload);
+    pause.reached.notified().await;
+    std::fs::remove_file(link).expect("unlink");
+    std::os::unix::fs::symlink(dir.join("other.yaml"), link).expect("re-point");
+    pause.release.notify_one();
+    assert!(reload.await.expect("reload task"), "the reload applies");
+    let dir = crate::identity_grants::journal::resolved(dir);
+    LOADED
+        .lock()
+        .expect("loaded")
+        .iter()
+        .filter(|p| p.starts_with(&dir) || p.as_path() == link)
+        .cloned()
+        .collect()
+}
+
+/// H1 for writers: the lock, the write and the reload are one config. A link
+/// re-pointed while the reload is under way does not move it elsewhere.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_write_reloads_what_it_locked_when_the_link_moves() {
+    let (dir, real, link, ctx) = linked_context();
+    let at = link.clone();
+    let write = async move {
+        ctx.mutate_and_reload_outcome_within(&at, WAIT, |_: &mut Config| Ok::<(), String>(()))
+            .await
+            .is_ok()
+    };
+    let loaded = repointed_mid_reload(dir.path(), &link, write).await;
+    assert_eq!(
+        loaded,
+        vec![crate::identity_grants::journal::resolved(&real)],
+        "only the locked target is loaded, never the link or what it now names"
+    );
+}
+
+/// H1 for readers, under the same race: the watcher's reload stays on the
+/// target its lock resolved.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_watcher_reload_stays_put_when_the_link_moves() {
+    let (dir, real, link, ctx) = linked_context();
+    let reload = async move { ctx.reload_outcome().await.is_ok() };
+    let loaded = repointed_mid_reload(dir.path(), &link, reload).await;
+    assert_eq!(
+        loaded,
+        vec![crate::identity_grants::journal::resolved(&real)],
+        "only the locked target is loaded, never the link or what it now names"
     );
 }

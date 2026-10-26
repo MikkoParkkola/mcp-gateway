@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::config_persistence::journal;
-use crate::config_persistence::lock::{NotLocked, lock_config_recovering};
+use crate::config_persistence::lock::{NotLocked, lock_config};
 use crate::config_persistence::{FileMode, Symlink, write_atomic};
 use crate::config_reload::{ConfigWriteError, ReloadOutcome};
 
@@ -219,7 +219,9 @@ impl ReloadContext {
             ConfigWriteError::Busy => ReplaceError::Busy,
             ConfigWriteError::Failed(message) => ReplaceError::Failed(message),
         })?;
-        let (_held, recovered) = lock_config_recovering(&self.config_path, deadline)
+        // The target is resolved once, by the lock: the owed reload, the
+        // trust check, the read and the commit are all about that one file.
+        let locked = lock_config(&self.config_path, deadline)
             .await
             .map_err(|e| {
                 self.note_refused_lock();
@@ -228,9 +230,9 @@ impl ReloadContext {
                     NotLocked::Failed(message) => ReplaceError::Failed(message),
                 }
             })?;
-        self.pay_owed_reload(recovered).await;
+        let target = locked.target;
+        self.pay_owed_reload(locked.recovered, &target).await;
 
-        let target = crate::identity_grants::journal::resolved(&self.config_path);
         if target != self.trusted_config {
             return Err(ReplaceError::Unsupported(format!(
                 "{} now resolves to {}, not to {}, the file this gateway started on; nothing was written",
@@ -259,7 +261,7 @@ impl ReloadContext {
             // one does not leave the runtime stale. Nothing was committed, so
             // a refusal needs no rollback.
             let reload = self
-                .reload_outcome_locked()
+                .reload_outcome_locked_at(&target)
                 .await
                 .map_err(ReplaceError::ReloadRefused)?;
             return Ok(ReplaceOutcome {

@@ -407,22 +407,22 @@ impl ReloadContext {
         // Then the config sidecar, the order every holder takes them in: so
         // this load never reads bytes a refused write is about to roll back.
         let deadline = std::time::Instant::now() + super::RELOAD_LOCK_WAIT;
-        // Resolved once: lock, journal checks and load are about one file.
-        let target = crate::identity_grants::journal::resolved(&self.config_path);
+        // The lock resolves the config once, off the workers: lock, journal
+        // checks and load are about that one file.
         let reader = tokio::select! {
             biased;
             () = self.stop.cancelled() => return Err(STOPPED.to_owned()),
-            reader = crate::config_persistence::lock::reader_lock(&target, deadline) => reader,
+            reader = crate::config_persistence::lock::reader_lock(&self.config_path, deadline) => reader,
         };
-        let _sidecar = match reader {
-            crate::config_persistence::lock::ReaderLock::Held(held, recovered) => {
-                if recovered == crate::config_persistence::journal::Recovered::RolledBack {
+        let (_sidecar, target) = match reader {
+            crate::config_persistence::lock::ReaderLock::Held(locked) => {
+                if locked.recovered == crate::config_persistence::journal::Recovered::RolledBack {
                     self.reload_owed
                         .store(true, std::sync::atomic::Ordering::SeqCst);
                 }
-                Some(held)
+                (Some(locked.held), locked.target)
             }
-            crate::config_persistence::lock::ReaderLock::Unlocked => None,
+            crate::config_persistence::lock::ReaderLock::Unlocked(target) => (None, target),
             crate::config_persistence::lock::ReaderLock::Skip(why) => {
                 self.note_refused_lock();
                 let mut skipped = format!("config reload skipped: {why}; the next change retries");
@@ -534,17 +534,12 @@ impl ReloadContext {
         }
     }
 
-    /// The reload transaction itself. The caller must already hold the reload
-    /// lock; taking it here as well would deadlock on the non-reentrant mutex.
-    /// An accepted reload pays any reload a lock recovery left owed.
-    async fn reload_outcome_locked(&self) -> std::result::Result<ReloadOutcome, String> {
-        self.reload_outcome_locked_at(&self.config_path.clone())
-            .await
-    }
-
-    /// [`Self::reload_outcome_locked`], loading gateway.yaml from `path`: the
-    /// byte writer passes the target it resolved and checked, so its reload
-    /// reads that file even if a symlink at `config_path` moves meanwhile.
+    /// The reload transaction itself, loading gateway.yaml from `path`: the
+    /// target the caller's config lock resolved, so the reload reads the file
+    /// it locked even if a symlink at `config_path` moves meanwhile. The
+    /// caller must already hold the reload lock; taking it here as well would
+    /// deadlock on the non-reentrant mutex. An accepted reload pays any reload
+    /// a lock recovery left owed.
     async fn reload_outcome_locked_at(
         &self,
         path: &std::path::Path,
@@ -557,20 +552,24 @@ impl ReloadContext {
         outcome
     }
 
-    /// Note what a lock recovery did, then pay an owed reload before the
-    /// caller's own work, so no early return leaves the running config on
+    /// Note what a lock recovery did, then pay an owed reload of `target`,
+    /// the file the caller locked, before the caller's own work, so no early return leaves the running config on
     /// bytes recovery took away. The caller holds the reload lock. A failed
     /// reload stays owed and is logged; the caller's work goes on, and its
     /// own reload (every writer ends with one) tries again.
-    async fn pay_owed_reload(&self, recovered: crate::config_persistence::journal::Recovered) {
+    async fn pay_owed_reload(
+        &self,
+        recovered: crate::config_persistence::journal::Recovered,
+        target: &std::path::Path,
+    ) {
         use std::sync::atomic::Ordering::SeqCst;
         if recovered == crate::config_persistence::journal::Recovered::RolledBack {
             self.reload_owed.store(true, SeqCst);
         }
         if self.reload_owed.load(SeqCst)
-            && let Err(error) = self.reload_outcome_locked().await
+            && let Err(error) = self.reload_outcome_locked_at(target).await
         {
-            tracing::warn!(%error, path = %self.config_path.display(), "the reload owed after restoring gateway.yaml failed; it is retried on the next one");
+            tracing::warn!(%error, path = %target.display(), "the reload owed after restoring gateway.yaml failed; it is retried on the next one");
         }
     }
 

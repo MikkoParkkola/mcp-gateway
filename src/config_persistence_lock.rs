@@ -20,6 +20,8 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use std::time::{Duration, Instant};
 
 use super::journal::Recovered;
@@ -154,52 +156,88 @@ fn keep_private(lock: &Path) -> io::Result<()> {
     ))
 }
 
+/// A held config lock and the file it was taken for: the config resolved
+/// once, so the holder's load, write and reload reach the file it locked even
+/// if a symlink at the configured path is re-pointed meanwhile.
+pub(crate) struct Locked {
+    /// The resolved config.
+    pub(crate) target: PathBuf,
+    /// The lock; released on drop.
+    pub(crate) held: ExclusiveFileLock,
+    /// What recovery did. After [`Recovered::RolledBack`] the running config
+    /// is on bytes that are no longer on disk, and a live gateway owes a
+    /// reload.
+    pub(crate) recovered: Recovered,
+}
+
 /// Take the lock for `config`, waiting until `deadline` while another writer
-/// holds it. For async callers: the wait is an async sleep, never a thread
-/// blocked on an executor worker.
+/// holds it. For async callers.
 ///
 /// A replace journal left beside the config is recovered before this
 /// returns, so no holder ever reads a half-replaced file
 /// ([`super::journal`]).
-pub(crate) async fn lock_config(
-    config: &Path,
-    deadline: Instant,
-) -> Result<ExclusiveFileLock, NotLocked> {
-    lock_config_recovering(config, deadline)
+///
+/// All of it runs on one thread off the async workers: resolving the path,
+/// opening the sidecar and recovery each touch the filesystem, and on a
+/// stalled NFS or FUSE mount any of them blocks (#1808). The lock stays with
+/// that thread until it returns, so a caller cancelled meanwhile never
+/// leaves recovery running unlocked, and the thread stops waiting within one
+/// poll of the cancel.
+pub(crate) async fn lock_config(config: &Path, deadline: Instant) -> Result<Locked, NotLocked> {
+    let config = config.to_path_buf();
+    let waiting = Arc::new(AtomicBool::new(true));
+    let _cancel = StopWaiting(Arc::clone(&waiting));
+    off_runtime(move || acquire(&config, deadline, &|| waiting.load(SeqCst), |_| {}))
         .await
-        .map(|(held, _)| held)
+        .unwrap_or_else(|| {
+            Err(NotLocked::Failed(
+                "taking the config lock failed: its thread could not start or ended without a result"
+                    .to_owned(),
+            ))
+        })
 }
 
-/// [`lock_config`], also saying what recovery did, for a holder with a live
-/// gateway: after [`Recovered::RolledBack`] the running config is on bytes
-/// that are no longer on disk, and it owes a reload.
-pub(crate) async fn lock_config_recovering(
+/// Tells the locking thread to stop waiting once its caller is gone.
+struct StopWaiting(Arc<AtomicBool>);
+
+impl Drop for StopWaiting {
+    fn drop(&mut self) {
+        self.0.store(false, SeqCst);
+    }
+}
+
+/// The wait itself, on a thread that may block. Gives up as at the deadline
+/// once `waiting` turns false. `on_wait` runs once, the first time the lock
+/// is found held.
+fn acquire(
     config: &Path,
     deadline: Instant,
-) -> Result<(ExclusiveFileLock, Recovered), NotLocked> {
-    // Resolved once: the lock and the recovery are about the same file, even
-    // if a symlink is re-pointed meanwhile.
+    waiting: &dyn Fn() -> bool,
+    on_wait: impl FnOnce(&Path),
+) -> Result<Locked, NotLocked> {
+    // Resolved once: the lock, the recovery and the holder's work are about
+    // the same file, even if a symlink is re-pointed meanwhile.
     let target = resolved(config);
     let lock = lock_path(&target);
+    let mut on_wait = Some(on_wait);
     loop {
         if let Some(held) = try_once(config, &lock)? {
-            // Recovery reads, writes and fsyncs: off the async workers. The
-            // lock moves into the task, so a caller cancelled while waiting
-            // here never leaves recovery running unlocked.
-            let target = target.clone();
-            return off_runtime(move || recovered(&target, held))
-                .await
-                .unwrap_or_else(|| {
-                    Err(NotLocked::Failed(
-                        "recovering the replace journal failed: its thread ended without a result"
-                            .to_owned(),
-                    ))
-                });
+            // An unusable journal releases the lock and refuses, naming what
+            // to do by hand.
+            let recovered = super::journal::recover(&target).map_err(NotLocked::Failed)?;
+            return Ok(Locked {
+                target,
+                held,
+                recovered,
+            });
         }
-        if Instant::now() >= deadline {
+        if let Some(say) = on_wait.take() {
+            say(&lock);
+        }
+        if !waiting() || Instant::now() >= deadline {
             return Err(NotLocked::Busy);
         }
-        tokio::time::sleep(POLL).await;
+        std::thread::sleep(POLL);
     }
 }
 
@@ -209,6 +247,11 @@ pub(crate) async fn lock_config_recovering(
 /// load does, #1808). Whatever `work` owns (a held lock) stays with it until
 /// it finishes, even if the awaiting caller is dropped. `None` if the
 /// thread could not start or ended without a result.
+///
+/// Not bounded: a thread stalled on the mount stays stalled however its
+/// caller gives up, so each retry against a mount that never recovers adds
+/// one. A fixed cap would refuse writers that are only waiting on each
+/// other; bound it by the mount, not a count, if that ever shows up.
 async fn off_runtime<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Option<T> {
     let (done, result) = tokio::sync::oneshot::channel();
     std::thread::Builder::new()
@@ -228,30 +271,17 @@ pub(crate) fn lock_config_blocking(
     deadline: Instant,
     on_wait: impl FnOnce(&Path),
 ) -> Result<ExclusiveFileLock, NotLocked> {
-    let target = resolved(config);
-    let lock = lock_path(&target);
-    let mut on_wait = Some(on_wait);
-    loop {
-        if let Some(held) = try_once(config, &lock)? {
-            return recovered(&target, held).map(|(held, _)| held);
-        }
-        if let Some(say) = on_wait.take() {
-            say(&lock);
-        }
-        if Instant::now() >= deadline {
-            return Err(NotLocked::Busy);
-        }
-        std::thread::sleep(POLL);
-    }
+    acquire(config, deadline, &|| true, on_wait).map(|locked| locked.held)
 }
 
 /// What a reload that did not start the write may do about the lock.
 pub(crate) enum ReaderLock {
-    /// Held (and any journal recovered): load under it.
-    Held(ExclusiveFileLock, Recovered),
+    /// Held (and any journal recovered): load its target under it.
+    Held(Locked),
     /// No writer can exist (read-only filesystem, or a directory this
-    /// account cannot write) and no journal is pending: load without it.
-    Unlocked,
+    /// account cannot write) and no journal is pending: load this resolved
+    /// config without it.
+    Unlocked(PathBuf),
     /// Do not load this time; the next event retries. The reason, for a log.
     Skip(String),
 }
@@ -265,44 +295,53 @@ pub(crate) enum ReaderLock {
 /// because no writer can exist here, and no journal is pending (a stat finds
 /// none). Every other failure skips this reload: never an unlocked read.
 pub(crate) async fn reader_lock(config: &Path, deadline: Instant) -> ReaderLock {
-    match lock_config_recovering(config, deadline).await {
-        Ok((held, recovered)) => ReaderLock::Held(held, recovered),
+    match lock_config(config, deadline).await {
+        Ok(locked) => ReaderLock::Held(locked),
         Err(NotLocked::Busy) => ReaderLock::Skip(format!(
-            "another writer holds {} past the wait",
-            lock_path(&resolved(config)).display()
+            "another writer holds the lock beside {} past the wait",
+            config.display()
         )),
         Err(NotLocked::Failed(message)) => {
             let probed = config.to_path_buf();
-            let probe =
-                off_runtime(move || (no_writer_possible(&probed), journal_pending(&probed))).await;
+            let probe = off_runtime(move || {
+                let target = resolved(&probed);
+                let journal = super::journal::journal_path(&target);
+                (
+                    no_writer_possible(&target),
+                    journal_pending(&target),
+                    target,
+                    journal,
+                )
+            })
+            .await;
             classify_unlockable(config, message, probe)
         }
     }
 }
 
 /// What a reader does when its lock cannot be taken at all, given the probe
-/// (why no writer can exist, whether a journal is pending); a probe that did
-/// not run skips.
+/// (why no writer can exist, whether a journal is pending, the resolved
+/// config and its journal path); a probe that did not run skips.
 fn classify_unlockable(
     config: &Path,
     message: String,
-    probe: Option<(Option<&'static str>, bool)>,
+    probe: Option<(Option<&'static str>, bool, PathBuf, PathBuf)>,
 ) -> ReaderLock {
-    let Some((no_writer, pending)) = probe else {
+    let Some((no_writer, pending, target, journal)) = probe else {
         return ReaderLock::Skip(message);
     };
     match no_writer {
         None => ReaderLock::Skip(message),
         Some(_) if pending => ReaderLock::Skip(format!(
             "a pending write's journal {} sits beside a file this gateway cannot lock; resolve the pending write from the writable side",
-            super::journal::journal_path(config).display()
+            journal.display()
         )),
         Some(why) => {
             static ONCE: std::sync::Once = std::sync::Once::new();
             ONCE.call_once(|| {
                     tracing::warn!(path = %config.display(), reason = why, "reading gateway.yaml without the config lock: no writer can exist here");
                 });
-            ReaderLock::Unlocked
+            ReaderLock::Unlocked(target)
         }
     }
 }
@@ -341,18 +380,6 @@ pub(crate) fn journal_pending(config: &Path) -> bool {
         std::fs::symlink_metadata(super::journal::journal_path(config)),
         Err(e) if e.kind() == io::ErrorKind::NotFound
     )
-}
-
-/// Recover a replace journal beside the resolved `target` under `held`; an
-/// unusable one releases the lock and refuses, naming what to do by hand.
-fn recovered(
-    target: &Path,
-    held: ExclusiveFileLock,
-) -> Result<(ExclusiveFileLock, Recovered), NotLocked> {
-    match super::journal::recover(target) {
-        Ok(recovered) => Ok((held, recovered)),
-        Err(message) => Err(NotLocked::Failed(message)),
-    }
 }
 
 #[cfg(test)]

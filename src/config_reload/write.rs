@@ -154,7 +154,9 @@ pub async fn write_config_and_reload_outcome(
 
     // No reload lock without a live gateway, but the config lock still
     // orders this write against every other process's writer.
-    let held = lock_config(path, Instant::now() + super::RELOAD_LOCK_WAIT).await?;
+    let held = lock_config(path, Instant::now() + super::RELOAD_LOCK_WAIT)
+        .await?
+        .held;
     crate::config_persistence::write_config_with(path, config, CommentLoss::Rewrite, &held)
         .map_err(|e| ConfigWriteError::from(MutateError::from(e)))?;
     Ok(None)
@@ -289,7 +291,8 @@ where
     }
     let held = lock_config(path, Instant::now() + super::RELOAD_LOCK_WAIT)
         .await
-        .map_err(ConfigWriteError::from)?;
+        .map_err(ConfigWriteError::from)?
+        .held;
     let mut config = crate::config_persistence::load_existing_or_default(path)
         .map_err(|e| load_failure(path, &e, mode))?;
     match mutate(&mut config) {
