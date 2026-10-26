@@ -44,7 +44,7 @@ impl Config {
                     let value = secret_ref::read_file_ref("", path).ok();
                     files.insert(path.to_path_buf(), value.as_deref().map(digest));
                 }
-                SecretRef::Literal(_) => {}
+                SecretRef::Keychain(_) | SecretRef::Literal(_) => {}
             }
         }
         (seen, files)
