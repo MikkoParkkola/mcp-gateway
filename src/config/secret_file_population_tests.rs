@@ -145,6 +145,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "writability probe",
     ),
     (
+        "src/transport/stdio_cache.rs",
+        "writability probe for a backend's package cache: creates, writes and removes its own marker; reads nothing",
+    ),
+    (
         "src/gateway/meta_mcp/boundary_pins/packaged.rs",
         "cfg(test) helper reading the repo files the MIK-8387/MIK-8481 pins check (registry-ban clippy.toml, pre-push.sh, the CI workflow); no secret",
     ),
