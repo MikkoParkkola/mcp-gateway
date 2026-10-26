@@ -15,10 +15,6 @@
 //! Lock order, for every holder: the reload lock, then the config sidecar
 //! lock, then (for a save that also writes secrets) the vault lock. Nothing
 //! ranked earlier is taken while a later one is held.
-#![expect(
-    dead_code,
-    reason = "its first callers, the web UI settings save and the configuration-history restore, read the outcome and error fields; they land next"
-)]
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -35,8 +31,22 @@ use super::ReloadContext;
 /// history view was made from. Not `config_revision`, which also covers the
 /// process environment and `file:` secrets.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and the configuration-history restore"
+    )
+)]
 pub(crate) struct FileRevision(String);
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and the configuration-history restore"
+    )
+)]
 impl FileRevision {
     /// The revision of `bytes`.
     #[must_use]
@@ -52,6 +62,13 @@ impl FileRevision {
 }
 
 /// What the file must hold for the write to go ahead.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and the configuration-history restore"
+    )
+)]
 pub(crate) enum Expected {
     /// Whatever it holds.
     Any,
@@ -61,6 +78,13 @@ pub(crate) enum Expected {
 
 /// What happens to the bytes a successful write replaces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and the configuration-history restore"
+    )
+)]
 pub(crate) enum Replaced {
     /// Removed once the new bytes are accepted.
     Discard,
@@ -69,9 +93,23 @@ pub(crate) enum Replaced {
 }
 
 /// The new bytes, from the current ones; `Err` refuses the write.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and the configuration-history restore"
+    )
+)]
 pub(crate) type Compute = Box<dyn FnOnce(&[u8]) -> Result<Vec<u8>, String> + Send>;
 
 /// One replacement of gateway.yaml.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and the configuration-history restore"
+    )
+)]
 pub(crate) struct Replace {
     pub(crate) expected: Expected,
     pub(crate) compute: Compute,
@@ -80,12 +118,26 @@ pub(crate) struct Replace {
 
 /// A replacement that was written and accepted.
 #[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and the configuration-history restore"
+    )
+)]
 pub(crate) struct ReplaceOutcome {
     /// The new revision; `None` when the bytes were already the file's.
     pub(crate) revision: Option<FileRevision>,
     /// The kept copy, for [`Replaced::KeepBeside`].
     pub(crate) kept_beside: Option<PathBuf>,
     /// The reload that accepted it.
+    #[cfg_attr(
+        test,
+        expect(
+            dead_code,
+            reason = "first callers: the web UI settings save and the configuration-history restore"
+        )
+    )]
     pub(crate) reload: ReloadOutcome,
 }
 
@@ -93,6 +145,10 @@ pub(crate) struct ReplaceOutcome {
 /// `Unconfirmed` leaves the old file on disk and running; those two leave a
 /// journal that the next holder of the config lock recovers.
 #[derive(Debug)]
+#[expect(
+    dead_code,
+    reason = "the error payloads are read by the first callers: the web UI settings save and the configuration-history restore"
+)]
 pub(crate) enum ReplaceError {
     /// A lock stayed held past the wait; nothing was read.
     Busy,
@@ -121,6 +177,13 @@ pub(crate) enum ReplaceError {
 /// Write `replace` in a task of its own: dropping the caller (a request
 /// handler whose client went away) drops only the wait, never a write
 /// between its rename and its reload.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and the configuration-history restore"
+    )
+)]
 pub(crate) async fn replace_detached(
     ctx: Arc<ReloadContext>,
     replace: Replace,
@@ -135,6 +198,13 @@ pub(crate) async fn replace_detached(
         })
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and the configuration-history restore"
+    )
+)]
 impl ReloadContext {
     async fn replace_locked(
         &self,
@@ -266,6 +336,13 @@ impl ReloadContext {
 /// target, never over an existing name (`-2`, `-3` on a clash). A failure
 /// leaves it where it is, for the journal cleanup to remove, and is logged:
 /// the save itself succeeded.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and the configuration-history restore"
+    )
+)]
 fn keep_beside(original: &std::path::Path, target: &std::path::Path) -> Option<PathBuf> {
     // A clock before 1970 still keeps the copy, under a name that says so.
     let stamp = crate::clock::utc_now().map_or_else(
