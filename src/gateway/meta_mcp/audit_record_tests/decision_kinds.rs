@@ -100,3 +100,39 @@ async fn a_budget_refusal_records_cost_budget() {
     assert!(error.to_string().contains("budget exceeded"), "{error}");
     assert_eq!(record["decision"]["kind"], json!("cost_budget"), "{record}");
 }
+
+/// Two targets of one request, refused by different checks at the route
+/// stage: each is answered with its own check, never the first target's.
+#[tokio::test]
+async fn a_route_stage_refusal_kind_is_taken_per_target() {
+    use crate::gateway::meta_mcp::invoke::audit::{
+        note_refused_by, take_refusal_kind, with_route_scope,
+    };
+    use crate::security::decision_record::DecisionKind;
+    let (first, second) = with_route_scope(async {
+        note_refused_by(DecisionKind::ToolPolicy, None);
+        let first = take_refusal_kind();
+        note_refused_by(DecisionKind::BackendScope, None);
+        (first, take_refusal_kind())
+    })
+    .await;
+    assert_eq!(first, Some(DecisionKind::ToolPolicy));
+    assert_eq!(second, Some(DecisionKind::BackendScope));
+}
+
+/// A gateway started with no config file has no reload context; its records
+/// still name the revision of the live config startup built.
+#[test]
+fn records_read_the_startup_live_config_without_a_reload_context() {
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    assert!(
+        meta.live_config().is_none(),
+        "nothing before startup sets it"
+    );
+    let live = Arc::new(crate::config_reload::LiveConfig::new(
+        crate::config::Config::default(),
+    ));
+    meta.set_live_config(Arc::clone(&live));
+    let served = meta.live_config().expect("startup's live config");
+    assert!(Arc::ptr_eq(&served, &live));
+}

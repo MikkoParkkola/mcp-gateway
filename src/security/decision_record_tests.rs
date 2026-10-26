@@ -33,3 +33,49 @@ fn the_wire_names_are_the_agreed_ones() {
     assert!(v.get("rule_id").is_none(), "absent, not null");
     assert!(v.get("audit_required").is_none() && v.get("rollback_applies").is_none());
 }
+
+/// The kind `noted` records for a call whose outcome is `outcome`.
+fn recorded(noted: &super::Noted, outcome: crate::security::audit::AuditOutcome) -> DecisionKind {
+    noted
+        .decision(Decided::Fresh, super::Refused::of(outcome), None)
+        .kind
+}
+
+#[test]
+fn the_first_refusal_noted_is_the_one_recorded() {
+    let mut noted = super::Noted::default();
+    noted.refused(DecisionKind::ToolPolicy, None);
+    noted.refused(DecisionKind::Firewall, None);
+    let denied = crate::security::audit::AuditOutcome::Denied(-32003);
+    assert_eq!(recorded(&noted, denied), DecisionKind::ToolPolicy);
+}
+
+#[test]
+fn the_memo_kind_wins_over_a_later_note() {
+    let mut noted = super::Noted::default();
+    noted.refused(DecisionKind::Firewall, None);
+    noted.refused_by_memo(DecisionKind::BackendScope);
+    let denied = crate::security::audit::AuditOutcome::Denied(-32003);
+    assert_eq!(recorded(&noted, denied), DecisionKind::BackendScope);
+}
+
+#[test]
+fn an_allowed_call_with_no_note_is_a_default_allow() {
+    let ok = crate::security::audit::AuditOutcome::Ok;
+    assert_eq!(
+        recorded(&super::Noted::default(), ok),
+        DecisionKind::DefaultAllow
+    );
+    let replayed = super::Noted::not_redecided();
+    assert_eq!(recorded(&replayed, ok), DecisionKind::NotRedecided);
+}
+
+/// MIK-8914.API2A.13: a refused call that noted no check fails every debug
+/// build; a release build records `unrecorded`, never an allow.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "noted no check")]
+fn a_refusal_that_noted_no_check_fails_the_guard() {
+    let denied = crate::security::audit::AuditOutcome::Denied(-32001);
+    let _ = recorded(&super::Noted::default(), denied);
+}
