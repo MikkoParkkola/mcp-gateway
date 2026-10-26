@@ -82,6 +82,20 @@ fn skip_or_fail(refusal: &Refusal) -> Option<Output> {
     None
 }
 
+/// `tool` is installed, or this test is skipped; where the sandbox is
+/// required, a missing tool fails instead, so no test passes by not running.
+fn has_tool(tool: &str) -> bool {
+    if Path::new(tool).exists() {
+        return true;
+    }
+    assert!(
+        std::env::var_os("PREVIEW_SANDBOX_REQUIRED").is_none(),
+        "the sandbox tests are required here but {tool} is missing"
+    );
+    eprintln!("skipped: {tool} is not installed");
+    false
+}
+
 async fn sh(script: &str) -> Option<Output> {
     sandboxed("/bin/sh", &["-c", script]).await
 }
@@ -129,7 +143,7 @@ async fn a_runtime_file_is_readable() {
 /// the test reaches that listener itself (positive control).
 #[tokio::test]
 async fn the_run_phase_cannot_connect_anywhere() {
-    if !Path::new("/bin/bash").exists() {
+    if !has_tool("/bin/bash") {
         return;
     }
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -233,7 +247,7 @@ async fn the_home_is_bounded() {
 /// the child with `SIGSYS`.
 #[tokio::test]
 async fn the_filter_refuses_keyrings_and_ptrace() {
-    if !Path::new("/usr/bin/python3").exists() {
+    if !has_tool("/usr/bin/python3") {
         return;
     }
     #[cfg(target_arch = "x86_64")]
