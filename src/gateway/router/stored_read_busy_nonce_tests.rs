@@ -76,7 +76,10 @@ pub(super) async fn signed_fixture_with(
     );
     state_mut.meta_mcp = Arc::new(meta);
     state_mut.transparency_log = Some(log);
-    state_mut.sanitize_input = sanitizing == crate::security::sanitize::InputSanitizing::On;
+    let on = sanitizing == crate::security::sanitize::InputSanitizing::On;
+    state_mut
+        .live_config
+        .edit(|c| c.security.sanitize_input = on);
     let tool: crate::protocol::Tool = serde_json::from_value(json!({
         "name": TOOL, "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}}
     }))

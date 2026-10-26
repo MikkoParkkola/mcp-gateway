@@ -640,7 +640,10 @@ async fn fixture_inner(
     let (mut state, store) = fixture_state().await;
     let (calls, seen) = (Arc::new(AtomicUsize::new(0)), Arc::default());
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
-    state_mut.sanitize_input = SANITIZE.with(std::cell::Cell::get);
+    // The flag applies from the published config (ADR-023).
+    let mut config = (*state_mut.live_config.get()).clone();
+    config.security.sanitize_input = SANITIZE.with(std::cell::Cell::get);
+    state_mut.live_config.set(config);
     // A required propagation refuses to mint without a durable audit sink
     // (MIK-6740), so a propagating fixture gets a transparency log.
     if PROPAGATING.with(std::cell::Cell::get) {

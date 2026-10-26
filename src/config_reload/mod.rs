@@ -185,7 +185,8 @@ impl ReloadOutcome {
 /// `Arc` under a write-lock, so readers are never blocked for more than a
 /// pointer-width CAS.
 pub struct LiveConfig {
-    inner: RwLock<Arc<Config>>,
+    /// The published generation; its config is what `get` returns.
+    inner: RwLock<Arc<Generation>>,
     /// What the running process actually applied, fixed at startup.
     ///
     /// Kept apart from `inner` because the diff compares the file against the
@@ -200,18 +201,24 @@ pub struct LiveConfig {
     /// send is admitted, so once `set` returns no send is admitted against
     /// the old config (MIK-7907). Always taken before `inner`.
     admission: RwLock<()>,
+    /// G5: how many generations this holder has published.
+    #[cfg(test)]
+    publishes: std::sync::atomic::AtomicU64,
 }
 
 impl LiveConfig {
     /// Create a new `LiveConfig` seeded with the startup configuration.
     #[must_use]
     pub fn new(config: Config) -> Self {
-        let running = Arc::new(config);
+        let seed = Generation::of(config);
+        let running = Arc::clone(seed.config());
         Self {
-            inner: RwLock::new(Arc::clone(&running)),
+            inner: RwLock::new(Arc::new(seed)),
             running,
             policy_epoch: None,
             admission: RwLock::new(()),
+            #[cfg(test)]
+            publishes: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -253,13 +260,29 @@ impl LiveConfig {
     /// Clone the current active configuration snapshot.
     #[must_use]
     pub fn get(&self) -> Arc<Config> {
+        Arc::clone(self.inner.read().config())
+    }
+
+    /// The current generation. A request takes it once, on arrival, and is
+    /// judged by it until it answers; never read it again mid-request.
+    #[must_use]
+    pub fn generation(&self) -> Arc<Generation> {
         Arc::clone(&self.inner.read())
     }
 
-    /// Atomically replace the current config.
+    /// Atomically replace the current config. Kept for callers that publish
+    /// a config no view can refuse; a reload prepares a [`Generation`] first
+    /// and calls [`Self::publish`].
     pub fn set(&self, config: Config) {
+        self.publish(Arc::new(Generation::of(config)));
+    }
+
+    /// Publish a prepared generation in one swap.
+    pub fn publish(&self, generation: Arc<Generation>) {
         let gate = self.admission.write();
-        let old = std::mem::replace(&mut *self.inner.write(), Arc::new(config));
+        let old = std::mem::replace(&mut *self.inner.write(), generation);
+        #[cfg(test)]
+        self.publishes.fetch_add(1, Ordering::SeqCst);
         if let Some(epoch) = &self.policy_epoch {
             let prev = epoch.fetch_add(1, Ordering::Release);
             debug_assert!(
@@ -271,6 +294,21 @@ impl LiveConfig {
         // A large config is freed after the gate opens, never while a send
         // waits on it.
         drop(old);
+    }
+
+    /// G5: generations published since construction.
+    #[cfg(test)]
+    pub(crate) fn seq(&self) -> u64 {
+        self.publishes.load(Ordering::SeqCst)
+    }
+
+    /// Publish the current config with `edit` applied, as a reload of an
+    /// edited file would.
+    #[cfg(test)]
+    pub(crate) fn edit(&self, edit: impl FnOnce(&mut Config)) {
+        let mut config = (*self.get()).clone();
+        edit(&mut config);
+        self.set(config);
     }
 
     /// Run `admit` under the admission gate: a reload's `set` waits for it,
@@ -438,6 +476,18 @@ pub async fn apply_patch(
 }
 
 mod diff;
+mod generation;
+pub use generation::Generation;
+
+/// `config` with both request-path security flags off: what the router test
+/// fixtures set on `AppState` before the flags moved into the published
+/// config (ADR-023).
+#[cfg(test)]
+pub(crate) fn flags_off(mut config: Config) -> Config {
+    config.security.sanitize_input = false;
+    config.security.ssrf_protection = false;
+    config
+}
 mod reload_context;
 mod reload_warm_hook;
 // Linux and macOS, as the other real-watcher rows (MIK-8181).

@@ -83,7 +83,10 @@ pub(super) async fn open(
     overlay: &crate::config::EnvOverlay,
     meta_mcp: &Arc<MetaMcp>,
     tool_policy: &Arc<ToolPolicy>,
-    record_key: &Arc<crate::gateway::record_principal::RecordPrincipalKey>,
+    (record_key, live_config): (
+        &Arc<crate::gateway::record_principal::RecordPrincipalKey>,
+        &Arc<crate::config_reload::LiveConfig>,
+    ),
 ) -> Option<(Arc<StdioTasks>, ExpirySweep)> {
     let dir = store_dir(config);
     let subscriptions = subscriptions(config, overlay, record_key);
@@ -113,9 +116,7 @@ pub(super) async fn open(
             meta_mcp: Arc::clone(meta_mcp),
             tool_policy: Arc::clone(tool_policy),
             nonce: super::StdioNonce::process(),
-            sanitize: crate::security::sanitize::InputSanitizing::from_setting(
-                config.security.sanitize_input,
-            ),
+            live_config: Arc::clone(live_config),
         }),
         options: TaskOptions {
             ttl_ms: (config.tasks.default_ttl_ms > 0).then_some(config.tasks.default_ttl_ms),

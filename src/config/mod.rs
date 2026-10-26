@@ -105,6 +105,10 @@ pub struct Config {
     /// Paths support ~ expansion. Loaded in order, later files override earlier.
     #[serde(default)]
     pub env_files: Vec<String>,
+    /// The operator's name for this gateway's environment (`staging`,
+    /// `prod`), shown by the UI. Nothing can infer it, so it is set by hand;
+    /// it applies on reload (ADR-023).
+    pub environment: Option<String>,
     /// Server configuration.
     pub server: ServerConfig,
     /// Authentication configuration.

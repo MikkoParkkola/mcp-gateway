@@ -52,6 +52,12 @@ enum Who {
     Cert(CertIdentity, GrantSubject),
 }
 
+/// The relay rows judge nothing a generation holds; one default serves all.
+static GENERATION: std::sync::LazyLock<Arc<crate::config_reload::Generation>> =
+    std::sync::LazyLock::new(|| {
+        crate::config_reload::LiveConfig::new(crate::config::Config::default()).generation()
+    });
+
 impl Who {
     fn auth<'a>(&'a self, client: &'a AuthenticatedClient) -> BackendAuthContext<'a> {
         let (grant_subject, cert_identity) = match self {
@@ -59,6 +65,7 @@ impl Who {
             Self::Cert(c, s) => (Some(s), Some(c)),
         };
         BackendAuthContext {
+            generation: &GENERATION,
             client: Some(client),
             oauth_agent_identity: None,
             cert_identity,

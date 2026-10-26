@@ -40,7 +40,7 @@ impl DirectRouteGuards {
     /// derivation (an authenticated key, then an OAuth agent, then a
     /// certificate), so one caller has one bucket on both.
     pub(crate) fn admit_nonce(
-        state: &AppState,
+        (state, generation): (&AppState, &crate::config_reload::Generation),
         (client, oauth_agent_identity, cert_identity): (
             Option<&AuthenticatedClient>,
             Option<&crate::gateway::oauth::OAuthAgentIdentity>,
@@ -50,6 +50,7 @@ impl DirectRouteGuards {
     ) -> Result<Option<AdmittedNonce>> {
         let authorizer = super::authorization::RouterAuthorizer {
             state,
+            generation,
             client,
             oauth_agent_identity,
             cert_identity,

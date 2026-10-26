@@ -238,8 +238,6 @@ async fn state_in(
         key_server: None,
         tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
-        sanitize_input: false,
-        ssrf_protection: false,
         trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(100)),
         agent_auth: AgentAuthState::new(false, Arc::new(AgentRegistry::new())),
@@ -251,7 +249,14 @@ async fn state_in(
         agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new(config.clone())),
+        live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new({
+            // Flags off, as this fixture set them on `AppState` before they
+            // moved into the published config (ADR-023).
+            let mut config = config.clone();
+            config.security.sanitize_input = false;
+            config.security.ssrf_protection = false;
+            config
+        })),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),

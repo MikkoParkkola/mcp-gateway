@@ -335,7 +335,8 @@ async fn dispatch(
     if *cancel_rx.borrow() {
         return None;
     }
-    let authorizer = state.authorizer(owned.authorizer());
+    let generation = state.generation();
+    let authorizer = state.authorizer(owned.authorizer(), &generation);
     let _key_hold = owned.hold_caller_key(state);
     let caller = owned.dispatch_context_retrying(state, &authorizer, retry);
     let (arguments, judged) = match state.readmit(call, &caller, owned.session_id()).await {

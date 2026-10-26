@@ -12,6 +12,11 @@ use serde_json::{Value, json};
 use super::{LiveConfig, compute_diff};
 use crate::config::Config;
 
+/// One named change to a config.
+type Edit = Box<dyn Fn(&mut Config)>;
+/// One named change to a field's serialized value.
+type ValueEdit = fn(&mut Value);
+
 /// The restart-pending sections after publishing `wanted` over `running`.
 fn pending(running: &Config, wanted: Config) -> Vec<&'static str> {
     let live = LiveConfig::new(running.clone());
@@ -47,11 +52,11 @@ fn r1_a_security_flag_only_edit_is_not_restart_pending() {
 #[test]
 fn r2_any_other_security_field_stays_restart_pending() {
     let running = Config::default();
-    let edits: Vec<(&str, Box<dyn Fn(&mut Config)>)> = vec![
+    let edits: Vec<(&str, Edit)> = vec![
         (
             "trust_configured_backends",
             Box::new(|c| {
-                c.security.trust_configured_backends = !c.security.trust_configured_backends
+                c.security.trust_configured_backends = !c.security.trust_configured_backends;
             }),
         ),
         (
@@ -65,7 +70,7 @@ fn r2_any_other_security_field_stays_restart_pending() {
                     .firewall
                     .collusion
                     .sources
-                    .push("mail".to_string())
+                    .push("mail".to_string());
             }),
         ),
     ];
@@ -170,7 +175,7 @@ type Report = (String, Vec<&'static str>, bool);
 /// could not be changed generically, so a new field cannot slip past.
 fn each_field_alone(section: &str, skip: &[&str]) -> (Vec<Report>, Vec<String>) {
     // Fields with no bool or number inside: one hand-picked valid edit each.
-    let by_hand: &[(&str, fn(&mut Value))] = &[
+    let by_hand: &[(&str, ValueEdit)] = &[
         ("posture", |v| *v = json!("hardened")),
         ("hardened", |v| v["private_backends"] = json!(["10.0.0.1"])),
         ("caller_identity", |v| v["authority"] = json!("edited")),
@@ -297,4 +302,51 @@ fn e4_an_environment_key_in_a_file_loads() {
     let loaded = Config::load(Some(&path)).expect("loads");
     let v = serde_json::to_value(&loaded).expect("serializes");
     assert_eq!(v["environment"], json!("staging"), "{v}");
+}
+
+// G6 and G5: the generation is prepared before `apply_patch`. A reload whose
+// preparation refuses starts no backend and publishes nothing; the same file
+// reloaded with nothing refusing publishes exactly once.
+#[tokio::test]
+async fn g6_a_refused_preparation_changes_nothing_and_g5_one_publish() {
+    use std::sync::atomic::Ordering;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    crate::gateway::test_helpers::write_owner_only(
+        &path,
+        "backends:\n  added:\n    http_url: \"http://127.0.0.1:9/mcp\"\n",
+    )
+    .expect("write");
+    let registry = std::sync::Arc::new(crate::backend::BackendRegistry::new());
+    let live = std::sync::Arc::new(LiveConfig::new(Config::default()));
+    let ctx = super::ReloadContext::new(
+        path,
+        std::sync::Arc::clone(&live),
+        std::sync::Arc::clone(&registry),
+        crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    )
+    .expect("the registry pairs with the config");
+    let before = live.generation();
+
+    let fired = super::generation::refuse_hook::arm("g6 refusal");
+    let err = ctx
+        .reload_outcome()
+        .await
+        .expect_err("the preparation refused");
+    assert!(
+        fired.load(Ordering::SeqCst),
+        "the refusal hook never ran: preparation moved off this thread"
+    );
+    assert!(err.contains("g6 refusal"), "{err}");
+    assert!(registry.get("added").is_none(), "a backend started");
+    assert!(
+        std::sync::Arc::ptr_eq(&before, &live.generation()),
+        "published"
+    );
+    assert_eq!(live.seq(), 0, "a refused reload published");
+
+    ctx.reload_outcome().await.expect("the same file applies");
+    assert!(registry.get("added").is_some(), "the backend was not added");
+    assert_eq!(live.seq(), 1, "one reload, one publication");
 }

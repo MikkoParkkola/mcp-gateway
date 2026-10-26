@@ -162,8 +162,6 @@ async fn make_app_state(
         key_server: None,
         tool_policy,
         mtls_policy,
-        sanitize_input: false,
-        ssrf_protection: false,
         trust_configured_backends: false,
         inflight,
         agent_auth,
@@ -175,9 +173,14 @@ async fn make_app_state(
         agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::new(
-            mcp_gateway::config::Config::default(),
-        )),
+        live_config: std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::new({
+            // Flags off, as this fixture set them on `AppState` before they
+            // moved into the published config (ADR-023).
+            let mut config = mcp_gateway::config::Config::default();
+            config.security.sanitize_input = false;
+            config.security.ssrf_protection = false;
+            config
+        })),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(
@@ -251,8 +254,6 @@ async fn make_app_state_with_reload(
             key_server: None,
             tool_policy,
             mtls_policy,
-            sanitize_input: false,
-            ssrf_protection: false,
             trust_configured_backends: false,
             inflight,
             agent_auth,
@@ -264,9 +265,14 @@ async fn make_app_state_with_reload(
             agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
             control_plane_store: None,
             control_plane_base: None,
-            live_config: std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::new(
-                mcp_gateway::config::Config::default(),
-            )),
+            live_config: std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::new({
+                // Flags off, as this fixture set them on `AppState` before they
+                // moved into the published config (ADR-023).
+                let mut config = mcp_gateway::config::Config::default();
+                config.security.sanitize_input = false;
+                config.security.ssrf_protection = false;
+                config
+            })),
             export_status: None,
             transparency_log: None,
             dashboard_bootstrap: std::sync::Arc::new(

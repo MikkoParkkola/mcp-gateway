@@ -102,6 +102,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `cost_governance` | 12 |  |  |  | `currency` |
 | `default_routing_profile` | 1 |  |  |  |  |
 | `env_files` | 1 |  |  |  |  |
+| `environment` | 1 |  |  |  |  |
 | `error_budget` | 11 |  |  |  |  |
 | `events` | 13 |  | `dead_letter_max_bytes`; `dead_letter_max_records`; `default_ttl`; `max_in_flight`; `max_outbox`; `max_outbox_per_subscription`; `max_subscriptions`; `max_subscriptions_per_principal`; `max_ttl`; `max_verified_tail`; `max_verified_tail_per_principal`; `min_ttl`; `queue_depth`; `rate_limit_per_subscription`; `rate_limit_per_subscription.burst`; `rate_limit_per_subscription.per_minute`; `retry_base`; `retry_max_attempts`; `retry_window`; `schedule`; `schedule.max_timers`; `schedule.max_timers_per_principal`; `secret_rotation_grace`; `seen_max_per_route`; `suspend_min_attempts`; `suspend_window`; `verification_per_host_per_minute`; `verified_tail_ttl`; `watch`; `watch.max_pollers`; `watch.max_pollers_per_principal` |  |  |
 | `failsafe` | 7 |  | `circuit_breaker.failure_threshold`; `circuit_breaker.reset_timeout`; `circuit_breaker.success_threshold`; `health_check.interval`; `health_check.timeout`; `rate_limit.burst_size`; `rate_limit.requests_per_second`; `retry.initial_backoff`; `retry.max_attempts`; `retry.max_backoff`; `retry.multiplier` |  | `circuit_breaker.enabled`; `retry.enabled` |
@@ -431,6 +432,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `cost_governance.tool_costs` | KEEP | `HashMap::new()` | budgets and per-tool prices are operator inputs | - | src/cost_accounting/config.rs:30 |
 | `default_routing_profile` | KEEP | `"default".to_string()` | per-session tool scoping | - | src/config/mod.rs:123 |
 | `env_files` | KEEP | `type default` | loads secrets from files the user owns | - | src/config/mod.rs:91 |
+| `environment` | KEEP | — | the operator's name for this gateway's environment, shown by the UI; nothing can infer it, and it applies on reload | - | src/config/mod.rs:111 |
 | `error_budget` | KEEP | `type default` | user-requested tuning, GH #475; documented per public commitment (amended 2026-10-11, was INTERNAL) | - | src/config/mod.rs:103 |
 | `error_budget.capability` | KEEP | `type default` | user-requested tuning, GH #475; documented per public commitment (amended 2026-10-11, was INTERNAL) | - | src/config/features/error_budget.rs:39 |
 | `error_budget.capability.cooldown` | KEEP | `type default` | user-requested tuning, GH #475; documented per public commitment (amended 2026-10-11, was INTERNAL) | - | src/config/features/error_budget.rs:57 |

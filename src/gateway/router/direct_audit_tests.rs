@@ -256,6 +256,11 @@ impl MetaMode {
     }
 }
 
+/// `security.sanitize_input` on the published config (ADR-023).
+fn sanitizing(state: &super::AppState, on: bool) {
+    state.live_config.edit(|c| c.security.sanitize_input = on);
+}
+
 /// Backends `alpha` and `beta`, one logger shared by both routes.
 async fn fixture(setup: Setup) -> Fixture {
     let audit = tempfile::tempdir().unwrap();
@@ -308,7 +313,7 @@ async fn fixture(setup: Setup) -> Fixture {
     if let Some(config) = setup.agent_identity {
         state_mut.agent_identity_config = config;
     }
-    state_mut.sanitize_input = setup.sanitize == Sanitize::On;
+    sanitizing(state_mut, setup.sanitize == Sanitize::On);
     let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
     #[cfg(feature = "firewall")]
     if setup.request_firewall {

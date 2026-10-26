@@ -195,7 +195,9 @@ async fn run_dispatched(
         return;
     }
 
-    let authorizer = state.authorizer(intent.owned.authorizer());
+    // A queued dispatch is judged by the generation current now (ADR-023).
+    let generation = state.generation();
+    let authorizer = state.authorizer(intent.owned.authorizer(), &generation);
     // Held through the call and an upstream job's follow, released before
     // settling: a parked round ends this worker, and its caller is idle then.
     let key_hold = intent.owned.hold_caller_key(&state);

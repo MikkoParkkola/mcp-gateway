@@ -225,6 +225,7 @@ pub(super) fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'stat
         "runtime" => runtime,
         "tasks" => tasks,
         "events" => events,
+        "idempotency" => idempotency,
         // Fail-closed on purpose. Eager replacement of a descriptor's authority,
         // resource, issuer or scopes is NOT implemented, so an `accounts` edit
         // is reported as outstanding until a restart rather than claimed as
@@ -236,7 +237,22 @@ pub(super) fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'stat
         "cost_governance" => cost_governance,
     ];
     sections[0].1 = running.auth.restart_only_json() != wanted.auth.restart_only_json();
+    // ADR-023: the two request-path flags apply on reload, so `security` is
+    // compared without them; a change to any other field in it still counts.
+    if let Some(security) = sections.iter_mut().find(|(name, _)| *name == "security") {
+        security.1 = security_restart_only_json(&running.security)
+            != security_restart_only_json(&wanted.security);
+    }
     sections
+}
+
+/// `security` with the fields that apply on reload set to one fixed value, so
+/// only the restart-only remainder is compared.
+fn security_restart_only_json(security: &crate::config::SecurityConfig) -> String {
+    let mut view = security.clone();
+    view.sanitize_input = false;
+    view.ssrf_protection = false;
+    canonical_json(&view)
 }
 
 /// Returns `true` when the TCP-listener address differs.
@@ -336,6 +352,14 @@ pub(super) struct MetaFields {
     #[cfg(feature = "cost-governance")]
     cost_governance: String,
     tasks: String,
+    /// Read once at startup, so detected and reported as restart-required.
+    idempotency: String,
+    events: String,
+    /// Every `server` field, so a change to one beyond the listener address
+    /// and `public_url` is detected; `pending_restart_fields` decides which.
+    server: String,
+    /// Read by the UI from the published generation; applies on reload.
+    environment: Option<String>,
     /// The `accounts` block. Absent from this comparison, an accounts-only edit
     /// — a descriptor's issuer, resource or scopes — produced no diff at all,
     /// so the reload reported nothing and the running gateway kept minting
@@ -368,6 +392,10 @@ impl MetaFields {
             #[cfg(feature = "cost-governance")]
             cost_governance: canonical_json(&c.cost_governance),
             tasks: canonical_json(&c.tasks),
+            idempotency: canonical_json(&c.idempotency),
+            events: canonical_json(&c.events),
+            server: canonical_json(&c.server),
+            environment: c.environment.clone(),
             accounts: canonical_json(&c.accounts),
         }
     }
