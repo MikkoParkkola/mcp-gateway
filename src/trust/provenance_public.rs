@@ -24,6 +24,10 @@ pub(crate) const PROVENANCE_KEY_ID_ENV: &str = "GATEWAY_PROVENANCE_KEY_ID";
 /// Domain tag separating this signature from every other envelope.
 const DOMAIN_TAG: &[u8] = b"mcp-gateway-provenance-ed25519-v1\0";
 
+/// Domain tag of an Activity export manifest's signature: never the
+/// receipt's, so neither signature verifies as the other.
+pub(crate) const ACTIVITY_EXPORT_DOMAIN: &[u8] = b"mcp-gateway-activity-export-ed25519-v1\0";
+
 /// The detached public signature: `{"payload": <String>, "sig": <String>}`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct PublicSignature {
@@ -50,7 +54,6 @@ impl std::fmt::Debug for ProvenancePublicSigner {
 
 impl ProvenancePublicSigner {
     /// This signer's key id.
-    #[cfg(test)]
     pub(crate) fn kid(&self) -> &str {
         &self.kid
     }
@@ -114,6 +117,17 @@ impl ProvenancePublicSigner {
             payload: URL_SAFE_NO_PAD.encode(&payload_bytes),
             sig: URL_SAFE_NO_PAD.encode(sig.as_ref()),
         }
+    }
+
+    /// Ed25519 over `domain || message`, as URL-safe-no-pad base64. Each
+    /// caller passes its own domain tag, so a signature made for one envelope
+    /// never verifies as another's.
+    pub(crate) fn sign_bytes(&self, domain: &[u8], message: &[u8]) -> String {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let mut signed = domain.to_vec();
+        signed.extend_from_slice(message);
+        URL_SAFE_NO_PAD.encode(self.key_pair.sign(&signed).as_ref())
     }
 
     /// A signer from a raw seed, for tests only.
@@ -256,6 +270,34 @@ impl TrustSet {
     }
 }
 
+impl TrustSet {
+    /// Verify a [`ProvenancePublicSigner::sign_bytes`] signature made under
+    /// `domain` by the key named `kid`.
+    pub(crate) fn verify_bytes(
+        &self,
+        kid: &str,
+        domain: &[u8],
+        message: &[u8],
+        sig: &str,
+    ) -> Result<(), VerifyRefusal> {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use ring::signature::{ED25519, UnparsedPublicKey};
+        let key = self.keys.get(kid).ok_or(VerifyRefusal::UnknownKid)?;
+        if sig.contains('=') {
+            return Err(VerifyRefusal::BadEncoding);
+        }
+        let sig = URL_SAFE_NO_PAD
+            .decode(sig)
+            .map_err(|_| VerifyRefusal::BadEncoding)?;
+        let mut signed = domain.to_vec();
+        signed.extend_from_slice(message);
+        UnparsedPublicKey::new(&ED25519, key)
+            .verify(&signed, &sig)
+            .map_err(|_| VerifyRefusal::BadSignature)
+    }
+}
+
 /// One JWK object to its kid and 32-byte key.
 fn parse_jwk(value: &serde_json::Value) -> Result<(String, [u8; 32]), TrustSetRefusal> {
     use base64::Engine as _;
@@ -313,6 +355,12 @@ pub(crate) enum TrustSetRefusal {
 
 /// A JSON value parsed without accepting a repeated member at any depth.
 struct NoDupValue(serde_json::Value);
+
+/// Parse JSON, refusing a repeated member at any depth: two readers of a
+/// signed document must never see different values for one key.
+pub(crate) fn from_slice_no_dup(bytes: &[u8]) -> serde_json::Result<serde_json::Value> {
+    serde_json::from_slice::<NoDupValue>(bytes).map(|v| v.0)
+}
 
 /// Rebuilds a [`serde_json::Value`] while refusing a repeated object key.
 struct NoDupVisitor;
@@ -592,20 +640,22 @@ pub fn run_provenance_command(
     }
 }
 
-/// Export the gateway's public provenance JWK and thumbprint.
-fn run_public_key(config: Option<&std::path::Path>) -> ExitCode {
-    let loaded = match crate::config::Config::load(config) {
-        Ok(cfg) => cfg,
-        Err(error) => {
-            eprintln!("{error}");
-            return ExitCode::from(1);
-        }
-    };
+/// The public signer the configuration at `config` names, if any. Errors
+/// are value-free text.
+pub(crate) fn configured_signer(
+    config: Option<&std::path::Path>,
+) -> Result<Option<ProvenancePublicSigner>, String> {
+    let loaded = crate::config::Config::load(config).map_err(|e| e.to_string())?;
     let overlay = loaded.env_overlay();
     let attestation = overlay
         .resolve(crate::attestation::ATTESTATION_KEY_ID_ENV)
         .unwrap_or_else(|| "gateway".to_owned());
-    match resolve_public_signer(&overlay, &attestation) {
+    resolve_public_signer(&overlay, &attestation).map_err(|e| e.to_string())
+}
+
+/// Export the gateway's public provenance JWK and thumbprint.
+fn run_public_key(config: Option<&std::path::Path>) -> ExitCode {
+    match configured_signer(config) {
         Ok(Some(signer)) => {
             let output = serde_json::json!({
                 "jwk": signer.public_jwk(),

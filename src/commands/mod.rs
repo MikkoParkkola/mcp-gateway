@@ -9,6 +9,7 @@ mod accounts;
 #[cfg(feature = "webui")]
 mod add_remove;
 mod api_key_rewrite;
+mod audit;
 mod backend_url_keys;
 mod cap;
 mod capability_dirs;
@@ -45,6 +46,7 @@ pub use add_remove::{
     run_add_command, run_get_command, run_list_available_command, run_list_command,
     run_remove_command,
 };
+pub use audit::run_audit_command;
 pub use cap::run_cap_command;
 #[cfg(feature = "config-export")]
 pub use config_export::run_config_export;

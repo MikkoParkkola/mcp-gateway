@@ -96,6 +96,8 @@ pub(crate) mod rotation_fault {
 pub(crate) mod pager;
 #[path = "transparency_log_segments.rs"]
 pub(crate) mod segments;
+#[path = "transparency_log_signature.rs"]
+pub(crate) mod signature;
 #[path = "transparency_log_verify.rs"]
 mod verify;
 // MIK-7713: verify against an off-host copy of `.hwm`.

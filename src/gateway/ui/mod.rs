@@ -9,6 +9,7 @@
 //!
 //! All UI code is gated behind the `webui` feature flag.
 
+mod activity;
 pub mod admin_audit;
 pub mod backend_ops;
 pub mod backends;
@@ -72,6 +73,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route(routes::UI_DASHBOARD_LINK, post(session::dashboard_link))
         .route(routes::DASHBOARD, get(dashboard_handler))
         .route(routes::UI_PREVIEWS, post(preview::preview_backend))
+        .merge(activity::activity_router())
         .merge(capabilities::capabilities_router())
         .merge(control_plane::control_plane_router())
         .merge(backends::backends_router())
