@@ -16,30 +16,36 @@ impl BudgetEnforcer {
     /// Re-apply today's spend from a persisted snapshot, so a restart keeps
     /// counting against the budgets instead of starting them at zero.
     ///
-    /// A snapshot saved on an earlier UTC day is ignored: the daily budgets it
-    /// counted have already reset. The global total is the sum of the per-tool
-    /// totals, because every recorded spend lands in both.
+    /// A snapshot saved on an earlier day is ignored: the daily budgets it
+    /// counted have already reset. A snapshot with `day_basis: "local"` was
+    /// saved under local days and restores on the same local day. One without
+    /// it was saved under UTC days (before ADR-026): it restores on the same
+    /// UTC day, and that day stays open until UTC midnight, so its budgets
+    /// reset once there and count local days after. The global total is the
+    /// sum of the per-tool totals, because every recorded spend lands in both.
     pub fn restore(&self, persisted: &super::super::persistence::PersistedCosts) {
-        // A clock it cannot read keeps the saved spend counting (MIK-8202):
-        // discarding it would restart the budgets at zero.
-        let today = super::current_day();
-        if today.is_ok_and(|today| persisted.saved_at / 86_400 != today) {
-            tracing::info!(
-                // The pre-split module path, kept as the log target.
-                target: "mcp_gateway::cost_accounting::enforcer",
-                saved_at = persisted.saved_at,
-                "Persisted cost data is from an earlier UTC day; budgets start at zero"
-            );
+        let Some(day) = self.restore_day(persisted) else {
             return;
+        };
+        // Accumulators built before this restore hold the local day; filed
+        // under the older legacy day, their spend would count on the local
+        // day and miss the UTC reset. None holds spend yet at start-up.
+        for acc in [&self.global_daily, &self.tool_overflow, &self.key_overflow] {
+            acc.redate_if_empty(day);
         }
+        for map in [&self.tool_daily, &self.key_daily] {
+            for acc in map {
+                acc.redate_if_empty(day);
+            }
+        }
+        let day = Some(day);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let micro = |usd: f64| (usd.max(0.0) * 1_000_000.0).round() as u64;
         // Through the cap: a snapshot saved before the cap existed may hold
-        // more names than it allows. Filed under the snapshot's own UTC day,
-        // so spend restored on a clock before 1970 still counts once the
-        // clock reads that day (MIK-8202).
+        // more names than it allows. Filed under the snapshot's own day, so
+        // spend restored on a clock before 1970 still counts once the clock
+        // reads that day.
         let budgets = &self.config.budgets;
-        let day = Some(persisted.saved_at / 86_400);
         // A zero row (a name saved after midnight before it spent again) is
         // not restored: it would take a place in the cap and read 0 anyway.
         for (tool, total) in &persisted.tool_totals {
@@ -59,6 +65,44 @@ impl BudgetEnforcer {
         self.tool_overflow.add_on(day, tool_overflow);
         self.key_overflow
             .add_on(day, micro(persisted.key_overflow_usd));
+    }
+
+    /// The day key to file `persisted` under, or `None` when it is from an
+    /// earlier day. A clock it cannot read keeps the saved spend counting
+    /// instead: discarding it would restart the budgets at zero.
+    fn restore_day(&self, persisted: &super::super::persistence::PersistedCosts) -> Option<u64> {
+        let now = crate::clock::unix_secs();
+        let saved = persisted.saved_at;
+        let same_day = match persisted.day_basis.as_deref() {
+            Some("local") => now.map(|now| self.day_key(now) == self.day_key(saved)),
+            // A basis this build does not recognise counts as a pre-upgrade
+            // UTC day: discarding it would restart the budgets at zero.
+            basis => {
+                if let Some(other) = basis {
+                    tracing::warn!(
+                        target: "mcp_gateway::cost_accounting::enforcer",
+                        day_basis = other,
+                        "Persisted cost data names a day basis this gateway does not recognise; restoring it as a UTC day"
+                    );
+                }
+                let same = now.map(|now| now / 86_400 == saved / 86_400);
+                if same != Ok(false) {
+                    self.legacy_utc_day
+                        .store(saved / 86_400 + 1, std::sync::atomic::Ordering::Relaxed);
+                }
+                same
+            }
+        };
+        if same_day == Ok(false) {
+            tracing::info!(
+                // The pre-split module path, kept as the log target.
+                target: "mcp_gateway::cost_accounting::enforcer",
+                saved_at = saved,
+                "Persisted cost data is from an earlier day; budgets start at zero"
+            );
+            return None;
+        }
+        Some(self.day_key(saved))
     }
 
     /// The per-tool day rows.
@@ -95,15 +139,17 @@ impl BudgetEnforcer {
         Ok(EnforcerSaveSnapshot::from_snapshot(
             self.snapshot_at(Some(taken_at)),
             taken_at,
+            self.day_basis_at(taken_at),
         ))
     }
 
     fn snapshot_at(&self, taken_at: Option<u64>) -> EnforcerSnapshot {
-        let global_daily_usd = usd(self.global_daily.current());
+        let today = taken_at.map(|secs| self.day_key(secs));
+        let global_daily_usd = usd(self.global_daily.current_on(today));
 
-        let tool_daily = daily_usd(&self.tool_daily);
+        let tool_daily = daily_usd(&self.tool_daily, today);
 
-        let key_daily = daily_usd(&self.key_daily);
+        let key_daily = daily_usd(&self.key_daily, today);
 
         EnforcerSnapshot {
             global_daily_usd,
@@ -113,8 +159,8 @@ impl BudgetEnforcer {
             taken_at,
             key_daily,
             key_limits: self.config.budgets.per_key.clone(),
-            tool_overflow_usd: usd(self.tool_overflow.current()),
-            key_overflow_usd: usd(self.key_overflow.current()),
+            tool_overflow_usd: usd(self.tool_overflow.current_on(today)),
+            key_overflow_usd: usd(self.key_overflow.current_on(today)),
         }
     }
 
@@ -145,8 +191,8 @@ impl BudgetEnforcer {
     }
 }
 
-fn daily_usd(map: &DashMap<String, DailyAccumulator>) -> HashMap<String, f64> {
+fn daily_usd(map: &DashMap<String, DailyAccumulator>, today: Option<u64>) -> HashMap<String, f64> {
     map.iter()
-        .map(|e| (e.key().clone(), usd(e.value().current())))
+        .map(|e| (e.key().clone(), usd(e.value().current_on(today))))
         .collect()
 }

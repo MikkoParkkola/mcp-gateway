@@ -220,20 +220,41 @@ fn i11_many_insertions_in_one_run_stay_linear() {
     );
 }
 
+/// The barrier by definition: the output's last run of non-whitespace holds
+/// a connection-string prefix.
+fn rescan_barrier(prefix: &Regex, text: &str) -> bool {
+    let run = text
+        .char_indices()
+        .rev()
+        .find(|(_, c)| c.is_whitespace())
+        .map_or(0, |(at, c)| at + c.len_utf8());
+    prefix.is_match(&text[run..])
+}
+
 /// The writer's run state, tracked as text arrives, agrees with a full
 /// rescan of the output at every split of every pinned input.
 #[test]
 fn i12_the_tracked_run_agrees_with_a_rescan() {
     let prefix = Regex::new(connection_prefix!()).expect("compiles");
-    let rescan = |text: &str| {
-        let run = text
-            .char_indices()
-            .rev()
-            .find(|(_, c)| c.is_whitespace())
-            .map_or(0, |(at, c)| at + c.len_utf8());
-        prefix.is_match(&text[run..])
-    };
+    let rescan = |text: &str| rescan_barrier(&prefix, text);
     let long = format!("{}redis://{}", "x".repeat(60), "\u{e9}".repeat(20));
+    // Runs past the writer's short-run limit: the scheme in the middle, after
+    // a non-scheme `://`, folded through a long s, and behind a non-ASCII
+    // whitespace character that must reset the run.
+    let x = "x".repeat(70);
+    let long_runs = [
+        format!("{x}http://{x}"),
+        format!("{x}http://{x}postgres://"),
+        format!("{x}PO\u{17f}TGRES://{x}"),
+        format!("{x}redis://\u{3000}{x}"),
+        format!("{x}\u{a0}{x}mongodb://"),
+        format!("{}redis://{x}", "\u{1f600}".repeat(20)),
+        format!("{x}redi"),
+        // `postgres` with both `s` as long s takes 13 bytes, past the head of
+        // a long run and wider than its letters suggest.
+        format!("po\u{17f}tgre\u{17f}://{x}"),
+        format!("{x}po\u{17f}tgre\u{17f}://{x}"),
+    ];
     for text in [
         "redis://",
         "REDIS:// x",
@@ -242,7 +263,21 @@ fn i12_the_tracked_run_agrees_with_a_rescan() {
         r#"{"redis://":""#,
         "\u{e9}\u{e9}mysql://\u{1f600}",
         long.as_str(),
-    ] {
+        // Case folding as `(?i)` does it: long s folds to `s`; the Kelvin sign
+        // and dotted capital I fold to no scheme letter here.
+        "po\u{17f}tgres://",
+        "redi\u{17f}://",
+        "MyS\u{17f}QL://",
+        "\u{212a}redis://",
+        "mongodb\u{130}://",
+        "redis:/",
+        "xredis://",
+        "postgres://\u{2028}",
+        "red is://",
+    ]
+    .into_iter()
+    .chain(long_runs.iter().map(String::as_str))
+    {
         for split in (0..=text.len()).filter(|&at| text.is_char_boundary(at)) {
             let mut out = Spliced::with_capacity(text.len());
             out.push(&text[..split]);
@@ -262,4 +297,90 @@ fn i13_each_suffix_spelling_takes_its_first_free_number() {
     assert_eq!(names.claim("k", true), Some(2));
     assert_eq!(names.claim("k", false), Some(2));
     assert_eq!(names.claim("k", false), Some(3));
+}
+
+/// The writer's scheme list is the connection-string rule's: every scheme the
+/// rule's prefix alternation names, and no other.
+#[test]
+fn i14_the_writer_and_the_rule_name_the_same_schemes() {
+    let alternation = connection_prefix!()
+        .trim_start_matches("(?i)(?:")
+        .trim_end_matches(")://");
+    let rule: Vec<String> = alternation
+        .split('|')
+        .map(|scheme| format!("{scheme}://"))
+        .collect();
+    let writer: Vec<String> = splice::SCHEMES
+        .iter()
+        .map(|s| String::from_utf8(s.to_vec()).expect("ascii"))
+        .collect();
+    assert_eq!(writer, rule);
+    assert_eq!(
+        splice::LONGEST,
+        writer.iter().map(String::len).max().unwrap_or(0)
+    );
+}
+
+/// The writer agrees with a rescan after every push, over seeded random
+/// sequences of pushes drawn from scheme letters, long s, `:` and `/`,
+/// ASCII and non-ASCII whitespace and wide characters, with runs both under
+/// and past the writer's short-run limit.
+#[test]
+fn i15_random_push_sequences_agree_with_a_rescan() {
+    const FILLER: &str = "0123456789abcdef0123456789abcdef";
+    // The filler three times, so runs past the short-run limit are common;
+    // single letters and long s, so a scheme can span three or more pushes.
+    const PIECES: [&str; 25] = [
+        "postgres://",
+        "po\u{17f}tgre\u{17f}://",
+        "REDIS",
+        "://",
+        ":",
+        "/",
+        "mysql",
+        "mongodb:/",
+        "p",
+        "o",
+        "s",
+        "\u{17f}",
+        "r",
+        "e",
+        "d",
+        "q",
+        FILLER,
+        FILLER,
+        FILLER,
+        " ",
+        "\u{b}",
+        "\u{a0}",
+        "\u{3000}",
+        "\u{e9}",
+        "\u{1f600}",
+    ];
+    let prefix = Regex::new(connection_prefix!()).expect("compiles");
+    // xorshift64: a fixed seed, so a failure reproduces.
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut next = |below: usize| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        usize::try_from(state % u64::try_from(below).expect("fits")).expect("fits")
+    };
+    for case in 0..2000 {
+        let mut out = Spliced::with_capacity(0);
+        let mut written = String::new();
+        for _ in 0..=next(6) {
+            let mut push = String::new();
+            for _ in 0..next(16) {
+                push.push_str(PIECES[next(PIECES.len())]);
+            }
+            out.push(&push);
+            written.push_str(&push);
+            assert_eq!(
+                out.barrier(),
+                rescan_barrier(&prefix, &written),
+                "case {case}: {written:?}"
+            );
+        }
+    }
 }
