@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Pieces `mcp-gateway add` needs to write a whole backend (MIK-7787): the
-//! default OAuth stanza, and whether one backend's `${VAR}` references would
-//! resolve at the next load.
+//! default OAuth stanza, whether one backend's `${VAR}` references would
+//! resolve at the next load, and the pre-write check that its secret
+//! references resolve (ADR-028).
 
 use super::OAuthConfig;
-#[cfg(feature = "webui")]
 use super::{BackendConfig, EnvOverlay, secret_ref};
 
 /// The stanza `oauth: {}` deserialises to: enabled, no fixed client, so the
@@ -46,11 +46,58 @@ impl BackendConfig {
             .env
             .iter()
             .map(|(key, value)| (format!("backends.{name}.env.{key}"), value));
+        // A whole-value secret reference is not a template: its own check is
+        // `check_secret_references` (a `file:` path may hold `${` literally).
         let mut unresolved: Vec<String> = headers
             .chain(env)
+            .filter(|(_, value)| !secret_ref::is_reference(value))
             .filter_map(|(field, value)| secret_ref::expand_field(&field, value, overlay).err())
             .collect();
         unresolved.sort();
         unresolved
+    }
+}
+
+impl BackendConfig {
+    /// The pre-write check every writer of a backend runs: each whole-value
+    /// `env:`, `file:` or `keychain:` in its `headers` and `env` is resolved,
+    /// read and dropped, through the load's own evaluator, enabled or not, so
+    /// a reference that does not resolve never reaches gateway.yaml or the
+    /// next start. `${VAR}` templates are not checked here: an unset one keeps
+    /// add-disabled.
+    ///
+    /// `pub` only for the binary's discover and setup writers; it returns to
+    /// `pub(crate)` once no binary-side writer of `backends` remains.
+    ///
+    /// # Errors
+    ///
+    /// Every unresolved reference, one message each naming the field and the
+    /// entry, never a value.
+    pub fn check_secret_references(
+        &self,
+        name: &str,
+        overlay: &EnvOverlay,
+    ) -> Result<(), Vec<String>> {
+        let headers = self
+            .headers
+            .iter()
+            .map(|(key, value)| (format!("backends.{name}.headers.{key}"), value));
+        let env = self
+            .env
+            .iter()
+            .map(|(key, value)| (format!("backends.{name}.env.{key}"), value));
+        let mut refused: Vec<String> = headers
+            .chain(env)
+            .filter(|(_, value)| secret_ref::is_reference(value))
+            .filter_map(|(field, value)| {
+                secret_ref::evaluate_backend_value(&field, value, overlay).err()
+            })
+            .collect();
+        refused.sort();
+        if refused.is_empty() {
+            Ok(())
+        } else {
+            Err(refused)
+        }
     }
 }

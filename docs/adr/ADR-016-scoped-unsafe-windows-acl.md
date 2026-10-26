@@ -38,6 +38,11 @@ and `schannel`; the change adds it as a direct Windows-only dependency with the
 `Win32_Foundation`, `Win32_Security`, `Win32_Storage_FileSystem` and
 `Win32_System_Threading` features and adds no package to the lock file.
 
+Amended 2026-10-26 (ADR-028 §2a): a second module, `src/win_cred.rs`, is allowed
+`unsafe` for Windows Credential Manager under the same rules, so the modules allowed
+`unsafe` are now `src/win_acl.rs` and `src/win_cred.rs`. Both are compiled only on
+Windows, and `src/unsafe_allowlist_tests.rs` pins the list.
+
 The module exports nine safe `pub(crate)` functions and nothing else:
 `current_user_sid`, `private_descriptor`, `create_dir_private`, `create_file_private`,
 `inspect`, `replace`, `volume_is_local`, `final_path` (design §2.1), and

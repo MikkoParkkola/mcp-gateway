@@ -36,6 +36,7 @@ pub use quota::QuotaPrincipal;
 #[path = "auth_api_key.rs"]
 mod api_key;
 pub use api_key::ResolvedApiKey;
+pub(crate) use api_key::{PreviousDigest, refuse_shared_digests};
 #[path = "auth_dashboard.rs"]
 mod dashboard;
 pub use dashboard::DashboardBootstrap;
@@ -74,8 +75,22 @@ fn bearer_token_fingerprint(token: &str) -> String {
 /// Persisted as the key of sessions, grants, journals and task owners, so it
 /// is never lengthened; two credentials that share one are refused instead
 /// ([`refuse_shared_principals`], MIK-7973).
-pub(crate) fn principal_of_digest(digest: &[u8; 32]) -> InternalPrincipal {
+fn principal_of_digest(digest: &[u8; 32]) -> InternalPrincipal {
     InternalPrincipal::new(hex::encode(&digest[..6]))
+}
+
+/// A configured key's principal (ADR-022): `explicit` when the key records
+/// one, written at its first rotation, otherwise derived from `digest`, its
+/// current digest. The only way any code outside this file turns a configured
+/// key into a principal.
+pub(crate) fn configured_key_principal(
+    explicit: Option<&str>,
+    digest: &[u8; 32],
+) -> InternalPrincipal {
+    explicit.map_or_else(
+        || principal_of_digest(digest),
+        |principal| InternalPrincipal::new(principal.to_owned()),
+    )
 }
 
 /// The prefix of a credential caller's owner key, `credential:<principal>`: a
@@ -93,22 +108,20 @@ pub(crate) const CREDENTIAL_OWNER_PREFIX: &str = "credential:";
 /// The error names the two credentials, never a secret, digest or principal.
 pub(crate) fn refuse_shared_principals<'a>(
     bearer: Option<&str>,
-    keys: impl IntoIterator<Item = (&'a str, &'a [u8; 32])>,
+    keys: impl IntoIterator<Item = (&'a str, InternalPrincipal)>,
 ) -> crate::Result<()> {
     let bearer = bearer.map(|token| ("auth.bearer_token".to_owned(), principal_of(token)));
-    let keys = keys.into_iter().map(|(name, digest)| {
-        (
-            format!("auth.api_keys['{name}']"),
-            principal_of_digest(digest),
-        )
-    });
+    let keys = keys
+        .into_iter()
+        .map(|(name, principal)| (format!("auth.api_keys['{name}']"), principal));
     let mut seen = std::collections::HashMap::new();
     for (label, principal) in bearer.into_iter().chain(keys) {
         if let Some(first) = seen.insert(principal, label.clone()) {
             return Err(crate::Error::ConfigValidation(format!(
                 "{first} and {label} resolve to the same credential principal (the first 48 \
-                 bits of the SHA-256 digest), so the gateway could not tell their callers \
-                 apart; replace one of the two credentials or remove the duplicate entry"
+                 bits of the SHA-256 digest, or an explicit principal), so the gateway could \
+                 not tell their callers apart; replace one of the two credentials or remove \
+                 the duplicate entry"
             )));
         }
     }
@@ -123,8 +136,9 @@ pub struct ResolvedAuthConfig {
     pub bearer_token: Option<String>,
     /// Precomputed full digest, published only after validating the bearer.
     bearer_quota_principal: Option<QuotaPrincipal>,
-    /// Resolved API keys
-    pub api_keys: Vec<ResolvedApiKey>,
+    /// Resolved API keys. Read through [`Self::api_keys`], never directly, so
+    /// every reader sees one snapshot of the list.
+    api_keys: Vec<ResolvedApiKey>,
     /// Public paths
     pub public_paths: Vec<String>,
     /// Rate limiters per client, keyed by credential (`client_state_key`).
@@ -170,6 +184,8 @@ impl std::fmt::Debug for ResolvedAuthConfig {
 pub(crate) struct NamedApiKey {
     name: String,
     personal: bool,
+    /// The key's previous digest matched, not its current one (ADR-022).
+    matched_previous_digest: bool,
 }
 
 impl NamedApiKey {
@@ -183,10 +199,29 @@ impl NamedApiKey {
     pub(crate) fn is_personal(&self) -> bool {
         self.personal
     }
+
+    /// Whether the request presented the key's previous secret, inside its
+    /// grace (ADR-022): the caller still holds the secret a rotation replaced.
+    pub(crate) fn matched_previous_digest(&self) -> bool {
+        self.matched_previous_digest
+    }
 }
 
 #[path = "auth_resolved.rs"]
 mod resolved;
+
+/// Carries the matched key's provenance with the request, so downstream checks
+/// read it rather than re-derive it. A request that presented a rotated key's
+/// previous secret is logged at DEBUG, naming only the key (ADR-022).
+fn attach_api_key(request: &mut Request<Body>, api_key: Option<NamedApiKey>) {
+    let Some(api_key) = api_key else {
+        return;
+    };
+    if api_key.matched_previous_digest() {
+        debug!(key = %api_key.name(), "API key authenticated with its previous secret");
+    }
+    request.extensions_mut().insert(api_key);
+}
 
 pub use crate::security::audit::CredentialKind;
 
@@ -603,9 +638,7 @@ async fn authenticate_request(
         if let Some((client, api_key)) = auth_config.validate_token_with_origin(&presented) {
             // The adapter allow-list is checked downstream against this, so the
             // provenance has to travel with the request rather than be re-derived.
-            if let Some(api_key) = api_key {
-                request.extensions_mut().insert(api_key);
-            }
+            attach_api_key(&mut request, api_key);
             request.extensions_mut().insert(client);
             return next.run(request).await;
         }
@@ -669,9 +702,7 @@ async fn authenticate_request(
             return deny;
         }
         debug!(client = %client.name, path = %path, "Authenticated via static key");
-        if let Some(api_key) = api_key {
-            request.extensions_mut().insert(api_key);
-        }
+        attach_api_key(&mut request, api_key);
         request.extensions_mut().insert(client);
         return next.run(request).await;
     }
@@ -763,6 +794,10 @@ mod clock_tests;
 #[cfg(test)]
 #[path = "auth_client_state_tests.rs"]
 mod client_state_tests;
+
+#[cfg(test)]
+#[path = "auth_rotation_tests.rs"]
+mod rotation_tests;
 
 /// SIGNING.5 row 44: which nonce-quota authority a dashboard session carries.
 ///
