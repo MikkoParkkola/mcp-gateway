@@ -225,6 +225,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "runtime provisioning manifest; public",
     ),
     (
+        "src/secret_store/index.rs",
+        "the secret-entry index: names, stores and timestamps, never a value; created owner-only",
+    ),
+    (
         "src/security/firewall/audit.rs",
         "append-only audit log; no secret",
     ),

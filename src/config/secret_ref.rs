@@ -293,6 +293,62 @@ pub(crate) fn expand_field(
     })
 }
 
+/// One backend `env` or `headers` value as the backend receives it
+/// (ADR-028). The written text is classified once: a whole-value `env:`,
+/// `file:` or `keychain:` reference resolves once, and its bytes are used
+/// verbatim, never read again as a reference; anything else is a template
+/// and gets [`expand_field`]'s `${VAR}` expansion, whose result is never
+/// classified. The load and the pre-write check both call this, so they
+/// cannot disagree.
+///
+/// # Errors
+///
+/// The message naming `field` (and the entry for a reference), never a value.
+pub(crate) fn evaluate_backend_value(
+    field: &str,
+    written: &str,
+    overlay: &EnvOverlay,
+) -> std::result::Result<String, String> {
+    match SecretRef::parse(written) {
+        SecretRef::Literal(_) => expand_field(field, written, overlay),
+        reference => reference.resolve(field, overlay).map_err(|e| match e {
+            Error::ConfigValidation(message) => message,
+            other => other.to_string(),
+        }),
+    }
+}
+
+/// [`evaluate_backend_value`] over every enabled backend's `headers` and
+/// `env`, in place, collecting each unresolved one's message: backend env
+/// and headers are secret slots too (ADR-028).
+pub(crate) fn evaluate_backends(
+    backends: &mut std::collections::HashMap<String, super::BackendConfig>,
+    overlay: &EnvOverlay,
+    unresolved: &mut Vec<String>,
+) {
+    for (name, backend) in backends.iter_mut().filter(|(_, b)| b.enabled) {
+        let headers = backend
+            .headers
+            .iter_mut()
+            .map(|(key, value)| (format!("backends.{name}.headers.{key}"), value));
+        let env = backend
+            .env
+            .iter_mut()
+            .map(|(key, value)| (format!("backends.{name}.env.{key}"), value));
+        for (field, value) in headers.chain(env) {
+            match evaluate_backend_value(&field, value, overlay) {
+                Ok(evaluated) => *value = evaluated,
+                Err(message) => unresolved.push(message),
+            }
+        }
+    }
+}
+
+/// Whether `written` is a whole-value `env:`, `file:` or `keychain:` reference.
+pub(crate) fn is_reference(written: &str) -> bool {
+    !matches!(SecretRef::parse(written), SecretRef::Literal(_))
+}
+
 impl super::Config {
     /// Every required secret that resolves to nothing (an unresolvable `env:`
     /// reference or an empty literal), one message each, so the operator fixes

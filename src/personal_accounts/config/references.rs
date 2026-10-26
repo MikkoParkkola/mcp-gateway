@@ -10,9 +10,7 @@ use super::{AccountsConfigError, SecretOverlay, decode_key};
 /// Whether `reference` is `env:`, `file:` or `keychain:` rather than a
 /// literal secret. Text only; reads nothing.
 pub(super) fn is_reference(reference: &str) -> bool {
-    ["env:", "file:", "keychain:"]
-        .iter()
-        .any(|prefix| reference.starts_with(prefix))
+    crate::config::is_reference(reference)
 }
 
 /// Every `accounts.keys` entry is an `env:` or `file:` reference. Text only;
