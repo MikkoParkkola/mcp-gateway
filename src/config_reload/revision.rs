@@ -14,6 +14,11 @@
 //! dropped. Only the digests outlive the publish, so a later grants change can
 //! recompute the id without the process holding any input's bytes.
 //!
+//! Not yet covered: capability definitions (their part is an empty list until
+//! the capability loader hands its bytes over), so nothing may present an id
+//! as naming capability state; and CLI flag overrides applied after the load,
+//! which are process arguments rather than inputs.
+//!
 //! Encoding (shared with configuration history, which keys stored versions by
 //! this id):
 //! ```text
@@ -36,8 +41,10 @@ pub(crate) const TAG: &[u8] = b"mcp-gateway/config-revision/v1";
 /// Domain tag of a part digest.
 const PART_TAG: &[u8] = b"mcp-gateway/config-revision/v1/part";
 
-/// Input bytes between the load and the publish. One alias, so the buffer
-/// type that wipes on drop replaces it in one place.
+/// Input bytes between the load and the publish: moved into the publish and
+/// dropped there, never cloned past it. One alias, so the buffer type that
+/// wipes on drop (`WipedBytes`, #4162) replaces it in one place; that switch
+/// lands in this change's second part at the latest.
 pub(crate) type RawBytes = Vec<u8>;
 
 /// A keyed digest of one input part.

@@ -166,7 +166,8 @@ impl Gateway {
         // never changes.
         let live_config = Arc::new(
             LiveConfig::new(self.config.clone())
-                .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
+                .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch))
+                .with_startup_revision(&record_key, self.env.take_startup_inputs()),
         );
 
         // SIEM evidence-export background task (MIK-6703). None when disabled.

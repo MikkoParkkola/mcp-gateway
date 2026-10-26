@@ -298,6 +298,21 @@ impl LiveConfig {
         self
     }
 
+    /// Key revisions by `record_key` and publish what the startup load read;
+    /// without inputs (a config built in memory) no revision is published.
+    #[must_use]
+    pub(crate) fn with_startup_revision(
+        self,
+        record_key: &crate::gateway::record_principal::RecordPrincipalKey,
+        raw: Option<RawInputs>,
+    ) -> Self {
+        let live = self.with_revision_key(record_key.config_revision_key());
+        match raw {
+            Some(raw) => live.with_applied(raw),
+            None => live,
+        }
+    }
+
     /// The revision of the published config; `None` when it was published
     /// without its inputs or no revision key is configured.
     #[must_use]

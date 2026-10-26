@@ -151,3 +151,33 @@ fn rotated_env_files_under_an_unchanged_config_get_a_new_revision() {
         "startup's stays"
     );
 }
+
+#[test]
+fn startup_inputs_are_moved_into_the_first_publish_and_taken_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = env_file(dir.path(), "a.env", "GW_ONCE=1\n");
+    let cfg = config_naming_env_files(dir.path(), &[env.to_str().unwrap()]);
+    let mut evaluated = startup_through(&cfg, &RecordingHome::new());
+    let live_env = evaluated.live_env();
+    assert_eq!(
+        evaluated.inputs,
+        RawInputs::default(),
+        "moved out of the load, not copied"
+    );
+    let record_key = crate::gateway::record_principal::test_record_key();
+    let live = LiveConfig::new(Config::default())
+        .with_startup_revision(&record_key, live_env.take_startup_inputs());
+    assert!(live.revision().is_some(), "startup publishes a revision");
+    assert_eq!(live.running_revision(), live.revision().as_deref());
+    assert!(
+        live_env.take_startup_inputs().is_none(),
+        "the slot is empty after the startup publish, and a second take gets nothing"
+    );
+}
+
+#[test]
+fn a_startup_without_captured_inputs_publishes_no_revision() {
+    let record_key = crate::gateway::record_principal::test_record_key();
+    let live = LiveConfig::new(Config::default()).with_startup_revision(&record_key, None);
+    assert_eq!(live.revision(), None);
+}
