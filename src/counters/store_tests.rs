@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Store rules (test plan T1-T11, T45-T52): buckets, rings, local
+//! Store rules (test plan T1-T11, T45-T54): buckets, rings, local
 //! days, caps, labels and classification, all on explicit times and zones.
 
 use chrono::TimeZone;
@@ -673,4 +673,39 @@ fn t52_a_label_held_before_the_window_keeps_its_exact_zeros() {
     assert!(!view.folded);
     assert_eq!(view.since, T0, "held through the whole window");
     assert_eq!(view.points.len(), 48, "exact zeros, every bucket");
+}
+
+#[test]
+fn t53_a_long_held_label_called_again_keeps_its_exact_zeros() {
+    let store = CounterStore::new(T0);
+    store.record(&ok("key:a", "s", "held"), T0 + 10, &UTC);
+    let now = T0 + 3 * DAY;
+    let stray = Call {
+        caller: "key:a",
+        server: Label::Known("s"),
+        tool: Label::Untrusted,
+        tally: Tally::default(),
+    };
+    store.record(&stray, now - 2 * HOUR, &UTC);
+    // Its ring drops the day-old bucket as it takes this one.
+    store.record(&ok("key:a", "s", "held"), now, &UTC);
+    let view = store.series(
+        &Query::new(Metric::Calls, Window::Day, Filter::Tool("s", "held")),
+        now + 10,
+        &UTC,
+    );
+    assert!(!view.folded);
+    assert_eq!(view.since, T0, "held since before the window");
+    assert_eq!(view.points.len(), 48, "exact zeros before its new call");
+    assert_eq!(nonzero(&view.points), vec![(now, 1)]);
+}
+
+#[test]
+fn t54_a_ring_gives_its_buckets_oldest_first() {
+    let mut half = ring::Ring::<{ HALF_BUCKETS as u64 }>::default();
+    for bucket in [30, 10, 20, 40] {
+        half.add(bucket, [1, 0, 0, 0, 0]);
+    }
+    let order: Vec<u64> = half.buckets().map(|(b, _)| b).collect();
+    assert_eq!(order, vec![10, 20, 30, 40]);
 }
