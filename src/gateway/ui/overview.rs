@@ -41,11 +41,7 @@ const TEXT_BYTES: usize = 256;
 
 /// `text` cut to at most [`TEXT_BYTES`] bytes on a character boundary.
 fn clip(text: &str) -> String {
-    let mut end = text.len().min(TEXT_BYTES);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_owned()
+    text[..text.floor_char_boundary(TEXT_BYTES)].to_owned()
 }
 
 /// An audit record's string field, clipped; JSON null when it is not a string.
