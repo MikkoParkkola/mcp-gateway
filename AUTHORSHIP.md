@@ -3,7 +3,7 @@
 **Work:** mcp-gateway (this repository)
 **Author:** Mikko Parkkola, Finland
 **Date of declaration:** 2026-07-12
-**Last amended:** 2026-09-04 (outside contributions recorded)
+**Last amended:** 2026-10-26 (outside contributions in 3.5.2 recorded)
 
 ## Declaration
 
@@ -65,6 +65,11 @@ table says so rather than implying an acceptance that was never given.
 | Bryan Zick, submitted by [v4de](https://github.com/v4de) | `structuredContent` in responses from tools that declare an `outputSchema`, as the MCP 2025-06-18 spec requires | [#159](https://github.com/MikkoParkkola/mcp-gateway/pull/159) | **not applicable** — merged 2026-04-27, before `CLA.md` existed |
 | [v4de](https://github.com/v4de) | Rust 1.95 clippy, rustfmt and compilation fixes across ~15 sites | [#160](https://github.com/MikkoParkkola/mcp-gateway/pull/160) | **not applicable** — merged 2026-04-28, before `CLA.md` existed |
 | [terafin](https://github.com/terafin) | Parallel, timeout-bounded backend fan-out for `prompts/list` and `resources/list`; cancellation-safe cleanup of in-flight transport requests | [#465](https://github.com/MikkoParkkola/mcp-gateway/pull/465) | **outstanding** — requested 2026-09-04, after the merge |
+| [terafin](https://github.com/terafin) | A per-backend package-manager cache for stdio backends, so concurrent `npx` installs no longer tear a shared cache | [#622](https://github.com/MikkoParkkola/mcp-gateway/pull/622) | **accepted on submission** — [`CLA.md`](CLA.md) was in the repository at merge; no explicit statement was requested or given |
+| [terafin](https://github.com/terafin) | The `-full` container image variant with the Node.js, `uv` and `git` runtimes stdio backends shell out to | [#644](https://github.com/MikkoParkkola/mcp-gateway/pull/644) | **accepted on submission** — [`CLA.md`](CLA.md) was in the repository at merge; no explicit statement was requested or given |
+| [terafin](https://github.com/terafin) | `EXTRA_APT_PACKAGES` and `/docker-entrypoint.d` drop-ins on the `-full` image variant, with privileges dropped to the gateway user | [#729](https://github.com/MikkoParkkola/mcp-gateway/pull/729) | **accepted on submission** — [`CLA.md`](CLA.md) was in the repository at merge; no explicit statement was requested or given |
+| [terafin](https://github.com/terafin) | A timeout ceiling on every probe in the `-full` variant smoke gate | [#744](https://github.com/MikkoParkkola/mcp-gateway/pull/744) | **accepted on submission** — [`CLA.md`](CLA.md) was in the repository at merge; no explicit statement was requested or given |
+| [terafin](https://github.com/terafin) | A stdio backend whose npm cache cannot install clears its gateway-assigned cache and retries once; non-secret npm settings forwarded to stdio backends. Carried onto the release line in [#3242](https://github.com/MikkoParkkola/mcp-gateway/pull/3242) and the npm-settings follow-up | [#1759](https://github.com/MikkoParkkola/mcp-gateway/pull/1759) | **accepted on submission** — [`CLA.md`](CLA.md) was in the repository at submission; no explicit statement was requested or given |
 
 ## Third-party material
 

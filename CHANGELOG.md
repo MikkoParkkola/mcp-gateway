@@ -7,6 +7,123 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.2] - 2026-10-26
+
+### Added
+
+- **A `-full` image variant for stdio backends.** The default image carries no
+  language runtimes, so a backend started with `npx`, `uvx` or `git` could not
+  run in it. The `-full` variant adds Node.js 24 from NodeSource (its signing
+  key checked by fingerprint, npm pinned), `uv` pinned by digest, and `git`,
+  and runs under `tini`. On
+  start it installs any `EXTRA_APT_PACKAGES` and runs `/docker-entrypoint.d`
+  drop-ins, then drops privileges to the gateway user; an apt option or a
+  package removal in `EXTRA_APT_PACKAGES` is refused. It is published beside
+  the default image with a `-full` suffix, and CI builds, scans and smokes it
+  on every pull request. A new image variant in a patch release: the default
+  image is unchanged. By [@terafin](https://github.com/terafin)
+  ([#644](https://github.com/MikkoParkkola/mcp-gateway/pull/644),
+  [#729](https://github.com/MikkoParkkola/mcp-gateway/pull/729),
+  [#744](https://github.com/MikkoParkkola/mcp-gateway/pull/744)), ported in
+  [#4156](https://github.com/MikkoParkkola/mcp-gateway/pull/4156) and
+  [#4157](https://github.com/MikkoParkkola/mcp-gateway/pull/4157).
+
+### Fixed
+
+- **Concurrent `npx` installs no longer break each other.** Every stdio
+  backend whose command runs `npx`, `npm`, `pnpm`, `yarn` or `bunx` gets its
+  own package-manager cache, keyed on its full name, in the variable each
+  runner reads. Two backends installing at once used to tear one shared cache,
+  and every later start then failed as "Backend timeout" with zero tools. A
+  cache path the child cannot use goes to no runner, with one warning, and an
+  operator's own setting wins in any spelling its runner reads. By
+  [@terafin](https://github.com/terafin)
+  ([#622](https://github.com/MikkoParkkola/mcp-gateway/pull/622)), ported in
+  [#4140](https://github.com/MikkoParkkola/mcp-gateway/pull/4140),
+  [#4142](https://github.com/MikkoParkkola/mcp-gateway/pull/4142),
+  [#4148](https://github.com/MikkoParkkola/mcp-gateway/pull/4148),
+  [#4151](https://github.com/MikkoParkkola/mcp-gateway/pull/4151) and
+  [#4153](https://github.com/MikkoParkkola/mcp-gateway/pull/4153).
+- **A backend whose package cache cannot install repairs itself.** A failed
+  install on a damaged cache is recognised from the child's stderr, which is
+  kept in memory and never logged; the gateway clears the cache it assigned
+  and retries once. The startup sweep deletes only caches the gateway itself
+  marked, never an operator's directory. By
+  [@terafin](https://github.com/terafin)
+  ([#1759](https://github.com/MikkoParkkola/mcp-gateway/pull/1759)), ported
+  in [#4144](https://github.com/MikkoParkkola/mcp-gateway/pull/4144),
+  [#4146](https://github.com/MikkoParkkola/mcp-gateway/pull/4146) and
+  [#4147](https://github.com/MikkoParkkola/mcp-gateway/pull/4147).
+- **Six non-secret npm settings reach stdio backends.** `npm_config_allow_git`,
+  `cafile`, `prefer_offline`, `offline`, `strict_ssl` and `loglevel` are
+  forwarded from the gateway's environment; a backend's own spelling wins.
+  It is an allowlist, so no credential setting can be forwarded by accident.
+  ([#4155](https://github.com/MikkoParkkola/mcp-gateway/pull/4155))
+- **A restart no longer resets the daily cost budgets.** Totals were saved to
+  `costs.json` on shutdown but never read back, so an agent that had hit its
+  daily cap could spend again after a restart. Today's totals are now restored
+  on start; an earlier day's are not carried over, and an unreadable file
+  starts at zero with one warning naming it.
+  ([#4161](https://github.com/MikkoParkkola/mcp-gateway/pull/4161))
+- **The state directory is always absolute.** A relative
+  `MCP_GATEWAY_CONFIG_DIR` resolves against the gateway's working directory, so
+  a backend started elsewhere sees the same directory.
+  ([#4139](https://github.com/MikkoParkkola/mcp-gateway/pull/4139))
+- **A config edit keeps `${VAR}` references as written.** A dashboard edit to
+  one backend wrote every other backend's referenced header back as its
+  resolved value. Edits now read the file literally.
+  ([#4174](https://github.com/MikkoParkkola/mcp-gateway/pull/4174))
+- **An edit refuses a `gateway.yaml` that does not load.** The dashboard,
+  `add` and `setup` built their edit on the built-in defaults and wrote them
+  over the file; `list` and `get` showed an empty config. Every command now
+  reports the load error and leaves the file unchanged. A missing file still
+  starts from the defaults.
+  ([#4174](https://github.com/MikkoParkkola/mcp-gateway/pull/4174))
+
+### Security
+
+- **An edit no longer writes `MCP_GATEWAY_*` environment overrides into
+  `gateway.yaml`.** A value set only in the environment, such as
+  `MCP_GATEWAY_AUTH__BEARER_TOKEN`, was merged into the struct an edit writes
+  back, so the token landed in the file in plain text. An edit now reads the
+  file alone; the overrides still apply at runtime.
+  ([#4174](https://github.com/MikkoParkkola/mcp-gateway/pull/4174))
+- **A crafted `costs.json` can no longer reset an exhausted daily budget.**
+  Restore skipped a valid per-tool total that would overflow the global sum
+  and restored a saturated counter as zero; both reopened a cap after a
+  restart. Every in-range total now comes back, and a saturated one stays
+  saturated. ([#4176](https://github.com/MikkoParkkola/mcp-gateway/pull/4176))
+- **Dependency advisories.** Lockfile-only bumps: tokio 1.53.3
+  (RUSTSEC-2026-0386), ctutils 0.4.5 (RUSTSEC-2026-0385), webpki-roots and
+  webpki-root-certs 1.0.10 (RUSTSEC-2026-0381, -0383), rustls-webpki 0.103.16
+  (RUSTSEC-2026-0382), rustls 0.23.46 (RUSTSEC-2026-0285, -0346, -0348,
+  -0349) and quinn-proto 0.11.18 (RUSTSEC-2026-0338 to -0342).
+- **RUSTSEC-2024-0449 stays excepted until 2026-11-05.** It flags
+  `unsafe-libyaml`, reached through `serde_yaml`, as unmaintained; there is no
+  patched release. The OSV exception expires on that date, with no silent
+  renewal.
+- **Supply-chain hardening of the release workflow.** Every action is pinned to
+  a commit SHA, including `cosign-installer` v4.1.2 and `download-syft`
+  v0.24.3. One guarded publisher pushes images: it publishes the image it
+  scanned, and `latest` goes only to the highest stable tag, so a 3.5.x
+  release never takes `latest` from a newer line.
+
+### Deprecated
+
+- **`config_persistence::load_config_or_default`**, also re-exported from
+  `gateway::ui::backend_ops`, for library users. It edits an unloadable file as
+  the defaults; use `load_existing_or_default`, which returns the error.
+  Nothing in the gateway calls it, and 4.0 removes it.
+
+### Notes
+
+- **Both image tag styles.** As with 3.5.1, images are tagged both `3.5.2` and
+  `v3.5.2`.
+- **Known limit.** An edit validates the config struct before writing it, but
+  does not yet reload the written bytes with the full loader before the atomic
+  rename. No case is known where the two disagree; a later 3.5 release closes
+  the gap.
+
 ## [3.5.1] - 2026-09-04
 
 ### Changed
@@ -1325,6 +1442,7 @@ credential path.
 - Configuration via YAML with Pydantic validation
 - systemd/launchd service templates
 
+[3.5.2]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.1...v3.5.2
 [3.5.1]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.0...v3.5.1
 [3.5.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.4.0...v3.5.0
 [2.10.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v2.9.1...v2.10.0
