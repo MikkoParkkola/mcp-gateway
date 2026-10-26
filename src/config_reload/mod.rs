@@ -179,13 +179,31 @@ impl ReloadOutcome {
     }
 }
 
+/// A published config and the revision naming it.
+struct Published {
+    config: Arc<Config>,
+    applied: Option<Arc<Applied>>,
+}
+
+/// The keyed digests a published config was built from, and its revision.
+struct Applied {
+    inputs: AppliedInputs,
+    revision: String,
+}
+
 /// Live, atomically-swappable config snapshot shared across the gateway.
 ///
 /// Readers take a read-lock and clone the inner `Arc`; writers swap the whole
 /// `Arc` under a write-lock, so readers are never blocked for more than a
 /// pointer-width CAS.
 pub struct LiveConfig {
-    inner: RwLock<Arc<Config>>,
+    /// The published config and the revision naming it, swapped as one so a
+    /// reader never pairs a config with another config's revision.
+    inner: RwLock<Published>,
+    /// Derived from the record key; `None` publishes no revision at all.
+    revision_key: Option<[u8; 32]>,
+    /// The revision of what this process applied at startup.
+    running_revision: Option<String>,
     /// What the running process actually applied, fixed at startup.
     ///
     /// Kept apart from `inner` because the diff compares the file against the
@@ -208,7 +226,12 @@ impl LiveConfig {
     pub fn new(config: Config) -> Self {
         let running = Arc::new(config);
         Self {
-            inner: RwLock::new(Arc::clone(&running)),
+            inner: RwLock::new(Published {
+                config: Arc::clone(&running),
+                applied: None,
+            }),
+            revision_key: None,
+            running_revision: None,
             running,
             policy_epoch: None,
             admission: RwLock::new(()),
@@ -253,13 +276,86 @@ impl LiveConfig {
     /// Clone the current active configuration snapshot.
     #[must_use]
     pub fn get(&self) -> Arc<Config> {
-        Arc::clone(&self.inner.read())
+        Arc::clone(&self.inner.read().config)
     }
 
-    /// Atomically replace the current config.
+    /// Key revisions with `key` (derived from the record key).
+    #[must_use]
+    pub(crate) fn with_revision_key(mut self, key: [u8; 32]) -> Self {
+        self.revision_key = Some(key);
+        self
+    }
+
+    /// Record the inputs the startup config was built from: its revision is
+    /// both the running and the published one.
+    #[must_use]
+    pub(crate) fn with_applied(mut self, raw: RawInputs) -> Self {
+        let applied = self.applied(raw);
+        self.running_revision = applied.as_ref().map(|a| a.revision.clone());
+        self.inner.get_mut().applied = applied;
+        self
+    }
+
+    /// The revision of the published config; `None` when it was published
+    /// without its inputs or no revision key is configured.
+    #[must_use]
+    pub(crate) fn revision(&self) -> Option<String> {
+        self.inner
+            .read()
+            .applied
+            .as_ref()
+            .map(|a| a.revision.clone())
+    }
+
+    /// The revision this process applied at startup.
+    #[must_use]
+    pub(crate) fn running_revision(&self) -> Option<&str> {
+        self.running_revision.as_deref()
+    }
+
+    fn applied(&self, raw: RawInputs) -> Option<Arc<Applied>> {
+        let key = self.revision_key?;
+        let inputs = AppliedInputs::digest(&key, raw);
+        let revision = revision::config_revision(&key, &inputs);
+        Some(Arc::new(Applied { inputs, revision }))
+    }
+
+    /// Atomically replace the current config with one built from `raw`; the
+    /// raw bytes are reduced to digests here and dropped.
+    pub(crate) fn set_applied(&self, config: Config, raw: RawInputs) {
+        let applied = self.applied(raw);
+        self.publish(Published {
+            config: Arc::new(config),
+            applied,
+        });
+    }
+
+    /// New grants over the published config: only the grants part changes,
+    /// and the revision is recomputed under the same gate as a reload.
+    pub(crate) fn set_grants(&self, grants: Option<revision::RawBytes>) {
+        let _gate = self.admission.write();
+        let mut inner = self.inner.write();
+        let (Some(key), Some(current)) = (self.revision_key, inner.applied.as_ref()) else {
+            return;
+        };
+        let mut inputs = current.inputs.clone();
+        inputs.grants = grants.as_deref().map(|g| revision::part_digest(&key, g));
+        let revision = revision::config_revision(&key, &inputs);
+        inner.applied = Some(Arc::new(Applied { inputs, revision }));
+    }
+
+    /// Atomically replace the current config. It carries no revision: only
+    /// [`LiveConfig::set_applied`] knows the inputs.
     pub fn set(&self, config: Config) {
+        self.publish(Published {
+            config: Arc::new(config),
+            applied: None,
+        });
+    }
+
+    fn publish(&self, published: Published) {
         let gate = self.admission.write();
-        let old = std::mem::replace(&mut *self.inner.write(), Arc::new(config));
+        let old = std::mem::replace(&mut *self.inner.write(), published);
         if let Some(epoch) = &self.policy_epoch {
             let prev = epoch.fetch_add(1, Ordering::Release);
             debug_assert!(
@@ -438,6 +534,7 @@ mod diff;
 mod reload_context;
 mod reload_warm_hook;
 pub(crate) mod revision;
+use revision::{AppliedInputs, RawInputs};
 // Linux and macOS, as the other real-watcher rows (MIK-8181).
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod reload_warm_hook_tests;
