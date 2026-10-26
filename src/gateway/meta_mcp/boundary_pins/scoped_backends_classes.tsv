@@ -55,7 +55,7 @@ src/gateway/meta_mcp/task_replay.rs	cold_lease_remaining	scoped_get	scoped
 src/gateway/meta_mcp/task_replay.rs	settle_caller_view	scoped_get	scoped
 src/gateway/meta_mcp/task_replay.rs	settle_shared_view	scoped_get	scoped
 src/gateway/meta_mcp/task_replay.rs	target_refused_without_catalogue	scoped_get	scoped
-src/gateway/meta_mcp/task_replay.rs	unknown_server_refusal	scoped_get	scoped
+src/gateway/meta_mcp/task_replay/judging.rs	unknown_server_refusal	scoped_get	scoped
 src/gateway/meta_mcp/upstream.rs	cancel	get_for	Background
 src/gateway/meta_mcp/upstream.rs	eligible	get_for	Background
 src/gateway/meta_mcp/upstream.rs	recover_gated	get_for	Background

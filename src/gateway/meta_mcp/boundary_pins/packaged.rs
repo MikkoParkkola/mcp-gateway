@@ -53,6 +53,8 @@ pub(super) enum PinnedFile {
     PrePush,
     /// `.github/workflows/ci.yml`, read by `checked_in_workflow`.
     CiWorkflow,
+    /// ADR-016, read by `b26_the_adr_and_crate_root_name_both_unsafe_modules`.
+    UnsafeAdr,
 }
 
 impl PinnedFile {
@@ -62,6 +64,7 @@ impl PinnedFile {
             PinnedFile::RegistryBanClippy => "scripts/lint/registry-ban/clippy.toml",
             PinnedFile::PrePush => "scripts/dev/pre-push.sh",
             PinnedFile::CiWorkflow => ".github/workflows/ci.yml",
+            PinnedFile::UnsafeAdr => "docs/adr/ADR-016-scoped-unsafe-windows-acl.md",
         }
     }
 }
@@ -149,11 +152,13 @@ fn pinned_repo_files_are_read_in_a_checkout() {
         PinnedFile::RegistryBanClippy,
         PinnedFile::PrePush,
         PinnedFile::CiWorkflow,
+        PinnedFile::UnsafeAdr,
     ] {
         let rel = match file {
             PinnedFile::RegistryBanClippy => "scripts/lint/registry-ban/clippy.toml",
             PinnedFile::PrePush => "scripts/dev/pre-push.sh",
             PinnedFile::CiWorkflow => ".github/workflows/ci.yml",
+            PinnedFile::UnsafeAdr => "docs/adr/ADR-016-scoped-unsafe-windows-acl.md",
         };
         assert_eq!(rel, file.path(), "path() names the pinned file");
         assert!(
@@ -161,4 +166,25 @@ fn pinned_repo_files_are_read_in_a_checkout() {
             "{rel} missing in a checkout"
         );
     }
+}
+
+/// B26: ADR-016 and the crate root name both Windows modules allowed
+/// `unsafe`, so neither still reads as if `win_acl` were the only one. The
+/// ADR is not in the published crate, so a packaged run skips that half.
+#[test]
+fn b26_the_adr_and_crate_root_name_both_unsafe_modules() {
+    let lib = std::fs::read_to_string(crate_root().join("src/lib.rs")).expect("read src/lib.rs");
+    for module in ["win_acl", "win_cred"] {
+        assert!(lib.contains(module), "src/lib.rs does not name {module}");
+    }
+    let Some(adr) = repo_file(PinnedFile::UnsafeAdr) else {
+        return;
+    };
+    for module in ["win_acl", "win_cred"] {
+        assert!(adr.contains(module), "ADR-016 does not name {module}");
+    }
+    assert!(
+        adr.contains("are now `src/win_acl.rs` and `src/win_cred.rs`"),
+        "ADR-016 lacks its ADR-028 amendment"
+    );
 }

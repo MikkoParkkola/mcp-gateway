@@ -55,6 +55,11 @@ pub struct ToolPreview {
     pub path: String,
     /// Query/path/body parameter names.
     pub parameters: Vec<String>,
+    /// `read` for an operation the converter marks `read_only` (GET and
+    /// HEAD), else `write`.
+    pub class: &'static str,
+    /// Always `inferred`: a spec declares no MCP annotations.
+    pub class_source: &'static str,
 }
 
 /// Response from `POST /ui/api/import/openapi/preview`.
@@ -116,8 +121,20 @@ async fn preview_handler(
     };
 
     let tools: Vec<ToolPreview> = caps.iter().map(tool_preview_from_cap).collect();
+    // The same block a server preview carries. The URL is fetched
+    // as supplied, but echoed without userinfo, query or fragment, so a
+    // query-authenticated spec never returns its key.
+    let preview = json!({
+        "transport": "openapi",
+        "url": body.url.as_deref().map(crate::security::sanitize::redact_url_keep_path),
+        "publisher": {"verified": false, "source": null},
+    });
 
-    (StatusCode::OK, Json(json!({"tools": tools}))).into_response()
+    (
+        StatusCode::OK,
+        Json(json!({"preview": preview, "tools": tools})),
+    )
+        .into_response()
 }
 
 /// `POST /ui/api/import/openapi`
@@ -319,12 +336,37 @@ async fn fetch_spec(url: &str, ssrf_protection: bool) -> Result<String, (StatusC
         ));
     }
 
-    resp.text().await.map_err(|e| {
+    read_spec_body(resp).await
+}
+
+/// The most a fetched spec may carry, counted while it is read.
+/// Sized for large public API specs, not for MCP listings; an inline `spec`
+/// is not counted here.
+const SPEC_BUDGET: usize = 32 * 1024 * 1024;
+
+/// `resp`'s body as text, refused with a 502 the moment it passes
+/// [`SPEC_BUDGET`], so an over-budget spec is never held whole.
+async fn read_spec_body(mut resp: reqwest::Response) -> Result<String, (StatusCode, String)> {
+    let unreadable = |e: reqwest::Error| {
         (
             StatusCode::BAD_GATEWAY,
             format!("Failed to read response body: {e}"),
         )
-    })
+    };
+    let mut body = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(unreadable)? {
+        if body.len() + chunk.len() > SPEC_BUDGET {
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                format!(
+                    "the spec is over its {} MiB budget",
+                    SPEC_BUDGET / (1024 * 1024)
+                ),
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&body).into_owned())
 }
 
 /// Parse a spec string into generated capabilities.
@@ -343,6 +385,15 @@ fn tool_preview_from_cap(cap: &GeneratedCapability) -> ToolPreview {
     let mut method = String::new();
     let mut path = String::new();
     let mut parameters: Vec<String> = Vec::new();
+    // The converter's own `metadata.read_only` is the YAML's last such line,
+    // after every description: a description line that reads the same can
+    // only come earlier, so it never sets the class.
+    let read_only = cap
+        .yaml
+        .lines()
+        .rev()
+        .find_map(|line| line.trim().strip_prefix("read_only: "))
+        == Some("true");
 
     for line in cap.yaml.lines() {
         let trimmed = line.trim();
@@ -388,6 +439,8 @@ fn tool_preview_from_cap(cap: &GeneratedCapability) -> ToolPreview {
         method,
         path,
         parameters,
+        class: if read_only { "read" } else { "write" },
+        class_source: "inferred",
     }
 }
 
@@ -666,6 +719,23 @@ paths:
     }
 
     /// MIK-8691 T3: well-formed `{param}` references still extract in first-appearance order.
+    /// A description line that reads `read_only: true` does not make a
+    /// write a read; the converter's own metadata line decides.
+    #[test]
+    fn a_description_line_cannot_set_the_class() {
+        let cap = GeneratedCapability {
+            name: "x".into(),
+            yaml: "description: |\n  read_only: true\nendpoint:\n  method: POST\nmetadata:\n  read_only: false\n"
+                .into(),
+        };
+        assert_eq!(tool_preview_from_cap(&cap).class, "write");
+        let read = GeneratedCapability {
+            name: "y".into(),
+            yaml: "endpoint:\n  method: GET\nmetadata:\n  read_only: true\n".into(),
+        };
+        assert_eq!(tool_preview_from_cap(&read).class, "read");
+    }
+
     #[test]
     fn preview_parameters_are_unchanged_for_well_formed_references() {
         let cap = GeneratedCapability {
