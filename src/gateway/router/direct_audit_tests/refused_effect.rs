@@ -82,19 +82,23 @@ async fn a_contract_refusal_records_refused() {
     assert_eq!(event["response_effect"], "refused", "{event}");
 }
 
-/// A notification refused for want of a caller slot (a 429 with the body
-/// `{}`) is the gateway's refusal, classed by its status.
+/// A call refused with a 403 (here an agent identity the gateway requires
+/// and the call lacks) is classed `denied` by its status: the gateway
+/// refused it. A 429 is not: its outcome is an error, not a refusal.
 #[tokio::test]
-async fn a_refused_direct_notification_records_refused() {
+async fn a_forbidden_direct_call_records_refused() {
     let fx = fixture(Setup {
-        notify_refused: true,
+        agent_identity: Some(crate::config::AgentIdentityConfig {
+            enabled: true,
+            require_id: true,
+            known_agents: vec![],
+            ..Default::default()
+        }),
         ..Setup::default()
     })
     .await;
-    let note =
-        json!({"jsonrpc": "2.0", "method": "notifications/roots/list_changed", "params": {}});
-    let (status, body) = post(&fx, "alpha", &note.to_string(), &Caller::Anonymous).await;
-    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "premise: {body}");
+    let (status, body) = post(&fx, "alpha", &tools_call("t"), &Caller::Anonymous).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "premise: {body}");
     let event = only_attempt(&fx);
     assert_eq!(event["response_effect"], "refused", "{event}");
 }
