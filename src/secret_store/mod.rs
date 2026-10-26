@@ -10,14 +10,19 @@
 
 mod files;
 mod index;
+mod pending;
 mod save;
 
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::config::SecretStoreChoice;
 
 pub(crate) use files::FilesStore;
-pub(crate) use save::{NewSecret, SaveError, Vault, save_secrets, unused_entries};
+pub(crate) use pending::{NewSecretOwned, PendingSecrets, create_secrets};
+pub(crate) use save::{
+    LOCK_WAIT, NewSecret, SaveError, UnusedEntry, Vault, save_secrets, unused_entries,
+};
 
 /// A store new secrets are written to. Every call is bounded and never
 /// prompts; no method returns or logs a value.
@@ -33,7 +38,8 @@ pub(crate) trait SecretStore {
     /// Stores `value` under `name`, refusing a name already taken, and returns
     /// the reference text the config points at.
     fn create(&self, name: &str, value: &[u8]) -> Result<String, StoreError>;
-    /// Removes the entry `name`.
+    /// Removes the entry `name`. `Ok` means the removal is durable: the
+    /// index marks the name removed only after this returns `Ok`.
     fn delete(&self, name: &str) -> Result<(), StoreError>;
 }
 
@@ -125,11 +131,11 @@ const SWITCH: &str = "set `secrets.store: files`, or unlock or install the keych
 pub(crate) fn choose_store(
     choice: SecretStoreChoice,
     config_dir: &Path,
-) -> Result<Box<dyn SecretStore>, StoreError> {
+) -> Result<Arc<dyn SecretStore + Send + Sync>, StoreError> {
     match choice {
         SecretStoreChoice::Keychain => Err(StoreError::NotYetAvailable),
         SecretStoreChoice::Auto | SecretStoreChoice::Files => {
-            Ok(Box::new(FilesStore::new(config_dir)))
+            Ok(Arc::new(FilesStore::new(config_dir)))
         }
     }
 }

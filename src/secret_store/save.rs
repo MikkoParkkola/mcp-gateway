@@ -10,27 +10,32 @@
 //! An old entry is never deleted.
 
 use std::collections::BTreeSet;
+use std::convert::Infallible;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use super::index::Index;
-use super::{SecretStore, StoreError, fresh_name, now_ms, random_suffix};
+use super::{SecretStore, StoreError, StoreKind, fresh_name, now_ms, random_suffix};
 use crate::config_persistence::lock::{NotLocked, lock_file_blocking};
 use crate::fs_lock::ExclusiveFileLock;
 
-/// How long a save waits for another save holding the vault lock.
-const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+/// How long a synchronous save waits for another save holding the vault lock.
+pub(crate) const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// The vault lock, through the config lock's owner-only sidecar.
-fn take_lock(lock_path: &Path) -> Result<ExclusiveFileLock, StoreError> {
-    lock_file_blocking(lock_path, std::time::Instant::now() + LOCK_WAIT).map_err(|e| match e {
+/// The vault lock, through the config lock's owner-only sidecar, waiting no
+/// later than `deadline`.
+fn take_lock(lock_path: &Path, deadline: Instant) -> Result<ExclusiveFileLock, StoreError> {
+    lock_file_blocking(lock_path, deadline).map_err(|e| match e {
         NotLocked::Busy => StoreError::Failed(
-            "another save held the vault lock for 30 s; nothing was written".to_owned(),
+            "another save held the vault lock until the deadline; nothing was written".to_owned(),
         ),
         NotLocked::Failed(why) => StoreError::Failed(format!("cannot take the vault lock: {why}")),
     })
 }
 
-/// The per-user vault lock and the index of one config directory.
+/// The per-user vault lock and the index of one config directory. Cheap to
+/// clone: two paths.
+#[derive(Clone)]
 pub(crate) struct Vault {
     lock_path: PathBuf,
     index: Index,
@@ -76,7 +81,8 @@ pub(crate) struct NewSecret<'a> {
     pub(crate) value: &'a [u8],
 }
 
-/// Why a save did not commit.
+/// Why a save did not commit. `create_secrets` returns
+/// `SaveError<Infallible>`: it has no commit of its own.
 #[derive(Debug)]
 pub(crate) enum SaveError<E> {
     /// Refused before anything was written.
@@ -91,9 +97,9 @@ pub(crate) enum SaveError<E> {
 /// their reference texts, in order. All or nothing (ADR-024).
 ///
 /// `commit` writes the config. It must leave the old config in force when it
-/// returns `Err`, since every new entry is then removed. A caller that also
-/// holds the config writer lock takes it before calling this, which takes the
-/// vault lock (ADR-028 rule 3: config lock, then vault lock).
+/// returns `Err`, since every new entry is then removed; a panic inside it
+/// removes them too. The lock order is reload, then config sidecar, then
+/// vault: a caller holding either of the first two takes it before this.
 ///
 /// # Errors
 ///
@@ -106,8 +112,58 @@ pub(crate) fn save_secrets<T, E>(
     secrets: &[NewSecret<'_>],
     commit: impl FnOnce(&[String]) -> Result<T, E>,
 ) -> Result<T, SaveError<E>> {
+    let (_lock, written, refs) =
+        begin(vault, store, secrets, Instant::now() + LOCK_WAIT).map_err(widen)?;
+    // Removes this save's entries on an error return and on a panic alike.
+    let mut undo = Undo {
+        written: &written,
+        vault,
+        store,
+        armed: true,
+    };
+    let saved = commit(&refs).map_err(SaveError::Commit)?;
+    undo.armed = false;
+    Ok(saved)
+}
+
+/// A phase-one error as a `save_secrets` error.
+fn widen<E>(error: SaveError<Infallible>) -> SaveError<E> {
+    match error {
+        SaveError::Refused(e) => SaveError::Refused(e),
+        SaveError::Store(e) => SaveError::Store(e),
+        SaveError::Commit(never) => match never {},
+    }
+}
+
+/// Rolls a save back when dropped armed.
+struct Undo<'a> {
+    written: &'a Written,
+    vault: &'a Vault,
+    store: &'a dyn SecretStore,
+    armed: bool,
+}
+
+impl Drop for Undo<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            let _kept = self.written.roll_back(self.vault, self.store);
+        }
+    }
+}
+
+/// Phase one, shared by `save_secrets` and `create_secrets`, in B1's order:
+/// the vault lock (waiting no later than `deadline`), the value checks, the
+/// probe, then per secret: index the fresh name durably, confirm it absent,
+/// create it. A failure rolls this save back before it returns. On success
+/// the caller owns the lock and the rollback record.
+pub(super) fn begin(
+    vault: &Vault,
+    store: &dyn SecretStore,
+    secrets: &[NewSecret<'_>],
+    deadline: Instant,
+) -> Result<(ExclusiveFileLock, Written, Vec<String>), SaveError<Infallible>> {
     // Held from the first absence check through commit or rollback.
-    let _lock = take_lock(&vault.lock_path).map_err(SaveError::Refused)?;
+    let lock = take_lock(&vault.lock_path, deadline).map_err(SaveError::Refused)?;
     for secret in secrets {
         let refusal = if secret.value.is_empty() {
             Some(StoreError::Empty)
@@ -128,25 +184,18 @@ pub(crate) fn save_secrets<T, E>(
     store.probe().map_err(SaveError::Refused)?;
 
     let mut written = Written::default();
-    let refs = match write_all(vault, store, secrets, &mut written) {
-        Ok(refs) => refs,
+    match write_all(vault, store, secrets, &mut written) {
+        Ok(refs) => Ok((lock, written, refs)),
         Err(error) => {
-            written.roll_back(vault, store);
-            return Err(SaveError::Store(error));
-        }
-    };
-    match commit(&refs) {
-        Ok(saved) => Ok(saved),
-        Err(error) => {
-            written.roll_back(vault, store);
-            Err(SaveError::Commit(error))
+            let _kept = written.roll_back(vault, store);
+            Err(SaveError::Store(error))
         }
     }
 }
 
 /// What this save has indexed and what it may have created.
 #[derive(Default)]
-struct Written {
+pub(super) struct Written {
     indexed: Vec<String>,
     created: Vec<String>,
 }
@@ -155,9 +204,11 @@ impl Written {
     /// Deletes what this save created, newest first, then marks as removed
     /// each indexed name that is gone. A name whose delete failed, or one
     /// that collided with an entry this save did not create, stays live in
-    /// the index, so the unused listing still finds it.
-    fn roll_back(&self, vault: &Vault, store: &dyn SecretStore) {
+    /// the index, so the unused listing still finds it. Returns the names
+    /// this save created and could not remove.
+    pub(super) fn roll_back(&self, vault: &Vault, store: &dyn SecretStore) -> Vec<String> {
         let mut removed = BTreeSet::new();
+        let mut kept = Vec::new();
         for name in self.created.iter().rev() {
             match store.delete(name) {
                 Ok(()) => {
@@ -165,6 +216,7 @@ impl Written {
                 }
                 Err(error) => {
                     tracing::warn!(entry = %name, %error, "a rolled-back secret entry could not be removed");
+                    kept.push(name.clone());
                 }
             }
         }
@@ -178,6 +230,12 @@ impl Written {
                 tracing::warn!(entry = %name, %error, "a rolled-back secret entry stays in the index");
             }
         }
+        kept
+    }
+
+    /// How many entries this save created.
+    pub(super) fn created_count(&self) -> usize {
+        self.created.len()
     }
 }
 
@@ -214,29 +272,49 @@ fn write_all(
     Ok(refs)
 }
 
-/// Names in the index that still exist in their store and that no loaded
-/// config references, oldest first (ADR-028 rule 6).
+/// An entry in the index that still exists and that no config on disk names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UnusedEntry {
+    pub(crate) name: String,
+    pub(crate) store: StoreKind,
+    /// When the save that created it indexed it; 0 for a clock set before
+    /// the epoch. Never a sort key: the listing keeps index order.
+    pub(crate) created_at_ms: u64,
+}
+
+/// Entries in the index that still exist in their store and that no config
+/// on disk names, in index order (ADR-028 rule 6).
+///
+/// `referenced` is the entry names the on-disk `gateway.yaml` names: a
+/// `keychain:` name, or the basename of a `file:` path under `secrets/`. A
+/// caller holds the config sidecar from reading that file until this
+/// returns, so a concurrent save cannot make an active secret look unused.
 ///
 /// # Errors
 ///
-/// The index read failing, or an `exists` check failing.
+/// The vault lock, the index read or an `exists` check failing.
 pub(crate) fn unused_entries(
     vault: &Vault,
     stores: &[&dyn SecretStore],
     referenced: &BTreeSet<String>,
-) -> Result<Vec<String>, StoreError> {
+) -> Result<Vec<UnusedEntry>, StoreError> {
     // A save holding the lock may have created entries it has not committed.
-    let _lock = take_lock(&vault.lock_path)?;
+    let _lock = take_lock(&vault.lock_path, Instant::now() + LOCK_WAIT)?;
     let mut unused = Vec::new();
-    for (name, kind) in vault.index.live()? {
-        if referenced.contains(&name) {
+    for live in vault.index.live()? {
+        if referenced.contains(&live.name) {
             continue;
         }
-        let Some(store) = stores.iter().find(|s| s.kind().as_str() == kind) else {
+        // An index row is a candidate: the store is asked whether it exists.
+        let Some(store) = stores.iter().find(|s| s.kind().as_str() == live.store) else {
             continue;
         };
-        if store.exists(&name)? {
-            unused.push(name);
+        if store.exists(&live.name)? {
+            unused.push(UnusedEntry {
+                name: live.name,
+                store: store.kind(),
+                created_at_ms: live.created_at_ms,
+            });
         }
     }
     Ok(unused)

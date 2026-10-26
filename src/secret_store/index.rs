@@ -27,6 +27,7 @@ struct Line {
 }
 
 /// The index of one config directory.
+#[derive(Clone)]
 pub(super) struct Index {
     path: PathBuf,
 }
@@ -84,27 +85,40 @@ impl Index {
         sync_dir(dir).map_err(|e| failed("cannot sync the secrets index directory", &e))
     }
 
-    /// Every name created and not removed, with its store, oldest first.
-    /// Unreadable lines, such as a torn last one, are skipped.
-    pub(super) fn live(&self) -> Result<Vec<(String, String)>, StoreError> {
+    /// Every name created and not removed, in index order. Unreadable lines,
+    /// such as a torn last one, are skipped.
+    pub(super) fn live(&self) -> Result<Vec<Live>, StoreError> {
         let text = match std::fs::read_to_string(&self.path) {
             Ok(text) => text,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(failed("cannot read the secrets index", &e)),
         };
-        let mut live: Vec<(String, String)> = Vec::new();
+        let mut live: Vec<Live> = Vec::new();
         for line in text
             .lines()
             .filter_map(|l| serde_json::from_str::<Line>(l).ok())
         {
             if line.removed_at.is_some() {
-                live.retain(|(name, _)| *name != line.name);
+                live.retain(|entry| entry.name != line.name);
             } else if let Some(store) = line.store {
-                live.push((line.name, store));
+                live.push(Live {
+                    name: line.name,
+                    store,
+                    created_at_ms: line.created_at.unwrap_or(0),
+                });
             }
         }
         Ok(live)
     }
+}
+
+/// A name the index says was created and not removed: a candidate, since a
+/// crash between a delete and its removal line leaves one whose entry is gone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Live {
+    pub(super) name: String,
+    pub(super) store: String,
+    pub(super) created_at_ms: u64,
 }
 
 /// Whether `file` is empty or ends in a newline.

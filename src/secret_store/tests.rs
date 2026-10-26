@@ -17,32 +17,34 @@ use crate::config::{Config, SecretStoreChoice};
 const SENTINEL: &[u8] = b"kc-sentinel-7f3a";
 
 /// A temporary config dir and a vault whose lock lives in it.
-fn vault() -> (tempfile::TempDir, Vault) {
+pub(super) fn vault() -> (tempfile::TempDir, Vault) {
     let dir = tempfile::tempdir().expect("tempdir");
     let vault = Vault::with_lock(dir.path(), dir.path().join("vault.lock"));
     (dir, vault)
 }
 
-fn index_text(dir: &Path) -> String {
+pub(super) fn index_text(dir: &Path) -> String {
     std::fs::read_to_string(dir.join("secrets-index.jsonl")).unwrap_or_default()
 }
 
 /// An in-memory store that records every call, can fail its Nth create, and
 /// checks at each create that the name is already durable in the index.
-struct Fake {
+pub(super) struct Fake {
     entries: Mutex<BTreeMap<String, Vec<u8>>>,
     calls: Mutex<Vec<String>>,
-    fail_create: Option<usize>,
+    pub(super) fail_create: Option<usize>,
     creates: Mutex<usize>,
     limit: usize,
-    probe: Result<(), StoreError>,
+    pub(super) probe: Result<(), StoreError>,
     index: Option<PathBuf>,
+    /// Every delete fails, leaving the entry.
+    pub(super) fail_delete: bool,
     /// The first name asked about is taken by an entry this save did not make.
     collide: bool,
 }
 
 impl Fake {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             entries: Mutex::default(),
             calls: Mutex::default(),
@@ -52,14 +54,15 @@ impl Fake {
             probe: Ok(()),
             index: None,
             collide: false,
+            fail_delete: false,
         }
     }
 
-    fn calls(&self) -> Vec<String> {
+    pub(super) fn calls(&self) -> Vec<String> {
         self.calls.lock().unwrap().clone()
     }
 
-    fn names(&self) -> Vec<String> {
+    pub(super) fn names(&self) -> Vec<String> {
         self.entries.lock().unwrap().keys().cloned().collect()
     }
 
@@ -115,12 +118,15 @@ impl SecretStore for Fake {
     }
     fn delete(&self, name: &str) -> Result<(), StoreError> {
         self.call("delete", name);
+        if self.fail_delete {
+            return Err(StoreError::Failed("injected delete failure".to_owned()));
+        }
         self.entries.lock().unwrap().remove(name);
         Ok(())
     }
 }
 
-fn three() -> [NewSecret<'static>; 3] {
+pub(super) fn three() -> [NewSecret<'static>; 3] {
     [
         NewSecret {
             field: "auth.bearer_token",
@@ -137,7 +143,7 @@ fn three() -> [NewSecret<'static>; 3] {
     ]
 }
 
-fn count(calls: &[String], what: &str) -> usize {
+pub(super) fn count(calls: &[String], what: &str) -> usize {
     calls.iter().filter(|c| c.starts_with(what)).count()
 }
 
@@ -255,7 +261,8 @@ fn b4_old_entries_stay_and_only_unreferenced_ones_are_unused() {
     assert!(Path::new(second.strip_prefix("file:").unwrap()).exists());
     let referenced = BTreeSet::from([name(&second)]);
     let unused = unused_entries(&vault, &[&store], &referenced).expect("listed");
-    assert_eq!(unused, vec![name(&first)]);
+    let names: Vec<String> = unused.into_iter().map(|entry| entry.name).collect();
+    assert_eq!(names, vec![name(&first)]);
 }
 
 #[test]
@@ -282,9 +289,9 @@ fn b5_the_index_is_owner_only_outside_secrets_and_survives_a_torn_line() {
     save_secrets(&vault, &store, &secret, |_| Ok::<_, ()>(())).expect("saved again");
     let live = super::index::Index::at(dir.path()).live().unwrap();
     assert_eq!(live.len(), 2, "{live:?}");
-    assert!(live.iter().all(
-        |(name, store)| name.starts_with("mcp-gateway.auth-bearer-token.") && store == "files"
-    ));
+    assert!(live.iter().all(|entry| {
+        entry.name.starts_with("mcp-gateway.auth-bearer-token.") && entry.store == "files"
+    }));
 }
 
 #[test]
@@ -337,7 +344,11 @@ fn b6_two_saves_on_one_vault_lock_take_turns() {
     held_rx.recv().expect("the first save holds the lock");
     // While the first save is inside its commit, the lock cannot be taken.
     let contended = crate::fs_lock::ExclusiveFileLock::try_acquire(&lock);
-    assert!(contended.is_err(), "the vault lock was free during a save");
+    assert!(
+        matches!(&contended, Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+        "the vault lock was free during a save: {:?}",
+        contended.as_ref().err()
+    );
     release_tx.send(()).unwrap();
     first.join().unwrap();
     assert!(crate::fs_lock::ExclusiveFileLock::try_acquire(&lock).is_ok());
@@ -520,9 +531,11 @@ fn b19_a_second_process_meets_the_vault_lock() {
         .map_while(Result::ok)
         .any(|line| line.contains("vault lock held"));
     assert!(held, "the child never took the lock");
+    let contended = crate::fs_lock::ExclusiveFileLock::try_acquire(&lock);
     assert!(
-        crate::fs_lock::ExclusiveFileLock::try_acquire(&lock).is_err(),
-        "a second process took the vault lock while the first held it"
+        matches!(&contended, Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+        "a second process took the vault lock while the first held it: {:?}",
+        contended.as_ref().err()
     );
     drop(child.stdin.take());
     let rest: Vec<String> = lines.map_while(Result::ok).collect();
@@ -551,5 +564,5 @@ fn b15_a_collision_is_not_retried_and_the_foreign_entry_stays_listed() {
     // Still live in the index: the unused listing can find it.
     let live = super::index::Index::at(dir.path()).live().unwrap();
     assert_eq!(live.len(), 1, "{live:?}");
-    assert_eq!(live[0].0, store.names()[0]);
+    assert_eq!(live[0].name, store.names()[0]);
 }
