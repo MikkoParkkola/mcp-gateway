@@ -437,6 +437,7 @@ pub async fn apply_patch(
 mod diff;
 mod reload_context;
 mod reload_warm_hook;
+pub(crate) mod revision;
 // Linux and macOS, as the other real-watcher rows (MIK-8181).
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod reload_warm_hook_tests;
