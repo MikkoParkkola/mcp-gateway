@@ -190,7 +190,14 @@ fn the_unused_listing_carries_write_times_in_index_order() {
     let two = save_secrets(&vault, &store, &three()[..1], |r| Ok::<_, ()>(r[0].clone())).unwrap();
     let unused: Vec<UnusedEntry> =
         unused_entries(&vault, &[&store], &BTreeSet::new()).expect("listed");
-    let base = |r: &str| r.rsplit('/').next().unwrap().to_owned();
+    // The entry name is the file's name, whatever the path separator.
+    let base = |r: &str| {
+        std::path::Path::new(r.strip_prefix("file:").unwrap_or(r))
+            .file_name()
+            .expect("a file name")
+            .to_string_lossy()
+            .into_owned()
+    };
     let names: Vec<&str> = unused.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(names, vec![base(&one).as_str(), zero, base(&two).as_str()]);
     assert_eq!(unused[1].created_at_ms, 0);
