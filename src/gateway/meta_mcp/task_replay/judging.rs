@@ -37,7 +37,7 @@ impl MetaMcp {
             let Some(absence) = scoped.absence(&target.server) else {
                 continue;
             };
-            if absence == super::scoped_backends::Absence::OutOfScope {
+            if absence == super::super::scoped_backends::Absence::OutOfScope {
                 let args = json!({"server": target.server, "tool": target.tool, "arguments": {}});
                 let _ = self.check_visible_policy(&args, session, caller);
             }
@@ -245,7 +245,7 @@ impl MetaMcp {
                 .targets
                 .first()
                 .map_or(stored.task.tool(), |target| target.server.as_str());
-            return Err(super::stored_binding::Refusal::Legacy.error(server));
+            return Err(super::super::stored_binding::Refusal::Legacy.error(server));
         }
         self.judge_bindings(
             &self.scoped(caller.scope().authorizer.backend_grant()),
@@ -292,10 +292,10 @@ impl MetaMcp {
             caller.agent_id.map(|a| (a.as_str(), a.proof())),
         ])
         .to_string();
-        super::grant_audit::in_repeat_scope(&self.grant_repeats, task_and_caller, || {
+        super::super::grant_audit::in_repeat_scope(&self.grant_repeats, task_and_caller, || {
             // Names only: no current policy reads a target's arguments.
             for target in &stored.targets {
-                let args = super::upstream::recovery_policy_args(
+                let args = super::super::upstream::recovery_policy_args(
                     &target.server,
                     &target.tool,
                     &json!({}),
