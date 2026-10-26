@@ -71,6 +71,7 @@ mod playbook_authz;
 /// MIK-8158: no authorization server, no protected-resource metadata.
 mod prm_without_issuer;
 mod quota_principal;
+mod refusal_wire_pins;
 mod request_parsing;
 mod responses;
 mod session_hold_direct;
