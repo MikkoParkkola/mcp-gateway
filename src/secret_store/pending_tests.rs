@@ -5,6 +5,7 @@
 //! listing.
 
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::sync::{Arc, Barrier};
 use std::time::Instant;
 
@@ -176,7 +177,7 @@ fn the_unused_listing_carries_write_times_in_index_order() {
     let index = dir.path().join("secrets-index.jsonl");
     let mut text = std::fs::read_to_string(&index).unwrap();
     let zero = "mcp-gateway.zero.0.0000000000000000";
-    text.push_str(&format!("{{\"name\":\"{zero}\",\"store\":\"files\"}}\n"));
+    writeln!(text, "{{\"name\":\"{zero}\",\"store\":\"files\"}}").unwrap();
     std::fs::write(&index, text).unwrap();
     std::fs::write(dir.path().join("secrets").join(zero), "z\n").unwrap();
     let two = save_secrets(&vault, &store, &three()[..1], |r| Ok::<_, ()>(r[0].clone())).unwrap();
