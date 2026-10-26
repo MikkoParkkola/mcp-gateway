@@ -204,7 +204,7 @@ impl ResolvedAuthConfig {
     }
 
     /// [`Self::validate_token`] judged at `now`, the caller's reading of the
-    /// clock; reads no clock (MIK-8202). Tests judge expiry boundaries with it.
+    /// clock; reads no clock. Tests judge expiry boundaries with it.
     #[cfg(test)]
     #[must_use]
     pub(crate) fn validate_token_at(
