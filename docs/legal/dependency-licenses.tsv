@@ -1,4 +1,6 @@
 name	version	authors	repository	license	license_file	description
+@axe-core/playwright	4.14.0	Deque Systems, Inc.	https://github.com/dequelabs/axe-core-npm	MPL-2.0		Provides a method to inject and analyze web pages using axe
+@playwright/test	1.64.1	Microsoft Corporation	https://github.com/microsoft/playwright	Apache-2.0		A high-level API to automate web browsers
 adler2	2.0.1	Jonas Schievink <jonasschievink@gmail.com>|oyvindln <oyvindln@users.noreply.github.com>	https://github.com/oyvindln/adler2	0BSD OR Apache-2.0 OR MIT		A simple clean-room implementation of the Adler-32 checksum
 aho-corasick	1.1.4	Andrew Gallant <jamslam@gmail.com>	https://github.com/BurntSushi/aho-corasick	MIT OR Unlicense		Fast multiple substring searching.
 alloc-no-stdlib	2.0.4	Daniel Reiter Horn <danielrh@dropbox.com>	https://github.com/dropbox/rust-alloc-no-stdlib	BSD-3-Clause		A dynamic allocator that may be used with or without the stdlib. This allows a package with nostd to allocate memory dynamically and be used either with a custom allocator, items on the stack, or by a package that wishes to simply use Box<>. It also provides options to use calloc or a mutable global variable for pre-zeroed memory
@@ -27,6 +29,7 @@ atomic-waker	1.1.2	Stjepan Glavina <stjepang@gmail.com>|Contributors to futures-
 autocfg	1.5.0	Josh Stone <cuviper@gmail.com>	https://github.com/cuviper/autocfg	Apache-2.0 OR MIT		Automatic cfg for Rust compiler features
 aws-lc-rs	1.16.2	AWS-LibCrypto	https://github.com/aws/aws-lc-rs	(Apache-2.0 OR ISC) AND ISC		aws-lc-rs is a cryptographic library using AWS-LC for its cryptographic operations. This library strives to be API-compatible with the popular Rust library named ring.
 aws-lc-sys	0.39.0	AWS-LC	https://github.com/aws/aws-lc-rs	(Apache-2.0 OR ISC OR MIT) AND (Apache-2.0 OR ISC OR MIT-0) AND (Apache-2.0 OR ISC) AND Apache-2.0 AND BSD-3-Clause AND ISC AND MIT		AWS-LC is a general-purpose cryptographic library maintained by the AWS Cryptography team for AWS and their customers. It іs based on code from the Google BoringSSL project and the OpenSSL project.
+axe-core	4.14.0	Deque Systems, Inc.	https://github.com/dequelabs/axe-core	MPL-2.0		Accessibility engine for automated Web UI testing
 axum	0.8.9		https://github.com/tokio-rs/axum	MIT		HTTP routing and request handling library that focuses on ergonomics and modularity
 axum-core	0.5.6		https://github.com/tokio-rs/axum	MIT		Core types and traits for axum
 axum-server	0.8.0	Programatik <programatik29@gmail.com>|Adi Salimgereev <adisalimgereev@gmail.com>	https://github.com/programatik29/axum-server	MIT		High level server designed to be used with axum framework.
@@ -216,6 +219,8 @@ pem	3.0.6	Jonathan Creekmore <jonathan@thecreekmores.org>	https://github.com/jcr
 percent-encoding	2.3.2	The rust-url developers	https://github.com/servo/rust-url/	Apache-2.0 OR MIT		Percent encoding and decoding
 pin-project-lite	0.2.17		https://github.com/taiki-e/pin-project-lite	Apache-2.0 OR MIT		A lightweight version of pin-project written with declarative macros.
 pin-utils	0.1.0	Josef Brandl <mail@josefbrandl.de>	https://github.com/rust-lang-nursery/pin-utils	Apache-2.0 OR MIT		Utilities for pinning
+playwright	1.64.1	Microsoft Corporation	https://github.com/microsoft/playwright	Apache-2.0		A high-level API to automate web browsers
+playwright-core	1.64.1	Microsoft Corporation	https://github.com/microsoft/playwright	Apache-2.0		A high-level API to automate web browsers
 plotters	0.3.7	Hao Hou <haohou302@gmail.com>	https://github.com/plotters-rs/plotters	MIT		A Rust drawing library focus on data plotting for both WASM and native applications
 plotters-backend	0.3.7	Hao Hou <haohou302@gmail.com>	https://github.com/plotters-rs/plotters	MIT		Plotters Backend API
 plotters-svg	0.3.7	Hao Hou <haohou302@gmail.com>	https://github.com/plotters-rs/plotters.git	MIT		Plotters SVG backend

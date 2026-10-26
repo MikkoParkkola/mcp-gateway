@@ -671,7 +671,7 @@ fn storage_creates_directory_if_missing() {
 }
 
 /// The token file is REPLACED, never written into whatever already sits at
-/// that path (Decision D, `docs/design/unauthenticated-network-posture.md`).
+/// that path (Decision D, the unauthenticated network posture design).
 ///
 /// `fs::write` followed by `set_permissions` puts the access token inside a
 /// file created at the process umask, or inside an existing file whose mode

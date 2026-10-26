@@ -6,6 +6,14 @@
 # tracked tree, and may not cite a tracker id.
 #
 #   PR_BODY="$(gh pr view N --json body -q .body)" scripts/dev/check-pr-body-hygiene.sh
+#   scripts/dev/check-pr-body-hygiene.sh body.md
+#
+# Exactly one source: $PR_BODY or one file. Whether PR_BODY is SET decides,
+# not its value: set to "" is an explicit empty body, which passes (it cannot
+# leak anything, and CI always sets it). Unset with no file, two sources, a
+# missing file, more than one file or an option is a misused call and is
+# refused, because a check that reads nothing and prints OK is worse than no
+# check.
 #
 # CI passes the body through the environment, never by interpolating it into
 # the script, so the body is data and cannot become shell.
@@ -14,7 +22,26 @@ set -euo pipefail
 # shellcheck source=scripts/dev/public-hygiene-patterns.sh
 source "$(dirname "${BASH_SOURCE[0]}")/public-hygiene-patterns.sh"
 
-body="${PR_BODY-}"
+usage() {
+  printf 'usage: PR_BODY=<text> %s  |  %s <file>\n' "$0" "$0" >&2
+  exit 2
+}
+if (( $# > 1 )) || [[ "${1:-}" == -* ]]; then
+  usage
+fi
+if (( $# == 1 )); then
+  [[ -z "${PR_BODY+set}" ]] || { printf 'check-pr-body-hygiene: give the body in PR_BODY or a file, not both\n' >&2; exit 2; }
+  [[ -f "$1" ]] || { printf 'check-pr-body-hygiene: no such file: %s\n' "$1" >&2; exit 2; }
+  body="$(cat -- "$1")"
+elif [[ -n "${PR_BODY+set}" ]]; then
+  body="$PR_BODY"
+else
+  usage
+fi
+if [[ -z "${body//[[:space:]]/}" ]]; then
+  printf 'Pull request body hygiene OK: the body is empty.\n'
+  exit 0
+fi
 failures=0
 
 report() {

@@ -328,7 +328,7 @@ fn cache_binding(subject_key: &str, audience: &str) -> String {
 /// person the gateway never authenticated.
 ///
 /// The prefix pins the subject and leaves the audience free
-/// (`docs/internal/design/2026-09-22-identity-keyed-slot-eviction.md` §E1).
+/// (the identity keyed slot eviction design §E1).
 /// Leaving the audience free is not looseness: on the token-exchange path the
 /// pool key is [`token_exchange::exchange_cache_key`]'s *widened* string, so an
 /// exact match would silently evict nothing there. The length prefix makes the
