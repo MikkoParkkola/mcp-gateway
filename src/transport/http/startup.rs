@@ -479,7 +479,7 @@ impl HttpTransport {
     ///
     /// `initialize()` re-enters this on session expiry, by which time
     /// `outbound_era()` may already read `Modern` (MIK-7214.HEADER.9a/.9b,
-    /// `docs/design/2026-09-03-header-9-era-conditional-outbound.md`). The
+    /// the header 9 era conditional outbound design). The
     /// builder always writes the legacy handshake version, so a reconnect to
     /// an already-classified peer is re-asserted here, after the builder's
     /// static-header merge — the same ordering the `Request`/`Notify`

@@ -7,7 +7,7 @@
 //! entry point that does not exist yet, so they share one compile error; this
 //! case's red must be attributable to the `reap` signature alone.
 //!
-//! Plan: `docs/design/2026-09-08-control4-session-lifecycle-test-plan.md`.
+//! Plan: the control4 session lifecycle test plan.
 
 use mcp_gateway::gateway::session_lifecycle::SessionLifecycle;
 
