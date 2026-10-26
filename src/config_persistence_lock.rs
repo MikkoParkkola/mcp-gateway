@@ -180,7 +180,14 @@ pub(crate) async fn lock_config_recovering(
     let lock = lock_path(&resolved(config));
     loop {
         if let Some(held) = try_once(config, &lock)? {
-            return recovered(config, held);
+            // Recovery reads, writes and fsyncs: off the async workers.
+            let path = config.to_path_buf();
+            let recovery = tokio::task::spawn_blocking(move || super::journal::recover(&path))
+                .await
+                .map_err(|e| {
+                    NotLocked::Failed(format!("recovering the replace journal failed: {e}"))
+                })?;
+            return recovery.map(|r| (held, r)).map_err(NotLocked::Failed);
         }
         if Instant::now() >= deadline {
             return Err(NotLocked::Busy);

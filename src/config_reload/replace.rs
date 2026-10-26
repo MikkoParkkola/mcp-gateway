@@ -154,7 +154,8 @@ pub(crate) enum ReplaceError {
     Busy,
     /// The file changed since the caller's view; its current revision.
     Stale { current: FileRevision },
-    /// The compute refused, or produced bytes the loader cannot read.
+    /// The compute refused, or produced bytes that are not UTF-8 text. Bytes
+    /// the loader rejects are `ReloadRefused`, after the rollback.
     Refused(String),
     /// gateway.yaml no longer resolves to the file this gateway started on.
     Unsupported(String),
@@ -276,38 +277,53 @@ impl ReloadContext {
         new: &[u8],
         replaced: Replaced,
     ) -> Result<ReplaceOutcome, ReplaceError> {
-        let config = &self.config_path;
-        let original = journal::stage_original(config, current)
+        // Every step uses `target`, resolved once and checked against the
+        // trusted path, so a link re-pointed mid-write cannot split them.
+        let original = journal::stage_original(target, current)
             .map_err(|e| ReplaceError::Stage(format!("staging the original failed: {e}")))?;
-        if let Err(e) = journal::begin(config, &original, FileRevision::of(current).0) {
-            let _ = std::fs::remove_file(&original);
-            return Err(ReplaceError::Stage(format!(
-                "writing the replace journal failed: {e}"
-            )));
+        // The kept copy exists before anything is replaced: a save that
+        // cannot keep it is refused, never reported done without it.
+        let kept_beside = match replaced {
+            Replaced::KeepBeside => match keep_beside(&original, target) {
+                Ok(kept) => Some(kept),
+                Err(e) => {
+                    return Err(Self::roll_back(target, ReplaceError::Stage(e)));
+                }
+            },
+            Replaced::Discard => None,
+        };
+        let unkeep = || {
+            if let Some(kept) = &kept_beside {
+                let _ = std::fs::remove_file(kept);
+            }
+        };
+        if let Err(e) = journal::begin(target, FileRevision::of(current).0) {
+            unkeep();
+            return Err(Self::roll_back(
+                target,
+                ReplaceError::Stage(format!("writing the replace journal failed: {e}")),
+            ));
         }
         // gateway.yaml is owner-only, as every config write leaves it.
-        if let Err(e) = write_atomic(target, new, FileMode::Private, Symlink::Follow) {
-            return Err(self.roll_back(ReplaceError::Write(format!(
-                "writing {} failed: {e}",
-                target.display()
-            ))));
+        if let Err(e) = write_atomic(target, new, FileMode::Private, Symlink::Replace) {
+            unkeep();
+            return Err(Self::roll_back(
+                target,
+                ReplaceError::Write(format!("writing {} failed: {e}", target.display())),
+            ));
         }
         match self.reload_outcome_locked().await {
             Ok(reload) => {
-                if let Err(e) = journal::mark_all_renamed(config) {
+                if let Err(e) = journal::mark_all_renamed(target) {
                     return Err(ReplaceError::Unconfirmed {
-                        journal: journal::journal_path(config),
+                        journal: journal::journal_path(target),
                         error: e.to_string(),
                     });
                 }
-                let kept_beside = match replaced {
-                    Replaced::KeepBeside => keep_beside(&original, target),
-                    Replaced::Discard => None,
-                };
-                if let Err(e) = journal::finish(config) {
+                if let Err(e) = journal::finish(target) {
                     // The new bytes stand and were accepted; the journal says
                     // `all_renamed`, so the next lock holder only cleans up.
-                    tracing::warn!(error = %e, path = %config.display(), "removing the replace journal failed; the next config write removes it");
+                    tracing::warn!(error = %e, path = %target.display(), "removing the replace journal failed; the next config write removes it");
                 }
                 Ok(ReplaceOutcome {
                     revision: Some(FileRevision::of(new)),
@@ -315,27 +331,34 @@ impl ReloadContext {
                     reload,
                 })
             }
-            Err(refusal) => Err(self.roll_back(ReplaceError::ReloadRefused(refusal))),
+            Err(refusal) => {
+                unkeep();
+                Err(Self::roll_back(
+                    target,
+                    ReplaceError::ReloadRefused(refusal),
+                ))
+            }
         }
     }
 
-    /// Put the original back (the same recovery the next lock holder would
-    /// run) and report `error`, or `RollbackFailed` when that fails too.
-    fn roll_back(&self, error: ReplaceError) -> ReplaceError {
-        match journal::recover(&self.config_path) {
+    /// Put the original back, or remove a staged copy no journal names yet
+    /// (the same recovery the next lock holder would run), and report
+    /// `error`; or `RollbackFailed` when that fails too.
+    fn roll_back(target: &std::path::Path, error: ReplaceError) -> ReplaceError {
+        match journal::recover(target) {
             Ok(_) => error,
             Err(rollback) => ReplaceError::RollbackFailed {
-                journal: journal::journal_path(&self.config_path),
+                journal: journal::journal_path(target),
                 error: rollback,
             },
         }
     }
 }
 
-/// Move the staged original to `gateway.yaml.<UTC time>.rejected` beside the
-/// target, never over an existing name (`-2`, `-3` on a clash). A failure
-/// leaves it where it is, for the journal cleanup to remove, and is logged:
-/// the save itself succeeded.
+/// Keep the staged original as `gateway.yaml.<UTC time>.rejected` beside the
+/// target: a second hard link to it, so it survives the journal cleanup that
+/// removes the staged name. Never over an existing name (`-2`, `-3` on a
+/// clash).
 #[cfg_attr(
     not(test),
     expect(
@@ -343,7 +366,7 @@ impl ReloadContext {
         reason = "first callers: the web UI settings save and the configuration-history restore"
     )
 )]
-fn keep_beside(original: &std::path::Path, target: &std::path::Path) -> Option<PathBuf> {
+fn keep_beside(original: &std::path::Path, target: &std::path::Path) -> Result<PathBuf, String> {
     // A clock before 1970 still keeps the copy, under a name that says so.
     let stamp = crate::clock::utc_now().map_or_else(
         |_| "before-epoch".to_owned(),
@@ -359,17 +382,17 @@ fn keep_beside(original: &std::path::Path, target: &std::path::Path) -> Option<P
         let kept = PathBuf::from(name);
         // A hard link never replaces an existing name, unlike a rename.
         match std::fs::hard_link(original, &kept) {
-            Ok(()) => {
-                let _ = std::fs::remove_file(original);
-                return Some(kept);
-            }
+            Ok(()) => return Ok(kept),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(e) => {
-                tracing::warn!(error = %e, path = %kept.display(), "keeping the replaced gateway.yaml failed");
-                return None;
+                return Err(format!(
+                    "keeping the replaced gateway.yaml as {} failed: {e}",
+                    kept.display()
+                ));
             }
         }
     }
-    tracing::warn!(path = %base, "keeping the replaced gateway.yaml failed: every name is taken");
-    None
+    Err(format!(
+        "keeping the replaced gateway.yaml failed: every name like {base} is taken"
+    ))
 }
