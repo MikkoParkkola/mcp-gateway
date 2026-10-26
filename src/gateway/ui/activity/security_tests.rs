@@ -26,7 +26,7 @@ fn write(path: &std::path::Path, entries: &mut [Value]) {
         e["prev_entry_hash"] = prev.clone().into();
         let hash = recompute_entry_hash(e).unwrap();
         e["entry_hash"] = hash.clone().into();
-        body.push_str(&format!("{e}\n"));
+        body.push_str(&(e.to_string() + "\n"));
         prev = hash;
     }
     std::fs::write(path, body).unwrap();

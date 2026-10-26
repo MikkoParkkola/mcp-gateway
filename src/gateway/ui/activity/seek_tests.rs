@@ -63,7 +63,7 @@ fn c1_bisection_reads_o_log_n_windows_in_a_large_file() {
     let path = dir.path().join("inv.jsonl");
     let pad = "p".repeat(400);
     let body: String = (1..=30_000)
-        .map(|c| format!("{}\n", json!({"counter": c, "pad": pad})))
+        .map(|c| json!({"counter": c, "pad": pad}).to_string() + "\n")
         .collect();
     std::fs::write(&path, body).unwrap();
     for counter in [1, 15_000, 29_999, 30_000] {
@@ -84,11 +84,11 @@ fn c1_a_record_at_the_cap_is_returned_whole() {
     big["pad"] = "x".repeat(4 * 1024 * 1024 - base).into();
     let mut body = String::new();
     for c in 1..5 {
-        body.push_str(&format!("{}\n", json!({"counter": c})));
+        body.push_str(&(json!({"counter": c}).to_string() + "\n"));
     }
-    body.push_str(&format!("{big}\n"));
+    body.push_str(&(big.to_string() + "\n"));
     for c in 6..10 {
-        body.push_str(&format!("{}\n", json!({"counter": c})));
+        body.push_str(&(json!({"counter": c}).to_string() + "\n"));
     }
     std::fs::write(&path, body).unwrap();
     for counter in [4, 5, 6, 9] {
@@ -106,7 +106,7 @@ fn c2_a_counter_not_in_the_kept_log_is_none() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("inv.jsonl");
     let body: String = (10..=20)
-        .map(|c| format!("{}\n", json!({"counter": c})))
+        .map(|c| json!({"counter": c}).to_string() + "\n")
         .collect();
     std::fs::write(&path, body).unwrap();
     for counter in [1, 9, 21] {

@@ -96,8 +96,12 @@ fn logs(state: &AppState) -> Option<Logs> {
     })
 }
 
-fn bad_request(body: Value) -> Response {
-    (StatusCode::BAD_REQUEST, Json(body)).into_response()
+/// An early answer from a parsing or admission step. Boxed: a `Response`
+/// is large, and the happy path should not carry its size.
+type Early = Box<Response>;
+
+fn bad_request(body: Value) -> Early {
+    Box::new((StatusCode::BAD_REQUEST, Json(body)).into_response())
 }
 
 fn refused(r: Refused) -> Response {
@@ -116,15 +120,17 @@ fn admit(
     state: &AppState,
     client: Option<&Extension<AuthenticatedClient>>,
     identity: Option<&Extension<VerifiedIdentity>>,
-) -> Result<(Access, Logs), Response> {
+) -> Result<(Access, Logs), Early> {
     let access = access::resolve(
         client.map(|Extension(c)| c),
         identity.map(|Extension(i)| i),
         &state.live_config.get().control_plane.role_mapping,
     )
-    .map_err(refused)?;
+    .map_err(|r| Box::new(refused(r)))?;
     let logs = logs(state).ok_or_else(|| {
-        flat_error(StatusCode::NOT_FOUND, "no transparency log is configured").into_response()
+        Box::new(
+            flat_error(StatusCode::NOT_FOUND, "no transparency log is configured").into_response(),
+        )
     })?;
     Ok((access, logs))
 }
@@ -148,7 +154,7 @@ async fn list(
 ) -> Response {
     match admit(&state, client.as_ref(), identity.as_ref()) {
         Ok((access, logs)) => blocking(move || list_page(&logs, &access, &query)).await,
-        Err(r) => r,
+        Err(r) => *r,
     }
 }
 
@@ -164,7 +170,7 @@ async fn receipt_route(
 ) -> Response {
     let (access, logs) = match admit(&state, client.as_ref(), identity.as_ref()) {
         Ok(admitted) => admitted,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let Some(id) = receipt::parse_id(&id) else {
         return not_kept();
@@ -205,7 +211,7 @@ struct Parsed {
 fn time(
     field: &str,
     value: Option<&str>,
-) -> Result<Option<chrono::DateTime<chrono::FixedOffset>>, Response> {
+) -> Result<Option<chrono::DateTime<chrono::FixedOffset>>, Early> {
     value
         .map(|t| {
             chrono::DateTime::parse_from_rfc3339(t).map_err(|_| {
@@ -215,7 +221,7 @@ fn time(
         .transpose()
 }
 
-fn parse(q: &ListQuery) -> Result<Parsed, Response> {
+fn parse(q: &ListQuery) -> Result<Parsed, Early> {
     let outcome = match q.outcome.as_deref() {
         None => None,
         Some("ok") => Some(FeedOutcome::Ok),
@@ -270,7 +276,7 @@ fn parse(q: &ListQuery) -> Result<Parsed, Response> {
 fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
     let parsed = match parse(query) {
         Ok(p) => p,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let limits = Limits {
         matches: parsed.limit,
@@ -288,7 +294,7 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
     let page = match read_page(
         &logs.invocation,
         logs.governance.as_deref(),
-        parsed.cursor.clone(),
+        parsed.cursor.as_ref(),
         limits,
         keep,
     ) {
@@ -342,7 +348,7 @@ async fn export_route(
 ) -> Response {
     let (access, logs) = match admit(&state, client.as_ref(), identity.as_ref()) {
         Ok(admitted) => admitted,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let signer = state.meta_mcp.public_provenance_signer();
     blocking(move || export_response(&logs, &access, &query, signer.as_deref())).await
@@ -359,12 +365,12 @@ fn export_response(
     use axum::http::header;
     let parsed = match parse(&query.list) {
         Ok(p) => p,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let csv = match query.format.as_deref() {
         None | Some("ndjson") => false,
         Some("csv") => true,
-        Some(_) => return bad_request(json!({"error": "`format` is ndjson or csv"})),
+        Some(_) => return *bad_request(json!({"error": "`format` is ndjson or csv"})),
     };
     let signer = match (csv, signer) {
         (false, None) => {

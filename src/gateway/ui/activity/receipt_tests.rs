@@ -62,7 +62,7 @@ fn write_chained(path: &Path, entries: &mut [Value]) {
         e["prev_entry_hash"] = prev.clone().into();
         let hash = recompute_entry_hash(e).unwrap();
         e["entry_hash"] = hash.clone().into();
-        body.push_str(&format!("{e}\n"));
+        body.push_str(&(e.to_string() + "\n"));
         prev = hash;
     }
     std::fs::write(path, body).unwrap();
@@ -137,7 +137,7 @@ fn c3_a_broken_link_reads_broken_and_verify_log_agrees() {
     all[3]["prev_entry_hash"] = format!("sha256:{}", "0".repeat(64)).into();
     let hash = recompute_entry_hash(&all[3]).unwrap();
     all[3]["entry_hash"] = hash.into();
-    let body: String = all.iter().map(|v| format!("{v}\n")).collect();
+    let body: String = all.iter().map(|v| v.to_string() + "\n").collect();
     std::fs::write(&path, body).unwrap();
 
     let broken = receipt(

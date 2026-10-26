@@ -31,14 +31,14 @@ fn entry(signed: bool) -> Value {
     serde_json::from_str(text.lines().last().unwrap()).unwrap()
 }
 
-fn secret() -> Option<&'static [u8]> {
-    Some(SECRET.as_bytes())
+fn secret() -> &'static [u8] {
+    SECRET.as_bytes()
 }
 
 #[test]
 fn untouched_signed_entry_is_valid() {
     assert_eq!(
-        signature_state(&entry(true), secret()),
+        signature_state(&entry(true), Some(secret())),
         SignatureState::Valid
     );
 }
@@ -49,13 +49,16 @@ fn altered_field_with_stored_hash_and_sig_kept_is_invalid() {
     // recomputed hash sees the edit.
     let mut signed = entry(true);
     signed["tool"] = "tool_b".into();
-    assert_eq!(signature_state(&signed, secret()), SignatureState::Invalid);
+    assert_eq!(
+        signature_state(&signed, Some(secret())),
+        SignatureState::Invalid
+    );
 
     let mut unsigned = entry(false);
     assert!(unsigned.get("sig").is_none());
     unsigned["tool"] = "tool_b".into();
     assert_eq!(
-        signature_state(&unsigned, secret()),
+        signature_state(&unsigned, Some(secret())),
         SignatureState::Invalid
     );
     assert_eq!(signature_state(&unsigned, None), SignatureState::Invalid);
@@ -72,7 +75,7 @@ fn signed_entry_without_the_secret_is_unverifiable_and_unsigned_stays_unsigned()
         SignatureState::Unsigned
     );
     assert_eq!(
-        signature_state(&entry(false), secret()),
+        signature_state(&entry(false), Some(secret())),
         SignatureState::Unsigned
     );
 }
@@ -84,7 +87,7 @@ fn flipped_sig_byte_is_invalid() {
     let last = sig.chars().last().unwrap();
     let flipped = if last == '0' { '1' } else { '0' };
     e["sig"] = format!("{}{flipped}", &sig[..sig.len() - 1]).into();
-    assert_eq!(signature_state(&e, secret()), SignatureState::Invalid);
+    assert_eq!(signature_state(&e, Some(secret())), SignatureState::Invalid);
 }
 
 #[test]

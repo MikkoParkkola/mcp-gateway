@@ -85,7 +85,7 @@ fn e1_a_valid_export_verifies_and_every_edit_fails() {
     let manifest: Value = serde_json::from_str(lines.last().unwrap()).unwrap();
     let rejoin = |ls: &[String]| -> Vec<u8> {
         ls.iter()
-            .map(|l| format!("{l}\n"))
+            .map(|l| l.to_string() + "\n")
             .collect::<String>()
             .into_bytes()
     };
@@ -102,7 +102,7 @@ fn e1_a_valid_export_verifies_and_every_edit_fails() {
     // The same change with the digest recomputed and the old signature kept.
     let rows: String = edited[..edited.len() - 1]
         .iter()
-        .map(|l| format!("{l}\n"))
+        .map(|l| l.to_string() + "\n")
         .collect();
     let mut m = manifest.clone();
     m["sha256"] = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(rows.as_bytes())).into();
@@ -190,7 +190,7 @@ fn e4_tampered_rows_are_marked_and_counted() {
     text[calls[1]]["tool"] = "rehashed".into();
     let h = crate::security::transparency_log::recompute_entry_hash(&text[calls[1]]).unwrap();
     text[calls[1]]["entry_hash"] = h.into();
-    let body: String = text.iter().map(|v| format!("{v}\n")).collect();
+    let body: String = text.iter().map(|v| v.to_string() + "\n").collect();
     std::fs::write(&path, body).unwrap();
 
     let c = all(&path, CAPS, ndjson_size);
@@ -245,10 +245,7 @@ fn e5_each_cap_cuts_where_it_says_and_names_itself() {
     let pad = "p".repeat(400);
     let lines: String = (0..5_000)
         .map(|i| {
-            format!(
-                "{}\n",
-                json!({"tool": format!("t{i}"), "request_hash": "x", "pad": pad})
-            )
+            json!({"tool": format!("t{i}"), "request_hash": "x", "pad": pad}).to_string() + "\n"
         })
         .collect();
     std::fs::write(&big, lines).unwrap();

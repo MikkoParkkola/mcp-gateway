@@ -25,7 +25,10 @@ const Y: &str = "https://issuer-y";
 
 /// Write call records, chained and hashed like the logger's, unsigned.
 /// `who` is `(account, issuer, subject, principal)`.
-fn write_calls(path: &Path, calls: &[(&str, Option<(&str, &str)>, &str)]) {
+/// A call: `(account, verified (issuer, subject), principal)`.
+type Call<'a> = (&'a str, Option<(&'a str, &'a str)>, &'a str);
+
+fn write_calls(path: &Path, calls: &[Call<'_>]) {
     let mut prev = "genesis".to_string();
     let mut body = String::new();
     for (i, (account, verified, principal)) in calls.iter().enumerate() {
@@ -42,7 +45,7 @@ fn write_calls(path: &Path, calls: &[(&str, Option<(&str, &str)>, &str)]) {
         });
         let hash = recompute_entry_hash(&entry).unwrap();
         entry["entry_hash"] = hash.clone().into();
-        body.push_str(&format!("{entry}\n"));
+        body.push_str(&(entry.to_string() + "\n"));
         prev = hash;
     }
     std::fs::write(path, body).unwrap();
@@ -256,7 +259,7 @@ async fn a_rule_filter_answers_400_until_rules_are_recorded() {
 async fn page_size_defaults_to_50_and_is_capped_at_200() {
     let dir = tempfile::tempdir().unwrap();
     let l = logs(&dir);
-    let calls: Vec<(&str, Option<(&str, &str)>, &str)> = vec![("a", None, ""); 210];
+    let calls: Vec<Call<'_>> = vec![("a", None, ""); 210];
     write_calls(&l.invocation, &calls);
     let count = |v: &Value| v["rows"].as_array().unwrap().len();
     let (_, v) = body(list_page(&l, &Access::All, &ListQuery::default())).await;

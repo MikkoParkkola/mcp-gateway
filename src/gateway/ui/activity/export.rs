@@ -16,10 +16,7 @@ use super::reader::{Cursor, Limits, Line, read_page};
 use super::rows::{Filter, Kind, kind_of, owned_by, row};
 use crate::security::transparency_log::recompute_entry_hash;
 use crate::security::transparency_log::signature::{SignatureState, signature_state};
-use crate::trust::provenance_public::ProvenancePublicSigner;
-
-/// The domain the manifest signature is made under; never the receipt's.
-pub(crate) const EXPORT_DOMAIN: &[u8] = b"mcp-gateway-activity-export-ed25519-v1\0";
+use crate::trust::provenance_public::{ACTIVITY_EXPORT_DOMAIN, ProvenancePublicSigner};
 
 /// The caps, whichever comes first.
 #[derive(Debug, Clone, Copy)]
@@ -96,7 +93,7 @@ pub(super) fn collect(
             matches: PASS,
             bytes: caps.scan.saturating_sub(scanned),
         };
-        let page = read_page(inv, gov, cursor.take(), limits, keep)?;
+        let page = read_page(inv, gov, cursor.as_ref(), limits, keep)?;
         scanned += page.bytes_examined;
         for line in &page.lines {
             let Some(kind) = kind_of(line) else { continue };
@@ -162,14 +159,14 @@ pub(super) fn ndjson(
     filters: Value,
     signer: &ProvenancePublicSigner,
 ) -> Vec<u8> {
-    let mut out = Vec::new();
+    let mut bytes = Vec::new();
     let mut integrity_failed = 0_usize;
     for r in &collected.rows {
         if r.get("integrity").is_some() {
             integrity_failed += 1;
         }
-        out.extend_from_slice(r.to_string().as_bytes());
-        out.push(b'\n');
+        bytes.extend_from_slice(r.to_string().as_bytes());
+        bytes.push(b'\n');
     }
     let counters = |log: &str| -> Value {
         let mut it = collected
@@ -177,7 +174,7 @@ pub(super) fn ndjson(
             .iter()
             .filter(|r| (r["kind"] == "config") == (log == "governance"))
             .filter_map(|r| r["counter"].as_u64());
-        match (it.next(), it.last()) {
+        match (it.next(), it.next_back()) {
             (Some(newest), Some(oldest)) => json!([oldest, newest]),
             (Some(only), None) => json!([only, only]),
             _ => Value::Null,
@@ -196,18 +193,18 @@ pub(super) fn ndjson(
         "truncated".into(),
         truncated_str(collected.truncated).into(),
     );
-    manifest.insert("sha256".into(), hex::encode(Sha256::digest(&out)).into());
+    manifest.insert("sha256".into(), hex::encode(Sha256::digest(&bytes)).into());
     manifest.insert("kid".into(), signer.kid().into());
-    let signed = serde_json_canonicalizer::to_vec(&Value::Object(manifest.clone()))
+    let canonical = serde_json_canonicalizer::to_vec(&Value::Object(manifest.clone()))
         // invariant: the manifest holds only strings, integers and objects of them, which RFC 8785 always canonicalises.
         .expect("a manifest of JSON values canonicalises");
     manifest.insert(
         "public_signature".into(),
-        signer.sign_bytes(EXPORT_DOMAIN, &signed).into(),
+        signer.sign_bytes(ACTIVITY_EXPORT_DOMAIN, &canonical).into(),
     );
-    out.extend_from_slice(Value::Object(manifest).to_string().as_bytes());
-    out.push(b'\n');
-    out
+    bytes.extend_from_slice(Value::Object(manifest).to_string().as_bytes());
+    bytes.push(b'\n');
+    bytes
 }
 
 /// The CSV columns, in order.

@@ -84,7 +84,7 @@ fn drain(
     let mut cursor = cursor;
     let mut pages = 0;
     loop {
-        let page = read_page(inv, gov, cursor, limits, is_call).unwrap();
+        let page = read_page(inv, gov, cursor.as_ref(), limits, is_call).unwrap();
         pages += 1;
         assert!(!page.cursor_reset);
         seen.extend(page.lines.iter().filter_map(call_index));
@@ -193,7 +193,7 @@ fn p2a_rotation_inside_one_request_reads_the_sealed_bytes() {
 
 /// Write hand-made lines; the reader parses JSON and needs no chain.
 fn write_lines(path: &Path, lines: &[Value]) {
-    let body: String = lines.iter().map(|v| format!("{v}\n")).collect();
+    let body: String = lines.iter().map(|v| v.to_string() + "\n").collect();
     std::fs::write(path, body).unwrap();
 }
 
@@ -222,10 +222,10 @@ fn p3_a_record_at_the_cap_is_assembled_across_windows() {
 fn p3_an_over_cap_line_is_reported_once_and_bounded() {
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir, "inv.jsonl");
-    let mut body = format!("{}\n", entry("0", None));
+    let mut body = entry("0", None).to_string() + "\n";
     body.push_str(&"y".repeat(6 * 1024 * 1024));
     body.push('\n');
-    body.push_str(&format!("{}\n", entry("2", None)));
+    body.push_str(&(entry("2", None).to_string() + "\n"));
     // An unterminated tail: an append still in flight, never served.
     body.push_str(r#"{"tool":"tool_3""#);
     std::fs::write(&path, body).unwrap();
@@ -272,7 +272,7 @@ fn p5_a_cursor_into_an_expired_segment_restarts_newest() {
         i += 1;
         assert!(i < 2_000);
     }
-    let reset = read_page(&path, None, Some(old), limits, is_call).unwrap();
+    let reset = read_page(&path, None, Some(&old), limits, is_call).unwrap();
     assert!(reset.cursor_reset);
     assert_eq!(reset.lines.first().and_then(call_index), Some(i - 1));
 }
@@ -294,7 +294,7 @@ fn merged(inv: &Path, gov: &Path, matches: usize) -> Vec<(Which, String)> {
             matches,
             bytes: 8 << 20,
         };
-        let page = read_page(inv, Some(gov), cursor, limits, |_| true).unwrap();
+        let page = read_page(inv, Some(gov), cursor.as_ref(), limits, |_| true).unwrap();
         got.extend(page.lines.iter().map(|l| (l.log, id(l))));
         match page.next {
             Some(n) => cursor = Some(n),
@@ -302,6 +302,14 @@ fn merged(inv: &Path, gov: &Path, matches: usize) -> Vec<(Which, String)> {
         }
     }
 }
+
+/// Invocation lines and governance lines, oldest first, as `(id, time)`,
+/// and the expected merged order.
+type Scenario<'a> = (
+    &'a [(&'a str, Option<String>)],
+    &'a [(&'a str, Option<String>)],
+    &'a [&'a str],
+);
 
 #[test]
 fn p6_merge_is_the_full_expected_sequence_across_page_boundaries() {
@@ -311,11 +319,7 @@ fn p6_merge_is_the_full_expected_sequence_across_page_boundaries() {
     // does too (i2 over g1); otherwise the later time first.
     // B: a backward clock step (i2) never reorders a log: i1 stays after i2
     // though its time is later.
-    let scenarios: [(
-        &[(&str, Option<String>)],
-        &[(&str, Option<String>)],
-        &[&str],
-    ); 2] = [
+    let scenarios: [Scenario<'_>; 2] = [
         (
             &[
                 ("i1", Some(ts("10:00:00"))),
@@ -377,7 +381,7 @@ fn p7_a_sparse_filter_stops_at_the_budget_and_resumes_to_an_older_match() {
         "read {}",
         page.bytes_examined
     );
-    let resumed = read_page(&path, None, page.next, ALL, needle).unwrap();
+    let resumed = read_page(&path, None, page.next.as_ref(), ALL, needle).unwrap();
     assert_eq!(resumed.lines.len(), 1);
 }
 

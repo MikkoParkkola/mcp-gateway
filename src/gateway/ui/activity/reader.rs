@@ -265,6 +265,32 @@ impl LogTail {
 /// Both logs' readers; `None` is a log not read (done, or not configured).
 type Tails = (Option<LogTail>, Option<LogTail>);
 
+/// Open both logs at `cursor`, or at their newest lines. `Ok(None)` when the
+/// cursor names a segment no longer kept, so the caller restarts.
+fn open_tails(
+    inv: &Path,
+    gov: Option<&Path>,
+    cursor: Option<&Cursor>,
+) -> io::Result<Option<Tails>> {
+    let inv_pos = cursor.map(|c| c.inv);
+    let gov_pos = cursor.map(|c| c.gov);
+    let inv_tail = match inv_pos {
+        Some(None) => None,
+        pos => match LogTail::open(Which::Invocation, inv, pos.flatten())? {
+            Some(t) => Some(t),
+            None => return Ok(None),
+        },
+    };
+    let gov_tail = match (gov, gov_pos) {
+        (None, _) | (_, Some(None)) => None,
+        (Some(path), pos) => match LogTail::open(Which::Governance, path, pos.flatten())? {
+            Some(t) => Some(t),
+            None => return Ok(None),
+        },
+    };
+    Ok(Some((inv_tail, gov_tail)))
+}
+
 fn timestamp(entry: &Value) -> Option<DateTime<FixedOffset>> {
     entry
         .get("timestamp")
@@ -282,41 +308,20 @@ fn timestamp(entry: &Value) -> Option<DateTime<FixedOffset>> {
 pub(super) fn read_page(
     inv: &Path,
     gov: Option<&Path>,
-    cursor: Option<Cursor>,
+    cursor: Option<&Cursor>,
     limits: Limits,
     mut keep: impl FnMut(&Line) -> bool,
 ) -> io::Result<Page> {
     let mut cursor_reset = false;
-    let open_both = |c: Option<Cursor>| -> io::Result<Option<Tails>> {
-        let inv_pos = c.as_ref().map(|c| c.inv);
-        let gov_pos = c.as_ref().map(|c| c.gov);
-        let inv_tail = match inv_pos {
-            Some(None) => None,
-            pos => match LogTail::open(Which::Invocation, inv, pos.flatten())? {
-                Some(t) => Some(t),
-                None => return Ok(None),
-            },
-        };
-        let gov_tail = match (gov, gov_pos) {
-            (None, _) | (_, Some(None)) => None,
-            (Some(path), pos) => match LogTail::open(Which::Governance, path, pos.flatten())? {
-                Some(t) => Some(t),
-                None => return Ok(None),
-            },
-        };
-        Ok(Some((inv_tail, gov_tail)))
-    };
     let mut gov_bound = cursor
-        .as_ref()
         .and_then(|c| c.gov_bound.as_deref())
         .and_then(|t| DateTime::parse_from_rfc3339(t).ok());
-    let (mut inv_tail, mut gov_tail) = match open_both(cursor.clone())? {
-        Some(tails) => tails,
-        None => {
-            cursor_reset = true;
-            gov_bound = None;
-            open_both(None)?.unwrap_or((None, None))
-        }
+    let (mut inv_tail, mut gov_tail) = if let Some(tails) = open_tails(inv, gov, cursor)? {
+        tails
+    } else {
+        cursor_reset = true;
+        gov_bound = None;
+        open_tails(inv, gov, None)?.unwrap_or((None, None))
     };
 
     let mut spent = 0_u64;
