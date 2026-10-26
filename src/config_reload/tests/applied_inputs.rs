@@ -5,7 +5,7 @@
 
 use super::env_support::{RecordingHome, config_naming_env_files, env_file, startup_through};
 use super::*;
-use crate::config_reload::revision::{AppliedInputs, ConsumedSource, config_revision};
+use crate::config_reload::revision::{AppliedInputs, ConsumedSource, RawInputs, config_revision};
 
 fn revision_key() -> [u8; 32] {
     crate::gateway::record_principal::test_record_key().config_revision_key()
@@ -72,24 +72,27 @@ fn an_env_file_alone_consumes_no_value() {
 fn the_published_revision_names_the_published_inputs() {
     let live = LiveConfig::new(Config::default()).with_revision_key(revision_key());
     assert_eq!(live.revision(), None, "nothing applied yet");
-    let inputs = AppliedInputs {
+    let inputs = RawInputs {
         gateway_yaml: b"server:\n  port: 1\n".to_vec(),
-        ..AppliedInputs::default()
+        ..RawInputs::default()
     };
     live.set_applied(Config::default(), inputs.clone());
-    let first = config_revision(&revision_key(), &inputs);
+    let id_of = |raw: RawInputs| {
+        config_revision(
+            &revision_key(),
+            &AppliedInputs::digest(&revision_key(), raw),
+        )
+    };
+    let first = id_of(inputs.clone());
     assert_eq!(live.revision().as_deref(), Some(first.as_str()));
 
     // New grants over the same config get their own id.
     live.set_grants(Some(b"[]\n".to_vec()));
-    let with_grants = AppliedInputs {
+    let with_grants = RawInputs {
         grants: Some(b"[]\n".to_vec()),
         ..inputs
     };
-    assert_eq!(
-        live.revision(),
-        Some(config_revision(&revision_key(), &with_grants))
-    );
+    assert_eq!(live.revision(), Some(id_of(with_grants)));
 
     // A config published without inputs carries no revision, never a stale one.
     live.set(Config::default());
@@ -99,6 +102,6 @@ fn the_published_revision_names_the_published_inputs() {
 #[test]
 fn without_a_revision_key_no_revision_is_published() {
     let live = LiveConfig::new(Config::default());
-    live.set_applied(Config::default(), AppliedInputs::default());
+    live.set_applied(Config::default(), RawInputs::default());
     assert_eq!(live.revision(), None);
 }
