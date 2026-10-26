@@ -126,6 +126,7 @@ async fn t34_the_series_route_answers_points_and_the_previous_period() {
 /// fields as any series, with `since` moved to its own first count.
 #[tokio::test]
 async fn t51_a_late_label_answers_the_same_shape_with_a_later_since() {
+    const DAY: u64 = 86_400;
     let (admin, store, _dir) = state(true).await;
     let at = |tool: &str, when: u64| {
         let call = Call {
@@ -136,7 +137,6 @@ async fn t51_a_late_label_answers_the_same_shape_with_a_later_since() {
         };
         store.record(&call, when, &chrono::Local);
     };
-    const DAY: u64 = 86_400;
     let base = now() - 32 * DAY;
     let names: Vec<String> = (0..crate::counters::MAX_LABELS)
         .map(|i| format!("old-{i}"))

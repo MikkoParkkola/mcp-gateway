@@ -124,6 +124,43 @@ fn counts(series: &Series, window: Window, key: u64) -> Option<[u64; 5]> {
     }
 }
 
+/// The buckets `window` reads at unix second `now`, oldest first, none
+/// before `since`.
+fn window_slots<Tz: TimeZone>(window: Window, now: u64, since: u64, zone: &Tz) -> Vec<Slot> {
+    match window {
+        Window::Day | Window::TwoDays => {
+            let n = if window == Window::Day { 48 } else { 96 };
+            let now_bucket = now / HALF;
+            ((now_bucket + 1).saturating_sub(n)..=now_bucket)
+                .filter(|b| (b + 1) * HALF > since)
+                .map(|b| Slot {
+                    t: b * HALF,
+                    key: b,
+                })
+                .collect()
+        }
+        Window::Month => {
+            // Today, then each day before it, walked back from its start.
+            let mut days = vec![day::local_day(zone, now)];
+            while days.len() < super::DAYS {
+                let earliest = days[days.len() - 1];
+                if earliest.start == 0 {
+                    break;
+                }
+                days.push(day::local_day(zone, earliest.start - 1));
+            }
+            days.iter()
+                .rev()
+                .filter(|day| day.end > since)
+                .map(|day| Slot {
+                    t: day.start,
+                    key: super::day_key(day.date),
+                })
+                .collect()
+        }
+    }
+}
+
 impl CounterStore {
     /// Read `query` at unix second `now`, days cut in `zone`.
     pub(crate) fn series<Tz: TimeZone>(
@@ -134,38 +171,7 @@ impl CounterStore {
     ) -> SeriesView {
         let inner = self.inner.lock();
         let mut since = inner.since;
-        let mut slots: Vec<Slot> = match query.window {
-            Window::Day | Window::TwoDays => {
-                let n = if query.window == Window::Day { 48 } else { 96 };
-                let now_bucket = now / HALF;
-                ((now_bucket + 1).saturating_sub(n)..=now_bucket)
-                    .filter(|b| (b + 1) * HALF > since)
-                    .map(|b| Slot {
-                        t: b * HALF,
-                        key: b,
-                    })
-                    .collect()
-            }
-            Window::Month => {
-                // Today, then each day before it, walked back from its start.
-                let mut days = vec![day::local_day(zone, now)];
-                while days.len() < super::DAYS {
-                    let earliest = days[days.len() - 1];
-                    if earliest.start == 0 {
-                        break;
-                    }
-                    days.push(day::local_day(zone, earliest.start - 1));
-                }
-                days.iter()
-                    .rev()
-                    .filter(|day| day.end > since)
-                    .map(|day| Slot {
-                        t: day.start,
-                        key: super::day_key(day.date),
-                    })
-                    .collect()
-            }
-        };
+        let mut slots = window_slots(query.window, now, since, zone);
         let overflowed =
             |overflow: &Series, slot: &Slot| counts(overflow, query.window, slot.key).is_some();
         let empty = Series::default();
