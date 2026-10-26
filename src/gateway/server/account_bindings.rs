@@ -287,6 +287,30 @@ fn install_descriptor(
     );
 }
 
+impl super::Gateway {
+    /// Install the per-backend account strategies with this gateway's
+    /// custody. Both serve paths call this, so the custody handle becomes the
+    /// trait object the install takes in exactly one place.
+    pub(super) fn install_account_bindings(
+        &self,
+        gateway_key_pair: &Arc<GatewayKeyPair>,
+        meta_mcp: &MetaMcp,
+        mode: ServeMode,
+    ) -> Result<()> {
+        let custody = self
+            .custody
+            .as_ref()
+            .map(|custody| Arc::clone(custody) as Arc<dyn AccountCustody>);
+        install_account_strategies(
+            &self.config,
+            custody.as_ref(),
+            gateway_key_pair,
+            meta_mcp,
+            mode,
+        )
+    }
+}
+
 /// Subject-assertion lifetime for an external descriptor's strategy, matching
 /// the process-wide install site: 5 minutes, clamped further by the strategy.
 const ASSERTION_TTL_SECS: i64 = 300;
