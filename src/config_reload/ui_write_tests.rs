@@ -66,7 +66,14 @@ async fn a_ui_edit_keeps_a_variable_reference_as_written() {
 
     let result = add_backend(&context(&path), &path, "beta").await;
 
+    // An unexpanded reference must still validate, or the edit is refused and
+    // the file is left as it was, which would pass the checks below too.
+    assert_eq!(result, "applied");
     let written = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        written.contains("beta:"),
+        "the edit was not written:\n{written}"
+    );
     assert!(
         written.contains("${UI_WRITE_TEST_TOKEN:-s3cret-value}"),
         "the reference was replaced ({result}):\n{written}"
