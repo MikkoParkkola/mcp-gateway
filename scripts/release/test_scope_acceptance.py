@@ -128,6 +128,105 @@ class AcceptanceTests(unittest.TestCase):
         ):
             return gate.main([mode])
 
+    # Evidence kept in the private companion repository: cited by path, pinned
+    # by sha256 in PRIVATE_EVIDENCE, and hashed wherever the clone exists.
+    def cite_private(self, pinned_text, clone_text=None):
+        self.data["criteria"][0]["evidence"] = ["docs/internal/proof.md:1"]
+        digest = gate.hashlib.sha256(pinned_text.encode()).hexdigest()
+        table = self.root / gate.PRIVATE_EVIDENCE
+        table.parent.mkdir(parents=True, exist_ok=True)
+        table.write_text(f"docs/internal/proof.md\t{digest}\n")
+        if clone_text is not None:
+            private = self.root / gate.PRIVATE_CHECKOUT / "docs/internal/proof.md"
+            private.parent.mkdir(parents=True, exist_ok=True)
+            private.write_text(clone_text)
+        gate.UNVERIFIED_PRIVATE.clear()
+        self.addCleanup(gate.UNVERIFIED_PRIVATE.clear)
+
+    def test_evidence_in_the_tree_needs_no_private_listing(self):
+        self.assertEqual(self.inspect()[0], [])
+        self.assertEqual(gate.UNVERIFIED_PRIVATE, set())
+
+    def test_private_evidence_with_its_pinned_hash_passes(self):
+        self.cite_private("reviewed result\n", clone_text="reviewed result\n")
+        self.assertEqual(self.inspect()[0], [])
+        self.assertEqual(gate.UNVERIFIED_PRIVATE, set())
+
+    def test_private_evidence_with_another_hash_fails(self):
+        self.cite_private("reviewed result\n", clone_text="edited result\n")
+        errors = self.inspect()[0]
+        self.assertTrue(any("does not match its pinned sha256" in e for e in errors), errors)
+
+    def test_private_evidence_at_a_named_clone_path_is_hashed_there(self):
+        self.cite_private("main version\n")
+        table = self.root / gate.PRIVATE_EVIDENCE
+        digest = gate.hashlib.sha256(b"main version\n").hexdigest()
+        table.write_text(f"docs/internal/proof.md\t{digest}\tvariants/main/docs/internal/proof.md\n")
+        variant = self.root / gate.PRIVATE_CHECKOUT / "variants/main/docs/internal/proof.md"
+        variant.parent.mkdir(parents=True, exist_ok=True)
+        variant.write_text("main version\n")
+        self.assertEqual(self.inspect()[0], [])
+        variant.write_text("edited\n")
+        errors = self.inspect()[0]
+        self.assertTrue(any("does not match its pinned sha256" in e for e in errors), errors)
+
+    def test_private_evidence_missing_from_a_present_clone_fails(self):
+        self.cite_private("reviewed result\n")
+        (self.root / gate.PRIVATE_CHECKOUT).mkdir()
+        errors = self.inspect()[0]
+        self.assertTrue(any("missing from the clone" in e for e in errors), errors)
+
+    def test_a_pin_that_is_not_a_sha256_fails(self):
+        self.cite_private("reviewed result\n")
+        (self.root / gate.PRIVATE_EVIDENCE).write_text("docs/internal/proof.md\t\n")
+        errors = self.inspect()[0]
+        self.assertTrue(any("pin is not a sha256" in e for e in errors), errors)
+
+    def test_a_backwards_range_on_private_evidence_fails_without_a_clone(self):
+        self.cite_private("reviewed result\n")
+        self.data["criteria"][0]["evidence"] = ["docs/internal/proof.md:20-10"]
+        errors = self.inspect()[0]
+        self.assertTrue(any("range runs backwards" in e for e in errors), errors)
+
+    def test_a_pin_row_without_a_tab_fails_rather_than_crashing(self):
+        self.cite_private("reviewed result\n")
+        (self.root / gate.PRIVATE_EVIDENCE).write_text("docs/internal/proof.md\n")
+        errors = self.inspect()[0]
+        self.assertTrue(any("pin is not a sha256" in e for e in errors), errors)
+
+    def test_a_clone_path_outside_the_clone_fails(self):
+        outside = self.root / "outside.md"
+        outside.write_text("reviewed result\n")
+        self.cite_private("reviewed result\n")
+        (self.root / gate.PRIVATE_CHECKOUT).mkdir()
+        digest = gate.hashlib.sha256(b"reviewed result\n").hexdigest()
+        (self.root / gate.PRIVATE_EVIDENCE).write_text(
+            f"docs/internal/proof.md\t{digest}\t../outside.md\n"
+        )
+        errors = self.inspect()[0]
+        self.assertTrue(any("must stay inside the clone" in e for e in errors), errors)
+
+    def test_a_tree_file_at_a_pinned_private_path_fails(self):
+        self.cite_private("reviewed result\n")
+        public = self.root / "docs/internal/proof.md"
+        public.parent.mkdir(parents=True, exist_ok=True)
+        public.write_text("something else\n")
+        errors = self.inspect()[0]
+        self.assertTrue(any("back in the tree" in e for e in errors), errors)
+
+    def test_unlisted_missing_evidence_fails(self):
+        self.data["criteria"][0]["evidence"] = ["docs/internal/absent.md"]
+        errors = self.inspect()[0]
+        self.assertTrue(any("evidence file does not exist" in e for e in errors), errors)
+
+    def test_private_evidence_without_a_clone_passes_and_is_counted(self):
+        self.cite_private("reviewed result\n")
+        self.assertEqual(self.cli("--check"), 0)
+        self.assertIn(
+            "private evidence: 1 rows, hash-pinned, not verified here",
+            self.stdout.getvalue(),
+        )
+
     def test_complete_release_positive_control(self):
         self.assertEqual(self.inspect(), ([], [], []))
         self.assertEqual(self.cli("--release"), 0)

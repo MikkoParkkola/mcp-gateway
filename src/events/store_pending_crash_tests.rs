@@ -4,7 +4,7 @@
 //! counted when it is claimed, before its POST (`OutboxRecord::attempt`,
 //! "attempts started so far"), and a restart does not refund it: load returns
 //! an in-flight record to pending with its id and bytes unchanged (design F1,
-//! docs/design/2026-10-01-mik-7630-mcp-events.md:787) under a budget of "at
+//! the mcp events design) under a budget of "at
 //! most 5 attempts" (same document, :658). A crash after a claim therefore
 //! spends that attempt whether or not its POST went out. The clock here is
 //! the `now` each call is given, never the wall clock.

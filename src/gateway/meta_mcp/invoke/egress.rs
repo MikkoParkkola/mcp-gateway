@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! One egress scan (design `docs/internal/design/2026-10-08-one-egress-scan.md`):
+//! One egress scan (design the one egress scan design):
 //! every frame carrying a backend's text passes here before a client reads
 //! it, on every route, once. It decides which parts a frame has and how each
 //! is screened, so no caller picks a method list or a mutation policy.

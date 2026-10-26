@@ -1,0 +1,25 @@
+# Evidence the scope contract cites that is kept in the private companion
+# repository (cloned at internal/). path TAB sha256 of the file as moved.
+docs/design/2026-09-12-mik-3274-ranking-abbreviations.md	e0b1adeea4aa589b41c872ade33842ed6916cc5a7f9cf478ac892bc9c86ab9c6
+docs/design/2026-09-13-mik-7387-stdio-concurrent-dispatch.md	8c4dbee191bf9970f2f82abd19085e826d8ffba6b682b04c2d9e0e21f56be5c1
+docs/design/2026-09-17-mik-6746-c1-mandatory-agent-audience.md	c48bc249fce9b5870c7869cd00162f39a82e72f0accddefc0d775460da5be4fd
+docs/design/2026-09-17-nfr-demo-1-scenario-recordings.md	b74896001019bc55d560cc1cf868cb250f39f0e1d6a64a05dc0c65c33a2d30cc
+docs/design/2026-09-26-f1-direct-route-tasks-refusal.md	2eac4dbea6d408ec33f43611e58ff97b2392a74878824fee8157a5ddbffeef6d
+docs/design/2026-09-28-asi10-verbatim-relay.md	dc72ac71643983be0494f43869c5bb89a32a4a03804d1c61ef649011c4fe6175
+docs/design/2026-09-30-era-1-2-stale-probe-refusal.md	8cbe00997a0930f0ae75eedd9826090d0a012d56d35ef545cdf328a0a72d1e8b
+docs/design/2026-09-30-session-keyed-inventory.md	4f8763f044a02bfbdba468d02d98565bb7277dd82f0f3a743d3a7c394aeaca21
+docs/design/2026-10-01-mik-7630-event-sources-4.0.0.md	07357d984b74e359c46e8f30a5f3d1a695e9b4bd31efd10e50c7e88c20024b14
+docs/design/2026-10-01-mik-7630-mcp-events.md	a95dca3d0bd582a55c05efad57097b59595dfe9427d5ad998a7def74383ce3dd
+docs/design/RFC-0060-dual-generation-mcp.md	dab035fa9e8c95e73df88367c2325f95156fdd5c4e6d3cadafd68e3395765ca2
+docs/design/RFC-0061-protocol-2026-07-28-release-scope.md	adeb78e4625618e66983940035a22074e6939d388889fbbb12ab00b883ecf34a
+docs/internal/design/2026-09-03-cluster-a-coverage-audit.md	bdfacf8a8ab0a802df3653f8c2b6171014e168cabe8b3fca72f84ac499406f8f
+docs/internal/design/2026-09-21-provable-agent-identity.md	b868bf4baa50a91ff7bead23cad180f137b85be3617a978ae0451d8f83c89305
+docs/internal/release/v4.0.0-botreview-ledger.md	311639f9ae8d4d3cb1061b50a8e2f0286c80226810743cc161b6476ed4ff19f5
+docs/internal/release/v4.0.0-scope-contract-validation.md	5b8dc99fad50df60f2ac0d513b7d72ac6c88087b1856d280075d83366aed156a
+docs/internal/requirements/RELEASE-4.0.0-scope-delivery.md	7a2bf6d0678d3513c386052cfb42706a00107443f8f71dd49e06875d9bc4a9dc
+docs/internal/requirements/scope-grading-2026-09-12.md	3c25b417326a5ddf2b3f3835172a559b3cae074e2d4699a523b279dbdb70c0b9
+docs/requirements/RELEASE-4.0.0-conformance-matrix.md	c280610ef47b524c938ebc8d3c22f015d6b210df30278657cce5b379f5a620c2
+docs/requirements/RELEASE-4.0.0-operator-decisions.md	e9ed699c83d5b30fe2d91006e419f274dabc42dbdd62b14ec0d70566b8a81c35
+docs/requirements/RELEASE-4.0.0-performance-contract.md	afa6f75a8a8791998db89dd08d33aa28aa8a5a8c2ca69efe50456b96b6975066
+docs/requirements/RELEASE-4.0.0-scope-decisions-2026-09-06.md	ba4d63e08b4c5533b485df2c11d467ef6ecbfb5446b447fcf2a2c9096489b08d
+scripts/release/botreview_sweep.py	ad3872e7542157b6833938687ed6c630e26eec33504d413bf693d36628dbfc03

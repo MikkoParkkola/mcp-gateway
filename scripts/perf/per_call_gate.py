@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-"""MIK-8014 per-call timing gate (design: docs/internal/design/2026-10-09-mik-8014-perf-per-call-family.md).
+"""MIK-8014 per-call timing gate (design: the perf per call family design).
 
 Runs ON the bench host, never on shared CI runners. For BASE and HEAD it builds
 the lib test binary (only the harness file overlaid on BASE and mounted with

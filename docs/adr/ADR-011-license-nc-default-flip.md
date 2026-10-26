@@ -27,7 +27,7 @@ Enforced bidirectionally in CI
 (`scripts/ci/check-license-headers.sh`): allowlist files must be MIT, and no file
 outside the allowlist may be MIT.
 
-Three operator decisions set the boundary:
+Three owner decisions set the boundary:
 
 1. **Companies pay to run it.** Free = personal/noncommercial only. No
    free-commercial tier, so no runtime refactor now. The runnable gateway is
