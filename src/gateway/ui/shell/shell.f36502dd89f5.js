@@ -410,6 +410,8 @@ function showSignIn() {
 }
 
 let signingIn = false;
+/** How long a key check may take before it counts as unreachable. */
+const KEY_CHECK_MS = 10_000;
 
 /**
  * Check a typed key on its own and keep it only if it signs in. The check
@@ -434,7 +436,13 @@ async function signIn(ev) {
   let auth = null;
   let message = '';
   try {
-    const reply = await fetch('/ui/api/status', { credentials: 'omit', headers: { Authorization: `Bearer ${key}` } });
+    // A gateway that takes the connection but never answers must not leave
+    // the button disabled: give up after the check's own deadline.
+    const reply = await fetch('/ui/api/status', {
+      credentials: 'omit',
+      headers: { Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(KEY_CHECK_MS),
+    });
     if (reply.ok) auth = (await reply.json())?.auth ?? null;
     else if (reply.status !== 401 && reply.status !== 403) message = 'Could not reach the gateway. Try again.';
   } catch {

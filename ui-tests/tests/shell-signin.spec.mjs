@@ -183,8 +183,10 @@ test('S9 a 401 to a request sent before sign-in does not reopen the sign-in view
   await page.locator('#signin-key').fill(KEY);
   await page.keyboard.press('Enter');
   await expect(page.locator('#signin')).toBeHidden();
+  const stale = page.waitForResponse((r) => r.url().endsWith('/ui/api/forbidden-probe') && r.status() === 401);
   release();
-  await page.waitForTimeout(300);
+  await stale;
+  await page.evaluate(() => new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok))));
   await expect(page.locator('#signin')).toBeHidden();
 });
 
@@ -213,4 +215,20 @@ test.describe('sign-in on a touch screen', () => {
     const h = await page.locator('#signin button[type="submit"]').evaluate((b) => b.getBoundingClientRect().height);
     expect(h).toBeGreaterThanOrEqual(44);
   });
+});
+
+test('S12 a key check that never answers gives up and frees the button', async ({ page }) => {
+  await page.clock.install();
+  await page.route('**/ui/api/status', async (route) => {
+    if (route.request().headers().authorization) return; // never answered
+    return route.fulfill({ json: { auth: { enabled: true, signed_in: false, admin: false } } });
+  });
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  const button = page.locator('#signin button[type="submit"]');
+  await expect(button).toBeDisabled();
+  await page.clock.runFor(10_500);
+  await expect(page.locator('.signin-error')).toHaveText('Could not reach the gateway. Try again.');
+  await expect(button).toBeEnabled();
 });
