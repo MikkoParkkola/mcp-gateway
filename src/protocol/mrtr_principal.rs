@@ -18,7 +18,7 @@ pub enum PrincipalSource<'a> {
     /// A caller with no verified identity, bound by the validated credential
     /// it presented: the principal text the idempotency guard already keys
     /// that caller's calls on (`caller_cache_principal`), built by the gateway,
-    /// never read from a request (MIK-8078). One key is one principal, so
+    /// never read from a request. One key is one principal, so
     /// everyone holding a shared key is one caller here too.
     Key(String),
     /// The one client of this stdio process, named by a nonce drawn once per
@@ -58,11 +58,11 @@ impl std::fmt::Debug for PrincipalSource<'_> {
 /// a constant, because continuations share a keyring across processes and a
 /// constant would be the one shared non-identity every stdio process on a
 /// config holds. An API-key caller binds on the principal the gateway already
-/// owns its sessions, grants, journals and tasks by (MIK-8078, lead ruling A):
+/// owns its sessions, grants, journals and tasks by:
 /// the truncated 48-bit digest of its key. Short, but it is not a credential
 /// and is never chosen by a caller: a redeemer must present a validated key,
 /// and two configured keys can never share a principal
-/// (`refuse_shared_principals`, MIK-7973). So one key cannot redeem another's
+/// (`refuse_shared_principals`). So one key cannot redeem another's
 /// continuation, and every holder of one shared key is one caller. The
 /// client-certificate scheme is not yet reachable at the mint site (its DER is
 /// read and dropped before the caller context is built); its callers are
@@ -92,8 +92,8 @@ pub fn source_fingerprint(source: PrincipalSource<'_>) -> Option<String> {
 ///
 /// Not a caller binding: every gateway site binds through
 /// `MetaMcpCallerContext::principal_source`, which also binds a key-only
-/// caller (MIK-8137). Its one production caller is the direct route's A2A
-/// round, whose caller cannot reach `principal_source` yet (MIK-8330). It is
+/// caller. Its one production caller is the direct route's A2A
+/// round, whose caller cannot reach `principal_source` yet. It is
 /// the same derivation as the `Credential` arm, not a second one.
 #[must_use]
 pub fn principal_fingerprint(
