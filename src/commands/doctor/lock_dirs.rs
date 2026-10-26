@@ -95,7 +95,10 @@ mod tests {
                 .expect("a SID")
                 .to_owned();
             let acl = format!("D:P(A;OICI;FA;;;{sid})(A;OICI;0x1301bf;;;BU)");
+            // Windows PowerShell must not inherit a PowerShell 7 module path (the CI
+            // shell is pwsh), or it cannot load its own security module.
             let set = std::process::Command::new("powershell")
+                .env_remove("PSModulePath")
                 .args(["-NoProfile", "-Command"])
                 .arg(format!(
                     "$a = Get-Acl -LiteralPath '{}'; $a.SetSecurityDescriptorSddlForm('{acl}'); \
