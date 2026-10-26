@@ -45,7 +45,7 @@ fn started_in(
     let path = dir.path().join("gateway.yaml");
     crate::gateway::test_helpers::write_owner_only(
         &path,
-        serde_yaml::to_string(&initial).expect("yaml"),
+        crate::yaml::to_string(&initial).expect("yaml"),
     )
     .expect("write");
     let meta = MetaMcp::new(Arc::clone(&registry))
@@ -69,7 +69,7 @@ async fn reload_to(dir: &tempfile::TempDir, context: &ReloadContext, pairs: &[(&
     let path = dir.path().join("gateway.yaml");
     crate::gateway::test_helpers::write_owner_only(
         &path,
-        serde_yaml::to_string(&config_with(pairs)).expect("yaml"),
+        crate::yaml::to_string(&config_with(pairs)).expect("yaml"),
     )
     .expect("write");
     context
@@ -250,7 +250,7 @@ async fn l3_a_changed_list_nudges_once_and_an_identical_one_never() {
 fn write_file(dir: &tempfile::TempDir, pairs: &[(&str, &str)]) {
     crate::gateway::test_helpers::write_owner_only(
         &dir.path().join("gateway.yaml"),
-        serde_yaml::to_string(&config_with(pairs)).expect("yaml"),
+        crate::yaml::to_string(&config_with(pairs)).expect("yaml"),
     )
     .expect("write");
 }
@@ -281,7 +281,7 @@ async fn l2_a_watcher_driven_reload_applies_surfaced_tools() {
     let initial = config_with(&[("alpha", "read")]);
     crate::gateway::test_helpers::write_owner_only(
         &path,
-        serde_yaml::to_string(&initial).expect("yaml"),
+        crate::yaml::to_string(&initial).expect("yaml"),
     )
     .expect("write");
     let registry = Arc::new(BackendRegistry::new());
