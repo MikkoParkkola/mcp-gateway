@@ -38,11 +38,20 @@ const SHARING_VIOLATION: i32 = 32;
 const HEAL_LIMIT: Duration = Duration::from_secs(30);
 const HEAL_POLL: Duration = Duration::from_millis(25);
 
-/// One attempt, never waiting: `Err` only for a refused directory and the
-/// errors a lock file open has always returned (missing or read-only
-/// directory, a denied create).
+/// One attempt, never waiting: `Err` only for the errors a lock file open has
+/// always returned (a missing or read-only directory); a refused directory or
+/// sidecar is `Refused`.
 pub(super) fn probe(lock_path: &Path) -> io::Result<Attempt> {
-    let pin = lock_dir(lock_path)?;
+    // A refused directory is a refusal like a refused sidecar, so a caller
+    // that keeps refusals on its busy path (the grant journal) never reads it
+    // as an unreadable file.
+    let pin = match lock_dir(lock_path) {
+        Ok(pin) => pin,
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            return Ok(Attempt::Refused(error));
+        }
+        Err(error) => return Err(error),
+    };
     Ok(match sidecar(lock_path)? {
         Sidecar::Private(file) => match file.try_lock() {
             Ok(()) => Attempt::Taken(ExclusiveFileLock::held(file).pinning(pin)),
@@ -122,6 +131,14 @@ fn sidecar(path: &Path) -> io::Result<Sidecar> {
         Ok(file) => return Ok(Sidecar::Private(file)),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
         Err(error) if error.raw_os_error() == Some(SHARING_VIOLATION) => return Ok(Sidecar::Held),
+        // Also what a name still being deleted answers: refused for now, so a
+        // waiting caller tries again until its deadline.
+        Err(error) if error.raw_os_error() == Some(ACCESS_DENIED) => {
+            return Ok(Sidecar::Refused(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("cannot create lock file {}: {error}", path.display()),
+            )));
+        }
         Err(error) => return Err(error),
     }
     let reason = match open_existing(path) {
@@ -156,15 +173,20 @@ fn sidecar(path: &Path) -> io::Result<Sidecar> {
             Ok(match open_existing(path) {
                 Ok(file) if judge_file(&file).is_ok() => Sidecar::Held,
                 Ok(_) => Sidecar::Refused(held_refusal(path, &reason)),
+                Err(error) if error.raw_os_error() == Some(ACCESS_DENIED) => {
+                    Sidecar::Refused(held_refusal(path, &reason))
+                }
                 Err(_) => Sidecar::Held,
             })
         }
+        // Never "remove it": whether another process still has it open is not
+        // known here, and removing a file something holds splits the lock.
         Err(error) => Ok(Sidecar::Refused(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!(
-                "lock file {} is not owner-only ({reason}) and this account may not remove it \
-                 ({error}); an administrator must remove it so the gateway can recreate it \
-                 owner-only",
+                "lock file {} is not owner-only ({reason}) and cannot be replaced ({error}). Stop \
+                 any process that may have it open and give this account the right to replace \
+                 files in that folder; the gateway then replaces the file itself",
                 path.display()
             ),
         ))),

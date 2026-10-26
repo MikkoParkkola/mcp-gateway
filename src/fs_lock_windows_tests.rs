@@ -266,7 +266,7 @@ fn a_lock_behind_a_junction_is_refused() {
     let parent = tempfile::tempdir().expect("dir");
     let target = parent.path().join("real");
     std::fs::create_dir(&target).expect("target");
-    let link = parent.path().join("link");
+    let link = parent.path().join("jx");
     let made = std::process::Command::new("cmd")
         .args(["/C", "mklink", "/J"])
         .arg(&link)
@@ -283,7 +283,12 @@ fn a_lock_behind_a_junction_is_refused() {
             io::ErrorKind::PermissionDenied,
             "{how}: {error}"
         );
-        assert!(error.to_string().contains("link"), "{how}: {error}");
+        assert!(
+            error
+                .to_string()
+                .contains("is a link, or a link sits in its path"),
+            "{how}: {error}"
+        );
     }
 }
 

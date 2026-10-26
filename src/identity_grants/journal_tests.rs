@@ -700,3 +700,30 @@ fn a_refused_journal_lock_is_busy_and_logs_why() {
     );
     drop(holder);
 }
+
+/// Windows: a lock directory other accounts can write is refused like a
+/// refused lock file: busy, so no start-up seeds an empty grant baseline from
+/// a grant file it never read.
+#[cfg(windows)]
+#[test]
+fn a_refused_journal_lock_directory_is_busy_not_unreadable() {
+    let parent = tempfile::tempdir().unwrap();
+    let dir = parent.path().join("grants");
+    std::fs::create_dir(&dir).unwrap();
+    let user = crate::private_fs::test_support::user_sid();
+    crate::private_fs::test_support::plant_any(
+        "journal dir",
+        &dir,
+        &format!("O:{user}D:P(A;OICI;FA;;;{user})(A;OICI;0x1301bf;;;BU)"),
+    );
+    let grants = dir.join("grants.yaml");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let read = runtime.block_on(super::journal::read_locked(
+        &grants,
+        std::time::Duration::from_millis(100),
+    ));
+    assert!(read.is_none(), "busy, never an unreadable grant file");
+}
