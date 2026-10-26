@@ -486,10 +486,7 @@ async fn update_backend(
                 // Surface the refusal verbatim. An operator setting "stop when idle" on a
                 // backend the gateway does not start needs to be told why, not silently
                 // ignored - being silently ignored is what this whole change corrects.
-                let code = update_refusal_status(&message);
-                if code != StatusCode::NOT_FOUND {
-                    in_lock.record(RefusalKind::Edit, &name, &message);
-                }
+                let code = in_lock.refused_edit(&name, &message, update_refusal_status(&message));
                 (code, message)
             })
         },

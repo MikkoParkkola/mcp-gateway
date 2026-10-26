@@ -93,6 +93,15 @@ impl WriteTicket {
         }
     }
 
+    /// An edit refused with `code`: recorded unless the backend was not
+    /// found (nothing to fix there); `code` is returned unchanged.
+    pub(super) fn refused_edit(&self, name: &str, error: &str, code: StatusCode) -> StatusCode {
+        if code != StatusCode::NOT_FOUND {
+            self.record(RefusalKind::Edit, name, error);
+        }
+        code
+    }
+
     /// After the write committed: resolve `name`'s earlier refusals.
     pub(super) fn committed(&self, name: &str) {
         if let (Some(ledger), Some(ticket)) = (&self.ledger, self.ticket.lock().take()) {
