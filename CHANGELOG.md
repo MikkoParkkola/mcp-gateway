@@ -15,10 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   language runtimes, so a backend started with `npx`, `uvx` or `git` could not
   run in it. The `-full` variant adds Node.js 24 from NodeSource (its signing
   key checked by fingerprint, npm pinned), `uv` pinned by digest, and `git`,
-  and runs under `tini`. On
-  start it installs any `EXTRA_APT_PACKAGES` and runs `/docker-entrypoint.d`
-  drop-ins, then drops privileges to the gateway user; an apt option or a
-  package removal in `EXTRA_APT_PACKAGES` is refused. It is published beside
+  and runs under `tini`. Started
+  as root (`--user root`), it installs any `EXTRA_APT_PACKAGES` and runs
+  `/docker-entrypoint.d` drop-ins, then drops privileges to the gateway user;
+  an apt option or a package removal in `EXTRA_APT_PACKAGES` is refused.
+  Under the image's default non-root user both are skipped. It is published beside
   the default image with a `-full` suffix, and CI builds, scans and smokes it
   on every pull request. A new image variant in a patch release: the default
   image is unchanged. By [@terafin](https://github.com/terafin)
@@ -44,10 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [#4148](https://github.com/MikkoParkkola/mcp-gateway/pull/4148),
   [#4151](https://github.com/MikkoParkkola/mcp-gateway/pull/4151) and
   [#4153](https://github.com/MikkoParkkola/mcp-gateway/pull/4153).
-- **A backend whose package cache cannot install repairs itself.** A failed
-  install on a damaged cache is recognised from the child's stderr, which is
-  kept in memory and never logged; the gateway clears the cache it assigned
-  and retries once. The startup sweep deletes only caches the gateway itself
+- **A backend whose npm cache cannot install repairs itself.** An npm or npx
+  install that fails on a damaged cache with a missing module is recognised
+  from the child's stderr, which is kept in memory and never logged; the
+  gateway clears the cache it assigned and retries once. The startup sweep deletes only caches the gateway itself
   marked, never an operator's directory. By
   [@terafin](https://github.com/terafin)
   ([#1759](https://github.com/MikkoParkkola/mcp-gateway/pull/1759)), ported
@@ -55,10 +56,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [#4146](https://github.com/MikkoParkkola/mcp-gateway/pull/4146) and
   [#4147](https://github.com/MikkoParkkola/mcp-gateway/pull/4147).
 - **Six non-secret npm settings reach stdio backends.** `npm_config_allow_git`,
-  `cafile`, `prefer_offline`, `offline`, `strict_ssl` and `loglevel` are
-  forwarded from the gateway's environment; a backend's own spelling wins.
-  It is an allowlist, so no credential setting can be forwarded by accident.
-  ([#4155](https://github.com/MikkoParkkola/mcp-gateway/pull/4155))
+  `npm_config_cafile`, `npm_config_prefer_offline`, `npm_config_offline`,
+  `npm_config_strict_ssl` and `npm_config_loglevel` are forwarded from the
+  gateway's environment; a backend's own spelling wins. It is an allowlist, so
+  no credential setting can be forwarded by accident. By
+  [@terafin](https://github.com/terafin)
+  ([#1759](https://github.com/MikkoParkkola/mcp-gateway/pull/1759)), ported
+  in [#4155](https://github.com/MikkoParkkola/mcp-gateway/pull/4155).
 - **A restart no longer resets the daily cost budgets.** Totals were saved to
   `costs.json` on shutdown but never read back, so an agent that had hit its
   daily cap could spend again after a restart. Today's totals are now restored
@@ -88,8 +92,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back, so the token landed in the file in plain text. An edit now reads the
   file alone; the overrides still apply at runtime.
   ([#4174](https://github.com/MikkoParkkola/mcp-gateway/pull/4174))
-- **A crafted `costs.json` can no longer reset an exhausted daily budget.**
-  Restore skipped a valid per-tool total that would overflow the global sum
+- **An overflowing or saturated total in `costs.json` no longer resets an
+  exhausted daily budget.** Restore skipped a valid per-tool total that would overflow the global sum
   and restored a saturated counter as zero; both reopened a cap after a
   restart. Every in-range total now comes back, and a saturated one stays
   saturated. ([#4176](https://github.com/MikkoParkkola/mcp-gateway/pull/4176))
@@ -114,6 +118,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gateway::ui::backend_ops`, for library users. It edits an unloadable file as
   the defaults; use `load_existing_or_default`, which returns the error.
   Nothing in the gateway calls it, and 4.0 removes it.
+
+### Changed
+
+- **Internal material removed from the public tree.** Internal design notes,
+  research papers and plans that had been published with the source are gone,
+  and CI now refuses private content and paths in the tree, commit messages
+  and pull request descriptions. No shipped behaviour changes.
+  ([#4171](https://github.com/MikkoParkkola/mcp-gateway/pull/4171))
 
 ### Notes
 
