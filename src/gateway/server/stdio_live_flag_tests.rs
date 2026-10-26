@@ -32,6 +32,13 @@ fn write_flag(path: &Path, on: bool) {
     .expect("write");
 }
 
+/// Whether a session sends `notifications/initialized` after `initialize`.
+#[derive(PartialEq, Eq)]
+enum Announce {
+    Yes,
+    No,
+}
+
 struct Session {
     client: DuplexStream,
     reader: tokio::io::BufReader<DuplexStream>,
@@ -43,7 +50,12 @@ struct Session {
 }
 
 impl Session {
-    async fn start(dir: &Path, path: std::path::PathBuf) -> Self {
+    /// A session on `path`. `announce` sends `notifications/initialized`;
+    /// a held row leaves it out, because every line but `initialize` passes
+    /// the one-shot dispatch pause (stdio_loop.rs, `hold.pause()`), and a
+    /// notification still in flight when the row arms it would take the
+    /// pause in place of the row's own line.
+    async fn start(dir: &Path, path: std::path::PathBuf, announce: Announce) -> Self {
         let config = Config::load(Some(&path)).expect("loads");
         let mut gateway = Gateway::new_with_path(config, Some(path))
             .await
@@ -81,12 +93,14 @@ impl Session {
             )
             .await;
         session.answer(id).await;
-        let note = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
-        session
-            .client
-            .write_all(format!("{note}\n").as_bytes())
-            .await
-            .expect("write");
+        if announce == Announce::Yes {
+            let note = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
+            session
+                .client
+                .write_all(format!("{note}\n").as_bytes())
+                .await
+                .expect("write");
+        }
         session
     }
 
@@ -158,7 +172,7 @@ async fn f2_stdio_sanitise_input_follows_a_reload() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
     write_flag(&path, true);
-    let mut s = Session::start(dir.path(), path.clone()).await;
+    let mut s = Session::start(dir.path(), path.clone(), Announce::Yes).await;
 
     let id = s.send_nul().await;
     let reply = s.answer(id).await;
@@ -177,14 +191,21 @@ async fn f2_stdio_sanitise_input_follows_a_reload() {
     assert!(sanitised(&reply), "on after reload: {reply}");
 }
 
-/// Hold the next line's dispatch, publish the flipped flag into the config
-/// stdio serves (as its reload would; F2 covers the reload itself), release,
-/// and return the held line's answer.
-async fn held_across_a_flip(s: &mut Session, to: bool) -> Value {
+/// Hold the next line's dispatch, flip the flag by a reload sent on the same
+/// session (it runs concurrently: lines other than `initialize` are spawned),
+/// release, and return the held line's answer. The flag the session serves is
+/// checked flipped, so a reload that never landed cannot pass the row.
+async fn held_across_a_flip(s: &mut Session, path: &Path, to: bool) -> Value {
     let (reached, release) = s.hold.arm();
     let held = s.send_nul().await;
     crate::test_pause::within("the held line reaches the pause", reached.notified()).await;
-    s.live.edit(|c| c.security.sanitize_input = to);
+    write_flag(path, to);
+    s.reload().await;
+    assert_eq!(
+        s.live.get().security.sanitize_input,
+        to,
+        "the reload did not land"
+    );
     release.notify_one();
     s.answer(held).await
 }
@@ -196,11 +217,11 @@ async fn g4_a_held_stdio_line_keeps_the_generation_it_was_read_under() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
     write_flag(&path, true);
-    let mut s = Session::start(dir.path(), path).await;
+    let mut s = Session::start(dir.path(), path.clone(), Announce::No).await;
 
-    let reply = held_across_a_flip(&mut s, false).await;
+    let reply = held_across_a_flip(&mut s, &path, false).await;
     assert!(sanitised(&reply), "on then off: {reply}");
 
-    let reply = held_across_a_flip(&mut s, true).await;
+    let reply = held_across_a_flip(&mut s, &path, true).await;
     assert!(!sanitised(&reply), "off then on: {reply}");
 }
