@@ -119,6 +119,22 @@ fn judge_owner(file_uid: u32, expected_uid: u32) -> io::Result<()> {
     ))
 }
 
+/// The uid a per-user sidecar must belong to: the effective user. A test
+/// can name another, to show the lock path really asks.
+#[cfg(unix)]
+fn expected_owner_uid() -> u32 {
+    #[cfg(test)]
+    if let Some(uid) = EXPECTED_OWNER.with(std::cell::Cell::get) {
+        return uid;
+    }
+    rustix::process::geteuid().as_raw()
+}
+
+#[cfg(all(test, unix))]
+thread_local! {
+    static EXPECTED_OWNER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
+
 #[cfg(unix)]
 fn keep_private(lock: &Path, owners: Owners) -> io::Result<()> {
     use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
@@ -141,7 +157,7 @@ fn keep_private(lock: &Path, owners: Owners) -> io::Result<()> {
     let meta = file.metadata()?;
     let me = rustix::process::geteuid().as_raw();
     if owners == Owners::UserOnly && meta.is_file() {
-        judge_owner(meta.uid(), me)?;
+        judge_owner(meta.uid(), expected_owner_uid())?;
     }
     let shared = meta.mode() & 0o077 != 0;
     if !meta.is_file() || !shared {
@@ -361,5 +377,29 @@ mod tests {
         assert!(held.is_ok(), "the user's own sidecar was refused");
         let mode = std::fs::metadata(&lock).expect("stat").permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "mode {mode:o}");
+    }
+
+    /// The lock path itself asks the owner rule: with another uid expected,
+    /// a private sidecar this user owns is refused. Skipping the check, or
+    /// moving it below the early return for a private file, turns this green
+    /// into a pass and so fails it.
+    #[cfg(unix)]
+    #[test]
+    fn the_vault_lock_refuses_a_sidecar_owned_by_anyone_else() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lock = dir.path().join("vault.lock");
+        std::fs::write(&lock, "").expect("write");
+        std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        let me = rustix::process::geteuid().as_raw();
+        super::EXPECTED_OWNER.with(|uid| uid.set(Some(me + 1)));
+        let refused = super::lock_file_blocking(&lock, std::time::Instant::now());
+        super::EXPECTED_OWNER.with(|uid| uid.set(None));
+        match refused {
+            Err(super::NotLocked::Failed(why)) => {
+                assert!(why.contains("belongs to another user"), "{why}");
+            }
+            other => panic!("not refused: {:?}", other.is_ok()),
+        }
     }
 }

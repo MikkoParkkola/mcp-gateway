@@ -224,13 +224,15 @@ fn a_crash_between_delete_and_removal_line_is_filtered_by_exists() {
 
 #[test]
 fn a_two_phase_save_and_a_secret_only_save_both_complete_under_contention() {
+    use std::sync::atomic::{AtomicBool, Ordering};
     let (dir, vault) = fresh_vault();
     let config = dir.path().join("gateway.yaml");
     std::fs::write(&config, "{}\n").unwrap();
     let store = Arc::new(Fake::new());
-    let start = Arc::new(Barrier::new(2));
+    let held = Arc::new(Barrier::new(2));
+    let kept = Arc::new(AtomicBool::new(false));
     let writer = {
-        let (vault, store, start, config) = (vault.clone(), store.clone(), start.clone(), config);
+        let (vault, store, held, kept) = (vault.clone(), store.clone(), held.clone(), kept.clone());
         std::thread::spawn(move || {
             // Reload, then the config sidecar, then the vault: the global order.
             let reload = std::sync::Mutex::new(());
@@ -241,16 +243,28 @@ fn a_two_phase_save_and_a_secret_only_save_both_complete_under_contention() {
                 |_| {},
             )
             .expect("config lock");
-            start.wait();
             let saved = create_secrets(vault, store, &two(), soon()).expect("phase one");
+            // The secret-only save starts while this one holds the vault lock.
+            held.wait();
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            kept.store(true, Ordering::SeqCst);
             saved.keep();
         })
     };
     let secret_only = {
-        let (vault, store, start) = (vault.clone(), store.clone(), start.clone());
+        let (vault, store, held, kept) = (vault.clone(), store.clone(), held.clone(), kept.clone());
         std::thread::spawn(move || {
-            start.wait();
-            save_secrets(&vault, store.as_ref(), &three(), |_| Ok::<_, ()>(())).expect("saved");
+            held.wait();
+            save_secrets(&vault, store.as_ref(), &three(), |_| {
+                // Its entries exist only once the vault lock was free, after
+                // the two-phase save kept: without the lock this runs first.
+                assert!(
+                    kept.load(Ordering::SeqCst),
+                    "both saves held the vault at once"
+                );
+                Ok::<_, ()>(())
+            })
+            .expect("saved");
         })
     };
     writer.join().expect("the two-phase save");
@@ -277,12 +291,17 @@ fn the_store_core_takes_no_lock_but_the_vault_lock() {
             assert!(!text.contains(call), "{name} takes another lock: {call}");
         }
     }
-    let save = include_str!("save.rs");
-    assert_eq!(
-        save.matches("lock_file_blocking(").count(),
-        1,
-        "one vault lock site"
-    );
+    let sites: usize = [
+        include_str!("mod.rs"),
+        include_str!("save.rs"),
+        include_str!("pending.rs"),
+        include_str!("files.rs"),
+        include_str!("index.rs"),
+    ]
+    .iter()
+    .map(|text| text.matches("lock_file_blocking(").count())
+    .sum();
+    assert_eq!(sites, 1, "one vault lock site in the store core");
 }
 
 #[test]
