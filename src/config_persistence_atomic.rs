@@ -196,6 +196,47 @@ fn create_kept(target: &Path, candidate: &Path) -> std::io::Result<std::fs::File
     }
 }
 
+/// Copy `src` to `dst` (a backup), keeping `src`'s access: on unix
+/// `std::fs::copy`, which keeps the mode; on Windows, where a copy takes the
+/// folder's list instead, the bytes are written to a scratch created with
+/// `src`'s list (checked as an `Inherit` save is) and renamed over `dst`.
+///
+/// # Errors
+///
+/// Returns the copy's I/O error, or on Windows a refusal when `src`'s list
+/// cannot be copied exactly; `dst` is then left as it was.
+pub fn copy_keeping_access(src: &Path, dst: &Path) -> std::io::Result<()> {
+    #[cfg(not(windows))]
+    {
+        std::fs::copy(src, dst).map(|_| ())
+    }
+    #[cfg(windows)]
+    {
+        let bytes = std::fs::read(src)?;
+        let (mut file, scratch) =
+            super::claim_scratch(dst, super::next_scratch_seed(), |candidate| {
+                create_kept(src, candidate)
+            })
+            .map_err(|e| match e {
+                super::ScratchClaimError::AllTaken => std::io::Error::other(format!(
+                    "{} scratch names next to {} were all in use",
+                    super::SCRATCH_ATTEMPTS,
+                    dst.display()
+                )),
+                super::ScratchClaimError::Io(e) => e,
+            })?;
+        if let Err(e) = file.write_all(&bytes).and_then(|()| file.sync_all()) {
+            drop(file);
+            let _ = std::fs::remove_file(&scratch);
+            return Err(e);
+        }
+        drop(file);
+        super::rename_with_retry(&scratch, dst).inspect_err(|_| {
+            let _ = std::fs::remove_file(&scratch);
+        })
+    }
+}
+
 /// Whether the scratch ended up in the target's group.
 #[cfg(unix)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

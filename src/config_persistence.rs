@@ -75,7 +75,7 @@ pub(crate) mod comments;
 
 #[path = "config_persistence_atomic.rs"]
 mod atomic;
-pub use atomic::{FileMode, Symlink, write_atomic};
+pub use atomic::{FileMode, Symlink, copy_keeping_access, write_atomic};
 
 /// Take the config lock for a CLI write, waiting up to [`CLI_LOCK_WAIT`].
 fn cli_lock(path: &Path) -> Result<ExclusiveFileLock, String> {

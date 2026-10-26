@@ -339,3 +339,18 @@ fn an_access_enforcing_sacl_entry_refuses_the_copy() {
         Some("undecodable-ace")
     );
 }
+
+/// B1: a backup of an owner-only file is owner-only; a plain copy would take
+/// the folder's list.
+#[test]
+fn a_backup_of_an_owner_only_file_is_owner_only() {
+    let row = "WINACL-B1";
+    let dir = everyone_full_dir(row);
+    let src = dir.path().join("gateway.yaml");
+    std::fs::write(&src, b"admin: secret").unwrap();
+    plant_owner_only(row, &src);
+    let dst = dir.path().join("gateway.yaml.bak");
+    super::copy_keeping_access(&src, &dst).unwrap();
+    assert_owner_only(row, &dst, false);
+    assert_eq!(std::fs::read(&dst).unwrap(), b"admin: secret");
+}

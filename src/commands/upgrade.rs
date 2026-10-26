@@ -279,7 +279,8 @@ fn backup_config(config_dir: &Path, old_version: &str) -> std::io::Result<Option
         return Ok(None);
     }
     let dst = src.with_extension(format!("yaml.bak.{old_version}"));
-    std::fs::copy(&src, &dst)?;
+    // Keeps the config's access: a plain copy on Windows takes the folder's.
+    mcp_gateway::config_persistence::copy_keeping_access(&src, &dst)?;
     Ok(Some(dst))
 }
 
