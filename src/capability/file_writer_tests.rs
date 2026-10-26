@@ -600,3 +600,60 @@ fn patch_of_two_large_unrelated_files_stays_bounded() {
         "+++ header plus 3000"
     );
 }
+
+// ── T10, catalogue half: what a reload serves ─────────────────────────
+
+/// A write that fails at the rename leaves the catalogue as it was after the
+/// next reload (the one the watcher triggers); a commit changes it.
+#[cfg(unix)]
+#[tokio::test]
+async fn catalogue_unchanged_after_a_failed_write_and_changed_after_a_commit() {
+    use crate::capability::{CapabilityBackend, CapabilityExecutor};
+    let (dir, _file) = dir_with(TEXT);
+    let root = dir.path().to_path_buf();
+    let backend = CapabilityBackend::new("caps", std::sync::Arc::new(CapabilityExecutor::new()));
+    backend.register_directories(&[root.to_string_lossy().into_owned()]);
+    backend.reload().await.expect("the directory loads");
+    let description = |b: &CapabilityBackend| b.get("kept").map(|c| c.description);
+    assert_eq!(description(&backend).as_deref(), Some("Original"));
+
+    let failed = commit_observed(
+        edit(
+            dir.path(),
+            Base::Bytes(sha(TEXT)),
+            Change::Write(described(TEXT, "Edited")),
+            PinUpdate::InPlace,
+        ),
+        None,
+        soon(),
+        |_| set_mode(&root, 0o555),
+    )
+    .await;
+    set_mode(&root, 0o755);
+    assert!(
+        matches!(failed, Err(Refused::Unwritable { .. })),
+        "{failed:?}"
+    );
+    backend.reload().await.expect("the directory still loads");
+    assert_eq!(
+        backend.list(),
+        vec!["kept".to_string()],
+        "no scratch is served"
+    );
+    assert_eq!(description(&backend).as_deref(), Some("Original"));
+
+    commit(
+        edit(
+            dir.path(),
+            Base::Bytes(sha(TEXT)),
+            Change::Write(described(TEXT, "Edited")),
+            PinUpdate::InPlace,
+        ),
+        None,
+        soon(),
+    )
+    .await
+    .expect("the save commits");
+    backend.reload().await.expect("the directory loads");
+    assert_eq!(description(&backend).as_deref(), Some("Edited"));
+}
