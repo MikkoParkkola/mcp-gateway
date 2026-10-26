@@ -191,6 +191,7 @@ async fn view_pinned(
         .extension(generation)
         .extension(crate::gateway::auth::AuthenticatedClient {
             admin: true,
+            authenticated: true,
             ..crate::gateway::auth::anonymous_client()
         })
         .body(Body::empty())
@@ -200,10 +201,15 @@ async fn view_pinned(
         .oneshot(request)
         .await
         .expect("the router is infallible");
-    assert!(response.status().is_success(), "{}", response.status());
+    let status = response.status();
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("body");
+    assert!(
+        status.is_success(),
+        "{uri}: {status} {}",
+        String::from_utf8_lossy(&body)
+    );
     serde_json::from_slice(&body).expect("json")
 }
 

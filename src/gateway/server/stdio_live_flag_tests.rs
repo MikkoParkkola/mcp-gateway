@@ -20,8 +20,16 @@ use crate::test_pause::Slot;
 
 const NUL: &str = "a\u{0}b";
 
+/// The config with `sanitize_input` = `on`, and a task store in the test's
+/// own directory (the harness refuses the real one).
 fn write_flag(path: &Path, on: bool) {
-    write_owner_only(path, &format!("security:\n  sanitize_input: {on}\n")).expect("write");
+    let tasks = path.with_file_name("tasks");
+    let tasks = tasks.display().to_string().replace('\'', "''");
+    write_owner_only(
+        path,
+        format!("security:\n  sanitize_input: {on}\ntasks:\n  store_dir: '{tasks}'\n"),
+    )
+    .expect("write");
 }
 
 struct Session {
