@@ -94,9 +94,17 @@ pub struct AuthorizationError {
     pub code: i32,
     pub status: StatusCode,
     pub message: String,
+    #[expect(
+        dead_code,
+        reason = "read by the decision record, which lands in the next commit of this change"
+    )]
     pub(crate) kind: crate::security::decision_record::DecisionKind,
 }
 
+#[expect(
+    clippy::missing_fields_in_debug,
+    reason = "kind is deliberately left out so no log line can carry it"
+)]
 impl std::fmt::Debug for AuthorizationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AuthorizationError")

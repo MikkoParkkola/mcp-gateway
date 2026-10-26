@@ -4,6 +4,7 @@
 //! response body and no log line (`Debug` omits it).
 
 use super::*;
+use pretty_assertions::assert_eq;
 
 use crate::gateway::authz::AuthorizationError;
 use crate::security::decision_record::DecisionKind;
