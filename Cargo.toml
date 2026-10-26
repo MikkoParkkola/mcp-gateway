@@ -133,7 +133,7 @@ serde = { version = "1.0", features = ["derive"] }
 # raw_value: the reply classifier captures a backend `error` member as sent
 # (MIK-8263); axum already enables it, this states the dependency.
 serde_json = { version = "1.0", features = ["raw_value"] }
-serde_json_canonicalizer = "0.3.2"
+serde_json_canonicalizer = "0.4.1"
 # MIK-8639 pre-parse guard: exact pin, no comment buffer (MIK-8425 backend family).
 granit-parser = { version = "=2.0.0", default-features = false, features = ["std", "error_messages"] }
 # The adapter's own YAML tree (MIK-8425 MIG.2): insertion-ordered mappings and
@@ -182,7 +182,7 @@ chrono-tz = "0.10.4"
 # The host's IANA zone name, for local-day budgets; already in the tree via chrono
 iana-time-zone = "0.1.65"
 dashmap = "6.2"
-parking_lot = "0.12"
+parking_lot = "0.13"
 bytes = "1.11.1"
 pin-project-lite = "0.2"
 shlex = "2.0"
@@ -281,7 +281,7 @@ serde_urlencoded = "0.7"
 # MIK-8512: a compressed-body row for the doctor npm lookup (already in Cargo.lock).
 flate2 = "1.1"
 criterion = { version = "0.8", features = ["html_reports"] }
-jsonschema = { version = "0.56.0", default-features = false }
+jsonschema = { version = "0.60.0", default-features = false }
 # MIK-8387 boundary pins: parse the crate's own source (already in Cargo.lock).
 syn = { version = "2.0.119", features = ["full", "visit"] }
 
