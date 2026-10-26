@@ -76,7 +76,7 @@ Every `unsafe` block carries a `// SAFETY:` comment naming which of these it rel
      `MoveFileExW`, `GetVolumePathNameW`, `GetFileInformationByHandleEx`, `GetVolumeInformationByHandleW`,
      `InitializeAcl`, `AddAccessAllowedAceEx`, `InitializeSecurityDescriptor`,
      `SetSecurityDescriptorOwner`, `SetSecurityDescriptorDacl`,
-     `SetSecurityDescriptorControl`, `GetAce`): zero is failure, then
+     `SetSecurityDescriptorControl`, `GetSecurityDescriptorSacl`, `GetAce`): zero is failure, then
      `io::Error::last_os_error()`.
    - `GetKernelObjectSecurity` is a `BOOL` too: a zero with
      `ERROR_INSUFFICIENT_BUFFER` and a larger required length grows the buffer and
@@ -124,6 +124,25 @@ Every `unsafe` block carries a `// SAFETY:` comment naming which of these it rel
 - `file_identity`: one `FILE_ID_INFO` on the stack, its exact size passed, written by the call.
 - `volume_is_local` / `final_path`: output buffers sized from the first call, lengths
   checked against the buffer before the `&[u16]` slice is formed.
+- `inspect_for_copy` (amendment, lead-ratified 2026-10-26): two reads through the same
+  `read_descriptor` loop `inspect` uses (`GetKernelObjectSecurity`, the handle borrowed
+  for the whole call): one for the DACL plus the five access-enforcing SACL classes
+  (label, scope, attribute, process trust label, access filter; never
+  `SACL_SECURITY_INFORMATION`, which needs `ACCESS_SYSTEM_SECURITY`), one for the owner.
+  Owner and DACL are decoded exactly as `inspect` decodes them.
+- SACL count (amendment, lead-ratified 2026-10-26): `GetSecurityDescriptorSacl` on the
+  descriptor `read_descriptor` returned, the twin of the `GetSecurityDescriptorDacl`
+  call. The SACL pointer is read only while the buffer lives, must lie inside the
+  descriptor's own length, and its entries are walked by the same `read_aces` with the
+  same per-ACE bounds; only their number is used.
+- `create_file_like` (amendment, lead-ratified 2026-10-26): `CreateFileW` with
+  `CREATE_NEW`, no sharing and `FILE_FLAG_OPEN_REPARSE_POINT`, whose
+  `SECURITY_ATTRIBUTES` points at a copy of the self-relative descriptor
+  `inspect_for_copy` read (the form `lpSecurityDescriptor` accepts; it carries no
+  owner, so the creator's owner applies). The copy, the wide path and the attributes
+  live on the caller's frame until the call returns; the result is checked against
+  `INVALID_HANDLE_VALUE` and owned exactly once. The caller compares the new file's
+  owner, DACL and SACL count with the model before any byte is written.
 
 ## Consequences
 
