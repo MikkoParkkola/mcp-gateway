@@ -177,38 +177,48 @@ impl Locked {
     /// Whether there is no config to load: the target is missing, and the
     /// configured path is no dangling link to it. A dangling link refuses:
     /// its target is never created from defaults (GH462). It counts if it
-    /// dangled when the path was resolved, or dangles now because the target
-    /// was deleted while the writer waited.
+    /// dangled when the path was resolved and the target is still missing,
+    /// or dangles now because the target was deleted while the writer
+    /// waited. A path that moved refuses first ([`Self::still_named_by`]),
+    /// so the link judged here is the one that names the target.
     ///
     /// # Errors
     ///
-    /// A dangling link, or a target whose metadata cannot be read.
+    /// A moved path, a dangling link, or a target whose metadata cannot be
+    /// read.
     pub(crate) fn absent(&self, config: &Path) -> Result<bool, String> {
-        let dangling = || {
-            Err(format!(
-                "{} is a symlink to {}, which does not exist",
-                config.display(),
-                self.target.display()
-            ))
-        };
-        if self.dangling {
-            return dangling();
-        }
+        self.still_named_by(config)?;
         match std::fs::symlink_metadata(&self.target) {
             Ok(_) => Ok(false),
-            Err(e)
-                if e.kind() == io::ErrorKind::NotFound
-                    && std::fs::symlink_metadata(config)
-                        .is_ok_and(|m| m.file_type().is_symlink()) =>
-            {
-                dangling()
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                let links =
+                    std::fs::symlink_metadata(config).is_ok_and(|m| m.file_type().is_symlink());
+                if self.dangling || links {
+                    return Err(format!(
+                        "{} is a symlink to {}, which does not exist",
+                        config.display(),
+                        self.target.display()
+                    ));
+                }
+                Ok(true)
             }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(true),
             Err(e) => Err(format!(
                 "Cannot inspect config file {}: {e}",
                 self.target.display()
             )),
         }
+    }
+
+    /// Whether the holder may write the target now: the path still names it
+    /// and it is no dangling link's missing target. Checked last, just
+    /// before the write, so a target deleted while the writer worked is not
+    /// recreated.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::absent`].
+    pub(crate) fn may_write(&self, config: &Path) -> Result<(), String> {
+        self.absent(config).map(drop)
     }
 
     /// Refuse a write whose configured path no longer names the target this

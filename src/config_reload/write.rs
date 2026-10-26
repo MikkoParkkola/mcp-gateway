@@ -156,7 +156,7 @@ pub async fn write_config_and_reload_outcome(
     // orders this write against every other process's writer.
     // Written through the target the lock resolved, never `path` again.
     let locked = lock_config(path, Instant::now() + super::RELOAD_LOCK_WAIT).await?;
-    locked.still_named_by(path)?;
+    locked.may_write(path)?;
     crate::config_persistence::write_config_with(
         &locked.target,
         config,
@@ -300,7 +300,7 @@ where
         .map_err(|e| load_failure(path, &e, mode))?;
     match mutate(&mut config) {
         Ok(value) => {
-            locked.still_named_by(path)?;
+            locked.may_write(path)?;
             crate::config_persistence::write_config_with(
                 &locked.target,
                 &config,

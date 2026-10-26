@@ -53,7 +53,7 @@ pub fn load_existing_or_default(path: &Path) -> crate::Result<Config> {
 )]
 pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
     let locked = lock_for_cli(path)?;
-    locked.still_named_by(path)?;
+    locked.may_write(path)?;
     write_config_with(&locked.target, config, CommentLoss::Rewrite, &locked.held).map_err(|e| {
         match e {
             Unwritten::Failed(message) | Unwritten::CommentLoss(message) => message,
@@ -254,7 +254,8 @@ impl From<String> for Unwritten {
 /// comments; [`Unwritten::Failed`] on validation, serialisation or I/O failure.
 ///
 /// `_held` is the config lock ([`lock`]) the caller took before it loaded:
-/// the load, the edit and this write are one critical section.
+/// the load, the edit and this write are one critical section. `path` is the
+/// target that lock resolved, written as it stands, never through a link.
 pub(crate) fn write_config_with(
     path: &Path,
     config: &Config,
@@ -325,6 +326,7 @@ where
     let mut dropped = Vec::new();
     edit_locked(
         path,
+        Target::Config,
         |locked| read_config(path, locked),
         |current| {
             let mut config = current
@@ -371,9 +373,21 @@ where
     // dangling link creates the target and keeps the link.
     edit_locked(
         path,
+        Target::FollowLink,
         |locked| read_text(&locked.target),
         |current| edit(current.as_deref()),
     )
+}
+
+/// What a missing target means to a locked edit.
+#[derive(Clone, Copy)]
+enum Target {
+    /// A config: a dangling link at the path is damage, never created
+    /// (GH462), even when its target was deleted while the edit ran.
+    Config,
+    /// Text through the link, as `init` has always written it: a dangling
+    /// link's target is created and the link kept.
+    FollowLink,
 }
 
 /// The one locked write path: take the config lock, `read` its target, let
@@ -382,11 +396,19 @@ where
 /// the file was written.
 fn edit_locked<T>(
     path: &Path,
+    target: Target,
     read: impl FnOnce(&lock::Locked) -> Result<T, String>,
     edit: impl FnOnce(T) -> Result<Option<String>, String>,
 ) -> Result<bool, String> {
     let locked = cli_lock(path)?;
-    let Some(text) = edit(read(&locked)?)? else {
+    let text = edit(read(&locked)?)?;
+    // Checked even when nothing is written, so no edit reports on a config
+    // the path no longer names.
+    match target {
+        Target::Config => locked.may_write(path)?,
+        Target::FollowLink => locked.still_named_by(path)?,
+    }
+    let Some(text) = text else {
         return Ok(false);
     };
     // Fail closed (GH462): bytes that do not parse are never written.
@@ -396,8 +418,7 @@ fn edit_locked<T>(
             path.display()
         )
     })?;
-    locked.still_named_by(path)?;
-    write_yaml(&locked.target, &text)?;
+    write_yaml_at(&locked.target, &text)?;
     Ok(true)
 }
 
@@ -462,7 +483,8 @@ fn write_spliced(
         .flatten();
     let text = text.or(unloaded.as_deref());
     if let Some((yaml, _)) = render(path, before, text, config, mode, scope)? {
-        write_yaml(path, &yaml)?;
+        // `path` is the lock holder's target ([`write_config_with`]).
+        write_yaml_at(path, &yaml)?;
     }
     Ok(())
 }
@@ -584,7 +606,13 @@ pub fn write_text_atomic(path: &Path, text: &str) -> Result<(), String> {
 fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
     // Replace the config itself, not a symlink naming it: renaming onto the
     // link would detach the config from its target (MIK-8153).
-    let path = &crate::identity_grants::journal::resolved(path);
+    write_yaml_at(&crate::identity_grants::journal::resolved(path), yaml)
+}
+
+/// [`write_yaml`] over `path` itself, the target a lock holder resolved: the
+/// rename replaces whatever entry is there, so a symlink planted at the
+/// target since is replaced, never followed to another file.
+fn write_yaml_at(path: &Path, yaml: &str) -> Result<(), String> {
     let (mut file, tmp_path) = create_scratch_exclusive(path, next_scratch_seed())?;
 
     // Leave no debris behind on any failure. The scratch name is unique per

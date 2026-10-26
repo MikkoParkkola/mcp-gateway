@@ -97,21 +97,22 @@ async fn writer_waits(lock: &std::path::Path, before: usize) {
     .expect("the writer waits for the held lock");
 }
 
-/// An async writer, seen waiting by its lock attempts.
+/// An async writer, seen waiting by its lock attempts. `write` resolves to
+/// its refusal, if it refused.
 async fn async_race<F>(write: impl FnOnce(PathBuf) -> F)
 where
-    F: std::future::Future<Output = bool> + Send + 'static,
+    F: std::future::Future<Output = Option<String>> + Send + 'static,
 {
     let (l, held) = linked();
     let before = crate::fs_lock::lock_attempts(&l.lock);
     let writer = tokio::spawn(write(l.link.clone()));
     writer_waits(&l.lock, before).await;
     repoint_and_release(&l, held);
-    let applied = tokio::time::timeout(BOUND, writer).await.expect("ends");
-    assert!(
-        !applied.expect("writer task"),
-        "a write whose path moved refuses"
-    );
+    let refused = tokio::time::timeout(BOUND, writer).await.expect("ends");
+    let refused = refused
+        .expect("writer task")
+        .expect("a write whose path moved refuses");
+    assert!(refused.contains("moved during the write"), "{refused}");
     wrote_neither(&l);
 }
 
@@ -152,14 +153,13 @@ fn write_config_refuses_when_the_link_moves() {
 #[tokio::test]
 async fn a_no_gateway_mutation_refuses_when_the_link_moves() {
     async_race(|at| async move {
-        matches!(
-            super::write::mutate_config_and_reload(&at, None, |c| {
-                add_b(c);
-                Ok::<(), String>(())
-            })
-            .await,
-            Ok(ConfigMutation::Applied(..))
-        )
+        super::write::mutate_config_and_reload(&at, None, |c| {
+            add_b(c);
+            Ok::<(), String>(())
+        })
+        .await
+        .err()
+        .map(|e| e.to_string())
     })
     .await;
 }
@@ -173,7 +173,33 @@ async fn a_no_gateway_whole_config_write_refuses_when_the_link_moves() {
         async move {
             super::write::write_config_and_reload_outcome(&at, &config, None)
                 .await
-                .is_ok()
+                .err()
+                .map(|e| e.to_string())
+        }
+    })
+    .await;
+}
+
+/// The live gateway's whole-config writer refuses the same race.
+#[tokio::test]
+async fn a_live_whole_config_write_refuses_when_the_link_moves() {
+    async_race(|at| {
+        let running = Config::load(Some(&at)).expect("config loads");
+        let mut config = running.clone();
+        add_b(&mut config);
+        let ctx = ReloadContext::new(
+            at.clone(),
+            std::sync::Arc::new(LiveConfig::new(running)),
+            std::sync::Arc::new(crate::backend::BackendRegistry::new()),
+            crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        )
+        .expect("context");
+        async move {
+            ctx.write_and_reload_outcome_within(&at, BOUND, &config)
+                .await
+                .err()
+                .map(|e| e.to_string())
         }
     })
     .await;
@@ -254,4 +280,27 @@ fn a_link_removed_while_waiting_writes_nothing() {
     );
     let real = std::fs::read_to_string(&l.real).expect("read real");
     assert_eq!(real, START, "the locked config is untouched");
+}
+
+/// The whole-config writer, which does not read the config first, still
+/// refuses a target deleted while it waited: no config is recreated from
+/// its caller's copy (GH462).
+#[tokio::test]
+#[allow(deprecated)] // the deprecated whole-config writer still locks
+async fn a_whole_config_write_does_not_recreate_a_deleted_target() {
+    let (l, held) = linked();
+    let config = Config::load(Some(&l.link)).expect("config loads");
+    let before = crate::fs_lock::lock_attempts(&l.lock);
+    let at = l.link.clone();
+    let writer = tokio::spawn(async move {
+        super::write::write_config_and_reload_outcome(&at, &config, None)
+            .await
+            .is_err()
+    });
+    writer_waits(&l.lock, before).await;
+    std::fs::remove_file(&l.real).expect("delete target");
+    drop(held);
+    let refused = tokio::time::timeout(BOUND, writer).await.expect("ends");
+    assert!(refused.expect("writer task"), "the write refuses");
+    assert!(!l.real.exists(), "the deleted target stays deleted");
 }

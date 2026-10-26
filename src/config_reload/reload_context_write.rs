@@ -64,7 +64,7 @@ impl ReloadContext {
         // Written and reloaded through the target the lock resolved: one file,
         // even if a symlink at `path` is re-pointed meanwhile.
         let locked = lock_config(path, deadline).await?;
-        locked.still_named_by(path)?;
+        locked.may_write(path)?;
         crate::config_persistence::write_config_with(
             &locked.target,
             config,
@@ -166,7 +166,7 @@ impl ReloadContext {
         };
         // A write that changes nothing still reloads: a retry after a failed
         // reload finds its value on disk and must not leave the runtime stale.
-        locked.still_named_by(path)?;
+        locked.may_write(path)?;
         crate::config_persistence::write_config_with(target, &config, mode, &locked.held)?;
         let outcome = self
             .reload_outcome_locked_at(target)

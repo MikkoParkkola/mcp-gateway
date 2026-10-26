@@ -270,6 +270,14 @@ impl ReloadContext {
                 reload,
             });
         }
+        // The path may have moved while the bytes were computed: refuse before
+        // anything is staged, rather than write and roll back.
+        if crate::identity_grants::journal::resolved(&self.config_path) != target {
+            return Err(ReplaceError::Unsupported(format!(
+                "{} was re-pointed during the write; nothing was written",
+                self.config_path.display()
+            )));
+        }
         self.commit(&target, &current, &new, replace.replaced).await
     }
 
