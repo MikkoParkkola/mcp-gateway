@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 //! MIK-7116.MIN.2 red tests, rows 2 and 2b of the design's red-test order
-//! (docs/design/2026-10-01-min2-min4-tenant-reads.md §6.1).
+//! (the min2 min4 tenant reads design §6.1).
 //!
 //! One `caller_key` may read at most one tenant inside the window, whatever
 //! route, session or concurrency the reads arrive on. Every row runs the real

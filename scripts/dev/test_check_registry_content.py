@@ -6,7 +6,7 @@
 Each row is its own function; the runner at the bottom calls every one and
 prints PASS/FAIL per row, so a run on a checker without the feature shows
 every row failing for its own reason instead of stopping at the first.
-The test plan is docs/internal/design/2026-10-23-mik-8513-test-plan.md.
+The test plan is the registry content test plan.
 """
 
 import contextlib

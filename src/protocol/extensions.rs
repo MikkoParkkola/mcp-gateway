@@ -162,7 +162,7 @@ mod tests {
     // banner was the defect, not the assertions.
     //
     // EXT.1's own evidence is cases E1-E5 of
-    // `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md`,
+    // the cluster b capability and trace metadata test plan,
     // which are red on HEAD by design. Nothing here is expected to fail today.
     //
     // Both sides are built through `from_capabilities` on purpose. Using
