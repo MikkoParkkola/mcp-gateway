@@ -187,17 +187,37 @@ pub(crate) async fn lock_config_recovering(
             // lock moves into the task, so a caller cancelled while waiting
             // here never leaves recovery running unlocked.
             let target = target.clone();
-            return tokio::task::spawn_blocking(move || recovered(&target, held))
+            return off_runtime(move || recovered(&target, held))
                 .await
-                .map_err(|e| {
-                    NotLocked::Failed(format!("recovering the replace journal failed: {e}"))
-                })?;
+                .unwrap_or_else(|| {
+                    Err(NotLocked::Failed(
+                        "recovering the replace journal failed: its thread ended without a result"
+                            .to_owned(),
+                    ))
+                });
         }
         if Instant::now() >= deadline {
             return Err(NotLocked::Busy);
         }
         tokio::time::sleep(POLL).await;
     }
+}
+
+/// Run `work` on a detached thread of its own and await its result: a
+/// detached thread, not `spawn_blocking`, so filesystem work stalled on an
+/// NFS or FUSE mount never holds the runtime's shutdown (as the reload's own
+/// load does, #1808). Whatever `work` owns (a held lock) stays with it until
+/// it finishes, even if the awaiting caller is dropped. `None` if the
+/// thread could not start or ended without a result.
+async fn off_runtime<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    let (done, result) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("config-lock".into())
+        .spawn(move || {
+            let _ = done.send(work());
+        })
+        .ok()?;
+    result.await.ok()
 }
 
 /// [`lock_config`] for a synchronous caller (the CLI), which may block its
@@ -251,20 +271,39 @@ pub(crate) async fn reader_lock(config: &Path, deadline: Instant) -> ReaderLock 
             "another writer holds {} past the wait",
             lock_path(&resolved(config)).display()
         )),
-        Err(NotLocked::Failed(message)) => match no_writer_possible(config) {
-            None => ReaderLock::Skip(message),
-            Some(_) if journal_pending(config) => ReaderLock::Skip(format!(
-                "a pending write's journal {} sits beside a file this gateway cannot lock; resolve the pending write from the writable side",
-                super::journal::journal_path(config).display()
-            )),
-            Some(why) => {
-                static ONCE: std::sync::Once = std::sync::Once::new();
-                ONCE.call_once(|| {
+        Err(NotLocked::Failed(message)) => {
+            let probed = config.to_path_buf();
+            let probe =
+                off_runtime(move || (no_writer_possible(&probed), journal_pending(&probed))).await;
+            classify_unlockable(config, message, probe)
+        }
+    }
+}
+
+/// What a reader does when its lock cannot be taken at all, given the probe
+/// (why no writer can exist, whether a journal is pending); a probe that did
+/// not run skips.
+fn classify_unlockable(
+    config: &Path,
+    message: String,
+    probe: Option<(Option<&'static str>, bool)>,
+) -> ReaderLock {
+    let Some((no_writer, pending)) = probe else {
+        return ReaderLock::Skip(message);
+    };
+    match no_writer {
+        None => ReaderLock::Skip(message),
+        Some(_) if pending => ReaderLock::Skip(format!(
+            "a pending write's journal {} sits beside a file this gateway cannot lock; resolve the pending write from the writable side",
+            super::journal::journal_path(config).display()
+        )),
+        Some(why) => {
+            static ONCE: std::sync::Once = std::sync::Once::new();
+            ONCE.call_once(|| {
                     tracing::warn!(path = %config.display(), reason = why, "reading gateway.yaml without the config lock: no writer can exist here");
                 });
-                ReaderLock::Unlocked
-            }
-        },
+            ReaderLock::Unlocked
+        }
     }
 }
 

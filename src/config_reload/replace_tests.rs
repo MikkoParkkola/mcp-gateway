@@ -616,3 +616,38 @@ async fn a_restore_whose_journal_stays_still_owes_a_reload() {
         "the runtime still owes the reload to the restored bytes"
     );
 }
+
+/// A reload not started by a write (the watcher's) resolves the config once
+/// and loads that same target it locked, never the symlink spelling.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_watcher_reload_loads_the_target_it_locked() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let real = dir.path().join("real.yaml");
+    write_owner_only(&real, START).expect("write config");
+    let link = dir.path().join("gateway.yaml");
+    std::os::unix::fs::symlink(&real, &link).expect("symlink");
+    let running = Config::load(Some(&link)).expect("config loads");
+    let mut ctx = ReloadContext::new(
+        link.clone(),
+        Arc::new(LiveConfig::new(running)),
+        Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    )
+    .expect("context");
+    ctx.load = recording_load;
+
+    ctx.reload_outcome().await.expect("the reload loads");
+
+    let target = crate::identity_grants::journal::resolved(&link);
+    let loaded = LOADED.lock().expect("loaded");
+    assert!(
+        loaded.contains(&target),
+        "the reload read its locked target: {loaded:?}"
+    );
+    assert!(
+        !loaded.contains(&link),
+        "never the link spelling: {loaded:?}"
+    );
+}

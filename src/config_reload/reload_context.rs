@@ -407,10 +407,12 @@ impl ReloadContext {
         // Then the config sidecar, the order every holder takes them in: so
         // this load never reads bytes a refused write is about to roll back.
         let deadline = std::time::Instant::now() + super::RELOAD_LOCK_WAIT;
+        // Resolved once: lock, journal checks and load are about one file.
+        let target = crate::identity_grants::journal::resolved(&self.config_path);
         let reader = tokio::select! {
             biased;
             () = self.stop.cancelled() => return Err(STOPPED.to_owned()),
-            reader = crate::config_persistence::lock::reader_lock(&self.config_path, deadline) => reader,
+            reader = crate::config_persistence::lock::reader_lock(&target, deadline) => reader,
         };
         let _sidecar = match reader {
             crate::config_persistence::lock::ReaderLock::Held(held, recovered) => {
@@ -423,12 +425,14 @@ impl ReloadContext {
             crate::config_persistence::lock::ReaderLock::Unlocked => None,
             crate::config_persistence::lock::ReaderLock::Skip(why) => {
                 self.note_refused_lock();
-                return Err(format!(
-                    "config reload skipped: {why}; the next change retries"
-                ));
+                let mut skipped = format!("config reload skipped: {why}; the next change retries");
+                if let Some(Ok(line) | Err(line)) = grants {
+                    write!(skipped, "; {line}").ok();
+                }
+                return Err(skipped);
             }
         };
-        let mut outcome = match self.reload_outcome_locked().await {
+        let mut outcome = match self.reload_outcome_locked_at(&target).await {
             Ok(outcome) => outcome,
             // Both steps render on every path: a config refusal read alone
             // hides whether the revocation landed. Appended, so every consumer
@@ -570,9 +574,8 @@ impl ReloadContext {
         }
     }
 
-    /// A lock this context was refused may still have restored gateway.yaml
-    /// (its journal then could not be removed): owe the reload that brings
-    /// the runtime back to the restored bytes.
+    /// A refused lock may still have restored gateway.yaml (its journal then
+    /// could not be removed): owe the reload back to the restored bytes.
     fn note_refused_lock(&self) {
         if crate::config_persistence::journal::take_restored(&self.config_path) {
             self.reload_owed

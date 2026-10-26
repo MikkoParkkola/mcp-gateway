@@ -274,11 +274,13 @@ static RESTORED: std::sync::Mutex<Option<std::collections::HashSet<PathBuf>>> =
     std::sync::Mutex::new(None);
 
 fn note_restored(target: &Path) {
-    if let Ok(mut restored) = RESTORED.lock() {
-        restored
-            .get_or_insert_with(std::collections::HashSet::new)
-            .insert(target.to_path_buf());
-    }
+    // A poisoned lock still holds the set: losing the mark would lose the
+    // owed reload.
+    RESTORED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get_or_insert_with(std::collections::HashSet::new)
+        .insert(target.to_path_buf());
 }
 
 /// Take the restored mark for `config`, if a refused recovery left one.
@@ -286,9 +288,9 @@ pub(crate) fn take_restored(config: &Path) -> bool {
     let target = resolved(config);
     RESTORED
         .lock()
-        .ok()
-        .and_then(|mut restored| restored.as_mut().map(|set| set.remove(&target)))
-        .unwrap_or(false)
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_mut()
+        .is_some_and(|set| set.remove(&target))
 }
 
 fn read(path: &Path) -> std::io::Result<Journal> {
