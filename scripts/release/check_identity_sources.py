@@ -225,7 +225,7 @@ READ_BACKS = {
     # never a request's identity. A rule may name anyone; checking happens
     # where a request's identity is made (MIK-8286 design 2.5).
     ("src/capability/parser.rs", "parse_capability"): "rule: a definition's identity_owner",
-    ("src/identity_grants.rs", "read_identity_grants_file"): "rule: the grant file",
+    ("src/identity_grants.rs", "read_identity_grants_file_with_bytes"): "rule: the grant file, with the bytes its config revision digests",
     ("src/identity_grants/journal.rs", "parse_journal"): "rule: persisted grants",
     ("src/identity_grants_matching.rs", "parse_refusal"): "rule: grant-file error report",
     ("src/identity_grants_matching.rs", "remainder_error"): "rule: grant-file error report",
