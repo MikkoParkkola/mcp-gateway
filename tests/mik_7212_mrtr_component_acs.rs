@@ -302,7 +302,7 @@ fn error_message(response: &Value) -> Option<String> {
 /// case naming the expiry check is satisfied by the binding check refusing
 /// first. Discriminating them is DE-9a's to decide — one client sentence for
 /// seven causes, and what it costs a test
-/// (`docs/design/2026-08-30-mrtr-wiring.md:687`) — and it has an owner there.
+/// (the mrtr wiring design) — and it has an owner there.
 /// Recorded, not worked around: a substring hierarchy invented here would be a
 /// test asserting a vocabulary production never agreed to.
 fn assert_refused_by_the_continuation_guard(response: &Value, case: &str) {
@@ -962,7 +962,7 @@ async fn ac_mrtr_2_the_backends_own_state_is_never_relayed_to_the_client() {
 ///
 /// `ContinuationState::new()` draws its own key material, so this is the
 /// arrangement the accepted design deploys — independent keys per process, no
-/// shared store (`docs/design/2026-08-30-shared-continuation-state.md:107-120`).
+/// shared store (the shared continuation state design).
 /// The payload is identical in every field; only the minting key differs.
 fn mint_on_a_foreign_process(tool: &str, args: &Value) -> String {
     let foreign = ContinuationState::new();
@@ -1163,7 +1163,7 @@ async fn ac_mrtr_8_a_call_that_finished_holds_no_slot() {
 // ---------------------------------------------------------------------------
 //
 // The criterion offers two arms and the accepted design took the second:
-// `docs/design/2026-08-30-shared-continuation-state.md:116` forecloses affinity
+// the shared continuation state design forecloses affinity
 // and `:103-104` prices the consequence. `6e744936` deleted `Routing::Elsewhere`
 // accordingly, so "reach the holder" is not a behaviour this gateway can be
 // tested for. What remains testable is the half the criterion actually forbids:

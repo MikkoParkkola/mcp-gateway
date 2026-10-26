@@ -520,7 +520,7 @@ mod tests {
         }
     }
 
-    // §12 review (gpt-review + kimi-review, both HIGH, confirmed independently):
+    // Review (two independent reviewers, both HIGH, confirmed independently):
     // the first version of RL.5 vetoed on ANY negated occurrence appearing
     // anywhere in the text, so a negated phrase silently suppressed a
     // separate, genuine "throttled" elsewhere in the same payload -- exactly

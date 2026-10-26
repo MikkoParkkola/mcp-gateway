@@ -4,7 +4,7 @@
 """Check that a *listening* gateway carries the merged security controls.
 
 NFR.SEC.7, MIK-7265. Design:
-`docs/design/2026-09-11-merged-versus-listening-drift-check.md`.
+the merged versus listening drift check design.
 
 A green test suite cannot see this class of failure: every test in this
 repository runs against a build made from the tree under test, and drift lives

@@ -249,7 +249,7 @@ A multitenant backend (email, memory, calendar) that runs its own OIDC normally 
 - [Five MCP hot-reload tools compared](https://ruachtov.ai/blog/five-tools-mcp-restart.html): Ruach Tov Collective's BPD-based comparison of mcp-gateway against four restart-focused alternatives, with a feature matrix and architectural analysis.
 - [mcp-gateway deep dive](https://ruachtov.ai/blog/mcp-gateway-deep-dive.html): a walkthrough of the capability system, SHA-256 integrity pinning, and the v2.5 to v2.9 development arc.
 
-Quantitative claims in this README are sourced from [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and the machine-readable [benchmarks/public_claims.json](benchmarks/public_claims.json), with a CI check that fails on drift. The public Trust Fabric plan is tracked in [docs/roadmap/mik-6550-trust-fabric-roadmap.md](docs/roadmap/mik-6550-trust-fabric-roadmap.md).
+Quantitative claims in this README are sourced from [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and the machine-readable [benchmarks/public_claims.json](benchmarks/public_claims.json), with a CI check that fails on drift.
 
 ## Why the token math matters
 
@@ -381,7 +381,7 @@ Remote MCP servers plug in by URL, with no extra code. See [examples/gateway-ful
 
 ## Public MCP Gateway Comparison
 
-This table compares public, user-facing behavior, not internal roadmap scoring. MCP Gateway entries are grounded in this repo's public docs: [quickstart](QUICKSTART.md), [deployment](docs/DEPLOYMENT.md), [OWASP controls](docs/OWASP_AGENTIC_AI_COMPLIANCE.md), [TrustCard/CBOM](docs/trustcard.md), [CatalogTrustLab](docs/catalog_trust_lab.md), [adaptive ranking](docs/adaptive_ranking.md), [identity grants](docs/identity_grants.md), [ADR-007 identity propagation](docs/adr/ADR-007-identity-propagation.md), [ADR-008 multi-user OAuth isolation](docs/adr/ADR-008-multi-user-oauth-isolation.md), and the [Trust Fabric roadmap](docs/roadmap/mik-6550-trust-fabric-roadmap.md). Competitor entries are grounded in public project docs: [Docker MCP Catalog and Toolkit](https://docs.docker.com/ai/mcp-catalog-and-toolkit/), [MCPJungle README](https://github.com/mcpjungle/MCPJungle), [mcpo README](https://github.com/open-webui/mcpo), and [Supergateway README](https://github.com/supercorp-ai/supergateway).
+This table compares public, user-facing behavior, not internal roadmap scoring. MCP Gateway entries are grounded in this repo's public docs: [quickstart](QUICKSTART.md), [deployment](docs/DEPLOYMENT.md), [OWASP controls](docs/OWASP_AGENTIC_AI_COMPLIANCE.md), [TrustCard/CBOM](docs/trustcard.md), [CatalogTrustLab](docs/catalog_trust_lab.md), [adaptive ranking](docs/adaptive_ranking.md), [identity grants](docs/identity_grants.md), [ADR-007 identity propagation](docs/adr/ADR-007-identity-propagation.md), [ADR-008 multi-user OAuth isolation](docs/adr/ADR-008-multi-user-oauth-isolation.md). Competitor entries are grounded in public project docs: [Docker MCP Catalog and Toolkit](https://docs.docker.com/ai/mcp-catalog-and-toolkit/), [MCPJungle README](https://github.com/mcpjungle/MCPJungle), [mcpo README](https://github.com/open-webui/mcpo), and [Supergateway README](https://github.com/supercorp-ai/supergateway).
 
 | Axis | **MCP Gateway** | **[Docker MCP Gateway / Toolkit](https://docs.docker.com/ai/mcp-catalog-and-toolkit/)** | **[MCPJungle](https://github.com/mcpjungle/MCPJungle)** | **[mcpo](https://github.com/open-webui/mcpo) / [Supergateway](https://github.com/supercorp-ai/supergateway)** |
 |---|---|---|---|---|
@@ -440,7 +440,7 @@ MCP Gateway can ingest [Agent Skills](https://agentskills.io) and Claude Code `S
 
 ```bash
 # Import a local skill directory (auto-discovers SKILL.md + resources/)
-mcp-gateway skills import ~/.claude/skills/gws-gmail-send
+mcp-gateway skills import ./skills/my-skill
 
 # Import a single SKILL.md file
 mcp-gateway skills import ./path/to/SKILL.md
@@ -493,7 +493,6 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 | [Changelog](CHANGELOG.md) | Release history |
 | [OWASP Agentic AI Compliance](docs/OWASP_AGENTIC_AI_COMPLIANCE.md) | Risk coverage matrix |
 | [ShadowRadar](docs/SHADOW_SCAN.md) | Passive local discovery and static network-rule export |
-| [Enterprise agent governance comparison](docs/competitive/willow-enterprise-agent-governance.md) | Willow/Webrix feature bar and mcp-gateway's current gaps |
 | [vs Anthropic MCP tunnels](#vs-anthropic-mcp-tunnels) | Where mcp-gateway and Anthropic's MCP tunnel compose |
 
 ## Troubleshooting

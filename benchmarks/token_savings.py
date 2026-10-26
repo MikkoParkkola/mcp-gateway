@@ -263,7 +263,7 @@ GATEWAY_TOOLS = [
     # tools are absent for the same reason in reverse: each is gated on
     # configuration the default deployment does not have, so listing them
     # here would model a surface nobody is served
-    # (`docs/design/2026-09-16-meta-tool-surface-compaction.md`).
+    # (the meta tool surface compaction design).
     make_gateway_tool_definition(
         "gateway_webhook_status",
         "List registered webhook endpoints and their delivery statistics (received, delivered, failures, last event)",

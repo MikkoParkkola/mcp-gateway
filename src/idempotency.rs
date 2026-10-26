@@ -1209,7 +1209,7 @@ mod tests {
 
     // ── evict_expired ─────────────────────────────────────────────────────────
 
-    /// Repro harness for the eviction race gpt-review raised on 2026-09-08.
+    /// Repro harness for the eviction race a review raised on 2026-09-08.
     ///
     /// A race has no honest single-shot failing test, so the repair protocol
     /// asks for a deterministic repro harness instead. The invariant is

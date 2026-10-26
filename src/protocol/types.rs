@@ -238,7 +238,7 @@ pub struct ServerCapabilities {
     pub experimental: Option<HashMap<String, Value>>,
     /// Extensions this gateway implements and honours today (`io.modelcontextprotocol/extensions`).
     /// Populated from implemented-and-enabled handlers only, never from a static list of known
-    /// identifiers — see docs/design/2026-08-31-cluster-b-capability-and-trace-metadata.md §3.1a.
+    /// identifiers — see the cluster b capability and trace metadata design §3.1a.
     ///
     /// Omitted when empty, like every sibling field. An earlier revision serialized it
     /// unconditionally so that `{}` could mean "speaks the mechanism, supports nothing" as

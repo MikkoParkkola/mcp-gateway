@@ -4,7 +4,7 @@
 //! MCP 2026-07-28, and the validation that must happen before the gateway acts
 //! on them.
 //!
-//! Plan: `docs/requirements/RELEASE-4.0.0-test-plan.md` §"Increment 3".
+//! Plan: the 4.0.0 release test plan §"Increment 3".
 //!
 //! The encoding table below is transcribed from the specification, not produced
 //! by our own encoder. A round-trip through our encoder would prove that our

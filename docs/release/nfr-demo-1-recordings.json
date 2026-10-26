@@ -5,7 +5,7 @@
     "gateway_version": "mcp-gateway 4.0.0",
     "binary_sha256": "6e38ee5f55e2eabc5bc751c3dc42a7b0e92a4171d435b78341c3615f2d1acd70",
     "build_sha_confidence": "assumption",
-    "provenance": "The binary was copied from a peer worktree's target/debug tree (/Users/mikko/github/.worktrees/v4-codeql-record/target/debug/mcp-gateway) because this machine had too little free disk to build. The binary embeds no commit SHA and the crate has no build.rs, so the source revision behind it is an ASSUMPTION, not a measurement -- hence build_sha_confidence. The sha256 above is measured and pins the exact bytes the recording ran against."
+    "provenance": "The binary was copied from a peer worktree's target/debug tree (a peer checkout's target/debug/mcp-gateway) because this machine had too little free disk to build. The binary embeds no commit SHA and the crate has no build.rs, so the source revision behind it is an ASSUMPTION, not a measurement -- hence build_sha_confidence. The sha256 above is measured and pins the exact bytes the recording ran against."
   },
   "scenarios": [
     {

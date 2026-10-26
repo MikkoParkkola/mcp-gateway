@@ -5,7 +5,7 @@
 //!
 //! Each test carries its acceptance criterion verbatim and asserts it in the
 //! same polarity the criterion states. Plan:
-//! `docs/requirements/RELEASE-4.0.0-test-plan.md` §"Increment 1".
+//! the 4.0.0 release test plan §"Increment 1".
 //!
 //! These are written BEFORE the implementation. Every one of them fails now,
 //! and that failure is the point: a test written after the code agrees with the

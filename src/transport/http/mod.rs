@@ -1216,7 +1216,7 @@ impl HttpTransport {
     ///
     /// `initialize()` re-enters this on session expiry, by which time
     /// `outbound_era()` may already read `Modern` (MIK-7214.HEADER.9a/.9b,
-    /// `docs/design/2026-09-03-header-9-era-conditional-outbound.md`). The
+    /// the header 9 era conditional outbound design). The
     /// builder always writes the legacy handshake version, so a reconnect to
     /// an already-classified peer is re-asserted here, after the builder's
     /// static-header merge — the same ordering the `Request`/`Notify`
@@ -1705,7 +1705,7 @@ impl Transport for HttpTransport {
         // MIK-5982 / MIK-6040: when the backend's session expires (daemon restart,
         // or a remote invalidating the MCP session on OAuth token refresh), every
         // request — including circuit-breaker half-open probes — keeps failing
-        // until we re-handshake (observed live 2026-06-11: hebb unreachable 6.5h
+        // until we re-handshake (observed live 2026-06-11: a backend unreachable 6.5h
         // while healthy). Recovery lives here, inside `request`, so it also rescues
         // half-open probes and is not gated behind the Backend failsafe/CB.
         //

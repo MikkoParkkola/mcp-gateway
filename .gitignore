@@ -39,11 +39,10 @@ history.txt
 # Internal planning docs, strategic positioning, and competitive intelligence
 docs/plans/
 docs/submissions/
+# The private companion repository's clone.
+/internal/
 docs/strategy/
-# Public landscape pages are named explicitly; everything else stays private.
-docs/competitive/*
-!docs/competitive/README.md
-!docs/competitive/willow-enterprise-agent-governance.md
+docs/competitive/
 docs/competitive-intelligence/
 docs/positioning/
 linkedin-post-draft.md

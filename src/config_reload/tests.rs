@@ -1189,7 +1189,7 @@ fn test_reload_context(config_path: &std::path::Path) -> ReloadContext {
 // FILE passes them by reading fields the reload never applies: the file may say
 // authentication is on while the router is still running the startup snapshot.
 // They fail against that version and pass against one judged on the config that
-// will be in force. See docs/design/unauthenticated-network-posture.md,
+// will be in force. See the unauthenticated network posture design,
 // Decision C.
 // -------------------------------------------------------------------------
 
@@ -1494,7 +1494,7 @@ fn the_live_field_allow_list_has_not_grown() {
             pending_restart_fields(&Config::default(), &also).contains(&name),
             "a field the reload posture overlay reads from the running config is \
              now applied live; the overlay must carry it — see \
-             docs/design/unauthenticated-network-posture.md, Decision C"
+             the unauthenticated network posture design, Decision C"
         );
     }
 }
@@ -1887,8 +1887,8 @@ fn a_retargeted_symlink_is_matched_at_its_new_target() {
 // -------------------------------------------------------------------------
 // MIK-7256 — env files on a failed load (§P2 failing tests)
 //
-// Rows from `docs/design/mik-7256-test-plan.md`, against the design in
-// `docs/design/mik-7256-env-files-on-a-failed-load.md`. The design's types do
+// Rows from the env-files test plan, against the design in
+// the env files on a failed load design. The design's types do
 // not exist yet, so these fail to COMPILE until implementation lands.
 //
 // Seam naming: the design requires that expansion reach its home "through an
