@@ -53,7 +53,7 @@ pub fn doctor_report(config_path: &Path, choice: SecretStoreChoice) -> SecretSto
         config_path,
         choice,
         vault,
-        crate::config::os_secret_store().as_ref(),
+        crate::config::keychain::os_secret_store().as_ref(),
     )
 }
 

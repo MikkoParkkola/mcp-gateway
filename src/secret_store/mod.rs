@@ -148,7 +148,11 @@ pub(crate) fn choose_store(
     choice: SecretStoreChoice,
     config_dir: &Path,
 ) -> Result<Chosen, StoreError> {
-    let chosen = choose_with(choice, config_dir, crate::config::os_secret_store())?;
+    let chosen = choose_with(
+        choice,
+        config_dir,
+        crate::config::keychain::os_secret_store(),
+    )?;
     log_choice(choice, &chosen);
     Ok(chosen)
 }
