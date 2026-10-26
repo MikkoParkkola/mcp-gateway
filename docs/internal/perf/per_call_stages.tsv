@@ -62,11 +62,17 @@ src/gateway/meta_mcp/invoke/admin.rs	revive_server	-	gateway_revive_server meta-
 src/gateway/meta_mcp/invoke/admin.rs	run_playbook	-	gateway_run_playbook meta-tool only, not the tools/call path
 src/gateway/meta_mcp/invoke/admin.rs	set_playbook_engine	-	startup wiring, set once when the gateway is built
 src/gateway/meta_mcp/invoke/admin.rs	webhook_status	-	gateway_webhook_status meta-tool only, not the tools/call path
+src/gateway/meta_mcp/invoke/audit_replay.rs	audit_replay	-	on-path, untimed: replayed executions only; the timed rows execute fresh
+src/gateway/meta_mcp/invoke/audit_decision.rs	decided	-	on-path, untimed: the invocation record's decision, built only with a transparency logger, which the harness does not configure
+src/gateway/meta_mcp/invoke/audit_decision.rs	note_allowed_by	-	on-path, untimed: an explicit allow rule's note; the timed calls match no explicit allow rule
+src/gateway/meta_mcp/invoke/audit_decision.rs	note_decision	-	on-path, untimed: called only by note_refused_by and note_allowed_by
+src/gateway/meta_mcp/invoke/audit_decision.rs	note_refused_by	-	on-path, untimed: refusals only; the timed rows are allowed calls
+src/gateway/meta_mcp/invoke/audit_decision.rs	take_route_noted	-	on-path, untimed: the router refusal record only; the timed rows are allowed calls
+src/gateway/meta_mcp/invoke/audit_decision.rs	with_route_scope	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/audit.rs	attributes_tenants	-	on-path, untimed: read only by the chain-refusal note (note_uninspected); the timed backend is not chained
 src/gateway/meta_mcp/invoke/audit.rs	attribution	-	on-path, untimed: invocation-record attribution, built only with a transparency logger, which the harness does not configure
 src/gateway/meta_mcp/invoke/audit.rs	audit_invocation	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/audit.rs	audit_refused_credential	-	on-path, untimed: identity-propagation refusals only; the timed backend propagates no credential
-src/gateway/meta_mcp/invoke/audit.rs	audit_replay	-	on-path, untimed: replayed executions only; the timed rows execute fresh
 src/gateway/meta_mcp/invoke/audit.rs	audit_settlement	-	test-only shorthand (cfg(test))
 src/gateway/meta_mcp/invoke/audit.rs	audit_settlement_kept	-	upstream task settlement (tasks/get recovery) only, not a live dispatch
 src/gateway/meta_mcp/invoke/audit.rs	delivered_value	-	on-path, untimed: relay receipt rebuilds of delivered answers, with relay detection active; the harness stages no receipt

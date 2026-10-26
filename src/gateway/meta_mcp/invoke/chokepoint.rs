@@ -325,7 +325,7 @@ impl MetaMcp {
         let decision = authorizer.decide(target);
         let refusal = if decision.verdict.is_err() {
             decision.emit(Emit::Audit).map_err(|e| {
-                super::audit::note_refusal(e.kind, None);
+                super::audit::note_refused_by(e.kind, None);
                 Error::Forbidden {
                     code: e.code,
                     status: e.status.as_u16(),
@@ -337,7 +337,7 @@ impl MetaMcp {
             let _allowed = decision.emit(on_allow);
             self.admin_capability_rule(server, tool, scope.is_admin)
                 .inspect_err(|_| {
-                    super::audit::note_refusal(
+                    super::audit::note_refused_by(
                         crate::security::decision_record::DecisionKind::AdminCapability,
                         None,
                     );
@@ -353,7 +353,10 @@ impl MetaMcp {
             .is_err()
         {
             // Re-run to write the refusal's own record, as the route would.
-            super::audit::note_refusal(crate::security::decision_record::DecisionKind::Grant, None);
+            super::audit::note_refused_by(
+                crate::security::decision_record::DecisionKind::Grant,
+                None,
+            );
             return self.identity_grant_rule(server, tool, scope, Emit::Audit);
         }
         Ok(())

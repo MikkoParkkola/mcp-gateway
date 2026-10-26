@@ -19,8 +19,8 @@ fn t7_inputs_are_the_parsed_bytes_not_a_reread() {
     let yaml = std::fs::read(&cfg).unwrap();
     let evaluated = startup_through(&cfg, &RecordingHome::new());
     // Both files change on disk after the load parsed them.
-    crate::gateway::write_owner_only(&cfg, "env_files: []\n").unwrap();
-    crate::gateway::write_owner_only(&env, "GW_T7=two\n").unwrap();
+    crate::gateway::test_helpers::write_owner_only(&cfg, "env_files: []\n").unwrap();
+    crate::gateway::test_helpers::write_owner_only(&env, "GW_T7=two\n").unwrap();
     assert_eq!(evaluated.inputs.gateway_yaml, yaml);
     assert_eq!(
         evaluated.inputs.env_files,

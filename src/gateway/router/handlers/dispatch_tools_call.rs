@@ -315,7 +315,7 @@ pub(super) async fn tools_call(
                 );
             }
             if let Some((code, reason)) = verdict.request_refusal() {
-                crate::gateway::meta_mcp::invoke::audit::note_refusal(
+                crate::gateway::meta_mcp::invoke::audit::note_refused_by(
                     crate::security::decision_record::DecisionKind::Firewall,
                     None,
                 );

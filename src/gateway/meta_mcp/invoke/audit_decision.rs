@@ -11,7 +11,7 @@ use crate::gateway::meta_mcp::MetaMcp;
 /// Note the gate that refused this call; the first refusal wins. Inside a
 /// dispatch it is the call's; before one (the router's pre-check) it is the
 /// request route stage's.
-pub(crate) fn note_refusal(
+pub(crate) fn note_refused_by(
     kind: crate::security::decision_record::DecisionKind,
     rule_id: Option<String>,
 ) {
@@ -19,7 +19,7 @@ pub(crate) fn note_refusal(
 }
 
 /// Note an explicit allow; the earliest in check order wins.
-pub(crate) fn note_allow(
+pub(crate) fn note_allowed_by(
     kind: crate::security::decision_record::DecisionKind,
     rule_id: Option<String>,
 ) {

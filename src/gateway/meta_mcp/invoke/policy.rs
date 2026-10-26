@@ -28,7 +28,7 @@ impl MetaMcp {
         self.authorize_invocation(args, caller)?;
         crate::gateway::meta_mcp::visible::memo::refuse_withheld(server, tool)?;
         if let Err(reason) = validate_tool_name(tool) {
-            super::audit::note_refusal(
+            super::audit::note_refused_by(
                 crate::security::decision_record::DecisionKind::Syntax,
                 None,
             );
@@ -42,7 +42,7 @@ impl MetaMcp {
             "gateway_invoke",
         )
         .inspect_err(|_| {
-            super::audit::note_refusal(
+            super::audit::note_refused_by(
                 crate::security::decision_record::DecisionKind::Attestation,
                 None,
             );
@@ -77,7 +77,7 @@ impl MetaMcp {
             .scoped_get(server);
         match backend.and_then(|b| b.blocked_tool_refusal(None, tool)) {
             Some(refusal) => {
-                super::audit::note_refusal(
+                super::audit::note_refused_by(
                     crate::security::decision_record::DecisionKind::DescriptorBlock,
                     None,
                 );
@@ -126,7 +126,7 @@ impl MetaMcp {
         let refusal = authorizer
             .authorize(target)
             .map_err(|e| {
-                super::audit::note_refusal(e.kind, None);
+                super::audit::note_refused_by(e.kind, None);
                 Error::Forbidden {
                     code: e.code,
                     status: e.status.as_u16(),
@@ -136,7 +136,7 @@ impl MetaMcp {
             .and_then(|()| {
                 self.admin_capability_rule(server, tool, caller.is_admin)
                     .inspect_err(|_| {
-                        super::audit::note_refusal(DecisionKind::AdminCapability, None);
+                        super::audit::note_refused_by(DecisionKind::AdminCapability, None);
                     })
             });
         if let Err(e) = refusal {
@@ -149,7 +149,7 @@ impl MetaMcp {
         // idempotency short-circuit both return below this point: a gate under
         // a cache read decides nothing on a hit.
         self.identity_grant_rule(server, tool, caller.scope(), Emit::Audit)
-            .inspect_err(|_| super::audit::note_refusal(DecisionKind::Grant, None))
+            .inspect_err(|_| super::audit::note_refused_by(DecisionKind::Grant, None))
     }
 
     /// Validate the per-action attestation token presented at `boundary`

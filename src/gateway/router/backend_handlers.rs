@@ -127,7 +127,7 @@ async fn guard_tool_call(
 ) -> Result<Option<BackendRejection>, BackendRejection> {
     let named = params.and_then(|params| Some((params, params.get("name")?.as_str()?)));
     let Some((params, tool_name)) = named.filter(|(_, tool)| !tool.is_empty()) else {
-        crate::gateway::meta_mcp::invoke::audit::note_refusal(
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
             crate::security::decision_record::DecisionKind::Syntax,
             None,
         );
@@ -135,7 +135,7 @@ async fn guard_tool_call(
     };
 
     if let Err(e) = validate_tool_name(tool_name) {
-        crate::gateway::meta_mcp::invoke::audit::note_refusal(
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
             crate::security::decision_record::DecisionKind::Syntax,
             None,
         );
@@ -158,7 +158,7 @@ async fn guard_tool_call(
     )
     .err()
     .map(|refusal| {
-        crate::gateway::meta_mcp::invoke::audit::note_refusal(refusal.kind, None);
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(refusal.kind, None);
         refusal.code
     })
     .or_else(|| {
@@ -166,7 +166,7 @@ async fn guard_tool_call(
             .meta_mcp
             .profile_refusal(backend_name, tool_name, session_id)
             .map(|refusal| {
-                crate::gateway::meta_mcp::invoke::audit::note_refusal(
+                crate::gateway::meta_mcp::invoke::audit::note_refused_by(
                     crate::security::decision_record::DecisionKind::RoutingProfile,
                     None,
                 );
@@ -178,7 +178,7 @@ async fn guard_tool_call(
     let withheld = withheld_code.is_some() || {
         let blocked = backend.blocked_tool_refusal(None, tool_name).is_some();
         if blocked {
-            crate::gateway::meta_mcp::invoke::audit::note_refusal(
+            crate::gateway::meta_mcp::invoke::audit::note_refused_by(
                 crate::security::decision_record::DecisionKind::DescriptorBlock,
                 None,
             );
@@ -213,7 +213,7 @@ async fn guard_tool_call(
             );
         }
         if let Some((code, message)) = verdict.request_refusal() {
-            crate::gateway::meta_mcp::invoke::audit::note_refusal(
+            crate::gateway::meta_mcp::invoke::audit::note_refused_by(
                 crate::security::decision_record::DecisionKind::Firewall,
                 None,
             );

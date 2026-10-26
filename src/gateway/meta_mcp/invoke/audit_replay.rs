@@ -15,7 +15,7 @@ impl MetaMcp {
     /// call like any other (D1-d). Only an invocation is recorded, over the
     /// envelope its first execution hashed, and with that execution's
     /// outcome and response hash, under the server it was admitted for
-    /// (`facts`, MIK-8520), so it reads as the original record did. A meta tool that wrote no invocation record the first
+    /// (`facts`), so it reads as the original record did. A meta tool that wrote no invocation record the first
     /// time writes none on replay. Under `FailClosed` a failed write
     /// withholds the replay (D1-f).
     pub(crate) async fn audit_replay(
@@ -49,7 +49,9 @@ impl MetaMcp {
         } else {
             let result = match (&replay.result, &replay.error) {
                 (Some(value), _) => Ok(value.clone()),
-                (None, Some(error)) => Err(Error::json_rpc(error.code, error.message.clone())),
+                (None, Some(error)) => {
+                    Err(crate::Error::json_rpc(error.code, error.message.clone()))
+                }
                 (None, None) => return replay,
             };
             let Some(outcome) = AuditOutcome::from_result(&result) else {
@@ -57,7 +59,7 @@ impl MetaMcp {
             };
             // A delivered error carries a code and no provenance, and `from_result`
             // reads a bare `-32001`/`-32004` as a gateway refusal: with no stored
-            // class, that is a peer's answer as likely as a refusal (MIK-7735).
+            // class, that is a peer's answer as likely as a refusal.
             let outcome = match outcome {
                 AuditOutcome::Denied(code) => AuditOutcome::Error(code),
                 other => other,
