@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use super::{
-    FilesStore, SecretStore, StoreError, StoreKind, Vault, choice_str, choose_with, log_choice,
+    FilesStore, SecretStore, StoreError, StoreKind, Vault, choice_str, choose_with,
     unused_entries_until,
 };
 use crate::config::SecretStoreChoice;
@@ -67,10 +67,12 @@ pub(super) fn report_with(
     let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
     let (chosen, reason, fell_back) = match choose_with(choice, config_dir, os.cloned()) {
         Ok(chosen) => {
-            log_choice(choice, &chosen);
+            // No choice log line here: that line belongs to saves, and doctor
+            // shows the same fields in its row.
             let kind = chosen.store.kind();
-            // Explicit `keychain` is probed by every save; doctor shows now
-            // whether the next one would be refused.
+            // Explicit `keychain` is probed by every save; doctor runs the
+            // same probe now. A locked macOS keychain can still pass it and
+            // refuse at the first create (ADR-028 §7).
             match (choice, kind) {
                 (SecretStoreChoice::Keychain, StoreKind::Keychain) => match chosen.store.probe() {
                     Ok(()) => (

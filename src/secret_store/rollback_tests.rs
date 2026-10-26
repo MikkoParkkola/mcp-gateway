@@ -66,3 +66,30 @@ fn a_timed_out_refusal_names_the_kept_entry_and_carries_no_value() {
     assert!(reason.contains("did not answer in time"), "{reason}");
     assert!(reason.contains("listed as unused"), "{reason}");
 }
+
+#[test]
+fn the_kept_entry_warning_names_the_entry_and_never_the_value() {
+    let (_dir, vault) = vault();
+    let mut store = Fake::new();
+    store.time_out_create = Some((1, true));
+    let secret = [super::NewSecret {
+        field: "auth.bearer_token",
+        value: b"kc-sentinel-7f3a",
+    }];
+    let records = crate::test_log_capture::records(|| {
+        let _ = save_secrets(&vault, &store, &secret, |_| Ok::<_, ()>(()));
+    });
+    let shown = format!("{records:?}");
+    assert!(
+        !shown.contains("kc-sentinel-7f3a"),
+        "a value reached a log: {shown}"
+    );
+    // Entry names are not secret (ADR-028 rule 7); this line is how an
+    // operator finds the kept entry.
+    assert_eq!(
+        crate::test_log_capture::count(&records, "WARN", "kept and listed as unused"),
+        1,
+        "{shown}"
+    );
+    assert!(shown.contains(&store.names()[0]), "{shown}");
+}

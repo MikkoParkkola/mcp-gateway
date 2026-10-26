@@ -44,3 +44,12 @@ fn unused_entries_warn_with_their_count() {
     assert_eq!(row.status, CheckStatus::Warn);
     assert!(row.detail.contains("unused=2"), "{}", row.detail);
 }
+
+#[test]
+fn a_count_that_could_not_be_taken_warns() {
+    let mut failed = report(Some("keychain"), false, None);
+    failed.unused_error = Some("another save held the vault lock".to_owned());
+    let row = row(&failed);
+    assert_eq!(row.status, CheckStatus::Warn);
+    assert!(row.detail.contains("held the vault lock"), "{}", row.detail);
+}

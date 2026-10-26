@@ -15,8 +15,9 @@ pub(super) fn check_secret_store(config_path: &Path, choice: SecretStoreChoice) 
     row(&mcp_gateway::doctor_report(config_path, choice))
 }
 
-/// Pass when saves land where the setting asks; warn on a fallback to files
-/// or unused entries; fail when the setting refuses every save.
+/// Pass when saves land where the setting asks; warn on a fallback to files,
+/// on unused entries, or when they could not be counted; fail when the
+/// setting refuses every save.
 fn row(report: &SecretStoreReport) -> CheckResult {
     let unused = report.unused.map_or_else(
         || {
@@ -40,6 +41,8 @@ fn row(report: &SecretStoreReport) -> CheckResult {
             .with_hint("secrets go to files; unlock or install the keychain to keep them there"),
         (Some(_), false, Some(count)) if count > 0 => CheckResult::warn("secret-store", detail)
             .with_hint("unused entries stay until an admin removes them"),
+        (Some(_), false, None) => CheckResult::warn("secret-store", detail)
+            .with_hint("the unused entries could not be counted; run doctor again"),
         _ => CheckResult::pass("secret-store", detail),
     };
     row.with_category("secrets")
