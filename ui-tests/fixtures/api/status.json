@@ -1,0 +1,10 @@
+{
+  "server_count": 3,
+  "healthy_count": 3,
+  "degraded_count": 0,
+  "tool_count": 42,
+  "uptime_secs": 3600,
+  "version": "4.0.0",
+  "auth": { "enabled": true, "signed_in": true, "admin": true },
+  "servers": []
+}
