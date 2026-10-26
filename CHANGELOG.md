@@ -77,7 +77,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#4139](https://github.com/MikkoParkkola/mcp-gateway/pull/4139))
 - **A config edit keeps `${VAR}` references as written.** A dashboard edit to
   one backend wrote every other backend's referenced header back as its
-  resolved value. Edits now read the file literally.
+  resolved value. Edits now read the file literally. If a dashboard edit put a
+  resolved secret in `gateway.yaml`, restore its `${VAR}` reference and rotate
+  the secret.
   ([#4174](https://github.com/MikkoParkkola/mcp-gateway/pull/4174))
 - **An edit refuses a `gateway.yaml` that does not load.** The dashboard,
   `add` and `setup` built their edit on the built-in defaults and wrote them
