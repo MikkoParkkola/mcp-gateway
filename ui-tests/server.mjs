@@ -43,6 +43,13 @@ const CSP = parseCsp(SHELL_RS);
 const ASSETS = parseAssets(SHELL_RS);
 const TYPES = { css: 'text/css; charset=utf-8', js: 'text/javascript; charset=utf-8', woff2: 'font/woff2', svg: 'image/svg+xml', png: 'image/png' };
 
+/** The shell document, plus the fixture pages when the test asked for them. */
+function shellDocument(req) {
+  const doc = readFileSync(join(SHELL_DIR, 'index.html'), 'utf8');
+  if (!/(?:^|;\s*)fixture-pages=1(?:;|$)/.test(req.headers.cookie ?? '')) return doc;
+  return doc.replace('</head>', '<script type="module" src="/ui/assets/fixture-pages.mjs"></script>\n</head>');
+}
+
 function send(res, status, headers, body) {
   res.writeHead(status, headers);
   res.end(body);
@@ -55,6 +62,13 @@ function handle(req, res) {
     // axum's get() route: another method answers 405.
     if (!get) return send(res, 405, { allow: 'GET,HEAD' }, '');
     return send(res, 200, { 'content-type': 'text/html; charset=utf-8' }, readFileSync(join(FIXTURES, 'classic.html')));
+  }
+  // Test-only page registrations (fixtures/fixture-pages.mjs), never in ASSETS.
+  if (path === '/ui/assets/fixture-pages.mjs' && get) {
+    const shell = [...ASSETS.keys()].find((n) => /^shell\.[0-9a-f]{12}\.js$/.test(n));
+    if (!shell) return send(res, 404, {}, '');
+    const src = readFileSync(join(FIXTURES, 'fixture-pages.mjs'), 'utf8').replaceAll('__SHELL__', `/ui/assets/${shell}`);
+    return send(res, 200, { 'content-type': TYPES.js }, src);
   }
   if (path.startsWith('/ui/assets/')) {
     const file = ASSETS.get(path.slice('/ui/assets/'.length));
@@ -82,7 +96,7 @@ function handle(req, res) {
       'content-security-policy': CSP,
       'x-content-type-options': 'nosniff',
       'referrer-policy': 'no-referrer',
-    }, readFileSync(join(SHELL_DIR, 'index.html')));
+    }, shellDocument(req));
   }
   return send(res, 404, {}, '');
 }

@@ -398,6 +398,34 @@ fn probe_cap() -> Duration {
     PROBE_TIMEOUT
 }
 
+/// Start an HTTP transport that belongs to no backend slot (the web UI's
+/// start-once preview): attach a fresh era cache, connect, probe the
+/// peer's era once, and finish startup with that verdict. The same sequence
+/// `Backend::start_entry` runs, so a modern stateless server that refuses
+/// `initialize` previews like a legacy one.
+#[cfg(feature = "webui")]
+pub(crate) async fn start_detached_http(
+    transport: &Arc<crate::transport::HttpTransport>,
+    name: &str,
+    timeout: Duration,
+) -> Result<()> {
+    let cache = Arc::new(crate::protocol::era::EraCache::for_backend(name));
+    transport.attach_era(Arc::clone(&cache));
+    transport.connect().await?;
+    let cap = timeout.min(probe_cap());
+    // The preview's byte budget refusing the probe's answer is that refusal,
+    // not the silence that falls back to a handshake.
+    let outcome = match tokio::time::timeout(cap, transport.request(DISCOVER_METHOD, None)).await {
+        Ok(Ok(response)) => outcome_of(response),
+        Ok(Err(error)) if crate::transport::is_budget_refusal(&error) => return Err(error),
+        Ok(Err(_)) | Err(_) => ProbeOutcome::NoAnswer,
+    };
+    // Installed in the attached cache, as a slot's start does: every request
+    // after the probe is shaped for that verdict.
+    let era = cache.resolve_with(|| async { outcome }).await;
+    transport.finish_startup(era).await
+}
+
 /// What a refusal of a method the 2026-07-28 revision removed carries, so the
 /// route that answers the caller can tell it from a peer's own error.
 const REMOVED_METHOD_MARK: &str = "removedInRevision";

@@ -766,6 +766,9 @@ pub(super) fn which_command(bin: &str) -> bool {
 mod start_stdio;
 pub use start_stdio::StdioProbe;
 #[cfg(test)]
+#[path = "doctor/key_digest_tests.rs"]
+mod key_digest_tests;
+#[cfg(test)]
 #[path = "doctor/runtime_tests.rs"]
 mod runtime_tests;
 #[cfg(test)]

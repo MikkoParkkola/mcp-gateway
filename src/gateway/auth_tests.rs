@@ -133,6 +133,8 @@ fn debug_output_redacts_bearer_and_api_keys() {
             denied_tools: None,
             admin: false,
             personal: false,
+            explicit_principal: None,
+            previous: None,
         }],
         public_paths: vec![],
         rate_limiters: DashMap::new(),
@@ -220,6 +222,8 @@ fn constant_time_token_comparison_accepts_correct_rejects_wrong() {
             denied_tools: None,
             admin: false,
             personal: false,
+            explicit_principal: None,
+            previous: None,
         }],
         public_paths: vec![],
         rate_limiters: DashMap::new(),
@@ -279,6 +283,8 @@ fn test_api_key_validation() {
                 denied_tools: None,
                 admin: false,
                 personal: false,
+                explicit_principal: None,
+                previous: None,
             },
             ResolvedApiKey {
                 digest: test_digest("key2"),
@@ -291,6 +297,8 @@ fn test_api_key_validation() {
                 denied_tools: None,
                 admin: false,
                 personal: false,
+                explicit_principal: None,
+                previous: None,
             },
         ],
         public_paths: vec![],
@@ -619,6 +627,8 @@ fn admin_key(admin: bool) -> ResolvedApiKey {
         denied_tools: None,
         admin,
         personal: false,
+        explicit_principal: None,
+        previous: None,
     }
 }
 

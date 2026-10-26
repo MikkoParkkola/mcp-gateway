@@ -85,6 +85,7 @@ async fn app_state_with_log() -> (Arc<AppState>, std::path::PathBuf, tempfile::T
             denied_tools: None,
             admin: false,
             kind: mcp_gateway::config::ApiKeyKind::Shared,
+            ..Default::default()
         }],
         public_paths: Vec::new(),
         client_circuit_breaker: None,

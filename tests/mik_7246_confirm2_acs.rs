@@ -57,6 +57,7 @@ async fn admin_state() -> (
                 denied_tools: None,
                 admin: true,
                 kind: mcp_gateway::config::ApiKeyKind::Shared,
+                ..Default::default()
             }],
             public_paths: Vec::new(),
             client_circuit_breaker: None,

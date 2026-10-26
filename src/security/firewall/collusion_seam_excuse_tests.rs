@@ -761,3 +761,13 @@ fn a_short_right_side_after_a_safe_cut_skips_its_span_and_reports_it() {
         "the other span's seams are missing"
     );
 }
+
+/// Both capped sides land mid-char ("ab" + 500 "€"): each moves to a whole
+/// char, so the pass slices no char apart and reads at most both caps.
+#[test]
+fn capped_sides_never_split_a_multibyte_char() {
+    let piece = |h: &str| format!("{h}{}", "€".repeat(500));
+    let (_, _, work) = pass(&detector(), &[vec![piece("ab"), piece("cd"), piece("ef")]]);
+    assert!(work.spans_attempted >= 1, "premise: a span is attempted");
+    assert!(work.bytes_read <= work.spans_attempted * 2 * SEAM_SIDE_BYTES);
+}
