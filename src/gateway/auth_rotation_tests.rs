@@ -34,6 +34,13 @@ fn grace_end() -> DateTime<Utc> {
         .with_timezone(&Utc)
 }
 
+/// A grace still running whenever the wall-clock path judges it.
+fn far_future() -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339("2999-01-01T00:00:00Z")
+        .expect("fixed instant")
+        .with_timezone(&Utc)
+}
+
 fn rfc3339(at: DateTime<Utc>) -> String {
     at.to_rfc3339()
 }
@@ -194,6 +201,23 @@ fn both_secrets_resolve_to_the_explicit_principal() {
     assert_eq!(current.principal.storage_form(), PRINCIPAL);
     assert_eq!(previous.principal.storage_form(), PRINCIPAL);
     assert!(current.quota_principal == previous.quota_principal);
+}
+
+// ROT.10: the provenance says which of the key's digests matched.
+#[test]
+fn provenance_records_a_previous_secret_match() {
+    let config = resolved(&[key("ops", NEW, Some((OLD, far_future())))]);
+    let (_, current) = config
+        .validate_token_with_origin(NEW)
+        .expect("current secret");
+    let (_, previous) = config
+        .validate_token_with_origin(OLD)
+        .expect("previous secret");
+    let current = current.expect("an API key");
+    let previous = previous.expect("an API key");
+    assert!(!current.matched_previous_digest());
+    assert!(previous.matched_previous_digest());
+    assert_eq!(previous.name(), "ops");
 }
 
 // ROT.6: a rotated key's event watches still find it by its principal.

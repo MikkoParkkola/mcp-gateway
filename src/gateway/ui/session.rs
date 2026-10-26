@@ -137,9 +137,8 @@ pub(super) async fn dashboard_link(
     // not the live file, so a reload cannot split them. A key that is not
     // found cannot prove its expiry, so it may not mint: fail closed.
     let not_after = if client.api_key_identity().is_some() {
-        let Some(key) = state
-            .auth_config
-            .api_keys
+        let keys = state.auth_config.api_keys();
+        let Some(key) = keys
             .iter()
             // By the credential, not the name: two keys may share a name
             // when a config skipped load validation (MIK-8489).

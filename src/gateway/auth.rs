@@ -171,8 +171,9 @@ pub struct ResolvedAuthConfig {
     pub bearer_token: Option<String>,
     /// Precomputed full digest, published only after validating the bearer.
     bearer_quota_principal: Option<QuotaPrincipal>,
-    /// Resolved API keys
-    pub api_keys: Vec<ResolvedApiKey>,
+    /// Resolved API keys. Read through [`Self::api_keys`], never directly, so
+    /// every reader sees one snapshot of the list.
+    api_keys: Vec<ResolvedApiKey>,
     /// Public paths
     pub public_paths: Vec<String>,
     /// Rate limiters per client, keyed by credential (`client_state_key`).
@@ -218,6 +219,8 @@ impl std::fmt::Debug for ResolvedAuthConfig {
 pub(crate) struct NamedApiKey {
     name: String,
     personal: bool,
+    /// The key's previous digest matched, not its current one (ADR-022).
+    matched_previous_digest: bool,
 }
 
 impl NamedApiKey {
@@ -230,6 +233,12 @@ impl NamedApiKey {
     /// so it is a per-caller identity on its own.
     pub(crate) fn is_personal(&self) -> bool {
         self.personal
+    }
+
+    /// Whether the request presented the key's previous secret, inside its
+    /// grace (ADR-022): the caller still holds the secret a rotation replaced.
+    pub(crate) fn matched_previous_digest(&self) -> bool {
+        self.matched_previous_digest
     }
 }
 

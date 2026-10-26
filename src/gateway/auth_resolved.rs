@@ -149,6 +149,14 @@ impl ResolvedAuthConfig {
             .expect("auth config secret references should resolve")
     }
 
+    /// The configured API keys, as one snapshot: a request binds it once and
+    /// matches, judges and builds its caller from the same list. The
+    /// signature is the contract a live-swappable list keeps.
+    #[must_use]
+    pub fn api_keys(&self) -> impl std::ops::Deref<Target = [ResolvedApiKey]> + '_ {
+        &self.api_keys[..]
+    }
+
     /// The record key clients minted here are keyed with (MIK-8697 §16.11).
     pub(crate) fn record_key(&self) -> &RecordPrincipalKey {
         &self.record_key
@@ -172,7 +180,7 @@ impl ResolvedAuthConfig {
     pub(super) fn is_expired_key(&self, token: &str) -> bool {
         use subtle::ConstantTimeEq;
         let presented = <sha2::Sha256 as sha2::Digest>::digest(token.as_bytes());
-        self.api_keys.iter().any(|k| {
+        self.api_keys().iter().any(|k| {
             bool::from(presented.as_slice().ct_eq(k.digest.as_slice()))
                 && crate::config::api_key_expired_now(k.expires_at)
         })
@@ -251,7 +259,7 @@ impl ResolvedAuthConfig {
         // off, and nothing is turned into a bool until after the loop.
         let presented = <sha2::Sha256 as sha2::Digest>::digest(token.as_bytes());
         let presented = presented.as_slice();
-        let keys = &self.api_keys;
+        let keys = self.api_keys();
         let dummy = dummy_previous_digest();
         let mut found = Choice::from(0);
         let mut index = 0u32;
@@ -292,6 +300,7 @@ impl ResolvedAuthConfig {
             Some(NamedApiKey {
                 name: key.name.clone(),
                 personal: key.personal,
+                matched_previous_digest: via_previous,
             }),
         ))
     }
@@ -326,8 +335,8 @@ impl ResolvedAuthConfig {
         name: &str,
         principal: &str,
     ) -> Option<AuthenticatedClient> {
-        let key = self
-            .api_keys
+        let keys = self.api_keys();
+        let key = keys
             .iter()
             .find(|k| k.name == name && k.principal.storage_form() == principal)?;
         (!crate::config::api_key_expired_now(key.expires_at)).then(|| Self::client_of(key))
@@ -341,8 +350,8 @@ impl ResolvedAuthConfig {
         principal: &str,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Option<AuthenticatedClient> {
-        let key = self
-            .api_keys
+        let keys = self.api_keys();
+        let key = keys
             .iter()
             .find(|k| k.name == name && k.principal.storage_form() == principal)?;
         (!crate::config::api_key_expired(key.expires_at, now)).then(|| Self::client_of(key))
