@@ -152,28 +152,36 @@ pub fn assert_golden(name: &str, actual: &str) {
 }
 
 /// The recorded files edited since recording, as `reviewed_skips.tsv` lists
-/// them: path, then the PR that edited it.
+/// them: path, then the reviewed file's `sha256:<hex>` (or `gone`), then the
+/// PR that edited it.
 pub fn reviewed_skips() -> std::collections::BTreeMap<String, String> {
     read_golden("reviewed_skips.tsv")
         .lines()
         .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
         .map(|line| {
-            let (path, pr) = line
-                .split_once('\t')
-                .unwrap_or_else(|| panic!("reviewed_skips.tsv: malformed row {line:?}"));
-            (path.to_owned(), pr.to_owned())
+            let cols: Vec<&str> = line.split('\t').collect();
+            let [path, sha, _pr] = cols[..] else {
+                panic!("reviewed_skips.tsv: malformed row {line:?}");
+            };
+            (path.to_owned(), sha.to_owned())
         })
         .collect()
 }
 
+/// A file's bytes as `reviewed_skips.tsv` pins them: `sha256:<hex>`, or
+/// `gone` when the file no longer exists.
+fn current_sha(path: &str) -> String {
+    std::fs::read(repo_root().join(path)).map_or_else(|_| "gone".to_owned(), |b| digest(&b))
+}
+
 /// A keyed golden skips exactly the reviewed rows. `skipped` are the paths
 /// it could not compare (gone, or edited so they read differently) and
-/// `unchanged` those whose bytes still match the recording. Fails on a skip
-/// `reviewed_skips.tsv` does not list, and on a listed path whose bytes are
-/// back to the recording. One list serves every golden, so a listed edit
-/// that reads as recorded in this golden is no failure: another may need
-/// the line. The old backend has left the build, so an edited file cannot
-/// be re-recorded; a reviewer adds its line instead.
+/// `unchanged` those whose bytes still match the recording. A row excuses
+/// only the bytes that were reviewed, so a skip fails unless
+/// `reviewed_skips.tsv` lists the file at its current sha; any edit after
+/// review needs a fresh review. A listed path whose bytes are back to the
+/// recording fails too. The old backend has left the build, so an edited
+/// file cannot be re-recorded; a reviewer adds its line instead.
 pub fn assert_skips_reviewed<'a>(
     name: &str,
     unchanged: impl IntoIterator<Item = &'a str>,
@@ -186,15 +194,23 @@ pub fn assert_skips_reviewed<'a>(
             skipped.len()
         );
     }
-    let unlisted: Vec<&str> = skipped
+    let unreviewed: Vec<String> = skipped
         .iter()
-        .copied()
-        .filter(|path| !reviewed.contains_key(*path))
+        .filter_map(|path| {
+            let now = current_sha(path);
+            match reviewed.get(*path) {
+                Some(sha) if *sha == now => None,
+                Some(_) => Some(format!("{path}\t{now}\t(edited after review)")),
+                None => Some(format!("{path}\t{now}\t(not listed)")),
+            }
+        })
         .collect();
     assert!(
-        unlisted.is_empty(),
-        "golden {name}: recorded files edited or removed since recording: {unlisted:?}; \
-         review each and add `path<TAB>PR` to tests/fixtures/mik_8425_yaml/reviewed_skips.tsv"
+        unreviewed.is_empty(),
+        "golden {name}: recorded files edited or removed since recording, not reviewed at \
+         their current bytes:\n{}\nreview each and put `path<TAB>sha<TAB>PR` in \
+         tests/fixtures/mik_8425_yaml/reviewed_skips.tsv",
+        unreviewed.join("\n")
     );
     let restored: Vec<&str> = unchanged
         .into_iter()
