@@ -114,6 +114,23 @@ class TestCwe532Lint(unittest.TestCase):
         self.assertIn("`token`", out)
         self.assertNotIn("`secrets`", out)
 
+    def test_an_alias_enum_or_tuple_struct_of_that_name_is_not_delegated(self):
+        outer = "#[derive(Debug)]\npub struct Config {\n    pub api_token: Token,\n}\n"
+        for other in (
+            "pub type Token = String;\n",
+            "#[derive(Debug)]\npub enum Token { Raw(String) }\n",
+            "#[derive(Debug)]\npub struct Token(String);\n",
+            "#[derive(Debug)]\npub struct Token<T>(T);\n",
+        ):
+            code, out, _ = self._run_tree({
+                "outer.rs": outer,
+                # A scanned struct of the same name elsewhere must not lend it cover.
+                "scanned.rs": "#[derive(Debug)]\npub struct Token {\n    pub value_id: u64,\n}\n",
+                "other.rs": other,
+            })
+            self.assertNotEqual(code, 0, f"{other!r}: {out}")
+            self.assertIn("`api_token`", out, other)
+
     def test_a_section_with_a_manual_debug_is_not_delegated(self):
         code, out, _ = self._run_tree({
             "outer.rs": "#[derive(Debug)]\npub struct Config {\n    pub secrets: SecretsConfig,\n}\n",

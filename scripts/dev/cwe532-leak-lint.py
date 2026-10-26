@@ -140,6 +140,11 @@ LOG_MARKER_RE = re.compile(r"//\s*ci-allow-secret-log:\s*(\S.*)$")
 
 DERIVE_RE = re.compile(r"#\[derive\(([^)]*)\)\]")
 STRUCT_RE = re.compile(r"\b(?:pub(?:\([^)]*\))?\s+)?struct\s+(\w+)")
+# A type alias, enum or union: names a field type could use without being a
+# struct whose named fields this lint reads.
+OTHER_TYPE_ITEM_RE = re.compile(
+    r"\b(?:pub(?:\([^)]*\))?\s+)?(?:type|enum|union)\s+(\w+)"
+)
 MANUAL_DEBUG_IMPL_RE = re.compile(
     r"impl(?:<[^>]*>)?\s+(?:std::fmt::Debug|fmt::Debug|Debug)\s+for\s+(\w+)"
 )
@@ -302,11 +307,18 @@ def derived_debug_structs(lines: list[str]) -> tuple[set[str], set[str]]:
     """(structs whose derived Debug this lint scans, structs it does not).
 
     A struct is scanned when it derives Debug with no allow marker on the
-    derive. One with a manual Debug impl, or a marked derive, is not.
+    derive and has named fields, which are what this lint reads. Not scanned:
+    a manual Debug impl, a marked derive, a tuple struct (its fields are not
+    read), and every name a type alias, enum or union also uses, so a field
+    typed through one of those can never pass as a scanned struct.
     """
     manual = find_manual_debug_impls(lines)
     scanned: set[str] = set()
     unscanned: set[str] = set(manual)
+    for line in lines:
+        other = OTHER_TYPE_ITEM_RE.search(line)
+        if other:
+            unscanned.add(other.group(1))
     n = len(lines)
     for i, line in enumerate(lines):
         if "#[derive(" not in line:
@@ -322,7 +334,15 @@ def derived_debug_structs(lines: list[str]) -> tuple[set[str], set[str]]:
             sm = STRUCT_RE.search(lines[j])
             if sm:
                 name = sm.group(1)
-                if name in manual or has_marker_above_or_on(lines, i, DEBUG_MARKER_RE):
+                tail = lines[j][sm.end():].lstrip()
+                tuple_struct = tail.startswith("(") or (
+                    tail.startswith("<") and re.search(r">\s*\(", tail) is not None
+                )
+                if (
+                    name in manual
+                    or tuple_struct
+                    or has_marker_above_or_on(lines, i, DEBUG_MARKER_RE)
+                ):
                     unscanned.add(name)
                 else:
                     scanned.add(name)
