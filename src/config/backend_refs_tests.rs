@@ -98,7 +98,7 @@ fn b3d_unresolved_references_fail_the_load_naming_every_field_never_the_value() 
             "      A: keychain:b3.gone\n      B: keychain:b3.also-gone\n",
         ),
     );
-    let error = load(&path, fake(&[])).err().expect("refused").to_string();
+    let error = load(&path, fake(&[])).expect_err("refused").to_string();
     assert!(error.contains("backends.tool.env.A"), "{error}");
     assert!(error.contains("backends.tool.env.B"), "{error}");
     assert!(error.contains("b3.gone"), "{error}");
