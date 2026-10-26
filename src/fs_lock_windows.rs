@@ -174,10 +174,27 @@ fn warn_once(dir: &Path, groups: &[&str]) {
 
 /// What `doctor` reports for `dir` as a lock directory: the warning for one
 /// only broad local groups may write, the refusal for one that is refused,
-/// `None` when it is fine or does not exist.
+/// why it could not be judged, or `None` when it is fine or does not exist.
 pub(super) fn lock_directory_finding(dir: &Path) -> Option<String> {
-    let configured = std::path::absolute(dir).ok()?;
-    let handle = crate::private_fs::open_dir(&configured).ok()?;
+    let configured = match std::path::absolute(dir) {
+        Ok(configured) => configured,
+        Err(error) => {
+            return Some(format!(
+                "lock directory {} cannot be resolved: {error}",
+                dir.display()
+            ));
+        }
+    };
+    let handle = match crate::private_fs::open_dir(&configured) {
+        Ok(handle) => handle,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return None,
+        Err(error) => {
+            return Some(format!(
+                "lock directory {} cannot be opened to judge it: {error}",
+                configured.display()
+            ));
+        }
+    };
     let found = judge_lock_dir(&handle, &configured);
     if found.is_empty() {
         return None;
@@ -188,28 +205,19 @@ pub(super) fn lock_directory_finding(dir: &Path) -> Option<String> {
     })
 }
 
-/// The warning text, with the repair as `icacls` lines only when the path is
-/// plain enough to quote safely; prose otherwise. The lines first copy the
-/// inherited entries and give this account full control, so removing the
-/// groups never removes this account's own access.
+/// The warning text, with the repair in prose: a command built from a path
+/// quotes differently in each shell, and getting it wrong can cut this
+/// account's own access. The steps first keep this account's access, so
+/// removing the groups never removes it.
 fn broad_warning(dir: &Path, groups: &[&str]) -> String {
-    let shown = dir.display().to_string();
-    let head = format!(
-        "lock directory {shown} lets {} create files in it, so another local account could \
-         hold a lock file there and stall the gateway's writes; the gateway proceeds",
-        groups.join(" and ")
-    );
-    match crate::private_fs::user_sid_string() {
-        Some(me) if crate::private_fs::runnable_path(&shown) => format!(
-            "{head}. To close it, run: icacls \"{shown}\" /inheritance:d then icacls \"{shown}\" \
-             /grant *{me}:(OI)(CI)F then icacls \"{shown}\" /remove:g *S-1-5-32-545 *S-1-5-11"
-        ),
-        _ => format!(
-            "{head}. To close it, in the folder's Security settings disable inheritance (copying \
-             the entries), give this account Full control, and remove {}",
-            groups.join(" and ")
-        ),
-    }
+    let groups = groups.join(" and ");
+    format!(
+        "lock directory {} lets {groups} create files in it, so another local account could \
+         hold a lock file there and stall the gateway's writes; the gateway proceeds. To close \
+         it, in the folder's Security settings disable inheritance (copying the entries), give \
+         this account Full control, and remove {groups}",
+        dir.display()
+    )
 }
 
 enum Sidecar {
