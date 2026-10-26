@@ -225,7 +225,7 @@ impl ServerConfig {
                 value
             }
             // Same contract as `env:`: a scrape credential never stops startup.
-            reference @ SecretRef::File(_) => {
+            reference @ (SecretRef::File(_) | SecretRef::Keychain(_)) => {
                 match reference.resolve("server.metrics_token", overlay) {
                     Ok(value) => Some(value),
                     Err(error) => {
