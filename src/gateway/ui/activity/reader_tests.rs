@@ -463,6 +463,12 @@ fn the_active_segment_is_numbered_by_its_open_record() {
     .unwrap();
     let token = first.next.expect("more to read");
     assert_eq!(token.inv.unwrap().segment, 7);
+    // Resumed before any rotation, the token names the active segment.
+    let still_active = read_page(&path, None, Some(&token), ALL, |l| {
+        l.entry.get("tool").is_some()
+    })
+    .unwrap();
+    assert!(!still_active.cursor_reset);
     // It is sealed as segment 7 and segment 8 opens: the token still reads on.
     std::fs::rename(&path, sealed_path(&path, 7)).unwrap();
     write_lines(&path, &[opened(8)]);

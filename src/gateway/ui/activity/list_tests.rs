@@ -300,3 +300,90 @@ async fn p4_a_token_this_process_did_not_issue_restarts_from_the_newest_row() {
     assert_eq!(reset["cursor_reset"], true);
     assert_eq!(tools(&reset), set(&["tool_3", "tool_4"]));
 }
+
+/// A call signed by the real logger under `secret`.
+fn signed_call(dir: &tempfile::TempDir, name: &str, secret: &str) -> Value {
+    let path = dir.path().join(name);
+    let l = crate::security::TransparencyLogger::open(std::sync::Arc::new(
+        crate::security::TransparencyLogConfig {
+            enabled: true,
+            path: path.to_string_lossy().into_owned(),
+            key_id: "k".into(),
+            shared_secret: secret.into(),
+            rotation: crate::security::audit_rotation_config::RotationConfig::default(),
+        },
+    ))
+    .unwrap();
+    l.log_invocation("s", "c", "srv", "t", "sha256:aa", "sha256:bb")
+        .unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    serde_json::from_str(text.lines().last().unwrap()).unwrap()
+}
+
+#[test]
+fn rows_are_checked_with_the_running_key_not_a_reloaded_one() {
+    use crate::security::transparency_log::signature::{SignatureState, signature_state};
+    const RUNNING: &str = "the-key-the-logger-started-with-0123456789";
+    const RELOADED: &str = "a-key-loaded-but-not-yet-running-987654321";
+    let with_key = |key: &str| {
+        let mut c = crate::config::Config::default();
+        c.security.transparency_log.shared_secret = key.into();
+        c
+    };
+    let live = crate::config_reload::LiveConfig::new(with_key(RUNNING));
+    live.set(with_key(RELOADED));
+    let secret = super::verification_secret(&live).expect("a key is configured");
+    assert_eq!(secret, RUNNING.as_bytes());
+
+    let dir = tempfile::tempdir().unwrap();
+    let by_running = signed_call(&dir, "a.jsonl", RUNNING);
+    let by_reloaded = signed_call(&dir, "b.jsonl", RELOADED);
+    assert_eq!(
+        signature_state(&by_running, Some(&secret)),
+        SignatureState::Valid
+    );
+    assert_eq!(
+        signature_state(&by_reloaded, Some(&secret)),
+        SignatureState::Invalid
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_fifth_read_waits_until_one_of_four_finishes() {
+    use axum::response::IntoResponse;
+    use std::sync::mpsc;
+    assert_eq!(super::MAX_CONCURRENT_READS, 4);
+    // Four reads that hold their permit until released.
+    let mut releases = Vec::new();
+    let mut held = Vec::new();
+    for _ in 0..4 {
+        let (tx, rx) = mpsc::channel::<()>();
+        releases.push(tx);
+        held.push(tokio::spawn(super::blocking(move || {
+            let _ = rx.recv();
+            StatusCode::OK.into_response()
+        })));
+    }
+    while super::READS.available_permits() > 0 {
+        tokio::task::yield_now().await;
+    }
+    // The fifth does not start while four run.
+    let (ran_tx, ran_rx) = mpsc::channel::<()>();
+    let mut fifth = Box::pin(super::blocking(move || {
+        let _ = ran_tx.send(());
+        StatusCode::OK.into_response()
+    }));
+    assert!(futures::poll!(&mut fifth).is_pending());
+    assert!(ran_rx.try_recv().is_err(), "the fifth read ran early");
+    // One finishes; its slot frees and the fifth runs.
+    releases.remove(0).send(()).unwrap();
+    held.remove(0).await.unwrap();
+    assert_eq!(fifth.await.status(), StatusCode::OK);
+    assert!(ran_rx.try_recv().is_ok());
+    for tx in releases {
+        tx.send(()).unwrap();
+    }
+    for h in held {
+        h.await.unwrap();
+    }
+}

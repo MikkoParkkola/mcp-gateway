@@ -82,19 +82,19 @@ fn logs(state: &AppState) -> Option<Logs> {
             base.path
                 .join(crate::control_plane::role_mapping::GOVERNANCE_LOG_FILE)
         });
-    // The logger signs with the key it started with, not a reloaded one.
-    let secret = state
-        .live_config
-        .running()
-        .security
-        .transparency_log
-        .shared_secret
-        .clone();
     Some(Logs {
         invocation,
         governance,
-        secret: (!secret.is_empty()).then(|| secret.into_bytes()),
+        secret: verification_secret(&state.live_config),
     })
+}
+
+/// The key rows' HMACs are checked with: the one the logger runs with. A
+/// reload changes the configured key, not the running logger's, so a key
+/// loaded but not yet running would read every row as invalid.
+fn verification_secret(live: &crate::config_reload::LiveConfig) -> Option<Vec<u8>> {
+    let secret = &live.running().security.transparency_log.shared_secret;
+    (!secret.is_empty()).then(|| secret.clone().into_bytes())
 }
 
 /// An early answer from a parsing or admission step. Boxed: a `Response`
