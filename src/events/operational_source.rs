@@ -245,6 +245,10 @@ impl EventsHub {
 #[derive(Clone)]
 pub(crate) struct Markers {
     pub(crate) store: Arc<crate::counters::CounterStore>,
+    /// Runs inside the kill switch's observer. Its one production caller
+    /// (`gateway_kill_server`) holds no registry or capabilities lock across
+    /// `kill()`, and the switch calls its observer after its own set has
+    /// released, so reading both here cannot invert a lock order.
     pub(crate) known: Arc<dyn Fn(&str) -> bool + Send + Sync>,
 }
 

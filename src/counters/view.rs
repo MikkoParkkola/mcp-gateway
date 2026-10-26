@@ -169,6 +169,9 @@ impl CounterStore {
         let overflowed =
             |overflow: &Series, slot: &Slot| counts(overflow, query.window, slot.key).is_some();
         let empty = Series::default();
+        // Where the previous period may start drawing: rule (b) again, over
+        // the 48-hour ring that period is read from.
+        let mut previous_since = since;
         let series = match inner.find(query.filter) {
             // A label not held, with calls in its dimension's overflow in
             // this window, may be among them: zeros would read as exact.
@@ -191,11 +194,15 @@ impl CounterStore {
                     .iter()
                     .rposition(|slot| slot.t <= series.admitted)
                     .unwrap_or(0);
-                if let Some(overflow) = overflow
-                    && slots[..first].iter().any(|slot| overflowed(overflow, slot))
-                {
-                    since = since.max(slots[first].t);
-                    slots.drain(..first);
+                if let Some(overflow) = overflow {
+                    let admitted = series.admitted - series.admitted % HALF;
+                    if overflow.half.buckets().any(|(b, _)| b * HALF < admitted) {
+                        previous_since = previous_since.max(admitted);
+                    }
+                    if slots[..first].iter().any(|slot| overflowed(overflow, slot)) {
+                        since = since.max(slots[first].t);
+                        slots.drain(..first);
+                    }
                 }
                 series
             }
@@ -216,8 +223,14 @@ impl CounterStore {
             since,
         };
         if query.compare && query.window == Window::Day {
-            let (previous, complete) =
-                previous_day(series, &view.points, now / HALF, since, m, zone);
+            let (previous, complete) = previous_day(
+                series,
+                &view.points,
+                now / HALF,
+                since.max(previous_since),
+                m,
+                zone,
+            );
             view.previous = Some(previous);
             view.previous_complete = complete;
         }
