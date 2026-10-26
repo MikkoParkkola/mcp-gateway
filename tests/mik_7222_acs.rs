@@ -107,6 +107,40 @@ fn sweep5_canary_through_every_helper() {
     assert!(!expired.to_string().contains(CANARY));
 }
 
+/// Reads one HTTP/1.1 request (head, then `content-length` body bytes) so the
+/// fake server answers only after the client finished sending. Closing a
+/// socket with unread request bytes resets the connection, which the client
+/// reports as a canceled request instead of the response under test.
+async fn drain_request(stream: &mut tokio::net::TcpStream) {
+    use tokio::io::AsyncReadExt;
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let head_end = loop {
+        if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            break i + 4;
+        }
+        match stream.read(&mut chunk).await {
+            Ok(0) | Err(_) => return,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+        }
+    };
+    let length = String::from_utf8_lossy(&buf[..head_end])
+        .lines()
+        .find_map(|l| {
+            let (name, value) = l.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().ok())
+                .flatten()
+        })
+        .unwrap_or(0);
+    while buf.len() < head_end + length {
+        match stream.read(&mut chunk).await {
+            Ok(0) | Err(_) => return,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+        }
+    }
+}
+
 #[tokio::test]
 async fn sweep_decode_error_must_not_echo_url_credentials() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -116,6 +150,7 @@ async fn sweep_decode_error_must_not_echo_url_credentials() {
     tokio::spawn(async move {
         use tokio::io::AsyncWriteExt;
         let (mut stream, _) = listener.accept().await.expect("accept");
+        drain_request(&mut stream).await;
         let body = b"not-json";
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
