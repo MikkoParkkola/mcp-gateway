@@ -162,9 +162,9 @@ fn an_invalid_config_is_refused_and_left_unwritten() {
 /// The web UI and admin write through `backend_ops::write_config`.
 #[cfg(feature = "webui")]
 fn ui_write(path: &Path, change: impl FnOnce(&mut mcp_gateway::config::Config)) -> String {
+    use mcp_gateway::config_persistence::load_existing_or_default;
     use mcp_gateway::gateway::test_helpers::write_config_fixture;
-    use mcp_gateway::gateway::ui::backend_ops::load_config_or_default;
-    let mut config = load_config_or_default(path);
+    let mut config = load_existing_or_default(path).expect("config loads");
     change(&mut config);
     write_config_fixture(path, &config).expect("write config");
     std::fs::read_to_string(path).expect("read")
