@@ -649,3 +649,32 @@ fn b3i_update_refuses_a_reference_that_does_not_resolve_and_leaves_the_backend()
         "the update was applied"
     );
 }
+
+#[test]
+fn b3k_a_reference_cannot_be_spliced_into_a_registry_header() {
+    // github's header is `Bearer ${GITHUB_TOKEN}`: a reference inside it
+    // would be text that never resolves (ADR-028).
+    let refused = resolve_backend(
+        "github",
+        None,
+        None,
+        None,
+        env("GITHUB_TOKEN", "keychain:gw.github"),
+    )
+    .err()
+    .expect("refused");
+    assert!(refused.contains("GITHUB_TOKEN"), "{refused}");
+    assert!(refused.contains("whole header value"), "{refused}");
+    // A plain value is still spliced in, as before.
+    let resolved = resolve_backend("github", None, None, None, env("GITHUB_TOKEN", "ghp_x"))
+        .expect("a literal token is spliced");
+    assert!(
+        resolved
+            .backend
+            .headers
+            .values()
+            .any(|v| v.contains("ghp_x")),
+        "{:?}",
+        resolved.backend.headers
+    );
+}

@@ -500,10 +500,12 @@ fn add_refusal(name: &str, message: String) -> (StatusCode, String) {
 /// An update that `update_backend` refused: 404 for a missing backend, 422
 /// for a secret reference that does not resolve (ADR-028), else 400.
 fn update_refusal_status(message: &str) -> StatusCode {
-    if message.contains("not found") {
-        StatusCode::NOT_FOUND
-    } else if message.contains(UNRESOLVED_SECRETS) {
+    // The marker first: an unresolved `env:` names a missing env file in its
+    // hint, which says "not found".
+    if message.contains(UNRESOLVED_SECRETS) {
         StatusCode::UNPROCESSABLE_ENTITY
+    } else if message.contains("not found") {
+        StatusCode::NOT_FOUND
     } else {
         StatusCode::BAD_REQUEST
     }
@@ -612,6 +614,12 @@ mod tests {
         );
         assert_eq!(
             update_refusal_status(&message),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        // A missing env file's hint says "not found"; it is still a 422.
+        let hinted = format!("{message} (env file /x/.env not found)");
+        assert_eq!(
+            update_refusal_status(&hinted),
             StatusCode::UNPROCESSABLE_ENTITY
         );
         // The other refusals keep their codes.

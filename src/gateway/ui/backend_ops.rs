@@ -363,7 +363,7 @@ pub fn resolve_backend<S: std::hash::BuildHasher>(
     // Registry lookup.
     if let Some(entry) = server_registry::lookup(name) {
         return Ok(ResolvedBackend {
-            backend: registry_backend(entry, desc, env),
+            backend: registry_backend(entry, desc, env)?,
             entry: Some(entry),
         });
     }
@@ -386,7 +386,7 @@ fn registry_backend(
     entry: &server_registry::ServerCatalogEntry,
     desc: Option<&str>,
     mut env: HashMap<String, String>,
-) -> BackendConfig {
+) -> Result<BackendConfig, String> {
     use server_registry::{Auth, CatalogTransport, HttpFlavor};
 
     // An empty `-e VAR=` for a required variable is no value: the reference
@@ -426,7 +426,17 @@ fn registry_backend(
                     let mut value = value.to_string();
                     for var in entry.required_env {
                         if let Some(given) = env.remove(*var) {
-                            value = value.replace(&format!("${{{var}}}"), &given);
+                            let placeholder = format!("${{{var}}}");
+                            // A reference is a whole-value secret slot: spliced
+                            // into text it would never resolve (ADR-028).
+                            if crate::config::is_reference(&given) && value != placeholder {
+                                return Err(format!(
+                                    "{var} is a secret reference, which cannot go inside the \
+                                     '{name}' header; give the whole header value as one \
+                                     reference instead, holding the full header text"
+                                ));
+                            }
+                            value = value.replace(&placeholder, &given);
                         }
                     }
                     backend.headers.insert(name.to_string(), value);
@@ -436,7 +446,7 @@ fn registry_backend(
             backend.env = env;
         }
     }
-    backend
+    Ok(backend)
 }
 
 /// Transport and description only, for tests that check routing.

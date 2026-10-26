@@ -322,15 +322,12 @@ fn merge_servers_into_config(
     config: &mut Config,
     selected: &[&DiscoveredServer],
 ) -> Result<usize, String> {
+    // The whole selection is checked before anything is added or printed,
+    // so a refusal leaves no half-reported import.
     let overlay = config.env_overlay();
-    let mut added = 0usize;
     for server in selected {
-        if config.backends.contains_key(&server.name) {
-            println!("  Skipping '{}' (already in config)", server.name);
-            continue;
-        }
-        let backend = server.to_backend_config();
-        backend
+        server
+            .to_backend_config()
             .check_secret_references(&server.name, &overlay)
             .map_err(|refused| {
                 format!(
@@ -339,6 +336,14 @@ fn merge_servers_into_config(
                     refused.join("; ")
                 )
             })?;
+    }
+    let mut added = 0usize;
+    for server in selected {
+        if config.backends.contains_key(&server.name) {
+            println!("  Skipping '{}' (already in config)", server.name);
+            continue;
+        }
+        let backend = server.to_backend_config();
         config.backends.insert(server.name.clone(), backend);
         println!("  Added '{}'", server.name);
         added += 1;
