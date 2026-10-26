@@ -456,13 +456,23 @@ async fn t06_a_read_revokes_only_grants_it_covered() {
         .expect("admitted");
     let granted = hub.store.subscriptions()[0].incarnation;
     let listed = std::collections::HashSet::new();
-    hub.revoke_absent_uris("b", &listed, granted - 1).await;
+    hub.revoke_absent_uris(
+        &crate::events::upstream_listener::ListenerKey::shared("b"),
+        &listed,
+        granted - 1,
+    )
+    .await;
     assert_eq!(
         hub.store.subscriptions().len(),
         1,
         "a grant after the read began is kept"
     );
-    hub.revoke_absent_uris("b", &listed, granted).await;
+    hub.revoke_absent_uris(
+        &crate::events::upstream_listener::ListenerKey::shared("b"),
+        &listed,
+        granted,
+    )
+    .await;
     assert!(
         hub.store.subscriptions().is_empty(),
         "a grant the read covered and that is absent goes"
