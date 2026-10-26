@@ -293,6 +293,31 @@ pub(crate) fn expand_field(
     })
 }
 
+/// One backend `env` or `headers` value as the backend receives it (ADR-028,
+/// MIK-8908 B3). The written text is classified once: a whole-value `env:`,
+/// `file:` or `keychain:` reference resolves once, and its bytes are used
+/// verbatim, never read again as a reference; anything else is a template
+/// and gets [`expand_field`]'s `${VAR}` expansion, whose result is never
+/// classified. The load and the pre-write check both call this, so they
+/// cannot disagree.
+///
+/// # Errors
+///
+/// The message naming `field` (and the entry for a reference), never a value.
+pub(crate) fn evaluate_backend_value(
+    field: &str,
+    written: &str,
+    overlay: &EnvOverlay,
+) -> std::result::Result<String, String> {
+    match SecretRef::parse(written) {
+        SecretRef::Literal(_) => expand_field(field, written, overlay),
+        reference => reference.resolve(field, overlay).map_err(|e| match e {
+            Error::ConfigValidation(message) => message,
+            other => other.to_string(),
+        }),
+    }
+}
+
 impl super::Config {
     /// Every required secret that resolves to nothing (an unresolvable `env:`
     /// reference or an empty literal), one message each, so the operator fixes

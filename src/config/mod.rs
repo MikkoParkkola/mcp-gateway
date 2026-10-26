@@ -697,27 +697,41 @@ impl Config {
     /// Expand `${VAR}` and `${VAR:-default}` patterns in config values.
     ///
     /// An unset variable with no default is refused (C4) for enabled backends
-    /// and `capabilities.directories`. A disabled backend keeps its text
+    /// and `capabilities.directories`. An enabled backend's whole-value
+    /// `env:`, `file:` or `keychain:` resolves once instead, and an unresolved
+    /// one is refused the same way. A disabled backend keeps its text
     /// verbatim: auth validation skips it too, and enabling it goes through
     /// reload, which runs this again.
     fn expand_env_vars(&mut self, overlay: &EnvOverlay) -> Result<SecretRefsRead> {
         // Every unresolved reference in one error: fixing them one restart at a
         // time is the experience this replaces.
         let mut unresolved = Vec::new();
+        // Backend env and headers are secret slots too (ADR-028): a whole
+        // reference resolves once, verbatim; anything else expands as before.
+        for (name, backend) in self.backends.iter_mut().filter(|(_, b)| b.enabled) {
+            let fields = backend
+                .headers
+                .iter_mut()
+                .map(|(key, value)| (format!("backends.{name}.headers.{key}"), value))
+                .chain(
+                    backend
+                        .env
+                        .iter_mut()
+                        .map(|(key, value)| (format!("backends.{name}.env.{key}"), value)),
+                );
+            for (field, value) in fields {
+                match secret_ref::evaluate_backend_value(&field, value, overlay) {
+                    Ok(evaluated) => *value = evaluated,
+                    Err(message) => unresolved.push(message),
+                }
+            }
+        }
         let mut expand = |field: String, value: &mut String| match secret_ref::expand_field(
             &field, value, overlay,
         ) {
             Ok(expanded) => *value = expanded,
             Err(message) => unresolved.push(message),
         };
-        for (name, backend) in self.backends.iter_mut().filter(|(_, b)| b.enabled) {
-            for (key, value) in &mut backend.headers {
-                expand(format!("backends.{name}.headers.{key}"), value);
-            }
-            for (key, value) in &mut backend.env {
-                expand(format!("backends.{name}.env.{key}"), value);
-            }
-        }
         for (i, dir) in self.capabilities.directories.iter_mut().enumerate() {
             expand(format!("capabilities.directories[{i}]"), dir);
         }
@@ -824,6 +838,8 @@ pub mod humantime_serde;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(test)]
+mod backend_refs_tests;
 #[cfg(test)]
 mod backend_url_tests;
 #[cfg(all(test, target_os = "linux"))]
