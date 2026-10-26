@@ -10,7 +10,7 @@ mod mounts;
 pub(crate) mod plan;
 pub(crate) mod seccomp;
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
@@ -19,6 +19,7 @@ use std::process::{ExitCode, Stdio};
 use plan::{HostNamespaces, Plan};
 
 use super::{Refusal, Started, Target};
+use crate::capability::resolve_command;
 
 /// The helper subcommands, dispatched before the CLI parser and any runtime.
 pub(crate) const SANDBOX: &str = "__preview-sandbox";
@@ -83,7 +84,7 @@ pub(super) fn start(
         .map(Path::new)
         .find(|p| p.is_file())
         .ok_or(Refusal::MissingTool("util-linux unshare"))?;
-    let plan = build_plan(target, protected)?;
+    let plan = build_plan(target, protected, std::env::var_os("PATH").as_deref())?;
     let encoded = serde_json::to_string(&plan)
         .map_err(|e| Refusal::Step(format!("encoding the plan ({e})")))?;
 
@@ -125,8 +126,13 @@ pub(super) fn start(
 }
 
 /// Turn a target into the helper's plan, refusing what the root cannot hold.
-fn build_plan(target: &Target, protected: &[PathBuf]) -> Result<Plan, Refusal> {
-    let program = resolve(&target.program)?;
+/// A bare program name is looked up on `path`.
+fn build_plan(
+    target: &Target,
+    protected: &[PathBuf],
+    path: Option<&OsStr>,
+) -> Result<Plan, Refusal> {
+    let program = resolve(&target.program, path)?;
     let mut read_only: Vec<String> = READ_ONLY.iter().map(ToString::to_string).collect();
     read_only.extend(top_level_libs());
     let masked: Vec<String> = MASKED.iter().map(ToString::to_string).collect();
@@ -217,12 +223,13 @@ fn build_plan(target: &Target, protected: &[PathBuf]) -> Result<Plan, Refusal> {
         bound_back,
         limits: plan::limits(user_process_count() + 256),
         env,
+        program: utf8(&argv0)?,
         target: argv,
     })
 }
 
-/// An absolute program as given, or the first match on the gateway's `PATH`.
-fn resolve(program: &Path) -> Result<PathBuf, Refusal> {
+/// An absolute program as given, or the first match on `path`.
+fn resolve(program: &Path, path: Option<&OsStr>) -> Result<PathBuf, Refusal> {
     let not_found = || Refusal::Step(format!("finding {}", program.display()));
     if program.is_absolute() {
         return program
@@ -239,8 +246,7 @@ fn resolve(program: &Path) -> Result<PathBuf, Refusal> {
             program.display()
         )));
     }
-    let path = std::env::var_os("PATH").ok_or_else(not_found)?;
-    std::env::split_paths(&path)
+    std::env::split_paths(path.ok_or_else(not_found)?)
         .map(|dir| dir.join(program))
         .find(|candidate| candidate.is_absolute() && candidate.is_file())
         .ok_or_else(not_found)
@@ -657,9 +663,12 @@ mod tests {
         let real = fs::canonicalize(sh).expect("canonical sh");
         let alias = dir.path().join("alias");
         std::os::unix::fs::symlink(&real, &alias).expect("symlink");
+        // A chain of two aliases ends at the same real file.
+        std::os::unix::fs::symlink(&alias, dir.path().join("chained")).expect("symlink");
         let alias = alias.to_str().expect("UTF-8 scratch path").to_owned();
         for (requested, path) in [
             ("alias", Some(dir.path().as_os_str())),
+            ("chained", Some(dir.path().as_os_str())),
             (alias.as_str(), system_path().as_deref()),
         ] {
             let plan = build_plan(&target(requested), &[], path).expect("plan");
@@ -673,9 +682,9 @@ mod tests {
         }
     }
 
-    /// A6: the preview and the capability executor take the same program
-    /// for every name, or refuse it alike. `a\b` is a file on the injected
-    /// PATH, which only a one-component check would accept.
+    /// The preview and the capability executor take the same program for
+    /// every name, or refuse it alike. `a\b` is a file on the injected PATH,
+    /// which only a one-component check would accept.
     #[test]
     fn the_preview_resolves_as_the_executor_does() {
         let dir = scratch();
@@ -689,6 +698,7 @@ mod tests {
             "./sh",
             "bin/sh",
             "a\\b",
+            "sh/",
             "",
             "no-such-tool-8905",
         ] {

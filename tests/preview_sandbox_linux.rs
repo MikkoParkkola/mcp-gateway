@@ -459,7 +459,7 @@ fn the_helper_refuses_outside_fresh_namespaces() {
         "host": {"user": inode("user"), "mnt": inode("mnt"), "pid": inode("pid"), "net": inode("net"), "ipc": inode("ipc"), "uts": inode("uts")},
         "read_only": [], "masked": [], "hidden": [], "bound_back": [],
         "limits": {"address_space": 1, "file_size": 1, "open_files": 1, "processes": 1},
-        "env": [], "target": ["/bin/true"]
+        "env": [], "program": "/bin/true", "target": ["/bin/true"]
     });
     let home = tempfile::tempdir().unwrap();
     let out = gateway_bin::command(home.path(), gateway_bin::Inherit::Nothing)

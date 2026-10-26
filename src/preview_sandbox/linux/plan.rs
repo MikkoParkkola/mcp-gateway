@@ -51,7 +51,9 @@ pub(crate) struct Plan {
     pub(crate) limits: Limits,
     /// The run phase's environment, already filtered by the launcher.
     pub(crate) env: Vec<(String, String)>,
-    /// Absolute program path, then its arguments.
+    /// The absolute file the drop execs.
+    pub(crate) program: String,
+    /// The argv: the name the program was asked for, then its arguments.
     pub(crate) target: Vec<String>,
 }
 
