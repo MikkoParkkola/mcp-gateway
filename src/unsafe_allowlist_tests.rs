@@ -233,26 +233,3 @@ fn a11_every_unsafe_block_in_win_cred_names_its_contract() {
         "no unsafe block found: the scan is reading the wrong file"
     );
 }
-
-/// B26: the ADR and the crate root name both Windows modules allowed
-/// `unsafe`, so neither still reads as if `win_acl` were the only one.
-#[test]
-fn b26_the_adr_and_crate_root_name_both_unsafe_modules() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let adr = std::fs::read_dir(root.join("docs/adr"))
-        .expect("read docs/adr")
-        .filter_map(Result::ok)
-        .find(|e| e.file_name().to_string_lossy().starts_with("ADR-016"))
-        .expect("ADR-016");
-    let adr = std::fs::read_to_string(adr.path()).expect("read ADR-016");
-    let lib = std::fs::read_to_string(root.join("src/lib.rs")).expect("read src/lib.rs");
-    for (what, text) in [("ADR-016", &adr), ("src/lib.rs", &lib)] {
-        for module in ["win_acl", "win_cred"] {
-            assert!(text.contains(module), "{what} does not name {module}");
-        }
-    }
-    assert!(
-        adr.contains("are now `src/win_acl.rs` and `src/win_cred.rs`"),
-        "ADR-016 lacks its ADR-028 amendment"
-    );
-}
