@@ -53,11 +53,14 @@ tokio::task_local! {
 /// call's), else the route stage's, taken, so the next target of the same
 /// request starts from nothing and never inherits this one's check.
 pub(crate) fn take_refusal_kind() -> Option<crate::security::decision_record::DecisionKind> {
+    // Taken first, always: a dispatch that noted its own check must not
+    // leave the route's note for the next target.
+    let route = take_route_noted().refusal_kind();
     super::NOTES
         .try_with(|notes| notes.borrow().decision.refusal_kind())
         .ok()
         .flatten()
-        .or_else(|| take_route_noted().refusal_kind())
+        .or(route)
 }
 
 /// Run a request's route stage with a decision scope of its own.

@@ -27,12 +27,20 @@ impl MetaMcp {
     /// The live config, for a record's config revision: the one startup
     /// built, else the reload context's; `None` only before startup sets it.
     pub(crate) fn live_config(&self) -> Option<Arc<crate::config_reload::LiveConfig>> {
-        self.startup_live_config.get().cloned().or_else(|| {
-            self.reload_context
-                .read()
-                .as_ref()
-                .map(|context| Arc::clone(&context.live_config))
-        })
+        let from_reload = self
+            .reload_context
+            .read()
+            .as_ref()
+            .map(|context| Arc::clone(&context.live_config));
+        // One live config: a reload context built at startup shares it.
+        debug_assert!(
+            match (self.startup_live_config.get(), from_reload.as_ref()) {
+                (Some(startup), Some(reload)) => Arc::ptr_eq(startup, reload),
+                _ => true,
+            },
+            "the reload context publishes a different live config than startup's"
+        );
+        self.startup_live_config.get().cloned().or(from_reload)
     }
 
     /// Startup's live config; a second call keeps the first.

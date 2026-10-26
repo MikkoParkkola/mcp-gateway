@@ -136,3 +136,29 @@ fn records_read_the_startup_live_config_without_a_reload_context() {
     let served = meta.live_config().expect("startup's live config");
     assert!(Arc::ptr_eq(&served, &live));
 }
+
+/// A target whose dispatch noted its own check: the route stage's note for
+/// it is still taken, so the next target never inherits it.
+#[tokio::test]
+async fn a_route_note_is_taken_even_when_the_dispatch_noted_a_check() {
+    use crate::gateway::meta_mcp::invoke::audit::{
+        note_refused_by, take_refusal_kind, with_dispatch_scope, with_route_scope,
+    };
+    use crate::security::decision_record::DecisionKind;
+    let (this, next) = with_route_scope(async {
+        note_refused_by(DecisionKind::ToolPolicy, None);
+        let (this, _) = with_dispatch_scope(async {
+            note_refused_by(DecisionKind::Firewall, None);
+            take_refusal_kind()
+        })
+        .await;
+        (this, take_refusal_kind())
+    })
+    .await;
+    assert_eq!(
+        this,
+        Some(DecisionKind::Firewall),
+        "the dispatch's own check"
+    );
+    assert_eq!(next, None, "the next target starts from nothing");
+}
