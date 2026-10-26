@@ -350,3 +350,64 @@ async fn g6_a_refused_preparation_changes_nothing_and_g5_one_publish() {
     assert!(registry.get("added").is_some(), "the backend was not added");
     assert_eq!(live.seq(), 1, "one reload, one publication");
 }
+
+// G7: the meta-tool's reload context and the file watcher publish through
+// the same holder, so either one changes what the next request takes. The
+// meta-tool path runs first, before any watcher can race it.
+#[tokio::test]
+async fn g7_the_meta_tool_and_the_watcher_both_publish_the_flag() {
+    use std::sync::Arc;
+    use std::time::Duration;
+    let write = crate::gateway::test_helpers::write_owner_only;
+    let flag = |on: bool| format!("security:\n  sanitize_input: {on}\n");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    write(&path, &flag(true)).expect("write");
+    let initial = Config::load(Some(&path)).expect("loads");
+    let live = Arc::new(LiveConfig::new(initial.clone()));
+    let registry = Arc::new(crate::backend::BackendRegistry::new());
+
+    let meta_tool = super::ReloadContext::new(
+        path.clone(),
+        Arc::clone(&live),
+        Arc::clone(&registry),
+        crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    )
+    .expect("the registry pairs with the config");
+    write(&path, &flag(false)).expect("write");
+    meta_tool
+        .reload_outcome()
+        .await
+        .expect("the meta-tool reload applies");
+    assert!(
+        !live.generation().sanitize_input(),
+        "meta-tool: not published"
+    );
+
+    let (_shutdown, shutdown_rx) = tokio::sync::broadcast::channel(1);
+    let _watcher = super::ConfigWatcher::start_with_hook(
+        path.clone(),
+        Arc::clone(&live),
+        registry,
+        &initial,
+        Arc::new(crate::config::LiveEnv::new(
+            Arc::new(crate::config::EnvOverlay::none()),
+            crate::config::ResolvedEnvFiles::default(),
+        )),
+        None,
+        None,
+        shutdown_rx,
+        None,
+    )
+    .expect("the watcher starts");
+    write(&path, &flag(true)).expect("write");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !live.generation().sanitize_input() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "watcher: the edit was never published"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
