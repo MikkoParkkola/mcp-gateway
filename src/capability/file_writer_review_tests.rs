@@ -291,7 +291,6 @@ fn unverifiable_pins() -> Vec<String> {
         "\"sha\\x32\\x35\\x36\": 0\n".into(),
         // Not YAML at all: nothing can say a pin is missing.
         "{sha256: 0, sha256: 0}\n".into(),
-        "name: [unclosed\n".into(),
     ]
 }
 
@@ -353,4 +352,28 @@ fn a_large_middle_falls_back_to_a_full_replace() {
     let patch = super::super::unified_diff(&from, &to);
     let context = patch.lines().filter(|l| l.starts_with(' ')).count();
     assert_eq!(context, 1, "only the shared prefix line is context");
+}
+
+/// Broken YAML that never mentions `sha256` is unpinned: an admin repairs it
+/// in the editor (lead ruling 2026-10-26). Broken YAML that mentions it is a
+/// mismatch (the duplicate-flow-key row above).
+#[tokio::test]
+async fn broken_yaml_without_a_pin_key_is_repaired_in_the_editor() {
+    let broken = TEXT.replace("description: Original", "description: [unclosed");
+    let (dir, file) = dir_with(&broken);
+
+    let result = commit(
+        edit(
+            dir.path(),
+            Base::Bytes(sha(&broken)),
+            Change::Write(TEXT.to_string()),
+            PinUpdate::InPlace,
+        ),
+        None,
+        soon(),
+    )
+    .await;
+
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), TEXT);
 }

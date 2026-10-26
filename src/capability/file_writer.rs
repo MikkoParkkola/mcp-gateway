@@ -154,7 +154,8 @@ enum YamlPin {
     /// a list, a map, a tagged value, another length, not hex), or more than
     /// one key resolving to `sha256`.
     Unreadable,
-    /// Not YAML: whether a key is missing cannot be known.
+    /// Not YAML, and it mentions `sha256`: whether a pin is there cannot be
+    /// known, so it counts as broken.
     NotYaml,
 }
 
@@ -164,7 +165,13 @@ enum YamlPin {
 fn yaml_pin(text: &str) -> YamlPin {
     use crate::yaml::Value;
     let Ok(doc) = crate::yaml::from_str::<Value>(text) else {
-        return YamlPin::NotYaml;
+        // Broken YAML that never mentions the key is unpinned, so an admin
+        // can repair it in the editor (lead ruling 2026-10-26).
+        return if text.contains("sha256") {
+            YamlPin::NotYaml
+        } else {
+            YamlPin::Absent
+        };
     };
     let Value::Mapping(map) = doc.untag_ref() else {
         return YamlPin::Absent;
@@ -401,10 +408,10 @@ fn final_bytes(
     }
     let pins = pin_lines(&text);
     match pins.as_slice() {
-        // The loader sees a pin no `sha256:` line carries (a quoted key):
-        // there is no line to rewrite, so nothing can be saved in place.
-        // A pin the loader would see but no `sha256:` line carries. Text that
-        // is not YAML passes on, so validation answers it with its line.
+        // A pin the loader would see but no `sha256:` line carries (a quoted
+        // or tagged key): there is no line to rewrite, so nothing is saved.
+        // Text that is not YAML passes on, so validation answers it with its
+        // line.
         [] if matches!(yaml_pin(&text), YamlPin::Value(_) | YamlPin::Unreadable) => {
             Err(Refused::PinAmbiguous { patch: patch() })
         }
