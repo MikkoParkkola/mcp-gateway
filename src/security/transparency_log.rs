@@ -92,6 +92,8 @@ mod rotation;
 pub(crate) mod rotation_fault {
     pub(crate) use super::rotation::WriteFault;
 }
+#[path = "transparency_log_pager.rs"]
+pub(crate) mod pager;
 #[path = "transparency_log_segments.rs"]
 pub(crate) mod segments;
 #[path = "transparency_log_verify.rs"]
