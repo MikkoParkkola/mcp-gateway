@@ -1,0 +1,8 @@
+src/transport/http/streamable_listen.rs	transport	1	Upgrades the weak transport handle or reports it gone.
+src/transport/http/streamable_listen.rs	notify	1	Sends a notification through OpenAs::send, which enforces.
+src/transport/http/streamable_listen.rs	listen	1	Runs ensure_session and open_listen_as, which enforce.
+src/transport/http/streamable_listen.rs	unsolicited	1	Runs ensure_session and open_session_stream_as, which enforce.
+src/transport/http/streamable_listen.rs	detected_streamable	1	Reports Some(true): this session is the Streamable HTTP transport.
+src/transport/http/streamable_listen.rs	legacy_pin	1	Hashes the subscriber's session id as the D5 ledger's holder id; bookkeeping, not a security decision.
+src/transport/http/streamable_listen.rs	legacy_interest	1	Forwards a resources/subscribe or unsubscribe through call, which enforces.
+src/transport/http/streamable_listen.rs	probe	1	Sends server/discover through call, which enforces, and maps the answer for classify.

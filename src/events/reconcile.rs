@@ -47,11 +47,68 @@ impl EventsHub {
             return;
         };
         let hub = Arc::clone(self);
+        let backend = backend.to_owned();
         runtime.spawn(async move {
+            hub.revoke_unobservable(Some(&backend)).await;
+            hub.revoke_inadmissible(Some(&backend)).await;
             hub.reconcile_stops().await;
             hub.replay_starts_of(|kind| kind == SourceKind::BackendNotification)
                 .await;
         });
+    }
+
+    /// Revoke (`-32012`) every row of `backend` (every backend when `None`)
+    /// whose observation can no longer be had: its backend's identity config
+    /// is not the one it was observed under, the backend moved between shared
+    /// and per-user, or its identity is gone. Such a row is never re-keyed
+    /// silently; its key then stops, which wipes its lease.
+    pub(crate) async fn revoke_unobservable(self: &Arc<Self>, backend: Option<&str>) {
+        let Some(services) = self.runtime.services.get() else {
+            return;
+        };
+        let config = services.live.get();
+        let stale: Vec<_> = self
+            .store
+            .subscriptions()
+            .into_iter()
+            .filter(|sub| {
+                parse_name(&sub.name).is_some_and(|(of, _)| {
+                    backend.is_none_or(|b| b == of)
+                        && super::observation::observe_row(&config, of, sub).is_err()
+                })
+            })
+            .collect();
+        for sub in stale {
+            self.revoke(&sub).await;
+        }
+    }
+
+    /// Revoke (`-32012`) every per-user row of `backend` (every backend when
+    /// `None`) whose subscriber's credential no longer passes admission:
+    /// its listener stops and its lease is wiped, rather
+    /// than observing until its next delivery. A refusal the clock may have
+    /// caused keeps the row.
+    pub(crate) async fn revoke_inadmissible(self: &Arc<Self>, backend: Option<&str>) {
+        let Some(services) = self.runtime.services.get() else {
+            return;
+        };
+        let rows: Vec<_> = self
+            .store
+            .subscriptions()
+            .into_iter()
+            .filter(|sub| sub.obs_basis.is_some())
+            .filter(|sub| {
+                parse_name(&sub.name).is_some_and(|(of, _)| backend.is_none_or(|b| b == of))
+            })
+            .collect();
+        for sub in rows {
+            let grant = parse_name(&sub.name).map(|(of, _)| of.to_owned());
+            if services.admission(&sub, grant.as_deref()).await
+                == super::services::AccessVerdict::Refuses
+            {
+                self.revoke(&sub).await;
+            }
+        }
     }
 
     /// The sweep's lifecycle half, every `SWEEP_EVERY` (design r3 L8): a
@@ -64,6 +121,9 @@ impl EventsHub {
             let held = self.store.live_subscription_ids(now);
             self.runtime.rates.retain(&held);
             self.runtime.failures.retain(&held);
+            // `utc_now` is never before 1970, so its seconds are unsigned.
+            let secs = u64::try_from(now.timestamp()).unwrap_or_default();
+            self.leases.wipe_expired(secs).await;
         }
         self.reconcile_stops().await;
         // After the stops, so freed slots are free: a watch key whose

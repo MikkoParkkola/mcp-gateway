@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The listener's session choice (MIK-8835): an identity credential never
 //! falls back to the shared transport (C4), and an own session runs legacy
-//! (S10b).
+//! (S10b). A per-user listener emits with no catalogue snapshot.
 
 use super::*;
+use crate::events::upstream_need::WINDOW;
 use crate::transport::upstream_tap::ListenerCredential;
 
 /// C4 (MIK-8835.SSE.4, design B6): an identity credential on a transport with
@@ -65,4 +66,38 @@ fn s10b_an_own_session_always_runs_legacy() {
     assert!(!runs_modern(true, PeerEra::Legacy));
     assert!(runs_modern(false, PeerEra::Modern));
     assert!(!runs_modern(false, PeerEra::Legacy));
+}
+
+/// A per-user listener reads no catalogue, so its snapshot stays empty: its
+/// watched URIs are emitted, not held back for a snapshot that never comes.
+#[tokio::test]
+async fn a_per_user_listener_emits_without_a_snapshot() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let mut intake = hub.runtime.intake.lock().take().expect("intake");
+    let weak = Arc::downgrade(&hub);
+    let shared = super::tests::shared_keyed(
+        crate::events::upstream_listener::ListenerKey {
+            backend: "b".to_owned(),
+            obs: Some("o".to_owned()),
+        },
+        Arc::new(std::collections::BTreeSet::new),
+    );
+    shared
+        .need
+        .lock()
+        .add(&crate::events::upstream_need::Interest::ResourceUpdated(
+            "file:///a".to_owned(),
+        ))
+        .expect("room");
+    let mut state = State::new(&shared, PeerEra::Legacy);
+    state.note(
+        UpstreamNote::Notice {
+            kind: NoteKind::ResourceUpdated,
+            uri: Some("file:///a".to_owned()),
+        },
+        false,
+    );
+    state.flush_at(&weak, std::time::Instant::now() + WINDOW);
+    assert!(intake.try_recv().is_ok(), "emitted with no snapshot");
 }

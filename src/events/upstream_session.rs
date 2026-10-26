@@ -185,7 +185,7 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
         let outcome = if backend.is_a2a() {
             poll::poll(&shared, &backend, &hub, &registry).await
         } else {
-            session(&shared, &backend, &hub).await
+            session(&shared, &backend, &hub, &registry).await
         };
         let delay = match outcome {
             Outcome::Stopped => return,
@@ -284,8 +284,13 @@ fn requested(shared: &Shared) -> Requested {
 }
 
 /// One connection's life.
-async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<EventsHub>) -> Outcome {
-    let Some(run) = begin_run(shared, backend).await else {
+async fn session(
+    shared: &Arc<Shared>,
+    backend: &Arc<Backend>,
+    hub: &Weak<EventsHub>,
+    registry: &BackendRegistry,
+) -> Outcome {
+    let Some(run) = begin_run(shared, backend, hub).await else {
         return failed();
     };
     let started = Instant::now();
@@ -294,9 +299,10 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
     // The first catalogue read doubles as the legacy HTTP session's first
     // request on the shared bucket (§3).
     state.read_snapshot(backend, hub, false).await;
-    if !modern {
+    if !modern && shared.key.obs.is_none() {
         // A legacy GET names a session that exists: one shared-bucket request
-        // first, even when no URI is watched (§3).
+        // first, even when no URI is watched (§3). A per-user listener's own
+        // session makes its own handshake.
         let _ = backend.read_resource_snapshot(false).await;
     }
     if let Err(ended) = open_first(shared, &mut state, &run.handle, modern).await {
@@ -354,11 +360,17 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
         if refill.is_none() {
             refill = start_due_refill(&mut state, backend);
         }
-        if !backend_still_current(backend, &run.transport) {
+        // A per-user run's transport is its own: only a replaced backend
+        // (a reload) ends it.
+        let current = match &run.transport {
+            Some(transport) => backend_still_current(backend, transport),
+            None => !registered_anew(registry, &shared.name, backend),
+        };
+        if !current {
             debug!(backend = %shared.name, "upstream listener: transport replaced");
             return finish_refill(&mut state, shared, backend, hub, refill, started).await;
         }
-        if backend.connected_streamable() != run.flavour {
+        if run.transport.is_some() && backend.connected_streamable() != run.flavour {
             debug!(backend = %shared.name, "upstream listener: transport flavour changed; reconnecting");
             return finish_refill(&mut state, shared, backend, hub, refill, started).await;
         }
@@ -568,7 +580,11 @@ impl<'a> State<'a> {
     /// Read the catalogue snapshot when URIs are watched; a failure keeps
     /// the previous good one (an error is not absence, §7).
     async fn read_snapshot(&mut self, backend: &Backend, hub: &Weak<EventsHub>, fresh: bool) {
-        if requested(self.shared).uris.is_empty() {
+        // A per-user listener reads no catalogue through the backend's shared
+        // transport, whose credential is the gateway's: its URIs are admitted
+        // (an unread catalogue proves nothing, §7) rather than judged by the
+        // gateway's view.
+        if self.shared.key.obs.is_some() || requested(self.shared).uris.is_empty() {
             return;
         }
         let epoch = self.shared.snapshot.lock().epoch();
@@ -600,7 +616,7 @@ impl<'a> State<'a> {
                     return;
                 }
                 if complete && let Some(hub) = hub.upgrade() {
-                    hub.revoke_absent_uris(&self.shared.name, &listed, granted_by)
+                    hub.revoke_absent_uris(&self.shared.key, &listed, granted_by)
                         .await;
                 }
                 self.reread = false;
@@ -610,7 +626,7 @@ impl<'a> State<'a> {
                 self.snapshot_due = Instant::now() + snapshot_interval(backend.cache_ttl());
             }
             Err(error) => {
-                debug!(backend = %self.shared.name, %error, "upstream listener: catalogue read failed");
+                debug!(backend = %self.shared.name, error = %self.shared.error_text(&error), "upstream listener: catalogue read failed");
                 self.snapshot_retry_at = Instant::now() + SNAPSHOT_RETRY;
             }
         }
