@@ -340,9 +340,22 @@ in_volume 'test ! -e /case/started && test ! -e /case/release && test ! -e /case
   || fail "the call case's volume holds a marker before the gateway started"
 docker run -d --name "${CALL_CASE}" --pull never -p "127.0.0.1::39400" \
   -v "${CALL_VOLUME}:/case" "${IMAGE}" --config /case/gateway.yaml > /dev/null
-wait_for_gateway "${CALL_CASE}"
 CALL_PORT="$(docker port "${CALL_CASE}" 39400/tcp | head -1 | sed 's/.*://')"
 [ -n "${CALL_PORT}" ] || fail "docker published no host port for 39400/tcp"
+# Polled from the host, not with wait_for_gateway: on a 0.0.0.0 bind with no
+# public_url the Host gate admits only numeric hosts, so its in-container
+# `localhost` probe is refused however ready the gateway is.
+CALL_READY=
+for _ in $(seq 1 30); do
+  [ "$(docker inspect -f '{{.State.Running}}' "${CALL_CASE}" 2> /dev/null || true)" = "true" ] \
+    || fail "the call case exited during startup: $(call_log_tail)"
+  if curl -fsS --max-time 5 -o /dev/null "http://127.0.0.1:${CALL_PORT}/livez" 2> /dev/null; then
+    CALL_READY=1
+    break
+  fi
+  sleep 2
+done
+[ -n "${CALL_READY}" ] || fail "the call case never answered /livez within 60s: $(call_log_tail)"
 CALL_URL="http://127.0.0.1:${CALL_PORT}/mcp"
 CALLDIR="${WORKDIR}/smoke-full-call-$$"
 mkdir -p "${CALLDIR}"
