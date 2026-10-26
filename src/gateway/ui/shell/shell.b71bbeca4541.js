@@ -130,7 +130,7 @@ let paletteEl = null;
 
 /** Open the palette. It finds pages, actions and settings and opens them on their tab; nothing runs from it. */
 export function openPalette() {
-  if (paletteEl?.open) return;
+  if (paletteEl) return; // also while a closing palette's cleanup is pending
   const opener = document.activeElement;
   const input = el('input', { type: 'text', role: 'combobox', 'aria-expanded': 'true', 'aria-controls': 'palette-list', 'aria-autocomplete': 'list', 'aria-label': 'Go to anything', placeholder: 'Go to anything', autocomplete: 'off', spellcheck: 'false' });
   const list = el('div', { id: 'palette-list', role: 'listbox', 'aria-label': 'Results' });
@@ -140,6 +140,7 @@ export function openPalette() {
   document.body.append(paletteEl);
   let options = [];
   let active = 0;
+  let chosen = false;
   const draw = () => {
     const q = input.value.trim().toLowerCase();
     const found = entries().filter((e) => !q || e.label.toLowerCase().includes(q) || crumb(e.path).toLowerCase().includes(q));
@@ -172,16 +173,20 @@ export function openPalette() {
       input.removeAttribute('aria-activedescendant');
     }
   };
+  const search = document.querySelector('button.search');
   const close = () => {
     paletteEl.close();
   };
   const choose = (path) => {
+    chosen = true;
     close();
+    closeMenu();
     go(path);
     document.getElementById('content').focus({ preventScroll: true });
   };
   input.addEventListener('input', () => { active = 0; draw(); });
   input.addEventListener('keydown', (ev) => {
+    if (ev.isComposing) return; // an IME is still committing text
     if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
       ev.preventDefault();
       if (!options.length) return;
@@ -195,10 +200,14 @@ export function openPalette() {
   paletteEl.addEventListener('close', () => {
     paletteEl.remove();
     paletteEl = null;
-    if (opener && document.contains(opener) && document.activeElement !== document.getElementById('content')) opener.focus();
+    search?.setAttribute('aria-expanded', 'false');
+    // A choice hands focus to the content (choose() moves it after this);
+    // Esc or a click outside gives it back to the opener.
+    if (!chosen && opener && document.contains(opener)) opener.focus();
   });
   paletteEl.addEventListener('click', (ev) => { if (ev.target === paletteEl) close(); });
   draw();
+  search?.setAttribute('aria-expanded', 'true');
   paletteEl.showModal();
   input.focus();
 }
@@ -394,9 +403,12 @@ function boot() {
     if (fromTabs) document.querySelector('nav.tabs a[aria-current="page"]')?.focus();
     else document.getElementById('content').focus({ preventScroll: true });
   });
-  document.querySelector('button.search').addEventListener('click', openPalette);
+  const search = document.querySelector('button.search');
+  search.addEventListener('click', openPalette);
+  // The hint names the key this platform uses; both work everywhere.
+  if (!/Mac|iPhone|iPad/.test(navigator.platform)) search.querySelector('kbd').textContent = 'Ctrl K';
   document.addEventListener('keydown', (ev) => {
-    if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'k') {
+    if ((ev.metaKey || ev.ctrlKey) && !ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === 'k') {
       ev.preventDefault();
       openPalette();
     }

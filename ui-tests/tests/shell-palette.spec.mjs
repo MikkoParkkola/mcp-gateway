@@ -159,3 +159,34 @@ test('P6 segmented() presses exactly one button, by click and by Space', async (
   await expect(group.locator('button[aria-pressed="true"]')).toHaveCount(1);
   expect(await page.evaluate(() => window.picked)).toEqual(['1h', '7d']);
 });
+
+test('P1b only exactly Ctrl+K opens it; the search button reports open and closed', async ({ page }) => {
+  await page.goto('/ui/overview/status');
+  await shellReady(page);
+  await page.keyboard.press('Control+Shift+KeyK');
+  await page.keyboard.press('Control+Alt+KeyK');
+  await expect(page.locator('dialog.palette')).toHaveCount(0);
+  const search = page.locator('button.search');
+  await expect(search).toHaveAttribute('aria-expanded', 'false');
+  await search.click();
+  await expect(search).toHaveAttribute('aria-expanded', 'true');
+  await page.keyboard.press('Escape');
+  await expect(search).toHaveAttribute('aria-expanded', 'false');
+});
+
+test.describe('palette on a phone', () => {
+  test.use({ isMobile: true, hasTouch: true, viewport: { width: 390, height: 844 } });
+  test('P5b a palette choice closes the phone menu, and rows are 44 px', async ({ page }) => {
+    await withFixturePages(page);
+    await page.goto('/ui/overview/status');
+    await shellReady(page);
+    await page.locator('button.menu').click();
+    await expect(page.locator('nav.route-nav')).toBeVisible();
+    await page.locator('button.search').click();
+    const rows = await page.locator('dialog.palette [role="option"]').evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height));
+    expect(Math.min(...rows)).toBeGreaterThanOrEqual(44);
+    await page.locator('dialog.palette [role="option"][data-path="/ui/costs/status"]').click();
+    await expect(page).toHaveURL('/ui/costs/status');
+    await expect(page.locator('nav.route-nav')).toBeHidden();
+  });
+});

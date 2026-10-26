@@ -632,6 +632,7 @@ a { color: inherit; text-decoration: none; }
 /* Coarse pointers: every target the shell draws is at least 44 px. */
 @media (pointer: coarse) {
   .stn, .tabs a, .skip, .lnk, button { min-height: var(--size-touch); min-width: var(--size-touch); display: inline-flex; align-items: center; }
+  .palette-option { min-height: var(--size-touch); align-items: center; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
