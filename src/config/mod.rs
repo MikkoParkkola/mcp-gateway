@@ -772,7 +772,7 @@ impl Config {
             subst(token, &mut seen);
         }
         for key in &mut self.auth.api_keys {
-            if let Some(digest) = key.key_sha256.as_mut() {
+            for digest in key.digest_specs_mut() {
                 subst(digest, &mut seen);
             }
         }

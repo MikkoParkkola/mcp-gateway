@@ -32,6 +32,7 @@ fn authorizer(backends: &[&str]) -> AuthState {
             denied_tools: None,
             admin: false,
             kind: crate::config::ApiKeyKind::Shared,
+            ..Default::default()
         }],
         ..AuthConfig::default()
     };
