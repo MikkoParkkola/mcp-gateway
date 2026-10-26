@@ -180,6 +180,13 @@ fn authorize_targets(
                 .authorize_requested_target(scope, server_tool, arguments, Some(session_id))
                 .map(|withheld| {
                     if let Some(withheld) = withheld {
+                        // A lone target answered as absent is the gateway's
+                        // refusal, as on `/mcp`.
+                        if targets.len() == 1 {
+                            crate::gateway::delivery_facts::raise(
+                                crate::gateway::delivery_facts::ResponseEffect::Refused,
+                            );
+                        }
                         crate::gateway::meta_mcp::visible::memo::note_denial_code(
                             checked.server,
                             checked.tool,

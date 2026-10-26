@@ -98,3 +98,26 @@ async fn a_refused_direct_notification_records_refused() {
     let event = only_attempt(&fx);
     assert_eq!(event["response_effect"], "refused", "{event}");
 }
+
+/// A `gateway_invoke` of a tool the key denies is answered on `/mcp` as an
+/// absent name: the gateway refused it, and the record says so.
+#[tokio::test]
+async fn a_withheld_meta_target_records_refused() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(Some(vec!["t".to_string()]))),
+        ..Setup::default()
+    })
+    .await;
+    let invoke = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {
+        "name": "gateway_invoke", "arguments": {"server": "alpha", "tool": "t", "arguments": {}}}});
+    let (status, body) = post_to(&fx, "/mcp", &invoke.to_string(), &Caller::Key).await;
+    assert_eq!(status, StatusCode::OK, "premise: {body}");
+    assert_eq!(body["result"]["isError"], true, "premise: absent: {body}");
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        0,
+        "premise: never dispatched"
+    );
+    let event = only_attempt(&fx);
+    assert_eq!(event["response_effect"], "refused", "{event}");
+}
