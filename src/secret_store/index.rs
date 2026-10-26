@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::{StoreError, StoreKind};
+use super::{StoreError, StoreKind, failed, now_ms};
 
 /// One index line: a created entry, or the removal of one.
 #[derive(Serialize, Deserialize)]
@@ -29,16 +29,6 @@ struct Line {
 /// The index of one config directory.
 pub(super) struct Index {
     path: PathBuf,
-}
-
-fn failed(what: &str, error: &std::io::Error) -> StoreError {
-    StoreError::Failed(format!("{what}: {error}"))
-}
-
-/// Milliseconds since the epoch; 0 for a clock set before it, which only
-/// dates an index line.
-fn now_ms() -> u64 {
-    crate::clock::unix_millis().unwrap_or(0)
 }
 
 impl Index {

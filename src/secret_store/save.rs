@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use super::index::Index;
-use super::{SecretStore, StoreError, fresh_name, random_suffix};
+use super::{SecretStore, StoreError, fresh_name, now_ms, random_suffix};
 use crate::fs_lock::ExclusiveFileLock;
 
 /// The per-user vault lock and the index of one config directory.
@@ -73,14 +73,13 @@ pub(crate) enum SaveError<E> {
     Commit(E),
 }
 
-/// Milliseconds since the epoch; 0 for a clock set before it, which the
-/// random part of a name still keeps unique.
-fn now_ms() -> u64 {
-    crate::clock::unix_millis().unwrap_or(0)
-}
-
 /// Writes `secrets` to fresh entries in `store`, then runs `commit` with
 /// their reference texts, in order. All or nothing (ADR-024).
+///
+/// `commit` writes the config. It must leave the old config in force when it
+/// returns `Err`, since every new entry is then removed. A caller that also
+/// holds the config writer lock takes it before calling this, which takes the
+/// vault lock (ADR-028 rule 3: config lock, then vault lock).
 ///
 /// # Errors
 ///
@@ -110,7 +109,7 @@ pub(crate) fn save_secrets<T, E>(
         } else if std::str::from_utf8(secret.value).is_err() {
             Some(StoreError::NotUtf8)
         } else {
-            store.accepts(secret.value).err()
+            None
         };
         if let Some(refusal) = refusal {
             return Err(SaveError::Refused(refusal));
@@ -148,16 +147,23 @@ impl Written {
     /// that collided with an entry this save did not create, stays live in
     /// the index, so the unused listing still finds it.
     fn roll_back(&self, vault: &Vault, store: &dyn SecretStore) {
+        let mut removed = BTreeSet::new();
         for name in self.created.iter().rev() {
-            if let Err(error) = store.delete(name) {
-                tracing::warn!(entry = %name, %error, "a rolled-back secret entry could not be removed");
+            match store.delete(name) {
+                Ok(()) => {
+                    removed.insert(name.as_str());
+                }
+                Err(error) => {
+                    tracing::warn!(entry = %name, %error, "a rolled-back secret entry could not be removed");
+                }
             }
         }
-        for name in self
-            .indexed
-            .iter()
-            .filter(|n| matches!(store.exists(n), Ok(false)))
-        {
+        // Gone: deleted durably here, or never created and not there.
+        let gone = |name: &String| {
+            removed.contains(name.as_str())
+                || (!self.created.contains(name) && matches!(store.exists(name), Ok(false)))
+        };
+        for name in self.indexed.iter().filter(|n| gone(n)) {
             if let Err(error) = vault.index.append_removed(name) {
                 tracing::warn!(entry = %name, %error, "a rolled-back secret entry stays in the index");
             }

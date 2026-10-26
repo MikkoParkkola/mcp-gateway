@@ -7,7 +7,7 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use super::{SecretStore, StoreError, StoreKind};
+use super::{SecretStore, StoreError, StoreKind, failed};
 
 /// The `file:` reader's limit, 64 KiB, less the one newline every file gets.
 const LIMIT: usize = 64 * 1024 - 1;
@@ -30,10 +30,6 @@ impl FilesStore {
     }
 }
 
-fn failed(what: &str, error: &std::io::Error) -> StoreError {
-    StoreError::Failed(format!("{what}: {error}"))
-}
-
 impl SecretStore for FilesStore {
     fn kind(&self) -> StoreKind {
         StoreKind::Files
@@ -41,17 +37,6 @@ impl SecretStore for FilesStore {
 
     fn limit(&self) -> usize {
         LIMIT
-    }
-
-    fn accepts(&self, value: &[u8]) -> Result<(), StoreError> {
-        // The `file:` reader drops one trailing `\r\n` as readily as `\n`, so
-        // a final CR would be lost once the newline is added.
-        if value.ends_with(b"\r") {
-            return Err(StoreError::Unrepresentable(
-                "a value ending in a carriage return cannot be stored as a secret file",
-            ));
-        }
-        Ok(())
     }
 
     fn probe(&self) -> Result<(), StoreError> {
@@ -84,6 +69,10 @@ impl SecretStore for FilesStore {
     fn create(&self, name: &str, value: &[u8]) -> Result<String, StoreError> {
         let path = std::path::absolute(self.path(name))
             .map_err(|e| failed("cannot resolve the secrets directory", &e))?;
+        // The reference is text: a path that is not UTF-8 could not reopen.
+        let shown = path.to_str().map(str::to_owned).ok_or_else(|| {
+            StoreError::Failed("the secrets directory path is not UTF-8".to_owned())
+        })?;
         let mut file = match crate::config_persistence::create_new_private(&path) {
             Ok(file) => file,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -91,18 +80,25 @@ impl SecretStore for FilesStore {
             }
             Err(e) => return Err(failed("cannot create a secret file", &e)),
         };
-        // The `file:` reader drops exactly one trailing newline, so one is
-        // added: the value reads back byte for byte, its own newlines kept.
+        // The `file:` reader drops one trailing `\n` or `\r\n`, so one `\n` is
+        // added and the value reads back byte for byte. A value ending in CR
+        // gets none: `CR` plus the added `\n` would read as one newline.
+        let pad: &[u8] = if value.ends_with(b"\r") { b"" } else { b"\n" };
         file.write_all(value)
-            .and_then(|()| file.write_all(b"\n"))
+            .and_then(|()| file.write_all(pad))
             .and_then(|()| file.sync_all())
             .map_err(|e| failed("cannot write a secret file", &e))?;
         crate::events::sync_dir(&self.dir)
             .map_err(|e| failed("cannot sync the secrets directory", &e))?;
-        Ok(format!("file:{}", path.display()))
+        Ok(format!("file:{shown}"))
     }
 
     fn delete(&self, name: &str) -> Result<(), StoreError> {
-        std::fs::remove_file(self.path(name)).map_err(|e| failed("cannot remove a secret file", &e))
+        std::fs::remove_file(self.path(name))
+            .map_err(|e| failed("cannot remove a secret file", &e))?;
+        // Durable before the index marks it removed, or a crash could bring
+        // the entry back with its index line already gone.
+        crate::events::sync_dir(&self.dir)
+            .map_err(|e| failed("cannot sync the secrets directory", &e))
     }
 }

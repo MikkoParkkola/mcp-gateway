@@ -26,11 +26,6 @@ pub(crate) trait SecretStore {
     fn kind(&self) -> StoreKind;
     /// The largest value this store keeps intact, in bytes (ADR-028 rule 2).
     fn limit(&self) -> usize;
-    /// Whether this store can keep `value` byte for byte; checked, with the
-    /// limit, before anything is written.
-    fn accepts(&self, _value: &[u8]) -> Result<(), StoreError> {
-        Ok(())
-    }
     /// Whether the store can take a write now (ADR-028 rule 7).
     fn probe(&self) -> Result<(), StoreError>;
     /// Whether an entry `name` exists.
@@ -73,8 +68,6 @@ pub(crate) enum StoreError {
     NotUtf8,
     /// The value is longer than `store` keeps intact.
     TooLarge { limit: usize, store: StoreKind },
-    /// The store cannot keep this value byte for byte: why.
-    Unrepresentable(&'static str),
     /// The store failed: the operation and the OS reason, never a value.
     Failed(String),
 }
@@ -97,7 +90,6 @@ impl StoreError {
                     StoreKind::Files => base,
                 }
             }
-            Self::Unrepresentable(why) => (*why).to_owned(),
             Self::Failed(why) => why.clone(),
         }
     }
@@ -107,6 +99,17 @@ impl std::fmt::Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.reason())
     }
+}
+
+/// A store failure: what was being done, and the OS reason.
+fn failed(what: &str, error: &std::io::Error) -> StoreError {
+    StoreError::Failed(format!("{what}: {error}"))
+}
+
+/// Milliseconds since the epoch; 0 for a clock set before it, which only
+/// dates an index line (a name's random part keeps it unique).
+fn now_ms() -> u64 {
+    crate::clock::unix_millis().unwrap_or(0)
 }
 
 const SWITCH: &str = "set `secrets.store: files`, or unlock or install the keychain";
