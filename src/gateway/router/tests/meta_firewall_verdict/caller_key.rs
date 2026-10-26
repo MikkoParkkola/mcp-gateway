@@ -105,6 +105,7 @@ fn api_key(secret: &str, name: &str) -> ApiKeyConfig {
         denied_tools: None,
         admin: false,
         kind: crate::config::ApiKeyKind::Shared,
+        ..Default::default()
     }
 }
 

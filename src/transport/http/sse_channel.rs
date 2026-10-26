@@ -53,7 +53,12 @@ pub(crate) struct SseChannel {
     endpoint: String,
     pending: PendingMap,
     closed: CancellationToken,
+    /// Why the stream was ended on purpose (a byte budget), for the requests
+    /// it fails; `None` for an ordinary end.
+    ended: Ended,
 }
+
+type Ended = Arc<Mutex<Option<String>>>;
 
 impl Drop for SseChannel {
     fn drop(&mut self) {
@@ -67,6 +72,7 @@ pub(super) struct Waiting {
     key: String,
     rx: Option<oneshot::Receiver<JsonRpcResponse>>,
     pending: PendingMap,
+    ended: Ended,
 }
 
 impl Drop for Waiting {
@@ -81,8 +87,14 @@ impl Waiting {
         let Some(rx) = self.rx.take() else {
             return Err(Error::Transport("SSE response already taken".to_owned()));
         };
-        rx.await
-            .map_err(|_| Error::Transport("SSE stream ended before the response".to_owned()))
+        rx.await.map_err(|_| {
+            Error::Transport(
+                self.ended
+                    .lock()
+                    .clone()
+                    .unwrap_or_else(|| "SSE stream ended before the response".to_owned()),
+            )
+        })
     }
 }
 
@@ -97,12 +109,20 @@ impl SseChannel {
     /// their waiting requests, notifications to `sink`. A frame over the
     /// response bound (`MAX_PENDING_SSE_BYTES`, the limit a call answer has
     /// in a body) or a read error ends the channel.
+    ///
+    /// Under the start-once preview's `budget`, every byte read counts
+    /// against its total and each event is bounded by its per-response
+    /// limit; the request a budget ends is failed with that budget's reason.
     pub(super) async fn open(
         mut response: reqwest::Response,
         resolve: impl FnOnce(&str) -> Result<String>,
         sink: Option<Sink>,
+        budget: Option<Arc<super::budget::ByteBudget>>,
     ) -> Result<Arc<Self>> {
-        let mut decoder = SseDecoder::new(MAX_PENDING_SSE_BYTES);
+        let frame_cap = budget.as_ref().map_or(MAX_PENDING_SSE_BYTES, |b| {
+            b.per_response().min(MAX_PENDING_SSE_BYTES)
+        });
+        let mut decoder = SseDecoder::new(frame_cap);
         let mut early: Vec<SseEvent> = Vec::new();
         let mut read = 0usize;
         let endpoint = loop {
@@ -116,6 +136,9 @@ impl SseChannel {
                 ));
             };
             read += chunk.len();
+            if let Some(budget) = &budget {
+                budget.charge_total(chunk.len())?;
+            }
             if read > HANDSHAKE_CAP {
                 return Err(Error::Transport(format!(
                     "SSE handshake exceeded {HANDSHAKE_CAP}-byte buffer without an endpoint event"
@@ -138,15 +161,21 @@ impl SseChannel {
             endpoint,
             pending: Arc::default(),
             closed: CancellationToken::new(),
+            ended: Arc::default(),
         });
         let (pending, closed) = (Arc::clone(&channel.pending), channel.closed.clone());
+        let ended = Arc::clone(&channel.ended);
         tokio::spawn(async move {
             let mut sink = sink;
             let read = async {
                 route(&pending, &mut sink, early);
                 loop {
                     let next = match response.chunk().await {
-                        Ok(Some(chunk)) => decoder.push(&chunk),
+                        Ok(Some(chunk)) => budget
+                            .as_ref()
+                            .map_or(Ok(()), |b| b.charge_total(chunk.len()))
+                            .and_then(|()| decoder.push(&chunk))
+                            .map_err(|error| over_budget(budget.as_deref(), error)),
                         Ok(None) => {
                             if let Ok(events) = decoder.finish() {
                                 route(&pending, &mut sink, events);
@@ -155,8 +184,12 @@ impl SseChannel {
                         }
                         Err(_) => return,
                     };
-                    let Ok(events) = next else {
-                        return;
+                    let events = match next {
+                        Ok(events) => events,
+                        Err(error) => {
+                            *ended.lock() = Some(error.to_string());
+                            return;
+                        }
                     };
                     route(&pending, &mut sink, events);
                 }
@@ -203,7 +236,22 @@ impl SseChannel {
             key,
             rx: Some(rx),
             pending: Arc::clone(&self.pending),
+            ended: Arc::clone(&self.ended),
         })
+    }
+}
+
+/// Under a budget, an event past the decoder's cap is the budget's own
+/// per-response refusal, so a caller can tell it from a dead stream.
+///
+/// ponytail: matched on the decoder's message; give `SseDecoder` a typed
+/// oversize error if a second caller needs to tell them apart.
+fn over_budget(budget: Option<&super::budget::ByteBudget>, error: Error) -> Error {
+    match budget {
+        Some(budget) if error.to_string().contains("SSE event exceeded") => {
+            budget.response_refusal()
+        }
+        _ => error,
     }
 }
 

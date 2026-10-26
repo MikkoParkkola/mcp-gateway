@@ -62,7 +62,11 @@ impl ApiKeyKind {
 }
 
 /// API key configuration for multi-client access.
-#[derive(Clone, Serialize, Deserialize)]
+///
+/// `Default` is for struct literals in tests (`..Default::default()`); it adds
+/// no serde default. Every field already defaults on its own, and a key with
+/// no digest is refused by load validation, not by serde.
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct ApiKeyConfig {
     /// Legacy plaintext key. Parsed only so the load can refuse it by name;
     /// never written back.
@@ -102,6 +106,19 @@ pub struct ApiKeyConfig {
     /// Who holds the key; `shared` unless set.
     #[serde(default, skip_serializing_if = "ApiKeyKind::is_shared")]
     pub kind: ApiKeyKind,
+    /// The key's principal, 12 lowercase hex digits, written at its first
+    /// rotation so the key keeps owning its sessions, grants and tasks under a
+    /// new digest (ADR-022). Absent: derived from `key_sha256` as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
+    /// The digest the key had before its last rotation, in the forms
+    /// `key_sha256` takes. Accepted until `previous_expires_at`, never without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_key_sha256: Option<String>,
+    /// RFC 3339 end of the rotation's grace; past it the previous digest is
+    /// refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_expires_at: Option<DateTime<Utc>>,
 }
 
 // Manual `Debug` (CWE-532): a derived one printed the key. The digest is not a
@@ -121,6 +138,9 @@ impl std::fmt::Debug for ApiKeyConfig {
             .field("denied_tools", &self.denied_tools)
             .field("admin", &self.admin)
             .field("kind", &self.kind)
+            .field("principal", &redact(&self.principal))
+            .field("previous_key_sha256", &redact(&self.previous_key_sha256))
+            .field("previous_expires_at", &self.previous_expires_at)
             .finish()
     }
 }
@@ -143,6 +163,43 @@ impl ApiKeyConfig {
             .ok_or_else(|| Error::ConfigValidation(format!("{field} is missing")))?;
         let value = crate::config::secret_ref::SecretRef::parse(spec).resolve(&field, overlay)?;
         parse_api_key_digest(&value).ok_or_else(|| malformed(name, spec))
+    }
+
+    /// The digest before the last rotation, resolved by the same rule as
+    /// [`Self::resolve_digest`]; `None` when the key has none.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::resolve_digest`], naming `previous_key_sha256`.
+    pub fn resolve_previous_digest(&self, overlay: &EnvOverlay) -> Result<Option<[u8; 32]>> {
+        let Some(spec) = self.previous_key_sha256.as_deref() else {
+            return Ok(None);
+        };
+        let name = &self.name;
+        let field = format!("auth.api_keys['{name}'].previous_key_sha256");
+        let value = crate::config::secret_ref::SecretRef::parse(spec).resolve(&field, overlay)?;
+        parse_api_key_digest(&value)
+            .map(Some)
+            .ok_or_else(|| malformed_field(name, "previous_key_sha256", spec))
+    }
+
+    /// The one derivation of a configured key's principal (ADR-022): the
+    /// explicit `principal` when set, otherwise the first 48 bits of `digest`,
+    /// the key's current digest.
+    #[must_use]
+    pub(crate) fn principal_for(
+        &self,
+        digest: &[u8; 32],
+    ) -> crate::gateway::record_principal::InternalPrincipal {
+        crate::gateway::auth::configured_key_principal(self.principal.as_deref(), digest)
+    }
+
+    /// The key's digest slots, current then previous: a rotated key's previous
+    /// digest is a live credential too (ADR-022), so it is read like the current.
+    pub(crate) fn digest_specs_mut(&mut self) -> impl Iterator<Item = &mut String> {
+        self.key_sha256
+            .iter_mut()
+            .chain(&mut self.previous_key_sha256)
     }
 
     /// True when `now` is at or past `expires_at`.
@@ -177,24 +234,74 @@ pub(crate) fn api_key_expired_now(expires_at: Option<DateTime<Utc>>) -> bool {
 }
 
 fn malformed(name: &str, spec: &str) -> Error {
-    if spec.starts_with("file:") {
+    malformed_field(name, "key_sha256", spec)
+}
+
+/// The refusal for a digest field whose value is not a digest, naming the
+/// field and the reference, never the value.
+fn malformed_field(name: &str, field: &str, spec: &str) -> Error {
+    if spec.starts_with("file:") || spec.starts_with("keychain:") {
+        let holder = if spec.starts_with("file:") {
+            "the file"
+        } else {
+            "the entry"
+        };
         return Error::ConfigValidation(format!(
-            "auth.api_keys['{name}'].key_sha256 references {spec}, whose content is not a \
+            "auth.api_keys['{name}'].{field} references {spec}, whose content is not a \
              sha256:<64 lowercase hex> digest; store the output of `mcp-gateway hash-key` in \
-             the file, not the key itself"
+             {holder}, not the key itself"
         ));
     }
     match spec.strip_prefix("env:") {
         Some(var) => Error::ConfigValidation(format!(
-            "auth.api_keys['{name}'].key_sha256 references env:{var}, whose value is not a \
+            "auth.api_keys['{name}'].{field} references env:{var}, whose value is not a \
              sha256:<64 lowercase hex> digest; store the output of `mcp-gateway hash-key` in \
              {var}, not the key itself"
         )),
         None => Error::ConfigValidation(format!(
-            "auth.api_keys['{name}'].key_sha256 must be sha256: followed by 64 lowercase hex \
+            "auth.api_keys['{name}'].{field} must be sha256: followed by 64 lowercase hex \
              characters, the output of `mcp-gateway hash-key`"
         )),
     }
+}
+
+/// A digest field's configured text names a sha256 digest: a literal, or an
+/// `env:`, `file:` or `keychain:` reference that resolves to one. An unset or
+/// unreadable reference is the required-reference check's to report.
+fn check_digest_spec(name: &str, field: &str, spec: &str, overlay: &EnvOverlay) -> Result<()> {
+    let value = match spec.strip_prefix("env:") {
+        Some(var) => match overlay.resolve(var) {
+            Some(value) => value,
+            None => return Ok(()),
+        },
+        // A file (C9) or keychain entry (ADR-028) holding the digest.
+        None if spec.starts_with("file:") || spec.starts_with("keychain:") => {
+            let path = format!("auth.api_keys['{name}'].{field}");
+            match crate::config::secret_ref::SecretRef::parse(spec).resolve(&path, overlay) {
+                Ok(value) => value,
+                Err(_) => return Ok(()),
+            }
+        }
+        // The C4 wording for an empty secret, so it reads the same.
+        None if spec.is_empty() => {
+            return Err(Error::ConfigValidation(format!(
+                "auth.api_keys['{name}'].{field} is empty."
+            )));
+        }
+        None => spec.to_owned(),
+    };
+    match parse_api_key_digest(&value) {
+        Some(_) => Ok(()),
+        None => Err(malformed_field(name, field, spec)),
+    }
+}
+
+/// The storage form of a principal: 12 lowercase hex digits.
+fn is_principal_form(principal: &str) -> bool {
+    principal.len() == 12
+        && principal
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 impl AuthConfig {
@@ -226,41 +333,40 @@ impl AuthConfig {
                          and set key_sha256"
                     )));
                 }
-                (None, Some(spec)) => {
-                    let value = match spec.strip_prefix("env:") {
-                        Some(var) => match overlay.resolve(var) {
-                            Some(value) => value,
-                            None => continue,
-                        },
-                        // A file holding the digest (C9). An unreadable file
-                        // is the required-reference check's to report.
-                        None if spec.starts_with("file:") => {
-                            let field = format!("auth.api_keys['{name}'].key_sha256");
-                            match crate::config::secret_ref::SecretRef::parse(spec)
-                                .resolve(&field, overlay)
-                            {
-                                Ok(value) => value,
-                                Err(_) => continue,
-                            }
-                        }
-                        // The C4 wording for an empty secret, so it reads the same.
-                        None if spec.is_empty() => {
-                            return Err(Error::ConfigValidation(format!(
-                                "auth.api_keys['{name}'].key_sha256 is empty."
-                            )));
-                        }
-                        None => spec.clone(),
-                    };
-                    if parse_api_key_digest(&value).is_none() {
-                        return Err(malformed(name, spec));
-                    }
+                (None, Some(spec)) => check_digest_spec(name, "key_sha256", spec, overlay)?,
+            }
+            if let Some(principal) = key.principal.as_deref()
+                && !is_principal_form(principal)
+            {
+                return Err(Error::ConfigValidation(format!(
+                    "auth.api_keys['{name}'].principal must be 12 lowercase hex digits: the \
+                     principal the key had before its first rotation"
+                )));
+            }
+            match (&key.previous_key_sha256, key.previous_expires_at) {
+                (Some(_), None) => {
+                    return Err(Error::ConfigValidation(format!(
+                        "auth.api_keys['{name}'] sets previous_key_sha256 without \
+                         previous_expires_at; a previous digest is accepted only until \
+                         previous_expires_at, so set it or delete previous_key_sha256"
+                    )));
                 }
+                (Some(spec), Some(_)) => {
+                    check_digest_spec(name, "previous_key_sha256", spec, overlay)?;
+                }
+                // An end of grace with nothing to end keeps no secret valid.
+                (None, Some(_)) => tracing::warn!(
+                    key = %name,
+                    "API key sets previous_expires_at without previous_key_sha256; it has no effect"
+                ),
+                (None, None) => {}
             }
         }
         self.dashboard_session.validate()
     }
 
-    /// MIK-7973 at load and reload: no two credentials may share a principal.
+    /// MIK-7973 at load and reload: no two credentials may share a principal,
+    /// explicit or derived, and (ADR-022) no two may share a digest.
     ///
     /// An `auto` bearer does not exist until startup and is checked there
     /// (`ResolvedAuthConfig::try_from_config`). A reference that does not
@@ -270,14 +376,25 @@ impl AuthConfig {
             None | Some("auto") => None,
             Some(_) => self.resolve_bearer_token(overlay).ok().flatten(),
         };
-        let digests: Vec<_> = self
+        // A key whose digests do not resolve is left to the checks that report it.
+        let keys: Vec<_> = self
             .api_keys
             .iter()
-            .filter_map(|key| Some((key.name.as_str(), key.resolve_digest(overlay).ok()?)))
+            .filter_map(|key| {
+                let current = key.resolve_digest(overlay).ok()?;
+                let previous = key.resolve_previous_digest(overlay).ok()?;
+                Some((key, current, previous))
+            })
             .collect();
         crate::gateway::auth::refuse_shared_principals(
             bearer.as_deref(),
-            digests.iter().map(|(name, digest)| (*name, digest)),
+            keys.iter()
+                .map(|(key, current, _)| (key.name.as_str(), key.principal_for(current))),
+        )?;
+        crate::gateway::auth::refuse_shared_digests(
+            bearer.as_deref(),
+            keys.iter()
+                .map(|(key, current, previous)| (key.name.as_str(), *current, *previous)),
         )
     }
 

@@ -30,6 +30,8 @@ pub(crate) enum SecretRef<'a> {
     Env(&'a str),
     /// `file:PATH`: the content of the file at `PATH`, which must be absolute.
     File(&'a Path),
+    /// `keychain:NAME`: the OS keychain entry `NAME` (ADR-028).
+    Keychain(&'a str),
     /// Anything else: the text itself is the secret.
     Literal(&'a str),
 }
@@ -43,6 +45,8 @@ impl<'a> SecretRef<'a> {
             Self::Env(name)
         } else if let Some(path) = text.strip_prefix("file:") {
             Self::File(Path::new(path))
+        } else if let Some(name) = text.strip_prefix("keychain:") {
+            Self::Keychain(name)
         } else {
             Self::Literal(text)
         }
@@ -76,8 +80,62 @@ impl<'a> SecretRef<'a> {
                 Some(value) => Ok(value),
             },
             Self::File(path) => read_file_ref(field, path),
+            Self::Keychain(name) => read_keychain_ref(field, name, overlay),
         }
     }
+}
+
+/// Whether `name` fits ADR-028's keychain grammar, `[A-Za-z0-9._-]{1,128}`.
+/// Text only; reads nothing.
+pub(crate) fn is_keychain_name(name: &str) -> bool {
+    (1..=128).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+/// The secret a `keychain:` reference names: the entry's exact bytes, never
+/// trimmed (ADR-028 rule 5).
+///
+/// # Errors
+///
+/// [`Error::ConfigValidation`] naming `field` alone when the name is not a
+/// valid keychain name (the text may be a mistyped secret, so it is never
+/// echoed), and naming `field` and the entry when the entry is missing,
+/// empty, not UTF-8, or cannot be read.
+pub(crate) fn read_keychain_ref(field: &str, name: &str, overlay: &EnvOverlay) -> Result<String> {
+    use super::keychain::KeychainError;
+    // Checked before any lookup: a name outside the grammar is a typo, and
+    // asking the store about it could only prompt or mislead.
+    if !is_keychain_name(name) {
+        // The rejected text is not echoed: a mistyped literal secret would
+        // otherwise land in the startup log.
+        return Err(Error::ConfigValidation(format!(
+            "{field} uses a keychain: reference whose name is not a valid keychain name \
+             (1-128 of A-Z, a-z, 0-9, '.', '_', '-')."
+        )));
+    }
+    let refused = |why: &str| {
+        Error::ConfigValidation(format!("{field} references keychain entry '{name}', {why}"))
+    };
+    let bytes = match overlay.keychain().read(name) {
+        Ok(bytes) => bytes,
+        Err(KeychainError::Missing) => return Err(refused("which does not exist.")),
+        Err(other) => {
+            return Err(refused(&format!(
+                "which cannot be read: {}.",
+                other.reason()
+            )));
+        }
+    };
+    if bytes.as_bytes().is_empty() {
+        return Err(refused("which is empty; empty secrets are refused."));
+    }
+    // Exact bytes: unlike `file:`, no trailing newline is stripped (ADR-028
+    // rule 5); the store holds what the operator saved.
+    std::str::from_utf8(bytes.as_bytes())
+        .map(str::to_owned)
+        .map_err(|_| refused("which is not UTF-8."))
 }
 
 /// The secret a `file:` reference names. See the module docs for the rules.
@@ -248,6 +306,10 @@ impl super::Config {
             for key in &self.auth.api_keys {
                 if let Some(spec) = key.key_sha256.as_deref() {
                     slots.push((format!("auth.api_keys['{}'].key_sha256", key.name), spec));
+                }
+                if let Some(spec) = key.previous_key_sha256.as_deref() {
+                    let field = format!("auth.api_keys['{}'].previous_key_sha256", key.name);
+                    slots.push((field, spec));
                 }
             }
         }

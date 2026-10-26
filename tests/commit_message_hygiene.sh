@@ -208,7 +208,51 @@ pr_body_case home_path fail 'Built in /Users/mikko/github/mcp-gateway.'
 pr_body_case agent_config fail 'See $HOME/.claude/rules for the gate.'
 pr_body_case private_address fail 'Measured against 100.64.1.2.'
 pr_body_case learning_rule_is_not_a_name pass 'Uses a Hebbian decay for ranking.'
+# An explicitly empty body (PR_BODY set to "") passes: it cannot leak
+# anything, and CI always sets the variable. No body at all (PR_BODY unset,
+# no file) is a misused call, refused rather than read as empty and clean.
 pr_body_case empty_body pass ''
+pr_body_unset_case() {
+  local status=0
+  env -u PR_BODY bash "$source_repo/scripts/dev/check-pr-body-hygiene.sh" >/dev/null 2>&1 || status=$?
+  if [[ "$status" -eq 0 ]]; then
+    printf 'FAIL pr_body_unset: expected the checker to refuse a call with no body\n' >&2
+    failures=$((failures + 1))
+  fi
+}
+pr_body_unset_case
+
+# The body may come from a file instead of $PR_BODY; a misused call is refused
+# rather than read as an empty, clean body.
+pr_body_args_case() {
+  local name="$1" expectation="$2" body="$3"
+  shift 3
+  local status=0
+  if [[ -n "$body" ]]; then
+    PR_BODY="$body" bash "$source_repo/scripts/dev/check-pr-body-hygiene.sh" "$@" >/dev/null 2>&1 || status=$?
+  else
+    env -u PR_BODY bash "$source_repo/scripts/dev/check-pr-body-hygiene.sh" "$@" >/dev/null 2>&1 || status=$?
+  fi
+  if [[ "$expectation" == "pass" && "$status" -ne 0 ]]; then
+    printf 'FAIL pr_body_%s: expected pass, exit %d\n' "$name" "$status" >&2
+    failures=$((failures + 1))
+  elif [[ "$expectation" == "fail" && "$status" -eq 0 ]]; then
+    printf 'FAIL pr_body_%s: expected the checker to refuse\n' "$name" >&2
+    failures=$((failures + 1))
+  fi
+}
+body_dir="$tmp_root/pr-bodies"
+mkdir -p "$body_dir"
+printf '## Summary\n\n- Refuse a stale handle\n' >"$body_dir/clean.md"
+printf 'Refs MIK-1234\n' >"$body_dir/ticket.md"
+: >"$body_dir/empty.md"
+pr_body_args_case file_clean pass '' "$body_dir/clean.md"
+pr_body_args_case file_with_ticket_id fail '' "$body_dir/ticket.md"
+pr_body_args_case file_empty pass '' "$body_dir/empty.md"
+pr_body_args_case file_missing fail '' "$body_dir/absent.md"
+pr_body_args_case unknown_option fail 'Fine body.' --body
+pr_body_args_case two_files fail '' "$body_dir/clean.md" "$body_dir/ticket.md"
+pr_body_args_case file_and_env_both_given fail 'Fine body.' "$body_dir/clean.md"
 pr_body_case acceptance_criterion_id pass 'Covers MIK-9999.HANDLE.1 and MIK-9999.HANDLE.2a.'
 pr_body_case acceptance_id_beside_a_citation fail 'Covers MIK-9999.HANDLE.1, see MIK-9999.'
 

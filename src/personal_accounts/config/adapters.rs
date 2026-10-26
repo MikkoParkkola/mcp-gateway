@@ -275,9 +275,18 @@ fn validate_secret_ref(index: usize, reference: &str) -> Result<(), AccountsConf
         }
         return Ok(());
     }
+    if let Some(name) = reference.strip_prefix("keychain:") {
+        if !crate::config::is_keychain_name(name) {
+            return Err(fail(
+                "hmac_secret_ref keychain: reference must name a valid keychain entry",
+            ));
+        }
+        return Ok(());
+    }
     let Some(variable) = reference.strip_prefix("env:") else {
         return Err(fail(
-            "hmac_secret_ref must be an env: or file: reference, never a literal secret",
+            "hmac_secret_ref must be an env:, file: or keychain: reference, never a literal \
+             secret",
         ));
     };
     if variable.trim().is_empty() {
@@ -405,13 +414,22 @@ pub(crate) enum GatewayCredential<'a> {
         name: &'a str,
         spec: &'a str,
     },
+    /// `auth.api_keys[index].previous_key_sha256`: a rotated key's previous
+    /// digest, a live credential until its grace ends (ADR-022).
+    ApiKeyPreviousDigest {
+        index: usize,
+        name: &'a str,
+        spec: &'a str,
+    },
 }
 
 impl<'a> GatewayCredential<'a> {
     /// The configured text: `auto`, `env:VARIABLE`, or a literal credential.
     fn spec(self) -> &'a str {
         match self {
-            Self::BearerToken(spec) | Self::ApiKeyDigest { spec, .. } => spec,
+            Self::BearerToken(spec)
+            | Self::ApiKeyDigest { spec, .. }
+            | Self::ApiKeyPreviousDigest { spec, .. } => spec,
         }
     }
 
@@ -425,6 +443,12 @@ impl<'a> GatewayCredential<'a> {
             }
             Self::ApiKeyDigest { index, name, .. } => {
                 format!("auth.api_keys[{index}] (name {name})")
+            }
+            Self::ApiKeyPreviousDigest { index, name, .. } if name.trim().is_empty() => {
+                format!("auth.api_keys[{index}].previous_key_sha256")
+            }
+            Self::ApiKeyPreviousDigest { index, name, .. } => {
+                format!("auth.api_keys[{index}].previous_key_sha256 (name {name})")
             }
         }
     }
@@ -523,7 +547,12 @@ pub(crate) fn validate_no_gateway_material_reuse(
             .resolve_reference(&credential.label(), credential.spec())
             .ok()
             .flatten();
-        let is_digest = matches!(credential, GatewayCredential::ApiKeyDigest { .. });
+        // Both of a key's digests are compared as digests: a previous one read as
+        // raw material would never equal a hashed adapter secret.
+        let is_digest = matches!(
+            credential,
+            GatewayCredential::ApiKeyDigest { .. } | GatewayCredential::ApiKeyPreviousDigest { .. }
+        );
         match material {
             Some(value) if is_digest => {
                 if let Some(digest) = crate::config::parse_api_key_digest(&value) {

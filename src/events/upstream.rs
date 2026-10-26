@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Upstream-notification events (MIK-7630 I5, design
-//! `docs/design/2026-10-02-mik-7630-i5-upstream-listener.md`): the three
+//! the i5 upstream listener design): the three
 //! event names a backend's `resources/updated`, `resources/list_changed` and
 //! `prompts/list_changed` become, and which backends cannot offer them (§6,
 //! §11 D2/D3). A subscription to one of them on such a backend is refused

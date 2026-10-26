@@ -33,7 +33,7 @@ use super::*;
 ///
 /// `ContinuationState::new()` draws its own key material, so this is the
 /// arrangement the accepted design deploys — independent keys per process, no
-/// shared store (`docs/design/2026-08-30-shared-continuation-state.md:107-120`).
+/// shared store (the shared continuation state design).
 /// The payload is identical in every field; only the minting key differs.
 fn mint_on_a_foreign_process(tool: &str, args: &Value) -> String {
     let foreign = ContinuationState::new();

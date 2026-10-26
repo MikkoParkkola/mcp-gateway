@@ -8,7 +8,7 @@
 //! `calls` list — because no production path nests a plan (see
 //! `plan_step_guard_tests`). Each row names the mutant it kills.
 //!
-//! Test plan: docs/internal/design/2026-10-12-mik-8408-test-plan.md,
+//! Test plan: the relay replay test plan,
 //! as retargeted by design d4 H4.
 
 use std::cell::RefCell;

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-7630 increment I5: the upstream listener (design
-//! `docs/design/2026-10-02-mik-7630-i5-upstream-listener.md` §10, rows
+//! the i5 upstream listener design §10, rows
 //! T39a-k). Backend `resources/updated`, `resources/list_changed` and
 //! `prompts/list_changed` become events for every backend era.
 //!

@@ -1,0 +1,1 @@
+src/gateway/server/account_bindings.rs	install_account_bindings	1	Turns the custody handle into the trait object install_account_strategies takes and calls it; decides nothing (install_account_strategies decides).
