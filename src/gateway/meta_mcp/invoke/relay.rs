@@ -115,10 +115,16 @@ impl MetaMcp {
             };
             let caller = RelayCaller::new(who.key, who.keyed);
             fw.relay_block_message(caller, (server, tool), &params, audit)
-                .map(|message| crate::Error::Forbidden {
-                    code: -32002,
-                    status: 403,
-                    message,
+                .map(|message| {
+                    super::audit::note_refused_by(
+                        crate::security::decision_record::DecisionKind::Firewall,
+                        None,
+                    );
+                    crate::Error::Forbidden {
+                        code: -32002,
+                        status: 403,
+                        message,
+                    }
                 })
         }
         #[cfg(not(feature = "firewall"))]
