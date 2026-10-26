@@ -145,6 +145,7 @@ fn api_key(name: &str, denied: &[&str]) -> ApiKeyConfig {
             .then(|| denied.iter().map(|d| (*d).to_string()).collect()),
         admin: false,
         kind: crate::config::ApiKeyKind::Shared,
+        ..Default::default()
     }
 }
 
