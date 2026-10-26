@@ -268,8 +268,7 @@ fn unresolvable_previous_digest_reference_is_refused_by_field() {
     let path = dir.path().join("config.yaml");
     crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("config file");
     let message = Config::load(Some(&path))
-        .err()
-        .expect("an unresolvable previous digest must be refused")
+        .expect_err("an unresolvable previous digest must be refused")
         .to_string();
     assert!(
         message.contains("auth.api_keys['ops'].previous_key_sha256"),
