@@ -259,9 +259,23 @@ fn interpreter_dirs(program: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-/// Where homes live: the gateway user's own, and the system's home roots.
+/// Where homes live: the system's home roots, every user's home directly
+/// under `/home` (another user's, not only the gateway user's), and the
+/// gateway user's own wherever it is. Each is canonical, so a symlinked home
+/// is found at its real path.
+///
+/// Not `/etc/passwd`: service accounts name system directories as their home
+/// (Debian's `sync` has `/bin`), which would forbid binding `/bin` itself.
 fn home_roots() -> Vec<PathBuf> {
     let mut homes = vec![PathBuf::from("/home"), PathBuf::from("/root")];
+    if let Ok(entries) = fs::read_dir("/home") {
+        homes.extend(
+            entries
+                .filter_map(Result::ok)
+                .map(|e| e.path())
+                .map(|p| fs::canonicalize(&p).unwrap_or(p)),
+        );
+    }
     if let Some(home) = crate::home_dir::home_dir() {
         homes.push(fs::canonicalize(&home).unwrap_or(home));
     }
@@ -500,6 +514,9 @@ mod tests {
         for dir in ["/", "/home", "/srv", "/srv/users", "/srv/users/ann"] {
             assert!(covered_home(Path::new(dir), &homes).is_some(), "{dir}");
         }
+        // Another user's home is a home too, once it is listed.
+        let with_alice = [PathBuf::from("/home"), PathBuf::from("/home/alice")];
+        assert!(covered_home(Path::new("/home/alice"), &with_alice).is_some());
         // An interpreter directory inside a home, or beside one, is fine.
         for dir in [
             "/srv/users/ann/.nvm/versions/node/v22/bin",
@@ -507,6 +524,22 @@ mod tests {
             "/opt/node/bin",
         ] {
             assert!(covered_home(Path::new(dir), &homes).is_none(), "{dir}");
+        }
+    }
+
+    /// Every user's home under `/home` is a home root, not only the gateway
+    /// user's, so none of them can be bound whole.
+    #[test]
+    fn every_home_under_slash_home_is_a_home_root() {
+        let roots = home_roots();
+        for entry in fs::read_dir("/home")
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+        {
+            let home = fs::canonicalize(entry.path()).unwrap_or_else(|_| entry.path());
+            assert!(roots.contains(&home), "{} is missing", home.display());
+            assert!(covered_home(&home, &roots).is_some(), "{}", home.display());
         }
     }
 

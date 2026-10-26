@@ -417,7 +417,7 @@ fn the_helper_refuses_outside_fresh_namespaces() {
     };
     let plan = serde_json::json!({
         "host": {"user": inode("user"), "mnt": inode("mnt"), "pid": inode("pid"), "net": inode("net"), "ipc": inode("ipc"), "uts": inode("uts")},
-        "read_only": [], "masked": [], "bound_back": [],
+        "read_only": [], "masked": [], "hidden": [], "bound_back": [],
         "limits": {"address_space": 1, "file_size": 1, "open_files": 1, "processes": 1},
         "env": [], "target": ["/bin/true"]
     });
