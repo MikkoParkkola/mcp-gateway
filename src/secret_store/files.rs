@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use super::{SecretStore, StoreError, StoreKind, failed};
 
-/// The `file:` reader's limit, 64 KiB, less the one newline every file gets.
+/// The `file:` reader's limit, 64 KiB, less the one newline a file may get.
 const LIMIT: usize = 64 * 1024 - 1;
 
 /// Owner-only secret files in one directory.

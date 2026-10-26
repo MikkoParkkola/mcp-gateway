@@ -62,7 +62,23 @@ fn b2_values_ending_in_cr_or_crlf_round_trip_through_file_ref() {
     let dir = tempfile::tempdir().expect("tempdir");
     let vault = Vault::with_lock(dir.path(), dir.path().join("vault.lock"));
     let store = FilesStore::new(dir.path());
-    for value in [&b"pasted\r"[..], b"\r", b"a\r\n", b"a\r\nb", b"x\n"] {
+    // At the limit: padded to exactly 64 KiB, and a CR-ended one left unpadded.
+    let full = vec![b'x'; 65_535];
+    let mut full_cr = vec![b'x'; 65_534];
+    full_cr.push(b'\r');
+    let values: [&[u8]; 10] = [
+        b"pasted\r",
+        b"\r",
+        b"a\r\n",
+        b"a\r\nb",
+        b"x\n",
+        b"\n",
+        b"\r\r",
+        b"\n\r",
+        &full,
+        &full_cr,
+    ];
+    for value in values {
         let refs = save_secrets(
             &vault,
             &store,
@@ -75,6 +91,6 @@ fn b2_values_ending_in_cr_or_crlf_round_trip_through_file_ref() {
         .expect("saved");
         let path = PathBuf::from(refs[0].strip_prefix("file:").unwrap());
         let read = super::secret_ref::read_file_ref("auth.bearer_token", &path).expect("read");
-        assert_eq!(read.as_bytes(), value, "{value:?}");
+        assert_eq!(read.as_bytes(), value, "{} bytes", value.len());
     }
 }
