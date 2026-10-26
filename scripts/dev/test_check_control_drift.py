@@ -8,7 +8,7 @@ Stdlib-only. Run directly:
     python3 scripts/dev/test_check_control_drift.py
 
 The rows here are the fail-first table in
-`docs/design/2026-09-11-merged-versus-listening-drift-check.md`. Each probe has
+the merged versus listening drift check design. Each probe has
 two halves and both decide: a stub that refuses everything must fail the check
 exactly like a stub that refuses nothing, because "the control refused this" and
 "everything here is refused" are different findings.

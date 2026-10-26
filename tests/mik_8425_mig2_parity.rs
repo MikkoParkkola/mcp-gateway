@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8425 MIG.2: the YAML backend reproduces every golden the guarded
 //! adapter recorded over the replaced backend (plan
-//! `docs/internal/plans/2026-10-24-mik-8425-mig2-swap.md`, sections 3 and 3b).
+//! the YAML backend swap plan, sections 3 and 3b).
 //!
 //! Each row compiles a baseline suite's own report and compares it with that
 //! suite's golden. Before the switch this crate bound the reports to
@@ -248,8 +248,10 @@ fn p6_every_repository_tree_round_trips() {
 /// count, so any further skip fails until it is reviewed. 184 rows were
 /// recorded; skipped today, each printed by name when the test runs:
 /// `capabilities/linear/linear_get_issue.yaml` (edited on the release line,
-/// #4133) and `examples/token-exchange-live.yaml` (#4150).
-const P2_UNEDITED: usize = 182;
+/// #4133), `examples/token-exchange-live.yaml` (#4150), and
+/// `capabilities/automation/bus_pull.yaml` and `bus_subscribe.yaml`, whose
+/// example topic stopped naming a private project (#4168).
+const P2_UNEDITED: usize = 180;
 
 /// P2: every repository YAML file's tree, `Dict` and stream, as recorded
 /// with the replaced backend.

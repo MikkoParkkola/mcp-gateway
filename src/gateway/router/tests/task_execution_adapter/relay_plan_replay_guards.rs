@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8408 stage 4: the route-level guard rows of the test plan
-//! (docs/internal/design/2026-10-12-mik-8408-test-plan.md), as
+//! (the relay replay test plan), as
 //! retargeted by d4 H4: G18/G21 read the replay entry's `calls`,
 //! G20 is dropped. Each row names its mutant and asserts through
 //! the route (bob's relay refused or not) or, for `calls`, the

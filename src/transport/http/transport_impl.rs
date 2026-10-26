@@ -90,7 +90,7 @@ impl Transport for HttpTransport {
         // MIK-5982 / MIK-6040: when the backend's session expires (daemon restart,
         // or a remote invalidating the MCP session on OAuth token refresh), every
         // request — including circuit-breaker half-open probes — keeps failing
-        // until we re-handshake (observed live 2026-06-11: hebb unreachable 6.5h
+        // until we re-handshake (observed live 2026-06-11: a memory backend unreachable 6.5h
         // while healthy). Recovery lives here, inside `request`, so it also rescues
         // half-open probes and is not gated behind the Backend failsafe/CB.
         //
