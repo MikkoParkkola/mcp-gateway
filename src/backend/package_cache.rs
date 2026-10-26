@@ -365,7 +365,13 @@ where
 {
     let target = dir.to_path_buf();
     let renamed = tokio::task::spawn_blocking(move || {
+        // Locals drop in reverse order, so on a panic in `retire` the latch is
+        // re-armed before `held` releases the lock, and whether or not anyone
+        // still awaits this task.
+        let held = held;
+        let mut rearm = RearmOnUnwind(Some(&target));
         let retired = retire(&target);
+        rearm.0 = None;
         match &retired {
             Retired::Moved(tombstone) => discard(tombstone.clone()),
             Retired::Refused => arm_again(&target),
@@ -376,8 +382,23 @@ where
     match renamed.await {
         Ok((retired, held)) => (retired, Some(held)),
         Err(error) => {
-            warn!(%error, "package cache rename task failed");
+            // A panic in `retire` was re-armed inside the task, under the lock.
+            warn!(%error, panicked = error.is_panic(), "package cache rename task failed");
             (Retired::Refused, None)
+        }
+    }
+}
+
+/// Re-arms the repair latch for a cache whose rename did not finish, so a
+/// panic leaves the backend repairable instead of marked repaired with
+/// nothing cleared. Disarmed once the rename returns: from there the task
+/// re-arms, or not, by its outcome.
+struct RearmOnUnwind<'a>(Option<&'a Path>);
+
+impl Drop for RearmOnUnwind<'_> {
+    fn drop(&mut self) {
+        if let Some(dir) = self.0 {
+            arm_again(dir);
         }
     }
 }
