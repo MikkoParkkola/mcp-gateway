@@ -42,7 +42,10 @@ pub(super) struct Fake {
     /// The Nth create panics, after the earlier ones succeeded.
     pub(super) panic_create: Option<usize>,
     /// The first name asked about is taken by an entry this save did not make.
-    collide: bool,
+    pub(super) collide: bool,
+    /// The Nth create times out; with `true`, its entry lands before the
+    /// timeout is reported, as a late native call can.
+    pub(super) time_out_create: Option<(usize, bool)>,
 }
 
 impl Fake {
@@ -58,6 +61,7 @@ impl Fake {
             collide: false,
             fail_delete: false,
             panic_create: None,
+            time_out_create: None,
         }
     }
 
@@ -67,6 +71,15 @@ impl Fake {
 
     pub(super) fn names(&self) -> Vec<String> {
         self.entries.lock().unwrap().keys().cloned().collect()
+    }
+
+    /// An entry appearing without a create through this store: a call that
+    /// timed out landing late.
+    pub(super) fn land(&self, name: &str) {
+        self.entries
+            .lock()
+            .unwrap()
+            .insert(name.to_owned(), b"late".to_vec());
     }
 
     fn call(&self, what: &str, name: &str) {
@@ -115,6 +128,14 @@ impl SecretStore for Fake {
         );
         if self.fail_create == Some(*creates) {
             return Err(StoreError::Failed("injected create failure".to_owned()));
+        }
+        if let Some((nth, landed)) = self.time_out_create
+            && nth == *creates
+        {
+            if landed {
+                self.land(name);
+            }
+            return Err(StoreError::TimedOut);
         }
         let mut entries = self.entries.lock().unwrap();
         if entries.contains_key(name) {
@@ -551,7 +572,7 @@ fn b19_a_second_process_meets_the_vault_lock() {
 }
 
 #[test]
-fn b15_a_collision_is_not_retried_and_the_foreign_entry_stays_listed() {
+fn b15_a_collision_is_not_retried_and_the_foreign_entry_is_never_offered() {
     let (dir, vault) = vault();
     let mut store = Fake::new();
     store.collide = true;
@@ -568,8 +589,10 @@ fn b15_a_collision_is_not_retried_and_the_foreign_entry_stays_listed() {
         "a foreign entry was deleted: {calls:?}"
     );
     assert_eq!(store.names().len(), 1, "the foreign entry is gone");
-    // Still live in the index: the unused listing can find it.
+    // Retired in the index: the entry is not ours, so the unused listing
+    // never offers it for removal.
     let live = super::index::Index::at(dir.path()).live().unwrap();
-    assert_eq!(live.len(), 1, "{live:?}");
-    assert_eq!(live[0].name, store.names()[0]);
+    assert!(live.is_empty(), "{live:?}");
+    let unused = unused_entries(&vault, &[&store], &BTreeSet::new()).expect("listing");
+    assert!(unused.is_empty(), "a foreign entry was listed: {unused:?}");
 }

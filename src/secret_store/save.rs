@@ -217,14 +217,21 @@ impl Drop for Rollback<'_> {
 pub(super) struct Written {
     indexed: Vec<String>,
     created: Vec<String>,
+    /// Creates that timed out: still in flight, so never deleted.
+    timed_out: Vec<String>,
+    /// Names taken by an entry this save did not make.
+    collided: Vec<String>,
 }
 
 impl Written {
     /// Deletes what this save created, newest first, then marks as removed
-    /// each indexed name that is gone. A name whose delete failed, or one
-    /// that collided with an entry this save did not create, stays live in
-    /// the index, so the unused listing still finds it. Returns the names
-    /// this save created and could not remove.
+    /// each indexed name that is gone. A name whose delete failed stays live
+    /// in the index, so the unused listing still finds it. A timed-out create
+    /// is never deleted nor marked removed, whatever `exists` reads: the
+    /// abandoned call may land after this returns. A collided name is marked
+    /// removed: its entry is not ours (the name's random part makes that
+    /// certain), so the listing must never offer it. Returns the names this
+    /// save created, or may yet create, and could not remove.
     pub(super) fn roll_back(&self, vault: &Vault, store: &dyn SecretStore) -> Vec<String> {
         let mut removed = BTreeSet::new();
         let mut kept = Vec::new();
@@ -239,10 +246,14 @@ impl Written {
                 }
             }
         }
-        // Gone: deleted durably here, or never created and not there.
+        kept.extend(self.timed_out.iter().cloned());
+        // Gone: deleted durably here, never created and not there, or someone
+        // else's. A timed-out name is never gone.
         let gone = |name: &String| {
-            removed.contains(name.as_str())
-                || (!self.created.contains(name) && matches!(store.exists(name), Ok(false)))
+            !self.timed_out.contains(name)
+                && (removed.contains(name.as_str())
+                    || self.collided.contains(name)
+                    || (!self.created.contains(name) && matches!(store.exists(name), Ok(false))))
         };
         for name in self.indexed.iter().filter(|n| gone(n)) {
             if let Err(error) = vault.index.append_removed(name) {
@@ -271,6 +282,7 @@ fn write_all(
         written.indexed.push(name.clone());
         // Create-only: a taken name is someone else's entry, never replaced.
         if store.exists(&name)? {
+            written.collided.push(name);
             return Err(StoreError::Exists);
         }
         match store.create(&name, secret.value) {
@@ -278,7 +290,14 @@ fn write_all(
                 written.created.push(name);
                 refs.push(reference);
             }
-            Err(StoreError::Exists) => return Err(StoreError::Exists),
+            Err(StoreError::Exists) => {
+                written.collided.push(name);
+                return Err(StoreError::Exists);
+            }
+            Err(StoreError::TimedOut) => {
+                written.timed_out.push(name);
+                return Err(StoreError::TimedOut);
+            }
             Err(error) => {
                 // A failed or timed-out create may still have written.
                 if store.exists(&name).unwrap_or(true) {

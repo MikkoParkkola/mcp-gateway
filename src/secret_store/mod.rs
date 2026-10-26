@@ -76,6 +76,9 @@ pub(crate) enum StoreError {
     TooLarge { limit: usize, store: StoreKind },
     /// The store failed: the operation and the OS reason, never a value.
     Failed(String),
+    /// The store did not answer within its bound. The abandoned call may
+    /// still write, so its entry is never deleted and stays indexed.
+    TimedOut,
 }
 
 impl StoreError {
@@ -97,6 +100,9 @@ impl StoreError {
                 }
             }
             Self::Failed(why) => why.clone(),
+            Self::TimedOut => "the secret store did not answer in time; an entry it may \
+                still write is kept and listed as unused"
+                .to_owned(),
         }
     }
 }
@@ -178,3 +184,6 @@ pub(crate) fn random_suffix() -> Result<u64, StoreError> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod rollback_tests;
