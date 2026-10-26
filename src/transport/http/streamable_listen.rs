@@ -182,9 +182,9 @@ impl StreamableListenSession {
         }
         // The server selects; its choice governs this session's
         // `MCP-Protocol-Version` from here on, as on a slot's handshake.
-        let selection = crate::protocol::negotiate::Selectable::Legacy;
+        let selection = crate::protocol::Selectable::Legacy;
         if let Some(selected) =
-            crate::protocol::negotiate::checked_selection(answer.result.as_ref(), selection)?
+            crate::protocol::checked_selection(answer.result.as_ref(), selection)?
         {
             *t.protocol_version.write() = Some(selected.to_string());
         }
