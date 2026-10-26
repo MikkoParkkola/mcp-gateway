@@ -79,6 +79,8 @@ mod response_observer;
 pub(crate) mod response_tests;
 #[cfg(test)]
 mod rule_glob_tests;
+#[cfg(test)]
+mod rule_scan_tests;
 
 // ─── Runtime types ───────────────────────────────────────────────────────────
 
