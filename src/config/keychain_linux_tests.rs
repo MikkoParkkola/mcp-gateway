@@ -59,7 +59,7 @@ fn a8_an_unlocked_item_is_searched_then_looked_up() {
         "{log}"
     );
     assert!(
-        lines[0].contains(&format!("{{'service': <'{NAME}'>}}")),
+        lines[0].contains(&format!("{{'service': '{NAME}'}}")),
         "{log}"
     );
     assert_eq!(
@@ -177,7 +177,7 @@ fn a15_the_real_secret_service_reads_back_byte_exact_and_refuses_when_locked() {
             "/org/freedesktop/secrets",
             "--method",
             "org.freedesktop.Secret.Service.Lock",
-            "['/org/freedesktop/secrets/aliases/default']",
+            "[objectpath '/org/freedesktop/secrets/aliases/default']",
         ])
         .status()
         .expect("run gdbus");
