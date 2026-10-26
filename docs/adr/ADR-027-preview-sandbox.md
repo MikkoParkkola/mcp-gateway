@@ -132,9 +132,11 @@ and then, inside the namespaces, in this order:
 2. Stages a fresh root on a tmpfs (`size=16M`). Every tmpfs it mounts, this one included, carries `MS_NOSUID |
    MS_NODEV`. Each runtime path is bind-mounted recursively (`MS_BIND | MS_REC`), and then it and every submount
    under it is remounted `MS_REMOUNT | MS_BIND | MS_RDONLY | MS_NOSUID | MS_NODEV` (an initial bind ignores
-   those flags, and a remount reaches only one mount). Runtime paths: `/usr`, `/bin`, `/lib*`, `/etc/ssl`, `/etc/ca-certificates`, `/etc/pki/tls`, and for
-   the command's interpreter only the resolved binary's directory plus the library directories it needs, never a
-   whole prefix. Every masking mount is a tmpfs with `size=4k`, mounted writable only long enough to create the
+   those flags, and a remount reaches only one mount). Runtime paths: `/usr`, `/bin`, `/lib*`, `/etc/ssl`, `/etc/ca-certificates`, `/etc/pki/tls`. The
+   command's program binds on an allowlist, by where its real file is: under those roots, nothing more; under
+   `/usr/local`, its directory and a sibling `lib`, bound back; inside a known runtime tree (an NVM node version, a
+   pyenv version, a Homebrew keg), that tree alone; anywhere else, the file alone, never the directory around it,
+   so a home or any other private directory is excluded without having to be found. Every masking mount is a tmpfs with `size=4k`, mounted writable only long enough to create the
    mountpoints of any bind-back under it, then remounted `MS_RDONLY`: one over `/usr/local` (with that
    interpreter directory bound back if it lies there), one each over `/etc/ssl/private` and
    `/etc/pki/tls/private`, and one over every resolved gateway state, config and data path that falls under any

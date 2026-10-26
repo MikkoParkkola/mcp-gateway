@@ -132,32 +132,42 @@ fn build_plan(target: &Target, protected: &[PathBuf]) -> Result<Plan, Refusal> {
     let masked: Vec<String> = MASKED.iter().map(ToString::to_string).collect();
     let mut hidden = Vec::new();
     let mut bound_back = Vec::new();
-    let homes = home_roots()?;
-    // The run phase's PATH: the interpreter's directories, then the system's.
+    // The run phase's PATH: the program's own directory, then the system's.
     let mut path_dirs = Vec::new();
-    for dir in interpreter_dirs(&program) {
-        let dir = utf8(&dir)?;
-        let under = |prefixes: &[String]| prefixes.iter().any(|p| Path::new(&dir).starts_with(p));
-        if Path::new(&dir).starts_with(mounts::STAGE) {
+    let real = fs::canonicalize(&program).unwrap_or_else(|_| program.clone());
+    if real.starts_with(mounts::STAGE) {
+        return Err(Refusal::Step(format!(
+            "placing {} (a program under /tmp cannot be bound)",
+            real.display()
+        )));
+    }
+    // Bound on an allowlist: what the program needs and nothing around it, so
+    // a home or any other private directory is excluded without being found.
+    let argv0 = match program_bind(&real, &read_only) {
+        ProgramBind::Refused => {
             return Err(Refusal::Step(format!(
-                "placing {dir} (a program under /tmp cannot be bound)"
+                "placing {} (it lies under a masked secret path)",
+                real.display()
             )));
         }
-        if let Some(home) = covered_home(Path::new(&dir), &homes) {
-            return Err(Refusal::Step(format!(
-                "placing {dir} (binding it would expose {})",
-                home.display()
-            )));
+        ProgramBind::System => program.clone(),
+        ProgramBind::UsrLocal(dirs) => {
+            for dir in dirs {
+                bound_back.push(utf8(&dir)?);
+            }
+            real.clone()
         }
-        let masked_system: Vec<String> = MASKED.iter().map(ToString::to_string).collect();
-        if under(&masked_system) {
-            bound_back.push(dir.clone());
-        } else if !under(&read_only) {
-            read_only.push(dir.clone());
+        ProgramBind::Runtime(prefix) => {
+            read_only.push(utf8(&prefix)?);
+            real.clone()
         }
-        if !dir.ends_with("/lib") {
-            path_dirs.push(dir);
+        ProgramBind::File(file) => {
+            read_only.push(utf8(&file)?);
+            real.clone()
         }
+    };
+    if let Some(dir) = argv0.parent() {
+        path_dirs.push(utf8(dir)?);
     }
     let gateway_paths = [
         Some(crate::config_persistence::gateway_data_dir()),
@@ -191,7 +201,7 @@ fn build_plan(target: &Target, protected: &[PathBuf]) -> Result<Plan, Refusal> {
         ("TMPDIR".to_owned(), "/tmp".to_owned()),
     ];
 
-    let mut argv = vec![utf8(&program)?];
+    let mut argv = vec![utf8(&argv0)?];
     for arg in &target.args {
         argv.push(
             arg.to_str()
@@ -236,94 +246,70 @@ fn resolve(program: &Path) -> Result<PathBuf, Refusal> {
         .ok_or_else(not_found)
 }
 
-/// The program's directory, its target's directory when it is a link, and a
-/// sibling `lib` of each.
-///
-/// ponytail: `../lib` stands in for the interpreter's real library list; read
-/// its ELF needs (or the interpreter's own prefix layout) if a runtime needs a
-/// library from anywhere else.
-fn interpreter_dirs(program: &Path) -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    let real = fs::canonicalize(program).unwrap_or_else(|_| program.to_owned());
-    for file in [program, real.as_path()] {
-        let Some(dir) = file.parent() else { continue };
-        for candidate in [dir.to_owned(), dir.join("../lib")] {
-            let Ok(candidate) = fs::canonicalize(&candidate) else {
-                continue;
-            };
-            if !dirs.contains(&candidate) {
-                dirs.push(candidate);
-            }
-        }
+/// What the sandbox binds for a program, by where its real file is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ProgramBind {
+    /// Under the read-only system roots, which are bound already.
+    System,
+    /// Under the masked `/usr/local`: its directory and a sibling `lib`,
+    /// bound back.
+    UsrLocal(Vec<PathBuf>),
+    /// Under a masked secret path (`/etc/ssl/private`): never bound.
+    Refused,
+    /// Inside a runtime's own install tree (an NVM node version, a pyenv
+    /// version, a Homebrew keg): that tree, which holds the runtime and its
+    /// standard library and nothing of the user's.
+    Runtime(PathBuf),
+    /// Anywhere else: the file alone, never the directory around it. A static
+    /// binary runs; one needing libraries outside the system roots fails
+    /// visibly rather than exposing where it lives.
+    File(PathBuf),
+}
+
+/// The runtime install trees the sandbox knows, as path components that
+/// end at the tree's root: `.nvm/versions/node/<v>`, `.pyenv/versions/<v>`,
+/// `.linuxbrew/Cellar/<formula>/<v>`.
+const RUNTIME_TREES: [&[&str]; 3] = [
+    &[".nvm", "versions", "node", "*"],
+    &[".pyenv", "versions", "*"],
+    &[".linuxbrew", "Cellar", "*", "*"],
+];
+
+fn program_bind(real: &Path, system: &[String]) -> ProgramBind {
+    const USR_LOCAL: &str = "/usr/local";
+    if real.starts_with(USR_LOCAL) {
+        let dir = real.parent().map(Path::to_path_buf).unwrap_or_default();
+        let lib = fs::canonicalize(dir.join("../lib")).ok();
+        let dirs = std::iter::once(dir)
+            .chain(lib)
+            .filter(|d| d.starts_with(USR_LOCAL))
+            .collect();
+        return ProgramBind::UsrLocal(dirs);
     }
-    dirs
+    if MASKED.iter().any(|m| real.starts_with(m)) {
+        return ProgramBind::Refused;
+    }
+    if system.iter().any(|root| real.starts_with(root)) {
+        return ProgramBind::System;
+    }
+    runtime_tree(real).map_or_else(|| ProgramBind::File(real.to_owned()), ProgramBind::Runtime)
 }
 
-/// Where homes live, read from the host: `/home`, `/root`, every entry under
-/// `/home`, every home `/etc/passwd` names, and the gateway user's own. A
-/// read that fails refuses the preview rather than leaving a home unlisted.
-fn home_roots() -> Result<Vec<PathBuf>, Refusal> {
-    let listing = match fs::read_dir("/home") {
-        Ok(entries) => entries
-            .map(|e| e.map(|e| e.path()))
-            .collect::<std::io::Result<Vec<_>>>()
-            .map_err(|e| Refusal::Step(format!("listing /home ({e})")))?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(e) => return Err(Refusal::Step(format!("listing /home ({e})"))),
-    };
-    let passwd = fs::read_to_string("/etc/passwd")
-        .map_err(|e| Refusal::Step(format!("reading /etc/passwd ({e})")))?;
-    let own = crate::home_dir::home_dir();
-    Ok(home_roots_from(&passwd, listing, own)
-        .into_iter()
-        .map(|home| fs::canonicalize(&home).unwrap_or(home))
-        .collect())
-}
-
-/// A service account's home that is a system directory, or no real home at
-/// all (`/`, `/bin` for Debian's `sync`, `/usr/sbin`, `/var/...`,
-/// `/nonexistent`); counting it as a home would forbid binding `/bin`.
-fn is_system_placeholder(home: &Path) -> bool {
-    const SYSTEM: [&str; 12] = [
-        "/bin",
-        "/sbin",
-        "/usr",
-        "/lib",
-        "/lib32",
-        "/lib64",
-        "/etc",
-        "/var",
-        "/run",
-        "/proc",
-        "/dev",
-        "/nonexistent",
-    ];
-    home == Path::new("/") || SYSTEM.iter().any(|system| home.starts_with(system))
-}
-
-/// The home list from its inputs, so the rule is tested without the host.
-fn home_roots_from(passwd: &str, listing: Vec<PathBuf>, own: Option<PathBuf>) -> Vec<PathBuf> {
-    let mut homes = vec![PathBuf::from("/home"), PathBuf::from("/root")];
-    homes.extend(listing);
-    homes.extend(
-        passwd
-            .lines()
-            .filter_map(|line| line.split(':').nth(5))
-            .map(PathBuf::from)
-            .filter(|home| home.is_absolute() && !is_system_placeholder(home)),
-    );
-    homes.extend(own);
-    homes
-}
-
-/// The home that binding `dir` would expose: `dir` is `/`, a home, or an
-/// ancestor of one. An interpreter's own directory inside a home (an NVM
-/// `bin`) is fine; the home around it is not.
-fn covered_home<'a>(dir: &Path, homes: &'a [PathBuf]) -> Option<&'a Path> {
-    homes
-        .iter()
-        .map(PathBuf::as_path)
-        .find(|home| home.starts_with(dir))
+/// The root of the runtime tree `real` lies in, if it lies in one.
+fn runtime_tree(real: &Path) -> Option<PathBuf> {
+    let parts: Vec<_> = real.components().collect();
+    RUNTIME_TREES.iter().find_map(|tree| {
+        (0..parts.len()).find_map(|start| {
+            let window = parts.get(start..start + tree.len())?;
+            let matches = window
+                .iter()
+                .zip(tree.iter())
+                .all(|(part, want)| *want == "*" || part.as_os_str() == std::ffi::OsStr::new(want));
+            // The tree must hold the program, not be it.
+            (matches && parts.len() > start + tree.len())
+                .then(|| parts[..start + tree.len()].iter().collect())
+        })
+    })
 }
 
 /// `/lib`, `/lib64`, `/lib32`, `/libx32`, whichever exist.
@@ -542,63 +528,85 @@ mod tests {
         );
     }
 
+    fn system() -> Vec<String> {
+        ["/usr", "/bin", "/lib", "/lib64"]
+            .map(ToOwned::to_owned)
+            .into()
+    }
+
+    /// A program anywhere outside the system roots and the known runtime
+    /// trees binds as the file alone: a home around it is never bound,
+    /// whatever account owns it and wherever it lives.
     #[test]
-    fn a_directory_that_holds_a_home_is_never_bound() {
-        let homes = [PathBuf::from("/home"), PathBuf::from("/srv/users/ann")];
-        for dir in ["/", "/home", "/srv", "/srv/users", "/srv/users/ann"] {
-            assert!(covered_home(Path::new(dir), &homes).is_some(), "{dir}");
-        }
-        // Another user's home is a home too, once it is listed.
-        let with_alice = [PathBuf::from("/home"), PathBuf::from("/home/alice")];
-        assert!(covered_home(Path::new("/home/alice"), &with_alice).is_some());
-        // An interpreter directory inside a home, or beside one, is fine.
-        for dir in [
-            "/srv/users/ann/.nvm/versions/node/v22/bin",
-            "/usr/bin",
-            "/opt/node/bin",
+    fn a_program_outside_the_allowlist_binds_as_its_file_alone() {
+        for program in [
+            "/home/alice/server",
+            "/srv/users/alice/bin/server",
+            "/var/lib/ldap-user/tool",
+            "/opt/vendor/bin/mcp-server",
         ] {
-            assert!(covered_home(Path::new(dir), &homes).is_none(), "{dir}");
+            assert_eq!(
+                program_bind(Path::new(program), &system()),
+                ProgramBind::File(PathBuf::from(program)),
+                "{program}"
+            );
         }
     }
 
-    /// Every account's home counts, under `/home` or elsewhere; a system
-    /// placeholder home (Debian's `sync` has `/bin`) does not.
+    /// Only `/usr/local` is bound back; a program under a masked secret path
+    /// is refused rather than reopening it.
     #[test]
-    fn homes_come_from_the_listing_passwd_and_the_own_home() {
-        let passwd = "root:x:0:0:root:/root:/bin/bash\n\
-                      sync:x:4:65534:sync:/bin:/bin/sync\n\
-                      man:x:6:12:man:/var/cache/man:/usr/sbin/nologin\n\
-                      nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n\
-                      alice:x:1001:1001::/srv/users/alice:/bin/bash\n\
-                      odd:x:9:9::relative:/bin/sh\n";
-        let homes = home_roots_from(
-            passwd,
-            vec![PathBuf::from("/home/bob")],
-            Some(PathBuf::from("/opt/gateway-user")),
+    fn only_usr_local_is_bound_back() {
+        assert!(matches!(
+            program_bind(Path::new("/usr/local/bin/node"), &system()),
+            ProgramBind::UsrLocal(dirs) if dirs.first() == Some(&PathBuf::from("/usr/local/bin"))
+        ));
+        assert_eq!(
+            program_bind(Path::new("/etc/ssl/private/tool"), &system()),
+            ProgramBind::Refused
         );
-        for home in [
-            "/home",
-            "/root",
-            "/home/bob",
-            "/srv/users/alice",
-            "/opt/gateway-user",
-        ] {
-            assert!(homes.contains(&PathBuf::from(home)), "{home} missing");
-            assert!(covered_home(Path::new(home), &homes).is_some(), "{home}");
+    }
+
+    #[test]
+    fn a_system_program_binds_nothing_more() {
+        for program in ["/usr/bin/python3", "/bin/sh", "/lib/x86_64-linux-gnu/ld.so"] {
+            assert_eq!(
+                program_bind(Path::new(program), &system()),
+                ProgramBind::System
+            );
         }
-        for system in ["/bin", "/var/cache/man", "/nonexistent", "relative"] {
-            assert!(!homes.contains(&PathBuf::from(system)), "{system} counted");
+    }
+
+    /// A runtime binds its own install tree and nothing above it: the NVM
+    /// version, not `.nvm` or the home holding it.
+    #[test]
+    fn a_runtime_binds_its_own_tree_only() {
+        let cases = [
+            (
+                "/home/ann/.nvm/versions/node/v22.1.0/bin/node",
+                "/home/ann/.nvm/versions/node/v22.1.0",
+            ),
+            (
+                "/srv/u/bo/.pyenv/versions/3.12.4/bin/python3.12",
+                "/srv/u/bo/.pyenv/versions/3.12.4",
+            ),
+            (
+                "/home/linuxbrew/.linuxbrew/Cellar/python@3.12/3.12.4/bin/python3.12",
+                "/home/linuxbrew/.linuxbrew/Cellar/python@3.12/3.12.4",
+            ),
+        ];
+        for (program, tree) in cases {
+            assert_eq!(
+                program_bind(Path::new(program), &system()),
+                ProgramBind::Runtime(PathBuf::from(tree)),
+                "{program}"
+            );
         }
-        // The system directories still bind; an interpreter inside a home does.
-        for dir in [
-            "/bin",
-            "/usr/bin",
-            "/usr/local/bin",
-            "/srv/users/alice/.nvm/bin",
-        ] {
-            assert!(covered_home(Path::new(dir), &homes).is_none(), "{dir}");
-        }
-        assert!(covered_home(Path::new("/srv"), &homes).is_some());
+        // A path that only names the tree, with nothing inside it, is a file.
+        assert_eq!(
+            program_bind(Path::new("/home/ann/.nvm/versions/node/v22"), &system()),
+            ProgramBind::File(PathBuf::from("/home/ann/.nvm/versions/node/v22"))
+        );
     }
 
     #[test]
