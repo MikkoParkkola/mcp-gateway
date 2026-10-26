@@ -571,3 +571,33 @@ fn remove_names_the_comments_that_went_with_the_entry() {
         "{after}"
     );
 }
+
+/// A file the loader refuses: an unknown top-level key.
+const UNLOADABLE: &str = "backends: {}\nnot_a_gateway_key: 1\n";
+
+/// `list` and `get` only read, but a file that does not load must still be
+/// reported, never shown as an empty config.
+fn read_reports_the_load_error(args: &[&str]) {
+    let home = tempfile::tempdir().expect("home");
+    let path = home.path().join("gateway.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, UNLOADABLE).expect("write");
+    let mut args = args.to_vec();
+    args.extend(["--config", path.to_str().unwrap()]);
+    let output = run(home.path(), &args);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{args:?} succeeded:\n{stderr}");
+    assert!(
+        stderr.contains("Failed to load"),
+        "{args:?} must report the load error:\n{stderr}"
+    );
+}
+
+#[test]
+fn cli_list_reports_a_file_it_cannot_load() {
+    read_reports_the_load_error(&["list"]);
+}
+
+#[test]
+fn cli_get_reports_a_file_it_cannot_load() {
+    read_reports_the_load_error(&["get", "demo"]);
+}
