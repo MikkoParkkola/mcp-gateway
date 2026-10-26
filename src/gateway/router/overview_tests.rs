@@ -167,6 +167,24 @@ async fn o3_a_140_server_gateway_returns_a_bounded_body() {
     );
 }
 
+/// O3b: a name longer than the field cap is cut to 256 bytes, so one long
+/// name cannot grow the body past the computed ceiling.
+#[tokio::test]
+async fn o3b_a_long_server_name_is_clipped() {
+    let (state, _dir) = fixture(0, false).await;
+    let name = "n".repeat(1000);
+    let backend = Arc::new(Backend::new(
+        &name,
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    assert!(state.backends.register(backend), "register the long name");
+    let body = overview(&state).await;
+    let shown = body["servers"]["rows"][0]["name"].as_str().expect("a name");
+    assert_eq!(shown.len(), 256, "{body}");
+}
+
 /// O6: a section with no source on this line is absent, never a zero or an
 /// empty list, and no `degraded` list appears when nothing failed.
 #[tokio::test]

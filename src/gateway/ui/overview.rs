@@ -35,6 +35,23 @@ const ACTION_ROWS: usize = 5;
 const ACTION_SCAN_BYTES: u64 = 4 << 20;
 /// One read window of that scan.
 const ACTION_WINDOW_BYTES: u64 = 256 << 10;
+/// Longest text a field carries: names, subjects and audit fields are cut
+/// here, so the body is bounded in bytes as well as rows.
+const TEXT_BYTES: usize = 256;
+
+/// `text` cut to at most [`TEXT_BYTES`] bytes on a character boundary.
+fn clip(text: &str) -> String {
+    let mut end = text.len().min(TEXT_BYTES);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_owned()
+}
+
+/// An audit record's string field, clipped; JSON null when it is not a string.
+fn clip_field(value: &Value) -> Value {
+    value.as_str().map_or(Value::Null, |text| clip(text).into())
+}
 
 /// `GET /ui/api/overview`. Admin only: an authenticated non-admin gets 403
 /// here, and an unauthenticated caller never reaches it (401 upstream).
@@ -89,7 +106,7 @@ fn kpi_and_servers(state: &AppState) -> (Value, Value) {
         .iter()
         .map(|backend| {
             let status = backend.status();
-            (status.name, status.running, status.tools_cached)
+            (clip(&status.name), status.running, status.tools_cached)
         })
         .collect();
     rows.sort_by(|a, b| a.0.cmp(&b.0));
@@ -154,10 +171,10 @@ fn limit_rows(state: &AppState) -> Vec<Value> {
                 percent,
                 json!({
                     "kind": "limit_80",
-                    "subject": name.map_or_else(|| scope.to_owned(), |n| format!("{scope}:{n}")),
+                    "subject": clip(&name.map_or_else(|| scope.to_owned(), |n| format!("{scope}:{n}"))),
                     "detail": {
                         "scope": scope,
-                        "name": name,
+                        "name": name.map(clip),
                         "spent_usd": spent,
                         "limit_usd": limit,
                         "percent": percent,
@@ -191,8 +208,10 @@ fn limit_rows(_state: &AppState) -> Vec<Value> {
 
 /// The newest admin actions in the transparency log's live segment, read
 /// newest window first until [`ACTION_ROWS`] are found or
-/// [`ACTION_SCAN_BYTES`] are read. `complete` is false when the scan cap
-/// stopped it short; actions in rotated-out segments are not read.
+/// [`ACTION_SCAN_BYTES`] are read. `complete` is true only when the rows are
+/// the newest [`ACTION_ROWS`] there are: all five found, or the whole log
+/// read with no rotated-out segment behind it and no line skipped as too long
+/// to read. Otherwise older actions may exist that were not read.
 fn last_actions(path: &std::path::Path) -> io::Result<Value> {
     let mut end = match std::fs::metadata(path) {
         Ok(meta) => meta.len(),
@@ -200,12 +219,14 @@ fn last_actions(path: &std::path::Path) -> io::Result<Value> {
         Err(error) => return Err(error),
     };
     let mut scanned = 0u64;
+    let mut skipped = false;
     let mut rows = Vec::new();
     while end > 0 && rows.len() < ACTION_ROWS && scanned < ACTION_SCAN_BYTES {
         let (tail, spanned) = tail_window(path, end, ACTION_WINDOW_BYTES)?;
         scanned += spanned;
         let Tail::Lines { start, .. } = &tail else {
             // One line longer than a window: skip past it rather than loop.
+            skipped = true;
             end -= spanned;
             continue;
         };
@@ -217,17 +238,24 @@ fn last_actions(path: &std::path::Path) -> io::Result<Value> {
                 continue;
             };
             if entry["event"] == "admin_action" {
+                let who = &entry["who"];
                 rows.push(json!({
-                    "at": entry["timestamp"],
-                    "route": entry["route"],
-                    "method": entry["method"],
-                    "outcome": entry["outcome"],
-                    "who": entry["who"],
+                    "at": clip_field(&entry["timestamp"]),
+                    "route": clip_field(&entry["route"]),
+                    "method": clip_field(&entry["method"]),
+                    "outcome": clip_field(&entry["outcome"]),
+                    "who": {
+                        "authority": clip_field(&who["authority"]),
+                        "subject": clip_field(&who["subject"]),
+                        "account": clip_field(&who["account"]),
+                    },
                 }));
             }
         }
         end = *start;
     }
-    let complete = rows.len() == ACTION_ROWS || end == 0;
+    let rotated = !crate::security::transparency_log::segments::list_segments(path)
+        .is_ok_and(|sealed| sealed.is_empty());
+    let complete = rows.len() == ACTION_ROWS || (end == 0 && !skipped && !rotated);
     Ok(json!({ "rows": rows, "complete": complete }))
 }
