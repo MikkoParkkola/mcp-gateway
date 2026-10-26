@@ -252,6 +252,12 @@ fn resolve(program: &Path, path: Option<&OsStr>) -> Result<PathBuf, Refusal> {
         .ok_or_else(not_found)
 }
 
+/// Whether `path` and every link on its way to a file are `shown` inside the
+/// root. A stub until the alias rule lands: never.
+fn reachable_inside(_path: &Path, _shown: &dyn Fn(&Path) -> bool) -> bool {
+    false
+}
+
 /// What the sandbox binds for a program, by where its real file is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ProgramBind {
@@ -711,6 +717,37 @@ mod tests {
                 (Err(_), Err(_)) => {}
                 (a, b) => panic!("{name:?}: preview {a:?}, executor {b:?}"),
             }
+        }
+    }
+
+    /// An alias is exec'd as itself only when it and every link after it
+    /// stay where the root shows them.
+    #[test]
+    fn an_alias_is_kept_only_while_every_link_is_shown() {
+        let dir = scratch();
+        let root = fs::canonicalize(dir.path())
+            .expect("canonical scratch")
+            .join("root");
+        let out = root.with_file_name("out");
+        fs::create_dir_all(&root).expect("root");
+        fs::create_dir_all(&out).expect("out");
+        fs::write(root.join("real"), "").expect("real");
+        let link =
+            |at: &str, to: &str| std::os::unix::fs::symlink(to, root.join(at)).expect("link");
+        link("same-dir", "real");
+        link("chained", "same-dir");
+        link("dangling", "missing");
+        link("outside", "../out/hop");
+        std::os::unix::fs::symlink("../root/real", out.join("hop")).expect("hop");
+        let shown = |p: &Path| p.starts_with(&root);
+        for (name, kept) in [
+            ("real", true),
+            ("same-dir", true),
+            ("chained", true),
+            ("dangling", false),
+            ("outside", false),
+        ] {
+            assert_eq!(reachable_inside(&root.join(name), &shown), kept, "{name}");
         }
     }
 
