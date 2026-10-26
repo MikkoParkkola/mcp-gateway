@@ -199,6 +199,7 @@ pub(super) fn ndjson(
     manifest.insert("sha256".into(), hex::encode(Sha256::digest(&out)).into());
     manifest.insert("kid".into(), signer.kid().into());
     let signed = serde_json_canonicalizer::to_vec(&Value::Object(manifest.clone()))
+        // invariant: the manifest holds only strings, integers and objects of them, which RFC 8785 always canonicalises.
         .expect("a manifest of JSON values canonicalises");
     manifest.insert(
         "public_signature".into(),

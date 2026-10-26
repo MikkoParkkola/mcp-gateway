@@ -35,6 +35,7 @@ pub(super) fn decode(token: &str) -> Option<Cursor> {
 }
 
 fn mac(key: &[u8]) -> Hmac<Sha256> {
+    // invariant: HMAC-SHA256 takes a key of any length.
     <Hmac<Sha256> as KeyInit>::new_from_slice(key).expect("HMAC accepts any key length")
 }
 
@@ -43,6 +44,7 @@ fn encode_with(key: &[u8], cursor: &Cursor) -> String {
         v: 1,
         cursor: cursor.clone(),
     })
+    // invariant: a cursor is two optional pairs of integers and an optional string; serialising it cannot fail.
     .expect("a cursor serialises");
     let mut m = mac(key);
     m.update(&body);
