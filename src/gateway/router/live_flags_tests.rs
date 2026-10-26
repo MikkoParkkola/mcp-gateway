@@ -166,9 +166,32 @@ async fn f4_ssrf_protection_follows_a_reload() {
 
     reload(&fx, |c| c.security.ssrf_protection = true);
     let (_, body) = call().await;
+    // The direct route answers a refused target as absent (it never says
+    // why), so the reason is read from the same judgement, on the generation
+    // the reload published.
     assert!(
-        message(&body).contains(crate::security::ssrf::SSRF_BLOCKED),
-        "on after reload: not the SSRF refusal: {body}"
+        message(&body).contains("does not list a tool named `read`"),
+        "on after reload: not withheld: {body}"
+    );
+    let refusal = super::authorization::authorize_tool_target(
+        &fx.state,
+        &fx.state.live_config.generation(),
+        None,
+        None,
+        None,
+        crate::gateway::authz::ToolTarget {
+            server: "alpha",
+            tool: "read",
+            arguments: &json!({}),
+        },
+    )
+    .expect_err("on after reload: the target is admitted");
+    assert!(
+        refusal
+            .message
+            .contains(crate::security::ssrf::SSRF_BLOCKED),
+        "on after reload: refused, but not by SSRF: {}",
+        refusal.message
     );
     assert_eq!(
         calls.load(Ordering::SeqCst),
