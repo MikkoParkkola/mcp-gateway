@@ -82,6 +82,10 @@ impl TransparencyLogger {
     /// As [`Self::log_invocation_correlated`], and when an `extra` key is a
     /// chain, envelope or invocation field: attribution never overwrites what
     /// the record says about the call.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the record's parts, each owned by a different stage of the call"
+    )]
     pub(crate) fn log_invocation_attributed(
         &self,
         key: CorrelationKey<'_>,

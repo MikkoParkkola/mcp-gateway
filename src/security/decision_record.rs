@@ -37,6 +37,8 @@ pub(crate) enum DecisionKind {
     Syntax,
     NotRedecided,
     DefaultAllow,
+    /// A refusal whose check noted no kind: never `default_allow`.
+    Unrecorded,
 }
 
 /// What the tool's own annotations say the call could change. A claim by the
@@ -92,6 +94,24 @@ pub(crate) struct Decision {
     pub decided: Decided,
 }
 
+/// Whether the record being written is of a refused call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Refused {
+    Yes,
+    No,
+}
+
+impl Refused {
+    /// From the record's outcome: denied and invalid are refusals.
+    pub(crate) const fn of(outcome: crate::security::audit::AuditOutcome) -> Self {
+        use crate::security::audit::AuditOutcome;
+        match outcome {
+            AuditOutcome::Denied(_) | AuditOutcome::Invalid(_) => Self::Yes,
+            _ => Self::No,
+        }
+    }
+}
+
 /// Which check decided one call, as its gates noted it: the first refusal,
 /// else the earliest explicit allow.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -124,16 +144,30 @@ impl Noted {
     }
 
     /// The decision object for this call under the published config `live`.
+    ///
+    /// A refused call that noted no check records `unrecorded`, never an
+    /// allow; under test that is a failure, so a refusal site that forgot to
+    /// note its kind cannot ship silently.
     pub(crate) fn decision(
         &self,
         decided: Decided,
+        refused: Refused,
         live: Option<&crate::config_reload::LiveConfig>,
     ) -> Decision {
-        let (kind, rule_id) = self
-            .refusal
-            .clone()
-            .or_else(|| self.allow.clone())
-            .unwrap_or((DecisionKind::DefaultAllow, None));
+        let (kind, rule_id) = match (&self.refusal, refused) {
+            (Some(refusal), _) => refusal.clone(),
+            (None, Refused::No) => self
+                .allow
+                .clone()
+                .unwrap_or((DecisionKind::DefaultAllow, None)),
+            (None, Refused::Yes) => {
+                assert!(
+                    !cfg!(test),
+                    "a refused call noted no check (MIK-8914.API2A.7)"
+                );
+                (DecisionKind::Unrecorded, None)
+            }
+        };
         let applied = live.and_then(crate::config_reload::LiveConfig::applied_now);
         let config_revision = applied.as_ref().map(|a| a.revision.clone());
         let running_revision = live
@@ -180,6 +214,9 @@ pub(crate) fn rule_line(decision: &Decision) -> &'static str {
     match (decision.kind, decision.rule_id.is_some()) {
         (DecisionKind::DefaultAllow, _) => "allowed: no rule restricted this call",
         (DecisionKind::NotRedecided, _) => "not decided again for this call",
+        (DecisionKind::Unrecorded, _) => {
+            "refused; the check was not recorded by this gateway version"
+        }
         (_, true) => "decided by the rule named below",
         (_, false) => "rule not recorded for this check",
     }

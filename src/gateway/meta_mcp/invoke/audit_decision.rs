@@ -61,13 +61,25 @@ pub(crate) fn take_route_noted() -> crate::security::decision_record::Noted {
 impl DispatchNotes {
     /// The decision object for this call's record: a cache hit ran no gate,
     /// so it was not decided again.
-    pub(crate) fn decided(&self, meta: &MetaMcp) -> crate::security::decision_record::Decision {
+    pub(crate) fn decided(
+        &self,
+        meta: &MetaMcp,
+        outcome: crate::security::audit::AuditOutcome,
+    ) -> crate::security::decision_record::Decision {
         use crate::security::decision_record::{Decided, Noted};
         let live = meta.live_config();
         if self.cached {
-            Noted::not_redecided().decision(Decided::CacheHitNotRedecided, live.as_deref())
+            Noted::not_redecided().decision(
+                Decided::CacheHitNotRedecided,
+                crate::security::decision_record::Refused::No,
+                live.as_deref(),
+            )
         } else {
-            self.decision.decision(Decided::Fresh, live.as_deref())
+            self.decision.decision(
+                Decided::Fresh,
+                crate::security::decision_record::Refused::of(outcome),
+                live.as_deref(),
+            )
         }
     }
 }

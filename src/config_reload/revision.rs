@@ -117,25 +117,26 @@ impl AppliedInputs {
     /// Digest `raw` under `key`; the raw bytes are dropped here.
     pub(crate) fn digest(key: &[u8; 32], raw: RawInputs) -> Self {
         let d = |bytes: &[u8]| part_digest(key, bytes);
+        // Consumed field by field: each buffer drops as soon as it is digested.
         Self {
             gateway_yaml: d(&raw.gateway_yaml),
-            grants: raw.grants.as_deref().map(d),
+            grants: raw.grants.map(|grants| d(&grants)),
             env_files: raw
                 .env_files
-                .iter()
-                .map(|(path, bytes)| (path.clone(), bytes.as_deref().map(d)))
+                .into_iter()
+                .map(|(path, bytes)| (path, bytes.map(|b| d(&b))))
                 .collect(),
             capabilities: raw
                 .capabilities
-                .iter()
-                .map(|(path, bytes)| (path.clone(), d(bytes)))
+                .into_iter()
+                .map(|(path, bytes)| (path, d(&bytes)))
                 .collect(),
             consumed: raw
                 .consumed
-                .iter()
+                .into_iter()
                 .map(|c| ConsumedInput {
                     source: c.source,
-                    name: c.name.clone(),
+                    name: c.name,
                     value: d(&c.value),
                 })
                 .collect(),

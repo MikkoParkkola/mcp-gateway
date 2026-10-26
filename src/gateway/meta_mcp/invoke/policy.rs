@@ -122,7 +122,6 @@ impl MetaMcp {
         };
         let authorizer = caller.authorizer;
         // The admin-capability rule is refused and audited like the authorizer.
-        use crate::security::decision_record::DecisionKind;
         let refusal = authorizer
             .authorize(target)
             .map_err(|e| {
@@ -136,7 +135,10 @@ impl MetaMcp {
             .and_then(|()| {
                 self.admin_capability_rule(server, tool, caller.is_admin)
                     .inspect_err(|_| {
-                        super::audit::note_refused_by(DecisionKind::AdminCapability, None);
+                        super::audit::note_refused_by(
+                            crate::security::decision_record::DecisionKind::AdminCapability,
+                            None,
+                        );
                     })
             });
         if let Err(e) = refusal {
@@ -149,7 +151,12 @@ impl MetaMcp {
         // idempotency short-circuit both return below this point: a gate under
         // a cache read decides nothing on a hit.
         self.identity_grant_rule(server, tool, caller.scope(), Emit::Audit)
-            .inspect_err(|_| super::audit::note_refused_by(DecisionKind::Grant, None))
+            .inspect_err(|_| {
+                super::audit::note_refused_by(
+                    crate::security::decision_record::DecisionKind::Grant,
+                    None,
+                )
+            })
     }
 
     /// Validate the per-action attestation token presented at `boundary`

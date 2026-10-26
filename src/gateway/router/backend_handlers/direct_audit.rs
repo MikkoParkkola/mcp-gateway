@@ -331,7 +331,7 @@ pub(super) async fn record(
     let response_hash = body.get("result").is_some().then(|| sha256_of(body));
     // MIK-7116.MIN.1: what the gates saw, or the delivered value on a replay.
     let tenants = state.meta_mcp.request_tenants(&call.arguments);
-    let decision = notes.decided(&state.meta_mcp);
+    let decision = notes.decided(&state.meta_mcp, outcome);
     let attribution = notes.attribution(&state.meta_mcp, tenants, body.get("result"));
     // D2-f: the caller's W3C trace id, else a trace id; no session rung.
     let trace_id = crate::gateway::trace::current().unwrap_or_else(crate::gateway::trace::generate);

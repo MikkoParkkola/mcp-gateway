@@ -149,42 +149,7 @@ async fn guard_tool_call(
         tool: tool_name,
         arguments,
     };
-    let withheld_code = authorize_tool_target(
-        state,
-        auth.client,
-        auth.oauth_agent_identity,
-        auth.cert_identity,
-        target,
-    )
-    .err()
-    .map(|refusal| {
-        crate::gateway::meta_mcp::invoke::audit::note_refused_by(refusal.kind, None);
-        refusal.code
-    })
-    .or_else(|| {
-        state
-            .meta_mcp
-            .profile_refusal(backend_name, tool_name, session_id)
-            .map(|refusal| {
-                crate::gateway::meta_mcp::invoke::audit::note_refused_by(
-                    crate::security::decision_record::DecisionKind::RoutingProfile,
-                    None,
-                );
-                refusal.to_rpc_code()
-            })
-    });
-    // A name its description withholds is the gate's too, judged here before
-    // any credential (MIK-8356's caller verdict leaves it to the gate).
-    let withheld = withheld_code.is_some() || {
-        let blocked = backend.blocked_tool_refusal(None, tool_name).is_some();
-        if blocked {
-            crate::gateway::meta_mcp::invoke::audit::note_refused_by(
-                crate::security::decision_record::DecisionKind::DescriptorBlock,
-                None,
-            );
-        }
-        blocked
-    };
+    let (withheld_code, withheld) = withheld_verdict(state, auth, target, (backend, session_id));
     if let Some(code) = withheld_code {
         // The call's one record names it (MIK-8361).
         crate::gateway::meta_mcp::visible::memo::note_denial_code(backend_name, tool_name, code);
@@ -262,6 +227,51 @@ async fn guard_tool_call(
             .await
             .unwrap_or(key_check::absent_response(id, tool_name)),
     ))
+}
+
+/// Whether the caller may see this direct-route target: the refusal code of
+/// the authorizer or the routing profile, and whether a description block
+/// withholds it too. Each notes the check that decided it.
+fn withheld_verdict(
+    state: &AppState,
+    auth: BackendAuthContext<'_>,
+    target: ToolTarget<'_>,
+    (backend, session_id): (&crate::backend::Backend, Option<&str>),
+) -> (Option<i32>, bool) {
+    use crate::gateway::meta_mcp::invoke::audit::note_refused_by;
+    use crate::security::decision_record::DecisionKind;
+    let (backend_name, tool_name) = (target.server, target.tool);
+    let withheld_code = authorize_tool_target(
+        state,
+        auth.client,
+        auth.oauth_agent_identity,
+        auth.cert_identity,
+        target,
+    )
+    .err()
+    .map(|refusal| {
+        note_refused_by(refusal.kind, None);
+        refusal.code
+    })
+    .or_else(|| {
+        state
+            .meta_mcp
+            .profile_refusal(backend_name, tool_name, session_id)
+            .map(|refusal| {
+                note_refused_by(DecisionKind::RoutingProfile, None);
+                refusal.to_rpc_code()
+            })
+    });
+    // A name its description withholds is the gate's too, judged here before
+    // any credential (the caller verdict leaves it to the gate).
+    let withheld = withheld_code.is_some() || {
+        let blocked = backend.blocked_tool_refusal(None, tool_name).is_some();
+        if blocked {
+            note_refused_by(DecisionKind::DescriptorBlock, None);
+        }
+        blocked
+    };
+    (withheld_code, withheld)
 }
 
 /// What a direct-route call's token must grant (MIK-7570.ATTEST.1 part 3).

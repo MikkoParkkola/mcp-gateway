@@ -493,7 +493,7 @@ impl MetaMcp {
             return result;
         };
         let outcome = notes.outcome(outcome);
-        let decision = notes.decided(self);
+        let decision = notes.decided(self, outcome);
         // MIK-7116.MIN.1: the tool's own arguments, as the firewall walks them.
         let arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments(args);
         let tenants = self.request_tenants(arguments.as_ref().unwrap_or(&Value::Null));
@@ -531,7 +531,7 @@ impl MetaMcp {
     /// hash) and `attribution`. `Err` only when the write failed under
     /// [`AuditFailurePolicy::FailClosed`] (D1-f).
     #[allow(clippy::too_many_arguments)]
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "the record's parts, each owned by a different stage of the call"
     )]

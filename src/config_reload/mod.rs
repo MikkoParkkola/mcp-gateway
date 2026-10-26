@@ -316,17 +316,6 @@ impl LiveConfig {
         }
     }
 
-    /// The revision of the published config; `None` when it was published
-    /// without its inputs or no revision key is configured.
-    #[must_use]
-    pub(crate) fn revision(&self) -> Option<String> {
-        self.inner
-            .read()
-            .applied
-            .as_ref()
-            .map(|a| a.revision.clone())
-    }
-
     /// The revision this process applied at startup.
     #[must_use]
     pub(crate) fn running_revision(&self) -> Option<&str> {
@@ -394,17 +383,6 @@ impl LiveConfig {
     pub(crate) fn set_grants(&self, grants: Option<&[u8]>) {
         self.replace_part(|key, inputs| {
             inputs.grants = grants.map(|g| revision::part_digest(key, g));
-        });
-    }
-
-    /// The capability definitions the capability sink loaded, as
-    /// (configured directory joined with the relative path, bytes).
-    pub(crate) fn set_capabilities(&self, files: &[(String, Vec<u8>)]) {
-        self.replace_part(|key, inputs| {
-            inputs.capabilities = files
-                .iter()
-                .map(|(path, bytes)| (path.clone(), revision::part_digest(key, bytes)))
-                .collect();
         });
     }
 

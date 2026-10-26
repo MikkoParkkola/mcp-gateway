@@ -39,7 +39,7 @@ impl OverlayEnv<'_> {
 impl Config {
     /// What a resolving evaluation read: the file's bytes, each env file's
     /// parsed bytes, and every value it consumed from outside the files.
-    /// SecretRefs resolved lazily after load are not inputs of the load.
+    /// A `SecretRef` resolved lazily after load is not an input of the load.
     pub(super) fn raw_inputs(
         path: Option<&ConfigFile>,
         overlay: &EnvOverlay,

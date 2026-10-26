@@ -90,6 +90,7 @@ impl MetaMcp {
         // Answered past every gate: nothing decided it again.
         let decision = crate::security::decision_record::Noted::not_redecided().decision(
             crate::security::decision_record::Decided::Replayed,
+            crate::security::decision_record::Refused::No,
             self.live_config().as_deref(),
         );
         match self
