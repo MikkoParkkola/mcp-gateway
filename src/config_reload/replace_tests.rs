@@ -316,13 +316,8 @@ async fn unchanged_bytes_write_nothing_and_still_reload() {
 /// original staged, the journal `staged`.
 fn crashed_after_rename(path: &Path, bytes: &str) {
     use crate::config_persistence::journal;
-    let original = journal::stage_original(path, START.as_bytes()).expect("stage");
-    journal::begin(
-        path,
-        &original,
-        FileRevision::of(START.as_bytes()).as_str().to_owned(),
-    )
-    .expect("journal");
+    journal::stage_original(path, START.as_bytes()).expect("stage");
+    journal::begin(path, FileRevision::of(START.as_bytes()).as_str().to_owned()).expect("journal");
     write_owner_only(crate::identity_grants::journal::resolved(path), bytes).expect("rename");
 }
 
@@ -379,7 +374,7 @@ async fn a_journal_without_its_original_refuses_the_lock() {
     match lock_now(&path).await {
         Err(crate::config_persistence::lock::NotLocked::Failed(message)) => {
             assert!(
-                message.contains("copy the staged original over"),
+                message.contains("copy the staged original"),
                 "{message}"
             );
         }
@@ -415,4 +410,26 @@ async fn an_edit_recovers_a_stranded_unparseable_file_first() {
     assert!(on_disk.backends.contains_key("a") && on_disk.backends.contains_key("b"));
     assert!(running_has_b(&ctx));
     assert!(!crate::config_persistence::journal::exists(&path));
+}
+
+/// T9b: a staged original that does not match its journal's digest is never
+/// written back: the lock is refused and the file is left as it is.
+#[tokio::test]
+async fn a_tampered_original_is_never_written_back() {
+    let (_dir, path, _ctx) = setup();
+    crashed_after_rename(&path, NEXT);
+    std::fs::write(
+        crate::config_persistence::journal::original_path(&path),
+        "backends: {}\n",
+    )
+    .expect("tamper");
+
+    match lock_now(&path).await {
+        Err(crate::config_persistence::lock::NotLocked::Failed(message)) => {
+            assert!(message.contains("does not match its journal"), "{message}");
+        }
+        Err(other) => panic!("expected a refusal, got {other:?}"),
+        Ok(_) => panic!("a tampered original must refuse the lock"),
+    }
+    assert_eq!(read(&path), NEXT);
 }

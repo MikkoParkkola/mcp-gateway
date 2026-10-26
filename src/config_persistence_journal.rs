@@ -11,6 +11,9 @@
 //! journal it finds before reading the file: `staged` puts the original
 //! back, `all_renamed` keeps the new bytes. Either way the journal and the
 //! copy go, the journal first, so a crash during cleanup is recovered again.
+//!
+//! Every path is derived from the config itself, never read back from the
+//! journal: a journal can only name the file it sits beside.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -34,17 +37,17 @@ pub(crate) enum State {
     AllRenamed,
 }
 
-/// One replacement in flight.
+/// One replacement in flight, as written to disk. `target` and `original`
+/// are recorded for a person reading the file; recovery checks `target`
+/// against the config it was asked about and never uses either path.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct Journal {
     version: u32,
-    pub(crate) state: State,
-    /// The config file, resolved through a symlink.
-    pub(crate) target: PathBuf,
-    /// The private copy of the bytes the replacement overwrites.
-    pub(crate) original: PathBuf,
-    /// The SHA-256 of those bytes, checked after a rollback.
-    pub(crate) original_revision: String,
+    state: State,
+    target: PathBuf,
+    original: PathBuf,
+    /// The SHA-256 of the staged original, checked before it is written back.
+    original_revision: String,
 }
 
 /// What recovery did.
@@ -83,7 +86,7 @@ pub(crate) fn exists(config: &Path) -> bool {
     std::fs::symlink_metadata(journal_path(config)).is_ok()
 }
 
-/// Stage `bytes` (the file's current content) as the private original. Any
+/// Stage `bytes` (the file's current content) as the private original. A
 /// copy left by a crash before its journal existed is debris, removed first;
 /// the caller holds the config lock, so no other replacement owns it.
 #[cfg_attr(
@@ -93,23 +96,21 @@ pub(crate) fn exists(config: &Path) -> bool {
         reason = "called only by the byte writer, whose first caller lands next"
     )
 )]
-pub(crate) fn stage_original(config: &Path, bytes: &[u8]) -> std::io::Result<PathBuf> {
-    let path = original_path(config);
-    match std::fs::remove_file(&path) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e),
-    }
+pub(crate) fn stage_original(target: &Path, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    let path = original_path(target);
+    remove_if_present(&path)?;
     let mut file = super::create_new_private(&path)?;
     file.write_all(bytes)?;
     file.sync_all()?;
     drop(file);
-    sync_dir(&path)?;
+    sync_dir_of(&path)?;
     Ok(path)
 }
 
-/// Write the journal for a replacement of `config` in state `staged`,
-/// created exclusive so a second one can never overwrite the first.
+/// Publish the journal for a replacement of `target` in state `staged`. It is
+/// written whole to a scratch file first and then linked to its name, which
+/// refuses an existing journal: a crash never leaves half a journal, and a
+/// second replacement never overwrites the first's.
 #[cfg_attr(
     not(test),
     expect(
@@ -117,24 +118,25 @@ pub(crate) fn stage_original(config: &Path, bytes: &[u8]) -> std::io::Result<Pat
         reason = "called only by the byte writer, whose first caller lands next"
     )
 )]
-pub(crate) fn begin(
-    config: &Path,
-    original: &Path,
-    original_revision: String,
-) -> std::io::Result<()> {
+pub(crate) fn begin(target: &Path, original_revision: String) -> std::io::Result<()> {
     let journal = Journal {
         version: VERSION,
         state: State::Staged,
-        target: resolved(config),
-        original: original.to_path_buf(),
+        target: resolved(target),
+        original: original_path(target),
         original_revision,
     };
-    let path = journal_path(config);
-    let mut file = super::create_new_private(&path)?;
+    let path = journal_path(target);
+    let scratch = beside(&resolved(target), ".replace-journal.new");
+    remove_if_present(&scratch)?;
+    let mut file = super::create_new_private(&scratch)?;
     file.write_all(&serde_json::to_vec(&journal).map_err(std::io::Error::other)?)?;
     file.sync_all()?;
     drop(file);
-    sync_dir(&path)
+    let linked = std::fs::hard_link(&scratch, &path);
+    let _ = std::fs::remove_file(&scratch);
+    linked?;
+    sync_dir_of(&path)
 }
 
 /// Mark the journal `all_renamed`: the reload accepted the new bytes. Durable
@@ -146,87 +148,98 @@ pub(crate) fn begin(
         reason = "called only by the byte writer, whose first caller lands next"
     )
 )]
-pub(crate) fn mark_all_renamed(config: &Path) -> std::io::Result<()> {
-    let path = journal_path(config);
+pub(crate) fn mark_all_renamed(target: &Path) -> std::io::Result<()> {
+    let path = journal_path(target);
     let mut journal = read(&path)?;
     journal.state = State::AllRenamed;
     let bytes = serde_json::to_vec(&journal).map_err(std::io::Error::other)?;
     write_atomic(&path, &bytes, FileMode::Private, Symlink::Replace)?;
-    sync_dir(&path)
+    sync_dir_of(&path)
 }
 
 /// Remove the journal, durably, then the staged original. A crash between
-/// the two leaves only debris, which the next `stage_original` removes.
-pub(crate) fn finish(config: &Path) -> std::io::Result<()> {
-    let path = journal_path(config);
+/// the two leaves only debris, which the next recovery or staging removes.
+pub(crate) fn finish(target: &Path) -> std::io::Result<()> {
+    let path = journal_path(target);
     std::fs::remove_file(&path)?;
-    sync_dir(&path)?;
-    match std::fs::remove_file(original_path(config)) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
-        _ => Ok(()),
-    }
-}
-
-/// Put the staged original back over the target, owner-only as every
-/// gateway.yaml write is, and check it re-reads as the original.
-///
-/// The staged copy is read, never moved: a crash in the middle of this
-/// leaves it in place, and the journal still `staged`, for the next try.
-pub(crate) fn roll_back(journal: &Journal) -> Result<(), String> {
-    let bytes = std::fs::read(&journal.original).map_err(|e| {
-        format!(
-            "{}: its staged original {} cannot be read ({e}); copy the staged original over {}, then delete {}",
-            journal_path(&journal.target).display(),
-            journal.original.display(),
-            journal.target.display(),
-            journal_path(&journal.target).display(),
-        )
-    })?;
-    write_atomic(&journal.target, &bytes, FileMode::Private, Symlink::Follow)
-        .and_then(|()| sync_dir(&journal.target))
-        .map_err(|e| format!("restoring {} failed: {e}", journal.target.display()))?;
-    let back = std::fs::read(&journal.target)
-        .map_err(|e| format!("re-reading {} failed: {e}", journal.target.display()))?;
-    if crate::hashing::sha256_hex(&back) != journal.original_revision {
-        return Err(format!(
-            "{} does not read back as its staged original",
-            journal.target.display()
-        ));
-    }
-    Ok(())
+    sync_dir_of(&path)?;
+    remove_if_present(&original_path(target))
 }
 
 /// Recover a journal beside `config`, if there is one. The caller holds the
 /// config lock.
 ///
+/// The original is verified against its recorded digest before anything is
+/// written, and written over the config's own resolved path, owner-only as
+/// every gateway.yaml write is. It is read, never moved: a crash in the
+/// middle leaves it, and the journal, for the next try. Once the file is
+/// right, a failed cleanup is logged, not returned, so the caller still
+/// learns that the file changed.
+///
 /// # Errors
 ///
-/// A journal that cannot be acted on: unreadable, of an unknown version, or
-/// `staged` with its original gone. Nothing is changed, and the message says
-/// what to do by hand.
+/// A journal that cannot be acted on: unreadable, of an unknown version,
+/// naming another file, or `staged` with its original gone or not matching
+/// its digest. Nothing is changed, and the message says what to do by hand.
 pub(crate) fn recover(config: &Path) -> Result<Recovered, String> {
-    let path = journal_path(config);
+    let target = resolved(config);
+    let path = journal_path(&target);
+    let original = original_path(&target);
+    let manual = || {
+        format!(
+            "copy the staged original {} over {}, then delete {}",
+            original.display(),
+            target.display(),
+            path.display()
+        )
+    };
     let journal = match read(&path) {
         Ok(journal) => journal,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Recovered::Nothing),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // A staged copy with no journal is a crash before the journal
+            // existed: the file was never replaced.
+            let _ = remove_if_present(&original);
+            return Ok(Recovered::Nothing);
+        }
         Err(e) => {
             return Err(format!(
-                "{} cannot be read ({e}); copy {} over {}, then delete {}",
+                "{} cannot be read ({e}); {}",
                 path.display(),
-                original_path(config).display(),
-                resolved(config).display(),
-                path.display(),
+                manual()
             ));
         }
     };
+    if journal.target != target {
+        return Err(format!(
+            "{} names {}, not {}; {}",
+            path.display(),
+            journal.target.display(),
+            target.display(),
+            manual()
+        ));
+    }
     let recovered = match journal.state {
         State::Staged => {
-            roll_back(&journal)?;
+            let bytes = std::fs::read(&original).map_err(|e| {
+                format!("{} cannot be read ({e}); {}", original.display(), manual())
+            })?;
+            if crate::hashing::sha256_hex(&bytes) != journal.original_revision {
+                return Err(format!(
+                    "{} does not match its journal; {}",
+                    original.display(),
+                    manual()
+                ));
+            }
+            write_atomic(&target, &bytes, FileMode::Private, Symlink::Replace)
+                .and_then(|()| sync_dir_of(&target))
+                .map_err(|e| format!("restoring {} failed: {e}", target.display()))?;
             Recovered::RolledBack
         }
         State::AllRenamed => Recovered::KeptNew,
     };
-    finish(config).map_err(|e| format!("removing {} failed: {e}", path.display()))?;
+    if let Err(e) = finish(&target) {
+        tracing::warn!(error = %e, journal = %path.display(), "cleaning up a recovered replace journal failed; the next config write retries");
+    }
     Ok(recovered)
 }
 
@@ -242,20 +255,26 @@ fn read(path: &Path) -> std::io::Result<Journal> {
     Ok(journal)
 }
 
-/// fsync `path`'s directory, so a create, rename or remove in it is durable.
-#[cfg(unix)]
-fn sync_dir(path: &Path) -> std::io::Result<()> {
+fn remove_if_present(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
+}
+
+/// Flush `path`'s directory, so a create, rename or remove in it is durable;
+/// on Windows through the shared helper that opens the directory for it.
+fn sync_dir_of(path: &Path) -> std::io::Result<()> {
     let dir = path
         .parent()
         .filter(|d| !d.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    std::fs::File::open(dir)?.sync_all()
-}
-
-/// Windows: std offers no directory fsync, so a rename's durability is the
-/// rename's own, as for every other config write (`rename_with_retry`).
-#[cfg(not(unix))]
-#[allow(clippy::unnecessary_wraps, reason = "matches the unix signature")]
-fn sync_dir(_path: &Path) -> std::io::Result<()> {
-    Ok(())
+    #[cfg(windows)]
+    {
+        crate::private_fs::sync_dir(dir)
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::File::open(dir)?.sync_all()
+    }
 }
