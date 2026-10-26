@@ -82,13 +82,6 @@ pub mod key_server;
 pub mod kill_switch;
 #[doc(hidden)]
 pub mod kubernetes;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "its first callers are the budget enforcer and the UI counter store"
-    )
-)]
 pub(crate) mod local_day;
 #[cfg(feature = "metrics")]
 #[doc(hidden)]

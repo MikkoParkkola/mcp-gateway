@@ -13,8 +13,9 @@ use serde::{Deserialize, Serialize};
 
 // ── PersistedCosts ────────────────────────────────────────────────────────────
 
-/// Today's spend (UTC) as of `saved_at`, persisted so a restart keeps the
-/// daily budgets. Reloaded only on the same UTC day it was saved.
+/// Today's spend as of `saved_at`, persisted so a restart keeps the daily
+/// budgets. Reloaded only on the same day it was saved: a local day with
+/// `day_basis: "local"`, else a UTC day (ADR-026).
 #[cfg(feature = "cost-governance")]
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct PersistedCosts {
@@ -30,6 +31,12 @@ pub struct PersistedCosts {
     /// Spend of unbudgeted keys past the per-key day map's cap (MIK-8015).
     #[serde(default)]
     pub key_overflow_usd: f64,
+    /// `"local"` when `saved_at`'s day is the host's local day. Absent in a
+    /// snapshot saved before ADR-026, and in one saved while the UTC day such
+    /// a snapshot restored is still open: both count UTC days. Any other
+    /// value also counts a UTC day, with a warning, so its spend is kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub day_basis: Option<String>,
 }
 
 /// Spend for a single tool on the day of `saved_at`.
@@ -77,19 +84,26 @@ pub(crate) struct EnforcerSaveSnapshot {
     pub(crate) tool_overflow_usd: f64,
     /// Today's spend of unbudgeted keys past the per-key map's cap (USD).
     pub(crate) key_overflow_usd: f64,
+    /// Copied into `PersistedCosts.day_basis`.
+    pub(crate) day_basis: Option<String>,
 }
 
 #[cfg(feature = "cost-governance")]
 impl EnforcerSaveSnapshot {
     /// Split the save's persistable slice out of a UI snapshot taken at the
     /// save's own reading.
-    pub(crate) fn from_snapshot(snap: super::enforcer::EnforcerSnapshot, taken_at: u64) -> Self {
+    pub(crate) fn from_snapshot(
+        snap: super::enforcer::EnforcerSnapshot,
+        taken_at: u64,
+        day_basis: Option<String>,
+    ) -> Self {
         Self {
             tool_daily: snap.tool_daily,
             key_daily: snap.key_daily,
             taken_at,
             tool_overflow_usd: snap.tool_overflow_usd,
             key_overflow_usd: snap.key_overflow_usd,
+            day_basis,
         }
     }
 }
