@@ -250,10 +250,13 @@ fn poll_blocking(
         if let Some(say) = on_wait.take() {
             say(lock);
         }
-        if Instant::now() >= deadline {
+        // Never sleep past the deadline: a lock released after it is not
+        // taken late.
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
             return Err(NotLocked::Busy);
         }
-        std::thread::sleep(POLL);
+        std::thread::sleep(POLL.min(left));
     }
 }
 
