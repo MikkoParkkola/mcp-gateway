@@ -57,6 +57,9 @@ pub(crate) use fanout::CatalogueScan;
 #[cfg(feature = "webui")]
 pub(crate) use governance::Actor;
 pub(crate) use records::{ApiKeyRef, Credential, LiveBinding};
+// Owner-only directory creation and directory sync, shared with the secret
+// files store (ADR-028).
+pub(crate) use records::{create_private_dir, sync_dir};
 pub(crate) use rpc::Caller;
 pub(crate) use services::{LiveCredentials, Services};
 pub(crate) use types::CallbackFailure;
