@@ -65,13 +65,20 @@ impl Drop for Session {
 
 impl Session {
     async fn open(backend_url: &str) -> Self {
+        Self::open_with(backend_url, "").await
+    }
+
+    /// [`Self::open`] with `extra` appended to the gateway's config, `{DIR}`
+    /// in it standing for the session's own directory.
+    async fn open_with(backend_url: &str, extra: &str) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
+        let extra = extra.replace("{DIR}", &dir.path().display().to_string());
         let path = dir.path().join("gateway.yaml");
         let store = serde_json::to_string(&dir.path().join("tasks").display().to_string())
             .expect("a JSON string");
         let yaml = format!(
             "backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\n\
-             tasks:\n  store_dir: {store}\n"
+             tasks:\n  store_dir: {store}\n{extra}"
         );
         crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
         let config = Config::load(Some(&path)).expect("config loads");
@@ -202,4 +209,80 @@ async fn t2_stdio_tasks_get_answers_absent_once_the_listing_withholds_the_tool()
         twin.get("error"),
         "T2: a blocked stored read answers exactly as an absent name on stdio"
     );
+}
+
+/// A session whose gateway writes a transparency log in its own directory,
+/// and the log's path.
+async fn logged_session() -> (Session, std::path::PathBuf) {
+    let backend_url = spawn_backend().await;
+    let extra =
+        "security:\n  transparency_log:\n    enabled: true\n    path: \"{DIR}/audit.jsonl\"\n";
+    let session = Session::open_with(&backend_url, extra).await;
+    let log = session._dir.path().join("audit.jsonl");
+    (session, log)
+}
+
+/// The delivery records of `gateway_invoke` calls in the log at `path`.
+fn invoke_deliveries(path: &std::path::Path) -> Vec<Value> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|row| {
+            row["event"] == "response_delivery_attempt" && row["tool"] == "gateway_invoke"
+        })
+        .collect()
+}
+
+fn invoke(id: i64) -> Value {
+    json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {
+        "name": "gateway_invoke",
+        "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {}},
+    }})
+}
+
+/// The real serve loop opens one delivery's facts per message: a call
+/// through it records what the gateway did to the answer.
+#[tokio::test]
+async fn the_serve_loop_records_a_delivery_effect() {
+    let (mut session, log) = logged_session().await;
+    let answer = session.ask(&invoke(2), 2).await;
+    assert!(answer.get("error").is_none(), "premise: answered: {answer}");
+    let rows = invoke_deliveries(&log);
+    let [row] = rows.as_slice() else {
+        panic!("one delivery record: {rows:?}");
+    };
+    assert_eq!(row["response_effect"], "delivered", "{row}");
+}
+
+/// A batch item through the real serve loop gets its own delivery's facts.
+#[tokio::test]
+async fn a_batch_item_records_a_delivery_effect() {
+    let (mut session, log) = logged_session().await;
+    let batch = json!([invoke(3)]);
+    session
+        .client
+        .write_all(format!("{batch}\n").as_bytes())
+        .await
+        .expect("stdin");
+    let answer = loop {
+        let line = tokio::time::timeout(Duration::from_secs(10), session.lines.next_line())
+            .await
+            .expect("an answer within the bound")
+            .expect("stdout readable")
+            .expect("stdout open");
+        let frame: Value = serde_json::from_str(&line).expect("one JSON frame per line");
+        if frame.is_array() {
+            break frame;
+        }
+    };
+    assert!(
+        answer[0].get("error").is_none(),
+        "premise: answered: {answer}"
+    );
+    let rows = invoke_deliveries(&log);
+    let [row] = rows.as_slice() else {
+        panic!("one delivery record: {rows:?}");
+    };
+    assert_eq!(row["response_effect"], "delivered", "{row}");
 }
