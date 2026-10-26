@@ -392,6 +392,7 @@ async fn p10u_an_unminted_plan_refusal_keeps_its_nonce_spent() {
 
 /// The `trace_id`s of `log`'s invocation records, then of its delivery
 /// records, once nothing is in flight.
+#[cfg(feature = "firewall")]
 async fn invocation_and_delivery_traces(
     log: &crate::security::TransparencyLogger,
 ) -> (Vec<Value>, Vec<Value>) {
@@ -412,6 +413,7 @@ async fn invocation_and_delivery_traces(
 /// the dispatch: served from the idempotency cache (`cache`) or lifted from
 /// the stored answer. Each delivery names its own request's trace, so it
 /// joins that request's invocation record, not the first run's.
+#[cfg(feature = "firewall")]
 async fn replay_delivery_joins_its_own_invocation(cache: bool, key_name: &str) {
     use crate::gateway::router::route_matrix_driver_tests::response::temp_log;
     use std::sync::atomic::Ordering;
@@ -456,11 +458,13 @@ async fn replay_delivery_joins_its_own_invocation(cache: bool, key_name: &str) {
     assert_eq!(delivered, invoked, "each delivery joins its own invocation");
 }
 
+#[cfg(feature = "firewall")]
 #[tokio::test]
 async fn a_cached_replay_delivery_joins_its_own_invocation() {
     replay_delivery_joins_its_own_invocation(true, "trace-cache").await;
 }
 
+#[cfg(feature = "firewall")]
 #[tokio::test]
 async fn a_lifted_replay_delivery_joins_its_own_invocation() {
     replay_delivery_joins_its_own_invocation(false, "trace-lift").await;
