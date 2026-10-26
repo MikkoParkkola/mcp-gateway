@@ -4,7 +4,7 @@
 //! protocol extensions must be **recovered by production code**, not merely
 //! parseable in isolation.
 //!
-//! Written from `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md`
+//! Written from the cluster b capability and trace metadata test plan
 //! §EXT.1.c. That plan proposed both rows as exact deltas on the adoption
 //! counter, serialised against each other, on the stated assumption that
 //! "nothing else in the tree declares this extension with a valid settings

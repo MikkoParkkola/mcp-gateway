@@ -51,7 +51,6 @@ include = [
     "docs/design/RFC-0081-intelligent-tool-surfacing.md",
     "docs/design/surface-4.0.md",
     "docs/legal/dependency-licenses.tsv",
-    "CLAUDE.md",
     "homebrew/mcp-gateway.rb",
     "npm/package.json",
     ".github/workflows/release.yml",
@@ -86,20 +85,12 @@ include = [
     "docs/release/4.0.0-beta.3-notes.md",
     "docs/release/v4.0.0-supported-matrix.md",
     "docs/release/verify/2026-09-23-claude-code-2.1.280.md",
-    "docs/requirements/2026-09-09-nfr-sec3-key-rotation-test-plan.md",
     "docs/requirements/nfr-sec1-control-inventory.md",
-    "docs/requirements/RELEASE-4.0.0-conformance-matrix.md",
     "docs/requirements/RELEASE-4.0.0-criteria-status.md",
-    "docs/requirements/RELEASE-4.0.0-operator-decisions.md",
-    "docs/requirements/RELEASE-4.0.0-performance-contract.md",
-    "docs/requirements/RELEASE-4.0.0-performance-releaseline-2026-09-15.md",
-    "docs/requirements/RELEASE-4.0.0-performance.md",
     "docs/requirements/RELEASE-4.0.0-requirements.md",
-    "docs/requirements/RELEASE-4.0.0-scope-decisions-2026-09-06.md",
     "docs/requirements/RELEASE-4.0.0-scope-status.json",
     "docs/requirements/RELEASE-4.0.0-scope-tests.md",
     "docs/requirements/RELEASE-4.0.0-scope-update.md",
-    "docs/requirements/RELEASE-4.0.0-test-plan.md",
     "docs/requirements/RELEASE-4.0.0-workload-contract.md",
     "docs/requirements/workload-pins-observed.md",
     "docs/roadmap/trust-fabric.md",
@@ -188,6 +179,8 @@ uuid = { version = "1.23", features = ["v4", "fast-rng"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 # IANA zones for `schedule.tick` cron expressions (MIK-7720)
 chrono-tz = "0.10.4"
+# The host's IANA zone name, for local-day budgets; already in the tree via chrono
+iana-time-zone = "0.1.65"
 dashmap = "6.2"
 parking_lot = "0.12"
 bytes = "1.11.1"

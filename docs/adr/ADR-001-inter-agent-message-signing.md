@@ -78,7 +78,7 @@ Each `gateway_invoke` request accepts an optional `nonce` field:
 
 ```json
 {
-  "server": "hebb",
+  "server": "memory",
   "tool": "recall",
   "arguments": {"query": "..."},
   "nonce": "client-monotonic-1713225600-42"

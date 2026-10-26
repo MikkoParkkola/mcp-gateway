@@ -1924,6 +1924,7 @@ dependencies = [
  "hex",
  "hkdf",
  "hmac",
+ "iana-time-zone",
  "icu_normalizer",
  "indexmap",
  "jsonschema",
