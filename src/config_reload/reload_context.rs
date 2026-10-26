@@ -535,7 +535,7 @@ impl ReloadContext {
             // would serve a value the operator has already replaced.
             self.publish_overlay(overlay);
             // The same rotation changes what the config was built from.
-            self.live_config.set_inputs(inputs);
+            self.live_config.set_inputs(inputs, &env_restart_keys);
             // No difference from the published snapshot does not mean nothing is
             // outstanding: a restart-only edit was published on an earlier
             // reload and the running process still has not applied it.
@@ -642,7 +642,8 @@ impl ReloadContext {
 
         // Published together: a resolver that read the new config against the
         // old overlay would resolve an `env:` reference the reload just changed.
-        self.live_config.set_applied(new_config, inputs);
+        self.live_config
+            .set_applied(new_config, inputs, &env_restart_keys);
         self.publish_overlay(overlay);
         // Still under `lock_reload`, against the config just published.
         self.report_registered(&patch.registered_change(), &self.live_config.get());

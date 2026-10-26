@@ -43,15 +43,6 @@ pub(super) enum GrantsRead {
 }
 
 impl GrantsRead {
-    /// Publish this into `live`; `NotRead` changes nothing.
-    pub(super) fn publish(self, live: &crate::config_reload::LiveConfig) {
-        match self {
-            Self::NotRead => {}
-            Self::Served(bytes) => live.set_grants(Some(&bytes)),
-            Self::ServedNone => live.set_grants(None),
-        }
-    }
-
     /// Hand this to the startup inputs, for a session whose config is
     /// published later.
     pub(super) fn into_startup(self, env: &crate::config::LiveEnv) {

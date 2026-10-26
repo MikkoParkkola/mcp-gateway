@@ -80,7 +80,7 @@ fn the_published_revision_names_the_published_inputs() {
         gateway_yaml: b"server:\n  port: 1\n".to_vec(),
         ..RawInputs::default()
     };
-    live.set_applied(Config::default(), inputs.clone());
+    live.set_applied(Config::default(), inputs.clone(), &[]);
     let id_of = |raw: RawInputs| {
         config_revision(
             &revision_key(),
@@ -106,7 +106,7 @@ fn the_published_revision_names_the_published_inputs() {
 #[test]
 fn without_a_revision_key_no_revision_is_published() {
     let live = LiveConfig::new(Config::default());
-    live.set_applied(Config::default(), RawInputs::default());
+    live.set_applied(Config::default(), RawInputs::default(), &[]);
     assert_eq!(revision(&live), None);
 }
 
@@ -120,7 +120,7 @@ fn a_reload_keeps_the_grants_their_sink_published() {
         gateway_yaml: b"server:\n  port: 2\n".to_vec(),
         ..RawInputs::default()
     };
-    live.set_applied(Config::default(), reloaded.clone());
+    live.set_applied(Config::default(), reloaded.clone(), &[]);
     let expected = RawInputs {
         grants: Some(b"[]\n".to_vec()),
         ..reloaded
@@ -145,7 +145,7 @@ fn rotated_env_files_under_an_unchanged_config_get_a_new_revision() {
         .with_applied(env(b"K=1\n"));
     let before = revision(&live);
     assert_eq!(before.as_deref(), live.running_revision());
-    live.set_inputs(env(b"K=2\n"));
+    live.set_inputs(env(b"K=2\n"), &[]);
     assert_ne!(revision(&live), before);
     assert_eq!(
         live.running_revision(),
@@ -182,4 +182,67 @@ fn a_startup_without_captured_inputs_publishes_no_revision() {
     let record_key = crate::gateway::record_principal::test_record_key();
     let live = LiveConfig::new(Config::default()).with_startup_revision(&record_key, None);
     assert_eq!(revision(&live), None);
+}
+
+/// Grants served at startup go into the startup inputs before the live config
+/// is built, so the running revision names them and equals the published one
+/// (the HTTP start once published them after, leaving the two apart).
+#[test]
+fn startup_grants_are_in_the_running_revision() {
+    let record_key = crate::gateway::record_principal::test_record_key();
+    // One directory for both starts, so only the grants differ.
+    let dir = tempfile::tempdir().unwrap();
+    let env = env_file(dir.path(), "a.env", "GW_GRANTS=1\n");
+    let cfg = config_naming_env_files(dir.path(), &[env.to_str().unwrap()]);
+    let startup = |grants: Option<&[u8]>| {
+        let mut evaluated = startup_through(&cfg, &RecordingHome::new());
+        let live_env = evaluated.live_env();
+        live_env.set_startup_grants(grants.map(<[u8]>::to_vec));
+        let live = LiveConfig::new(Config::default())
+            .with_startup_revision(&record_key, live_env.take_startup_inputs());
+        let running = live.running_revision().map(str::to_owned);
+        (running, revision(&live))
+    };
+    let (with_grants, published) = startup(Some(b"grants: []\n"));
+    assert_eq!(
+        with_grants, published,
+        "running and published agree at startup"
+    );
+    let (without, _) = startup(None);
+    assert_ne!(
+        with_grants, without,
+        "the served grants are in the revision"
+    );
+}
+
+/// A startup environment value changed since start only takes effect on a
+/// restart: the published decision state says so while it is outstanding,
+/// under one name and never the variable's, and stops once it is not.
+#[test]
+fn an_outstanding_environment_change_is_pending_restart() {
+    let live = LiveConfig::new(Config::default())
+        .with_revision_key(revision_key())
+        .with_applied(RawInputs::default());
+    let pending = |live: &LiveConfig| {
+        live.applied_now()
+            .map(|a| a.pending_restart.clone())
+            .unwrap_or_default()
+    };
+    live.set_inputs(RawInputs::default(), &["GW_SECRET_NAME".to_owned()]);
+    assert_eq!(pending(&live), vec![crate::config_reload::ENV_RESTART]);
+    live.set_applied(
+        Config::default(),
+        RawInputs::default(),
+        &["GW_SECRET_NAME".to_owned()],
+    );
+    assert_eq!(
+        pending(&live),
+        vec![crate::config_reload::ENV_RESTART],
+        "named once, not twice"
+    );
+    live.set_inputs(RawInputs::default(), &[]);
+    assert!(
+        pending(&live).is_empty(),
+        "cleared once nothing is outstanding"
+    );
 }

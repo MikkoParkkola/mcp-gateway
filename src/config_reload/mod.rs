@@ -358,16 +358,18 @@ impl LiveConfig {
 
     /// Atomically replace the current config with one built from `raw`; the
     /// raw bytes are reduced to digests here and dropped.
-    pub(crate) fn set_applied(&self, config: Config, raw: RawInputs) {
+    /// `env_restart` names the startup environment values changed since
+    /// start, which only a restart applies.
+    pub(crate) fn set_applied(&self, config: Config, raw: RawInputs, env_restart: &[String]) {
         self.publish(config, |current, pending| {
             self.digest_over(raw, current)
-                .and_then(|inputs| self.applied(inputs, pending))
+                .and_then(|inputs| self.applied(inputs, with_env_restart(pending, env_restart)))
         });
     }
 
     /// The env files changed under an unchanged config file: same config,
     /// new inputs, new revision.
-    pub(crate) fn set_inputs(&self, raw: RawInputs) {
+    pub(crate) fn set_inputs(&self, raw: RawInputs, env_restart: &[String]) {
         let _gate = self.admission.write();
         let mut inner = self.inner.write();
         let current = inner.applied.as_deref();
@@ -375,6 +377,7 @@ impl LiveConfig {
             .map(|a| a.pending_restart.clone())
             .unwrap_or_default();
         let inputs = self.digest_over(raw, current);
+        let pending = with_env_restart(pending, env_restart);
         inner.applied = inputs.and_then(|i| self.applied(i, pending));
     }
 
@@ -610,6 +613,21 @@ pub(crate) use reload_warm_hook::{OnRegistered, RegisteredChange};
 mod watcher;
 mod write;
 use diff::pending_restart_fields;
+
+/// The `pending_restart` entry for startup environment values (env files,
+/// secret files, process overrides) changed since start: one name, never the
+/// variables themselves.
+const ENV_RESTART: &str = "environment";
+
+/// `pending` with [`ENV_RESTART`] present exactly while `env_restart` is not
+/// empty.
+fn with_env_restart(mut pending: Vec<&'static str>, env_restart: &[String]) -> Vec<&'static str> {
+    pending.retain(|field| *field != ENV_RESTART);
+    if !env_restart.is_empty() {
+        pending.push(ENV_RESTART);
+    }
+    pending
+}
 #[cfg(test)]
 use diff::tracked_sections;
 pub use diff::{ConfigPatch, compute_diff};
