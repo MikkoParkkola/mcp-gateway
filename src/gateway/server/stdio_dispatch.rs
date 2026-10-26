@@ -622,15 +622,18 @@ impl Gateway {
             // firewall, X14 (route-check-parity P3). A refusal here took no
             // key, lease or task, and gives back the nonce admitted above,
             // unless X14 spent a grant first.
-            let (stage, witness) = Self::stdio_route_stage(
-                meta_mcp,
-                &id,
-                (&tool_name, arguments.as_ref(), task_member.as_ref()),
-                &caller,
-                client,
-                witness,
-            )
-            .await;
+            // In a route decision scope, as on `/mcp`: a refusal here names
+            // the check that made it.
+            let (stage, witness) =
+                crate::gateway::meta_mcp::invoke::audit::with_route_scope(Self::stdio_route_stage(
+                    meta_mcp,
+                    &id,
+                    (&tool_name, arguments.as_ref(), task_member.as_ref()),
+                    &caller,
+                    client,
+                    witness,
+                ))
+                .await;
             match stage {
                 RouteStage::Answer(answer) => {
                     if let Some(witness) = witness {

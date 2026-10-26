@@ -60,6 +60,10 @@ fn take_nonces(
             Ok(nonce) => nonce,
             Err(e) => {
                 let message = crate::gateway::meta_mcp::signing::wire_error_message(&e);
+                crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+                    crate::security::decision_record::DecisionKind::Syntax,
+                    None,
+                );
                 return Err(build_http_error_response(
                     Some(id.clone()),
                     e.to_rpc_code(),
@@ -91,6 +95,10 @@ fn parse_direct_arguments(envelope: &mut Envelope, id: &RequestId) -> Result<(),
         Ok(std::borrow::Cow::Borrowed(_)) => return Ok(()),
         Ok(std::borrow::Cow::Owned(parsed)) => parsed,
         Err(e) => {
+            crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+                crate::security::decision_record::DecisionKind::Syntax,
+                None,
+            );
             return Err(build_http_error_response(
                 Some(id.clone()),
                 e.to_rpc_code(),
@@ -124,6 +132,10 @@ fn check_attestation(
         "direct_route",
     ) {
         let (code, message) = (e.to_rpc_code(), e.to_string());
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Attestation,
+            None,
+        );
         return Err(build_http_error_response(
             Some(id.clone()),
             code,
@@ -149,6 +161,10 @@ pub(super) fn preflight(
     // task. The owner-checked task arms serve `/mcp` only. Refused before
     // propagation, attestation and idempotency, so a refusal mints nothing.
     if super::is_task_method(&envelope.method, envelope.params.as_ref()) {
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Syntax,
+            None,
+        );
         return Err(build_http_error_response(
             Some(id.clone()),
             METHOD_NOT_FOUND,
@@ -165,6 +181,10 @@ pub(super) fn preflight(
     // would fake the replay protection a destructive call asked for.
     let retry = crate::protocol::mrtr::RetryFields::from_params(envelope.params.as_ref());
     if retry.is_malformed() {
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Syntax,
+            None,
+        );
         return Err(build_http_error_response(
             Some(id.clone()),
             INVALID_PARAMS,
@@ -490,6 +510,11 @@ pub(super) async fn propagate_identity(
         name,
         !propagation.headers.is_empty(),
     ) {
+        // Identity propagation's isolation: no kind names it yet.
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Unrecorded,
+            None,
+        );
         return Err(build_http_error_response(
             Some(id.clone()),
             e.to_rpc_code(),
