@@ -666,6 +666,17 @@ providers:
         assert!(result.is_none(), "Expected no error, got: {result:?}");
     }
 
+    /// A text with a `name:` key that does not deserialize as a capability
+    /// is refused: the parse error was computed and then discarded.
+    #[test]
+    fn validate_yaml_body_refuses_text_that_does_not_parse() {
+        let result = validate_yaml_body("name: kept\nproviders: 5\n");
+        assert!(
+            result.as_deref().is_some_and(|e| e.contains("parse error")),
+            "expected the parse error, got: {result:?}"
+        );
+    }
+
     #[test]
     fn validate_yaml_body_requires_name_key() {
         let yaml = "description: no name here\n";
