@@ -81,6 +81,11 @@ fn assert_refused(fetched: &Value) {
         "{fetched}"
     );
     std::assert_eq!(
+        fetched.pointer("/result/result/_meta/io.mcp-gateway~1reason"),
+        Some(&json!("surfaced_target_changed")),
+        "{fetched}"
+    );
+    std::assert_eq!(
         fetched.pointer("/result/result/content/0/text"),
         Some(&json!("surfaced target changed since the task was created")),
         "{fetched}"
@@ -186,8 +191,9 @@ fn asking() -> Answer {
 }
 
 /// L10c (N12): a task parked on alpha whose name moves to beta before the
-/// answer arrives: the resume refuses with the plain error, alpha is not
-/// called again and beta never.
+/// answer arrives: the resume settles as the worker's refusal does (completed,
+/// not executed, surfaced target changed), alpha is not called again and beta
+/// never.
 #[tokio::test]
 async fn l10c_a_parked_surfaced_task_moved_before_resume_is_refused() {
     let alpha = MockBackend::answering(asking());
@@ -196,13 +202,7 @@ async fn l10c_a_parked_surfaced_task_moved_before_resume_is_refused() {
         state.meta_mcp.resurface_for_test(TOOL, BETA);
     })
     .await;
-    std::assert!(is_terminal(&status_of(&fetched)), "{fetched}");
-    std::assert!(
-        fetched
-            .to_string()
-            .contains("surfaced target changed since the task was created"),
-        "{fetched}"
-    );
+    assert_refused(&fetched);
     std::assert_eq!((alpha.calls(), beta.calls()), (1, 0), "{fetched}");
 }
 

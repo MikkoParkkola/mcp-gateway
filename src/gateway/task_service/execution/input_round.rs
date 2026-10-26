@@ -18,7 +18,7 @@ use super::observe::{Acceptance, Handoff};
 use super::settlement::{
     DispatchSettlement, abandoned_input_round, classify_dispatch, interrupted_before_dispatch,
 };
-use super::worker::inspect_settled;
+use super::worker::{inspect_settled, settle_surfaced_refused};
 use super::{CommitStage, OwnedCallerContext, TaskCall, TaskExecutor};
 use crate::gateway::task_service::host::LiveHost;
 use crate::gateway::task_service::record::{CONTINUATION_DEADLINE_MARGIN_SECS, InputRound};
@@ -339,14 +339,10 @@ async fn dispatch(
     let authorizer = state.authorizer(owned.authorizer());
     let _key_hold = owned.hold_caller_key(state);
     let caller = owned.dispatch_context_retrying(state, &authorizer, retry);
-    // A resume runs on the server the task recorded, or not at
-    // all when a reload has moved or removed that surfaced name since. The pin
+    // `redeeming_dispatch` has checked the surfaced target holds. The pin
     // covers the readmission as well as the dispatch.
     let meta = state.meta_mcp();
     let recorded = call.surfaced_server.as_ref();
-    if !meta.surfaced_target_holds(&call.tool, recorded) {
-        return Some(crate::gateway::meta_mcp::surfaced_target_changed());
-    }
     meta.with_surfaced_pin(&call.tool, recorded, async {
         let (arguments, judged) = match state.readmit(call, &caller, owned.session_id()).await {
             Ok(readmitted) => readmitted,

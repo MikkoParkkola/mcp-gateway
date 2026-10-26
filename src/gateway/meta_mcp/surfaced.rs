@@ -209,16 +209,6 @@ impl MetaMcp {
     }
 }
 
-/// The plain answer for a surfaced task whose name a reload moved or removed
-/// after the task was created: no backend is called.
-pub(crate) fn surfaced_target_changed() -> crate::protocol::JsonRpcResponse {
-    crate::protocol::JsonRpcResponse::error(
-        None,
-        crate::error::rpc_codes::INTERNAL_ERROR,
-        "surfaced target changed since the task was created",
-    )
-}
-
 /// Apply a reloaded config's `surfaced_tools` (under
 /// `lock_reload`). The new list is validated as at startup; when the ordered
 /// `(tool, server)` list differs from the running one (a reorder changes every

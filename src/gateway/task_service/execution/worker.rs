@@ -595,8 +595,9 @@ async fn settle_descriptor_refused(
 }
 
 /// A surfaced task whose name a reload moved or removed since creation,
-/// settled before any backend is called.
-async fn settle_surfaced_refused(
+/// settled before any backend is called. A resume and a state-only round
+/// settle through here too, so every refusal reads the same.
+pub(super) async fn settle_surfaced_refused(
     executor: &TaskExecutor,
     principal: &str,
     id: &str,
