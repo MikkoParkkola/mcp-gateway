@@ -609,11 +609,27 @@ mod tests {
         );
     }
 
+    fn target(program: &str) -> Target {
+        Target {
+            program: PathBuf::from(program),
+            args: Vec::new(),
+        }
+    }
+
+    fn system_path() -> Option<OsString> {
+        std::env::var_os("PATH")
+    }
+
+    /// A scratch directory outside `/tmp`, which the plan refuses to bind.
+    fn scratch() -> tempfile::TempDir {
+        tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("scratch dir")
+    }
+
     #[test]
     fn a_relative_program_is_refused() {
         for program in ["./sh", "bin/sh", "../sh"] {
             assert!(
-                matches!(resolve(Path::new(program)), Err(Refusal::Step(s)) if s.contains("bare name")),
+                matches!(build_plan(&target(program), &[], system_path().as_deref()), Err(Refusal::Step(s)) if s.contains("bare name")),
                 "{program}"
             );
         }
@@ -621,12 +637,71 @@ mod tests {
 
     #[test]
     fn a_bare_name_resolves_to_an_absolute_path() {
-        let found = resolve(Path::new("sh")).expect("sh on PATH");
+        let plan = build_plan(&target("sh"), &[], system_path().as_deref()).expect("sh on PATH");
+        let found = Path::new(&plan.program);
         assert!(
             found.is_absolute() && found.is_file(),
             "{}",
             found.display()
         );
+    }
+
+    /// An alias whose real file is elsewhere (delta check 3): the drop execs
+    /// the real file, `argv[0]` is the name as asked for, bare or absolute,
+    /// and the run phase's PATH never names the alias's own directory, which
+    /// the sandbox does not show.
+    #[test]
+    fn a_symlinked_program_execs_its_real_file_under_its_name() {
+        let dir = scratch();
+        let sh = resolve_command("sh", system_path().as_deref(), None).expect("sh on PATH");
+        let real = fs::canonicalize(sh).expect("canonical sh");
+        let alias = dir.path().join("alias");
+        std::os::unix::fs::symlink(&real, &alias).expect("symlink");
+        let alias = alias.to_str().expect("UTF-8 scratch path").to_owned();
+        for (requested, path) in [
+            ("alias", Some(dir.path().as_os_str())),
+            (alias.as_str(), system_path().as_deref()),
+        ] {
+            let plan = build_plan(&target(requested), &[], path).expect("plan");
+            assert_eq!(Path::new(&plan.program), real, "{requested}");
+            assert_eq!(plan.target.first().map(String::as_str), Some(requested));
+            let run_path = &plan.env.iter().find(|(k, _)| k == "PATH").expect("PATH").1;
+            assert!(
+                !run_path.split(':').any(|d| Path::new(d) == dir.path()),
+                "{requested}: {run_path}"
+            );
+        }
+    }
+
+    /// A6: the preview and the capability executor take the same program
+    /// for every name, or refuse it alike. `a\b` is a file on the injected
+    /// PATH, which only a one-component check would accept.
+    #[test]
+    fn the_preview_resolves_as_the_executor_does() {
+        let dir = scratch();
+        fs::write(dir.path().join("a\\b"), "").expect("odd name");
+        let mut dirs = vec![dir.path().to_owned()];
+        dirs.extend(std::env::split_paths(&system_path().unwrap_or_default()));
+        let path = std::env::join_paths(dirs).expect("PATH");
+        for name in [
+            "sh",
+            "/bin/sh",
+            "./sh",
+            "bin/sh",
+            "a\\b",
+            "",
+            "no-such-tool-8905",
+        ] {
+            let preview =
+                build_plan(&target(name), &[], Some(&path)).map(|p| PathBuf::from(p.program));
+            let executor = resolve_command(name, Some(&path), None)
+                .map(|p| fs::canonicalize(p).expect("canonical"));
+            match (preview, executor) {
+                (Ok(a), Ok(b)) => assert_eq!(a, b, "{name}"),
+                (Err(_), Err(_)) => {}
+                (a, b) => panic!("{name:?}: preview {a:?}, executor {b:?}"),
+            }
+        }
     }
 
     /// The helper subcommands are recognised only as the first argument.

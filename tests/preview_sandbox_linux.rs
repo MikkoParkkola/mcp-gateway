@@ -127,6 +127,21 @@ async fn the_run_phase_starts_in_its_own_home() {
     assert_eq!(out.stdout, "/preview-home\n/preview-home\nwritable\n");
 }
 
+/// A program reached through an alias the sandbox does not show starts as its
+/// real file and keeps the name it was asked for as `$0`.
+#[tokio::test]
+async fn a_symlinked_program_runs_under_its_requested_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let alias = dir.path().join("alias-sh");
+    std::os::unix::fs::symlink(std::fs::canonicalize("/bin/sh").unwrap(), &alias).unwrap();
+    let alias = alias.to_str().unwrap();
+    let Some(out) = sandboxed(alias, &["-c", "echo \"$0\""]).await else {
+        return;
+    };
+    assert!(out.status.success(), "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{alias}\n"));
+}
+
 /// SBX.2: files outside the binds do not exist inside; the same files are
 /// readable outside (positive control).
 #[tokio::test]
