@@ -416,3 +416,15 @@ async fn a_refused_stdio_delivery_records_refused() {
     assert!(refused(&body), "premise: refused whole: {body}");
     assert_eq!(row["response_effect"], "refused", "{row}");
 }
+
+/// A progress notification carrying a credential is screened and withheld
+/// mid-call; the answer after it is another artifact, and its delivery
+/// records only its own scan: delivered, clean (A4).
+#[tokio::test]
+async fn a_screened_notification_leaves_the_answers_facts_alone() {
+    let leak = secret();
+    let (body, row) = recorded_delivery(Setup::Default, Part::Progress, leak.clone()).await;
+    assert!(!body.contains(&leak), "premise: withheld: {body}");
+    assert_eq!(row["response_effect"], "delivered", "{row}");
+    assert_eq!(row["response_findings"], json!([]), "{row}");
+}

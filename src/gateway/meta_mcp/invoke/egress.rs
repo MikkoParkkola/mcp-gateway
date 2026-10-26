@@ -387,7 +387,10 @@ impl crate::transport::notification_sink::NotificationScreen for NotificationEgr
             api_key_name: None,
             firewall: self.meta.firewall.as_deref(),
         };
-        self.meta.scan_notification(notification, &at) != EgressOutcome::Refused
+        // A notification is not the answer: its scan writes nothing into the
+        // delivery's facts (A4).
+        crate::gateway::delivery_facts::suspended(|| self.meta.scan_notification(notification, &at))
+            != EgressOutcome::Refused
     }
 }
 
