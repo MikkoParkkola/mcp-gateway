@@ -99,9 +99,10 @@ pub(crate) fn is_keychain_name(name: &str) -> bool {
 ///
 /// # Errors
 ///
-/// [`Error::ConfigValidation`] naming `field` and the entry when the name is
-/// not a valid keychain name, or the entry is missing, empty, not UTF-8, or
-/// cannot be read.
+/// [`Error::ConfigValidation`] naming `field` alone when the name is not a
+/// valid keychain name (the text may be a mistyped secret, so it is never
+/// echoed), and naming `field` and the entry when the entry is missing,
+/// empty, not UTF-8, or cannot be read.
 pub(crate) fn read_keychain_ref(field: &str, name: &str, overlay: &EnvOverlay) -> Result<String> {
     use super::keychain::KeychainError;
     // Checked before any lookup: a name outside the grammar is a typo, and
