@@ -4,7 +4,7 @@
 //! gateway-core — MCP tool discovery and routing primitives.
 //!
 //! Core library providing tool registry, search, and execution
-//! primitives. Used by botnaut for direct (zero-IPC) MCP tool access.
+//! primitives. Used by embedding clients for direct (zero-IPC) MCP tool access.
 //!
 //! ## License
 //! PolyForm Noncommercial 1.0.0 — free for noncommercial use.

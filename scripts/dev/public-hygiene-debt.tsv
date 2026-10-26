@@ -2,42 +2,17 @@
 # repository, or text that is being reworded. One <path or directory/> TAB
 # <check id> TAB <most hits> per line. A line that no longer matches anything, or covers more hits than its count, fails the
 # hygiene check, so this list only shrinks; it is not a place to add to.
-CLAUDE.md	private-path	1
-docs/internal/	private-path	171
-docs/requirements/	private-path	16
-capabilities/automation/bus_pull.yaml	private-name	1
-capabilities/automation/bus_subscribe.yaml	private-name	1
-CHANGELOG.md	private-name	1
-crates/gateway-core/src/lib.rs	private-name	1
-docs/adr/ADR-001-inter-agent-message-signing.md	private-name	1
-docs/adr/ADR-005-control-plane-persistence.md	private-name	1
-docs/design/2026-09-06-gh452-session-delete-ownership.md	private-name	1
-docs/design/2026-09-06-personal-accounts.md	private-name	1
-docs/design/issue-462-config-preservation.md	private-name	1
-docs/design/RFC-0060-dual-generation-mcp.md	private-name	12
-docs/design/RFC-0061-protocol-2026-07-28-release-scope.md	private-name	6
-docs/internal/	agent-config	1
-docs/internal/	private-name	13
-docs/requirements/	private-name	17
 docs/runtime/descriptor_spec.md	private-name	6
 docs/runtime/substrate_mapping.md	private-name	3
-README.md	agent-config	1
 scripts/release/surface_docs.py	private-name	1
 src/backend/annotations.rs	private-name	2
 src/backend/tests/tool_cache.rs	private-name	1
-src/config/features/security.rs	private-name	1
 src/failsafe/circuit_breaker_tests.rs	private-name	2
-src/failsafe/circuit_breaker.rs	private-name	1
-src/gateway/route_check_matrix_tests/response.rs	agent-config	1
-src/gateway/server/warmstart.rs	private-name	1
-src/gateway/server/warmstart/tests.rs	private-name	8
-src/projection/schema.rs	private-name	1
+src/gateway/server/warmstart/tests.rs	private-name	5
 src/runtime/compiler_tests.rs	private-name	8
 src/runtime/compiler.rs	private-name	5
 src/runtime/descriptor_tests.rs	private-name	15
 src/runtime/descriptor.rs	private-name	13
 src/runtime/mod.rs	private-name	2
 src/security/firewall/memory_scanner.rs	private-name	1
-src/transport/http/tests/session_expiry.rs	private-name	1
-src/transport/http/transport_impl.rs	private-name	1
 tests/mik_5226_acs.rs	private-name	24

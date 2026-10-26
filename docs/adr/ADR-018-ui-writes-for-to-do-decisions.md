@@ -11,7 +11,7 @@ To do (frames 44, 44b, 44c, 44d) asks a person to accept a changed capability, a
 | # | Fact | Where |
 |---|---|---|
 | F1 | Control-plane grant and policy writes authorize the caller, then refuse with 409 before any write, "because dispatch never reads this store". | `src/gateway/ui/control_plane/mutations.rs:301-325` |
-| F2 | Enforced grants live in the identity-grants file; the CLI changes them only by rewriting that file (upsert, revoke). | `src/commands/identity.rs:134`, `:190`; `docs/design/2026-09-28-grant-change-journal.md` P1 |
+| F2 | Enforced grants live in the identity-grants file; the CLI changes them only by rewriting that file (upsert, revoke). | `src/commands/identity.rs:134`, `:190`; the grant change journal design P1 |
 | F3 | The CLI journals each grant change beside the file; the gateway turns journal and file into governance records exactly once, every record with actor `unknown`. | `src/config_reload/grant_audit.rs:3-13` |
 | F4 | A running gateway applies a grant-file change on its next reload, under a grants reload lock. | design P3; `src/config_reload/env_poll.rs:244` |
 | F5 | A capability pin is a hash written into the file; the previous definition is not kept, so no diff can be shown. | `src/capability/hash.rs` (`rewrite_with_pin`); api-gaps.md F11 |
