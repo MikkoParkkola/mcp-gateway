@@ -40,7 +40,7 @@ fn the_sidecar_sits_next_to_the_config() {
     );
 }
 
-/// MIK-8132: a sidecar with an inherited ACL (copied in, or checked out
+/// A sidecar with an inherited ACL (copied in, or checked out
 /// by git) is refused with the repair to run, never with only the rule it
 /// broke.
 #[cfg(windows)]
@@ -62,7 +62,7 @@ fn a_shared_sidecar_is_refused_with_its_repair() {
     );
 }
 
-/// MIK-8153: a config named through a symlink and through its target is
+/// A config named through a symlink and through its target is
 /// one config, so both spellings meet one lock.
 #[cfg(unix)]
 #[test]
