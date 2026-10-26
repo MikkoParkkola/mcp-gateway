@@ -457,6 +457,7 @@ pub(super) fn scoped_auth_config(admin: bool) -> AuthConfig {
             denied_tools: None,
             admin,
             kind: crate::config::ApiKeyKind::Shared,
+            ..Default::default()
         }],
         public_paths: vec!["/health".to_string()],
         ..AuthConfig::default()

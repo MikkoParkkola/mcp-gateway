@@ -11,7 +11,7 @@ use governor::{Quota, RateLimiter};
 use tracing::warn;
 
 use super::{
-    AUTH_TARGET, AuthenticatedClient, NamedApiKey, QuotaPrincipal, ResolvedApiKey,
+    AUTH_TARGET, AuthenticatedClient, NamedApiKey, PreviousDigest, QuotaPrincipal, ResolvedApiKey,
     ResolvedAuthConfig, principal_of,
 };
 use crate::Result;
@@ -84,6 +84,12 @@ impl ResolvedAuthConfig {
             .iter()
             .map(|k| {
                 let digest = k.resolve_digest(overlay)?;
+                // A previous digest without its expiry is refused at load; never
+                // carried, so it can never match by omission.
+                let previous = match (k.resolve_previous_digest(overlay)?, k.previous_expires_at) {
+                    (Some(digest), Some(expires_at)) => Some(PreviousDigest { digest, expires_at }),
+                    _ => None,
+                };
                 Ok(ResolvedApiKey {
                     digest,
                     expires_at: k.expires_at,
@@ -95,6 +101,8 @@ impl ResolvedAuthConfig {
                     denied_tools: k.denied_tools.clone(),
                     admin: k.admin,
                     personal: k.kind == crate::config::ApiKeyKind::Personal,
+                    principal: k.principal_for(&digest),
+                    previous,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -173,6 +181,29 @@ impl ResolvedAuthConfig {
         &self,
         token: &str,
     ) -> Option<(AuthenticatedClient, Option<NamedApiKey>)> {
+        self.validate_token_judged(token, crate::config::api_key_expired_now)
+    }
+
+    /// [`Self::validate_token`] judged at `now`, the caller's reading of the
+    /// clock; reads no clock (MIK-8202).
+    #[must_use]
+    pub(crate) fn validate_token_at(
+        &self,
+        token: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Option<AuthenticatedClient> {
+        self.validate_token_judged(token, |at| crate::config::api_key_expired(at, now))
+            .map(|(client, _origin)| client)
+    }
+
+    /// The one matcher behind both clocks. `expired` judges an optional expiry
+    /// instant; the wall-clock caller passes `api_key_expired_now`, which
+    /// fails closed when the clock cannot be read.
+    fn validate_token_judged(
+        &self,
+        token: &str,
+        expired: impl Fn(Option<chrono::DateTime<chrono::Utc>>) -> bool,
+    ) -> Option<(AuthenticatedClient, Option<NamedApiKey>)> {
         use subtle::ConstantTimeEq;
 
         // Check bearer token first. Constant-time comparison prevents a timing
@@ -208,7 +239,7 @@ impl ResolvedAuthConfig {
             hit.or(eq.then_some(k))
         })?;
         // After the match: an expired key is never an authenticated caller.
-        if crate::config::api_key_expired_now(key.expires_at) {
+        if expired(key.expires_at) {
             warn!(target: AUTH_TARGET, key = %key.name, "expired API key");
             return None;
         }
@@ -366,4 +397,27 @@ fn client_state_key(client: &AuthenticatedClient) -> String {
         || format!("label:{}", client.name),
         |quota| quota.as_store_key().to_owned(),
     )
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only stand-in for the dummy digest a key with no previous secret
+    /// is compared against, so a test can aim it at a known token.
+    static DUMMY_DIGEST_OVERRIDE: std::cell::Cell<Option<[u8; 32]>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Runs `f` with the dummy digest set to `digest` on this thread, then
+/// restores it, so a test can prove the dummy is masked rather than merely
+/// improbable.
+#[cfg(test)]
+pub(super) fn with_dummy_digest<R>(digest: [u8; 32], f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<[u8; 32]>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            DUMMY_DIGEST_OVERRIDE.with(|cell| cell.set(self.0));
+        }
+    }
+    let _restore = Restore(DUMMY_DIGEST_OVERRIDE.with(|cell| cell.replace(Some(digest))));
+    f()
 }

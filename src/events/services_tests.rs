@@ -27,6 +27,7 @@ fn key(
         denied_tools: None,
         admin: false,
         kind: ApiKeyKind::Shared,
+        ..Default::default()
     }
 }
 

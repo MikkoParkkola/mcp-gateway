@@ -445,6 +445,7 @@ fn keyed(secret: &str, expires_at: chrono::DateTime<Utc>) -> crate::config::Conf
         denied_tools: None,
         admin: false,
         kind: crate::config::ApiKeyKind::Shared,
+        ..Default::default()
     }];
     config
 }

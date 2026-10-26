@@ -151,6 +151,7 @@ fn key(name: &str) -> ApiKeyConfig {
         denied_tools: None,
         admin: false,
         kind,
+        ..Default::default()
     }
 }
 

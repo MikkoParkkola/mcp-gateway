@@ -26,6 +26,29 @@ pub struct ResolvedApiKey {
     pub admin: bool,
     /// Configured `kind: personal`: one holder, so a per-caller identity.
     pub(super) personal: bool,
+    /// The key's principal, from the one derivation
+    /// (`ApiKeyConfig::principal_from`): stable across rotations (ADR-022).
+    pub(crate) principal: super::InternalPrincipal,
+    /// The digest before the last rotation and the end of its grace.
+    pub(crate) previous: Option<PreviousDigest>,
+}
+
+/// A rotated key's previous digest, accepted until `expires_at` (ADR-022).
+#[derive(Clone)]
+pub(crate) struct PreviousDigest {
+    /// sha256 of the previous key. The plaintext is never held (E4).
+    pub(crate) digest: [u8; 32],
+    /// The end of the grace: at and after it the previous digest is refused.
+    pub(crate) expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl std::fmt::Debug for PreviousDigest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreviousDigest")
+            .field("digest", &"<redacted>")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for ResolvedApiKey {
@@ -41,6 +64,9 @@ impl std::fmt::Debug for ResolvedApiKey {
             .field("denied_tools", &self.denied_tools)
             .field("admin", &self.admin)
             .field("personal", &self.personal)
+            // The principal is persisted as owner keys; out of logs like the digest.
+            .field("principal", &"<redacted>")
+            .field("previous", &self.previous)
             .finish_non_exhaustive()
     }
 }

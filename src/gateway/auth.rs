@@ -35,6 +35,7 @@ mod quota;
 pub use quota::QuotaPrincipal;
 #[path = "auth_api_key.rs"]
 mod api_key;
+pub(crate) use api_key::PreviousDigest;
 pub use api_key::ResolvedApiKey;
 #[path = "auth_dashboard.rs"]
 mod dashboard;
@@ -763,6 +764,10 @@ mod clock_tests;
 #[cfg(test)]
 #[path = "auth_client_state_tests.rs"]
 mod client_state_tests;
+
+#[cfg(test)]
+#[path = "auth_rotation_tests.rs"]
+mod rotation_tests;
 
 /// SIGNING.5 row 44: which nonce-quota authority a dashboard session carries.
 ///

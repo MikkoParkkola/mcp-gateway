@@ -62,7 +62,11 @@ impl ApiKeyKind {
 }
 
 /// API key configuration for multi-client access.
-#[derive(Clone, Serialize, Deserialize)]
+///
+/// `Default` is for struct literals in tests (`..Default::default()`); it adds
+/// no serde default. Every field already defaults on its own, and a key with
+/// no digest is refused by load validation, not by serde.
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct ApiKeyConfig {
     /// Legacy plaintext key. Parsed only so the load can refuse it by name;
     /// never written back.
@@ -102,6 +106,19 @@ pub struct ApiKeyConfig {
     /// Who holds the key; `shared` unless set.
     #[serde(default, skip_serializing_if = "ApiKeyKind::is_shared")]
     pub kind: ApiKeyKind,
+    /// The key's principal, 12 lowercase hex digits, written at its first
+    /// rotation so the key keeps owning its sessions, grants and tasks under a
+    /// new digest (ADR-022). Absent: derived from `key_sha256` as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
+    /// The digest the key had before its last rotation, in the forms
+    /// `key_sha256` takes. Accepted until `previous_expires_at`, never without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_key_sha256: Option<String>,
+    /// RFC 3339 end of the rotation's grace; past it the previous digest is
+    /// refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_expires_at: Option<DateTime<Utc>>,
 }
 
 // Manual `Debug` (CWE-532): a derived one printed the key. The digest is not a
@@ -121,6 +138,9 @@ impl std::fmt::Debug for ApiKeyConfig {
             .field("denied_tools", &self.denied_tools)
             .field("admin", &self.admin)
             .field("kind", &self.kind)
+            .field("principal", &redact(&self.principal))
+            .field("previous_key_sha256", &redact(&self.previous_key_sha256))
+            .field("previous_expires_at", &self.previous_expires_at)
             .finish()
     }
 }
@@ -143,6 +163,40 @@ impl ApiKeyConfig {
             .ok_or_else(|| Error::ConfigValidation(format!("{field} is missing")))?;
         let value = crate::config::secret_ref::SecretRef::parse(spec).resolve(&field, overlay)?;
         parse_api_key_digest(&value).ok_or_else(|| malformed(name, spec))
+    }
+
+    /// The digest before the last rotation, resolved by the same rule as
+    /// [`Self::resolve_digest`]; `None` when the key has none.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::resolve_digest`], naming `previous_key_sha256`.
+    pub fn resolve_previous_digest(&self, overlay: &EnvOverlay) -> Result<Option<[u8; 32]>> {
+        let Some(spec) = self.previous_key_sha256.as_deref() else {
+            return Ok(None);
+        };
+        let name = &self.name;
+        let field = format!("auth.api_keys['{name}'].previous_key_sha256");
+        let value = crate::config::secret_ref::SecretRef::parse(spec).resolve(&field, overlay)?;
+        parse_api_key_digest(&value)
+            .map(Some)
+            .ok_or_else(|| malformed_field(name, "previous_key_sha256", spec))
+    }
+
+    /// The one derivation of a configured key's principal (ADR-022): the
+    /// explicit `principal` when set, otherwise the first 48 bits of `digest`,
+    /// the key's current digest.
+    #[must_use]
+    pub(crate) fn principal_for(
+        &self,
+        digest: &[u8; 32],
+    ) -> crate::gateway::record_principal::InternalPrincipal {
+        match self.principal.as_deref() {
+            Some(principal) => {
+                crate::gateway::record_principal::InternalPrincipal::new(principal.to_owned())
+            }
+            None => crate::gateway::auth::principal_of_digest(digest),
+        }
     }
 
     /// True when `now` is at or past `expires_at`.
@@ -177,6 +231,12 @@ pub(crate) fn api_key_expired_now(expires_at: Option<DateTime<Utc>>) -> bool {
 }
 
 fn malformed(name: &str, spec: &str) -> Error {
+    malformed_field(name, "key_sha256", spec)
+}
+
+/// The refusal for a digest field whose value is not a digest, naming the
+/// field and the reference, never the value.
+fn malformed_field(name: &str, field: &str, spec: &str) -> Error {
     if spec.starts_with("file:") || spec.starts_with("keychain:") {
         let holder = if spec.starts_with("file:") {
             "the file"
@@ -184,19 +244,19 @@ fn malformed(name: &str, spec: &str) -> Error {
             "the entry"
         };
         return Error::ConfigValidation(format!(
-            "auth.api_keys['{name}'].key_sha256 references {spec}, whose content is not a \
+            "auth.api_keys['{name}'].{field} references {spec}, whose content is not a \
              sha256:<64 lowercase hex> digest; store the output of `mcp-gateway hash-key` in \
              {holder}, not the key itself"
         ));
     }
     match spec.strip_prefix("env:") {
         Some(var) => Error::ConfigValidation(format!(
-            "auth.api_keys['{name}'].key_sha256 references env:{var}, whose value is not a \
+            "auth.api_keys['{name}'].{field} references env:{var}, whose value is not a \
              sha256:<64 lowercase hex> digest; store the output of `mcp-gateway hash-key` in \
              {var}, not the key itself"
         )),
         None => Error::ConfigValidation(format!(
-            "auth.api_keys['{name}'].key_sha256 must be sha256: followed by 64 lowercase hex \
+            "auth.api_keys['{name}'].{field} must be sha256: followed by 64 lowercase hex \
              characters, the output of `mcp-gateway hash-key`"
         )),
     }

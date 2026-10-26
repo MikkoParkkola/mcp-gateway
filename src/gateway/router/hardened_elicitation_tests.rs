@@ -43,6 +43,7 @@ async fn gateway(posture: SecurityPosture) -> (Arc<AppState>, tempfile::TempDir)
                 denied_tools: None,
                 admin: true,
                 kind: ApiKeyKind::Personal,
+                ..Default::default()
             },
             ApiKeyConfig {
                 key: None,
@@ -55,6 +56,7 @@ async fn gateway(posture: SecurityPosture) -> (Arc<AppState>, tempfile::TempDir)
                 denied_tools: None,
                 admin: false,
                 kind: ApiKeyKind::Personal,
+                ..Default::default()
             },
         ],
         public_paths: vec!["/health".to_string()],

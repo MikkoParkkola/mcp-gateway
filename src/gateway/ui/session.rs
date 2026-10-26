@@ -317,6 +317,7 @@ mod mik_8659_dashboard_tests {
                 denied_tools: None,
                 admin: true,
                 kind: crate::config::ApiKeyKind::Shared,
+                ..Default::default()
             }],
             ..crate::config::AuthConfig::default()
         };

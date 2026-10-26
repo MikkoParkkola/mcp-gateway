@@ -649,6 +649,7 @@ mod mik_8659_caller_tests {
                 denied_tools: None,
                 admin,
                 kind: crate::config::ApiKeyKind::Shared,
+                ..Default::default()
             }],
             ..crate::config::AuthConfig::default()
         }

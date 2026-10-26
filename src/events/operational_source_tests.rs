@@ -33,6 +33,7 @@ fn key(name: &str, secret: &str, admin: bool) -> ApiKeyConfig {
         denied_tools: None,
         admin,
         kind: ApiKeyKind::Shared,
+        ..Default::default()
     }
 }
 
