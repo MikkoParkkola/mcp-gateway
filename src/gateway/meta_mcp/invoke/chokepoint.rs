@@ -324,15 +324,24 @@ impl MetaMcp {
         };
         let decision = authorizer.decide(target);
         let refusal = if decision.verdict.is_err() {
-            decision.emit(Emit::Audit).map_err(|e| Error::Forbidden {
-                code: e.code,
-                status: e.status.as_u16(),
-                message: e.message,
+            decision.emit(Emit::Audit).map_err(|e| {
+                super::audit::note_refusal(e.kind, None);
+                Error::Forbidden {
+                    code: e.code,
+                    status: e.status.as_u16(),
+                    message: e.message,
+                }
             })
         } else {
             // Allowed: the record, when this stage owns it, then the admin rule.
             let _allowed = decision.emit(on_allow);
             self.admin_capability_rule(server, tool, scope.is_admin)
+                .inspect_err(|_| {
+                    super::audit::note_refusal(
+                        crate::security::decision_record::DecisionKind::AdminCapability,
+                        None,
+                    );
+                })
         };
         if let Err(e) = refusal {
             let (transport, name) = (authorizer.transport(), authorizer.caller_name());
@@ -344,6 +353,7 @@ impl MetaMcp {
             .is_err()
         {
             // Re-run to write the refusal's own record, as the route would.
+            super::audit::note_refusal(crate::security::decision_record::DecisionKind::Grant, None);
             return self.identity_grant_rule(server, tool, scope, Emit::Audit);
         }
         Ok(())

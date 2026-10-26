@@ -108,6 +108,11 @@ impl Noted {
         noted
     }
 
+    /// Whether a gate refused.
+    pub(crate) const fn has_refusal(&self) -> bool {
+        self.refusal.is_some()
+    }
+
     /// The gate that refused; only the first one counts.
     pub(crate) fn refused(&mut self, kind: DecisionKind, rule_id: Option<String>) {
         self.refusal.get_or_insert((kind, rule_id));

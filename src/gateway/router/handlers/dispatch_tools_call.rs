@@ -315,6 +315,10 @@ pub(super) async fn tools_call(
                 );
             }
             if let Some((code, reason)) = verdict.request_refusal() {
+                crate::gateway::meta_mcp::invoke::audit::note_refusal(
+                    crate::security::decision_record::DecisionKind::Firewall,
+                    None,
+                );
                 // A content finding about a step names the definition: it
                 // answers as every other step refusal does (A3).
                 if index >= request_targets && verdict.refusal_words_content() {
