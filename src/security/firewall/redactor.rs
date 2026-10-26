@@ -30,6 +30,7 @@ use regex::{Regex, RegexSet};
 use serde_json::{Map, Value};
 
 use super::json_literal::{self, Literal, decoded, trimmed_content};
+use super::json_valid;
 use super::{Finding, FindingLocation, ScanType};
 use crate::security::Severity;
 use crate::truncate::{Budget, Suffix, truncate};
@@ -315,7 +316,7 @@ impl Redactor {
             return self.redact_large_json(text, exempt, findings);
         }
         // An object, an array or a string, as `Value` would read it.
-        if !json_literal::is_document(text) {
+        if json_valid::walkable(text) != Some(true) {
             return JsonText::NotJson;
         }
         self.redact_collected(text, exempt, findings)
