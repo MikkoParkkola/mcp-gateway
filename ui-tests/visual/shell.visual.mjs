@@ -35,6 +35,14 @@ const CASES = [
   // the dialog 80 px further right, given as the frame box's x.
   ['46-command-palette.png', 1440, 1000, 'dark', [
     ['palette input', 400, 120, 640, 50, 0.02, '', 480, 120]], 'palette:github'],
+  // Frame 32 exists at 1440 and 390 px, dark only. The shell's card adds two
+  // lines (the handoff route and the in-memory key note the shell ADR asks
+  // for), so it centres 21 px higher; the key form is compared, frame box
+  // shifted down by that much. The frame's logo mark is not drawn yet.
+  ['32-sign-in.png', 1440, 1000, 'dark', [
+    ['key form', 546, 446, 348, 135, 0.02, '', 546, 467]], 'signin'],
+  ['32-sign-in-390.png', 390, 800, 'dark', [
+    ['key form', 42, 346, 306, 135, 0.02, '', 42, 367]], 'signin'],
 ];
 
 test.describe('frames', () => {
@@ -48,14 +56,19 @@ test.describe('frames', () => {
       expect(FRAMES).toBeTruthy();
       await page.setViewportSize({ width, height });
       await page.emulateMedia({ colorScheme: scheme });
+      if (act === 'signin') {
+        await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: false, admin: false } } }));
+      }
       // The fixture pages give Overview its subtitle, as a real screen will.
       await withFixturePages(page);
       await page.goto('/ui/overview/status');
-      await page.waitForSelector('#content [data-rendered]');
+      await page.waitForSelector(act === 'signin' ? '#signin:not([hidden])' : '#content [data-rendered]');
       if (act?.startsWith('palette:')) {
         await page.keyboard.press('Control+KeyK');
         await page.keyboard.type(act.slice('palette:'.length));
       }
+      // Focus is state, not look: the frames draw the controls unfocused.
+      if (act === 'signin') await page.evaluate(() => document.activeElement?.blur());
       await page.evaluate(() => document.fonts.ready);
       const shot = (await page.screenshot()).toString('base64');
       const frame = readFileSync(join(FRAMES, file)).toString('base64');

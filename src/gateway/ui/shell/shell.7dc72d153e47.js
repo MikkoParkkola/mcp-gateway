@@ -105,6 +105,7 @@ export async function api(path, init = {}) {
   const headers = new Headers(init.headers);
   if (bearer) headers.set('Authorization', `Bearer ${bearer}`);
   const reply = await fetch(path, { credentials: 'same-origin', ...init, headers });
+  if (reply.status === 401) showSignIn();
   if (!reply.ok) throw new ApiError(reply.status, path);
   return reply.status === 204 ? null : reply.json();
 }
@@ -321,6 +322,7 @@ export function render() {
     .catch((err) => {
       if (seq !== renderSeq) return;
       const status = err instanceof ApiError ? err.status : 0;
+      if (status === 401) return; // the sign-in view is showing; it re-renders after sign-in
       content.replaceChildren(mark(state(status === 403 ? 'forbidden' : 'error')));
     });
 }
@@ -367,13 +369,71 @@ async function loadCounts() {
   drawNav(parse(location.pathname).page);
 }
 
+/** Read who is signed in; when auth is on and nobody is, ask for sign-in. */
 async function loadWho() {
   try {
     const { auth } = await api('/ui/api/status');
+    if (auth?.enabled && !auth.signed_in) {
+      showSignIn();
+      return false;
+    }
     document.querySelector('.top .who').textContent = auth?.signed_in ? (auth.admin ? 'Signed in · admin' : 'Signed in') : '';
+    return true;
   } catch {
-    // the page states report reachability; the label just stays empty
+    return false; // a 401 already shows sign-in; other failures show in the page states
   }
+}
+
+// ---------------------------------------------------------------- sign-in
+
+/**
+ * Show the sign-in view at the current address, so the same page and tab
+ * render after sign-in. A cookie session comes from the one-time link or
+ * the handoff code; a key typed here is held in this module only (never in
+ * storage, a cookie or the URL), so a reload asks for it again.
+ */
+function showSignIn() {
+  if (document.body.classList.contains('signed-out')) return;
+  closeMenu();
+  document.body.classList.add('signed-out');
+  document.getElementById('signin').hidden = false;
+  document.querySelector('.signin-host').textContent = location.host;
+  document.getElementById('signin-key').focus();
+}
+
+async function signIn(ev) {
+  ev.preventDefault();
+  const input = document.getElementById('signin-key');
+  const error = document.querySelector('.signin-error');
+  const key = input.value.trim();
+  error.hidden = true;
+  if (!key) {
+    error.textContent = 'Paste an API key, or use the sign-in link.';
+    error.hidden = false;
+    return;
+  }
+  bearer = key;
+  let ok = false;
+  try {
+    const { auth } = await api('/ui/api/status');
+    ok = Boolean(auth?.signed_in);
+  } catch {
+    ok = false;
+  }
+  if (!ok) {
+    bearer = null;
+    error.textContent = 'That key was not accepted.';
+    error.hidden = false;
+    input.select();
+    return;
+  }
+  input.value = '';
+  document.getElementById('signin').hidden = true;
+  document.body.classList.remove('signed-out');
+  render();
+  loadCounts();
+  loadWho();
+  document.getElementById('content').focus({ preventScroll: true });
 }
 
 /** The phone menu: the sidebar shown as a sheet under the top bar. */
@@ -422,6 +482,7 @@ function boot() {
     }
   });
   addEventListener('popstate', render);
+  document.getElementById('signin-form').addEventListener('submit', signIn);
   document.querySelector('a.skip').addEventListener('click', (ev) => {
     ev.preventDefault();
     document.getElementById('content').focus();
