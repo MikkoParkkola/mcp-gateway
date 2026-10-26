@@ -293,7 +293,10 @@ impl<K: Hash + Eq + Clone> Dimension<K> {
             swept = true;
         }
         if self.labels.len() < self.cap {
-            self.labels.entry(key).or_default().add(at, day, counts);
+            self.labels
+                .entry(key)
+                .or_insert_with(|| Series::admitted_at(at))
+                .add(at, day, counts);
         } else {
             self.overflow.add(at, day, counts);
         }

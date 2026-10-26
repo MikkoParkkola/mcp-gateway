@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Store rules (test plan T1-T11, T45-T54): buckets, rings, local
+//! Store rules (test plan T1-T11, T45-T55): buckets, rings, local
 //! days, caps, labels and classification, all on explicit times and zones.
 
 use chrono::TimeZone;
@@ -708,4 +708,17 @@ fn t54_a_ring_gives_its_buckets_oldest_first() {
     }
     let order: Vec<u64> = half.buckets().map(|(b, _)| b).collect();
     assert_eq!(order, vec![10, 20, 30, 40]);
+}
+
+#[test]
+fn t55_a_late_label_keeps_its_admission_across_a_restart() {
+    let (store, now) = swept_after_overflow();
+    store.record(&ok("key:a", "s", "late"), now + 10, &UTC);
+    let before = month(&store, Filter::Tool("s", "late"), now + 20);
+    let bytes = store.encode("4.0.0", now + 20);
+    let (back, _) = CounterStore::from_bytes(&bytes, now + 20, "4.0.0", &UTC).unwrap();
+    let after = month(&back, Filter::Tool("s", "late"), now + 20);
+    assert!(before.since > T0, "the fixture moved since");
+    assert_eq!(after.since, before.since, "the admission survived");
+    assert_eq!(after.points, before.points);
 }

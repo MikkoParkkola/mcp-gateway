@@ -87,9 +87,23 @@ impl<const W: u64> Ring<W> {
 pub(crate) struct Series {
     pub(crate) half: Ring<{ HALF_BUCKETS as u64 }>,
     pub(crate) day: Ring<{ DAYS as u64 }>,
+    /// The unix second a label took its slot; 0 for the global and overflow
+    /// series, and for a label held since before this was kept. A read
+    /// compares the overflow's calls against it, never the ring, which drops
+    /// its old buckets as it takes new ones.
+    #[serde(default)]
+    pub(crate) admitted: u64,
 }
 
 impl Series {
+    /// A label's series, admitted at unix second `at`.
+    pub(crate) fn admitted_at(at: u64) -> Self {
+        Self {
+            admitted: at,
+            ..Self::default()
+        }
+    }
+
     /// Add `counts` at unix second `at`, on local day `day` when the zone
     /// could place it.
     pub(crate) fn add(&mut self, at: u64, day: Option<u64>, counts: [u64; 5]) {

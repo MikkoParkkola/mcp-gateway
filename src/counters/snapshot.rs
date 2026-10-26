@@ -96,7 +96,7 @@ pub(super) fn encode(inner: &Inner, binary_version: &str, saved_at: u64) -> Vec<
 
 /// `series` with only the buckets a window ending at `now` holds.
 fn windowed<Tz: TimeZone>(series: &Series, now: u64, zone: &Tz) -> Series {
-    let mut kept = Series::default();
+    let mut kept = Series::admitted_at(series.admitted);
     let today = Some(super::day_key(day::local_day(zone, now).date));
     for (bucket, counts) in series.half.buckets() {
         kept.half.add(bucket, counts);
@@ -112,6 +112,8 @@ fn windowed<Tz: TimeZone>(series: &Series, now: u64, zone: &Tz) -> Series {
 }
 
 fn add_series(into: &mut Series, from: &Series) {
+    // Two labels that normalize to one: the earlier admission covers it.
+    into.admitted = into.admitted.min(from.admitted);
     for (bucket, counts) in from.half.buckets() {
         into.half.add(bucket, counts);
     }
@@ -136,7 +138,13 @@ fn restore_dim<K: Hash + Eq + Clone, Tz: TimeZone>(
         let normalized = key(&label);
         let series = windowed(&series, now, zone);
         if dim.labels.len() < cap || dim.labels.contains_key(&normalized) {
-            add_series(dim.labels.entry(normalized).or_default(), &series);
+            let admitted = series.admitted;
+            add_series(
+                dim.labels
+                    .entry(normalized)
+                    .or_insert_with(|| Series::admitted_at(admitted)),
+                &series,
+            );
         } else {
             add_series(&mut dim.overflow, &series);
             cut = true;
