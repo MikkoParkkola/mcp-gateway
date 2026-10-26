@@ -193,7 +193,7 @@ async fn test_capability_invalid_yaml_rejected_on_put() {
     // GIVEN: a temp dir holding the file the save replaces
     let tmp = TempDir::new().unwrap();
     let cap_dir = tmp.path().to_str().unwrap().to_string();
-    write_owner_only(&tmp.path().join("test-invalid.yaml"), VALID_YAML).unwrap();
+    write_owner_only(tmp.path().join("test-invalid.yaml"), VALID_YAML).unwrap();
 
     let (state, _store) = make_app_state(Some(&cap_dir), None).await;
     let router = create_router(state);

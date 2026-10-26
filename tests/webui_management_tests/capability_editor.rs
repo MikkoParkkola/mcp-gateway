@@ -529,7 +529,7 @@ async fn test_symlinked_capability_is_refused() {
 #[tokio::test]
 async fn test_symlinked_capability_directory_still_saves() {
     let real_dir = TempDir::new().unwrap();
-    write_owner_only(&real_dir.path().join("kept.yaml"), VALID_YAML).unwrap();
+    write_owner_only(real_dir.path().join("kept.yaml"), VALID_YAML).unwrap();
     let holder = TempDir::new().unwrap();
     let linked_dir = holder.path().join("caps");
     std::os::unix::fs::symlink(real_dir.path(), &linked_dir).unwrap();

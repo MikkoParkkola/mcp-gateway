@@ -42,7 +42,6 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "chain checkpoints; no secret, not a trust decision",
     ),
     ("src/cli/invoke.rs", "reads stdin, not a file"),
-    ("src/commands/cap.rs", "capability YAML pinning; public"),
     (
         "src/commands/config_export/mod.rs",
         "third-party MCP client config JSON edited to add the gateway entry; no gateway secret",
