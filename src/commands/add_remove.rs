@@ -14,8 +14,8 @@ use std::process::ExitCode;
 use mcp_gateway::{
     config::TransportConfig,
     gateway::ui::backend_ops::{
-        self, BackendUpdate, add_backend, get_backend, list_backends, parse_env_vars,
-        remove_backend, resolve_transport, update_backend, write_config,
+        BackendUpdate, add_backend, get_backend, list_backends, load_existing_or_default,
+        parse_env_vars, remove_backend, resolve_transport, update_backend, write_config,
     },
     registry::server_registry,
 };
@@ -68,7 +68,13 @@ pub async fn run_add_command(
     // credential is not generated here on purpose; minting one as a side effect
     // of adding a backend is a surprise. Saying so is not.
     let creating_config = !config.exists();
-    let mut gateway_config = backend_ops::load_config_or_default(config);
+    let mut gateway_config = match load_existing_or_default(config) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Error: Failed to load {}: {e}", config.display());
+            return ExitCode::FAILURE;
+        }
+    };
 
     // ── Insert backend ─────────────────────────────────────────────────────
     if let Err(msg) = add_backend(
@@ -133,7 +139,13 @@ fn report_env_status(required: &[&str], provided_env: &std::collections::HashMap
 
 /// Run `mcp-gateway remove`.
 pub fn run_remove_command(name: &str, config: &Path) -> ExitCode {
-    let mut gateway_config = backend_ops::load_config_or_default(config);
+    let mut gateway_config = match load_existing_or_default(config) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Error: Failed to load {}: {e}", config.display());
+            return ExitCode::FAILURE;
+        }
+    };
 
     if let Err(msg) = remove_backend(&mut gateway_config, name) {
         eprintln!("Error: {msg} (in {})", config.display());
@@ -153,7 +165,13 @@ pub fn run_remove_command(name: &str, config: &Path) -> ExitCode {
 
 /// Run `mcp-gateway list`.
 pub fn run_list_command(json: bool, config: &Path) -> ExitCode {
-    let gateway_config = backend_ops::load_config_or_default(config);
+    let gateway_config = match load_existing_or_default(config) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Error: Failed to load {}: {e}", config.display());
+            return ExitCode::FAILURE;
+        }
+    };
 
     if gateway_config.backends.is_empty() {
         if json {
@@ -191,7 +209,13 @@ pub fn run_list_command(json: bool, config: &Path) -> ExitCode {
 
 /// Run `mcp-gateway get`.
 pub fn run_get_command(name: &str, config: &Path) -> ExitCode {
-    let gateway_config = backend_ops::load_config_or_default(config);
+    let gateway_config = match load_existing_or_default(config) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Error: Failed to load {}: {e}", config.display());
+            return ExitCode::FAILURE;
+        }
+    };
 
     let info = match get_backend(&gateway_config, name) {
         Ok(i) => i,
@@ -251,7 +275,8 @@ pub fn run_get_command(name: &str, config: &Path) -> ExitCode {
 /// Will be called from HTTP handlers in Task 1.2.
 #[allow(dead_code)]
 pub fn run_update_backend(name: &str, update: BackendUpdate, config: &Path) -> Result<(), String> {
-    let mut gateway_config = backend_ops::load_config_or_default(config);
+    let mut gateway_config = load_existing_or_default(config)
+        .map_err(|e| format!("Failed to load {}: {e}", config.display()))?;
     update_backend(&mut gateway_config, name, update)?;
     write_config(config, &gateway_config)
 }
@@ -268,6 +293,54 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gateway.yaml");
         (dir, path)
+    }
+
+    // ── a file that does not load ────────────────────────────────────────────
+
+    /// A config holding one backend, then a line that does not parse.
+    fn unloadable_config(path: &std::path::Path) -> String {
+        let mut config = Config::default();
+        config.backends.insert(
+            "alpha".to_string(),
+            mcp_gateway::config::BackendConfig {
+                transport: TransportConfig::Http {
+                    http_url: "http://127.0.0.1:9/mcp".to_string(),
+                    streamable_http: false,
+                    protocol_version: None,
+                },
+                ..mcp_gateway::config::BackendConfig::default()
+            },
+        );
+        write_config(path, &config).unwrap();
+        let mut broken = std::fs::read_to_string(path).unwrap();
+        broken.push_str("\n: [this line does not parse\n");
+        std::fs::write(path, &broken).unwrap();
+        broken
+    }
+
+    /// Adding to a file that does not load must not start from the defaults:
+    /// writing them back would erase every backend the file held.
+    #[tokio::test]
+    async fn add_leaves_a_file_it_cannot_load_unchanged() {
+        let (_dir, path) = temp_config();
+        let broken = unloadable_config(&path);
+
+        let code = run_add_command("tavily", None, None, None, &[], &path).await;
+
+        assert_eq!(code, ExitCode::FAILURE, "add reported success");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), broken);
+    }
+
+    /// Removing from a file that does not load refuses and leaves it as it was.
+    #[test]
+    fn remove_leaves_a_file_it_cannot_load_unchanged() {
+        let (_dir, path) = temp_config();
+        let broken = unloadable_config(&path);
+
+        let code = run_remove_command("alpha", &path);
+
+        assert_eq!(code, ExitCode::FAILURE, "remove reported success");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), broken);
     }
 
     // ── add round-trip ────────────────────────────────────────────────────────
