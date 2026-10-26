@@ -25,6 +25,15 @@ impl Truncated {
     }
 }
 
+/// One cell. Only text is guarded: a number is written as a number, so a
+/// negative latency or cost still sums in a spreadsheet.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum Cell<'a> {
+    Text(&'a str),
+    Int(i64),
+    Float(f64),
+}
+
 /// Builds one CSV export, header first.
 pub(super) struct CsvWriter {
     out: String,
@@ -37,12 +46,13 @@ impl CsvWriter {
             out: String::new(),
             rows: 0,
         };
-        w.line(header);
+        let header: Vec<Cell<'_>> = header.iter().map(|h| Cell::Text(h)).collect();
+        w.line(&header);
         w
     }
 
     /// Append one data row.
-    pub(super) fn row(&mut self, cells: &[&str]) {
+    pub(super) fn row(&mut self, cells: &[Cell<'_>]) {
         self.line(cells);
         self.rows += 1;
     }
@@ -58,12 +68,16 @@ impl CsvWriter {
         self.out
     }
 
-    fn line(&mut self, cells: &[&str]) {
+    fn line(&mut self, cells: &[Cell<'_>]) {
         for (i, c) in cells.iter().enumerate() {
             if i > 0 {
                 self.out.push(',');
             }
-            push_cell(&mut self.out, c);
+            match *c {
+                Cell::Text(t) => push_cell(&mut self.out, t),
+                Cell::Int(n) => push_cell(&mut self.out, &n.to_string()),
+                Cell::Float(x) => push_cell(&mut self.out, &x.to_string()),
+            }
         }
         self.out.push_str("\r\n");
     }

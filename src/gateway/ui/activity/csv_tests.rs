@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
-use super::{CsvWriter, Truncated};
+use super::{Cell, CsvWriter, Truncated};
 
 /// Export one row with `server` and `tool` set to `value`.
 fn export(value: &str) -> String {
     let mut w = CsvWriter::new(&["counter", "server", "tool"]);
-    w.row(&["1", value, value]);
+    w.row(&[Cell::Int(1), Cell::Text(value), Cell::Text(value)]);
     w.finish(Truncated::None)
 }
 
@@ -29,7 +29,12 @@ fn formula_lead_characters_get_a_leading_quote_in_server_and_tool() {
 #[test]
 fn rfc4180_quoting_of_quotes_commas_and_newlines() {
     let mut w = CsvWriter::new(&["a", "b", "c", "d"]);
-    w.row(&["plain", "has,comma", "has \"quote\"", "two\nlines"]);
+    w.row(&[
+        Cell::Text("plain"),
+        Cell::Text("has,comma"),
+        Cell::Text("has \"quote\""),
+        Cell::Text("two\nlines"),
+    ]);
     let file = w.finish(Truncated::None);
     assert_eq!(
         file,
@@ -46,8 +51,8 @@ fn file_ends_with_row_count_and_truncation_state() {
         (Truncated::Scan, "scan"),
     ] {
         let mut w = CsvWriter::new(&["a"]);
-        w.row(&["1"]);
-        w.row(&["2"]);
+        w.row(&[Cell::Int(1)]);
+        w.row(&[Cell::Int(2)]);
         let file = w.finish(t);
         assert!(
             file.ends_with(&format!("\r\n#end rows=2 truncated={s}\r\n")),
@@ -60,4 +65,12 @@ fn file_ends_with_row_count_and_truncation_state() {
 fn a_lead_character_inside_a_cell_is_left_alone() {
     let file = export("a=b");
     assert_eq!(file.lines().nth(1), Some("1,a=b,a=b"));
+}
+
+#[test]
+fn numbers_are_never_guarded_and_text_always_is() {
+    let mut w = CsvWriter::new(&["latency_ms", "cost", "tool"]);
+    w.row(&[Cell::Int(-5), Cell::Float(-0.25), Cell::Text("-1+cmd")]);
+    let file = w.finish(Truncated::None);
+    assert_eq!(file.lines().nth(1), Some("-5,-0.25,'-1+cmd"));
 }
