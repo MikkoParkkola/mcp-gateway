@@ -48,6 +48,15 @@ impl Verdicts {
     pub(crate) fn withheld_names(&self) -> BTreeSet<String> {
         self.withheld.keys().cloned().collect()
     }
+
+    /// Each withheld name with the rule's findings against it.
+    #[cfg(feature = "webui")]
+    pub(crate) fn withheld_issues(&self) -> BTreeMap<String, Vec<String>> {
+        self.withheld
+            .iter()
+            .map(|(name, (_, issues))| (name.clone(), issues.clone()))
+            .collect()
+    }
 }
 
 /// Hex SHA-256 over exactly what the rule judges, each field prefixed by its

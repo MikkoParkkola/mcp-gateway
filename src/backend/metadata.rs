@@ -30,9 +30,14 @@ use crate::protocol::{Tool, ToolsListResult};
 // MIK-8014 PERF.12: the fresh-slot answer and completeness `tools_for_check` reads.
 #[path = "metadata_fresh_check.rs"]
 mod fresh_check;
+#[cfg(feature = "webui")]
+#[path = "metadata_preview.rs"]
+mod preview;
 // MIK-8393: the response cache's admission, read from the slot this file resolves.
 #[path = "metadata_read_only.rs"]
 mod read_only;
+#[cfg(feature = "webui")]
+pub(crate) use preview::{PreviewListing, list_tools_for_preview};
 // The resources, resource-template and prompts accessors.
 #[path = "metadata_catalogues.rs"]
 mod catalogues;

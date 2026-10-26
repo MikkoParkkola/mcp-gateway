@@ -71,6 +71,9 @@ owned_routes! {
     UI_EVENTS_HELD = "/ui/api/events/held",
     UI_IMPORT_PREVIEW = "/ui/api/import/openapi/preview",
     UI_IMPORT = "/ui/api/import/openapi",
+    /// Start-once preview of a server before it is added. Its own
+    /// prefix, so it can never shadow a backend name under `/ui/api/backends`.
+    UI_PREVIEWS = "/ui/api/previews",
     /// The bare prefix, which the catch-all does not match; claimed so it
     /// never reaches the main router's full-URI trace span.
     ACCOUNTS_ROOT = "/accounts/v1",
