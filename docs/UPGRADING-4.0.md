@@ -4771,6 +4771,7 @@ mounted. Derived items work out their value when unset. Removed items are refuse
 | `/ui/api/events/dead-letters` | hidden | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface; MIK-8697: a row names its subscription as `subscriptionAlias` (keyed) and `subscriptionId` is removed, and the `subscription` filter takes the alias or a stored id |  |
 | `/ui/api/events/held` | hidden | admin only, like the dead-letter listing; held webhook subscriptions per type (MIK-8057) |  |
 | `/ui/api/previews` | hidden | admin only; describe-then-confirm start-once preview of a server before it is added, nothing persisted |  |
+| `/ui/api/refusals` | hidden | admin-only read of what the gateway refused to apply and how to fix it; documented as the bundled UI's private API, not an integration surface |  |
 | `/ui/assets/{file}` | hidden | none: the UI's own files, not an integration surface |  |
 ### Library items
 
