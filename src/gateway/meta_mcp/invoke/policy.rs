@@ -242,7 +242,7 @@ impl MetaMcp {
     /// upstream chain outcome (inc3 D4), or the lift's already-shaped stored
     /// answer, delivered unchanged (MIK-8392 STORED.2 D8). The invocation
     /// runs under `trace_id`, which the caller keeps for the answer's
-    /// delivery record (MIK-8929).
+    /// delivery record.
     pub(in crate::gateway::meta_mcp) async fn invoke_tool_sourced(
         &self,
         args: &Value,

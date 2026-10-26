@@ -762,7 +762,7 @@ impl MetaMcp {
             )
             .await
         {
-            // The replay's delivery joins this record (MIK-8929).
+            // The replay's delivery joins this record.
             Ok(()) => replay.with_invocation_trace(trace_id.as_str().into()),
             Err(error) => replay.id.clone().map_or_else(
                 || JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string()),

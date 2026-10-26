@@ -555,7 +555,7 @@ async fn meta_mcp_dispatch(
     let caller = client
         .as_ref()
         .map_or("anonymous", |client| client.name.as_str());
-    // Taken before finalizing, which may replace the answer (MIK-8929).
+    // Taken before finalizing, which may replace the answer.
     let invocation_trace = response.invocation_trace.clone();
     let delivery = crate::gateway::meta_mcp::response_security::ResponseDeliveryContext {
         method,

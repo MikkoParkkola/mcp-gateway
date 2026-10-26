@@ -426,7 +426,7 @@ impl MetaMcp {
 
         // Only gateway_invoke can be chain-eligible; composites stay NotEligible.
         let (mut source, mut upstream) = (ChainSource::NotEligible, None);
-        // Only `gateway_invoke` answers for one invocation (MIK-8929).
+        // Only `gateway_invoke` answers for one invocation.
         let mut trace = None;
         let result = match MetaArm::parse(tool_name) {
             Some(MetaArm::Search) => self.code_mode_search(&arguments, session_id, caller).await,

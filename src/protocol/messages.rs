@@ -85,7 +85,7 @@ pub struct JsonRpcResponse {
     #[serde(skip)]
     pub(crate) chain_upstream: Option<std::sync::Arc<super::UpstreamChain>>,
     /// Server-owned: the trace of the invocation this response answers, so
-    /// its delivery record joins that invocation's record (MIK-8929). Never
+    /// its delivery record joins that invocation's record. Never
     /// on the wire, so no caller and no backend can set it.
     #[serde(skip)]
     pub(crate) invocation_trace: Option<std::sync::Arc<str>>,
@@ -201,7 +201,7 @@ impl JsonRpcResponse {
         response
     }
 
-    /// This response answers the invocation traced `trace` (MIK-8929).
+    /// This response answers the invocation traced `trace`.
     #[must_use]
     pub(crate) fn with_invocation_trace(mut self, trace: std::sync::Arc<str>) -> Self {
         self.invocation_trace = Some(trace);

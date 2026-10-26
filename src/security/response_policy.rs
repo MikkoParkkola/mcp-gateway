@@ -29,7 +29,7 @@ pub(crate) struct ResponseCorrelation<'a> {
     /// delivery record names it as the invocation record does.
     pub(crate) subject: Option<&'a crate::identity_grants::GrantSubject>,
     /// The trace of the invocation the delivered answer belongs to, so its
-    /// delivery record joins that invocation's record (MIK-8929). `None`
+    /// delivery record joins that invocation's record. `None`
     /// where no single invocation produced the answer (a notification, a
     /// plan) or the correlation only labels a scan.
     pub(crate) trace_id: Option<&'a str>,

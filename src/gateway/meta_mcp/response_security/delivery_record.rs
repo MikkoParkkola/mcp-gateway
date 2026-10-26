@@ -213,7 +213,7 @@ async fn append_delivery_attempt(
         who.authority = Some(grant.authority.clone());
         who.subject = Some(grant.subject.clone());
     }
-    // The invocation's own trace when one answered (MIK-8929); absent, the
+    // The invocation's own trace when one answered; absent, the
     // envelope's fallback traces the record as before.
     let envelope = AuditEnvelope {
         trace_id: correlation.trace_id.map(str::to_owned),

@@ -201,7 +201,7 @@ async fn audited_call_judged(
     ));
     let mut call = None;
     let mut reads = DirectReads::default();
-    // The invocation's trace, kept for its delivery record (MIK-8929).
+    // The invocation's trace, kept for its delivery record.
     let mut trace = None;
     let guard = super::super::helpers::read_guard(&state);
     // One memo spans the guard and the record, so a withheld call's one
