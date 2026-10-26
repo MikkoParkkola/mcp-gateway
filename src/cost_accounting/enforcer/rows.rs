@@ -23,8 +23,12 @@ pub(super) type Rows<'a> = (
 );
 
 /// Drop the unbudgeted rows of earlier days; budgeted rows always stay.
-pub(super) fn sweep_stale(map: &DashMap<String, DailyAccumulator>, limits: &HashMap<String, f64>) {
-    map.retain(|row, day| limits.contains_key(row) || day.is_current());
+pub(super) fn sweep_stale(
+    map: &DashMap<String, DailyAccumulator>,
+    limits: &HashMap<String, f64>,
+    today: Option<u64>,
+) {
+    map.retain(|row, acc| limits.contains_key(row) || acc.is_current_on(today));
 }
 
 /// Add `micro` to `name`'s entry and return that entry's running total. A
@@ -62,11 +66,13 @@ pub(super) fn add_capped(
         && let Some(today) = day
         && swept.fetch_max(today, Ordering::Relaxed) < today
     {
-        sweep_stale(map, limits);
+        sweep_stale(map, limits, day);
         own = unbudgeted() < MAX_UNBUDGETED_ROWS;
     }
     if own {
-        map.entry(name.to_string()).or_default().add_on(day, micro)
+        map.entry(name.to_string())
+            .or_insert_with(|| DailyAccumulator::on(day))
+            .add_on(day, micro)
     } else {
         overflow.add_on(day, micro)
     }
