@@ -604,7 +604,8 @@ async fn o4c_the_threshold_is_the_configured_notify_percent() {
     assert_eq!(rows(&at_59), 0, "59% is under a 60% Notify: {at_59}");
 }
 
-/// O4d: more needs-you rows than the cap keeps the cap and counts the rest.
+/// O4d: more needs-you rows than the cap keeps the most urgent ones, highest
+/// percent first, and counts the rest.
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn o4d_needs_you_folds_past_its_cap() {
@@ -620,12 +621,24 @@ async fn o4d_needs_you_folds_past_its_cap() {
     for tool in &tools {
         cfg.budgets.per_tool.insert(tool.clone(), 1.0);
     }
-    let spend: Vec<(&str, f64)> = tools.iter().map(|tool| (tool.as_str(), 0.9)).collect();
+    // Tool i spends 80% + i/2 %, so the two least urgent are tool-00 and
+    // tool-01, and they are the ones folded.
+    let spend: Vec<(&str, f64)> = tools
+        .iter()
+        .zip(0u32..)
+        .map(|(tool, i)| (tool.as_str(), 0.80 + f64::from(i) * 0.005))
+        .collect();
     let body = governed(cfg, &spend).await;
-    assert_eq!(
-        body["needs_you"]["rows"].as_array().map(Vec::len),
-        Some(NEEDS_YOU_ROWS),
-        "{body}"
-    );
+    let shown: Vec<&str> = body["needs_you"]["rows"]
+        .as_array()
+        .expect("needs-you rows")
+        .iter()
+        .map(|row| row["subject"].as_str().expect("a subject"))
+        .collect();
+    let want: Vec<String> = (2..NEEDS_YOU_ROWS + 2)
+        .rev()
+        .map(|i| format!("tool:tool-{i:02}"))
+        .collect();
+    assert_eq!(shown, want, "{body}");
     assert_eq!(body["needs_you"]["more"]["count"], 2, "{body}");
 }
