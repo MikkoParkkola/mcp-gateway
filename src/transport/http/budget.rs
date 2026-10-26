@@ -28,6 +28,8 @@ pub(crate) struct ByteBudget {
 }
 
 impl ByteBudget {
+    // The preview is its only caller outside tests.
+    #[cfg(any(test, feature = "webui"))]
     pub(crate) const fn new(per_response: usize, total: usize) -> Self {
         Self {
             per_response,
@@ -126,6 +128,7 @@ impl ByteBudget {
 
 /// `error` is a [`ByteBudget`] refusal, which a caller must report rather
 /// than read as a peer's silence.
+#[cfg(any(test, feature = "webui"))]
 pub(crate) fn is_budget_refusal(error: &Error) -> bool {
     let text = error.to_string();
     text.contains("over the preview's") || text.contains("preview is over its")

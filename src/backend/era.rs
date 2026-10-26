@@ -403,6 +403,7 @@ fn probe_cap() -> Duration {
 /// peer's era once, and finish startup with that verdict. The same sequence
 /// `Backend::start_entry` runs, so a modern stateless server that refuses
 /// `initialize` previews like a legacy one.
+#[cfg(feature = "webui")]
 pub(crate) async fn start_detached_http(
     transport: &Arc<crate::transport::HttpTransport>,
     name: &str,

@@ -68,8 +68,10 @@ pub(crate) use catalogue_verdict::CatalogueVerdict;
 pub(crate) use era::removed_method_refusal_message;
 // The web UI's start-once preview: a slotless HTTP start and a
 // listing that neither caches nor commits verdicts.
+#[cfg(feature = "webui")]
 pub(crate) use era::start_detached_http;
 pub(crate) use input_keys::Lens;
+#[cfg(feature = "webui")]
 pub(crate) use metadata::{PreviewListing, list_tools_for_preview};
 #[cfg(test)]
 pub(crate) use pool::PoolKey;

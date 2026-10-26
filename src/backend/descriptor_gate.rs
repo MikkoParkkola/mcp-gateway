@@ -50,6 +50,7 @@ impl Verdicts {
     }
 
     /// Each withheld name with the rule's findings against it.
+    #[cfg(feature = "webui")]
     pub(crate) fn withheld_issues(&self) -> BTreeMap<String, Vec<String>> {
         self.withheld
             .iter()

@@ -564,6 +564,7 @@ impl HttpTransport {
 
     /// Refuse any body past `per_response` bytes, and everything read past
     /// `total`, counted before parsing. Set once, before the first request.
+    #[cfg(feature = "webui")]
     pub(crate) fn set_body_budget(&self, per_response: usize, total: usize) {
         let _ = self
             .body_budget
@@ -590,6 +591,7 @@ impl Drop for HttpTransport {
 mod budget;
 mod cancel_guard;
 mod client;
+#[cfg(any(test, feature = "webui"))]
 pub(crate) use budget::is_budget_refusal;
 /// The guarded client, for the A2A transport (MIK-8063): the same redirect
 /// policy and pinned resolution as every HTTP backend.
