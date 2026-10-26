@@ -1,15 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! `env:` and `file:` secret references in the `accounts` block (C9). The
+//! `env:`, `file:` and `keychain:` secret references in the `accounts` block
+//! (C9, ADR-028). The
 //! grammar is `config::secret_ref`'s; this is the text-level view the accounts
 //! checks need, plus key resolution through [`SecretOverlay`].
 
 use super::{AccountsConfigError, SecretOverlay, decode_key};
 
-/// Whether `reference` is `env:` or `file:` rather than a literal secret.
-/// Text only; reads nothing.
+/// Whether `reference` is `env:`, `file:` or `keychain:` rather than a
+/// literal secret. Text only; reads nothing.
 pub(super) fn is_reference(reference: &str) -> bool {
-    reference.starts_with("env:") || reference.starts_with("file:")
+    crate::config::is_reference(reference)
 }
 
 /// Every `accounts.keys` entry is an `env:` or `file:` reference. Text only;
@@ -56,18 +57,22 @@ pub(super) fn resolve_key(
 
 /// A reference compared by identity for the structural alias check: an
 /// `env:` variable, or a `file:` path with symlinks and `.` resolved where the
-/// file exists (a Kubernetes mount reaches one file through `..data` links).
-/// Reads no secret.
+/// file exists (a Kubernetes mount reaches one file through `..data` links),
+/// or a keychain entry name. Reads no secret.
 #[derive(PartialEq, Eq)]
 pub(super) enum ReferenceKey {
     Env(String),
     File(std::path::PathBuf),
+    Keychain(String),
 }
 
 impl ReferenceKey {
     pub(super) fn of(spec: &str) -> Option<Self> {
         if let Some(variable) = spec.strip_prefix("env:") {
             return Some(Self::Env(variable.to_string()));
+        }
+        if let Some(name) = spec.strip_prefix("keychain:") {
+            return Some(Self::Keychain(name.to_string()));
         }
         let path = std::path::Path::new(spec.strip_prefix("file:")?);
         Some(Self::File(

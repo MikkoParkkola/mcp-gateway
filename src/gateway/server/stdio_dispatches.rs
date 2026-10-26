@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The stdio serve loop's spawned dispatches, by the request id each answers,
 //! so a `notifications/cancelled` can abort one (MIK-7272.LIFE.1, design D5 in
-//! `docs/design/2026-09-30-sub4-stdio-owner.md`).
+//! the sub4 stdio owner design).
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};

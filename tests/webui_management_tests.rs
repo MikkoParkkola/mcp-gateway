@@ -63,6 +63,8 @@ mod access_posture;
 mod backend_edit_comments;
 #[path = "webui_management_tests/backend_mutation.rs"]
 mod backend_mutation;
+#[path = "webui_management_tests/backend_preview.rs"]
+mod backend_preview;
 #[path = "webui_management_tests/capabilities.rs"]
 mod capabilities;
 #[path = "webui_management_tests/internal_routes.rs"]

@@ -325,7 +325,7 @@ fn error_message(response: &Value) -> Option<String> {
 /// case naming the expiry check is satisfied by the binding check refusing
 /// first. Discriminating them is DE-9a's to decide — one client sentence for
 /// seven causes, and what it costs a test
-/// (`docs/design/2026-08-30-mrtr-wiring.md:687`) — and it has an owner there.
+/// (the mrtr wiring design) — and it has an owner there.
 /// Recorded, not worked around: a substring hierarchy invented here would be a
 /// test asserting a vocabulary production never agreed to.
 fn assert_refused_by_the_continuation_guard(response: &Value, case: &str) {

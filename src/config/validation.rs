@@ -174,6 +174,15 @@ impl Config {
                     spec,
                 });
             }
+            // Listed while it is in the file, grace over or not: an expired
+            // previous secret must not become an adapter key either.
+            if let Some(spec) = api_key.previous_key_sha256.as_deref() {
+                credentials.push(GatewayCredential::ApiKeyPreviousDigest {
+                    index,
+                    name: api_key.name.as_str(),
+                    spec,
+                });
+            }
         }
         credentials
     }

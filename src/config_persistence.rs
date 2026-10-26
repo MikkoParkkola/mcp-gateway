@@ -14,26 +14,6 @@ use crate::fs_lock::ExclusiveFileLock;
 mod data_dir;
 pub use data_dir::gateway_data_dir;
 
-/// Load config tolerantly, returning defaults when the file is absent or unloadable.
-///
-/// New read-modify-write callers must use [`load_existing_or_default`] so a load
-/// failure cannot replace an operator's config with defaults. The reviewed
-/// production callers remaining here are CLI list/get, and legacy remove/update
-/// whose missing-backend guards reject the empty default before any write.
-/// See `docs/design/issue-462-config-preservation.md` for the caller inventory.
-/// Literal loading, per [`Config::load_literal`], preserves secret references.
-#[must_use]
-pub fn load_config_or_default(path: &Path) -> Config {
-    if path.exists() {
-        Config::load_literal(Some(path)).unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "Could not load config, using defaults");
-            Config::default()
-        })
-    } else {
-        Config::default()
-    }
-}
-
 /// Load config from `path`, returning `Config::default()` when the file is absent.
 ///
 /// Literal, per [`Config::load_literal`].

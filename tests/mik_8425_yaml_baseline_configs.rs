@@ -51,17 +51,11 @@ fn loaded(text: &str) -> String {
     }
 }
 
-/// The configs edited since recording. The replaced backend left the build with
-/// the MIK-8425 swap, so an edited config can no longer be re-recorded; exactly
-/// these rows are skipped, each printed by name: `examples/token-exchange-live.yaml`
-/// (#4150).
-const EDITED: usize = 1;
-
-/// Every shipped config extracts to the recorded `Config`, except exactly
-/// the `EDITED` ones.
+/// Every shipped config extracts to the recorded `Config`; an edited one is
+/// skipped only when `reviewed_skips.tsv` lists it.
 #[test]
 fn every_shipped_config_extracts_as_recorded() {
-    golden::assert_keyed_golden("configs.tsv", CONFIGS.len() - EDITED, reading);
+    golden::assert_keyed_golden("configs.tsv", reading);
 }
 
 /// Prints the golden for review; never part of a normal run.
@@ -78,7 +72,7 @@ fn record_configs_golden() {
 /// `Config`.
 #[test]
 fn every_shipped_config_loads_as_recorded() {
-    golden::assert_keyed_golden("configs_loaded.tsv", CONFIGS.len() - EDITED, loaded);
+    golden::assert_keyed_golden("configs_loaded.tsv", loaded);
 }
 
 /// Prints the loaded golden for review; never part of a normal run.

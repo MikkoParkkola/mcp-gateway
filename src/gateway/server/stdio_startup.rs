@@ -30,12 +30,7 @@ impl Gateway {
         if self.config.accounts.is_some() {
             let gateway_key_pair =
                 Arc::new(GatewayKeyPair::generate().map_err(|error| key_error(&error))?);
-            let account_custody = self.custody.as_ref().map(|custody| {
-                Arc::clone(custody) as Arc<dyn crate::personal_accounts::AccountCustody>
-            });
-            account_bindings::install_account_strategies(
-                &self.config,
-                account_custody.as_ref(),
+            self.install_account_bindings(
                 &gateway_key_pair,
                 meta_mcp,
                 account_bindings::ServeMode::Stdio,

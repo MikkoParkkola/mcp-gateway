@@ -138,17 +138,11 @@ impl Gateway {
         // its own backend, and the resolver prefers the per-backend entry over
         // the single process-wide one above. A managed binding with no custody
         // refuses here rather than dispatching as though it were shared.
-        let account_custody = self.custody.as_ref().map(|custody| {
-            Arc::clone(custody) as Arc<dyn crate::personal_accounts::AccountCustody>
-        });
-        account_bindings::install_account_strategies(
-            &self.config,
-            account_custody.as_ref(),
+        self.install_account_bindings(
             gateway_key_pair,
             meta_mcp,
             account_bindings::ServeMode::Http,
-        )?;
-        Ok(())
+        )
     }
 
     /// Declare multi-user status, and warn when single-user suppresses the

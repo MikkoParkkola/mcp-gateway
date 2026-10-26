@@ -12,7 +12,7 @@
 //! a reading of the mechanism.
 //!
 //! The shape asserted is the one fixed by
-//! `docs/design/2026-09-09-confirm-2-in-band-schema-and-wiring.md`, spelled in
+//! the confirm 2 in band schema and wiring design, spelled in
 //! the wire vocabulary `src/protocol/mrtr.rs:238-249` parses.
 //!
 //! What is deliberately NOT asserted: the `Unsupported` refusal. It is now the
@@ -57,6 +57,7 @@ async fn admin_state() -> (
                 denied_tools: None,
                 admin: true,
                 kind: mcp_gateway::config::ApiKeyKind::Shared,
+                ..Default::default()
             }],
             public_paths: Vec::new(),
             client_circuit_breaker: None,

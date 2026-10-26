@@ -3,7 +3,7 @@
 //! Owned fixtures for MIK-7272.OWNER.2 (I4): a counting backend, the shipped
 //! binary over stdio and over HTTP, and the modern task vocabulary.
 //!
-//! Test plan: `docs/design/2026-09-30-sub4-stdio-owner-test-plan.md` (I4).
+//! Test plan: the sub4 stdio owner test plan (I4).
 //! Every row drives the binary through its config and JSON-RPC, never a
 //! crate item, so the red commit compiles before the fix exists.
 
@@ -246,6 +246,7 @@ pub fn write_config(
             denied_tools: None,
             admin: false,
             kind: ApiKeyKind::Shared,
+            ..Default::default()
         });
     }
     config.backends.insert(

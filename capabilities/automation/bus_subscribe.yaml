@@ -1,4 +1,4 @@
-sha256: 2fe3ddef1064c1aba4d833482df51157cd0dda32b69fd10e9849642e89bb085e
+sha256: 0d49dc9aa891993d028328fd21414b16e6f9ab52adcad7a8f6440df149ef85b8
 fulcrum: "1.0"
 name: bus_subscribe
 description: >
@@ -14,7 +14,7 @@ schema:
     properties:
       topic_pattern:
         type: string
-        description: "Topic prefix to subscribe to, e.g. bus.global or bus.proj.botnaut"
+        description: "Topic prefix to subscribe to, e.g. bus.global or bus.proj.example"
       agent_id:
         type: string
         description: "Subscribing agent id (for DM delivery, e.g. claude-code:mbp)"
