@@ -249,7 +249,9 @@ fn a_lock_directory_others_can_write_is_refused() {
 #[test]
 fn the_default_profile_folder_shape_is_accepted() {
     let user = user_sid();
-    let sddl = format!("O:{user}D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;{user})");
+    // Numeric SIDs: SYSTEM and Administrators read back numerically.
+    let sddl =
+        format!("O:{user}D:P(A;OICI;FA;;;S-1-5-18)(A;OICI;FA;;;S-1-5-32-544)(A;OICI;FA;;;{user})");
     for how in CONSTRUCTORS {
         let parent = tempfile::tempdir().expect("dir");
         let dir = parent.path().join("home");
