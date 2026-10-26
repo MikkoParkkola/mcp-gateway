@@ -201,12 +201,10 @@ async fn audited_call_judged(
     ));
     let mut call = None;
     let mut reads = DirectReads::default();
-    // The invocation's trace, kept for its delivery record.
-    let mut trace = None;
     let guard = super::super::helpers::read_guard(&state);
     // One memo spans the guard and the record, so a withheld call's one
     // record names its refusal (MIK-8361).
-    let ((status, Json(body)), hidden) =
+    let (((status, Json(body)), hidden), trace) =
         crate::gateway::meta_mcp::visible::memo::with_visibility_memo(async {
             let inner = Box::pin(crate::gateway::outbound::read_scoped(
                 guard.clone(),
@@ -220,18 +218,8 @@ async fn audited_call_judged(
             ));
             let ((answer, hidden), notes) =
                 crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(inner).await;
-            let answer = match call.take() {
-                Some(call) => {
-                    // D2-f: the caller's W3C trace id, else a trace id; no session rung.
-                    let id = crate::gateway::trace::current()
-                        .unwrap_or_else(crate::gateway::trace::generate);
-                    let answer = record(&state, (&name, &id), call, answer, notes).await;
-                    trace = Some(id);
-                    answer
-                }
-                None => answer,
-            };
-            (answer, hidden)
+            let (answer, trace) = record_traced(&state, &name, call.take(), answer, notes).await;
+            ((answer, hidden), trace)
         })
         .await;
     if status == StatusCode::ACCEPTED {
@@ -306,6 +294,26 @@ async fn audited_call_judged(
     #[cfg(not(feature = "firewall"))]
     let _ = (delivers, written);
     reply
+}
+
+/// [`record`] for `call`, when the inner handler made one, under a trace
+/// decided here: the answer, and the trace its delivery record names.
+async fn record_traced(
+    state: &AppState,
+    server: &str,
+    call: Option<DirectCall>,
+    answer: Answer,
+    notes: DispatchNotes,
+) -> (Answer, Option<String>) {
+    let Some(call) = call else {
+        return (answer, None);
+    };
+    // D2-f: the caller's W3C trace id, else a trace id; no session rung.
+    let id = crate::gateway::trace::current().unwrap_or_else(crate::gateway::trace::generate);
+    (
+        record(state, (server, &id), call, answer, notes).await,
+        Some(id),
+    )
 }
 
 /// Write the record for `call`, traced `trace_id`, and hand `answer` on, or
