@@ -153,6 +153,17 @@ fn each_field_alone(
     section: &str,
     skip: &[&str],
 ) -> (Vec<(String, Vec<&'static str>)>, Vec<String>) {
+    // Fields with no bool or number inside: one hand-picked valid edit each.
+    let by_hand: &[(&str, fn(&mut Value))] = &[
+        ("posture", |v| *v = json!("hardened")),
+        ("hardened", |v| v["private_backends"] = json!(["10.0.0.1"])),
+        ("caller_identity", |v| v["authority"] = json!("edited")),
+        ("signature_chain", |v| {
+            *v = json!({"signing_key": "env:CHAIN_SEED", "key_id": "k1"});
+        }),
+        ("idempotency_key", |v| *v = json!("required")),
+        ("shutdown_timeout", |v| *v = json!("31s")),
+    ];
     let running = Config::default();
     let base = serde_json::to_value(&running).expect("config serializes");
     let keys: Vec<String> = base[section]
@@ -165,7 +176,15 @@ fn each_field_alone(
     let (mut reports, mut stuck) = (Vec::new(), Vec::new());
     for key in keys {
         let mut v = base.clone();
-        if !perturb(&mut v[section][&key]) {
+        let field = &mut v[section][&key];
+        let edited = match by_hand.iter().find(|(name, _)| *name == key) {
+            Some((_, edit)) => {
+                edit(field);
+                true
+            }
+            None => perturb(field),
+        };
+        if !edited {
             stuck.push(key);
             continue;
         }
