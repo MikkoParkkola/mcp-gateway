@@ -34,13 +34,8 @@ fn has_b(ctx: &ReloadContext) -> bool {
 /// original staged, the journal `staged`.
 fn crashed_after_rename(path: &Path, original: &str, bytes: &str) {
     use crate::config_persistence::journal;
-    let staged = journal::stage_original(path, original.as_bytes()).expect("stage");
-    journal::begin(
-        path,
-        &staged,
-        crate::hashing::sha256_hex(original.as_bytes()),
-    )
-    .expect("journal");
+    journal::stage_original(path, original.as_bytes()).expect("stage");
+    journal::begin(path, crate::hashing::sha256_hex(original.as_bytes())).expect("journal");
     write_owner_only(crate::identity_grants::journal::resolved(path), bytes).expect("rename");
 }
 

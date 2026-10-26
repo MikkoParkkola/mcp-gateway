@@ -373,10 +373,7 @@ async fn a_journal_without_its_original_refuses_the_lock() {
 
     match lock_now(&path).await {
         Err(crate::config_persistence::lock::NotLocked::Failed(message)) => {
-            assert!(
-                message.contains("copy the staged original"),
-                "{message}"
-            );
+            assert!(message.contains("copy the staged original"), "{message}");
         }
         Err(other) => panic!("expected a refusal, got {other:?}"),
         Ok(_) => panic!("an unusable journal must refuse the lock"),
