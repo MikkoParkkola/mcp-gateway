@@ -95,7 +95,11 @@ fn write_config(root: &Path, port: u16) -> std::path::PathBuf {
         },
     );
     let path = root.join("gateway.yaml");
-    std::fs::write(&path, yaml::to_string(&config).expect("config yaml")).expect("write");
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        &path,
+        yaml::to_string(&config).expect("config yaml"),
+    )
+    .expect("write");
     path
 }
 
