@@ -231,3 +231,90 @@ fn stream(state: &State, subject: String) -> Response {
     )
         .into_response()
 }
+
+/// An HTTPS RFC 8693 token endpoint for the `token_exchange` strategy. It
+/// answers each exchange with `at.<subject>`, the subject read from the
+/// gateway's `subject_token`, so the peer can tell exchanged callers apart.
+pub struct TokenEndpoint {
+    pub url: String,
+    /// The CA this endpoint's leaf chains to, for the gateway's trust file.
+    pub ca_file: std::path::PathBuf,
+    exchanged: Arc<Mutex<Vec<String>>>,
+}
+
+impl TokenEndpoint {
+    pub async fn start(root: &std::path::Path) -> Self {
+        use rcgen::{CertificateParams, DistinguishedName, DnType, Issuer, KeyPair, SanType};
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let ca = mcp_gateway::mtls::CertGenerator::init_ca(&mcp_gateway::mtls::CaParams {
+            cn: "subject peer token endpoint temporary CA",
+            validity_days: 1,
+        })
+        .expect("temporary CA");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind token endpoint");
+        listener.set_nonblocking(true).expect("non-blocking");
+        let addr = listener.local_addr().expect("token endpoint address");
+        let leaf_key = KeyPair::generate().expect("leaf key");
+        let mut leaf = CertificateParams::default();
+        let mut dn = DistinguishedName::new();
+        dn.push(DnType::CommonName, "127.0.0.1");
+        leaf.distinguished_name = dn;
+        leaf.subject_alt_names = vec![SanType::IpAddress(addr.ip())];
+        let ca_key = KeyPair::from_pem(&ca.key_pem).expect("CA key");
+        let issuer = Issuer::from_ca_cert_pem(&ca.cert_pem, ca_key).expect("CA cert");
+        let leaf_pem = leaf.signed_by(&leaf_key, &issuer).expect("leaf").pem();
+        let tls = axum_server::tls_rustls::RustlsConfig::from_pem(
+            leaf_pem.into_bytes(),
+            leaf_key.serialize_pem().into_bytes(),
+        )
+        .await
+        .expect("rustls config");
+        let exchanged: Arc<Mutex<Vec<String>>> = Arc::default();
+        let log = Arc::clone(&exchanged);
+        let app = axum::Router::new().route(
+            "/token",
+            axum::routing::post(
+                move |axum::Form(form): axum::Form<BTreeMap<String, String>>| {
+                    let log = Arc::clone(&log);
+                    async move {
+                        let mut headers = HeaderMap::new();
+                        let bearer = format!(
+                            "Bearer {}",
+                            form.get("subject_token").map_or("", String::as_str)
+                        );
+                        if let Ok(value) = bearer.parse() {
+                            headers.insert("authorization", value);
+                        }
+                        let subject = subject_of(&headers);
+                        log.lock().expect("exchanged").push(subject.clone());
+                        axum::Json(json!({
+                            "access_token": format!("at.{subject}"),
+                            "token_type": "Bearer",
+                            "issued_token_type":
+                                "urn:ietf:params:oauth:token-type:access_token",
+                            "expires_in": 300,
+                        }))
+                    }
+                },
+            ),
+        );
+        tokio::spawn(async move {
+            let _ = axum_server::from_tcp_rustls(listener, tls)
+                .expect("TLS listener")
+                .serve(app.into_make_service())
+                .await;
+        });
+        let ca_file = root.join("token-endpoint-ca.pem");
+        std::fs::write(&ca_file, &ca.cert_pem).expect("write CA");
+        Self {
+            url: format!("https://{addr}/token"),
+            ca_file,
+            exchanged,
+        }
+    }
+
+    /// The subject of every exchange so far.
+    pub fn exchanged(&self) -> Vec<String> {
+        self.exchanged.lock().expect("exchanged").clone()
+    }
+}

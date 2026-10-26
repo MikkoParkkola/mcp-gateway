@@ -41,7 +41,7 @@ use delivery::{DEADLINE, wait_until};
 use gateway::Gateway;
 use receiver::{Receiver, TRUST_CA};
 use serde_json::{Value, json};
-use subject_peer::{SubjectPeer, resource_of};
+use subject_peer::{SubjectPeer, TokenEndpoint, resource_of};
 use upstream_sub::{delivered, expect_events, sub, upstream_config};
 
 /// Past the 1 s coalescing window plus delivery: "nothing more arrived".
@@ -64,7 +64,13 @@ fn signed_backend(peer: &SubjectPeer) -> Value {
 
 /// A gateway with backend `x` = `backend`, verifying `issuer`'s bearers, and
 /// trusting both the receiver's CA and the issuer's.
-async fn start(root: &Path, rx: &Receiver, issuer: &issuer::Issuer, backend: Value) -> Gateway {
+async fn start(
+    root: &Path,
+    rx: &Receiver,
+    issuer: &issuer::Issuer,
+    backend: Value,
+    extra_trust: &[&Path],
+) -> Gateway {
     let mut cfg = upstream_config(root, backend, &[]);
     cfg["key_server"] = json!({
         "enabled": true,
@@ -78,6 +84,9 @@ async fn start(root: &Path, rx: &Receiver, issuer: &issuer::Issuer, backend: Val
     let both = root.join("trust-both.pem");
     let mut pem = std::fs::read_to_string(&rx.ca_file).expect("receiver CA");
     pem.push_str(&std::fs::read_to_string(&issuer.ca_file).expect("issuer CA"));
+    for ca in extra_trust {
+        pem.push_str(&std::fs::read_to_string(ca).expect("extra CA"));
+    }
     std::fs::write(&both, pem).expect("combined trust file");
     let trust = both.to_string_lossy();
     Gateway::start_with_env(root, cfg, &[("SSL_CERT_FILE", &trust), (TRUST_CA, &trust)]).await
@@ -102,24 +111,59 @@ async fn iso_t1_signed_assertion_each_user_receives_only_their_own_changes() {
     let issuer = issuer::Issuer::start(root.path()).await;
     let rx = Receiver::start(root.path()).await;
     let peer = SubjectPeer::start().await;
-    let gw = start(root.path(), &rx, &issuer, signed_backend(&peer)).await;
+    let gw = start(root.path(), &rx, &issuer, signed_backend(&peer), &[]).await;
+    each_user_only_their_own(&peer, &gw, &rx, &issuer).await;
+}
+
+/// ISO-T1, token_exchange: the same, with each user's credential exchanged at
+/// the backend's token endpoint.
+#[tokio::test]
+async fn iso_t1_token_exchange_each_user_receives_only_their_own_changes() {
+    let root = tempfile::tempdir().expect("root");
+    let issuer = issuer::Issuer::start(root.path()).await;
+    let rx = Receiver::start(root.path()).await;
+    let peer = SubjectPeer::start().await;
+    let endpoint = TokenEndpoint::start(root.path()).await;
+    let backend = json!({
+        "http_url": peer.url,
+        "identity_propagation": {
+            "strategy": "token_exchange",
+            "audience": "https://subject-peer.test",
+            "token_exchange_endpoint": endpoint.url,
+            "required": true,
+            "session_mode": "per_user",
+        },
+    });
+    let gw = start(root.path(), &rx, &issuer, backend, &[&endpoint.ca_file]).await;
+    each_user_only_their_own(&peer, &gw, &rx, &issuer).await;
+    for user in ["u1", "u2"] {
+        assert!(
+            endpoint.exchanged().iter().any(|s| s == user),
+            "{user}'s credential was exchanged: {:?}",
+            endpoint.exchanged()
+        );
+    }
+}
+
+/// Two users subscribe to `x`'s tools and their own resource; each user's
+/// change reaches that user only, each is served, and no listener stream
+/// opens as anyone else.
+async fn each_user_only_their_own(
+    peer: &SubjectPeer,
+    gw: &Gateway,
+    rx: &Receiver,
+    issuer: &issuer::Issuer,
+) {
     let users = ["u1", "u2"];
     let mut subs = Vec::new();
     for user in users {
         let bearer = issuer.mint(user, &format!("{user}@example.test"));
-        let tools = sub(&gw, &bearer, TOOLS, &rx, json!({})).await;
-        let updated = sub(
-            &gw,
-            &bearer,
-            UPDATED,
-            &rx,
-            json!({"uri": resource_of(user)}),
-        )
-        .await;
+        let tools = sub(gw, &bearer, TOOLS, rx, json!({})).await;
+        let updated = sub(gw, &bearer, UPDATED, rx, json!({"uri": resource_of(user)})).await;
         subs.push((user, tools, updated));
     }
     for user in users {
-        listening(&peer, &gw, user).await;
+        listening(peer, gw, user).await;
     }
 
     for (n, (user, tools, updated)) in subs.iter().enumerate() {
@@ -129,19 +173,19 @@ async fn iso_t1_signed_assertion_each_user_receives_only_their_own_changes() {
             "notifications/resources/updated",
             json!({"uri": resource_of(user)}),
         );
-        expect_events(&rx, tools, TOOLS, 1).await;
-        expect_events(&rx, updated, UPDATED, 1).await;
+        expect_events(rx, tools, TOOLS, 1).await;
+        expect_events(rx, updated, UPDATED, 1).await;
         tokio::time::sleep(QUIET).await;
         for (m, (other, other_tools, other_updated)) in subs.iter().enumerate() {
             // Users already pushed to have their one delivery; later ones none yet.
             let want = usize::from(m <= n);
             assert_eq!(
-                delivered(&rx, other_tools, TOOLS).len(),
+                delivered(rx, other_tools, TOOLS).len(),
                 want,
                 "{user}'s tools change and {other}'s subscription"
             );
             assert_eq!(
-                delivered(&rx, other_updated, UPDATED).len(),
+                delivered(rx, other_updated, UPDATED).len(),
                 want,
                 "{user}'s resource change and {other}'s subscription"
             );
