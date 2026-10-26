@@ -354,3 +354,33 @@ fn a_backup_of_an_owner_only_file_is_owner_only() {
     assert_owner_only(row, &dst, false);
     assert_eq!(std::fs::read(&dst).unwrap(), b"admin: secret");
 }
+
+/// A7b: the Low-label folder case for a file whose list is inherited (the
+/// default-create path): the scratch's inherited label is refused too.
+#[test]
+fn a_low_label_on_the_default_create_path_is_refused() {
+    let row = "WINACL-A7b";
+    let dir = everyone_full_dir(row);
+    let path = dir.path().join("cursor.json");
+    std::fs::write(&path, b"old").unwrap();
+    icacls(row, dir.path(), &["/setintegritylevel", "(OI)(CI)Low"]);
+    assert_refused(row, &path, "security-label");
+}
+
+/// B4: a backup made through a symbolic link copies the linked file's list,
+/// not the link's.
+#[test]
+fn a_backup_through_a_link_keeps_the_linked_files_list() {
+    let row = "WINACL-B4";
+    let dir = everyone_full_dir(row);
+    let real = dir.path().join("gateway.yaml");
+    std::fs::write(&real, b"admin: secret").unwrap();
+    plant_owner_only(row, &real);
+    let link = dir.path().join("link.yaml");
+    std::os::windows::fs::symlink_file(&real, &link)
+        .unwrap_or_else(|e| panic!("WT-FIXTURE {row}: symlink: {e}"));
+    let dst = dir.path().join("gateway.yaml.bak");
+    super::copy_keeping_access(&link, &dst).unwrap();
+    assert_owner_only(row, &dst, false);
+    assert_eq!(std::fs::read(&dst).unwrap(), b"admin: secret");
+}

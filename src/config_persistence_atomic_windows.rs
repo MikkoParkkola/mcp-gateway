@@ -18,8 +18,13 @@ use crate::win_acl::{self, Ace, CopySource, Inspection};
 pub(super) enum KeptScratch {
     /// A scratch created with the target's access list and checked against it.
     Kept(File),
-    /// Create the scratch as before: the target's list is the folder's.
-    Default,
+    /// Create the scratch as before: the target's list is the folder's. The
+    /// result is checked against this reading of the target, the one already
+    /// judged, so nothing is read twice.
+    Default(CopySource),
+    /// The volume keeps no access lists (FAT, exFAT): create as before, with
+    /// no check, since there is no list to widen.
+    NoAcls,
 }
 
 /// A refused save; the stable code names the class (one per refusal reason).
@@ -44,7 +49,7 @@ pub(super) fn prepare(target: &Path, scratch: &Path) -> io::Result<KeptScratch> 
     match volume_keeps_acls(&model) {
         Ok(true) => {}
         // FAT and exFAT keep no list, so there is none to widen.
-        Ok(false) => return Ok(KeptScratch::Default),
+        Ok(false) => return Ok(KeptScratch::NoAcls),
         Err(e) => {
             return Err(refused(
                 "volume-query-failed",
@@ -66,7 +71,7 @@ pub(super) fn prepare(target: &Path, scratch: &Path) -> io::Result<KeptScratch> 
     if !source.inspection.protected {
         // An inherited list is the folder's: a default create reproduces it.
         // The check after the create still refuses anything wider.
-        return Ok(KeptScratch::Default);
+        return Ok(KeptScratch::Default(source));
     }
     let file = win_acl::create_file_like(scratch, &source)?;
     match verify(&file, &source, target) {
@@ -79,26 +84,9 @@ pub(super) fn prepare(target: &Path, scratch: &Path) -> io::Result<KeptScratch> 
     }
 }
 
-/// After a default create over a target with an inherited list: the scratch
-/// must carry no restriction or owner the target lacks, and nothing wider.
-pub(super) fn verify_default(file: &File, target: &Path) -> io::Result<()> {
-    let model = OpenOptions::new()
-        .access_mode(READ_CONTROL)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(target)?;
-    let source = win_acl::inspect_for_copy(&model).map_err(|e| {
-        refused(
-            "descriptor-unreadable",
-            target,
-            &format!("its access list could not be read ({e})"),
-        )
-    })?;
-    verify(file, &source, target)
-}
-
 /// The scratch's owner, access list (in order) and access-enforcing SACL
 /// entries equal the target's. Runs before any byte is written.
-fn verify(file: &File, source: &CopySource, target: &Path) -> io::Result<()> {
+pub(super) fn verify(file: &File, source: &CopySource, target: &Path) -> io::Result<()> {
     let got = win_acl::inspect_for_copy(file).map_err(|e| {
         refused(
             "descriptor-unreadable",

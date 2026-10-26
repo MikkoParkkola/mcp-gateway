@@ -179,14 +179,18 @@ fn create_kept(target: &Path, candidate: &Path) -> std::io::Result<std::fs::File
     use windows::KeptScratch;
     match windows::prepare(target, candidate)? {
         KeptScratch::Kept(file) => Ok(file),
-        KeptScratch::Default => {
+        KeptScratch::NoAcls => std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(candidate),
+        KeptScratch::Default(source) => {
             // Read as well as write, so the check below can read the list.
             let file = std::fs::OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create_new(true)
                 .open(candidate)?;
-            if let Err(e) = windows::verify_default(&file, target) {
+            if let Err(e) = windows::verify(&file, &source, target) {
                 drop(file);
                 let _ = std::fs::remove_file(candidate);
                 return Err(e);
@@ -212,10 +216,13 @@ pub fn copy_keeping_access(src: &Path, dst: &Path) -> std::io::Result<()> {
     }
     #[cfg(windows)]
     {
-        let bytes = std::fs::read(src)?;
+        // One resolved path for both the bytes and the access list: a link
+        // read through for its bytes must not lend its own list to the copy.
+        let src = std::fs::canonicalize(src)?;
+        let bytes = std::fs::read(&src)?;
         let (mut file, scratch) =
             super::claim_scratch(dst, super::next_scratch_seed(), |candidate| {
-                create_kept(src, candidate)
+                create_kept(&src, candidate)
             })
             .map_err(|e| match e {
                 super::ScratchClaimError::AllTaken => std::io::Error::other(format!(
