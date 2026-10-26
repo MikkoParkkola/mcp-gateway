@@ -6,7 +6,7 @@
 // test controls what the shell loads; triggers come from the shell's own
 // tip() through a fixture tab built in the page.
 import { test, expect } from './base.mjs';
-import { shellModuleUrl, shellReady, withFixturePages } from './shell.mjs';
+import { shellModuleUrl, shellReady, withFixturePages, tooltipCoversNothing } from './shell.mjs';
 
 const COPY = {
   _pending: {},
@@ -184,6 +184,25 @@ test.describe('component', () => {
     });
     expect(box.top).toBeGreaterThanOrEqual(0);
     expect(box.bottom).toBeLessThanOrEqual(160);
+  });
+
+  test('T12 the screens\' placement helper passes a clear layout and names a covered control', async ({ page }) => {
+    await serveCopy(page);
+    await ready(page);
+    await mount(page, ['fixture.status.calls']);
+    expect(await tooltipCoversNothing(page, 'fixture.status.calls')).toEqual([]);
+    // A control placed under the popup's box is reported.
+    await page.evaluate(() => {
+      const r = document.querySelector('.has-tip').getBoundingClientRect();
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = 'Under';
+      Object.assign(b.style, { position: 'fixed', left: `${r.left + 20}px`, top: `${r.bottom + 30}px` });
+      document.getElementById('content').append(b);
+    });
+    const covered = await tooltipCoversNothing(page, 'fixture.status.calls');
+    expect(covered).toHaveLength(1);
+    expect(covered[0]).toContain('Under');
   });
 
   test('T6 T6b focus moving to the next trigger opens it at once and closes the previous', async ({ page }) => {

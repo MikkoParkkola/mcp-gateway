@@ -87,8 +87,10 @@ test.describe('frames', () => {
           const shell = await import(url);
           await shell.tipsReady();
           const t = shell.tip('fixture.status.calls');
-          // The box opens 6 px under its 14 px trigger: wrapper top = 142 - 20,
-          // plus the half pixel the frame's own flow layout puts its box at.
+          // The box opens 6 px under its 14 px trigger. The frame's own page
+          // lays its box out at y = 142.48 px (the lines stacked above it have
+          // fractional heights), so the box goes to 142.5, not a rounded 142:
+          // text rasterizes by its sub-pixel offset. Wrapper top = 142.5 - 20.
           Object.assign(t.style, { position: 'fixed', left: '388px', top: '122.5px' });
           document.body.append(t);
         }, url);

@@ -303,7 +303,7 @@ export function tip(id) {
   const entry = tipEntry(id);
   if (!entry) return null;
   const tid = `tip-${++tipSeq}`;
-  return el('span', { class: 'has-tip' },
+  return el('span', { class: 'has-tip', 'data-tip': id },
     el('button', { type: 'button', class: 'tip-i', 'aria-label': `About ${entry.title}`, 'aria-describedby': tid }, 'i'),
     el('span', { class: 'tip', role: 'tooltip', id: tid }, el('strong', { class: 'tip-title', 'aria-hidden': 'true' }, entry.title), tipBody(entry)));
 }
@@ -326,7 +326,7 @@ export function tipMarkup(id) {
   const body = Array.isArray(entry.rows)
     ? `<dl class="tip-rows">${entry.rows.map(([l, v]) => `<div><dt>${esc(l)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>`
     : `<span class="tip-body">${esc(entry.text ?? '')}</span>`;
-  return `<span class="has-tip"><button type="button" class="tip-i" aria-label="About ${esc(entry.title)}" aria-describedby="${tid}">i</button>`
+  return `<span class="has-tip" data-tip="${esc(id)}"><button type="button" class="tip-i" aria-label="About ${esc(entry.title)}" aria-describedby="${tid}">i</button>`
     + `<span class="tip" role="tooltip" id="${tid}"><strong class="tip-title" aria-hidden="true">${esc(entry.title)}</strong>${body}</span></span>`;
 }
 

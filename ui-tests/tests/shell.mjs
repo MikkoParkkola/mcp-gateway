@@ -48,3 +48,28 @@ export async function withFixturePages(page, { title } = {}) {
 export async function shellReady(page) {
   await page.waitForSelector('#content [data-rendered]');
 }
+
+/**
+ * The screens' placement check: open the tooltip for a copy id by focusing
+ * its trigger, and return every visible focusable control outside that
+ * tooltip whose box intersects the open popup. A screen's journey test
+ * expects it to be empty for each trigger it draws:
+ *   expect(await tooltipCoversNothing(page, 'servers.status.paused')).toEqual([]);
+ */
+export async function tooltipCoversNothing(page, id) {
+  const trigger = page.locator(`.has-tip[data-tip="${id}"] button`);
+  await trigger.focus();
+  return page.evaluate(async (id) => {
+    await Promise.all(document.getAnimations().map((a) => a.finished));
+    const wrap = document.querySelector(`.has-tip[data-tip="${id}"]`);
+    const pop = wrap.querySelector('.tip').getBoundingClientRect();
+    const sel = 'a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])';
+    return [...document.querySelectorAll(sel)]
+      .filter((e) => !wrap.contains(e) && e.checkVisibility() && !e.disabled)
+      .filter((e) => {
+        const r = e.getBoundingClientRect();
+        return r.left < pop.right && pop.left < r.right && r.top < pop.bottom && pop.top < r.bottom;
+      })
+      .map((e) => `${e.tagName.toLowerCase()} "${(e.getAttribute('aria-label') ?? e.textContent).trim().slice(0, 40)}"`);
+  }, id);
+}
