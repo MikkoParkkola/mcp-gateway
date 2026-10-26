@@ -702,12 +702,19 @@ async fn a_second_preview_while_one_runs_is_refused_unspent() {
 }
 
 /// T1b: a modern-mode server that refuses `initialize` and answers
-/// `server/discover` previews like a legacy one.
+/// `server/discover` previews like a legacy one. It also refuses a
+/// `tools/list` without the 2026 `_meta`, so the preview must have kept the
+/// probe's verdict for the requests after it.
 #[tokio::test]
 async fn a_modern_server_that_refuses_initialize_previews() {
     fn modern_only(request: &Value) -> Response {
         let id = request["id"].clone();
         match request.get("method").and_then(Value::as_str) {
+            Some("tools/list") if !request["params"]["_meta"].is_object() => {
+                Json(json!({"jsonrpc": "2.0", "id": id,
+                    "error": {"code": -32602, "message": "missing _meta"}}))
+                .into_response()
+            }
             Some("server/discover") => Json(json!({"jsonrpc": "2.0", "id": id, "result":
                 {"capabilities": {"tools": {}}, "supportedVersions": MODERN_VERSIONS}}))
             .into_response(),
@@ -727,6 +734,36 @@ async fn a_modern_server_that_refuses_initialize_previews() {
             .as_array()
             .is_some_and(|t| t.iter().any(|t| t["name"] == "list_notes")),
         "{body}"
+    );
+}
+
+/// T11b: an over-budget answer to the era probe is the budget's 502, not a
+/// silence that falls back to the handshake.
+#[tokio::test]
+async fn an_over_budget_discovery_answer_is_a_502() {
+    fn huge_discover(request: &Value) -> Response {
+        if request.get("method").and_then(Value::as_str) != Some("server/discover") {
+            return answer(request);
+        }
+        let padding = "a".repeat(5 * 1024 * 1024);
+        Json(json!({"jsonrpc": "2.0", "id": request["id"], "result": {"pad": padding}}))
+            .into_response()
+    }
+    let log = Log::default();
+    let url = stub_with(&log, huge_discover).await;
+    let (router, _store) = router_with(false).await;
+    let (status, body) = confirmed(&router, &json!({"name": "big", "url": url})).await;
+    let message = body["error"].as_str().unwrap_or_default();
+    assert_eq!(
+        status,
+        StatusCode::BAD_GATEWAY,
+        "{}",
+        &message[..message.len().min(200)]
+    );
+    assert!(
+        message.contains("4 MiB budget"),
+        "{}",
+        &message[..message.len().min(200)]
     );
 }
 
