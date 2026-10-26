@@ -180,6 +180,14 @@ impl StreamableListenSession {
         if answer.error.is_some() {
             return Err(Error::Transport("listener initialize refused".to_owned()));
         }
+        // The server selects; its choice governs this session's
+        // `MCP-Protocol-Version` from here on, as on a slot's handshake.
+        let selection = crate::protocol::negotiate::Selectable::Legacy;
+        if let Some(selected) =
+            crate::protocol::negotiate::checked_selection(answer.result.as_ref(), selection)?
+        {
+            *t.protocol_version.write() = Some(selected.to_string());
+        }
         self.notify("notifications/initialized").await
     }
 }

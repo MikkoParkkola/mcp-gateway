@@ -315,7 +315,12 @@ impl LeaseStore {
             .unwrap_or_else(|| Err(withdrawn()))
     }
 
-    async fn wipe_generation(&self, key: &LeaseKey, generation: u128, reason: WipeReason) {
+    pub(super) async fn wipe_generation(
+        &self,
+        key: &LeaseKey,
+        generation: u128,
+        reason: WipeReason,
+    ) {
         let mut held = self.held.lock().await;
         if held.get(key).is_some_and(|h| h.generation == generation) {
             if let Some(old) = held.remove(key) {

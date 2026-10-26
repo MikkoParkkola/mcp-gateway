@@ -64,7 +64,8 @@ impl EventsHub {
             backend: backend.to_owned(),
             obs,
         };
-        self.leases
+        let generation = self
+            .leases
             .install(
                 key.clone(),
                 authorization,
@@ -73,19 +74,28 @@ impl EventsHub {
             )
             .await
             .map_err(RpcError::lease_refused)?;
-        // An unsubscribe between the row check and the install found no lease
-        // to wipe. Unsubscribe removes the row before its last-interest wipe
+        // An unsubscribe or a reload between the row check and the install
+        // found no lease to wipe. Both change the rows before their wipe
         // runs, so either that wipe sees this lease or this check sees no
-        // live row of the caller's on the backend and wipes it here.
+        // live row of the caller's still observed, under the live config, as
+        // this lease, and wipes it here: only this generation, never a newer
+        // lease a concurrent call installed.
         // Judged at the decision's `now`: a row that expired since still
         // counts here, and the lease's own deadline bounds it.
+        let listener = super::upstream_listener::ListenerKey {
+            backend: backend.to_owned(),
+            obs: Some(key.obs.clone()),
+        };
         let still_live = self.store.subscriptions().iter().any(|s| {
             s.principal == principal
                 && s.live(now)
                 && upstream::parse_name(&s.name).is_some_and(|(b, _)| b == backend)
+                && self.listens_as(s, &listener)
         });
         if !still_live {
-            self.leases.wipe(&key, lease::WipeReason::Released).await;
+            self.leases
+                .wipe_generation(&key, generation, lease::WipeReason::Released)
+                .await;
             return Err(RpcError::forbidden());
         }
         // The parked listener starts now, under the new lease (E7).
