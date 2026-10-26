@@ -174,6 +174,8 @@ and this document disagree, one of them is a bug.
 - No new setting. Per-user listeners are capped per backend at
   `MAX_PER_USER_LISTENERS` = `MAX_IDENTITY_SLOTS - MAX_SLOTS_PER_PRINCIPAL`, which
   leaves the identity-slot pool a share for calls. The cap counts listener keys.
+- Listeners are capped separately and do not consume call slots, so eviction never
+  displaces a call for a listener.
 - A subscribe that would need a listener past the cap gets -32013 with
   `data.limit = "identity_slots"`.
 
