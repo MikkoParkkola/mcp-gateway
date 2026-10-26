@@ -46,6 +46,30 @@ impl HttpTransport {
         mode: HeaderMode<'_>,
         identity_key: Option<&str>,
     ) -> Result<header::HeaderMap> {
+        self.build_headers(mode, identity_key, CredentialOrigin::Gateway)
+            .await
+    }
+
+    /// [`Self::build_mcp_headers`] for a request whose credential a
+    /// [`CredentialSource`](crate::transport::upstream_tap::CredentialSource)
+    /// lends: protocol headers only. It never reads the
+    /// gateway's OAuth token, so it never starts a login, and never adds the
+    /// operator's static headers; the source's own headers are merged later.
+    pub(super) async fn build_lent_headers(
+        &self,
+        mode: HeaderMode<'_>,
+        identity_key: Option<&str>,
+    ) -> Result<header::HeaderMap> {
+        self.build_headers(mode, identity_key, CredentialOrigin::Lent)
+            .await
+    }
+
+    async fn build_headers(
+        &self,
+        mode: HeaderMode<'_>,
+        identity_key: Option<&str>,
+        origin: CredentialOrigin,
+    ) -> Result<header::HeaderMap> {
         let version = self
             .protocol_version
             .read()
@@ -78,7 +102,11 @@ impl HttpTransport {
         // `MetaMcp::enforce_oauth_isolation`); by the time we build headers the
         // isolation decision has already been made. `insert` replaces (never
         // appends) Authorization, so no caller-supplied header is duplicated.
-        if let Some(token) = self.get_oauth_token().await? {
+        let token = match origin {
+            CredentialOrigin::Gateway => self.get_oauth_token().await?,
+            CredentialOrigin::Lent => None,
+        };
+        if let Some(token) = token {
             // A token carrying bytes illegal in an HTTP header value must fail as
             // a clean auth error, never panic the request path (MIK-6909).
             headers.insert(header::AUTHORIZATION, bearer_header_value(&token)?);
@@ -117,7 +145,11 @@ impl HttpTransport {
         // User-supplied custom headers apply to all calls, including
         // notifications, because some backends require the same auth header for
         // `notifications/initialized` as for normal requests.
-        for (key, value) in &self.headers {
+        let statics = match origin {
+            CredentialOrigin::Gateway => self.headers.iter().collect::<Vec<_>>(),
+            CredentialOrigin::Lent => Vec::new(),
+        };
+        for (key, value) in statics {
             if let (Ok(k), Ok(v)) = (
                 key.parse::<reqwest::header::HeaderName>(),
                 value.parse::<reqwest::header::HeaderValue>(),
@@ -347,6 +379,22 @@ impl HttpTransport {
         // receive (MIK-7642 R10.1). A no-op unless a submission is armed.
         crate::transport::submit_mark::response_head_received();
 
+        self.read_answer(request, response, message_url, identity_key, waiting)
+            .await
+    }
+
+    /// The answer to `request` from its `response`: the caller's session id
+    /// bound to its bucket, a refusal typed, and a JSON or SSE body read. Split
+    /// from [`Self::post_and_read`] so a send a credential source makes is
+    /// read the same way.
+    pub(super) async fn read_answer(
+        &self,
+        request: &JsonRpcRequest,
+        response: reqwest::Response,
+        message_url: &str,
+        identity_key: Option<&str>,
+        waiting: Option<super::sse_channel::Waiting>,
+    ) -> Result<JsonRpcResponse> {
         // Extract session ID from response headers if this caller's bucket is
         // empty (MIK-6784: store under the caller's identity key, never a shared
         // slot). The first request for a new identity has no session; the
@@ -646,4 +694,13 @@ async fn detach_token_step(
     }));
     task.await
         .map_err(|e| Error::OAuth(format!("the detached token step failed: {e}")))?
+}
+
+/// Whose credential a request's headers carry.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CredentialOrigin {
+    /// The gateway's own: its OAuth login and the operator's static headers.
+    Gateway,
+    /// A subscriber's, lent per request by a credential source: neither.
+    Lent,
 }

@@ -63,6 +63,7 @@ owned_routes! {
     UI_DEAD_LETTERS_REPLAY = "/ui/api/events/dead-letters/replay",
     UI_DEAD_LETTER_REPLAY = "/ui/api/events/dead-letters/{id}/replay",
     UI_EVENTS_HELD = "/ui/api/events/held",
+    UI_EVENTS_LEASES = "/ui/api/events/leases",
     UI_IMPORT_PREVIEW = "/ui/api/import/openapi/preview",
     UI_IMPORT = "/ui/api/import/openapi",
     /// Start-once preview of a server before it is added. Its own

@@ -125,6 +125,8 @@ fn subscription(name: &str) -> super::super::records::Subscription {
         unoffered_since: None,
         held_until: None,
         watch_class: None,
+        observed_identity: None,
+        obs_basis: None,
     }
 }
 
@@ -732,3 +734,6 @@ fn an_event_id_is_evt_and_32_hex_of_the_separated_parts() {
         "evt_cf0dffc69c8671340a9b0fad9233489d"
     );
 }
+
+#[path = "fanout_obs_tests.rs"]
+mod obs;

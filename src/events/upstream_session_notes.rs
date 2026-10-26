@@ -108,6 +108,12 @@ impl State<'_> {
         self.open_failures = 0;
     }
 
+    /// The lifecycle key of this listener's occurrence of `name`: its rows'
+    /// key, so it reaches only the subscriber it was observed for (A4).
+    fn key_of(&self, name: &str, data: &serde_json::Value) -> Option<String> {
+        crate::events::backend_source::backend_key(self.shared.key.obs.as_deref(), name, data)
+    }
+
     /// Emit the coalescing windows that closed (§8), through the hub only.
     /// `true` when the backend is now ineligible: nothing was sent, and the
     /// caller ends the listener through [`end_ineligible`].
@@ -127,7 +133,27 @@ impl State<'_> {
         if std::mem::take(&mut self.tools_pending)
             && let Some(hub) = hub.upgrade()
         {
-            hub.backend_tools_changed(&self.shared.name);
+            if self.shared.key.obs.is_some() {
+                // A per-user listener's tool set is its subscriber's own:
+                // reported for its rows alone, never through the gateway's
+                // shared announcement.
+                let backend = self.shared.name.clone();
+                let name = event_name(&backend, super::NoteKind::ToolsChanged);
+                let lifecycle_key = self.key_of(&name, &json!({}));
+                hub.emit_dated(|occurred_at| SourceEvent {
+                    kind: SourceKind::BackendNotification,
+                    name,
+                    backend: backend.clone(),
+                    scope: Visibility::Backend(backend),
+                    owner: None,
+                    upstream_id: uuid::Uuid::new_v4().to_string(),
+                    occurred_at,
+                    data: json!({}),
+                    lifecycle_key,
+                });
+            } else {
+                hub.backend_tools_changed(&self.shared.name);
+            }
         }
         if due.is_empty() {
             return false;
@@ -147,22 +173,28 @@ impl State<'_> {
             if !self.shared.need.lock().emits(kind, uri.as_deref()) {
                 continue;
             }
+            // A per-user listener reads no catalogue (`read_snapshot`), so its
+            // URIs are admitted, not judged by an empty snapshot.
             if let Some(uri) = &uri
+                && self.shared.key.obs.is_none()
                 && self.shared.snapshot.lock().verdict(uri) != Verdict::Deliver
             {
                 continue;
             }
             let backend = self.shared.name.clone();
+            let name = event_name(&backend, kind);
+            let data = uri.map_or_else(|| json!({}), |uri| json!({ "uri": uri }));
+            let lifecycle_key = self.key_of(&name, &data);
             hub.emit(SourceEvent {
                 kind: SourceKind::BackendNotification,
-                name: event_name(&backend, kind),
+                name,
                 backend: backend.clone(),
                 scope: Visibility::Backend(backend),
                 owner: None,
                 upstream_id: uuid::Uuid::new_v4().to_string(),
                 occurred_at,
-                data: uri.map_or_else(|| json!({}), |uri| json!({ "uri": uri })),
-                lifecycle_key: None,
+                data,
+                lifecycle_key,
             });
         }
         false

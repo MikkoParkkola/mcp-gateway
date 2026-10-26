@@ -86,6 +86,15 @@ pub(crate) struct Subscription {
     /// `None` on other rows, and on a watch written before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watch_class: Option<WatchClass>,
+    /// The identity a per-user backend observes this subscriber as, when
+    /// `binding` does not already carry it. `Debug`
+    /// leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_identity: Option<crate::key_server::oidc::VerifiedIdentity>,
+    /// The backend config the observation key was derived from (design B3):
+    /// `None` on a shared backend and on rows written before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obs_basis: Option<super::observation::ObsBasis>,
 }
 
 /// How a REST watch is polled: one shared poller for a credential-free
@@ -235,6 +244,29 @@ impl std::fmt::Debug for Subscription {
 }
 
 impl Subscription {
+    /// The identity a per-user backend observes this row as: an OIDC
+    /// bearer's own fields, so nothing is stored twice, or the stored one.
+    pub(crate) fn observed_as(&self) -> Option<crate::key_server::oidc::VerifiedIdentity> {
+        if let Some(LiveBinding::OidcBearer {
+            issuer,
+            subject,
+            email,
+            groups,
+            ..
+        }) = &self.binding
+        {
+            // Checked: a binding that names nobody observes as no one.
+            return crate::key_server::oidc::VerifiedIdentity::checked(
+                issuer.clone(),
+                subject.clone(),
+                email.clone(),
+                None,
+                groups.clone(),
+            );
+        }
+        self.observed_identity.clone()
+    }
+
     /// When the row stops being live: its expiry or the bound of its hold,
     /// whichever comes first; `None` when neither is set.
     pub(crate) fn effective_expiry(&self) -> Option<DateTime<Utc>> {
