@@ -77,6 +77,8 @@ mod anomaly_posture_tests;
 mod response_observer;
 #[cfg(test)]
 pub(crate) mod response_tests;
+#[cfg(test)]
+mod rule_glob_tests;
 
 // ─── Runtime types ───────────────────────────────────────────────────────────
 
@@ -119,7 +121,8 @@ pub struct Firewall {
 
 /// A compiled firewall rule with a pre-processed glob pattern.
 struct CompiledRule {
-    pattern: glob::Pattern,
+    /// `None` when the rule's glob did not parse; such a rule matches no tool.
+    pattern: Option<glob::Pattern>,
     action: FirewallAction,
     #[allow(dead_code)]
     scans: Vec<ScanType>,

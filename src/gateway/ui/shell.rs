@@ -3,8 +3,11 @@
 //! The new web UI's shell (MIK-8870): every `/ui/*` deep link answers one
 //! static document, and `/ui/assets/*` serves its content-hashed files with
 //! an immutable cache. Both are compile-time constants, unauthenticated like
-//! `/ui` and holding no gateway data. Until the new UI ships (UI1, MIK-8875)
-//! the document hands the visitor to `/ui`, so nobody sees an empty shell.
+//! `/ui` and holding no gateway data: the shell's script reads `/ui/api`
+//! after load. A page not yet built shows a "Not built yet" state linking
+//! `/ui/classic`; `/ui` stays the classic page until the cutover.
+//! `scripts/dev/rehash_ui_assets.py` renames edited assets and rewrites this
+//! table and the references to them.
 
 use axum::extract::Path;
 use axum::http::{StatusCode, header};
@@ -16,10 +19,32 @@ const DOCUMENT: &str = include_str!("shell/index.html");
 /// Every asset by its content-hashed name: the name's hash is the first 12
 /// hex digits of the SHA-256 of its bytes (a test holds this), so an edited
 /// asset gets a new name and a cached copy can never go stale.
-pub(super) const ASSETS: &[(&str, &[u8])] = &[(
-    "shell.59b6e0f80d81.css",
-    include_bytes!("shell/shell.59b6e0f80d81.css"),
-)];
+pub(super) const ASSETS: &[(&str, &[u8])] = &[
+    (
+        "BigShoulders-700.5faff1f81ec2.woff2",
+        include_bytes!("shell/fonts/BigShoulders-700.5faff1f81ec2.woff2"),
+    ),
+    (
+        "BigShoulders-800.dee5cd68621c.woff2",
+        include_bytes!("shell/fonts/BigShoulders-800.dee5cd68621c.woff2"),
+    ),
+    (
+        "Overpass-400.3d4945e84023.woff2",
+        include_bytes!("shell/fonts/Overpass-400.3d4945e84023.woff2"),
+    ),
+    (
+        "OverpassMono-400.9b51e031ff0d.woff2",
+        include_bytes!("shell/fonts/OverpassMono-400.9b51e031ff0d.woff2"),
+    ),
+    (
+        "shell.dd769a420409.css",
+        include_bytes!("shell/shell.dd769a420409.css"),
+    ),
+    (
+        "shell.a978b27a9b6e.js",
+        include_bytes!("shell/shell.a978b27a9b6e.js"),
+    ),
+];
 
 /// The shell's policy: everything from this origin, nothing inline, no
 /// framing. Fonts come from `font-src 'self'`, so they are self-hosted.

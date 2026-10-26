@@ -85,7 +85,6 @@ src/security/firewall/memory_scanner.rs	.expect("instruction injection patterns 
 src/security/firewall/memory_scanner.rs	.expect("role confusion patterns must compile"),	1
 src/security/firewall/redactor.rs	.map(|p| Regex::new(p).expect("Credential pattern must compile"))	1
 src/security/firewall/redactor.rs	set: RegexSet::new(&patterns).expect("Credential pattern set must compile"),	1
-src/security/firewall/verdict.rs	.unwrap_or_else(|_| glob::Pattern::new("*").expect("fallback pattern compiles"));	1
 src/security/message_signing.rs	.expect("matching live nonce entry");	1
 src/security/message_signing.rs	let (at, nonce) = state.expiries.pop_front().expect("elapsed queue head");	1
 src/security/message_signing.rs	let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");	1
