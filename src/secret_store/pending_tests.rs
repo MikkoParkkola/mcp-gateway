@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
-use std::sync::{Arc, Barrier};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::secret_store::tests::{Fake, count, index_text, three, vault as fresh_vault};
@@ -224,63 +224,43 @@ fn a_crash_between_delete_and_removal_line_is_filtered_by_exists() {
 
 #[test]
 fn a_two_phase_save_and_a_secret_only_save_both_complete_under_contention() {
-    use std::sync::atomic::{AtomicBool, Ordering};
     let (dir, vault) = fresh_vault();
     let config = dir.path().join("gateway.yaml");
     std::fs::write(&config, "{}\n").unwrap();
     let store = Arc::new(Fake::new());
-    let held = Arc::new(Barrier::new(2));
-    let kept = Arc::new(AtomicBool::new(false));
-    let started = Arc::new(AtomicBool::new(false));
-    let writer = {
-        let (vault, store, held, kept, started) = (
-            vault.clone(),
-            store.clone(),
-            held.clone(),
-            kept.clone(),
-            started.clone(),
+    // Reload, then the config sidecar, then the vault: the global order.
+    let reload = std::sync::Mutex::new(());
+    let reload_held = reload.lock().unwrap();
+    let sidecar = crate::config_persistence::lock::lock_config_blocking(
+        &config,
+        Instant::now() + LOCK_WAIT,
+        |_| {},
+    )
+    .expect("config lock");
+    // Parked between its phases: phase one returned, the vault lock is held.
+    let parked = create_secrets(vault.clone(), store.clone(), &two(), soon()).expect("phase one");
+    let attempt = crate::fs_lock::ExclusiveFileLock::try_acquire(vault.lock_path());
+    assert!(
+        matches!(&attempt, Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+        "the vault lock was free while a save held it: {:?}",
+        attempt.as_ref().err()
+    );
+    drop(attempt);
+    // A second save whose deadline has passed meets the held lock once and
+    // is refused, having written nothing.
+    let refused = create_secrets(vault.clone(), store.clone(), &two(), Instant::now());
+    let Err(SaveError::Refused(StoreError::Failed(why))) = refused.as_ref().map(|_| ()) else {
+        panic!(
+            "a second save ran while the first held the vault: {:?}",
+            refused.as_ref().err()
         );
-        std::thread::spawn(move || {
-            // Reload, then the config sidecar, then the vault: the global order.
-            let reload = std::sync::Mutex::new(());
-            let _reload = reload.lock().unwrap();
-            let _sidecar = crate::config_persistence::lock::lock_config_blocking(
-                &config,
-                Instant::now() + LOCK_WAIT,
-                |_| {},
-            )
-            .expect("config lock");
-            let saved = create_secrets(vault, store, &two(), soon()).expect("phase one");
-            // The secret-only save starts while this one holds the vault lock.
-            held.wait();
-            // Keep only once the other save has begun: it is then at, or on
-            // its way to, the vault lock this save still holds.
-            while !started.load(Ordering::SeqCst) {
-                std::thread::yield_now();
-            }
-            kept.store(true, Ordering::SeqCst);
-            saved.keep();
-        })
     };
-    let secret_only = {
-        let (vault, store, held, kept) = (vault.clone(), store.clone(), held.clone(), kept.clone());
-        std::thread::spawn(move || {
-            held.wait();
-            started.store(true, Ordering::SeqCst);
-            save_secrets(&vault, store.as_ref(), &three(), |_| {
-                // Its entries exist only once the vault lock was free, after
-                // the two-phase save kept: without the lock this runs first.
-                assert!(
-                    kept.load(Ordering::SeqCst),
-                    "both saves held the vault at once"
-                );
-                Ok::<_, ()>(())
-            })
-            .expect("saved");
-        })
-    };
-    writer.join().expect("the two-phase save");
-    secret_only.join().expect("the secret-only save");
+    assert!(why.contains("held the vault lock"), "{why}");
+    assert_eq!(store.names().len(), 2, "the refused save created entries");
+    parked.keep();
+    drop((sidecar, reload_held));
+    // Released: the secret-only save now completes.
+    save_secrets(&vault, store.as_ref(), &three(), |_| Ok::<_, ()>(())).expect("saved");
     assert_eq!(store.names().len(), 5);
 }
 
