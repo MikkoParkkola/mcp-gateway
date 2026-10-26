@@ -41,7 +41,8 @@ const TEXT_BYTES: usize = 256;
 
 /// `text` cut to at most [`TEXT_BYTES`] bytes on a character boundary.
 fn clip(text: &str) -> String {
-    text[..text.floor_char_boundary(TEXT_BYTES)].to_owned()
+    use crate::truncate::{Budget, Suffix, truncate};
+    truncate(text, Budget::Bytes(TEXT_BYTES), "", Suffix::Within)
 }
 
 /// An audit record's string field, clipped; JSON null when it is not a string.
@@ -100,9 +101,13 @@ fn kpi_and_servers(state: &AppState) -> (Value, Value) {
     let backends = state.backends.all();
     let mut rows: Vec<(String, bool, usize)> = backends
         .iter()
+        // Not `status()`: it also sorts latency samples this view never shows.
         .map(|backend| {
-            let status = backend.status();
-            (clip(&status.name), status.running, status.tools_cached)
+            (
+                clip(&backend.name),
+                backend.is_running(),
+                backend.cached_tools_count(),
+            )
         })
         .collect();
     rows.sort_by(|a, b| a.0.cmp(&b.0));
@@ -232,6 +237,8 @@ fn last_actions(path: &std::path::Path) -> io::Result<Value> {
                 break;
             }
             let Ok(entry) = serde_json::from_slice::<Value>(line) else {
+                // An unreadable record may have been an action too.
+                skipped |= !line.is_empty();
                 continue;
             };
             if entry["event"] == "admin_action" {
@@ -251,8 +258,7 @@ fn last_actions(path: &std::path::Path) -> io::Result<Value> {
         }
         end = *start;
     }
-    let rotated = !crate::security::transparency_log::segments::list_segments(path)
-        .is_ok_and(|sealed| sealed.is_empty());
+    let rotated = !crate::security::transparency_log::segments::list_segments(path)?.is_empty();
     // A skipped line may have been a newer action than any row found, so any
     // skip makes the list incomplete, even with all five rows.
     let complete = !skipped && (rows.len() == ACTION_ROWS || (end == 0 && !rotated));
