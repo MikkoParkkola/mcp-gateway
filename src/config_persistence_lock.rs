@@ -196,6 +196,24 @@ pub(crate) fn lock_config_blocking(
     }
 }
 
+/// Take the lock file `lock` itself, blocking until `deadline`: the same
+/// owner-only sidecar and the same attempt as the config lock, for a lock
+/// that is not beside a config (ADR-028's per-user vault lock).
+pub(crate) fn lock_file_blocking(
+    lock: &Path,
+    deadline: Instant,
+) -> Result<ExclusiveFileLock, NotLocked> {
+    loop {
+        if let Some(held) = try_once(lock, lock)? {
+            return Ok(held);
+        }
+        if Instant::now() >= deadline {
+            return Err(NotLocked::Busy);
+        }
+        std::thread::sleep(POLL);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::lock_path;

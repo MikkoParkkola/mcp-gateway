@@ -14,6 +14,14 @@ pub struct SecretsConfig {
     pub store: SecretStoreChoice,
 }
 
+impl SecretsConfig {
+    /// Whether nothing in the section differs from the default, so a written
+    /// config leaves the section out.
+    pub(crate) fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 /// The `secrets.store` value.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

@@ -139,8 +139,8 @@ pub struct Config {
     /// Security policy configuration.
     pub security: SecurityConfig,
     /// Where secrets saved through the gateway are written (ADR-028).
-    // ci-allow-secret-debug: the store choice only, never a value
-    pub secrets: SecretsConfig,
+    #[serde(skip_serializing_if = "SecretsConfig::is_default")]
+    pub secrets: SecretsConfig, // ci-allow-secret-debug: the store choice only, never a value
     /// Webhook receiver configuration.
     pub webhooks: WebhookConfig,
     /// Routing profiles for session-scoped tool access control.

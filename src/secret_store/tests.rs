@@ -489,7 +489,7 @@ fn vault_lock_child() {
     let Some(path) = std::env::var_os(LOCK_CHILD) else {
         return;
     };
-    let _held = crate::fs_lock::ExclusiveFileLock::acquire(Path::new(&path)).expect("lock");
+    let _held = crate::fs_lock::ExclusiveFileLock::try_acquire(Path::new(&path)).expect("lock");
     println!("vault lock held");
     // Held until the parent closes stdin.
     let mut rest = String::new();

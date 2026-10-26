@@ -24,17 +24,6 @@ server:
   # cleartext_http: refuse
   # cluster_domain: cluster.local
 
-# --- Secret store ---
-# Where secrets saved through the gateway (web UI settings and adopt) go.
-# Each is written to a fresh entry, never over an old one (ADR-028).
-#   auto      keychain where the OS store answers, owner-only files otherwise
-#   keychain  the OS keychain; refused when it is unavailable
-#   files     a new owner-only file under <config dir>/secrets/, as file:
-# Existing env:, file: and keychain: references resolve whatever this says.
-
-secrets:
-  store: auto
-
 # --- Authentication ---
 
 auth:

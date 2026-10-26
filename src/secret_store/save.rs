@@ -14,7 +14,21 @@ use std::path::{Path, PathBuf};
 
 use super::index::Index;
 use super::{SecretStore, StoreError, fresh_name, now_ms, random_suffix};
+use crate::config_persistence::lock::{NotLocked, lock_file_blocking};
 use crate::fs_lock::ExclusiveFileLock;
+
+/// How long a save waits for another save holding the vault lock.
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The vault lock, through the config lock's owner-only sidecar.
+fn take_lock(lock_path: &Path) -> Result<ExclusiveFileLock, StoreError> {
+    lock_file_blocking(lock_path, std::time::Instant::now() + LOCK_WAIT).map_err(|e| match e {
+        NotLocked::Busy => StoreError::Failed(
+            "another save held the vault lock for 30 s; nothing was written".to_owned(),
+        ),
+        NotLocked::Failed(why) => StoreError::Failed(format!("cannot take the vault lock: {why}")),
+    })
+}
 
 /// The per-user vault lock and the index of one config directory.
 pub(crate) struct Vault {
@@ -93,11 +107,7 @@ pub(crate) fn save_secrets<T, E>(
     commit: impl FnOnce(&[String]) -> Result<T, E>,
 ) -> Result<T, SaveError<E>> {
     // Held from the first absence check through commit or rollback.
-    let _lock = ExclusiveFileLock::acquire(&vault.lock_path).map_err(|e| {
-        SaveError::Refused(StoreError::Failed(format!(
-            "cannot take the vault lock: {e}"
-        )))
-    })?;
+    let _lock = take_lock(&vault.lock_path).map_err(SaveError::Refused)?;
     for secret in secrets {
         let refusal = if secret.value.is_empty() {
             Some(StoreError::Empty)
@@ -216,8 +226,7 @@ pub(crate) fn unused_entries(
     referenced: &BTreeSet<String>,
 ) -> Result<Vec<String>, StoreError> {
     // A save holding the lock may have created entries it has not committed.
-    let _lock = ExclusiveFileLock::acquire(&vault.lock_path)
-        .map_err(|e| StoreError::Failed(format!("cannot take the vault lock: {e}")))?;
+    let _lock = take_lock(&vault.lock_path)?;
     let mut unused = Vec::new();
     for (name, kind) in vault.index.live()? {
         if referenced.contains(&name) {
