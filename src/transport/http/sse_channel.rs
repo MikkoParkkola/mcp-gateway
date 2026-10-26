@@ -174,7 +174,8 @@ impl SseChannel {
                         Ok(Some(chunk)) => budget
                             .as_ref()
                             .map_or(Ok(()), |b| b.charge_total(chunk.len()))
-                            .and_then(|()| decoder.push(&chunk)),
+                            .and_then(|()| decoder.push(&chunk))
+                            .map_err(|error| over_budget(budget.as_deref(), error)),
                         Ok(None) => {
                             if let Ok(events) = decoder.finish() {
                                 route(&pending, &mut sink, events);
@@ -237,6 +238,20 @@ impl SseChannel {
             pending: Arc::clone(&self.pending),
             ended: Arc::clone(&self.ended),
         })
+    }
+}
+
+/// Under a budget, an event past the decoder's cap is the budget's own
+/// per-response refusal, so a caller can tell it from a dead stream.
+///
+/// ponytail: matched on the decoder's message; give `SseDecoder` a typed
+/// oversize error if a second caller needs to tell them apart.
+fn over_budget(budget: Option<&super::budget::ByteBudget>, error: Error) -> Error {
+    match budget {
+        Some(budget) if error.to_string().contains("SSE event exceeded") => {
+            budget.response_refusal()
+        }
+        _ => error,
     }
 }
 

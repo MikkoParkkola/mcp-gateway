@@ -303,5 +303,8 @@ async fn a_budgeted_stream_refuses_a_frame_past_the_response_limit() {
         .response()
         .await
         .expect_err("the frame limit ends the stream");
-    assert!(error.to_string().contains("exceeded 1024 bytes"), "{error}");
+    // The budget's own refusal, which the era probe reports instead of
+    // reading as silence.
+    assert!(error.to_string().contains("over the preview's"), "{error}");
+    assert!(crate::transport::is_budget_refusal(&error), "{error}");
 }

@@ -153,8 +153,9 @@ pub(super) struct PreviewRequest {
 }
 
 /// The gateways (by `AppState` address) with a confirmed preview running: one
-/// at a time per gateway. A guard releases its entry when dropped, so every
-/// exit frees it, a client that disconnects included.
+/// at a time per gateway. A guard releases its entry when dropped; once a
+/// preview starts, its task holds the guard until teardown is done, so a
+/// client that disconnects frees it only then.
 static BUSY: Mutex<BTreeSet<usize>> = Mutex::new(BTreeSet::new());
 
 struct Busy(usize);

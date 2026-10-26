@@ -36,12 +36,18 @@ impl ByteBudget {
     fn charge(&self, seen: &mut usize, len: usize) -> Result<()> {
         *seen = seen.saturating_add(len);
         if *seen > self.per_response {
-            return Err(Error::Transport(format!(
-                "the response is over the preview's {} budget",
-                mib(self.per_response)
-            )));
+            return Err(self.response_refusal());
         }
         self.charge_total(len)
+    }
+
+    /// The refusal of one response (or one stream event) past
+    /// [`Self::per_response`], in the words [`is_budget_refusal`] knows.
+    pub(crate) fn response_refusal(&self) -> Error {
+        Error::Transport(format!(
+            "the response is over the preview's {} budget",
+            mib(self.per_response)
+        ))
     }
 
     /// The most one response (or one event on a retained stream) may carry.
