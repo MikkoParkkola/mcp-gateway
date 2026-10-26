@@ -201,11 +201,15 @@ async fn test_save_on_a_stale_base_offers_a_patch() {
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["error"], "stale", "{body}");
     let patch = body["patch"].as_str().expect("a stale save offers a patch");
-    assert!(
-        patch.contains("-description: Test capability for integration tests"),
-        "{patch}"
-    );
+    // The base is a hash, so the patch runs from the current file to the
+    // sent text: the other writer's line shows as removed.
+    assert!(patch.contains("-description: Their change"), "{patch}");
     assert!(patch.contains("+description: My change"), "{patch}");
+    assert_eq!(
+        body["current_sha256"],
+        sha256_hex(theirs.as_bytes()).as_str(),
+        "{body}"
+    );
     assert_eq!(std::fs::read_to_string(&cap_file).unwrap(), theirs);
 }
 
@@ -379,5 +383,24 @@ async fn test_pinned_save_rewrites_the_pin_in_place() {
         pin_line,
         format!("sha256: {}", compute_capability_hash(&on_disk)),
         "the pin verifies the bytes written"
+    );
+}
+
+#[tokio::test]
+async fn test_save_to_a_name_with_no_file_is_404() {
+    let (tmp, _file, router, _store) = editor_with(VALID_YAML).await;
+    let (status, _, body) = call(
+        &router,
+        Method::PUT,
+        "/ui/api/capabilities/absent",
+        &[("if-match", &sha256_hex(VALID_YAML.as_bytes()))],
+        VALID_YAML,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "not_found", "{body}");
+    assert!(
+        !tmp.path().join("absent.yaml").exists(),
+        "PUT never creates"
     );
 }
