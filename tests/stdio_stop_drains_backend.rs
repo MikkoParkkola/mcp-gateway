@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8895 STOP.1: a stop sent to the gateway's whole process group (what
+//! A stop sent to the gateway's whole process group (what
 //! `tini -g` does in the `-full` image, and a terminal's ^C) must not reach
 //! the stdio backends before the gateway drains. The call in flight when the
 //! signal lands is answered, then the gateway exits.
 //!
-//! Red before MIK-8895: the backend shared the gateway's process group, so it
+//! It was red while backends shared the gateway's process group: the backend
 //! died with the same signal and the drained call had nothing to wait for.
 #![cfg(unix)]
 
@@ -321,10 +321,11 @@ impl Drop for KillGroup {
     }
 }
 
-/// gpt seat (MIK-8895): in stdio mode (`serve --stdio`, how an MCP client runs
+/// In stdio mode (`serve --stdio`, how an MCP client runs
 /// the gateway) a SIGTERM to the gateway alone must still end the backend's
-/// tree. Red before MIK-8895: stdio mode had no signal handler, so the gateway
-/// died at once and the backend's descendant outlived it.
+/// tree. Red on the release line before the stop signal was registered ahead
+/// of warm start and the first reap step ran on the dropping thread: the
+/// backend's descendant outlived the gateway.
 #[tokio::test]
 async fn a_sigterm_in_stdio_mode_ends_the_backends_tree() {
     use tokio::io::AsyncWriteExt as _;

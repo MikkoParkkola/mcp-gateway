@@ -138,7 +138,7 @@ impl Gateway {
         // spawn a backend, so the OS handlers are registered from now on
         // rather than from the read loop's first poll: a signal in between
         // would otherwise take the default action and, since each backend
-        // leads its own process group (MIK-8895), leave their trees running.
+        // leads its own process group, leave their trees running.
         let signalled_early = futures::FutureExt::now_or_never(stop_signal.as_mut()).is_some();
 
         self.install_stdio_startup_catalogue(&meta_mcp, grant_sink.as_ref(), &warmer)

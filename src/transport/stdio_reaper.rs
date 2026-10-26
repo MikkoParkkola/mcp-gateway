@@ -79,7 +79,7 @@ pub(super) fn hand_over(tree: ChildTree) -> watch::Receiver<Reaped> {
     // The first step runs here, on the caller's thread, not on the reaper's:
     // it sends the ownership-checked group signal now, so a gateway that
     // exits right after dropping a transport has already signalled the
-    // backend's group (MIK-8895). The reaper takes the rest of the order.
+    // backend's group. The reaper takes the rest of the order.
     if !step(&mut job, Instant::now()) {
         return receiver;
     }
