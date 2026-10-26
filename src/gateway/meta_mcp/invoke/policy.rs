@@ -423,9 +423,7 @@ impl MetaMcp {
         // MIN.2: past every gate, so this dispatch's raw reading counts.
         crate::security::tenant_reads::note_attribution(raw_read);
         if round && delivered.1 == super::super::response_security::GateEffect::Enforced {
-            return Err(crate::gateway::delivery_facts::refused(
-                Error::ResponseFirewallRefused,
-            ));
+            return Err(Error::ResponseFirewallRefused);
         }
         Ok(delivered)
     }

@@ -234,6 +234,8 @@ enum MetaMode {
     CodeMode,
     /// Only `gateway_list_servers` is exposed: `gateway_invoke` is no tool.
     InvokeHidden,
+    /// A fail-closed response contract with none declared refuses every answer.
+    ContractRefuses,
 }
 
 impl MetaMode {
@@ -248,6 +250,14 @@ impl MetaMode {
                 crate::idempotency::CLEANUP_INTERVAL,
             ),
             Self::CodeMode => return meta.with_code_mode(true),
+            Self::ContractRefuses => {
+                meta.set_response_contract(crate::config::ResponseContractConfig {
+                    enabled: true,
+                    action_mode: true,
+                    fail_closed: true,
+                    ..Default::default()
+                })
+            }
             Self::InvokeHidden => {
                 return meta.with_exposed_meta_tools(&["gateway_list_servers".to_string()]);
             }

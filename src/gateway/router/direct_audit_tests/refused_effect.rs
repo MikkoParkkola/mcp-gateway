@@ -64,3 +64,20 @@ async fn an_inspection_refusal_records_refused() {
         assert_eq!(event["response_effect"], "refused", "{uri}: {event}");
     }
 }
+
+/// A fail-closed response contract refuses the answer on the meta route; the
+/// error it renders carries no refusal marker.
+#[tokio::test]
+async fn a_contract_refusal_records_refused() {
+    let fx = fixture(Setup {
+        meta_mode: MetaMode::ContractRefuses,
+        ..Setup::default()
+    })
+    .await;
+    let invoke = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {
+        "name": "gateway_invoke", "arguments": {"server": "alpha", "tool": "t", "arguments": {}}}});
+    let (_, body) = post_to(&fx, "/mcp", &invoke.to_string(), &Caller::Anonymous).await;
+    assert!(body.get("error").is_some(), "premise: refused: {body}");
+    let event = only_attempt(&fx);
+    assert_eq!(event["response_effect"], "refused", "{event}");
+}
