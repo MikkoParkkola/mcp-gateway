@@ -234,8 +234,7 @@ async fn f8_a_response_reads_only_the_request_generation() {
 
     let snap = view_pinned(&state, "/ui/api/control-plane", pinned.clone()).await;
     let enforced = |id: &str| {
-        snap.pointer("/snapshot/policies")
-            .or_else(|| snap.pointer("/policies"))
+        snap.pointer("/view/policies")
             .and_then(Value::as_array)
             .and_then(|rows| rows.iter().find(|p| p["policy_id"] == id))
             .map(|p| p["enforced"].clone())

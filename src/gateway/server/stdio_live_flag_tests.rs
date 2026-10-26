@@ -36,6 +36,8 @@ struct Session {
     client: DuplexStream,
     reader: tokio::io::BufReader<DuplexStream>,
     hold: Arc<Slot>,
+    /// The config this session serves and reloads.
+    live: Arc<crate::config_reload::LiveConfig>,
     task: tokio::task::JoinHandle<()>,
     next_id: u64,
 }
@@ -43,19 +45,31 @@ struct Session {
 impl Session {
     async fn start(dir: &Path, path: std::path::PathBuf) -> Self {
         let config = Config::load(Some(&path)).expect("loads");
-        let gateway = Gateway::new_with_path(config, Some(path))
+        let mut gateway = Gateway::new_with_path(config, Some(path))
             .await
             .expect("valid config")
             .with_data_dir(dir.to_path_buf());
         let (hold, _) = gateway.stdio_drain_seams_for_test();
+        let meta = gateway.stdio_meta_mcp_for_test();
         let (client, input) = tokio::io::duplex(64 * 1024);
         let (output, reader) = tokio::io::duplex(1 << 20);
         let task =
             tokio::spawn(async move { drop(gateway.run_stdio_on(input, output, None).await) });
+        let meta = tokio::time::timeout(Duration::from_secs(30), meta)
+            .await
+            .expect("stdio built its Meta-MCP within 30 s")
+            .expect("the seam reported it");
+        let live = Arc::clone(
+            &meta
+                .reload_context()
+                .expect("stdio has a reload context")
+                .live_config,
+        );
         let mut session = Self {
             client,
             reader: tokio::io::BufReader::new(reader),
             hold,
+            live,
             task,
             next_id: 1,
         };
@@ -163,14 +177,14 @@ async fn f2_stdio_sanitise_input_follows_a_reload() {
     assert!(sanitised(&reply), "on after reload: {reply}");
 }
 
-/// Hold the next line's dispatch, flip the flag by a reload on another line,
-/// release, and return the held line's answer.
-async fn held_across_a_flip(s: &mut Session, path: &Path, to: bool) -> Value {
+/// Hold the next line's dispatch, publish the flipped flag into the config
+/// stdio serves (as its reload would; F2 covers the reload itself), release,
+/// and return the held line's answer.
+async fn held_across_a_flip(s: &mut Session, to: bool) -> Value {
     let (reached, release) = s.hold.arm();
     let held = s.send_nul().await;
     crate::test_pause::within("the held line reaches the pause", reached.notified()).await;
-    write_flag(path, to);
-    s.reload().await;
+    s.live.edit(|c| c.security.sanitize_input = to);
     release.notify_one();
     s.answer(held).await
 }
@@ -182,11 +196,11 @@ async fn g4_a_held_stdio_line_keeps_the_generation_it_was_read_under() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
     write_flag(&path, true);
-    let mut s = Session::start(dir.path(), path.clone()).await;
+    let mut s = Session::start(dir.path(), path).await;
 
-    let reply = held_across_a_flip(&mut s, &path, false).await;
+    let reply = held_across_a_flip(&mut s, false).await;
     assert!(sanitised(&reply), "on then off: {reply}");
 
-    let reply = held_across_a_flip(&mut s, &path, true).await;
+    let reply = held_across_a_flip(&mut s, true).await;
     assert!(!sanitised(&reply), "off then on: {reply}");
 }
