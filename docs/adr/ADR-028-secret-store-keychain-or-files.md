@@ -21,6 +21,8 @@
 ### 1. Grammar
 
 `SecretRef` gains `keychain:NAME`, accepted everywhere `env:` and `file:` are, because every secret field already parses through `SecretRef`.
+
+Amended 2026-10-26 (B3): backend `env` and `headers` values did not parse through `SecretRef`; they had only `${VAR}` expansion, so a `keychain:` value written there reached the backend as text. They are now secret slots too. The written value is classified once. A whole-value `env:`, `file:` or `keychain:` reference resolves once, for an enabled backend, and its bytes are used verbatim, never read again as a reference. Anything else keeps `${VAR}` expansion, whose result is not classified. Every writer of a backend resolves its references before writing and refuses one that does not resolve, so it never reaches gateway.yaml. Display surfaces show the reference text, never the value.
 - `NAME` matches `[A-Za-z0-9._-]{1,128}`.
 - A config naming an entry that does not exist, or is empty, **fails validation with a message naming the entry**. It never resolves to an empty value, the same C4 rule as `env:`.
 - On a platform without a keychain backend, a `keychain:` reference fails validation, naming the platform.
