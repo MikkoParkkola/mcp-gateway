@@ -290,13 +290,12 @@ pub(super) fn enter_root() -> Step {
         .map_err(io::Error::from)
         .map_err(at("detaching the old root at", &old))?;
     fs::remove_dir(&old).map_err(at("removing", &old))?;
-    mount_remount(
-        "/",
-        MountFlags::BIND | MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV,
-        c"",
+    // Through the same helper as every bind, so the root keeps its locked
+    // flags rather than failing the remount with an opaque EPERM.
+    remount(
+        Path::new("/"),
+        MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV,
     )
-    .map_err(io::Error::from)
-    .map_err(at("making the new root read-only at", Path::new("/")))
 }
 
 /// `m` is the mount `ancestor` or lies below it in the mount tree.

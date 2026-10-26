@@ -160,6 +160,14 @@ fn build_plan(target: &Target, protected: &[PathBuf]) -> Result<Plan, Refusal> {
         .flatten()
         .chain(protected.iter().cloned())
     {
+        // Masked where it is named and where it really is: a state directory
+        // that is a symlink into a bound prefix (`/usr/...`) would otherwise
+        // stay readable at its real path.
+        if let Ok(real) = fs::canonicalize(&path) {
+            if real != path {
+                masked.push(utf8(&real)?);
+            }
+        }
         masked.push(utf8(&path)?);
     }
 
@@ -202,10 +210,19 @@ fn resolve(program: &Path) -> Result<PathBuf, Refusal> {
             .then(|| program.to_owned())
             .ok_or_else(not_found);
     }
+    // A bare name only, as the capability executor's resolver takes: `./tool`
+    // and `bin/tool` name the gateway's working directory, which the preview
+    // never sees, and so does a match through a relative PATH entry.
+    if program.components().count() != 1 {
+        return Err(Refusal::Step(format!(
+            "finding {} (a bare name or an absolute path)",
+            program.display()
+        )));
+    }
     let path = std::env::var_os("PATH").ok_or_else(not_found)?;
     std::env::split_paths(&path)
         .map(|dir| dir.join(program))
-        .find(|candidate| candidate.is_file())
+        .find(|candidate| candidate.is_absolute() && candidate.is_file())
         .ok_or_else(not_found)
 }
 
@@ -264,6 +281,8 @@ fn host_namespaces() -> Result<HostNamespaces, Refusal> {
         mnt: inode("mnt")?,
         pid: inode("pid")?,
         net: inode("net")?,
+        ipc: inode("ipc")?,
+        uts: inode("uts")?,
     })
 }
 
@@ -312,17 +331,27 @@ pub(super) fn classify(stderr: &str) -> Refusal {
 }
 
 fn classify_with(stderr: &str, host: &HostFacts) -> Refusal {
-    // The helper's own refusal names its step; it ran, so the host is fine.
+    let apparmor = host.apparmor_restricts_userns.as_deref() == Some("1");
+    // The helper's own refusal names its step. On an AppArmor-restricted host
+    // the namespaces can be created and the mounts inside them still denied,
+    // which the one-time profile fixes too.
     if let Some(step) = stderr
         .lines()
         .find_map(|line| line.strip_prefix("preview-sandbox: refused at "))
     {
+        let denied = step.contains("Permission denied") || step.contains("Operation not permitted");
+        let mounting = ["mounting", "binding", "masking", "remounting", "pivoting"]
+            .iter()
+            .any(|verb| step.starts_with(verb));
+        if apparmor && denied && mounting {
+            return Refusal::AppArmorRestricted;
+        }
         return Refusal::Step(step.to_owned());
     }
     if host.max_user_namespaces.as_deref() == Some("0") {
         return Refusal::UserNamespacesDisabled;
     }
-    if host.apparmor_restricts_userns.as_deref() == Some("1") {
+    if apparmor {
         return Refusal::AppArmorRestricted;
     }
     if host.in_container {
@@ -396,12 +425,49 @@ mod tests {
         );
     }
 
+    /// Namespaces created, mounts denied: the same one-time step.
+    #[test]
+    fn a_mount_denied_under_apparmor_names_the_profile_step() {
+        let host = HostFacts {
+            apparmor_restricts_userns: Some("1".into()),
+            ..HostFacts::default()
+        };
+        let stderr = "preview-sandbox: refused at mounting the root tmpfs on /tmp \
+                      (Permission denied (os error 13))\n";
+        assert_eq!(classify_with(stderr, &host), Refusal::AppArmorRestricted);
+        // The same step on a host without the restriction is the step itself.
+        assert!(matches!(
+            classify_with(stderr, &HostFacts::default()),
+            Refusal::Step(step) if step.starts_with("mounting the root tmpfs")
+        ));
+    }
+
     #[test]
     fn an_unrecognised_failure_keeps_what_unshare_said() {
         let refusal = classify_with("unshare: a new message\n", &HostFacts::default());
         assert_eq!(
             refusal,
             Refusal::Step("starting the namespaces (unshare: a new message)".into())
+        );
+    }
+
+    #[test]
+    fn a_relative_program_is_refused() {
+        for program in ["./sh", "bin/sh", "../sh"] {
+            assert!(
+                matches!(resolve(Path::new(program)), Err(Refusal::Step(s)) if s.contains("bare name")),
+                "{program}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bare_name_resolves_to_an_absolute_path() {
+        let found = resolve(Path::new("sh")).expect("sh on PATH");
+        assert!(
+            found.is_absolute() && found.is_file(),
+            "{}",
+            found.display()
         );
     }
 

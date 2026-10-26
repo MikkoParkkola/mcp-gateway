@@ -43,6 +43,8 @@ fn check_namespaces(host: HostNamespaces) -> Result<(), String> {
         ("mnt", host.mnt),
         ("pid", host.pid),
         ("net", host.net),
+        ("ipc", host.ipc),
+        ("uts", host.uts),
     ] {
         let path = format!("/proc/self/ns/{name}");
         let inode = fs::metadata(&path)
@@ -61,10 +63,10 @@ fn check_namespaces(host: HostNamespaces) -> Result<(), String> {
 /// would need `unsafe`, so a descriptor inherited without close-on-exec fails
 /// the preview closed instead of leaking into it.
 fn check_descriptors() -> Result<(), String> {
-    let listing =
+    let mut listing =
         fs::read_dir("/proc/self/fd").map_err(|e| format!("listing descriptors ({e})"))?;
     let mut extra = Vec::new();
-    for entry in listing {
+    for entry in listing.by_ref() {
         let entry = entry.map_err(|e| format!("listing descriptors ({e})"))?;
         let Some(fd) = entry
             .file_name()
@@ -77,11 +79,13 @@ fn check_descriptors() -> Result<(), String> {
             extra.push(fd);
         }
     }
-    // The listing holds one descriptor of its own, on the fd directory.
+    // The listing holds one descriptor of its own, on the fd directory. It is
+    // still open here, so its link still names that directory.
     let own = extra.iter().position(|fd| {
         fs::read_link(format!("/proc/self/fd/{fd}"))
             .is_ok_and(|target| target.ends_with("fd") && target.starts_with("/proc"))
     });
+    drop(listing);
     if let Some(own) = own {
         extra.swap_remove(own);
     }

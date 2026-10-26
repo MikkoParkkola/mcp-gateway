@@ -148,7 +148,24 @@ mod tests {
             .iter()
             .map(|i| (i.code, i.jt, i.jf, i.k))
             .collect();
-        assert_eq!(head, PREAMBLE);
+        // Typed out from ADR-027's table, not read from `PREAMBLE`, so an edit
+        // to the constant cannot also change what it is checked against.
+        #[cfg(target_arch = "x86_64")]
+        let published: &[(u16, u8, u8, u32)] = &[
+            (0x20, 0, 0, 4),
+            (0x15, 1, 0, 0xC000_003E),
+            (0x06, 0, 0, 0x8000_0000),
+            (0x20, 0, 0, 0),
+            (0x45, 0, 1, 0x4000_0000),
+            (0x06, 0, 0, 0x8000_0000),
+        ];
+        #[cfg(target_arch = "aarch64")]
+        let published: &[(u16, u8, u8, u32)] = &[
+            (0x20, 0, 0, 4),
+            (0x15, 1, 0, 0xC000_00B7),
+            (0x06, 0, 0, 0x8000_0000),
+        ];
+        assert_eq!(head, published);
         // seccompiler's own program follows, starting with its arch load.
         assert_eq!(first[PREAMBLE.len()].code, 0x20);
     }

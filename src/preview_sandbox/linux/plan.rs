@@ -18,6 +18,8 @@ pub(crate) struct HostNamespaces {
     pub(crate) mnt: u64,
     pub(crate) pid: u64,
     pub(crate) net: u64,
+    pub(crate) ipc: u64,
+    pub(crate) uts: u64,
 }
 
 /// Resource limits `__preview-drop` sets on itself before the exec.
