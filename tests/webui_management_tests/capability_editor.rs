@@ -404,3 +404,171 @@ async fn test_save_to_a_name_with_no_file_is_404() {
         "PUT never creates"
     );
 }
+
+// ── T8 (rev5 plan): validate-only before If-Match; refusals create nothing ───
+
+#[tokio::test]
+async fn test_put_validate_needs_no_if_match() {
+    let (_tmp, cap_file, router, _store) = editor_with(VALID_YAML).await;
+    let edited = VALID_YAML.replace(EDITED_FROM, "Unsaved edit");
+    let (status, _, body) = call(
+        &router,
+        Method::PUT,
+        "/ui/api/capabilities/kept?validate=1",
+        &[],
+        &edited,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "validate-only never answers 428: {body}"
+    );
+    assert_eq!(std::fs::read_to_string(&cap_file).unwrap(), VALID_YAML);
+}
+
+fn listing(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n != ".capabilities.lock")
+        .collect();
+    names.sort();
+    names
+}
+
+#[tokio::test]
+async fn test_refused_writes_create_nothing() {
+    let (tmp, _cap, router, _store) = editor_with(VALID_YAML).await;
+    let before = listing(tmp.path());
+    let stale = format!("\"{}\"", sha256_hex(b"not the base"));
+    for (method, uri, headers, body) in [
+        (
+            Method::PUT,
+            "/ui/api/capabilities/absent",
+            vec![("if-match", stale.as_str())],
+            VALID_YAML,
+        ),
+        (
+            Method::PUT,
+            "/ui/api/capabilities/kept",
+            vec![("if-match", stale.as_str())],
+            VALID_YAML,
+        ),
+        (Method::PUT, "/ui/api/capabilities/kept", vec![], VALID_YAML),
+        (
+            Method::PUT,
+            "/ui/api/capabilities/kept",
+            vec![("if-match", stale.as_str())],
+            "name: kept\nproviders: 5\n",
+        ),
+        (
+            Method::DELETE,
+            "/ui/api/capabilities/kept",
+            vec![("if-match", stale.as_str())],
+            "",
+        ),
+    ] {
+        let (status, _, answer) = call(&router, method.clone(), uri, &headers, body).await;
+        assert!(
+            status.is_client_error(),
+            "{method} {uri}: {status} {answer}"
+        );
+        assert_eq!(listing(tmp.path()), before, "{method} {uri} left debris");
+    }
+}
+
+// ── T18: the editor never writes through a symlink ───────────────────────────
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_symlinked_capability_is_refused() {
+    let elsewhere = TempDir::new().unwrap();
+    let real = elsewhere.path().join("real.yaml");
+    write_owner_only(&real, VALID_YAML).unwrap();
+    let tmp = TempDir::new().unwrap();
+    let link = tmp.path().join("kept.yaml");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let (state, _store) = make_app_state(Some(tmp.path().to_str().unwrap()), None).await;
+    let router = create_router(state);
+    let base = sha256_hex(VALID_YAML.as_bytes());
+    let edited = VALID_YAML.replace(EDITED_FROM, "Through the link");
+
+    for (method, body) in [(Method::PUT, edited.as_str()), (Method::DELETE, "")] {
+        let (status, _, answer) = call(
+            &router,
+            method.clone(),
+            "/ui/api/capabilities/kept",
+            &[("if-match", &base)],
+            body,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{method}: {answer}");
+        assert_eq!(answer["error"], "symlinked", "{method}: {answer}");
+        let real_path = std::fs::canonicalize(&real).unwrap();
+        assert!(
+            answer["message"]
+                .as_str()
+                .is_some_and(|m| m.contains(real_path.to_str().unwrap())),
+            "the admin is told where it lives: {answer}"
+        );
+    }
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(std::fs::read_to_string(&real).unwrap(), VALID_YAML);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_symlinked_capability_directory_still_saves() {
+    let real_dir = TempDir::new().unwrap();
+    write_owner_only(&real_dir.path().join("kept.yaml"), VALID_YAML).unwrap();
+    let holder = TempDir::new().unwrap();
+    let linked_dir = holder.path().join("caps");
+    std::os::unix::fs::symlink(real_dir.path(), &linked_dir).unwrap();
+    let (state, _store) = make_app_state(Some(linked_dir.to_str().unwrap()), None).await;
+    let router = create_router(state);
+    let edited = VALID_YAML.replace(EDITED_FROM, "Through the directory link");
+
+    let (status, _, body) = call(
+        &router,
+        Method::PUT,
+        "/ui/api/capabilities/kept",
+        &[("if-match", &sha256_hex(VALID_YAML.as_bytes()))],
+        &edited,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        std::fs::read_to_string(real_dir.path().join("kept.yaml")).unwrap(),
+        edited
+    );
+}
+
+// ── T20: a save keeps its mode ───────────────────────────────────────────────
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_save_keeps_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    for mode in [0o644, 0o600] {
+        let (_tmp, cap_file, router, _store) = editor_with(VALID_YAML).await;
+        std::fs::set_permissions(&cap_file, std::fs::Permissions::from_mode(mode)).unwrap();
+        let edited = VALID_YAML.replace(EDITED_FROM, "Mode kept");
+        let (status, _, body) = call(
+            &router,
+            Method::PUT,
+            "/ui/api/capabilities/kept",
+            &[("if-match", &sha256_hex(VALID_YAML.as_bytes()))],
+            &edited,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{mode:o}: {body}");
+        let now = std::fs::metadata(&cap_file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(now, mode, "mode {mode:o} was not kept");
+    }
+}
