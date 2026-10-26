@@ -11,14 +11,24 @@ use sha2::Digest as _;
 const ORIGINAL: &str = "backends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n";
 const CANDIDATE: &str = "backends: [not: yaml\n";
 
+/// Write `text` owner-only, as the loader requires of a config.
+fn write_private(path: &Path, text: &str) {
+    std::fs::write(path, text).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+}
+
 /// The disk a writer killed after its rename leaves, written by hand in the
 /// journal's on-disk form: the candidate in place, the original staged, the
 /// journal `staged`. Returns the journal's path.
 fn crashed_write(config: &Path) -> PathBuf {
-    std::fs::write(config, CANDIDATE).unwrap();
+    write_private(config, CANDIDATE);
     let target = std::fs::canonicalize(config).unwrap();
     let staged = target.with_file_name(".gateway.yaml.replace-original");
-    std::fs::write(&staged, ORIGINAL).unwrap();
+    write_private(&staged, ORIGINAL);
     let journal = target.with_file_name(".gateway.yaml.replace-journal");
     let revision = hex::encode(sha2::Sha256::digest(ORIGINAL.as_bytes()));
     let body = serde_json::json!({
@@ -53,7 +63,7 @@ fn a_starting_gateway_recovers_a_crashed_write_before_loading() {
 fn a_start_without_a_journal_writes_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("gateway.yaml");
-    std::fs::write(&config, ORIGINAL).unwrap();
+    write_private(&config, ORIGINAL);
 
     super::load_for_serve(Some(&config)).expect("loads");
 
@@ -89,7 +99,7 @@ fn writable(dir: &Path) {
 fn an_unwritable_directory_without_a_journal_starts() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("gateway.yaml");
-    std::fs::write(&config, ORIGINAL).unwrap();
+    write_private(&config, ORIGINAL);
     if unwritable(dir.path()).is_none() {
         return;
     }
@@ -115,10 +125,10 @@ fn an_unwritable_directory_with_a_journal_refuses_to_start() {
     let refused = super::load_for_serve(Some(&config));
 
     writable(dir.path());
-    let message = refused
-        .err()
-        .expect("a pending journal it cannot lock refuses")
-        .to_string();
+    let message = match refused {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("a pending journal it cannot lock must refuse the start"),
+    };
     assert!(
         message.contains("resolve the pending write from the writable side"),
         "{message}"
