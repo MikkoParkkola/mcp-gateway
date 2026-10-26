@@ -700,6 +700,18 @@ async fn repointed_mid_reload(
         .collect()
 }
 
+/// Every load this test saw read `real`, the target its lock resolved:
+/// never the link spelling, nor what the link names after it moved.
+#[cfg(unix)]
+fn only_the_locked_target(loaded: &[PathBuf], real: &Path) {
+    let real = crate::identity_grants::journal::resolved(real);
+    assert!(
+        !loaded.is_empty() && loaded.iter().all(|p| *p == real),
+        "only the locked target {} is loaded: {loaded:?}",
+        real.display()
+    );
+}
+
 /// H1 for writers: the lock, the write and the reload are one config. A link
 /// re-pointed while the reload is under way does not move it elsewhere.
 #[cfg(unix)]
@@ -713,11 +725,7 @@ async fn a_write_reloads_what_it_locked_when_the_link_moves() {
             .is_ok()
     };
     let loaded = repointed_mid_reload(dir.path(), &link, write).await;
-    assert_eq!(
-        loaded,
-        vec![crate::identity_grants::journal::resolved(&real)],
-        "only the locked target is loaded, never the link or what it now names"
-    );
+    only_the_locked_target(&loaded, &real);
 }
 
 /// H1 for readers, under the same race: the watcher's reload stays on the
@@ -728,9 +736,59 @@ async fn a_watcher_reload_stays_put_when_the_link_moves() {
     let (dir, real, link, ctx) = linked_context();
     let reload = async move { ctx.reload_outcome().await.is_ok() };
     let loaded = repointed_mid_reload(dir.path(), &link, reload).await;
+    only_the_locked_target(&loaded, &real);
+}
+
+/// H1 for the whole-config writer, under the same race.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_whole_config_write_reloads_what_it_locked_when_the_link_moves() {
+    let (dir, real, link, ctx) = linked_context();
+    let config = Config::load(Some(&real)).expect("config loads");
+    let at = link.clone();
+    let write = async move {
+        ctx.write_and_reload_outcome_within(&at, WAIT, &config)
+            .await
+            .is_ok()
+    };
+    let loaded = repointed_mid_reload(dir.path(), &link, write).await;
+    only_the_locked_target(&loaded, &real);
+}
+
+/// H1 for the reload a lock recovery left owed: paid before the writer's
+/// own work, it loads the target the writer locked, not the link.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_owed_reload_loads_what_the_writer_locked_when_the_link_moves() {
+    let (dir, real, link, ctx) = linked_context();
+    ctx.reload_owed
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let at = link.clone();
+    let write = async move {
+        ctx.mutate_and_reload_outcome_within(&at, WAIT, |_: &mut Config| Ok::<(), String>(()))
+            .await
+            .is_ok()
+    };
+    let loaded = repointed_mid_reload(dir.path(), &link, write).await;
     assert_eq!(
-        loaded,
-        vec![crate::identity_grants::journal::resolved(&real)],
-        "only the locked target is loaded, never the link or what it now names"
+        loaded.len(),
+        2,
+        "the owed reload, then the write's own: {loaded:?}"
     );
+    only_the_locked_target(&loaded, &real);
+}
+
+/// H1 for a replace that changes nothing: its reload still loads the
+/// target the lock resolved.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unchanged_replace_reloads_what_it_locked_when_the_link_moves() {
+    let (dir, real, link, ctx) = linked_context();
+    let replace = async move {
+        replace_detached(ctx, to(Expected::Any, START, Replaced::Discard), WAIT)
+            .await
+            .is_ok()
+    };
+    let loaded = repointed_mid_reload(dir.path(), &link, replace).await;
+    only_the_locked_target(&loaded, &real);
 }

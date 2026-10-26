@@ -21,7 +21,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering::SeqCst};
 use std::time::{Duration, Instant};
 
 use super::journal::Recovered;
@@ -189,11 +189,13 @@ pub(crate) async fn lock_config(config: &Path, deadline: Instant) -> Result<Lock
     let _cancel = StopWaiting(Arc::clone(&waiting));
     off_runtime(move || acquire(&config, deadline, &|| waiting.load(SeqCst), |_| {}))
         .await
-        .unwrap_or_else(|| {
-            Err(NotLocked::Failed(
+        .unwrap_or_else(|why| match why {
+            // Retryable, as a lock held past the wait is.
+            NoResult::Stalled => Err(NotLocked::Busy),
+            NoResult::Lost => Err(NotLocked::Failed(
                 "taking the config lock failed: its thread could not start or ended without a result"
                     .to_owned(),
-            ))
+            )),
         })
 }
 
@@ -241,26 +243,118 @@ fn acquire(
     }
 }
 
+/// Why [`off_runtime`] has no result.
+#[derive(Debug, PartialEq)]
+enum NoResult {
+    /// Not started: [`MAX_ABANDONED`] earlier threads are still stuck.
+    Stalled,
+    /// The thread could not start, or ended without a result.
+    Lost,
+}
+
+// ponytail: a cap of 4 abandoned threads, not a per-mount bound. A thread
+// stalled on a dead NFS or FUSE mount stays stalled whatever its caller
+// does, so each retry against that mount would leave one more behind; a
+// few cover a mount that recovers, and past them every lock attempt
+// refuses until one returns. Threads whose caller is still waiting are not
+// counted: their callers already bound them, and counting them would turn
+// writers that only wait on each other into refusals.
+const MAX_ABANDONED: usize = 4;
+
+/// Threads [`off_runtime`] started whose caller gave up before they
+/// returned.
+struct Abandoned(AtomicUsize);
+
+static ABANDONED: Abandoned = Abandoned(AtomicUsize::new(0));
+
+/// A thread's state, shared by it and its caller.
+const RUNNING: u8 = 0;
+const RETURNED: u8 = 1;
+const LEFT: u8 = 2;
+
 /// Run `work` on a detached thread of its own and await its result: a
 /// detached thread, not `spawn_blocking`, so filesystem work stalled on an
 /// NFS or FUSE mount never holds the runtime's shutdown (as the reload's own
 /// load does, #1808). Whatever `work` owns (a held lock) stays with it until
-/// it finishes, even if the awaiting caller is dropped. `None` if the
-/// thread could not start or ended without a result.
-///
-/// Not bounded: a thread stalled on the mount stays stalled however its
-/// caller gives up, so each retry against a mount that never recovers adds
-/// one. A fixed cap would refuse writers that are only waiting on each
-/// other; bound it by the mount, not a count, if that ever shows up.
-async fn off_runtime<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+/// it finishes, even if the awaiting caller is dropped.
+async fn off_runtime<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, NoResult> {
+    off_runtime_in(&ABANDONED, work).await
+}
+
+async fn off_runtime_in<T: Send + 'static>(
+    abandoned: &'static Abandoned,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, NoResult> {
+    if abandoned.0.load(SeqCst) >= MAX_ABANDONED {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            tracing::warn!(
+                stuck = MAX_ABANDONED,
+                "config lock work refused: earlier threads are still stuck in the filesystem; check the mount holding gateway.yaml"
+            );
+        });
+        return Err(NoResult::Stalled);
+    }
+    let state = Arc::new(AtomicU8::new(RUNNING));
     let (done, result) = tokio::sync::oneshot::channel();
+    let ended = Returned {
+        state: Arc::clone(&state),
+        abandoned,
+    };
     std::thread::Builder::new()
         .name("config-lock".into())
         .spawn(move || {
-            let _ = done.send(work());
+            let out = work();
+            // Marked returned before the result is sent, so a caller that
+            // receives it never counts this thread as abandoned. A panic
+            // marks it too, as the guard drops.
+            drop(ended);
+            let _ = done.send(out);
         })
-        .ok()?;
-    result.await.ok()
+        .map_err(|_| NoResult::Lost)?;
+    let _caller = Left { state, abandoned };
+    result.await.map_err(|_| NoResult::Lost)
+}
+
+/// Held by the thread: marks it returned, and uncounts it if its caller
+/// had already left.
+struct Returned {
+    state: Arc<AtomicU8>,
+    abandoned: &'static Abandoned,
+}
+
+impl Drop for Returned {
+    fn drop(&mut self) {
+        if self.state.swap(RETURNED, SeqCst) == LEFT {
+            self.abandoned.0.fetch_sub(1, SeqCst);
+        }
+    }
+}
+
+/// Held by the caller: counts the thread as abandoned if the caller leaves
+/// first. Counted before the state turns, so the thread's uncount can never
+/// run ahead of it.
+struct Left {
+    state: Arc<AtomicU8>,
+    abandoned: &'static Abandoned,
+}
+
+impl Drop for Left {
+    fn drop(&mut self) {
+        if self.state.load(SeqCst) == RETURNED {
+            return;
+        }
+        self.abandoned.0.fetch_add(1, SeqCst);
+        if self
+            .state
+            .compare_exchange(RUNNING, LEFT, SeqCst, SeqCst)
+            .is_err()
+        {
+            self.abandoned.0.fetch_sub(1, SeqCst);
+        }
+    }
 }
 
 /// [`lock_config`] for a synchronous caller (the CLI), which may block its
@@ -313,7 +407,8 @@ pub(crate) async fn reader_lock(config: &Path, deadline: Instant) -> ReaderLock 
                     journal,
                 )
             })
-            .await;
+            .await
+            .ok();
             classify_unlockable(config, message, probe)
         }
     }
@@ -485,5 +580,45 @@ mod tests {
         assert!(held.is_ok(), "the lock is taken");
         let mode = std::fs::metadata(&lock).expect("stat").permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "mode {mode:o}");
+    }
+
+    /// Abandoned threads are capped: with [`super::MAX_ABANDONED`] callers
+    /// gone while their threads stay stuck, the next start is refused; once
+    /// those threads return, starts work again.
+    #[tokio::test]
+    async fn abandoned_threads_are_capped_until_they_return() {
+        use super::{Abandoned, MAX_ABANDONED, NoResult, off_runtime_in};
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        // This test's own count, so other tests' threads never touch it.
+        static MINE: Abandoned = Abandoned(AtomicUsize::new(0));
+        let mut stuck = Vec::new();
+        for _ in 0..MAX_ABANDONED {
+            let (release, wait) = std::sync::mpsc::channel::<()>();
+            stuck.push(release);
+            let call = off_runtime_in(&MINE, move || wait.recv().is_ok());
+            tokio::pin!(call);
+            // Polled once, which starts the thread, then dropped: the caller
+            // leaves, the thread stays.
+            tokio::select! {
+                biased;
+                _ = &mut call => panic!("the thread waits for its release"),
+                () = std::future::ready(()) => {}
+            }
+        }
+        assert_eq!(MINE.0.load(SeqCst), MAX_ABANDONED);
+        assert_eq!(
+            off_runtime_in(&MINE, || ()).await,
+            Err(NoResult::Stalled),
+            "refused past the cap"
+        );
+
+        drop(stuck);
+        let mut spins = 0_u32;
+        while MINE.0.load(SeqCst) != 0 && spins < 10_000_000 {
+            std::thread::yield_now();
+            spins += 1;
+        }
+        assert_eq!(MINE.0.load(SeqCst), 0, "returned threads are uncounted");
+        assert_eq!(off_runtime_in(&MINE, || 7).await, Ok(7));
     }
 }
