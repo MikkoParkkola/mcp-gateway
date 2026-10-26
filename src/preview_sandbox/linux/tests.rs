@@ -346,6 +346,13 @@ fn an_alias_is_kept_only_while_every_link_is_shown() {
     std::os::unix::fs::symlink("../root/real", out.join("hop")).expect("hop");
     std::os::unix::fs::symlink(&root, out.join("dir-hop")).expect("dir hop");
     fs::create_dir_all(out.join("real-dir")).expect("real dir");
+    // No dots at all, yet through the unshown `out/dir-hop`: rejected only
+    // because the target as written differs from its resolved form.
+    let absolute = out.join("dir-hop").join("real");
+    link(
+        "absolute-dir-link",
+        absolute.to_str().expect("UTF-8 scratch path"),
+    );
     std::os::unix::fs::symlink("real-dir", out.join("twin")).expect("twin");
     let shown = |p: &Path| p.starts_with(&root);
     // Reached through a directory link the root does not show: kept, but
@@ -366,6 +373,7 @@ fn an_alias_is_kept_only_while_every_link_is_shown() {
         ("later-dir-link", false),
         ("dotdot-through-link", false),
         ("plain-climb", false),
+        ("absolute-dir-link", false),
         ("loop-a", false),
     ] {
         let got = reachable_inside(&root.join(name), &shown);
