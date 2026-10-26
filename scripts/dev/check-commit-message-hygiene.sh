@@ -50,6 +50,7 @@ checks=(
   "\\bwe (added|fixed|caught|found|decided|realised|realized)\\b::first person: describe the change, not the people who made it"
   "\\b(sub-?agent|agent session|scratchpad|worktree)\\b::authoring-process narration"
   "\\b(claude|codex|kimi|chatgpt|gpt-[0-9]|grok|copilot)\\b::names the authoring tool as an actor"
+  "\\bcursor('s)? (suggest(ed|ion|s)?|ide)\\b::names the authoring tool as an actor"
   "\\b(this session|the session transcript|earlier turn|compaction|context window)\\b::session narration"
   "\\b(review seat|the operator|the reviewer (said|asked|caught)|per the ruling|ruling [0-9])\\b::internal process shorthand"
   "\\b(sorry|oops|apolog(y|ies|ise|ize)|my (mistake|bad|earlier) )::apology or self-criticism"
@@ -58,7 +59,8 @@ checks=(
 )
 
 # Matched with case: the editor is "Cursor", while a lowercase cursor is the
-# pagination noun ("the next page cursor").
+# pagination noun ("the next page cursor"). The lowercase forms that can only
+# mean the editor ("cursor suggested", "cursor IDE") are in the list above.
 case_sensitive_checks=(
   "\\bCursor\\b::names the authoring tool as an actor"
 )
@@ -81,8 +83,8 @@ commits="$(git rev-list --no-merges "$range" 2>/dev/null || true)"
 while IFS= read -r sha; do
   [[ -n "$sha" ]] || continue
   # Drop trailer lines: they legitimately carry names and addresses. Drop the
-  # I/O token and the "(i)" info marker too, or each reads as the first-person
-  # pronoun -- and
+  # I/O token and the lowercase "(i)" info marker too, or each reads as the
+  # first-person pronoun ("(I)" in capitals stays the pronoun) -- and
   # neutralise short command flags for the same reason: a word boundary falls
   # between the dash and the letter, so a short flag reads as the pronoun.
   # Found by this guard rejecting a message that quoted its own remediation
@@ -91,7 +93,7 @@ while IFS= read -r sha; do
   # form passes on Linux CI and does nothing on a macOS working copy.
   body="$(git log -1 --format='%B' "$sha" |
     sed -E '/^[A-Za-z-]+-[Bb]y:[[:space:]]/d; /^(Signed-off-by|Refs|Fixes|Closes|Reviewed-on):[[:space:]]/d' |
-    sed -E 's#I/O#IO#g; s/\([iI]\)/(info)/g; s/ -([a-zA-Z])([^[:alnum:]]|$)/ shortflag\1\2/g')"
+    sed -E 's#I/O#IO#g; s/\(i\)/(info)/g; s/ -([a-zA-Z])([^[:alnum:]]|$)/ shortflag\1\2/g')"
 
   # The forge appends " (#123)" when it squashes, so the ceiling governs what
   # the author wrote.
