@@ -141,8 +141,9 @@ and then, inside the namespaces, in this order:
    interpreter directory bound back if it lies there), one each over `/etc/ssl/private` and
    `/etc/pki/tls/private`, and one over every resolved gateway state, config and data path that falls under any
    bind. Plus the preview home (tmpfs `size=1G`, read-write), a `/tmp` (tmpfs `size=256M`), `/dev/null`,
-   `/dev/zero`, `/dev/urandom`, and the PID namespace's `/proc` mounted at the new root's `/proc` with `hidepid=2`, so the helper (PID 1), which
-   the target cannot ptrace, is not listed there. The gateway
+   `/dev/zero`, `/dev/urandom`, and the PID namespace's `/proc` mounted at the new root's `/proc` with `hidepid=2,gid=1` (then remounted, as
+   kernels before 5.8 keep the options per superblock), so the helper (PID 1), which the target cannot ptrace, is
+   not listed there, whatever host groups the gateway's user holds. The gateway
    proxy's Unix socket is bound in now, while its host path is still reachable, onto a file under the writable
    `/tmp`, so the helper alone can unmount and remove it after the fetch (step 6); nothing in the new root is from `/run`, `/var` or any home; no
    `/etc/resolv.conf` (the fetch reaches only the proxy on `127.0.0.1`, which resolves names on the gateway

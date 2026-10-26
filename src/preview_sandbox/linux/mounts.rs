@@ -93,15 +93,19 @@ pub(super) fn build_root(plan: &Plan) -> Step {
     // the kernel lets a user namespace mount another). `hidepid=2` hides every
     // process the viewer cannot ptrace: the target runs as the namespace's
     // root, which owns a non-dumpable helper's `/proc/1/fd` and could list it.
-    mount(
-        "proc",
-        &proc,
-        "proc",
-        MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
-        c"hidepid=2",
-    )
-    .map_err(io::Error::from)
-    .map_err(at("mounting proc on", &proc))?;
+    // `gid=1` is never mapped here, so no group is exempt (by default host
+    // group 0 is, and a user namespace cannot drop a supplementary group).
+    let proc_flags = MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC;
+    let proc_options = c"hidepid=2,gid=1";
+    mount("proc", &proc, "proc", proc_flags, proc_options)
+        .map_err(io::Error::from)
+        .map_err(at("mounting proc on", &proc))?;
+    // Before Linux 5.8 the options live on the PID namespace's one proc
+    // superblock, which `--mount-proc` created without them and the mount
+    // above reused; a remount applies them there too.
+    mount_remount(&proc, proc_flags, proc_options)
+        .map_err(io::Error::from)
+        .map_err(at("remounting proc on", &proc))?;
 
     verify(plan)
 }
