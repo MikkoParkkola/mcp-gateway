@@ -502,3 +502,135 @@ async fn best_effort_admin_record_failure_does_not_refuse() {
     assert!(fx.log.append_failures() >= 2, "no record was attempted");
     assert!(!fx.log.is_degraded());
 }
+
+// ── The capability editor: validate exemption, save record ────────────────────
+
+/// A string in a capability file; no record may carry it.
+const CAP_CANARY: &str = "CAP-CANARY-91c4";
+
+/// `fx` with one capability directory holding `kept.yaml`; returns the
+/// directory guard and the file's bytes.
+fn with_capability(fx: &mut Audited) -> (tempfile::TempDir, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let text = format!(
+        "fulcrum: \"1.0\"\nname: kept\ndescription: {CAP_CANARY}\n\nschema:\n  input:\n    type: object\n  output:\n    type: object\n\nproviders:\n  primary:\n    service: rest\n    config:\n      base_url: https://api.example\n      path: /api\n      method: GET\n"
+    );
+    std::fs::write(dir.path().join("kept.yaml"), &text).unwrap();
+    let state = Arc::get_mut(&mut fx.gw.state).expect("state is unique");
+    state.capability_dirs = vec![dir.path().to_string_lossy().into_owned()];
+    (dir, text)
+}
+
+fn yaml_request(
+    method: &str,
+    uri: &str,
+    bearer: &str,
+    if_match: Option<&str>,
+    body: &str,
+) -> axum::http::Request<axum::body::Body> {
+    let mut builder = axum::http::Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("authorization", format!("Bearer {bearer}"))
+        .header("content-type", "application/x-yaml");
+    if let Some(tag) = if_match {
+        builder = builder.header("if-match", tag);
+    }
+    builder
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap()
+}
+
+fn sha256_of(text: &str) -> String {
+    crate::hashing::sha256_hex(text.as_bytes())
+}
+
+/// T13: a save writes one `capability_editor` record beside the layer's,
+/// naming the admin and both hashes, and never the file's content.
+#[tokio::test]
+async fn capability_save_writes_editor_record() {
+    let mut fx = audited(AuditFailurePolicy::FailClosed, &[]).await;
+    let (dir, before) = with_capability(&mut fx);
+    let after = before.replace("primary", "main");
+    let (status, body) = fx
+        .send(yaml_request(
+            "PUT",
+            "/ui/api/capabilities/kept",
+            &fx.alice(),
+            Some(&sha256_of(&before)),
+            &after,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let records = fx.admin_actions();
+    let editor: Vec<&Value> = records
+        .iter()
+        .filter(|r| r["surface"] == "capability_editor")
+        .collect();
+    assert_eq!(editor.len(), 1, "{records:#?}");
+    let record = editor[0];
+    assert_alice(record);
+    assert_eq!(record["action"], "save", "{record}");
+    assert_eq!(record["capability"], "kept", "{record}");
+    assert_eq!(
+        record["sha256_before"],
+        sha256_of(&before).as_str(),
+        "{record}"
+    );
+    let on_disk = std::fs::read_to_string(dir.path().join("kept.yaml")).unwrap();
+    assert_eq!(
+        record["sha256_after"],
+        sha256_of(&on_disk).as_str(),
+        "{record}"
+    );
+    assert_eq!(record["pin"], "none", "{record}");
+    assert!(
+        !fx.raw().contains(CAP_CANARY),
+        "the file's content was logged"
+    );
+}
+
+/// T14: validate records nothing and answers while the log is degraded; the
+/// exemption is the route's, so a PUT to the same name is still refused.
+#[tokio::test]
+async fn capability_validate_is_exempt_by_route() {
+    let mut fx = audited(AuditFailurePolicy::FailClosed, &[]).await;
+    let (_dir, text) = with_capability(&mut fx);
+    let (status, body) = fx
+        .send(yaml_request(
+            "POST",
+            "/ui/api/capabilities/kept/validate",
+            &fx.alice(),
+            None,
+            &text,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(fx.admin_actions().is_empty(), "{:#?}", fx.admin_actions());
+
+    fx.degrade();
+    let (status, body) = fx
+        .send(yaml_request(
+            "POST",
+            "/ui/api/capabilities/kept/validate",
+            &fx.alice(),
+            None,
+            &text,
+        ))
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "validate answers on a degraded log: {body}"
+    );
+    let (status, body) = fx
+        .send(yaml_request(
+            "PUT",
+            "/ui/api/capabilities/kept",
+            &fx.alice(),
+            Some(&sha256_of(&text)),
+            &text,
+        ))
+        .await;
+    assert_audit_unavailable_ui(status, &body);
+}
