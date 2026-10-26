@@ -594,7 +594,6 @@ impl MetaMcp {
             // stage kept first stands.
             note_denial_code(server, tool, refusal.to_rpc_code(), Some(*kind));
         }
-        let refusal = refusal.map(|(refusal, _)| refusal);
         if let Some(cap) = self.get_capabilities()
             && server == cap.name
         {

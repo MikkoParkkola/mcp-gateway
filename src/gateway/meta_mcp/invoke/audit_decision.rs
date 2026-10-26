@@ -59,13 +59,17 @@ pub(crate) fn current_refusal_kind() -> Option<crate::security::decision_record:
 }
 
 /// Run a request's route stage with a decision scope of its own.
-pub(crate) async fn with_route_scope<F: std::future::Future>(future: F) -> F::Output {
-    ROUTE
-        .scope(
-            RefCell::new(crate::security::decision_record::Noted::default()),
-            future,
-        )
-        .await
+///
+/// A plain `fn`, not an `async fn`: an async wrapper's state holds `future`
+/// twice (as its argument, then inside the scope), which doubled the boxed
+/// stdio `tools/call` dispatch.
+pub(crate) fn with_route_scope<F: std::future::Future>(
+    future: F,
+) -> impl std::future::Future<Output = F::Output> {
+    ROUTE.scope(
+        RefCell::new(crate::security::decision_record::Noted::default()),
+        future,
+    )
 }
 
 /// The route stage's decision so far, taken: the next target of the same
