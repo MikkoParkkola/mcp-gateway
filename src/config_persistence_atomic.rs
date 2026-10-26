@@ -176,8 +176,19 @@ fn create_scratch(
 /// is written, with no scratch left.
 #[cfg(windows)]
 fn create_kept(target: &Path, candidate: &Path) -> std::io::Result<std::fs::File> {
+    finish_kept(windows::prepare(target, candidate)?, target, candidate)
+}
+
+/// Turn the Windows decision into the scratch file: the kept one, or a
+/// default create, checked when the volume keeps lists.
+#[cfg(windows)]
+fn finish_kept(
+    decision: windows::KeptScratch,
+    target: &Path,
+    candidate: &Path,
+) -> std::io::Result<std::fs::File> {
     use windows::KeptScratch;
-    match windows::prepare(target, candidate)? {
+    match decision {
         KeptScratch::Kept(file) => Ok(file),
         KeptScratch::NoAcls => std::fs::OpenOptions::new()
             .write(true)
@@ -216,13 +227,21 @@ pub fn copy_keeping_access(src: &Path, dst: &Path) -> std::io::Result<()> {
     }
     #[cfg(windows)]
     {
-        // One resolved path for both the bytes and the access list: a link
-        // read through for its bytes must not lend its own list to the copy.
-        let src = std::fs::canonicalize(src)?;
-        let bytes = std::fs::read(&src)?;
+        use std::io::Read as _;
+        // One handle, following links, for both the bytes and the access
+        // list: nothing swapped in by name between the two reads can pair
+        // these bytes with another file's list. Plain read access carries
+        // READ_CONTROL.
+        let mut source = std::fs::File::open(src)?;
+        let mut bytes = Vec::new();
+        source.read_to_end(&mut bytes)?;
         let (mut file, scratch) =
             super::claim_scratch(dst, super::next_scratch_seed(), |candidate| {
-                create_kept(&src, candidate)
+                finish_kept(
+                    windows::prepare_from(&source, src, candidate)?,
+                    src,
+                    candidate,
+                )
             })
             .map_err(|e| match e {
                 super::ScratchClaimError::AllTaken => std::io::Error::other(format!(

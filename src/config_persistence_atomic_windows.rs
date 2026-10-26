@@ -46,7 +46,15 @@ pub(super) fn prepare(target: &Path, scratch: &Path) -> io::Result<KeptScratch> 
         .access_mode(READ_CONTROL)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(target)?;
-    match volume_keeps_acls(&model) {
+    prepare_from(&model, target, scratch)
+}
+
+/// [`prepare`] with the model already open (it must carry `READ_CONTROL`):
+/// everything about the model is read through this one handle, so a path
+/// swapped underneath cannot lend another file's list. `target` only names
+/// it in messages.
+pub(super) fn prepare_from(model: &File, target: &Path, scratch: &Path) -> io::Result<KeptScratch> {
+    match volume_keeps_acls(model) {
         Ok(true) => {}
         // FAT and exFAT keep no list, so there is none to widen.
         Ok(false) => return Ok(KeptScratch::NoAcls),
@@ -58,7 +66,7 @@ pub(super) fn prepare(target: &Path, scratch: &Path) -> io::Result<KeptScratch> 
             ));
         }
     }
-    let source = win_acl::inspect_for_copy(&model).map_err(|e| {
+    let source = win_acl::inspect_for_copy(model).map_err(|e| {
         refused(
             "descriptor-unreadable",
             target,
