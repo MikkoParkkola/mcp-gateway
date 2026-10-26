@@ -162,6 +162,8 @@ pub(crate) struct Recorded {
     pub(crate) body: Value,
     /// The log's `response_delivery_attempt` rows.
     pub(crate) rows: Vec<Value>,
+    /// Every row in the log, in order, read once the delivery rows landed.
+    pub(crate) entries: Vec<Value>,
     _dir: tempfile::TempDir,
 }
 
@@ -191,9 +193,15 @@ pub(crate) async fn signed_recorded_call(route: HttpRoute) -> Recorded {
         }
     };
     let rows = delivery_rows(&log).await;
+    let entries = std::fs::read_to_string(log.path())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect();
     Recorded {
         body,
         rows,
+        entries,
         _dir: dir,
     }
 }
