@@ -8,6 +8,7 @@
 
 pub(crate) mod account_bindings;
 mod account_refs;
+mod applied_inputs;
 mod backend_add;
 mod backend_config;
 mod backend_debug;
@@ -44,6 +45,7 @@ use figment::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::config_reload::revision::RawInputs;
 use crate::mtls::MtlsConfig;
 use crate::routing_profile::RoutingProfileConfig;
 use crate::security::{posture, verify_remote_server_provenance};
@@ -294,19 +296,7 @@ impl Provider for OverlayEnv<'_> {
 
     fn data(&self) -> figment::Result<Map<Profile, Dict>> {
         let mut dict = Dict::new();
-        for (key, value) in self.merged_vars(std::env::vars_os()) {
-            // Whole names only: `MCP_GATEWAY_CAPABILITIES__NAME` is still a
-            // nested override of `capabilities.name`.
-            if CLI_OWNED_ENV.contains(&key.as_str()) {
-                continue;
-            }
-            let Some(rest) = key.strip_prefix(Self::PREFIX) else {
-                continue;
-            };
-            let parts: Vec<String> = rest.split("__").map(str::to_lowercase).collect();
-            if parts.iter().any(String::is_empty) {
-                continue;
-            }
+        for (_, parts, value) in self.overrides(std::env::vars_os()) {
             Self::insert_nested(&mut dict, &parts, value);
         }
         backend_transport::refuse_backend_url(&dict).map_err(figment::Error::from)?;
@@ -661,6 +651,16 @@ impl Config {
             let (names, account_files) = config.record_account_refs();
             secret_refs.extend(names);
             files.extend(account_files);
+        }
+        // Before the digests move into the overlay: they are the `file:`
+        // secrets this evaluation read.
+        let inputs = match expansion {
+            Expansion::Resolve => {
+                Self::raw_inputs(path, &overlay, &env_paths, &secret_refs, &files)
+            }
+            Expansion::Literal => RawInputs::default(),
+        };
+        if expansion == Expansion::Resolve {
             overlay.record_secret_files(files);
         }
         Ok(Evaluated {
@@ -668,6 +668,7 @@ impl Config {
             overlay: std::sync::Arc::new(overlay),
             env_paths,
             secret_refs,
+            inputs,
         })
     }
 

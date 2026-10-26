@@ -520,6 +520,25 @@ impl EnvOverlay {
         Ok(())
     }
 
+    /// Each env file of `order` with the bytes the parser consumed; `None`
+    /// for one that was skipped as absent.
+    pub(super) fn env_file_inputs(
+        &self,
+        order: &[PathBuf],
+    ) -> Vec<(String, Option<crate::config_reload::revision::RawBytes>)> {
+        order
+            .iter()
+            .map(|path| {
+                let parsed = self
+                    .sources
+                    .iter()
+                    .find(|(source, _)| source == path)
+                    .map(|(_, text)| text.as_bytes().to_vec());
+                (path.to_string_lossy().into_owned(), parsed)
+            })
+            .collect()
+    }
+
     /// The first env file whose own bytes substitute a key these same files
     /// define, with the key named.
     ///
@@ -655,4 +674,7 @@ pub struct Evaluated {
     /// overlays to report a rotation no running holder can take.
     // ci-allow-secret-debug: names only, recorded before substitution; values live in `config`.
     pub secret_refs: std::collections::BTreeSet<String>,
+    /// What the evaluation read, for the config revision. Raw until publish
+    /// reduces it to keyed digests; empty for a literal load.
+    pub(crate) inputs: crate::config_reload::revision::RawInputs,
 }

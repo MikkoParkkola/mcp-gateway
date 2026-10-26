@@ -166,6 +166,14 @@ pub(crate) fn is_template_syntax(text: &str) -> bool {
 ///
 /// The first variable that is unset or empty with no default, or the first
 /// `${` that is not a `${NAME}` reference.
+/// The `${NAME}` names `text` references, in order.
+pub(super) fn template_names(text: &str) -> impl Iterator<Item = &str> {
+    TEMPLATE
+        .captures_iter(text)
+        .filter_map(|caps| caps.get(1))
+        .map(|name| name.as_str())
+}
+
 pub(crate) fn expand_template(
     text: &str,
     overlay: &EnvOverlay,
