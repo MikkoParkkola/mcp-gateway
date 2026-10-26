@@ -17,6 +17,7 @@ use crate::gateway::oauth::{
     Action, OAuthAgentIdentity, check_scopes, record_agent_scope_decision,
 };
 use crate::mtls::{CertIdentity, PolicyDecision};
+use crate::security::decision_record::DecisionKind;
 use crate::security::validate_tool_name;
 
 /// Whether `request` is exempt from sanitization (MIK-8154 SAN.1, option (a)):
@@ -240,6 +241,7 @@ pub(super) async fn require_admin_tool_access(
         Ok(())
     } else {
         Err(AuthorizationError::forbidden(
+            DecisionKind::AdminCapability,
             INVALID_REQUEST,
             format!("Tool '{tool_name}' requires admin access"),
         ))
@@ -256,6 +258,7 @@ pub(super) async fn require_admin_tool_access(
         code: error.to_rpc_code(),
         status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
         message: error.to_string(),
+        kind: DecisionKind::AdminCapability,
     };
     log.admit().await.map_err(unavailable)?;
     let outcome = match &verdict {
@@ -298,6 +301,7 @@ pub(super) fn require_admin_log_level(
         return Ok(());
     }
     let e = AuthorizationError::forbidden(
+        DecisionKind::AdminCapability,
         INVALID_REQUEST,
         "logging/setLevel sets backend log levels for every user of the gateway and \
          requires admin access; to receive fewer messages, declare a level in the \
@@ -339,19 +343,33 @@ pub(super) fn decide_tool_target<'a>(
         return Decision::of(Ok(()));
     }
     let early = validate_tool_name(target.tool)
-        .map_err(|e| AuthorizationError::forbidden(INVALID_REQUEST, e.clone()))
+        .map_err(|e| {
+            AuthorizationError::forbidden(DecisionKind::Syntax, INVALID_REQUEST, e.clone())
+        })
         .and_then(|()| crate::gateway::authz::authorize_backend(client, target.server))
         .and_then(|()| {
             state
                 .tool_policy
                 .check(target.server, target.tool)
-                .map_err(|e| AuthorizationError::forbidden(INVALID_REQUEST, e.to_string()))
+                .map_err(|e| {
+                    AuthorizationError::forbidden(
+                        DecisionKind::ToolPolicy,
+                        INVALID_REQUEST,
+                        e.to_string(),
+                    )
+                })
         })
         .and_then(|()| {
             client.map_or(Ok(()), |client| {
                 client
                     .check_tool_scope(target.server, target.tool)
-                    .map_err(|e| AuthorizationError::forbidden(INVALID_REQUEST, e))
+                    .map_err(|e| {
+                        AuthorizationError::forbidden(
+                            DecisionKind::ClientToolScope,
+                            INVALID_REQUEST,
+                            e,
+                        )
+                    })
             })
         });
     if let Err(e) = early {
@@ -365,6 +383,7 @@ pub(super) fn decide_tool_target<'a>(
             == PolicyDecision::Deny
     {
         let refusal = AuthorizationError::forbidden(
+            DecisionKind::Mtls,
             INVALID_REQUEST,
             format!(
                 "Tool '{}' on server '{}' is blocked by certificate policy",
@@ -387,6 +406,7 @@ pub(super) fn decide_tool_target<'a>(
     if state.agent_auth.enabled {
         let Some(identity) = oauth_agent_identity else {
             return Decision::of(Err(AuthorizationError::forbidden(
+                DecisionKind::AgentScope,
                 INVALID_REQUEST,
                 "Agent authentication is enabled but no validated agent identity was found",
             )));
@@ -399,7 +419,11 @@ pub(super) fn decide_tool_target<'a>(
             &Action::Execute,
         );
         if let Err(reason) = &verdict {
-            let refusal = AuthorizationError::forbidden(INVALID_REQUEST, reason.clone());
+            let refusal = AuthorizationError::forbidden(
+                DecisionKind::AgentScope,
+                INVALID_REQUEST,
+                reason.clone(),
+            );
             return Decision::recorded(Err(refusal), move || {
                 record_agent_scope_decision(
                     identity,
@@ -432,7 +456,9 @@ pub(super) fn decide_tool_target<'a>(
         verdict = backend
             .destination()
             .check_configured_url(url)
-            .map_err(|e| AuthorizationError::forbidden(INVALID_REQUEST, e.to_string()));
+            .map_err(|e| {
+                AuthorizationError::forbidden(DecisionKind::Ssrf, INVALID_REQUEST, e.to_string())
+            });
     }
 
     // The agent allow record is written even when SSRF then refuses, exactly

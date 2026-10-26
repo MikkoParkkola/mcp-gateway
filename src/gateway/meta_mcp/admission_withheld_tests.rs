@@ -409,6 +409,7 @@ impl ToolAuthorizer for DenyEach {
         if self.0.contains(&target.tool) {
             return crate::gateway::authz::Decision::of(Err(
                 crate::gateway::authz::AuthorizationError::forbidden(
+                    crate::security::decision_record::DecisionKind::ToolPolicy,
                     -32003,
                     format!("denied by test authorizer: '{}'", target.tool),
                 ),
