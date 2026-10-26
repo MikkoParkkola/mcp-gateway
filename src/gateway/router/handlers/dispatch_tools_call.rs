@@ -196,7 +196,7 @@ pub(super) async fn tools_call(
     // Authorize every target before scanning any, so a refused later target
     // charges no earlier one's budget.
     // The withheld target's record is this call's invocation record: the
-    // answer the missing name's path gives carries its trace.
+    // invisible call's answer below carries its trace.
     let mut withheld_trace = None;
     for (index, target) in backend_targets.iter().enumerate() {
         // The one route-stage authorize /mcp and stdio share (P3). A surfaced
@@ -514,7 +514,14 @@ pub(super) async fn tools_call(
         let answer = state
             .meta_mcp
             .handle_tools_call_ref(id, tool_name, arguments, session, caller);
-        return Ok(Box::pin(answer).await);
+        let answer = Box::pin(answer).await;
+        // The withheld target's record is this call's one invocation record.
+        return Ok(match withheld_trace {
+            Some(trace) if answer.invocation_trace.is_none() => {
+                answer.with_invocation_trace(trace.into())
+            }
+            _ => answer,
+        });
     }
 
     // The modern destructive gate (X14). Every authorization, admin and
@@ -768,10 +775,5 @@ pub(super) async fn tools_call(
         ))
         .await
     };
-    Ok(match withheld_trace {
-        Some(trace) if response.invocation_trace.is_none() => {
-            response.with_invocation_trace(trace.into())
-        }
-        _ => response,
-    })
+    Ok(response)
 }
