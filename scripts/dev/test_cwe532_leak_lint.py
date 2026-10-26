@@ -88,6 +88,45 @@ class TestCwe532Lint(unittest.TestCase):
         self.assertTrue(debug, "expected a debug finding for api_key")
         self.assertIn("api_key", debug[0].detail)
 
+    # A config section typed as a struct whose derived Debug the lint scans
+    # is delegated to that struct: the section is not a finding, a secret
+    # field inside it still is, and a manual Debug keeps the section flagged.
+    def _run_tree(self, files):
+        with tempfile.TemporaryDirectory() as d:
+            for name, src in files.items():
+                (Path(d) / name).write_text(src, encoding="utf-8")
+            return _run_main([d])
+
+    def test_section_of_a_scanned_struct_is_delegated(self):
+        code, out, _ = self._run_tree({
+            "outer.rs": "#[derive(Debug)]\npub struct Config {\n    pub secrets: SecretsConfig,\n}\n",
+            "inner.rs": "#[derive(Debug)]\npub struct SecretsConfig {\n    pub store: Choice,\n}\n",
+        })
+        self.assertEqual(code, 0, out)
+
+    def test_a_secret_inside_a_delegated_section_is_still_flagged(self):
+        code, out, _ = self._run_tree({
+            "outer.rs": "#[derive(Debug)]\npub struct Config {\n    pub secrets: SecretsConfig,\n}\n",
+            "inner.rs": "#[derive(Debug)]\npub struct SecretsConfig {\n    pub token: String,\n}\n",
+        })
+        self.assertNotEqual(code, 0, out)
+        self.assertIn("SecretsConfig", out)
+        self.assertIn("`token`", out)
+        self.assertNotIn("`secrets`", out)
+
+    def test_a_section_with_a_manual_debug_is_not_delegated(self):
+        code, out, _ = self._run_tree({
+            "outer.rs": "#[derive(Debug)]\npub struct Config {\n    pub secrets: SecretsConfig,\n}\n",
+            "inner.rs": (
+                "pub struct SecretsConfig { pub token: String }\n"
+                "impl std::fmt::Debug for SecretsConfig {\n"
+                "    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { Ok(()) }\n"
+                "}\n"
+            ),
+        })
+        self.assertNotEqual(code, 0, out)
+        self.assertIn("`secrets`", out)
+
     # (2) safe-named fields (_count, _id, has_) -> not flagged
     def test_safe_named_fields_not_flagged(self):
         src = (
