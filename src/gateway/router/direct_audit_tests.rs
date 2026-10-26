@@ -375,6 +375,7 @@ fn key_for_alpha(denied_tools: Option<Vec<String>>) -> AuthConfig {
             denied_tools,
             admin: false,
             kind: crate::config::ApiKeyKind::Shared,
+            ..Default::default()
         }],
         public_paths: vec!["/health".to_string()],
         client_circuit_breaker: None,

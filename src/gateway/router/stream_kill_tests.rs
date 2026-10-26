@@ -113,6 +113,7 @@ async fn fixture(mode: IdempotencyKeyMode) -> Fixture {
             denied_tools: None,
             admin: false,
             kind: crate::config::ApiKeyKind::Shared,
+            ..Default::default()
         }],
         public_paths: vec!["/health".to_string()],
         ..AuthConfig::default()

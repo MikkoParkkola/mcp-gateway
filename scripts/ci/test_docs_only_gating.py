@@ -33,6 +33,8 @@ SKIPPED = {
     "task-sdk-recovery",
     # Real gws against the gws capability files; no docs file is read.
     "gws-dry-run",
+    # One keychain test against a real Secret Service; no docs file is read.
+    "linux-keychain",
 }
 # Workflows with no pull_request trigger: they cannot run on a docs-only PR, so
 # they need no gate. Gaining a pull_request trigger fails main() until gated.
@@ -77,6 +79,7 @@ POST_MERGE_SKIPPED = {
     # Build-heavy smokes; docker.yml builds and smokes the image per merge, the tag reruns them.
     "service-template-smoke", "usability-smoke", "upgrade-rehearsal", "helm-oci-roundtrip",
     "helm-supply-chain", "helm-airgap", "k8s-kind-rollback", "gws-dry-run", "task-sdk-recovery",
+    "linux-keychain",
 }
 POST_MERGE_PUSH = {"event_name": "push", "ref": f"refs/heads/{RELEASE_LINE}"}
 
