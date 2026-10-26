@@ -209,9 +209,10 @@ fn limit_rows(_state: &AppState) -> Vec<Value> {
 /// The newest admin actions in the transparency log's live segment, read
 /// newest window first until [`ACTION_ROWS`] are found or
 /// [`ACTION_SCAN_BYTES`] are read. `complete` is true only when the rows are
-/// the newest [`ACTION_ROWS`] there are: all five found, or the whole log
-/// read with no rotated-out segment behind it and no line skipped as too long
-/// to read. Otherwise older actions may exist that were not read.
+/// the newest [`ACTION_ROWS`] there are: no line was skipped as too long to
+/// read, and either all five were found or the whole log was read with no
+/// rotated-out segment behind it. Otherwise an action may exist that was not
+/// read.
 fn last_actions(path: &std::path::Path) -> io::Result<Value> {
     let mut end = match std::fs::metadata(path) {
         Ok(meta) => meta.len(),
@@ -256,6 +257,8 @@ fn last_actions(path: &std::path::Path) -> io::Result<Value> {
     }
     let rotated = !crate::security::transparency_log::segments::list_segments(path)
         .is_ok_and(|sealed| sealed.is_empty());
-    let complete = rows.len() == ACTION_ROWS || (end == 0 && !skipped && !rotated);
+    // A skipped line may have been a newer action than any row found, so any
+    // skip makes the list incomplete, even with all five rows.
+    let complete = !skipped && (rows.len() == ACTION_ROWS || (end == 0 && !rotated));
     Ok(json!({ "rows": rows, "complete": complete }))
 }
