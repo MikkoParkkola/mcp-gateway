@@ -482,3 +482,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, windows))]
+#[path = "fs_lock_windows_tests.rs"]
+mod windows_tests;
