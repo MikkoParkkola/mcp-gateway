@@ -384,3 +384,22 @@ fn a_backup_through_a_link_keeps_the_linked_files_list() {
     assert_owner_only(row, &dst, false);
     assert_eq!(std::fs::read(&dst).unwrap(), b"admin: secret");
 }
+
+/// Table rows for the crate's private-create helpers: each result, made in a
+/// folder that hands Everyone full access, is owner-only.
+#[test]
+fn the_private_create_helpers_make_owner_only_results() {
+    let dir = everyone_full_dir("WINACL-T");
+    let new = dir.path().join("new-private");
+    drop(super::super::create_new_private(&new).unwrap());
+    assert_owner_only("WINACL-T1 create_new_private", &new, false);
+
+    let replaced = dir.path().join("replaced-private");
+    std::fs::write(&replaced, b"stale").unwrap();
+    drop(super::super::create_private_replacing(&replaced).unwrap());
+    assert_owner_only("WINACL-T2 create_private_replacing", &replaced, false);
+
+    let sub = dir.path().join("private-dir");
+    crate::private_fs::create_dir_private(&sub).unwrap();
+    assert_owner_only("WINACL-T3 create_dir_private", &sub, true);
+}
