@@ -7,7 +7,9 @@
 //! reload must leave that report, and every other setting in its section must
 //! stay in it, alone or in a combined edit.
 
-use super::LiveConfig;
+use serde_json::{Value, json};
+
+use super::{LiveConfig, compute_diff};
 use crate::config::Config;
 
 /// The restart-pending sections after publishing `wanted` over `running`.
@@ -120,4 +122,125 @@ fn r5_an_idempotency_only_edit_is_restart_pending() {
         pending(&running, wanted).contains(&"idempotency"),
         "the idempotency section is read once at startup"
     );
+}
+
+/// Change the first bool or number found in `v`, depth first. `false` when
+/// nothing in it can be changed without knowing the field's meaning.
+fn perturb(v: &mut Value) -> bool {
+    match v {
+        Value::Bool(b) => {
+            *b = !*b;
+            true
+        }
+        Value::Number(n) => {
+            let next = match (n.as_u64(), n.as_f64()) {
+                (Some(u), _) => json!(u + 1),
+                (None, Some(f)) => json!(f + 1.0),
+                _ => return false,
+            };
+            *v = next;
+            true
+        }
+        Value::Object(m) => m.values_mut().any(perturb),
+        _ => false,
+    }
+}
+
+/// Every key of `section` except `skip`, each changed alone through the
+/// serialized config. Returns the pending report per key, and the keys that
+/// could not be changed generically, so a new field cannot slip past.
+fn each_field_alone(
+    section: &str,
+    skip: &[&str],
+) -> (Vec<(String, Vec<&'static str>)>, Vec<String>) {
+    let running = Config::default();
+    let base = serde_json::to_value(&running).expect("config serializes");
+    let keys: Vec<String> = base[section]
+        .as_object()
+        .expect("section is an object")
+        .keys()
+        .filter(|k| !skip.contains(&k.as_str()))
+        .cloned()
+        .collect();
+    let (mut reports, mut stuck) = (Vec::new(), Vec::new());
+    for key in keys {
+        let mut v = base.clone();
+        if !perturb(&mut v[section][&key]) {
+            stuck.push(key);
+            continue;
+        }
+        let wanted: Config = serde_json::from_value(v)
+            .unwrap_or_else(|e| panic!("{section}.{key} changed is not a valid config: {e}"));
+        reports.push((key, pending(&running, wanted)));
+    }
+    (reports, stuck)
+}
+
+// R2 (every field): each security field other than the two hot flags,
+// changed alone, keeps the section restart-pending.
+#[test]
+fn r2_each_other_security_field_alone_stays_restart_pending() {
+    let (reports, stuck) = each_field_alone("security", &["sanitize_input", "ssrf_protection"]);
+    let missed: Vec<&str> = reports
+        .iter()
+        .filter(|(_, p)| !p.contains(&"security"))
+        .map(|(k, _)| k.as_str())
+        .collect();
+    assert!(missed.is_empty(), "not restart-pending: {missed:?}");
+    assert!(
+        stuck.is_empty(),
+        "no generic edit, add one to R2: {stuck:?}"
+    );
+}
+
+// R5 (every field): each server field beyond host, port and public_url, and
+// each events field, changed alone, is restart-pending.
+#[test]
+fn r5_each_server_and_events_field_alone_is_restart_pending() {
+    for (section, skip) in [
+        ("server", &["host", "port", "public_url"][..]),
+        ("events", &[][..]),
+    ] {
+        let (reports, stuck) = each_field_alone(section, skip);
+        let missed: Vec<&str> = reports
+            .iter()
+            .filter(|(_, p)| p.is_empty())
+            .map(|(k, _)| k.as_str())
+            .collect();
+        assert!(
+            missed.is_empty(),
+            "{section}: not restart-pending: {missed:?}"
+        );
+        assert!(stuck.is_empty(), "{section}: no generic edit: {stuck:?}");
+    }
+}
+
+/// `running` with `environment` set through JSON, so the row compiles before
+/// the key exists.
+fn with_environment(running: &Config, name: &str) -> Config {
+    let mut v = serde_json::to_value(running).expect("config serializes");
+    v["environment"] = json!(name);
+    serde_json::from_value(v).expect("still a config")
+}
+
+// E2: an environment-only edit is a change that applied, not restart-pending.
+#[test]
+fn e2_an_environment_only_edit_applies_without_a_restart() {
+    let running = Config::default();
+    let wanted = with_environment(&running, "staging");
+    assert!(
+        !compute_diff(&running, &wanted).is_empty(),
+        "the edit is reported as a change"
+    );
+    assert_eq!(pending(&running, wanted), Vec::<&str>::new());
+}
+
+// E3: a misspelt key still fails the strict load and names the key path.
+#[test]
+fn e3_a_misspelt_environment_key_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    crate::gateway::test_helpers::write_owner_only(&path, "environmnt: staging\n").expect("write");
+    let err = Config::load(Some(&path)).expect_err("typo refuses");
+    assert!(format!("{err:#}").contains("environmnt"), "{err:#}");
 }
