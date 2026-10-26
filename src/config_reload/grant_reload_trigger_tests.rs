@@ -3,7 +3,7 @@
 
 //! MIK-7537 — grant-reload cells that need `config_reload` internals.
 //!
-//! Cells from `docs/internal/design/2026-09-22-live-identity-grant-reload.md`
+//! Cells from the live identity grant reload design
 //! §3 and §D4 that must reach the grants lock or the watcher's private reload
 //! task: T6 and T10b (the busy refusal) and W (the watcher entry point).
 //!
