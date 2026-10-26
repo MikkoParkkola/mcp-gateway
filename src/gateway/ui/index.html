@@ -1407,8 +1407,11 @@ function renderCapabilities() {
   list.innerHTML = capabilitiesData.map(cap => {
     const name = cap.name || cap;
     const toolCount = cap.tool_count != null ? cap.tool_count : '';
+    // The name as a JS string literal inside a double-quoted attribute: a raw
+    // JSON.stringify quote would end the attribute and leave a dead handler.
+    const arg = esc(JSON.stringify(name)).replace(/"/g, '&quot;');
     return `<div class="cap-item" id="cap-item-${esc(name)}">
-      <div class="cap-header" onclick="toggleCap(${JSON.stringify(name)})">
+      <div class="cap-header" onclick="toggleCap(${arg})">
         <div class="cap-title">
           <span>${esc(name)}</span>
           ${toolCount !== '' ? `<span class="badge badge-running">${toolCount} tool${toolCount !== 1 ? 's' : ''}</span>` : ''}
@@ -1419,9 +1422,9 @@ function renderCapabilities() {
         <textarea id="cap-editor-${esc(name)}" spellcheck="false" placeholder="Loading YAML..."
           onkeydown="capTabIndent(event)"></textarea>
         <div class="cap-body-actions">
-          <button class="btn btn-sm" onclick="saveCap(${JSON.stringify(name)})">Save</button>
-          <button class="btn btn-sm btn-secondary" onclick="revertCap(${JSON.stringify(name)})">Revert</button>
-          <button class="btn btn-sm btn-danger" onclick="deleteCap(${JSON.stringify(name)})">Delete</button>
+          <button class="btn btn-sm" onclick="saveCap(${arg})">Save</button>
+          <button class="btn btn-sm btn-secondary" onclick="revertCap(${arg})">Revert</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteCap(${arg})">Delete</button>
           <span id="cap-msg-${esc(name)}" class="form-msg"></span>
         </div>
       </div>
