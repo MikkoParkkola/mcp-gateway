@@ -5,7 +5,8 @@
 //! value spans projected, keys a match starts in renamed, members paired,
 //! exempt values kept. Every row goes through the same [`expected`] oracle,
 //! which validates with `serde_json::Value`, or is compared with the same
-//! document delivered under the cap.
+//! document delivered under the cap. The cost rows, which time the
+//! projection against the whole-leaf path, live here too.
 
 use super::*;
 
@@ -251,13 +252,19 @@ fn time_against_base(label: &str, text: &str) -> (String, f64) {
 /// so when every match sits inside one literal.
 fn time_against(label: &str, text: &str, differs: bool) -> (String, f64) {
     let warm = redactor();
-    let mut value = json!({ "content": [{ "type": "text", "text": text }] });
-    let started = std::time::Instant::now();
-    warm.scan_and_redact(&mut value);
-    let projected = started.elapsed();
-    let started = std::time::Instant::now();
-    let whole = splice(text, &warm.credential_spans(text));
-    let base = started.elapsed();
+    // The fastest of five alternating runs each: one slow sample cannot move a ratio.
+    // Inputs built up front, so a sample times the scan, not a 1 MB copy.
+    let mut fresh: Vec<Value> = (0..5)
+        .map(|_| json!({ "content": [{ "type": "text", "text": text }] }))
+        .collect();
+    let ((value, projected), (whole, base)) = fastest_pair(
+        || {
+            let mut value = fresh.pop().expect("one input per run");
+            warm.scan_and_redact(&mut value);
+            value
+        },
+        || splice(text, &warm.credential_spans(text)),
+    );
     let out = value["content"][0]["text"].as_str().expect("text");
     if differs {
         assert_ne!(out, whole, "{label}: the projection must have run");
@@ -474,4 +481,93 @@ fn s14_offsets_past_32_bits_are_not_walked() {
     let max = usize::try_from(u32::MAX).expect("fits");
     assert!(json_literal::fits_offsets(max));
     assert!(!json_literal::fits_offsets(max + 1));
+}
+
+// ── F: cost ───────────────────────────────────────────────────────────────
+
+/// The fastest of five runs each of `projection` and `base`, with their
+/// outputs. The two alternate, so a load change on a busy machine slows both
+/// sides of a ratio, and one slow sample cannot move it.
+fn fastest_pair<P, B>(
+    mut projection: impl FnMut() -> P,
+    mut base: impl FnMut() -> B,
+) -> ((P, std::time::Duration), (B, std::time::Duration)) {
+    fn keep<T>(best: &mut Option<(T, std::time::Duration)>, run: &mut impl FnMut() -> T) {
+        let started = std::time::Instant::now();
+        let out = run();
+        let took = started.elapsed();
+        if best.as_ref().is_none_or(|(_, b)| took < *b) {
+            *best = Some((out, took));
+        }
+    }
+    let (mut p, mut b) = (None, None);
+    // Each side goes first in turn, so neither gains from running second.
+    for round in 0..5_u32 {
+        if round.is_multiple_of(2) {
+            keep(&mut p, &mut projection);
+            keep(&mut b, &mut base);
+        } else {
+            keep(&mut b, &mut base);
+            keep(&mut p, &mut projection);
+        }
+    }
+    (p.expect("five runs"), b.expect("five runs"))
+}
+
+/// F1: the projection on a document near the size cap, of short literals with
+/// one connection string (sparse) or one in every 10 (dense), against base's
+/// whole-leaf path. A regression guard in every test run: each ratio is the
+/// fastest of five projections over the fastest of five whole-leaf passes,
+/// alternating in the same run, so a loaded runner slows both sides, and no
+/// wall-clock bound is asserted. Unoptimised builds sit near 2x, release near 2.5x.
+#[test]
+fn f1_projection_cost() {
+    use std::fmt::Write as _;
+    // Every shape is measured before any fails, so one slow shape cannot hide
+    // another's ratio.
+    let mut over = Vec::new();
+    for every in [50_000_usize, 10] {
+        let mut text = String::from("[");
+        let mut i = 0_usize;
+        while text.len() < CAP - 200 {
+            if i > 0 {
+                text.push(',');
+            }
+            if i.is_multiple_of(every) {
+                write!(text, "\"{}\"", pg_url()).unwrap();
+            } else {
+                text.push_str("\"short\"");
+            }
+            i += 1;
+        }
+        text.push(']');
+        let ((out, projected), (whole, base)) = fastest_pair(|| deliver(&text).0, || today(&text));
+        assert!(parses(&out), "every {every}");
+        assert_ne!(out, whole, "every {every}: the projection must have run");
+        let ratio = projected.as_secs_f64() / base.as_secs_f64();
+        println!("every {every}: projection {projected:?}, whole leaf {base:?}, ratio {ratio:.2}");
+        if ratio >= 3.0 {
+            over.push(format!(
+                "every {every}: ratio {ratio:.2} over the plan's 3x"
+            ));
+        }
+    }
+    assert!(over.is_empty(), "{}", over.join("; "));
+    // One literal near the cap with 40 000 matches, each beside an escape: the
+    // escape widening must stay a search, not a rescan per match.
+    let mut body = String::new();
+    for i in 0..40_000 {
+        write!(body, "AKIA{i:016} \\n ").unwrap();
+    }
+    let text = format!(r#"{{"s":"{body}"}}"#);
+    let ((out, projected), (whole, base)) = fastest_pair(|| deliver(&text).0, || today(&text));
+    assert_eq!(out, whole, "matches inside one literal redact as base");
+    let ratio = projected.as_secs_f64() / base.as_secs_f64();
+    println!(
+        "one literal, 40000 matches: projection {projected:?}, whole leaf {base:?}, ratio {ratio:.2}"
+    );
+    assert!(
+        ratio < 3.0,
+        "dense escapes: ratio {ratio:.2} over the plan's 3x"
+    );
 }
