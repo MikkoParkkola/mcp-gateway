@@ -624,11 +624,11 @@ pub(super) fn inspect_settled(
     // A surfaced task's result is inspected as the recorded server's answer:
     // a reload that moved the name during the call must not lend it the new
     // server's targets.
-    state
-        .meta_mcp()
-        .with_surfaced_pin_sync(&call.tool, call.surfaced_server.as_ref(), || {
-            inspect_settled_pinned(state, call, id, response)
-        })
+    crate::gateway::meta_mcp::MetaMcp::with_surfaced_pin_sync(
+        &call.tool,
+        call.surfaced_server.as_ref(),
+        || inspect_settled_pinned(state, call, id, response),
+    )
 }
 
 fn inspect_settled_pinned(

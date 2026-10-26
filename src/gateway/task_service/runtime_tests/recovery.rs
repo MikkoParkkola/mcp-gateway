@@ -240,6 +240,18 @@ struct RowFixture<'a> {
 
 /// Commit and settle one row into the shape its `Seed` describes. Split out of
 /// `seed_store` so each row's fixture setup reads as one sequence.
+/// The input round [`seed_row`] parks: one carrying a stored continuation.
+fn sealed_round() -> crate::gateway::task_service::record::InputRound {
+    crate::gateway::task_service::record::InputRound {
+        request_state: Some("sealed-by-the-previous-process".to_owned()),
+        tool: "write".to_owned(),
+        arguments: json!({}),
+        accepted_inputs: serde_json::Map::new(),
+        continuation_deadline: None,
+        surfaced_server: None,
+    }
+}
+
 async fn seed_row(
     fixture: &RowFixture<'_>,
     key: &'static str,
@@ -301,14 +313,7 @@ async fn seed_row(
                     round,
                     // MIK-7311: the round carries a stored continuation, and
                     // restart still settles it interrupted (I3).
-                    crate::gateway::task_service::record::InputRound {
-                        request_state: Some("sealed-by-the-previous-process".to_owned()),
-                        tool: "write".to_owned(),
-                        arguments: json!({}),
-                        accepted_inputs: serde_json::Map::new(),
-                        continuation_deadline: None,
-                        surfaced_server: None,
-                    },
+                    sealed_round(),
                     chrono::Utc::now(),
                 )
                 .await

@@ -198,7 +198,6 @@ impl MetaMcp {
     /// settled result is inspected under the targets of the server that
     /// produced it, even when a reload moved the name during the call.
     pub(crate) fn with_surfaced_pin_sync<R>(
-        &self,
         tool: &str,
         recorded: Option<&SurfacedTarget>,
         read: impl FnOnce() -> R,
@@ -223,7 +222,7 @@ pub(crate) fn surfaced_target_changed() -> crate::protocol::JsonRpcResponse {
 /// Apply a reloaded config's `surfaced_tools` (under
 /// `lock_reload`). The new list is validated as at startup; when the ordered
 /// `(tool, server)` list differs from the running one (a reorder changes every
-/// served list), the state is swapped and one tools/list_changed nudge is
+/// served list), the state is swapped and one `tools/list_changed` nudge is
 /// sent. An identical list changes and announces nothing. Returns whether
 /// anything changed.
 pub(super) fn apply_surfaced_reload(

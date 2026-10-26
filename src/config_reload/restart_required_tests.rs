@@ -215,15 +215,18 @@ fn l7_a_surfaced_tools_change_alone_is_not_restart_pending() {
     );
 }
 
+/// One named edit to a `meta_mcp` field.
+type Edit = (&'static str, fn(&mut crate::config::MetaMcpConfig));
+
 /// L7 (pin): every other `meta_mcp` field is still read
 /// once at startup, so a change to any of them stays restart-pending even
-/// alongside a surfaced_tools edit.
+/// alongside a `surfaced_tools` edit.
 #[test]
 fn l7_every_other_meta_mcp_field_stays_restart_pending() {
-    let edits: [(&str, fn(&mut crate::config::MetaMcpConfig)); 7] = [
+    let edits: [Edit; 7] = [
         ("enabled", |m| m.enabled = !m.enabled),
         ("cache_ttl", |m| {
-            m.cache_ttl += std::time::Duration::from_secs(1)
+            m.cache_ttl += std::time::Duration::from_secs(1);
         }),
         ("prompts_resources_fetch_timeout", |m| {
             m.prompts_resources_fetch_timeout += std::time::Duration::from_secs(1);
@@ -240,7 +243,7 @@ fn l7_every_other_meta_mcp_field_stays_restart_pending() {
                 .push("gateway_list_servers".to_string());
         }),
         ("expose_stats_tool", |m| {
-            m.expose_stats_tool = !m.expose_stats_tool
+            m.expose_stats_tool = !m.expose_stats_tool;
         }),
     ];
     for (field, edit) in edits {

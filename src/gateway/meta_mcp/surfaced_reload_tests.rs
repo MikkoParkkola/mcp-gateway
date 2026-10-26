@@ -261,7 +261,7 @@ async fn l3_a_changed_list_nudges_once_and_an_identical_one_never() {
 /// Rewrite the config file to `pairs` without reloading it.
 fn write_file(dir: &tempfile::TempDir, pairs: &[(&str, &str)]) {
     crate::gateway::test_helpers::write_owner_only(
-        &dir.path().join("gateway.yaml"),
+        dir.path().join("gateway.yaml"),
         crate::yaml::to_string(&config_with(pairs)).expect("yaml"),
     )
     .expect("write");
