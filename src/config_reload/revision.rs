@@ -47,8 +47,9 @@ impl ConsumedSource {
     }
 }
 
-/// One value the loader consumed from outside the files.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One value the loader consumed from outside the files. `Debug` names the
+/// source and name only: the value is often a secret.
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ConsumedInput {
     pub source: ConsumedSource,
     pub name: String,
@@ -56,8 +57,9 @@ pub(crate) struct ConsumedInput {
 }
 
 /// The exact inputs an applied configuration was built from. Held in memory
-/// only; configuration history stores the files, never `consumed`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// only; configuration history stores the files, never `consumed`. `Debug`
+/// prints counts and lengths only: any of these bytes can hold a secret.
+#[derive(Clone, Default, PartialEq, Eq)]
 pub(crate) struct AppliedInputs {
     pub gateway_yaml: Vec<u8>,
     pub grants: Option<Vec<u8>>,
@@ -66,6 +68,28 @@ pub(crate) struct AppliedInputs {
     pub env_files: Vec<(String, Option<Vec<u8>>)>,
     pub capabilities: Vec<(String, Vec<u8>)>,
     pub consumed: Vec<ConsumedInput>,
+}
+
+impl std::fmt::Debug for ConsumedInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConsumedInput")
+            .field("source", &self.source)
+            .field("name", &self.name)
+            .field("value_len", &self.value.len())
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for AppliedInputs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppliedInputs")
+            .field("gateway_yaml_len", &self.gateway_yaml.len())
+            .field("grants_len", &self.grants.as_ref().map(Vec::len))
+            .field("env_files", &self.env_files.len())
+            .field("capabilities", &self.capabilities.len())
+            .field("consumed", &self.consumed.len())
+            .finish()
+    }
 }
 
 /// The revision id of `inputs` under `key` (the derived revision key).
@@ -105,6 +129,8 @@ pub(crate) fn config_revision(key: &[u8; 32], inputs: &AppliedInputs) -> String 
         .map(|c| (c.source.tag(), c.name.as_str(), c.value.as_slice()))
         .collect();
     consumed.sort_unstable();
+    // A value resolved twice during one load is one input, not two.
+    consumed.dedup();
     count(&mut m, consumed.len());
     for (source, name, value) in consumed {
         part(&mut m, source.as_bytes());

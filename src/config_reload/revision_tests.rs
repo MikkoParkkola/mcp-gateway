@@ -109,3 +109,39 @@ fn api2a_1_a_missing_env_file_differs_from_an_empty_one() {
         config_revision(&key(), &env(Some(b""))),
     );
 }
+
+#[test]
+fn api2a_1_a_value_resolved_twice_counts_once() {
+    let consumed = |n: usize| AppliedInputs {
+        consumed: vec![
+            ConsumedInput {
+                source: ConsumedSource::EnvVar,
+                name: "A".to_owned(),
+                value: b"1".to_vec(),
+            };
+            n
+        ],
+        ..base()
+    };
+    assert_eq!(
+        config_revision(&key(), &consumed(1)),
+        config_revision(&key(), &consumed(2))
+    );
+}
+
+#[test]
+fn debug_never_prints_input_bytes() {
+    let inputs = AppliedInputs {
+        gateway_yaml: b"token: hunter2-yaml".to_vec(),
+        grants: Some(b"hunter2-grants".to_vec()),
+        env_files: vec![("/e/.env".to_owned(), Some(b"K=hunter2-env".to_vec()))],
+        capabilities: vec![("c/a.yaml".to_owned(), b"hunter2-cap".to_vec())],
+        consumed: vec![ConsumedInput {
+            source: ConsumedSource::SecretFile,
+            name: "/run/s".to_owned(),
+            value: b"hunter2-secret".to_vec(),
+        }],
+    };
+    let printed = format!("{inputs:?} {:?}", inputs.consumed[0]);
+    assert!(!printed.contains("hunter2"), "{printed}");
+}
