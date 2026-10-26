@@ -39,8 +39,6 @@ impl BudgetEnforcer {
             }
         }
         let day = Some(day);
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let micro = |usd: f64| (usd.max(0.0) * 1_000_000.0).round() as u64;
         // Through the cap: a snapshot saved before the cap existed may hold
         // more names than it allows. Filed under the snapshot's own day, so
         // spend restored on a clock before 1970 still counts once the clock
@@ -49,22 +47,25 @@ impl BudgetEnforcer {
         // A zero row (a name saved after midnight before it spent again) is
         // not restored: it would take a place in the cap and read 0 anyway.
         for (tool, total) in &persisted.tool_totals {
-            let spent = micro(total.total_cost_usd);
+            let spent = saved_micro("tool", tool, total.total_cost_usd);
             if spent > 0 {
                 self.global_daily.add_on(day, spent);
                 add_capped(self.tool_maps(), tool, &budgets.per_tool, spent, day);
             }
         }
         for (key, &usd) in &persisted.key_totals {
-            if micro(usd) > 0 {
-                add_capped(self.key_maps(), key, &budgets.per_key, micro(usd), day);
+            let spent = saved_micro("key", key, usd);
+            if spent > 0 {
+                add_capped(self.key_maps(), key, &budgets.per_key, spent, day);
             }
         }
-        let tool_overflow = micro(persisted.tool_overflow_usd);
+        let tool_overflow = saved_micro("overflow", "tool", persisted.tool_overflow_usd);
         self.global_daily.add_on(day, tool_overflow);
         self.tool_overflow.add_on(day, tool_overflow);
-        self.key_overflow
-            .add_on(day, micro(persisted.key_overflow_usd));
+        self.key_overflow.add_on(
+            day,
+            saved_micro("overflow", "key", persisted.key_overflow_usd),
+        );
     }
 
     /// The day key to file `persisted` under, or `None` when it is from an
@@ -195,4 +196,27 @@ fn daily_usd(map: &DashMap<String, DailyAccumulator>, today: Option<u64>) -> Has
     map.iter()
         .map(|e| (e.key().clone(), usd(e.value().current_on(today))))
         .collect()
+}
+
+/// A saved row's `usd` as micro-USD, or 0 with a warning for a value no run
+/// could have saved: negative, NaN, infinite, or above what a saved
+/// micro-USD count can reach. Such a value is corruption; saturating it would
+/// make a cap that refuses every call until the day rolls, so the row
+/// restores as zero. The ceiling is the save side's own conversion of
+/// `u64::MAX`, so a counter that saturated legitimately restores saturated
+/// (its USD value times 1e6 rounds to 2^64; the cast saturates it back).
+fn saved_micro(kind: &str, row: &str, usd_value: f64) -> u64 {
+    if usd_value.is_finite() && usd_value >= 0.0 && usd_value <= usd(u64::MAX) {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        return (usd_value * 1_000_000.0).round() as u64;
+    }
+    tracing::warn!(
+        target: "mcp_gateway::cost_accounting::enforcer",
+        file = "costs.json",
+        kind,
+        row,
+        usd = usd_value,
+        "Saved daily total is out of range; restoring it as zero"
+    );
+    0
 }

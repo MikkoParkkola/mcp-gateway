@@ -319,6 +319,7 @@ fn narrow_auth() -> AuthState {
             denied_tools: None,
             admin: false,
             kind: crate::config::ApiKeyKind::Shared,
+            ..Default::default()
         }],
         ..crate::config::AuthConfig::default()
     };

@@ -432,6 +432,8 @@ pub(crate) enum CheckedFile {
     IdentityGrants,
     /// A control-plane `grants.json` or `policies.json`.
     ControlPlaneCollection,
+    /// `gateway.yaml`, reread by a read-only report.
+    Config,
 }
 
 /// The one mode-checked read for files outside `config` (F18): open once,
@@ -463,6 +465,7 @@ fn checked_class(what: CheckedFile) -> SecretFile {
         CheckedFile::CredentialFile => SecretFile::CredentialFile,
         CheckedFile::IdentityGrants => SecretFile::IdentityGrants,
         CheckedFile::ControlPlaneCollection => SecretFile::ControlPlaneCollection,
+        CheckedFile::Config => SecretFile::Config,
     }
 }
 
