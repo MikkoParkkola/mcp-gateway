@@ -17,10 +17,10 @@ src/config_persistence.rs	create_new_private	helper:create_file_private	1	helper
 src/config_persistence.rs	create_new_private	open-create	1	helper	the private create itself (0600 on unix)
 src/config_persistence.rs	create_private_replacing	helper:create_new_private	1	helper	calls the crate's create_new_private
 src/config_persistence.rs	create_private_replacing	open-create	1	helper	the private create itself (0600 on unix)
-src/config_persistence_atomic.rs	create_kept	open-create	1	helper	the atomic writer's checked default create
+src/config_persistence_atomic.rs	finish_kept	open-create	2	helper	the atomic writer's default creates: checked against the judged reading, or unchecked on a volume without access lists
 src/config_persistence_atomic.rs	create_scratch	helper:create_new_private	1	helper	calls the crate's create_new_private
 src/config_persistence_atomic.rs	create_scratch	open-create	1	helper	the atomic writer's scratch create
-src/config_persistence_atomic_windows.rs	prepare	helper:create_file_like	1	helper	calls the crate's create_file_like
+src/config_persistence_atomic_windows.rs	prepare_from	helper:create_file_like	1	helper	calls the crate's create_file_like
 src/control_plane/export.rs	deliver	open-create	1	no-secret	SIEM export file sink; audit records, append-only
 src/control_plane/export.rs	persist_cursor	helper:write_atomic	1	helper	calls the crate's write_atomic
 src/control_plane/store/file.rs	store_cas	helper:write_atomic	1	helper	calls the crate's write_atomic
