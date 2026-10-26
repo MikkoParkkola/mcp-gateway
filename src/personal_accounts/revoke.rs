@@ -15,24 +15,13 @@ use super::provider::{ProviderRevocation, TokenTypeHint};
 use super::service::{AccountServiceError, CredentialReleaseObserver};
 use super::worker::{CustodyError, CustodyHandle};
 use super::{AccountError, AccountKey, GrantRecord, PersonalAccountStore};
+use crate::wiped_bytes::WipedBytes;
 
-/// A token copied out of a retained record. The bytes are overwritten on drop.
-struct WipedToken(crate::wiped_bytes::WipedBytes);
-
-impl WipedToken {
-    fn new(token: String) -> Self {
-        Self(crate::wiped_bytes::WipedBytes::new(token.into_bytes()))
-    }
-
-    fn as_str(&self) -> &str {
-        // Built only from a `String`, so the bytes are UTF-8 by construction.
-        std::str::from_utf8(self.0.as_bytes()).unwrap_or_default()
-    }
-}
-
-/// Every provider token a revoked grant still held, refresh first.
+/// Every provider token a revoked grant still held, refresh first. Each is
+/// copied out of the retained record and overwritten on drop. Built only from
+/// a `String`, so its bytes are UTF-8 by construction.
 pub(crate) struct RevocationMaterial {
-    tokens: Vec<(WipedToken, TokenTypeHint)>,
+    tokens: Vec<(WipedBytes, TokenTypeHint)>,
 }
 
 impl std::fmt::Debug for RevocationMaterial {
@@ -48,11 +37,17 @@ impl RevocationMaterial {
     fn take_from(mut record: GrantRecord) -> Option<Self> {
         let mut tokens = Vec::with_capacity(2);
         if let Some(refresh) = record.refresh_token.take().filter(|t| !t.is_empty()) {
-            tokens.push((WipedToken::new(refresh), TokenTypeHint::RefreshToken));
+            tokens.push((
+                WipedBytes::new(refresh.into_bytes()),
+                TokenTypeHint::RefreshToken,
+            ));
         }
         let access = std::mem::take(&mut record.access_token);
         if !access.is_empty() {
-            tokens.push((WipedToken::new(access), TokenTypeHint::AccessToken));
+            tokens.push((
+                WipedBytes::new(access.into_bytes()),
+                TokenTypeHint::AccessToken,
+            ));
         }
         (!tokens.is_empty()).then_some(Self { tokens })
     }
@@ -62,7 +57,12 @@ impl RevocationMaterial {
     pub(crate) fn tokens_for_test(&self) -> Vec<(String, TokenTypeHint)> {
         self.tokens
             .iter()
-            .map(|(token, hint)| (token.as_str().to_string(), *hint))
+            .map(|(token, hint)| {
+                (
+                    String::from_utf8_lossy(token.as_bytes()).into_owned(),
+                    *hint,
+                )
+            })
             .collect()
     }
 }
@@ -185,10 +185,8 @@ where
         // Every token is attempted even after a failure: a dead refresh token
         // says nothing about whether the access token is still live (R3-3).
         for (token, hint) in &material.tokens {
-            match provider
-                .revoke_token(account_id, token.as_str(), *hint)
-                .await
-            {
+            let token = std::str::from_utf8(token.as_bytes()).unwrap_or_default();
+            match provider.revoke_token(account_id, token, *hint).await {
                 ProviderRevocation::Confirmed => {}
                 ProviderRevocation::Unsupported => return ProviderOutcome::Unsupported,
                 ProviderRevocation::Failed => outcome = ProviderOutcome::Failed,
