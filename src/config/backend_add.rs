@@ -46,8 +46,11 @@ impl BackendConfig {
             .env
             .iter()
             .map(|(key, value)| (format!("backends.{name}.env.{key}"), value));
+        // A whole-value secret reference is not a template: its own check is
+        // `check_secret_references` (a `file:` path may hold `${` literally).
         let mut unresolved: Vec<String> = headers
             .chain(env)
+            .filter(|(_, value)| !secret_ref::is_reference(value))
             .filter_map(|(field, value)| secret_ref::expand_field(&field, value, overlay).err())
             .collect();
         unresolved.sort();

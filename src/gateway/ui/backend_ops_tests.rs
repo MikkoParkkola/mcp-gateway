@@ -678,3 +678,32 @@ fn b3k_a_reference_cannot_be_spliced_into_a_registry_header() {
         resolved.backend.headers
     );
 }
+
+#[test]
+fn b3i_a_resolvable_reference_is_added_and_kept_as_written() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // A path holding `${...}` literally: a reference, never a template.
+    let secret = dir.path().join("${B3_NOT_A_VAR}");
+    crate::gateway::test_helpers::write_owner_only(&secret, "kc-ops-sentinel").expect("write");
+    let reference = format!("file:{}", secret.display());
+    let mut cfg = empty_config();
+    let notes = super::add_backend(
+        &mut cfg,
+        "tool",
+        ResolvedBackend {
+            backend: BackendConfig {
+                enabled: true,
+                transport: stdio_transport("node server.js"),
+                env: env("API_KEY", &reference),
+                ..Default::default()
+            },
+            entry: None,
+        },
+    )
+    .expect("a resolvable reference is added");
+    assert!(notes.is_empty(), "{notes:?}");
+    let backend = &cfg.backends["tool"];
+    assert!(backend.enabled, "a valid reference disabled the backend");
+    // Checked, never substituted: the config keeps the reference text.
+    assert_eq!(backend.env["API_KEY"], reference);
+}
