@@ -12,6 +12,11 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+#[expect(
+    deprecated,
+    reason = "kept at its old path for library callers until 4.0 removes it"
+)]
+pub use crate::config_persistence::load_config_or_default;
 pub use crate::config_persistence::{load_existing_or_default, write_config};
 use crate::{
     config::{BackendConfig, Config, TransportConfig},

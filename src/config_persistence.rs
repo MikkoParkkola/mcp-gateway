@@ -44,6 +44,24 @@ fn resolve_gateway_data_dir(
 }
 
 /// Load config from `path` for editing, with references kept as written,
+/// returning `Config::default()` when the file is absent or cannot be parsed.
+///
+/// Nothing in the gateway calls this any more. It stays for library callers
+/// on this patch line and goes in 4.0.
+#[deprecated(note = "edits an unloadable file as defaults; use load_existing_or_default")]
+#[must_use]
+pub fn load_config_or_default(path: &Path) -> Config {
+    if path.exists() {
+        Config::load_literal(Some(path)).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "Could not load config, using defaults");
+            Config::default()
+        })
+    } else {
+        Config::default()
+    }
+}
+
+/// Load config from `path` for editing, with references kept as written,
 /// returning `Config::default()` when the file is absent.
 ///
 /// A file that exists but does not load is an error, never the defaults: an
