@@ -56,8 +56,8 @@ pub struct Redactor {
     member_value: Regex,
 }
 
-/// The connection-string rule's prefix, one text for the rule and for the
-/// barrier [`Spliced`] writes (MIK-8794).
+/// The connection-string rule's prefix. The barrier [`Spliced`] writes
+/// tracks the same schemes byte by byte; a test pins the lists.
 macro_rules! connection_prefix {
     () => {
         "(?i)(?:postgres|mysql|mongodb|redis)://"
