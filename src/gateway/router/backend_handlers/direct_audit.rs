@@ -363,6 +363,7 @@ pub(super) async fn record(
                 &request_hash,
                 response_hash.as_deref(),
                 attribution,
+                None,
             )
         })
         .await;

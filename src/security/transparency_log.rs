@@ -428,6 +428,7 @@ impl TransparencyLogger {
             request_hash,
             response_hash,
             serde_json::Map::new(),
+            None,
         )
     }
 
