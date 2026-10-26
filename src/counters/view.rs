@@ -196,7 +196,14 @@ impl CounterStore {
                     .unwrap_or(0);
                 if let Some(overflow) = overflow {
                     let admitted = series.admitted - series.admitted % HALF;
-                    if overflow.half.buckets().any(|(b, _)| b * HALF < admitted) {
+                    // Only the 48 hours the two periods are read from: a
+                    // ring keeps older buckets until its next write.
+                    let read_from = (now / HALF + 1).saturating_sub(super::HALF_BUCKETS as u64);
+                    if overflow
+                        .half
+                        .buckets()
+                        .any(|(b, _)| b >= read_from && b * HALF < admitted)
+                    {
                         previous_since = previous_since.max(admitted);
                     }
                     if slots[..first].iter().any(|slot| overflowed(overflow, slot)) {
