@@ -252,15 +252,19 @@ async fn masked_system_paths_are_empty() {
 #[tokio::test]
 async fn a_symlinked_gateway_path_is_masked_where_it_really_is() {
     let real = Path::new("/usr/share/doc");
-    let listed = std::fs::read_dir(real).map(|d| d.count()).unwrap_or(0);
+    let listed = std::fs::read_dir(real).map_or(0, Iterator::count);
     if listed == 0 {
         return;
     }
     let link = Path::new("/var/tmp").join(format!("sbx-state-link-{}", std::process::id()));
     let _ = std::fs::remove_file(&link);
     std::os::unix::fs::symlink(real, &link).unwrap();
-    let out =
-        sandboxed_protecting("/bin/sh", &["-c", "ls -A /usr/share/doc"], &[link.clone()]).await;
+    let out = sandboxed_protecting(
+        "/bin/sh",
+        &["-c", "ls -A /usr/share/doc"],
+        std::slice::from_ref(&link),
+    )
+    .await;
     std::fs::remove_file(&link).unwrap();
     let Some(out) = out else { return };
     assert!(out.status.success(), "{}", out.stderr);
