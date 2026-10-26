@@ -68,3 +68,4 @@ src/home_dir.rs	-	item	the one place the platform lookups are called
 src/home_dir.rs	-	item	the one place the platform lookups are called	
 src/home_dir.rs	-	item	the one place the platform lookups are called	
 src/home_dir.rs	-	item	the one place the platform lookups are called	
+src/gateway/ui/overview.rs	kpi_and_servers	statement	Admin	allx1
