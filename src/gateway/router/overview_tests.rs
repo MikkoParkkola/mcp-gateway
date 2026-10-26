@@ -317,6 +317,32 @@ async fn o5_last_actions_are_the_newest_admin_actions() {
     assert_eq!(body["degraded"], json!(["last_actions"]), "{body}");
 }
 
+/// O5b: a line too long to read, newer than the five actions found, may
+/// itself have been an action, so the list says it is not complete.
+#[tokio::test]
+async fn o5b_a_skipped_newer_line_makes_the_list_incomplete() {
+    use std::io::Write as _;
+    let (mut state, _dir) = fixture(1, false).await;
+    let logs = tempfile::tempdir().expect("log dir");
+    let log = with_log(&mut state, &logs);
+    for i in 0..ACTION_ROWS {
+        admin_action(&log, &format!("/ui/api/route-{i}"));
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(log.path())
+        .expect("open the log for a raw append");
+    writeln!(file, "{}", "x".repeat(300 << 10)).expect("a 300 KiB line");
+    drop(file);
+    let body = overview(&state).await;
+    assert_eq!(
+        body["last_actions"]["rows"].as_array().map(Vec::len),
+        Some(ACTION_ROWS),
+        "the five older actions are still found: {body}"
+    );
+    assert_eq!(body["last_actions"]["complete"], false, "{body}");
+}
+
 /// O4 (API16.3, the D6 half): with the default Notify rule at 80, spend at
 /// exactly 80% of the daily limit is a row (inclusive), 85% is a row with its
 /// percent, 79% is none. Governance off: no limit rows at all.
