@@ -7,7 +7,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use super::verify_entry_sig;
+use super::{recompute_entry_hash, verify_entry_sig};
 
 /// What a reader can say about one entry's integrity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -28,6 +28,11 @@ pub(crate) fn signature_state(entry: &Value, secret: Option<&[u8]>) -> Signature
     let Some(stored) = entry.get("entry_hash").and_then(Value::as_str) else {
         return SignatureState::Invalid;
     };
+    // The stored hash is what the HMAC signs, so it proves nothing about the
+    // fields shown beside it until it is recomputed from them.
+    if !recompute_entry_hash(entry).is_ok_and(|h| h == stored) {
+        return SignatureState::Invalid;
+    }
     if entry.get("sig").is_none() {
         return SignatureState::Unsigned;
     }

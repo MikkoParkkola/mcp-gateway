@@ -69,8 +69,19 @@ impl CsvWriter {
     }
 }
 
-/// One cell, quoted when it holds a quote, comma, CR or LF.
+/// Characters a spreadsheet reads as the start of a formula.
+const FORMULA_LEADS: [char; 6] = ['=', '+', '-', '@', '\t', '\r'];
+
+/// One cell: a leading `'` when it would start a formula, then quoted when it
+/// holds a quote, comma, CR or LF.
 fn push_cell(out: &mut String, cell: &str) {
+    let guarded;
+    let cell = if cell.starts_with(FORMULA_LEADS) {
+        guarded = format!("'{cell}");
+        guarded.as_str()
+    } else {
+        cell
+    };
     if cell.contains(['"', ',', '\r', '\n']) {
         out.push('"');
         out.push_str(&cell.replace('"', "\"\""));
