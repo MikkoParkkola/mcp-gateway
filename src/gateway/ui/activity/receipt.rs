@@ -94,7 +94,6 @@ pub(super) fn receipt(
         log: id.log,
         entry: found.entry,
         segment: found.segment,
-        offset: 0,
     };
     let Some(kind) = kind_of(&line) else {
         return Ok(None);

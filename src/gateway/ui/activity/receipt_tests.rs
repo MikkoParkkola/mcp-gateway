@@ -45,7 +45,6 @@ fn id_of(log: Which, entry: &Value) -> RowId {
         log,
         entry: entry.clone(),
         segment: 0,
-        offset: 0,
     };
     parse_id(&row_id(&line).unwrap()).unwrap()
 }

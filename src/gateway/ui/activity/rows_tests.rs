@@ -17,7 +17,6 @@ fn line(log: Which, entry: Value) -> Line {
         log,
         entry,
         segment: 0,
-        offset: 0,
     }
 }
 

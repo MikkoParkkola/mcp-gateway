@@ -55,7 +55,6 @@ pub(super) struct Line {
     pub(super) log: Which,
     pub(super) entry: Value,
     pub(super) segment: u64,
-    pub(super) offset: u64,
 }
 
 /// A line that is not a JSON entry: a hand-edited log, or one over the record
@@ -198,7 +197,6 @@ impl LogTail {
                         log: self.which,
                         entry,
                         segment: self.segment,
-                        offset,
                     }),
                     _ => Item::Unreadable(Unreadable {
                         log: self.which,

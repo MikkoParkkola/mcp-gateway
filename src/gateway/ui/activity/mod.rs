@@ -51,7 +51,7 @@ pub(super) fn activity_router() -> Router<Arc<AppState>> {
 
 /// The list's query, as sent. Parsed by [`parse`].
 #[derive(Debug, Default, Deserialize)]
-pub(super) struct ListQuery {
+struct ListQuery {
     outcome: Option<String>,
     server: Option<String>,
     caller: Option<String>,
@@ -64,10 +64,10 @@ pub(super) struct ListQuery {
 }
 
 /// The logs a page reads, and the secret that checks their signatures.
-pub(super) struct Logs {
-    pub(super) invocation: PathBuf,
-    pub(super) governance: Option<PathBuf>,
-    pub(super) secret: Option<Vec<u8>>,
+struct Logs {
+    invocation: PathBuf,
+    governance: Option<PathBuf>,
+    secret: Option<Vec<u8>>,
 }
 
 fn logs(state: &AppState) -> Option<Logs> {
@@ -265,7 +265,7 @@ fn parse(q: &ListQuery) -> Result<Parsed, Response> {
 }
 
 /// One page of the list. Blocking: it reads the log files.
-pub(super) fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
+fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
     let parsed = match parse(query) {
         Ok(p) => p,
         Err(r) => return r,
