@@ -137,3 +137,40 @@ async fn auth_off_mcp_held_request_keeps_its_generation() {
     assert_reloaded(&fx, true);
     assert!(body.get("error").is_none(), "off then on: {body}");
 }
+
+/// F4 (held, direct route): `ssrf_protection` on at arrival for a backend
+/// declared on loopback, off by a reload once the caller is resolved; the call
+/// is still withheld and nothing runs. Authorization is judged after the seam,
+/// so a judge that took the current generation would let it through.
+#[tokio::test]
+async fn f4_direct_held_ssrf_on_then_off_is_still_refused() {
+    use crate::config::{BackendConfig, TransportConfig};
+    let fx = Box::pin(fixture_built(Answer::Ok, |meta| meta)).await;
+    let calls = super::direct_guards_fixture::replace_backend_configured(
+        &fx,
+        "alpha",
+        BackendConfig {
+            transport: TransportConfig::Http {
+                http_url: "http://127.0.0.1:9/mcp".to_string(),
+                streamable_http: Some(false),
+                protocol_version: None,
+            },
+            ..BackendConfig::default()
+        },
+    );
+    fx.state
+        .live_config
+        .edit(|c| c.security.ssrf_protection = true);
+    let live = Arc::clone(&fx.state.live_config);
+    seams::after_caller(move || live.edit(|c| c.security.ssrf_protection = false));
+    let (_, body) = post_direct(&fx, "alpha", "k-std", "read", json!({}), None, None).await;
+    assert!(
+        !fx.state.live_config.get().security.ssrf_protection,
+        "the seam never ran, so this row tested nothing"
+    );
+    assert!(
+        body.pointer("/result/isError") == Some(&json!(true)),
+        "admitted: {body}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "dispatched");
+}
