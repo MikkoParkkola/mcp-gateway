@@ -234,6 +234,9 @@ fn g3_the_key_cache_decides_as_every_pair_did() {
     assert!(generic_seen, "a generic API-key member matched");
 }
 
+/// Each pattern's spans as found, by pattern index.
+type FoundBy = Vec<(usize, Vec<(usize, usize)>)>;
+
 /// Seeded random spans over a document of empty and short values: what each
 /// pattern keeps, and whether it crosses an exempt value, come out the same
 /// from the crossed-only exempt list as from the list of every exempt value.
@@ -255,12 +258,12 @@ fn g4_crossed_exempt_values_decide_as_every_exempt_value_did() {
         state ^= state << 17;
         usize::try_from(state % u64::try_from(below).expect("fits")).expect("fits")
     };
-    let crosses = |found: &[(usize, usize)], holes: &[(usize, usize)]| {
+    let meets_a_hole = |found: &[(usize, usize)], holes: &[(usize, usize)]| {
         (found.iter()).any(|&(start, end)| holes.iter().any(|&(a, b)| a < end && start < b))
     };
     // Spans ending or starting exactly at each literal's edges, alone and
     // touching end to end, then seeded random ones.
-    let mut sets: Vec<Vec<(usize, Vec<(usize, usize)>)>> = Vec::new();
+    let mut sets: Vec<FoundBy> = Vec::new();
     for lit in &literals {
         let (a, b) = (lit.start(), lit.end());
         for found in [
@@ -273,7 +276,7 @@ fn g4_crossed_exempt_values_decide_as_every_exempt_value_did() {
         }
     }
     for _ in 0..3000 {
-        let found_by: Vec<(usize, Vec<(usize, usize)>)> = (0..=next(3))
+        let found_by: FoundBy = (0..=next(3))
             .map(|idx| {
                 let mut found: Vec<(usize, usize)> = (0..next(5))
                     .map(|_| {
@@ -296,15 +299,15 @@ fn g4_crossed_exempt_values_decide_as_every_exempt_value_did() {
                 "case {case}"
             );
             assert_eq!(
-                crosses(found, &crossed),
-                crosses(found, &every),
+                meets_a_hole(found, &crossed),
+                meets_a_hole(found, &every),
                 "case {case}"
             );
         }
     }
 }
 
-/// Tripwire: serde_json's `arbitrary_precision` feature is off. Under it a
+/// Tripwire: `serde_json`'s `arbitrary_precision` feature is off. Under it a
 /// `Value` keeps a number's exact digits, and an object whose first key is
 /// the parser's private number token reads as a number, which
 /// `json_valid::walkable` does not follow. A crate turning the feature on
