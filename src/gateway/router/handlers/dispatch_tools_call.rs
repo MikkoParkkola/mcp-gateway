@@ -229,7 +229,12 @@ pub(super) async fn tools_call(
                             code,
                         );
                     } else {
-                        withheld_trace = refused.note_withheld(state, checked, code).await;
+                        let trace = refused.note_withheld(state, checked, code).await;
+                        // Only a call with no other target is answered for
+                        // this record alone.
+                        if backend_targets.len() == 1 {
+                            withheld_trace = trace;
+                        }
                     }
                     Ok(())
                 }
