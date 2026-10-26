@@ -181,6 +181,9 @@ mod canary_tests;
 /// ADR-023: the security flags apply on reload.
 #[cfg(all(test, feature = "firewall"))]
 mod live_flags_tests;
+/// ADR-023: a request keeps the generation it arrived with.
+#[cfg(all(test, feature = "firewall"))]
+mod live_pin_tests;
 /// ADR-023: the UI view reads the flags and environment name on each response.
 #[cfg(test)]
 mod live_ui_view_tests;

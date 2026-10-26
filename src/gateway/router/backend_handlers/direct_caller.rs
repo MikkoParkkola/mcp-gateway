@@ -201,6 +201,9 @@ pub(super) async fn resolve_caller(
     if let Some(no) = hardened_identity_refusal(state, key.as_deref(), request.extensions().get()) {
         return Err(no);
     }
+    // The caller holds its generation; a reload from here on must not reach it.
+    #[cfg(test)]
+    crate::gateway::meta_mcp::visible::seams::caller_resolved();
     Ok((caller, key, request))
 }
 

@@ -210,6 +210,14 @@ pub(crate) async fn fixture_sanitizing(answer: Answer, on: bool) -> Fx {
     fx
 }
 
+/// Any fixture builder, run with authentication off.
+pub(crate) async fn auth_off<T, F: std::future::Future<Output = T>>(build: F) -> T {
+    AUTH_OFF.with(|s| s.set(true));
+    let fx = build.await;
+    AUTH_OFF.with(|s| s.set(false));
+    fx
+}
+
 /// Any fixture builder, run with `security.sanitize_input` = `on` (MIK-8154
 /// rows: the firewalled and code-mode fixtures under sanitization).
 pub(crate) async fn sanitizing<T, F: std::future::Future<Output = T>>(on: bool, build: F) -> T {
@@ -511,6 +519,8 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
     /// `security.sanitize_input` for the state (the route x check matrix).
     static SANITIZE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Authentication off for the state (ADR-023: the pin holds without it).
+    static AUTH_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Both backends require identity propagation, each to its own audience
     /// (`aud-<name>`), so one caller reaches them under two bindings
     /// (MIK-8293 S3c).
@@ -558,7 +568,7 @@ thread_local! {
 /// The auth the fixture serves: four keys, plus a client breaker when asked.
 fn fixture_auth() -> AuthConfig {
     let mut auth = AuthConfig {
-        enabled: true,
+        enabled: !AUTH_OFF.with(std::cell::Cell::get),
         api_keys: vec![
             key("k-std"),
             key("k-other"),
