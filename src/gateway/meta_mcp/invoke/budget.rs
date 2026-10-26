@@ -189,32 +189,42 @@ impl MetaMcp {
         trace_id: &str,
         result: Value,
     ) -> (Value, super::super::response_security::GateEffect) {
+        let (value, effect, _) =
+            self.context_integrity_outcome(server, tool, api_key_name, trace_id, result);
+        (value, effect)
+    }
+
+    /// [`Self::apply_context_integrity`], plus whether enforcement withheld the
+    /// result outright. Only the caller that delivers the result notes that as
+    /// a refusal; a classification of a copy notes nothing.
+    pub(super) fn context_integrity_outcome(
+        &self,
+        server: &str,
+        tool: &str,
+        api_key_name: Option<&str>,
+        trace_id: &str,
+        result: Value,
+    ) -> (Value, super::super::response_security::GateEffect, bool) {
         use super::super::response_security::GateEffect;
         let input = self.context_integrity_input((server, tool), api_key_name, trace_id, &result);
         let evaluation = audit::noted_classes(self.context_integrity_kernel.read().evaluate(input));
         if evaluation.classification.findings.is_empty()
             && evaluation.policy.would_decision == ContextIntegrityDecisionKind::Allow
         {
-            return (result, GateEffect::PassedThrough);
+            return (result, GateEffect::PassedThrough, false);
         }
 
-        let (delivered, effect) = if evaluation.policy.enforcement_applied {
-            // Withheld outright (no delivered form): the gate refused the
-            // result. A transformed result was delivered, so it is not noted.
-            if evaluation.transformed.delivered.is_none() {
-                audit::note_refused_by(
-                    crate::security::decision_record::DecisionKind::ResponseGate,
-                    None,
-                );
-            }
-            let delivered = Self::context_integrity_delivered_result(&evaluation, &result);
-            (delivered, GateEffect::Enforced)
+        let (delivered, effect, withheld) = if evaluation.policy.enforcement_applied {
+            let (delivered, withheld) =
+                Self::context_integrity_delivered_result(&evaluation, &result);
+            (delivered, GateEffect::Enforced, withheld)
         } else {
-            (result, GateEffect::PassedThrough)
+            (result, GateEffect::PassedThrough, false)
         };
         (
             Self::attach_context_integrity_metadata(delivered, &evaluation),
             effect,
+            withheld,
         )
     }
 
@@ -234,18 +244,21 @@ impl MetaMcp {
     pub(super) fn context_integrity_delivered_result(
         evaluation: &ContextIntegrityEvaluation,
         original: &Value,
-    ) -> Value {
+    ) -> (Value, bool) {
         let Some(delivered) = evaluation.transformed.delivered.clone() else {
-            return json!({
-                "isError": true,
-                "content": [{
-                    "type": "text",
-                    "text": format!(
-                        "Tool result withheld by ContextIntegrityKernel: {}",
-                        evaluation.policy.rationale
-                    )
-                }]
-            });
+            return (
+                json!({
+                    "isError": true,
+                    "content": [{
+                        "type": "text",
+                        "text": format!(
+                            "Tool result withheld by ContextIntegrityKernel: {}",
+                            evaluation.policy.rationale
+                        )
+                    }]
+                }),
+                true,
+            );
         };
 
         let text = delivered
@@ -279,13 +292,16 @@ impl MetaMcp {
         let malformed = result_type.is_some_and(|value| !value.is_string())
             || is_error.is_some_and(|value| !value.is_boolean());
         if malformed {
-            return json!({
-                "content": [{
-                    "type": "text",
-                    "text": "The backend returned a malformed result: `resultType`                              must be a string and `isError` a boolean. The response                              was refused rather than delivered."
-                }],
-                "isError": true,
-            });
+            return (
+                json!({
+                    "content": [{
+                        "type": "text",
+                        "text": "The backend returned a malformed result: `resultType`                              must be a string and `isError` a boolean. The response                              was refused rather than delivered."
+                    }],
+                    "isError": true,
+                }),
+                true,
+            );
         }
         let mut envelope = serde_json::Map::new();
         for (field, value) in [("resultType", result_type), ("isError", is_error)] {
@@ -295,7 +311,7 @@ impl MetaMcp {
         }
         envelope.insert("content".to_string(), content);
         envelope.insert("structuredContent".to_string(), delivered);
-        Value::Object(envelope)
+        (Value::Object(envelope), false)
     }
 
     pub(super) fn attach_context_integrity_metadata(
