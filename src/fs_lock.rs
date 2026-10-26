@@ -174,10 +174,10 @@ impl ExclusiveFileLock {
 
     /// One non-blocking attempt at an exclusive lease on `lock_path`, on
     /// every platform: [`Attempt::Held`] when another handle holds it,
-    /// [`Attempt::Refused`] when the sidecar cannot be used now (Windows: not
-    /// owner-only and still open elsewhere, so it cannot be replaced), `Err`
-    /// for any other failure (a directory in the way or refused, a read-only
-    /// volume, locking unsupported). A separate constructor from
+    /// [`Attempt::Refused`] when the lock cannot be used now (Windows: a lock
+    /// directory another account could write, or a sidecar that is not
+    /// owner-only and still open elsewhere), `Err` for any other failure (a
+    /// missing directory, a read-only volume, locking unsupported). A separate constructor from
     /// [`Self::try_acquire`], which refuses on any platform with neither unix
     /// nor Windows custody.
     #[cfg(windows)]

@@ -721,9 +721,16 @@ fn a_refused_journal_lock_directory_is_busy_not_unreadable() {
         .enable_all()
         .build()
         .unwrap();
-    let read = runtime.block_on(super::journal::read_locked(
-        &grants,
-        std::time::Duration::from_millis(100),
-    ));
+    let (read, warnings) = crate::test_log_capture::capture_warnings(|| {
+        runtime.block_on(super::journal::read_locked(
+            &grants,
+            std::time::Duration::from_millis(100),
+        ))
+    });
     assert!(read.is_none(), "busy, never an unreadable grant file");
+    assert!(
+        warnings.contains("grant journal lock file refused"),
+        "{warnings}"
+    );
+    assert!(warnings.contains("lock directory"), "{warnings}");
 }
