@@ -4,7 +4,7 @@
 //! retained result is delivered, with zero dispatch to the denied target,
 //! while a permitted neighbouring target works.
 //!
-//! Test plan: `docs/design/2026-09-30-sub4-stdio-owner-test-plan.md` (I2).
+//! Test plan: the sub4 stdio owner test plan (I2).
 //! Every row runs against ONE `MetaMcp`, so the admission ledger and the
 //! idempotency cache that could replay the denied target's result are the
 //! same ones the permitted call filled. The policy is the one the dispatcher

@@ -359,10 +359,10 @@ pub(crate) struct MetaToolGates {
 /// This is why `NFR.PERF.4` bands the surface at 9-17 rather than 9-16: the
 /// webhook feature defaults to enabled, so an HTTP deployment serving the
 /// diagnostic is the shipped default, not an exotic combination. See
-/// `docs/design/2026-09-08-perf4-webhook-status-restoration.md`. Nine is every
+/// the perf4 webhook status restoration design. Nine is every
 /// gate off; the band is quantified over gate configuration at the admin
 /// ceiling, never over caller standing
-/// (`docs/design/2026-09-16-meta-tool-surface-compaction.md` §7).
+/// (the meta tool surface compaction design §7).
 pub(crate) fn build_meta_tools(
     gates: MetaToolGates,
     tool_count: ToolTotal,

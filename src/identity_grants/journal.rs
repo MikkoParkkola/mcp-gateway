@@ -8,7 +8,7 @@
 //! The CLI cannot write the gateway's governance log (one writer per log,
 //! #1570), and a grant file edit carries no authenticated actor. So each CLI
 //! change appends an entry here, beside the grant file, and the gateway
-//! ingests it. See `docs/design/2026-09-28-grant-change-journal.md` section 3.
+//! ingests it. See the grant change journal design section 3.
 
 use std::path::{Path, PathBuf};
 

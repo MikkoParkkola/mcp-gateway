@@ -5,7 +5,7 @@
 //! The CLI journals each change beside the grant file; this module turns the
 //! journal and the file into governance audit records, exactly once, and
 //! records direct edits as out-of-band. Every record has actor `unknown`.
-//! Design: `docs/design/2026-09-28-grant-change-journal.md` sections 5-6.
+//! Design: the grant change journal design sections 5-6.
 //!
 //! Two calls per reconciliation, because the plan must be durable before the
 //! grant set is published and the records are appended after it:

@@ -232,8 +232,8 @@ pub(crate) const CASES: [RespCase; 4] = [
 ];
 pub(crate) const ERAS: [Era; 2] = [Era::Modern, Era::Legacy];
 
-/// Each route's tail as the code runs it (verified at 407481d51:
-/// ~/.claude/data/ratification-briefs/mik-8689/orders-verified.md).
+/// Each route's tail as the code runs it (verified against the code at
+/// 407481d51).
 pub(crate) const fn order(route: RespRoute) -> &'static [RespStage] {
     use RespStage::{
         DeliveryRecord, Firewall, Judge, OriginLink, ProvenanceStamp, RelayCommit, RelayRebuild,

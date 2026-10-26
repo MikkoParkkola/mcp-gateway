@@ -186,8 +186,10 @@ const GOLDEN: &str = "tests/fixtures/mik_8425_yaml/shipped.tsv";
 /// further skip fails until it is reviewed. 184 rows were recorded on
 /// 2026-10-25; skipped today, each printed by name when the test runs:
 /// `capabilities/linear/linear_get_issue.yaml` (edited on the release line,
-/// #4133) and `examples/token-exchange-live.yaml` (#4150).
-const MIN_COMPARED: usize = 182;
+/// #4133), `examples/token-exchange-live.yaml` (#4150), and
+/// `capabilities/automation/bus_pull.yaml` and `bus_subscribe.yaml`, whose
+/// example topic stopped naming a private project (#4168).
+const MIN_COMPARED: usize = 180;
 
 fn digest(content: &str) -> String {
     use sha2::Digest as _;

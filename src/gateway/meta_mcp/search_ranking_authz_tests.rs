@@ -496,7 +496,7 @@ fn poisoned_profile(deny_weak: bool) -> RoutingProfileConfig {
 /// `weak_match` SECOND; re-sorting this fixture silently guts that proof.
 ///
 /// The first entry is `zebracorn_tool`, deliberately NOT a tool named exactly
-/// `QUERY`. Design §3.4 (`docs/design/2026-09-12-mik-3274-ranking-abbreviations.md`)
+/// `QUERY`. Design §3.4 (the ranking abbreviations design)
 /// retires score-only ordering as a premise: an exact identifier match is the
 /// PRIMARY sort key, ahead of score, so no usage multiplier can promote
 /// anything past a tool the caller named exactly. A potency control founded on

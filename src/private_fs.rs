@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Owner-only file custody for the task store and the personal-account store
-//! on Windows (design `docs/design/2026-09-26-windows-owner-only-stores.md`).
+//! on Windows (design the windows owner only stores design).
 //!
 //! The unix stores keep their mode-based bodies where they are; this module is
 //! the Windows side of the same rules. Safe code only: every Win32 call goes

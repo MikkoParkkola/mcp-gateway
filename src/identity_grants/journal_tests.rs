@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Grant-change journal cells (MIK-7570.AUDIT.4), CLI half.
 //!
-//! Plan: `docs/design/2026-09-28-grant-change-journal-test-plan.md`, cells
+//! Plan: the grant change journal test plan, cells
 //! T1a-T1f and the journal reader. The gateway half lives with the auditor.
 
 use std::path::Path;

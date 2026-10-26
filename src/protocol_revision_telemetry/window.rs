@@ -3,7 +3,7 @@
 //! U1 v2 measurement window: per-transport counts and one segment per HTTP
 //! `serve` process. The decision half is `window_decide` (test-only).
 //!
-//! Design: `docs/design/2026-10-17-u1-window-v2-release-line.md`.
+//! Design: the u1 window v2 release line design.
 
 use std::collections::BTreeMap;
 use std::io;
