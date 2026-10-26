@@ -20,6 +20,7 @@ pub(crate) mod load_error;
 pub(crate) use features::DEFAULT_TASK_TTL_MS;
 mod flagged_tools;
 mod input_schema;
+mod keychain;
 pub(crate) mod log_once;
 mod meta_mcp_config;
 mod pattern_grammar;
@@ -56,7 +57,7 @@ use env_overlay::{SecretFileDigests, SecretRefsRead, digest};
 pub use input_schema::InputSchemaEnforcement;
 pub(crate) use record_key::resolve_record_key_text;
 use secret_ref::SecretRef;
-pub(crate) use secret_ref::is_template_syntax;
+pub(crate) use secret_ref::{is_keychain_name, is_template_syntax};
 
 // New items (F18): the one mode-checked read for files outside `config`.
 #[cfg(windows)]
@@ -748,12 +749,18 @@ impl Config {
                 files.insert(path.to_path_buf(), value.as_deref().map(digest));
                 value
             }
+            SecretRef::Keychain(name) => secret_ref::read_keychain_ref("", name, overlay).ok(),
             SecretRef::Literal(_) => None,
         };
         // A literal stays as written; an empty one is `validate_with_env`'s to
         // report, like an unresolved reference left verbatim.
+        // A value that reads as a reference (`env:` holding `keychain:x`) is not
+        // written back: resolvers parse the slot again and would follow it as a
+        // second reference. The original reference resolves once, to that text.
         let mut subst = |slot: &mut String, seen: &mut BTreeSet<String>| {
-            if let Some(value) = record(slot, seen) {
+            if let Some(value) = record(slot, seen)
+                && matches!(SecretRef::parse(&value), SecretRef::Literal(_))
+            {
                 *slot = value;
             }
         };
@@ -813,6 +820,10 @@ pub mod humantime_serde;
 
 #[cfg(test)]
 mod backend_url_tests;
+#[cfg(test)]
+mod keychain_load_tests;
+#[cfg(test)]
+mod keychain_ref_tests;
 #[cfg(test)]
 mod secret_file_ref_tests;
 #[cfg(test)]
