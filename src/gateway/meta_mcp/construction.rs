@@ -184,6 +184,13 @@ impl MetaMcp {
 
     /// The zone daily budgets count days in (ADR-026): the budget enforcer's,
     /// or the host's when none runs.
+    #[cfg_attr(
+        not(feature = "cost-governance"),
+        expect(
+            clippy::unused_self,
+            reason = "only the budget enforcer is read through self"
+        )
+    )]
     pub(crate) fn day_zone(&self) -> &'static str {
         #[cfg(feature = "cost-governance")]
         if let Some(enforcer) = &self.budget_enforcer {
