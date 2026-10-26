@@ -552,6 +552,7 @@ impl HttpTransport {
                 self.resolve_message_url(data)
             },
             None,
+            self.body_budget.get().cloned(),
         )
         .await?;
         *self.sse_channel.write() = Some(channel);

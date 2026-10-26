@@ -41,6 +41,18 @@ impl ByteBudget {
                 mib(self.per_response)
             )));
         }
+        self.charge_total(len)
+    }
+
+    /// The most one response (or one event on a retained stream) may carry.
+    pub(crate) const fn per_response(&self) -> usize {
+        self.per_response
+    }
+
+    /// Count `len` more bytes against the whole preview only: a retained
+    /// session stream is no single response, so its events are bounded one
+    /// by one by the decoder at [`Self::per_response`] instead.
+    pub(crate) fn charge_total(&self, len: usize) -> Result<()> {
         let used = self
             .used
             .fetch_add(len, Ordering::Relaxed)

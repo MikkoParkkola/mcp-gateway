@@ -44,8 +44,22 @@ async fn stream_server() -> (String, mpsc::UnboundedSender<String>) {
 }
 
 async fn open(url: &str, sink: Option<Sink>) -> crate::Result<Arc<SseChannel>> {
+    open_budgeted(url, sink, None).await
+}
+
+async fn open_budgeted(
+    url: &str,
+    sink: Option<Sink>,
+    budget: Option<Arc<super::super::budget::ByteBudget>>,
+) -> crate::Result<Arc<SseChannel>> {
     let response = reqwest::get(url).await.expect("GET");
-    SseChannel::open(response, |data| Ok(format!("resolved:{data}")), sink).await
+    SseChannel::open(
+        response,
+        |data| Ok(format!("resolved:{data}")),
+        sink,
+        budget,
+    )
+    .await
 }
 
 fn event(data: &serde_json::Value) -> String {
@@ -248,4 +262,46 @@ async fn the_replacing_tasks_own_request_fails_fast() {
         panic!("the replacing task's own request must fail fast");
     };
     assert!(refused.to_string().contains("being replaced"), "{refused}");
+}
+
+/// The preview's byte budget covers the retained stream too: a waiting
+/// request learns the budget that ended it, never a bare "stream ended".
+#[tokio::test]
+async fn a_budgeted_stream_past_its_total_fails_the_waiting_request() {
+    let (url, tx) = stream_server().await;
+    tx.send("event: endpoint\ndata: /m\n\n".into())
+        .expect("send");
+    let budget = Arc::new(super::super::budget::ByteBudget::new(1024, 2048));
+    let channel = open_budgeted(&url, None, Some(budget)).await.expect("open");
+    let waiting = channel.register(&RequestId::Number(1)).expect("register");
+    // Notifications under the frame limit, past the total.
+    let note = format!(
+        "event: message\ndata: {{\"jsonrpc\":\"2.0\",\"method\":\"x\",\"params\":\"{}\"}}\n\n",
+        "a".repeat(600)
+    );
+    for _ in 0..4 {
+        tx.send(note.clone()).expect("send");
+    }
+    let error = waiting
+        .response()
+        .await
+        .expect_err("the budget ends the stream");
+    assert!(error.to_string().contains("preview is over its"), "{error}");
+}
+
+#[tokio::test]
+async fn a_budgeted_stream_refuses_a_frame_past_the_response_limit() {
+    let (url, tx) = stream_server().await;
+    tx.send("event: endpoint\ndata: /m\n\n".into())
+        .expect("send");
+    let budget = Arc::new(super::super::budget::ByteBudget::new(1024, 1 << 20));
+    let channel = open_budgeted(&url, None, Some(budget)).await.expect("open");
+    let waiting = channel.register(&RequestId::Number(1)).expect("register");
+    tx.send(format!("event: message\ndata: {}", "a".repeat(2000)))
+        .expect("send");
+    let error = waiting
+        .response()
+        .await
+        .expect_err("the frame limit ends the stream");
+    assert!(error.to_string().contains("exceeded 1024 bytes"), "{error}");
 }
