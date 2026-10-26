@@ -124,7 +124,8 @@ fn r5_an_idempotency_only_edit_is_restart_pending() {
     );
 }
 
-/// Change the first bool or number found in `v`, depth first. `false` when
+/// Change the first bool, number, string or empty list found in `v`, depth
+/// first. `false` when
 /// nothing in it can be changed without knowing the field's meaning.
 fn perturb(v: &mut Value) -> bool {
     match v {
@@ -141,18 +142,29 @@ fn perturb(v: &mut Value) -> bool {
             *v = next;
             true
         }
+        // A duration reads " 1ms" as one more millisecond; any other string
+        // stays a string. An enum refuses it, and the load names the key.
+        Value::String(text) => {
+            text.push_str(" 1ms");
+            true
+        }
+        Value::Array(items) if items.is_empty() => {
+            items.push(json!("10.0.0.1"));
+            true
+        }
         Value::Object(m) => m.values_mut().any(perturb),
         _ => false,
     }
 }
 
+/// One field changed alone: its name, the pending report, and whether the
+/// reload saw a change at all.
+type Report = (String, Vec<&'static str>, bool);
+
 /// Every key of `section` except `skip`, each changed alone through the
 /// serialized config. Returns the pending report per key, and the keys that
 /// could not be changed generically, so a new field cannot slip past.
-fn each_field_alone(
-    section: &str,
-    skip: &[&str],
-) -> (Vec<(String, Vec<&'static str>)>, Vec<String>) {
+fn each_field_alone(section: &str, skip: &[&str]) -> (Vec<Report>, Vec<String>) {
     // Fields with no bool or number inside: one hand-picked valid edit each.
     let by_hand: &[(&str, fn(&mut Value))] = &[
         ("posture", |v| *v = json!("hardened")),
@@ -190,7 +202,8 @@ fn each_field_alone(
         }
         let wanted: Config = serde_json::from_value(v)
             .unwrap_or_else(|e| panic!("{section}.{key} changed is not a valid config: {e}"));
-        reports.push((key, pending(&running, wanted)));
+        let changed = !compute_diff(&running, &wanted).is_empty();
+        reports.push((key, pending(&running, wanted), changed));
     }
     (reports, stuck)
 }
@@ -202,8 +215,8 @@ fn r2_each_other_security_field_alone_stays_restart_pending() {
     let (reports, stuck) = each_field_alone("security", &["sanitize_input", "ssrf_protection"]);
     let missed: Vec<&str> = reports
         .iter()
-        .filter(|(_, p)| !p.contains(&"security"))
-        .map(|(k, _)| k.as_str())
+        .filter(|(_, p, _)| !p.contains(&"security"))
+        .map(|(k, _, _)| k.as_str())
         .collect();
     assert!(missed.is_empty(), "not restart-pending: {missed:?}");
     assert!(
@@ -213,7 +226,8 @@ fn r2_each_other_security_field_alone_stays_restart_pending() {
 }
 
 // R5 (every field): each server field beyond host, port and public_url, and
-// each events field, changed alone, is restart-pending.
+// each events field, changed alone, is reported as a change and as
+// restart-pending.
 #[test]
 fn r5_each_server_and_events_field_alone_is_restart_pending() {
     for (section, skip) in [
@@ -223,13 +237,19 @@ fn r5_each_server_and_events_field_alone_is_restart_pending() {
         let (reports, stuck) = each_field_alone(section, skip);
         let missed: Vec<&str> = reports
             .iter()
-            .filter(|(_, p)| p.is_empty())
-            .map(|(k, _)| k.as_str())
+            .filter(|(_, p, _)| p.is_empty())
+            .map(|(k, _, _)| k.as_str())
             .collect();
         assert!(
             missed.is_empty(),
             "{section}: not restart-pending: {missed:?}"
         );
+        let unseen: Vec<&str> = reports
+            .iter()
+            .filter(|(_, _, changed)| !changed)
+            .map(|(k, _, _)| k.as_str())
+            .collect();
+        assert!(unseen.is_empty(), "{section}: not a change: {unseen:?}");
         assert!(stuck.is_empty(), "{section}: no generic edit: {stuck:?}");
     }
 }
