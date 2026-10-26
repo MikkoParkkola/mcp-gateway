@@ -1,6 +1,6 @@
 # ADR-020: Remote sign-in, the live stream, and how the shell is delivered
 
-- **Status**: Proposed, 2026-10-25
+- **Status**: Accepted, 2026-10-25 (the decision record on the ticket below; proposed the same day)
 - **Ticket**: MIK-8839 (ADR.4 and ADR.7, decided together because each constrains the other); unblocks U3 (MIK-8856, live stream), UI1 (MIK-8875, shell) and UI12 (MIK-8886, progressive enhancement)
 - **Base**: `docs/ranking-1-release-line` at `d13b042cb`
 

@@ -474,6 +474,7 @@ async fn a_blocked_direct_tool_list_is_not_a_client_success() {
             denied_tools: None,
             admin: false,
             kind: crate::config::ApiKeyKind::Shared,
+            ..Default::default()
         }],
         client_circuit_breaker: Some(crate::config::CircuitBreakerConfig {
             failure_threshold: 2,
