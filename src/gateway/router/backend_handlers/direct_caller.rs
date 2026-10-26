@@ -102,6 +102,10 @@ fn validate_agent(
                 crate::security::IdentityAudit::Clean,
                 Some(&reason),
             );
+            crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+                crate::security::decision_record::DecisionKind::AgentScope,
+                None,
+            );
             Err(build_http_error_response(
                 None,
                 INVALID_REQUEST,
@@ -175,7 +179,14 @@ pub(super) async fn resolve_caller(
     .await
     {
         Ok(admission) => admission.subject,
-        Err(refusal) => return Err(super::super::identity::identity_refusal_response(refusal)),
+        Err(refusal) => {
+            // The caller's identity standing: no kind names it yet.
+            crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+                crate::security::decision_record::DecisionKind::Unrecorded,
+                None,
+            );
+            return Err(super::super::identity::identity_refusal_response(refusal));
+        }
     };
     caller.spend_key = super::super::identity::caller_key(
         caller.grant_subject.as_ref(),
@@ -187,6 +198,10 @@ pub(super) async fn resolve_caller(
         caller.cert_identity.as_ref(),
     );
     if let Some(no) = hardened_identity_refusal(state, key.as_deref(), request.extensions().get()) {
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Unrecorded,
+            None,
+        );
         return Err(no);
     }
     Ok((caller, key, request))
@@ -227,6 +242,10 @@ pub(super) async fn read_envelope(
     let mut json_request: Value = match serde_json::from_slice(&body_bytes) {
         Ok(v) => v,
         Err(e) => {
+            crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+                crate::security::decision_record::DecisionKind::Syntax,
+                None,
+            );
             return Err(build_http_error_response(
                 None,
                 PARSE_ERROR,
@@ -259,6 +278,11 @@ pub(super) async fn read_envelope(
         validated(&json_request)?;
     }
     if let Some(refusal) = intake_refusal(state, &json_request, caller) {
+        // The caller's identity standing: no kind names it yet.
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Unrecorded,
+            None,
+        );
         return Err(refusal);
     }
     if state.sanitize_input {
@@ -269,6 +293,10 @@ pub(super) async fn read_envelope(
     let (id, method, params) = match crate::gateway::router::helpers::parse_request(&json_request) {
         Ok(parsed) => parsed,
         Err(response) => {
+            crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+                crate::security::decision_record::DecisionKind::Syntax,
+                None,
+            );
             return Err(crate::gateway::router::helpers::build_http_response(
                 &Egressed::gateway_own(response),
                 StatusCode::BAD_REQUEST,
@@ -293,6 +321,12 @@ pub(super) async fn read_envelope(
         {
             crate::gateway::meta_mcp::visible::memo::note_denial_code(name, tool, -32003);
         }
+        if absence == crate::gateway::meta_mcp::scoped_backends::Absence::OutOfScope {
+            crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+                crate::security::decision_record::DecisionKind::BackendScope,
+                None,
+            );
+        }
         return Err(backend_not_found(name));
     }
     // D2-b: scope is checked after the parse, so its refusal names the tool,
@@ -300,6 +334,10 @@ pub(super) async fn read_envelope(
     if let Some(ref client) = caller.client
         && !client.can_access_backend(name)
     {
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::BackendScope,
+            None,
+        );
         return Err(build_http_error_response(
             None,
             -32003,
@@ -327,6 +365,10 @@ pub(super) async fn read_envelope(
         id.as_ref(),
         (&reading.0, reading.1),
     ) {
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Syntax,
+            None,
+        );
         return Err(refusal);
     }
     // Every modern request reaching here passed the `/mcp` checks above, so
@@ -412,6 +454,10 @@ pub(super) fn route<'a>(
         session_id,
         &state.meta_mcp.window_seal,
     ) {
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Syntax,
+            None,
+        );
         return Err(crate::gateway::router::helpers::window_sealed_response(
             &envelope.json_request,
         ));
@@ -428,6 +474,10 @@ pub(super) fn route<'a>(
         caller.proven.as_deref(),
         name,
     ) {
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::AdminCapability,
+            None,
+        );
         return Err(build_http_error_response(
             envelope.id.clone(),
             e.code,
