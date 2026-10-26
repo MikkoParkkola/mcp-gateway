@@ -348,25 +348,29 @@ async fn meta_replay_delivery_joins_the_replaying_invocation() {
     assert_eq!(delivered, invoked, "each delivery joins its own invocation");
 }
 
-/// A surfaced tool withheld from the caller answers as an absent name, and
-/// its one invocation record is the route's `denied` record: the answer's
-/// delivery record names that record's trace.
+/// A meta tool this gateway does not expose (`gateway_execute`, code mode
+/// off) whose one target the caller's key denies: the route stage writes the
+/// call's one invocation record, `denied`, and the absent name's answer
+/// carries its trace, so the delivery joins it. (A surfaced name the caller
+/// cannot see is no target at all; its one record is the meta layer's grant
+/// decision.)
 #[tokio::test]
-async fn a_withheld_surfaced_name_delivery_joins_its_denied_record() {
+async fn a_withheld_target_delivery_joins_its_denied_record() {
     let fx = fixture(Setup {
         auth: Some(key_for_alpha(Some(vec!["t".to_string()]))),
-        meta_mode: MetaMode::SurfacedT,
         ..Setup::default()
     })
     .await;
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                      "params": {"name": "t", "arguments": {"q": 1},
+                      "params": {"name": "gateway_execute",
+                                 "arguments": {"tool": "alpha:t", "arguments": {"q": 1}},
                                  "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
                                            "io.modelcontextprotocol/clientCapabilities": {}}}});
-    let (status, answer) = post_modern_named(&fx, "t", &body.to_string()).await;
-    // The absent name's answer, as for a name that matches no tool.
-    assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
-    assert!(answer.contains("-32601"), "{answer}");
+    let (_, answer) = post_modern_named(&fx, "gateway_execute", &body.to_string()).await;
+    assert!(
+        answer.contains("-32601"),
+        "the absent name's answer: {answer}"
+    );
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "never dispatched");
     let invoked = invocations(&fx);
     let [denied] = invoked.as_slice() else {
