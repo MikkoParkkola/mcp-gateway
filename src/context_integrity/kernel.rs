@@ -666,10 +666,7 @@ fn trim_prefix_to_limit(out: &mut String, limit: usize) {
         return;
     }
 
-    let mut start = out.len() - limit;
-    while !out.is_char_boundary(start) {
-        start += 1;
-    }
+    let start = out.ceil_char_boundary(out.len() - limit);
     out.drain(..start);
 }
 
@@ -678,10 +675,7 @@ fn prefix_fragment(text: &str, limit: usize) -> &str {
         return text;
     }
 
-    let mut end = limit;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
+    let end = text.floor_char_boundary(limit);
     &text[..end]
 }
 
@@ -690,10 +684,7 @@ fn suffix_fragment(text: &str, limit: usize) -> &str {
         return text;
     }
 
-    let mut start = text.len() - limit;
-    while !text.is_char_boundary(start) {
-        start += 1;
-    }
+    let start = text.ceil_char_boundary(text.len() - limit);
     &text[start..]
 }
 
