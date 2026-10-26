@@ -164,21 +164,18 @@ and this document disagree, one of them is a bug.
   after commit releases the reservation and revokes the row.
 - **Revocation is pushed.** A gateway credential revocation (an API key removed on
   reload, a key-server token revoked, an OIDC provider configuration change)
-  cancels the principal's listeners and wipes their leases synchronously, from the
-  same hooks that fire -32012. A quiet listener also re-checks admission on the
-  snapshot interval, as a fallback.
+  signals the events runtime from the same hooks that fire -32012. On its next
+  scheduler turn it revokes the rows that can no longer be observed or admitted,
+  which cancels their listeners and wipes their leases. A quiet listener also
+  re-checks admission on the snapshot interval, as a fallback.
 
 ### 2.10 Listener ceiling
 
-- No new setting. Listeners are accounted against the pool's existing identity-slot
-  budget (`MAX_IDENTITY_SLOTS`, with `MAX_SLOTS_PER_PRINCIPAL` per principal).
-- A listener counts against P's existing per-user slot when P has one, so it does
-  not take a second. Listeners may pin at most
-  `MAX_IDENTITY_SLOTS - MAX_SLOTS_PER_PRINCIPAL` distinct slots per backend, which
-  leaves calls a reserved share. A subscribe past that gets -32013 with
+- No new setting. Per-user listeners are capped per backend at
+  `MAX_PER_USER_LISTENERS` = `MAX_IDENTITY_SLOTS - MAX_SLOTS_PER_PRINCIPAL`, which
+  leaves the identity-slot pool a share for calls. The cap counts listener keys.
+- A subscribe that would need a listener past the cap gets -32013 with
   `data.limit = "identity_slots"`.
-- A listener holds its slot claim for its whole life, so idle eviction never takes
-  a slot a live listener holds. The slot is released when the listener stops.
 
 ## 3. Passthrough token lease
 
@@ -289,8 +286,6 @@ The next successful `events/lease` resumes a rejected or expired key.
   as a held credential: backend, the subscription handle (an alias, never the
   stored id), `expires_at` and state (`active`, `credential_needed`,
   `credential_rejected`). They never show the token or any digest of it.
-- Lease counts are exported as a metric with no label that identifies the
-  subscriber.
 
 ### 3.8 Process memory
 
@@ -312,7 +307,8 @@ Zeroize-on-drop does not cover core dumps, swap or VM snapshots.
 - **Swap is the operator's.** Run the gateway with encrypted swap or none.
   `mcp-gateway doctor` warns, when passthrough is configured, unless every active
   swap entry is verified encrypted (an entry whose status cannot be determined
-  counts as unencrypted), and also reports the core-dump limit.
+  counts as unencrypted), and also reports whether this platform can apply the
+  core-dump guard.
 - Both calls come from `rustix`, already a direct dependency: no new crate and no
   `unsafe`.
 
@@ -361,7 +357,9 @@ falls back to the calls' shared transport.
 
 ## 5. Tests
 
-Each test must fail on the broken implementation it names.
+These are the required tests. Each must fail on the broken implementation it
+names. This section states the requirement, not current coverage: a row is covered
+only when a test exists that fails on its mutant.
 
 ### Isolation
 
