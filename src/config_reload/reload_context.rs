@@ -197,7 +197,14 @@ pub struct ReloadContext {
         )
     )]
     pub(super) trusted_config: PathBuf,
+    /// Applies `meta_mcp.surfaced_tools` from each published config,
+    /// set by the gateway when it attaches to this context.
+    surfaced_hook: parking_lot::Mutex<Option<SurfacedHook>>,
 }
+
+/// Applies a published config's `meta_mcp.surfaced_tools` to the running
+/// gateway, under `lock_reload`.
+pub(crate) type SurfacedHook = Arc<dyn Fn(&Config) + Send + Sync>;
 
 /// The refusal a reload returns when the gateway's shutdown ended its wait.
 pub(super) const STOPPED: &str = "config reload stopped: the gateway is shutting down";
@@ -269,7 +276,14 @@ impl ReloadContext {
             stop: tokio_util::sync::CancellationToken::new(),
             capabilities: None,
             on_registered: None,
+            surfaced_hook: parking_lot::Mutex::new(None),
         })
+    }
+
+    /// Install the hook that applies `surfaced_tools` on every applied
+    /// reload. The gateway calls it when it attaches to this context.
+    pub(crate) fn set_surfaced_hook(&self, hook: SurfacedHook) {
+        *self.surfaced_hook.lock() = Some(hook);
     }
 
     /// Announce `tools/list_changed` for `capabilities` when a reload's env
@@ -689,6 +703,11 @@ impl ReloadContext {
         self.publish_overlay(overlay);
         // Still under `lock_reload`, against the config just published.
         self.report_registered(&patch.registered_change(), &self.live_config.get());
+        // `surfaced_tools` applies here too, under the same lock.
+        let surfaced_hook = self.surfaced_hook.lock().clone();
+        if let Some(hook) = surfaced_hook {
+            hook(&self.live_config.get());
+        }
 
         Ok(with_pending_restart(
             outcome,
