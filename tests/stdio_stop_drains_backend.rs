@@ -64,11 +64,6 @@ for line in sys.stdin:
     print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
 "#;
 
-fn free_port() -> u16 {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
-    listener.local_addr().expect("its address").port()
-}
-
 fn write_config(root: &Path, port: u16) -> std::path::PathBuf {
     let script = BACKEND_SCRIPT
         .replace("TOOL", TOOL)
@@ -176,8 +171,9 @@ fn logs(root: &Path) -> String {
 async fn a_stop_to_the_gateways_group_drains_the_backend_call() {
     let root = tempfile::tempdir().expect("temp root");
     let root = root.path();
-    let port = free_port();
-    let config = write_config(root, port);
+    // Port 0: the gateway binds it and reports what it got, so no other
+    // test can take the port between a pick and the bind.
+    let config = write_config(root, gateway_bin::ANY_PORT);
     let log = std::fs::File::create(root.join("gateway.log")).expect("log");
 
     // The gateway leads its own group, as the entrypoint does under tini, so
@@ -199,16 +195,25 @@ async fn a_stop_to_the_gateways_group_drains_the_backend_call() {
     let _cleanup = KillGroup(pgid);
 
     let client = reqwest::Client::new();
-    let base = format!("http://127.0.0.1:{port}");
     let ready_by = tokio::time::Instant::now() + READY_BOUND;
-    while client.get(format!("{base}/health")).send().await.is_err() {
+    let port = loop {
+        if let Some(port) = gateway_bin::logged_port(&root.join("gateway.log"))
+            && client
+                .get(format!("http://127.0.0.1:{port}/health"))
+                .send()
+                .await
+                .is_ok()
+        {
+            break port;
+        }
         assert!(
             tokio::time::Instant::now() < ready_by,
             "the gateway never became ready\n{}",
             logs(root)
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    };
+    let base = format!("http://127.0.0.1:{port}");
 
     let session = open_session(&client, &base, root).await;
     let mut call = tokio::spawn({
@@ -330,7 +335,7 @@ async fn a_sigterm_in_stdio_mode_ends_the_backends_tree() {
 
     let root = tempfile::tempdir().expect("temp root");
     let root = root.path();
-    let config = write_config(root, free_port());
+    let config = write_config(root, gateway_bin::ANY_PORT);
     let log = std::fs::File::create(root.join("gateway.log")).expect("log");
 
     let mut gateway = tokio::process::Command::from(gateway_bin::command(
