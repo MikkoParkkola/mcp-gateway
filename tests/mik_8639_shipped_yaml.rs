@@ -153,8 +153,7 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
         .collect();
     let files = shipped_files();
     assert!(!files.is_empty(), "expected to find shipped YAML files");
-    let mut unchanged = Vec::new();
-    let mut skipped = Vec::new();
+    let mut fates: Vec<(String, golden::Fate)> = Vec::new();
     let mut new_files = Vec::new();
     let mut refused = Vec::new();
     let mut accepted = 0usize;
@@ -174,9 +173,11 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
         // so an edited file is still checked only when its full `trees.tsv`
         // reading is unchanged.
         if sha == digest(&content) {
-            unchanged.push(path.clone());
-        } else if tree_readings.get(path) != Some(&trees::readings(&content)) {
-            skipped.push(path.clone());
+            fates.push((path.clone(), golden::Fate::Unchanged));
+        } else if tree_readings.get(path) == Some(&trees::readings(&content)) {
+            fates.push((path.clone(), golden::Fate::ReadsAsRecorded));
+        } else {
+            fates.push((path.clone(), golden::Fate::Skipped));
             continue;
         }
         let ok = if reading == "single" {
@@ -192,13 +193,17 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
             refused.push(path.clone());
         }
     }
-    skipped.extend(recorded.into_keys());
-    let skipped: Vec<&str> = skipped.iter().map(String::as_str).collect();
-    golden::assert_skips_reviewed(
-        "shipped.tsv",
-        unchanged.iter().map(String::as_str),
-        &skipped,
+    // A recorded file the walk no longer finds is gone.
+    fates.extend(
+        recorded
+            .into_keys()
+            .map(|path| (path, golden::Fate::Skipped)),
     );
+    let fates: Vec<(&str, golden::Fate)> = fates
+        .iter()
+        .map(|(path, fate)| (path.as_str(), *fate))
+        .collect();
+    golden::assert_skips_reviewed("shipped.tsv", &fates);
     if !new_files.is_empty() {
         eprintln!(
             "shipped-yaml: {} new file(s) without a row: {new_files:?}",

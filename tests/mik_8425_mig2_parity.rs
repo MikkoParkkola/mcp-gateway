@@ -107,20 +107,19 @@ fn compare_keyed(name: &str, read: impl Fn(&str) -> String) -> Outcome {
         differ: Vec::new(),
     };
     let table = fixture(name);
-    let mut unchanged = Vec::new();
-    let mut skipped = Vec::new();
+    let mut fates = Vec::new();
     for row in table.lines() {
         let mut cols = row.splitn(3, '\t');
         let (Some(path), Some(sha), Some(recorded)) = (cols.next(), cols.next(), cols.next())
         else {
             panic!("{name}: malformed row {row:?}");
         };
-        let Ok(text) = std::fs::read_to_string(golden::repo_root().join(path)) else {
+        let Some(text) = golden::read_recorded(path) else {
             // The package does not ship it: not a skip the list must name.
             if golden::in_packaged_crate() {
                 eprintln!("{name}: {path} is not in the package");
             } else {
-                skipped.push(path);
+                fates.push((path, golden::Fate::Skipped));
             }
             continue;
         };
@@ -128,9 +127,11 @@ fn compare_keyed(name: &str, read: impl Fn(&str) -> String) -> Outcome {
         let same = read(&text) == expected;
         // An edited file that still reads as recorded is compared, not skipped.
         if golden::digest(text.as_bytes()) == sha {
-            unchanged.push(path);
-        } else if !same {
-            skipped.push(path);
+            fates.push((path, golden::Fate::Unchanged));
+        } else if same {
+            fates.push((path, golden::Fate::ReadsAsRecorded));
+        } else {
+            fates.push((path, golden::Fate::Skipped));
             continue;
         }
         outcome.compared += 1;
@@ -138,7 +139,7 @@ fn compare_keyed(name: &str, read: impl Fn(&str) -> String) -> Outcome {
             outcome.differ.push(path.to_owned());
         }
     }
-    golden::assert_skips_reviewed(name, unchanged, &skipped);
+    golden::assert_skips_reviewed(name, &fates);
     outcome
 }
 
@@ -148,6 +149,13 @@ fn assert_outcome(group: &str, outcome: &Outcome, min_compared: usize) {
         "{group}: only {} rows comparable (need {min_compared})",
         outcome.compared
     );
+    assert_no_differ(group, outcome);
+}
+
+/// A keyed group has no floor: `assert_skips_reviewed` already accounts for
+/// every row it did not compare, and in the packaged crate a group may
+/// compare none at all.
+fn assert_no_differ(group: &str, outcome: &Outcome) {
     assert!(
         outcome.differ.is_empty(),
         "{group}: {} of {} rows differ: {:?}",
@@ -257,27 +265,24 @@ fn p6_every_repository_tree_round_trips() {
 /// `reviewed_skips.tsv` lists it, as the baseline suites do.
 #[test]
 fn p2_trees_as_recorded() {
-    let outcome = compare_keyed("trees.tsv", trees::readings);
-    assert_outcome("P2 trees", &outcome, 1);
+    assert_no_differ("P2 trees", &compare_keyed("trees.tsv", trees::readings));
 }
 
 /// P13: the `Config` each shipped config and Helm `ConfigMap` extracts to.
 #[test]
 fn p13_configs_as_recorded() {
-    assert_outcome(
+    assert_no_differ(
         "P13 configs",
         &compare_keyed("configs.tsv", configs::reading),
-        1,
     );
 }
 
 /// P9: every shipped capability reads to the recorded definition.
 #[test]
 fn p9_capabilities_as_recorded() {
-    assert_outcome(
+    assert_no_differ(
         "P9 capabilities",
         &compare_keyed("capabilities.tsv", capabilities::reading),
-        1,
     );
 }
 
