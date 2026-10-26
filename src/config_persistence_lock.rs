@@ -22,6 +22,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use super::journal::Recovered;
 use crate::fs_lock::ExclusiveFileLock;
 use crate::identity_grants::journal::resolved;
 
@@ -156,14 +157,30 @@ fn keep_private(lock: &Path) -> io::Result<()> {
 /// Take the lock for `config`, waiting until `deadline` while another writer
 /// holds it. For async callers: the wait is an async sleep, never a thread
 /// blocked on an executor worker.
+///
+/// A replace journal left beside the config is recovered before this
+/// returns, so no holder ever reads a half-replaced file
+/// ([`super::journal`]).
 pub(crate) async fn lock_config(
     config: &Path,
     deadline: Instant,
 ) -> Result<ExclusiveFileLock, NotLocked> {
+    lock_config_recovering(config, deadline)
+        .await
+        .map(|(held, _)| held)
+}
+
+/// [`lock_config`], also saying what recovery did, for a holder with a live
+/// gateway: after [`Recovered::RolledBack`] the running config is on bytes
+/// that are no longer on disk, and it owes a reload.
+pub(crate) async fn lock_config_recovering(
+    config: &Path,
+    deadline: Instant,
+) -> Result<(ExclusiveFileLock, Recovered), NotLocked> {
     let lock = lock_path(&resolved(config));
     loop {
         if let Some(held) = try_once(config, &lock)? {
-            return Ok(held);
+            return recovered(config, held);
         }
         if Instant::now() >= deadline {
             return Err(NotLocked::Busy);
@@ -184,7 +201,7 @@ pub(crate) fn lock_config_blocking(
     let mut on_wait = Some(on_wait);
     loop {
         if let Some(held) = try_once(config, &lock)? {
-            return Ok(held);
+            return recovered(config, held).map(|(held, _)| held);
         }
         if let Some(say) = on_wait.take() {
             say(&lock);
@@ -193,6 +210,18 @@ pub(crate) fn lock_config_blocking(
             return Err(NotLocked::Busy);
         }
         std::thread::sleep(POLL);
+    }
+}
+
+/// Recover a replace journal under `held`; an unusable one releases the
+/// lock and refuses, naming what to do by hand.
+fn recovered(
+    config: &Path,
+    held: ExclusiveFileLock,
+) -> Result<(ExclusiveFileLock, Recovered), NotLocked> {
+    match super::journal::recover(config) {
+        Ok(recovered) => Ok((held, recovered)),
+        Err(message) => Err(NotLocked::Failed(message)),
     }
 }
 
