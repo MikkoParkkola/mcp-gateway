@@ -80,8 +80,9 @@ pub use features::{
     KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig,
     PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig, ProcessCommand, ProcessExecution,
     RateLimitConfig, RecordPrincipalKeyRef, RemoteServerSigningConfig, ResponseContractConfig,
-    RetryConfig, RuntimeConfig, RuntimeProfileConfig, SecurityConfig, SignatureChainConfig,
-    StreamingConfig, TasksConfig, ToolContractConfig, WebhookConfig, api_key_digest_spec,
+    RetryConfig, RuntimeConfig, RuntimeProfileConfig, SecretStoreChoice, SecretsConfig,
+    SecurityConfig, SignatureChainConfig, StreamingConfig, TasksConfig, ToolContractConfig,
+    WebhookConfig, api_key_digest_spec,
 };
 pub use features::{
     EventsConfig, EventsRateLimit, EventsScheduleConfig, EventsSourcesConfig, EventsWatchConfig,
@@ -138,6 +139,8 @@ pub struct Config {
     pub playbooks: PlaybooksConfig,
     /// Security policy configuration.
     pub security: SecurityConfig,
+    /// Where secrets saved through the gateway are written (ADR-028).
+    pub secrets: SecretsConfig,
     /// Webhook receiver configuration.
     pub webhooks: WebhookConfig,
     /// Routing profiles for session-scoped tool access control.
@@ -758,16 +761,13 @@ impl Config {
             SecretRef::Keychain(name) => secret_ref::read_keychain_ref("", name, overlay).ok(),
             SecretRef::Literal(_) => None,
         };
-        // A literal stays as written; an empty one is `validate_with_env`'s to
-        // report, like an unresolved reference left verbatim.
-        // A value that reads as a reference (`env:` holding `keychain:x`) is not
-        // written back: resolvers parse the slot again and would follow it as a
-        // second reference. The original reference resolves once, to that text.
+        // Literals stay (empty ones are `validate_with_env`'s); a value that reads
+        // as a reference is not written back, or it would be followed twice.
         let mut subst = |slot: &mut String, seen: &mut BTreeSet<String>| {
-            if let Some(value) = record(slot, seen)
-                && matches!(SecretRef::parse(&value), SecretRef::Literal(_))
+            let value = record(slot, seen);
+            if let Some(v) = value.filter(|v| matches!(SecretRef::parse(v), SecretRef::Literal(_)))
             {
-                *slot = value;
+                *slot = v;
             }
         };
 
@@ -838,6 +838,8 @@ mod keychain_ref_tests;
 mod keychain_windows_tests;
 #[cfg(test)]
 mod secret_file_ref_tests;
+#[cfg(test)]
+mod secret_files_store_tests;
 #[cfg(test)]
 mod secret_ref_tests;
 #[cfg(test)]

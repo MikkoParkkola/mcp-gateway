@@ -607,6 +607,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `runtime.profiles.<name>.restart` | KEEP | `RuntimeRestartPolicy::default()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:134 |
 | `runtime.profiles.<name>.restart.backoff_secs` | KEEP | `5` | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:276 |
 | `runtime.profiles.<name>.restart.max_restarts` | KEEP | `2` | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:274 |
+| `secrets` | KEEP | `type default` | where secrets saved through the gateway are written (ADR-028) | - | src/config/mod.rs:143 |
+| `secrets.store` | KEEP | `SecretStoreChoice::Auto` | the store for new UI secret saves: `auto`, `keychain` or `files` (ADR-028); an operator setting by ruling | - | src/config/features/secrets.rs:14 |
 | `security` | KEEP | `type default` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/mod.rs:115 |
 | `security.agent_identity` | KEEP | `AgentIdentityConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:642 |
 | `security.agent_identity.allow_unverified_agent_identity` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/agent_identity.rs:89 |

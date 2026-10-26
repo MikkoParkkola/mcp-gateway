@@ -116,6 +116,16 @@ pub mod runtime;
 pub mod scheduler;
 #[doc(hidden)]
 pub mod secret_injection;
+// The UI save core is its first caller (ADR-024); until then only tests use it.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        unused_imports,
+        reason = "the UI save core is its first caller"
+    )
+)]
+mod secret_store;
 #[doc(hidden)]
 pub mod secrets;
 #[doc(hidden)]
