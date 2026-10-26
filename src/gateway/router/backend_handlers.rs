@@ -156,7 +156,7 @@ async fn guard_tool_call(
             backend_name,
             tool_name,
             code,
-            crate::gateway::meta_mcp::invoke::audit::current_refusal_kind(),
+            crate::gateway::meta_mcp::invoke::audit::take_refusal_kind(),
         );
         warn!(backend = %backend_name, tool = %tool_name, "Tool withheld by authorization; answered as absent");
     }

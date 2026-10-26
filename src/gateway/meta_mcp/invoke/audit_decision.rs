@@ -49,19 +49,15 @@ tokio::task_local! {
     static ROUTE: RefCell<crate::security::decision_record::Noted>;
 }
 
-/// The check noted as refusing so far: the dispatch's, else the route
-/// stage's. Read, not taken.
-pub(crate) fn current_refusal_kind() -> Option<crate::security::decision_record::DecisionKind> {
+/// The check noted as refusing so far: the dispatch's, read (it is this
+/// call's), else the route stage's, taken, so the next target of the same
+/// request starts from nothing and never inherits this one's check.
+pub(crate) fn take_refusal_kind() -> Option<crate::security::decision_record::DecisionKind> {
     super::NOTES
         .try_with(|notes| notes.borrow().decision.refusal_kind())
         .ok()
         .flatten()
-        .or_else(|| {
-            ROUTE
-                .try_with(|route| route.borrow().refusal_kind())
-                .ok()
-                .flatten()
-        })
+        .or_else(|| take_route_noted().refusal_kind())
 }
 
 /// Run a request's route stage with a decision scope of its own.
