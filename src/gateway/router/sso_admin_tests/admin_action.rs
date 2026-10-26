@@ -551,7 +551,7 @@ fn sha256_of(text: &str) -> String {
 async fn capability_save_writes_editor_record() {
     let mut fx = audited(AuditFailurePolicy::FailClosed, &[]).await;
     let (dir, before) = with_capability(&mut fx);
-    let after = before.replace("primary", "main");
+    let after = before.replace("path: /api", "path: /api/v2");
     let (status, body) = fx
         .send(yaml_request(
             "PUT",
