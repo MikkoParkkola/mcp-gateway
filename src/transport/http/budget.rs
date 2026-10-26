@@ -21,6 +21,10 @@ pub(crate) struct ByteBudget {
     per_response: usize,
     total: usize,
     used: AtomicUsize,
+    /// The first refusal, kept: once over budget anywhere, every later read
+    /// under this budget fails with it, so a peer cannot follow an oversized
+    /// stream event with a small body answer and have the preview succeed.
+    refused: std::sync::OnceLock<String>,
 }
 
 impl ByteBudget {
@@ -29,11 +33,27 @@ impl ByteBudget {
             per_response,
             total,
             used: AtomicUsize::new(0),
+            refused: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Keep `message` as this budget's refusal (the first one wins) and
+    /// return the refusal in force.
+    fn refuse(&self, message: String) -> Error {
+        Error::Transport(self.refused.get_or_init(|| message).clone())
+    }
+
+    /// The refusal already in force, if any.
+    fn check(&self) -> Result<()> {
+        match self.refused.get() {
+            Some(message) => Err(Error::Transport(message.clone())),
+            None => Ok(()),
         }
     }
 
     /// Count `len` more bytes of one response that has read `seen` so far.
     fn charge(&self, seen: &mut usize, len: usize) -> Result<()> {
+        self.check()?;
         *seen = seen.saturating_add(len);
         if *seen > self.per_response {
             return Err(self.response_refusal());
@@ -44,7 +64,7 @@ impl ByteBudget {
     /// The refusal of one response (or one stream event) past
     /// [`Self::per_response`], in the words [`is_budget_refusal`] knows.
     pub(crate) fn response_refusal(&self) -> Error {
-        Error::Transport(format!(
+        self.refuse(format!(
             "the response is over the preview's {} budget",
             mib(self.per_response)
         ))
@@ -59,12 +79,13 @@ impl ByteBudget {
     /// session stream is no single response, so its events are bounded one
     /// by one by the decoder at [`Self::per_response`] instead.
     pub(crate) fn charge_total(&self, len: usize) -> Result<()> {
+        self.check()?;
         let used = self
             .used
             .fetch_add(len, Ordering::Relaxed)
             .saturating_add(len);
         if used > self.total {
-            return Err(Error::Transport(format!(
+            return Err(self.refuse(format!(
                 "the preview is over its {} budget",
                 mib(self.total)
             )));
@@ -89,6 +110,8 @@ impl ByteBudget {
 
     /// The whole of `response`'s body, refused past either budget.
     pub(crate) async fn read(self: &Arc<Self>, response: reqwest::Response) -> Result<Bytes> {
+        // An empty body charges nothing, so the kept refusal is checked here too.
+        self.check()?;
         let stream = response
             .bytes_stream()
             .map(|chunk| chunk.map_err(|e| safe_request_error("Failed to read response", &e)));
@@ -126,6 +149,17 @@ mod tests {
             error.contains("response is over the preview's 4 MiB budget"),
             "{error}"
         );
+    }
+
+    /// Once refused, a later small read is refused too, with the first reason.
+    #[test]
+    fn a_refusal_is_kept_for_every_later_read() {
+        let budget = ByteBudget::new(1024, 1 << 20);
+        let first = budget.response_refusal().to_string();
+        assert!(first.contains("over the preview's"), "{first}");
+        let later = budget.charge(&mut 0, 1).unwrap_err().to_string();
+        assert_eq!(later, first);
+        assert_eq!(budget.charge_total(1).unwrap_err().to_string(), first);
     }
 
     #[test]
