@@ -18,9 +18,17 @@ mod env_overlay;
 mod features;
 pub(crate) mod load_error;
 pub(crate) use features::DEFAULT_TASK_TTL_MS;
+pub(crate) mod display;
+pub use display::secret_slot;
 mod flagged_tools;
 mod input_schema;
-mod keychain;
+pub(crate) mod keychain;
+#[cfg(target_os = "linux")]
+mod keychain_linux;
+#[cfg(target_os = "macos")]
+mod keychain_macos;
+#[cfg(windows)]
+mod keychain_windows;
 pub(crate) mod log_once;
 mod meta_mcp_config;
 mod pattern_grammar;
@@ -57,7 +65,7 @@ use env_overlay::{SecretFileDigests, SecretRefsRead, digest};
 pub use input_schema::InputSchemaEnforcement;
 pub(crate) use record_key::resolve_record_key_text;
 use secret_ref::SecretRef;
-pub(crate) use secret_ref::{is_keychain_name, is_template_syntax};
+pub(crate) use secret_ref::{is_keychain_name, is_reference, is_template_syntax};
 
 // New items (F18): the one mode-checked read for files outside `config`.
 #[cfg(windows)]
@@ -74,8 +82,9 @@ pub use features::{
     KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig,
     PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig, ProcessCommand, ProcessExecution,
     RateLimitConfig, RecordPrincipalKeyRef, RemoteServerSigningConfig, ResponseContractConfig,
-    RetryConfig, RuntimeConfig, RuntimeProfileConfig, SecurityConfig, SignatureChainConfig,
-    StreamingConfig, TasksConfig, ToolContractConfig, WebhookConfig, api_key_digest_spec,
+    RetryConfig, RuntimeConfig, RuntimeProfileConfig, SecretStoreChoice, SecretsConfig,
+    SecurityConfig, SignatureChainConfig, StreamingConfig, TasksConfig, ToolContractConfig,
+    WebhookConfig, api_key_digest_spec,
 };
 pub use features::{
     EventsConfig, EventsRateLimit, EventsScheduleConfig, EventsSourcesConfig, EventsWatchConfig,
@@ -103,7 +112,6 @@ where
 pub struct Config {
     /// Environment files to load before processing config.
     /// Paths support ~ expansion. Loaded in order, later files override earlier.
-    #[serde(default)]
     pub env_files: Vec<String>,
     /// Server configuration.
     pub server: ServerConfig,
@@ -132,6 +140,9 @@ pub struct Config {
     pub playbooks: PlaybooksConfig,
     /// Security policy configuration.
     pub security: SecurityConfig,
+    /// Where secrets saved through the gateway are written (ADR-028).
+    #[serde(skip_serializing_if = "SecretsConfig::is_default")]
+    pub secrets: SecretsConfig, // ci-allow-secret-debug: the store choice only, never a value
     /// Webhook receiver configuration.
     pub webhooks: WebhookConfig,
     /// Routing profiles for session-scoped tool access control.
@@ -688,27 +699,22 @@ impl Config {
     /// Expand `${VAR}` and `${VAR:-default}` patterns in config values.
     ///
     /// An unset variable with no default is refused (C4) for enabled backends
-    /// and `capabilities.directories`. A disabled backend keeps its text
+    /// and `capabilities.directories`. An enabled backend's whole-value
+    /// `env:`, `file:` or `keychain:` resolves once instead, and an unresolved
+    /// one is refused the same way. A disabled backend keeps its text
     /// verbatim: auth validation skips it too, and enabling it goes through
     /// reload, which runs this again.
     fn expand_env_vars(&mut self, overlay: &EnvOverlay) -> Result<SecretRefsRead> {
         // Every unresolved reference in one error: fixing them one restart at a
         // time is the experience this replaces.
         let mut unresolved = Vec::new();
+        secret_ref::evaluate_backends(&mut self.backends, overlay, &mut unresolved);
         let mut expand = |field: String, value: &mut String| match secret_ref::expand_field(
             &field, value, overlay,
         ) {
             Ok(expanded) => *value = expanded,
             Err(message) => unresolved.push(message),
         };
-        for (name, backend) in self.backends.iter_mut().filter(|(_, b)| b.enabled) {
-            for (key, value) in &mut backend.headers {
-                expand(format!("backends.{name}.headers.{key}"), value);
-            }
-            for (key, value) in &mut backend.env {
-                expand(format!("backends.{name}.env.{key}"), value);
-            }
-        }
         for (i, dir) in self.capabilities.directories.iter_mut().enumerate() {
             expand(format!("capabilities.directories[{i}]"), dir);
         }
@@ -752,16 +758,13 @@ impl Config {
             SecretRef::Keychain(name) => secret_ref::read_keychain_ref("", name, overlay).ok(),
             SecretRef::Literal(_) => None,
         };
-        // A literal stays as written; an empty one is `validate_with_env`'s to
-        // report, like an unresolved reference left verbatim.
-        // A value that reads as a reference (`env:` holding `keychain:x`) is not
-        // written back: resolvers parse the slot again and would follow it as a
-        // second reference. The original reference resolves once, to that text.
+        // Literals stay (empty ones are `validate_with_env`'s); a value that reads
+        // as a reference is not written back, or it would be followed twice.
         let mut subst = |slot: &mut String, seen: &mut BTreeSet<String>| {
-            if let Some(value) = record(slot, seen)
-                && matches!(SecretRef::parse(&value), SecretRef::Literal(_))
+            let value = record(slot, seen);
+            if let Some(v) = value.filter(|v| matches!(SecretRef::parse(v), SecretRef::Literal(_)))
             {
-                *slot = value;
+                *slot = v;
             }
         };
 
@@ -819,13 +822,23 @@ pub mod humantime_serde;
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+mod backend_refs_tests;
+#[cfg(test)]
 mod backend_url_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod keychain_linux_tests;
 #[cfg(test)]
 mod keychain_load_tests;
+#[cfg(all(test, target_os = "macos"))]
+mod keychain_macos_tests;
 #[cfg(test)]
 mod keychain_ref_tests;
+#[cfg(all(test, windows))]
+mod keychain_windows_tests;
 #[cfg(test)]
 mod secret_file_ref_tests;
+#[cfg(test)]
+mod secret_files_store_tests;
 #[cfg(test)]
 mod secret_ref_tests;
 #[cfg(test)]
