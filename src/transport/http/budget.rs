@@ -117,10 +117,9 @@ impl ByteBudget {
         let stream = response
             .bytes_stream()
             .map(|chunk| chunk.map_err(|e| safe_request_error("Failed to read response", &e)));
-        // Metered into a local first: a call on a macro's head line is graded
-        // as unverified by the critical coverage grade.
-        let metered = self.metered(stream);
-        let mut stream = std::pin::pin!(metered);
+        // Boxed, not `pin!`: the critical coverage grade reads a macro's
+        // expansion line as unreached.
+        let mut stream = Box::pin(self.metered(stream));
         let mut body = BytesMut::new();
         while let Some(chunk) = stream.next().await {
             body.extend_from_slice(&chunk?);
@@ -166,6 +165,36 @@ mod tests {
         let later = budget.charge(&mut 0, 1).unwrap_err().to_string();
         assert_eq!(later, first);
         assert_eq!(budget.charge_total(1).unwrap_err().to_string(), first);
+    }
+
+    fn response(body: &'static [u8]) -> reqwest::Response {
+        reqwest::Response::from(axum::http::Response::new(body))
+    }
+
+    /// `read` returns a body within both budgets whole.
+    #[tokio::test]
+    async fn read_returns_a_body_within_budget() {
+        let budget = Arc::new(ByteBudget::new(16, 32));
+        let body = budget.read(response(b"tools list")).await.unwrap();
+        assert_eq!(body.as_ref(), b"tools list");
+    }
+
+    /// `read` refuses a body past the per-response budget, and then refuses
+    /// an empty one with the same reason before reading it.
+    #[tokio::test]
+    async fn read_refuses_a_body_past_its_budget_and_keeps_refusing() {
+        let budget = Arc::new(ByteBudget::new(4, 32));
+        let first = budget
+            .read(response(b"too long"))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            is_budget_refusal(&Error::Transport(first.clone())),
+            "{first}"
+        );
+        let later = budget.read(response(b"")).await.unwrap_err().to_string();
+        assert_eq!(later, first);
     }
 
     #[test]
