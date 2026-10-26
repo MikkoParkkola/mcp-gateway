@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::sync::{Arc, Barrier};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::secret_store::tests::{Fake, count, index_text, three, vault as fresh_vault};
 use crate::secret_store::{
@@ -151,9 +151,16 @@ fn a_held_vault_lock_refuses_at_the_deadline_before_any_store_call() {
     let (dir, vault) = fresh_vault();
     let _held = crate::fs_lock::ExclusiveFileLock::try_acquire(vault.lock_path()).expect("hold");
     let store = Arc::new(Fake::new());
-    let refused = create_secrets(vault.clone(), store.clone(), &two(), Instant::now())
+    let started = Instant::now();
+    let refused = create_secrets(vault.clone(), store.clone(), &two(), started)
         .err()
         .expect("refused");
+    // Refused at the caller's deadline, not after the 30 s default.
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "waited past the deadline: {:?}",
+        started.elapsed()
+    );
     match refused {
         SaveError::Refused(StoreError::Failed(why)) => {
             assert!(why.contains("held the vault lock"), "{why}");
