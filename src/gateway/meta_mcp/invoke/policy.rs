@@ -28,6 +28,10 @@ impl MetaMcp {
         self.authorize_invocation(args, caller)?;
         crate::gateway::meta_mcp::visible::memo::refuse_withheld(server, tool)?;
         if let Err(reason) = validate_tool_name(tool) {
+            super::audit::note_refusal(
+                crate::security::decision_record::DecisionKind::Syntax,
+                None,
+            );
             return Err(Error::Protocol(format!(
                 "Invalid tool name '{tool}': {reason}"
             )));
@@ -36,7 +40,13 @@ impl MetaMcp {
             args,
             caller.agent_id.map(crate::security::ProvenAgentId::as_str),
             "gateway_invoke",
-        )?;
+        )
+        .inspect_err(|_| {
+            super::audit::note_refusal(
+                crate::security::decision_record::DecisionKind::Attestation,
+                None,
+            );
+        })?;
         // S1 (kill switch, capability disable, session profile) is shared with
         // the per-backend route; every admission path reaches it through here.
         // MIK-8439/8475: on a per-user backend or an account-bearing
@@ -66,7 +76,13 @@ impl MetaMcp {
             .scoped(caller.scope().authorizer.backend_grant())
             .scoped_get(server);
         match backend.and_then(|b| b.blocked_tool_refusal(None, tool)) {
-            Some(refusal) => Err(Error::Protocol(refusal)),
+            Some(refusal) => {
+                super::audit::note_refusal(
+                    crate::security::decision_record::DecisionKind::DescriptorBlock,
+                    None,
+                );
+                Err(Error::Protocol(refusal))
+            }
             None => Ok(()),
         }
     }
@@ -106,14 +122,23 @@ impl MetaMcp {
         };
         let authorizer = caller.authorizer;
         // The admin-capability rule is refused and audited like the authorizer.
+        use crate::security::decision_record::DecisionKind;
         let refusal = authorizer
             .authorize(target)
-            .map_err(|e| Error::Forbidden {
-                code: e.code,
-                status: e.status.as_u16(),
-                message: e.message,
+            .map_err(|e| {
+                super::audit::note_refusal(e.kind, None);
+                Error::Forbidden {
+                    code: e.code,
+                    status: e.status.as_u16(),
+                    message: e.message,
+                }
             })
-            .and_then(|()| self.admin_capability_rule(server, tool, caller.is_admin));
+            .and_then(|()| {
+                self.admin_capability_rule(server, tool, caller.is_admin)
+                    .inspect_err(|_| {
+                        super::audit::note_refusal(DecisionKind::AdminCapability, None);
+                    })
+            });
         if let Err(e) = refusal {
             let (transport, name) = (authorizer.transport(), authorizer.caller_name());
             crate::gateway::authz::audit_refusal(transport, name, server, tool, &e.to_string());
@@ -124,6 +149,7 @@ impl MetaMcp {
         // idempotency short-circuit both return below this point: a gate under
         // a cache read decides nothing on a hit.
         self.identity_grant_rule(server, tool, caller.scope(), Emit::Audit)
+            .inspect_err(|_| super::audit::note_refusal(DecisionKind::Grant, None))
     }
 
     /// Validate the per-action attestation token presented at `boundary`

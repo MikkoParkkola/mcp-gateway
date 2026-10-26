@@ -94,10 +94,6 @@ pub struct AuthorizationError {
     pub code: i32,
     pub status: StatusCode,
     pub message: String,
-    #[expect(
-        dead_code,
-        reason = "read by the decision record, which lands in the next commit of this change"
-    )]
     pub(crate) kind: crate::security::decision_record::DecisionKind,
 }
 

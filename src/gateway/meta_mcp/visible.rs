@@ -33,6 +33,20 @@ pub(crate) enum Withholding {
     Absent,
 }
 
+impl Withholding {
+    /// The check a withheld tool's refusal is recorded under.
+    pub(crate) const fn kind(self) -> crate::security::decision_record::DecisionKind {
+        match self {
+            Self::Refused => crate::security::decision_record::DecisionKind::ToolPolicy,
+            Self::Schema | Self::Descriptor => {
+                crate::security::decision_record::DecisionKind::DescriptorBlock
+            }
+            Self::Lacked => crate::security::decision_record::DecisionKind::ClientToolScope,
+            Self::Absent => crate::security::decision_record::DecisionKind::BackendScope,
+        }
+    }
+}
+
 /// Whether a caller may be shown a tool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Visibility {
