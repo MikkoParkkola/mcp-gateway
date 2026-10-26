@@ -29,9 +29,6 @@ use tally::{HourBuckets, ToolTally};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-/// Default soft-budget warning threshold (80 % of the hard cap).
-const DEFAULT_WARNING_FRACTION: f64 = 0.80;
-
 /// Default price per million tokens (Claude Opus 4.6 input).
 pub const DEFAULT_PRICE_PER_MILLION: f64 = 15.0;
 
@@ -69,30 +66,11 @@ impl CostRecord {
     }
 }
 
-// ── Budget limits ─────────────────────────────────────────────────────────────
+// ── Report windows ────────────────────────────────────────────────────────────
 
-/// Budget configuration for a single API key.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BudgetConfig {
-    /// Hard limit in USD; `None` = unlimited.
-    pub hard_limit_usd: Option<f64>,
-    /// Fraction of the hard limit that triggers a soft warning (default 0.80).
-    pub warning_fraction: f64,
-    /// Rolling window over which the limit applies.
-    pub window: BudgetWindow,
-}
-
-impl Default for BudgetConfig {
-    fn default() -> Self {
-        Self {
-            hard_limit_usd: None,
-            warning_fraction: DEFAULT_WARNING_FRACTION,
-            window: BudgetWindow::Day,
-        }
-    }
-}
-
-/// Rolling time window for budget accounting.
+/// A rolling time window of the per-key cost report, and the idle-key sweep's
+/// horizon. Reporting only: no limit is enforced over these windows; the
+/// enforced caps are the budget enforcer's daily ones.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BudgetWindow {
     /// 24-hour rolling window.
@@ -207,10 +185,6 @@ pub struct SessionCostSnapshot {
 pub struct KeyCost {
     /// API key name.
     pub name: String,
-    /// Budget limits.
-    pub budget: BudgetConfig,
-    /// Set through [`CostTracker::set_key_budget`]: never swept when idle.
-    budgeted: bool,
     /// Hourly spend for the windows and all-time per-tool sums (MIK-8000):
     /// bounded by the clock and the catalog, never by the call count.
     spend: parking_lot::Mutex<(HourBuckets, ToolTally)>,
@@ -221,11 +195,9 @@ pub struct KeyCost {
 }
 
 impl KeyCost {
-    fn new(name: &str, budget: BudgetConfig) -> Self {
+    fn new(name: &str) -> Self {
         Self {
             name: name.to_string(),
-            budget,
-            budgeted: false,
             spend: parking_lot::Mutex::default(),
             // A key is born active: a sweep between its creation and its
             // first spend must not take it for a month-idle one. Born on a
@@ -249,12 +221,12 @@ impl KeyCost {
         }
     }
 
-    /// True when the key has had no spend for the 30-day window and no
-    /// budget was set for it: every window it reports would read zero. A key
-    /// with no dated spend is never idle (MIK-8202 P4b).
+    /// True when the key has had no spend for the 30-day window: every window
+    /// it reports would read zero. A key with no dated spend is never idle
+    /// (MIK-8202 P4b).
     fn idle(&self, now: u64) -> bool {
         let last = self.last_spend.load(Ordering::Relaxed);
-        last != 0 && !self.budgeted && last + BudgetWindow::Month.secs() < now
+        last != 0 && last + BudgetWindow::Month.secs() < now
     }
 
     /// Compute cost totals for a given rolling window, `None` when the clock
@@ -262,38 +234,6 @@ impl KeyCost {
     fn window_totals(&self, window_secs: u64) -> Option<(u64, f64)> {
         let now = crate::clock::unix_secs().ok()?;
         Some(self.spend.lock().0.totals(now, window_secs))
-    }
-
-    /// Cost within the budget window (used for limit checks).
-    fn budget_window_cost(&self) -> Option<f64> {
-        self.window_totals(self.budget.window.secs())
-            .map(|(_, cost)| cost)
-    }
-
-    /// Check budget status.
-    ///
-    /// Returns `BudgetStatus::Ok` if within limits, `Warning` if approaching
-    /// the hard cap, `Exceeded` if over it, `Unknown` when the clock cannot
-    /// date the spend (MIK-8202 P4b).
-    #[must_use]
-    pub fn budget_status(&self) -> BudgetStatus {
-        let Some(hard) = self.budget.hard_limit_usd else {
-            return BudgetStatus::Ok;
-        };
-        let Some(spent) = self.budget_window_cost() else {
-            return BudgetStatus::Unknown;
-        };
-        if spent >= hard {
-            BudgetStatus::Exceeded { spent, limit: hard }
-        } else if spent >= hard * self.budget.warning_fraction {
-            BudgetStatus::Warning {
-                spent,
-                limit: hard,
-                fraction: spent / hard,
-            }
-        } else {
-            BudgetStatus::Ok
-        }
     }
 
     /// Produce a serialisable snapshot with all three time windows.
@@ -320,36 +260,11 @@ impl KeyCost {
             window_24h: window(BudgetWindow::Day.secs()),
             window_7d: window(BudgetWindow::Week.secs()),
             window_30d: window(BudgetWindow::Month.secs()),
-            hard_limit_usd: self.budget.hard_limit_usd,
-            budget_status: format!("{:?}", self.budget_status()),
+            hard_limit_usd: None,
+            budget_status: "Ok".to_string(),
             by_tool,
         }
     }
-}
-
-/// Budget status enum.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum BudgetStatus {
-    /// Within limits.
-    Ok,
-    /// Approaching the hard cap.
-    Warning {
-        /// Amount spent so far in the budget window (USD).
-        spent: f64,
-        /// Configured hard limit (USD).
-        limit: f64,
-        /// Fraction of the limit consumed (0.0–1.0).
-        fraction: f64,
-    },
-    /// Hard cap exceeded.
-    Exceeded {
-        /// Amount spent so far in the budget window (USD).
-        spent: f64,
-        /// Configured hard limit (USD).
-        limit: f64,
-    },
-    /// The clock cannot date the spend, so no judgement is made (MIK-8202 P4b).
-    Unknown,
 }
 
 /// Aggregate stats for a rolling time window.
@@ -373,9 +288,12 @@ pub struct KeyCostSnapshot {
     pub window_7d: WindowStats,
     /// Spend in the past 30 days.
     pub window_30d: WindowStats,
-    /// Configured hard limit (None = unlimited).
+    /// Always `null`: no per-key rolling limit is enforced. The field stays
+    /// so the report's shape does not change; MIK-8863.API10.5 fills it from
+    /// the budget enforcer, which holds the per-key daily caps that are.
     pub hard_limit_usd: Option<f64>,
-    /// Human-readable budget status.
+    /// Always `"Ok"`, for the same reason as `hard_limit_usd`: it judges no
+    /// limit. Read the budget enforcer for a key's real standing.
     pub budget_status: String,
     /// All-time per-tool breakdown; tools past the row cap share `(other)`.
     pub by_tool: Vec<ToolCost>,
@@ -426,12 +344,10 @@ pub struct CostTracker {
     per_caller: caller::CallerCosts,
     /// When the next idle-key sweep may run (MIK-8000).
     next_key_sweep: AtomicU64,
-    /// Default budget applied to keys with no explicit config.
-    default_budget: BudgetConfig,
 }
 
 impl CostTracker {
-    /// Create a new tracker with no budget limits by default.
+    /// Create an empty tracker.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -440,27 +356,7 @@ impl CostTracker {
             sessionless: <[AtomicU64; 3]>::default(),
             per_caller: caller::CallerCosts::default(),
             next_key_sweep: AtomicU64::new(0),
-            default_budget: BudgetConfig::default(),
         }
-    }
-
-    /// Pre-register a budget for a named API key, keeping any spend it has.
-    ///
-    /// One entry guard covers the lookup and the replacement, so the idle
-    /// sweep (which takes every shard lock) cannot drop the key in between.
-    pub fn set_key_budget(&self, key_name: &str, budget: BudgetConfig) {
-        let mut entry = self
-            .per_key
-            .entry(key_name.to_string())
-            .or_insert_with(|| Arc::new(KeyCost::new(key_name, budget.clone())));
-        let spend = std::mem::take(&mut *entry.spend.lock());
-        let last_spend = entry.last_spend.load(Ordering::Relaxed);
-        *entry = Arc::new(KeyCost {
-            budgeted: true,
-            spend: parking_lot::Mutex::new(spend),
-            last_spend: AtomicU64::new(last_spend),
-            ..KeyCost::new(key_name, budget)
-        });
     }
 
     /// Record a tool-call cost event.
@@ -503,7 +399,7 @@ impl CostTracker {
         if let Some(key_name) = api_key_name {
             self.per_key
                 .entry(key_name.to_string())
-                .or_insert_with(|| Arc::new(KeyCost::new(key_name, self.default_budget.clone())))
+                .or_insert_with(|| Arc::new(KeyCost::new(key_name)))
                 .record(&rec, rec.timestamp);
             // The entry guard is dropped above: `retain` takes every shard lock.
             // Housekeeping skips its pass when the record is undated (MIK-8202).
@@ -535,16 +431,6 @@ impl CostTracker {
     pub fn caller_snapshot(&self, caller_key: &str) -> Option<SessionCostSnapshot> {
         self.per_caller
             .snapshot(caller_key, crate::clock::unix_secs().ok())
-    }
-
-    /// Check whether a key has exceeded its budget.
-    ///
-    /// Returns the `BudgetStatus` for the key (or `BudgetStatus::Ok` if unknown).
-    #[must_use]
-    pub fn check_budget(&self, api_key_name: &str) -> BudgetStatus {
-        self.per_key
-            .get(api_key_name)
-            .map_or(BudgetStatus::Ok, |kc| kc.budget_status())
     }
 
     /// Snapshot the cost for a session.
