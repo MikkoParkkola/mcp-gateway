@@ -162,9 +162,9 @@ fn an_invalid_config_is_refused_and_left_unwritten() {
 /// The web UI and admin write through `backend_ops::write_config`.
 #[cfg(feature = "webui")]
 fn ui_write(path: &Path, change: impl FnOnce(&mut mcp_gateway::config::Config)) -> String {
+    use mcp_gateway::config_persistence::load_existing_or_default;
     use mcp_gateway::gateway::test_helpers::write_config_fixture;
-    use mcp_gateway::gateway::ui::backend_ops::load_config_or_default;
-    let mut config = load_config_or_default(path);
+    let mut config = load_existing_or_default(path).expect("config loads");
     change(&mut config);
     write_config_fixture(path, &config).expect("write config");
     std::fs::read_to_string(path).expect("read")
@@ -570,4 +570,34 @@ fn remove_names_the_comments_that_went_with_the_entry() {
         after.contains("# top") && !after.contains("drop:"),
         "{after}"
     );
+}
+
+/// A file the loader refuses: an unknown top-level key.
+const UNLOADABLE: &str = "backends: {}\nnot_a_gateway_key: 1\n";
+
+/// `list` and `get` only read, but a file that does not load must still be
+/// reported, never shown as an empty config.
+fn read_reports_the_load_error(args: &[&str]) {
+    let home = tempfile::tempdir().expect("home");
+    let path = home.path().join("gateway.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, UNLOADABLE).expect("write");
+    let mut args = args.to_vec();
+    args.extend(["--config", path.to_str().unwrap()]);
+    let output = run(home.path(), &args);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{args:?} succeeded:\n{stderr}");
+    assert!(
+        stderr.contains("Failed to load"),
+        "{args:?} must report the load error:\n{stderr}"
+    );
+}
+
+#[test]
+fn cli_list_reports_a_file_it_cannot_load() {
+    read_reports_the_load_error(&["list"]);
+}
+
+#[test]
+fn cli_get_reports_a_file_it_cannot_load() {
+    read_reports_the_load_error(&["get", "demo"]);
 }
