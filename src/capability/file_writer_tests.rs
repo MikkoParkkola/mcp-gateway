@@ -441,9 +441,48 @@ async fn windows_save_keeps_a_private_file_private() {
 
 #[tokio::test]
 async fn first_line_pin_in_a_bom_file_verifies_after_a_save() {
+    // An unpinned BOM file; the save adds a pin on the first line, as a
+    // browser sends it (the BOM dropped).
+    let base = format!("\u{feff}{TEXT}");
+    let (dir, file) = dir_with(&base);
+    let sent = format!("sha256: 0\n{}", described(TEXT, "Edited"));
+
+    let result = commit(
+        edit(
+            dir.path(),
+            Base::Bytes(sha(&base)),
+            Change::Write(sent),
+            PinUpdate::InPlace,
+        ),
+        None,
+        soon(),
+    )
+    .await;
+
+    assert_eq!(
+        result.as_ref().map(|c| c.pin),
+        Ok(super::PinChange::Added),
+        "{result:?}"
+    );
+    let on_disk = std::fs::read_to_string(&file).unwrap();
+    assert!(
+        on_disk.starts_with("sha256: "),
+        "the pin is a line the loader sees: {on_disk:?}"
+    );
+    let cap = crate::capability::parser::parse_capability_text(&on_disk, &file)
+        .expect("the saved file verifies its own pin");
+    assert_eq!(
+        cap.providers.integrity,
+        crate::capability::Integrity::Verified
+    );
+}
+
+#[tokio::test]
+async fn a_bom_before_a_first_line_pin_is_a_mismatch_not_a_save() {
+    // The pin covers the text without the BOM, so the file as stored does not
+    // verify: the loader drops it, and an edit-save must not re-pin it.
     let base = format!("\u{feff}{}", pinned(TEXT));
     let (dir, file) = dir_with(&base);
-    // What a browser sends: the BOM dropped, one value changed.
     let sent = pinned(TEXT).replace("description: Original", "description: Edited");
 
     let result = commit(
@@ -458,18 +497,11 @@ async fn first_line_pin_in_a_bom_file_verifies_after_a_save() {
     )
     .await;
 
-    assert!(result.is_ok(), "{result:?}");
-    let on_disk = std::fs::read_to_string(&file).unwrap();
     assert!(
-        on_disk.starts_with("sha256: "),
-        "the pin is a line the loader sees: {on_disk:?}"
+        matches!(result, Err(Refused::PinMismatch { .. })),
+        "{result:?}"
     );
-    let cap = crate::capability::parser::parse_capability_text(&on_disk, &file)
-        .expect("the saved file verifies its own pin");
-    assert_eq!(
-        cap.providers.integrity,
-        crate::capability::Integrity::Verified
-    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), base);
 }
 
 // ── Code review r1 ────────────────────────────────────────────────────
@@ -656,4 +688,95 @@ async fn catalogue_unchanged_after_a_failed_write_and_changed_after_a_commit() {
     .expect("the save commits");
     backend.reload().await.expect("the directory loads");
     assert_eq!(description(&backend).as_deref(), Some("Edited"));
+}
+
+// ── Code review r2 ────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn a_schema_broken_pinned_file_is_still_judged_by_its_pin() {
+    // A pin over the original text, then the bytes changed AND the schema
+    // broken: a save that repairs the schema must not re-pin unseen bytes.
+    let tampered = pinned(TEXT).replace("fulcrum: \"1.0\"", "fulcrum: [1]");
+    let tampered = tampered.replace("description: Original", "description: Tampered");
+    let (dir, file) = dir_with(&tampered);
+    assert!(
+        crate::capability::parse_capability(&tampered).is_err(),
+        "the schema is broken"
+    );
+    let repaired = tampered.replace("fulcrum: [1]", "fulcrum: \"1.0\"");
+
+    let result = commit(
+        edit(
+            dir.path(),
+            Base::Bytes(sha(&tampered)),
+            Change::Write(repaired),
+            PinUpdate::InPlace,
+        ),
+        None,
+        soon(),
+    )
+    .await;
+
+    assert!(
+        matches!(result, Err(Refused::PinMismatch { .. })),
+        "{result:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), tampered);
+}
+
+#[tokio::test]
+async fn a_hash_inside_a_plain_pin_value_is_part_of_the_value() {
+    // YAML ends a plain scalar at " #", not at "#": the whole token is the
+    // value, and the splice replaces all of it.
+    let base = format!("sha256: {}#x\n{TEXT}", compute_capability_hash(TEXT));
+    let (dir, file) = dir_with(&base);
+    let sent = base.replace("description: Original", "description: Edited");
+
+    let result = commit(
+        edit(
+            dir.path(),
+            Base::Bytes(sha(&base)),
+            Change::Write(sent),
+            PinUpdate::InPlace,
+        ),
+        None,
+        soon(),
+    )
+    .await;
+
+    // The current pin (with "#x") never matched, so this is a mismatch; what
+    // matters is that no splice leaves "#x" behind a fresh hash.
+    assert!(
+        matches!(result, Err(Refused::PinMismatch { .. })),
+        "{result:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), base);
+}
+
+#[test]
+fn an_empty_side_starts_at_line_zero() {
+    let created = super::unified_diff("", "a\n");
+    assert!(created.contains("@@ -0,0 +1,1 @@"), "{created:?}");
+    let deleted = super::unified_diff("a\n", "");
+    assert!(deleted.contains("@@ -1,1 +0,0 @@"), "{deleted:?}");
+}
+
+#[test]
+fn a_large_middle_falls_back_to_a_full_replace() {
+    // Half the lines are shared, so an LCS would keep them as context; the
+    // fallback keeps none. Past the cell budget, no context line remains
+    // after the shared first line.
+    let from: String = (0..3000).map(|i| format!("x{i}\n")).collect();
+    let to: String = (0..3000)
+        .map(|i| {
+            if i % 2 == 0 {
+                format!("x{i}\n")
+            } else {
+                format!("y{i}\n")
+            }
+        })
+        .collect();
+    let patch = super::unified_diff(&from, &to);
+    let context = patch.lines().filter(|l| l.starts_with(' ')).count();
+    assert_eq!(context, 1, "only the shared prefix line is context");
 }

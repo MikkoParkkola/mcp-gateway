@@ -130,10 +130,7 @@ fn pin_lines(text: &str) -> Vec<PinLine> {
             let rest = &line[start..];
             let (from, len) = match rest.chars().next() {
                 Some(q @ ('"' | '\'')) => (start + 1, rest[1..].find(q)?),
-                _ => (
-                    start,
-                    rest.find([' ', '\t', '#', '\r']).unwrap_or(rest.len()),
-                ),
+                _ => (start, rest.find([' ', '\t', '\r']).unwrap_or(rest.len())),
             };
             Some(PinLine {
                 index,
@@ -144,14 +141,25 @@ fn pin_lines(text: &str) -> Vec<PinLine> {
         .collect()
 }
 
-/// The pin as the loader reads it (`parser.rs`): the parsed `sha256` field.
-/// `None` when the text has none, or does not parse.
-fn loader_pin(text: &str) -> Option<String> {
-    super::parse_capability(text).ok()?.sha256
+/// The document's `sha256` as YAML reads it: the top-level key the loader's
+/// field comes from, read without the capability schema, so a file whose
+/// schema is broken still has its pin judged. `Err` when the text is not YAML.
+fn yaml_pin(text: &str) -> Result<Option<String>, ()> {
+    let doc = crate::yaml::from_str::<crate::yaml::Value>(text).map_err(|_| ())?;
+    Ok(doc
+        .get("sha256")
+        .and_then(|v| v.as_str())
+        .map(str::to_string))
 }
 
-/// Whether the text carries a pin, by the loader's reading or, for text that
-/// does not parse, by a pin line.
+/// The pin as the loader reads it, or `None` when there is none or the text
+/// is not YAML.
+fn loader_pin(text: &str) -> Option<String> {
+    yaml_pin(text).ok().flatten()
+}
+
+/// Whether the text carries a pin, by YAML or, for text that is not YAML, by
+/// a pin line.
 fn is_pinned(text: &str) -> bool {
     loader_pin(text).is_some() || !pin_lines(text).is_empty()
 }
@@ -165,10 +173,16 @@ fn smuggles(text: &str, index: usize) -> bool {
 }
 
 /// Whether the file's pin no longer matches its bytes: the loader's own
-/// comparison (`parser.rs`), so the editor refuses exactly what would not load.
+/// comparison (`parser.rs`), on the YAML key whatever the schema says. Text
+/// that is not YAML but has a pin line cannot be judged, so it counts as
+/// broken: an edit never re-pins bytes nobody verified.
 fn pin_broken(current: &str) -> bool {
-    loader_pin(current)
-        .is_some_and(|pin| !pin.eq_ignore_ascii_case(&compute_capability_hash(current)))
+    match yaml_pin(current) {
+        Ok(pin) => {
+            pin.is_some_and(|pin| !pin.eq_ignore_ascii_case(&compute_capability_hash(current)))
+        }
+        Err(()) => !pin_lines(current).is_empty(),
+    }
 }
 
 /// The sent text in the base's style: its BOM kept, and LF made CRLF when
@@ -248,7 +262,8 @@ pub(crate) fn unified_diff(from: &str, to: &str) -> String {
         .take_while(|(x, y)| x == y)
         .count();
     let (mid_a, mid_b) = (&a[prefix..a.len() - suffix], &b[prefix..b.len() - suffix]);
-    let middle = if mid_a.len().saturating_mul(mid_b.len()) <= DIFF_MAX_CELLS {
+    let cells = (mid_a.len() + 1).saturating_mul(mid_b.len() + 1);
+    let middle = if cells <= DIFF_MAX_CELLS {
         lcs_lines(mid_a, mid_b)
     } else {
         mid_a
@@ -257,9 +272,13 @@ pub(crate) fn unified_diff(from: &str, to: &str) -> String {
             .chain(mid_b.iter().map(|l| ('+', *l)))
             .collect()
     };
+    // An empty side starts at line 0, as `git apply` requires.
+    let start = |n: usize| usize::from(n > 0);
     let mut out = format!(
-        "--- current\n+++ sent\n@@ -1,{} +1,{} @@\n",
+        "--- current\n+++ sent\n@@ -{},{} +{},{} @@\n",
+        start(a.len()),
         a.len(),
+        start(b.len()),
         b.len()
     );
     for line in &a[..prefix] {
@@ -354,14 +373,24 @@ fn final_bytes(
             let hash = compute_capability_hash(&text);
             let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
             lines[line.index].replace_range(line.span.0..line.span.1, &hash);
-            let before =
-                current.and_then(|c| loader_pin(c).or_else(|| pin_lines(c).pop().map(|p| p.value)));
+            let spliced = lines.join("\n");
+            // The loader must read back exactly the hash written, or the
+            // splice missed (a value shape the line scan reads differently).
+            if loader_pin(&spliced).as_deref() != Some(hash.as_str()) {
+                return Err(Refused::PinAmbiguous { patch: patch() });
+            }
+            let before = current.and_then(|c| {
+                loader_pin(c).or_else(|| match pin_lines(c).as_slice() {
+                    [only] => Some(only.value.clone()),
+                    _ => None,
+                })
+            });
             let change = match before {
                 None => PinChange::Added,
                 Some(old) if old.eq_ignore_ascii_case(&hash) => PinChange::Kept,
                 Some(_) => PinChange::Updated,
             };
-            Ok((lines.join("\n"), change))
+            Ok((spliced, change))
         }
         _ => Err(Refused::PinAmbiguous { patch: patch() }),
     }
@@ -394,10 +423,25 @@ fn read_current(path: &Path, sent: &str) -> Result<(Option<String>, bool), Refus
     }
     let mut open = std::fs::OpenOptions::new();
     open.read(true);
+    // Unix: never follow a link, and never block on a FIFO or take a
+    // terminal; the handle's own metadata then says what was opened.
     #[cfg(unix)]
     {
+        use rustix::fs::OFlags;
         use std::os::unix::fs::OpenOptionsExt;
-        open.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
+        open.custom_flags(
+            (OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::NOCTTY)
+                .bits()
+                .cast_signed(),
+        );
+    }
+    // Windows: open a link itself rather than its target (no follow), so
+    // the handle's metadata shows the link and it is refused below.
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        open.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
     let mut file = match open.open(path) {
         Ok(file) => file,
@@ -412,6 +456,9 @@ fn read_current(path: &Path, sent: &str) -> Result<(Option<String>, bool), Refus
     let meta = file
         .metadata()
         .map_err(|e| unwritable(e, unified_diff("", sent)))?;
+    if meta.file_type().is_symlink() {
+        return Err(symlinked());
+    }
     if !meta.is_file() {
         return Err(unwritable("not a regular file", unified_diff("", sent)));
     }
