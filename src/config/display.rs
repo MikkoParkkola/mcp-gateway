@@ -25,6 +25,8 @@ pub fn secret_slot(literal: &str) -> String {
 /// Every backend `env` and `headers` slot of `config` that holds a reference,
 /// keyed by its field path (`backends.<name>.env.<KEY>`), in path order.
 /// `config` must be the literal config: an evaluated one holds values.
+/// Only the web UI's config read lists them, hence the feature gate.
+#[cfg(feature = "webui")]
 pub(crate) fn backend_secret_references(
     config: &super::Config,
 ) -> std::collections::BTreeMap<String, String> {
@@ -51,8 +53,7 @@ pub(crate) fn backend_secret_references(
 
 #[cfg(test)]
 mod tests {
-    use super::{backend_secret_references, secret_slot};
-    use crate::config::Config;
+    use super::secret_slot;
 
     const SENTINEL: &str = "kc-display-sentinel-7f3a";
 
@@ -90,8 +91,12 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "webui")]
     #[test]
     fn kc8_backend_references_are_listed_by_field_and_literals_are_left_out() {
+        use super::backend_secret_references;
+        use crate::config::Config;
+
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("gateway.yaml");
         let body = format!(
