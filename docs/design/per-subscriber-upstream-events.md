@@ -106,6 +106,10 @@ and this document disagree, one of them is a bug.
 
 ### 2.5 Vault leases: stable route, fenced state
 
+*Required, not yet implemented.* Today a vault listener mints a fresh credential
+on every request, so new requests use the current lease, but nothing below fences
+a rotation yet.
+
 - The route key carries no lease fields. Each `(backend, obs)` listener records the
   lease binding it last authenticated with.
 - On any lease change, the listener closes its session and discards its snapshot,
@@ -135,7 +139,8 @@ and this document disagree, one of them is a bug.
 
 - An outbox record carries `ObservedUnder { incarnation, obs_basis, lease }`: the
   row incarnation, the observation basis and, for vault and passthrough, the lease
-  binding or generation. It carries no identity digest and never the token.
+  binding or generation (the vault lease binding is *required, not yet
+  implemented*; today only the passthrough generation is stamped). It carries no identity digest and never the token.
 - Fan-out writes it from the occurrence.
 - A send attempt checks it twice: when the attempt is claimed, and again after the
   authorization and audit waits, against the row re-read for signing. It requires
@@ -147,7 +152,9 @@ and this document disagree, one of them is a bug.
 - A same-id re-grant has a new incarnation, so it never inherits the previous
   grant's queue, even with an unchanged `obs`.
 - Dead-letter replay applies the same check before re-queuing and refuses an
-  incompatible record with a reason in the admin answer.
+  incompatible record with a reason in the admin answer. *Required, not yet
+  implemented:* replay re-queues today, and the send-time check buries the record
+  again, so nothing is delivered, but the admin answer gives no refusal.
 - Records written before this change have no `ObservedUnder`. They are valid only
   for rows without an `obs`, which was every row, since identity-bound
   subscriptions were refused until now.
