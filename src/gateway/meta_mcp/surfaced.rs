@@ -122,17 +122,22 @@ impl MetaMcp {
 impl MetaMcp {
     /// Whether a task's recorded surfaced server still holds,
     /// read memo-blind so a request snapshot cannot hide a reload: the live
-    /// map still surfaces `tool` from `recorded`, and that backend is still
-    /// configured. `None` (no recorded server) always holds and resolves live.
+    /// map still surfaces `tool` from `recorded`, and what serves it is still
+    /// configured: the backend `recorded`, or, as `resolve_surfaced_tool`
+    /// falls back, a loaded capability named `tool`. `None` (no recorded
+    /// server) always holds and resolves live.
     pub(crate) fn surfaced_target_holds(&self, tool: &str, recorded: Option<&str>) -> bool {
         let Some(recorded) = recorded else {
             return true;
         };
         self.surfaced_state_live().map.unscoped(tool) == Some(recorded)
-            && self
+            && (self
                 .backends
                 .get_for(super::scoped_backends::Unscoped::Visibility, recorded)
                 .is_some()
+                || self
+                    .get_capabilities()
+                    .is_some_and(|cap| cap.has_capability(tool)))
     }
 
     /// Run `dispatch` with `tool` pinned to its recorded server in the active
