@@ -204,3 +204,19 @@ fn a4_account_references_resolve_from_the_keychain() {
         "{missing}"
     );
 }
+
+#[test]
+fn a19_capability_keychain_templates_keep_their_own_reader() {
+    // ADR-028 rule 11: capability `{keychain.X}` reads stay on the existing
+    // CLI reader, so the gateway.yaml reader is never asked for them.
+    let fake = fake();
+    fake.insert("a19-capability-entry", b"from-the-gateway-reader");
+    let resolved = with_test_keychain(fake.clone(), || {
+        crate::secrets::SecretResolver::new().resolve("key={keychain.a19-capability-entry}")
+    });
+    assert_ne!(
+        resolved.ok().as_deref(),
+        Some("key=from-the-gateway-reader")
+    );
+    assert!(fake.asked().is_empty(), "asked {:?}", fake.asked());
+}
