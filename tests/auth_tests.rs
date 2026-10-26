@@ -36,6 +36,7 @@ fn test_auth_config_resolution() {
             denied_tools: None,
             admin: false,
             kind: mcp_gateway::config::ApiKeyKind::Shared,
+            ..Default::default()
         }],
         public_paths: vec!["/health".to_string()],
         client_circuit_breaker: None,
@@ -47,8 +48,8 @@ fn test_auth_config_resolution() {
 
     assert!(resolved.enabled);
     assert_eq!(resolved.bearer_token, Some("test-token".to_string()));
-    assert_eq!(resolved.api_keys.len(), 1);
-    assert_eq!(resolved.api_keys[0].name, "Test Client");
+    assert_eq!(resolved.api_keys().len(), 1);
+    assert_eq!(resolved.api_keys()[0].name, "Test Client");
     assert!(resolved.is_public_path("/health"));
     assert!(!resolved.is_public_path("/mcp"));
 }
@@ -99,6 +100,7 @@ fn test_api_key_auth_with_restrictions() {
                 denied_tools: None,
                 admin: false,
                 kind: mcp_gateway::config::ApiKeyKind::Shared,
+                ..Default::default()
             },
             ApiKeyConfig {
                 key: None,
@@ -113,6 +115,7 @@ fn test_api_key_auth_with_restrictions() {
                 denied_tools: None,
                 admin: false,
                 kind: mcp_gateway::config::ApiKeyKind::Shared,
+                ..Default::default()
             },
         ],
         public_paths: vec![],
@@ -157,6 +160,7 @@ fn test_rate_limiting() {
             denied_tools: None,
             admin: false,
             kind: mcp_gateway::config::ApiKeyKind::Shared,
+            ..Default::default()
         }],
         public_paths: vec![],
         client_circuit_breaker: None,
@@ -275,6 +279,7 @@ fn test_client_circuit_breaker_is_per_client() {
                 denied_tools: None,
                 admin: false,
                 kind: mcp_gateway::config::ApiKeyKind::Shared,
+                ..Default::default()
             },
             ApiKeyConfig {
                 key: None,
@@ -289,6 +294,7 @@ fn test_client_circuit_breaker_is_per_client() {
                 denied_tools: None,
                 admin: false,
                 kind: mcp_gateway::config::ApiKeyKind::Shared,
+                ..Default::default()
             },
         ],
         public_paths: vec![],
@@ -339,6 +345,7 @@ fn test_client_circuit_breaker_recovers_after_successful_probe() {
             denied_tools: None,
             admin: false,
             kind: mcp_gateway::config::ApiKeyKind::Shared,
+            ..Default::default()
         }],
         public_paths: vec![],
         client_circuit_breaker: Some(CircuitBreakerConfig {
