@@ -357,3 +357,54 @@ async fn a_refused_stdio_answer_joins_its_invocation() {
     };
     assert_eq!(delivery["trace_id"], invocation["trace_id"], "{delivery}");
 }
+
+/// One stdio `tools/call` of `part` carrying `text` under `setup`, with a
+/// transparency log on: what the client got, and the one delivery record.
+async fn recorded_delivery(setup: Setup, part: Part, text: String) -> (String, Value) {
+    use crate::gateway::router::route_matrix_driver_tests::response::{delivery_rows, temp_log};
+    let backend = Arc::new(Planted::with_text("tools/call", part, text));
+    let (mut meta, _firewall) = stdio_on(backend, setup).await;
+    let (_dir, log) = temp_log(None);
+    Arc::get_mut(&mut meta)
+        .expect("the only handle")
+        .enable_transparency_log(Arc::clone(&log));
+    let body = send(&meta, "tools/call", part).await;
+    let rows = delivery_rows(&log).await;
+    let [row] = rows.as_slice() else {
+        panic!("one delivery record: {rows:?}");
+    };
+    (body, row.clone())
+}
+
+/// The stdio delivery record states what the gateway did to its answer:
+/// delivered and scanned clean, rewritten with its finding, or refused.
+#[tokio::test]
+async fn a_stdio_delivery_records_its_effect() {
+    let (body, row) = recorded_delivery(Setup::Default, Part::ResultText, "plain".into()).await;
+    assert!(!refused(&body), "premise: delivered: {body}");
+    assert_eq!(row["response_effect"], "delivered", "{row}");
+    assert_eq!(row["response_findings"], json!([]), "{row}");
+
+    let leak = secret();
+    let (body, row) = recorded_delivery(Setup::Warn, Part::ResultText, leak.clone()).await;
+    assert!(
+        rewritten(&body) && !body.contains(&leak),
+        "premise: redacted: {body}"
+    );
+    assert_eq!(row["response_effect"], "rewritten", "{row}");
+    assert!(!row.to_string().contains(&leak), "no content: {row}");
+    let findings = row["response_findings"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        findings.iter().any(|f| f["kind"]
+            .as_str()
+            .is_some_and(|k| k.starts_with("firewall:"))),
+        "{row}"
+    );
+
+    let (body, row) = recorded_delivery(Setup::Default, Part::InterimQuestion, secret()).await;
+    assert!(refused(&body), "premise: refused whole: {body}");
+    assert_eq!(row["response_effect"], "refused", "{row}");
+}
