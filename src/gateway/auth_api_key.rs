@@ -57,6 +57,9 @@ impl ResolvedApiKey {
     /// The key's principal, by the one derivation: the recorded one when the
     /// key was rotated, otherwise derived from its current digest. Computed,
     /// never stored, so it cannot fall out of step with the digest.
+    // ponytail: allocates one 12-character String per call (once per
+    // authenticated request); if auth ever shows in a profile, make the
+    // fields private and derive the principal once in a constructor.
     #[must_use]
     pub(crate) fn principal(&self) -> super::InternalPrincipal {
         super::configured_key_principal(self.explicit_principal.as_deref(), &self.digest)
