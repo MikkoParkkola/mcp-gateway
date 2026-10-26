@@ -23,8 +23,17 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
     ) -> Result<()> {
-        let server = extract_required_str(args, "server")?;
-        let tool = extract_required_str(args, "tool")?;
+        // A missing target is the request's shape.
+        let required = |key| {
+            extract_required_str(args, key).inspect_err(|_| {
+                super::audit::note_refused_by(
+                    crate::security::decision_record::DecisionKind::Syntax,
+                    None,
+                );
+            })
+        };
+        let server = required("server")?;
+        let tool = required("tool")?;
         self.authorize_invocation(args, caller)?;
         crate::gateway::meta_mcp::visible::memo::refuse_withheld(server, tool)?;
         if let Err(reason) = validate_tool_name(tool) {

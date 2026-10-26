@@ -415,6 +415,10 @@ impl MetaMcp {
             );
             return Ok(());
         }
+        super::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Firewall,
+            None,
+        );
         // The stateless rescan has no anomaly findings, so this is the
         // `-32600` arm of the one shared wording.
         let (code, message) = verdict.request_refusal().unwrap_or_else(|| {

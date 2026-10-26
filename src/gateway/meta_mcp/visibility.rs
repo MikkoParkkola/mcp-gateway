@@ -251,6 +251,8 @@ impl MetaMcp {
             super::visible::Withholding::Schema
             | super::visible::Withholding::Descriptor
             | super::visible::Withholding::Lacked => {
+                // Its record names the check that withheld it, never an allow.
+                crate::gateway::meta_mcp::invoke::audit::note_refused_by(reason.kind(), None);
                 tracing::warn!(
                     server,
                     tool = tool_name,

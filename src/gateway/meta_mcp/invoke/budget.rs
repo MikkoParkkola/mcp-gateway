@@ -199,6 +199,14 @@ impl MetaMcp {
         }
 
         let (delivered, effect) = if evaluation.policy.enforcement_applied {
+            // Withheld outright (no delivered form): the gate refused the
+            // result. A transformed result was delivered, so it is not noted.
+            if evaluation.transformed.delivered.is_none() {
+                audit::note_refused_by(
+                    crate::security::decision_record::DecisionKind::ResponseGate,
+                    None,
+                );
+            }
             let delivered = Self::context_integrity_delivered_result(&evaluation, &result);
             (delivered, GateEffect::Enforced)
         } else {
