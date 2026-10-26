@@ -30,6 +30,18 @@ const STANDARD_KEY: &str = "overview-standard-key";
 const SERVER_ROWS: usize = 24;
 const NEEDS_YOU_ROWS: usize = 20;
 const ACTION_ROWS: usize = 5;
+/// The longest a clipped text field serializes to: 256 bytes, each a control
+/// character JSON writes as a six-byte `\u00XX` escape, plus its quotes.
+const FIELD: usize = 2 + 6 * 256;
+/// The body's byte ceiling from the caps alone. Each row is its clipped text
+/// fields at [`FIELD`] plus a margin for keys and numbers: a server row has one
+/// text field, a needs-you row two (subject, name), an action row seven (at,
+/// route, method, outcome, authority, subject, account). The rest of the body
+/// (KPIs, `more`, `complete`, `degraded`) fits in 4 KiB.
+const WORST_BODY: usize = SERVER_ROWS * (FIELD + 64)
+    + NEEDS_YOU_ROWS * (2 * FIELD + 256)
+    + ACTION_ROWS * (7 * FIELD + 256)
+    + 4096;
 
 fn api_key(key: &str, admin: bool) -> ApiKeyConfig {
     ApiKeyConfig {
@@ -159,12 +171,9 @@ async fn o3_a_140_server_gateway_returns_a_bounded_body() {
     assert_eq!(body["servers"]["more"]["up"], 0, "{raw}");
     assert_eq!(body["servers"]["more"]["down"], 140 - SERVER_ROWS, "{raw}");
     assert_eq!(body["kpi"]["servers_total"], 140, "{raw}");
-    // Per server row: a 200-byte name plus at most ~64 bytes of fields.
-    // Fixed sections: well under 4 KiB without U1/U4 data.
-    let ceiling = SERVER_ROWS * 264 + NEEDS_YOU_ROWS * 512 + ACTION_ROWS * 512 + 4096;
     assert!(
-        raw.len() <= ceiling,
-        "{} bytes over the {ceiling}-byte ceiling",
+        raw.len() <= WORST_BODY,
+        "{} bytes over the {WORST_BODY}-byte ceiling",
         raw.len()
     );
 }
@@ -293,6 +302,80 @@ async fn o3d_the_fold_sorts_on_the_full_name() {
         "{body}"
     );
     assert_eq!(body["servers"]["more"]["down"], 0, "{body}");
+}
+
+/// O3e (API16.2, worst case): every capped list full and every text field at
+/// its clip, written as control characters so JSON escapes each byte six-fold.
+/// The body stays under [`WORST_BODY`], and over three quarters of it, so the
+/// fixture really is the worst case the ceiling is computed for.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn o3e_a_worst_case_body_stays_under_the_ceiling() {
+    use crate::cost_accounting::config::CostGovernanceConfig;
+    use crate::cost_accounting::enforcer::BudgetEnforcer;
+    use crate::cost_accounting::registry::CostRegistry;
+
+    let heavy = "\u{1}".repeat(300);
+    let (mut state, dir) = fixture(0, false).await;
+    for i in 0..SERVER_ROWS + 6 {
+        let backend = Arc::new(Backend::new(
+            &format!("{i:02}{heavy}"),
+            BackendConfig::default(),
+            &FailsafeConfig::default(),
+            Duration::from_secs(300),
+        ));
+        assert!(state.backends.register(backend), "register {i}");
+    }
+    let log = with_log(&mut state, &dir);
+    let actor = format!("oidc:{}:{heavy}:{}:{heavy}", heavy.len(), heavy.len());
+    for _ in 0..ACTION_ROWS + 2 {
+        let mut fields = Map::new();
+        fields.insert("route".into(), heavy.clone().into());
+        fields.insert("method".into(), heavy.clone().into());
+        let envelope = AuditEnvelope::ok(AuditWho::from_actor_id(&actor));
+        log.append_admin_action("admin_ui", fields, &envelope)
+            .expect("admin action appended");
+    }
+    let mut cfg = CostGovernanceConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    let tools: Vec<String> = (0..NEEDS_YOU_ROWS + 2)
+        .map(|i| format!("{i:02}{heavy}"))
+        .collect();
+    for tool in &tools {
+        cfg.budgets.per_tool.insert(tool.clone(), 1.0);
+    }
+    let enforcer = Arc::new(BudgetEnforcer::new(
+        cfg.clone(),
+        Arc::new(CostRegistry::new(&cfg)),
+    ));
+    for tool in &tools {
+        enforcer.record_spend(tool, None, 0.9);
+    }
+    let inner = Arc::get_mut(&mut state).expect("state is unique");
+    let mut meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::clone(&inner.backends));
+    meta.budget_enforcer = Some(enforcer);
+    inner.meta_mcp = Arc::new(meta);
+
+    let (status, raw) = get(&state, Some(ADMIN_KEY)).await;
+    assert_eq!(status, StatusCode::OK, "{raw}");
+    let body: Value = serde_json::from_str(&raw).expect("a JSON body");
+    let rows = |path: [&str; 2]| body[path[0]][path[1]].as_array().map(Vec::len);
+    assert_eq!(rows(["servers", "rows"]), Some(SERVER_ROWS), "{raw}");
+    assert_eq!(rows(["needs_you", "rows"]), Some(NEEDS_YOU_ROWS), "{raw}");
+    assert_eq!(rows(["last_actions", "rows"]), Some(ACTION_ROWS), "{raw}");
+    assert!(raw.contains("\\u0001"), "the text is escape-heavy");
+    assert!(
+        raw.len() <= WORST_BODY,
+        "{} bytes over the {WORST_BODY}-byte ceiling",
+        raw.len()
+    );
+    assert!(
+        raw.len() > WORST_BODY / 4 * 3,
+        "{} bytes is not near the {WORST_BODY}-byte worst case",
+        raw.len()
+    );
 }
 
 /// O6: a section with no source on this line is absent, never a zero or an
