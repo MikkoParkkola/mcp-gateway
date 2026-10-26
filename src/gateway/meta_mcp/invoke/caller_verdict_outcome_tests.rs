@@ -33,6 +33,7 @@ fn sole_operator() -> AuthConfig {
             denied_tools: None,
             admin: false,
             kind: crate::config::ApiKeyKind::Shared,
+            ..Default::default()
         }],
         single_user: true,
         ..AuthConfig::default()

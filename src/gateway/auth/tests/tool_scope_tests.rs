@@ -280,6 +280,7 @@ fn test_api_key_config_with_tool_scopes() {
         denied_tools: Some(vec!["read_secrets".to_string()]),
         admin: false,
         kind: crate::config::ApiKeyKind::Shared,
+        ..Default::default()
     };
 
     // Verify config fields are set correctly

@@ -47,6 +47,7 @@ fn keyed() -> Config {
         denied_tools: None,
         admin: false,
         kind: ApiKeyKind::Shared,
+        ..Default::default()
     }];
     config
 }

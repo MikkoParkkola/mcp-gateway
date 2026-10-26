@@ -51,6 +51,7 @@ fn key_for_alpha(kind: ApiKeyKind) -> AuthConfig {
             denied_tools: None,
             admin: false,
             kind,
+            ..Default::default()
         }],
         public_paths: vec!["/health".to_string()],
         client_circuit_breaker: None,
