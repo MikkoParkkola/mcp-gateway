@@ -100,8 +100,7 @@ fn every_unserved_admin_cell_names_the_test_that_serves_it() {
     // The admin's answer on the richest fixture the row has: the configured
     // column where there is one. The control plane's configured 409 is its
     // served refusal, pinned with its reason code by the cited test.
-    let unserved: BTreeSet<(String, String)> = ROWS
-        .iter()
+    let unserved: BTreeSet<(String, String)> = all_rows()
         .filter(|r| !is_served(r.path, r.configured.map_or(r.base[3], |c| c[2])))
         .map(|r| (r.path.to_owned(), r.method.to_string()))
         .collect();
