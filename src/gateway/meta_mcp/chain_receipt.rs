@@ -198,6 +198,7 @@ impl super::super::MetaMcp {
         let Some(challenge) = challenge else {
             *slot.lock() = ChainReceipt::Refused;
             crate::gateway::meta_mcp::invoke::audit::note_uninspected(self);
+            note_chain_refused();
             return Err(refusal("challenge"));
         };
         match now().and_then(|now| receive(identity, policy, result, challenge, now)) {
@@ -211,6 +212,7 @@ impl super::super::MetaMcp {
                 *slot.lock() = ChainReceipt::Refused;
                 // MIN.1: refused unread, so its tenants are recorded as not read.
                 crate::gateway::meta_mcp::invoke::audit::note_uninspected(self);
+                note_chain_refused();
                 Err(error)
             }
         }
@@ -303,4 +305,14 @@ impl super::super::MetaMcp {
             _ => Ok(()),
         }
     }
+}
+
+/// The upstream signature chain refused the reply. No kind names that check
+/// yet (MIK-8914, PR2): not `response_gate`, which judges the payload, and not
+/// `attestation`, which is the caller's evidence.
+fn note_chain_refused() {
+    crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+        crate::security::decision_record::DecisionKind::Unrecorded,
+        None,
+    );
 }

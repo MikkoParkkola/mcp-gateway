@@ -410,7 +410,8 @@ impl MetaMcp {
     ) -> Result<(Value, super::super::response_security::GateEffect)> {
         crate::security::signature_chain::strip_chain(&mut result);
         let (mut result, raw_read) = audit::noted_response(self, result);
-        self.apply_response_contract_gate(server, tool, trace_id, &mut result)?;
+        self.apply_response_contract_gate(server, tool, trace_id, &mut result)
+            .inspect_err(|_| note_response_gate())?;
 
         // === POST-INVOKE: Response content inspection (issue #133, D2) ===
         //
@@ -422,7 +423,9 @@ impl MetaMcp {
         // Action mode (`action_mode = true`): blocks any response with a
         // HIGH/CRITICAL finding, returning a security error to the caller.
         let text = crate::security::response_inspect::extract_text_from_result(&result);
-        let findings = self.inspect_backend_text((server, tool, trace_id), &text)?;
+        let findings = self
+            .inspect_backend_text((server, tool, trace_id), &text)
+            .inspect_err(|_| note_response_gate())?;
         if !findings.is_empty() {
             if let Some(obj) = result.as_object_mut() {
                 obj.insert(
@@ -447,6 +450,7 @@ impl MetaMcp {
         // MIN.2: past every gate, so this dispatch's raw reading counts.
         crate::security::tenant_reads::note_attribution(raw_read);
         if round && delivered.1 == super::super::response_security::GateEffect::Enforced {
+            note_response_gate();
             return Err(Error::ResponseFirewallRefused);
         }
         Ok(delivered)
@@ -613,4 +617,14 @@ impl MetaMcp {
         }
         Ok(())
     }
+}
+
+/// A response gate refused the backend's answer. Its blocks answer -32603,
+/// which no outcome reads as a refusal, so the note is what keeps the
+/// record from reading `default_allow` (MIK-8914.API2A.13).
+fn note_response_gate() {
+    super::audit::note_refused_by(
+        crate::security::decision_record::DecisionKind::ResponseGate,
+        None,
+    );
 }
