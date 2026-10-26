@@ -14,6 +14,11 @@ use crate::security::response_policy::{
 };
 
 impl Firewall {
+    /// Whether a response scan may rewrite a credential in place.
+    pub(crate) const fn redacts(&self) -> bool {
+        self.config.credential_redaction
+    }
+
     /// Inspect one artifact and evaluate every authenticated routing target.
     /// Immutable questions may be refused, but are never silently rewritten.
     pub(crate) fn check_response_artifact(
