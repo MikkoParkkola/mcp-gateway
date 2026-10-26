@@ -385,11 +385,18 @@ fn tool_preview_from_cap(cap: &GeneratedCapability) -> ToolPreview {
     let mut method = String::new();
     let mut path = String::new();
     let mut parameters: Vec<String> = Vec::new();
-    let mut read_only = false;
+    // The converter's own `metadata.read_only` is the YAML's last such line,
+    // after every description: a description line that reads the same can
+    // only come earlier, so it never sets the class.
+    let read_only = cap
+        .yaml
+        .lines()
+        .rev()
+        .find_map(|line| line.trim().strip_prefix("read_only: "))
+        == Some("true");
 
     for line in cap.yaml.lines() {
         let trimmed = line.trim();
-        read_only |= trimmed == "read_only: true";
         if method.is_empty()
             && let Some(rest) = trimmed.strip_prefix("method: ")
         {
@@ -712,6 +719,23 @@ paths:
     }
 
     /// MIK-8691 T3: well-formed `{param}` references still extract in first-appearance order.
+    /// A description line that reads `read_only: true` does not make a
+    /// write a read; the converter's own metadata line decides.
+    #[test]
+    fn a_description_line_cannot_set_the_class() {
+        let cap = GeneratedCapability {
+            name: "x".into(),
+            yaml: "description: |\n  read_only: true\nendpoint:\n  method: POST\nmetadata:\n  read_only: false\n"
+                .into(),
+        };
+        assert_eq!(tool_preview_from_cap(&cap).class, "write");
+        let read = GeneratedCapability {
+            name: "y".into(),
+            yaml: "endpoint:\n  method: GET\nmetadata:\n  read_only: true\n".into(),
+        };
+        assert_eq!(tool_preview_from_cap(&read).class, "read");
+    }
+
     #[test]
     fn preview_parameters_are_unchanged_for_well_formed_references() {
         let cap = GeneratedCapability {
