@@ -585,18 +585,16 @@ impl MetaMcp {
     ) -> Option<Result<GuardedValue>> {
         let scope = caller.scope();
         // Policy, profile, admin rule, grants: known without a catalogue.
-        let refusal = self.may_invoke(server, tool, scope, session_id).err();
+        let refusal = self
+            .may_invoke_explained(server, tool, scope, session_id)
+            .err();
         let refused = refusal.is_some();
-        if let Some(refusal) = &refusal {
+        if let Some((refusal, kind)) = &refusal {
             // The call's one record names it (MIK-8361); a code the route
             // stage kept first stands.
-            note_denial_code(
-                server,
-                tool,
-                refusal.to_rpc_code(),
-                crate::gateway::meta_mcp::invoke::audit::current_refusal_kind(),
-            );
+            note_denial_code(server, tool, refusal.to_rpc_code(), Some(*kind));
         }
+        let refusal = refusal.map(|(refusal, _)| refusal);
         if let Some(cap) = self.get_capabilities()
             && server == cap.name
         {

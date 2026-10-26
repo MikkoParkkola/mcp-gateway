@@ -271,7 +271,7 @@ fn staging_entry_points_have_only_their_authorized_callers() {
         ),
         (
             ".stage_replay(",
-            "src/gateway/meta_mcp/invoke/audit.rs",
+            "src/gateway/meta_mcp/invoke/audit_replay.rs",
             "audit_replay",
         ),
         (

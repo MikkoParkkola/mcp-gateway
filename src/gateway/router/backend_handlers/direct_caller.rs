@@ -599,6 +599,11 @@ pub(super) async fn forward_notification(
 
 /// A refusal of the sanitize step's: HTTP 400 with the error's code and text.
 fn refused(id: Option<crate::protocol::RequestId>, e: &crate::Error) -> Rejection {
+    // The request's own shape refused it, before any gate.
+    crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+        crate::security::decision_record::DecisionKind::Syntax,
+        None,
+    );
     build_http_error_response(id, e.to_rpc_code(), e.to_string(), StatusCode::BAD_REQUEST)
 }
 

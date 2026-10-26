@@ -67,8 +67,22 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
         session_id: Option<&str>,
     ) -> Result<()> {
-        self.may_invoke_before_grants(server, tool, scope, session_id)?;
+        self.may_invoke_explained(server, tool, scope, session_id)
+            .map_err(|(error, _)| error)
+    }
+
+    /// [`Self::may_invoke`], naming the check that refused: the one sequence,
+    /// so a caller that records the refusal names the check that made it.
+    pub(crate) fn may_invoke_explained(
+        &self,
+        server: &str,
+        tool: &str,
+        scope: InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) -> std::result::Result<(), (Error, crate::security::decision_record::DecisionKind)> {
+        self.may_invoke_before_grants_explained(server, tool, scope, session_id)?;
         self.identity_grant_rule(server, tool, scope, Emit::Silent)
+            .map_err(|error| (error, crate::security::decision_record::DecisionKind::Grant))
     }
 
     /// The pieces of [`Self::may_invoke`] before identity grants.
@@ -79,9 +93,26 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
         session_id: Option<&str>,
     ) -> Result<()> {
+        self.may_invoke_before_grants_explained(server, tool, scope, session_id)
+            .map_err(|(error, _)| error)
+    }
+
+    /// [`Self::may_invoke_before_grants`], naming the check that refused.
+    fn may_invoke_before_grants_explained(
+        &self,
+        server: &str,
+        tool: &str,
+        scope: InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) -> std::result::Result<(), (Error, crate::security::decision_record::DecisionKind)> {
         self.active_profile(session_id)
             .check(server, tool)
-            .map_err(Error::Protocol)?;
+            .map_err(|refusal| {
+                (
+                    Error::Protocol(refusal),
+                    crate::security::decision_record::DecisionKind::RoutingProfile,
+                )
+            })?;
         // `{}`, never `Null`: invocation builds its target with an empty
         // object, and two gates that see different targets can disagree.
         let empty = json!({});
@@ -94,12 +125,24 @@ impl MetaMcp {
             .authorizer
             .decide(target)
             .emit(Emit::Silent)
-            .map_err(|e| Error::Forbidden {
-                code: e.code,
-                status: e.status.as_u16(),
-                message: e.message,
+            .map_err(|e| {
+                let kind = e.kind;
+                (
+                    Error::Forbidden {
+                        code: e.code,
+                        status: e.status.as_u16(),
+                        message: e.message,
+                    },
+                    kind,
+                )
             })?;
         self.admin_capability_rule(server, tool, scope.is_admin)
+            .map_err(|error| {
+                (
+                    error,
+                    crate::security::decision_record::DecisionKind::AdminCapability,
+                )
+            })
     }
 
     /// Whether a piece of `may_invoke` other than the authorizer refuses
@@ -401,10 +444,22 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
         emit: Emit,
     ) -> Result<()> {
-        self.grant_evaluation(server, tool, scope)?
-            .map_or(Ok(()), |verdict| {
-                self.settle_grant(server, tool, scope, &verdict, emit)
-            })
+        let verdict = self
+            .grant_evaluation(server, tool, scope)
+            .and_then(|evaluation| {
+                evaluation.map_or(Ok(()), |verdict| {
+                    self.settle_grant(server, tool, scope, &verdict, emit)
+                })
+            });
+        // Noted only when audited: a silent evaluation is a listing's, and a
+        // listing inside a call must not name another target's check.
+        if emit == Emit::Audit && verdict.is_err() {
+            crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+                crate::security::decision_record::DecisionKind::Grant,
+                None,
+            );
+        }
+        verdict
     }
 
     /// One evaluation of the identity grants for `(server, tool)`: `None`
@@ -424,10 +479,6 @@ impl MetaMcp {
         // A clock before 1970 can judge no grant expiry and date no decision,
         // so no grant authorizes on it: refused like a denied grant (MIK-8202).
         let Ok(now) = crate::clock::utc_now() else {
-            crate::gateway::meta_mcp::invoke::audit::note_refused_by(
-                crate::security::decision_record::DecisionKind::Grant,
-                None,
-            );
             return Err(Error::json_rpc(
                 -32004,
                 format!(
@@ -490,10 +541,6 @@ impl MetaMcp {
                 "Identity grant denied personal capability dispatch"
             );
         }
-        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
-            crate::security::decision_record::DecisionKind::Grant,
-            None,
-        );
         Err(Error::json_rpc(
             -32004,
             format!(
