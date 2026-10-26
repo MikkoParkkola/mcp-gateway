@@ -273,12 +273,20 @@ pub(crate) fn no_writer_possible(config: &Path) -> Option<&'static str> {
         return None;
     }
     match super::create_new_private(&lock) {
-        Err(e) if e.kind() == io::ErrorKind::ReadOnlyFilesystem => Some("read-only filesystem"),
-        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
-            Some("this account cannot write the config directory")
-        }
+        Err(e) => creation_blocked(&e),
         // Created after all: the earlier failure was something else, and the
         // sidecar stays, as every sidecar does.
+        Ok(_) => None,
+    }
+}
+
+/// Whether a failed sidecar create means no writer can exist here: a
+/// read-only filesystem, or a directory this account cannot write. Any other
+/// failure (no space, a name in the way) does not.
+fn creation_blocked(error: &io::Error) -> Option<&'static str> {
+    match error.kind() {
+        io::ErrorKind::ReadOnlyFilesystem => Some("read-only filesystem"),
+        io::ErrorKind::PermissionDenied => Some("this account cannot write the config directory"),
         _ => None,
     }
 }
@@ -305,6 +313,29 @@ fn recovered(
 
 #[cfg(test)]
 mod tests {
+    /// The one line the filesystem tests cannot reach without a seam: which
+    /// create failures mean no writer can exist.
+    #[test]
+    fn only_a_read_only_or_unwritable_directory_blocks_every_writer() {
+        use std::io::{Error, ErrorKind};
+        assert_eq!(
+            super::creation_blocked(&Error::from(ErrorKind::ReadOnlyFilesystem)),
+            Some("read-only filesystem")
+        );
+        assert!(super::creation_blocked(&Error::from(ErrorKind::PermissionDenied)).is_some());
+        for other in [
+            ErrorKind::StorageFull,
+            ErrorKind::AlreadyExists,
+            ErrorKind::NotFound,
+        ] {
+            assert_eq!(
+                super::creation_blocked(&Error::from(other)),
+                None,
+                "{other:?}"
+            );
+        }
+    }
+
     use super::lock_path;
     use std::path::Path;
 
