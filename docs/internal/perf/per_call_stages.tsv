@@ -117,6 +117,7 @@ src/gateway/meta_mcp/invoke/budget.rs	capability_context_flags	http_invoke_tiny	
 src/gateway/meta_mcp/invoke/budget.rs	context_integrity_delivered_result	-	on-path, untimed: only when context integrity enforces on a result; the timed result is clean and passes through
 src/gateway/meta_mcp/invoke/budget.rs	context_integrity_enforces	-	on-path, untimed: the egress scan's content check, on error frames and non-tools/call answers; a tools/call result met it at dispatch
 src/gateway/meta_mcp/invoke/budget.rs	context_integrity_input	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/budget.rs	context_integrity_outcome	http_invoke_tiny	on the HTTP gateway_invoke path (the response gates call it on every result)
 src/gateway/meta_mcp/invoke/budget.rs	grant_subject_from_api_key	-	on-path, untimed: capability-backend identity-grant checks only; the timed rows dispatch to an MCP backend
 src/gateway/meta_mcp/invoke/budget.rs	record_and_predict	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/budget.rs	record_error_budget	http_invoke_tiny	recorded at every accounted dispatch (account_dispatch)
@@ -228,6 +229,7 @@ src/gateway/meta_mcp/invoke/gate.rs	gated	http_invoke_tiny	on the HTTP gateway_i
 src/gateway/meta_mcp/invoke/gate.rs	invisible_at_route	http_invoke_tiny	on the HTTP gateway_invoke path (the route stage's visibility judgement)
 src/gateway/meta_mcp/invoke/gate.rs	invisible_call	http_invoke_tiny	on the HTTP gateway_invoke path (the route stage's whole-call gate)
 src/gateway/meta_mcp/invoke/gate.rs	named_gate_answer	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)
+src/gateway/meta_mcp/invoke/gate.rs	per_user_withheld_answer	-	on-path, untimed: a backend that keeps a catalogue per caller only; the timed rows dispatch to a shared-catalogue backend
 src/gateway/meta_mcp/invoke/gate.rs	profile_refusal	-	direct /mcp/{backend} route only, not the meta tools/call path
 src/gateway/meta_mcp/invoke/gate.rs	profile_refusal_as_undefined	-	on-path, untimed: admission refusals only (session profile, kill switch, capability cooldown); the timed rows succeed
 src/gateway/meta_mcp/invoke/gate.rs	profile_withheld_capability	http_invoke_tiny	on the HTTP gateway_invoke path (the route authorize's profile lookup; it refuses only a capability the profile excludes)
@@ -317,6 +319,7 @@ src/gateway/meta_mcp/invoke/policy.rs	authorize_invocation	http_invoke_tiny	on t
 src/gateway/meta_mcp/invoke/policy.rs	check_attestation	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/policy.rs	check_attestation_scoped	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/policy.rs	note_response_gate	-	on-path, untimed: a response gate refusal only; the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/policy.rs	inspect_backend_text	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/policy.rs	invoke_tool_sourced	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/policy.rs	record_absent_step	-	on-path, untimed: gateway_execute chain steps naming an absent target only
