@@ -190,14 +190,13 @@ fn api2a_3_the_decision_is_written_by_the_writer_and_reads_back() {
         .unwrap();
     write(&logger, Map::new()).unwrap();
     let records = invocations(&path);
-    assert_eq!(
-        crate::security::decision_record::decision_evidence(&records[0]),
-        Some(decision)
-    );
-    assert_eq!(
-        crate::security::decision_record::decision_evidence(&records[1]),
-        None,
-        "a record written without one carries no evidence"
+    let field = crate::security::decision_record::FIELD;
+    let written: crate::security::decision_record::Decision =
+        serde_json::from_value(records[0][field].clone()).expect("the decision reads back");
+    assert_eq!(written, decision);
+    assert!(
+        records[1].get(field).is_none(),
+        "a record written without one carries no decision"
     );
     assert!(
         verify_log(&path).unwrap().ok,

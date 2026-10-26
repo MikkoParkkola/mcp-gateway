@@ -9,7 +9,6 @@
 //! revision id, rules by keyed ids, findings by type, severity and location.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 /// The record field the decision object lives under.
 pub(crate) const FIELD: &str = "decision";
@@ -42,55 +41,6 @@ pub(crate) enum DecisionKind {
     /// The target matches nothing: no backend or tool by that name.
     NotFound,
 }
-
-impl DecisionKind {
-    /// Whether a refusal of this kind can answer the caller as an absent
-    /// name; a caller-scoped view shows all of these as one line, so a
-    /// record cannot tell a missing target from a withheld one.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "wired in the receipt reader, this PR; removed before push"
-        )
-    )]
-    pub(crate) const fn can_look_absent(self) -> bool {
-        matches!(
-            self,
-            Self::NotFound
-                | Self::BackendScope
-                | Self::ClientToolScope
-                | Self::DescriptorBlock
-                | Self::ToolPolicy
-                | Self::RoutingProfile
-        )
-    }
-}
-
-/// Who reads a decision: an operator (Admin, Auditor) sees the true kind and
-/// rule; a caller reading its own records sees no existence oracle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired in the receipt reader, this PR; removed before push"
-    )
-)]
-pub(crate) enum Viewer {
-    Operator,
-    CallerScoped,
-}
-
-/// The one line a caller-scoped view shows for every absent-looking refusal.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired in the receipt reader, this PR; removed before push"
-    )
-)]
-pub(crate) const NOT_AVAILABLE: &str = "refused: not available to you";
 
 /// What the tool's own annotations say the call could change. A claim by the
 /// tool, never a gateway guarantee.
@@ -254,109 +204,6 @@ impl Noted {
             effect: None,
             decided,
         }
-    }
-}
-
-/// The decision a record carries; `None` for a record written before this
-/// field existed ("no evidence recorded"), and for one that does not parse,
-/// never an error.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired in the receipt reader, this PR; removed before push"
-    )
-)]
-pub(crate) fn decision_evidence(entry: &Value) -> Option<Decision> {
-    serde_json::from_value(entry.get(FIELD)?.clone()).ok()
-}
-
-/// Whether `entry` was decided by the rule `rule_id`. Exact match only; a
-/// record with no rule id matches nothing.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired in the receipt reader, this PR; removed before push"
-    )
-)]
-pub(crate) fn matches_rule(entry: &Value, rule_id: &str) -> bool {
-    entry
-        .get(FIELD)
-        .and_then(|d| d.get("rule_id"))
-        .and_then(Value::as_str)
-        .is_some_and(|id| id == rule_id)
-}
-
-/// The receipt's line for which rule decided. Never blank, never a guess.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired in the receipt reader, this PR; removed before push"
-    )
-)]
-pub(crate) fn rule_line(decision: &Decision) -> &'static str {
-    match (decision.kind, decision.rule_id.is_some()) {
-        (DecisionKind::DefaultAllow, _) => "allowed: no rule restricted this call",
-        (DecisionKind::NotRedecided, _) => "not decided again for this call",
-        (DecisionKind::Unrecorded, _) => {
-            "refused; the check was not recorded by this gateway version"
-        }
-        (DecisionKind::NotFound, _) => "refused: no such backend or tool",
-        (_, true) => "decided by the rule named below",
-        (_, false) => "rule not recorded for this check",
-    }
-}
-
-/// The receipt's line for the request findings: "not recorded" (no evidence,
-/// or the check did not run) is never shown as "none".
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired in the receipt reader, this PR; removed before push"
-    )
-)]
-pub(crate) fn findings_line(decision: Option<&Decision>) -> &'static str {
-    match decision.and_then(|d| d.findings.as_ref()) {
-        None => "findings not recorded by this gateway version",
-        Some(found) if found.is_empty() => "none",
-        Some(_) => "listed below",
-    }
-}
-
-/// The decision as `viewer` may see it: a caller-scoped view of an
-/// absent-looking refusal keeps neither its kind nor its rule.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired in the receipt reader, this PR; removed before push"
-    )
-)]
-pub(crate) fn line_for(decision: &Decision, viewer: Viewer) -> &'static str {
-    if viewer == Viewer::CallerScoped && decision.kind.can_look_absent() {
-        NOT_AVAILABLE
-    } else {
-        rule_line(decision)
-    }
-}
-
-/// The rule id `viewer` may see: none for a caller-scoped view of an
-/// absent-looking refusal.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired in the receipt reader, this PR; removed before push"
-    )
-)]
-pub(crate) fn rule_for(decision: &Decision, viewer: Viewer) -> Option<&str> {
-    if viewer == Viewer::CallerScoped && decision.kind.can_look_absent() {
-        None
-    } else {
-        decision.rule_id.as_deref()
     }
 }
 

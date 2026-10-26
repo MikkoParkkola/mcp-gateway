@@ -36,18 +36,6 @@ pub(crate) async fn after_upstream_401(
     answer
 }
 
-/// Note an explicit allow; the earliest in check order wins.
-#[expect(
-    dead_code,
-    reason = "wired with the explicit-allow rule ids, this PR; removed before push"
-)]
-pub(crate) fn note_allowed_by(
-    kind: crate::security::decision_record::DecisionKind,
-    rule_id: Option<String>,
-) {
-    note_decision(|noted| noted.allowed(kind, rule_id));
-}
-
 fn note_decision(f: impl FnOnce(&mut crate::security::decision_record::Noted)) {
     if super::NOTES.try_with(|_| ()).is_ok() {
         super::note(|notes| f(&mut notes.decision));
