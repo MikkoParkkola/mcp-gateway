@@ -1409,7 +1409,7 @@ function renderCapabilities() {
     const toolCount = cap.tool_count != null ? cap.tool_count : '';
     // The name as a JS string literal inside a double-quoted attribute: a raw
     // JSON.stringify quote would end the attribute and leave a dead handler.
-    const arg = esc(JSON.stringify(name)).replace(/"/g, '&quot;');
+    const arg = esc(JSON.stringify(name));
     return `<div class="cap-item" id="cap-item-${esc(name)}">
       <div class="cap-header" onclick="toggleCap(${arg})">
         <div class="cap-title">
@@ -1886,7 +1886,9 @@ function esc(s) {
   if (s == null) return '';
   const d = document.createElement('div');
   d.appendChild(document.createTextNode(String(s)));
-  return d.innerHTML;
+  // innerHTML escapes & < > only; quotes too, so the result is safe inside a
+  // quoted attribute as well as in text.
+  return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 // Auto-refresh
