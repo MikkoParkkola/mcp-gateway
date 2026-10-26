@@ -4,8 +4,9 @@
 //! Per-client cost accounting for gateway tool calls.
 //!
 //! Tracks token usage and estimated spend per session and per API key,
-//! with rolling time windows (24 h / 7 d / 30 d, to the hour) and optional
-//! hard/soft budget limits. Everything held is a running sum (tally.rs), so
+//! with rolling time windows (24 h / 7 d / 30 d, to the hour) for reporting.
+//! It enforces no limit: the enforced caps are the budget enforcer's
+//! (`enforcer.rs`). Everything held is a running sum (tally.rs), so
 //! memory never grows with the number of calls (MIK-8000).
 //!
 //! # Design
@@ -282,7 +283,8 @@ pub struct WindowStats {
 pub struct KeyCostSnapshot {
     /// API key name.
     pub api_key_name: String,
-    /// Spend in the past 24 hours.
+    /// Spend in the past 24 hours. Held in memory: the 24 h, 7 d and 30 d
+    /// windows start again at zero after a restart.
     pub window_24h: WindowStats,
     /// Spend in the past 7 days.
     pub window_7d: WindowStats,
@@ -290,7 +292,8 @@ pub struct KeyCostSnapshot {
     pub window_30d: WindowStats,
     /// Always `null`: no per-key rolling limit is enforced. The field stays
     /// so the report's shape does not change; MIK-8863.API10.5 fills it from
-    /// the budget enforcer, which holds the per-key daily caps that are.
+    /// the budget enforcer, which holds the per-key daily caps that are
+    /// enforced.
     pub hard_limit_usd: Option<f64>,
     /// Always `"Ok"`, for the same reason as `hard_limit_usd`: it judges no
     /// limit. Read the budget enforcer for a key's real standing.
