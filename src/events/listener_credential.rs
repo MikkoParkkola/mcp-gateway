@@ -30,6 +30,30 @@ pub(crate) trait ListenerMint: Send + Sync {
         backend: &str,
         identity: &VerifiedIdentity,
     ) -> crate::Result<Vec<(String, String)>>;
+
+    /// The grant binding a listener of `backend` observing as `identity` is
+    /// fenced on, read without minting; `None` for a backend no vault
+    /// grant backs.
+    ///
+    /// # Errors
+    /// The binding cannot be read now ([`FenceRead::Busy`]) or the grant
+    /// gives no view ([`FenceRead::Closed`]).
+    async fn fence_binding(
+        &self,
+        _backend: &str,
+        _identity: &VerifiedIdentity,
+    ) -> Result<Option<String>, FenceRead> {
+        Ok(None)
+    }
+}
+
+/// Why a fence binding could not be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FenceRead {
+    /// Custody is busy or the read timed out: retry, never send.
+    Busy,
+    /// No view of the grant: fail closed.
+    Closed,
 }
 
 /// `signed_assertion`, `token_exchange` and vault: a fresh, audited mint for

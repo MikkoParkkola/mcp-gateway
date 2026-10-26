@@ -765,6 +765,9 @@ mod charge;
 #[path = "worker_burial_tests.rs"]
 mod burial;
 
+#[path = "worker_vault_fence_tests.rs"]
+mod vault_fence;
+
 #[path = "worker_audit_order_tests.rs"]
 mod audit_order;
 #[path = "worker_hold_tests.rs"]

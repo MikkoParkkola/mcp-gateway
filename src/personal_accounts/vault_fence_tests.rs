@@ -113,7 +113,7 @@ fn fence_now(root: &std::path::Path) -> ViewBinding {
 
 /// Apply one store journey with no custody running over the store.
 fn journey(root: &std::path::Path, step: impl FnOnce(&PersonalAccountStore)) {
-    let store = PersonalAccountStore::initialize(store_config(root)).expect("open");
+    let store = PersonalAccountStore::open(store_config(root)).expect("open");
     step(&store);
 }
 
