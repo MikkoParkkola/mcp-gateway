@@ -14,7 +14,7 @@
 # touches the operator's real ~/.mcp-gateway. The five properties and why
 # they are the right ones: docs/requirements/RELEASE-4.0.0-scope-tests.md
 # (NFR.UPGRADE.1 row) and docs/requirements/RELEASE-4.0.0-scope-update.md.
-# Results are graded in docs/release/nfr-upgrade-1-rehearsal-results.md.
+# Results are graded in the nfr upgrade 1 rehearsal results.
 # Deliberately no `-e`: this script records PASS/FAIL per conjunct rather
 # than aborting on the first non-zero exit (a refused-request curl or a
 # refused-protocol-version response is an expected outcome in some phases,

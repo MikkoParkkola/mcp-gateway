@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `MIK-7334.CATALOGUE.1` revocation conjunct — the chain COMPOSED.
 //!
-//! T9 of `docs/internal/design/2026-09-22-live-identity-grant-reload.md` §3,
+//! T9 of the live identity grant reload design §3,
 //! and the only cell that drives `reload_identity_grants` against a POPULATED
 //! per-user pool slot. Its siblings each pin one link:
 //! `config_reload/grant_change_trigger_tests.rs` the trigger, C7/C10a/C10b the

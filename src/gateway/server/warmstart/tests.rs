@@ -77,7 +77,7 @@ fn resolve_warm_start_names_prefers_configured_list() {
 #[test]
 fn readiness_errors_are_retried() {
     // Each can mean the sibling daemon has not finished booting. The two
-    // observed in production were Transport (hebb, netdata) and
+    // observed in production were Transport (a memory server, netdata) and
     // BackendTimeout (context7); BackendNotFound comes from start_entry's
     // shutdown-race path (a stopped, replaced instance), which
     // `chains::retry_step` would have treated as permanent -- the reason that
@@ -87,7 +87,7 @@ fn readiness_errors_are_retried() {
         Error::BackendTimeout("hebb".to_string()),
         Error::BackendUnavailable("hebb".to_string()),
         Error::BackendNotFound("hebb".to_string()),
-        // The shape hebb actually produced: the port was not yet bound.
+        // The shape the memory server actually produced: the port was not yet bound.
         Error::Io(std::io::Error::new(
             std::io::ErrorKind::ConnectionRefused,
             "connection refused",
@@ -242,7 +242,7 @@ async fn a_reachable_backend_makes_exactly_one_attempt() {
 
 #[tokio::test(start_paused = true)]
 async fn a_backend_that_becomes_reachable_later_is_still_cached() {
-    // The production race: hebb-serve was loading ONNX models while the
+    // The production race: a memory server was loading ONNX models while the
     // gateway made its single attempt, so the tool cache stayed empty for
     // the whole 1.5-day process lifetime.
     let (calls, attempt) = flaky(4, 7);

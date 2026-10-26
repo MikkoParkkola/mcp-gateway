@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Upstream notification taps (MIK-7630 I5, design
-//! `docs/design/2026-10-02-mik-7630-i5-upstream-listener.md` §4): what a
+//! the i5 upstream listener design §4): what a
 //! transport hands the events listener. A backend frame never crosses the
 //! channel; the producer classifies and projects it first, so a queued note
 //! is bounded whatever the backend sends.
