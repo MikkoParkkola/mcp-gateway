@@ -140,25 +140,62 @@ fn a_scratch_that_inherits_a_low_label_is_refused() {
     assert_refused(row, &path, "security-label");
 }
 
-/// A9: a file owned by another principal (Administrators) is refused, and the
-/// message names the owner found and the owner expected.
+/// The owner a file created now in `dir` gets under this process's token:
+/// the user, or BUILTIN\Administrators for an elevated administrator.
+fn fresh_owner(row: &str, dir: &Path) -> String {
+    let probe = dir.join("owner-probe");
+    std::fs::write(&probe, b"x").unwrap();
+    let owner = parse_sddl(&read_sddl(row, &probe)).owner;
+    std::fs::remove_file(&probe).unwrap();
+    owner
+}
+
+/// A9: a file whose owner differs from the owner a new file gets here is
+/// refused, and the message names the owner found and the owner expected.
+/// The rule is relative to this token, never a fixed list of owners.
 #[test]
-fn a_file_owned_by_administrators_is_refused_naming_both_owners() {
+fn a_file_with_another_owner_is_refused_naming_both_owners() {
     let row = "WINACL-A9";
     let dir = everyone_full_dir(row);
     let path = dir.path().join("gateway.yaml");
     std::fs::write(&path, b"old").unwrap();
     let user = crate::private_fs::test_support::user_sid();
-    plant_any(row, &path, &format!("O:BAD:P(A;;FA;;;{user})"));
+    let expected = fresh_owner(row, dir.path());
+    let other = if expected == "S-1-5-32-544" {
+        user.clone()
+    } else {
+        "S-1-5-32-544".to_owned()
+    };
+    plant_any(row, &path, &format!("O:{other}D:P(A;;FA;;;{user})"));
     let err = write_atomic(&path, b"new", FileMode::Inherit, Symlink::Replace)
         .expect_err("WINACL-A9: the save was not refused");
     let text = err.to_string();
     assert!(text.contains("foreign-owner"), "{row}: {text}");
     assert!(
-        text.contains("S-1-5-32-544") && text.contains(&user),
+        text.contains(&other) && text.contains(&expected),
         "{row}: {text}"
     );
     assert_eq!(std::fs::read(&path).unwrap(), b"old");
+}
+
+/// A9b: a file owned by the owner a new file gets here (BUILTIN\Administrators
+/// for an elevated service) saves normally and keeps its list.
+#[test]
+fn a_file_with_the_owner_new_files_get_saves_normally() {
+    let row = "WINACL-A9b";
+    let dir = everyone_full_dir(row);
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(&path, b"old").unwrap();
+    let user = crate::private_fs::test_support::user_sid();
+    let expected = fresh_owner(row, dir.path());
+    plant_any(row, &path, &format!("O:{expected}D:P(A;;FA;;;{user})"));
+    let before = parse_sddl(&read_sddl(row, &path));
+    save(&path);
+    assert_eq!(
+        parse_sddl(&read_sddl(row, &path)),
+        before,
+        "{row}: list changed"
+    );
 }
 
 /// A10: a file moved in from another folder keeps that folder's inherited

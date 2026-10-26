@@ -50,7 +50,10 @@ pub(super) fn owner_only_file(row: &str, name: &str) -> (tempfile::TempDir, Path
             .arg(&path)
             .args(["/inheritance:r", "/grant:r", &grant]),
     );
-    assert_owner_only(row, &path);
+    // A setup that did not take is a fixture failure, never a red row.
+    if let Err(dacl) = owner_only(row, &path) {
+        panic!("WT-FIXTURE {row}: planting owner-only left D:{dacl}");
+    }
     (dir, path)
 }
 
@@ -65,8 +68,10 @@ fn dacl(row: &str, path: &Path) -> String {
     );
     let bytes = std::fs::read(&saved).unwrap();
     let wide: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_le_bytes(*c))
         .collect();
     let text = String::from_utf16_lossy(&wide);
     let at = text
@@ -79,13 +84,37 @@ fn dacl(row: &str, path: &Path) -> String {
 }
 
 /// `path` is protected and carries exactly the user's full-access entry.
+///
+/// `icacls /save` writes a well-known account as its SDDL alias rather than
+/// its SID (a runner signed in as the built-in Administrator reads back as
+/// `LA`), so the user is matched by SID or by that alias.
 pub(super) fn assert_owner_only(row: &str, path: &Path) {
+    if let Err(dacl) = owner_only(row, path) {
+        panic!(
+            "WT-ASSERT {row}: {} is not owner-only: D:{dacl}",
+            path.display()
+        );
+    }
+}
+
+/// `Err(dacl)` unless `path` is protected and carries exactly the user's
+/// full-access entry.
+fn owner_only(row: &str, path: &Path) -> Result<(), String> {
     let dacl = dacl(row, path);
     let user = user_sid(row);
+    let alias = if user.ends_with("-500") {
+        Some("LA")
+    } else if user.ends_with("-501") {
+        Some("LG")
+    } else {
+        None
+    };
     let aces = &dacl[dacl.find('(').unwrap_or(dacl.len())..];
-    assert!(
-        dacl.starts_with('P') && aces == format!("(A;;FA;;;{user})"),
-        "WT-ASSERT {row}: {} is not owner-only: D:{dacl}",
-        path.display()
-    );
+    let is_user_only = aces == format!("(A;;FA;;;{user})")
+        || alias.is_some_and(|a| aces == format!("(A;;FA;;;{a})"));
+    if dacl.starts_with('P') && is_user_only {
+        Ok(())
+    } else {
+        Err(dacl)
+    }
 }
