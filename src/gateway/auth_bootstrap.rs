@@ -101,7 +101,7 @@ pub(super) fn try_dashboard_bootstrap(
         // operator over a token the exchange would not have used. A RESTRICTED
         // key does not count: the session it opens carries admin.
         let has_admin_credential = state.auth_config.bearer_token.is_some()
-            || state.auth_config.api_keys.iter().any(|k| k.admin);
+            || state.auth_config.api_keys().iter().any(|k| k.admin);
         if !has_admin_credential {
             auth_failure(AuthFailureKind::BootstrapRefused);
             warn!("Dashboard bootstrap unusable: no admin credential is configured");
