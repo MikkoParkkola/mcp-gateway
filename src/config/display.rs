@@ -8,10 +8,14 @@
 use super::secret_ref::SecretRef;
 
 /// What a secret slot holding `literal` (its text in gateway.yaml) shows:
-/// an `env:`, `file:` or `keychain:` reference as written, anything else as
-/// `<set>`. Pure: it reads nothing.
+/// an `env:`, `file:` or `keychain:` reference as written, an empty value as
+/// `<empty>`, and any other value as `<set>`. Pure: it reads nothing, and no
+/// part of a literal value is ever returned.
 #[must_use]
-pub(crate) fn secret_slot(literal: &str) -> String {
+pub fn secret_slot(literal: &str) -> String {
+    if literal.is_empty() {
+        return "<empty>".to_owned();
+    }
     match SecretRef::parse(literal) {
         SecretRef::Literal(_) => "<set>".to_owned(),
         _ => literal.to_owned(),
@@ -57,8 +61,27 @@ mod tests {
         assert_eq!(secret_slot("keychain:gw.k"), "keychain:gw.k");
         assert_eq!(secret_slot("env:API_KEY"), "env:API_KEY");
         assert_eq!(secret_slot("file:/run/secret"), "file:/run/secret");
-        assert_eq!(secret_slot(SENTINEL), "<set>");
-        assert_eq!(secret_slot("Bearer keychain:x"), "<set>");
+        assert_eq!(secret_slot(""), "<empty>");
+    }
+
+    #[test]
+    fn kc8_no_part_of_a_literal_ever_shows() {
+        let mid = format!("Bearer keychain:{SENTINEL}");
+        for literal in [SENTINEL, mid.as_str(), "x", "keychainz", " keychain:x"] {
+            let shown = secret_slot(literal);
+            assert_eq!(shown, "<set>", "{literal:?}");
+            // Every substring of length 3 or more of the literal is absent.
+            let bytes = literal.as_bytes();
+            for start in 0..bytes.len() {
+                for end in (start + 3)..=bytes.len() {
+                    let part = &literal[start..end];
+                    assert!(
+                        !shown.contains(part),
+                        "{part:?} of {literal:?} shown as {shown:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

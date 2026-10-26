@@ -19,6 +19,7 @@ mod features;
 pub(crate) mod load_error;
 pub(crate) use features::DEFAULT_TASK_TTL_MS;
 pub(crate) mod display;
+pub use display::secret_slot;
 mod flagged_tools;
 mod input_schema;
 pub(crate) mod keychain;
