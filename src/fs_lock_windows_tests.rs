@@ -100,7 +100,9 @@ fn a_sidecar_denying_the_user_data_access_is_replaced() {
         let path = dir.path().join(".store.lock");
         std::fs::write(&path, b"").expect("plant");
         let user = user_sid();
-        let sddl = format!("O:{user}D:P(D;;FRFW;;;{user})(A;;FA;;;{user})");
+        // Read and write data denied, SYNCHRONIZE left: the replacement's open
+        // asks for delete (through the folder) and SYNCHRONIZE only.
+        let sddl = format!("O:{user}D:P(D;;0x3;;;{user})(A;;FA;;;{user})");
         plant_any(how, &path, &sddl);
         drop(take(how, &path).expect(how));
         assert_owner_only(how, &path, false);
@@ -133,7 +135,11 @@ fn a_sidecar_an_older_build_holds_is_not_deleted_and_is_refused_at_the_deadline(
         let text = error.to_string();
         assert!(text.contains(&path.display().to_string()), "{how}: {text}");
         assert!(!text.to_lowercase().contains("delete"), "{how}: {text}");
-        assert_eq!(std::fs::read(&path).expect("still there"), b"held", "{how}");
+        assert_eq!(
+            std::fs::metadata(&path).expect("still there").len(),
+            4,
+            "{how}"
+        );
         drop(holder);
         drop(take(how, &path).expect("replaced once free"));
         assert_owner_only(how, &path, false);

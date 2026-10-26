@@ -247,6 +247,10 @@ fn the_wait_retries_every_100_ms_until_the_window() {
 }
 
 /// Contention, then a different failure: that failure comes back as it is.
+// Unix only: a Windows lease file is opened without delete sharing, so it
+// cannot be removed (and a directory put in its place) while a handle to it
+// is open; that is what keeps a holder and a newcomer from locking two files.
+#[cfg(unix)]
 #[test]
 fn a_non_contention_error_mid_wait_returns_unchanged() {
     let dir = tempfile::tempdir().unwrap();

@@ -131,15 +131,17 @@ fn sidecar(path: &Path) -> io::Result<Sidecar> {
         Ok(file) => return Ok(Sidecar::Private(file)),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
         Err(error) if error.raw_os_error() == Some(SHARING_VIOLATION) => return Ok(Sidecar::Held),
-        // Also what a name still being deleted answers: refused for now, so a
-        // waiting caller tries again until its deadline.
-        Err(error) if error.raw_os_error() == Some(ACCESS_DENIED) => {
-            return Ok(Sidecar::Refused(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!("cannot create lock file {}: {error}", path.display()),
-            )));
-        }
+        // A directory this account may not create in is an error, as it
+        // always was: the grant journal reads it as an unreadable file.
         Err(error) => return Err(error),
+    }
+    // Something other than a file in the way is an error at once, never a
+    // sidecar to wait out or replace.
+    if std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir()) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("lock file {} is a directory", path.display()),
+        ));
     }
     let reason = match open_existing(path) {
         Ok(file) => match judge_file(&file) {
@@ -229,13 +231,15 @@ fn held_refusal(path: &Path, reason: &str) -> io::Error {
 /// when pasted, and a blanket removal can cut this account's own access.
 fn directory_refusal(dir: &Path, found: &[PrivacyRefusal]) -> io::Error {
     use PrivacyRefusal as P;
-    let others: Vec<&str> = found
+    let mut others: Vec<&str> = found
         .iter()
         .filter_map(|refusal| match refusal {
             P::ForeignSid(sid) => Some(sid.as_str()),
             _ => None,
         })
         .collect();
+    others.sort_unstable();
+    others.dedup();
     let mut why = Vec::new();
     if !others.is_empty() {
         why.push(format!(
