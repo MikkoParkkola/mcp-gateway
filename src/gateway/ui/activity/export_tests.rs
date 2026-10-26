@@ -85,7 +85,7 @@ fn e1_a_valid_export_verifies_and_every_edit_fails() {
     let manifest: Value = serde_json::from_str(lines.last().unwrap()).unwrap();
     let rejoin = |ls: &[String]| -> Vec<u8> {
         ls.iter()
-            .map(|l| l.to_string() + "\n")
+            .map(|l| l.clone() + "\n")
             .collect::<String>()
             .into_bytes()
     };
@@ -102,7 +102,7 @@ fn e1_a_valid_export_verifies_and_every_edit_fails() {
     // The same change with the digest recomputed and the old signature kept.
     let rows: String = edited[..edited.len() - 1]
         .iter()
-        .map(|l| l.to_string() + "\n")
+        .map(|l| l.clone() + "\n")
         .collect();
     let mut m = manifest.clone();
     m["sha256"] = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(rows.as_bytes())).into();

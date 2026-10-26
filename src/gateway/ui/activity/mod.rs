@@ -100,8 +100,8 @@ fn logs(state: &AppState) -> Option<Logs> {
 /// is large, and the happy path should not carry its size.
 type Early = Box<Response>;
 
-fn bad_request(body: Value) -> Early {
-    Box::new((StatusCode::BAD_REQUEST, Json(body)).into_response())
+fn bad_request(body: Value) -> Response {
+    (StatusCode::BAD_REQUEST, Json(body)).into_response()
 }
 
 fn refused(r: Refused) -> Response {
@@ -215,7 +215,9 @@ fn time(
     value
         .map(|t| {
             chrono::DateTime::parse_from_rfc3339(t).map_err(|_| {
-                bad_request(json!({"error": format!("`{field}` must be an RFC 3339 time")}))
+                Box::new(bad_request(
+                    json!({"error": format!("`{field}` must be an RFC 3339 time")}),
+                ))
             })
         })
         .transpose()
@@ -228,31 +230,31 @@ fn parse(q: &ListQuery) -> Result<Parsed, Early> {
         Some("failed") => Some(FeedOutcome::Failed),
         Some("blocked") => Some(FeedOutcome::Blocked),
         Some("cleaned") => {
-            return Err(bad_request(json!({
+            return Err(Box::new(bad_request(json!({
                 "error": "answer changes are not recorded by this gateway version",
                 "supported": SUPPORTED_OUTCOMES,
-            })));
+            }))));
         }
         Some(_) => {
-            return Err(bad_request(json!({
+            return Err(Box::new(bad_request(json!({
                 "error": "outcome not supported",
                 "supported": SUPPORTED_OUTCOMES,
-            })));
+            }))));
         }
     };
     if q.rule.is_some() {
-        return Err(bad_request(
+        return Err(Box::new(bad_request(
             json!({"error": "rules are not recorded by this gateway version"}),
-        ));
+        )));
     }
     let limit = match q.limit.as_deref() {
         None => DEFAULT_LIMIT,
         Some(l) => match l.parse::<usize>() {
             Ok(n) if (1..=MAX_LIMIT).contains(&n) => n,
             _ => {
-                return Err(bad_request(
+                return Err(Box::new(bad_request(
                     json!({"error": format!("`limit` must be 1 to {MAX_LIMIT}")}),
-                ));
+                )));
             }
         },
     };
@@ -370,7 +372,7 @@ fn export_response(
     let csv = match query.format.as_deref() {
         None | Some("ndjson") => false,
         Some("csv") => true,
-        Some(_) => return *bad_request(json!({"error": "`format` is ndjson or csv"})),
+        Some(_) => return bad_request(json!({"error": "`format` is ndjson or csv"})),
     };
     let signer = match (csv, signer) {
         (false, None) => {
