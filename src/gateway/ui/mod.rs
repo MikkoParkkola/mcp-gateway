@@ -537,6 +537,23 @@ async fn config(
         })
         .collect();
 
+    // Each backend secret slot that holds a reference, as written, read from
+    // the literal file: never a resolved value (ADR-028).
+    let secret_references = match state.config_path.clone() {
+        Some(path) => tokio::task::spawn_blocking(move || {
+            crate::config::Config::load_literal(Some(&path)).map_or_else(
+                |e| {
+                    tracing::warn!(error = %e, "secret references hidden: config did not load");
+                    std::collections::BTreeMap::new()
+                },
+                |literal| crate::config::display::backend_secret_references(&literal),
+            )
+        })
+        .await
+        .unwrap_or_default(),
+        None => std::collections::BTreeMap::new(),
+    };
+
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "meta_mcp_enabled": state.meta_mcp_enabled,
@@ -545,6 +562,7 @@ async fn config(
         "ssrf_protection": generation.ssrf_protection(),
         "environment": generation.environment(),
         "servers": servers,
+        "secret_references": secret_references,
     }))
     .into_response()
 }

@@ -62,6 +62,7 @@ fn two_principal_auth() -> AuthConfig {
         denied_tools: None,
         admin: false,
         kind: mcp_gateway::config::ApiKeyKind::Shared,
+        ..Default::default()
     };
     AuthConfig {
         enabled: true,

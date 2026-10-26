@@ -125,6 +125,26 @@ impl Gateway {
         let serving =
             super::stdio_single::ModernServing::from_setting(self.config.server.modern_protocol);
 
+        // MIK-8364 (Option A): Ctrl+C and SIGTERM end stdio the way stdin EOF
+        // does: stop reading, drain what was accepted under the same bound,
+        // then the final telemetry save. Without this a signal killed stdio
+        // outright and the counts since the last save were lost.
+        let (signal_tx, _) = tokio::sync::broadcast::channel(1);
+        #[cfg(test)]
+        let stop_signal = super::test_seams::shutdown_signal_or_trigger(
+            signal_tx,
+            self.test_seams.take_shutdown_trigger(),
+        );
+        #[cfg(not(test))]
+        let stop_signal = super::support::shutdown_signal(signal_tx);
+        tokio::pin!(stop_signal);
+        // Polled once here, before the catalogue install and warm start can
+        // spawn a backend, so the OS handlers are registered from now on
+        // rather than from the read loop's first poll: a signal in between
+        // would otherwise take the default action and, since each backend
+        // leads its own process group, leave their trees running.
+        let signalled_early = futures::FutureExt::now_or_never(stop_signal.as_mut()).is_some();
+
         self.install_stdio_startup_catalogue(&meta_mcp, &live_config, grant_sink.as_ref(), &warmer)
             .await?;
 
@@ -157,20 +177,6 @@ impl Gateway {
                 None,
             ))
         });
-
-        // MIK-8364 (Option A): Ctrl+C and SIGTERM end stdio the way stdin EOF
-        // does: stop reading, drain what was accepted under the same bound,
-        // then the final telemetry save. Without this a signal killed stdio
-        // outright and the counts since the last save were lost.
-        let (signal_tx, _) = tokio::sync::broadcast::channel(1);
-        #[cfg(test)]
-        let stop_signal = super::test_seams::shutdown_signal_or_trigger(
-            signal_tx,
-            self.test_seams.take_shutdown_trigger(),
-        );
-        #[cfg(not(test))]
-        let stop_signal = super::support::shutdown_signal(signal_tx);
-        tokio::pin!(stop_signal);
 
         info!("MCP Gateway stdio mode ready — reading JSON-RPC from stdin");
 
@@ -249,6 +255,10 @@ impl Gateway {
         let mut stdout_died = false;
 
         loop {
+            if signalled_early {
+                info!("stdio: shutdown signal received during startup; shutting down");
+                break;
+            }
             // A closed queue means the stdout writer has exited, so every
             // answer from here on would be written nowhere. Executing the
             // request anyway performs its side effect and discards the only

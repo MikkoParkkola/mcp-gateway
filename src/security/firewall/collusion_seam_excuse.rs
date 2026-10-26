@@ -362,10 +362,7 @@ fn left_side(run: &Indexed<'_>, a: usize, props: &Props<'_>) -> Option<Side> {
             .filter(|&c| visible(c))
             .take(3)
             .collect();
-        let mut start = piece.len() - (SEAM_SIDE_BYTES - bytes);
-        while !piece.is_char_boundary(start) {
-            start += 1;
-        }
+        let start = piece.ceil_char_boundary(piece.len() - (SEAM_SIDE_BYTES - bytes));
         let cut = (start..=piece.len())
             .filter(|&i| piece.is_char_boundary(i))
             .find(|&i| props.safe_cut([&ctx, &piece[..i]], [&piece[i..], &after_ctx]))?;
@@ -398,10 +395,7 @@ fn right_side(run: &Indexed<'_>, b: usize, props: &Props<'_>) -> Option<Side> {
         }
         artificial = true;
         let ctx = context_after(run, j)?;
-        let mut end = SEAM_SIDE_BYTES - text.len();
-        while !piece.is_char_boundary(end) {
-            end -= 1;
-        }
+        let end = piece.floor_char_boundary(SEAM_SIDE_BYTES - text.len());
         let cut = (0..=end)
             .rev()
             .filter(|&i| piece.is_char_boundary(i))

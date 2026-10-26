@@ -188,6 +188,7 @@ async fn a_token_is_bound_to_its_credential_not_its_name() {
         denied_tools: None,
         admin: true,
         kind: mcp_gateway::config::ApiKeyKind::Shared,
+        ..Default::default()
     };
     let log = Log::default();
     let url = stub(&log).await;
@@ -289,6 +290,7 @@ async fn a_non_admin_caller_is_refused_and_nothing_starts() {
         denied_tools: None,
         admin: false,
         kind: mcp_gateway::config::ApiKeyKind::Shared,
+        ..Default::default()
     };
     let auth = AuthConfig {
         api_keys: vec![viewer],

@@ -111,6 +111,7 @@ fn api_key(name: &str, key: &str) -> ApiKeyConfig {
         denied_tools: None,
         admin: false,
         kind: mcp_gateway::config::ApiKeyKind::Shared,
+        ..Default::default()
     }
 }
 

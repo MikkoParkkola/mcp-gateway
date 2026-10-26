@@ -35,6 +35,7 @@ pub(crate) fn mints() -> Vec<(&'static str, AuthenticatedClient)> {
             denied_tools: None,
             admin: true,
             kind: crate::config::ApiKeyKind::Shared,
+            ..Default::default()
         }],
         ..crate::config::AuthConfig::default()
     };

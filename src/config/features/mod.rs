@@ -17,6 +17,7 @@ mod idempotency;
 mod key_server;
 mod playbooks;
 mod runtime;
+mod secrets;
 mod security;
 mod signature_chain;
 mod streaming;
@@ -44,6 +45,7 @@ pub use key_server::{
 };
 pub use playbooks::PlaybooksConfig;
 pub use runtime::{RuntimeConfig, RuntimeProfileConfig};
+pub use secrets::{SecretStoreChoice, SecretsConfig};
 pub use security::{
     AgentIdentityConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig,
     IdentityGrantsConfig, RecordPrincipalKeyRef, RemoteServerSigningConfig, ResponseContractConfig,
