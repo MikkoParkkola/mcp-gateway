@@ -14,6 +14,10 @@
 //! covered in process by `src/gateway/router/identity_header_tests.rs`).
 
 #![cfg(unix)]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code reads the host clock to stamp the ID token and check the assertion's times"
+)]
 
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
