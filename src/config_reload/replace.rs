@@ -15,12 +15,9 @@
 //! Lock order, for every holder: the reload lock, then the config sidecar
 //! lock, then (for a save that also writes secrets) the vault lock. Nothing
 //! ranked earlier is taken while a later one is held.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "its first callers, the web UI settings save and the configuration-history restore, land next"
-    )
+#![expect(
+    dead_code,
+    reason = "its first callers, the web UI settings save and the configuration-history restore, read the outcome and error fields; they land next"
 )]
 
 use std::path::PathBuf;

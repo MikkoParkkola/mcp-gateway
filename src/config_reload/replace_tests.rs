@@ -53,7 +53,7 @@ fn to(expected: Expected, bytes: &'static str, replaced: Replaced) -> Replace {
 }
 
 fn running_has_b(ctx: &ReloadContext) -> bool {
-    ctx.live_config.running().backends.contains_key("b")
+    ctx.live_config.get().backends.contains_key("b")
 }
 
 fn read(path: &Path) -> String {
@@ -180,10 +180,10 @@ async fn kept_beside_leaves_the_replaced_bytes() {
 /// byte; the running config never changed and no journal is left.
 #[tokio::test]
 async fn a_refused_reload_rolls_the_file_back() {
-    let (dir, path, ctx) = setup();
     // A public URL over open tools: the posture check refuses the reload
     // (as in `tests/posture_refusal.rs`).
     const EXPOSED: &str = "server:\n  public_url: \"https://gw.example.com\"\nbackends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n  b:\n    http_url: \"http://127.0.0.1:9/mcp\"\n";
+    let (dir, path, ctx) = setup();
 
     let failure = replace_detached(
         Arc::clone(&ctx),
@@ -195,8 +195,7 @@ async fn a_refused_reload_rolls_the_file_back() {
 
     assert!(
         matches!(failure, ReplaceError::ReloadRefused(_)),
-        "{:?}",
-        failure
+        "{failure:?}"
     );
     assert_eq!(read(&path), START, "refused bytes never stay on disk");
     assert!(!running_has_b(&ctx));
@@ -282,8 +281,7 @@ async fn a_repointed_link_is_refused() {
 
     assert!(
         matches!(failure, ReplaceError::Unsupported(_)),
-        "{:?}",
-        failure
+        "{failure:?}"
     );
     assert_eq!(read(&victim), START);
 }
@@ -325,7 +323,7 @@ fn crashed_after_rename(path: &Path, bytes: &str) {
         FileRevision::of(START.as_bytes()).as_str().to_owned(),
     )
     .expect("journal");
-    write_owner_only(&crate::identity_grants::journal::resolved(path), bytes).expect("rename");
+    write_owner_only(crate::identity_grants::journal::resolved(path), bytes).expect("rename");
 }
 
 fn lock_now(
