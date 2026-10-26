@@ -42,7 +42,7 @@ fn run_audit_verify(
         Ok(c) => c,
         Err(e) => {
             // Fail closed: a config we cannot load must NOT downgrade to
-            // hash-only and report success (MIK-6700 review finding #2).
+            // hash-only and report success.
             eprintln!(
                 "Error: could not load gateway config for signed verification: {e}. Refusing to verify (a load failure must not silently downgrade to hash-only)."
             );
@@ -54,7 +54,6 @@ fn run_audit_verify(
     // without a secret, would silently degrade to hash-only and pass a
     // stale-sig forgery with exit 0 — regardless of why the secret is
     // absent (no config discovered, wrong config, unset env).
-    // (MIK-6700 review finding #2, residual no-config path.)
     if !signed {
         match mcp_gateway::security::transparency_log::log_contains_signed_entry(log_path) {
             Ok(true) => {
