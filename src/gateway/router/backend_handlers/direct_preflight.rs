@@ -442,6 +442,12 @@ async fn audit_mint(
                     "identity-propagation refuse audit write failed"
                 );
             }
+            // The caller's identity standing (MIK-8914.API2A.13): no kind
+            // names it yet.
+            crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+                crate::security::decision_record::DecisionKind::Unrecorded,
+                None,
+            );
             let who = caller.verified_identity.as_ref();
             Err(state
                 .meta_mcp
