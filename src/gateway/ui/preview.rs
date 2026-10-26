@@ -131,6 +131,9 @@ fn url_carries_credentials(raw: &str) -> bool {
 /// The whole start and listing, then teardown.
 const PREVIEW_CAP: Duration = Duration::from_secs(30);
 
+/// Teardown after the start and listing, on every exit, the cap included.
+const TEARDOWN_CAP: Duration = Duration::from_secs(5);
+
 /// Each request's own timeout, past [`PREVIEW_CAP`], so a silent server is
 /// always ended by the cap: one answer, 504, never a race with a 502.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(35);
@@ -261,9 +264,17 @@ pub(super) async fn preview_backend(
         )
         .into_response();
     }
-    let response = run_confirmed(&state, &add.name, &backend, described).await;
-    drop(busy);
-    response
+    // A task, not this request's future: a client that disconnects drops the
+    // request, never the teardown, and the guard goes only once that is done.
+    let name = add.name;
+    let task = tokio::spawn(async move {
+        let response = run_confirmed(&state, &name, &backend, described).await;
+        drop(busy);
+        response
+    });
+    task.await.unwrap_or_else(|_| {
+        flat_error(StatusCode::INTERNAL_SERVER_ERROR, "the preview failed").into_response()
+    })
 }
 
 /// Open, check and spend a preview confirmation in one step.
@@ -311,45 +322,60 @@ async fn run_confirmed(
         DestinationPolicy::Configured
     };
     let started = std::time::Instant::now();
+    let transport = match crate::transport::HttpTransport::with_destination(
+        http_url,
+        std::collections::HashMap::new(),
+        REQUEST_TIMEOUT,
+        *streamable_http,
+        None,
+        protocol_version.clone(),
+        policy,
+    ) {
+        Ok(transport) => transport,
+        Err(error) => return failed(&error),
+    };
+    transport.set_body_budget(RESPONSE_BUDGET, PREVIEW_BUDGET);
     let outcome = tokio::time::timeout(PREVIEW_CAP, async {
-        let transport = crate::transport::HttpTransport::with_destination(
-            http_url,
-            std::collections::HashMap::new(),
-            REQUEST_TIMEOUT,
-            *streamable_http,
-            None,
-            protocol_version.clone(),
-            policy,
-        )?;
-        transport.set_body_budget(RESPONSE_BUDGET, PREVIEW_BUDGET);
-        let listed = async {
-            crate::backend::start_detached_http(&transport, name, REQUEST_TIMEOUT).await?;
-            crate::backend::list_tools_for_preview(name, transport.as_ref()).await
-        }
-        .await;
-        let _ = crate::transport::Transport::close(transport.as_ref()).await;
-        listed
+        crate::backend::start_detached_http(&transport, name, REQUEST_TIMEOUT).await?;
+        crate::backend::list_tools_for_preview(name, transport.as_ref()).await
     })
     .await;
+    // Teardown before any answer, the 504 and 502 included.
+    let closing = std::time::Instant::now();
+    let _ = tokio::time::timeout(
+        TEARDOWN_CAP,
+        crate::transport::Transport::close(transport.as_ref()),
+    )
+    .await;
+    let teardown = closing.elapsed();
     match outcome {
         Err(_) => flat_error(
             StatusCode::GATEWAY_TIMEOUT,
             "the server did not answer within 30 s",
         )
         .into_response(),
-        Ok(Err(error)) => {
-            let message = error.to_string();
-            let status = if message.contains(SSRF_BLOCKED) {
-                StatusCode::UNPROCESSABLE_ENTITY
-            } else {
-                StatusCode::BAD_GATEWAY
-            };
-            flat_error(status, message).into_response()
-        }
+        Ok(Err(error)) => failed(&error),
         Ok(Ok(listing)) => {
-            Json(listed_body(&listing, described, started.elapsed())).into_response()
+            let mut body = listed_body(&listing, described, started.elapsed());
+            body["preview"]["teardown"] = json!({"ms": millis(teardown)});
+            Json(body).into_response()
         }
     }
+}
+
+/// A start or listing failure: 422 for an SSRF refusal, else 502.
+fn failed(error: &crate::Error) -> Response {
+    let message = error.to_string();
+    let status = if message.contains(SSRF_BLOCKED) {
+        StatusCode::UNPROCESSABLE_ENTITY
+    } else {
+        StatusCode::BAD_GATEWAY
+    };
+    flat_error(status, message).into_response()
+}
+
+fn millis(elapsed: Duration) -> u64 {
+    u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// The 200 body: each tool with its class and where the class came from.
@@ -371,7 +397,7 @@ fn listed_body(listing: &PreviewListing, mut preview: Value, elapsed: Duration) 
         .collect();
     preview["stopped"] = json!(true);
     preview["truncated"] = json!(listing.truncated);
-    preview["elapsed_ms"] = json!(u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX));
+    preview["elapsed_ms"] = json!(millis(elapsed));
     json!({
         "preview": preview,
         "tools": tools,
