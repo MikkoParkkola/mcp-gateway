@@ -300,6 +300,7 @@ pub(super) fn scan_direct_egress(
         external_server: call.server,
         external_tool: call.tool,
         subject: None,
+        trace_id: None,
     };
     // The router's own instance judges the direct route (MIK-7669).
     #[cfg(feature = "firewall")]

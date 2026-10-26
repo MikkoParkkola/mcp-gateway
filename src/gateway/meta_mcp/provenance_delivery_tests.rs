@@ -47,6 +47,7 @@ fn delivery_ctx<'a>(
             external_server: "gateway",
             external_tool,
             subject: None,
+            trace_id: None,
         },
         signing: None,
         chain_source: ChainSource::NotEligible,
