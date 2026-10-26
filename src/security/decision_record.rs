@@ -161,10 +161,9 @@ impl Noted {
                 .clone()
                 .unwrap_or((DecisionKind::DefaultAllow, None)),
             (None, Refused::Yes) => {
-                assert!(
-                    !cfg!(test),
-                    "a refused call noted no check (MIK-8914.API2A.7)"
-                );
+                if cfg!(test) {
+                    panic!("a refused call noted no check (MIK-8914.API2A.7)");
+                }
                 (DecisionKind::Unrecorded, None)
             }
         };
@@ -195,12 +194,20 @@ impl Noted {
 /// The decision a record carries; `None` for a record written before this
 /// field existed ("no evidence recorded"), and for one that does not parse,
 /// never an error.
+#[expect(
+    dead_code,
+    reason = "wired in the receipt reader, this PR; removed before push"
+)]
 pub(crate) fn decision_evidence(entry: &Value) -> Option<Decision> {
     serde_json::from_value(entry.get(FIELD)?.clone()).ok()
 }
 
 /// Whether `entry` was decided by the rule `rule_id`. Exact match only; a
 /// record with no rule id matches nothing.
+#[expect(
+    dead_code,
+    reason = "wired in the receipt reader, this PR; removed before push"
+)]
 pub(crate) fn matches_rule(entry: &Value, rule_id: &str) -> bool {
     entry
         .get(FIELD)
@@ -210,6 +217,10 @@ pub(crate) fn matches_rule(entry: &Value, rule_id: &str) -> bool {
 }
 
 /// The receipt's line for which rule decided. Never blank, never a guess.
+#[expect(
+    dead_code,
+    reason = "wired in the receipt reader, this PR; removed before push"
+)]
 pub(crate) fn rule_line(decision: &Decision) -> &'static str {
     match (decision.kind, decision.rule_id.is_some()) {
         (DecisionKind::DefaultAllow, _) => "allowed: no rule restricted this call",
@@ -224,6 +235,10 @@ pub(crate) fn rule_line(decision: &Decision) -> &'static str {
 
 /// The receipt's line for the request findings: "not recorded" (no evidence,
 /// or the check did not run) is never shown as "none".
+#[expect(
+    dead_code,
+    reason = "wired in the receipt reader, this PR; removed before push"
+)]
 pub(crate) fn findings_line(decision: Option<&Decision>) -> &'static str {
     match decision.and_then(|d| d.findings.as_ref()) {
         None => "findings not recorded by this gateway version",

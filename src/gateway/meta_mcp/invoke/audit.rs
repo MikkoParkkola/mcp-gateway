@@ -81,7 +81,7 @@ pub(crate) struct DispatchNotes {
 mod decision;
 #[path = "audit_replay.rs"]
 mod replay;
-pub(crate) use decision::{note_allowed_by, note_refused_by, take_route_noted, with_route_scope};
+pub(crate) use decision::{note_refused_by, take_route_noted, with_route_scope};
 
 /// Most process notes one record carries (a playbook may run many).
 const MAX_PROCESS_NOTES: usize = 16;

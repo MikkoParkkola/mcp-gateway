@@ -155,7 +155,7 @@ impl MetaMcp {
                 super::audit::note_refused_by(
                     crate::security::decision_record::DecisionKind::Grant,
                     None,
-                )
+                );
             })
     }
 

@@ -19,6 +19,10 @@ pub(crate) fn note_refused_by(
 }
 
 /// Note an explicit allow; the earliest in check order wins.
+#[expect(
+    dead_code,
+    reason = "wired with the explicit-allow rule ids, this PR; removed before push"
+)]
 pub(crate) fn note_allowed_by(
     kind: crate::security::decision_record::DecisionKind,
     rule_id: Option<String>,
