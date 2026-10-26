@@ -6,7 +6,7 @@
 // test controls what the shell loads; triggers come from the shell's own
 // tip() through a fixture tab built in the page.
 import { test, expect } from './base.mjs';
-import { shellModuleUrl, shellReady } from './shell.mjs';
+import { shellModuleUrl, shellReady, withFixturePages } from './shell.mjs';
 
 const COPY = {
   _pending: {},
@@ -171,6 +171,21 @@ test.describe('component', () => {
     expect(box.right).toBeLessThanOrEqual(390);
   });
 
+  test('T5e in a viewport too short for either side the popup still fits, scrolling inside', async ({ page }) => {
+    await page.setViewportSize({ width: 800, height: 160 });
+    await serveCopy(page);
+    await ready(page);
+    await mount(page, ['fixture.status.calls'], { layout: 'top-left' });
+    await page.evaluate(() => { document.querySelector('.fixture-tips').style.top = '70px'; });
+    await page.getByRole('button', { name: 'About Calls today' }).focus();
+    const box = await page.evaluate(async () => {
+      await Promise.all(document.getAnimations().map((a) => a.finished));
+      return document.querySelector('.has-tip .tip').getBoundingClientRect().toJSON();
+    });
+    expect(box.top).toBeGreaterThanOrEqual(0);
+    expect(box.bottom).toBeLessThanOrEqual(160);
+  });
+
   test('T6 T6b focus moving to the next trigger opens it at once and closes the previous', async ({ page }) => {
     await serveCopy(page);
     await ready(page);
@@ -262,6 +277,34 @@ test.describe('no JavaScript', () => {
     await page.locator('.has-tip button').focus();
     await expect(tip).toHaveCSS('opacity', '1');
   });
+
+  test('T10c with no script the popup stays open while the pointer moves onto it', async ({ page }) => {
+    await page.goto('/ui/assets/fixture-tooltip.html');
+    const tip = page.locator('.has-tip .tip');
+    await page.locator('.has-tip button').hover();
+    await expect(tip).toHaveCSS('opacity', '1');
+    const box = await tip.boundingBox();
+    const trigger = await page.locator('.has-tip button').boundingBox();
+    // Cross the gap between trigger and popup in small steps, as a hand would.
+    await page.mouse.move(trigger.x + 4, trigger.y + trigger.height / 2);
+    await page.mouse.move(trigger.x + 4, box.y + box.height / 2, { steps: 12 });
+    await expect(tip).toHaveCSS('opacity', '1');
+  });
+});
+
+test('T10d two triggers for one copy id get distinct description targets', async ({ page }) => {
+  await serveCopy(page);
+  await ready(page);
+  const url = await shellModuleUrl(page);
+  const ids = await page.evaluate(async (url) => {
+    const shell = await import(url);
+    await shell.tipsReady();
+    const host = document.createElement('div');
+    host.innerHTML = shell.tipMarkup('fixture.status.paused') + shell.tipMarkup('fixture.status.paused');
+    return [...host.querySelectorAll('button')].map((b) => [b.getAttribute('aria-describedby'), host.querySelectorAll(`[id="${b.getAttribute('aria-describedby')}"]`).length]);
+  }, url);
+  expect(ids[0][0]).not.toBe(ids[1][0]);
+  expect(ids.map(([, n]) => n)).toEqual([1, 1]);
 });
 
 test('T10b tipMarkup() output is exactly the static fixture markup', async ({ page, request }) => {
@@ -339,6 +382,40 @@ test.describe('copy loading', () => {
     expect(await page.locator('#content [data-rendered]').count()).toBe(0);
     release();
     await shellReady(page);
+  });
+
+  test('C7 navigating before the copy settles waits for it, and nothing redraws after', async ({ page }) => {
+    let release;
+    await withFixturePages(page);
+    await serveCopy(page, COPY, { hold: new Promise((ok) => { release = ok; }) });
+    await page.goto('/ui/overview/status');
+    await page.locator('nav.route-nav a', { hasText: 'Servers' }).click();
+    await page.waitForTimeout(200);
+    expect(await page.locator('#content [data-rendered]').count()).toBe(0);
+    release();
+    await expect(page.locator('#content [data-rendered]')).toHaveText('servers - status');
+    const redraws = await page.evaluate(() => new Promise((ok) => {
+      let n = 0;
+      new MutationObserver((m) => { n += m.length; }).observe(document.getElementById('content'), { childList: true });
+      setTimeout(() => ok(n), 400);
+    }));
+    expect(redraws).toBe(0);
+  });
+
+  test('C8 the content is marked rendered only when its tab has drawn', async ({ page }) => {
+    await serveCopy(page);
+    await ready(page);
+    const url = await shellModuleUrl(page);
+    const early = await page.evaluate(async (url) => {
+      const shell = await import(url);
+      shell.register('servers', { tabs: { status: async (el) => { await new Promise((ok) => setTimeout(ok, 300)); el.textContent = 'late'; } } });
+      shell.go('/ui/servers/status');
+      await new Promise((ok) => setTimeout(ok, 50));
+      return document.querySelector('#content [data-rendered]')?.textContent ?? null;
+    }, url);
+    expect(early).toBeNull();
+    await shellReady(page);
+    expect(await page.locator('#content [data-rendered]').textContent()).toBe('late');
   });
 
   test('C5 C5b copy loads once and triggers render', async ({ page }) => {

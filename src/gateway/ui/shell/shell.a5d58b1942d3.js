@@ -312,11 +312,17 @@ export function tip(id) {
  * The same trigger as HTML text, for pages rendered without JavaScript:
  * the stylesheet shows it on hover and focus there. Every value is escaped.
  */
+const markupSeq = new Map();
+
 export function tipMarkup(id) {
   const entry = tipEntry(id);
   if (!entry) return '';
   const esc = (v) => String(v).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-  const tid = `tip-${id.replace(/[^a-z0-9-]/g, '-')}`;
+  // Ids stay stable for the first trigger of an id, and distinct after it.
+  const slug = `tip-${id.replace(/[^a-z0-9-]/g, '-')}`;
+  const n = (markupSeq.get(slug) ?? 0) + 1;
+  markupSeq.set(slug, n);
+  const tid = n === 1 ? slug : `${slug}-${n}`;
   const body = Array.isArray(entry.rows)
     ? `<dl class="tip-rows">${entry.rows.map(([l, v]) => `<div><dt>${esc(l)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>`
     : `<span class="tip-body">${esc(entry.text ?? '')}</span>`;
@@ -329,6 +335,8 @@ const TIP_OPEN_MS = 300;
 const TIP_CLOSE_MS = 150;
 /** The popup keeps this far from the viewport's sides (its width leaves 2 x 8 px). */
 const TIP_MARGIN = 8;
+/** The gap between trigger and popup, as in the stylesheet. */
+const TIP_GAP = 6;
 let openTip = null;
 let tipTimer = 0;
 
@@ -350,12 +358,21 @@ function hideTip(wrap) {
 function placeTip(wrap, pop) {
   pop.classList.remove('flip-y');
   pop.style.left = '';
+  pop.style.maxHeight = '';
   const r = pop.getBoundingClientRect();
   // Slide left by what overflows the right edge, never past the left margin:
   // on a narrow screen a mid-line trigger fits neither edge-aligned placement.
   const shift = Math.max(0, Math.min(r.right - (innerWidth - TIP_MARGIN), r.left - TIP_MARGIN));
   if (shift) pop.style.left = `${-shift}px`;
-  if (r.bottom > innerHeight) pop.classList.add('flip-y');
+  // Below unless it does not fit there and above has more room; when neither
+  // side fits, the popup takes the roomier side and scrolls inside.
+  const w = wrap.getBoundingClientRect();
+  const below = innerHeight - w.bottom - TIP_GAP - TIP_MARGIN;
+  const above = w.top - TIP_GAP - TIP_MARGIN;
+  const up = r.height > below && above > below;
+  if (up) pop.classList.add('flip-y');
+  const room = up ? above : below;
+  if (r.height > room) pop.style.maxHeight = `${Math.max(room, 0)}px`;
 }
 
 function wireTips() {
@@ -470,7 +487,7 @@ export function render() {
     plate.textContent = 'Not found';
     document.title = 'Not found · MCP Gateway';
     document.querySelector('.head .sub').hidden = true;
-    content.replaceChildren(mark(state('empty', { title: 'No such page', body: 'Pick a page from the list.' })));
+    settle(content, state('empty', { title: 'No such page', body: 'Pick a page from the list.' }), seq);
     return;
   }
   const spec = pages.get(route.page);
@@ -481,7 +498,7 @@ export function render() {
   document.title = `${spec?.title ?? label} · MCP Gateway`;
   const tabs = visibleTabs(route.page);
   if (tabs.length === 0) {
-    content.replaceChildren(mark(state('not-built')));
+    settle(content, state('not-built'), seq);
     return;
   }
   if (!tabs.some(([t]) => t === route.tab)) {
@@ -493,15 +510,28 @@ export function render() {
     tabsNav.append(el('a', { href, 'aria-current': t === route.tab ? 'page' : null }, tabLabel));
   }
   const body = el('div', { class: 'body' });
-  content.replaceChildren(mark(body));
-  Promise.resolve()
-    .then(() => spec.tabs[route.tab](body, { object: route.object, tab: route.tab, api, state }))
+  content.replaceChildren(body);
+  // Every render waits for the tooltip copy (loaded, failed or late), so a
+  // tab draws once, with its triggers; it is marked rendered only once drawn.
+  tipsReady()
+    .then(() => (seq === renderSeq ? spec.tabs[route.tab](body, { object: route.object, tab: route.tab, api, state }) : null))
+    .then(() => {
+      if (seq === renderSeq) mark(body);
+    })
     .catch((err) => {
       if (seq !== renderSeq) return;
       const status = err instanceof ApiError ? err.status : 0;
       if (status === 401) return; // the sign-in view is showing; it re-renders after sign-in
       content.replaceChildren(mark(state(status === 403 ? 'forbidden' : 'error')));
     });
+}
+
+/** Show a fixed state, marked rendered once the copy settles, as a tab would be. */
+function settle(content, node, seq) {
+  content.replaceChildren(node);
+  tipsReady().then(() => {
+    if (seq === renderSeq) mark(node);
+  });
 }
 
 /** Mark a node as the rendered content (tests and screens wait on it). */
@@ -696,8 +726,7 @@ function boot() {
     document.getElementById('content').focus();
   });
   drawNav(parse(location.pathname).page);
-  // The first render waits for the tooltip copy: loaded, failed or late.
-  tipsReady().then(render);
+  render();
   loadCounts();
   loadWho();
 }

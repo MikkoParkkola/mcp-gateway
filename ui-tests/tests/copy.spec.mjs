@@ -33,6 +33,12 @@ test('C2 C2b the check goes red on each planted fault', () => {
     [copy, ['tip(someVar)'], 'non-literal'],
     [{ ...copy, 'Servers.Status.X': { title: 'x', text: 'y' }, _pending: { servers: ['servers.status.paused', 'Servers.Status.X'] } }, [''], 'malformed id'],
     [{ ...copy, _pending: { servers: ['servers.status.paused', 'servers.status.ghost'] } }, [''], 'pending without copy'],
+    [copy, ['tip("servers.status.paused" + suffix)'], 'non-literal'],
+    [copy, ['tip ( computed )'], 'non-literal'],
+    [{ ...copy, 'access.status.x': { title: 'x', text: 'y' }, _pending: { servers: ['servers.status.paused', 'access.status.x'] } }, [''], 'pending under another page'],
+    [copy, ['tip("servers.status.paused"); register("servers", {})'], 'pending under a built page'],
+    [{ ...copy, 'servers.status.notitle': { text: 'y' }, _pending: { servers: ['servers.status.paused', 'servers.status.notitle'] } }, [''], 'malformed entry'],
+    [{ ...copy, 'servers.status.both': { title: 'x', text: 'y', rows: [['a', 'b']] }, _pending: { servers: ['servers.status.paused', 'servers.status.both'] } }, [''], 'malformed entry'],
   ];
   for (const [c, s, want] of cases) {
     const found = checkCopy(c, s);

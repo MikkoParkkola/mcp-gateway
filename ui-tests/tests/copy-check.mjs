@@ -21,9 +21,10 @@ export function checkCopy(copy, scripts) {
   const built = new Set();
   for (const src of scripts) {
     // Calls only: a definition (`function tip(id)`) is not a use.
-    for (const m of src.matchAll(/(?<!function\s+)\btip(?:Markup)?\(\s*([^)]*)\)/g)) {
+    for (const m of src.matchAll(/(?<!function\s+)\btip(?:Markup)?\s*\(\s*([^)]*)\)/g)) {
       const arg = m[1].trim();
-      const lit = arg.match(/^(['"])([^'"]+)\1/);
+      // The whole argument must be one string literal: `"a" + b` is not.
+      const lit = arg.match(/^(['"])([^'"]+)\1$/);
       if (!lit) problems.push(`non-literal tooltip id: tip(${arg})`);
       else used.add(lit[2]);
     }
@@ -37,13 +38,17 @@ export function checkCopy(copy, scripts) {
     const m = id.match(ID);
     if (!m || !PAGES.includes(m[1]) || !TABS.includes(m[2])) problems.push(`malformed id: ${id}`);
   }
-  for (const id of used) if (!ids.includes(id)) problems.push(`used without copy: ${id}`);
   for (const id of ids) {
-    if (used.has(id)) continue;
-    const page = pendingIds.get(id);
-    if (!page) problems.push(`orphan copy (neither used nor pending): ${id}`);
-    else if (built.has(page)) problems.push(`pending under a built page (${page}): ${id}`);
+    const e = copy[id];
+    const body = (typeof e?.text === 'string') + Array.isArray(e?.rows);
+    if (typeof e?.title !== 'string' || body !== 1) problems.push(`malformed entry (a title and exactly one of text or rows): ${id}`);
   }
+  for (const id of used) if (!ids.includes(id)) problems.push(`used without copy: ${id}`);
+  for (const [id, page] of pendingIds) {
+    if (id.split('.')[0] !== page) problems.push(`pending under another page (${page}): ${id}`);
+    if (built.has(page)) problems.push(`pending under a built page (${page}): ${id}`);
+  }
+  for (const id of ids) if (!used.has(id) && !pendingIds.has(id)) problems.push(`orphan copy (neither used nor pending): ${id}`);
   for (const id of pendingIds.keys()) if (!ids.includes(id)) problems.push(`pending without copy: ${id}`);
   return problems;
 }
