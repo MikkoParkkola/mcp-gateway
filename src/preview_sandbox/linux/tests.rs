@@ -333,11 +333,20 @@ fn an_alias_is_kept_only_while_every_link_is_shown() {
     // A later hop through a directory link the root does not show: the kernel
     // would walk `out/dir-hop`, which is absent inside, so nothing is kept.
     link("later-dir-link", "../out/dir-hop/real");
+    // The same walk hidden by `..`: `out/twin` is a directory link the root
+    // does not show, and the `..` after it cancels it in the text, so the
+    // text alone reads as resolved while the kernel still walks `out/twin`.
+    link("dotdot-through-link", "../out/twin/../../root/real");
+    // Any climb on a later hop runs the real file, a link-free one included
+    // (an nvm `npm -> ../lib/...` alias): only the spelling is lost.
+    link("plain-climb", "../root/real");
     // Two links pointing at each other end at the hop ceiling, not a loop.
     link("loop-a", "loop-b");
     link("loop-b", "loop-a");
     std::os::unix::fs::symlink("../root/real", out.join("hop")).expect("hop");
     std::os::unix::fs::symlink(&root, out.join("dir-hop")).expect("dir hop");
+    fs::create_dir_all(out.join("real-dir")).expect("real dir");
+    std::os::unix::fs::symlink("real-dir", out.join("twin")).expect("twin");
     let shown = |p: &Path| p.starts_with(&root);
     // Reached through a directory link the root does not show: kept, but
     // spelled through the real directory, which the root does show.
@@ -353,6 +362,8 @@ fn an_alias_is_kept_only_while_every_link_is_shown() {
         ("dangling", false),
         ("outside", false),
         ("later-dir-link", false),
+        ("dotdot-through-link", false),
+        ("plain-climb", false),
         ("loop-a", false),
     ] {
         assert_eq!(
