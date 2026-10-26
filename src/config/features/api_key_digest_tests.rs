@@ -187,3 +187,105 @@ fn neither_key_nor_digest_fails_to_load() {
     assert!(message.contains("ops"), "{message}");
     assert!(message.contains("key_sha256"), "{message}");
 }
+
+// Slot (ADR-022): `previous_key_sha256` is a secret slot like `key_sha256`. A
+// reference resolves at load, a `file:` one is tracked for rotation, and a bad
+// one is refused naming the field, never the value.
+const OLD: &str = "k-old-secret";
+
+fn rotated(previous: &str) -> String {
+    format!(
+        "    - name: ops\n      key_sha256: \"{}\"\n      previous_key_sha256: {previous}\n      previous_expires_at: \"2999-01-01T00:00:00Z\"\n",
+        digest_of(KEY)
+    )
+}
+
+fn old_secret_authenticates(config: &Config) -> bool {
+    ResolvedAuthConfig::try_from_config(
+        &config.auth,
+        &crate::config::EnvOverlay::none(),
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    )
+    .expect("resolves")
+    .validate_token(OLD)
+    .is_some_and(|client| client.name == "ops")
+}
+
+#[test]
+fn previous_digest_env_reference_authenticates() {
+    let env = format!("{VAR}={}\n", digest_of(OLD));
+    let (_dir, loaded) = load(&rotated(&format!("env:{VAR}")), Some(&env));
+    assert!(old_secret_authenticates(
+        &loaded.expect("an env: previous digest loads")
+    ));
+}
+
+#[test]
+fn previous_digest_file_reference_authenticates_and_is_tracked() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let file = dir.path().join("previous");
+    crate::gateway::test_helpers::write_owner_only(&file, format!("{}\n", digest_of(OLD)))
+        .expect("digest file");
+    let mut yaml = String::from("auth:\n  enabled: false\n  api_keys:\n");
+    yaml.push_str(&rotated(&format!("'file:{}'", file.display())));
+    let path = dir.path().join("config.yaml");
+    crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("config file");
+    let startup = Config::load_evaluated(Some(&path)).expect("a file: previous digest loads");
+    assert!(old_secret_authenticates(&startup.config));
+
+    crate::gateway::test_helpers::write_owner_only(&file, format!("{}\n", digest_of("k-other")))
+        .expect("rotate the file");
+    let reloaded = Config::load_evaluated(Some(&path)).expect("reload");
+    assert_eq!(
+        reloaded.overlay.rotated_secret_files(&startup.overlay),
+        vec![format!("file:{}", file.display())],
+        "a changed previous-digest file is seen as key_sha256's would be"
+    );
+}
+
+#[test]
+fn previous_digest_keychain_reference_authenticates() {
+    use crate::config::keychain::{FakeKeychain, with_test_keychain};
+    let fake = std::sync::Arc::new(FakeKeychain::default());
+    fake.insert("gw.previous", digest_of(OLD).as_bytes());
+    let (_dir, loaded) = with_test_keychain(fake, || load(&rotated("keychain:gw.previous"), None));
+    assert!(old_secret_authenticates(
+        &loaded.expect("a keychain: previous digest loads")
+    ));
+}
+
+#[test]
+fn unresolvable_previous_digest_reference_is_refused_by_field() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let mut yaml = String::from("auth:\n  enabled: true\n  api_keys:\n");
+    yaml.push_str(&rotated("env:E4_UNSET_PREVIOUS_VAR"));
+    writeln!(
+        yaml,
+        "security:\n  transparency_log:\n    enabled: true\n    path: {}",
+        quoted(&dir.path().join("audit.jsonl"))
+    )
+    .expect("String write");
+    let path = dir.path().join("config.yaml");
+    crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("config file");
+    let message = Config::load(Some(&path))
+        .err()
+        .expect("an unresolvable previous digest must be refused")
+        .to_string();
+    assert!(
+        message.contains("auth.api_keys['ops'].previous_key_sha256"),
+        "{message}"
+    );
+}
+
+#[test]
+fn malformed_previous_digest_is_refused_without_its_value() {
+    let bad = "sha256:not-a-digest-value";
+    let env = format!("{VAR}={bad}\n");
+    let (_dir, loaded) = load(&rotated(&format!("env:{VAR}")), Some(&env));
+    let message = validation_error(loaded, "malformed previous digest");
+    assert!(message.contains("previous_key_sha256"), "{message}");
+    assert!(
+        !message.contains(bad),
+        "the variable's value leaked: {message}"
+    );
+}
