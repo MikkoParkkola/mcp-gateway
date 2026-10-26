@@ -401,10 +401,19 @@ function showSignIn() {
   document.getElementById('signin-key').focus();
 }
 
+let signingIn = false;
+
+/**
+ * Check a typed key on its own and keep it only if it signs in. The check
+ * leaves cookies off the request (credentials: 'omit'), so an existing
+ * session cookie can never make a wrong key look accepted.
+ */
 async function signIn(ev) {
   ev.preventDefault();
+  if (signingIn) return;
   const input = document.getElementById('signin-key');
   const error = document.querySelector('.signin-error');
+  const button = document.querySelector('#signin button[type="submit"]');
   const key = input.value.trim();
   error.hidden = true;
   if (!key) {
@@ -412,27 +421,33 @@ async function signIn(ev) {
     error.hidden = false;
     return;
   }
-  bearer = key;
-  let ok = false;
+  signingIn = true;
+  button.disabled = true;
+  let auth = null;
+  let message = '';
   try {
-    const { auth } = await api('/ui/api/status');
-    ok = Boolean(auth?.signed_in);
+    const reply = await fetch('/ui/api/status', { credentials: 'omit', headers: { Authorization: `Bearer ${key}` } });
+    if (reply.ok) auth = (await reply.json())?.auth ?? null;
+    else if (reply.status !== 401 && reply.status !== 403) message = 'Could not reach the gateway. Try again.';
   } catch {
-    ok = false;
+    message = 'Could not reach the gateway. Try again.';
+  } finally {
+    signingIn = false;
+    button.disabled = false;
   }
-  if (!ok) {
-    bearer = null;
-    error.textContent = 'That key was not accepted.';
+  if (!auth?.signed_in) {
+    error.textContent = message || 'That key was not accepted.';
     error.hidden = false;
     input.select();
     return;
   }
+  bearer = key;
   input.value = '';
   document.getElementById('signin').hidden = true;
   document.body.classList.remove('signed-out');
+  document.querySelector('.top .who').textContent = auth.admin ? 'Signed in · admin' : 'Signed in';
   render();
   loadCounts();
-  loadWho();
   document.getElementById('content').focus({ preventScroll: true });
 }
 

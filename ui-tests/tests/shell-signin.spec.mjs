@@ -97,3 +97,70 @@ for (const width of WIDTHS) {
     await expect(page.locator('#signin a[href="/dashboard/handoff"]')).toBeFocused();
   });
 }
+
+test('S6 with a cookie session already present, a wrong key is still refused and not kept', async ({ page, context, baseURL }) => {
+  const auths = [];
+  await page.route('**/ui/api/status', (route) => {
+    const req = route.request();
+    const auth = req.headers().authorization ?? '';
+    const cookie = req.headers().cookie ?? '';
+    auths.push(auth);
+    // The worst case: a server that falls back to the cookie session when
+    // the bearer is not valid. The shell must check a key on its own.
+    const signedIn = auth === `Bearer ${KEY}` || cookie.includes('session=fixture');
+    return route.fulfill({ json: { auth: { enabled: true, signed_in: signedIn, admin: signedIn } } });
+  });
+  await page.goto('/ui/overview/status');
+  await expect(page.locator('#signin')).toBeVisible();
+  // The link or the handoff completes in another tab: the cookie arrives.
+  await context.addCookies([{ name: 'session', value: 'fixture', url: baseURL }]);
+  await page.locator('#signin-key').fill('mcpg_wrong');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.signin-error')).toHaveText('That key was not accepted.');
+  await expect(page.locator('#signin')).toBeVisible();
+  // No later call carries the refused key.
+  const count = auths.length;
+  await page.evaluate(() => fetch('/ui/api/status', { credentials: 'same-origin' }));
+  await page.evaluate(async () => (await import(document.querySelector('script[type="module"][src^="/ui/assets/"]').src)).api('/ui/api/status').catch(() => null));
+  expect(auths.slice(count).every((a) => a === '')).toBe(true);
+  // A valid key still works with the cookie present, sent on its own.
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#signin')).toBeHidden();
+});
+
+test('S7 a network failure while checking the key says the gateway could not be reached', async ({ page }) => {
+  await page.route('**/ui/api/status', (route) => {
+    if (route.request().headers().authorization) return route.abort('connectionfailed');
+    return route.fulfill({ json: { auth: { enabled: true, signed_in: false, admin: false } } });
+  });
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.signin-error')).toHaveText('Could not reach the gateway. Try again.');
+  await expect(page.locator('#signin-key')).toHaveValue(KEY);
+});
+
+test('S8 a second submit while the key is being checked sends no second check', async ({ page }) => {
+  let checks = 0;
+  let release;
+  const held = new Promise((ok) => { release = ok; });
+  await page.route('**/ui/api/status', async (route) => {
+    const auth = route.request().headers().authorization ?? '';
+    if (auth) {
+      checks++;
+      await held;
+    }
+    return route.fulfill({ json: { auth: { enabled: true, signed_in: auth === `Bearer ${KEY}`, admin: false } } });
+  });
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  const button = page.locator('#signin button[type="submit"]');
+  await expect(button).toBeDisabled();
+  await page.keyboard.press('Enter');
+  await page.evaluate(() => document.getElementById('signin-form').requestSubmit());
+  release();
+  await expect(page.locator('#signin')).toBeHidden();
+  expect(checks).toBe(1);
+});
