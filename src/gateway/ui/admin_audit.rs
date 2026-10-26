@@ -119,7 +119,7 @@ async fn admin_action_layer(
 /// The layer's 503 "withheld" answer when the append fails.
 pub(super) fn record_admin_action(
     state: &AppState,
-    surface: &str,
+    surface: &'static str,
     client: Option<&AuthenticatedClient>,
     identity: Option<&VerifiedIdentity>,
     fields: serde_json::Map<String, serde_json::Value>,
