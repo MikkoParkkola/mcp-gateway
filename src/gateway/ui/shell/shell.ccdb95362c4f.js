@@ -91,6 +91,8 @@ export function state(kind, { title, body, action } = {}) {
 // ---------------------------------------------------------------- api
 
 let bearer = null;
+/** Counts sign-ins; an answer to a request started before the latest one is stale. */
+let authEpoch = 0;
 
 /** An error from /ui/api with its HTTP status. */
 export class ApiError extends Error {
@@ -104,8 +106,10 @@ export class ApiError extends Error {
 export async function api(path, init = {}) {
   const headers = new Headers(init.headers);
   if (bearer) headers.set('Authorization', `Bearer ${bearer}`);
+  const epoch = authEpoch;
   const reply = await fetch(path, { credentials: 'same-origin', ...init, headers });
-  if (reply.status === 401) showSignIn();
+  // A 401 to a request sent before the latest sign-in says nothing about now.
+  if (reply.status === 401 && epoch === authEpoch) showSignIn();
   if (!reply.ok) throw new ApiError(reply.status, path);
   return reply.status === 204 ? null : reply.json();
 }
@@ -132,6 +136,7 @@ let paletteEl = null;
 /** Open the palette. It finds pages, actions and settings and opens them on their tab; nothing runs from it. */
 export function openPalette() {
   if (paletteEl) return; // also while a closing palette's cleanup is pending
+  if (document.body.classList.contains('signed-out')) return;
   const opener = document.activeElement;
   const input = el('input', { type: 'text', role: 'combobox', 'aria-expanded': 'true', 'aria-controls': 'palette-list', 'aria-autocomplete': 'list', 'aria-label': 'Go to anything', placeholder: 'Go to anything', autocomplete: 'off', spellcheck: 'false' });
   const list = el('div', { id: 'palette-list', role: 'listbox', 'aria-label': 'Results' });
@@ -371,8 +376,10 @@ async function loadCounts() {
 
 /** Read who is signed in; when auth is on and nobody is, ask for sign-in. */
 async function loadWho() {
+  const epoch = authEpoch;
   try {
     const { auth } = await api('/ui/api/status');
+    if (epoch !== authEpoch) return true; // answered for a session that has since signed in
     if (auth?.enabled && !auth.signed_in) {
       showSignIn();
       return false;
@@ -395,6 +402,7 @@ async function loadWho() {
 function showSignIn() {
   if (document.body.classList.contains('signed-out')) return;
   closeMenu();
+  paletteEl?.close(); // a modal palette would keep the key field inert
   document.body.classList.add('signed-out');
   document.getElementById('signin').hidden = false;
   document.querySelector('.signin-host').textContent = location.host;
@@ -442,6 +450,7 @@ async function signIn(ev) {
     return;
   }
   bearer = key;
+  authEpoch++;
   input.value = '';
   document.getElementById('signin').hidden = true;
   document.body.classList.remove('signed-out');

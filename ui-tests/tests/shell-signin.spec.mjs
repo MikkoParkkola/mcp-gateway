@@ -164,3 +164,53 @@ test('S8 a second submit while the key is being checked sends no second check', 
   await expect(page.locator('#signin')).toBeHidden();
   expect(checks).toBe(1);
 });
+
+test('S9 a 401 to a request sent before sign-in does not reopen the sign-in view', async ({ page }) => {
+  let release;
+  const held = new Promise((ok) => { release = ok; });
+  await gate(page);
+  // Access › Status reads this probe; hold its anonymous answer until after sign-in.
+  await page.route('**/ui/api/forbidden-probe', async (route) => {
+    if (!route.request().headers().authorization) {
+      await held;
+      return route.fulfill({ status: 401, json: {} });
+    }
+    return route.fulfill({ json: {} });
+  });
+  await withFixturePages(page);
+  await page.goto('/ui/access/status');
+  await expect(page.locator('#signin')).toBeVisible();
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#signin')).toBeHidden();
+  release();
+  await page.waitForTimeout(300);
+  await expect(page.locator('#signin')).toBeHidden();
+});
+
+test('S10 sign-in closes an open palette, and the palette stays shut while signed out', async ({ page }) => {
+  await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: false, signed_in: false, admin: false } } }));
+  await page.route('**/ui/api/probe-401', (r) => r.fulfill({ status: 401, json: {} }));
+  // Auth off at first, so the shell renders and the palette can open.
+  await page.goto('/ui/overview/status');
+  await page.locator('#content [data-rendered]').waitFor();
+  await page.keyboard.press('Control+KeyK');
+  await expect(page.locator('dialog.palette')).toBeVisible();
+  // Something answers 401 now: sign-in takes over and the palette goes.
+  await page.evaluate(async () => (await import(document.querySelector('script[type="module"][src^="/ui/assets/"]').src)).api('/ui/api/probe-401').catch(() => null));
+  await expect(page.locator('#signin')).toBeVisible();
+  await expect(page.locator('dialog.palette')).toHaveCount(0);
+  await page.keyboard.press('Control+KeyK');
+  await expect(page.locator('dialog.palette')).toHaveCount(0);
+  await expect(page.locator('#signin-key')).toBeFocused();
+});
+
+test.describe('sign-in on a touch screen', () => {
+  test.use({ isMobile: true, hasTouch: true, viewport: { width: 390, height: 844 } });
+  test('S11 the sign-in button is at least 44 px tall', async ({ page }) => {
+    await gate(page);
+    await page.goto('/ui/overview/status');
+    const h = await page.locator('#signin button[type="submit"]').evaluate((b) => b.getBoundingClientRect().height);
+    expect(h).toBeGreaterThanOrEqual(44);
+  });
+});

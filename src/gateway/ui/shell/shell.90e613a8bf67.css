@@ -842,6 +842,7 @@ body.signed-out > .side, body.signed-out > .main, body.signed-out > .skip { disp
 @media (pointer: coarse) {
   .stn, .tabs a, .skip, .lnk, button { min-height: var(--size-touch); min-width: var(--size-touch); display: inline-flex; align-items: center; }
   .palette-option { min-height: var(--size-touch); align-items: center; }
+  .signin .btn { min-height: var(--size-touch); }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
