@@ -65,7 +65,12 @@ pub struct Started {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Isolation {
     pub os: &'static str,
+    /// Read-only paths. Anything under `hidden` is empty inside even where
+    /// it lies below one of these.
     pub readable: Vec<String>,
+    /// Paths covered by an empty read-only mount: system secrets and the
+    /// gateway's own state, config and data.
+    pub hidden: Vec<String>,
     pub writable: Vec<String>,
     pub network: Network,
     pub cleanup: &'static str,
@@ -89,7 +94,12 @@ impl Isolation {
                 .chain(&plan.bound_back)
                 .cloned()
                 .collect(),
-            writable: vec![linux::plan::HOME.to_owned(), "/tmp".to_owned()],
+            hidden: plan.masked.iter().chain(&plan.hidden).cloned().collect(),
+            // The fresh home and /tmp, the two writable devices and the PID
+            // namespace's own /proc: the mounts the helper leaves writable.
+            writable: [linux::plan::HOME, "/tmp", "/dev/null", "/dev/zero", "/proc"]
+                .map(ToOwned::to_owned)
+                .into(),
             network: Network {
                 fetch: None,
                 run: "none",

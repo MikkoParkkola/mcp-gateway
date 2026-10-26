@@ -38,9 +38,13 @@ pub(crate) struct Plan {
     /// Host paths bound read-only at the same path in the new root. A host
     /// symlink is recreated as a symlink, so merged-`/usr` hosts keep `/bin`.
     pub(crate) read_only: Vec<String>,
-    /// Paths covered by an empty read-only tmpfs (directories) or an empty
-    /// read-only file (files) once the binds are in place.
+    /// System paths covered by an empty read-only tmpfs (directories) or an
+    /// empty read-only file (files) once the binds are in place; the
+    /// interpreter's bind-backs are restored under them.
     pub(crate) masked: Vec<String>,
+    /// The gateway's own state, config and data paths, covered the same way
+    /// after the system masks and their bind-backs, and never bound back.
+    pub(crate) hidden: Vec<String>,
     /// Paths bound back read-only under a mask (an interpreter under
     /// `/usr/local`).
     pub(crate) bound_back: Vec<String>,

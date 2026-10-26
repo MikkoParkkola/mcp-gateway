@@ -64,7 +64,12 @@ pub(super) fn build_root(plan: &Plan) -> Step {
         bind_read_only(Path::new(path))?;
     }
     for path in &plan.masked {
-        mask(plan, Path::new(path))?;
+        mask(plan, Path::new(path), BindBacks::Restore)?;
+    }
+    // Last, and with nothing bound back: a gateway path covers whatever lies
+    // beneath it, an interpreter bind-back included.
+    for path in &plan.hidden {
+        mask(plan, Path::new(path), BindBacks::None)?;
     }
     for (device, writable) in DEVICES {
         bind_device(Path::new(device), writable)?;
@@ -137,7 +142,16 @@ fn bind_read_only(path: &Path) -> Step {
 
 /// Cover `path` with an empty read-only tmpfs (a directory) or the empty file
 /// (a file), binding back any plan path that lies under it first.
-fn mask(plan: &Plan, path: &Path) -> Step {
+/// Whether a mask restores the interpreter's bind-backs beneath it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BindBacks {
+    /// A system mask (`/usr/local`): the interpreter's directories return.
+    Restore,
+    /// A gateway path: nothing beneath it returns.
+    None,
+}
+
+fn mask(plan: &Plan, path: &Path, bind_backs: BindBacks) -> Step {
     let target = staged(&path.to_string_lossy());
     match fs::symlink_metadata(&target) {
         // Nothing to hide: the path is not inside any bind.
@@ -167,7 +181,7 @@ fn mask(plan: &Plan, path: &Path) -> Step {
         .bound_back
         .iter()
         .map(Path::new)
-        .filter(|b| b.starts_with(path))
+        .filter(|b| bind_backs == BindBacks::Restore && b.starts_with(path))
     {
         bind_read_only(back)?;
     }
@@ -243,6 +257,7 @@ fn verify(plan: &Plan) -> Step {
         .read_only
         .iter()
         .chain(&plan.masked)
+        .chain(&plan.hidden)
         .chain(&plan.bound_back)
         .map(|p| staged(p))
         .collect();
@@ -352,6 +367,7 @@ fn parse_mountinfo(text: &str) -> Vec<Mount> {
                         "noatime" => MountFlags::NOATIME,
                         "nodiratime" => MountFlags::NODIRATIME,
                         "relatime" => MountFlags::RELATIME,
+                        "strictatime" => MountFlags::STRICTATIME,
                         _ => MountFlags::empty(),
                     }
                 });

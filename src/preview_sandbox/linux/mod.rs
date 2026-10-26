@@ -129,8 +129,10 @@ fn build_plan(target: &Target, protected: &[PathBuf]) -> Result<Plan, Refusal> {
     let program = resolve(&target.program)?;
     let mut read_only: Vec<String> = READ_ONLY.iter().map(ToString::to_string).collect();
     read_only.extend(top_level_libs());
-    let mut masked: Vec<String> = MASKED.iter().map(ToString::to_string).collect();
+    let masked: Vec<String> = MASKED.iter().map(ToString::to_string).collect();
+    let mut hidden = Vec::new();
     let mut bound_back = Vec::new();
+    let homes = home_roots();
     // The run phase's PATH: the interpreter's directories, then the system's.
     let mut path_dirs = Vec::new();
     for dir in interpreter_dirs(&program) {
@@ -139,6 +141,12 @@ fn build_plan(target: &Target, protected: &[PathBuf]) -> Result<Plan, Refusal> {
         if Path::new(&dir).starts_with(mounts::STAGE) {
             return Err(Refusal::Step(format!(
                 "placing {dir} (a program under /tmp cannot be bound)"
+            )));
+        }
+        if let Some(home) = covered_home(Path::new(&dir), &homes) {
+            return Err(Refusal::Step(format!(
+                "placing {dir} (binding it would expose {})",
+                home.display()
             )));
         }
         let masked_system: Vec<String> = MASKED.iter().map(ToString::to_string).collect();
@@ -160,15 +168,16 @@ fn build_plan(target: &Target, protected: &[PathBuf]) -> Result<Plan, Refusal> {
         .flatten()
         .chain(protected.iter().cloned())
     {
-        // Masked where it is named and where it really is: a state directory
+        // Hidden where it is named and where it really is: a state directory
         // that is a symlink into a bound prefix (`/usr/...`) would otherwise
-        // stay readable at its real path.
+        // stay readable at its real path. Hidden paths never bind anything
+        // back, so they cover any interpreter bind-back beneath them.
         if let Ok(real) = fs::canonicalize(&path)
             && real != path
         {
-            masked.push(utf8(&real)?);
+            hidden.push(utf8(&real)?);
         }
-        masked.push(utf8(&path)?);
+        hidden.push(utf8(&path)?);
     }
 
     for system in ["/usr/bin", "/bin"] {
@@ -194,6 +203,7 @@ fn build_plan(target: &Target, protected: &[PathBuf]) -> Result<Plan, Refusal> {
         host: host_namespaces()?,
         read_only,
         masked,
+        hidden,
         bound_back,
         limits: plan::limits(user_process_count() + 256),
         env,
@@ -247,6 +257,25 @@ fn interpreter_dirs(program: &Path) -> Vec<PathBuf> {
         }
     }
     dirs
+}
+
+/// Where homes live: the gateway user's own, and the system's home roots.
+fn home_roots() -> Vec<PathBuf> {
+    let mut homes = vec![PathBuf::from("/home"), PathBuf::from("/root")];
+    if let Some(home) = crate::home_dir::home_dir() {
+        homes.push(fs::canonicalize(&home).unwrap_or(home));
+    }
+    homes
+}
+
+/// The home that binding `dir` would expose: `dir` is `/`, a home, or an
+/// ancestor of one. An interpreter's own directory inside a home (an NVM
+/// `bin`) is fine; the home around it is not.
+fn covered_home<'a>(dir: &Path, homes: &'a [PathBuf]) -> Option<&'a Path> {
+    homes
+        .iter()
+        .map(PathBuf::as_path)
+        .find(|home| home.starts_with(dir))
 }
 
 /// `/lib`, `/lib64`, `/lib32`, `/libx32`, whichever exist.
@@ -351,11 +380,13 @@ fn classify_with(stderr: &str, host: &HostFacts) -> Refusal {
     if host.max_user_namespaces.as_deref() == Some("0") {
         return Refusal::UserNamespacesDisabled;
     }
-    if apparmor {
-        return Refusal::AppArmorRestricted;
-    }
+    // A container first: its sysctls are the host's, but its seccomp denial
+    // is what refused, and no AppArmor profile lifts that.
     if host.in_container {
         return Refusal::Container;
+    }
+    if apparmor {
+        return Refusal::AppArmorRestricted;
     }
     Refusal::Step(format!("starting the namespaces ({})", stderr.trim()))
 }
@@ -412,6 +443,18 @@ mod tests {
         assert!(refusal.to_string().contains("container"));
     }
 
+    /// An Ubuntu 24.04 container reports the host's AppArmor sysctl; the fix
+    /// it needs is to preview from a host install, not the profile.
+    #[test]
+    fn a_container_on_an_apparmor_host_says_container() {
+        let host = HostFacts {
+            apparmor_restricts_userns: Some("1".into()),
+            in_container: true,
+            ..HostFacts::default()
+        };
+        assert_eq!(classify_with(UID_MAP_DENIED, &host), Refusal::Container);
+    }
+
     #[test]
     fn a_helper_refusal_names_its_step_on_any_host() {
         let host = HostFacts {
@@ -449,6 +492,22 @@ mod tests {
             refusal,
             Refusal::Step("starting the namespaces (unshare: a new message)".into())
         );
+    }
+
+    #[test]
+    fn a_directory_that_holds_a_home_is_never_bound() {
+        let homes = [PathBuf::from("/home"), PathBuf::from("/srv/users/ann")];
+        for dir in ["/", "/home", "/srv", "/srv/users", "/srv/users/ann"] {
+            assert!(covered_home(Path::new(dir), &homes).is_some(), "{dir}");
+        }
+        // An interpreter directory inside a home, or beside one, is fine.
+        for dir in [
+            "/srv/users/ann/.nvm/versions/node/v22/bin",
+            "/usr/bin",
+            "/opt/node/bin",
+        ] {
+            assert!(covered_home(Path::new(dir), &homes).is_none(), "{dir}");
+        }
     }
 
     #[test]

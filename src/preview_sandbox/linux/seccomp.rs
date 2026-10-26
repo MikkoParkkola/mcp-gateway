@@ -106,6 +106,16 @@ pub(crate) fn programs() -> Result<[BpfProgram; 2], seccompiler::BackendError> {
         })
         .collect::<Result<Vec<_>, _>>()?;
     rules.insert(libc::SYS_clone, clone_rules);
+    // vsock reaches the hypervisor's host, which a network namespace does not
+    // confine, so a socket in that family is refused outright.
+    let vsock = SeccompCondition::new(
+        0,
+        SeccompCmpArgLen::Dword,
+        SeccompCmpOp::Eq,
+        libc::AF_VSOCK.cast_unsigned().into(),
+    )
+    .and_then(|condition| SeccompRule::new(vec![condition]))?;
+    rules.insert(libc::SYS_socket, vec![vsock]);
     let deny = SeccompFilter::new(
         rules,
         SeccompAction::Allow,
