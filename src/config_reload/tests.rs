@@ -689,6 +689,7 @@ fn test_reload_context(config_path: &std::path::Path) -> ReloadContext {
     .expect("the registry pairs with the config")
 }
 
+mod applied_inputs;
 mod env_files;
 mod env_secrets;
 mod env_support;
