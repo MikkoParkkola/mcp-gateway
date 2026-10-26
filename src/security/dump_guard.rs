@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The core-dump guard a passthrough token lease requires. A lease holds a subscriber's own backend token in memory; a core dump
-//! or a same-uid ptrace would copy it out. Before any lease exists the process
+//! The core-dump guard a passthrough token lease requires. A lease holds a
+//! subscriber's own backend token in memory; a core dump or a same-uid ptrace
+//! would copy it out. Before any lease exists the process
 //! sets its core-file limit to zero (every Unix rustix covers) and, on Linux
 //! and Android, marks itself not dumpable. If either cannot be applied, no
 //! lease is created: the caller refuses with `core_dump_guard_unavailable`.
@@ -12,8 +13,16 @@ use std::sync::OnceLock;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DumpGuard {
     /// Both calls this platform has were applied.
+    #[cfg_attr(
+        not(unix),
+        allow(dead_code, reason = "a platform with no guard call applies none")
+    )]
     Applied,
     /// A call failed; the value names it (`setrlimit_core`, `prctl_dumpable`).
+    #[cfg_attr(
+        not(unix),
+        allow(dead_code, reason = "a platform with no guard call fails none")
+    )]
     Failed(&'static str),
     /// This platform has no call that prevents core dumps.
     #[cfg_attr(

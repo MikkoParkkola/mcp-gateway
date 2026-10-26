@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A burial's governance record survives an eviction by the caps. Split from `worker_tests.rs` (file-size ceiling).
+//! A burial's governance record survives an eviction by the caps. Split from `worker_tests.rs`
+//! (file-size ceiling).
 
 use super::*;
 

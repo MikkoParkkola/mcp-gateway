@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Which identity a backend's events are observed under. A per-user backend's listener observes as one
-//! subscriber; the key it observes under, `obs`, is derived wherever it is
-//! needed from the row's stored identity and the live config, never stored.
-//! The row keeps `ObsBasis`, the non-secret config the key was derived from,
-//! so a reload or restart that would change it is seen and the row revoked.
+//! Which identity a backend's events are observed under. A per-user backend's listener observes as
+//! one subscriber; the key it observes under, `obs`, is derived wherever it is needed from the
+//! row's stored identity and the live config, never stored. The row keeps `ObsBasis`, the
+//! non-secret config the key was derived from, so a reload or restart that would change it is seen
+//! and the row revoked.
 
 use serde::{Deserialize, Serialize};
 
