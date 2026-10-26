@@ -199,23 +199,23 @@ fn daily_usd(map: &DashMap<String, DailyAccumulator>, today: Option<u64>) -> Has
 }
 
 /// A saved row's `usd` as micro-USD, or 0 with a warning for a value no run
-/// could have saved: negative, NaN, infinite, or too large for a micro-USD
-/// count. Such a value is corruption; saturating it would make a cap that
-/// refuses every call until the day rolls, so the row restores as zero.
-fn saved_micro(kind: &str, row: &str, usd: f64) -> u64 {
-    #[allow(clippy::cast_precision_loss)]
-    let ceiling = u64::MAX as f64;
-    let micro = usd * 1_000_000.0;
-    if usd.is_finite() && usd >= 0.0 && micro < ceiling {
+/// could have saved: negative, NaN, infinite, or above what a saved
+/// micro-USD count can reach. Such a value is corruption; saturating it would
+/// make a cap that refuses every call until the day rolls, so the row
+/// restores as zero. The ceiling is the save side's own conversion of
+/// `u64::MAX`, so a counter that saturated legitimately restores saturated
+/// (its USD value times 1e6 rounds to 2^64; the cast saturates it back).
+fn saved_micro(kind: &str, row: &str, usd_value: f64) -> u64 {
+    if usd_value.is_finite() && usd_value >= 0.0 && usd_value <= usd(u64::MAX) {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        return micro.round() as u64;
+        return (usd_value * 1_000_000.0).round() as u64;
     }
     tracing::warn!(
         target: "mcp_gateway::cost_accounting::enforcer",
         file = "costs.json",
         kind,
         row,
-        usd,
+        usd = usd_value,
         "Saved daily total is out of range; restoring it as zero"
     );
     0

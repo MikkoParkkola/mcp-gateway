@@ -618,3 +618,35 @@ fn a_saved_value_out_of_range_restores_nothing() {
     assert!(snap.tool_overflow_usd.abs() < 1e-9, "{snap:?}");
     assert!(snap.key_overflow_usd.abs() < 1e-9, "{snap:?}");
 }
+
+/// A counter that saturated saves as `usd(u64::MAX)`; that value restores
+/// saturated, and the next value above it is out of range.
+#[test]
+fn a_saturated_saved_total_restores_saturated() {
+    use super::super::persistence::{PersistedCosts, ToolTotal};
+    let saved_at = 1_791_500_000;
+    let mut saved = PersistedCosts {
+        saved_at,
+        ..PersistedCosts::default()
+    };
+    for (tool, total_usd) in [("max", usd(u64::MAX)), ("past", usd(u64::MAX).next_up())] {
+        let total = ToolTotal {
+            call_count: 1,
+            total_cost_usd: total_usd,
+            avg_cost_usd: total_usd,
+        };
+        saved.tool_totals.insert(tool.to_owned(), total);
+    }
+    let _same_day = crate::clock::test_clock::at_secs(saved_at + 60);
+    let e = enforcer_with(true, None, &[], &[], &[]);
+    e.restore(&saved);
+    let snap = e.snapshot();
+    let max = usd(u64::MAX).to_bits();
+    assert_eq!(
+        snap.tool_daily.get("max").map(|v| v.to_bits()),
+        Some(max),
+        "{snap:?}"
+    );
+    assert!(!snap.tool_daily.contains_key("past"), "{snap:?}");
+    assert_eq!(snap.global_daily_usd.to_bits(), max, "{snap:?}");
+}
