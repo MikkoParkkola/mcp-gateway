@@ -228,3 +228,32 @@ fn b18_the_real_secret_service_round_trips_then_refuses_locked() {
         Err(StoreError::Unavailable(_))
     ));
 }
+
+#[test]
+fn b16_delete_refuses_when_any_match_is_locked_or_the_collection_is() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mixed = "([objectpath '/c/login/7'], [objectpath '/c/work/3'])";
+    let mixed_store = keychain(dir.path(), UNLOCKED, mixed, "exit 0", two_seconds());
+    assert!(matches!(
+        mixed_store.delete(NAME),
+        Err(StoreError::Unavailable(_))
+    ));
+    let locked = tempfile::tempdir().expect("tempdir");
+    let locked_store = keychain(locked.path(), LOCKED, FOUND, "exit 0", two_seconds());
+    assert!(matches!(
+        locked_store.delete(NAME),
+        Err(StoreError::Unavailable(_))
+    ));
+    for dir in [dir.path(), locked.path()] {
+        assert!(!calls(dir).contains("secret-tool"), "{}", calls(dir));
+    }
+}
+
+#[test]
+fn b9_a_probe_that_times_out_is_unavailable_not_a_pending_write() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let gdbus = stub(dir.path(), "gdbus", "exec sleep 30");
+    let secret_tool = stub(dir.path(), "secret-tool", "exit 0");
+    let keychain = LinuxKeychain::with_programs(gdbus, secret_tool, Duration::from_millis(300));
+    assert!(matches!(keychain.probe(), Err(StoreError::Unavailable(_))));
+}

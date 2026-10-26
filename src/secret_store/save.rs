@@ -246,7 +246,12 @@ impl Written {
                 }
             }
         }
-        kept.extend(self.timed_out.iter().cloned());
+        for name in &self.timed_out {
+            // The refusal carries no name; this line says which entry to
+            // look for in the unused listing if the late call lands.
+            tracing::warn!(entry = %name, "a timed-out secret entry is kept and listed as unused");
+            kept.push(name.clone());
+        }
         // Gone: deleted durably here, never created and not there, or someone
         // else's. A timed-out name is never gone.
         let gone = |name: &String| {

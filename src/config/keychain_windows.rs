@@ -58,15 +58,19 @@ impl SecretStore for WindowsKeychain {
         LIMIT
     }
 
-    /// A read of a name that never exists: "not found" means Credential
+    /// A lookup of a name that never exists: "not found" means Credential
     /// Manager answers for this logon session.
     fn probe(&self) -> Result<(), StoreError> {
-        match self.read(PROBE_NAME) {
-            Err(KeychainError::Missing) => Ok(()),
-            Ok(_) => Err(StoreError::Unavailable(
+        match self.exists(PROBE_NAME) {
+            Ok(false) => Ok(()),
+            Ok(true) => Err(StoreError::Unavailable(
                 "Credential Manager holds the probe's reserved name".into(),
             )),
-            Err(error) => Err(store_error(error)),
+            // A probe writes nothing, so its timeout is plain unavailability.
+            Err(StoreError::TimedOut) => Err(StoreError::Unavailable(
+                "Credential Manager did not answer in time".into(),
+            )),
+            Err(error) => Err(error),
         }
     }
 

@@ -142,8 +142,8 @@ impl SecretStore for LinuxKeychain {
     }
 
     fn probe(&self) -> Result<(), StoreError> {
-        self.secret_tool().map_err(store_error)?;
-        self.default_unlocked().map_err(store_error)
+        self.secret_tool().map_err(probe_error)?;
+        self.default_unlocked().map_err(probe_error)
     }
 
     fn exists(&self, name: &str) -> Result<bool, StoreError> {
@@ -176,7 +176,8 @@ impl SecretStore for LinuxKeychain {
     fn delete(&self, name: &str) -> Result<(), StoreError> {
         match self.search(name).map_err(store_error)? {
             (0, 0) => return Ok(()),
-            (0, _) => {
+            // Any locked match could make `clear` ask to unlock: refused.
+            (_, 1..) => {
                 return Err(StoreError::Unavailable(
                     "the entry is in a locked collection".into(),
                 ));
@@ -184,6 +185,8 @@ impl SecretStore for LinuxKeychain {
             _ => {}
         }
         let secret_tool = self.secret_tool().map_err(store_error)?;
+        // The same gate as every other spawn.
+        self.default_unlocked().map_err(store_error)?;
         let output =
             run(secret_tool, &["clear", "service", name], None, self.bound).map_err(store_error)?;
         // Durable means gone: the search, not the exit status, decides.
@@ -193,6 +196,17 @@ impl SecretStore for LinuxKeychain {
                 "secret-tool clear left the entry in place".into(),
             )),
         }
+    }
+}
+
+/// A probe error: a probe writes nothing, so its timeout is plain
+/// unavailability, never an entry that may still land.
+fn probe_error(error: KeychainError) -> StoreError {
+    match error {
+        KeychainError::Timeout => {
+            StoreError::Unavailable("the Secret Service did not answer in time".into())
+        }
+        other => store_error(other),
     }
 }
 
