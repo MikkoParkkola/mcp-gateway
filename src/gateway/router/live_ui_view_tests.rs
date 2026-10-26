@@ -178,3 +178,70 @@ async fn f5_the_ui_import_follows_ssrf_protection() {
     assert!(status.is_success(), "off after reload: {body}");
     assert_eq!(hits.load(Ordering::SeqCst), 2, "off after reload: fetched");
 }
+
+/// `GET uri` on the UI routes alone, with `generation` pinned by hand and no
+/// outer layer to replace it, as an admin client.
+async fn view_pinned(
+    state: &Arc<AppState>,
+    uri: &str,
+    generation: Arc<crate::config_reload::Generation>,
+) -> Value {
+    let request = Request::builder()
+        .uri(uri)
+        .extension(generation)
+        .extension(crate::gateway::auth::AuthenticatedClient {
+            admin: true,
+            ..crate::gateway::auth::anonymous_client()
+        })
+        .body(Body::empty())
+        .expect("request builds");
+    let response = crate::gateway::ui::api_router()
+        .with_state(Arc::clone(state))
+        .oneshot(request)
+        .await
+        .expect("the router is infallible");
+    assert!(response.status().is_success(), "{}", response.status());
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    serde_json::from_slice(&body).expect("json")
+}
+
+// F8: one response, one generation. The view and the control-plane snapshot
+// are served from the generation pinned on the request, here one that
+// differs from the published config in every field read; a field read from
+// the published config instead would show its value.
+#[tokio::test]
+async fn f8_a_response_reads_only_the_request_generation() {
+    let (state, _dir) = Box::pin(fixture()).await;
+    let published = state.live_config.get();
+    let mut pinned = (*published).clone();
+    pinned.security.sanitize_input = !published.security.sanitize_input;
+    pinned.security.ssrf_protection = !published.security.ssrf_protection;
+    pinned.environment = Some("pinned-only".to_string());
+    let pinned = Arc::new(crate::config_reload::LiveConfig::new(pinned).generation());
+
+    let v = view_pinned(&state, "/ui/api/config", Arc::clone(&pinned)).await;
+    assert_eq!(v["sanitize_input"], pinned.sanitize_input(), "{v}");
+    assert_eq!(v["ssrf_protection"], pinned.ssrf_protection(), "{v}");
+    assert_eq!(v["environment"], "pinned-only", "{v}");
+
+    let snap = view_pinned(&state, "/ui/api/control-plane", pinned.clone()).await;
+    let enforced = |id: &str| {
+        snap.pointer("/snapshot/policies")
+            .or_else(|| snap.pointer("/policies"))
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.iter().find(|p| p["policy_id"] == id))
+            .map(|p| p["enforced"].clone())
+    };
+    assert_eq!(
+        enforced("local:input_sanitization"),
+        Some(Value::Bool(pinned.sanitize_input())),
+        "{snap}"
+    );
+    assert_eq!(
+        enforced("local:ssrf_protection"),
+        Some(Value::Bool(pinned.ssrf_protection())),
+        "{snap}"
+    );
+}
