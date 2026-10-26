@@ -347,7 +347,7 @@ fn a_config_rewrite_keeps_secret_references_unresolved() {
     )
     .expect("write config");
 
-    let mut config = load_config_or_default(&path);
+    let mut config = load_existing_or_default(&path).expect("config loads");
     config.server.port = 9191;
     crate::gateway::test_helpers::write_config_fixture(&path, &config).expect("rewrite the config");
 
