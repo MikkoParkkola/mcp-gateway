@@ -201,7 +201,15 @@ pub(super) async fn preview_backend(
     if !is_admin(client.as_ref()) {
         return admin_auth_required().into_response();
     }
-    let principal = client.map(|c| c.name).unwrap_or_default();
+    // The credential, not the display name: two admin keys may share a name,
+    // and neither may spend the other's confirmation. A digest of it goes in
+    // the sealed token, never the stored principal itself.
+    let principal = client
+        .as_ref()
+        .and_then(|c| c.credential_principal())
+        .map_or_else(String::new, |p| {
+            crate::hashing::sha256_hex(p.storage_form().as_bytes())
+        });
     let add = request.add;
     if let Err(message) = validate_backend_name(&add.name) {
         return flat_error(StatusCode::UNPROCESSABLE_ENTITY, message).into_response();
