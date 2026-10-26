@@ -273,11 +273,36 @@ fn reachable_inside(path: &Path, shown: &dyn Fn(&Path) -> bool) -> Option<PathBu
             return None;
         }
         match fs::read_link(&here) {
-            Ok(next) => here = resolve(&here.parent().unwrap_or(Path::new("/")).join(next))?,
+            Ok(next) => {
+                // The kernel walks a link's target as written: a directory link
+                // on that walk must exist inside too, which is only certain
+                // when there is none, so the target must already be resolved.
+                let target = here.parent().unwrap_or(Path::new("/")).join(next);
+                here = resolve(&target)?;
+                if lexical(&target) != here {
+                    return None;
+                }
+            }
             Err(_) => return here.is_file().then_some(spelling),
         }
     }
     None
+}
+
+/// `path` with `.` and `..` applied to the text alone, as a walk with no
+/// links in it would resolve them.
+fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// What the sandbox binds for a program, by where its real file is.

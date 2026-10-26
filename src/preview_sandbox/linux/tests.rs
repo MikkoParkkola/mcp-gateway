@@ -333,6 +333,9 @@ fn an_alias_is_kept_only_while_every_link_is_shown() {
     // A later hop through a directory link the root does not show: the kernel
     // would walk `out/dir-hop`, which is absent inside, so nothing is kept.
     link("later-dir-link", "../out/dir-hop/real");
+    // Two links pointing at each other end at the hop ceiling, not a loop.
+    link("loop-a", "loop-b");
+    link("loop-b", "loop-a");
     std::os::unix::fs::symlink("../root/real", out.join("hop")).expect("hop");
     std::os::unix::fs::symlink(&root, out.join("dir-hop")).expect("dir hop");
     let shown = |p: &Path| p.starts_with(&root);
@@ -350,6 +353,7 @@ fn an_alias_is_kept_only_while_every_link_is_shown() {
         ("dangling", false),
         ("outside", false),
         ("later-dir-link", false),
+        ("loop-a", false),
     ] {
         assert_eq!(
             reachable_inside(&root.join(name), &shown),
