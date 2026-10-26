@@ -67,12 +67,13 @@ fn t6a_the_comment_strip_hides_nothing_that_is_fetched() {
     assert!(!strip_css_comments("a{} /* see https://fonts.test/ofl */ b{}").contains("https:"));
     // An address in a string or in url() stays, even beside a comment opener.
     for css in [
-        r#"a{background:url(https://off-origin.test/x.png)} /* note */"#,
-        r#"a{background:url(https://off-origin.test/*x*/.png)}"#,
+        r"a{background:url(https://off-origin.test/x.png)} /* note */",
+        r"a{background:url(https://off-origin.test/*x*/.png)}",
         r#"a{content:"/* https://off-origin.test */"}"#,
-        r#"a{content:'https://off-origin.test' /* trailing */}"#,
+        r"a{content:'https://off-origin.test' /* trailing */}",
         r#"a{background:URL("https://off-origin.test/a.png")}"#,
-        r#"a{content:"" /* https://off-origin.test"}"#,
+        // An escaped quote does not end the string, so this is all text.
+        r#"a{content:"\" /* https://off-origin.test"}"#,
     ] {
         assert!(strip_css_comments(css).contains("https:"), "{css}");
     }
