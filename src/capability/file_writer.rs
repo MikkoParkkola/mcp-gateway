@@ -142,37 +142,41 @@ fn pin_lines(text: &str) -> Vec<PinLine> {
 }
 
 /// The document's `sha256` as YAML reads it (lead ruling 2026-10-26: one
-/// total rule). A pin is absent only when the key is missing; anything else
-/// under it is a pin, and only a string of exactly 64 hex digits can verify.
+/// total rule). A pin is absent only when the key is known to be missing;
+/// anything else under it is a pin, and only a string of exactly 64 hex
+/// digits can verify.
 enum YamlPin {
-    /// No top-level `sha256` key.
+    /// No top-level key resolves to `sha256`.
     Absent,
-    /// A string of 64 hex digits: the pin to compare.
+    /// One `sha256` key whose value is a string of 64 hex digits.
     Value(String),
-    /// Anything else under the key (a number, a boolean, null, a list, a
-    /// map, a string of another length or not hex), or text that is not
-    /// YAML and mentions `sha256` at all (a duplicate key is not YAML
-    /// here). It can never verify.
+    /// A `sha256` key whose value cannot verify (a number, a boolean, null,
+    /// a list, a map, a tagged value, another length, not hex), or more than
+    /// one key resolving to `sha256`.
     Unreadable,
+    /// Not YAML: whether a key is missing cannot be known.
+    NotYaml,
 }
 
-/// The top-level `sha256` key the loader's field comes from, read without
-/// the capability schema, so a file whose schema is broken still has its pin
-/// judged.
+/// The top-level keys that resolve to `sha256`, tags stripped as the
+/// loader's scalar keys are, read without the capability schema so a file
+/// whose schema is broken still has its pin judged.
 fn yaml_pin(text: &str) -> YamlPin {
-    let Ok(doc) = crate::yaml::from_str::<crate::yaml::Value>(text) else {
-        // Text that is not YAML cannot have its key located safely (it may
-        // be indented, quoted, BOM-prefixed or an explicit `? sha256`), so
-        // any mention of the key fails closed.
-        return if text.contains("sha256") {
-            YamlPin::Unreadable
-        } else {
-            YamlPin::Absent
-        };
+    use crate::yaml::Value;
+    let Ok(doc) = crate::yaml::from_str::<Value>(text) else {
+        return YamlPin::NotYaml;
     };
-    match doc.get("sha256") {
-        None => YamlPin::Absent,
-        Some(value) => match value.as_str() {
+    let Value::Mapping(map) = doc.untag_ref() else {
+        return YamlPin::Absent;
+    };
+    let mut pins = map
+        .iter()
+        .filter(|(key, _)| key.untag_ref().as_str() == Some("sha256"))
+        .map(|(_, value)| value);
+    match (pins.next(), pins.next()) {
+        (None, _) => YamlPin::Absent,
+        (Some(_), Some(_)) => YamlPin::Unreadable,
+        (Some(value), None) => match value.as_str() {
             Some(pin) if pin.len() == 64 && pin.bytes().all(|b| b.is_ascii_hexdigit()) => {
                 YamlPin::Value(pin.to_string())
             }
@@ -186,14 +190,14 @@ fn yaml_pin(text: &str) -> YamlPin {
 fn loader_pin(text: &str) -> Option<String> {
     match yaml_pin(text) {
         YamlPin::Value(pin) => Some(pin),
-        YamlPin::Absent | YamlPin::Unreadable => None,
+        YamlPin::Absent | YamlPin::Unreadable | YamlPin::NotYaml => None,
     }
 }
 
 /// Whether the text carries a pin, by YAML or, for text that is not YAML, by
 /// a pin line.
 fn is_pinned(text: &str) -> bool {
-    !matches!(yaml_pin(text), YamlPin::Absent) || !pin_lines(text).is_empty()
+    matches!(yaml_pin(text), YamlPin::Value(_) | YamlPin::Unreadable) || !pin_lines(text).is_empty()
 }
 
 /// Whether a pin line carries text after a YAML line break other than `\n`
@@ -212,8 +216,9 @@ fn pin_broken(current: &str) -> bool {
     match yaml_pin(current) {
         YamlPin::Absent => false,
         YamlPin::Value(pin) => !pin.eq_ignore_ascii_case(&compute_capability_hash(current)),
-        // Nothing verified these bytes, so an edit never re-pins them.
-        YamlPin::Unreadable => true,
+        // Nothing verified these bytes, or nothing can say a pin is missing:
+        // an edit never re-pins them.
+        YamlPin::Unreadable | YamlPin::NotYaml => true,
     }
 }
 
@@ -398,7 +403,9 @@ fn final_bytes(
     match pins.as_slice() {
         // The loader sees a pin no `sha256:` line carries (a quoted key):
         // there is no line to rewrite, so nothing can be saved in place.
-        [] if !matches!(yaml_pin(&text), YamlPin::Absent) => {
+        // A pin the loader would see but no `sha256:` line carries. Text that
+        // is not YAML passes on, so validation answers it with its line.
+        [] if matches!(yaml_pin(&text), YamlPin::Value(_) | YamlPin::Unreadable) => {
             Err(Refused::PinAmbiguous { patch: patch() })
         }
         [] if was_pinned => Err(Refused::Unpin { patch: patch() }),

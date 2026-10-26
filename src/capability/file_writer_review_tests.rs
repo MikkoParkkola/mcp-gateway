@@ -285,6 +285,13 @@ fn unverifiable_pins() -> Vec<String> {
         format!("sha256: {}\n", "g".repeat(64)),
         format!("sha256: {good}\nsha256: {good}\n"),
         format!("\"sha256\": {good}\n\"sha256\": {good}\n"),
+        // Key spellings the loader resolves to `sha256`.
+        "!tag sha256: 0\n".into(),
+        "? sha256\n: 0\n".into(),
+        "\"sha\\x32\\x35\\x36\": 0\n".into(),
+        // Not YAML at all: nothing can say a pin is missing.
+        "{sha256: 0, sha256: 0}\n".into(),
+        "name: [unclosed\n".into(),
     ]
 }
 
