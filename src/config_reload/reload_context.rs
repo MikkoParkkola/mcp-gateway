@@ -30,6 +30,8 @@ pub(super) struct EvaluatedReload {
     pub(super) overlay: Arc<EnvOverlay>,
     /// Every `env:NAME` the config references, resolved or not.
     pub(super) secret_refs: std::collections::BTreeSet<String>,
+    /// What this evaluation read; digested when it is published.
+    pub(super) inputs: super::revision::RawInputs,
 }
 
 pub(super) fn load_config_patch(
@@ -51,6 +53,7 @@ pub(super) fn load_config_patch(
         patch,
         overlay: evaluated.overlay,
         secret_refs: evaluated.secret_refs,
+        inputs: evaluated.inputs,
     })
 }
 
@@ -522,6 +525,7 @@ impl ReloadContext {
             config: new_config,
             patch,
             overlay,
+            inputs,
             ..
         } = evaluated;
 
@@ -530,6 +534,8 @@ impl ReloadContext {
             // overlay is published even here — a resolver reading the old one
             // would serve a value the operator has already replaced.
             self.publish_overlay(overlay);
+            // The same rotation changes what the config was built from.
+            self.live_config.set_inputs(inputs);
             // No difference from the published snapshot does not mean nothing is
             // outstanding: a restart-only edit was published on an earlier
             // reload and the running process still has not applied it.
@@ -636,7 +642,7 @@ impl ReloadContext {
 
         // Published together: a resolver that read the new config against the
         // old overlay would resolve an `env:` reference the reload just changed.
-        self.live_config.set(new_config);
+        self.live_config.set_applied(new_config, inputs);
         self.publish_overlay(overlay);
         // Still under `lock_reload`, against the config just published.
         self.report_registered(&patch.registered_change(), &self.live_config.get());
