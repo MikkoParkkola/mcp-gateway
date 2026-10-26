@@ -638,3 +638,56 @@ fn an_unresolvable_or_empty_credential_or_adapter_secret_is_skipped_not_matched(
         .is_err()
     );
 }
+
+/// A config whose one key was rotated, with `previous` as its previous digest
+/// spec and a grace still running.
+fn rotated_key_config(previous: &str) -> crate::config::Config {
+    let mut config = crate::config::Config::default();
+    config.auth.api_keys.push(crate::config::ApiKeyConfig {
+        name: "owui-gateway-key".to_string(),
+        key_sha256: Some(crate::config::api_key_digest_spec(
+            secret_32('c').as_bytes(),
+        )),
+        previous_key_sha256: Some(previous.to_string()),
+        // Any instant: the inventory lists a previous digest, grace over or not.
+        previous_expires_at: Some(
+            chrono::DateTime::parse_from_rfc3339("2026-10-26T12:00:00Z")
+                .expect("fixed instant")
+                .with_timezone(&chrono::Utc),
+        ),
+        ..Default::default()
+    });
+    config
+}
+
+#[test]
+fn an_adapter_variable_shared_with_a_previous_digest_is_refused() {
+    // A previous digest is a live credential during its grace (ADR-022).
+    let config = rotated_key_config("env:SHARED_SECRET");
+    let error = validate_no_gateway_reference_alias(
+        &[adapter("desk", "SHARED_SECRET")],
+        &config.gateway_credentials(),
+    )
+    .expect_err("a previous digest's variable must not double as adapter signing material");
+    let credential = gateway_reuse_credential(&error, 0);
+    assert!(
+        credential.contains("previous_key_sha256"),
+        "refusal names the previous digest field, got {credential}"
+    );
+}
+
+#[test]
+fn an_adapter_secret_equal_to_a_previous_secret_is_refused_on_material() {
+    let adapter_secret = secret_32('p');
+    let previous = crate::config::api_key_digest_spec(adapter_secret.as_bytes());
+    let config = rotated_key_config(&previous);
+    let overlay = FakeOverlay::new(&[("OPENWEBUI_HMAC", adapter_secret.as_str())]);
+    let error = validate_no_gateway_material_reuse(
+        &[adapter("desk", "OPENWEBUI_HMAC")],
+        &overlay,
+        &config.gateway_credentials(),
+    )
+    .expect_err("the previous secret must not be an adapter key");
+    assert!(gateway_reuse_credential(&error, 0).contains("previous_key_sha256"));
+    assert_no_material_leaked(&error, &[adapter_secret.as_str()]);
+}

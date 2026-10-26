@@ -308,6 +308,7 @@ pub fn api_key(key: &str, rate_limit: u32, allowed: Option<Vec<String>>) -> ApiK
         denied_tools: None,
         admin: false,
         kind: mcp_gateway::config::ApiKeyKind::Shared,
+        ..Default::default()
     }
 }
 
