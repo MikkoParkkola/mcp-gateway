@@ -177,16 +177,28 @@ impl StreamableListenSession {
                 })),
             )
             .await?;
-        if answer.error.is_some() {
-            return Err(Error::Transport("listener initialize refused".to_owned()));
-        }
         // The server selects; its choice governs this session's
         // `MCP-Protocol-Version` from here on, as on a slot's handshake.
-        let selection = crate::protocol::Selectable::Legacy;
-        if let Some(selected) =
-            crate::protocol::checked_selection(answer.result.as_ref(), selection)?
-        {
-            *t.protocol_version.write() = Some(selected.to_string());
+        let selected = if answer.error.is_some() {
+            Err(Error::Transport("listener initialize refused".to_owned()))
+        } else {
+            crate::protocol::checked_selection(
+                answer.result.as_ref(),
+                crate::protocol::Selectable::Legacy,
+            )
+            .map(|s| s.map(str::to_owned))
+        };
+        match selected {
+            Ok(Some(version)) => *t.protocol_version.write() = Some(version),
+            Ok(None) => {}
+            Err(error) => {
+                // A refused handshake leaves no session to reuse: the next
+                // call handshakes again rather than speak on this one.
+                t.sessions
+                    .write()
+                    .remove(HttpTransport::bucket_key(Some(&self.bucket)));
+                return Err(error);
+            }
         }
         self.notify("notifications/initialized").await
     }

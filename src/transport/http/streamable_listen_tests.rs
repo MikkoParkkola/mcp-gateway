@@ -26,6 +26,11 @@ type Log = Arc<Mutex<Vec<Seen>>>;
 /// A stateful Streamable HTTP peer at `/mcp`: `initialize` answers JSON and
 /// mints session `s-1`; the GET is a held event stream.
 async fn peer() -> (String, Log) {
+    peer_answering(json!({})).await
+}
+
+/// [`peer`], answering every request with `result`.
+async fn peer_answering(result: Value) -> (String, Log) {
     let log: Log = Arc::default();
     let header =
         |h: &HeaderMap, name: &str| h.get(name).and_then(|v| v.to_str().ok()).map(str::to_owned);
@@ -58,13 +63,14 @@ async fn peer() -> (String, Log) {
         .post(
             move |headers: HeaderMap, axum::Json(frame): axum::Json<Value>| {
                 let log = Arc::clone(&post_log);
+                let result = result.clone();
                 async move {
                     let method = frame["method"].as_str().unwrap_or_default().to_owned();
                     log.lock().expect("log").push(seen(&method, &headers));
                     let Some(id) = frame.get("id") else {
                         return StatusCode::ACCEPTED.into_response();
                     };
-                    let answer = json!({"jsonrpc": "2.0", "id": id, "result": {}});
+                    let answer = json!({"jsonrpc": "2.0", "id": id, "result": result});
                     ([("mcp-session-id", "s-1")], axum::Json(answer)).into_response()
                 }
             },
@@ -198,4 +204,36 @@ async fn a_per_user_listener_on_an_sse_backend_is_legacy_and_sends_nothing_yet()
         "the SSE session"
     );
     assert!(log.lock().expect("log").is_empty(), "no probe on SSE");
+}
+
+/// A handshake whose selected version is refused leaves no session behind:
+/// the next call sends `initialize` again instead of speaking on the
+/// session that answer minted.
+#[tokio::test]
+async fn a_refused_version_selection_is_not_reused_by_the_next_call() {
+    let (url, log) = peer_answering(json!({"protocolVersion": "1999-01-01"})).await;
+    let t = transport(&url);
+    let (session, _) = t.per_user_session("b", lent()).await.expect("own session");
+    for _ in 0..2 {
+        assert!(
+            Arc::clone(&session)
+                .legacy_interest(LegacyPin::default(), "file:///a", true)
+                .await
+                .is_err(),
+            "a refused selection fails the call"
+        );
+    }
+    let seen = log.lock().expect("log").clone();
+    let methods: Vec<&str> = seen.iter().map(|s| s.0.as_str()).collect();
+    assert_eq!(
+        methods,
+        ["server/discover", "initialize", "initialize"],
+        "{seen:?}"
+    );
+    assert!(
+        !t.sessions
+            .read()
+            .contains_key(HttpTransport::bucket_key(Some("idp:p"))),
+        "no session kept"
+    );
 }
