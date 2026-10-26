@@ -238,15 +238,17 @@ impl crate::transport::Transport for Connected {
     }
 }
 
-/// O3d: rows are chosen on the full name, not the clipped one. Twenty-five
-/// names share their first 256 bytes; only the last by full name is up, so it
-/// is the one folded into `more`. A sort on the clipped name ties all 25 and
-/// keeps the registry's hash order, so it folds the up server only one run in
-/// 25 by chance.
+/// O3d: rows are chosen on the full name, not the clipped one. Thirty names
+/// share their first 256 bytes, so every shown name is the same clip; server
+/// `i` carries `i` tools, which identifies its row. The shown rows must be
+/// servers 0-23 in order, and the six folded ones (all up) must be 24-29. A
+/// sort on the clipped name ties all thirty and keeps the registry's hash
+/// order, which matches only by chance (about 3 in 10^30).
 #[tokio::test]
 async fn o3d_the_fold_sorts_on_the_full_name() {
+    const SERVERS: usize = 30;
     let (state, _dir) = fixture(0, false).await;
-    for i in 0..=SERVER_ROWS {
+    for i in 0..SERVERS {
         let name = format!("{}{i:02}", "s".repeat(256));
         let backend = Arc::new(Backend::new(
             &name,
@@ -254,15 +256,42 @@ async fn o3d_the_fold_sorts_on_the_full_name() {
             &FailsafeConfig::default(),
             Duration::from_secs(300),
         ));
-        if i == SERVER_ROWS {
+        let tools = (0..i)
+            .map(|t| {
+                serde_json::from_value(
+                    json!({"name": format!("t{t}"), "inputSchema": {"type": "object"}}),
+                )
+                .expect("a tool")
+            })
+            .collect();
+        backend.store_shared_tools_for_test(tools);
+        if i >= SERVER_ROWS {
             backend.set_transport_for_test(Arc::new(Connected));
         }
         assert!(state.backends.register(backend), "register {i}");
     }
     let body = overview(&state).await;
-    assert_eq!(body["kpi"]["servers_up"], 1, "{body}");
-    assert_eq!(body["servers"]["more"]["count"], 1, "{body}");
-    assert_eq!(body["servers"]["more"]["up"], 1, "{body}");
+    let shown: Vec<Value> = body["servers"]["rows"]
+        .as_array()
+        .expect("server rows")
+        .iter()
+        .map(|row| json!({ "tools": row["tools"], "up": row["up"] }))
+        .collect();
+    let want: Vec<Value> = (0..SERVER_ROWS)
+        .map(|i| json!({ "tools": i, "up": false }))
+        .collect();
+    assert_eq!(shown, want, "{body}");
+    assert_eq!(body["kpi"]["servers_up"], SERVERS - SERVER_ROWS, "{body}");
+    assert_eq!(
+        body["servers"]["more"]["count"],
+        SERVERS - SERVER_ROWS,
+        "{body}"
+    );
+    assert_eq!(
+        body["servers"]["more"]["up"],
+        SERVERS - SERVER_ROWS,
+        "{body}"
+    );
     assert_eq!(body["servers"]["more"]["down"], 0, "{body}");
 }
 
