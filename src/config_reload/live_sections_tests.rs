@@ -142,10 +142,14 @@ fn perturb(v: &mut Value) -> bool {
             *v = next;
             true
         }
-        // A duration reads " 1ms" as one more millisecond; any other string
-        // stays a string. An enum refuses it, and the load names the key.
+        // A duration (`30s`) gets one more of its unit; any other string gets
+        // a suffix. An enum refuses it, and the load names the key.
         Value::String(text) => {
-            text.push_str(" 1ms");
+            let digits = text.chars().take_while(char::is_ascii_digit).count();
+            *text = match text[..digits].parse::<u64>() {
+                Ok(n) => format!("{}{}", n + 1, &text[digits..]),
+                Err(_) => format!("{text}-edited"),
+            };
             true
         }
         Value::Array(items) if items.is_empty() => {
