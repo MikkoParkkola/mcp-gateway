@@ -178,7 +178,7 @@ pub(crate) fn initialize_extensions(
 /// Read from [`ExtensionSet::gateway_declares`] rather than assembled from
 /// literals, so what discovery advertises and what negotiation accepts are the
 /// same list by construction — see
-/// `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata.md` §3.1a
+/// the cluster b capability and trace metadata design §3.1a
 /// for why the source is the implemented set and never a catalogue of known
 /// identifiers.
 pub(crate) fn discovery_extensions() -> std::collections::HashMap<String, Value> {

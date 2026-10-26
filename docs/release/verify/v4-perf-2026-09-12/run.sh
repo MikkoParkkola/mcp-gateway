@@ -2,7 +2,7 @@
 set -euo pipefail
 source ~/.cargo/env 2>/dev/null || true
 WT=~/github/.worktrees/perf-remeasure-4.0.0
-LOG=~/bench-logs/v4-perf
+LOG="${BENCH_LOGS:?set BENCH_LOGS to the benchmark log directory}/v4-perf"
 export CARGO_TARGET_DIR=~/bench-targets/v4-perf
 cd "$WT"
 echo "=== BEFORE: v3.5.0 32f135a6 ==="

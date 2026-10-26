@@ -231,8 +231,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the listing configures the feature it reports on; `meta_mcp.expose_stats_tool:
   true` restores `gateway_get_stats`. Operator-visible consequence: a client that
   enumerates `tools/list` and refuses to call anything absent from it will stop
-  reaching these six until the corresponding feature is configured. See
-  `docs/design/2026-09-16-meta-tool-surface-compaction.md`.
+  reaching these six until the corresponding feature is configured.
 
 ## [4.0.0] - 2026-09-19
 
@@ -1582,7 +1581,7 @@ credential path.
 ### Docs
 
 - **README Windows install path**: install table and direct-download section now include the Windows MSVC release binary.
-- **`docs/always-load-pins.md`** (MIK-3639): client-side pin-set rationale for Claude Code v2.1.121 `alwaysLoad` flag — recommends `hebb`, `linear`, `gateway-core`, `apple-calendar` as hot-path always-loaded MCP servers with rollback procedure.
+- **Always-load pin-set guidance** (MIK-3639): client-side pin-set rationale for Claude Code v2.1.121 `alwaysLoad` flag — recommends a small set of hot-path always-loaded MCP servers with rollback procedure.
 
 ### Tests
 

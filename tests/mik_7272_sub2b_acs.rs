@@ -5,7 +5,7 @@
 //! own request's response.
 //!
 //! Scope is the PR bar, not ADR-014's full thirteen rows: test-plan `S-02`
-//! (`docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md:58`)
+//! (the cluster b connection invariance test plan)
 //! and the `notifications/progress` half of `S-03` (`:59`). See ADR-014
 //! Amendment 1 for why the `notifications/message` half of `S-03` has no stdio
 //! instance here, and the note above [`s03_message_http_isolates_by_stream`]

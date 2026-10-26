@@ -487,7 +487,7 @@ done
 //
 // stdout is ONE multiplexed stream, so "arrived on that request's own
 // stream" buys nothing here: the token match IS the correlation. Plan
-// rows: docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md
+// rows: the cluster b connection invariance test plan
 // :58 (S-02, "over stdio and over HTTP") and :59 (S-03, per-request
 // isolation on one connection).
 // =========================================================================

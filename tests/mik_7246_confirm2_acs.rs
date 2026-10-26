@@ -12,7 +12,7 @@
 //! a reading of the mechanism.
 //!
 //! The shape asserted is the one fixed by
-//! `docs/design/2026-09-09-confirm-2-in-band-schema-and-wiring.md`, spelled in
+//! the confirm 2 in band schema and wiring design, spelled in
 //! the wire vocabulary `src/protocol/mrtr.rs:238-249` parses.
 //!
 //! What is deliberately NOT asserted: the `Unsupported` refusal. It is now the

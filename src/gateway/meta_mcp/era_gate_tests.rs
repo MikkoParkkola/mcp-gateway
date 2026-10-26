@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Rows 13 to 15c of `docs/design/2026-09-11-outbound-era-gated-health-probe.md`
+//! Rows 13 to 15c of the outbound era gated health probe design
 //! — the three outbound call sites section 4 gates, alongside the health probe.
 //!
 //! These rows live here rather than in `src/backend/tests.rs` because the send

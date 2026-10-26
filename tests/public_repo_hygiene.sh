@@ -19,6 +19,7 @@ make_repo() {
   cp "$checker" "$repo/scripts/dev/check-public-repo-hygiene.sh"
   chmod +x "$repo/scripts/dev/check-public-repo-hygiene.sh"
   cat >"$repo/.gitignore" <<'EOF'
+/internal/
 docs/strategy/
 docs/competitive/
 docs/competitive-intelligence/
@@ -84,7 +85,7 @@ git -C "$repo" add .gitignore scripts/dev/check-public-repo-hygiene.sh
 git -C "$repo" add -f docs/competitive/scan.md
 assert_fail_contains "$repo" "tracked files remain under private strategy paths"
 
-repo="$(make_repo named-public-comparison)"
+repo="$(make_repo named-comparison-is-refused)"
 cat >>"$repo/.gitignore" <<'EOF'
 !docs/competitive/
 docs/competitive/*
@@ -100,7 +101,7 @@ cat >"$repo/docs/competitive/willow-enterprise-agent-governance.md" <<'EOF'
 EOF
 git -C "$repo" add .gitignore scripts/dev/check-public-repo-hygiene.sh
 git -C "$repo" add docs/competitive/README.md docs/competitive/willow-enterprise-agent-governance.md
-assert_pass "$repo"
+assert_fail_contains "$repo" "tracked files remain under private strategy paths"
 
 blocked_markers=(
   "Status: DRAFT. Not ready to publish"
@@ -192,7 +193,7 @@ cat >"$repo/docs/internal/release/v4.0.0-burndown-tracker.md" <<'EOF'
 | NFR.PERF.1 | MET |
 EOF
 git -C "$repo" add .gitignore docs/internal/release/v4.0.0-burndown-tracker.md scripts/dev/check-public-repo-hygiene.sh
-assert_pass "$repo"
+assert_fail_contains "$repo" "tracked files remain under private strategy paths"
 
 # A product page may cite a ruling or a review in its prose. The marker set
 # reads headings, so citing one is not the same as being one.
@@ -208,11 +209,9 @@ EOF
 git -C "$repo" add .gitignore docs/design/continuation-envelope.md scripts/dev/check-public-repo-hygiene.sh
 assert_pass "$repo"
 
-repo="$(make_repo internal-dir-ignored)"
-printf 'docs/internal/\n' >>"$repo/.gitignore"
-mkdir -p "$repo/docs/internal"
-printf '# v4.0.0 burndown\n' >"$repo/docs/internal/notes.md"
+repo="$(make_repo internal-clone-not-ignored)"
+printf 'docs/strategy/\n' >"$repo/.gitignore"
 git -C "$repo" add .gitignore scripts/dev/check-public-repo-hygiene.sh
-assert_fail_contains "$repo" "docs/internal is ignored"
+assert_fail_contains "$repo" "internal/example.md is not ignored"
 
 echo "public repo hygiene fixtures OK"

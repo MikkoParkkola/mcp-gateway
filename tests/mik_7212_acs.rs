@@ -3,7 +3,7 @@
 //! Acceptance-criterion tests for MIK-7212 — the multi-round-trip continuation
 //! envelope.
 //!
-//! Plan: `docs/requirements/RELEASE-4.0.0-test-plan.md` §"Increment 5".
+//! Plan: the 4.0.0 release test plan §"Increment 5".
 //!
 //! A backend hands the gateway an opaque `requestState`. The gateway must reach
 //! the client, and on retry reach that same backend with that same state —
@@ -1922,7 +1922,7 @@ mod elicitation_mode_gate {
 // MIK-7212.MRTR.9a — the coverage matrix
 //
 // Seven declaration shapes against four requested modes, from the test plan's
-// table (`docs/design/2026-09-03-mrtr-9a-test-plan.md`). Every cell states
+// table (the mrtr 9a test plan). Every cell states
 // relay or refusal; the last row stands for four non-object values and each is
 // run in full, so 28 cells expand to 40 assertions.
 //

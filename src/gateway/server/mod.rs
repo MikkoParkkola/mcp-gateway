@@ -1218,7 +1218,7 @@ impl Gateway {
         // Reaching a guard is not the whole criterion: the direct route still
         // RELEASES the client's key when the backend call fails, which is the
         // broken-stream case SUB.4 is written about, so the row is PARTIAL —
-        // see `docs/design/2026-08-31-sub-4-idempotency-wiring.md`.
+        // see the sub 4 idempotency wiring design.
         Arc::get_mut(&mut meta_mcp)
             .expect("no other Arc references at this point")
             .enable_idempotency(
@@ -5298,7 +5298,7 @@ mod tests {
 
         // OBS.1 / MRTR, the stdio retry gap -- NOT closed by this change and
         // deliberately left red rather than pinned as correct. See
-        // `docs/design/2026-09-02-cluster-g-stdio-dispatch-parity.md` §P3,
+        // the cluster g stdio dispatch parity design §P3,
         // "`NO_RETRY` on stdio -- declared OUT, with something watching it":
         // closing it needs `RetryFields` built at the convergence point and
         // malformed retry fields refused pre-dispatch on both transports, which

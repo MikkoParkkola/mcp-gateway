@@ -3,7 +3,7 @@
 //! Acceptance-criterion tests for MIK-7213 and MIK-7272 — results, renumbered
 //! errors, and the cacheability fields of MCP 2026-07-28.
 //!
-//! Plan: `docs/requirements/RELEASE-4.0.0-test-plan.md` §"Increment 4".
+//! Plan: the 4.0.0 release test plan §"Increment 4".
 //!
 //! `cacheScope` is the reason this increment is not mechanical. `public` means
 //! any intermediary may serve this response across authorization contexts — a
@@ -491,7 +491,7 @@ fn ac_cache_3_every_cacheable_method_has_an_assessed_row() {
 // other row of the plan's CACHE.4 section is uncovered by this file and is not
 // claimed otherwise.
 // The plan is the authority for that list and names each row's criterion in its
-// own first column: docs/design/2026-08-31-cluster-f-response-cache-keying-test-plan.md.
+// own first column: the cluster f response cache keying test plan.
 // Do not re-enumerate the rows here. A hand-copied list drifted twice, and both
 // times it silently dropped 4.g, the policy-epoch revocation race.
 // ===========================================================================

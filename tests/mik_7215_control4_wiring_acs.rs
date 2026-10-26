@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! T4 and T5 of the `MIK-7215.CONTROL.4` test plan
-//! (`docs/design/2026-09-08-control4-session-lifecycle-test-plan.md:55`).
+//! (the control4 session lifecycle test plan).
 //!
 //! Gated on `firewall`: the wiring under test is the firewall handler, and
 //! `wire_session_lifecycle` does not exist without the feature.

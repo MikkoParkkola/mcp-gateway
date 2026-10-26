@@ -355,7 +355,7 @@ the gateway shows the world.
 
 | Excluded | Reason |
 |---|---|
-| Other portfolio surfaces (hebb, throttla, fulcrum, botnaut-client, pithy) | RFC-0060 owns them. The gateway goes first because it is the only surface that must speak both eras at once. |
+| Other portfolio surfaces (the other MCP servers in the portfolio) | RFC-0060 owns them. The gateway goes first because it is the only surface that must speak both eras at once. |
 | Retiring 2025-03-26 and 2024-11-05 | Needs one week of revision telemetry. Retiring a revision on a guess breaks a client nobody knew was connecting. |
 | Skills-over-MCP, MCP Apps extensions | Not stable specifications. |
 | Broad OAuth expansion beyond the approved personal-account journey | MIK-6744/6745 fallback consent/storage is now in 4.0; reconcile MIK-6746's existing implementation and authorization contract. See the approved scope update. |

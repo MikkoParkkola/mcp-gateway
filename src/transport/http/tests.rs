@@ -667,7 +667,7 @@ async fn build_headers_trace_flag_gates_trace_header() {
 /// When the backend daemon restarts, the stored session ID is dead and the
 /// backend answers `-32015 Session not found`. The transport must drop the
 /// session, re-run the initialize handshake, and retry the original request
-/// once. Regression test for the 2026-06-11 incident (hebb unreachable 6.5h
+/// once. Regression test for the 2026-06-11 incident (a backend unreachable 6.5h
 /// behind a permanently re-opening circuit breaker).
 #[tokio::test]
 async fn request_reinitializes_session_and_retries_on_session_not_found() {
@@ -2110,7 +2110,7 @@ async fn default_task_capability_impl_refuses_without_falling_back() {
 //
 // Governing plan: docs/design/2026-08-31-cluster-b-connection-invariance
 // -test-plan.md S-02 (forwarding) and S-03 (per-request isolation).
-// Design: docs/design/2026-09-09-sub2b-request-scoped-notifications.md.
+// Design: the sub2b request scoped notifications design.
 // =========================================================================
 
 /// A notification seen ahead of the response is CAPTURED, not dropped.
@@ -2314,7 +2314,7 @@ async fn an_unredirected_connect_failure_is_pre_dispatch_end_to_end() {
 // =============================================================================
 // MIK-7272.SUB.2b — the outbound half over HTTP.
 //
-// Plan rows: docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md
+// Plan rows: the cluster b connection invariance test plan
 // :58 (S-02, "over stdio and over HTTP") and :59 (S-03, per-request isolation).
 // The correlation here is the framing, not a token: every frame on a response
 // stream belongs to the request that opened it.

@@ -1,0 +1,12 @@
+# Evidence the scope contract cites that is kept in the private companion
+# repository (cloned at internal/). path TAB sha256 TAB path inside the clone.
+docs/design/2026-09-12-mik-3274-ranking-abbreviations.md	396ef0d0a7debdbab0f0638ea35512c38b6c1251008cbe78222376f17e00fe7a	variants/main/docs/design/2026-09-12-mik-3274-ranking-abbreviations.md
+docs/design/2026-09-13-mik-7387-stdio-concurrent-dispatch.md	8c4dbee191bf9970f2f82abd19085e826d8ffba6b682b04c2d9e0e21f56be5c1	docs/design/2026-09-13-mik-7387-stdio-concurrent-dispatch.md
+docs/design/2026-09-17-mik-6746-c1-mandatory-agent-audience.md	c48bc249fce9b5870c7869cd00162f39a82e72f0accddefc0d775460da5be4fd	docs/design/2026-09-17-mik-6746-c1-mandatory-agent-audience.md
+docs/internal/design/2026-09-03-cluster-a-coverage-audit.md	bdfacf8a8ab0a802df3653f8c2b6171014e168cabe8b3fca72f84ac499406f8f	docs/internal/design/2026-09-03-cluster-a-coverage-audit.md
+docs/internal/design/2026-09-21-provable-agent-identity.md	689934f46ae1df93d273b0e8bcd24aae69a9de8dbd9a0b04d0bf88191295ca95	variants/main/docs/internal/design/2026-09-21-provable-agent-identity.md
+docs/internal/release/v4.0.0-scope-contract-validation.md	a177924dd356a35f5be444292b3bef6f3ab11f7992467b351fa3ad2d25b55e7a	variants/main/docs/internal/release/v4.0.0-scope-contract-validation.md
+docs/internal/requirements/scope-grading-2026-09-12.md	5939bc9aa444566cc921d22328da390060ef670bfa10acedf3648736658785ea	variants/main/docs/internal/requirements/scope-grading-2026-09-12.md
+docs/requirements/RELEASE-4.0.0-conformance-matrix.md	d787cffa6968dc7f2da86901d99c5a0eb5229a6cf4327baa8af8bf551b412ddb	variants/main/docs/requirements/RELEASE-4.0.0-conformance-matrix.md
+docs/requirements/RELEASE-4.0.0-performance-contract.md	9b01c585b656e2a009694918613a1509575d23a57cb128f352f8677c9e89cee6	variants/main/docs/requirements/RELEASE-4.0.0-performance-contract.md
+docs/requirements/RELEASE-4.0.0-scope-decisions-2026-09-06.md	bd84febbf3fd56c9a99e485a6ab00960ee1cbad9389d1a31925802f0d71099c4	variants/main/docs/requirements/RELEASE-4.0.0-scope-decisions-2026-09-06.md

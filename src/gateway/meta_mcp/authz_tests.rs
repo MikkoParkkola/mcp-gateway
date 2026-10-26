@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Tests for the dispatch authorization chokepoint (MIK-7252).
 //!
-//! Plan: `docs/design/authorize-at-dispatch-test-plan.md`. Test names follow
+//! Plan: the authorize at dispatch test plan. Test names follow
 //! its convention, `authz_<row>_<slug>`, so a row and its test are findable
 //! from each other.
 //!
@@ -858,7 +858,7 @@ async fn authz_13a_surfaced_tool_allowed_reaches_the_backend() {
 // CACHE.4b — policy epoch at the grant-store writer (4.f.1) and the
 // in-flight bump between read-key and write-key (4.g).
 //
-// Plan: docs/design/2026-09-06-cache4-policy-epoch-test-plan.md.
+// Plan: the cache4 policy epoch test plan.
 // The caller stays AUTHORIZED across the grant mutation: a revocation is
 // decided above the cache, so a denying swap would go green without an
 // epoch anywhere. The observable is the backend call counter, never body

@@ -3,7 +3,7 @@
 //! Acceptance-criterion tests for MIK-7272 §3.9 — subscriptions and streams
 //! under MCP 2026-07-28.
 //!
-//! Plan: `docs/requirements/RELEASE-4.0.0-test-plan.md` §"Increment 8".
+//! Plan: the 4.0.0 release test plan §"Increment 8".
 //!
 //! The revision replaces the HTTP GET stream and `resources/subscribe` with one
 //! long-lived POST-response stream a client opts into by notification type. It
