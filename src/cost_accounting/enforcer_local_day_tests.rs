@@ -201,6 +201,28 @@ fn a_pre_upgrade_snapshot_resets_once_at_utc_midnight_west_of_utc() {
     );
 }
 
+/// A day basis this build does not recognise keeps the saved spend, counted
+/// as a pre-upgrade snapshot: its UTC day stays open and resets once at
+/// 00:00 UTC. Discarding it would hand an edited file a fresh daily
+/// allowance. Mutant: the basis is dropped (the day total reads 0 at 00:30).
+#[test]
+fn an_unrecognised_day_basis_keeps_the_saved_spend_as_a_utc_day() {
+    let _zone = crate::local_day::test_zone(Europe::Amsterdam);
+    let e = booted(1_794_353_400, &snapshot(1_794_340_800, 1.0, Some("solar")));
+    {
+        let _clock = at_secs(1_794_353_400);
+        assert_eq!(e.day_zone(), "UTC");
+    }
+    steps(
+        &e,
+        &[
+            (1_794_353_400, "11-11 00:30 CET", 0.0, 1.0),
+            (1_794_355_199, "11-11 00:59:59 CET", 0.0, 1.0),
+            (1_794_355_200, "11-11 01:00 CET, 00:00 UTC", 0.0, 0.0),
+        ],
+    );
+}
+
 /// T4c: once a read on the next UTC day has closed the legacy day, a clock
 /// set back into it stays local: a save records "local" and the costs API
 /// names the host zone. Mutant: the legacy day is matched by date alone (the
