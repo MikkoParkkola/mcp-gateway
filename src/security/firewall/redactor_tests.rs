@@ -492,3 +492,15 @@ fn a_jwt_overlapping_another_in_a_key_leaves_no_signature() {
     assert_eq!(findings.len(), 1, "{findings:?}");
     assert_eq!(findings[0].matched, "[REDACTED:credential] end");
 }
+
+/// The first match ends at 302, so its overlap floor (302 - 256 = 46) lands
+/// inside a "€" and moves down to that char's start; the spans are unchanged.
+#[test]
+fn the_overlap_floor_never_splits_a_multibyte_char() {
+    let re = Regex::new("x+").expect("compiles");
+    let text = format!("{}xx€xx", "€".repeat(100));
+    assert_eq!(
+        super::overlapping_spans(&re, &text),
+        vec![(300, 302), (301, 302), (305, 307), (306, 307)]
+    );
+}
