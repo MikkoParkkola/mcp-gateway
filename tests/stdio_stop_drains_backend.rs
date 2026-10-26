@@ -17,6 +17,8 @@ use std::time::Duration;
 use mcp_gateway::config::{BackendConfig, Config, TransportConfig};
 use serde_json::{Value, json};
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
 #[path = "common/yaml.rs"]
 mod yaml;
 
@@ -180,12 +182,8 @@ async fn a_stop_to_the_gateways_group_drains_the_backend_call() {
 
     // The gateway leads its own group, as the entrypoint does under tini, so
     // the group signal below reaches it and its children but not this test.
-    let mut gateway = std::process::Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("MCP_GATEWAY_") {
-            gateway.env_remove(key);
-        }
-    }
+    // The helper isolates the home and drops inherited MCP_GATEWAY_* settings.
+    let mut gateway = gateway_bin::command(&root.join("home"), gateway_bin::Inherit::Environment);
     let mut gateway = gateway
         .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
         .current_dir(root)
@@ -335,12 +333,10 @@ async fn a_sigterm_in_stdio_mode_ends_the_backends_tree() {
     let config = write_config(root, free_port());
     let log = std::fs::File::create(root.join("gateway.log")).expect("log");
 
-    let mut gateway = tokio::process::Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("MCP_GATEWAY_") {
-            gateway.env_remove(key);
-        }
-    }
+    let mut gateway = tokio::process::Command::from(gateway_bin::command(
+        &root.join("home"),
+        gateway_bin::Inherit::Environment,
+    ));
     let mut gateway = gateway
         .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
         .current_dir(root)
