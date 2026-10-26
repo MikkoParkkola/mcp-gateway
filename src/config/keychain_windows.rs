@@ -77,7 +77,7 @@ impl SecretStore for WindowsKeychain {
     fn exists(&self, name: &str) -> Result<bool, StoreError> {
         let name = name.to_owned();
         bounded(self.bound, self.delay, move || {
-            win_cred::exists(&name).map_err(unavailable)
+            win_cred::exists(&name).map_err(|e| unavailable(&e))
         })
         .map_err(store_error)
     }
@@ -94,7 +94,7 @@ impl SecretStore for WindowsKeychain {
         match written {
             Ok(()) => Ok(reference),
             Err(CredError::Exists) => Err(StoreError::Exists),
-            Err(other) => Err(store_error(unavailable(other))),
+            Err(other) => Err(store_error(unavailable(&other))),
         }
     }
 
@@ -104,14 +104,14 @@ impl SecretStore for WindowsKeychain {
             match win_cred::delete(&name) {
                 // Already gone is durably gone.
                 Ok(()) | Err(CredError::NotFound) => Ok(()),
-                Err(other) => Err(unavailable(other)),
+                Err(other) => Err(unavailable(&other)),
             }
         })
         .map_err(store_error)
     }
 }
 
-fn unavailable(error: CredError) -> KeychainError {
+fn unavailable(error: &CredError) -> KeychainError {
     KeychainError::Unavailable(format!("Credential Manager: {error:?}"))
 }
 
