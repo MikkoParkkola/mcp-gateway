@@ -183,7 +183,7 @@ counts, and `/sse` answers 410 Gone pointing to `POST /mcp` (MIK-8044.SURF.4b).
 | `/ui` | 3 |  |  | `/ui/api/backends`; `/ui/api/backends/{name}`; `/ui/api/backends/{name}/revive`; `/ui/api/capabilities`; `/ui/api/capabilities/{name}`; `/ui/api/config`; `/ui/api/control-plane`; `/ui/api/control-plane/decisions`; `/ui/api/control-plane/export-status`; `/ui/api/control-plane/grants`; `/ui/api/control-plane/policies`; `/ui/api/costs`; `/ui/api/dashboard-link`; `/ui/api/events/dead-letters`; `/ui/api/events/dead-letters/replay`; `/ui/api/events/dead-letters/{id}/replay`; `/ui/api/events/held`; `/ui/api/import/openapi`; `/ui/api/import/openapi/preview`; `/ui/api/registry`; `/ui/api/registry/search`; `/ui/api/reload`; `/ui/api/status`; `/ui/api/tools`; `/ui/assets/{file}` |  |
 | `config-driven` | 3 |  |  |  |  |
 
-Response-code changes from backend secret references (ADR-028, MIK-8908 B3). Only the new condition changes; every other answer of these routes is unchanged:
+Response-code changes from backend secret references (ADR-028). Only the new condition changes; every other answer of these routes is unchanged:
 
 | Route | Condition | Before | After |
 |---|---|---|---|
@@ -196,7 +196,7 @@ Response-code changes from backend secret references (ADR-028, MIK-8908 B3). Onl
 |---|---|---|---|---|---|
 | `lib` |  |  |  | 64 |  |
 
-Two items are `pub` beyond the module items above, both from MIK-8908 B3, under the `#[doc(hidden)]` `config` module:
+Two items are `pub` beyond the module items above, both for backend secret references (ADR-028), under the `#[doc(hidden)]` `config` module:
 - `mcp_gateway::config::BackendConfig::check_secret_references`, the pre-write reference check. It is `pub` only for the binary's two writers of `backends`, `discover --write` and the setup import, and it returns to `pub(crate)` once no binary-side writer of `backends` remains.
 - `mcp_gateway::config::secret_slot(&str) -> String`, the display projection: a reference as written, an empty value as `<empty>`, anything else as `<set>`. It is pure. `mcp-gateway get`, `doctor` and the web UI's config read use it, and configuration history will.
 
