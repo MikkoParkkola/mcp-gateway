@@ -329,3 +329,34 @@ backends:
     assert!(text.contains("'partner'"), "{text}");
     assert!(meta.account_strategies().installed("partner-api").is_none());
 }
+
+/// Both serve paths install account strategies through
+/// `Gateway::install_account_bindings`, the one place the custody handle
+/// becomes the trait object the install takes. Neither path casts it itself
+/// or calls the raw install, so the two cannot drift apart.
+#[test]
+fn both_serve_paths_install_through_one_custody_cast() {
+    for (path, source) in [
+        ("run_wiring.rs", include_str!("run_wiring.rs")),
+        ("stdio_startup.rs", include_str!("stdio_startup.rs")),
+    ] {
+        assert!(
+            source.contains(".install_account_bindings("),
+            "{path} must install through Gateway::install_account_bindings"
+        );
+        assert!(
+            !source.contains("as Arc<dyn crate::personal_accounts::AccountCustody>"),
+            "{path} casts the custody handle itself"
+        );
+        assert!(
+            !source.contains("account_bindings::install_account_strategies("),
+            "{path} calls the raw install"
+        );
+    }
+    let own = include_str!("account_bindings.rs");
+    assert_eq!(
+        own.matches("as Arc<dyn AccountCustody>").count(),
+        1,
+        "the custody cast lives once, in install_account_bindings"
+    );
+}
