@@ -453,6 +453,34 @@ providers:
         path
     }
 
+    /// The pin is checked on the exact buffer that is parsed, never on bytes
+    /// read again from `path`: `path` names the capability only. Here the
+    /// file at `path` holds tampered bytes and the buffer holds the pinned
+    /// ones; the buffer verifies, and the tampered buffer is refused even
+    /// though the file holds the pinned bytes.
+    #[test]
+    fn parse_capability_text_checks_the_pin_on_the_parsed_buffer() {
+        let dir = TempDir::new().unwrap();
+        let hash = compute_capability_hash(UNPINNED_YAML);
+        let pinned = rewrite_with_pin(UNPINNED_YAML, &hash);
+        let tampered = pinned.replace("pinned_cap", "tampered_cap");
+        let path = write_capability_file(&dir, "pinned.yaml", &tampered);
+
+        let cap = parse_capability_text(&pinned, &path).expect("the pinned buffer verifies");
+        assert_eq!(
+            cap.providers.integrity,
+            crate::capability::Integrity::Verified
+        );
+        assert_eq!(cap.sha256.as_deref(), Some(hash.as_str()));
+
+        std::fs::write(&path, &pinned).unwrap();
+        let refused = parse_capability_text(&tampered, &path);
+        assert!(
+            matches!(refused, Err(Error::CapabilityHashMismatch { .. })),
+            "the tampered buffer is refused whatever the file holds: {refused:?}"
+        );
+    }
+
     #[tokio::test]
     async fn parse_capability_file_accepts_correct_pin() {
         // GIVEN: a capability file rewritten with its true sha256 pin
