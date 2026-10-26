@@ -166,7 +166,10 @@ async fn f4_ssrf_protection_follows_a_reload() {
 
     reload(&fx, |c| c.security.ssrf_protection = true);
     let (_, body) = call().await;
-    assert!(body.get("error").is_some(), "on after reload: {body}");
+    assert!(
+        message(&body).contains(crate::security::ssrf::SSRF_BLOCKED),
+        "on after reload: not the SSRF refusal: {body}"
+    );
     assert_eq!(
         calls.load(Ordering::SeqCst),
         ran,

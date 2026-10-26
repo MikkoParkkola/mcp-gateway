@@ -230,28 +230,27 @@ fn r2_each_other_security_field_alone_stays_restart_pending() {
 // restart-pending.
 #[test]
 fn r5_each_server_and_events_field_alone_is_restart_pending() {
+    let mut failures = Vec::new();
     for (section, skip) in [
         ("server", &["host", "port", "public_url"][..]),
         ("events", &[][..]),
     ] {
         let (reports, stuck) = each_field_alone(section, skip);
-        let missed: Vec<&str> = reports
-            .iter()
-            .filter(|(_, p, _)| p.is_empty())
-            .map(|(k, _, _)| k.as_str())
-            .collect();
-        assert!(
-            missed.is_empty(),
-            "{section}: not restart-pending: {missed:?}"
+        for (key, pending, changed) in &reports {
+            if pending.is_empty() {
+                failures.push(format!("{section}.{key}: not restart-pending"));
+            }
+            if !changed {
+                failures.push(format!("{section}.{key}: not a change"));
+            }
+        }
+        failures.extend(
+            stuck
+                .iter()
+                .map(|k| format!("{section}.{k}: no generic edit")),
         );
-        let unseen: Vec<&str> = reports
-            .iter()
-            .filter(|(_, _, changed)| !changed)
-            .map(|(k, _, _)| k.as_str())
-            .collect();
-        assert!(unseen.is_empty(), "{section}: not a change: {unseen:?}");
-        assert!(stuck.is_empty(), "{section}: no generic edit: {stuck:?}");
     }
+    assert!(failures.is_empty(), "{failures:#?}");
 }
 
 /// `running` with `environment` set through JSON, so the row compiles before
@@ -282,4 +281,16 @@ fn e3_a_misspelt_environment_key_is_refused() {
     crate::gateway::test_helpers::write_owner_only(&path, "environmnt: staging\n").expect("write");
     let err = Config::load(Some(&path)).expect_err("typo refuses");
     assert!(format!("{err:#}").contains("environmnt"), "{err:#}");
+}
+
+// E4: the key loads through the strict loader from a file, not only through
+// serde, so an operator's `environment:` is accepted and read back.
+#[test]
+fn e4_an_environment_key_in_a_file_loads() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    crate::gateway::test_helpers::write_owner_only(&path, "environment: staging\n").expect("write");
+    let loaded = Config::load(Some(&path)).expect("loads");
+    let v = serde_json::to_value(&loaded).expect("serializes");
+    assert_eq!(v["environment"], json!("staging"), "{v}");
 }

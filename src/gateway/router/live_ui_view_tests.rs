@@ -120,8 +120,9 @@ async fn spec_server() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
     (format!("http://127.0.0.1:{port}/spec.yaml"), hits)
 }
 
-/// `POST` the import preview for `url` as the admin bearer: the status.
-async fn preview(state: &Arc<AppState>, url: &str) -> axum::http::StatusCode {
+/// `POST` the import preview for `url` as the admin bearer: the status and
+/// the body text.
+async fn preview(state: &Arc<AppState>, url: &str) -> (axum::http::StatusCode, String) {
     let request = Request::builder()
         .method("POST")
         .uri("/ui/api/import/openapi/preview")
@@ -130,14 +131,18 @@ async fn preview(state: &Arc<AppState>, url: &str) -> axum::http::StatusCode {
         .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 52_347))))
         .body(Body::from(serde_json::json!({ "url": url }).to_string()))
         .expect("request builds");
-    tokio::time::timeout(
+    let response = tokio::time::timeout(
         crate::test_wait::HANG_BOUND,
         create_router(Arc::clone(state)).oneshot(request),
     )
     .await
     .expect("bounded")
-    .expect("the router is infallible")
-    .status()
+    .expect("the router is infallible");
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    (status, String::from_utf8_lossy(&body).into_owned())
 }
 
 fn set_ssrf(state: &AppState, on: bool) {
@@ -156,14 +161,20 @@ async fn f5_the_ui_import_follows_ssrf_protection() {
     let (url, hits) = spec_server().await;
 
     set_ssrf(&state, false);
-    assert!(preview(&state, &url).await.is_success(), "off");
+    let (status, body) = preview(&state, &url).await;
+    assert!(status.is_success(), "off: {body}");
     assert_eq!(hits.load(Ordering::SeqCst), 1, "off: fetched");
 
     set_ssrf(&state, true);
-    assert!(!preview(&state, &url).await.is_success(), "on after reload");
+    let (status, body) = preview(&state, &url).await;
+    assert!(
+        !status.is_success() && body.contains("SSRF protection blocked URL"),
+        "on after reload: not the SSRF refusal: {status} {body}"
+    );
     assert_eq!(hits.load(Ordering::SeqCst), 1, "on after reload: fetched");
 
     set_ssrf(&state, false);
-    assert!(preview(&state, &url).await.is_success(), "off after reload");
+    let (status, body) = preview(&state, &url).await;
+    assert!(status.is_success(), "off after reload: {body}");
     assert_eq!(hits.load(Ordering::SeqCst), 2, "off after reload: fetched");
 }
