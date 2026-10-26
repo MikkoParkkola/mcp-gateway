@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::security::transparency_log::pager::ASSEMBLY_WINDOW;
-use crate::security::transparency_log::segments::{list_segments, sealed_path};
+use crate::security::transparency_log::segments::{active_segment_seq, list_segments, sealed_path};
 
 /// How much one forward read takes while looking for a line's end.
 const CHUNK: u64 = 64 * 1024;
@@ -54,13 +54,58 @@ fn line_at(file: &mut File, start: u64, reads: &mut Reads) -> io::Result<Option<
     Ok(None)
 }
 
+/// The offset after the next newline at or after `from`, however far it is:
+/// a line over the record cap is stepped over, never held whole.
+fn after_next_newline(file: &mut File, from: u64, reads: &mut Reads) -> io::Result<Option<u64>> {
+    file.seek(SeekFrom::Start(from))?;
+    let mut at = from;
+    let mut chunk = vec![0u8; usize::try_from(CHUNK).unwrap_or(usize::MAX)];
+    loop {
+        let n = file.read(&mut chunk)?;
+        reads.0 += 1;
+        if n == 0 {
+            return Ok(None);
+        }
+        if let Some(nl) = chunk[..n].iter().position(|b| *b == b'\n') {
+            return Ok(Some(at + u64::try_from(nl).unwrap_or(u64::MAX) + 1));
+        }
+        at += u64::try_from(n).unwrap_or(u64::MAX);
+    }
+}
+
 /// The first line start at or after `from`.
 fn next_line_start(file: &mut File, from: u64, reads: &mut Reads) -> io::Result<Option<u64>> {
     if from == 0 {
         return Ok(Some(0));
     }
     // The byte before `from` decides: a newline there makes `from` a start.
-    Ok(line_at(file, from - 1, reads)?.map(|(_, end)| end))
+    after_next_newline(file, from - 1, reads)
+}
+
+/// The first readable line at or after `start` and below `hi`, with its
+/// counter and the offset after it. Unreadable lines in between (torn,
+/// hand-edited, over the cap) are stepped over, so a bad line never hides
+/// the records after it.
+fn first_readable(
+    file: &mut File,
+    start: u64,
+    hi: u64,
+    reads: &mut Reads,
+) -> io::Result<Option<(u64, Vec<u8>, u64)>> {
+    let mut at = start;
+    while at < hi {
+        match line_at(file, at, reads)? {
+            Some((bytes, end)) => match counter_of(&bytes) {
+                Some(c) => return Ok(Some((c, bytes, end))),
+                None => at = end,
+            },
+            None => match after_next_newline(file, at, reads)? {
+                Some(end) => at = end,
+                None => return Ok(None),
+            },
+        }
+    }
+    Ok(None)
 }
 
 fn counter_of(bytes: &[u8]) -> Option<u64> {
@@ -73,7 +118,7 @@ fn counter_of(bytes: &[u8]) -> Option<u64> {
 /// The log's files, oldest first: `(segment, path)`.
 fn files(log: &Path) -> io::Result<Vec<(u64, PathBuf)>> {
     let sealed = list_segments(log)?;
-    let active = sealed.last().map_or(0, |s| s.seq + 1);
+    let active = active_segment_seq(log, sealed.last().map_or(0, |s| s.seq + 1));
     let mut files: Vec<(u64, PathBuf)> = sealed
         .iter()
         .map(|s| (s.seq, sealed_path(log, s.seq)))
@@ -111,25 +156,15 @@ pub(super) fn seek(log: &Path, counter: u64, reads: &mut Reads) -> io::Result<Op
             hi = mid;
             continue;
         }
-        let Some((bytes, end)) = line_at(&mut file, start, reads)? else {
-            hi = mid;
-            continue;
-        };
-        match counter_of(&bytes) {
-            Some(c) if c == counter => {
+        match first_readable(&mut file, start, hi, reads)? {
+            Some((c, bytes, _)) if c == counter => {
                 let entry = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
                 return Ok(Some(Found { entry, segment }));
             }
-            Some(c) if c < counter => lo = end,
-            Some(_) => hi = start,
-            // An unreadable line: look on both sides of it in turn.
-            None => {
-                if start > lo {
-                    hi = start;
-                } else {
-                    lo = end;
-                }
-            }
+            Some((c, _, end)) if c < counter => lo = end,
+            // Above the target, or nothing readable up to `hi`: the target,
+            // if kept, starts below `start`.
+            _ => hi = start,
         }
     }
     Ok(None)

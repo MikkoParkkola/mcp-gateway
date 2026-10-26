@@ -335,3 +335,39 @@ async fn e2_ndjson_without_a_key_is_409_and_csv_still_works() {
         .unwrap();
     assert!(verify_export(&body, &trust(&s)).is_ok());
 }
+
+#[test]
+fn manifest_counters_are_per_source_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let inv = log(&dir, 3);
+    let gov = dir.path().join("gov.jsonl");
+    let mut prev = "genesis".to_string();
+    let mut body = String::new();
+    for c in 1..=2_u64 {
+        let mut e = json!({"kind": "control_plane_audit", "counter": c + 40, "prev_entry_hash": prev,
+                           "action": "mutate_grant", "actor_id": "a", "target_id": "t"});
+        let h = crate::security::transparency_log::recompute_entry_hash(&e).unwrap();
+        e["entry_hash"] = h.clone().into();
+        body.push_str(&(e.to_string() + "\n"));
+        prev = h;
+    }
+    std::fs::write(&gov, body).unwrap();
+    let c = collect(
+        &inv,
+        Some(&gov),
+        &Filter::default(),
+        &Access::All,
+        None,
+        CAPS,
+        ndjson_size,
+    )
+    .unwrap();
+    let out = String::from_utf8(ndjson(&c, json!({}), &signer())).unwrap();
+    let manifest: Value = serde_json::from_str(out.lines().last().unwrap()).unwrap();
+    assert_eq!(manifest["counters"]["governance"], json!([41, 42]));
+    let inv_range = manifest["counters"]["invocation"].as_array().unwrap();
+    assert!(
+        inv_range.iter().all(|n| n.as_u64().unwrap() < 41),
+        "{inv_range:?}"
+    );
+}

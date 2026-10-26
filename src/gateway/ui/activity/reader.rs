@@ -16,18 +16,13 @@ use serde_json::Value;
 use crate::security::transparency_log::pager::{
     self, ASSEMBLY_WINDOW, Tail, lines_newest_first, older_segment, tail_window_assembled,
 };
-use crate::security::transparency_log::segments::{list_segments, sealed_path};
+use crate::security::transparency_log::segments::{active_segment_seq, list_segments, sealed_path};
 
 /// The window each read takes.
 pub(super) const WINDOW: u64 = 1 << 20;
 
-/// Which log a line came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum Which {
-    Invocation,
-    Governance,
-}
+/// Which log a line came from: the SIEM export's name for the same two logs.
+pub(super) use crate::control_plane::export::ExportSource as Which;
 
 /// Where a log is read from next: everything below `offset` in segment
 /// `segment` is unread.
@@ -120,7 +115,7 @@ impl LogTail {
             }
             Some(p) => {
                 let sealed = list_segments(log)?;
-                let active = sealed.last().map_or(0, |s| s.seq + 1);
+                let active = active_segment_seq(log, sealed.last().map_or(0, |s| s.seq + 1));
                 let kept = sealed.first().map_or(active, |s| s.seq);
                 if p.segment < kept || p.segment > active {
                     return Ok(None);
@@ -159,9 +154,19 @@ impl LogTail {
         } else {
             self.log.clone()
         };
+        #[cfg(test)]
+        tests::before_open();
         let file = match File::open(&path) {
             Ok(f) => f,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            // Rotation renames the active file before it creates the next:
+            // in that gap the bytes are under the sealed name.
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return if path == self.log && sealed_now(self.segment)? {
+                    File::open(sealed_path(&self.log, self.segment)).map(Some)
+                } else {
+                    Ok(None)
+                };
+            }
             Err(e) => return Err(e),
         };
         if path == self.log && sealed_now(self.segment)? {

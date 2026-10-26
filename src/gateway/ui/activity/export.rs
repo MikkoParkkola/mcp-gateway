@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 use super::access::Access;
 use super::csv::{Cell, CsvWriter, Truncated};
-use super::reader::{Cursor, Limits, Line, read_page};
+use super::reader::{Cursor, Limits, Line, Which, read_page};
 use super::rows::{Filter, Kind, kind_of, owned_by, row};
 use crate::security::transparency_log::recompute_entry_hash;
 use crate::security::transparency_log::signature::{SignatureState, signature_state};
@@ -61,6 +61,8 @@ fn export_row(line: &Line, kind: Kind, secret: Option<&[u8]>) -> Option<Value> {
 /// The rows an export holds, and why it stopped.
 pub(super) struct Collected {
     pub(super) rows: Vec<Value>,
+    /// The log each row came from, in step with `rows`.
+    pub(super) sources: Vec<Which>,
     pub(super) truncated: Truncated,
 }
 
@@ -85,6 +87,7 @@ pub(super) fn collect(
         })
     };
     let mut rows = Vec::new();
+    let mut sources = Vec::new();
     let mut bytes = 0_usize;
     let mut scanned = 0_u64;
     let mut cursor: Option<Cursor> = None;
@@ -103,6 +106,7 @@ pub(super) fn collect(
             if rows.len() == caps.rows {
                 return Ok(Collected {
                     rows,
+                    sources,
                     truncated: Truncated::Rows,
                 });
             }
@@ -110,16 +114,19 @@ pub(super) fn collect(
             if bytes + n > caps.bytes {
                 return Ok(Collected {
                     rows,
+                    sources,
                     truncated: Truncated::Bytes,
                 });
             }
             bytes += n;
             rows.push(r);
+            sources.push(line.log);
         }
         match page.next {
             None => {
                 return Ok(Collected {
                     rows,
+                    sources,
                     truncated: Truncated::None,
                 });
             }
@@ -127,6 +134,7 @@ pub(super) fn collect(
             Some(_) if page.scan_exhausted => {
                 return Ok(Collected {
                     rows,
+                    sources,
                     truncated: Truncated::Scan,
                 });
             }
@@ -168,12 +176,14 @@ pub(super) fn ndjson(
         bytes.extend_from_slice(r.to_string().as_bytes());
         bytes.push(b'\n');
     }
-    let counters = |log: &str| -> Value {
+    // By source log, not by row kind: an admin action can sit in either.
+    let counters = |log: Which| -> Value {
         let mut it = collected
             .rows
             .iter()
-            .filter(|r| (r["kind"] == "config") == (log == "governance"))
-            .filter_map(|r| r["counter"].as_u64());
+            .zip(&collected.sources)
+            .filter(|(_, source)| **source == log)
+            .filter_map(|(r, _)| r["counter"].as_u64());
         match (it.next(), it.next_back()) {
             (Some(newest), Some(oldest)) => json!([oldest, newest]),
             (Some(only), None) => json!([only, only]),
@@ -186,7 +196,7 @@ pub(super) fn ndjson(
     manifest.insert("filters".into(), filters);
     manifest.insert(
         "counters".into(),
-        json!({"invocation": counters("invocation"), "governance": counters("governance")}),
+        json!({"invocation": counters(Which::Invocation), "governance": counters(Which::Governance)}),
     );
     manifest.insert("integrity_failed".into(), integrity_failed.into());
     manifest.insert(

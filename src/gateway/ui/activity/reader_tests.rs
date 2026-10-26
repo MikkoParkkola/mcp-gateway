@@ -11,12 +11,22 @@ use serde_json::{Value, json};
 
 use super::{Cursor, Limits, Line, Which, read_page};
 use crate::security::audit_rotation_config::{OnDiskFull, RotationConfig};
-use crate::security::transparency_log::segments::list_segments;
+use crate::security::transparency_log::segments::{list_segments, sealed_path};
 use crate::security::{TransparencyLogConfig, TransparencyLogger};
 
 thread_local! {
     /// Run once, the next time a log position is resolved (P2a).
     static AFTER_RESOLVE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    /// Run once, just before a segment's file is opened.
+    static BEFORE_OPEN: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+}
+
+/// The reader's seam between checking whether a segment is sealed and
+/// opening it by name.
+pub(super) fn before_open() {
+    if let Some(hook) = BEFORE_OPEN.with(|h| h.borrow_mut().take()) {
+        hook();
+    }
 }
 
 /// The reader's seam between resolving a log's position and opening its file.
@@ -418,4 +428,53 @@ fn p6_untimed_governance_records_sort_just_below_the_oldest_timed_one() {
         let ids: Vec<&str> = got.iter().map(|(_, i)| i.as_str()).collect();
         assert_eq!(ids, expected, "page size {matches}");
     }
+}
+
+#[test]
+fn a_read_in_the_rotation_gap_finds_the_sealed_file() {
+    // Rotation renames the active file to its sealed name, then creates the
+    // next one; a read opening by name in between must not see an empty log.
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir, "inv.jsonl");
+    write_lines(&path, &[entry("0", None), entry("1", None)]);
+    let (from, to) = (path.clone(), sealed_path(&path, 0));
+    BEFORE_OPEN.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move || std::fs::rename(&from, &to).unwrap()));
+    });
+    let page = read_page(&path, None, None, ALL, |_| true).unwrap();
+    assert_eq!(page.lines.len(), 2, "the sealed file was read");
+}
+
+#[test]
+fn the_active_segment_is_numbered_by_its_open_record() {
+    // Every sealed segment expired (retention or the disk-full path): only
+    // the active file, opened as segment 7, is left.
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir, "inv.jsonl");
+    let opened = |seq: u64| json!({"event": "audit_segment_opened", "segment_seq": seq});
+    write_lines(&path, &[opened(7), entry("a", None), entry("b", None)]);
+    let limits = Limits {
+        matches: 1,
+        bytes: 8 << 20,
+    };
+    let first = read_page(&path, None, None, limits, |l| {
+        call_index(l).is_none() && l.entry.get("tool").is_some()
+    })
+    .unwrap();
+    let token = first.next.expect("more to read");
+    assert_eq!(token.inv.unwrap().segment, 7);
+    // It is sealed as segment 7 and segment 8 opens: the token still reads on.
+    std::fs::rename(&path, sealed_path(&path, 7)).unwrap();
+    write_lines(&path, &[opened(8)]);
+    let rest = read_page(&path, None, Some(&token), ALL, |l| {
+        l.entry.get("tool").is_some()
+    })
+    .unwrap();
+    assert!(!rest.cursor_reset);
+    let tools: Vec<&str> = rest
+        .lines
+        .iter()
+        .filter_map(|l| l.entry["tool"].as_str())
+        .collect();
+    assert_eq!(tools, ["tool_a"]);
 }

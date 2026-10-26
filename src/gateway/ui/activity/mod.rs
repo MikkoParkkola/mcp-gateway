@@ -82,9 +82,10 @@ fn logs(state: &AppState) -> Option<Logs> {
             base.path
                 .join(crate::control_plane::role_mapping::GOVERNANCE_LOG_FILE)
         });
+    // The logger signs with the key it started with, not a reloaded one.
     let secret = state
         .live_config
-        .get()
+        .running()
         .security
         .transparency_log
         .shared_secret
@@ -135,8 +136,24 @@ fn admit(
     Ok((access, logs))
 }
 
-/// Run a blocking read off the async runtime.
+/// The most Activity reads (list, receipt, export) running at once. Each is
+/// bounded by its own budget; this bounds how many budgets run together, so
+/// callers cannot multiply them into the disk and the blocking pool.
+const MAX_CONCURRENT_READS: usize = 4;
+
+static READS: std::sync::LazyLock<tokio::sync::Semaphore> =
+    std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(MAX_CONCURRENT_READS));
+
+/// Run a blocking read off the async runtime, one of at most
+/// [`MAX_CONCURRENT_READS`]; a read beyond that waits its turn.
 async fn blocking(read: impl FnOnce() -> Response + Send + 'static) -> Response {
+    let Ok(_permit) = READS.acquire().await else {
+        return flat_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "the activity read failed",
+        )
+        .into_response();
+    };
     tokio::task::spawn_blocking(read).await.unwrap_or_else(|_| {
         flat_error(
             StatusCode::INTERNAL_SERVER_ERROR,
