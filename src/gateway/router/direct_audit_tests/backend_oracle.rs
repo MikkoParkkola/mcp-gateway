@@ -143,7 +143,7 @@ fn masked(text: &str, server: &str) -> String {
 
 /// A modern `/mcp` answer as JSON: the `data:` line of a one-event stream
 /// (the client offered `text/event-stream`), or the body itself.
-fn sse_or_json(bytes: &[u8]) -> Value {
+pub(super) fn sse_or_json(bytes: &[u8]) -> Value {
     let text = String::from_utf8_lossy(bytes);
     let json = text
         .lines()

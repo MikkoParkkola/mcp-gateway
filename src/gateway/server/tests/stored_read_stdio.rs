@@ -136,13 +136,18 @@ fn modern_meta() -> Value {
     })
 }
 
-/// T2: red on the release line, where stdio tasks/get delivers the output.
-#[tokio::test]
-async fn t2_stdio_tasks_get_answers_absent_once_the_listing_withholds_the_tool() {
-    let backend_url = spawn_backend().await;
-    let mut session = Session::open(&backend_url).await;
+/// A modern `tasks/get` of `task_id`.
+fn get(task_id: &str, id: i64) -> Value {
+    json!({"jsonrpc": "2.0", "id": id, "method": "tasks/get",
+        "params": {"taskId": task_id, "_meta": modern_meta()}})
+}
+
+/// A task of `gateway_invoke` under idempotency `key`, read with `tasks/get`
+/// until its stored output is served: the task id, the last read, and the
+/// next free request id.
+async fn stored_task(session: &mut Session, key: &str) -> (String, Value, i64) {
     let mut meta = modern_meta();
-    meta["io.mcp-gateway/idempotency-key"] = json!("s1-t2");
+    meta["io.mcp-gateway/idempotency-key"] = json!(key);
     let call = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
         "name": "gateway_invoke",
         "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {}},
@@ -153,20 +158,24 @@ async fn t2_stdio_tasks_get_answers_absent_once_the_listing_withholds_the_tool()
         .and_then(Value::as_str)
         .unwrap_or_else(|| panic!("premise: a task was made: {created}"))
         .to_owned();
-    let get = |id: i64| {
-        json!({"jsonrpc": "2.0", "id": id, "method": "tasks/get",
-            "params": {"taskId": task_id, "_meta": modern_meta()}})
-    };
     let bound = std::time::Instant::now() + Duration::from_secs(10);
     let mut next = 10;
-    let control = loop {
-        let got = session.ask(&get(next), next).await;
+    loop {
+        let got = session.ask(&get(&task_id, next), next).await;
         next += 1;
         if got.to_string().contains(OUTPUT) || std::time::Instant::now() >= bound {
-            break got;
+            return (task_id, got, next);
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
-    };
+    }
+}
+
+/// T2: red on the release line, where stdio tasks/get delivers the output.
+#[tokio::test]
+async fn t2_stdio_tasks_get_answers_absent_once_the_listing_withholds_the_tool() {
+    let backend_url = spawn_backend().await;
+    let mut session = Session::open(&backend_url).await;
+    let (task_id, control, next) = stored_task(&mut session, "s1-t2").await;
     assert!(
         control.to_string().contains(OUTPUT),
         "control: while visible the stored output is served: {control}"
@@ -180,7 +189,7 @@ async fn t2_stdio_tasks_get_answers_absent_once_the_listing_withholds_the_tool()
         .get(BACKEND)
         .expect("the backend is registered")
         .store_shared_tools_for_test(vec![invalid]);
-    let read = session.ask(&get(next), next).await;
+    let read = session.ask(&get(&task_id, next), next).await;
     assert_eq!(
         read.pointer("/error/code"),
         Some(&json!(-32601)),
@@ -285,4 +294,23 @@ async fn a_batch_item_records_a_delivery_effect() {
         panic!("one delivery record: {rows:?}");
     };
     assert_eq!(row["response_effect"], "delivered", "{row}");
+}
+
+/// A task read serves the stored answer, not one this request produced: its
+/// delivery states no effect and no findings.
+#[tokio::test]
+async fn a_stdio_task_read_states_no_effect() {
+    let (mut session, log) = logged_session().await;
+    let (_, read, _) = stored_task(&mut session, "unvouched-read").await;
+    assert!(read.to_string().contains(OUTPUT), "premise: served: {read}");
+    let rows: Vec<Value> = std::fs::read_to_string(&log)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|row| row["event"] == "response_delivery_attempt")
+        .collect();
+    let row = rows.last().expect("the read's delivery record");
+    for field in ["response_effect", "response_findings"] {
+        assert!(row.get(field).is_none(), "{field}: {row}");
+    }
 }

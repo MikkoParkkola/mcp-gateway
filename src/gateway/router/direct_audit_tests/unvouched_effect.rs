@@ -4,6 +4,7 @@
 //! effect and no findings: its delivery record omits both fields rather than
 //! claim `delivered` for bytes no scan of this request judged.
 
+use super::backend_oracle::sse_or_json;
 use super::meta_replay::{keyed_invoke, post_modern};
 use super::*;
 
@@ -82,5 +83,71 @@ async fn a_composite_states_no_effect() {
     };
     for field in ["response_effect", "response_findings"] {
         assert!(row.get(field).is_none(), "{field}: {row}");
+    }
+}
+
+/// POST `method` with `params` as key `k` on the 2026-07-28 revision with the
+/// tasks extension; `name` is the `mcp-name` header.
+async fn send_modern(fx: &Fixture, method: &str, name: &str, params: Value) -> Value {
+    let body = json!({"jsonrpc": "2.0", "id": 7, "method": method, "params": params});
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("authorization", "Bearer k")
+        .header("mcp-method", method)
+        .header("mcp-name", name)
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = fx.router.clone().oneshot(request).await.unwrap();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    sse_or_json(&bytes)
+}
+
+fn tasks_meta() -> Value {
+    json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+           "io.modelcontextprotocol/clientCapabilities": {
+               "extensions": {"io.modelcontextprotocol/tasks": {}}}})
+}
+
+/// A task read on `/mcp` serves the stored answer, not one this request
+/// produced.
+#[tokio::test]
+async fn a_meta_task_read_states_no_effect() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(None)),
+        ..Setup::default()
+    })
+    .await;
+    let mut meta = tasks_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!("k-unvouched-task");
+    let call = json!({"name": "gateway_invoke", "task": {}, "_meta": meta,
+        "arguments": {"server": "alpha", "tool": "t", "arguments": {}}});
+    let made = send_modern(&fx, "tools/call", "gateway_invoke", call).await;
+    let id = made
+        .pointer("/result/task/taskId")
+        .or_else(|| made.pointer("/result/taskId"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("premise: a task was made: {made}"))
+        .to_owned();
+    let bound = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let params = json!({"taskId": id, "_meta": tasks_meta()});
+        let read = send_modern(&fx, "tasks/get", &id, params).await;
+        if read.pointer("/result/status") == Some(&json!("completed")) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < bound,
+            "premise: settles: {read}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let rows = deliveries(&fx);
+    let read = rows.last().expect("the read's delivery record");
+    for field in ["response_effect", "response_findings"] {
+        assert!(read.get(field).is_none(), "{field}: {read}");
     }
 }
