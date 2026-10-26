@@ -138,7 +138,9 @@ impl MetaMcp {
             .await;
         let (result, chain) = match live_or_stored(sourced) {
             ControlFlow::Continue(live) => live,
-            ControlFlow::Break(stored) => return stored.with_invocation_trace(trace),
+            // A stored answer carries its replay's trace, stamped where
+            // `audit_replay` recorded it; a refused lift recorded nothing.
+            ControlFlow::Break(stored) => return stored,
         };
         // Native: the envelope verbatim. The dispatch's chain source rides on
         // a success only, as on `gateway_invoke` (A3 R5, MIK-8159).
@@ -449,7 +451,8 @@ impl MetaMcp {
                         trace = Some(invocation);
                         result
                     }
-                    ControlFlow::Break(stored) => return stored.with_invocation_trace(invocation),
+                    // Traced by `audit_replay`, as on the named-tool path.
+                    ControlFlow::Break(stored) => return stored,
                 }
             }
             Some(MetaArm::GetStats) => self.get_stats(&arguments, caller.is_admin).await,
