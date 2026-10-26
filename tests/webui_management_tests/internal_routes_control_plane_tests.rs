@@ -6,9 +6,9 @@
 
 use super::*;
 
-const GRANT: &str = r#"{"grant":{"grant_id":"grant-1","subject_id":"user-1","server_id":"srv-1","status":"approved"},"reason":"MIK-1","rollback":{"summary":"revert","step":"restore prior grant"}}"#;
-const POLICY: &str = r#"{"policy":{"policy_id":"pol-1","name":"p","enforced":false},"reason":"MIK-1","rollback":{"summary":"revert","step":"restore prior grant"}}"#;
-const DECISION: &str = r#"{"target_kind":"grant","target_id":"grant-1","decision":"approve","reason":"MIK-1","rollback":{"summary":"revert","step":"restore prior grant"}}"#;
+const GRANT: &str = r#"{"grant":{"grant_id":"grant-1","subject_id":"user-1","server_id":"srv-1","status":"approved"},"reason":"test-reason","rollback":{"summary":"revert","step":"restore prior grant"}}"#;
+const POLICY: &str = r#"{"policy":{"policy_id":"pol-1","name":"p","enforced":false},"reason":"test-reason","rollback":{"summary":"revert","step":"restore prior grant"}}"#;
+const DECISION: &str = r#"{"target_kind":"grant","target_id":"grant-1","decision":"approve","reason":"test-reason","rollback":{"summary":"revert","step":"restore prior grant"}}"#;
 
 pub(super) const ROWS: &[Row] = &[
     // src/gateway/ui/control_plane.rs:72 (require_authenticated layer), :116 (snapshot)
