@@ -26,10 +26,12 @@ So the settings the new UI edits most (keys, spend limits, firewall rules) are e
 
 Option 2.
 
-- **Apply on reload in 4.0.0:** `auth.api_keys` (with ADR-022's rotation fields), cost_governance budgets and alerts, `security.sanitize_input` and `security.ssrf_protection`, and the policy rules, actions, sensitivity and exceptions U8 writes (U19 API19.1 and API19.3), plus the environment name (frame 28g), which only the UI reads.
+- **Apply on reload in 4.0.0** (partly amended below, 2026-10-26): `auth.api_keys` (with ADR-022's rotation fields), cost_governance budgets and alerts, `security.sanitize_input` and `security.ssrf_protection`, and the policy rules, actions, sensitivity and exceptions U8 writes (U19 API19.1 and API19.3), plus the environment name (frame 28g), which only the UI reads.
 - **Each swap is atomic.** A parse or validation failure keeps the running value; a removed key stops working for open sessions (API19.2).
 - **The restart check ignores what now applies live.** The comparison that marks a section outstanding leaves the hot-applied fields out, the way `restart_only_json` already leaves out `dashboard_session` (F1), so changing a key does not mark the rest of `auth` as needing a restart.
 - **Everything else stays restart-only** and keeps F1's truthful reporting (API19.4). The UI marks those fields ↻ before Save, and Gateway › Actions offers Restart (ADR-019).
+
+**Amended 2026-10-26 (U19).** The firewall's `collusion.sources` and `collusion.allowed_flows` do not go live in U19. The relay tracker classifies each delivery when it is recorded: whether its source was sensitive, and which `allowed_flows` entries it may leave through, one bit per entry by position. A live edit would leave evidence already held classified under the old lists: a source just made sensitive has no sensitive evidence on record, and after entries are reordered or removed a held bit can name a different flow, in some edits letting a copy leave through a flow the new rules forbid. That is a fail-open window, so both lists stay restart-only and are reported as needing a restart. They go live with the policy schema work, once sensitivity and allowed flows are judged against the current rules when a relay is witnessed. New policy fields (sensitivity, exceptions) are defined and made live by that same work, not by U19.
 
 ## Consequences
 
