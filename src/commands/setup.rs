@@ -17,7 +17,7 @@ use mcp_gateway::cli::{ConnectionMode, ExportTarget};
 use mcp_gateway::{
     cli::InitProfile,
     config::{Config, TransportConfig},
-    config_persistence::{load_config_or_default, write_config},
+    config_persistence::{load_existing_or_default, write_config},
     discovery::{AutoDiscovery, DiscoveredServer, DiscoverySource},
 };
 
@@ -74,7 +74,13 @@ pub async fn run_setup_command(yes: bool, output: &Path, configure_client: bool)
     }
 
     // ── 4. Merge into config ───────────────────────────────────────────────
-    let mut config = load_config_or_default(output);
+    let mut config = match load_existing_or_default(output) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Error: Failed to load {}: {e}", output.display());
+            return ExitCode::FAILURE;
+        }
+    };
     let added = merge_servers_into_config(&mut config, &selected);
 
     if let Err(e) = write_config(output, &config) {
@@ -415,7 +421,7 @@ mod tests {
         let code = bootstrap_local_profile(&path);
         assert_eq!(code, ExitCode::SUCCESS);
 
-        let mut config = load_config_or_default(&path);
+        let mut config = load_existing_or_default(&path).unwrap();
         let selected = vec![&server];
         let added = merge_servers_into_config(&mut config, &selected);
         write_config(&path, &config).unwrap();
