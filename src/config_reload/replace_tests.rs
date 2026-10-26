@@ -5,7 +5,9 @@
 
 use std::{path::Path, path::PathBuf, sync::Arc, time::Duration};
 
-use super::replace::{Expected, FileRevision, Replace, ReplaceError, Replaced, replace_detached};
+use super::reload_context::replace::{
+    Expected, FileRevision, Replace, ReplaceError, Replaced, replace_detached,
+};
 use super::*;
 use crate::config::Config;
 use crate::fs_lock::ExclusiveFileLock;
@@ -317,7 +319,12 @@ async fn unchanged_bytes_write_nothing_and_still_reload() {
 fn crashed_after_rename(path: &Path, bytes: &str) {
     use crate::config_persistence::journal;
     let original = journal::stage_original(path, START.as_bytes()).expect("stage");
-    journal::begin(path, &original, FileRevision::of(START.as_bytes()).0).expect("journal");
+    journal::begin(
+        path,
+        &original,
+        FileRevision::of(START.as_bytes()).as_str().to_owned(),
+    )
+    .expect("journal");
     write_owner_only(&crate::identity_grants::journal::resolved(path), bytes).expect("rename");
 }
 

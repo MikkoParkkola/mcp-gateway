@@ -46,6 +46,12 @@ impl FileRevision {
     pub(crate) fn of(bytes: &[u8]) -> Self {
         Self(crate::hashing::sha256_hex(bytes))
     }
+
+    /// The hex digest.
+    #[must_use]
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// What the file must hold for the write to go ahead.
@@ -264,7 +270,11 @@ impl ReloadContext {
 /// leaves it where it is, for the journal cleanup to remove, and is logged:
 /// the save itself succeeded.
 fn keep_beside(original: &std::path::Path, target: &std::path::Path) -> Option<PathBuf> {
-    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+    // A clock before 1970 still keeps the copy, under a name that says so.
+    let stamp = crate::clock::utc_now().map_or_else(
+        |_| "before-epoch".to_owned(),
+        |now| now.format("%Y%m%dT%H%M%SZ").to_string(),
+    );
     let base = format!("{}.{stamp}.rejected", target.display());
     for n in 1..100 {
         let name = if n == 1 {

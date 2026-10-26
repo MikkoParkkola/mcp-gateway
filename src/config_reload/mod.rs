@@ -448,7 +448,6 @@ use diff::pending_restart_fields;
 use diff::tracked_sections;
 pub use diff::{ConfigPatch, compute_diff};
 pub use reload_context::ReloadContext;
-pub(crate) use reload_context::replace;
 #[cfg(test)]
 use reload_context::{
     EvaluatedReload, changed_startup_env_keys, load_config_patch, with_pending_restart,
