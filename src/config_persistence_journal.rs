@@ -352,19 +352,36 @@ pub(crate) mod fault {
 
     static FAULTS: Mutex<Option<HashMap<PathBuf, Fault>>> = Mutex::new(None);
 
-    pub(crate) fn set(config: &Path, fault: Fault) {
+    /// Set `fault` for `config` until the returned guard drops. Dropping it,
+    /// on a panic too, clears the entry and releases a pause, so a failing
+    /// test never leaves recovery parked or its fault visible to another.
+    #[must_use]
+    pub(crate) fn set(config: &Path, fault: Fault) -> Armed {
         let key = crate::identity_grants::journal::resolved(config);
         FAULTS
             .lock()
             .expect("faults")
             .get_or_insert_with(HashMap::new)
-            .insert(key, fault);
+            .insert(key.clone(), fault.clone());
+        Armed { key, fault }
     }
 
-    pub(crate) fn clear(config: &Path) {
-        let key = crate::identity_grants::journal::resolved(config);
-        if let Some(map) = FAULTS.lock().expect("faults").as_mut() {
-            map.remove(&key);
+    /// An armed fault; see [`set`].
+    pub(crate) struct Armed {
+        key: PathBuf,
+        fault: Fault,
+    }
+
+    impl Drop for Armed {
+        fn drop(&mut self) {
+            if let Ok(mut faults) = FAULTS.lock()
+                && let Some(map) = faults.as_mut()
+            {
+                map.remove(&self.key);
+            }
+            if let Fault::Pause(pause) = &self.fault {
+                pause.release();
+            }
         }
     }
 

@@ -439,10 +439,10 @@ async fn a_journal_that_cannot_be_removed_blocks_writes_until_it_is() {
     use crate::config_persistence::journal::{self, fault};
     let (_dir, path, _ctx) = setup();
     crashed_after_rename(&path, NEXT);
-    fault::set(&path, fault::Fault::FailJournalRemove);
+    let armed = fault::set(&path, fault::Fault::FailJournalRemove);
 
     let refused = lock_now(&path).await;
-    fault::clear(&path);
+    drop(armed);
 
     match refused {
         Err(crate::config_persistence::lock::NotLocked::Failed(message)) => {
@@ -474,7 +474,7 @@ async fn a_cancelled_lock_stays_held_until_its_recovery_ends() {
     let (_dir, path, _ctx) = setup();
     crashed_after_rename(&path, NEXT);
     let pause = Arc::new(fault::Pause::default());
-    fault::set(&path, fault::Fault::Pause(Arc::clone(&pause)));
+    let armed = fault::set(&path, fault::Fault::Pause(Arc::clone(&pause)));
     let locking = path.clone();
     let task = tokio::spawn(async move {
         crate::config_persistence::lock::lock_config_recovering(
@@ -499,8 +499,7 @@ async fn a_cancelled_lock_stays_held_until_its_recovery_ends() {
         "no second holder while recovery runs"
     );
 
-    pause.release();
-    fault::clear(&path);
+    drop(armed);
     let mut freed = false;
     for _ in 0..400 {
         if let Ok(held) = ExclusiveFileLock::try_acquire(&lock) {
