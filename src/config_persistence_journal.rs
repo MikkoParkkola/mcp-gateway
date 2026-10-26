@@ -336,12 +336,22 @@ pub(crate) mod fault {
             }
         }
 
-        /// Block until recovery has reached the gate.
+        /// Block until recovery has reached the gate, at most 20 s: a test
+        /// whose recovery never gets there fails by name instead of leaving
+        /// this thread waiting forever.
         pub(crate) fn wait_entered(&self) {
-            let mut state = self.state.lock().expect("pause");
-            while !state.0 {
-                state = self.changed.wait(state).expect("pause");
-            }
+            let (state, timeout) = self
+                .changed
+                .wait_timeout_while(
+                    self.state.lock().expect("pause"),
+                    std::time::Duration::from_secs(20),
+                    |state| !state.0,
+                )
+                .expect("pause");
+            assert!(
+                state.0 && !timeout.timed_out(),
+                "recovery never reached the pause within 20 s"
+            );
         }
 
         pub(crate) fn release(&self) {
