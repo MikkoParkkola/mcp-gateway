@@ -513,6 +513,23 @@ fn a_relative_file_reference_is_refused_and_an_absolute_one_is_not() {
 }
 
 #[test]
+fn an_invalid_keychain_name_is_refused_and_a_valid_one_is_not() {
+    let mut invalid = adapter("desk", "UNUSED");
+    invalid.hmac_secret_ref = "keychain:not a name".to_string();
+    let error = validate(&[invalid]).expect_err("a name outside the grammar is refused");
+    assert_eq!(
+        error,
+        AccountsConfigError::Adapter {
+            index: 0,
+            problem: "hmac_secret_ref keychain: reference must name a valid keychain entry",
+        }
+    );
+
+    validate_secret_ref(3, "keychain:mcp-gateway.adapter-hmac.1.0000000000000001")
+        .expect("a valid keychain: reference is shaped correctly");
+}
+
+#[test]
 fn a_literal_secret_is_refused_before_the_overlay_is_asked() {
     let overlay = FakeOverlay::new(&[("anything", secret_32('z').as_str())]);
     let mut literal = adapter("desk", "UNUSED");
