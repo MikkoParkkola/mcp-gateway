@@ -71,6 +71,48 @@ MCP Gateway implements defense-in-depth across the six attack vectors identified
   (UPGRADING-4.0 item 99). A file already on disk is only checked when it is read; the check
   does not rewrite it.
 
+### Command preview sandbox
+
+A command-server preview runs inside a per-OS sandbox, or not at all (ADR-027). There is no
+setting that turns the sandbox off. On Linux, util-linux `unshare` creates fresh user, mount,
+PID, network, IPC and UTS namespaces; the gateway's own helper builds a private read-only root
+(a fresh 1 GiB home and a 256 MiB `/tmp`; homes, `/run`, `/var` and the gateway's state, config
+and data paths absent or masked), drops every capability, sets resource limits and a seccomp
+filter, and runs the command with no network.
+
+Hosts that cannot provide it refuse every command preview with the reason; the server can still
+be added without a preview:
+
+- **Ubuntu 23.10 and later** restrict unprivileged user namespaces through AppArmor
+  (`kernel.apparmor_restrict_unprivileged_userns = 1`). The one-time fix, as root, is a profile
+  that lets the gateway binary create user namespaces and runs `/usr/bin/unshare` under the same
+  profile (`unshare` is the process that creates them, so allowing the gateway binary alone is
+  not enough). Set the attach path to your installed binary:
+
+  ```
+  abi <abi/4.0>,
+  include <tunables/global>
+
+  profile mcp-gateway /usr/local/bin/mcp-gateway flags=(attach_disconnected mediate_deleted) {
+    allow all,
+    @{exec_path} mrix,
+    /usr/bin/unshare ix,
+    userns,
+    include if exists <local/mcp-gateway>
+  }
+  ```
+
+  Save it as `/etc/apparmor.d/mcp-gateway` and load it with
+  `sudo apparmor_parser -r /etc/apparmor.d/mcp-gateway`. To remove it:
+  `sudo apparmor_parser -R /etc/apparmor.d/mcp-gateway && sudo rm /etc/apparmor.d/mcp-gateway`.
+  The profile adds no confinement (`allow all`); it only grants the namespace permission.
+- **`user.max_user_namespaces = 0`** (STIG-hardened RHEL and similar): the host's hardening
+  forbids user namespaces, and the gateway does not ask to change it.
+- **Containers** (Docker, Podman defaults): the container's seccomp profile denies new
+  namespaces, so the sandbox cannot nest. Preview from a host install.
+- **macOS**: refused until its sandbox (a Seatbelt profile) lands.
+- **Windows**: no sandbox in 4.0.0.
+
 ### Security Testing
 
 - **53 dedicated security integration tests** (`tests/security_tests.rs`)

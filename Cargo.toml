@@ -249,6 +249,17 @@ mimalloc = { version = "0.1.52", default-features = false }
 # ADR-016: the Win32 security calls behind owner-only stores on Windows, used only
 # by `src/win_acl.rs`. Already in the lock file through mio, socket2 and others;
 # promoted to direct so the features below are requested explicitly.
+# ADR-027: the command preview's Linux sandbox. util-linux `unshare` makes the
+# namespaces; the gateway's own helper mounts the private root and drops its
+# privileges (rustix `mount` and `thread`, safe calls), then installs a seccomp
+# filter: seccompiler's `apply_filter` and `BpfProgram` are safe (source read
+# at =0.5.0). libc is already in the lock file; only its syscall numbers and
+# errno constants are used.
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1.1", features = ["fs", "process", "mount", "thread"] }
+seccompiler = "=0.5.0"
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
