@@ -71,12 +71,22 @@ impl<'ast> syn::visit::Visit<'ast> for UnsafeFinder {
         syn::visit::visit_item_foreign_mod(self, node);
     }
 
+    fn visit_macro(&mut self, node: &'ast syn::Macro) {
+        // A macro body is opaque tokens to the parser: `unsafe` written there
+        // is found by keyword, never by a string that merely spells it.
+        let buffer = syn::buffer::TokenBuffer::new2(node.tokens.clone());
+        self.found |= has_unsafe_keyword(buffer.begin());
+        syn::visit::visit_macro(self, node);
+    }
+
     fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
         // `#[unsafe(no_mangle)]`, and `unsafe_code` anywhere in an `allow`,
-        // `expect` or combined lint list.
+        // `expect`, `cfg_attr` or combined lint list.
         let lint_list = match &node.meta {
             syn::Meta::List(list)
-                if list.path.is_ident("allow") || list.path.is_ident("expect") =>
+                if list.path.is_ident("allow")
+                    || list.path.is_ident("expect")
+                    || list.path.is_ident("cfg_attr") =>
             {
                 list.tokens.to_string().contains("unsafe_code")
             }
@@ -85,6 +95,29 @@ impl<'ast> syn::visit::Visit<'ast> for UnsafeFinder {
         self.found |= node.path().is_ident("unsafe") || lint_list;
         syn::visit::visit_attribute(self, node);
     }
+}
+
+/// Whether the tokens from `cursor` hold the `unsafe` keyword, or
+/// `unsafe_code`, at any depth.
+fn has_unsafe_keyword(mut cursor: syn::buffer::Cursor<'_>) -> bool {
+    while !cursor.eof() {
+        if let Some((ident, next)) = cursor.ident() {
+            if ident == "unsafe" || ident == "unsafe_code" {
+                return true;
+            }
+            cursor = next;
+        } else if let Some((inside, _, _, next)) = cursor.any_group() {
+            if has_unsafe_keyword(inside) {
+                return true;
+            }
+            cursor = next;
+        } else if let Some((_, next)) = cursor.token_tree() {
+            cursor = next;
+        } else {
+            break;
+        }
+    }
+    false
 }
 
 /// Whether the Rust source in `text` uses or opts into `unsafe`. A file that
@@ -151,6 +184,10 @@ fn the_scan_sees_every_form_of_unsafe() {
         "#![allow(unsafe_code)]",
         "#[expect(unsafe_code)] fn f() {}",
         "#[allow(dead_code, unsafe_code)] fn f() {}",
+        "#[cfg_attr(test, allow(unsafe_code))] fn f() {}",
+        "m! { unsafe { g() } }",
+        "macro_rules! m { () => { unsafe { g() } }; }",
+        "fn f() { m!(#[allow(unsafe_code)] x); }",
     ] {
         assert!(uses_unsafe(path, source), "missed: {source}");
     }
@@ -158,6 +195,7 @@ fn the_scan_sees_every_form_of_unsafe() {
         "fn f() { let s = \"unsafe { }\"; }",
         "// unsafe { }\nfn f() {}",
         "#[allow(dead_code)] fn f() {}",
+        "fn f() { println!(\"unsafe {}\", 1); }",
     ] {
         assert!(!uses_unsafe(path, source), "false hit: {source}");
     }
