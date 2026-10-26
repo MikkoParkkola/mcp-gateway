@@ -11,6 +11,9 @@
 //! Every backend answer carries its delivery number (`call-N`), so a replay is
 //! proved by content as well as by the delivery count.
 
+#[path = "common/flags_off.rs"]
+mod flags_off;
+use flags_off::flags_off;
 #[path = "common/record_key.rs"]
 mod record_key;
 
@@ -164,15 +167,6 @@ impl Setup {
             ..Self::auth_off()
         }
     }
-}
-
-/// `config` with both request-path security flags off, as this fixture set
-/// them on `AppState` before they moved into the published config (ADR-023).
-fn flags_off(config: &Config) -> Config {
-    let mut config = config.clone();
-    config.security.sanitize_input = false;
-    config.security.ssrf_protection = false;
-    config
 }
 
 /// A gateway with idempotency ON and the counting backend registered. The

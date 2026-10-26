@@ -11,6 +11,8 @@
 //! and that failure is the point: a test written after the code agrees with the
 //! code, not with the requirement.
 
+#[path = "common/flags_off.rs"]
+mod flags_off;
 #[path = "common/record_key.rs"]
 mod record_key;
 use std::sync::Arc;
@@ -389,14 +391,9 @@ mod http {
             agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
             control_plane_store: None,
             control_plane_base: None,
-            live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new({
-                // Flags off, as this fixture set them on `AppState` before they
-                // moved into the published config (ADR-023).
-                let mut config = Config::default();
-                config.security.sanitize_input = false;
-                config.security.ssrf_protection = false;
-                config
-            })),
+            live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new(
+                flags_off::flags_off(&Config::default()),
+            )),
             export_status: None,
             transparency_log: None,
             dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
