@@ -156,11 +156,15 @@ async fn a_failed_grant_write_keeps_the_invocation_trace() {
     use crate::security::audit::AuditFailurePolicy;
     let (_dir, log) =
         super::route_matrix_driver_tests::response::temp_log(Some(AuditFailurePolicy::FailClosed));
-    seams::inject_note_for_test("alpha", "read", seams::Inject::NextSlotOpen);
-    seams::fail_append_at_for_test(1);
-    let answer = JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({}))
-        .with_invocation_trace("gw-call".into());
-    let (response, ()) = slot_rpc(Some(&log), RequestId::Number(1), async { (answer, ()) }).await;
-    assert!(response.error.is_some(), "premise: replaced: {response:?}");
-    assert_eq!(response.invocation_trace.as_deref(), Some("gw-call"));
+    for trace in [Some("gw-call"), None] {
+        seams::inject_note_for_test("alpha", "read", seams::Inject::NextSlotOpen);
+        seams::fail_append_at_for_test(1);
+        let mut answer = JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({}));
+        answer.invocation_trace = trace.map(Into::into);
+        let (response, ()) =
+            slot_rpc(Some(&log), RequestId::Number(1), async { (answer, ()) }).await;
+        let code = response.error.as_ref().map(|error| error.code);
+        assert_eq!(code, Some(-32005), "premise: replaced: {response:?}");
+        assert_eq!(response.invocation_trace.as_deref(), trace);
+    }
 }

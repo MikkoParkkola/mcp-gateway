@@ -364,7 +364,9 @@ async fn a_withheld_surfaced_name_delivery_joins_its_denied_record() {
                                  "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
                                            "io.modelcontextprotocol/clientCapabilities": {}}}});
     let (status, answer) = post_modern_named(&fx, "t", &body.to_string()).await;
-    assert_eq!(status, StatusCode::OK, "{answer}");
+    // The absent name's answer, as for a name that matches no tool.
+    assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+    assert!(answer.contains("-32601"), "{answer}");
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "never dispatched");
     let invoked = invocations(&fx);
     let [denied] = invoked.as_slice() else {
