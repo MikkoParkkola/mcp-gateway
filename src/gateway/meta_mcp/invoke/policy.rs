@@ -357,15 +357,12 @@ impl MetaMcp {
                 );
             }
             let missing = Err(Error::BackendNotFound(server.to_owned()));
-            self.audit_invocation(
-                &args,
-                session_id,
-                caller,
-                &recorded_trace,
-                missing,
-                audit::DispatchNotes::default(),
-            )
-            .await
+            // Out of scope, the memo's code names its check; otherwise the
+            // name matches nothing.
+            let mut notes = audit::DispatchNotes::default();
+            notes.refused_by_memo(crate::security::decision_record::DecisionKind::NotFound);
+            self.audit_invocation(&args, session_id, caller, &recorded_trace, missing, notes)
+                .await
         });
         match crate::gateway::meta_mcp::visible::memo::with_visibility_memo(recorded).await {
             Err(error) => error,

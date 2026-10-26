@@ -530,6 +530,12 @@ impl MetaMcp {
                 -32003,
                 Some(crate::security::decision_record::DecisionKind::BackendScope),
             );
+        } else {
+            // Not out of scope: the name matches nothing.
+            super::audit::note_refused_by(
+                crate::security::decision_record::DecisionKind::NotFound,
+                None,
+            );
         }
         self.record_withheld(server, tool, Withholding::Absent, caller, session_id)
             .await;

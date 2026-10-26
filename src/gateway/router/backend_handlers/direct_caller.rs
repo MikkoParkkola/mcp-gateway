@@ -326,12 +326,12 @@ pub(super) async fn read_envelope(
                 Some(crate::security::decision_record::DecisionKind::BackendScope),
             );
         }
-        if absence == crate::gateway::meta_mcp::scoped_backends::Absence::OutOfScope {
-            crate::gateway::meta_mcp::invoke::audit::note_refused_by(
-                crate::security::decision_record::DecisionKind::BackendScope,
-                None,
-            );
-        }
+        let kind = if absence == crate::gateway::meta_mcp::scoped_backends::Absence::OutOfScope {
+            crate::security::decision_record::DecisionKind::BackendScope
+        } else {
+            crate::security::decision_record::DecisionKind::NotFound
+        };
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(kind, None);
         return Err(backend_not_found(name));
     }
     // D2-b: scope is checked after the parse, so its refusal names the tool,
@@ -440,6 +440,10 @@ pub(super) fn route<'a>(
         crate::gateway::authz::BackendGrant::of(caller.client.as_ref()),
         name,
     ) else {
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::NotFound,
+            None,
+        );
         return Err(backend_not_found(name));
     };
 
