@@ -3,7 +3,9 @@
 //! Per-backend package-manager cache directories for stdio children (#2258).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tracing::warn;
 
@@ -27,26 +29,44 @@ const YARN_CACHE: &str = "YARN_CACHE_FOLDER";
 pub fn isolated_package_manager_env<S: std::hash::BuildHasher>(
     backend_name: &str,
     command: &str,
-    mut backend_env: HashMap<String, String, S>,
+    backend_env: HashMap<String, String, S>,
 ) -> HashMap<String, String, S> {
+    isolated_env_and_assigned_cache(backend_name, command, backend_env).0
+}
+
+/// [`isolated_package_manager_env`] and `assigned_package_cache_dir` from one
+/// assignment. The write probe can answer differently from one call to the
+/// next, so a start that read the two separately could hand the child a cache
+/// the repair does not know is the gateway's (MIK-8831.REL.5).
+#[must_use]
+pub(crate) fn isolated_env_and_assigned_cache<S: std::hash::BuildHasher>(
+    backend_name: &str,
+    command: &str,
+    mut backend_env: HashMap<String, String, S>,
+) -> (HashMap<String, String, S>, Option<PathBuf>) {
     // Decided on the operator's own environment, before anything is added.
     // Berry ignores a cache folder while its global cache is on, whoever set
     // the folder; an operator who set the switch keeps it.
     let yarn = cache_vars_for(command).contains(&YARN_CACHE);
     let operator_folder = yarn && operator_names(&backend_env, YARN_CACHE);
     let berry_switch_free = yarn && !operator_names(&backend_env, BERRY_GLOBAL_CACHE);
+    let mut assigned_cache = None;
     let assigned_folder = match assignment(backend_name, command, &backend_env) {
         Assignment::None => false,
-        Assignment::Unusable => {
+        Assignment::Unusable(dir) => {
             warn!(
                 backend = backend_name,
-                "package cache path is not one a package manager can use as written \
-                 (not UTF-8, relative, holding `..`, or holding `${{`); the backend keeps its runner's default cache"
+                dir = %dir.display(),
+                "package cache path is not one a package manager can use \
+                 (not UTF-8, relative, holding `..` or `${{`, or not writable); the backend keeps its runner's default cache"
             );
             false
         }
         Assignment::To { vars, dir } => {
             let folder = vars.contains(&YARN_CACHE);
+            if vars.contains(&CACHE_ENV) {
+                assigned_cache = Some(PathBuf::from(&dir));
+            }
             for var in vars {
                 backend_env.insert(var.to_owned(), dir.clone());
             }
@@ -56,7 +76,7 @@ pub fn isolated_package_manager_env<S: std::hash::BuildHasher>(
     if berry_switch_free && (operator_folder || assigned_folder) {
         backend_env.insert(BERRY_GLOBAL_CACHE.to_owned(), "false".to_owned());
     }
-    backend_env
+    (backend_env, assigned_cache)
 }
 
 /// What the gateway assigns one backend: the one decision the environment
@@ -64,8 +84,8 @@ pub fn isolated_package_manager_env<S: std::hash::BuildHasher>(
 enum Assignment {
     /// The runner reads no cache variable, or the operator set every one.
     None,
-    /// Variables are left to the gateway, but no runner could use its path.
-    Unusable,
+    /// Variables are left to the gateway, but no runner could use this path.
+    Unusable(PathBuf),
     /// These variables, each set to this directory.
     To {
         vars: Vec<&'static str>,
@@ -88,7 +108,7 @@ fn assignment<S: std::hash::BuildHasher>(
     }
     match usable_cache_dir(backend_name) {
         Some(dir) => Assignment::To { vars, dir },
-        None => Assignment::Unusable,
+        None => Assignment::Unusable(cache_dir(backend_name)),
     }
 }
 
@@ -106,6 +126,9 @@ fn assignment<S: std::hash::BuildHasher>(
 ///
 /// Only npm's cache is answered for: the repair was reviewed against npm's
 /// install failures, and the other runners' trees are left to their own tools.
+// Test-only: starts read the cache through `isolated_env_and_assigned_cache`,
+// which takes the environment and the cache from one assignment.
+#[cfg(test)]
 #[must_use]
 pub(crate) fn assigned_package_cache_dir<S: std::hash::BuildHasher>(
     backend_name: &str,
@@ -125,9 +148,42 @@ pub(crate) fn assigned_package_cache_dir<S: std::hash::BuildHasher>(
 /// config value. A `..` is read as text by npm and through symlinks by the
 /// filesystem. And a relative path resolves against the child's `cwd`, not
 /// the gateway's (`gateway_data_dir` is absolute since MIK-7964 unless the
-/// working directory is unreadable).
+/// working directory is unreadable). And a directory the child cannot create
+/// or write fails every install, where the runner's default cache would have
+/// served (MIK-8831.REL.5).
 fn usable_cache_dir(backend_name: &str) -> Option<String> {
-    usable(cache_dir(backend_name))
+    usable(cache_dir(backend_name)).filter(|dir| writable(Path::new(dir)))
+}
+
+/// Whether a child could install into `dir`: it exists or can be created, and
+/// a byte can be written to a file in it. A read-only mount passes
+/// `create_dir_all` for a directory that already exists, so only the probe
+/// file tells.
+///
+/// The probe name is unique per call and created exclusively, so a concurrent
+/// start never shares it and a planted symlink fails the open instead of
+/// redirecting the write; only a file this call created is removed.
+fn writable(dir: &Path) -> bool {
+    static PROBES: AtomicU64 = AtomicU64::new(0);
+    if std::fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    let probe = dir.join(format!(
+        ".gateway-write-probe-{}-{}",
+        std::process::id(),
+        PROBES.fetch_add(1, Ordering::Relaxed)
+    ));
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    else {
+        return false;
+    };
+    let wrote = file.write_all(b"0").and_then(|()| file.sync_all()).is_ok();
+    drop(file);
+    let _ = std::fs::remove_file(&probe);
+    wrote
 }
 
 /// `dir` as a runner will read it, or `None` when no runner could use it as
@@ -243,16 +299,36 @@ fn cache_dir(backend_name: &str) -> PathBuf {
 /// prints `undefined` for `npm_config_store_dir`; older pnpm reads
 /// `npm_config_*`. Both are set so either generation is isolated.
 fn cache_vars_for(command: &str) -> &'static [&'static str] {
-    let Some(program) = command.split_whitespace().next() else {
+    // The splitter the launch uses, so a quoted program is classified as the
+    // one that will be spawned (MIK-8831.REL.4).
+    let Some(program) = crate::transport::split_command(command).and_then(|p| p.into_iter().next())
+    else {
         return &[];
     };
-    match program.rsplit('/').next().unwrap_or(program) {
+    match runner_name(&program) {
         "npx" | "npm" => &["npm_config_cache"],
         "bunx" => &["BUN_INSTALL_CACHE_DIR"],
         "yarn" => &["YARN_CACHE_FOLDER"],
         "pnpm" => &["pnpm_config_store_dir", "npm_config_store_dir"],
         _ => &[],
     }
+}
+
+/// The runner a program path names: its last component under either
+/// separator, without a Windows `.exe` or `.cmd` launcher suffix, so
+/// `C:\node\npx.cmd` is npx as `/usr/bin/npx` is.
+fn runner_name(program: &str) -> &str {
+    let base = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    for suffix in [".exe", ".cmd"] {
+        if let Some(stem_len) = base.len().checked_sub(suffix.len())
+            && base
+                .get(stem_len..)
+                .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
+        {
+            return &base[..stem_len];
+        }
+    }
+    base
 }
 
 /// A readable prefix plus a hash of the whole name. The prefix alone maps

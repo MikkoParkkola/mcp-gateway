@@ -54,6 +54,95 @@ fn only_npm_invoking_commands_get_a_cache() {
     }
 }
 
+/// A quoted program is the one the launch spawns, so it gets the same cache
+/// as the unquoted spelling; a whitespace split read `"/opt/node` and skipped
+/// isolation (MIK-8831.REL.4).
+#[test]
+fn a_quoted_runner_gets_the_cache_its_unquoted_spelling_gets() {
+    for (quoted, plain, var) in [
+        (
+            r#""/opt/node js/bin/npx" -y pkg"#,
+            "npx -y pkg",
+            "npm_config_cache",
+        ),
+        (r#""npx" -y pkg"#, "npx -y pkg", "npm_config_cache"),
+        (
+            r#""/opt/bun dir/bunx" pkg"#,
+            "bunx pkg",
+            "BUN_INSTALL_CACHE_DIR",
+        ),
+        (
+            r#""/opt/node js/bin/npm" exec pkg"#,
+            "npm exec pkg",
+            "npm_config_cache",
+        ),
+        (
+            r#""/opt/node js/bin/pnpm" dlx pkg"#,
+            "pnpm dlx pkg",
+            "pnpm_config_store_dir",
+        ),
+        (
+            r#""/opt/node js/bin/pnpm" dlx pkg"#,
+            "pnpm dlx pkg",
+            "npm_config_store_dir",
+        ),
+        (
+            r#""/opt/node js/bin/yarn" dlx pkg"#,
+            "yarn dlx pkg",
+            "YARN_CACHE_FOLDER",
+        ),
+        (
+            r#""/opt/node js/bin/yarn" dlx pkg"#,
+            "yarn dlx pkg",
+            "YARN_ENABLE_GLOBAL_CACHE",
+        ),
+        // Windows: either separator, and a `.cmd` or `.exe` launcher.
+        (
+            r#""C:\Program Files\nodejs\npx.cmd" -y pkg"#,
+            "npx -y pkg",
+            "npm_config_cache",
+        ),
+        (
+            r#""C:\Program Files\nodejs\npx.CMD" -y pkg"#,
+            "npx -y pkg",
+            "npm_config_cache",
+        ),
+        (
+            r#""C:\bun\bunx.exe" pkg"#,
+            "bunx pkg",
+            "BUN_INSTALL_CACHE_DIR",
+        ),
+    ] {
+        let want = isolated_package_manager_env("thing", plain, HashMap::new());
+        let got = isolated_package_manager_env("thing", quoted, HashMap::new());
+        assert_eq!(got.get(var), want.get(var), "{quoted} was missed");
+        assert!(got.contains_key(var), "{plain} itself got no {var}");
+        assert_eq!(
+            assigned_package_cache_dir("thing", quoted, &HashMap::new()),
+            assigned_package_cache_dir("thing", plain, &HashMap::new()),
+            "{quoted}: the repair records what the plain spelling records"
+        );
+    }
+}
+
+/// One start reads one assignment: the cache handed to the child is the one
+/// the repair records (MIK-8831.REL.5).
+#[test]
+fn the_child_env_and_the_recorded_cache_come_from_one_assignment() {
+    let (env, recorded) =
+        crate::transport::isolated_env_and_assigned_cache("thing", "npx -y pkg", HashMap::new());
+    assert_eq!(
+        recorded
+            .as_deref()
+            .map(|dir| dir.to_string_lossy().into_owned()),
+        env.get("npm_config_cache").cloned()
+    );
+    let (env, recorded) =
+        crate::transport::isolated_env_and_assigned_cache("thing", "bunx pkg", HashMap::new());
+    assert!(env.contains_key("BUN_INSTALL_CACHE_DIR"));
+    assert_eq!(recorded, None, "only npm's cache is the repair's");
+}
+
 #[test]
 fn a_name_cannot_escape_the_state_directory() {
     let root = crate::config_persistence::gateway_data_dir()
