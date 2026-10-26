@@ -10,3 +10,5 @@ src/transport/http/budget.rs	is_budget_refusal	1	critical	d	is_budget_refusal	Te
 src/transport/http/budget.rs	per_response	1	standard	d	ByteBudget::per_response	Hands the 4 MiB limit to the session stream's decoder as its event cap; a wrong value would loosen that cap.
 src/transport/http/budget.rs	response_refusal	1	standard	d	ByteBudget::response_refusal	Words the per-response refusal so is_budget_refusal recognises it; a different wording would make an over-budget answer read as silence.
 src/transport/http/sse_channel.rs	over_budget	1	critical	d	over_budget	Turns a budgeted session stream's oversized event into the budget refusal; a miss would let the era probe fall back to a handshake past the cap.
+src/transport/http/budget.rs	refuse	1	critical	d	ByteBudget::refuse	Keeps the first budget refusal so every later read fails with it; without it a small body after an oversized stream event would let the preview succeed.
+src/transport/http/budget.rs	check	1	critical	d	ByteBudget::check	Fails a read or charge once the budget has refused anything; a skipped check would read past a refused budget.
