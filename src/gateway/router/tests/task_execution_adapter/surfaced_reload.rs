@@ -165,14 +165,15 @@ async fn l10d_a_move_between_the_check_and_the_dispatch_still_runs_on_alpha() {
 }
 
 /// Park a surfaced task on alpha, whose first answer asks for input, then
-/// apply `reload` and answer. Returns the terminal state.
+/// apply `reload` and answer. Returns the gateway, its store and the terminal
+/// state.
 async fn resumed_after(
     alpha: &Arc<MockBackend>,
     beta: &Arc<MockBackend>,
     key: &str,
     before_answer: impl FnOnce(&Arc<AppState>, &str),
-) -> Value {
-    let (state, _store) = surfaced_state(alpha, beta).await;
+) -> (Arc<AppState>, tempfile::TempDir, Value) {
+    let (state, store) = surfaced_state(alpha, beta).await;
     let created = post(&state, "key-a", declaring_elicitation(surfaced_task(key))).await;
     let id = task_id(&created);
     super::input_round::wait_input_required(&state, &id).await;
@@ -180,7 +181,8 @@ async fn resumed_after(
     let answer =
         super::input_round::update(2, &id, json!({ "confirm": super::input_round::answer() }));
     let _ = post(&state, "key-a", answer).await;
-    poll_until_terminal(&state, "key-a", &id).await
+    let fetched = poll_until_terminal(&state, "key-a", &id).await;
+    (state, store, fetched)
 }
 
 fn asking() -> Answer {
@@ -198,12 +200,35 @@ fn asking() -> Answer {
 async fn l10c_a_parked_surfaced_task_moved_before_resume_is_refused() {
     let alpha = MockBackend::answering(asking());
     let beta = MockBackend::answering(Answer::ok());
-    let fetched = resumed_after(&alpha, &beta, "l10c", |state, _| {
+    let (_state, _store, fetched) = resumed_after(&alpha, &beta, "l10c", |state, _| {
         state.meta_mcp.resurface_for_test(TOOL, BETA);
     })
     .await;
     assert_refused(&fetched);
     std::assert_eq!((alpha.calls(), beta.calls()), (1, 0), "{fetched}");
+}
+
+/// L10d: a refused resume hands back what it held. Once it settles, a drain
+/// joins every handoff and takes the whole worker pool within the bound; a
+/// slot or handoff the refusal kept would hold the drain until it timed out.
+#[tokio::test]
+async fn l10d_a_refused_resume_releases_its_worker_capacity() {
+    let alpha = MockBackend::answering(asking());
+    let beta = MockBackend::answering(Answer::ok());
+    let (state, _store, fetched) = resumed_after(&alpha, &beta, "l10d", |state, _| {
+        state.meta_mcp.resurface_for_test(TOOL, BETA);
+    })
+    .await;
+    assert_refused(&fetched);
+    let drained = state
+        .task_executor
+        .drain(std::time::Duration::from_secs(5))
+        .await;
+    std::assert!(
+        drained.is_clean(),
+        "a refused resume kept capacity: {drained:?}"
+    );
+    std::assert!(drained.acquired > 0, "the drain took the pool: {drained:?}");
 }
 
 /// L13 (N13b, pin): a round written before it recorded its surfaced server
@@ -215,7 +240,7 @@ async fn l10c_a_parked_surfaced_task_moved_before_resume_is_refused() {
 async fn l13_a_round_without_a_recorded_server_resumes_on_the_live_map() {
     let alpha = MockBackend::answering(asking());
     let beta = MockBackend::answering(Answer::ok());
-    let fetched = resumed_after(&alpha, &beta, "l13", |state, id| {
+    let (_state, _store, fetched) = resumed_after(&alpha, &beta, "l13", |state, id| {
         state
             .task_executor
             .service
