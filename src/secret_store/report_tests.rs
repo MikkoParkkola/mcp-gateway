@@ -45,7 +45,9 @@ fn saved() -> (tempfile::TempDir, tempfile::TempDir, PathBuf) {
             value,
         }];
         save_secrets(&vault, &files, &secret, |refs| {
-            let yaml = format!("auth:\n  bearer_token: \"{}\"\n", refs[0]);
+            // Double-quoted YAML: a Windows path's backslashes are escaped.
+            let quoted = refs[0].replace('\\', "\\\\");
+            let yaml = format!("auth:\n  bearer_token: \"{quoted}\"\n");
             std::fs::write(&path, yaml)
         })
         .expect("saved");
