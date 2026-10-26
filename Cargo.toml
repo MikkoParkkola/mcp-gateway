@@ -260,12 +260,14 @@ mimalloc = { version = "0.1.52", default-features = false }
 security-framework = { version = "3.7", default-features = false }
 
 # ADR-016: the Win32 security calls behind owner-only stores on Windows, used only
-# by `src/win_acl.rs`. Already in the lock file through mio, socket2 and others;
+# by `src/win_acl.rs`, and Credential Manager, used only by `src/win_cred.rs`
+# (ADR-028). Already in the lock file through mio, socket2 and others;
 # promoted to direct so the features below are requested explicitly.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Security_Credentials",
     "Win32_Storage_FileSystem",
     "Win32_System_Threading",
 ] }
