@@ -44,6 +44,7 @@ pub mod definition;
 pub mod discovery;
 mod execution_context;
 mod executor;
+mod file_writer;
 pub mod hash;
 #[cfg(test)]
 mod linear_get_issue_tests;

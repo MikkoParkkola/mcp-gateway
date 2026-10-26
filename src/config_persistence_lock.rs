@@ -172,6 +172,14 @@ pub(crate) async fn lock_config(
     }
 }
 
+/// How many callers have found `lock` held and are waiting on it: the seam a
+/// test uses to know its racers reached the lock. Red-first stub.
+#[cfg(test)]
+pub(crate) fn waiters_for_test(lock: &Path) -> usize {
+    let _ = lock;
+    0
+}
+
 /// [`lock_config`] for a synchronous caller (the CLI), which may block its
 /// own thread. `on_wait` runs once, the first time the lock is found held,
 /// so the caller can say what it is waiting for.
