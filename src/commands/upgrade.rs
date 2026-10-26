@@ -584,6 +584,9 @@ mod upgrade_webhook_notice_tests;
 #[cfg(test)]
 #[path = "upgrade_prerelease_tests.rs"]
 mod prerelease_tests;
+#[cfg(all(test, windows))]
+#[path = "upgrade_winacl_tests.rs"]
+mod winacl_tests;
 
 #[cfg(test)]
 mod tests;

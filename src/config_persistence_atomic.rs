@@ -278,3 +278,13 @@ mod atomic_tests;
 #[cfg(all(test, any(target_os = "linux", target_os = "android")))]
 #[path = "config_persistence_acl_tests.rs"]
 mod acl_tests;
+
+// Windows: an `Inherit` save keeps the target's access list on Windows.
+#[cfg(all(test, windows))]
+#[path = "config_persistence_winacl_tests.rs"]
+mod winacl_tests;
+
+// The same, through each runtime state caller.
+#[cfg(all(test, windows))]
+#[path = "config_persistence_winacl_callers_tests.rs"]
+mod winacl_callers_tests;
