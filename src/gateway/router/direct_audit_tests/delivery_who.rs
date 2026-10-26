@@ -24,6 +24,7 @@ fn bearer_auth() -> AuthConfig {
             denied_tools: None,
             admin: false,
             kind: crate::config::ApiKeyKind::Shared,
+            ..Default::default()
         }],
         public_paths: vec!["/health".to_string()],
         client_circuit_breaker: None,
@@ -603,6 +604,7 @@ async fn delivery_records_keep_caller_account_and_subject() {
                 denied_tools: None,
                 admin: false,
                 kind: crate::config::ApiKeyKind::Shared,
+                ..Default::default()
             }],
             public_paths: vec!["/health".to_string()],
             client_circuit_breaker: None,
