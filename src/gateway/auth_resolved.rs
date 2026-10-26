@@ -48,6 +48,8 @@ impl ResolvedAuthConfig {
         // resolvers refuse one (C4, `SecretRef::resolve`), so every caller that
         // builds this comparator is covered.
         let bearer_token = config.resolve_bearer_token(overlay)?;
+        #[cfg(test)]
+        let bearer_token = auto_bearer_override(config).or(bearer_token);
         let bearer_quota_principal = bearer_token
             .as_deref()
             .map(QuotaPrincipal::configured_bearer);
@@ -200,7 +202,14 @@ impl ResolvedAuthConfig {
         &self,
         token: &str,
     ) -> Option<(AuthenticatedClient, Option<NamedApiKey>)> {
-        self.validate_token_judged(token, crate::config::api_key_expired_now)
+        // One clock reading judges both the key's expiry and its previous
+        // digest's grace, so the two are never judged at different instants.
+        // An unreadable clock refuses every dated key, as
+        // `api_key_expired_now` does.
+        let now = crate::clock::utc_now().ok();
+        self.validate_token_judged(token, |at| {
+            at.is_some() && now.is_none_or(|now| crate::config::api_key_expired(at, now))
+        })
     }
 
     /// [`Self::validate_token`] judged at `now`, the caller's reading of the
@@ -217,7 +226,7 @@ impl ResolvedAuthConfig {
     }
 
     /// The one matcher behind both clocks. `expired` judges an optional expiry
-    /// instant; the wall-clock caller passes `api_key_expired_now`, which
+    /// instant; the wall-clock caller judges against one clock reading, and
     /// fails closed when the clock cannot be read.
     fn validate_token_judged(
         &self,
@@ -472,6 +481,35 @@ thread_local! {
     /// is compared against, so a test can aim it at a known token.
     static DUMMY_DIGEST_OVERRIDE: std::cell::Cell<Option<[u8; 32]>> =
         const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only stand-in for a generated `auto` bearer, so a test can make a
+    /// key equal to it.
+    static AUTO_BEARER_OVERRIDE: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn auto_bearer_override(config: &AuthConfig) -> Option<String> {
+    (config.bearer_token.as_deref() == Some("auto"))
+        .then(|| AUTO_BEARER_OVERRIDE.with(|cell| cell.borrow().clone()))
+        .flatten()
+}
+
+/// Runs `f` with every `auto` bearer resolved on this thread generated as
+/// `token`, then restores random generation.
+#[cfg(test)]
+pub(super) fn with_auto_bearer<R>(token: &str, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<String>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            AUTO_BEARER_OVERRIDE.with(|cell| *cell.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(AUTO_BEARER_OVERRIDE.with(|cell| cell.replace(Some(token.to_owned()))));
+    f()
 }
 
 /// Runs `f` with the dummy digest set to `digest` on this thread, then
