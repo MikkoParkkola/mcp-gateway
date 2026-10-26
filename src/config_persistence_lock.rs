@@ -213,6 +213,77 @@ pub(crate) fn lock_config_blocking(
     }
 }
 
+/// What a reload that did not start the write may do about the lock.
+pub(crate) enum ReaderLock {
+    /// Held (and any journal recovered): load under it.
+    Held(ExclusiveFileLock, Recovered),
+    /// No writer can exist (read-only filesystem, or a directory this
+    /// account cannot write) and no journal is pending: load without it.
+    Unlocked,
+    /// Do not load this time; the next event retries. The reason, for a log.
+    Skip(String),
+}
+
+/// Take the lock for a reader: the file watcher, the env poll, a reload
+/// the admin asked for. Writers replace gateway.yaml by atomic rename, so an
+/// unlocked reader sees whole old or whole new bytes; the lock keeps it from
+/// loading bytes a refused reload is about to roll back.
+///
+/// Read without the lock only when the sidecar cannot even be created
+/// because no writer can exist here, and no journal is pending (a stat finds
+/// none). Every other failure skips this reload: never an unlocked read.
+pub(crate) async fn reader_lock(config: &Path, deadline: Instant) -> ReaderLock {
+    match lock_config_recovering(config, deadline).await {
+        Ok((held, recovered)) => ReaderLock::Held(held, recovered),
+        Err(NotLocked::Busy) => ReaderLock::Skip(format!(
+            "another writer holds {} past the wait",
+            lock_path(&resolved(config)).display()
+        )),
+        Err(NotLocked::Failed(message)) => match no_writer_possible(config) {
+            None => ReaderLock::Skip(message),
+            Some(_) if journal_pending(config) => ReaderLock::Skip(format!(
+                "a pending write's journal {} sits beside a file this gateway cannot lock; resolve the pending write from the writable side",
+                super::journal::journal_path(config).display()
+            )),
+            Some(why) => {
+                static ONCE: std::sync::Once = std::sync::Once::new();
+                ONCE.call_once(|| {
+                    tracing::warn!(path = %config.display(), reason = why, "reading gateway.yaml without the config lock: no writer can exist here");
+                });
+                ReaderLock::Unlocked
+            }
+        },
+    }
+}
+
+/// Why no writer can exist beside `config`: creating its lock sidecar fails
+/// on a read-only filesystem, or because this account cannot write the
+/// directory. `None` for any other failure, or when the sidecar exists (the
+/// failure was then the lock itself, not its creation).
+fn no_writer_possible(config: &Path) -> Option<&'static str> {
+    let lock = lock_path(&resolved(config));
+    if std::fs::symlink_metadata(&lock).is_ok() {
+        return None;
+    }
+    match super::create_new_private(&lock) {
+        Err(e) if e.kind() == io::ErrorKind::ReadOnlyFilesystem => Some("read-only filesystem"),
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
+            Some("this account cannot write the config directory")
+        }
+        // Created after all: the earlier failure was something else, and the
+        // sidecar stays, as every sidecar does.
+        _ => None,
+    }
+}
+
+/// A journal beside `config`, or one whose absence cannot be established.
+fn journal_pending(config: &Path) -> bool {
+    !matches!(
+        std::fs::symlink_metadata(super::journal::journal_path(config)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound
+    )
+}
+
 /// Recover a replace journal under `held`; an unusable one releases the
 /// lock and refuses, naming what to do by hand.
 fn recovered(

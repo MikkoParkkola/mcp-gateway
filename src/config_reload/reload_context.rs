@@ -404,6 +404,29 @@ impl ReloadContext {
             () = self.stop.cancelled() => return Err(STOPPED.to_owned()),
             guard = lock => guard,
         };
+        // Then the config sidecar, the order every holder takes them in: so
+        // this load never reads bytes a refused write is about to roll back.
+        let deadline = std::time::Instant::now() + super::RELOAD_LOCK_WAIT;
+        let reader = tokio::select! {
+            biased;
+            () = self.stop.cancelled() => return Err(STOPPED.to_owned()),
+            reader = crate::config_persistence::lock::reader_lock(&self.config_path, deadline) => reader,
+        };
+        let _sidecar = match reader {
+            crate::config_persistence::lock::ReaderLock::Held(held, recovered) => {
+                if recovered == crate::config_persistence::journal::Recovered::RolledBack {
+                    self.reload_owed
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                Some(held)
+            }
+            crate::config_persistence::lock::ReaderLock::Unlocked => None,
+            crate::config_persistence::lock::ReaderLock::Skip(why) => {
+                return Err(format!(
+                    "config reload skipped: {why}; the next change retries"
+                ));
+            }
+        };
         let mut outcome = match self.reload_outcome_locked().await {
             Ok(outcome) => outcome,
             // Both steps render on every path: a config refusal read alone

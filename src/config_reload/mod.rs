@@ -498,6 +498,9 @@ mod writer_lock_tests;
 mod replace_tests;
 
 #[cfg(test)]
+mod reader_lock_tests;
+
+#[cfg(test)]
 mod grant_change_trigger_tests;
 
 #[cfg(test)]
