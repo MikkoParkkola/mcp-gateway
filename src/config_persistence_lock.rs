@@ -177,17 +177,21 @@ pub(crate) async fn lock_config_recovering(
     config: &Path,
     deadline: Instant,
 ) -> Result<(ExclusiveFileLock, Recovered), NotLocked> {
-    let lock = lock_path(&resolved(config));
+    // Resolved once: the lock and the recovery are about the same file, even
+    // if a symlink is re-pointed meanwhile.
+    let target = resolved(config);
+    let lock = lock_path(&target);
     loop {
         if let Some(held) = try_once(config, &lock)? {
-            // Recovery reads, writes and fsyncs: off the async workers.
-            let path = config.to_path_buf();
-            let recovery = tokio::task::spawn_blocking(move || super::journal::recover(&path))
+            // Recovery reads, writes and fsyncs: off the async workers. The
+            // lock moves into the task, so a caller cancelled while waiting
+            // here never leaves recovery running unlocked.
+            let target = target.clone();
+            return tokio::task::spawn_blocking(move || recovered(&target, held))
                 .await
                 .map_err(|e| {
                     NotLocked::Failed(format!("recovering the replace journal failed: {e}"))
                 })?;
-            return recovery.map(|r| (held, r)).map_err(NotLocked::Failed);
         }
         if Instant::now() >= deadline {
             return Err(NotLocked::Busy);
@@ -204,11 +208,12 @@ pub(crate) fn lock_config_blocking(
     deadline: Instant,
     on_wait: impl FnOnce(&Path),
 ) -> Result<ExclusiveFileLock, NotLocked> {
-    let lock = lock_path(&resolved(config));
+    let target = resolved(config);
+    let lock = lock_path(&target);
     let mut on_wait = Some(on_wait);
     loop {
         if let Some(held) = try_once(config, &lock)? {
-            return recovered(config, held).map(|(held, _)| held);
+            return recovered(&target, held).map(|(held, _)| held);
         }
         if let Some(say) = on_wait.take() {
             say(&lock);
@@ -220,13 +225,13 @@ pub(crate) fn lock_config_blocking(
     }
 }
 
-/// Recover a replace journal under `held`; an unusable one releases the
-/// lock and refuses, naming what to do by hand.
+/// Recover a replace journal beside the resolved `target` under `held`; an
+/// unusable one releases the lock and refuses, naming what to do by hand.
 fn recovered(
-    config: &Path,
+    target: &Path,
     held: ExclusiveFileLock,
 ) -> Result<(ExclusiveFileLock, Recovered), NotLocked> {
-    match super::journal::recover(config) {
+    match super::journal::recover(target) {
         Ok(recovered) => Ok((held, recovered)),
         Err(message) => Err(NotLocked::Failed(message)),
     }

@@ -225,9 +225,10 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, String> {
             })?;
             if crate::hashing::sha256_hex(&bytes) != journal.original_revision {
                 return Err(format!(
-                    "{} does not match its journal; {}",
+                    "{} does not match the digest its journal {} records, so it was not restored; compare it with {} by hand before restoring anything, then delete the journal",
                     original.display(),
-                    manual()
+                    path.display(),
+                    target.display()
                 ));
             }
             write_atomic(&target, &bytes, FileMode::Private, Symlink::Replace)
@@ -238,6 +239,17 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, String> {
         State::AllRenamed => Recovered::KeptNew,
     };
     if let Err(e) = finish(&target) {
+        if recovered == Recovered::RolledBack {
+            // A `staged` journal left behind would roll back whatever the
+            // next writer saves. Refuse until it is gone: each later lock
+            // retries, and restoring the same original again is harmless.
+            return Err(format!(
+                "{} was restored, but its journal {} could not be removed ({e}); no config write proceeds until it is: delete the journal",
+                target.display(),
+                path.display()
+            ));
+        }
+        // An `all_renamed` journal left behind only keeps the current file.
         tracing::warn!(error = %e, journal = %path.display(), "cleaning up a recovered replace journal failed; the next config write retries");
     }
     Ok(recovered)

@@ -312,7 +312,23 @@ impl ReloadContext {
                 ReplaceError::Write(format!("writing {} failed: {e}", target.display())),
             ));
         }
-        match self.reload_outcome_locked().await {
+        let reloaded = self.reload_outcome_locked().await;
+        // The reload reads gateway.yaml through its configured path. If a
+        // symlink there moved meanwhile, it loaded some other file: put ours
+        // back, and owe a reload so the runtime leaves that other file too.
+        if crate::identity_grants::journal::resolved(&self.config_path) != target {
+            unkeep();
+            self.reload_owed
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            return Err(Self::roll_back(
+                target,
+                ReplaceError::Unsupported(format!(
+                    "{} was re-pointed during the write; nothing was applied",
+                    self.config_path.display()
+                )),
+            ));
+        }
+        match reloaded {
             Ok(reload) => {
                 if let Err(e) = journal::mark_all_renamed(target) {
                     return Err(ReplaceError::Unconfirmed {
