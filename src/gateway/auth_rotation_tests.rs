@@ -5,7 +5,7 @@
 //! refuses it after; load refuses a previous digest without an expiry, two
 //! keys sharing a principal, and any two equal credential digests.
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 
 use super::ResolvedAuthConfig;
 use crate::config::AuthConfig;
@@ -104,7 +104,7 @@ fn accepted_at(config: &ResolvedAuthConfig, token: &str, now: DateTime<Utc>) -> 
 #[test]
 fn previous_secret_is_accepted_until_its_grace_ends() {
     let config = resolved(&[key("ops", NEW, Some((OLD, grace_end())))]);
-    let second = Duration::seconds(1);
+    let second = crate::duration_bound::delta!(seconds, 1);
     assert!(accepted_at(&config, OLD, grace_end() - second));
     assert!(!accepted_at(&config, OLD, grace_end()));
     assert!(!accepted_at(&config, OLD, grace_end() + second));
@@ -114,7 +114,11 @@ fn previous_secret_is_accepted_until_its_grace_ends() {
 #[test]
 fn key_expiry_and_grace_expiry_share_one_boundary() {
     fn refused_at_exactly(config: &ResolvedAuthConfig, token: &str, at: DateTime<Utc>) {
-        assert!(accepted_at(config, token, at - Duration::seconds(1)));
+        assert!(accepted_at(
+            config,
+            token,
+            at - crate::duration_bound::delta!(seconds, 1)
+        ));
         assert!(!accepted_at(config, token, at), "refused at exactly {at}");
     }
     let rotated = resolved(&[key("ops", NEW, Some((OLD, grace_end())))]);
@@ -128,9 +132,13 @@ fn key_expiry_and_grace_expiry_share_one_boundary() {
 #[test]
 fn current_secret_outlives_the_grace_and_the_key_expiry_ends_both() {
     let config = resolved(&[key("ops", NEW, Some((OLD, grace_end())))]);
-    assert!(accepted_at(&config, NEW, grace_end() + Duration::hours(1)));
+    assert!(accepted_at(
+        &config,
+        NEW,
+        grace_end() + crate::duration_bound::delta!(hours, 1)
+    ));
 
-    let key_end = grace_end() - Duration::minutes(5);
+    let key_end = grace_end() - crate::duration_bound::delta!(minutes, 5);
     let mut entry = key("ops", NEW, Some((OLD, grace_end())));
     entry["expires_at"] = serde_json::Value::String(rfc3339(key_end));
     let config = resolved(&[entry]);
@@ -169,15 +177,23 @@ fn key_after_a_leak_refuses_the_old_secret() {
         key("leaked", NEW, None),
         key("other", NEWER, Some(("k-other-old", grace_end()))),
     ]);
-    assert!(!accepted_at(&config, OLD, grace_end() - Duration::hours(1)));
-    assert!(accepted_at(&config, NEW, grace_end() - Duration::hours(1)));
+    assert!(!accepted_at(
+        &config,
+        OLD,
+        grace_end() - crate::duration_bound::delta!(hours, 1)
+    ));
+    assert!(accepted_at(
+        &config,
+        NEW,
+        grace_end() - crate::duration_bound::delta!(hours, 1)
+    ));
 }
 
 // ROT.4: a second rotation replaces the previous digest, ending the first grace.
 #[test]
 fn second_rotation_ends_the_first_grace() {
     let config = resolved(&[key("ops", NEWER, Some((NEW, grace_end())))]);
-    let inside = grace_end() - Duration::minutes(1);
+    let inside = grace_end() - crate::duration_bound::delta!(minutes, 1);
     assert!(!accepted_at(&config, OLD, inside));
     assert!(accepted_at(&config, NEW, inside));
     assert!(accepted_at(&config, NEWER, inside));
@@ -191,7 +207,7 @@ fn both_secrets_resolve_to_the_explicit_principal() {
         key("ops", NEW, Some((OLD, grace_end()))),
         PRINCIPAL,
     )]);
-    let inside = grace_end() - Duration::minutes(1);
+    let inside = grace_end() - crate::duration_bound::delta!(minutes, 1);
     let current = config
         .validate_token_at(NEW, inside)
         .expect("current secret");
@@ -200,7 +216,7 @@ fn both_secrets_resolve_to_the_explicit_principal() {
         .expect("previous secret");
     assert_eq!(current.principal.storage_form(), PRINCIPAL);
     assert_eq!(previous.principal.storage_form(), PRINCIPAL);
-    assert!(current.quota_principal == previous.quota_principal);
+    assert_eq!(current.quota_principal, previous.quota_principal);
 }
 
 // ROT.10: the provenance says which of the key's digests matched.
@@ -227,7 +243,7 @@ fn client_for_key_finds_a_rotated_key_by_its_principal() {
         key("ops", NEW, Some((OLD, grace_end()))),
         PRINCIPAL,
     )]);
-    let inside = grace_end() - Duration::minutes(1);
+    let inside = grace_end() - crate::duration_bound::delta!(minutes, 1);
     assert!(config.client_for_key("ops", PRINCIPAL).is_some());
     assert!(config.client_for_key_at("ops", PRINCIPAL, inside).is_some());
     let derived = hex_of(NEW)[..12].to_owned();
@@ -253,7 +269,10 @@ fn no_digest_prefix_slice_outside_auth_rs() {
             }
             let rel = path.strip_prefix(&root).expect("under src");
             let name = rel.to_string_lossy().replace('\\', "/");
-            if !name.ends_with(".rs") || name == "gateway/auth.rs" || name.ends_with("_tests.rs") {
+            let is_rust = path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"));
+            if !is_rust || name == "gateway/auth.rs" || name.ends_with("_tests.rs") {
                 continue;
             }
             let text = std::fs::read_to_string(&path).expect("source is readable");

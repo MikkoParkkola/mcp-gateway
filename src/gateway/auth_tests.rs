@@ -691,6 +691,9 @@ fn a_key_reissued_under_the_same_name_is_another_caller() {
     );
     let mut reissued = admin_key(false);
     reissued.digest = test_digest("new-value");
+    // Re-issued, not rotated: no explicit principal, so load derives it from
+    // the new digest (ADR-022), as `admin_key` did for the old one.
+    reissued.principal = super::principal_of_digest(&reissued.digest);
     let (state, _) = bootstrap_state(None, vec![reissued]);
     assert!(
         state
