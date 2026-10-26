@@ -436,3 +436,38 @@ async fn windows_save_keeps_a_private_file_private() {
     assert!(result.is_ok(), "{result:?}");
     assert_eq!(private(&file), 0, "the save widened a private file");
 }
+
+// ── T5 (review r1): a first-line pin in a BOM file still verifies ─────
+
+#[tokio::test]
+async fn first_line_pin_in_a_bom_file_verifies_after_a_save() {
+    let base = format!("\u{feff}{}", pinned(TEXT));
+    let (dir, file) = dir_with(&base);
+    // What a browser sends: the BOM dropped, one value changed.
+    let sent = pinned(TEXT).replace("description: Original", "description: Edited");
+
+    let result = commit(
+        edit(
+            dir.path(),
+            Base::Bytes(sha(&base)),
+            Change::Write(sent),
+            PinUpdate::InPlace,
+        ),
+        None,
+        soon(),
+    )
+    .await;
+
+    assert!(result.is_ok(), "{result:?}");
+    let on_disk = std::fs::read_to_string(&file).unwrap();
+    assert!(
+        on_disk.starts_with("sha256: "),
+        "the pin is a line the loader sees: {on_disk:?}"
+    );
+    let cap = crate::capability::parser::parse_capability_text(&on_disk, &file)
+        .expect("the saved file verifies its own pin");
+    assert_eq!(
+        cap.providers.integrity,
+        crate::capability::Integrity::Verified
+    );
+}

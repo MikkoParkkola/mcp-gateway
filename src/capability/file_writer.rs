@@ -257,7 +257,13 @@ fn final_bytes(
         };
         return Ok((sent.to_string(), change));
     }
-    let text = in_base_style(sent, current);
+    let mut text = in_base_style(sent, current);
+    // A pin on the first line must stay a line the loader's strip sees: a
+    // restored BOM in front of it would hide it, and the pin would never
+    // verify. The BOM a textarea dropped stays dropped in that one case.
+    if pins.first().is_some_and(|(index, _)| *index == 0) && text.starts_with('\u{feff}') {
+        text.remove(0);
+    }
     match pins.as_slice() {
         [] if was_pinned => Err(Refused::Unpin { patch: patch() }),
         [] => Ok((text, PinChange::None)),
@@ -455,7 +461,7 @@ fn write(
 ///
 /// The file cannot be resolved, locked, read or written, or is not YAML.
 pub fn pin_file(file: &Path) -> Result<String, String> {
-    pin_file_until(file, Instant::now() + std::time::Duration::from_secs(30))
+    pin_file_until(file, Instant::now() + std::time::Duration::from_secs(5))
 }
 
 /// [`pin_file`], waiting for the lock until `deadline`.
@@ -471,7 +477,10 @@ fn pin_file_until(file: &Path, deadline: Instant) -> Result<String, String> {
         |lock| eprintln!("Waiting for {} (another write holds it)", lock.display()),
     )
     .map_err(|e| match e {
-        NotLocked::Busy => format!("{} is locked by another write; retry", dir.display()),
+        NotLocked::Busy => format!(
+            "{} is held by another write; retry",
+            crate::config_persistence::lock::lock_path(&dir.join("capabilities")).display()
+        ),
         NotLocked::Failed(error) => error,
     })?;
     let content = std::fs::read_to_string(&real)

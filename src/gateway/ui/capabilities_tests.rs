@@ -87,10 +87,10 @@ name: test_tool
 description: A test capability
 providers:
   primary:
-service: rest
-config:
-  base_url: https://api.example.com
-  path: /test
+    service: rest
+    config:
+      base_url: https://api.example.com
+      path: /test
 "#;
     // parse_capability may warn but should not error on this minimal input
     // (validate_capability requires providers.primary which is present)
@@ -133,7 +133,7 @@ fn count_tools_returns_one_for_single_provider() {
 name: t
 providers:
   primary:
-service: rest
+    service: rest
 ";
     assert_eq!(count_tools(yaml), 1);
 }
@@ -144,9 +144,9 @@ fn count_tools_counts_named_providers() {
 name: t
 providers:
   primary:
-service: rest
+    service: rest
   secondary:
-service: rest
+    service: rest
 ";
     assert_eq!(count_tools(yaml), 2);
 }
