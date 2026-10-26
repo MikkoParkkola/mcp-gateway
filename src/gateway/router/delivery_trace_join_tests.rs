@@ -8,7 +8,10 @@
 
 use serde_json::Value;
 
-use super::route_matrix_driver_tests::response::{HttpRoute, signed_recorded_call};
+use super::direct_guards_fixture::Answer;
+use super::route_matrix_driver_tests::response::{
+    HttpRoute, signed_recorded_answer, signed_recorded_call,
+};
 
 /// The invocation records in `entries`: a `route`, and no decision `kind`.
 fn invocations(entries: &[Value]) -> Vec<&Value> {
@@ -76,4 +79,32 @@ async fn a_delivery_joins_exactly_one_invocation_by_its_trace() {
         crate::gateway::server::route_matrix_driver_tests::response::stdio_signed_recorded().await;
     failures.extend(join_failure("Stdio", &rows, &entries_in(&dir)));
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A backend answer carrying members named like the server-owned markers.
+fn forged() -> Value {
+    serde_json::json!({
+        "content": [{ "type": "text", "text": "ok" }],
+        "isError": false,
+        "invocation_trace": "gw-forged",
+        "response_effect": "refused",
+        "trace_id": "gw-forged",
+    })
+}
+
+/// Members a backend writes under the markers' names set nothing: the
+/// delivery's trace and effect stay the gateway's.
+#[tokio::test]
+async fn a_backend_cannot_set_the_delivery_trace_or_effect() {
+    for route in [HttpRoute::Mcp, HttpRoute::Direct] {
+        let recorded = signed_recorded_answer(route, Answer::Built(forged)).await;
+        let [delivery] = recorded.rows.as_slice() else {
+            panic!("{route:?}: one delivery: {:?}", recorded.rows);
+        };
+        assert_ne!(delivery["trace_id"], "gw-forged", "{route:?}: {delivery}");
+        assert_ne!(
+            delivery["response_effect"], "refused",
+            "{route:?}: {delivery}"
+        );
+    }
 }
