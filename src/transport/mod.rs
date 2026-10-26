@@ -18,6 +18,8 @@ pub use self::command_split::{split_command, split_command_unix, split_command_w
 pub use self::http::HttpTransport;
 #[cfg(feature = "a2a")]
 pub(crate) use self::http::guarded_client;
+#[cfg(any(test, feature = "webui"))]
+pub(crate) use self::http::is_budget_refusal;
 #[doc(hidden)]
 pub use self::http::transport_follows_redirect;
 pub(crate) use self::stdio::assigned_package_cache_dir;
