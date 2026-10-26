@@ -206,6 +206,7 @@ fn two_keys() -> crate::config::AuthConfig {
         denied_tools: None,
         admin: false,
         kind: crate::config::ApiKeyKind::Shared,
+        ..Default::default()
     };
     crate::config::AuthConfig {
         enabled: true,

@@ -32,6 +32,7 @@ fn config(with_backend: bool) -> Config {
         denied_tools: None,
         admin: false,
         kind: ApiKeyKind::Shared,
+        ..Default::default()
     }];
     if with_backend {
         config

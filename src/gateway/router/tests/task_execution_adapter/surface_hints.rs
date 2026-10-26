@@ -24,6 +24,7 @@ fn admin_auth() -> AuthConfig {
             denied_tools: None,
             admin: true,
             kind: crate::config::ApiKeyKind::Shared,
+            ..Default::default()
         }],
         ..AuthConfig::default()
     }

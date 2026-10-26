@@ -536,3 +536,18 @@ fn clean_text_has_no_max_severity_and_no_findings() {
         "clean text must classify with no findings: {classification}"
     );
 }
+
+/// "€" is three bytes at 2..5, so every limit below lands inside it: the
+/// prefix cut moves down to the char's start, the suffix cuts move up past it.
+#[test]
+fn byte_limits_never_split_a_multibyte_char() {
+    let text = "ab€cd";
+    assert_eq!(super::prefix_fragment(text, 3), "ab");
+    assert_eq!(super::prefix_fragment(text, 4), "ab");
+    assert_eq!(super::suffix_fragment(text, 3), "cd");
+    assert_eq!(super::suffix_fragment(text, 4), "cd");
+    assert_eq!(super::suffix_fragment(text, 5), "€cd");
+    let mut out = text.to_owned();
+    super::trim_prefix_to_limit(&mut out, 4);
+    assert_eq!(out, "cd");
+}

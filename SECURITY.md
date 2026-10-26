@@ -55,7 +55,7 @@ MCP Gateway implements defense-in-depth across the six attack vectors identified
   cannot tell its operator from a web page that rebound a hostname to loopback.
   A stdio caller is admin: it spawned the process, so it already holds whatever
   the operator holds
-- **Secrets**: OS keychain integration (macOS Keychain, Linux secret-service) — never stored in config
+- **Secrets**: OS keychain integration (macOS Keychain, Linux Secret Service, Windows Credential Manager) — never stored in config. Secrets saved through the gateway go to a fresh keychain entry or a new owner-only file (`secrets.store`: `auto`, the default, prefers the keychain; `keychain`; `files`); a value never reaches argv, a log or an error. Old entries are never deleted, and `mcp-gateway doctor` counts the unused ones; nothing cleans them up automatically
 - **Circuit breakers**: Per-backend fault isolation prevents cascading failures
 - **Rate limiting**: Token-bucket per-backend rate limiting
 - **Audit logging**: NDJSON audit trail for all tool invocations
