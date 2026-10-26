@@ -343,7 +343,7 @@ impl Twin {
             .fx
             .state
             .auth_config
-            .api_keys
+            .api_keys()
             .iter()
             .find(|k| k.name == self.side.key(self.reason))
             .and_then(|k| k.denied_tools.clone())

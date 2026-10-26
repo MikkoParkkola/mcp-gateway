@@ -435,7 +435,6 @@ async fn the_expiry_watermark_holds_on_an_unreadable_clock() {
 fn keyed(secret: &str, expires_at: chrono::DateTime<Utc>) -> crate::config::Config {
     let mut config = crate::config::Config::default();
     config.auth.api_keys = vec![crate::config::ApiKeyConfig {
-        key: None,
         key_sha256: Some(crate::config::api_key_digest_spec(secret.as_bytes())),
         expires_at: Some(expires_at),
         name: "k".to_owned(),
@@ -445,6 +444,7 @@ fn keyed(secret: &str, expires_at: chrono::DateTime<Utc>) -> crate::config::Conf
         denied_tools: None,
         admin: false,
         kind: crate::config::ApiKeyKind::Shared,
+        ..Default::default()
     }];
     config
 }

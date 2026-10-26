@@ -33,6 +33,7 @@ fn key(name: &str, secret: &str, admin: bool) -> ApiKeyConfig {
         denied_tools: None,
         admin,
         kind: ApiKeyKind::Shared,
+        ..Default::default()
     }
 }
 
@@ -518,4 +519,23 @@ async fn standing_is_judged_on_one_clock_reading() {
             "a clock failure not told apart: {refused:?}"
         );
     }
+}
+
+/// ADR-022 (MIK-8862.ROT.5): a rotated key keeps its standing under its
+/// explicit principal, and has none under the principal its new digest would
+/// derive.
+#[test]
+fn a_rotated_key_keeps_its_standing_under_its_explicit_principal() {
+    let mut dev = key("dev", "s-dev-new", false);
+    dev.principal = Some(principal("s-dev-old"));
+    let dir = tempfile::tempdir().expect("dir");
+    let (hub, _live) = hub(dir.path(), vec![dev]);
+    let now = crate::clock::utc_now().expect("clock");
+    let standing = source(&hub).standing(&principal("s-dev-old"), now);
+    assert_eq!(standing.and_then(|s| s.key).as_deref(), Some("dev"));
+    assert!(
+        source(&hub)
+            .standing(&principal("s-dev-new"), now)
+            .is_none()
+    );
 }
