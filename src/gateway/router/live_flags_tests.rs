@@ -170,7 +170,10 @@ async fn f4_ssrf_protection_follows_a_reload() {
     // why), so the reason is read from the same judgement, on the generation
     // the reload published.
     assert!(
-        message(&body).contains("does not list a tool named `read`"),
+        body.pointer("/result/isError") == Some(&json!(true))
+            && body
+                .to_string()
+                .contains("does not list a tool named `read`"),
         "on after reload: not withheld: {body}"
     );
     let refusal = super::authorization::authorize_tool_target(
