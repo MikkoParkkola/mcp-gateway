@@ -686,10 +686,11 @@ mod tests {
         assert!(!snap.key_daily.contains_key("k"), "{snap:?}");
     }
 
-    // Two values each in range can still overflow the global total; the one
-    // that would wrap it is skipped instead of wrapping the global to near zero.
+    // Two values each in range can still sum past the counter. Each is still
+    // restored: dropping one would reopen that tool's own exhausted cap. The
+    // global total saturates instead of wrapping.
     #[test]
-    fn saved_values_that_sum_past_the_counter_skip_the_one_that_overflows() {
+    fn saved_values_that_sum_past_the_counter_all_come_back() {
         let e = enforcer_with(true, Some(10.0), &[], &[], &[]);
         e.restore(&persisted(
             now_secs(),
@@ -697,15 +698,38 @@ mod tests {
             &[],
         ));
         let snap = e.snapshot();
-        assert!(
-            (snap.global_daily_usd - (1e13 + 0.25)).abs() < 1.0,
-            "{snap:?}"
+        #[allow(clippy::cast_precision_loss)]
+        let saturated = u64::MAX as f64 / 1_000_000.0;
+        assert!((snap.global_daily_usd - saturated).abs() < 1.0, "{snap:?}");
+        for tool in ["a", "b", "ok"] {
+            assert!(snap.tool_daily.contains_key(tool), "{tool}: {snap:?}");
+        }
+    }
+
+    // A counter that saturated is saved as exactly `u64::MAX` micro-USD. It
+    // must come back saturated, or the exhausted budget resets on restart.
+    #[test]
+    fn a_saturated_total_comes_back_saturated() {
+        let before = enforcer_with(true, None, &[], &[], &[]);
+        before.record_spend("t", Some("k"), 1e13);
+        before.record_spend("t", Some("k"), 1e13);
+        let snap = before.snapshot();
+        let saved = persisted(
+            now_secs(),
+            &[("t", snap.tool_daily["t"])],
+            &[("k", snap.key_daily["k"])],
         );
-        let huge = ["a", "b"]
-            .iter()
-            .filter(|t| snap.tool_daily.contains_key(**t));
-        assert_eq!(huge.count(), 1, "{snap:?}");
-        assert!(snap.tool_daily.contains_key("ok"), "{snap:?}");
+
+        let after = enforcer_with(true, None, &[], &[], &[]);
+        after.restore(&saved);
+        assert_eq!(
+            after.tool_daily.get("t").map(|a| a.current()),
+            Some(u64::MAX)
+        );
+        assert_eq!(
+            after.key_daily.get("k").map(|a| a.current()),
+            Some(u64::MAX)
+        );
     }
 
     // MIK-8904.COST.3: a day that ended while the gateway was down is not
