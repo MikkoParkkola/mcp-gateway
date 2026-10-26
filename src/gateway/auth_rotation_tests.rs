@@ -446,3 +446,30 @@ fn previous_secret_is_refused_on_an_unreadable_clock() {
         "current secret needs no clock"
     );
 }
+
+// The load-path twin of the re-issue pin (auth_tests): a key re-issued under
+// its old name with a new secret and no rotation fields is another caller, so
+// it inherits neither the old principal (its grants, sessions and tasks) nor
+// its quota bucket, and the old principal no longer finds a key.
+#[test]
+fn a_reissued_key_loaded_from_config_is_another_caller() {
+    let before = resolved(&[key("ops", OLD, None)]);
+    let after = resolved(&[key("ops", NEW, None)]);
+    let old_caller = before.validate_token(OLD).expect("the original key");
+    let new_caller = after.validate_token(NEW).expect("the re-issued key");
+    assert_ne!(
+        old_caller.principal.storage_form(),
+        new_caller.principal.storage_form()
+    );
+    assert_ne!(old_caller.quota_principal, new_caller.quota_principal);
+    assert!(
+        after.validate_token(OLD).is_none(),
+        "the old secret is gone"
+    );
+    assert!(
+        after
+            .client_for_key("ops", old_caller.principal.storage_form())
+            .is_none(),
+        "a watch stored under the old principal does not follow the name"
+    );
+}
