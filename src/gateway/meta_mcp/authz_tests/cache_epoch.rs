@@ -8,7 +8,7 @@ use super::*;
 // CACHE.4b — policy epoch at the grant-store writer (4.f.1) and the
 // in-flight bump between read-key and write-key (4.g).
 //
-// Plan: docs/design/2026-09-06-cache4-policy-epoch-test-plan.md.
+// Plan: the cache4 policy epoch test plan.
 // The caller stays AUTHORIZED across the grant mutation: a revocation is
 // decided above the cache, so a denying swap would go green without an
 // epoch anywhere. The observable is the backend call counter, never body

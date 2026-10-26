@@ -5,7 +5,7 @@
 //! A grant change applied through the grant file has no authenticated actor,
 //! so its record's `actor_id` is the literal `unknown` and everything the
 //! change is known by lives here. See
-//! `docs/design/2026-09-28-grant-change-journal.md` section 2.
+//! the grant change journal design section 2.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

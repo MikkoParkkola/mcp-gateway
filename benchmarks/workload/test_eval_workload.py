@@ -318,7 +318,7 @@ def test_observed_k_plateau_sawtooth():
     """Pins the MEASURED sawtooth. This is NOT the design's P1 assertion.
 
     P1 ("non-increasing in expectation as N grows") is FALSE for this
-    statistic and is unresolved in docs/design/614-stability-gate.md. k is an
+    statistic and is unresolved in the 614 stability gate design. k is an
     integer order statistic pinned across ranges of n; inside a plateau the
     interval is the same pair of order statistics while the sample grows, so
     its expected width rises exactly as spread() does. It falls only when k

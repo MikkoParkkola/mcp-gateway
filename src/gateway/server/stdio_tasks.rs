@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The stdio local operator's durable task store (MIK-7272.OWNER.2, design D6
-//! rev 5 items 5–7, `docs/design/2026-09-30-sub4-stdio-owner.md`).
+//! rev 5 items 5–7, the sub4 stdio owner design).
 //!
 //! Stdio opens `<tasks.store_dir>/stdio`, its own directory beside HTTP's, so
 //! the two never contend for one lease by default. When that store cannot be

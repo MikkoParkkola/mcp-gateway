@@ -216,14 +216,14 @@ test files and ignored tests are not completed feature evidence.
 
 ### Linear tickets mapped onto existing rows (operator chat ruling C1)
 
-Ruling C1 is recorded in `docs/requirements/RELEASE-4.0.0-operator-decisions.md`, section "Operator rulings given in chat" (added by #2385).
+Ruling C1 is recorded in the operator decisions ledger, kept in the private companion repository and pinned in `docs/release/private-evidence.tsv` (added by #2385).
 
-- MIK-7217 (server/discover): the MIK-7217.DISCOVER.* and MIK-7217.OUTBOUND.* baseline rows (MET), plus MIK-7217.SEARCH.1, CLAIMS.1, STDIO.1 and ERA.1-3 above. The other-repository half (Linear MCP728.DISCOVER.2: trvl, hebb, nab, metacognition, throttla) moved to MIK-7629: decision `portfolio_halves_outside_4_0` (operator ruling C5).
+- MIK-7217 (server/discover): the MIK-7217.DISCOVER.* and MIK-7217.OUTBOUND.* baseline rows (MET), plus MIK-7217.SEARCH.1, CLAIMS.1, STDIO.1 and ERA.1-3 above. The other-repository half (Linear MCP728.DISCOVER.2: the other servers' repositories) moved to MIK-7629: decision `portfolio_halves_outside_4_0` (operator ruling C5).
 - MIK-7272 (two revisions behind): the MIK-7272.RESULT/ERROR/ORDER/SUB/EXT/OAUTH/OTEL/TASK baseline rows, all MET or N/A, plus MIK-7272.OWNER.1-5 and LIFE.1 above (the SUB4.STDIO.OWNER and SUB4.BRIDGE.LIFE ACs; ids shortened to the ledger's TICKET.COMPONENT.N form).
 - MIK-7211 (portfolio-wide dual generation): for this repository, the MIK-7215.STATELESS.* baseline rows (MET) plus MIK-7211.PARENT.1, 5, 6 and 7 above. Gateway halves of AC.2-4: AC.2 -> MIK-7217.DISCOVER.1a/1b, AC.3 -> MIK-7272.RESULT.1, AC.4 -> NFR.COMPAT.1, all MET. The other-repository halves of AC.2-4 moved to MIK-7628: decision `portfolio_halves_outside_4_0` (operator ruling C5).
 - MIK-7324 (coverage and mutation): NFR.BUILD.1 C5/C6 plus MIK-7324.COV.3 above.
 - MIK-7216 (idempotency, sub-issue of MIK-7211): IDEM.2 -> MIK-7212.MRTR.10b, IDEM.3 -> MIK-7212.MRTR.10a, IDEM.4 -> MIK-7272.SUB.4 (keyless stdio calls admitted per operator ruling C4 unless server.idempotency_key is required; no HTTP exemption), IDEM.7 -> MIK-7212.MRTR.10a and NFR.COMPAT.1, all MET; IDEM.1, 5 and 6 are rows above.
-- MIK-7219 (U2 hebb de-fork spike): moved to MIK-7628 with the MIK-7211 other-repository halves; MIK-7211.PARENT.1 no longer requires it.
+- MIK-7219 (U2 memory-server de-fork spike): moved to MIK-7628 with the MIK-7211 other-repository halves; MIK-7211.PARENT.1 no longer requires it.
 - MIK-7407 (response firewall): the MIK-7407.RESPONSE.* rows added by #2387.
 - MIK-7481 (container never started in CI): NFR.PKG.1 (MET), whose row names MIK-7481 as owner; the smoke runs on the scan image (.github/workflows/docker.yml:293-294, scripts/ci/smoke-image.sh), carried from #568 (c8803f066).
 - MIK-7116 (data minimisation): MIK-7116.TENANT.1 (baseline) plus MIK-7116.MIN.1, MIN.2 and MIN.4 above. MIN.3, MIN.5 and MIN.6 are not 4.0.0 criteria: decision `mik_7116_min_kill_gate` in RELEASE-4.0.0-scope-status.json (operator ruling 2026-09-30); they are tracked in Linear MIK-7627, gated on the post-release MIN.KILL week.

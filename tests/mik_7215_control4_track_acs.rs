@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! T1 and T2 of the `MIK-7215.CONTROL.4` test plan
-//! (`docs/design/2026-09-08-control4-session-lifecycle-test-plan.md:52`).
+//! (the control4 session lifecycle test plan).
 //!
 //! The write site. T4 proves a sweep reclaims what the registry holds; these
 //! two prove the route ever puts anything there, and that it puts nothing

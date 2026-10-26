@@ -1,6 +1,6 @@
 # ADR-024: UI saves edit the file in place, all or nothing
 
-- **Status**: Decided in design, recorded here, 2026-10-25. In-place save: design D3 (MIK-8842). All or nothing across file and keychain: lead ruling 2026-10-25. The keychain sequence below refines how that ruling is met, after review.
+- **Status**: Decided in design, recorded here, 2026-10-25. In-place save: design D3 (MIK-8842). All or nothing across file and keychain: maintainer decision 2026-10-25. The keychain sequence below refines how that decision is met, after review.
 - **Ticket**: MIK-8839 (lead's addition); binding on U8 (MIK-8860, API8.5 to API8.9) and U21 (MIK-8873, API21.5 and API21.6)
 - **Base**: `docs/ranking-1-release-line` at `d13b042cb`
 
