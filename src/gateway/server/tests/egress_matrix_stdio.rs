@@ -376,15 +376,19 @@ async fn recorded_delivery(setup: Setup, part: Part, text: String) -> (String, V
     (body, row.clone())
 }
 
-/// The stdio delivery record states what the gateway did to its answer:
-/// delivered and scanned clean, rewritten with its finding, or refused.
+/// A clean stdio answer under a scanning firewall: delivered, scanned clean.
 #[tokio::test]
-async fn a_stdio_delivery_records_its_effect() {
+async fn a_clean_stdio_delivery_records_delivered() {
     let (body, row) = recorded_delivery(Setup::Default, Part::ResultText, "plain".into()).await;
     assert!(!refused(&body), "premise: delivered: {body}");
     assert_eq!(row["response_effect"], "delivered", "{row}");
     assert_eq!(row["response_findings"], json!([]), "{row}");
+}
 
+/// A credential redacted under a Warn rule on stdio: rewritten, with its
+/// finding by kind and never its text.
+#[tokio::test]
+async fn a_redacted_stdio_delivery_records_rewritten() {
     let leak = secret();
     let (body, row) = recorded_delivery(Setup::Warn, Part::ResultText, leak.clone()).await;
     assert!(
@@ -403,7 +407,11 @@ async fn a_stdio_delivery_records_its_effect() {
             .is_some_and(|k| k.starts_with("firewall:"))),
         "{row}"
     );
+}
 
+/// An interim question carrying a credential on stdio: refused whole.
+#[tokio::test]
+async fn a_refused_stdio_delivery_records_refused() {
     let (body, row) = recorded_delivery(Setup::Default, Part::InterimQuestion, secret()).await;
     assert!(refused(&body), "premise: refused whole: {body}");
     assert_eq!(row["response_effect"], "refused", "{row}");
