@@ -25,6 +25,8 @@ mod keychain;
 mod keychain_linux;
 #[cfg(target_os = "macos")]
 mod keychain_macos;
+#[cfg(windows)]
+mod keychain_windows;
 pub(crate) mod log_once;
 mod meta_mcp_config;
 mod pattern_grammar;
@@ -833,6 +835,8 @@ mod keychain_load_tests;
 mod keychain_macos_tests;
 #[cfg(test)]
 mod keychain_ref_tests;
+#[cfg(all(test, windows))]
+mod keychain_windows_tests;
 #[cfg(test)]
 mod secret_file_ref_tests;
 #[cfg(test)]

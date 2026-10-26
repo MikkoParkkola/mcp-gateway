@@ -52,6 +52,38 @@ pub(crate) trait KeychainRead: Send + Sync {
     fn read(&self, name: &str) -> Result<WipedBytes, KeychainError>;
 }
 
+/// How long one keychain call may take (ADR-028 rule 7).
+#[cfg(any(target_os = "macos", windows))]
+pub(crate) const BOUND: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Runs a native keychain `call` on its own thread, after `delay` (a test
+/// seam), and waits at most `bound`. A late answer is dropped unread, and its
+/// value wiped; the thread itself is left to finish.
+#[cfg(any(target_os = "macos", windows))]
+pub(crate) fn bounded(
+    bound: std::time::Duration,
+    delay: std::time::Duration,
+    call: impl FnOnce() -> Result<WipedBytes, KeychainError> + Send + 'static,
+) -> Result<WipedBytes, KeychainError> {
+    use std::sync::mpsc;
+    let (send, receive) = mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("keychain-read".into())
+        .spawn(move || {
+            std::thread::sleep(delay);
+            // A receiver that timed out is gone; the value is wiped on drop.
+            let _ = send.send(call());
+        })
+        .map_err(|_| KeychainError::Unavailable("no thread for the keychain call".into()))?;
+    match receive.recv_timeout(bound) {
+        Ok(found) => found,
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(KeychainError::Timeout),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(KeychainError::Unavailable(
+            "the keychain call ended without an answer".into(),
+        )),
+    }
+}
+
 /// The reader an [`EnvOverlay`](super::EnvOverlay) resolves through. The
 /// default is the OS keychain.
 #[derive(Clone)]
@@ -85,7 +117,9 @@ fn os_keychain() -> Arc<dyn KeychainRead> {
         let os: Arc<dyn KeychainRead> = Arc::new(super::keychain_linux::LinuxKeychain::from_path());
         #[cfg(target_os = "macos")]
         let os: Arc<dyn KeychainRead> = Arc::new(super::keychain_macos::MacKeychain::search_list());
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(windows)]
+        let os: Arc<dyn KeychainRead> = Arc::new(super::keychain_windows::WindowsKeychain::new());
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         let os: Arc<dyn KeychainRead> = Arc::new(Unsupported);
         os
     })
@@ -116,10 +150,10 @@ pub(crate) fn with_test_keychain<T>(reader: Arc<dyn KeychainRead>, body: impl Fn
 }
 
 /// A target with no keychain reader yet: every read is refused by name.
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 struct Unsupported;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 impl KeychainRead for Unsupported {
     fn read(&self, _name: &str) -> Result<WipedBytes, KeychainError> {
         Err(KeychainError::Unavailable(

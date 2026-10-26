@@ -1,14 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! ADR-016: `unsafe` lives in exactly the scoped modules named here. A new
-//! site fails this test until an ADR names it (ADR-028 rule 10 adds the
-//! Windows credential module when it lands).
+//! site fails this test until an ADR names it (ADR-028 rule 10 added the
+//! Windows credential module).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// Product and test-helper files allowed to hold `unsafe`.
-const ALLOWED: &[&str] = &["src/win_acl.rs", "src/gateway/server/tests/alloc_meter.rs"];
+const ALLOWED: &[&str] = &[
+    "src/win_acl.rs",
+    "src/win_cred.rs",
+    "src/gateway/server/tests/alloc_meter.rs",
+];
 
 /// Integration tests with their own `unsafe` exemption (environment mutation
 /// in single-threaded test binaries), recorded so a new one is a decision.
