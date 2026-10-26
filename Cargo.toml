@@ -188,6 +188,8 @@ uuid = { version = "1.23", features = ["v4", "fast-rng"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 # IANA zones for `schedule.tick` cron expressions (MIK-7720)
 chrono-tz = "0.10.4"
+# The host's IANA zone name, for local-day budgets; already in the tree via chrono
+iana-time-zone = "0.1.65"
 dashmap = "6.2"
 parking_lot = "0.12"
 bytes = "1.11.1"
