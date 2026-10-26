@@ -136,6 +136,10 @@ impl Registry {
 
     /// Report a surfaced-tools change from a config reload.
     pub(in crate::gateway) fn nudge_surfaced(&self) {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Lifecycle: the classed operation itself"
+        )]
         self.0.nudge_surfaced();
     }
 
