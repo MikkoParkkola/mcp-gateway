@@ -275,9 +275,18 @@ fn validate_secret_ref(index: usize, reference: &str) -> Result<(), AccountsConf
         }
         return Ok(());
     }
+    if let Some(name) = reference.strip_prefix("keychain:") {
+        if !crate::config::is_keychain_name(name) {
+            return Err(fail(
+                "hmac_secret_ref keychain: reference must name a valid keychain entry",
+            ));
+        }
+        return Ok(());
+    }
     let Some(variable) = reference.strip_prefix("env:") else {
         return Err(fail(
-            "hmac_secret_ref must be an env: or file: reference, never a literal secret",
+            "hmac_secret_ref must be an env:, file: or keychain: reference, never a literal \
+             secret",
         ));
     };
     if variable.trim().is_empty() {

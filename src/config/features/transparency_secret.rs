@@ -60,6 +60,7 @@ impl TransparencyLogConfig {
                 SecretRef::File(path) => secret_ref::read_file_ref(FIELD, path).inspect(|key| {
                     refs.1.insert(path.to_path_buf(), Some(digest(key)));
                 }),
+                reference @ SecretRef::Keychain(_) => reference.resolve(FIELD, overlay),
             }
         };
         match resolved {
