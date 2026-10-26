@@ -56,8 +56,8 @@ pub struct Redactor {
     member_value: Regex,
 }
 
-/// The connection-string rule's prefix, one text for the rule and for the
-/// barrier [`Spliced`] writes (MIK-8794).
+/// The connection-string rule's prefix. The barrier [`Spliced`] writes
+/// tracks the same schemes byte by byte; a test pins the lists.
 macro_rules! connection_prefix {
     () => {
         "(?i)(?:postgres|mysql|mongodb|redis)://"
@@ -455,10 +455,7 @@ impl Redactor {
     /// [`KEY_MATCH_TAIL`] cannot invent a match, and that tail holds every
     /// match a key can start.
     fn match_starts_in(&self, text: &str, lit: &Literal) -> bool {
-        let mut end = (lit.end() + KEY_MATCH_TAIL).min(text.len());
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
+        let end = text.floor_char_boundary((lit.end() + KEY_MATCH_TAIL).min(text.len()));
         let near = &text[..end];
         self.set
             .matches_at(near, lit.start())
@@ -634,10 +631,7 @@ fn overlapping_spans(re: &Regex, text: &str) -> Vec<(usize, usize)> {
             break; // an empty match at the end; no pattern matches empty today
         }
         let next = m.start() + text[m.start()..].chars().next().map_or(1, char::len_utf8);
-        let mut floor = covered.saturating_sub(OVERLAP_WINDOW);
-        while !text.is_char_boundary(floor) {
-            floor -= 1;
-        }
+        let floor = text.floor_char_boundary(covered.saturating_sub(OVERLAP_WINDOW));
         at = next.max(floor);
     }
     spans

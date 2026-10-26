@@ -15,9 +15,9 @@ use super::config_write::CommentLoss;
 
 use mcp_gateway::{
     config::TransportConfig,
+    config_persistence::load_existing_or_default,
     gateway::ui::backend_ops::{
-        self, add_backend, get_backend, list_backends, parse_env_vars, remove_backend,
-        resolve_backend,
+        add_backend, get_backend, list_backends, parse_env_vars, remove_backend, resolve_backend,
     },
     gateway::ui::backends::RegistryEntryJson,
     registry::server_registry,
@@ -134,7 +134,13 @@ pub fn run_remove_command(name: &str, config: &Path, mode: CommentLoss) -> ExitC
 
 /// Run `mcp-gateway list`.
 pub fn run_list_command(json: bool, config: &Path) -> ExitCode {
-    let gateway_config = backend_ops::load_config_or_default(config);
+    let gateway_config = match load_existing_or_default(config) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Error: Failed to load {}: {e}", config.display());
+            return ExitCode::FAILURE;
+        }
+    };
 
     if gateway_config.backends.is_empty() {
         if json {
@@ -208,7 +214,13 @@ pub fn run_list_available_command(json: bool) -> ExitCode {
 
 /// Run `mcp-gateway get`.
 pub fn run_get_command(name: &str, config: &Path) -> ExitCode {
-    let gateway_config = backend_ops::load_config_or_default(config);
+    let gateway_config = match load_existing_or_default(config) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Error: Failed to load {}: {e}", config.display());
+            return ExitCode::FAILURE;
+        }
+    };
 
     let info = match get_backend(&gateway_config, name) {
         Ok(i) => i,

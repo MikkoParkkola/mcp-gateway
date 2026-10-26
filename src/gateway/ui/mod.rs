@@ -18,6 +18,7 @@ mod dashboard;
 mod errors;
 mod events;
 pub mod import;
+mod preview;
 pub(crate) mod session;
 mod shell;
 
@@ -70,6 +71,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route(routes::UI_RELOAD, post(reload))
         .route(routes::UI_DASHBOARD_LINK, post(session::dashboard_link))
         .route(routes::DASHBOARD, get(dashboard_handler))
+        .route(routes::UI_PREVIEWS, post(preview::preview_backend))
         .merge(capabilities::capabilities_router())
         .merge(control_plane::control_plane_router())
         .merge(backends::backends_router())
@@ -625,6 +627,8 @@ async fn costs(
         "aggregate": serde_json::to_value(tracker.aggregate()).unwrap_or(serde_json::Value::Null),
         "by_key":     serde_json::to_value(tracker.all_keys()).unwrap_or(serde_json::json!([])),
         "by_session": serde_json::to_value(tracker.all_sessions_fingerprinted()).unwrap_or_default(),
+        // The zone daily budgets count days in (ADR-026).
+        "day_zone": state.meta_mcp.day_zone(),
     }))
     .into_response()
 }

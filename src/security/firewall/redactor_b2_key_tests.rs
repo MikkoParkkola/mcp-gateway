@@ -416,3 +416,18 @@ fn g1_a_second_pass_changes_these_no_more_mik_8794() {
         );
     }
 }
+
+/// The key's match window ends 64 bytes past it, inside a run of "é"; one of
+/// the two pads puts that end mid-char, and the key is projected either way.
+#[test]
+fn k8_the_key_match_window_never_splits_a_multibyte_char() {
+    let key = format!("ghp_{}", "k".repeat(36));
+    let tail = "é".repeat(60);
+    for pad in ["", "x"] {
+        let text = format!(r#"{{"{key}":"{pad}{tail}"}}"#);
+        assert_eq!(
+            assert_projected(&text),
+            format!(r#"{{"{MARK}":"{pad}{tail}"}}"#)
+        );
+    }
+}

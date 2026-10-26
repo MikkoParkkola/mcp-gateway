@@ -13,9 +13,10 @@ pub(super) const fn default_anomaly_min_observations() -> u64 {
 }
 
 impl FirewallConfig {
-    /// Refuse anomaly thresholds and relay settings that cannot mean what
-    /// they say.
+    /// Refuse rule globs, anomaly thresholds and relay settings that cannot
+    /// mean what they say.
     ///
+    /// Rule `match` globs are checked only when the firewall is on.
     /// Anomaly thresholds are checked only when `anomaly_detection` is on,
     /// relay settings only when `collusion.action` is not `off`, so a config
     /// that enables neither loads exactly as before.
@@ -24,6 +25,19 @@ impl FirewallConfig {
     ///
     /// A message naming the first out-of-range field.
     pub fn validate(&self) -> Result<(), String> {
+        // A `match` glob that does not parse would fail open at runtime, so it
+        // is refused while the rules can run. The message names the rule's
+        // path, not its text.
+        if self.enabled
+            && let Some(i) = self
+                .rules
+                .iter()
+                .position(|rule| glob::Pattern::new(&rule.tool_match).is_err())
+        {
+            return Err(format!(
+                "security.firewall.rules[{i}].match is not a valid glob"
+            ));
+        }
         // Relay detection is independent of anomaly detection: checked first.
         self.collusion.validate(self.enabled)?;
         if !self.anomaly_detection {
