@@ -49,7 +49,7 @@ fn test_auth_config_resolution() {
     assert!(resolved.enabled);
     assert_eq!(resolved.bearer_token, Some("test-token".to_string()));
     assert_eq!(resolved.api_keys().len(), 1);
-    assert_eq!(resolved.api_keys[0].name, "Test Client");
+    assert_eq!(resolved.api_keys()[0].name, "Test Client");
     assert!(resolved.is_public_path("/health"));
     assert!(!resolved.is_public_path("/mcp"));
 }

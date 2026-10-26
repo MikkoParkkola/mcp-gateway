@@ -245,6 +245,19 @@ impl NamedApiKey {
 #[path = "auth_resolved.rs"]
 mod resolved;
 
+/// Carries the matched key's provenance with the request, so downstream checks
+/// read it rather than re-derive it. A request that presented a rotated key's
+/// previous secret is logged at DEBUG, naming only the key (ADR-022).
+fn attach_api_key(request: &mut Request<Body>, api_key: Option<NamedApiKey>) {
+    let Some(api_key) = api_key else {
+        return;
+    };
+    if api_key.matched_previous_digest() {
+        debug!(key = %api_key.name(), "API key authenticated with its previous secret");
+    }
+    request.extensions_mut().insert(api_key);
+}
+
 pub use crate::security::audit::CredentialKind;
 
 /// The one API-key predicate (MIK-8659): a caller's API-key name iff it authenticated with an API key.
@@ -660,9 +673,7 @@ async fn authenticate_request(
         if let Some((client, api_key)) = auth_config.validate_token_with_origin(&presented) {
             // The adapter allow-list is checked downstream against this, so the
             // provenance has to travel with the request rather than be re-derived.
-            if let Some(api_key) = api_key {
-                request.extensions_mut().insert(api_key);
-            }
+            attach_api_key(&mut request, api_key);
             request.extensions_mut().insert(client);
             return next.run(request).await;
         }
@@ -726,9 +737,7 @@ async fn authenticate_request(
             return deny;
         }
         debug!(client = %client.name, path = %path, "Authenticated via static key");
-        if let Some(api_key) = api_key {
-            request.extensions_mut().insert(api_key);
-        }
+        attach_api_key(&mut request, api_key);
         request.extensions_mut().insert(client);
         return next.run(request).await;
     }

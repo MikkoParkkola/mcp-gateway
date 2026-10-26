@@ -206,7 +206,8 @@ impl ResolvedAuthConfig {
     }
 
     /// [`Self::validate_token`] judged at `now`, the caller's reading of the
-    /// clock; reads no clock (MIK-8202).
+    /// clock; reads no clock (MIK-8202). Tests judge expiry boundaries with it.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn validate_token_at(
         &self,
@@ -291,9 +292,6 @@ impl ResolvedAuthConfig {
         // A previous digest is accepted only until its grace ends.
         if via_previous && expired(key.previous.as_ref().map(|p| p.expires_at)) {
             return None;
-        }
-        if via_previous {
-            tracing::debug!(target: AUTH_TARGET, key = %key.name, "API key authenticated with its previous secret");
         }
         Some((
             Self::client_of(key),
