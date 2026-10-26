@@ -708,7 +708,8 @@ fn decode_key(key_id: &str, encoded: &str) -> Result<Vec<u8>, AccountsConfigErro
 pub(crate) trait SecretOverlay {
     /// A whole reference: `env:NAME` looked up in the overlay
     /// (`Ok(None)` when unset), `file:PATH` read under the C2 mode rule (C9),
-    /// anything else the literal. `Err` is a message naming `field`, never a
+    /// `keychain:NAME` read from the OS keychain (ADR-028), anything else the
+    /// literal. `Err` is a message naming `field`, never a
     /// value.
     fn resolve_reference(&self, field: &str, reference: &str) -> Result<Option<String>, String>;
 }

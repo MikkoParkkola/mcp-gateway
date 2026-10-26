@@ -165,6 +165,7 @@ pub mod validator;
 mod private_fs;
 #[cfg(windows)]
 mod win_acl;
+mod wiped_bytes;
 /// The one YAML seam (MIK-8425); crate-private.
 mod yaml;
 

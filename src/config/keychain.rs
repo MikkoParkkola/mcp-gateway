@@ -7,18 +7,30 @@
 
 use std::sync::Arc;
 
+pub(crate) use crate::wiped_bytes::WipedBytes;
+
 /// Why a keychain read did not return a value. Never holds the value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum KeychainError {
     /// No entry has that name.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "constructed by the OS readers, which land next")
+    )]
     Missing,
     /// The store holding the entry is locked, and the gateway never prompts.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "constructed by the OS readers, which land next")
+    )]
     Locked,
     /// The store cannot be reached: no tool, no session bus, or a refusal.
     Unavailable(String),
-    /// The entry's bytes are not UTF-8.
-    NotUtf8,
     /// The store did not answer within the bound (ADR-028 rule 7).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "constructed by the OS readers, which land next")
+    )]
     Timeout,
 }
 
@@ -29,7 +41,6 @@ impl KeychainError {
             Self::Missing => "it does not exist".to_owned(),
             Self::Locked => "the keychain is locked".to_owned(),
             Self::Unavailable(why) => format!("the keychain is unavailable: {why}"),
-            Self::NotUtf8 => "it is not UTF-8".to_owned(),
             Self::Timeout => "the keychain timed out".to_owned(),
         }
     }
@@ -39,34 +50,6 @@ impl KeychainError {
 pub(crate) trait KeychainRead: Send + Sync {
     /// The entry's exact bytes.
     fn read(&self, name: &str) -> Result<WipedBytes, KeychainError>;
-}
-
-/// Secret bytes overwritten on drop. `Debug` shows only the length.
-pub(crate) struct WipedBytes(Vec<u8>);
-
-impl WipedBytes {
-    pub(crate) fn new(bytes: Vec<u8>) -> Self {
-        Self(bytes)
-    }
-
-    pub(crate) fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl Drop for WipedBytes {
-    fn drop(&mut self) {
-        // No `zeroize` crate in the tree; `black_box` keeps the stores from
-        // being elided as writes to memory about to be freed (as `WipedToken`).
-        self.0.iter_mut().for_each(|byte| *byte = 0);
-        std::hint::black_box(&self.0);
-    }
-}
-
-impl std::fmt::Debug for WipedBytes {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "WipedBytes({} bytes)", self.0.len())
-    }
 }
 
 /// The reader an [`EnvOverlay`](super::EnvOverlay) resolves through. The
@@ -90,7 +73,7 @@ impl Default for KeychainReader {
         if let Some(reader) = TEST_READER.with(|slot| slot.borrow().clone()) {
             return Self(reader);
         }
-        Self(os_keychain())
+        Self::new(os_keychain())
     }
 }
 
@@ -118,14 +101,15 @@ thread_local! {
 /// Runs `body` with every overlay built on this thread reading from `reader`.
 #[cfg(test)]
 pub(crate) fn with_test_keychain<T>(reader: Arc<dyn KeychainRead>, body: impl FnOnce() -> T) -> T {
-    struct Reset;
-    impl Drop for Reset {
+    struct Restore(Option<Arc<dyn KeychainRead>>);
+    impl Drop for Restore {
         fn drop(&mut self) {
-            TEST_READER.with(|slot| *slot.borrow_mut() = None);
+            let previous = self.0.take();
+            TEST_READER.with(|slot| *slot.borrow_mut() = previous);
         }
     }
-    TEST_READER.with(|slot| *slot.borrow_mut() = Some(reader));
-    let _reset = Reset;
+    let previous = TEST_READER.with(|slot| slot.borrow_mut().replace(reader));
+    let _restore = Restore(previous);
     body()
 }
 

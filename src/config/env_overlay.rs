@@ -125,7 +125,8 @@ impl std::fmt::Debug for EnvOverlay {
                 "secret_files",
                 &self.secret_files.keys().collect::<Vec<_>>(),
             )
-            .finish()
+            // The keychain reader holds no state worth printing.
+            .finish_non_exhaustive()
     }
 }
 
@@ -142,7 +143,8 @@ impl crate::personal_accounts::config::SecretOverlay for EnvOverlay {
 impl EnvOverlay {
     /// A whole-value secret in the one grammar (C4, C9), for callers outside
     /// `config`: `env:NAME` looks `NAME` up (`Ok(None)` when unset), `file:PATH`
-    /// reads the file under the C2 mode rule, and anything else is the literal.
+    /// reads the file under the C2 mode rule, `keychain:NAME` reads the OS
+    /// keychain entry (ADR-028), and anything else is the literal.
     ///
     /// # Errors
     ///

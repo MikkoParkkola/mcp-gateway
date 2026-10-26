@@ -122,7 +122,10 @@ fn a7_no_refusal_carries_the_value() {
         (other, None),
         (NAME, Some(KeychainError::Locked)),
         (NAME, Some(KeychainError::Timeout)),
-        (NAME, Some(KeychainError::NotUtf8)),
+        (
+            NAME,
+            Some(KeychainError::Unavailable("no session bus".to_owned())),
+        ),
     ];
     for (asked, failure) in cases {
         let fake = Arc::new(FakeKeychain::default());

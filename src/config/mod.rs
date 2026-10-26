@@ -756,8 +756,14 @@ impl Config {
         };
         // A literal stays as written; an empty one is `validate_with_env`'s to
         // report, like an unresolved reference left verbatim.
+        // A value that itself reads as a reference (an `env:` variable holding
+        // `keychain:x` or `file:/p`) is not written back: every resolver parses
+        // the slot again, and would follow the value as a second reference.
+        // Left as the original reference, it resolves once, to that text.
         let mut subst = |slot: &mut String, seen: &mut BTreeSet<String>| {
-            if let Some(value) = record(slot, seen) {
+            if let Some(value) = record(slot, seen)
+                && matches!(SecretRef::parse(&value), SecretRef::Literal(_))
+            {
                 *slot = value;
             }
         };

@@ -107,10 +107,11 @@ pub(crate) fn read_keychain_ref(field: &str, name: &str, overlay: &EnvOverlay) -
     // Checked before any lookup: a name outside the grammar is a typo, and
     // asking the store about it could only prompt or mislead.
     if !is_keychain_name(name) {
+        // The rejected text is not echoed: a mistyped literal secret would
+        // otherwise land in the startup log.
         return Err(Error::ConfigValidation(format!(
-            "{field} references keychain:{}, which is not a valid keychain name \
-             (1-128 of A-Z, a-z, 0-9, '.', '_', '-').",
-            name.escape_debug()
+            "{field} uses a keychain: reference whose name is not a valid keychain name \
+             (1-128 of A-Z, a-z, 0-9, '.', '_', '-')."
         )));
     }
     let refused = |why: &str| {
@@ -119,7 +120,6 @@ pub(crate) fn read_keychain_ref(field: &str, name: &str, overlay: &EnvOverlay) -
     let bytes = match overlay.keychain().read(name) {
         Ok(bytes) => bytes,
         Err(KeychainError::Missing) => return Err(refused("which does not exist.")),
-        Err(KeychainError::NotUtf8) => return Err(refused("which is not UTF-8.")),
         Err(other) => {
             return Err(refused(&format!(
                 "which cannot be read: {}.",
