@@ -131,6 +131,13 @@ fn stamped(
     hub.observed_now(sub, config).expect("observable")
 }
 
+/// Why `event_id` was buried; `None` while it is not.
+fn buried_as(hub: &EventsHub, event_id: &str) -> Option<String> {
+    hub.store
+        .dead_letter_by_id(event_id)
+        .map(|dead| dead.reason)
+}
+
 #[tokio::test]
 async fn iso_t2_a_rotation_buries_only_the_rotated_users_queued_record() {
     use std::sync::atomic::Ordering;
@@ -159,16 +166,19 @@ async fn iso_t2_a_rotation_buries_only_the_rotated_users_queued_record() {
     hub.attempt(&services, "evt_u2").await;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
+    assert!(
+        other_posts.load(Ordering::SeqCst) >= 1,
+        "the other user's record is delivered (buried as {:?})",
+        buried_as(&hub, "evt_u2")
+    );
     assert_eq!(
         rotated_posts.load(Ordering::SeqCst),
         0,
         "nothing observed under the old grant is sent after the rotation"
     );
-    let dead = hub.store.dead_letter_by_id("evt_u1").expect("buried");
-    assert_eq!(dead.record.dead_as, Some(DeadReason::Observation));
-    assert!(
-        other_posts.load(Ordering::SeqCst) >= 1,
-        "the other user's record is delivered"
+    assert_eq!(
+        buried_as(&hub, "evt_u1").as_deref(),
+        Some(DeadReason::Observation.as_str())
     );
 }
 
@@ -200,6 +210,8 @@ async fn iso_t2_an_old_run_emission_after_the_rotation_is_buried() {
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     assert_eq!(posts.load(Ordering::SeqCst), 0);
-    let dead = hub.store.dead_letter_by_id("evt_u1").expect("buried");
-    assert_eq!(dead.record.dead_as, Some(DeadReason::Observation));
+    assert_eq!(
+        buried_as(&hub, "evt_u1").as_deref(),
+        Some(DeadReason::Observation.as_str())
+    );
 }

@@ -178,8 +178,8 @@ fn a_reconnect_required_grant_fences_closed() {
     seed(tmp.path(), &[(alice(), unexpired_grant(ALICE_TOKEN))]);
     journey(tmp.path(), |store| {
         store
-            .mark_reconnect_required(&alice(), &seeded_revision())
-            .expect("mark");
+            .mark_reconnect_required(&alice(), &"1".repeat(64))
+            .expect("a descriptor move marks the grant");
     });
     assert!(matches!(fence_now(tmp.path()), ViewBinding::NoView(_)));
 }
