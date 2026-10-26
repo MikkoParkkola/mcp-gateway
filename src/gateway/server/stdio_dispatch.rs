@@ -624,9 +624,7 @@ impl Gateway {
             // unless X14 spent a grant first.
             // In a route decision scope, as on `/mcp`: a refusal here names
             // the check that made it.
-            // Boxed: allocated only when the stage runs, so a call refused
-            // before it (a nonce refusal) carries none of its state.
-            let (stage, witness) = Box::pin(
+            let (stage, witness) =
                 crate::gateway::meta_mcp::invoke::audit::with_route_scope(Self::stdio_route_stage(
                     meta_mcp,
                     &id,
@@ -634,9 +632,8 @@ impl Gateway {
                     &caller,
                     client,
                     witness,
-                )),
-            )
-            .await;
+                ))
+                .await;
             match stage {
                 RouteStage::Answer(answer) => {
                     if let Some(witness) = witness {
