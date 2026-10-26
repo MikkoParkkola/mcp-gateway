@@ -465,7 +465,7 @@ mod canary;
 mod tenants;
 // MIK-8520: a surfaced replay records the server it was admitted for.
 mod surfaced_replay;
-// MIK-8914: refusals answered with a non-refusal code still name their check.
+// MIK-8914.API2A.13: refusals answered with a non-refusal code name their check.
 mod decision_kinds;
 
 /// MIK-7735. A backend's own `-32001` / `-32004` answer is the peer's

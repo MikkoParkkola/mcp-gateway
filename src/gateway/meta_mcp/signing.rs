@@ -658,7 +658,7 @@ impl super::MetaMcp {
                 .map(Some)
                 .inspect_err(|e| {
                     // A malformed nonce is the request's shape; a replayed or
-                    // over-limit one has no kind naming it yet (MIK-8914, PR2),
+                    // over-limit one has no kind naming it yet (MIK-8914.API2A.17),
                     // and `syntax` would call a replay malformed.
                     refused(
                         if e.to_rpc_code() == crate::error::rpc_codes::INVALID_PARAMS {

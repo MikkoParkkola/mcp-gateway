@@ -218,7 +218,7 @@ pub(super) struct Envelope {
 }
 
 /// A backend the caller cannot see: an out-of-scope one keeps its `-32003`
-/// for the call's one record (MIK-8361), and the refusal names its check.
+/// for the call's one record, and the refusal names its check.
 fn note_absent(
     (name, tool): (&str, Option<&str>),
     method: &str,

@@ -209,7 +209,7 @@ pub(super) fn rejected_continuation(
     reason: &crate::protocol::continuation::ContinuationError,
 ) -> Error {
     // A spent, forged or expired handle: no kind names redemption yet
-    // (MIK-8914, PR2), and `syntax` would call it malformed.
+    // (MIK-8914.API2A.17), and `syntax` would call it malformed.
     super::audit::note_refused_by(
         crate::security::decision_record::DecisionKind::Unrecorded,
         None,
