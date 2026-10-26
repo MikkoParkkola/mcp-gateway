@@ -92,6 +92,67 @@ pub(crate) struct Decision {
     pub decided: Decided,
 }
 
+/// Which check decided one call, as its gates noted it: the first refusal,
+/// else the earliest explicit allow.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Noted {
+    refusal: Option<(DecisionKind, Option<String>)>,
+    allow: Option<(DecisionKind, Option<String>)>,
+}
+
+impl Noted {
+    /// A call answered without deciding it again (a replay, a cache hit).
+    pub(crate) fn not_redecided() -> Self {
+        let mut noted = Self::default();
+        noted.allowed(DecisionKind::NotRedecided, None);
+        noted
+    }
+
+    /// The gate that refused; only the first one counts.
+    pub(crate) fn refused(&mut self, kind: DecisionKind, rule_id: Option<String>) {
+        self.refusal.get_or_insert((kind, rule_id));
+    }
+
+    /// An explicit allow; only the earliest in check order counts.
+    pub(crate) fn allowed(&mut self, kind: DecisionKind, rule_id: Option<String>) {
+        self.allow.get_or_insert((kind, rule_id));
+    }
+
+    /// The decision object for this call under the published config `live`.
+    pub(crate) fn decision(
+        &self,
+        decided: Decided,
+        live: Option<&crate::config_reload::LiveConfig>,
+    ) -> Decision {
+        let (kind, rule_id) = self
+            .refusal
+            .clone()
+            .or_else(|| self.allow.clone())
+            .unwrap_or((DecisionKind::DefaultAllow, None));
+        let applied = live.and_then(crate::config_reload::LiveConfig::applied_now);
+        let config_revision = applied.as_ref().map(|a| a.revision.clone());
+        let running_revision = live
+            .and_then(crate::config_reload::LiveConfig::running_revision)
+            .filter(|running| config_revision.as_deref() != Some(*running))
+            .map(str::to_owned);
+        Decision {
+            v: 1,
+            config_revision,
+            running_revision,
+            pending_restart: applied
+                .map(|a| a.pending_restart.iter().map(|f| (*f).to_owned()).collect())
+                .unwrap_or_default(),
+            kind,
+            rule_id,
+            grant_id: None,
+            findings: None,
+            findings_truncated: false,
+            effect: None,
+            decided,
+        }
+    }
+}
+
 /// The decision a record carries; `None` for a record written before this
 /// field existed ("no evidence recorded"), and for one that does not parse,
 /// never an error.

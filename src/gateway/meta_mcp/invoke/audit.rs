@@ -74,6 +74,24 @@ pub(crate) struct DispatchNotes {
     /// [`MAX_PROCESS_NOTES`], and how many there were.
     process: Vec<ProcessNote>,
     process_total: usize,
+    /// MIK-8914.API2A.1: which check decided this call.
+    decision: crate::security::decision_record::Noted,
+}
+
+/// Note the gate that refused this call; the first refusal wins.
+pub(crate) fn note_refusal(
+    kind: crate::security::decision_record::DecisionKind,
+    rule_id: Option<String>,
+) {
+    note(|notes| notes.decision.refused(kind, rule_id));
+}
+
+/// Note an explicit allow; the earliest in check order wins.
+pub(crate) fn note_allow(
+    kind: crate::security::decision_record::DecisionKind,
+    rule_id: Option<String>,
+) {
+    note(|notes| notes.decision.allowed(kind, rule_id));
 }
 
 /// Most process notes one record carries (a playbook may run many).
@@ -220,6 +238,18 @@ pub(crate) async fn with_dispatch_scope<F: std::future::Future>(
 }
 
 impl DispatchNotes {
+    /// The decision object for this call's record: a cache hit ran no gate,
+    /// so it was not decided again.
+    fn decided(&self, meta: &MetaMcp) -> crate::security::decision_record::Decision {
+        use crate::security::decision_record::{Decided, Noted};
+        let live = meta.live_config();
+        if self.cached {
+            Noted::not_redecided().decision(Decided::CacheHitNotRedecided, live.as_deref())
+        } else {
+            self.decision.decision(Decided::Fresh, live.as_deref())
+        }
+    }
+
     /// MIN.2: whether a backend answered this call.
     pub(crate) const fn responded(&self) -> bool {
         self.responded
@@ -486,6 +516,7 @@ impl MetaMcp {
             return result;
         };
         let outcome = notes.outcome(outcome);
+        let decision = notes.decided(self);
         // MIK-7116.MIN.1: the tool's own arguments, as the firewall walks them.
         let arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments(args);
         let tenants = self.request_tenants(arguments.as_ref().unwrap_or(&Value::Null));
@@ -497,7 +528,16 @@ impl MetaMcp {
             super::super::admission::ReplayAudit::new(outcome, result.as_ref().ok().map(sha256_of))
                 .with_request_hash(sha256_of(args));
         let written = self
-            .write_invocation(log, args, session_id, caller, trace_id, &facts, attribution)
+            .write_invocation(
+                log,
+                args,
+                session_id,
+                caller,
+                trace_id,
+                &facts,
+                attribution,
+                decision,
+            )
             .await;
         // #2472: a replay of this execution is recorded with these facts, but
         // only once they describe what was delivered (#2521): a failed write
@@ -514,6 +554,10 @@ impl MetaMcp {
     /// hash) and `attribution`. `Err` only when the write failed under
     /// [`AuditFailurePolicy::FailClosed`] (D1-f).
     #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the record's parts, each owned by a different stage of the call"
+    )]
     async fn write_invocation(
         &self,
         log: &std::sync::Arc<crate::security::TransparencyLogger>,
@@ -523,6 +567,7 @@ impl MetaMcp {
         trace_id: &str,
         facts: &super::super::admission::ReplayAudit,
         attribution: Map<String, Value>,
+        decision: crate::security::decision_record::Decision,
     ) -> Result<()> {
         let server = args
             .get("server")
@@ -564,7 +609,7 @@ impl MetaMcp {
                     &request_hash,
                     response_hash.as_deref(),
                     attribution,
-                    None,
+                    Some(&decision),
                 )
             })
             .await;
@@ -751,6 +796,11 @@ impl MetaMcp {
             ..DispatchNotes::default()
         }
         .attribution(self, tenants, delivered);
+        // Answered past every gate: nothing decided it again.
+        let decision = crate::security::decision_record::Noted::not_redecided().decision(
+            crate::security::decision_record::Decided::Replayed,
+            self.live_config().as_deref(),
+        );
         match self
             .write_invocation(
                 log,
@@ -760,6 +810,7 @@ impl MetaMcp {
                 &trace_id,
                 &facts,
                 attribution,
+                decision,
             )
             .await
         {

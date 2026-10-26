@@ -24,6 +24,15 @@ impl MetaMcp {
         self.reload_context.read().clone()
     }
 
+    /// The live config the reload context publishes, for a record's config
+    /// revision; `None` without a reload context.
+    pub(crate) fn live_config(&self) -> Option<Arc<crate::config_reload::LiveConfig>> {
+        self.reload_context
+            .read()
+            .as_ref()
+            .map(|context| Arc::clone(&context.live_config))
+    }
+
     /// Public accessor for the reload context — used by UI management endpoints.
     pub fn reload_context(&self) -> Option<Arc<ReloadContext>> {
         self.reload_context.read().clone()

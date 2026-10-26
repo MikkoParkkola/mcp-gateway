@@ -185,10 +185,13 @@ struct Published {
     applied: Option<Arc<Applied>>,
 }
 
-/// The keyed digests a published config was built from, and its revision.
-struct Applied {
+/// The keyed digests a published config was built from, its revision, and
+/// what it asks for that only a restart applies (computed once per publish,
+/// never per call).
+pub(crate) struct Applied {
     inputs: AppliedInputs,
-    revision: String,
+    pub(crate) revision: String,
+    pub(crate) pending_restart: Vec<&'static str>,
 }
 
 /// Live, atomically-swappable config snapshot shared across the gateway.
@@ -292,7 +295,7 @@ impl LiveConfig {
     pub(crate) fn with_applied(mut self, raw: RawInputs) -> Self {
         let applied = self
             .digest_over(raw, None)
-            .and_then(|inputs| self.applied(inputs));
+            .and_then(|inputs| self.applied(inputs, Vec::new()));
         self.running_revision = applied.as_ref().map(|a| a.revision.clone());
         self.inner.get_mut().applied = applied;
         self
@@ -330,10 +333,25 @@ impl LiveConfig {
         self.running_revision.as_deref()
     }
 
-    fn applied(&self, inputs: AppliedInputs) -> Option<Arc<Applied>> {
+    fn applied(
+        &self,
+        inputs: AppliedInputs,
+        pending_restart: Vec<&'static str>,
+    ) -> Option<Arc<Applied>> {
         let key = self.revision_key?;
         let revision = revision::config_revision(&key, &inputs);
-        Some(Arc::new(Applied { inputs, revision }))
+        Some(Arc::new(Applied {
+            inputs,
+            revision,
+            pending_restart,
+        }))
+    }
+
+    /// The published revision and its restart state, for a record: one read
+    /// lock and one `Arc` clone.
+    #[must_use]
+    pub(crate) fn applied_now(&self) -> Option<Arc<Applied>> {
+        self.inner.read().applied.clone()
     }
 
     /// `raw` digested, with the grants and capability digests their own sinks
@@ -352,9 +370,9 @@ impl LiveConfig {
     /// Atomically replace the current config with one built from `raw`; the
     /// raw bytes are reduced to digests here and dropped.
     pub(crate) fn set_applied(&self, config: Config, raw: RawInputs) {
-        self.publish(config, |current| {
+        self.publish(config, |current, pending| {
             self.digest_over(raw, current)
-                .and_then(|inputs| self.applied(inputs))
+                .and_then(|inputs| self.applied(inputs, pending))
         });
     }
 
@@ -363,8 +381,12 @@ impl LiveConfig {
     pub(crate) fn set_inputs(&self, raw: RawInputs) {
         let _gate = self.admission.write();
         let mut inner = self.inner.write();
-        let inputs = self.digest_over(raw, inner.applied.as_deref());
-        inner.applied = inputs.and_then(|i| self.applied(i));
+        let current = inner.applied.as_deref();
+        let pending = current
+            .map(|a| a.pending_restart.clone())
+            .unwrap_or_default();
+        let inputs = self.digest_over(raw, current);
+        inner.applied = inputs.and_then(|i| self.applied(i, pending));
     }
 
     /// New grants over the published config: only the grants part changes,
@@ -393,14 +415,15 @@ impl LiveConfig {
             return;
         };
         let mut inputs = current.inputs.clone();
+        let pending = current.pending_restart.clone();
         change(&key, &mut inputs);
-        inner.applied = self.applied(inputs);
+        inner.applied = self.applied(inputs, pending);
     }
 
     /// Atomically replace the current config. It carries no revision: only
     /// [`LiveConfig::set_applied`] knows the inputs.
     pub fn set(&self, config: Config) {
-        self.publish(config, |_| None);
+        self.publish(config, |_, _| None);
     }
 
     /// Swap in `config` with the revision `applied` builds from the current
@@ -408,12 +431,13 @@ impl LiveConfig {
     fn publish(
         &self,
         config: Config,
-        applied: impl FnOnce(Option<&Applied>) -> Option<Arc<Applied>>,
+        applied: impl FnOnce(Option<&Applied>, Vec<&'static str>) -> Option<Arc<Applied>>,
     ) {
         let gate = self.admission.write();
         let old = {
             let mut inner = self.inner.write();
-            let applied = applied(inner.applied.as_deref());
+            let pending = pending_restart_fields(&self.running, &config);
+            let applied = applied(inner.applied.as_deref(), pending);
             std::mem::replace(
                 &mut *inner,
                 Published {
