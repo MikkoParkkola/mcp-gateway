@@ -114,6 +114,9 @@ fn a_removed_directory_is_named_and_keeps_its_kind() {
         const SHARING_VIOLATION: i32 = 32;
         let error = removed.expect_err("a held lease sidecar is not deletable");
         assert_eq!(error.raw_os_error(), Some(SHARING_VIOLATION), "{error}");
+        // The control: once the writer and its lease are gone, it goes.
+        drop(l);
+        std::fs::remove_dir_all(&dir).expect("removable once the lease is released");
     }
     #[cfg(not(windows))]
     {
