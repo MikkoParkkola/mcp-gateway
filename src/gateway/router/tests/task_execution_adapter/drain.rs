@@ -405,7 +405,8 @@ async fn a_task_worker_keeps_the_declared_agent_label() {
         None,
     );
     let host = crate::gateway::task_service::host::LiveHost::Http(Arc::clone(&state));
-    let authorizer = host.authorizer(owned.authorizer());
+    let generation = host.generation();
+    let authorizer = host.authorizer(owned.authorizer(), &generation);
     let caller = owned.dispatch_context(&host, &authorizer);
 
     let declared = caller

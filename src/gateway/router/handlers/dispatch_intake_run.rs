@@ -28,6 +28,17 @@ pub(in crate::gateway::router::handlers) async fn intake(
         .extensions()
         .get::<AuthenticatedClient>()
         .cloned();
+    // ADR-023: judged by the generation pinned on arrival, never the current
+    // one, so a reload mid-request cannot change what this request sees.
+    let Some(generation) = crate::gateway::router::pinned_generation(http_request.extensions())
+    else {
+        return Err((
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            crate::gateway::router::UNPINNED,
+        )
+            .into_response());
+    };
+    let sanitize_input = generation.sanitize_input();
     // Extract mTLS certificate identity (present when mTLS is active and a valid
     // client certificate was presented during the TLS handshake).
     let cert_identity = http_request.extensions().get::<CertIdentity>().cloned();
@@ -180,7 +191,7 @@ pub(in crate::gateway::router::handlers) async fn intake(
     // MIK-8154 S2': the protocol fields are validated before anything reads
     // them (the session and hardened checks below; signing and the chain
     // nonce take theirs off later), and never rewritten. No session yet.
-    if state.sanitize_input
+    if sanitize_input
         && let Err(e) = crate::security::sanitize::validate_protocol_fields(
             &request,
             &crate::gateway::PROTOCOL_NONCES,
@@ -269,9 +280,10 @@ pub(in crate::gateway::router::handlers) async fn intake(
     // mapped on the caller's view (a surfaced name judged through the request's
     // visibility memo) and before restore and every check; a request whose
     // every target is `passthrough` is exempt (option (a)).
-    let exempt = state.sanitize_input && {
+    let exempt = sanitize_input && {
         let authorizer = super::super::super::RouterAuthorizer {
             state,
+            generation: &generation,
             client: client.as_ref(),
             oauth_agent_identity: oauth_agent_identity.as_ref(),
             cert_identity: cert_identity.as_ref(),
@@ -307,7 +319,7 @@ pub(in crate::gateway::router::handlers) async fn intake(
     crate::gateway::meta_mcp::visible::seams::intake_judged();
     // In place (MIK-8499): a clean request is not copied. On an error the
     // request is refused here, so a partly rewritten tree is never used.
-    if state.sanitize_input
+    if sanitize_input
         && !exempt
         && let Err(e) = crate::security::sanitize::sanitize_request_in_place(
             &mut request,
@@ -645,6 +657,7 @@ pub(in crate::gateway::router::handlers) async fn intake(
         },
         signing_context,
         Intake {
+            generation,
             headers,
             client,
             cert_identity,

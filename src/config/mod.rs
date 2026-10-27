@@ -117,6 +117,9 @@ pub struct Config {
     /// Environment files to load before processing config.
     /// Paths support ~ expansion. Loaded in order, later files override earlier.
     pub env_files: Vec<String>,
+    /// This environment's name (`staging`, `prod`) for the UI; applies on reload (ADR-023).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment: Option<String>,
     /// Server configuration.
     pub server: ServerConfig,
     /// Authentication configuration.

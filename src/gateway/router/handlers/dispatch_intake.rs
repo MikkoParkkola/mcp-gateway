@@ -46,6 +46,9 @@ pub(super) struct JudgeInputs {
 
 /// The facts the prelude derives, owned, for the method arms and the postlude.
 pub(super) struct Intake<'r> {
+    /// The generation pinned on arrival; every judgement on this request
+    /// reads it (ADR-023).
+    pub(super) generation: std::sync::Arc<crate::config_reload::Generation>,
     pub(super) headers: HeaderMap,
     pub(super) client: Option<AuthenticatedClient>,
     pub(super) cert_identity: Option<CertIdentity>,
