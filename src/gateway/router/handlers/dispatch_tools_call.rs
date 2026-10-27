@@ -195,6 +195,9 @@ pub(super) async fn tools_call(
     backend_targets.extend(state.meta_mcp.playbook_step_targets(tool_name, &arguments));
     // Authorize every target before scanning any, so a refused later target
     // charges no earlier one's budget.
+    // The withheld target's record is this call's invocation record: the
+    // invisible call's answer below carries its trace.
+    let mut withheld_trace = None;
     for (index, target) in backend_targets.iter().enumerate() {
         // The one route-stage authorize /mcp and stdio share (P3). A surfaced
         // name withheld from this caller is not a target (MIK-8340): the meta
@@ -227,7 +230,12 @@ pub(super) async fn tools_call(
                             crate::gateway::meta_mcp::invoke::audit::take_refusal_kind(),
                         );
                     } else {
-                        refused.note_withheld(state, checked, code).await;
+                        let trace = refused.note_withheld(state, checked, code).await;
+                        // Only a call with no other target is answered for
+                        // this record alone.
+                        if backend_targets.len() == 1 {
+                            withheld_trace = trace;
+                        }
                     }
                     Ok(())
                 }
@@ -324,6 +332,7 @@ pub(super) async fn tools_call(
                 // answers as every other step refusal does (A3).
                 if index >= request_targets && verdict.refusal_words_content() {
                     return Err(refused
+                        .firewall()
                         .answer(
                             state,
                             target,
@@ -336,6 +345,7 @@ pub(super) async fn tools_call(
                         .await);
                 }
                 return Err(refused
+                    .firewall()
                     .answer(state, target, id, code, reason, StatusCode::BAD_REQUEST)
                     .await);
             }
@@ -511,7 +521,14 @@ pub(super) async fn tools_call(
         let answer = state
             .meta_mcp
             .handle_tools_call_ref(id, tool_name, arguments, session, caller);
-        return Ok(Box::pin(answer).await);
+        let answer = Box::pin(answer).await;
+        // The withheld target's record is this call's one invocation record.
+        return Ok(match withheld_trace {
+            Some(trace) if answer.invocation_trace.is_none() => {
+                answer.with_invocation_trace(trace.into())
+            }
+            _ => answer,
+        });
     }
 
     // The modern destructive gate (X14). Every authorization, admin and

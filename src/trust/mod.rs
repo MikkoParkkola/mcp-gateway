@@ -22,6 +22,7 @@ use crate::{
 mod assistant;
 pub mod claim_capture;
 mod descriptor;
+pub(crate) mod export_verify;
 mod inference;
 mod kinds;
 pub mod provenance_eval;
@@ -43,6 +44,7 @@ pub use descriptor::{
     project_tool_descriptor_trust_card, project_tool_descriptors_trust_cards,
     tools_list_result_with_trust_cards, trust_card_digest_sha256,
 };
+pub use export_verify::run_verify_export;
 pub use kinds::{CbomComponentKind, CbomSubjectKind, TrustEvidenceKind};
 pub use provenance_public::run_provenance_command;
 pub use result_extractor::extract_row_count;

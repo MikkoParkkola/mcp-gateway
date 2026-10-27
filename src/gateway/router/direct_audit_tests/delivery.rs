@@ -118,3 +118,33 @@ async fn an_unrecorded_direct_delivery_is_withheld() {
         "the result was delivered: {body}"
     );
 }
+
+/// A tool the caller's key denies answers as an absent name on the direct
+/// route too; its delivery record names its `denied` record's trace.
+#[tokio::test]
+async fn a_withheld_direct_delivery_joins_its_denied_record() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(Some(vec!["t".to_string()]))),
+        ..Setup::default()
+    })
+    .await;
+    let (status, body) = post(&fx, "alpha", &tools_call("t"), &Caller::Key).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let denied = only_invocation(&fx);
+    assert_eq!(denied["outcome"], "denied", "{denied}");
+    let event = only_attempt(&fx);
+    assert_eq!(event["trace_id"], denied["trace_id"], "{event}");
+}
+
+/// A delivery that no single invocation produced (here `tools/list`) is still
+/// traced: the envelope's fallback, never an empty or absent id.
+#[tokio::test]
+async fn a_delivery_with_no_invocation_keeps_a_fallback_trace() {
+    let fx = fixture(Setup::default()).await;
+    let list = json!({"jsonrpc": "2.0", "id": 6, "method": "tools/list"}).to_string();
+    let (status, body) = post(&fx, "alpha", &list, &Caller::Anonymous).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let event = only_attempt(&fx);
+    let trace = event["trace_id"].as_str().unwrap_or_default();
+    assert!(trace.starts_with("gw-"), "{event}");
+}

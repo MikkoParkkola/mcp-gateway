@@ -82,6 +82,22 @@ pub(crate) struct OutboxRecord {
     /// so it reads as one and is kept rather than dropped.
     #[serde(default = "may_be_a_replay")]
     pub replayed: bool,
+    /// What its row was observed under at fan-out: it is
+    /// sent only while the row still is. `None` for a shared row, and on
+    /// records written before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed: Option<ObservedUnder>,
+}
+
+/// A per-user row's observation as one value: its grant, the identity
+/// config its key came from, and for passthrough the lease generation (hex;
+/// never the token or a digest of it).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ObservedUnder {
+    pub incarnation: u64,
+    pub obs_basis: super::observation::ObsBasis,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease: Option<String>,
 }
 
 impl OutboxRecord {
@@ -133,6 +149,10 @@ pub(crate) enum DeadReason {
     /// Its subscription expired with it replayed or tried (MIK-8061).
     #[serde(rename = "subscription_expired")]
     Expired,
+    /// The row it was observed for changed under it: re-granted, a new
+    /// identity config, or a rotated lease.
+    #[serde(rename = "observation_changed")]
+    Observation,
 }
 
 impl DeadReason {
@@ -145,6 +165,7 @@ impl DeadReason {
             Self::Budget => "budget",
             Self::Tenant => "tenant",
             Self::Expired => "subscription_expired",
+            Self::Observation => "observation_changed",
         }
     }
 }

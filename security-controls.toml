@@ -61,6 +61,10 @@ module = "src/security/transparency_log_pager.rs"
 reason = "pages the audit log backward for its readers (positions, windows, lines); it reads, it refuses no request"
 
 [[coverage.not_a_control]]
+module = "src/security/transparency_log_signature.rs"
+reason = "names an audit entry's signature state for display (valid, invalid, signed_unverifiable, unsigned) through the existing hash and HMAC checks; it reads, it refuses no request"
+
+[[coverage.not_a_control]]
 module = "src/security/posture.rs"
 reason = "the security.posture switch raises other controls' settings at load; it refuses no request, and the controls it raises have their own rows"
 
@@ -444,7 +448,7 @@ reason = "an offline check an operator runs against the files and a copied ancho
 
 [[control]]
 id = "audit-fail-closed"
-description = "with auth on, a failed audit append withholds the call's result (503/-32005), refuses later calls and the direct route, and unreadies /readyz until an append succeeds (D1-f); enforced at src/gateway/meta_mcp/invoke/audit.rs, src/gateway/meta_mcp/response_security.rs, src/gateway/router/backend_handlers.rs and the /readyz handler in src/gateway/router/mod.rs"
+description = "with auth on, a failed audit append withholds the call's result (503/-32005), refuses later calls and the direct route, and unreadies /readyz until an append succeeds (D1-f); enforced at src/gateway/meta_mcp/invoke/audit.rs, src/gateway/meta_mcp/invoke/audit/settlement.rs, src/gateway/meta_mcp/response_security.rs, src/gateway/router/backend_handlers.rs and the /readyz handler in src/gateway/router/mod.rs"
 source = "src/security/transparency_log_degraded.rs"
 probe = "none"
 reason = "fires only when the log's storage fails; a live probe cannot induce that without breaking the install it probes"
@@ -472,3 +476,10 @@ introduced_in = "5d25f104"
 source = "src/lib.rs"
 probe = "none"
 reason = "a compile-time lint leaves no signal on the wire; drift is caught by the build, not by a request"
+
+[[control]]
+id = "lease-core-dump-guard"
+description = "no passthrough event lease is held unless the process has a zero core-file limit and, on Linux and Android, is not dumpable; otherwise events/lease is refused -32014 core_dump_guard_unavailable, and on Windows always"
+source = "src/security/dump_guard.rs"
+probe = "none"
+reason = "on a host where the guard applies, a lease answers the same with or without it; its absence shows only as a core file written after a crash, which a live probe of a running install cannot cause"

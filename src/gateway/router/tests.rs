@@ -701,3 +701,6 @@ pub(crate) fn modern_meta() -> serde_json::Value {
         }
     })
 }
+
+#[path = "history_route_tests.rs"]
+mod history_route_tests;

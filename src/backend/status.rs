@@ -202,6 +202,48 @@ impl Backend {
         })
     }
 
+    /// The operator's state for this backend, with why and when it retries.
+    ///
+    /// Read from the canonical Shared slot only, the same scope as
+    /// [`Self::status`]: a per-user slot's sign-in is one user's, not the
+    /// server's.
+    #[cfg(feature = "webui")]
+    pub(crate) fn server_state(
+        &self,
+        now: std::time::SystemTime,
+    ) -> super::server_state::StateView {
+        super::server_state::decide(&self.state_inputs(), now)
+    }
+
+    /// Whether this backend loads only because its operator accepted sending
+    /// its credentials in cleartext (`allow_cleartext_credentials`).
+    pub(crate) fn cleartext_override_in_effect(&self) -> bool {
+        crate::config::Config::cleartext_override_in_effect(&self.name, &self.config)
+    }
+
+    #[cfg(feature = "webui")]
+    fn state_inputs(&self) -> super::server_state::StateInputs {
+        let entry = self.shared_entry();
+        let health = entry.failsafe.health_metrics();
+        let breaker = entry.failsafe.circuit_breaker.stats();
+        let plan = self.runtime_plan.as_ref();
+        super::server_state::StateInputs {
+            denied: plan.is_some_and(crate::runtime::RuntimePlan::is_denied),
+            denial_reasons: plan
+                .map(|p| p.denied.iter().map(|d| d.reason).collect())
+                .unwrap_or_default(),
+            auth_wait: entry.auth_wait.load(Ordering::Relaxed),
+            breaker: breaker.state,
+            retry_after: std::time::Duration::from_millis(breaker.retry_after_ms),
+            healthy: health.healthy,
+            consecutive_failures: health.consecutive_failures,
+            running: self.is_running(),
+            reaped: entry.stopped_when_idle.load(Ordering::SeqCst),
+            ever_started: entry.ever_started.load(Ordering::Relaxed),
+            start_failed: entry.start_failed.load(Ordering::Relaxed),
+        }
+    }
+
     /// Get health metrics for this backend's canonical Shared slot (MIK-6735
     /// fix 1).
     pub fn health_metrics(&self) -> crate::failsafe::HealthMetrics {

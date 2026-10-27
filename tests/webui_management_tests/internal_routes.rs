@@ -246,9 +246,6 @@ fn mounted(path: &str) -> bool {
 }
 
 /// Bodies from `src/gateway/ui/control_plane_mutation_tests.rs` (grant-1, pol-1).
-const GRANT: &str = r#"{"grant":{"grant_id":"grant-1","subject_id":"user-1","server_id":"srv-1","status":"approved"},"reason":"MIK-1","rollback":{"summary":"revert","step":"restore prior grant"}}"#;
-const POLICY: &str = r#"{"policy":{"policy_id":"pol-1","name":"p","enforced":false},"reason":"MIK-1","rollback":{"summary":"revert","step":"restore prior grant"}}"#;
-const DECISION: &str = r#"{"target_kind":"grant","target_id":"grant-1","decision":"approve","reason":"MIK-1","rollback":{"summary":"revert","step":"restore prior grant"}}"#;
 /// `AddBackendRequest` / `UpdateBackendRequest` (src/gateway/ui/backends.rs:48, :67).
 const ADD_BACKEND: &str = r#"{"name":"probe","url":"http://127.0.0.1:9/probe"}"#;
 const UPDATE_BACKEND: &str = r#"{"description":"probe"}"#;
@@ -317,11 +314,29 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 200, 200, 200],
     ),
+    // src/gateway/ui/overview.rs (overview)
+    row(
+        "/ui/api/overview",
+        Method::GET,
+        "/ui/api/overview",
+        Payload::None,
+        [401, 403, 403, 200],
+    ),
     // src/gateway/ui/mod.rs:464 (tools)
     row(
         "/ui/api/tools",
         Method::GET,
         "/ui/api/tools",
+        Payload::None,
+        [401, 403, 403, 200],
+    ),
+    // src/gateway/ui/refusals.rs:24 (refusals; admin-only read, the codes the
+    // design requires: the auth layer refuses an unauthenticated caller, the
+    // handler refuses any non-admin, an admin reads the list)
+    row(
+        "/ui/api/refusals",
+        Method::GET,
+        "/ui/api/refusals",
         Payload::None,
         [401, 403, 403, 200],
     ),
@@ -374,10 +389,19 @@ const ROWS: &[Row] = &[
         [401, 403, 403, 200],
     ),
     // src/gateway/ui/capabilities.rs:319 (put_capability)
+    // The admin reaches the handler, which refuses a save without If-Match.
     row(
         "/ui/api/capabilities/{name}",
         Method::PUT,
         "/ui/api/capabilities/test_cap",
+        Payload::Yaml,
+        [401, 403, 403, 428],
+    ),
+    // src/gateway/ui/capabilities.rs (validate_capability_route; writes nothing)
+    row(
+        "/ui/api/capabilities/{name}/validate",
+        Method::POST,
+        "/ui/api/capabilities/test_cap/validate",
         Payload::Yaml,
         [401, 403, 403, 200],
     ),
@@ -390,56 +414,36 @@ const ROWS: &[Row] = &[
         [401, 403, 403, 200],
     ),
     // src/gateway/ui/capabilities.rs:486 (delete_capability)
+    // The admin reaches the handler, which refuses a delete without If-Match.
     row(
         "/ui/api/capabilities/{name}",
         Method::DELETE,
         "/ui/api/capabilities/test_cap",
         Payload::None,
-        [401, 403, 403, 200],
+        [401, 403, 403, 428],
     ),
-    // src/gateway/ui/control_plane.rs:72 (require_authenticated layer), :116 (snapshot)
+    // src/gateway/ui/activity/access.rs (resolve: no credential 401, a key
+    // with no Activity role 403); mod.rs (admit: no transparency log 404)
     row(
-        "/ui/api/control-plane",
+        "/ui/api/activity",
         Method::GET,
-        "/ui/api/control-plane",
+        "/ui/api/activity",
         Payload::None,
-        [401, 403, 200, 200],
+        [401, 401, 403, 404],
     ),
-    // control_plane.rs:72, mutations.rs:53 (mutate_grant), :310 (store), :330 (RBAC), :342 (409)
-    row_cfg(
-        "/ui/api/control-plane/grants",
-        Method::POST,
-        "/ui/api/control-plane/grants",
-        Payload::Json(GRANT),
-        [401, 403, 503, 503],
-        [401, 403, 409],
-    ),
-    // control_plane.rs:72, mutations.rs:79 (mutate_policy), :310, :330, :342
-    row_cfg(
-        "/ui/api/control-plane/policies",
-        Method::POST,
-        "/ui/api/control-plane/policies",
-        Payload::Json(POLICY),
-        [401, 403, 503, 503],
-        [401, 403, 409],
-    ),
-    // control_plane.rs:72, mutations.rs:131 (resolve_decision), :194 (store), :245 (RBAC), :258 (409)
-    row_cfg(
-        "/ui/api/control-plane/decisions",
-        Method::POST,
-        "/ui/api/control-plane/decisions",
-        Payload::Json(DECISION),
-        [401, 403, 503, 503],
-        [401, 403, 409],
-    ),
-    // control_plane.rs:72, :89 (export_status_handler: 404 `configured: false` when unset)
-    row_cfg(
-        "/ui/api/control-plane/export-status",
+    row(
+        "/ui/api/activity/export",
         Method::GET,
-        "/ui/api/control-plane/export-status",
+        "/ui/api/activity/export",
         Payload::None,
-        [401, 403, 404, 404],
-        [401, 200, 200],
+        [401, 401, 403, 404],
+    ),
+    row(
+        "/ui/api/activity/{id}",
+        Method::GET,
+        "/ui/api/activity/1-0123456789abcdef",
+        Payload::None,
+        [401, 401, 403, 404],
     ),
     // src/gateway/ui/backends.rs:184 (add_backend; no config path in the fixture)
     row(
@@ -521,6 +525,14 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 404],
     ),
+    // events.rs (leases), :59, :71
+    row(
+        "/ui/api/events/leases",
+        Method::GET,
+        "/ui/api/events/leases",
+        Payload::None,
+        [401, 403, 403, 404],
+    ),
     // src/gateway/ui/preview.rs (preview_backend): describe step
     row(
         "/ui/api/previews",
@@ -545,6 +557,34 @@ const ROWS: &[Row] = &[
         Payload::Import,
         [401, 403, 403, 200],
     ),
+    // src/gateway/ui/history.rs (markers). The codes come from the
+    // design (admin only: no credential 401, non-admin 403). This fixture
+    // never runs the server's start, so no counter store is attached and the
+    // admin is told counting is off (503), as /ui/api/events/held answers 404
+    // without an events hub; the served 200 is cited in `SERVED_BY`.
+    row(
+        "/ui/api/markers",
+        Method::GET,
+        "/ui/api/markers",
+        Payload::None,
+        [401, 403, 403, 503],
+    ),
+    // history.rs (series), as above.
+    row(
+        "/ui/api/metrics/series",
+        Method::GET,
+        "/ui/api/metrics/series?metric=calls&window=24h",
+        Payload::None,
+        [401, 403, 403, 503],
+    ),
+    // history.rs (series): an unsupported query is refused for the admin too.
+    row(
+        "/ui/api/metrics/series",
+        Method::GET,
+        "/ui/api/metrics/series?window=7d",
+        Payload::None,
+        [401, 403, 403, 400],
+    ),
     // src/gateway/ui/shell.rs, fn asset: static, outside auth like /ui
     row(
         "/ui/assets/{file}",
@@ -554,6 +594,11 @@ const ROWS: &[Row] = &[
         [200, 200, 200, 200],
     ),
 ];
+
+/// Every row: this table, then the control-plane group beside it.
+fn all_rows() -> impl Iterator<Item = &'static Row> {
+    ROWS.iter().chain(control_plane::ROWS)
+}
 
 /// Send one row as one caller and record any answer that is not today's.
 async fn check(
@@ -601,7 +646,7 @@ async fn internal_routes_answer_as_today() {
     let off = gateway(Fixture::AuthOff).await;
     let configured = gateway(Fixture::Configured).await;
     let mut wrong = Vec::new();
-    for row in ROWS.iter().filter(|r| mounted(r.path)) {
+    for row in all_rows().filter(|r| mounted(r.path)) {
         for (caller, want) in BASE_CALLERS.into_iter().zip(row.base) {
             let (gw, fixture) = if caller == Caller::AnonOff {
                 (&off, Fixture::AuthOff)
@@ -644,8 +689,7 @@ fn every_doc_internal_route_has_rows_and_no_other() {
         doc.contains("/sse"),
         "the routes table was not read: {doc:?}"
     );
-    let rows: BTreeSet<String> = ROWS
-        .iter()
+    let rows: BTreeSet<String> = all_rows()
         .filter(|r| mounted(r.path))
         .map(|r| r.path.to_owned())
         .collect();
@@ -681,7 +725,7 @@ async fn internal_routes_refuse_every_other_method() {
         .iter()
         .filter(|p| mounted(p))
     {
-        let rows: Vec<&Row> = ROWS.iter().filter(|r| r.path == path).collect();
+        let rows: Vec<&Row> = all_rows().filter(|r| r.path == path).collect();
         let Some(first) = rows.first() else { continue };
         let has = |m: &Method| rows.iter().any(|r| r.method == *m);
         for method in PROBE_METHODS.iter().filter(|m| !has(m)) {
@@ -722,75 +766,9 @@ async fn internal_routes_refuse_every_other_method() {
     );
 }
 
-/// A non-admin gets counts only: no backend name and no other field.
-#[tokio::test]
-async fn ui_status_redacts_for_a_non_admin() {
-    for (fixture, caller) in [
-        (Fixture::AuthOn, Caller::Auditor),
-        (Fixture::AuthOff, Caller::AnonOff),
-    ] {
-        let gw = gateway(fixture).await;
-        let (status, _, body) = send(
-            &gw,
-            request(&Method::GET, "/ui/api/status", caller, Payload::None),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{caller:?}");
-        let text = String::from_utf8_lossy(&body);
-        let json: Value = serde_json::from_slice(&body).expect("status is JSON");
-        let mut keys: Vec<&str> = json
-            .as_object()
-            .expect("an object")
-            .keys()
-            .map(String::as_str)
-            .collect();
-        keys.sort_unstable();
-        assert_eq!(
-            keys,
-            [
-                "auth",
-                "degraded_count",
-                "healthy_count",
-                "server_count",
-                "uptime_secs",
-                "version"
-            ],
-            "{caller:?} got a field beyond the counts: {text}"
-        );
-        // MIK-8786: `auth` states only three facts about the caller, never a
-        // backend detail.
-        let auth = json["auth"].as_object().expect("auth is an object");
-        let mut facts: Vec<&str> = auth.keys().map(String::as_str).collect();
-        facts.sort_unstable();
-        assert_eq!(
-            facts,
-            ["admin", "enabled", "signed_in"],
-            "{caller:?}: {text}"
-        );
-        assert!(
-            auth.values().all(Value::is_boolean),
-            "{caller:?}: every auth fact is a boolean: {text}"
-        );
-        assert_eq!(
-            json["server_count"], 1,
-            "the fixture's backend is counted: {text}"
-        );
-        assert!(
-            !text.contains("docs"),
-            "{caller:?} got the backend name: {text}"
-        );
-    }
-    // Positive control: the same fixture names the backend to an admin.
-    let gw = gateway(Fixture::AuthOn).await;
-    let (status, _, body) = send(
-        &gw,
-        request(&Method::GET, "/ui/api/status", Caller::Admin, Payload::None),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    let json: Value = serde_json::from_slice(&body).expect("status is JSON");
-    assert_eq!(json["servers"][0]["name"], "docs", "{json}");
-}
-
+#[path = "internal_routes_control_plane_tests.rs"]
+mod control_plane;
 #[path = "internal_routes_served.rs"]
 mod served;
+#[path = "internal_routes_status.rs"]
+mod status;

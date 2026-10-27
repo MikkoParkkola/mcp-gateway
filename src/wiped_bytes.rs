@@ -13,14 +13,29 @@ impl WipedBytes {
     pub(crate) fn as_bytes(&self) -> &[u8] {
         &self.0
     }
+
+    /// Overwrite the whole allocation with `zeroize`'s volatile writes, which
+    /// the optimiser may not drop as stores to memory about to be freed.
+    /// `zeroize` on the `Vec` itself (not a slice of it) wipes the contents,
+    /// clears the `Vec`, then wipes the whole buffer through its spare
+    /// capacity (which covers bytes a truncated buffer left past `len`); the
+    /// allocation is kept until the `Vec` drops.
+    fn wipe(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.0);
+        #[cfg(test)]
+        WIPES.with(|wipes| wipes.set(wipes.get() + 1));
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Wipes run on this thread, so a test can see that dropping wipes.
+    static WIPES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 impl Drop for WipedBytes {
     fn drop(&mut self) {
-        // No `zeroize` crate in the tree; `black_box` keeps the stores from
-        // being elided as writes to memory about to be freed.
-        self.0.iter_mut().for_each(|byte| *byte = 0);
-        std::hint::black_box(&self.0);
+        self.wipe();
     }
 }
 
@@ -30,5 +45,43 @@ impl std::fmt::Debug for WipedBytes {
         f.debug_struct("WipedBytes")
             .field("len", &self.0.len())
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WIPES, WipedBytes};
+
+    /// Dropping is what wipes: a value that only goes out of scope runs
+    /// `wipe`, so the zeroize path above is the one every drop takes.
+    #[test]
+    fn dropping_wipes() {
+        let before = WIPES.with(std::cell::Cell::get);
+        drop(WipedBytes::new(b"s3cret-token".to_vec()));
+        assert_eq!(WIPES.with(std::cell::Cell::get), before + 1);
+    }
+
+    /// `wipe` (what `Drop` runs) goes through `zeroize`'s `Vec` impl, the one
+    /// that also covers the spare capacity: it leaves the buffer cleared with
+    /// its allocation kept, where a slice wipe keeps the length and a no-op
+    /// keeps the secret. Bytes past `len` cannot be read without `unsafe`;
+    /// that `Vec::zeroize` wipes them is `zeroize`'s documented behaviour.
+    #[test]
+    fn the_wipe_goes_through_the_whole_allocation() {
+        let mut bytes = b"s3cret-token-and-more".to_vec();
+        bytes.truncate(12);
+        let capacity = bytes.capacity();
+        assert!(capacity > bytes.len(), "the fixture leaves bytes past len");
+        let mut secret = WipedBytes::new(bytes);
+        secret.wipe();
+        assert!(
+            secret.as_bytes().is_empty(),
+            "cleared, not just overwritten"
+        );
+        assert_eq!(
+            secret.0.capacity(),
+            capacity,
+            "the allocation it wiped is kept"
+        );
     }
 }

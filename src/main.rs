@@ -29,7 +29,7 @@ use std::{path::Path, process::ExitCode};
 
 use clap::Parser;
 use mcp_gateway::{
-    cli::{AuditCommand, Cli, Command, SetupCommand, SkillsCommand},
+    cli::{Cli, Command, SetupCommand, SkillsCommand},
     config::{Config, EnvOverlay},
     gateway::Gateway,
     setup_tracing,
@@ -38,14 +38,8 @@ use mcp_gateway::{
 };
 use tracing::{error, info};
 
-/// Stack for the thread that runs the async main body.
-///
-/// Clap's derived parser needs about 900 KB of stack in an unoptimized build
-/// (the generated `augment_subcommands` frames alone are ~650 KB), which is
-/// over the 1 MiB Windows gives a process's main thread. 8 MiB is the Linux
-/// default, so every platform gets the stack CI already exercises.
-const MAIN_STACK_BYTES: usize = 8 * 1024 * 1024;
-
+mod main_stack;
+use main_stack::on_main_stack;
 #[path = "main_runtime.rs"]
 mod runtime;
 /// The one YAML seam (MIK-8425): the binary compiles `commands` and
@@ -53,24 +47,18 @@ mod runtime;
 mod yaml;
 use runtime::RuntimeShutdown;
 fn main() -> ExitCode {
+    // The preview sandbox's helpers run before the CLI parser, the main-stack
+    // thread and any runtime: they change their own privileges, which must
+    // happen while the process has one thread (ADR-027).
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if let Some(code) = mcp_gateway::preview_sandbox::dispatch_helper(&args) {
+        return code;
+    }
     on_main_stack(|| {
         // Parsed here, so the shutdown mode is known before the runtime exists.
         let cli = Cli::parse();
         runtime::block_on(RuntimeShutdown::of(cli.command.as_ref()), run(cli))
     })
-}
-
-/// Run `body` on a thread with [`MAIN_STACK_BYTES`] of stack and return its
-/// value. A panic in `body` is re-raised on the caller (the thread already
-/// printed it), so the exit status stays a panic's.
-fn on_main_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-    std::thread::Builder::new()
-        .name("main".into())
-        .stack_size(MAIN_STACK_BYTES)
-        .spawn(body)
-        .expect("spawn the main runtime thread")
-        .join()
-        .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
 }
 
 #[allow(clippy::too_many_lines)] // Feature-gated fallback arms inflate line count
@@ -343,7 +331,9 @@ async fn run(cli: Cli) -> ExitCode {
             data_dir.as_deref(),
             cli.config.as_deref(),
         ),
-        Some(Command::Audit(audit_cmd)) => run_audit_command(audit_cmd, cli.config.as_deref()),
+        Some(Command::Audit(audit_cmd)) => {
+            commands::run_audit_command(audit_cmd, cli.config.as_deref())
+        }
         #[cfg(feature = "runtime-substrate")]
         Some(Command::Runtime(rt_cmd)) => run_runtime_command(rt_cmd),
         Some(Command::Serve { stdio: true }) => Box::pin(run_stdio_server(cli)).await,
@@ -391,161 +381,6 @@ fn run_runtime_command(cmd: mcp_gateway::cli::RuntimeCommand) -> ExitCode {
                 Err(e) => {
                     eprintln!("error: {e}");
                     ExitCode::FAILURE
-                }
-            }
-        }
-    }
-}
-
-/// Resolve the audit log path: use the provided `--path` flag, or fall back to
-/// the default `~/.mcp-gateway/transparency/transparency.jsonl`.
-fn resolve_audit_log_path(path: Option<std::path::PathBuf>) -> std::path::PathBuf {
-    use std::path::PathBuf;
-    path.unwrap_or_else(|| {
-        crate::home_dir::home_dir().map_or_else(
-            || PathBuf::from("transparency.jsonl"),
-            |h| {
-                h.join(".mcp-gateway")
-                    .join("transparency")
-                    .join("transparency.jsonl")
-            },
-        )
-    })
-}
-
-/// `audit verify`: every segment of the log, live or archive mode (D6).
-fn run_audit_verify(
-    log_path: &std::path::Path,
-    archive: bool,
-    anchor: Option<&std::path::Path>,
-    config_path: Option<&std::path::Path>,
-) -> ExitCode {
-    use mcp_gateway::security::transparency_log::{VerifyMode, verify_audit_log};
-    let resolve_log_config = Config::audit_verify_config;
-    let verify_mode = if archive {
-        VerifyMode::Archive
-    } else {
-        VerifyMode::Live
-    };
-    let log_config = match resolve_log_config(config_path) {
-        Ok(c) => c,
-        Err(e) => {
-            // Fail closed: a config we cannot load must NOT downgrade to
-            // hash-only and report success (MIK-6700 review finding #2).
-            eprintln!(
-                "Error: could not load gateway config for signed verification: {e}. Refusing to verify (a load failure must not silently downgrade to hash-only)."
-            );
-            return ExitCode::FAILURE;
-        }
-    };
-    let signed = !log_config.shared_secret.is_empty();
-    // Fail closed on the root danger: a log that WAS signed, verified
-    // without a secret, would silently degrade to hash-only and pass a
-    // stale-sig forgery with exit 0 — regardless of why the secret is
-    // absent (no config discovered, wrong config, unset env).
-    // (MIK-6700 review finding #2, residual no-config path.)
-    if !signed {
-        match mcp_gateway::security::transparency_log::log_contains_signed_entry(log_path) {
-            Ok(true) => {
-                eprintln!(
-                    "Error: log at {} has signed entries but no shared secret is configured — refusing hash-only verify (HMAC unauthenticated). Set security.transparency_log.shared_secret.",
-                    log_path.display()
-                );
-                return ExitCode::FAILURE;
-            }
-            Ok(false) => {}
-            Err(e) => {
-                eprintln!("Error reading log: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
-    }
-    match verify_audit_log(log_path, &log_config, verify_mode, anchor) {
-        // Neither the log nor any sealed segment exists (D6: sealed segments
-        // alone are still a log to verify).
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!(
-                "Error: transparency log not found at {}",
-                log_path.display()
-            );
-            ExitCode::FAILURE
-        }
-        Err(e) => {
-            eprintln!("Error reading log: {e}");
-            ExitCode::FAILURE
-        }
-        Ok(result) if result.ok => {
-            let mode = if signed {
-                "hash chain + per-entry HMAC"
-            } else {
-                "hash chain (no secret configured; HMAC not checked)"
-            };
-            let scope = match verify_mode {
-                VerifyMode::Live => "live log",
-                VerifyMode::Archive => "archive copy; tail completeness not checked",
-            };
-            println!(
-                "✓ Chain verified ({mode}; {scope}) — {} entries checked across {} \
-                 segments, {} expired by retention, no tampering detected.",
-                result.entries_checked, result.segments_checked, result.segments_expired
-            );
-            for warning in &result.warnings {
-                eprintln!("warning: {warning}");
-            }
-            ExitCode::SUCCESS
-        }
-        Ok(result) => {
-            let at = result
-                .error_at_counter
-                .map_or_else(|| "?".to_string(), |n| n.to_string());
-            let msg = result
-                .error_message
-                .unwrap_or_else(|| "unknown error".to_string());
-            eprintln!("✗ Chain verification FAILED at counter {at}: {msg}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
-/// Dispatch an `audit` subcommand (transparency log chain verification / session query).
-fn run_audit_command(cmd: AuditCommand, config_path: Option<&std::path::Path>) -> ExitCode {
-    use mcp_gateway::security::transparency_log::show_session_entries;
-
-    let resolve_path = resolve_audit_log_path;
-
-    match cmd {
-        AuditCommand::Verify {
-            path,
-            archive,
-            anchor,
-        } => run_audit_verify(&resolve_path(path), archive, anchor.as_deref(), config_path),
-
-        AuditCommand::Show { session, path } => {
-            let log_path = resolve_path(path);
-            match show_session_entries(&log_path, &session) {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    eprintln!(
-                        "Error: transparency log not found at {}",
-                        log_path.display()
-                    );
-                    ExitCode::FAILURE
-                }
-                Err(e) => {
-                    eprintln!("Error reading log: {e}");
-                    ExitCode::FAILURE
-                }
-                Ok(entries) if entries.is_empty() => {
-                    println!("No entries found for session '{session}'.");
-                    ExitCode::SUCCESS
-                }
-                Ok(entries) => {
-                    for entry in &entries {
-                        match serde_json::to_string_pretty(entry) {
-                            Ok(pretty) => println!("{pretty}"),
-                            Err(e) => eprintln!("Serialisation error: {e}"),
-                        }
-                    }
-                    ExitCode::SUCCESS
                 }
             }
         }
@@ -665,7 +500,7 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
     // `load_evaluated`, not `load`: an env file is read into an overlay the
     // gateway carries, never into the process environment, so the environment
     // has to travel with the config it was evaluated against.
-    let (config, env) = match Config::load_evaluated(load_path.as_deref()) {
+    let (config, env) = match commands::load_for_serve(load_path.as_deref()) {
         Ok(mut evaluated) => {
             let env = std::sync::Arc::new(evaluated.live_env());
             let mut config = evaluated.config;
@@ -720,7 +555,7 @@ async fn run_server(cli: Cli) -> ExitCode {
     // stdio path (a local pipe, no network auth surface) degrades — see
     // serve_config_path / run_stdio_server.
     let (discovered, load_path) = discovered_config::resolve(cli.config.as_deref());
-    let (config, env) = match Config::load_evaluated(load_path.as_deref()) {
+    let (config, env) = match commands::load_for_serve(load_path.as_deref()) {
         Ok(mut evaluated) => {
             let env = std::sync::Arc::new(evaluated.live_env());
             let mut config = evaluated.config;

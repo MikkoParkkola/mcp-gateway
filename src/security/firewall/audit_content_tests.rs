@@ -54,6 +54,7 @@ fn correlation() -> ResponseCorrelation<'static> {
         external_server: "srv",
         external_tool: "t",
         subject: None,
+        trace_id: None,
     }
 }
 

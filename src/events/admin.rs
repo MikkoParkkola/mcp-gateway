@@ -23,6 +23,10 @@ pub(crate) enum ReplayRefusal {
     /// Suspended until its subscriber refreshes it.
     SubscriptionSuspended,
     AccessRevoked,
+    /// The row is no longer observed as the record was: re-granted, its
+    /// lease rotated, or its identity config changed. The send path would
+    /// bury it again.
+    ObservationChanged,
     FirewallBlocked,
     TooLarge,
     OutboxFull,
@@ -38,6 +42,7 @@ impl ReplayRefusal {
             Self::SubscriptionGone => "subscription_gone",
             Self::SubscriptionSuspended => "subscription_suspended",
             Self::AccessRevoked => "access_revoked",
+            Self::ObservationChanged => "observation_changed",
             Self::FirewallBlocked => "firewall_blocked",
             Self::TooLarge => "too_large",
             Self::OutboxFull => "outbox_full",
@@ -77,6 +82,55 @@ impl EventsHub {
             .collect()
     }
 
+    /// Each passthrough subscription's held credential, as the admin view
+    /// lists it: its backend, its handle (never the stored id),
+    /// its state (`active`, `credential_needed`, `credential_rejected`) and,
+    /// while active, when the lease ends. Never the token or a digest of it.
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(dead_code, reason = "served by the web UI router")
+    )]
+    pub(crate) async fn list_leases(&self) -> Vec<Value> {
+        let Some(services) = self.runtime.services.get() else {
+            return Vec::new();
+        };
+        let config = services.live.get();
+        let mut out = Vec::new();
+        for sub in self.store.subscriptions() {
+            let Some((backend, _)) = super::upstream::parse_name(&sub.name) else {
+                continue;
+            };
+            if sub.obs_basis.as_ref().is_none_or(|b| {
+                b.strategy != crate::identity_propagation::PropagationStrategyKind::Passthrough
+            }) {
+                continue;
+            }
+            let state = match super::observation::observe_row(&config, backend, &sub) {
+                Ok(Some(obs)) => {
+                    self.leases
+                        .state(&super::lease::LeaseKey {
+                            backend: backend.to_owned(),
+                            obs,
+                        })
+                        .await
+                }
+                _ => super::lease::LeaseState::CredentialNeeded,
+            };
+            let (state, expires_at) = match state {
+                super::lease::LeaseState::Active { expires_at } => ("active", Some(expires_at)),
+                super::lease::LeaseState::CredentialNeeded => ("credential_needed", None),
+                super::lease::LeaseState::CredentialRejected => ("credential_rejected", None),
+            };
+            out.push(json!({
+                "backend": backend,
+                "subscription": services.alias(&sub.id),
+                "state": state,
+                "expiresAt": expires_at,
+            }));
+        }
+        out
+    }
+
     /// The dead letters as the admin listing shows them: event ids, the
     /// subscription's alias, reasons, times and sizes, never a body, a secret,
     /// a callback URL or a stored subscription id.
@@ -112,8 +166,9 @@ impl EventsHub {
             .collect()
     }
 
-    /// Replay dead letter `event_id`: access re-check, fresh firewall scan,
-    /// then a new outbox record under the same event id.
+    /// Replay dead letter `event_id`: access re-check, the send path's
+    /// observation check, fresh firewall scan, then a new outbox record under
+    /// the same event id.
     pub(crate) async fn replay_dead(
         self: &Arc<Self>,
         event_id: &str,
@@ -147,6 +202,7 @@ impl EventsHub {
             // No verdict on the access: the clock cannot be read (MIK-8202).
             super::services::AccessVerdict::Undated => return Err(ReplayRefusal::Unavailable),
         }
+        self.still_observed(&sub.id, &dead.record, services, now)?;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&dead.record.body_b64)
             .map_err(|_| ReplayRefusal::Unavailable)?;
@@ -222,6 +278,27 @@ impl EventsHub {
         }
     }
 
+    /// The send path's own observation check, on the row as it is after the
+    /// admission await (a re-grant may have landed meanwhile): a record it
+    /// would bury again is refused here, by name, and nothing is queued. A
+    /// row changed between this and `revive` is still buried at send.
+    fn still_observed(
+        &self,
+        subscription_id: &str,
+        record: &OutboxRecord,
+        services: &super::Services,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), ReplayRefusal> {
+        let current = (self.store.subscriptions().into_iter())
+            .find(|s| s.id == subscription_id && s.live(now))
+            .ok_or(ReplayRefusal::SubscriptionGone)?;
+        if self.observed_now(&current, &services.live.get()) == Ok(record.observed.clone()) {
+            Ok(())
+        } else {
+            Err(ReplayRefusal::ObservationChanged)
+        }
+    }
+
     /// Replay every dead letter of `subscription`; the count replayed and
     /// each refusal.
     pub(crate) async fn replay_all(
@@ -241,3 +318,7 @@ impl EventsHub {
         (replayed, refused)
     }
 }
+
+#[cfg(test)]
+#[path = "admin_replay_obs_tests.rs"]
+mod replay_obs_tests;

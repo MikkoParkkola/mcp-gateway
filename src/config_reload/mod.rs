@@ -435,6 +435,8 @@ impl LiveConfig {
             );
         }
         drop(gate);
+        // An API key or identity provider may have gone with it.
+        crate::events::credentials_changed();
         // A large config is freed after the gate opens, never while a send
         // waits on it.
         drop(old);
@@ -602,6 +604,15 @@ pub async fn apply_patch(
 }
 
 mod diff;
+pub(crate) mod override_audit;
+#[cfg_attr(
+    not(feature = "webui"),
+    allow(
+        dead_code,
+        reason = "every build records refusals; only the web UI's refusals route reads them back"
+    )
+)]
+pub(crate) mod refusals;
 mod reload_context;
 mod reload_warm_hook;
 pub(crate) mod revision;
@@ -632,6 +643,7 @@ fn with_env_restart(mut pending: Vec<&'static str>, env_restart: &[String]) -> V
 use diff::tracked_sections;
 pub use diff::{ConfigPatch, compute_diff};
 pub use reload_context::ReloadContext;
+pub(crate) use reload_context::SurfacedHook;
 #[cfg(test)]
 use reload_context::{
     EvaluatedReload, changed_startup_env_keys, load_config_patch, with_pending_restart,
@@ -677,6 +689,18 @@ mod reload_pause;
 mod webhook_base_path_reload_tests;
 #[cfg(test)]
 mod writer_lock_tests;
+#[cfg(all(test, unix))]
+mod writer_symlink_tests;
+
+#[cfg(test)]
+mod replace_secret_tests;
+#[cfg(test)]
+mod replace_test_support;
+#[cfg(test)]
+mod replace_tests;
+
+#[cfg(test)]
+mod reader_lock_tests;
 
 #[cfg(test)]
 mod grant_change_trigger_tests;

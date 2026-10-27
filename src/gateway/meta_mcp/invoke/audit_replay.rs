@@ -108,7 +108,8 @@ impl MetaMcp {
             )
             .await
         {
-            Ok(()) => replay,
+            // The replay's delivery joins this record.
+            Ok(()) => replay.with_invocation_trace(trace_id.as_str().into()),
             Err(error) => replay.id.clone().map_or_else(
                 || JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string()),
                 |id| crate::gateway::meta_mcp::error_response_preserving_status(id, &error),

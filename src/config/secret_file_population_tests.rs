@@ -18,6 +18,14 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "capability YAML; public definitions",
     ),
     (
+        "src/capability/file_writer.rs",
+        "capability YAML; public definitions; written under the directory lock",
+    ),
+    (
+        "src/capability/pin_file.rs",
+        "capability YAML; public definitions; written under the directory lock",
+    ),
+    (
         "src/capability/openapi/convert.rs",
         "OpenAPI spec input; public",
     ),
@@ -38,7 +46,14 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "chain checkpoints; no secret, not a trust decision",
     ),
     ("src/cli/invoke.rs", "reads stdin, not a file"),
-    ("src/commands/cap.rs", "capability YAML pinning; public"),
+    (
+        "src/commands/doctor/lease_custody.rs",
+        "doctor reads /proc/swaps and /sys/block/dm-*/dm/uuid; kernel tables, no secret",
+    ),
+    (
+        "src/commands/doctor/lease_custody.rs",
+        "doctor reads /proc/swaps and /sys/block/dm-*/dm/uuid; kernel tables, no secret",
+    ),
     (
         "src/commands/config_export/mod.rs",
         "third-party MCP client config JSON edited to add the gateway entry; no gateway secret",
@@ -100,12 +115,25 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "the shared atomic writer: creates its own private scratch; opens the target only to probe its ACL, never reads it",
     ),
     (
+        "src/config_persistence_journal.rs",
+        "the replace journal (paths, SHA-256 revisions and a state; no secret) and the staged \
+         original of gateway.yaml, both created owner-only by create_new_private; the original is \
+         checked against the journal's digest before it is written back; File::open only fsyncs \
+         its directory",
+    ),
+    (
         "src/config_persistence_lock.rs",
         "config lock file; opened only to judge its mode, never read",
     ),
     (
         "src/config_reload/grant_audit_plan.rs",
         "grant audit state: journal ids and grant digests; no secret",
+    ),
+    (
+        "src/config_reload/replace.rs",
+        "re-reads gateway.yaml under the config lock to check the caller's revision and stage the \
+         original; the target is the canonical path this gateway loaded at start, and every write \
+         back is owner-only",
     ),
     (
         "src/control_plane/export.rs",
@@ -122,6 +150,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/cost_accounting/persistence.rs",
         "cost ledger; no secret",
+    ),
+    (
+        "src/counters/persist.rs",
+        "call counters and markers; no secret",
     ),
     (
         "src/debug_trust_roots.rs",
@@ -143,6 +175,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/gateway/server/control_plane_store.rs",
         "writability probe",
+    ),
+    (
+        "src/transport/stdio_cache.rs",
+        "writability probe for a backend's package cache: creates, writes and removes its own marker; reads nothing",
     ),
     (
         "src/gateway/meta_mcp/boundary_pins/packaged.rs",
@@ -172,6 +208,14 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "src/gateway/task_service/execution/pause_hook.rs",
         "debug-build test hook writing a task id marker (#2298); compiled out of release",
     ),
+    (
+        "src/gateway/ui/activity/reader.rs",
+        "reads audit log segments for the Activity list; hash-only, no secret",
+    ),
+    (
+        "src/gateway/ui/activity/seek.rs",
+        "reads audit log segments to find one receipt; hash-only, no secret",
+    ),
     ("src/gateway/ui/capabilities.rs", "capability YAML; public"),
     (
         "src/identity_grants/journal.rs",
@@ -196,6 +240,18 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/personal_accounts/storage.rs",
         "own stricter check: O_NOFOLLOW, fstat, no group or world bits (R4)",
+    ),
+    (
+        "src/preview_sandbox/linux/mod.rs",
+        "kernel settings under /proc/sys, read to name why a host refuses user namespaces; no secret",
+    ),
+    (
+        "src/preview_sandbox/linux/mounts.rs",
+        "inside the sandbox's own mount namespace: empty mountpoint files and /proc/self/mountinfo; no secret",
+    ),
+    (
+        "src/preview_sandbox/mod.rs",
+        "the sandboxed child's stderr pipe, capped at 64 KiB, to classify a refusal; not a file",
     ),
     (
         "src/private_fs.rs",
@@ -274,6 +330,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/trust/claim_capture.rs",
         "append-only claim log; no secret",
+    ),
+    (
+        "src/trust/export_verify.rs",
+        "reads an Activity export bundle given to audit verify; no secret",
     ),
     (
         "src/trust/provenance_public.rs",
