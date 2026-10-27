@@ -417,10 +417,12 @@ async function signOut() {
   bearer = null;
   const epoch = ++authEpoch;
   showWho(null);
-  const error = document.querySelector('.signin-error');
+  // Its own status line, apart from the key check's error: a key typed while
+  // the logout is pending must not hide this, nor this overwrite its answer.
+  const notice = document.querySelector('.signin-notice');
   showSignIn();
-  error.textContent = 'Ending the session on the gateway…';
-  error.hidden = false;
+  notice.textContent = 'Ending the session on the gateway…';
+  notice.hidden = false;
   let ended = false;
   try {
     const reply = await fetch('/dashboard/logout', {
@@ -435,8 +437,10 @@ async function signOut() {
     ended = false;
   }
   if (epoch !== authEpoch) return;
-  if (ended) error.hidden = true;
-  else error.textContent = "Signed out here, but the gateway did not confirm the session ended, so this browser may still be signed in. Reload and sign out again, or clear this site's cookies.";
+  if (ended) {
+    notice.hidden = true;
+    notice.textContent = '';
+  } else notice.textContent = "Signed out here, but the gateway did not confirm the session ended, so this browser may still be signed in. Reload and sign out again, or clear this site's cookies.";
 }
 
 /**
@@ -510,6 +514,10 @@ async function signIn(ev) {
     return;
   }
   bearer = key;
+  // A newer sign-in supersedes a pending or unconfirmed sign-out's notice.
+  const notice = document.querySelector('.signin-notice');
+  notice.hidden = true;
+  notice.textContent = '';
   authEpoch++;
   input.value = '';
   document.getElementById('signin').hidden = true;

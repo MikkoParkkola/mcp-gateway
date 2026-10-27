@@ -806,6 +806,7 @@ body.signed-out > .side, body.signed-out > .main, body.signed-out > .skip { disp
 .signin label { font: var(--type-small); color: var(--color-text-secondary); }
 .signin .btn { justify-content: center; }
 .signin-error { color: var(--color-status-danger-fg); font: var(--type-small); }
+.signin-notice { color: var(--color-text-secondary); font: var(--type-small); }
 .signin-note { font: var(--type-small); }
 .signin-note code { font-family: var(--font-family-mono); }
 

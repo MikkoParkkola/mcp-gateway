@@ -283,6 +283,7 @@ test('S15 sign-out drops the key, ends the cookie session and shows sign-in at t
   await expect(page).toHaveURL('/ui/servers/status');
   expect(logouts).toEqual(['POST']);
   await expect(page.locator('.signin-error')).toBeHidden();
+  await expect(page.locator('.signin-notice')).toBeHidden();
   await expect(page.locator('.top .who')).toHaveText('');
   await expect(page.locator('#signin-key')).toBeFocused();
   // The key is gone without a reload: the next read from this page carries no bearer.
@@ -301,8 +302,8 @@ test('S18 a sign-out the gateway does not confirm says the session may still be 
   await expect(page.locator('#signin')).toBeHidden();
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page.locator('#signin')).toBeVisible();
-  await expect(page.locator('.signin-error')).toBeVisible();
-  await expect(page.locator('.signin-error')).toHaveText(UNCONFIRMED);
+  await expect(page.locator('.signin-notice')).toBeVisible();
+  await expect(page.locator('.signin-notice')).toHaveText(UNCONFIRMED);
 });
 
 test('S18 an unreachable gateway at sign-out says the same', async ({ page }) => {
@@ -313,8 +314,8 @@ test('S18 an unreachable gateway at sign-out says the same', async ({ page }) =>
   await page.keyboard.press('Enter');
   await expect(page.locator('#signin')).toBeHidden();
   await page.getByRole('button', { name: 'Sign out' }).click();
-  await expect(page.locator('.signin-error')).toBeVisible();
-  await expect(page.locator('.signin-error')).toHaveText(UNCONFIRMED);
+  await expect(page.locator('.signin-notice')).toBeVisible();
+  await expect(page.locator('.signin-notice')).toHaveText(UNCONFIRMED);
 });
 
 test('S16 sign-out is offered only to a signed-in session', async ({ page }) => {
@@ -394,10 +395,10 @@ test('S18 a logout that never answers shows the pending notice, then the warning
   await page.keyboard.press('Enter');
   await expect(page.locator('#signin')).toBeHidden();
   await page.getByRole('button', { name: 'Sign out' }).click();
-  await expect(page.locator('.signin-error')).toBeVisible();
-  await expect(page.locator('.signin-error')).toHaveText('Ending the session on the gateway…');
+  await expect(page.locator('.signin-notice')).toBeVisible();
+  await expect(page.locator('.signin-notice')).toHaveText('Ending the session on the gateway…');
   await page.clock.runFor(10_500);
-  await expect(page.locator('.signin-error')).toHaveText(UNCONFIRMED);
+  await expect(page.locator('.signin-notice')).toHaveText(UNCONFIRMED);
 });
 
 test('S18 a late logout failure never writes over a session signed in since', async ({ page }) => {
@@ -421,5 +422,27 @@ test('S18 a late logout failure never writes over a session signed in since', as
   // A later 401 shows sign-in again: the old sign-out's warning must not be on it.
   await page.evaluate(async () => (await import(document.querySelector('script[type="module"][src^="/ui/assets/"]').src)).api('/ui/api/probe-401').catch(() => null));
   await expect(page.locator('#signin')).toBeVisible();
-  await expect(page.locator('.signin-error')).toBeHidden();
+  await expect(page.locator('.signin-notice')).toBeHidden();
+});
+
+test('S18 a key refused while the logout is pending keeps both messages', async ({ page }) => {
+  let release;
+  const held = new Promise((ok) => { release = ok; });
+  await gate(page);
+  await page.route('**/dashboard/logout', async (route) => { await held; return route.fulfill({ status: 500, json: {} }); });
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#signin')).toBeHidden();
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.locator('.signin-notice')).toHaveText('Ending the session on the gateway…');
+  await page.locator('#signin-key').fill('mcpg_wrong');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.signin-error')).toHaveText('That key was not accepted.');
+  await expect(page.locator('.signin-notice')).toBeVisible();
+  const failed = page.waitForResponse((r) => r.url().endsWith('/dashboard/logout'));
+  release();
+  await failed;
+  await expect(page.locator('.signin-notice')).toHaveText(UNCONFIRMED);
+  await expect(page.locator('.signin-error')).toHaveText('That key was not accepted.');
 });
