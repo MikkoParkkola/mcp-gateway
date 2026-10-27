@@ -409,6 +409,20 @@ async fn a_stdio_inspection_finding_is_recorded() {
     assert!(!row.to_string().contains(&text), "no content: {row}");
 }
 
+/// On stdio, the same answer goes out with the gateway's
+/// `_security_findings` added: the record says `annotated`.
+#[tokio::test]
+async fn a_stdio_annotated_answer_records_annotated() {
+    let text = format!("base64: {}", "A".repeat(120));
+    let (body, row) = recorded_delivery(Setup::Default, Part::ResultText, text.clone()).await;
+    let sent = body.to_string();
+    assert!(
+        sent.contains("_security_findings") && sent.contains(&text),
+        "premise: annotated, text unchanged: {sent}"
+    );
+    assert_eq!(row["response_effect"], "annotated", "{row}");
+}
+
 /// A firewall with response scanning off reads nothing, so it states no
 /// finding of its own: a credential is listed by response inspection only,
 /// which always reads the answer, never as a firewall finding.

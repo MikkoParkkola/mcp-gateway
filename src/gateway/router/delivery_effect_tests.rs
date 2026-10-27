@@ -55,6 +55,11 @@ async fn a_redacted_answer_records_rewritten_and_its_finding() {
             !body.contains(leak) && body.contains("[REDACTED"),
             "{route:?}: premise: redacted and delivered: {body}"
         );
+        // Inspection annotates the same answer: rewritten outranks annotated.
+        assert!(
+            body.contains("_security_findings"),
+            "{route:?}: premise: annotated too: {body}"
+        );
         let row = only_delivery(route, &recorded.rows);
         assert_eq!(row["response_effect"], "rewritten", "{route:?}: {row}");
         let findings = row["response_findings"]
@@ -213,5 +218,22 @@ async fn an_inspection_finding_is_recorded_beside_a_clean_firewall_scan() {
             !row.to_string().contains(text),
             "{route:?}: no content: {row}"
         );
+    }
+}
+
+/// The same answer goes out with the gateway's `_security_findings` added
+/// and its text unchanged: the record says `annotated`, never `delivered`.
+#[tokio::test]
+async fn an_annotated_answer_records_annotated() {
+    for route in [HttpRoute::Mcp, HttpRoute::Direct] {
+        let text = inspection_only_text();
+        let recorded = firewalled_recorded_call(route, Answer::Text(text), None).await;
+        let body = recorded.body.to_string();
+        assert!(
+            body.contains("_security_findings") && body.contains(text),
+            "{route:?}: premise: annotated, text unchanged: {body}"
+        );
+        let row = only_delivery(route, &recorded.rows);
+        assert_eq!(row["response_effect"], "annotated", "{route:?}: {row}");
     }
 }
