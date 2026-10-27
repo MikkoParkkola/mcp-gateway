@@ -15,7 +15,7 @@ use super::super::{BridgeDispatcher, MetaMcp};
 use super::Slot;
 use crate::backend::{Backend, BackendRegistry};
 use crate::config::{BackendConfig, FailsafeConfig};
-use crate::gateway::input_bridge::BridgeError;
+use crate::gateway::input_bridge::{BackendInvoker, BridgeError};
 use crate::gateway::meta_mcp::InvokeScope;
 use crate::gateway::router::CallerStanding;
 use crate::identity_propagation::CallerProof;
