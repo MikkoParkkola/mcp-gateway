@@ -266,7 +266,7 @@ async fn a_preview_offers_no_invalid_name_for_selection() {
 
 /// The first `allowed_tools` value anywhere in an audit record, wherever
 /// its envelope nests the fields.
-fn find(value: &Value) -> Option<&Value> {
+fn selection_in(value: &Value) -> Option<&Value> {
     match value {
         Value::Object(map) => map
             .get("allowed_tools")
