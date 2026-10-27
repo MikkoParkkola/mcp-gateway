@@ -10,8 +10,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MCP Gateway</title>
-<link rel="stylesheet" href="/ui/assets/shell.bee4206366ba.css">
-<script type="module" src="/ui/assets/shell.b71bbeca4541.js"></script>
+<link rel="stylesheet" href="/ui/assets/shell.90e613a8bf67.css">
+<script type="module" src="/ui/assets/shell.f36502dd89f5.js"></script>
 </head>
 <body>
 <a class="skip" href="#content">Skip to content</a>
@@ -32,5 +32,21 @@
     <noscript><p>This page needs JavaScript. <a href="/ui/classic">Open the classic page</a>.</p></noscript>
   </main>
 </div>
+<section id="signin" class="signin" hidden aria-labelledby="signin-title">
+  <div class="signin-card tk">
+    <h2 id="signin-title" class="signin-name">mcp-gateway</h2>
+    <p class="signin-host muted"></p>
+    <p>Open the sign-in link the terminal printed when the gateway started, or paste an API key.</p>
+    <form id="signin-form" novalidate>
+      <label for="signin-key">API key</label>
+      <input id="signin-key" class="input" type="password" autocomplete="off" spellcheck="false" placeholder="mcpg_…">
+      <p class="signin-error" role="alert" hidden></p>
+      <button class="btn primary" type="submit">Sign in</button>
+    </form>
+    <p class="signin-note muted">No key? Run <code>mcp-gateway serve</code> on this machine; it prints a one-time link. From another device, enter the code it shows at <a class="lnk" href="/dashboard/handoff">/dashboard/handoff</a>.</p>
+    <p class="signin-note muted">A key stays in this tab only; a reload asks for it again.</p>
+    <i class="c1" aria-hidden="true"></i><i class="c2" aria-hidden="true"></i>
+  </div>
+</section>
 </body>
 </html>
