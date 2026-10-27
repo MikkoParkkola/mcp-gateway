@@ -103,7 +103,7 @@ async fn subscribed(peer: &SubjectPeer, gw: &Gateway, subject: &str) {
     );
 }
 
-/// ISO-T1, signed_assertion: each user's change reaches that user only, and
+/// ISO-T1, `signed_assertion`: each user's change reaches that user only, and
 /// each user is served.
 #[tokio::test]
 async fn iso_t1_signed_assertion_each_user_receives_only_their_own_changes() {
@@ -115,7 +115,7 @@ async fn iso_t1_signed_assertion_each_user_receives_only_their_own_changes() {
     each_user_only_their_own(&peer, &gw, &rx, &issuer).await;
 }
 
-/// ISO-T1, token_exchange: the same, with each user's credential exchanged at
+/// ISO-T1, `token_exchange`: the same, with each user's credential exchanged at
 /// the backend's token endpoint.
 #[tokio::test]
 async fn iso_t1_token_exchange_each_user_receives_only_their_own_changes() {
@@ -234,7 +234,7 @@ async fn iso_t7_signed_assertion_listener_only_presents_its_users_credential() {
     only_its_users_credential(&peer, &gw, &rx, &issuer).await;
 }
 
-/// ISO-T7, token_exchange: the same, each credential exchanged first.
+/// ISO-T7, `token_exchange`: the same, each credential exchanged first.
 #[tokio::test]
 async fn iso_t7_token_exchange_listener_only_presents_its_users_credential() {
     let root = tempfile::tempdir().expect("root");
