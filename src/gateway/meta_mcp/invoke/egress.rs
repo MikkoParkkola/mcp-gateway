@@ -190,6 +190,7 @@ impl MetaMcp {
 impl MetaMcp {
     /// The firewall on a result part under the part's own policy, without
     /// the relay receipt: a task settles its receipt itself.
+    #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
     pub(crate) fn firewall_result(&self, result: &mut Value, at: &Egress<'_>) -> EgressOutcome {
         #[cfg(feature = "firewall")]
         if let Some(firewall) = at.firewall {
@@ -213,6 +214,7 @@ impl MetaMcp {
     /// backend could have sent it: one target per backend, plus the
     /// backend-less one. The firewall takes the strongest outcome over
     /// targets, so a rule scoped to any backend still applies (POLICY.2).
+    #[cfg(feature = "firewall")]
     pub(crate) fn expand_targets(
         &self,
         targets: &[ResponsePolicyTarget],

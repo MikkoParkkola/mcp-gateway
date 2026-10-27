@@ -277,13 +277,18 @@ impl MetaMcp {
     ) -> Option<Error> {
         let firewall = self.firewall.as_deref()?;
         // stdio only: no API keys on that transport.
-        let target = crate::security::response_policy::RuleTarget {
+        let rule_target = crate::security::response_policy::RuleTarget {
             server: crate::security::response_policy::ServerOf::Backend(server),
             tool,
             key: crate::security::response_policy::KeyOf::NoKey,
         };
-        let verdict =
-            firewall.check_request_keyed(session_id, target, arguments, caller, control_identity);
+        let verdict = firewall.check_request_keyed(
+            session_id,
+            rule_target,
+            arguments,
+            caller,
+            control_identity,
+        );
         if verdict.action == crate::security::firewall::FirewallAction::Warn {
             tracing::warn!(
                 server,

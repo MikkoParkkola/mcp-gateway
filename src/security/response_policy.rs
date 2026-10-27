@@ -42,6 +42,7 @@ impl<'a> KeyOf<'a> {
 
 /// The backend a firewall rule's `servers` scope is judged against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
 pub(crate) enum ServerOf<'a> {
     /// The backend's registry name.
     Backend(&'a str),
@@ -49,6 +50,7 @@ pub(crate) enum ServerOf<'a> {
     NoBackend,
 }
 
+#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
 impl<'a> ServerOf<'a> {
     /// The name records and per-backend guards key on: the backend, or the
     /// `gateway` label for none.
@@ -62,6 +64,7 @@ impl<'a> ServerOf<'a> {
 
 /// What a firewall rule is matched against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
 pub(crate) struct RuleTarget<'a> {
     pub(crate) server: ServerOf<'a>,
     pub(crate) tool: &'a str,
@@ -91,6 +94,7 @@ pub(crate) struct ResponseCorrelation<'a> {
     /// The API key the caller authenticated with, for a firewall rule's
     /// `keys` scope. Only the firewall reads it; `NotKnown` where this
     /// surface carries no proven key.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
     pub(crate) key: KeyOf<'a>,
 }
 
