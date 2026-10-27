@@ -432,3 +432,28 @@ async fn a_step_refused_for_the_envelope_ends_an_abort_playbook_refused() {
         "{fields:?}"
     );
 }
+
+/// Control: a `continue` playbook carries on past the same refusal and
+/// delivers its report, so its record says nothing was refused.
+#[tokio::test]
+async fn a_continue_playbook_past_an_envelope_refusal_records_no_refused() {
+    use crate::gateway::delivery_facts;
+    let invoker = recording().await;
+    let mut engine = PlaybookEngine::new();
+    engine.register(two_steps("ask", &json!({ "list": ["$ask"] })));
+    let mut fields = serde_json::Map::new();
+    delivery_facts::scope(async {
+        delivery_facts::unvouched();
+        let ran = engine.execute("carry", json!({}), &invoker).await;
+        assert_refused_after(&invoker, &ran, "ask");
+        delivery_facts::composite_ended(delivery_facts::CompositeEnd::of_outcome(&ran));
+        delivery_facts::record_fields(
+            delivery_facts::snapshot().as_ref(),
+            false,
+            false,
+            &mut fields,
+        );
+    })
+    .await;
+    assert_eq!(fields.get("response_effect"), None, "{fields:?}");
+}

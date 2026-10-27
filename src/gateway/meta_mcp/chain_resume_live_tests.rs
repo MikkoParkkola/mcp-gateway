@@ -689,9 +689,10 @@ async fn a_resume_whose_pending_step_is_withheld_records_refused() {
     static DENY_ASK: crate::gateway::authz::DenyOne =
         crate::gateway::authz::DenyOne { tool: "ask" };
     let (resumed, fields, asks) = resume_as(&DENY_ASK).await;
-    assert!(
-        resumed.get("error").is_some(),
-        "premise: refused: {resumed}"
+    assert_eq!(
+        resumed["error"]["code"],
+        json!(-32601),
+        "premise: the absent name: {resumed}"
     );
     assert_eq!(asks, 1, "premise: the pending step never re-ran: {resumed}");
     assert_eq!(
@@ -707,9 +708,10 @@ async fn a_resume_whose_pending_step_is_withheld_records_refused() {
 #[tokio::test]
 async fn a_resume_whose_pending_step_is_out_of_scope_records_refused() {
     let (resumed, fields, asks) = resume_as(&Granted(vec!["other".to_owned()])).await;
-    assert!(
-        resumed.get("error").is_some(),
-        "premise: refused: {resumed}"
+    assert_eq!(
+        resumed["error"]["code"],
+        json!(-32001),
+        "premise: the backend miss: {resumed}"
     );
     assert_eq!(asks, 1, "premise: the pending step never re-ran: {resumed}");
     assert_eq!(

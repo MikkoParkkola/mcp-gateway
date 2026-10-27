@@ -5,7 +5,7 @@
 //! on something else, records no effect. Over-claiming is the worse failure,
 //! so most rows here pin the absence.
 
-use super::unvouched_effect::run_playbook;
+use super::unvouched_effect::{run_playbook, run_playbook_as};
 use super::*;
 
 /// The last delivery record, which is the composite's.
@@ -211,6 +211,45 @@ async fn a_chain_ending_on_a_step_withheld_for_its_schema_records_refused() {
     assert!(
         body.get("error").is_some() || body["result"]["isError"] == true,
         "premise: the step was withheld: {status} {body}"
+    );
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "premise: never sent");
+    let record = last_delivery(&fx);
+    assert_eq!(record["response_effect"], "refused", "{record}");
+}
+
+/// A playbook step the caller's key may not invoke: a playbook's steps meet
+/// the caller's policy only at dispatch, never at the route stage. The
+/// playbook (abort) ends on that refusal.
+#[tokio::test]
+async fn a_playbook_ending_on_a_step_its_key_may_not_invoke_records_refused() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(Some(vec!["t".to_string()]))),
+        ..Setup::default()
+    })
+    .await;
+    let yaml = format!("name: one\n{ONE_STEP}");
+    let (status, body) = run_playbook_as(&fx, &yaml, "one", &Caller::Key).await;
+    assert!(
+        body.get("error").is_some(),
+        "premise: ended on the denial: {status} {body}"
+    );
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "premise: never sent");
+    let record = last_delivery(&fx);
+    assert_eq!(record["response_effect"], "refused", "{record}");
+}
+
+/// A playbook step on a backend the operator killed: the kill switch is not
+/// a visibility rule, so the step passes the gate and meets the policy at
+/// dispatch. The playbook (abort) ends on that refusal.
+#[tokio::test]
+async fn a_playbook_ending_on_a_killed_backend_records_refused() {
+    let fx = fixture(Setup::default()).await;
+    fx.state.meta_mcp.kill_switch().kill("alpha");
+    let yaml = format!("name: one\n{ONE_STEP}");
+    let (status, body) = run_playbook(&fx, &yaml, "one").await;
+    assert!(
+        body.get("error").is_some(),
+        "premise: ended on the kill switch: {status} {body}"
     );
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "premise: never sent");
     let record = last_delivery(&fx);
