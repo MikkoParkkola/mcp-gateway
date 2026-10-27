@@ -15,12 +15,15 @@ use crate::config::{Config, EnvOverlay, LiveEnv, ResolvedEnvFiles};
 use crate::security::{posture, ssrf::DestinationPolicy};
 
 use super::{
-    ConfigPatch, ConfigWriteError, IdentityGrantSink, LiveConfig, POSTURE_REFUSED_PREFIX,
-    ReloadOutcome, SHUTDOWN_ABORTED_ERROR, apply_patch, compute_diff,
+    ConfigPatch, IdentityGrantSink, LiveConfig, POSTURE_REFUSED_PREFIX, ReloadOutcome,
+    SHUTDOWN_ABORTED_ERROR, apply_patch, compute_diff,
 };
 
 #[path = "reload_context_write.rs"]
 mod write_api;
+
+#[path = "reload_context_lock.rs"]
+mod lock_api;
 
 #[path = "replace.rs"]
 pub(crate) mod replace;
@@ -434,7 +437,35 @@ impl ReloadContext {
             () = self.stop.cancelled() => return Err(STOPPED.to_owned()),
             guard = lock => guard,
         };
-        let mut outcome = match self.reload_outcome_locked().await {
+        // Then the config sidecar, the order every holder takes them in: so
+        // this load never reads bytes a refused write is about to roll back.
+        let deadline = std::time::Instant::now() + super::RELOAD_LOCK_WAIT;
+        // The lock resolves the config once, off the workers: lock, journal
+        // checks and load are about that one file.
+        let reader = tokio::select! {
+            biased;
+            () = self.stop.cancelled() => return Err(STOPPED.to_owned()),
+            reader = crate::config_persistence::lock::reader_lock(&self.config_path, deadline) => reader,
+        };
+        let (_sidecar, target) = match reader {
+            crate::config_persistence::lock::ReaderLock::Held(locked) => {
+                if locked.recovered == crate::config_persistence::journal::Recovered::RolledBack {
+                    self.reload_owed
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                (Some(locked.held), locked.target)
+            }
+            crate::config_persistence::lock::ReaderLock::Unlocked(target) => (None, target),
+            crate::config_persistence::lock::ReaderLock::Skip(why) => {
+                self.note_refused_lock();
+                let mut skipped = format!("config reload skipped: {why}; the next change retries");
+                if let Some(Ok(line) | Err(line)) = grants {
+                    write!(skipped, "; {line}").ok();
+                }
+                return Err(skipped);
+            }
+        };
+        let mut outcome = match self.reload_outcome_locked_at(&target).await {
             Ok(outcome) => {
                 // An applied reload marks the charts; a refused one
                 // returns below and marks nothing.
@@ -464,123 +495,13 @@ impl ReloadContext {
         Ok(outcome)
     }
 
-    /// Take the reload lock, giving up after `wait`.
-    ///
-    /// The bound covers *acquiring* the lock, not holding it. A write that wins
-    /// the lock then runs its reload to completion, however long that takes;
-    /// what the bound prevents is every other write queueing behind that one
-    /// forever.
-    ///
-    /// Only config *writes* are bounded at all. A reload triggered by the
-    /// meta-tool, the admin UI reload button, or the file watcher still waits as
-    /// long as it takes: refusing one of those would silently drop a config
-    /// change the operator already made on disk, which trades a hang for a lost
-    /// edit. A refused write, by contrast, has changed nothing and can be
-    /// retried.
-    async fn lock_reload_within(
+    async fn reload_transaction(
         &self,
-        wait: Duration,
-    ) -> std::result::Result<tokio::sync::MutexGuard<'_, ()>, ConfigWriteError> {
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "Lifecycle: config reload applies the operator's backend set; no caller request"
-        )]
-        tokio::time::timeout(wait, self.registry.lock_reload())
-            .await
-            .map_err(|_| ConfigWriteError::Busy)
-    }
-
-    /// Run the file load on its own thread and wait for it without holding a
-    /// runtime worker (#1808).
-    ///
-    /// The load reads the config file and every env file; on a stalled NFS or
-    /// FUSE mount that read blocks for as long as the mount does. Awaiting it
-    /// here keeps the workers free and lets shutdown drop this future; nothing
-    /// the thread computes is published unless this future is still waiting.
-    /// Both failure arms refuse the reload, as a failed load always has. A
-    /// panicking load is a refusal only where panics unwind: the release
-    /// profile aborts on any panic, here as everywhere else.
-    async fn load_off_worker(&self) -> std::result::Result<EvaluatedReload, String> {
-        // The reload lock alone does not bound threads: a reload whose future
-        // is dropped (a client that disconnects, a caller's timeout) releases
-        // the lock while its read is still stalled. The permit travels into the
-        // thread and is released only when that read returns.
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "Lifecycle: config reload applies the operator's backend set; no caller request"
-        )]
-        let read_slot = self.registry.reload_read_slot();
-        let slot = tokio::select! {
-            biased;
-            () = self.stop.cancelled() => return Err(STOPPED.to_owned()),
-            slot = read_slot.acquire_owned() => {
-                slot.map_err(|_| "config reload load slot closed".to_owned())?
-            }
-        };
-        let (done, result) = tokio::sync::oneshot::channel();
-        let (load, path, live, env) = (
-            self.load,
-            self.config_path.clone(),
-            Arc::clone(&self.live_config),
-            Arc::clone(&self.env),
-        );
-        (self.spawn)(Box::new(move || {
-            // Released when the read returns, not when the reload that asked
-            // for it gives up.
-            let _slot = slot;
-            drop(done.send(load(&path, &live, &env)));
-        }))
-        .map_err(|e| format!("config reload could not start its file read: {e}"))?;
-        tokio::select! {
-            biased;
-            () = self.stop.cancelled() => Err(STOPPED.to_owned()),
-            done = result => {
-                done.map_err(|_| "config reload file read ended without a result".to_owned())?
-            }
-        }
-    }
-
-    /// The reload transaction itself. The caller must already hold the reload
-    /// lock; taking it here as well would deadlock on the non-reentrant mutex.
-    /// An accepted reload pays any reload a lock recovery left owed.
-    async fn reload_outcome_locked(&self) -> std::result::Result<ReloadOutcome, String> {
-        // Audits the overrides the registry holds however this ends: applied,
-        // refused, or dropped at an await after registering backends.
-        let _audit = (self.reporting.override_audit.as_deref()).map(|a| a.guard(&self.registry));
-        let outcome = self.reload_transaction().await;
-        let refusals = &self.reporting.refusals;
-        match &outcome {
-            Ok(_) => {
-                self.reload_owed
-                    .store(false, std::sync::atomic::Ordering::SeqCst);
-                refusals.reload_applied();
-            }
-            Err(refusal) => refusals.record(super::refusals::RefusalKind::Reload, None, refusal),
-        }
-        outcome
-    }
-
-    /// Note what a lock recovery did, then pay an owed reload before the
-    /// caller's own work, so no early return leaves the running config on
-    /// bytes recovery took away. The caller holds the reload lock. A failed
-    /// reload stays owed and is logged; the caller's work goes on, and its
-    /// own reload (every writer ends with one) tries again.
-    async fn pay_owed_reload(&self, recovered: crate::config_persistence::journal::Recovered) {
-        use std::sync::atomic::Ordering::SeqCst;
-        if recovered == crate::config_persistence::journal::Recovered::RolledBack {
-            self.reload_owed.store(true, SeqCst);
-        }
-        if self.reload_owed.load(SeqCst)
-            && let Err(error) = self.reload_outcome_locked().await
-        {
-            tracing::warn!(%error, path = %self.config_path.display(), "the reload owed after restoring gateway.yaml failed; it is retried on the next one");
-        }
-    }
-
-    async fn reload_transaction(&self) -> std::result::Result<ReloadOutcome, String> {
+        path: &std::path::Path,
+    ) -> std::result::Result<ReloadOutcome, String> {
         #[cfg(test)]
         super::reload_pause::pause_here(&self.config_path).await;
-        let evaluated = self.load_off_worker().await?;
+        let evaluated = self.load_off_worker(path.to_path_buf()).await?;
         // First: a posture change also changes what the posture forces (signing
         // among it), and the posture is the cause the operator must act on.
         if let Some(refusal) =

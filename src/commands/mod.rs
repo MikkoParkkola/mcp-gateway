@@ -695,3 +695,20 @@ mod admin_credential_tests {
         );
     }
 }
+
+/// The serve paths' first load of the config. A byte write a crash left
+/// behind is recovered first ([`mcp_gateway::config_persistence::recover_before_start`]),
+/// so the gateway never starts on bytes no reload accepted; an unresolvable
+/// one refuses the start. Read-only commands load without it.
+pub(crate) fn load_for_serve(
+    path: Option<&std::path::Path>,
+) -> mcp_gateway::Result<mcp_gateway::config::Evaluated> {
+    if let Some(path) = path {
+        mcp_gateway::config_persistence::recover_before_start(path)
+            .map_err(mcp_gateway::Error::Config)?;
+    }
+    mcp_gateway::config::Config::load_evaluated(path)
+}
+
+#[cfg(test)]
+mod serve_load_tests;
