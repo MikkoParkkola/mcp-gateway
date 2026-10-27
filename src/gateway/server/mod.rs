@@ -24,6 +24,8 @@ mod cost_save_stamp_tests;
 mod counter_wiring;
 mod events_wiring;
 #[cfg(test)]
+pub(crate) use events_wiring::listener_mint_for_test;
+#[cfg(test)]
 mod gh475_budget_decides_tests;
 mod identity_grants;
 #[cfg(all(test, feature = "firewall"))]
@@ -49,6 +51,9 @@ mod stdio_channel;
 mod stdio_delivery;
 mod stdio_dispatch;
 mod stdio_dispatches;
+/// ADR-023: the sanitise flag over stdio follows a reload.
+#[cfg(test)]
+mod stdio_live_flag_tests;
 mod stdio_loop;
 mod stdio_nonce;
 mod stdio_notify;
