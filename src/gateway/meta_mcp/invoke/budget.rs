@@ -5,11 +5,13 @@
 use serde_json::{Value, json};
 use tracing::{debug, warn};
 
+use super::gateway_writes::{CONTEXT_INTEGRITY, Layer, insert_noted, note};
 use super::{audit, withheld_evidence};
 use crate::context_integrity::{
     ContextActionRisk, ContextIntegrityDecisionKind, ContextIntegrityEvaluation,
     ContextIntegrityInput, ContextProvenance, ContextTrustBoundary,
 };
+use crate::gateway::delivery_facts::ResponseEffect;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::identity_grants::GrantSubject;
 
@@ -199,7 +201,11 @@ impl MetaMcp {
         }
 
         let (delivered, effect) = if evaluation.policy.enforcement_applied {
-            let delivered = Self::context_integrity_delivered_result(&evaluation, &result);
+            let (delivered, rebuilt) =
+                Self::context_integrity_delivered_result(&evaluation, &result);
+            if let Some(rebuilt) = rebuilt {
+                crate::gateway::delivery_facts::raise(rebuilt);
+            }
             (delivered, GateEffect::Enforced)
         } else {
             (result, GateEffect::PassedThrough)
@@ -223,12 +229,16 @@ impl MetaMcp {
         (false, false)
     }
 
+    /// The answer enforcement delivers, and what that did to the backend's:
+    /// `Rewritten` for a rebuild, `Refused` for a malformed round, and `None`
+    /// for a whole withhold, whose refusal is raised where the withheld
+    /// answer is delivered.
     pub(super) fn context_integrity_delivered_result(
         evaluation: &ContextIntegrityEvaluation,
         original: &Value,
-    ) -> Value {
+    ) -> (Value, Option<ResponseEffect>) {
         let Some(delivered) = evaluation.transformed.delivered.clone() else {
-            return json!({
+            let withheld = json!({
                 "isError": true,
                 "content": [{
                     "type": "text",
@@ -238,6 +248,7 @@ impl MetaMcp {
                     )
                 }]
             });
+            return (withheld, None);
         };
 
         let text = delivered
@@ -271,13 +282,14 @@ impl MetaMcp {
         let malformed = result_type.is_some_and(|value| !value.is_string())
             || is_error.is_some_and(|value| !value.is_boolean());
         if malformed {
-            return json!({
+            let refused = json!({
                 "content": [{
                     "type": "text",
                     "text": "The backend returned a malformed result: `resultType`                              must be a string and `isError` a boolean. The response                              was refused rather than delivered."
                 }],
                 "isError": true,
             });
+            return (refused, Some(ResponseEffect::Refused));
         }
         let mut envelope = serde_json::Map::new();
         for (field, value) in [("resultType", result_type), ("isError", is_error)] {
@@ -287,7 +299,7 @@ impl MetaMcp {
         }
         envelope.insert("content".to_string(), content);
         envelope.insert("structuredContent".to_string(), delivered);
-        Value::Object(envelope)
+        (Value::Object(envelope), Some(ResponseEffect::Rewritten))
     }
 
     pub(super) fn attach_context_integrity_metadata(
@@ -303,14 +315,19 @@ impl MetaMcp {
             "audit": &evaluation.audit,
         });
 
-        if let Some(obj) = result.as_object_mut() {
-            obj.insert("_context_integrity".to_string(), metadata);
+        if result.is_object() {
+            insert_noted(Layer::Value, CONTEXT_INTEGRITY, &mut result, metadata);
             result
         } else {
-            json!({
+            // A scalar has no member to carry the verdict: the gateway wraps
+            // it, which changes the bytes delivered.
+            crate::gateway::delivery_facts::raise(ResponseEffect::Rewritten);
+            let wrapped = json!({
                 "structuredContent": result,
                 "_context_integrity": metadata
-            })
+            });
+            note(Layer::Value, CONTEXT_INTEGRITY, &wrapped);
+            wrapped
         }
     }
 }

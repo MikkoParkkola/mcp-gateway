@@ -30,8 +30,6 @@ pub(crate) enum ResponseEffect {
     /// Delivered with a gateway annotation added (findings, contract notes).
     Annotated,
     /// Delivered with bytes the gateway changed.
-    // Only the firewall's egress scan rewrites.
-    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
     Rewritten,
     /// Not delivered: the gateway answered with a refusal.
     Refused,

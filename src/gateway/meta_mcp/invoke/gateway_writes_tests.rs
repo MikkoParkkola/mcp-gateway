@@ -99,6 +99,7 @@ async fn a_stored_record_round_trips_every_noted_path() {
         "_cost_suggestion": {"message": "m"}, "requestState": "rs-1", "resultType": "complete",
         "cacheScope": "private", "ttlMs": 5000,
         "_contract_violation": true, "_contract_reason": "no_contract_declared",
+        "_context_integrity": {"policy": {}},
         "text": "backend",
     });
     let stored = scope(async {

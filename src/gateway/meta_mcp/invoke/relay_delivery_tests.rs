@@ -402,6 +402,74 @@ fn a_recorded_prompt_is_classified_without_the_stripped_chain() {
     );
 }
 
+/// A context-integrity kernel that enforces `kind` on every finding.
+fn enforcing(
+    kind: crate::context_integrity::ContextIntegrityDecisionKind,
+) -> crate::context_integrity::ContextIntegrityKernel {
+    use crate::context_integrity::{
+        ContextIntegrityKernel, ContextIntegrityPolicy, ContextIntegrityPolicyMode,
+    };
+    ContextIntegrityKernel::new(ContextIntegrityPolicy {
+        mode: ContextIntegrityPolicyMode::Enforce,
+        untrusted_instruction_decision: kind,
+        guarded_material_decision: kind,
+        personal_data_decision: kind,
+        destructive_instruction_decision: kind,
+        tool_poisoning_decision: kind,
+        high_risk_action_decision: kind,
+        allow_benign_read_only: false,
+        non_bypassable: false,
+    })
+}
+
+/// The receipt copy is never delivered, so classifying it touches nothing
+/// of the delivery it runs in: a verdict attached in monitor mode notes no
+/// write and raises no `annotated`, an enforced malformed round raises no
+/// `refused`, and neither adds an audit class to the call.
+#[tokio::test]
+async fn a_recorded_prompt_leaves_the_open_delivery_unchanged() {
+    use crate::context_integrity::ContextIntegrityDecisionKind;
+    let pii = "Contact: keeper@orchardcoop.fi";
+    let monitored = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
+    let enforced = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()))
+        .with_context_integrity_kernel(enforcing(ContextIntegrityDecisionKind::Strip));
+    let attached =
+        json!({"contents": [{"uri": "res://orchard", "text": format!("{PROSE} {pii}")}]});
+    let malformed = json!({"content": [{"type": "text", "text": pii}], "resultType": 5});
+    for (meta, prompt) in [(&monitored, attached), (&enforced, malformed)] {
+        let ((recorded, effect, writes), notes) =
+            super::super::super::audit::with_dispatch_scope(crate::gateway::delivery_facts::scope(
+                super::super::super::gateway_writes::scope(async {
+                    let recorded = meta.recorded_prompt(
+                        ("alpha", "resources/read"),
+                        None,
+                        "catalogue",
+                        &prompt,
+                    );
+                    let mut fields = serde_json::Map::new();
+                    crate::gateway::delivery_facts::record_fields(
+                        crate::gateway::delivery_facts::snapshot().as_ref(),
+                        false,
+                        &mut fields,
+                    );
+                    let writes = super::super::super::gateway_writes::recorded();
+                    (recorded, fields["response_effect"].clone(), writes)
+                }),
+            ))
+            .await;
+        assert!(
+            recorded.get("_context_integrity").is_some(),
+            "premise: classified: {recorded}"
+        );
+        assert_eq!(effect, "delivered", "{prompt}");
+        assert!(writes.is_empty(), "{prompt}: noted {writes:?}");
+        assert!(
+            format!("{notes:?}").contains("data_classes: {}"),
+            "{prompt}: {notes:?}"
+        );
+    }
+}
+
 /// [`receipt_after_rebuild`] for an answer of `shape` (a legacy route).
 async fn receipt_after_rebuild_as(
     meta: &Arc<MetaMcp>,

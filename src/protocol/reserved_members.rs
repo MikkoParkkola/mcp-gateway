@@ -83,8 +83,7 @@ pub(crate) const MEMBERS: &[Member] = &[
     row(&["_contract_reason"], Counted, GatewayOnly, Noted),
     row(&["_cost_warnings"], Counted, GatewayOnly, Noted),
     row(&["_cost_suggestion"], Counted, GatewayOnly, Noted),
-    // Outside until the delivery record notes it at its attach site.
-    row(&["_context_integrity"], Counted, GatewayOnly, Outside),
+    row(&["_context_integrity"], Counted, GatewayOnly, Noted),
     row(&["tools", "*", "trustCard"], Counted, GatewayOnly, Outside),
     row(&["_signature"], Envelope, GatewayOnly, Noted),
     row(&["_meta", "provenance"], Envelope, GatewayOnly, Noted),

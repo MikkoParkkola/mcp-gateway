@@ -274,3 +274,96 @@ fn every_stored_answer_read_is_inventoried() {
         "a stored-answer read changed: unvouch its delivery, add a row that fails without it, then list it"
     );
 }
+
+/// How a caller of the context-integrity transform treats its result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransformUse {
+    /// The function itself, or a call inside the transform.
+    Inside,
+    /// The result is the answer delivered: its raises and notes count.
+    Delivering,
+    /// The result is a copy never delivered: it runs with the facts cell,
+    /// the gateway-write notes and the audit-class notes suspended.
+    Suspended,
+}
+
+/// Every production occurrence of the transform's three entry points.
+const TRANSFORM_CALLS: &[(&str, &str, usize, TransformUse)] = &[
+    (
+        "apply_context_integrity(",
+        "src/gateway/meta_mcp/invoke/budget.rs",
+        1,
+        TransformUse::Inside,
+    ),
+    (
+        "apply_context_integrity(",
+        "src/gateway/meta_mcp/invoke/policy.rs",
+        1,
+        TransformUse::Delivering,
+    ),
+    (
+        "apply_context_integrity(",
+        "src/gateway/meta_mcp/invoke/relay.rs",
+        1,
+        TransformUse::Suspended,
+    ),
+    (
+        "context_integrity_delivered_result(",
+        "src/gateway/meta_mcp/invoke/budget.rs",
+        2,
+        TransformUse::Inside,
+    ),
+    (
+        "attach_context_integrity_metadata(",
+        "src/gateway/meta_mcp/invoke/budget.rs",
+        2,
+        TransformUse::Inside,
+    ),
+];
+
+/// The scan row (lead ruling): a new caller of the transform would raise
+/// and note into whatever delivery is open. It cannot land unclassified,
+/// and a suspended caller must hold all three suspensions.
+#[test]
+fn every_context_integrity_caller_is_classified() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    production_sources(root, &root.join("src"), &mut files);
+    let needles: std::collections::BTreeSet<&str> =
+        TRANSFORM_CALLS.iter().map(|(needle, ..)| *needle).collect();
+    let mut found = std::collections::BTreeMap::new();
+    for file in files {
+        let text = std::fs::read_to_string(&file).expect("a source file reads");
+        let name = file
+            .strip_prefix(root)
+            .expect("under the crate")
+            .to_string_lossy()
+            .replace('\\', "/");
+        for needle in &needles {
+            let count = text.matches(needle).count();
+            if count > 0 {
+                found.insert((*needle, name.clone()), count);
+            }
+        }
+    }
+    let listed: std::collections::BTreeMap<_, _> = TRANSFORM_CALLS
+        .iter()
+        .map(|(needle, file, count, _)| ((*needle, (*file).to_owned()), *count))
+        .collect();
+    assert_eq!(
+        found, listed,
+        "a context-integrity caller changed: classify it as delivering or suspended, then list it"
+    );
+    for (_, file, _, class) in TRANSFORM_CALLS {
+        if *class == TransformUse::Suspended {
+            let text = std::fs::read_to_string(root.join(file)).expect("reads");
+            for guard in [
+                "delivery_facts::suspended(",
+                "gateway_writes::suspended(",
+                "audit::suspended(",
+            ] {
+                assert!(text.contains(guard), "{file} lacks {guard}");
+            }
+        }
+    }
+}

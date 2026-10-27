@@ -93,6 +93,9 @@ impl WriteRecord {
     }
 }
 
+/// The context-integrity verdict the gateway attaches to a judged answer.
+pub(super) const CONTEXT_INTEGRITY: &[&str] = &["_context_integrity"];
+
 /// The response-contract verdict the gateway writes on a violating answer.
 pub(super) const CONTRACT_VIOLATION: &[&str] = &["_contract_violation"];
 
@@ -352,6 +355,12 @@ impl WriteRecord {
         }
         Self(carried)
     }
+}
+
+/// Run `f` with this delivery's write record suspended: a member written
+/// into a copy that is never delivered is noted in a record thrown away.
+pub(super) fn suspended<T>(f: impl FnOnce() -> T) -> T {
+    GATEWAY_WRITES.sync_scope(RefCell::new(Writes::default()), f)
 }
 
 /// Run `delivery` with a write record, beside its receipt collector.
