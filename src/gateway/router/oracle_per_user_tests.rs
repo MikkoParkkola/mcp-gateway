@@ -6,6 +6,7 @@
 //! and no credential resolution, on `/mcp` `gateway_invoke` and the direct
 //! route; a refused direct call resolves no credential (ORACLE.3/.4).
 
+use crate::security::transparency_log::temp::TempLog;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
@@ -34,7 +35,7 @@ struct Gateway {
     shared: Arc<Asked>,
     mints: Arc<AtomicUsize>,
     _store: tempfile::TempDir,
-    _audit: [tempfile::NamedTempFile; 2],
+    _audit: [TempLog; 2],
 }
 
 impl Gateway {
@@ -91,10 +92,7 @@ fn gateway_on(
     let kept = Arc::clone(&backend);
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     assert!(state_mut.backends.register(backend), "fixture registration");
-    let audit = [
-        tempfile::NamedTempFile::new().expect("tempfile"),
-        tempfile::NamedTempFile::new().expect("tempfile"),
-    ];
+    let audit = [TempLog::new(), TempLog::new()];
     let mut profiles = std::collections::HashMap::new();
     profiles.insert(
         "restricted".to_string(),
