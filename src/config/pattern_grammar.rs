@@ -131,6 +131,21 @@ fn refuse_agent_scope(key: &str, scope: &str) -> Result<()> {
     Ok(())
 }
 
+/// Whether `tool` (or `qualified`, `server:tool`) matches any pattern in a
+/// tool list: an exact name, or a trailing `prefix*`. The one matcher every
+/// tool list uses (an API key's `allowed_tools`/`denied_tools`, a backend's
+/// `allowed_tools`), so the grammar refused above and the one matched here
+/// cannot drift apart.
+pub(crate) fn tool_pattern_matches(patterns: &[String], tool: &str, qualified: &str) -> bool {
+    patterns.iter().any(|pattern| {
+        if let Some(prefix) = pattern.strip_suffix('*') {
+            tool.starts_with(prefix) || qualified.starts_with(prefix)
+        } else {
+            tool == pattern || qualified == pattern
+        }
+    })
+}
+
 impl Config {
     /// Refuse a pattern its section cannot match (MIK-8298).
     pub(super) fn validate_pattern_grammar(&self) -> Result<()> {
