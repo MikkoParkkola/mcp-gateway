@@ -256,8 +256,14 @@ pub(crate) enum Settle {
     )
 )]
 pub(crate) fn settle_for(result: &Result<ReplaceOutcome, ReplaceError>, renamed: bool) -> Settle {
-    let _ = (result, renamed, Settle::Keep, Settle::Abandon);
-    Settle::Discard
+    match result {
+        Ok(_) => Settle::Keep,
+        Err(ReplaceError::RollbackFailed { .. } | ReplaceError::Unconfirmed { .. }) => {
+            Settle::Abandon
+        }
+        Err(ReplaceError::Failed(_)) if renamed => Settle::Abandon,
+        Err(_) => Settle::Discard,
+    }
 }
 
 /// This replacement's new entries until they are settled. Dropped unsettled
@@ -453,6 +459,13 @@ impl ReloadContext {
             .may_write(&self.config_path)
             .map_err(ReplaceError::Unsupported)?;
         if new == current {
+            if entries.pending.is_some() {
+                // The compute dropped the references: nothing would name the
+                // entries just created.
+                return Err(ReplaceError::Refused(
+                    "the new config does not name the saved secrets".to_string(),
+                ));
+            }
             // Nothing to write, but still a reload, so a retry after a failed
             // one does not leave the runtime stale. Nothing was committed, so
             // a refusal needs no rollback.
