@@ -34,6 +34,7 @@ async fn startup_on(gateway: Gateway) -> (crate::Result<()>, Arc<MetaMcp>) {
             )),
             None,
             &warmer,
+            crate::config_reload::refusals::ReloadReporting::default(),
         )
         .await;
     (outcome, built.meta_mcp)

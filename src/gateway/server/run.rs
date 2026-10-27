@@ -83,6 +83,15 @@ impl Gateway {
             record_key,
             transparency_log,
         } = self.build_meta_mcp().await?;
+        // One auditor for the process: the overrides in effect at start are
+        // recorded now, and every reload context shares it.
+        let (override_auditor, override_drain) =
+            crate::config_reload::override_audit::OverrideAuditor::start(transparency_log.clone());
+        override_auditor
+            .record_at_start(&self.backends, transparency_log.as_ref())
+            .await?;
+        let reload_reporting =
+            crate::config_reload::refusals::ReloadReporting::with_override_audit(override_auditor);
         // Restored before anything is served or reloaded.
         let (counters, counter_saver) =
             counter_wiring::start(&data_dir, &meta_mcp, shutdown_tx.subscribe());
@@ -215,6 +224,7 @@ impl Gateway {
                     self.config.failsafe.clone(),
                     self.config.meta_mcp.cache_ttl,
                 )?
+                .with_reporting(reload_reporting.clone())
                 .with_env(Arc::clone(&self.env))
                 .with_identity_grant_sink_opt(identity_grant_sink.clone())
                 .with_stop(reload_stop)
@@ -517,13 +527,14 @@ impl Gateway {
         // active. MIK-6750 r4: starting it earlier would let a startup-time
         // reload move `live_config` before the snapshot, surfacing a
         // never-bound host/port in the advertised resource.
-        let _config_watcher: Option<ConfigWatcher> = self.start_config_watcher(
+        let config_watcher: Option<ConfigWatcher> = self.start_config_watcher(
             &live_config,
             identity_grant_sink,
             capabilities_for_watcher,
             &shutdown_tx,
             &warmer,
             surfaced_hook,
+            reload_reporting,
         );
 
         // Start health check task. Shared with `run_stdio` for the same reason
@@ -614,6 +625,10 @@ impl Gateway {
 
         let drain_timeout = self.config.server.shutdown_timeout;
         Self::drain_inflight(&inflight, drain_timeout).await;
+        // Every reload entry point has stopped: the listener has returned and
+        // the watcher goes now. What they queued is written, or named.
+        drop(config_watcher);
+        override_drain.drain(&self.backends, drain_timeout).await;
 
         // Workers drain, and a drain that runs out cancels the rest; then the
         // expiry sweep is joined while the store is still open, and the store

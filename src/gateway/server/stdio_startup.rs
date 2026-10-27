@@ -24,6 +24,7 @@ impl Gateway {
         live_config: &Arc<LiveConfig>,
         grant_sink: Option<&Arc<IdentityGrantSink>>,
         warmer: &WarmerGuard,
+        reporting: crate::config_reload::refusals::ReloadReporting,
     ) -> Result<()> {
         // Account strategies must exist before stdio can admit a request, just
         // as they do before the HTTP listener starts serving.
@@ -95,6 +96,7 @@ impl Gateway {
                     self.config.failsafe.clone(),
                     self.config.meta_mcp.cache_ttl,
                 )?
+                .with_reporting(reporting)
                 .with_env(Arc::clone(&self.env))
                 .with_identity_grant_sink_opt(grant_sink.cloned())
                 .with_capabilities(meta_mcp.get_capabilities())

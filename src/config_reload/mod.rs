@@ -490,6 +490,15 @@ pub(crate) fn flags_off(mut config: Config) -> Config {
     config.security.ssrf_protection = false;
     config
 }
+pub(crate) mod override_audit;
+#[cfg_attr(
+    not(feature = "webui"),
+    allow(
+        dead_code,
+        reason = "every build records refusals; only the web UI's refusals route reads them back"
+    )
+)]
+pub(crate) mod refusals;
 mod reload_context;
 mod reload_warm_hook;
 // Linux and macOS, as the other real-watcher rows (MIK-8181).
