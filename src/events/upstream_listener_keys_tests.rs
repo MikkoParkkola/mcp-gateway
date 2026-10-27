@@ -59,6 +59,34 @@ async fn each_subscriber_of_a_backend_is_its_own_listener() {
     assert_eq!(ep.name, "b");
 }
 
+/// ISO-T4c: one subscriber's legacy unsubscribe leaves another's subscribe
+/// owed. The session fills a ledger; none runs here, so each subscriber's
+/// ledger is told its wanted URI directly.
+#[tokio::test]
+async fn one_subscribers_unsubscribe_keeps_anothers_subscribe() {
+    let l = listeners();
+    let (p, q) = (as_user("p"), as_user("q"));
+    let uri = "file:///a";
+    for key in [&p, &q] {
+        l.hold(key, &watched(uri)).expect("counted");
+    }
+    let q_ledger = {
+        let map = l.backends.lock();
+        for key in [&p, &q] {
+            map[key].ledger().lock().want(uri).expect("room");
+        }
+        map[&q].ledger()
+    };
+    l.remove(&p, &watched(uri));
+    assert!(
+        q_ledger
+            .lock()
+            .due(std::time::Instant::now())
+            .contains(&(uri.to_owned(), true)),
+        "q's subscribe is still owed after p unsubscribed"
+    );
+}
+
 #[tokio::test]
 async fn removing_one_subscribers_interest_leaves_the_others() {
     let l = listeners();
