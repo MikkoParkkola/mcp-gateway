@@ -14,6 +14,8 @@ use std::cell::RefCell;
 
 use serde_json::Value;
 
+use crate::protocol::reserved_members;
+
 /// A noted member's fingerprint: SHA-256 over its RFC 8785 canonical JSON
 /// (MIK-7993). Durable in a task row, so key order and number spelling must
 /// not change it across builds, and a backend that controls the bytes at a
@@ -40,7 +42,7 @@ struct Written {
     /// as the noted path; a composite boundary rebases it onto the composite's
     /// answer (MIK-7993).
     dest: Vec<String>,
-    /// The [`NOTED_PATHS`] entry the note was made as: which gateway member
+    /// The noted [`reserved_members::MEMBERS`] row the note was made as: which gateway member
     /// this is, whatever `dest` became.
     kind: &'static [&'static str],
     /// The part of the noted member that `dest` holds, when a projection
@@ -90,31 +92,6 @@ impl WriteRecord {
         self.0.is_empty()
     }
 }
-
-/// Every member the gateway notes. A stored record names its path by these
-/// segments, and decoding maps them back here: a path this build does not
-/// note is dropped, so that member stays receipted (MIK-7991 r4).
-const NOTED_PATHS: &[&[&str]] = &[
-    &["recovery"],
-    &["_signature"],
-    TASK_ID,
-    &["trace_id"],
-    &["predicted_next"],
-    &["_meta", "provenance"],
-    &["_security_findings"],
-    &["_cost_warnings"],
-    &["_cost_suggestion"],
-    // MIK-7994: the continuation envelope the gateway mints into an interim
-    // answer.
-    &["requestState"],
-    // MIK-8025: what the modern shaper writes.
-    &["resultType"],
-    &["cacheScope"],
-    &["ttlMs"],
-    // MIK-7993 (r4 M1): the response-contract annotations the gateway adds.
-    CONTRACT_VIOLATION,
-    CONTRACT_REASON,
-];
 
 /// The response-contract verdict the gateway writes on a violating answer.
 pub(super) const CONTRACT_VIOLATION: &[&str] = &["_contract_violation"];
@@ -179,9 +156,7 @@ fn decode_entry(entry: &Value) -> Option<Written> {
     let dest = segments(entry.get("dest")?)?;
     let within = segments(entry.get("within")?)?;
     let kind = segments(entry.get("kind")?)?;
-    let kind = NOTED_PATHS
-        .iter()
-        .copied()
+    let kind = reserved_members::noted()
         .find(|path| path.iter().copied().eq(kind.iter().map(String::as_str)))?;
     let hex_digest = entry.get("digest")?.as_str()?;
     if hex_digest.len() != 64
@@ -425,8 +400,8 @@ fn index(segment: &str) -> Option<usize> {
 /// outside a delivery scope or when the member is absent.
 pub(crate) fn note(layer: Layer, path: &'static [&'static str], value: &Value) {
     debug_assert!(
-        NOTED_PATHS.contains(&path),
-        "{path:?} is not in NOTED_PATHS, so a stored record would drop it"
+        reserved_members::noted().any(|noted| noted == path),
+        "{path:?} is not a noted row of reserved_members::MEMBERS, so a stored record would drop it"
     );
     let Some(digest) = member(value, path).and_then(digest) else {
         return;
