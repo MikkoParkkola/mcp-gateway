@@ -164,6 +164,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "other MCP clients' configs; not the gateway's files",
     ),
     ("src/fs_lock.rs", "lock files; empty"),
+    ("src/fs_lock_windows.rs", "lock files; empty"),
     (
         "src/events/records.rs",
         "events store records read through read_checked_bytes (EventsRecord, 0600); File::open only opens the store directory to fsync it",

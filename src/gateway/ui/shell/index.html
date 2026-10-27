@@ -10,14 +10,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MCP Gateway</title>
-<link rel="stylesheet" href="/ui/assets/shell.90e613a8bf67.css">
-<script type="module" src="/ui/assets/shell.f36502dd89f5.js"></script>
+<link rel="stylesheet" href="/ui/assets/shell.54b46a7583fd.css">
+<script type="module" src="/ui/assets/shell.de37fe73f4e1.js"></script>
 </head>
 <body>
 <a class="skip" href="#content">Skip to content</a>
 <aside class="side" id="pages">
   <div class="brand">mcp-gateway</div>
   <nav class="route-nav" aria-label="Pages"></nav>
+  <button class="btn signout side-signout" type="button" hidden>Sign out</button>
 </aside>
 <div class="main">
   <header class="top">
@@ -25,6 +26,7 @@
     <span class="mbrand">mcp-gateway</span>
     <button class="search" type="button" aria-haspopup="dialog" aria-expanded="false"><span class="stxt">Go to anything</span><kbd aria-hidden="true">⌘K</kbd></button>
     <span class="who muted"></span>
+    <button class="btn signout" type="button" hidden>Sign out</button>
   </header>
   <div class="head"><h1><span class="plate"></span></h1><p class="sub muted" hidden></p></div>
   <nav class="tabs" aria-label="Tabs"></nav>
@@ -41,6 +43,7 @@
       <label for="signin-key">API key</label>
       <input id="signin-key" class="input" type="password" autocomplete="off" spellcheck="false" placeholder="mcpg_…">
       <p class="signin-error" role="alert" hidden></p>
+      <p class="signin-notice" role="status" hidden></p>
       <button class="btn primary" type="submit">Sign in</button>
     </form>
     <p class="signin-note muted">No key? Run <code>mcp-gateway serve</code> on this machine; it prints a one-time link. From another device, enter the code it shows at <a class="lnk" href="/dashboard/handoff">/dashboard/handoff</a>.</p>
