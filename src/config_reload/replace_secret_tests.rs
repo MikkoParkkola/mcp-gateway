@@ -289,3 +289,33 @@ fn entries_settle_by_the_final_result() {
         assert_eq!(settle_for(&result), settle, "{result:?}");
     }
 }
+
+/// A refused reload whose rollback cannot finish leaves the journal staged:
+/// the file on disk may name the entries until the next lock holder
+/// recovers it, so they stay live and listed.
+#[tokio::test]
+async fn a_rollback_that_fails_keeps_the_entries() {
+    use crate::config_persistence::journal::fault;
+    let (dir, path, ctx) = setup();
+    let exposed = |refs: &[String]| {
+        let mut bytes = b"server:\n  public_url: \"https://gw.public.test\"\n".to_vec();
+        bytes.extend(with_ref(refs));
+        bytes
+    };
+    let armed = fault::set(&path, fault::Fault::FailJournalRemove);
+
+    let failure = replace_detached(
+        ctx,
+        secret_save(dir.path(), Expected::Any, move |_, refs| Ok(exposed(refs))),
+        WAIT,
+    )
+    .await
+    .expect_err("the posture refuses the reload");
+    drop(armed);
+
+    assert!(
+        matches!(failure, ReplaceError::RollbackFailed { .. }),
+        "{failure:?}"
+    );
+    assert_eq!(live_entries(dir.path()).len(), 1);
+}
