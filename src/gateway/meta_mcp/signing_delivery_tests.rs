@@ -71,6 +71,7 @@ async fn finalize(
                 external_server: "gateway",
                 external_tool: "gateway_invoke",
                 subject: None,
+                trace_id: None,
             },
             signing,
             chain_source: super::super::response_security::ChainSource::NotEligible,

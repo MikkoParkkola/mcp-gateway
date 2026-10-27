@@ -1,0 +1,1 @@
+src/gateway/router/backend_handlers/direct_audit.rs	record_traced	1	standard	borderline	record_traced	Decides the one trace a direct call is recorded under and hands it to the delivery record; a mistake silently leaves the delivery joining no invocation record.

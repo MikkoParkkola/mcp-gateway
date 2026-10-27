@@ -15,7 +15,7 @@ use crate::security::audit::CredentialKind;
 /// stable caller identity both eras share, so a task-settled event can be
 /// matched to its owner (I4). `None` when authentication is off or the
 /// caller presented no credential: webhook mode needs a principal.
-pub(super) fn principal(owner: &str, auth_enabled: bool) -> Option<String> {
+pub(in crate::gateway::router) fn principal(owner: &str, auth_enabled: bool) -> Option<String> {
     (auth_enabled && !owner.is_empty()).then(|| owner.to_owned())
 }
 

@@ -154,6 +154,7 @@ impl MetaMcp {
             external_server: "gateway",
             external_tool: "notifications/tasks",
             subject: reader.subject,
+            trace_id: None,
         };
         let delivered = self
             .record_notification_delivery_attempt(sent, &correlation, reader.credential.clone())
