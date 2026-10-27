@@ -242,7 +242,7 @@ fn depth(line: &str) -> usize {
 }
 
 /// Whether `line` holds YAML content: neither blank nor a comment line.
-fn content(line: &str) -> bool {
+pub(super) fn content(line: &str) -> bool {
     let t = line.trim_start();
     !t.is_empty() && !t.starts_with('#')
 }

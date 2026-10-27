@@ -15,6 +15,7 @@ use std::ops::Range;
 use crate::yaml::Value;
 
 use super::eol::{Line, render};
+use super::splice::content;
 
 /// The field a secret slot belongs to: its dotted path, the same text as the
 /// secret's `NewSecretOwned::field`.
@@ -62,10 +63,7 @@ impl Template {
     /// A template whose every slot range holds exactly its own field's
     /// placeholder, in order and disjoint; anything else is refused, so a
     /// slot can never be filled with another field's reference.
-    pub(crate) fn checked(
-        bytes: Vec<u8>,
-        slots: Vec<(SlotId, Range<usize>)>,
-    ) -> Result<Self, ComputeRefusal> {
+    fn checked(bytes: Vec<u8>, slots: Vec<(SlotId, Range<usize>)>) -> Result<Self, ComputeRefusal> {
         let text = std::str::from_utf8(&bytes).map_err(|_| ComputeRefusal::SlotMismatch)?;
         let mut end = 0;
         let mut seen = std::collections::BTreeSet::new();
@@ -102,7 +100,16 @@ impl Template {
             at = range.end;
         }
         out.extend_from_slice(&self.bytes[at..]);
-        Ok(out)
+        // Re-read: each reference must be the value at its own path.
+        let text = String::from_utf8(out).map_err(|_| ComputeRefusal::SlotMismatch)?;
+        let doc: Value = crate::yaml::from_str(&text).map_err(|_| ComputeRefusal::SlotMismatch)?;
+        for (id, _) in &self.slots {
+            let at_path = id.0.split('.').fold(&doc, |node, key| &node[key]);
+            if at_path.as_str() != Some(refs[id].as_str()) {
+                return Err(ComputeRefusal::SlotMismatch);
+            }
+        }
+        Ok(text.into_bytes())
     }
 }
 
@@ -233,12 +240,6 @@ fn bytes_hold(original: &str, edited: &str, edits: &[Located]) -> bool {
         )
 }
 
-/// A line that carries YAML content, not a blank or a full-line comment.
-fn content(line: &str) -> bool {
-    let t = line.trim_start();
-    !t.is_empty() && !t.starts_with('#')
-}
-
 fn indent(line: &str) -> usize {
     line.len() - line.trim_start_matches(' ').len()
 }
@@ -303,6 +304,10 @@ fn locate(lines: &[&str], path: &FieldPath) -> Result<Located, ComputeRefusal> {
 fn value_span(lines: &[&str], at: usize, after: usize) -> Result<Range<usize>, ComputeRefusal> {
     let line = lines[at];
     let start = after + (line[after..].len() - line[after..].trim_start().len());
+    // `key: # note` is a null field with a comment, not a scalar.
+    if line[start..].starts_with('#') {
+        return Ok(start..start);
+    }
     let mut end = line.trim_end().len().max(start);
     let bytes = line.as_bytes();
     for (p, _) in line[start..].match_indices('#') {
