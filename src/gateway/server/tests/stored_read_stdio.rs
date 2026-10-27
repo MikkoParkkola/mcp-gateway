@@ -33,8 +33,15 @@ async fn spawn_backend() -> String {
                 "tools/list" => json!({"tools": [{
                     "name": TOOL, "description": "reads rows", "inputSchema": {"type": "object"},
                 }]}),
+                // `cmd: "leak"` answers a credential the firewall redacts.
                 "tools/call" => {
-                    json!({"content": [{"type": "text", "text": OUTPUT}], "isError": false})
+                    let leak = request.pointer("/params/arguments/cmd") == Some(&json!("leak"));
+                    let text = if leak {
+                        crate::gateway::egress_fixture::secret()
+                    } else {
+                        OUTPUT.to_owned()
+                    };
+                    json!({"content": [{"type": "text", "text": text}], "isError": false})
                 }
                 _ => json!({}),
             };
@@ -223,10 +230,16 @@ async fn t2_stdio_tasks_get_answers_absent_once_the_listing_withholds_the_tool()
 /// A session whose gateway writes a transparency log in its own directory,
 /// and the log's path.
 async fn logged_session() -> (Session, std::path::PathBuf) {
+    logged_session_with("").await
+}
+
+/// [`logged_session`] with `security` appended under its `security:` key.
+async fn logged_session_with(security: &str) -> (Session, std::path::PathBuf) {
     let backend_url = spawn_backend().await;
-    let extra =
-        "security:\n  transparency_log:\n    enabled: true\n    path: \"{DIR}/audit.jsonl\"\n";
-    let session = Session::open_with(&backend_url, extra).await;
+    let extra = format!(
+        "security:\n  transparency_log:\n    enabled: true\n    path: \"{{DIR}}/audit.jsonl\"\n{security}"
+    );
+    let session = Session::open_with(&backend_url, &extra).await;
     let log = session._dir.path().join("audit.jsonl");
     (session, log)
 }
@@ -244,9 +257,13 @@ fn invoke_deliveries(path: &std::path::Path) -> Vec<Value> {
 }
 
 fn invoke(id: i64) -> Value {
+    invoke_cmd(id, "read")
+}
+
+fn invoke_cmd(id: i64, cmd: &str) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {
         "name": "gateway_invoke",
-        "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {}},
+        "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"cmd": cmd}},
     }})
 }
 
@@ -264,11 +281,14 @@ async fn the_serve_loop_records_a_delivery_effect() {
     assert_eq!(row["response_effect"], "delivered", "{row}");
 }
 
-/// A batch item through the real serve loop gets its own delivery's facts.
+/// Each batch item through the real serve loop gets its own delivery's facts
+/// (A14): of a redacted item and a clean one, one records `rewritten` and the
+/// other `delivered`, never one cell's effect for both.
 #[tokio::test]
 async fn a_batch_item_records_a_delivery_effect() {
-    let (mut session, log) = logged_session().await;
-    let batch = json!([invoke(3)]);
+    let warn = "  firewall:\n    enabled: true\n    rules:\n      - match: \"rows\"\n        action: warn\n";
+    let (mut session, log) = logged_session_with(warn).await;
+    let batch = json!([invoke_cmd(3, "leak"), invoke_cmd(4, "plain")]);
     session
         .client
         .write_all(format!("{batch}\n").as_bytes())
@@ -285,15 +305,17 @@ async fn a_batch_item_records_a_delivery_effect() {
             break frame;
         }
     };
+    let text = answer.to_string();
     assert!(
-        answer[0].get("error").is_none(),
-        "premise: answered: {answer}"
+        text.contains("[REDACTED") && text.contains(OUTPUT) && !text.contains("\"error\""),
+        "premise: one redacted, one clean, both answered: {answer}"
     );
-    let rows = invoke_deliveries(&log);
-    let [row] = rows.as_slice() else {
-        panic!("one delivery record: {rows:?}");
-    };
-    assert_eq!(row["response_effect"], "delivered", "{row}");
+    let mut effects: Vec<Value> = invoke_deliveries(&log)
+        .iter()
+        .map(|row| row["response_effect"].clone())
+        .collect();
+    effects.sort_by_key(Value::to_string);
+    assert_eq!(effects, [json!("delivered"), json!("rewritten")]);
 }
 
 /// A task read serves the stored answer, not one this request produced: its

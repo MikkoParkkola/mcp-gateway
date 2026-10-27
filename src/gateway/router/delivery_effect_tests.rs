@@ -7,9 +7,9 @@
 
 use serde_json::Value;
 
-use super::direct_guards_fixture::Answer;
+use super::direct_guards_fixture::{self as fixture, Answer, post_meta_invoke};
 use super::route_matrix_driver_tests::response::{
-    HttpRoute, firewalled_recorded_call, planted_credential,
+    HttpRoute, delivery_rows, firewalled_recorded_call, planted_credential, temp_log,
 };
 use crate::security::firewall::FirewallAction;
 
@@ -90,4 +90,51 @@ async fn a_blocked_answer_records_refused() {
         let row = only_delivery(route, &recorded.rows);
         assert_eq!(row["response_effect"], "refused", "{route:?}: {row}");
     }
+}
+
+/// Two `/mcp` calls in flight on one router, one redacted and one clean, each
+/// record their own facts (A14): polled together, neither cell sees the
+/// other's scan.
+#[tokio::test]
+async fn concurrent_deliveries_record_their_own_effects() {
+    let (_dir, log) = temp_log(None);
+    let meta_log = std::sync::Arc::clone(&log);
+    let answer = Answer::LeakOnCmd(planted_credential());
+    let warn = Some(FirewallAction::Warn);
+    let fx = fixture::fixture_firewalled_logged(
+        answer,
+        warn,
+        std::sync::Arc::clone(&log),
+        |mut meta| {
+            meta.enable_transparency_log(meta_log);
+            meta
+        },
+    )
+    .await;
+    let call = |cmd: &str| {
+        let args = serde_json::json!({"cmd": cmd});
+        post_meta_invoke(&fx, "k-std", "alpha", "read", args, None, None)
+    };
+    let ((_, leaked), (_, clean)) = tokio::join!(call("leak"), call("plain"));
+    assert!(
+        leaked.to_string().contains("[REDACTED"),
+        "premise: {leaked}"
+    );
+    assert!(
+        clean.get("error").is_none() && !clean.to_string().contains("[REDACTED"),
+        "premise: {clean}"
+    );
+    let mut effects: Vec<Value> = delivery_rows(&log)
+        .await
+        .iter()
+        .map(|row| row["response_effect"].clone())
+        .collect();
+    effects.sort_by_key(Value::to_string);
+    assert_eq!(
+        effects,
+        [
+            serde_json::json!("delivered"),
+            serde_json::json!("rewritten")
+        ]
+    );
 }

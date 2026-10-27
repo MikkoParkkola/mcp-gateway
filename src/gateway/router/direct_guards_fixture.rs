@@ -117,6 +117,9 @@ pub(crate) enum Answer {
     /// (MIK-8323: a backend handed an envelope can return it to a later,
     /// fresh call).
     AskThenStore,
+    /// Success whose text is the given payload when the call's `cmd` is
+    /// `"leak"`, and `ok` otherwise: two calls in flight get different answers.
+    LeakOnCmd(&'static str),
 }
 
 /// A router wired for the direct-route guard cells: non-admin keys
