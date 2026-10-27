@@ -28,6 +28,7 @@ use crate::gateway::router::create_router;
 pub(crate) const STAGES: &[(&str, bool, usize, usize)] = &[
     ("http_invoke_tiny", true, 16, 1),
     ("http_invoke_64k", true, 64 * 1024, 1),
+    ("http_surfaced_tiny", true, 16, 1),
     ("stdio_invoke_tiny", false, 16, 1),
     ("stdio_batch_tiny", false, 16, BATCH),
 ];
@@ -137,14 +138,38 @@ async fn bench_state() -> (Arc<crate::gateway::router::AppState>, tempfile::Temp
     (state, store)
 }
 
-async fn median_ns(state: &Arc<crate::gateway::router::AppState>, blob: usize) -> u128 {
-    let body = json!({
-        "jsonrpc": "2.0", "id": 7, "method": "tools/call",
-        "params": {"name": "gateway_invoke", "arguments": {
-            "server": "bench", "tool": "search", "arguments": {"blob": "x".repeat(blob)},
-        }},
-    })
-    .to_string();
+/// [`bench_state`] with `search` surfaced from `bench`, so a row can time a
+/// call that resolves a surfaced name (the surfaced-tools reload reads that
+/// name through a request snapshot).
+async fn surfaced_bench_state() -> (Arc<crate::gateway::router::AppState>, tempfile::TempDir) {
+    let (mut state, store) = bench_state().await;
+    let inner = Arc::get_mut(&mut state).expect("bench state is not shared yet");
+    inner.meta_mcp = Arc::new(
+        crate::gateway::meta_mcp::MetaMcp::new(Arc::clone(&inner.backends)).with_surfaced_tools(
+            vec![crate::config::SurfacedToolConfig {
+                server: "bench".to_string(),
+                tool: "search".to_string(),
+            }],
+        ),
+    );
+    (state, store)
+}
+
+/// The `tools/call` body a row times: `gateway_invoke` at `bench`, or the
+/// surfaced `search` name directly.
+fn http_call(stage: &str, blob: usize) -> String {
+    let arguments = json!({"blob": "x".repeat(blob)});
+    let params = if stage == "http_surfaced_tiny" {
+        json!({"name": "search", "arguments": arguments})
+    } else {
+        json!({"name": "gateway_invoke", "arguments": {
+            "server": "bench", "tool": "search", "arguments": arguments,
+        }})
+    };
+    json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params}).to_string()
+}
+
+async fn median_ns(state: &Arc<crate::gateway::router::AppState>, body: String) -> u128 {
     let mut samples = Vec::with_capacity(CALLS);
     for round in 0..WARMUP + CALLS {
         let request = axum::http::Request::builder()
@@ -307,8 +332,17 @@ fn per_call_timing() {
     }
     super::signing_nonce_allocations_support::runtime().block_on(async {
         let (state, _store) = bench_state().await;
+        let (surfaced, _surfaced_store) = surfaced_bench_state().await;
         for &(stage, _, blob, _) in STAGES.iter().filter(|stage| stage.1) {
-            println!("PER_CALL_NS {stage} {}", median_ns(&state, blob).await);
+            let on = if stage == "http_surfaced_tiny" {
+                &surfaced
+            } else {
+                &state
+            };
+            println!(
+                "PER_CALL_NS {stage} {}",
+                median_ns(on, http_call(stage, blob)).await
+            );
         }
         let mut stdio = StdioLoop::start().await;
         for &(stage, _, blob, batch) in STAGES.iter().filter(|stage| !stage.1) {

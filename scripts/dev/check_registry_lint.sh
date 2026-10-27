@@ -178,6 +178,7 @@ fn every_entry() {
     let _ = BackendRegistry::catalogue_hook; // PLANT catalogue_hook
     let _ = BackendRegistry::nudge_catalogue; // PLANT nudge_catalogue
     let _ = BackendRegistry::nudge_catalogue_scanned; // PLANT nudge_catalogue_scanned
+    let _ = BackendRegistry::nudge_surfaced; // PLANT nudge_surfaced
     let _ = BackendRegistry::resolve_unwarmed; // PLANT resolve_unwarmed
     let _ = BackendRegistry::get; // PLANT get
     let _ = BackendRegistry::all; // PLANT all
