@@ -367,6 +367,26 @@ fn explain(code: RefusalCode, kind: RefusalKind, backend: Option<&str>) -> (Stri
     }
 }
 
+impl super::ReloadContext {
+    /// The refusals this context's reloads and writes recorded.
+    pub(crate) fn refusals(&self) -> &std::sync::Arc<RefusalLedger> {
+        &self.reporting.refusals
+    }
+
+    /// Share `reporting` with every other reload context of this gateway.
+    #[must_use]
+    pub fn with_reporting(mut self, reporting: ReloadReporting) -> Self {
+        self.reporting = reporting;
+        self
+    }
+
+    /// The reporting this context shares, for a context built elsewhere.
+    #[must_use]
+    pub fn reporting(&self) -> ReloadReporting {
+        self.reporting.clone()
+    }
+}
+
 #[cfg(test)]
 #[path = "refusals_tests.rs"]
 mod tests;

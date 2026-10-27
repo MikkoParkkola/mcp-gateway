@@ -560,24 +560,6 @@ impl ReloadContext {
         outcome
     }
 
-    /// The refusals this context's reloads and writes recorded.
-    pub(crate) fn refusals(&self) -> &Arc<super::refusals::RefusalLedger> {
-        &self.reporting.refusals
-    }
-
-    /// Share `reporting` with every other reload context of this gateway.
-    #[must_use]
-    pub fn with_reporting(mut self, reporting: super::refusals::ReloadReporting) -> Self {
-        self.reporting = reporting;
-        self
-    }
-
-    /// The reporting this context shares, for a context built elsewhere.
-    #[must_use]
-    pub fn reporting(&self) -> super::refusals::ReloadReporting {
-        self.reporting.clone()
-    }
-
     /// Note what a lock recovery did, then pay an owed reload before the
     /// caller's own work, so no early return leaves the running config on
     /// bytes recovery took away. The caller holds the reload lock. A failed
