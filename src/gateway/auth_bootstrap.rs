@@ -145,7 +145,10 @@ pub(super) fn try_dashboard_bootstrap(
                  plain HTTP, so the session cookie would be discarded; enable mtls or remove \
                  public_url"
             );
-            return Some(refused_value());
+            return Some(refused_sign_in(
+                Navigation::of(request.headers()),
+                refused_value(),
+            ));
         }
         let Redemption { not_after, now } =
             match state.dashboard_bootstrap.consume_capped(&candidate) {
@@ -163,7 +166,10 @@ pub(super) fn try_dashboard_bootstrap(
                 Redeem::Refused => {
                     auth_failure(AuthFailureKind::BootstrapRefused);
                     warn!("Dashboard bootstrap rejected: wrong or already-used value");
-                    return Some(refused_value());
+                    return Some(refused_sign_in(
+                        Navigation::of(request.headers()),
+                        refused_value(),
+                    ));
                 }
             };
         // Hand the browser an opaque session in an HttpOnly cookie and redirect.
@@ -177,6 +183,50 @@ pub(super) fn try_dashboard_bootstrap(
             secure,
         ))
     }
+}
+
+/// How a request arrived: a top-level browser navigation, or anything else.
+/// Browsers send both headers on a navigation and a form POST to the
+/// potentially trustworthy origins sign-in runs on, and script cannot set them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Navigation {
+    /// `Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest: document`, exactly.
+    Document,
+    /// No Fetch Metadata, or any other value: keeps today's answers.
+    Other,
+}
+
+impl Navigation {
+    pub(crate) fn of(headers: &axum::http::HeaderMap) -> Self {
+        let is = |name: &str, want: &str| headers.get(name).is_some_and(|v| v == want);
+        if is("sec-fetch-mode", "navigate") && is("sec-fetch-dest", "document") {
+            Self::Document
+        } else {
+            Self::Other
+        }
+    }
+}
+
+/// Where a refused browser is sent: one fixed shell address and hint word.
+/// Nothing in the request feeds it, so it cannot be turned into a redirect
+/// elsewhere, and it reads the same whichever value was refused.
+#[cfg(feature = "webui")]
+const REFUSED_SIGN_IN_TARGET: &str = "/ui/overview/status?signin=link-refused";
+
+/// A refused link or code: a browser navigation goes back to the shell,
+/// which says so in plain words; anything else gets `refusal` unchanged.
+/// Without the dashboard there is no shell, so every caller gets `refusal`.
+pub(crate) fn refused_sign_in(navigation: Navigation, refusal: Response) -> Response {
+    #[cfg(feature = "webui")]
+    if navigation == Navigation::Document {
+        return super::handoff::private(axum::response::IntoResponse::into_response((
+            axum::http::StatusCode::SEE_OTHER,
+            [(axum::http::header::LOCATION, REFUSED_SIGN_IN_TARGET)],
+        )));
+    }
+    #[cfg(not(feature = "webui"))]
+    let _ = navigation;
+    refusal
 }
 
 /// The refusal of a value that is not the live one, and of every value where

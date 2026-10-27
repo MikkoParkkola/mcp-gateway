@@ -552,7 +552,22 @@ function closeMenu() {
   document.querySelector('button.menu').setAttribute('aria-expanded', 'false');
 }
 
+/**
+ * The gateway sends a browser whose sign-in link or code was refused here
+ * with `?signin=link-refused`, one fixed word for every cause. Take it off the
+ * address so a reload or a shared link does not repeat it, and say whether it
+ * was there. Any other value is left alone and means nothing.
+ */
+function takeLinkRefused() {
+  const url = new URL(location.href);
+  if (url.searchParams.get('signin') !== 'link-refused') return false;
+  url.searchParams.delete('signin');
+  history.replaceState(history.state, '', url.pathname + url.search + url.hash);
+  return true;
+}
+
 function boot() {
+  const linkRefused = takeLinkRefused();
   document.addEventListener('click', (ev) => {
     if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
     const a = ev.target.closest?.('a');
@@ -594,7 +609,13 @@ function boot() {
   });
   render();
   loadCounts();
-  loadWho();
+  loadWho().then(() => {
+    // Only a browser still signed out is told; one with a session has nothing to fix.
+    if (!linkRefused || !document.body.classList.contains('signed-out')) return;
+    const error = document.querySelector('.signin-error');
+    error.textContent = 'That sign-in link or code did not work. It may be wrong, already used or expired. Run `mcp-gateway dashboard-link` on the gateway’s machine for a new one.';
+    error.hidden = false;
+  });
 }
 
 document.addEventListener('DOMContentLoaded', boot);

@@ -69,6 +69,7 @@ async fn handoff_code(
         &state.live_config,
         origin,
         &body,
+        crate::gateway::auth::Navigation::of(&headers),
     )
 }
 

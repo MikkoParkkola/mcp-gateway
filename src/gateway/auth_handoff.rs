@@ -112,6 +112,7 @@ pub(crate) fn redeem_handoff(
     live: &crate::config_reload::LiveConfig,
     origin: Option<&str>,
     body: &[u8],
+    navigation: super::Navigation,
 ) -> Response {
     // Spent anywhere but the public origin, the code would set a cookie there
     // that a browser drops: refuse it, unspent. `Origin` is written by the
@@ -131,8 +132,13 @@ pub(crate) fn redeem_handoff(
     else {
         auth_failure(AuthFailureKind::BootstrapRefused);
         warn!("Dashboard handoff refused: wrong, used or expired code");
-        return private(bearer_unauthorized_response(
-            "The code is wrong, used or expired. Run `mcp-gateway dashboard-link` for a new link.",
+        // A browser goes back to the shell, at the same address the link
+        // path uses, so neither path nor cause shows in the answer.
+        return private(super::bootstrap::refused_sign_in(
+            navigation,
+            bearer_unauthorized_response(
+                "The code is wrong, used or expired. Run `mcp-gateway dashboard-link` for a new link.",
+            ),
         ));
     };
     // Always `Secure`: a code exists only because this origin is HTTPS, and a
