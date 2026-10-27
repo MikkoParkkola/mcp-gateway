@@ -83,9 +83,21 @@ pub(super) fn build_json_response(
 
 /// The JSON-RPC error an HTTP error response was built from, kept beside it so
 /// the `/mcp` exit that returns it unrendered can record its delivery
-/// (`judged_answer::record_error_exit`).
+/// (`judged_answer::record_error_exit`), under the trace of the record that
+/// refused it.
 #[derive(Clone)]
-pub(super) struct ErrorFrame(pub(super) JsonRpcResponse);
+pub(super) struct ErrorFrame {
+    pub(super) frame: JsonRpcResponse,
+    pub(super) trace: Option<String>,
+}
+
+/// Name the trace `response`'s refusal was recorded under, so its delivery
+/// record joins that record.
+pub(super) fn trace_error_frame(response: &mut axum::response::Response, trace: String) {
+    if let Some(frame) = response.extensions_mut().get_mut::<ErrorFrame>() {
+        frame.trace = Some(trace);
+    }
+}
 
 /// Build an HTTP response with a `mcp-session-id` header and a given status.
 pub(super) fn build_response(
@@ -93,7 +105,10 @@ pub(super) fn build_response(
     session_id: &str,
     status: StatusCode,
 ) -> axum::response::Response {
-    let frame = rpc.error.is_some().then(|| ErrorFrame(rpc.clone()));
+    let frame = rpc.error.is_some().then(|| ErrorFrame {
+        frame: rpc.clone(),
+        trace: crate::gateway::trace::current(),
+    });
     let mut response = build_session_response(rpc, session_id, status);
     if let Some(frame) = frame {
         response.extensions_mut().insert(frame);

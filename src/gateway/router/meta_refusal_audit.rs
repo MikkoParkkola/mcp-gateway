@@ -213,7 +213,12 @@ impl<'a> Refused<'a> {
             .as_ref()
             .map(|log| log.failure_policy());
         match written {
-            Ok(_) => build_error_response(Some(id), code, message, self.session_id, status),
+            Ok(trace) => {
+                let mut response =
+                    build_error_response(Some(id), code, message, self.session_id, status);
+                super::helpers::trace_error_frame(&mut response, trace);
+                response
+            }
             Err(error) if failure_policy == Some(AuditFailurePolicy::FailClosed) => {
                 tracing::error!(%error, "meta-route refusal audit write failed; answering 503");
                 let error = crate::Error::AuditUnavailable;

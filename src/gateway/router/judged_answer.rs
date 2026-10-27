@@ -71,7 +71,7 @@ pub(in crate::gateway) async fn record_error_exit(
     credential: DeliveryCredential,
     session_id: &str,
 ) -> axum::response::Response {
-    let Some(super::helpers::ErrorFrame(rpc)) = response
+    let Some(super::helpers::ErrorFrame { frame: rpc, trace }) = response
         .extensions()
         .get::<super::helpers::ErrorFrame>()
         .cloned()
@@ -81,7 +81,11 @@ pub(in crate::gateway) async fn record_error_exit(
     crate::gateway::delivery_facts::unvouched();
     let sent = rpc.error.as_ref().map(|e| (e.code, e.message.clone()));
     let frame = OutboundFrame::unjudged(crate::gateway::outbound::Payload::Response(rpc));
-    let (frame, _) = record_delivery(meta, frame, correlation, credential, None).await;
+    let correlation = ResponseCorrelation {
+        trace_id: trace.as_deref(),
+        ..*correlation
+    };
+    let (frame, _) = record_delivery(meta, frame, &correlation, credential, None).await;
     let recorded = frame
         .response()
         .and_then(|r| r.error.as_ref())
