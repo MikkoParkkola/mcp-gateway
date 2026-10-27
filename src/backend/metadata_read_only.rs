@@ -27,6 +27,7 @@ impl Backend {
     /// # Errors
     ///
     /// Returns an error if the backend cannot start or the tools request fails.
+    #[cfg(feature = "webui")]
     pub(crate) async fn shared_tools_with_declared_hints(
         &self,
     ) -> crate::Result<(Arc<Vec<crate::protocol::Tool>>, HashSet<String>)> {
