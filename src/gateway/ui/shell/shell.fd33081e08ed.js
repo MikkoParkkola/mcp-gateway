@@ -384,7 +384,7 @@ async function loadWho() {
       showSignIn();
       return false;
     }
-    document.querySelector('.top .who').textContent = auth?.signed_in ? (auth.admin ? 'Signed in · admin' : 'Signed in') : '';
+    showWho(auth);
     return true;
   } catch {
     return false; // a 401 already shows sign-in; other failures show in the page states
@@ -392,6 +392,31 @@ async function loadWho() {
 }
 
 // ---------------------------------------------------------------- sign-in
+
+/** The top bar's sign-in line, and sign-out offered only to a signed-in session. */
+function showWho(auth) {
+  const signedIn = Boolean(auth?.signed_in);
+  document.querySelector('.top .who').textContent = signedIn ? (auth.admin ? 'Signed in · admin' : 'Signed in') : '';
+  document.querySelector('.top .signout').hidden = !signedIn;
+}
+
+/**
+ * Sign out: forget the typed key, end the cookie session on the server
+ * (POST /dashboard/logout revokes it there, not only in this browser), and
+ * show sign-in at the same address. The key goes first, so a slow or failed
+ * logout never leaves it usable.
+ */
+async function signOut() {
+  bearer = null;
+  authEpoch++;
+  showWho(null);
+  showSignIn();
+  try {
+    await fetch('/dashboard/logout', { method: 'POST', credentials: 'same-origin', redirect: 'manual' });
+  } catch {
+    // Offline: the key is already gone, and the session cookie expires on its own.
+  }
+}
 
 /**
  * Show the sign-in view at the current address, so the same page and tab
@@ -431,8 +456,11 @@ async function signIn(ev) {
     error.hidden = false;
     return;
   }
+  const form = document.getElementById('signin-form');
   signingIn = true;
   button.disabled = true;
+  button.textContent = 'Checking…';
+  form.setAttribute('aria-busy', 'true');
   let auth = null;
   let message = '';
   try {
@@ -444,12 +472,15 @@ async function signIn(ev) {
       signal: AbortSignal.timeout(KEY_CHECK_MS),
     });
     if (reply.ok) auth = (await reply.json())?.auth ?? null;
-    else if (reply.status !== 401 && reply.status !== 403) message = 'Could not reach the gateway. Try again.';
+    else if (reply.status === 403) message = 'That key is valid, but it is not allowed into the web UI. Ask an admin for access.';
+    else if (reply.status !== 401) message = 'Could not reach the gateway. Try again.';
   } catch {
     message = 'Could not reach the gateway. Try again.';
   } finally {
     signingIn = false;
     button.disabled = false;
+    button.textContent = 'Sign in';
+    form.removeAttribute('aria-busy');
   }
   if (!auth?.signed_in) {
     error.textContent = message || 'That key was not accepted.';
@@ -462,7 +493,7 @@ async function signIn(ev) {
   input.value = '';
   document.getElementById('signin').hidden = true;
   document.body.classList.remove('signed-out');
-  document.querySelector('.top .who').textContent = auth.admin ? 'Signed in · admin' : 'Signed in';
+  showWho(auth);
   render();
   loadCounts();
   document.getElementById('content').focus({ preventScroll: true });
@@ -515,6 +546,7 @@ function boot() {
   });
   addEventListener('popstate', render);
   document.getElementById('signin-form').addEventListener('submit', signIn);
+  document.querySelector('.top .signout').addEventListener('click', signOut);
   document.querySelector('a.skip').addEventListener('click', (ev) => {
     ev.preventDefault();
     document.getElementById('content').focus();
