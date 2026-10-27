@@ -340,3 +340,12 @@ fn fill_refuses_a_missing_or_an_extra_reference() {
     ]);
     assert_eq!(template.fill(&extra), Err(ComputeRefusal::SlotMismatch));
 }
+
+#[test]
+fn a_slot_named_for_another_field_is_refused() {
+    let change = (path("a.t"), Change::Secret(SlotId("a.u".into())));
+    assert_eq!(
+        edit_in_place("a:\n  t: old\n  u: old\n", &[change]),
+        Err(ComputeRefusal::SlotMismatch)
+    );
+}

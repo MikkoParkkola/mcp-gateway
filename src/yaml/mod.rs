@@ -39,6 +39,8 @@ mod tagged;
 mod value;
 mod value_de;
 
+/// Any string as one valid double-quoted YAML scalar.
+pub(crate) use emit::quote_double as double_quoted;
 pub(crate) use error::{Error, Limit, Location, redact_message};
 use guard::guard;
 #[cfg(test)]
