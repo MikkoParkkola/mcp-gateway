@@ -343,6 +343,7 @@ pub(super) async fn tools_call(
                 // answers as every other step refusal does (A3).
                 if index >= request_targets && verdict.refusal_words_content() {
                     return Err(refused
+                        .firewall()
                         .answer(
                             state,
                             target,
@@ -355,6 +356,7 @@ pub(super) async fn tools_call(
                         .await);
                 }
                 return Err(refused
+                    .firewall()
                     .answer(state, target, id, code, reason, StatusCode::BAD_REQUEST)
                     .await);
             }

@@ -236,6 +236,7 @@ pub(super) fn deliver_replay(
         }
         Some(GuardOutcome::CachedError(error)) => {
             crate::gateway::meta_mcp::invoke::audit::note_cached_failure(&error);
+            crate::gateway::meta_mcp::invoke::audit::counting::note_replay();
             let mut response = super::cached_error_response(Some(id.clone()), &error);
             replay_scan(state, (&admitted.call, envelope), client, &mut response);
             return Err(build_http_response(&Egressed::of(response), StatusCode::OK));
@@ -249,6 +250,8 @@ pub(super) fn deliver_replay(
     if let Some(mut response) = replay {
         #[cfg(test)]
         seams::note_replay(admitted.idem_reservation.is_some());
+        // Either store's replay delivers an answer already counted.
+        crate::gateway::meta_mcp::invoke::audit::counting::note_replay();
         crate::gateway::meta_mcp::invoke::audit::note_cached();
         // A replay is a delivery too: it renews this caller's own copy,
         // shaped for this request's era (MIK-8022).

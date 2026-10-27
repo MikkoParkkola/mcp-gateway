@@ -365,7 +365,13 @@ where
 {
     let target = dir.to_path_buf();
     let renamed = tokio::task::spawn_blocking(move || {
+        // Locals drop in reverse order, so on a panic in `retire` the latch is
+        // re-armed before `held` releases the lock, and whether or not anyone
+        // still awaits this task.
+        let held = held;
+        let mut rearm = RearmOnUnwind(Some(&target));
         let retired = retire(&target);
+        rearm.0 = None;
         match &retired {
             Retired::Moved(tombstone) => discard(tombstone.clone()),
             Retired::Refused => arm_again(&target),
@@ -376,10 +382,41 @@ where
     match renamed.await {
         Ok((retired, held)) => (retired, Some(held)),
         Err(error) => {
-            warn!(%error, "package cache rename task failed");
+            // A panic in `retire` was re-armed inside the task, under the lock.
+            warn!(%error, panicked = error.is_panic(), "package cache rename task failed");
             (Retired::Refused, None)
         }
     }
+}
+
+/// Re-arms the repair latch for a cache whose rename did not finish, so a
+/// panic leaves the backend repairable instead of marked repaired with
+/// nothing cleared. Disarmed once the rename returns: from there the task
+/// re-arms, or not, by its outcome.
+struct RearmOnUnwind<'a>(Option<&'a Path>);
+
+impl Drop for RearmOnUnwind<'_> {
+    fn drop(&mut self) {
+        if let Some(dir) = self.0 {
+            arm_again(dir);
+        }
+    }
+}
+
+/// This run's part of a tombstone name: a random value drawn once per
+/// process. A container restart reuses the pid and the counter starts again
+/// at zero, so pid and counter alone can name a tombstone a crashed run left
+/// behind, and the rename onto it fails (MIK-8831.REL.7). The standard
+/// library seeds `RandomState` from the OS per process, so the value differs
+/// across restarts without a clock that could read zero.
+fn run_nonce() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    static NONCE: OnceLock<u64> = OnceLock::new();
+    *NONCE.get_or_init(|| {
+        std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish()
+    })
 }
 
 /// Renames the cache to a sibling tombstone: one atomic step on one filesystem,
@@ -404,9 +441,10 @@ fn retire_now(dir: &Path) -> Retired {
         warn!(%error, "could not mark the package cache before moving it aside");
     }
     let tombstone = parent.join(format!(
-        "{}{TOMBSTONE_MARK}{}-{}",
+        "{}{TOMBSTONE_MARK}{}-{}-{}",
         leaf.to_string_lossy(),
         std::process::id(),
+        run_nonce(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     match std::fs::rename(dir, &tombstone) {
