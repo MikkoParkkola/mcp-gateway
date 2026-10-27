@@ -120,8 +120,8 @@ pub(super) async fn key_refusal(
     let checked = backend.catalogue_refusal(slot, tool, arguments, lens);
     match checked.await {
         Ok(None) => None,
-        Ok(Some(text)) => {
-            if crate::backend::key_check_refuses(tool, &text) {
+        Ok(Some(crate::backend::KeyAnswer { kind, text })) => {
+            if kind.refuses() {
                 crate::gateway::delivery_facts::raise(
                     crate::gateway::delivery_facts::ResponseEffect::Refused,
                 );

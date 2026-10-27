@@ -436,40 +436,9 @@ pub(crate) fn text_absent(tool: &str) -> String {
     format!("the backend does not list a tool named `{tool}`")
 }
 
-/// Whether the argument-key check's answer `text` for `tool` is the gateway
-/// refusing the call (undeclared keys), not a name it cannot serve: texts A,
-/// P and U describe the catalogue, and a withheld name answers as text A. The
-/// meta route may append a "did you mean" hint to text A after a `. `.
-pub(crate) fn key_check_refuses(tool: &str, text: &str) -> bool {
-    let absent = text_absent(tool);
-    let names_absent = text
-        .strip_prefix(absent.as_str())
-        .is_some_and(|rest| rest.is_empty() || rest.starts_with(". "));
-    !names_absent && text != text_partial() && text != TEXT_UNAVAILABLE
-}
-
 #[cfg(test)]
 mod tests {
     use super::{LIST_FILL_COOLDOWN, LIST_MAX_PAGES};
-
-    /// Only an undeclared-key answer is a refusal: text A (with or without
-    /// the meta route's hint), P and U describe the catalogue.
-    #[test]
-    fn only_an_undeclared_key_answer_is_a_refusal() {
-        use super::{TEXT_UNAVAILABLE, key_check_refuses, text_absent, text_partial};
-        let absent = text_absent("edit");
-        assert!(!key_check_refuses("edit", &absent));
-        let hinted = format!("{absent}. Did you mean `edits`?");
-        assert!(!key_check_refuses("edit", &hinted));
-        assert!(!key_check_refuses("edit", &text_partial()));
-        assert!(!key_check_refuses("edit", TEXT_UNAVAILABLE));
-        assert!(key_check_refuses(
-            "edit",
-            "argument `zzextra` is not declared"
-        ));
-        // Another tool's absent text is not this tool's.
-        assert!(key_check_refuses("edit", &format!("{absent}x")));
-    }
 
     /// MIK-7979: a cold tools/list fill that runs out of time has not sent the
     /// tools/call it was checking for, so it is a pre-send refusal.

@@ -269,9 +269,11 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
             }
         };
         if let Some(refusal) = refusal {
-            let message = refusal["content"][0]["text"].as_str().unwrap_or_default();
+            let message = refusal.answer["content"][0]["text"]
+                .as_str()
+                .unwrap_or_default();
             // An undeclared key ends the exchange as the delivered refusal.
-            if crate::backend::key_check_refuses(self.tool, message) {
+            if refusal.kind.refuses() {
                 crate::gateway::delivery_facts::refused_while_vouched();
             }
             return Err(crate::gateway::input_bridge::BridgeError::NotAdmitted {

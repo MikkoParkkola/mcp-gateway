@@ -701,7 +701,8 @@ impl MetaMcp {
                 (scope, session_id),
                 lens,
             )
-            .await;
+            .await
+            .map(|checked| checked.map(|checked| checked.answer));
         let mut unreserved = None;
         let sealed = self
             .seal_key_refusal(
