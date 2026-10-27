@@ -104,12 +104,25 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "the shared atomic writer: creates its own private scratch; opens the target only to probe its ACL, never reads it",
     ),
     (
+        "src/config_persistence_journal.rs",
+        "the replace journal (paths, SHA-256 revisions and a state; no secret) and the staged \
+         original of gateway.yaml, both created owner-only by create_new_private; the original is \
+         checked against the journal's digest before it is written back; File::open only fsyncs \
+         its directory",
+    ),
+    (
         "src/config_persistence_lock.rs",
         "config lock file; opened only to judge its mode, never read",
     ),
     (
         "src/config_reload/grant_audit_plan.rs",
         "grant audit state: journal ids and grant digests; no secret",
+    ),
+    (
+        "src/config_reload/replace.rs",
+        "re-reads gateway.yaml under the config lock to check the caller's revision and stage the \
+         original; the target is the canonical path this gateway loaded at start, and every write \
+         back is owner-only",
     ),
     (
         "src/control_plane/export.rs",
