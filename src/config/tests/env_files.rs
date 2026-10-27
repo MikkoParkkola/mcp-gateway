@@ -3,6 +3,8 @@
 //! Env-file overlay resolution and substitution scanning.
 
 use super::*;
+use crate::config::env_provider::CLI_OWNED_ENV;
+use figment::{Profile, Provider, value::Value};
 
 // -------------------------------------------------------------------------
 // MIK-7256 — env files on a failed load (§P2 failing tests)

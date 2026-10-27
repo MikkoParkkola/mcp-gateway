@@ -384,7 +384,7 @@ async function loadWho() {
       showSignIn();
       return false;
     }
-    document.querySelector('.top .who').textContent = auth?.signed_in ? (auth.admin ? 'Signed in · admin' : 'Signed in') : '';
+    showWho(auth);
     return true;
   } catch {
     return false; // a 401 already shows sign-in; other failures show in the page states
@@ -392,6 +392,56 @@ async function loadWho() {
 }
 
 // ---------------------------------------------------------------- sign-in
+
+/**
+ * The top bar's sign-in line, and sign-out offered only to a signed-in
+ * session: in the top bar from 641 px up, as the phone menu's last row below.
+ */
+function showWho(auth) {
+  const signedIn = Boolean(auth?.signed_in);
+  document.querySelector('.top .who').textContent = signedIn ? (auth.admin ? 'Signed in · admin' : 'Signed in') : '';
+  for (const b of document.querySelectorAll('.signout')) b.hidden = !signedIn;
+}
+
+/**
+ * Sign out: forget the typed key, end the cookie session on the server
+ * (POST /dashboard/logout revokes it there, not only in this browser), and
+ * show sign-in at the same address. The key goes first, so a slow or failed
+ * logout never leaves it usable. The session cookie outlives the browser
+ * (it has a Max-Age), so until the gateway confirms the logout the sign-in
+ * view says the session is still being ended; a logout that fails, or does
+ * not answer within the key check's deadline, says this browser may still be
+ * signed in. An answer arriving after a newer sign-in changes nothing.
+ */
+async function signOut() {
+  bearer = null;
+  const epoch = ++authEpoch;
+  showWho(null);
+  // Its own status line, apart from the key check's error: a key typed while
+  // the logout is pending must not hide this, nor this overwrite its answer.
+  const notice = document.querySelector('.signin-notice');
+  showSignIn();
+  notice.textContent = 'Ending the session on the gateway…';
+  notice.hidden = false;
+  let ended = false;
+  try {
+    const reply = await fetch('/dashboard/logout', {
+      method: 'POST',
+      credentials: 'same-origin',
+      redirect: 'manual',
+      keepalive: true,
+      signal: AbortSignal.timeout(KEY_CHECK_MS),
+    });
+    ended = reply.ok || reply.type === 'opaqueredirect';
+  } catch {
+    ended = false;
+  }
+  if (epoch !== authEpoch) return;
+  if (ended) {
+    notice.hidden = true;
+    notice.textContent = '';
+  } else notice.textContent = "Signed out here, but the gateway did not confirm the session ended, so this browser may still be signed in. Reload and sign out again, or clear this site's cookies.";
+}
 
 /**
  * Show the sign-in view at the current address, so the same page and tab
@@ -409,7 +459,20 @@ function showSignIn() {
   document.getElementById('signin-key').focus();
 }
 
+/**
+ * The rate-limited key check's message. `Retry-After` is read as whole
+ * seconds; any other form (an HTTP date, a typo) falls back to a minute,
+ * the gateway's own default wait.
+ */
+function rateLimited(retryAfter) {
+  const seconds = /^\d+$/.test(retryAfter ?? '') ? Number(retryAfter) : 0;
+  const wait = seconds === 1 ? '1 second' : seconds > 0 ? `${seconds} seconds` : 'a minute';
+  return `The gateway is limiting sign-in attempts. Wait ${wait}, then try again.`;
+}
+
 let signingIn = false;
+/** Set once the user submits a key: from then on its answer owns the error line. */
+let keyCheckStarted = false;
 /** How long a key check may take before it counts as unreachable. */
 const KEY_CHECK_MS = 10_000;
 
@@ -420,6 +483,7 @@ const KEY_CHECK_MS = 10_000;
  */
 async function signIn(ev) {
   ev.preventDefault();
+  keyCheckStarted = true;
   if (signingIn) return;
   const input = document.getElementById('signin-key');
   const error = document.querySelector('.signin-error');
@@ -431,8 +495,11 @@ async function signIn(ev) {
     error.hidden = false;
     return;
   }
+  const form = document.getElementById('signin-form');
   signingIn = true;
   button.disabled = true;
+  button.textContent = 'Checking…';
+  form.setAttribute('aria-busy', 'true');
   let auth = null;
   let message = '';
   try {
@@ -444,12 +511,16 @@ async function signIn(ev) {
       signal: AbortSignal.timeout(KEY_CHECK_MS),
     });
     if (reply.ok) auth = (await reply.json())?.auth ?? null;
-    else if (reply.status !== 401 && reply.status !== 403) message = 'Could not reach the gateway. Try again.';
+    else if (reply.status === 403) message = 'That key is valid, but it is not allowed into the web UI. Ask an admin for access.';
+    else if (reply.status === 429) message = rateLimited(reply.headers.get('retry-after'));
+    else if (reply.status !== 401) message = 'Could not reach the gateway. Try again.';
   } catch {
     message = 'Could not reach the gateway. Try again.';
   } finally {
     signingIn = false;
     button.disabled = false;
+    button.textContent = 'Sign in';
+    form.removeAttribute('aria-busy');
   }
   if (!auth?.signed_in) {
     error.textContent = message || 'That key was not accepted.';
@@ -458,11 +529,15 @@ async function signIn(ev) {
     return;
   }
   bearer = key;
+  // A newer sign-in supersedes a pending or unconfirmed sign-out's notice.
+  const notice = document.querySelector('.signin-notice');
+  notice.hidden = true;
+  notice.textContent = '';
   authEpoch++;
   input.value = '';
   document.getElementById('signin').hidden = true;
   document.body.classList.remove('signed-out');
-  document.querySelector('.top .who').textContent = auth.admin ? 'Signed in · admin' : 'Signed in';
+  showWho(auth);
   render();
   loadCounts();
   document.getElementById('content').focus({ preventScroll: true });
@@ -480,7 +555,22 @@ function closeMenu() {
   document.querySelector('button.menu').setAttribute('aria-expanded', 'false');
 }
 
+/**
+ * The gateway sends a browser whose sign-in link or code was refused here
+ * with `?signin=link-refused`, one fixed word for every cause. Take it off the
+ * address so a reload or a shared link does not repeat it, and say whether it
+ * was there. Any other value is left alone and means nothing.
+ */
+function takeLinkRefused() {
+  const url = new URL(location.href);
+  if (url.searchParams.get('signin') !== 'link-refused') return false;
+  url.searchParams.delete('signin');
+  history.replaceState(history.state, '', url.pathname + url.search + url.hash);
+  return true;
+}
+
 function boot() {
+  const linkRefused = takeLinkRefused();
   document.addEventListener('click', (ev) => {
     if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
     const a = ev.target.closest?.('a');
@@ -515,13 +605,22 @@ function boot() {
   });
   addEventListener('popstate', render);
   document.getElementById('signin-form').addEventListener('submit', signIn);
+  for (const b of document.querySelectorAll('.signout')) b.addEventListener('click', signOut);
   document.querySelector('a.skip').addEventListener('click', (ev) => {
     ev.preventDefault();
     document.getElementById('content').focus();
   });
   render();
   loadCounts();
-  loadWho();
+  loadWho().then(() => {
+    // Only a browser still signed out is told; one with a session has nothing to fix.
+    // A key check the user has started owns the error line; a late startup
+    // answer must not write over it.
+    if (!linkRefused || keyCheckStarted || !document.body.classList.contains('signed-out')) return;
+    const error = document.querySelector('.signin-error');
+    error.textContent = 'That sign-in link or code did not work. It may be wrong, already used or expired. Run `mcp-gateway dashboard-link` on the gateway’s machine for a new one.';
+    error.hidden = false;
+  });
 }
 
 document.addEventListener('DOMContentLoaded', boot);

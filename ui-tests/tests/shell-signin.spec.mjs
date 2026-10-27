@@ -8,6 +8,7 @@ import { test, expect, WIDTHS, blockingViolations } from './base.mjs';
 import { withFixturePages } from './shell.mjs';
 
 const KEY = 'mcpg_fixture_key_0123456789';
+const UNCONFIRMED = "Signed out here, but the gateway did not confirm the session ended, so this browser may still be signed in. Reload and sign out again, or clear this site's cookies.";
 
 /** Status answers signed in only for requests carrying KEY as a bearer. */
 async function gate(page, { reject = false } = {}) {
@@ -231,4 +232,323 @@ test('S12 a key check that never answers gives up and frees the button', async (
   await page.clock.runFor(10_500);
   await expect(page.locator('.signin-error')).toHaveText('Could not reach the gateway. Try again.');
   await expect(button).toBeEnabled();
+});
+
+test('S13 the key check says Checking… and marks the form busy while it runs', async ({ page }) => {
+  let release;
+  const held = new Promise((ok) => { release = ok; });
+  await page.route('**/ui/api/status', async (route) => {
+    const auth = route.request().headers().authorization ?? '';
+    if (auth) await held;
+    return route.fulfill({ json: { auth: { enabled: true, signed_in: auth === `Bearer ${KEY}`, admin: false } } });
+  });
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  const button = page.locator('#signin button[type="submit"]');
+  await expect(button).toHaveText('Checking…');
+  await expect(page.locator('#signin-form')).toHaveAttribute('aria-busy', 'true');
+  release();
+  await expect(page.locator('#signin')).toBeHidden();
+  await expect(button).toHaveText('Sign in');
+  await expect(page.locator('#signin-form')).not.toHaveAttribute('aria-busy', 'true');
+});
+
+test('S14 a valid key the gateway does not let in (403) gets its own message', async ({ page }) => {
+  await page.route('**/ui/api/status', (route) => {
+    if (route.request().headers().authorization) return route.fulfill({ status: 403, json: {} });
+    return route.fulfill({ json: { auth: { enabled: true, signed_in: false, admin: false } } });
+  });
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.signin-error')).toHaveText('That key is valid, but it is not allowed into the web UI. Ask an admin for access.');
+  await expect(page.locator('#signin')).toBeVisible();
+});
+
+test('S15 sign-out drops the key, ends the cookie session and shows sign-in at the same address', async ({ page }) => {
+  const seen = await gate(page);
+  const logouts = [];
+  await page.route('**/dashboard/logout', (route) => {
+    logouts.push(route.request().method());
+    return route.fulfill({ status: 303, headers: { location: '/ui' } });
+  });
+  await withFixturePages(page);
+  await page.goto('/ui/servers/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#signin')).toBeHidden();
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.locator('#signin')).toBeVisible();
+  await expect(page).toHaveURL('/ui/servers/status');
+  expect(logouts).toEqual(['POST']);
+  await expect(page.locator('.signin-error')).toBeHidden();
+  await expect(page.locator('.signin-notice')).toBeHidden();
+  await expect(page.locator('.top .who')).toHaveText('');
+  await expect(page.locator('#signin-key')).toBeFocused();
+  // The key is gone without a reload: the next read from this page carries no bearer.
+  const before = seen.length;
+  await page.evaluate(async () => (await import(document.querySelector('script[type="module"][src^="/ui/assets/"]').src)).api('/ui/api/status').catch(() => null));
+  expect(seen.length).toBeGreaterThan(before);
+  expect(seen.slice(before)).not.toContain(`Bearer ${KEY}`);
+});
+
+test('S18 a sign-out the gateway does not confirm says the session may still be open', async ({ page }) => {
+  await gate(page);
+  await page.route('**/dashboard/logout', (route) => route.fulfill({ status: 500, json: {} }));
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#signin')).toBeHidden();
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.locator('#signin')).toBeVisible();
+  await expect(page.locator('.signin-notice')).toBeVisible();
+  await expect(page.locator('.signin-notice')).toHaveText(UNCONFIRMED);
+});
+
+test('S18 an unreachable gateway at sign-out says the same', async ({ page }) => {
+  await gate(page);
+  await page.route('**/dashboard/logout', (route) => route.abort('failed'));
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#signin')).toBeHidden();
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.locator('.signin-notice')).toBeVisible();
+  await expect(page.locator('.signin-notice')).toHaveText(UNCONFIRMED);
+});
+
+test('S16 sign-out is offered only to a signed-in session', async ({ page }) => {
+  await gate(page);
+  await page.goto('/ui/overview/status');
+  await expect(page.locator('#signin')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Sign out' })).toBeHidden();
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+});
+
+/** Sign in with KEY at the current viewport. */
+async function signedIn(page) {
+  await gate(page);
+  await page.route('**/dashboard/logout', (route) => route.fulfill({ status: 303, headers: { location: '/ui' } }));
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#signin')).toBeHidden();
+}
+
+test.describe('sign-out on a phone', () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+  test('S17 at 390 px sign-out is the menu\'s last row, not in the top bar', async ({ page }) => {
+    await signedIn(page);
+    await expect(page.locator('.top .signout')).toBeHidden();
+    await page.locator('button.menu').click();
+    const inMenu = page.locator('#pages').getByRole('button', { name: 'Sign out' });
+    await expect(inMenu).toBeVisible();
+    await inMenu.click();
+    await expect(page.locator('#signin')).toBeVisible();
+    await expect(page.locator('#signin-key')).toBeFocused();
+  });
+});
+
+for (const [width, inTopBar] of [[640, false], [641, true]]) {
+  test.describe(`sign-out at ${width} px`, () => {
+    test.use({ viewport: { width, height: 900 } });
+    test(`S17 at ${width} px sign-out is ${inTopBar ? 'in the top bar' : 'in the menu'}`, async ({ page }) => {
+      await signedIn(page);
+      if (inTopBar) {
+        await expect(page.locator('.top .signout')).toBeVisible();
+        await expect(page.locator('#pages .signout')).toBeHidden();
+      } else {
+        await expect(page.locator('.top .signout')).toBeHidden();
+        await page.locator('button.menu').click();
+        await expect(page.locator('#pages .signout')).toBeVisible();
+      }
+    });
+  });
+}
+
+test.describe('sign-out on a desktop', () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+  test('S17 at 1440 px sign-out is in the top bar, not in the sidebar', async ({ page }) => {
+    await signedIn(page);
+    await expect(page.locator('.top').getByRole('button', { name: 'Sign out' })).toBeVisible();
+    await expect(page.locator('#pages').getByRole('button', { name: 'Sign out' })).toBeHidden();
+  });
+});
+
+test('S16 with authentication off there is no session, so no sign-out', async ({ page }) => {
+  await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: false, signed_in: false, admin: false } } }));
+  await page.goto('/ui/overview/status');
+  await page.locator('#content [data-rendered]').waitFor();
+  await expect(page.locator('.top .signout')).toBeHidden();
+  await expect(page.locator('#pages .signout')).toBeHidden();
+});
+
+test('S18 a logout that never answers shows the pending notice, then the warning', async ({ page }) => {
+  await page.clock.install();
+  await gate(page);
+  await page.route('**/dashboard/logout', () => {}); // never answered
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#signin')).toBeHidden();
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.locator('.signin-notice')).toBeVisible();
+  await expect(page.locator('.signin-notice')).toHaveText('Ending the session on the gateway…');
+  await page.clock.runFor(10_500);
+  await expect(page.locator('.signin-notice')).toHaveText(UNCONFIRMED);
+});
+
+test('S18 a late logout failure never writes over a session signed in since', async ({ page }) => {
+  let release;
+  const held = new Promise((ok) => { release = ok; });
+  await gate(page);
+  await page.route('**/dashboard/logout', async (route) => { await held; return route.fulfill({ status: 500, json: {} }); });
+  await page.route('**/ui/api/probe-401', (r) => r.fulfill({ status: 401, json: {} }));
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#signin')).toBeHidden();
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#signin')).toBeHidden();
+  const failed = page.waitForResponse((r) => r.url().endsWith('/dashboard/logout'));
+  release();
+  await failed;
+  await page.evaluate(() => new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok))));
+  // A later 401 shows sign-in again: the old sign-out's warning must not be on it.
+  await page.evaluate(async () => (await import(document.querySelector('script[type="module"][src^="/ui/assets/"]').src)).api('/ui/api/probe-401').catch(() => null));
+  await expect(page.locator('#signin')).toBeVisible();
+  await expect(page.locator('.signin-notice')).toBeHidden();
+});
+
+test('S18 a key refused while the logout is pending keeps both messages', async ({ page }) => {
+  let release;
+  const held = new Promise((ok) => { release = ok; });
+  await gate(page);
+  await page.route('**/dashboard/logout', async (route) => { await held; return route.fulfill({ status: 500, json: {} }); });
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#signin')).toBeHidden();
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.locator('.signin-notice')).toHaveText('Ending the session on the gateway…');
+  await page.locator('#signin-key').fill('mcpg_wrong');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.signin-error')).toHaveText('That key was not accepted.');
+  await expect(page.locator('.signin-notice')).toBeVisible();
+  const failed = page.waitForResponse((r) => r.url().endsWith('/dashboard/logout'));
+  release();
+  await failed;
+  await expect(page.locator('.signin-notice')).toHaveText(UNCONFIRMED);
+  await expect(page.locator('.signin-error')).toHaveText('That key was not accepted.');
+});
+
+test('S20 a rate-limited key check says how long to wait and keeps the key', async ({ page }) => {
+  await page.route('**/ui/api/status', (route) => {
+    if (route.request().headers().authorization) {
+      return route.fulfill({ status: 429, headers: { 'retry-after': '60' }, json: { error: { code: -32000, message: 'rate limited' } } });
+    }
+    return route.fulfill({ json: { auth: { enabled: true, signed_in: false, admin: false } } });
+  });
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.signin-error')).toBeVisible();
+  await expect(page.locator('.signin-error')).toHaveText('The gateway is limiting sign-in attempts. Wait 60 seconds, then try again.');
+  await expect(page.locator('#signin-key')).toHaveValue(KEY);
+});
+
+test('S20 a rate limit without a usable wait says a minute', async ({ page }) => {
+  await page.route('**/ui/api/status', (route) => {
+    if (route.request().headers().authorization) return route.fulfill({ status: 429, headers: { 'retry-after': 'soon' }, json: {} });
+    return route.fulfill({ json: { auth: { enabled: true, signed_in: false, admin: false } } });
+  });
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.signin-error')).toHaveText('The gateway is limiting sign-in attempts. Wait a minute, then try again.');
+});
+
+for (const [header, wait] of [['1', '1 second'], [null, 'a minute'], ['Wed, 21 Oct 2026 07:28:00 GMT', 'a minute']]) {
+  test(`S20 Retry-After ${header ?? 'absent'} reads as ${wait}`, async ({ page }) => {
+    await page.route('**/ui/api/status', (route) => {
+      if (!route.request().headers().authorization) return route.fulfill({ json: { auth: { enabled: true, signed_in: false, admin: false } } });
+      return route.fulfill({ status: 429, headers: header === null ? {} : { 'retry-after': header }, json: {} });
+    });
+    await page.goto('/ui/overview/status');
+    await page.locator('#signin-key').fill(KEY);
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.signin-error')).toHaveText(`The gateway is limiting sign-in attempts. Wait ${wait}, then try again.`);
+  });
+}
+
+test('S20 the kept key signs in on the next try once the limit lifts', async ({ page }) => {
+  let limited = true;
+  await page.route('**/ui/api/status', (route) => {
+    const auth = route.request().headers().authorization ?? '';
+    if (auth && limited) return route.fulfill({ status: 429, headers: { 'retry-after': '60' }, json: {} });
+    return route.fulfill({ json: { auth: { enabled: true, signed_in: auth === `Bearer ${KEY}`, admin: false } } });
+  });
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.signin-error')).toBeVisible();
+  limited = false;
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#signin')).toBeHidden();
+});
+
+const LINK_REFUSED = 'That sign-in link or code did not work. It may be wrong, already used or expired. Run `mcp-gateway dashboard-link` on the gateway’s machine for a new one.';
+
+test('S19 a refused sign-in link lands on sign-in with the reason, and the hint leaves the address', async ({ page }) => {
+  await gate(page);
+  await page.goto('/ui/overview/status?signin=link-refused');
+  await expect(page.locator('#signin')).toBeVisible();
+  await expect(page.locator('.signin-error')).toBeVisible();
+  await expect(page.locator('.signin-error')).toHaveText(LINK_REFUSED);
+  await expect(page).toHaveURL('/ui/overview/status');
+});
+
+test('S19 any other hint value changes nothing', async ({ page }) => {
+  await gate(page);
+  await page.goto('/ui/overview/status?signin=<b>x</b>');
+  await expect(page.locator('#signin')).toBeVisible();
+  await expect(page.locator('.signin-error')).toBeHidden();
+});
+
+test('S19 a session already signed in drops the hint and shows nothing', async ({ page }) => {
+  await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: true, admin: true } } }));
+  await page.goto('/ui/overview/status?signin=link-refused');
+  await page.locator('#content [data-rendered]').waitFor();
+  await expect(page).toHaveURL('/ui/overview/status');
+  await expect(page.locator('#signin')).toBeHidden();
+});
+
+test('S19 a slow startup check never writes over a key check that has started', async ({ page }) => {
+  let release;
+  const held = new Promise((ok) => { release = ok; });
+  await page.route('**/ui/api/status', async (route) => {
+    if (route.request().headers().authorization) {
+      return route.fulfill({ status: 429, headers: { 'retry-after': '60' }, json: {} });
+    }
+    await held; // the startup check answers late
+    return route.fulfill({ json: { auth: { enabled: true, signed_in: false, admin: false } } });
+  });
+  await page.route('**/ui/api/probe-401', (r) => r.fulfill({ status: 401, json: {} }));
+  await page.goto('/ui/overview/status?signin=link-refused');
+  // Sign-in shows before the startup check answers (a 401 elsewhere opens it).
+  await page.evaluate(async () => (await import(document.querySelector('script[type="module"][src^="/ui/assets/"]').src)).api('/ui/api/probe-401').catch(() => null));
+  await expect(page.locator('#signin')).toBeVisible();
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.signin-error')).toHaveText('The gateway is limiting sign-in attempts. Wait 60 seconds, then try again.');
+  const late = page.waitForResponse((r) => r.url().endsWith('/ui/api/status') && !r.request().headers().authorization);
+  release();
+  await late;
+  await page.evaluate(() => new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok))));
+  await expect(page.locator('.signin-error')).toHaveText('The gateway is limiting sign-in attempts. Wait 60 seconds, then try again.');
 });

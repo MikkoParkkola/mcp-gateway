@@ -30,8 +30,9 @@ pub(crate) struct StdioTaskHost {
     /// The transport mark. Only `gateway::server` can mint one, so only a
     /// stdio-built host carries it.
     pub(crate) nonce: &'static StdioNonce,
-    /// `security.sanitize_input` at stdio start: a resume re-admits under it.
-    pub(crate) sanitize: crate::security::sanitize::InputSanitizing,
+    /// The config stdio serves and reloads, shared with its reload context: a
+    /// dispatch or resume takes the generation current when it runs.
+    pub(crate) live_config: Arc<crate::config_reload::LiveConfig>,
 }
 
 pub(crate) enum TaskHost {
@@ -55,6 +56,16 @@ pub(crate) enum LiveHost {
 }
 
 impl LiveHost {
+    /// The generation current now. Queued work is judged by the one current
+    /// when it dispatches or resumes, not the one it was admitted under
+    /// (ADR-023); take it once per step.
+    pub(crate) fn generation(&self) -> Arc<crate::config_reload::Generation> {
+        match self {
+            Self::Http(state) => state.live_config.generation(),
+            Self::Stdio(host) => host.live_config.generation(),
+        }
+    }
+
     pub(crate) fn meta_mcp(&self) -> &Arc<MetaMcp> {
         match self {
             Self::Http(state) => &state.meta_mcp,
@@ -67,18 +78,16 @@ impl LiveHost {
     /// The exemption is judged again on the caller's view; still exempt, the
     /// call is sent as stored under the instances judged now; otherwise its
     /// arguments are sanitized first (a NUL refuses the resume). Returns the
-    /// arguments to send and the judgement to send them under.
+    /// arguments to send and the judgement to send them under. `generation`
+    /// is the one this resume step took, the same one its authorizer judges
+    /// by, so one step never mixes two (ADR-023).
     pub(crate) async fn readmit(
         &self,
         call: &super::execution::TaskCall,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
-        session_id: Option<&str>,
+        (session_id, generation): (Option<&str>, &crate::config_reload::Generation),
     ) -> Result<(serde_json::Value, Judged), Box<JsonRpcResponse>> {
-        let sanitize = match self {
-            Self::Http(state) => state.sanitize_input,
-            Self::Stdio(host) => host.sanitize == crate::security::sanitize::InputSanitizing::On,
-        };
-        if !sanitize {
+        if !generation.sanitize_input() {
             return Ok((call.arguments.clone(), Judged::default()));
         }
         let request = serde_json::json!({"jsonrpc": "2.0", "method": "tools/call",
@@ -133,9 +142,10 @@ impl LiveHost {
     pub(crate) fn authorizer<'a>(
         &'a self,
         router: &'a OwnedRouterAuthorizer,
+        generation: &'a crate::config_reload::Generation,
     ) -> HostAuthorizer<'a> {
         match self {
-            Self::Http(state) => HostAuthorizer::Http(router.borrow(state)),
+            Self::Http(state) => HostAuthorizer::Http(router.borrow(state, generation)),
             Self::Stdio(host) => HostAuthorizer::Stdio(ToolPolicyAuthorizer {
                 tool_policy: &host.tool_policy,
             }),

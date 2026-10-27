@@ -15,8 +15,12 @@ use mcp_gateway::protocol::meta::MODERN_VERSIONS;
 
 use super::*;
 
+#[path = "backend_preview_identity.rs"]
+mod identity;
 #[path = "backend_preview_lifecycle.rs"]
 mod lifecycle;
+#[path = "backend_preview_tools_class.rs"]
+mod tools_class;
 
 const PREVIEW: &str = "/ui/api/previews";
 
@@ -140,10 +144,11 @@ async fn confirmed(router: &Router, body: &Value) -> (StatusCode, Value) {
 
 /// The router over a state whose `security.ssrf_protection` is `ssrf`.
 async fn router_with(ssrf: bool) -> (Router, TempDir) {
-    let (mut state, store_dir) = make_app_state(None, None).await;
-    Arc::get_mut(&mut state)
-        .expect("test AppState should be uniquely owned")
-        .ssrf_protection = ssrf;
+    let (state, store_dir) = make_app_state(None, None).await;
+    // The flag applies from the published config (ADR-023).
+    let mut config = (*state.live_config.get()).clone();
+    config.security.ssrf_protection = ssrf;
+    state.live_config.set(config);
     (create_router(state), store_dir)
 }
 
@@ -165,6 +170,12 @@ async fn an_unconfirmed_preview_starts_nothing_and_returns_a_token() {
         "{body}"
     );
     assert_eq!(body["preview"]["transport"], "http", "{body}");
+    assert!(
+        body["preview"]
+            .as_object()
+            .is_some_and(|p| p.get("package") == Some(&Value::Null)),
+        "not known before the server answers: {body}"
+    );
     assert!(
         log.lock().unwrap().is_empty(),
         "nothing may start before confirm"

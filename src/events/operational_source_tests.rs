@@ -100,6 +100,7 @@ fn event(name: &str, data: Value) -> SourceEvent {
         occurred_at: Utc::now(),
         data,
         lifecycle_key: None,
+        fence: None,
     }
 }
 

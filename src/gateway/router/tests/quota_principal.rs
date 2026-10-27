@@ -42,6 +42,7 @@ async fn a_quota_is_charged_to_the_strongest_authenticated_credential() {
     let charged = |client, agent, cert| {
         super::authorization::RouterAuthorizer {
             state: &state,
+            generation: &state.live_config.generation(),
             client,
             oauth_agent_identity: agent,
             cert_identity: cert,

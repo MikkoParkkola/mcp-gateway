@@ -38,6 +38,8 @@ pub mod capability;
 pub mod chains;
 #[doc(hidden)]
 pub mod cli;
+#[doc(hidden)]
+pub mod cli_support;
 mod clock;
 #[doc(hidden)]
 pub mod config;
@@ -64,6 +66,8 @@ mod events;
 #[doc(hidden)]
 pub mod failsafe;
 mod fs_lock;
+#[doc(hidden)]
+pub use fs_lock::lock_directory_finding;
 #[doc(hidden)]
 pub mod gateway;
 mod hashing;
