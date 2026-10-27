@@ -471,6 +471,8 @@ function rateLimited(retryAfter) {
 }
 
 let signingIn = false;
+/** Set once the user submits a key: from then on its answer owns the error line. */
+let keyCheckStarted = false;
 /** How long a key check may take before it counts as unreachable. */
 const KEY_CHECK_MS = 10_000;
 
@@ -481,6 +483,7 @@ const KEY_CHECK_MS = 10_000;
  */
 async function signIn(ev) {
   ev.preventDefault();
+  keyCheckStarted = true;
   if (signingIn) return;
   const input = document.getElementById('signin-key');
   const error = document.querySelector('.signin-error');
@@ -611,7 +614,9 @@ function boot() {
   loadCounts();
   loadWho().then(() => {
     // Only a browser still signed out is told; one with a session has nothing to fix.
-    if (!linkRefused || !document.body.classList.contains('signed-out')) return;
+    // A key check the user has started owns the error line; a late startup
+    // answer must not write over it.
+    if (!linkRefused || keyCheckStarted || !document.body.classList.contains('signed-out')) return;
     const error = document.querySelector('.signin-error');
     error.textContent = 'That sign-in link or code did not work. It may be wrong, already used or expired. Run `mcp-gateway dashboard-link` on the gateway’s machine for a new one.';
     error.hidden = false;

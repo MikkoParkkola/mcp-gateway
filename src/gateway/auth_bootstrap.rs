@@ -128,6 +128,13 @@ pub(super) fn try_dashboard_bootstrap(
         // from `mcp-gateway dashboard-link`.
         let secure = cookie_secure(state);
         if secure && !state.tls_enabled {
+            // The clock first, before any hand-off spends or compares: on a
+            // clock before 1970 every value gets the clock refusal, and the
+            // live link is kept, as on the direct path below.
+            if super::dashboard::wall_unreadable(Now::read()) {
+                auth_failure(AuthFailureKind::BootstrapRefused);
+                return Some(clock_refusal());
+            }
             // A cookie set here would be scoped to this loopback host. Hand off
             // to the public origin instead (#2130): the page shows a one-time
             // code the operator enters there, in a same-origin form, so the
@@ -158,10 +165,7 @@ pub(super) fn try_dashboard_bootstrap(
                 // tell the live value from a guess.
                 Redeem::ClockUnreadable => {
                     auth_failure(AuthFailureKind::BootstrapRefused);
-                    return Some(bearer_unauthorized_response(
-                        "The host clock reads before 1970, so a sign-in cannot be dated. Set the \
-                     clock; if this was the live link, it still works afterwards.",
-                    ));
+                    return Some(clock_refusal());
                 }
                 Redeem::Refused => {
                     auth_failure(AuthFailureKind::BootstrapRefused);
@@ -232,6 +236,14 @@ pub(crate) fn refused_sign_in(navigation: Navigation, refusal: Response) -> Resp
 /// The refusal of a value that is not the live one, and of every value where
 /// telling them apart would leak which is live: one response, built in one
 /// place, so the paths that share it cannot drift apart.
+fn clock_refusal() -> Response {
+    bearer_unauthorized_response(
+        "The host clock reads before 1970, so a sign-in cannot be dated. Set the clock; if \
+         this was the live link, it still works afterwards.",
+    )
+}
+
+/// The refusal of a value that is not the live one: see [`refused_sign_in`].
 fn refused_value() -> Response {
     bearer_unauthorized_response(
         "Bootstrap link is invalid or already used. Run `mcp-gateway dashboard-link` for a \

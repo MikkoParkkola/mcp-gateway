@@ -12,6 +12,10 @@ use super::*;
 const LOCAL: [u8; 4] = [127, 0, 0, 1];
 const REMOTE: [u8; 4] = [198, 51, 100, 7];
 
+/// A wrong value of the live value's length (43 base64url characters), so a
+/// compare that stopped at a length mismatch could not pass these rows.
+static GUESS: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| "B".repeat(43));
+
 /// Status, every header (sorted) and the body: what a caller can observe.
 fn observe(
     state: &AuthState,
@@ -51,7 +55,7 @@ fn r8_a_refusal_from_elsewhere_is_identical_for_the_live_value_and_a_guess() {
     let (live_state, printed) = bootstrap_state(Some("bearer"), vec![]);
     let (guess_state, guess_printed) = bootstrap_state(Some("bearer"), vec![]);
     let live = observe(&live_state, &printed, REMOTE);
-    let guess = observe(&guess_state, "not-the-value", REMOTE);
+    let guess = observe(&guess_state, &GUESS, REMOTE);
     assert_eq!(
         live, guess,
         "the refusal must not say whether the guess was live"
@@ -76,7 +80,7 @@ fn r9_a_clock_refusal_is_identical_for_the_live_value_and_a_guess() {
     {
         let _clock = crate::clock::test_clock::before_epoch();
         let live = observe(&state, &printed, LOCAL);
-        let guess = observe(&state, "not-the-value", LOCAL);
+        let guess = observe(&state, &GUESS, LOCAL);
         assert_eq!(
             live, guess,
             "the clock refusal must not say whether the guess was live"
@@ -100,10 +104,29 @@ fn r14_an_empty_slot_still_runs_the_compare() {
         "spends the live value"
     );
     let before = crate::gateway::auth_dashboard::ct_compares_for_test();
-    let _ = observe(&state, "not-the-value", LOCAL);
+    let _ = observe(&state, &GUESS, LOCAL);
     assert!(
         crate::gateway::auth_dashboard::ct_compares_for_test() > before,
         "the empty slot skipped the compare"
+    );
+}
+
+/// R14 (code): with no handoff code outstanding, a code still pays for the
+/// compare.
+#[cfg(feature = "webui")]
+#[test]
+fn r14_an_empty_code_slot_still_runs_the_compare() {
+    let (state, _) = bootstrap_state(Some("bearer"), vec![]);
+    let before = crate::gateway::auth_dashboard::ct_compares_for_test();
+    assert!(
+        state
+            .dashboard_bootstrap
+            .take_handoff(&GUESS, crate::gateway::auth::Now::read())
+            .is_none()
+    );
+    assert!(
+        crate::gateway::auth_dashboard::ct_compares_for_test() > before,
+        "the empty code slot skipped the compare"
     );
 }
 
@@ -117,13 +140,30 @@ fn r13_no_plain_compare_of_the_secret_remains() {
         let text = std::fs::read_to_string(root.join(file)).expect("source readable");
         for (n, line) in text.lines().enumerate() {
             let code = line.split("//").next().unwrap_or("");
-            let compares = code.contains("==") || code.contains("!=");
-            if compares && (code.contains("candidate") || code.contains(".peek()")) {
+            let compares = code.contains("==") || code.contains("!=") || code.contains(".eq(");
+            let secret =
+                code.contains("candidate") || code.contains(".peek()") || code.contains("reveal()");
+            if compares && secret {
                 hits.push(format!("{file}:{} {}", n + 1, line.trim()));
             }
         }
     }
     assert!(hits.is_empty(), "plain compares of the secret: {hits:#?}");
+    // `Secret` has no `==`, so the compiler refuses a plain compare; this scan
+    // is the backstop. Its one way out, `reveal()`, serves printing only.
+    let dashboard =
+        std::fs::read_to_string(root.join("auth_dashboard.rs")).expect("source readable");
+    let reveals: Vec<&str> = dashboard
+        .lines()
+        .filter(|l| {
+            l.contains("reveal()") && !l.trim_start().starts_with("//") && !l.contains("fn reveal")
+        })
+        .collect();
+    assert_eq!(
+        reveals.len(),
+        1,
+        "reveal() is for printing the link only: {reveals:#?}"
+    );
 }
 
 /// R10: without the dashboard there is no hand-off, so an HTTPS `public_url`
@@ -138,7 +178,7 @@ fn r10_an_https_front_without_a_handoff_answers_every_value_as_a_wrong_one() {
     config.server.public_url = Some("https://gw.example".to_string());
     state.live_config = std::sync::Arc::new(crate::config_reload::LiveConfig::new(config));
     let live = observe(&state, &printed, LOCAL);
-    let guess = observe(&state, "not-the-value", LOCAL);
+    let guess = observe(&state, &GUESS, LOCAL);
     assert_eq!(
         live, guess,
         "the deployment refusal must not say whether the guess was live"

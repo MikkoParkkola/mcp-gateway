@@ -17,7 +17,7 @@ use std::time::{Duration, Instant, SystemTime};
 pub struct DashboardBootstrap {
     /// The unused value, and the wall-clock time a session it opens must end
     /// by: the expiry of the credential that minted it, when that has one.
-    value: Mutex<Option<(String, Option<SystemTime>)>>,
+    value: Mutex<Option<(Secret, Option<SystemTime>)>>,
     /// The port the listener bound, 0 until known: `server.port: 0` asks the
     /// OS for one, and a link must name the real one.
     bound_port: AtomicU16,
@@ -40,7 +40,7 @@ pub(crate) const HANDOFF_TTL: Duration = Duration::from_secs(60);
 #[cfg(feature = "webui")]
 #[derive(Debug)]
 struct Handoff {
-    value: String,
+    value: Secret,
     minted: Now,
     cap: Option<SystemTime>,
 }
@@ -79,7 +79,7 @@ impl SessionTimes {
 /// A wall clock before 1970 refuses every dashboard credential (MIK-8202):
 /// without it a session would rest on the monotonic clock alone, which stops
 /// while the host sleeps, so a suspend would outlive the idle limit.
-fn wall_unreadable(now: Now) -> bool {
+pub(super) fn wall_unreadable(now: Now) -> bool {
     !now.wall_readable()
 }
 
@@ -163,7 +163,7 @@ impl DashboardBootstrap {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            value: Mutex::new(Some((random_value(), None))),
+            value: Mutex::new(Some((Secret(random_value()), None))),
             bound_port: AtomicU16::new(0),
             sessions: Mutex::new(HashMap::new()),
             #[cfg(feature = "webui")]
@@ -177,7 +177,7 @@ impl DashboardBootstrap {
         self.value
             .lock()
             .ok()
-            .and_then(|v| v.as_ref().map(|(value, _)| value.clone()))
+            .and_then(|v| v.as_ref().map(|(value, _)| value.reveal().to_owned()))
     }
 
     /// Consume the value if it matches. Single use: a second attempt fails even
@@ -212,10 +212,10 @@ impl DashboardBootstrap {
     /// Take the value and its cap if `candidate` matches it. An empty slot
     /// still runs the compare, against a dummy, so whether a live link is
     /// outstanding cannot be timed.
-    fn take_matching(&self, candidate: &str) -> Option<(String, Option<SystemTime>)> {
+    fn take_matching(&self, candidate: &str) -> Option<(Secret, Option<SystemTime>)> {
         let mut guard = self.value.lock().ok()?;
         let matches = match guard.as_ref() {
-            Some((expected, _)) => secret_eq(expected.as_bytes(), candidate),
+            Some((expected, _)) => expected.matches(candidate),
             None => {
                 let _ = secret_eq(&EMPTY_SLOT_DUMMY, candidate);
                 false
@@ -293,7 +293,7 @@ impl DashboardBootstrap {
     pub(crate) fn rearm_until(&self, not_after: Option<SystemTime>) -> String {
         let fresh = random_value();
         if let Ok(mut value) = self.value.lock() {
-            *value = Some((fresh.clone(), not_after));
+            *value = Some((Secret(fresh.clone()), not_after));
         }
         fresh
     }
@@ -305,7 +305,7 @@ impl DashboardBootstrap {
         let value = random_value();
         if let Ok(mut slot) = self.handoff.lock() {
             *slot = Some(Handoff {
-                value: value.clone(),
+                value: Secret(value.clone()),
                 minted: now,
                 cap,
             });
@@ -330,7 +330,7 @@ impl DashboardBootstrap {
                 wall_unreadable(now)
                     || exceeds(live.minted, now, HANDOFF_TTL)
                     || live.cap.is_some_and(|cap| cap_reached(now, cap)),
-                secret_eq(live.value.as_bytes(), candidate),
+                live.value.matches(candidate),
             )
         };
         if expired {
@@ -510,6 +510,28 @@ pub(crate) enum Redeem {
     ClockUnreadable,
     /// Not the live value, or none is outstanding.
     Refused,
+}
+
+/// A bootstrap value or handoff code the gateway holds. It has no `==`: the
+/// only comparison is [`Secret::matches`], in constant time, so the compiler
+/// refuses a plain compare that would leak timing or pick a branch by value.
+struct Secret(String);
+
+impl Secret {
+    fn matches(&self, candidate: &str) -> bool {
+        secret_eq(self.0.as_bytes(), candidate)
+    }
+
+    /// The value, to print the link for the operator. Never to compare.
+    fn reveal(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Secret(..)")
+    }
 }
 
 /// The one compare of a candidate with a secret: constant time for equal

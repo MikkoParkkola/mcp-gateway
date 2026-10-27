@@ -343,10 +343,11 @@ async fn a_code_posted_on_the_loopback_origin_is_not_spent() {
     );
 }
 
-/// R11: a hand-off that cannot happen (here the clock reads before 1970)
-/// answers the live link exactly as it answers a wrong one, and keeps it.
+/// R11: behind an HTTPS front, a clock before 1970 is decided before any
+/// hand-off or compare: the live link and a wrong one get the same clock
+/// refusal, and the live link is kept.
 #[tokio::test]
-async fn r11_a_hand_off_that_fails_answers_as_a_wrong_link() {
+async fn r11_a_clock_refusal_behind_an_https_front_is_the_same_for_every_link() {
     let (state, _dir) = behind_https_front().await;
     let value = state.dashboard_bootstrap.peek().expect("startup value");
     let (live, wrong) = {
@@ -358,6 +359,7 @@ async fn r11_a_hand_off_that_fails_answers_as_a_wrong_link() {
     assert_eq!(live.status, wrong.status, "{} / {}", live.body, wrong.body);
     assert_eq!(live.body, wrong.body);
     assert_eq!(live.headers, wrong.headers);
+    assert!(live.body.contains("before 1970"), "{}", live.body);
     assert_eq!(
         state.dashboard_bootstrap.peek(),
         Some(value),
@@ -410,7 +412,18 @@ async fn r5_every_refused_code_sends_a_browser_to_the_same_place() {
     assert_eq!(wrong.status, StatusCode::SEE_OTHER, "{}", wrong.body);
     assert_eq!(location(&wrong), "/ui/overview/status?signin=link-refused");
     assert_private(&wrong);
-    for other in [&used, &expired] {
+    // The link path's refusal is the same answer, so a browser cannot tell
+    // which path refused it either.
+    let link = Request::builder()
+        .method("GET")
+        .uri(format!("/dashboard?bootstrap={}", "B".repeat(43)))
+        .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 52_349))))
+        .header("sec-fetch-mode", "navigate")
+        .header("sec-fetch-dest", "document")
+        .body(Body::empty())
+        .expect("request builds");
+    let by_link = send(&wrong_state, link).await;
+    for other in [&used, &expired, &by_link] {
         assert_eq!(
             (other.status, &other.headers, &other.body),
             (wrong.status, &wrong.headers, &wrong.body)
