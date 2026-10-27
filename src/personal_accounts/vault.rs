@@ -433,6 +433,23 @@ impl VaultStrategy {
     /// The mint-free view read with a busy custody kept distinct (MIK-8392
     /// Busy parity): decided from [`CustodyError::Busy`] itself, never text.
     pub(crate) async fn view_binding_classified(&self, principal: Principal<'_>) -> ViewBinding {
+        self.read_binding(principal, cache_binding).await
+    }
+
+    /// The events fence: the mint-free read of the grant a delivery and a
+    /// listener run are fenced on. The same read as the view, keyed on the
+    /// stable grant only, so an ordinary token refresh does not move it.
+    pub(crate) async fn fence_binding(&self, principal: Principal<'_>) -> ViewBinding {
+        self.read_binding(principal, fence_key).await
+    }
+
+    /// The one mint-free read behind both bindings; `encode` names what the
+    /// binding is keyed on.
+    async fn read_binding(
+        &self,
+        principal: Principal<'_>,
+        encode: fn(&AccountKey, &CredentialLease) -> Result<String, PropagationError>,
+    ) -> ViewBinding {
         let account = match account_key(Some(principal), &self.descriptor) {
             Ok(account) => account,
             Err(error) => {
@@ -461,7 +478,7 @@ impl VaultStrategy {
         if let Err(error) = self.fence_changed_descriptor(&current) {
             return ViewBinding::NoView(error);
         }
-        match cache_binding(&account, &current) {
+        match encode(&account, &current) {
             Ok(binding) => ViewBinding::Bound(binding),
             Err(error) => ViewBinding::Unavailable(error),
         }
@@ -550,6 +567,16 @@ impl ManagedLease {
         self.strategy.recheck(&self.lease).await
     }
 
+    /// The events fence binding of the grant these headers were released
+    /// under: the same encoding [`VaultStrategy::fence_binding`] reads from
+    /// custody, so a listener run and a delivery compare like with like.
+    ///
+    /// # Errors
+    /// The account key cannot be digested.
+    pub(crate) fn fence_binding(&self) -> Result<String, PropagationError> {
+        fence_key(&self.lease.account, &self.lease)
+    }
+
     /// A11-c: the backend answered this dispatch with HTTP 401. At most one
     /// forced refresh, then the caller's answer: a reconnect refusal when the
     /// provider killed the grant, otherwise the rejection mark. A custody
@@ -620,6 +647,25 @@ fn cache_binding(
         lease.generation,
         lease.authorization_epoch,
         lease.token_revision,
+        lease.descriptor_revision.len(),
+        lease.descriptor_revision,
+    ))
+}
+
+/// What the events fence is keyed on: [`cache_binding`] without
+/// `token_revision`. A refresh moves only the token, so it never ends a
+/// listener run; a re-grant, a narrowing (it bumps the epoch) and a
+/// descriptor move each change it. Same length prefixes, so no two field
+/// tuples encode alike.
+fn fence_key(account: &AccountKey, lease: &CredentialLease) -> Result<String, PropagationError> {
+    let digest = account
+        .digest()
+        .map_err(|error| PropagationError::Refuse(format!("account key is unusable: {error}")))?;
+    Ok(format!(
+        "acct:fence:v1:{digest}:{}:{}:{}:{}:{}",
+        lease.generation.len(),
+        lease.generation,
+        lease.authorization_epoch,
         lease.descriptor_revision.len(),
         lease.descriptor_revision,
     ))

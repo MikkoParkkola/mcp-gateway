@@ -26,6 +26,7 @@ pub(crate) use meta_mcp::admission::EXECUTION_DIRECTIVES;
 pub(crate) use meta_mcp::invoke::audit::note_process;
 /// The per-delivery write record, shared with the response and idempotency
 /// caches that store it beside an answer (MIK-7991).
+pub(crate) mod delivery_facts;
 pub(crate) use meta_mcp::invoke::gateway_writes;
 /// The one write-then-bump-under-lock grant publisher, re-exported so the
 /// reload path can share it WITHOUT `meta_mcp` itself becoming crate-visible.
@@ -104,6 +105,8 @@ pub(crate) use server::STDIO_CREDENTIAL_PRINCIPAL;
 pub(crate) use server::StdioNonce;
 /// The declared account catalogue, for `cap list`'s readiness answer; crate-only.
 pub(crate) use server::account_bindings::declare_account_descriptors;
+#[cfg(test)]
+pub(crate) use server::listener_mint_for_test;
 // MIK-8407: the capability executor answers a changed account choice with it.
 pub(crate) use meta_mcp::stored_binding::Refusal as StoredBindingRefusal;
 pub(crate) use server::account_bindings::{ServeMode, sole_operator_asserted};

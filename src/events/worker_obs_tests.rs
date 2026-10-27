@@ -68,7 +68,7 @@ fn queued_observed(hub: &EventsHub, services: &Services, port: u16, event: &str)
         sub.observed_identity = Some(person());
     });
     let row = hub.store.subscriptions().pop().expect("row");
-    let observed = hub.observed_now(&row, &config).expect("observable");
+    let observed = hub.observed_now(&row, &config, None).expect("observable");
     assert!(observed.is_some(), "premise: a per-user stamp");
     let now = crate::clock::utc_now().expect("clock");
     let record = OutboxRecord {

@@ -632,13 +632,22 @@ impl ReloadContext {
             ));
         }
 
+        // Every view this config compiles to is built before `apply_patch`, so a
+        // refused build starts and stops no backend.
+        let generation = Arc::new(super::Generation::prepare(new_config).map_err(|reason| {
+            format!(
+                "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
+                 configuration was published."
+            )
+        })?);
+
         let outcome = patch.outcome();
         let fully_applied = apply_patch(
             &patch,
             &self.registry,
             &self.failsafe_config,
             self.cache_ttl,
-            &new_config.runtime,
+            &generation.config().runtime,
         )
         .await;
 
@@ -651,7 +660,7 @@ impl ReloadContext {
 
         // Published together: a resolver that read the new config against the
         // old overlay would resolve an `env:` reference the reload just changed.
-        self.live_config.set(new_config);
+        self.live_config.publish(Arc::clone(&generation));
         self.publish_overlay(overlay);
         // Still under `lock_reload`, against the config just published.
         self.report_registered(&patch.registered_change(), &self.live_config.get());
