@@ -51,6 +51,8 @@ struct Fence {
     bindings: Mutex<HashMap<String, String>>,
     refuse: Mutex<Option<FenceRead>>,
     reads: std::sync::atomic::AtomicUsize,
+    /// Parks the next read, so a row can act while it is pending.
+    pending: crate::test_pause::Slot,
 }
 
 impl Fence {
@@ -64,6 +66,7 @@ impl Fence {
             ),
             refuse: Mutex::new(None),
             reads: std::sync::atomic::AtomicUsize::new(0),
+            pending: crate::test_pause::Slot::default(),
         })
     }
 
@@ -94,6 +97,7 @@ impl ListenerMint for Fence {
         identity: &VerifiedIdentity,
     ) -> Result<Option<String>, FenceRead> {
         self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.pending.pause().await;
         match *self.refuse.lock().expect("fence") {
             Some(refused) => Err(refused),
             None => Ok(Some(self.current(&identity.subject))),
@@ -398,5 +402,36 @@ async fn a_send_past_the_fence_window_is_not_made() {
     tokio::join!(hub.attempt(&services, "evt_u1"), stall);
     assert_eq!(buried_as(&hub, "evt_u1"), None, "unsent, not buried");
     assert_eq!(outcomes(dir.path()), ["fence_stale"]);
+    assert_eq!(posts.load(Ordering::SeqCst), 0);
+}
+
+/// The barrier: an unsubscribe while the fence read is pending cancels the
+/// record. The row that signs is read after the fence, so nothing is sent
+/// under the subscription that is gone.
+#[tokio::test]
+async fn an_unsubscribe_during_the_fence_read_cancels_the_record() {
+    use std::sync::atomic::Ordering;
+    let dir = tempfile::tempdir().expect("dir");
+    let (hub, services, config, fence) = fenced(dir.path(), &["u1"]);
+    let (port, posts) = counting_callback().await;
+    queued_for(&hub, &config, port, "u1", &fence.current("u1"));
+    let (reached, release) = fence.pending.arm();
+    let unsubscribe = async {
+        reached.notified().await;
+        let tail = crate::events::store::TailPolicy {
+            ttl: Duration::from_secs(3600),
+            max: 10,
+            max_per_principal: 10,
+        };
+        assert!(
+            hub.store
+                .remove("sub_u1", Ok(chrono::Utc::now()), tail)
+                .expect("io"),
+            "premise: removed"
+        );
+        release.notify_one();
+    };
+    tokio::join!(hub.attempt(&services, "evt_u1"), unsubscribe);
+    assert_eq!(outcomes(dir.path()), ["cancelled"]);
     assert_eq!(posts.load(Ordering::SeqCst), 0);
 }
