@@ -218,7 +218,10 @@ fn limit_rows(_state: &AppState) -> Vec<Value> {
 /// read.
 fn last_actions(path: &std::path::Path) -> io::Result<Value> {
     let mut end = match std::fs::metadata(path) {
-        Ok(meta) => meta.len(),
+        Ok(meta) if meta.is_file() => meta.len(),
+        // A directory reports length 0 on Windows and would read as an empty
+        // log; anything but a regular file is a log that cannot be read.
+        Ok(_) => return Err(io::Error::other("transparency log is not a file")),
         Err(error) if error.kind() == io::ErrorKind::NotFound => 0,
         Err(error) => return Err(error),
     };
