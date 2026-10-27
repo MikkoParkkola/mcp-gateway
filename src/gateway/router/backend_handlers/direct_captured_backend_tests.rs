@@ -21,6 +21,8 @@ use crate::protocol::RequestId;
 
 fn anonymous() -> Caller {
     Caller {
+        generation: crate::config_reload::LiveConfig::new(crate::config::Config::default())
+            .generation(),
         client: None,
         cert_identity: None,
         oauth_agent_identity: None,

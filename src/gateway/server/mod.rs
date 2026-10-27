@@ -51,6 +51,9 @@ mod stdio_channel;
 mod stdio_delivery;
 mod stdio_dispatch;
 mod stdio_dispatches;
+/// ADR-023: the sanitise flag over stdio follows a reload.
+#[cfg(test)]
+mod stdio_live_flag_tests;
 mod stdio_loop;
 mod stdio_nonce;
 mod stdio_notify;

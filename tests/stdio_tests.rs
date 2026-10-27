@@ -13,6 +13,8 @@
 mod record_key;
 use record_key::RECORD_KEY as KEY;
 
+#[path = "common/flags_off.rs"]
+mod flags_off;
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
 
@@ -127,8 +129,6 @@ async fn test_stdio_initialize_produces_valid_response() {
         key_server: None,
         tool_policy,
         mtls_policy,
-        sanitize_input: false,
-        ssrf_protection: false,
         trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(10_000)),
         agent_auth,
@@ -141,7 +141,7 @@ async fn test_stdio_initialize_produces_valid_response() {
         control_plane_store: None,
         control_plane_base: None,
         live_config: std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::new(
-            mcp_gateway::config::Config::default(),
+            flags_off::flags_off(&Config::default()),
         )),
         export_status: None,
         transparency_log: None,
