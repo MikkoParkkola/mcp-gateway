@@ -1634,7 +1634,7 @@ async function previewOpenAPI() {
       preview.innerHTML = '<span style="color:var(--fg2)">No tools found in this spec.</span>';
     } else {
       preview.innerHTML = tools.map(t => `<div style="display:flex;gap:0.5rem;align-items:flex-start;padding:0.25rem 0">
-        <input type="checkbox" class="import-check" value="${esc(t.name)}" checked>
+        <input type="checkbox" class="import-check" value="${esc(t.name)}" aria-label="${esc(t.name)}" checked>
         <div><strong>${esc(t.name)}</strong><br><span style="font-size:0.85rem;color:var(--fg2)">${esc(t.description || '')}</span></div>
       </div>`).join('');
       importBtn.disabled = false;
@@ -1804,7 +1804,7 @@ async function previewOpenAPI() {
       preview.innerHTML = '<span class="preview-hint">No tools found in this spec.</span>';
     } else {
       preview.innerHTML = tools.map(t => `<div class="tool-check-item">
-        <input type="checkbox" class="import-check" value="${esc(t.name)}" checked>
+        <input type="checkbox" class="import-check" value="${esc(t.name)}" aria-label="${esc(t.name)}" checked>
         <div>
           <div class="tool-check-name">${esc(t.name)}</div>
           <div class="tool-check-desc">${esc(t.description || '')}</div>

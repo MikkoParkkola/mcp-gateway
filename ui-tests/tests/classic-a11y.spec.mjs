@@ -30,9 +30,13 @@ async function classicPage(page) {
     const path = new URL(route.request().url()).pathname;
     const body = {
       '/ui/api/status': STATUS,
-      '/ui/api/registry': { servers: [] },
+      '/ui/api/registry': { entries: [{ name: 'filesystem', description: 'Files on this host', login: 'none' }] },
       '/ui/api/tools': { tools: [{ server: 'alpha', name: 'read_a', description: 'Reads a thing' }] },
-      '/ui/api/capabilities': { capabilities: [] },
+      '/ui/api/capabilities': { capabilities: [{ name: 'weather_lookup', description: 'Looks up weather' }] },
+      '/ui/api/capabilities/weather_lookup': { name: 'weather_lookup', content: 'name: weather_lookup\n' },
+      '/ui/api/import/openapi/preview': { tools: [{ name: 'list_pets', description: 'Lists pets' }] },
+      // A digest wide enough that its table scrolls sideways on a phone.
+      '/ui/api/control-plane': { view: { servers: [{ name: 'alpha' }], trust_cards: [{ server_id: 'alpha', trust_card_digest_sha256: 'a'.repeat(64), schema_version: '1' }] } },
     }[path] ?? {};
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
   });
@@ -49,6 +53,17 @@ for (const width of WIDTHS) {
       await classicPage(page);
     });
 
+    test('a Control Plane table wider than the screen scrolls from the keyboard', async ({ page }) => {
+      test.skip(width > 600, 'the table fits at desktop width');
+      await page.evaluate(() => { location.hash = 'control-plane'; });
+      const region = page.getByRole('region', { name: 'TrustCards' });
+      await expect(region).toContainText('a'.repeat(64));
+      expect(await region.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+      await region.focus();
+      await page.keyboard.press('ArrowRight');
+      await expect.poll(() => region.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+    });
+
     for (const tab of TABS) {
       test(`axe finds no blocking violation on the ${tab} tab`, async ({ page }) => {
         await page.evaluate((t) => { location.hash = t; }, tab);
@@ -57,19 +72,46 @@ for (const width of WIDTHS) {
       });
     }
 
-    for (const mode of ['registry', 'custom']) {
-      test(`axe finds no blocking violation in the Add Server form, ${mode} mode`, async ({ page }) => {
+    test('axe finds no blocking violation in the Add Server form, registry mode with an entry picked', async ({ page }) => {
+      await page.evaluate(() => { location.hash = 'servers'; });
+      // Type once the registry is loaded, as a person would.
+      const loaded = page.waitForResponse((r) => r.url().endsWith('/ui/api/registry'));
+      await page.getByRole('button', { name: '+ Add Server' }).click();
+      await loaded;
+      await page.locator('#reg-search-input').fill('file');
+      await page.locator('#reg-dropdown .reg-opt').first().click();
+      await expect(page.locator('#reg-name-override')).toBeVisible();
+      expect(await blockingViolations(page)).toEqual([]);
+    });
+
+    for (const transport of ['stdio', 'http']) {
+      test(`axe finds no blocking violation in the Add Server form, custom ${transport} with an env row`, async ({ page }) => {
         await page.evaluate(() => { location.hash = 'servers'; });
         await page.getByRole('button', { name: '+ Add Server' }).click();
-        await page.locator(`#mode-${mode}`).click();
+        await page.locator('#mode-custom').click();
+        await page.locator('#custom-transport').selectOption(transport);
+        await page.locator('#server-custom-fields').getByRole('button', { name: '+ Add' }).click();
+        await expect(page.locator(transport === 'http' ? '#custom-url' : '#custom-command')).toBeVisible();
+        await expect(page.locator('#env-rows input')).toHaveCount(2);
         expect(await blockingViolations(page)).toEqual([]);
       });
     }
 
-    test('axe finds no blocking violation in the OpenAPI import dialog', async ({ page }) => {
+    test('axe finds no blocking violation with a capability open in the editor', async ({ page }) => {
+      await page.evaluate(() => { location.hash = 'capabilities'; });
+      await page.locator('[data-action="toggle-cap"][data-value="weather_lookup"]').click();
+      await expect(page.locator('#cap-editor-weather_lookup')).toBeVisible();
+      expect(await blockingViolations(page)).toEqual([]);
+    });
+
+    test('axe finds no blocking violation in the OpenAPI import dialog, before and after a preview', async ({ page }) => {
       await page.evaluate(() => { location.hash = 'capabilities'; });
       await page.getByRole('button', { name: 'Import OpenAPI' }).click();
       await expect(page.locator('#import-modal')).toHaveClass(/open/);
+      expect(await blockingViolations(page)).toEqual([]);
+      await page.locator('#import-url').fill('https://specs.example.test/openapi.json');
+      await page.locator('#preview-btn').click();
+      await expect(page.getByRole('checkbox', { name: 'list_pets' })).toBeChecked();
       expect(await blockingViolations(page)).toEqual([]);
     });
   });
