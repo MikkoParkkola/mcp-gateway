@@ -34,6 +34,15 @@ impl MetaMcp {
         self.public_provenance_signer = Some(Arc::new(signer));
     }
 
+    /// The public provenance signer, when one is installed: Activity signs
+    /// its export manifests with the same key.
+    #[cfg(feature = "webui")]
+    pub(crate) fn public_provenance_signer(
+        &self,
+    ) -> Option<Arc<crate::trust::provenance_public::ProvenancePublicSigner>> {
+        self.public_provenance_signer.clone()
+    }
+
     /// Whether a public provenance signer is installed (tests only).
     #[cfg(test)]
     pub(crate) fn public_provenance_installed(&self) -> bool {
@@ -347,6 +356,7 @@ impl super::MetaMcp {
             external_server: server,
             external_tool: tool,
             subject: None,
+            trace_id: None,
         };
         // A task's result is a `tools/call` result: its content gates ran at
         // dispatch.

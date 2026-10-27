@@ -93,3 +93,30 @@ async fn stdio_replay_after_a_refused_delivery_record_stays_withheld() {
         "the replay must not deliver the withheld value: {second}"
     );
 }
+
+/// A stdio replay's delivery record names the replaying request's own trace,
+/// so each delivery joins its own invocation record, not the first run's.
+#[tokio::test]
+async fn stdio_replay_delivery_joins_the_replaying_invocation() {
+    let dir = tempfile::tempdir().expect("a private log directory");
+    let fixture = Fixture::start_audited(&log_path(&dir)).await;
+    let first = dispatch(&fixture, keyed_request("r1", "key-join")).await;
+    assert!(first.get("error").is_none(), "{first}");
+    let second = dispatch(&fixture, keyed_request("r2", "key-join")).await;
+    assert_eq!(fixture.backend.tools_call_count(), 1, "a replay: {second}");
+    let traces = |rows: Vec<Value>| -> Vec<Value> {
+        rows.into_iter()
+            .map(|row| row["trace_id"].clone())
+            .collect()
+    };
+    let invoked = traces(invocations(&dir));
+    let delivered = traces(
+        crate::gateway::meta_mcp::grant_audit_fixture::entries(&dir)
+            .into_iter()
+            .filter(|entry| entry["event"] == "response_delivery_attempt")
+            .collect(),
+    );
+    assert_eq!(invoked.len(), 2, "{invoked:?}");
+    assert_ne!(invoked[0], invoked[1], "{invoked:?}");
+    assert_eq!(delivered, invoked, "each delivery joins its own invocation");
+}

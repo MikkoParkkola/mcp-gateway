@@ -287,6 +287,7 @@ pub(super) async fn save_state_on_shutdown(
     tracker: Arc<crate::transition::TransitionTracker>,
     transition_path: PathBuf,
     cost: Option<CostShutdown>,
+    more: Vec<ShutdownSave>,
 ) {
     let deadline = tokio::time::Instant::now() + SHUTDOWN_SAVES_TIMEOUT;
     #[allow(unused_mut)]
@@ -323,6 +324,7 @@ pub(super) async fn save_state_on_shutdown(
     }
     #[cfg(not(feature = "cost-governance"))]
     let _ = cost;
+    saves.extend(more);
     run_shutdown_saves(deadline, saves).await;
 }
 

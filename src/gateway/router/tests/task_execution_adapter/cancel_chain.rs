@@ -314,6 +314,7 @@ fn call(arguments: &Value) -> TaskCall {
     TaskCall {
         tool: "gateway_invoke".to_owned(),
         arguments: arguments.clone(),
+        surfaced_server: None,
     }
 }
 

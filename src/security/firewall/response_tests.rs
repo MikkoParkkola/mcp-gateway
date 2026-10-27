@@ -62,6 +62,7 @@ fn correlation() -> ResponseCorrelation<'static> {
         external_server: "gateway",
         external_tool: "gateway_execute",
         subject: None,
+        trace_id: None,
     }
 }
 

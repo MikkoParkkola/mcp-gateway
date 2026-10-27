@@ -363,6 +363,7 @@ async fn the_suites_firewall_delivers_a_minted_continuation() {
             external_server: BACKEND,
             external_tool: TOOL,
             subject: None,
+            trace_id: None,
         },
         signing: None,
         chain_source: crate::protocol::ChainSource::default(),

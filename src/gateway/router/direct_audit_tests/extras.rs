@@ -7,7 +7,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::{BackendConfig, MetaMcp, Setup};
+use super::{
+    AuditFailurePolicy, BackendConfig, MetaMcp, Setup, TransparencyLogConfig, TransparencyLogger,
+};
 
 /// MIK-8382 fixture switches, each off unless listed in `Setup::extras`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,4 +105,41 @@ pub(super) fn arm_extras(mut meta: MetaMcp, extras: &[Extra]) -> MetaMcp {
         signed(&mut meta, posture);
     }
     meta
+}
+
+/// Whether both routes have a transparency log (T21).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum Log {
+    #[default]
+    On,
+    Off,
+}
+
+/// The logger both routes share, in its own directory, failing closed when
+/// `fail_closed`.
+pub(super) fn audit_log(
+    fail_closed: bool,
+) -> (
+    tempfile::TempDir,
+    std::path::PathBuf,
+    Arc<TransparencyLogger>,
+) {
+    let audit = tempfile::tempdir().unwrap();
+    let path = audit.path().join("audit.jsonl");
+    let policy = if fail_closed {
+        AuditFailurePolicy::FailClosed
+    } else {
+        AuditFailurePolicy::BestEffort
+    };
+    let log = Arc::new(
+        TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: path.to_string_lossy().into_owned(),
+            key_id: "d2".to_string(),
+            ..TransparencyLogConfig::default()
+        }))
+        .expect("open log")
+        .with_failure_policy(policy),
+    );
+    (audit, path, log)
 }
