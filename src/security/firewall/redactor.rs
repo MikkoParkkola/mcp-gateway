@@ -651,6 +651,10 @@ fn overlapping_spans(re: &Regex, text: &str) -> Vec<(usize, usize)> {
     spans
 }
 
+#[path = "redactor_rewrite.rs"]
+mod rewrite;
+use rewrite::{project, rename_keys, replace_spans};
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[path = "redactor_spans.rs"]
@@ -659,10 +663,6 @@ use spans::{covers, exempt_crossed, merge_spans, spliced_capacity, without};
 
 #[path = "redactor_large.rs"]
 mod large;
-
-#[path = "redactor_rewrite.rs"]
-mod rewrite;
-use rewrite::{project, rename_keys, replace_spans};
 
 #[cfg(test)]
 #[path = "redactor_tests.rs"]

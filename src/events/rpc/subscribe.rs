@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
 use super::{
-    Caller, blocking, callback_url, checked_arguments, credential_ceiling, granted_ttl,
+    Caller, Commit, blocking, callback_url, checked_arguments, credential_ceiling, granted_ttl,
     rotation_grace, subscribe_answer, subscription_id,
 };
 use crate::events::EventsHub;
@@ -62,11 +62,11 @@ impl EventsHub {
         };
         // A lease, a cap and the callback opt-in's tail are not judged on a
         // clock before 1970: an opt-in it cannot date is never reused without
-        // a fresh challenge, so the subscribe is refused (MIK-8202).
+        // a fresh challenge, so the subscribe is refused.
         let now = crate::clock::utc_now().map_err(|_| RpcError::internal())?;
         let id = subscription_id(&principal, url.as_str(), &descriptor.name, &arguments);
         // The answer's handle, before anything is committed: a hub that
-        // cannot key it refuses with no row written (MIK-8697 §13).
+        // cannot key it refuses with no row written.
         let handle = self.handle(&id)?;
         let caps = self.caps();
         if self.store.get(&id).as_ref().is_none_or(|s| !s.live(now)) {
@@ -141,7 +141,7 @@ impl EventsHub {
                     self.runtime.wake.notify_one();
                     let throttled = self.runtime.rates.empty(&id, std::time::Instant::now())
                         // The subscribe's own read: an earlier `now` can
-                        // only under-report a due record (MIK-8202).
+                        // only under-report a due record.
                         && self.store.has_due(&id, now);
                     let answer =
                         subscribe_answer(&handle, expires_at, existing.as_ref(), throttled);
@@ -177,11 +177,10 @@ impl EventsHub {
             // Under the catalogue gate, then the store lock (the order every
             // withdraw takes): a reload that removed or narrowed the type
             // while the callback was challenged refuses the commit, so no
-            // subscription is stored that its route can no longer serve
-            // (MIK-8038).
+            // subscription is stored that its route can no longer serve.
             let _gate = hub.catalogue_lock();
             // Checked against the routes now, with the payload fields they
-            // carry now and no hold stamp (MIK-8057, MIK-8076).
+            // carry now and no hold stamp.
             let checked = |attempt: &mut Subscription| -> Result<(), RpcError> {
                 hub.still_admits(attempt)?;
                 attempt.payload_fields = hub.payload_fields(&attempt.name);
@@ -192,7 +191,7 @@ impl EventsHub {
             };
             // A held row's refresh keeps the row's hold as the store holds it
             // at the commit; every other commit is checked, and the store
-            // keeps the hold of a row held by then (MIK-8057, MIK-8076).
+            // keeps the hold of a row held by then.
             let mut hold = HoldCommit::Keep;
             if commit == Commit::Checked {
                 if let Err(refused) = checked(&mut attempt) {
