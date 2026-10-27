@@ -59,8 +59,9 @@ pub struct MetaMcpConfig {
     ///
     /// Each entry pins one backend tool so that LLMs can call it directly
     /// (one hop) instead of going through `gateway_invoke` (two hops).
-    /// The gateway validates at startup that surfaced tool names do not
-    /// collide with any meta-tool name.
+    /// The gateway validates, at startup and on every config reload, that
+    /// surfaced tool names do not collide with any meta-tool name. A reload
+    /// applies an edited list without a restart.
     #[serde(default)]
     pub surfaced_tools: Vec<SurfacedToolConfig>,
     /// Canonical response-projection rollout mode (MIK-5877).
@@ -83,7 +84,8 @@ pub struct MetaMcpConfig {
     /// (same policy as `surfaced_tools`).
     ///
     /// The list is read once at startup, so an edit takes effect on restart
-    /// rather than on `gateway_reload_config` (same as `surfaced_tools`).
+    /// rather than on `gateway_reload_config` (unlike `surfaced_tools`, which
+    /// a reload applies).
     #[serde(default)]
     pub exposed_meta_tools: Vec<String>,
     /// List `gateway_get_stats` in `tools/list` (`NFR.PERF.4`).

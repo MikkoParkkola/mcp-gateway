@@ -40,6 +40,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ("src/cli/invoke.rs", "reads stdin, not a file"),
     ("src/commands/cap.rs", "capability YAML pinning; public"),
     (
+        "src/commands/doctor/lease_custody.rs",
+        "doctor reads /proc/swaps and /sys/block/dm-*/dm/uuid; kernel tables, no secret",
+    ),
+    (
         "src/commands/config_export/mod.rs",
         "third-party MCP client config JSON edited to add the gateway entry; no gateway secret",
     ),
@@ -100,12 +104,25 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "the shared atomic writer: creates its own private scratch; opens the target only to probe its ACL, never reads it",
     ),
     (
+        "src/config_persistence_journal.rs",
+        "the replace journal (paths, SHA-256 revisions and a state; no secret) and the staged \
+         original of gateway.yaml, both created owner-only by create_new_private; the original is \
+         checked against the journal's digest before it is written back; File::open only fsyncs \
+         its directory",
+    ),
+    (
         "src/config_persistence_lock.rs",
         "config lock file; opened only to judge its mode, never read",
     ),
     (
         "src/config_reload/grant_audit_plan.rs",
         "grant audit state: journal ids and grant digests; no secret",
+    ),
+    (
+        "src/config_reload/replace.rs",
+        "re-reads gateway.yaml under the config lock to check the caller's revision and stage the \
+         original; the target is the canonical path this gateway loaded at start, and every write \
+         back is owner-only",
     ),
     (
         "src/control_plane/export.rs",
@@ -196,6 +213,18 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/personal_accounts/storage.rs",
         "own stricter check: O_NOFOLLOW, fstat, no group or world bits (R4)",
+    ),
+    (
+        "src/preview_sandbox/linux/mod.rs",
+        "kernel settings under /proc/sys, read to name why a host refuses user namespaces; no secret",
+    ),
+    (
+        "src/preview_sandbox/linux/mounts.rs",
+        "inside the sandbox's own mount namespace: empty mountpoint files and /proc/self/mountinfo; no secret",
+    ),
+    (
+        "src/preview_sandbox/mod.rs",
+        "the sandboxed child's stderr pipe, capped at 64 KiB, to classify a refusal; not a file",
     ),
     (
         "src/private_fs.rs",

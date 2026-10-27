@@ -131,6 +131,7 @@ fn callback_urls_must_be_absolute_https_with_a_host() {
 fn plain_caller() -> Caller {
     Caller {
         principal: Some("p".to_owned()),
+        identity: None,
         read_key: None,
         credential: Credential {
             kind: crate::security::audit::CredentialKind::None,
@@ -239,6 +240,7 @@ fn operator_types_are_seen_by_admins_only() {
     };
     let caller = |admin| Caller {
         principal: Some("p".to_owned()),
+        identity: None,
         read_key: None,
         credential: Credential {
             kind: crate::security::audit::CredentialKind::ApiKey,
@@ -282,8 +284,8 @@ fn canonical_is_the_libraries_jcs_within_2_pow_53() {
 }
 
 /// The T16 hub: upstream events on `u` (unset key, never connected), `s`
-/// (identity propagation, refused; it was explicit SSE until MIK-8835 made SSE
-/// eligible) and `c` (stdio), with the live services a commit reads.
+/// (a personal OAuth login on a multi-user gateway, refused; identity-propagated
+/// backends are now observed per subscriber) and `c` (stdio), with the live services a commit reads.
 async fn t16_hub() -> (
     Arc<EventsHub>,
     crate::config::EventsConfig,
@@ -293,10 +295,10 @@ async fn t16_hub() -> (
     use crate::config::{Config, EventsConfig, FailsafeConfig};
 
     let config: Config = crate::yaml::from_str(
-        "backends:\n  u:\n    http_url: http://127.0.0.1:9/mcp\n  \
+        "auth:\n  enabled: true\n\
+         backends:\n  u:\n    http_url: http://127.0.0.1:9/mcp\n  \
          s:\n    http_url: http://127.0.0.1:9/mcp\n    streamable_http: true\n    \
-         identity_propagation:\n      strategy: passthrough\n      audience: https://a\n      \
-         session_mode: per_user\n  \
+         oauth:\n      enabled: true\n  \
          c:\n    command: echo\n",
     )
     .expect("config");
@@ -404,9 +406,14 @@ async fn the_commit_admits_no_silent_start_after_its_check() {
     let refused = hub
         .start_key(
             &mut started,
-            "p",
-            "backend.s.resources_changed",
-            &json!({}),
+            &serde_json::from_value(json!({
+                "v": 1, "id": "i", "principal": "p", "api_key": null, "url": "https://cb",
+                "name": "backend.s.resources_changed", "arguments": {}, "secret": "s",
+                "previous_secret": null, "previous_until": null,
+                "granted_at": "2026-10-25T00:00:00Z", "expires_at": null, "active": true,
+                "failed_since": null, "last_delivery_at": null, "last_error": null
+            }))
+            .expect("a row"),
             crate::clock::utc_now().expect("clock"),
         )
         .await;
