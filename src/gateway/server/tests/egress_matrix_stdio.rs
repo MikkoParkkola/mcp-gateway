@@ -409,15 +409,33 @@ async fn a_stdio_inspection_finding_is_recorded() {
     assert!(!row.to_string().contains(&text), "no content: {row}");
 }
 
-/// A firewall with response scanning off reads nothing: the answer is
-/// delivered and its findings are null, never an empty (scanned clean) list.
+/// A firewall with response scanning off reads nothing, so it states no
+/// finding of its own: a credential is listed by response inspection only,
+/// which always reads the answer (MIK-8993), never as a firewall finding.
 #[tokio::test]
-async fn a_scan_off_delivery_records_null_findings() {
+async fn a_scan_off_firewall_states_no_finding() {
     for setup in [Setup::ScanOff, Setup::FirewallOff] {
-        let (body, row) = recorded_delivery(setup, Part::ResultText, "plain".into()).await;
+        let leak = secret();
+        let (body, row) = recorded_delivery(setup, Part::ResultText, leak.clone()).await;
         assert!(!refused(&body), "premise: delivered: {body}");
-        assert_eq!(row["response_effect"], "delivered", "{row}");
-        assert_eq!(row["response_findings"], Value::Null, "{row}");
+        let findings = row["response_findings"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            findings.iter().any(|f| f["kind"] == "inspect:secret"),
+            "{setup:?}: inspection's finding: {row}"
+        );
+        assert!(
+            !findings.iter().any(|f| f["kind"]
+                .as_str()
+                .is_some_and(|k| k.starts_with("firewall:"))),
+            "{setup:?}: a firewall that read nothing states nothing: {row}"
+        );
+        assert!(
+            !row.to_string().contains(&leak),
+            "{setup:?}: no content: {row}"
+        );
     }
 }
 

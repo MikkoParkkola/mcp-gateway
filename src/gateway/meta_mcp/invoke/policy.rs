@@ -413,7 +413,11 @@ impl MetaMcp {
         // HIGH/CRITICAL finding, returning a security error to the caller.
         let text = crate::security::response_inspect::extract_text_from_result(&result);
         let findings = self
-            .inspect_backend_text((server, tool, trace_id), &text)
+            .inspect_backend_text(
+                (server, tool, trace_id),
+                &text,
+                crate::gateway::delivery_facts::Part::Result,
+            )
             .map_err(crate::gateway::delivery_facts::refused)?;
         if !findings.is_empty() {
             if let Some(obj) = result.as_object_mut() {
@@ -452,6 +456,7 @@ impl MetaMcp {
         &self,
         (server, tool, trace_id): (&str, &str, &str),
         text: &str,
+        part: crate::gateway::delivery_facts::Part,
     ) -> Result<Vec<crate::security::response_inspect::Finding>> {
         if text.is_empty() {
             return Ok(Vec::new());
@@ -460,6 +465,13 @@ impl MetaMcp {
             text,
             self.response_inspection_action_mode,
         );
+        // This delivery's findings, written before the block decision so a
+        // blocked answer keeps the finding that blocked it (MIK-8993).
+        crate::gateway::delivery_facts::scanned();
+        for finding in &inspection.findings {
+            let kind = format!("inspect:{}", finding.category);
+            crate::gateway::delivery_facts::found(kind, finding.severity, part);
+        }
         for finding in &inspection.findings {
             warn!(
                 server,
