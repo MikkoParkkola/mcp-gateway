@@ -86,7 +86,12 @@ async fn a_save_that_stands_keeps_its_entries_and_writes_only_references() {
         "the value never reaches gateway.yaml"
     );
     assert_eq!(live_entries(dir.path()).len(), 1);
-    assert!(ctx.live_config.get().backends.contains_key("b"));
+    // The reference resolved to the stored bytes for the running backend.
+    let running = ctx.live_config.get();
+    assert_eq!(
+        running.backends["b"].env.get("K").map(String::as_bytes),
+        Some(VALUE)
+    );
 }
 
 #[tokio::test]
@@ -210,12 +215,10 @@ async fn bytes_that_name_no_entry_are_refused_and_discard() {
     assert_eq!(live_entries(dir.path()), Vec::<String>::new());
 }
 
-fn panicking_load(
-    _: &Path,
-    _: &Arc<LiveConfig>,
-    _: &crate::config::LiveEnv,
-) -> Result<super::reload_context::EvaluatedReload, String> {
-    panic!("the reload panics after the rename");
+/// The reload's load starts here, in the write task itself: a panic
+/// unwinds that task after the rename.
+fn panicking_spawn(_: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+    panic!("the write task dies after the rename");
 }
 
 /// A write task that dies after the rename leaves its entries live: the
@@ -233,7 +236,7 @@ async fn a_panic_after_the_rename_keeps_the_entries() {
             std::time::Duration::from_secs(60),
         )
         .expect("the registry pairs with the config")
-        .with_load(panicking_load),
+        .with_spawn(panicking_spawn),
     );
 
     let failure = replace_detached(

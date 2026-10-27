@@ -288,10 +288,20 @@ struct Entries {
     )
 )]
 impl Entries {
-    /// Settle off the async worker: a keychain call blocks for up to 2 s.
+    /// Keep and abandon touch no store, so they run here and now: a queued
+    /// closure that a shutting-down runtime never runs would drop the
+    /// entries undecided, which deletes them. Only a discard calls the
+    /// store, off the async worker (a keychain call blocks for up to 2 s);
+    /// if that closure never runs, the drop discards all the same.
     async fn settle(mut self, how: Settle) {
-        if let Some(pending) = self.pending.take() {
-            let _ = tokio::task::spawn_blocking(move || settle_now(pending, how)).await;
+        let Some(pending) = self.pending.take() else {
+            return;
+        };
+        match how {
+            Settle::Keep | Settle::Abandon => settle_now(pending, how),
+            Settle::Discard => {
+                let _ = tokio::task::spawn_blocking(move || settle_now(pending, how)).await;
+            }
         }
     }
 }
@@ -306,9 +316,11 @@ impl Drop for Entries {
         } else {
             Settle::Discard
         };
-        match tokio::runtime::Handle::try_current() {
-            Ok(runtime) => drop(runtime.spawn_blocking(move || settle_now(pending, how))),
-            Err(_) => settle_now(pending, how),
+        match (how, tokio::runtime::Handle::try_current()) {
+            (Settle::Discard, Ok(runtime)) => {
+                drop(runtime.spawn_blocking(move || settle_now(pending, how)));
+            }
+            _ => settle_now(pending, how),
         }
     }
 }
@@ -371,7 +383,7 @@ impl ReloadContext {
         let deadline = Instant::now() + wait;
         // The reload lock, then the config sidecar lock: the order every
         // holder takes them in (module docs).
-        let _reload_guard = self.lock_reload_within(wait).await.map_err(|e| match e {
+        let reload_guard = self.lock_reload_within(wait).await.map_err(|e| match e {
             ConfigWriteError::Busy => ReplaceError::Busy,
             ConfigWriteError::Failed(message) => ReplaceError::Failed(message),
         })?;
@@ -411,13 +423,14 @@ impl ReloadContext {
             renamed: false,
         };
         let refs = match replace.secrets {
-            Some(step) => {
+            // An empty step saves nothing: no entry for the bytes to name.
+            Some(step) if !step.values.is_empty() => {
                 let pending = create_entries(step, deadline).await?;
                 let refs = pending.refs().to_vec();
                 entries.pending = Some(pending);
                 refs
             }
-            None => Vec::new(),
+            _ => Vec::new(),
         };
         let result = self
             .write_computed(
@@ -429,6 +442,11 @@ impl ReloadContext {
                 &mut entries,
             )
             .await;
+        // The config locks go before any store call: a discard's keychain
+        // deletes must not hold up the next writer. A death in between is
+        // the `Entries` guard's.
+        drop(locked);
+        drop(reload_guard);
         let how = settle_for(&result);
         entries.settle(how).await;
         result
