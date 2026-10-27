@@ -76,11 +76,14 @@ const DESCRIPTIVE_KEYS: &[&str] = &[
     "source",
 ];
 
+/// Whether a carried key's value has the shape the parser reads.
+type ShapeCheck = fn(&Value) -> bool;
+
 /// Records every key of `config` neither in `carried` nor descriptive, and
 /// every carried key whose value fails its shape check.
 fn record_dropped_keys(
     config: &Value,
-    carried: &[(&str, fn(&Value) -> bool)],
+    carried: &[(&str, ShapeCheck)],
     uncarried: &mut Vec<String>,
 ) {
     let Some(object) = config.as_object() else {
@@ -128,6 +131,31 @@ pub(super) fn gateway_value(value: &str) -> Option<String> {
     crate::config::is_template_syntax(&value).then(|| value.into_owned())
 }
 
+/// The program and its string arguments, recording each argument the
+/// gateway would not run as the client does: a `${` it would not expand, or
+/// a non-string one, which is skipped as before.
+fn client_argv(program: &str, config: &Value, uncarried: &mut Vec<String>) -> Vec<String> {
+    let mut argv = vec![program.to_string()];
+    for (i, arg) in config
+        .get("args")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        match arg.as_str() {
+            Some(arg) => {
+                if client_expands(arg) {
+                    uncarried.push(format!("args[{i}]"));
+                }
+                argv.push(arg.to_string());
+            }
+            None => uncarried.push(format!("args[{i}]")),
+        }
+    }
+    argv
+}
+
 /// Parse one entry, or `None` for a shape that is neither stdio nor HTTP.
 pub(super) fn parse(
     name: &str,
@@ -146,25 +174,7 @@ pub(super) fn parse(
         if client_expands(program) {
             uncarried.push("command".to_string());
         }
-        let mut argv = vec![program.to_string()];
-        for (i, arg) in config
-            .get("args")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .enumerate()
-        {
-            match arg.as_str() {
-                Some(arg) => {
-                    if client_expands(arg) {
-                        uncarried.push(format!("args[{i}]"));
-                    }
-                    argv.push(arg.to_string());
-                }
-                // Skipped, as before; the find no longer passes as whole.
-                None => uncarried.push(format!("args[{i}]")),
-            }
-        }
+        let argv = client_argv(program, config, &mut uncarried);
         let Some(command) = crate::transport::join_command(&argv) else {
             warn!("server {name}: an argument cannot be quoted for the command line; skipped");
             return None;
