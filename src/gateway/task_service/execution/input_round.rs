@@ -18,7 +18,7 @@ use super::observe::{Acceptance, Handoff};
 use super::settlement::{
     DispatchSettlement, abandoned_input_round, classify_dispatch, interrupted_before_dispatch,
 };
-use super::worker::inspect_settled;
+use super::worker::{inspect_settled, settle_surfaced_refused};
 use super::{CommitStage, OwnedCallerContext, TaskCall, TaskExecutor};
 use crate::gateway::task_service::host::LiveHost;
 use crate::gateway::task_service::record::{CONTINUATION_DEADLINE_MARGIN_SECS, InputRound};
@@ -269,6 +269,7 @@ impl<'a> Settling<'a> {
             arguments: self.call.arguments.clone(),
             accepted_inputs: Map::new(),
             continuation_deadline,
+            surfaced_server: self.call.surfaced_server.clone(),
         };
         let parked = store
             .require_input(owner.as_digest(), self.id, self.revision, round, stored, at)
@@ -339,29 +340,36 @@ async fn dispatch(
     let authorizer = state.authorizer(owned.authorizer(), &generation);
     let _key_hold = owned.hold_caller_key(state);
     let caller = owned.dispatch_context_retrying(state, &authorizer, retry);
-    let (arguments, judged) = match state
-        .readmit(call, &caller, (owned.session_id(), &generation))
-        .await
-    {
-        Ok(readmitted) => readmitted,
-        Err(refused) => return Some(*refused),
-    };
-    let dispatched = state.meta_mcp().dispatch_below_gate_native_result(
-        RequestId::Number(0),
-        &call.tool,
-        arguments,
-        owned.session_id(),
-        &caller,
-    );
-    let dispatched = crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
-        Arc::clone(owned.dispatch_log()),
-        crate::gateway::meta_mcp::visible::memo::with_judged(judged, dispatched),
-    );
-    tokio::select! {
-        biased;
-        _ = cancel_rx.changed() => None,
-        response = dispatched => Some(response),
-    }
+    // `redeeming_dispatch` has checked the surfaced target holds. The pin
+    // covers the readmission as well as the dispatch.
+    let meta = state.meta_mcp();
+    let recorded = call.surfaced_server.as_ref();
+    meta.with_surfaced_pin(&call.tool, recorded, async {
+        let (arguments, judged) = match state
+            .readmit(call, &caller, (owned.session_id(), &generation))
+            .await
+        {
+            Ok(readmitted) => readmitted,
+            Err(refused) => return Some(*refused),
+        };
+        let dispatched = meta.dispatch_below_gate_native_result(
+            RequestId::Number(0),
+            &call.tool,
+            arguments,
+            owned.session_id(),
+            &caller,
+        );
+        let dispatched = crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
+            Arc::clone(owned.dispatch_log()),
+            crate::gateway::meta_mcp::visible::memo::with_judged(judged, dispatched),
+        );
+        tokio::select! {
+            biased;
+            _ = cancel_rx.changed() => None,
+            response = dispatched => Some(response),
+        }
+    })
+    .await
 }
 
 /// What a `tasks/update` carrying answers came to.
@@ -623,6 +631,7 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
     let call = TaskCall {
         tool: round.tool,
         arguments: round.arguments,
+        surfaced_server: round.surfaced_server,
     };
     let retry = owned.continuation(
         round.request_state,

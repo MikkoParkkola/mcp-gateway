@@ -77,6 +77,55 @@ impl EventsHub {
             .collect()
     }
 
+    /// Each passthrough subscription's held credential, as the admin view
+    /// lists it: its backend, its handle (never the stored id),
+    /// its state (`active`, `credential_needed`, `credential_rejected`) and,
+    /// while active, when the lease ends. Never the token or a digest of it.
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(dead_code, reason = "served by the web UI router")
+    )]
+    pub(crate) async fn list_leases(&self) -> Vec<Value> {
+        let Some(services) = self.runtime.services.get() else {
+            return Vec::new();
+        };
+        let config = services.live.get();
+        let mut out = Vec::new();
+        for sub in self.store.subscriptions() {
+            let Some((backend, _)) = super::upstream::parse_name(&sub.name) else {
+                continue;
+            };
+            if sub.obs_basis.as_ref().is_none_or(|b| {
+                b.strategy != crate::identity_propagation::PropagationStrategyKind::Passthrough
+            }) {
+                continue;
+            }
+            let state = match super::observation::observe_row(&config, backend, &sub) {
+                Ok(Some(obs)) => {
+                    self.leases
+                        .state(&super::lease::LeaseKey {
+                            backend: backend.to_owned(),
+                            obs,
+                        })
+                        .await
+                }
+                _ => super::lease::LeaseState::CredentialNeeded,
+            };
+            let (state, expires_at) = match state {
+                super::lease::LeaseState::Active { expires_at } => ("active", Some(expires_at)),
+                super::lease::LeaseState::CredentialNeeded => ("credential_needed", None),
+                super::lease::LeaseState::CredentialRejected => ("credential_rejected", None),
+            };
+            out.push(json!({
+                "backend": backend,
+                "subscription": services.alias(&sub.id),
+                "state": state,
+                "expiresAt": expires_at,
+            }));
+        }
+        out
+    }
+
     /// The dead letters as the admin listing shows them: event ids, the
     /// subscription's alias, reasons, times and sizes, never a body, a secret,
     /// a callback URL or a stored subscription id.

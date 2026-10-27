@@ -231,6 +231,8 @@ enum MetaMode {
     SurfacedT,
     /// Code mode is on, so `gateway_execute` runs chains (MIK-8387 rows).
     CodeMode,
+    /// Only `gateway_list_servers` is exposed: `gateway_invoke` is no tool.
+    InvokeHidden,
 }
 
 impl MetaMode {
@@ -245,6 +247,9 @@ impl MetaMode {
                 crate::idempotency::CLEANUP_INTERVAL,
             ),
             Self::CodeMode => return meta.with_code_mode(true),
+            Self::InvokeHidden => {
+                return meta.with_exposed_meta_tools(&["gateway_list_servers".to_string()]);
+            }
             Self::SurfacedT => {
                 return meta.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
                     server: "alpha".to_string(),
