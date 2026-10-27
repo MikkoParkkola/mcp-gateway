@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use super::fanout::SourceEvent;
 use super::types::{EventDescriptor, RpcError, SourceKind, Visibility};
 use super::upstream::{Kind, parse_name};
-use super::upstream_listener::UpstreamListeners;
+use super::upstream_listener::{ListenerKey, UpstreamListeners};
 use super::upstream_need::{Interest, MAX_URIS};
 use super::{EventSource, EventsHub};
 
@@ -56,6 +56,7 @@ impl BackendSource {
         name: &str,
         arguments: &Value,
         granted: Option<u64>,
+        observed: Option<String>,
     ) -> Result<(), RpcError> {
         let Some((backend, kind)) = parse_name(name) else {
             return Ok(());
@@ -84,7 +85,22 @@ impl BackendSource {
         else {
             return Err(RpcError::invalid("arguments.uri"));
         };
-        up.listeners.authorize_uri(backend, uri, granted).await?;
+        // At subscribe on a per-user backend the subscriber has no listener
+        // yet, and the catalogue is never read as the gateway for them: the
+        // URI is judged by their own listener's snapshot once it reads.
+        let per_user = observed.is_some()
+            || up
+                .listeners
+                .live_config()
+                .is_some_and(|config| super::observation::binding(&config, backend).is_some());
+        if granted.is_none() && per_user {
+            return Ok(());
+        }
+        let key = ListenerKey {
+            backend: backend.to_owned(),
+            obs: observed,
+        };
+        up.listeners.authorize_uri(&key, uri, granted).await?;
         // The lookup can wait on a catalogue read (up to 10s): a reload during
         // it counts, so eligibility, and the backend still being registered,
         // are read again once it returns.
@@ -152,11 +168,21 @@ impl EventSource for BackendSource {
         name: &str,
         arguments: &Value,
     ) -> Result<(), RpcError> {
-        self.authorize_granted(name, arguments, None).await
+        self.authorize_granted(name, arguments, None, None).await
     }
 
     async fn authorize_row(&self, sub: &super::records::Subscription) -> Result<(), RpcError> {
-        self.authorize_granted(&sub.name, &sub.arguments, Some(sub.incarnation))
+        // A per-user row is judged by its own listener, and a row whose
+        // observation can no longer be had is refused.
+        let observed = match (parse_name(&sub.name), &self.upstream) {
+            (Some((backend, _)), Some(up)) if sub.obs_basis.is_some() => {
+                let config = up.listeners.live_config().ok_or_else(RpcError::forbidden)?;
+                super::observation::observe_row(&config, backend, sub)
+                    .map_err(|_| RpcError::forbidden())?
+            }
+            _ => None,
+        };
+        self.authorize_granted(&sub.name, &sub.arguments, Some(sub.incarnation), observed)
             .await
     }
 
@@ -175,9 +201,37 @@ impl EventSource for BackendSource {
         }
     }
 
+    /// A per-user backend's row keys by the subscriber's observation,
+    /// `[obs, name, arguments]`, re-derived from its stored identity and the
+    /// live config; a shared one by `[name, arguments]` as before. A row
+    /// whose observation cannot be had holds no key.
+    fn key_of_row(
+        &self,
+        sub: &super::records::Subscription,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> Option<String> {
+        let shared = || backend_key(None, &sub.name, &sub.arguments);
+        let Some((backend, _)) = parse_name(&sub.name) else {
+            return shared();
+        };
+        let live = self
+            .upstream
+            .as_ref()
+            .and_then(|up| up.listeners.live_config());
+        let observed = match live {
+            Some(config) => super::observation::observe_row(&config, backend, sub).ok()?,
+            None if sub.obs_basis.is_some() => return None,
+            None => None,
+        };
+        match observed {
+            None => shared(),
+            Some(obs) => backend_key(Some(&obs), &sub.name, &sub.arguments),
+        }
+    }
+
     async fn on_first_subscriber(
         &self,
-        _key: &str,
+        key: &str,
         _principal: &str,
         name: &str,
         arguments: &Value,
@@ -186,12 +240,36 @@ impl EventSource for BackendSource {
         else {
             return Ok(());
         };
+        let listener = listener_of(key, backend);
+        // A per-user A2A listener has no read of its own to poll the agent
+        // card with, so its `tools_changed` would never fire: refused, never
+        // a silent subscription.
+        if listener.obs.is_some() && is_a2a(up, backend) {
+            return Err(RpcError::unsupported_backend_events(
+                name,
+                super::upstream::Ineligible::A2aCapability.as_str(),
+            ));
+        }
+        if up.listeners.over_budget(&listener) {
+            return Err(RpcError::exhausted(
+                "identity_slots",
+                Some(super::upstream_listener::MAX_PER_USER_LISTENERS),
+            ));
+        }
         // `tools_changed` is offered on every backend (a reload announces it);
         // only a backend that can be listened to gets a listener (§6, §14).
         // The other kinds are offered only for one that can: if it was
         // removed or refused since the commit check, a start with no listener
         // would leave the subscription silent, so it is refused (MIK-7969),
         // and a replay retries it.
+        // A passthrough subscriber with no lease is parked: counted with no
+        // task until `events/lease` (E7).
+        if !up.listeners.may_run(&listener) {
+            return up
+                .listeners
+                .hold(&listener, &interest)
+                .map_err(|_| RpcError::exhausted("upstream_uris", Some(MAX_URIS)));
+        }
         let known = up.listeners.knows(backend);
         // `tools_changed` asks the listeners' own predicate: an A2A backend is
         // refused its other kinds but polled for this one (MIK-8835.A2A.2).
@@ -205,7 +283,8 @@ impl EventSource for BackendSource {
             return if matches!(interest, Interest::ToolsChanged) {
                 // Counted with no task: the revive sweep starts one once the
                 // backend can be listened to (MIK-7944 D6.EVENTS_MISC.6).
-                up.listeners.hold(backend, &interest);
+                // `tools_changed` has no URI budget: never refused here.
+                let _ = up.listeners.hold(&listener, &interest);
                 // A registration between the check and the park missed it.
                 if up.listeners.knows(backend) {
                     up.listeners.revive_backend(backend);
@@ -218,7 +297,7 @@ impl EventSource for BackendSource {
             };
         }
         up.listeners
-            .add(backend, &interest)
+            .add(&listener, &interest)
             .map_err(|_| RpcError::exhausted("upstream_uris", Some(MAX_URIS)))
     }
 
@@ -247,13 +326,78 @@ impl EventSource for BackendSource {
         let Ok(Value::Array(parts)) = serde_json::from_str::<Value>(key) else {
             return;
         };
+        // `[name, arguments]`, or `[obs, name, arguments]` for a per-user key.
+        let parts = if parts.len() == 3 {
+            &parts[1..]
+        } else {
+            &parts[..]
+        };
         let (Some(name), Some(arguments)) = (parts.first().and_then(Value::as_str), parts.get(1))
         else {
             return;
         };
         if let Some((backend, interest)) = interest_of(name, arguments) {
-            up.listeners.remove(backend, &interest);
+            let listener = listener_of(key, backend);
+            up.listeners.remove(&listener, &interest);
+            // L4: a subscriber's last row on the backend ends their lease.
+            if let (Some(obs), Some(hub)) = (listener.obs, up.listeners.hub())
+                && !up.listeners.holds(&ListenerKey {
+                    backend: backend.to_owned(),
+                    obs: Some(obs.clone()),
+                })
+            {
+                let lease = super::lease::LeaseKey {
+                    backend: backend.to_owned(),
+                    obs,
+                };
+                hub.leases
+                    .wipe(&lease, super::lease::WipeReason::Released)
+                    .await;
+            }
         }
+    }
+}
+
+/// Whether `backend` is an A2A agent in the live config.
+fn is_a2a(up: &Upstream, backend: &str) -> bool {
+    #[cfg(feature = "a2a")]
+    {
+        up.listeners.live_config().is_some_and(|config| {
+            config
+                .backends
+                .get(backend)
+                .is_some_and(|b| matches!(b.transport, crate::config::TransportConfig::A2a { .. }))
+        })
+    }
+    #[cfg(not(feature = "a2a"))]
+    {
+        let _ = (up, backend);
+        false
+    }
+}
+
+/// The lifecycle key of a backend event: `[name, arguments]`, or
+/// `[obs, name, arguments]` for a per-user listener. Rows and occurrences
+/// both key through this, so a listener's occurrence reaches exactly the rows
+/// it was observed for.
+pub(super) fn backend_key(obs: Option<&str>, name: &str, arguments: &Value) -> Option<String> {
+    let parts = match obs {
+        Some(obs) => json!([obs, name, arguments]),
+        None => json!([name, arguments]),
+    };
+    String::from_utf8(super::rpc::canonical(&parts)).ok()
+}
+
+/// The listener a lifecycle key starts: `[obs, name, arguments]` names a
+/// per-user listener, `[name, arguments]` the backend's shared one.
+fn listener_of(lifecycle_key: &str, backend: &str) -> ListenerKey {
+    let obs = match serde_json::from_str::<Value>(lifecycle_key) {
+        Ok(Value::Array(parts)) if parts.len() == 3 => parts[0].as_str().map(str::to_owned),
+        _ => None,
+    };
+    ListenerKey {
+        backend: backend.to_owned(),
+        obs,
     }
 }
 
@@ -402,6 +546,8 @@ impl EventsHub {
                 }
                 latest.remove(&backend);
             }
+            // The gateway's own view: never a per-user row's (E4).
+            let key = backend_key(None, &event_name(&backend), &json!({}));
             hub.emit_dated(|occurred_at| SourceEvent {
                 kind: SourceKind::BackendNotification,
                 name: event_name(&backend),
@@ -411,7 +557,7 @@ impl EventsHub {
                 upstream_id: uuid::Uuid::new_v4().to_string(),
                 occurred_at,
                 data: json!({}),
-                lifecycle_key: None,
+                lifecycle_key: key,
             });
         });
     }

@@ -430,3 +430,71 @@ fn a_verification_record_is_named_by_the_hex_sha256_of_principal_and_url() {
         "56db466a5f824ac6b41c874188a1db56792806c372e734629f116d787a063cc7.json"
     );
 }
+
+/// An occurrence keys exactly as the rows it is for. A shared
+/// listener's key is the shared rows' key; a per-user listener's adds its
+/// observation and never equals a shared or another user's row key.
+#[test]
+fn an_occurrence_keys_as_its_rows() {
+    use super::backend_source::backend_key;
+    let source = backend_source::BackendSource {
+        names: Arc::new(Vec::new),
+        upstream: None,
+    };
+    let now = chrono::Utc::now();
+    for (name, arguments) in [
+        ("backend.x.resources_changed", serde_json::json!({})),
+        (
+            "backend.x.resource_updated",
+            serde_json::json!({"uri": "file:///a"}),
+        ),
+    ] {
+        let shared_row = source.lifecycle_key("p", name, &arguments, now);
+        assert_eq!(
+            backend_key(None, name, &arguments),
+            Some(shared_row.clone())
+        );
+        let p = backend_key(Some("idp:p"), name, &arguments).expect("key");
+        let q = backend_key(Some("idp:q"), name, &arguments).expect("key");
+        assert_ne!(p, shared_row);
+        assert_ne!(p, q);
+    }
+}
+
+/// No product code builds a backend-notification
+/// occurrence without a lifecycle key: a keyless one would reach every shared
+/// row and bypass the per-user routing. Each literal names its key.
+#[test]
+fn iso_t5_every_backend_occurrence_names_its_key() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/events");
+    let mut literals = 0;
+    for entry in std::fs::read_dir(&dir).expect("events dir").flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let rust = std::path::Path::new(&name)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("rs"));
+        if !rust || name.contains("test") {
+            continue;
+        }
+        let source = std::fs::read_to_string(entry.path()).expect("read");
+        for (at, _) in source.match_indices("kind: SourceKind::BackendNotification,") {
+            literals += 1;
+            let after = &source[at..];
+            let end = after
+                .find("});")
+                .or_else(|| after.find("})"))
+                .unwrap_or(after.len());
+            let literal = &after[..end];
+            // A descriptor names the kind too; only an occurrence has an id.
+            if !literal.contains("upstream_id") {
+                literals -= 1;
+                continue;
+            }
+            assert!(
+                literal.contains("lifecycle_key") && !literal.contains("lifecycle_key: None"),
+                "{name}: a backend occurrence without its key"
+            );
+        }
+    }
+    assert!(literals >= 3, "the scan found the emit sites: {literals}");
+}

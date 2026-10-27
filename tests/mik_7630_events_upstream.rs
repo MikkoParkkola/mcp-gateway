@@ -650,9 +650,10 @@ async fn t39i_a_restarted_stdio_backend_is_resubscribed() {
     expect_events(&receiver, &alice, &updated, 1).await;
 }
 
-/// T39j: only eligible backends offer b2 events (design §6).
+/// T39j: an explicit SSE key and an identity-propagated backend both offer
+/// the b2 events; the latter observes each subscriber apart.
 #[tokio::test]
-async fn t39j_ineligible_backends_offer_no_upstream_events() {
+async fn t39j_sse_and_identity_backends_offer_upstream_events() {
     let dir = tempfile::tempdir().expect("tempdir");
     let receiver = Receiver::start(dir.path()).await;
     let peer = HttpPeer::start(Era::Modern).await;
@@ -693,7 +694,9 @@ async fn t39j_ineligible_backends_offer_no_upstream_events() {
     };
     // An explicit SSE key offers the events since MIK-8835.SSE.1.
     assert!(offers("sse"), "sse must offer the b2 events: {names:?}");
-    assert!(!offers("idp"), "idp must offer no b2 events: {names:?}");
+    // An identity-propagated backend offers them too, observed per
+    // subscriber.
+    assert!(offers("idp"), "idp must offer the b2 events: {names:?}");
 }
 
 /// T39k: a burst for one URI is one event, sent after the burst.
