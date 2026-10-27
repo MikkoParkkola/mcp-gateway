@@ -115,7 +115,7 @@ current lease, but nothing below fences a rotation.
   older stream.
 - Three things end the run before any request goes out under a new grant: a mint
   under another binding, a refused mint whose grant reads as no view, and the
-  run's own 30-second fence read finding a moved grant. The run's notices, refill
+  run's own 30-second fence read finding a moved or revoked grant. The run's notices, refill
   and tools debounce end with it; carried tools debt is tagged with the run that
   heard it and dropped by a run on another grant.
 - Vault rotation uses the same generation registry as passthrough leases (§3.5).
@@ -150,7 +150,8 @@ current lease, but nothing below fences a rotation.
   before the signing row: custody that cannot answer in time defers the record
   unsent within its retry window (`fence_unavailable`), a grant with no view
   buries it (`grant_no_view`), and one 10-second deadline runs from that read to
-  the request's end (`fence_stale`).
+  the request's end; a window that runs out before the send starts sends nothing
+  (`fence_stale`).
 - Fan-out writes it from the occurrence.
 - A send attempt checks it twice: when the attempt is claimed, and again after the
   authorization and audit waits, against the row re-read for signing. It requires
