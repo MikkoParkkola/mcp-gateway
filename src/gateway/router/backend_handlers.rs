@@ -782,3 +782,6 @@ mod direct_captured_backend_tests;
 
 #[cfg(test)]
 mod direct_audit_subject_tests;
+
+#[cfg(test)]
+mod direct_unpinned_tests;
