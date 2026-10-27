@@ -174,6 +174,9 @@ mod meta_fingerprint_tests;
 mod mik8154_lease_rows_tests;
 #[cfg(all(test, feature = "webui"))]
 mod overview_tests;
+/// MIK-9000: a backend's gateway-only members never reach the client.
+#[cfg(test)]
+mod reserved_member_ingress_tests;
 /// U17: the UI shell at deep links, hashed assets, /ui/classic (MIK-8870).
 #[cfg(all(test, feature = "webui"))]
 mod u17_ui_shell_tests;
