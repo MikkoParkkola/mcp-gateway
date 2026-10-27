@@ -390,3 +390,24 @@ fn a_comment_after_a_non_breaking_space_survives() {
     let got = edited("a: old\u{a0} # keep\n", &[set_str("a", "new")]);
     assert_eq!(got, "a: \"new\" # keep\n");
 }
+
+/// A double-quoted value may go on over several lines, and a continuation
+/// line may start with `#`: only a value that closes on its own line is
+/// edited, so no old text survives as an apparent comment.
+#[test]
+fn a_quoted_value_continued_on_the_next_line_is_unprovable() {
+    assert_unprovable("a:\n  t: \"p1\n    #rest\"\n", &[set_str("a.t", "new")]);
+}
+
+/// Text right after a closing quote is not a comment the parser confirms:
+/// refuse rather than replace it with the value.
+#[test]
+fn text_touching_a_quoted_value_is_unprovable() {
+    assert_unprovable("a:\n  t: \"old\"# keep\n", &[set_str("a.t", "new")]);
+}
+
+#[test]
+fn a_comment_after_a_quoted_value_survives() {
+    let got = edited("a:\n  t: \"old # x\"   # keep\n", &[set_str("a.t", "new")]);
+    assert_eq!(got, "a:\n  t: \"new\"   # keep\n");
+}
