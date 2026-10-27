@@ -419,11 +419,14 @@ impl HttpTransport {
             *self.protocol_version.write() = Some(selected.to_string());
         }
         // The accepted answer only: a refused attempt above returned early.
-        *self.server_info.write() = response
-            .result
-            .as_ref()
-            .and_then(|result| result.get("serverInfo"))
-            .cloned();
+        #[cfg(any(feature = "webui", test))]
+        {
+            *self.server_info.write() = response
+                .result
+                .as_ref()
+                .and_then(|result| result.get("serverInfo"))
+                .cloned();
+        }
 
         // Some Streamable HTTP backends either close the initialize request
         // immediately or do not implement client notifications. The gateway
@@ -457,6 +460,7 @@ impl HttpTransport {
 
     /// The `serverInfo` the accepted `initialize` answer carried, as sent:
     /// untrusted, for display only, cleaned by whoever shows it.
+    #[cfg(any(feature = "webui", test))]
     pub(crate) fn reported_server_info(&self) -> Option<Value> {
         self.server_info.read().clone()
     }

@@ -111,6 +111,7 @@ pub(crate) fn is_unsafe_control(c: char) -> bool {
 /// Whether `c` is a Unicode format character (general category Cf): bidi
 /// overrides, zero-width marks and their kin, which reorder or hide the
 /// text around them on a terminal.
+#[cfg(feature = "webui")]
 pub(crate) fn is_format_char(c: char) -> bool {
     matches!(
         c,
