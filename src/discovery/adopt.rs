@@ -157,7 +157,9 @@ fn url(transport: &TransportConfig) -> Option<&str> {
     match transport {
         TransportConfig::Http { http_url, .. } => Some(http_url),
         TransportConfig::WebSocket { ws_url, .. } => Some(ws_url),
-        _ => None,
+        TransportConfig::Stdio { .. } => None,
+        #[cfg(feature = "a2a")]
+        TransportConfig::A2a { .. } => None,
     }
 }
 
