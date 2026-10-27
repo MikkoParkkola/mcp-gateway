@@ -682,53 +682,6 @@ fn write(
     )
 }
 
-/// `cap pin`: pin `file` in place under its directory's lock (D8). A link
-/// is followed, as `cap pin` always has, and the lock is the resolved file's
-/// directory, the same lock the editor takes there, so the two never write
-/// one file at once.
-///
-/// # Errors
-///
-/// The file cannot be resolved, locked, read or written, or is not YAML.
-pub fn pin_file(file: &Path) -> Result<String, String> {
-    pin_file_until(file, Instant::now() + std::time::Duration::from_secs(5))
-}
-
-/// [`pin_file`], waiting for the lock until `deadline`.
-fn pin_file_until(file: &Path, deadline: Instant) -> Result<String, String> {
-    let real = std::fs::canonicalize(file)
-        .map_err(|e| format!("cannot resolve {}: {e}", file.display()))?;
-    let dir = real
-        .parent()
-        .ok_or_else(|| format!("{} has no directory", real.display()))?;
-    let _held = crate::config_persistence::lock::lock_config_blocking(
-        &dir.join("capabilities"),
-        deadline,
-        |lock| eprintln!("Waiting for {} (another write holds it)", lock.display()),
-    )
-    .map_err(|e| match e {
-        NotLocked::Busy => format!(
-            "{} is held by another write; retry",
-            crate::config_persistence::lock::lock_path(&dir.join("capabilities")).display()
-        ),
-        NotLocked::Failed(error) => error,
-    })?;
-    let content = std::fs::read_to_string(&real)
-        .map_err(|e| format!("cannot read {}: {e}", real.display()))?;
-    crate::yaml::from_str::<crate::yaml::Value>(&content)
-        .map_err(|e| format!("not a valid YAML file ({}): {e}", real.display()))?;
-    let hash = compute_capability_hash(&content);
-    let pinned = super::rewrite_with_pin(&content, &hash);
-    let mode = if cfg!(windows) {
-        FileMode::Private
-    } else {
-        FileMode::Inherit
-    };
-    write_atomic(&real, pinned.as_bytes(), mode, Symlink::Replace)
-        .map_err(|e| format!("cannot write {}: {e}", real.display()))?;
-    Ok(hash)
-}
-
 #[cfg(test)]
 #[path = "file_writer_tests.rs"]
 mod tests;

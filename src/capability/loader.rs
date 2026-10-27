@@ -159,6 +159,7 @@ pub(crate) enum IssueLog {
 /// # Errors
 ///
 /// The legacy `validate_capability` error, which refuses before any issue.
+#[cfg(feature = "webui")]
 pub(crate) fn unloadable_issues(
     capability: &CapabilityDefinition,
     path: &Path,

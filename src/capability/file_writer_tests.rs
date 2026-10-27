@@ -362,43 +362,6 @@ async fn unresolved_account_binding_is_invalid() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), TEXT);
 }
 
-// ── T17: `cap pin` takes the resolved directory's lock ────────────────
-
-#[cfg(unix)]
-#[tokio::test]
-async fn cap_pin_follows_the_link_under_the_real_directory_lock() {
-    let (real_dir, real_file) = dir_with(TEXT);
-    let links = tempfile::tempdir().unwrap();
-    let link = links.path().join("link.yaml");
-    std::os::unix::fs::symlink(&real_file, &link).unwrap();
-
-    let held = lock_config(&real_dir.path().join("capabilities"), soon())
-        .await
-        .unwrap();
-    let refused = super::pin_file_until(&link, Instant::now());
-    assert!(refused.is_err(), "{refused:?}");
-    assert_eq!(
-        std::fs::read_to_string(&real_file).unwrap(),
-        TEXT,
-        "nothing written while held"
-    );
-    assert!(
-        !links.path().join(".capabilities.lock").exists(),
-        "the link's directory is not the lock"
-    );
-    drop(held);
-
-    let hash = super::pin_file_until(&link, soon()).expect("pins once the lock is free");
-    assert_eq!(hash, compute_capability_hash(TEXT));
-    assert_eq!(std::fs::read_to_string(&real_file).unwrap(), pinned(TEXT));
-    assert!(
-        std::fs::symlink_metadata(&link)
-            .unwrap()
-            .file_type()
-            .is_symlink()
-    );
-}
-
 // ── T21: on Windows a save never widens a private file ────────────────
 
 #[cfg(windows)]
