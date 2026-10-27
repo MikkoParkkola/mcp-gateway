@@ -399,7 +399,7 @@ async fn a_replay_past_revocation_records_refused() {
     use crate::gateway::delivery_facts;
     let mut fields = serde_json::Map::new();
     let answer = delivery_facts::scope(async {
-        let answer = replay_after_revoking(None, "write").await;
+        let answer = Box::pin(replay_after_revoking(None, "write")).await;
         delivery_facts::record_fields(
             delivery_facts::snapshot().as_ref(),
             false,
