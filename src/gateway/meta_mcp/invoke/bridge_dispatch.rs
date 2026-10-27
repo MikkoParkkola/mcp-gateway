@@ -203,7 +203,11 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         retry_params: Value,
     ) -> std::result::Result<Value, crate::gateway::input_bridge::BridgeError> {
         // The kill switch is read once at the top of the call, so re-read it per round.
-        refuse_if_killed(&self.meta.kill_switch, self.server)?;
+        // The bridged kill switch ends the exchange with the delivered
+        // refusal; per round, so raised only while the cell is vouched.
+        refuse_if_killed(&self.meta.kill_switch, self.server).inspect_err(|_| {
+            crate::gateway::delivery_facts::refused_while_vouched();
+        })?;
 
         // Admitted here as well as at the first dispatch, because the spend
         // check is per backend call and `invoke_tool` ran it once, before the
@@ -228,8 +232,12 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 trace_id: "",
                 caller_key: None,
             })
-            .map_err(|e| crate::gateway::input_bridge::BridgeError::NotAdmitted {
-                message: e.to_string(),
+            .map_err(|e| {
+                // A spend refusal ends the exchange as the delivered refusal.
+                crate::gateway::delivery_facts::refused_while_vouched();
+                crate::gateway::input_bridge::BridgeError::NotAdmitted {
+                    message: e.to_string(),
+                }
             })?;
         #[cfg(not(feature = "cost-governance"))]
         let admission = dispatch_guards::Admission::default();
@@ -269,7 +277,11 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
             });
         }
         // The check above may have awaited a cold `tools/list`: re-read the kill.
-        refuse_if_killed(&self.meta.kill_switch, self.server)?;
+        // The bridged kill switch ends the exchange with the delivered
+        // refusal; per round, so raised only while the cell is vouched.
+        refuse_if_killed(&self.meta.kill_switch, self.server).inspect_err(|_| {
+            crate::gateway::delivery_facts::refused_while_vouched();
+        })?;
         let outbound = OutboundRetry {
             request_state: retry_params
                 .get("requestState")

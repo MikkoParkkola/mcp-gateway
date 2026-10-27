@@ -292,13 +292,22 @@ async fn tasks_get_judged(
             |task_id| recover_from_upstream(state, owner, task_id, params, caller),
             |current| {
                 with_policy_caller(state, caller, |policy_caller| {
-                    state.meta_mcp.refuse_stored_delivery(
-                        &id,
-                        current,
-                        crate::gateway::meta_mcp::upstream::recovery_attestation(params),
-                        caller.session_id,
-                        policy_caller,
-                    )
+                    // The refusal is this read's answer (A2: recorded though
+                    // the stored row is not this request's to vouch for).
+                    state
+                        .meta_mcp
+                        .refuse_stored_delivery(
+                            &id,
+                            current,
+                            crate::gateway::meta_mcp::upstream::recovery_attestation(params),
+                            caller.session_id,
+                            policy_caller,
+                        )
+                        .inspect(|_| {
+                            crate::gateway::delivery_facts::raise(
+                                crate::gateway::delivery_facts::ResponseEffect::Refused,
+                            );
+                        })
                 })
             },
             |current, frame| state.meta_mcp.scan_task_read(current, frame),

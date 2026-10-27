@@ -392,13 +392,20 @@ impl StdioTasks {
                     params,
                     |_| std::future::ready(()),
                     |current| {
-                        self.host.meta_mcp.refuse_stored_delivery(
-                            &id,
-                            current,
-                            crate::gateway::meta_mcp::upstream::recovery_attestation(params),
-                            Some(session_id),
-                            caller,
-                        )
+                        self.host
+                            .meta_mcp
+                            .refuse_stored_delivery(
+                                &id,
+                                current,
+                                crate::gateway::meta_mcp::upstream::recovery_attestation(params),
+                                Some(session_id),
+                                caller,
+                            )
+                            .inspect(|_| {
+                                crate::gateway::delivery_facts::raise(
+                                    crate::gateway::delivery_facts::ResponseEffect::Refused,
+                                );
+                            })
                     },
                     |current, frame| self.host.meta_mcp.scan_task_read(current, frame),
                 )

@@ -131,6 +131,9 @@ impl MetaMcp {
                 if let Some(refusal) =
                     self.refuse_stored_repeat(&id, &stored, attestation, session_id, caller)
                 {
+                    crate::gateway::delivery_facts::raise(
+                        crate::gateway::delivery_facts::ResponseEffect::Refused,
+                    );
                     return refusal;
                 }
                 // Site 5 walks every recorded target (MIK-8406 PLANREPLAY.4). A
