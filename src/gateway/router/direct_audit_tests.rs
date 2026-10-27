@@ -36,6 +36,7 @@ mod lost_round;
 mod meta_malformed_retry;
 mod meta_refusal;
 mod meta_replay;
+mod refused_effect;
 /// MIK-8689 R-RECJUDGE: the judge's verdict rides the delivery record.
 #[cfg(feature = "firewall")]
 mod response_judge;
@@ -45,6 +46,7 @@ mod session_less;
 mod slot_release;
 #[cfg(feature = "firewall")]
 mod tenants;
+mod unvouched_effect;
 
 /// A backend that answers `tools/list` with its one tool `t` and anything
 /// else with a text result, or with a JSON-RPC error when `error` is set.
@@ -240,6 +242,8 @@ enum MetaMode {
     DispatchFirewall,
     /// Only `gateway_list_servers` is exposed: `gateway_invoke` is no tool.
     InvokeHidden,
+    /// A fail-closed response contract with none declared refuses every answer.
+    ContractRefuses,
 }
 
 impl MetaMode {
@@ -254,6 +258,14 @@ impl MetaMode {
                 crate::idempotency::CLEANUP_INTERVAL,
             ),
             Self::CodeMode => return meta.with_code_mode(true),
+            Self::ContractRefuses => {
+                meta.set_response_contract(crate::config::ResponseContractConfig {
+                    enabled: true,
+                    action_mode: true,
+                    fail_closed: true,
+                    ..Default::default()
+                });
+            }
             #[cfg(feature = "firewall")]
             Self::DispatchFirewall => meta.set_firewall(Some(Arc::new(
                 crate::security::firewall::Firewall::from_config(
