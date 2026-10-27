@@ -1120,7 +1120,8 @@ async function loadRegistry() {
   if (regAllServers.length > 0) return;
   try {
     const d = await apiFetch('/ui/api/registry');
-    regAllServers = d.servers || d || [];
+    // The endpoint answers {"entries": [...]}; anything else is an empty list.
+    regAllServers = Array.isArray(d && d.entries) ? d.entries : [];
   } catch (e) {
     if (e instanceof AuthRefused) {
       const note = document.getElementById('add-server-note');
