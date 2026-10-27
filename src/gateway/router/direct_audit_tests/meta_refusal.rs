@@ -181,3 +181,24 @@ async fn meta_firewall_refusal_append_failure_follows_the_policy() {
         assert_eq!(answer["id"], 5, "the request id was dropped: {answer}");
     }
 }
+
+/// `gateway_list_tools` naming a backend outside the key's scope is answered
+/// as a backend that does not exist (A3): the gateway's refusal, recorded
+/// as one.
+#[tokio::test]
+async fn meta_list_tools_out_of_scope_records_refused() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(None)),
+        ..Setup::default()
+    })
+    .await;
+    let list = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+        "params": {"name": "gateway_list_tools", "arguments": {"server": "beta"}}});
+    let (status, answer) = post_to(&fx, "/mcp", &list.to_string(), &Caller::Key).await;
+    assert!(
+        answer.to_string().contains("beta"),
+        "premise: answered as absent: {status} {answer}"
+    );
+    let record = super::composite_refusals::last_delivery(&fx);
+    assert_eq!(record["response_effect"], "refused", "{record}");
+}

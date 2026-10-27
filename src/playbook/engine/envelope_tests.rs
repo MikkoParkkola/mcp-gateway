@@ -399,3 +399,36 @@ async fn an_unreadable_clock_refuses_the_step_before_dispatch() {
         "not the clock refusal: {ran:?}"
     );
 }
+
+/// A step refused for carrying the envelope ends an `abort` playbook on the
+/// gateway's refusal: the composite's record says `refused`, though the
+/// refusal came before any send, so no step cell saw it.
+#[tokio::test]
+async fn a_step_refused_for_the_envelope_ends_an_abort_playbook_refused() {
+    use crate::gateway::delivery_facts;
+    let invoker = recording().await;
+    let mut definition = two_steps("ask", &json!({ "list": ["$ask"] }));
+    definition.on_error = ErrorStrategy::Abort;
+    let mut engine = PlaybookEngine::new();
+    engine.register(definition);
+    let mut fields = serde_json::Map::new();
+    delivery_facts::scope(async {
+        delivery_facts::unvouched();
+        let ran = engine.execute("carry", json!({}), &invoker).await;
+        assert!(ran.is_err(), "premise: the playbook ended on it: {ran:?}");
+        delivery_facts::composite_ended(ran.as_ref().err());
+        delivery_facts::record_fields(
+            delivery_facts::snapshot().as_ref(),
+            false,
+            false,
+            &mut fields,
+        );
+    })
+    .await;
+    assert_eq!(invoker.dispatched("stage"), 0, "premise: never sent");
+    assert_eq!(
+        fields.get("response_effect"),
+        Some(&json!("refused")),
+        "{fields:?}"
+    );
+}

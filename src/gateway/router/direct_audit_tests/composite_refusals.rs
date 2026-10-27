@@ -9,7 +9,7 @@ use super::unvouched_effect::run_playbook;
 use super::*;
 
 /// The last delivery record, which is the composite's.
-fn last_delivery(fx: &Fixture) -> Value {
+pub(super) fn last_delivery(fx: &Fixture) -> Value {
     std::fs::read_to_string(&fx.path)
         .unwrap_or_default()
         .lines()
@@ -121,6 +121,71 @@ async fn a_playbook_ending_on_an_undeclared_argument_records_refused() {
     assert!(
         body.get("error").is_some() && body.to_string().contains("bogus"),
         "premise: ended on the key refusal: {status} {body}"
+    );
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "premise: never sent");
+    let record = last_delivery(&fx);
+    assert_eq!(record["response_effect"], "refused", "{record}");
+}
+
+/// A single-tool `gateway_execute` answered with the refusal of an
+/// argument the tool does not declare: the refusal comes back as a tool
+/// error result, and the composite still records refused.
+#[tokio::test]
+async fn a_single_tool_execute_ending_on_an_undeclared_argument_records_refused() {
+    let fx = fixture(Setup {
+        meta_mode: MetaMode::CodeMode,
+        extras: &[Extra::DeclaredKeys],
+        ..Setup::default()
+    })
+    .await;
+    let call = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+        "params": {"name": "gateway_execute",
+                   "arguments": {"tool": "alpha:t", "arguments": {"bogus": "x"}}}});
+    let (status, body) = post_to(&fx, "/mcp", &call.to_string(), &Caller::Anonymous).await;
+    assert!(
+        body.to_string().contains("bogus"),
+        "premise: the key refusal: {status} {body}"
+    );
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "premise: never sent");
+    let record = last_delivery(&fx);
+    assert_eq!(record["response_effect"], "refused", "{record}");
+}
+
+/// A chain whose step names a backend outside the key's scope is answered
+/// with that step withheld: the chain ends on the gateway's refusal.
+#[tokio::test]
+async fn a_chain_ending_on_a_withheld_step_records_refused() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(None)),
+        meta_mode: MetaMode::CodeMode,
+        ..Setup::default()
+    })
+    .await;
+    let chain = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+        "params": {"name": "gateway_execute",
+                   "arguments": {"chain": [{"tool": "beta:t", "arguments": {}}]}}});
+    let (status, body) = post_to(&fx, "/mcp", &chain.to_string(), &Caller::Key).await;
+    assert!(
+        body.get("error").is_some() || body["result"]["isError"] == true,
+        "premise: the step was withheld: {status} {body}"
+    );
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "premise: never sent");
+    let record = last_delivery(&fx);
+    assert_eq!(record["response_effect"], "refused", "{record}");
+}
+
+/// A playbook refused whole, before any step runs (a step argument names a
+/// step's sealed `requestState`), ends on the gateway's refusal.
+#[tokio::test]
+async fn a_playbook_refused_before_any_step_records_refused() {
+    let fx = fixture(Setup::default()).await;
+    let yaml = "name: sealed\ndescription: hands the envelope on\n\
+        steps:\n  - name: read\n    server: alpha\n    tool: t\n    arguments: {}\n  \
+        - name: pass\n    server: alpha\n    tool: t\n    arguments: {s: $read.requestState}\n";
+    let (status, body) = run_playbook(&fx, yaml, "sealed").await;
+    assert!(
+        body.to_string().contains("sealed requestState"),
+        "premise: refused whole: {status} {body}"
     );
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "premise: never sent");
     let record = last_delivery(&fx);
