@@ -185,6 +185,15 @@ async fn a_failed_mint_audit_refuses_the_credential_without_the_error_text() {
         "identity-propagation audit unavailable for account 'acct'"
     );
     release.release();
+    // The released write recreates the log's folder: let it land before
+    // `file` drops, or the folder is left behind.
+    let late = Arc::clone(&logger);
+    let cleared = tokio::task::spawn_blocking(move || {
+        late.wait_write_cleared_for_test(crate::test_wait::HANG_BOUND)
+    })
+    .await
+    .expect("the wait does not panic");
+    assert!(cleared, "the late write never finished");
 }
 
 fn who(subject: &str) -> crate::key_server::oidc::VerifiedIdentity {
