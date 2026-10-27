@@ -354,11 +354,18 @@ fn every_context_integrity_caller_is_classified() {
         found, listed,
         "a context-integrity caller changed: classify it as delivering or suspended, then list it"
     );
-    for (_, file, _, class) in TRANSFORM_CALLS {
+    // The suspensions must wrap the call itself: each opens in the few
+    // lines just before it, so one elsewhere in the file cannot stand in.
+    for (needle, file, _, class) in TRANSFORM_CALLS {
         if *class == TransformUse::Suspended {
             let text = std::fs::read_to_string(root.join(file)).expect("reads");
+            let at = text.find(needle).expect("listed above");
+            let lead_in = &text[text[..at].len().saturating_sub(300)..at];
             for guard in ["delivery_facts::suspended(", "gateway_writes::suspended("] {
-                assert!(text.contains(guard), "{file} lacks {guard}");
+                assert!(
+                    lead_in.contains(guard),
+                    "{file}: {needle} is not inside {guard}"
+                );
             }
         }
     }

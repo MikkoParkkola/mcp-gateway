@@ -441,6 +441,18 @@ async fn a_recorded_prompt_leaves_the_open_delivery_unchanged() {
         let ((recorded, effect, writes), notes) =
             super::super::super::audit::with_dispatch_scope(crate::gateway::delivery_facts::scope(
                 super::super::super::gateway_writes::scope(async {
+                    // The open delivery already holds a finding and a write:
+                    // both must survive the copy unchanged.
+                    crate::gateway::delivery_facts::found(
+                        "firewall:seed".into(),
+                        crate::security::Severity::Low,
+                        crate::gateway::delivery_facts::Part::Result,
+                    );
+                    super::super::super::gateway_writes::note(
+                        super::super::super::gateway_writes::Layer::Value,
+                        &["trace_id"],
+                        &json!({"trace_id": "t-seed"}),
+                    );
                     let recorded = meta.recorded_prompt(
                         ("alpha", "resources/read"),
                         None,
@@ -454,7 +466,12 @@ async fn a_recorded_prompt_leaves_the_open_delivery_unchanged() {
                         &mut fields,
                     );
                     let writes = super::super::super::gateway_writes::recorded();
-                    (recorded, fields["response_effect"].clone(), writes)
+                    let findings = fields["response_findings"].clone();
+                    (
+                        recorded,
+                        (fields["response_effect"].clone(), findings),
+                        writes,
+                    )
                 }),
             ))
             .await;
@@ -462,8 +479,19 @@ async fn a_recorded_prompt_leaves_the_open_delivery_unchanged() {
             recorded.get("_context_integrity").is_some(),
             "premise: classified: {recorded}"
         );
+        let (effect, findings) = effect;
         assert_eq!(effect, "delivered", "{prompt}");
-        assert!(writes.is_empty(), "{prompt}: noted {writes:?}");
+        assert_eq!(
+            findings,
+            json!([{"kind": "firewall:seed", "severity": "low", "where": "result"}]),
+            "{prompt}"
+        );
+        let writes = serde_json::to_value(&writes).expect("serializes");
+        assert_eq!(
+            writes.as_array().map(Vec::len),
+            Some(1),
+            "{prompt}: only the seeded write: {writes}"
+        );
         assert!(
             format!("{notes:?}").contains("personal_data"),
             "{prompt}: {notes:?}"
