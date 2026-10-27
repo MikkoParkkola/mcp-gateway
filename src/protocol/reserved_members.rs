@@ -49,6 +49,10 @@ pub(crate) struct Member {
     /// Segments from the answer's root. `*` is every element of an array; a
     /// `_meta` key is one segment, reverse-DNS dots included.
     pub(crate) path: &'static [&'static str],
+    #[expect(
+        dead_code,
+        reason = "the delivery record's annotated raise reads it; that change follows this one"
+    )]
     pub(crate) class: Class,
     pub(crate) origin: Origin,
     pub(crate) writer: Writer,
@@ -158,8 +162,9 @@ pub(crate) fn strip_with(table: &[Member], value: &mut Value) -> Vec<String> {
 }
 
 /// The top-level members a signature chain's content digest covers: every one
-/// but `_meta` and `_signature` (`signature_chain::content_digest`).
-fn digest_covers(key: &str) -> bool {
+/// but `_meta` and `_signature`. `signature_chain::content_digest` reads this,
+/// so what ingress withholds and what the digest hashes cannot drift apart.
+pub(crate) fn digest_covers(key: &str) -> bool {
     !matches!(key, "_meta" | "_signature")
 }
 
@@ -193,6 +198,14 @@ pub(crate) fn strip_ingress(backend: &str, method: &str, response: &mut JsonRpcR
         if method.starts_with("tasks/")
             && let Some(slot) = result.get_mut("result")
         {
+            // The slot is digest-covered content too: withhold it as sent.
+            if !withheld.contains_key("result")
+                && MEMBERS
+                    .iter()
+                    .any(|m| m.origin == Origin::GatewayOnly && has_path(slot, m.path))
+            {
+                withheld.insert("result".to_owned(), slot.clone());
+            }
             removed.extend(
                 strip_with(MEMBERS, slot)
                     .into_iter()
@@ -308,6 +321,7 @@ pub(crate) mod test_support {
                 "io.mcp-gateway/executionOutcome": "FORGED-9",
                 "io.mcp-gateway/reason": "FORGED-10",
             },
+            "tools": [{"name": "t", "trustCard": {"verdict": "FORGED-11"}}],
             "backend_field": "KEPT-BY-BACKEND",
         })
     }

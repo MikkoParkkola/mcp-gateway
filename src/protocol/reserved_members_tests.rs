@@ -120,6 +120,15 @@ fn ingress_strips_the_task_slot_and_error_data() {
         json!({"task": {}, "result": {"content": [], "_security_findings": []}}),
     );
     strip_ingress("b", "tasks/result", &mut task);
+    let withheld = task
+        .ingress_withheld
+        .as_deref()
+        .expect("the slot is withheld");
+    assert_eq!(
+        withheld.members().get("result"),
+        Some(&json!({"content": [], "_security_findings": []})),
+        "a chain digest restores the slot as sent"
+    );
     assert_eq!(
         task.result,
         Some(json!({"task": {}, "result": {"content": []}}))

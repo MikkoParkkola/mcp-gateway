@@ -147,8 +147,10 @@ impl DirectRouteGuards {
                 call.server,
                 (
                     result,
+                    // Taken: the withheld members are for this check only.
                     response
                         .ingress_withheld
+                        .take()
                         .as_deref()
                         .map(crate::protocol::reserved_members::Withheld::members),
                 ),
