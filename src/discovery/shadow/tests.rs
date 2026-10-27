@@ -584,3 +584,51 @@ fn a_non_string_auth_header_is_no_auth_signal() {
         ShadowAuthExposure::NetworkHttpNoAuthMetadata
     );
 }
+
+#[test]
+fn a_command_with_no_program_name_has_none() {
+    for command in [
+        "/home/zqpriv/..",
+        "/home/zqpriv/.",
+        "/home/zqpriv/",
+        "/",
+        "..",
+        "",
+        r"C:\Users\zqpriv\",
+    ] {
+        assert_eq!(executable_name(command), None, "{command}");
+    }
+    // The quoted form discovery stores for a program path with spaces.
+    let nameless =
+        crate::transport::join_command(&["/home/zq priv/..".to_string()]).expect("joinable");
+    assert_eq!(executable_name(&nameless), None, "{nameless}");
+}
+
+#[test]
+fn a_quoted_windows_program_keeps_only_its_name() {
+    let argv = [
+        r"C:\Program Files\zqpriv\srv.exe".to_string(),
+        "--token".to_string(),
+        "zqsecret".to_string(),
+    ];
+    let command = crate::transport::join_command(&argv).expect("joinable");
+    assert_eq!(
+        executable_name(&command).as_deref(),
+        Some("srv.exe"),
+        "{command}"
+    );
+    let server = stdio_server(
+        "srv",
+        "d",
+        &command,
+        DiscoverySource::ClaudeDesktop,
+        None,
+        None,
+        None,
+    );
+    let json = serde_json::to_string(&report(&[server], &[])).expect("serializes");
+    assert!(
+        !json.contains("zqpriv") && !json.contains("zqsecret"),
+        "{json}"
+    );
+}
