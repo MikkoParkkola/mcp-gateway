@@ -270,7 +270,8 @@ pub(crate) fn validate_capability_url_for_context(
     match validate_url_not_ssrf(url) {
         Ok(()) => Ok(()),
         Err(_err) if context.allow_loopback_egress && url_targets_loopback_ip(url) => Ok(()),
-        Err(err) => Err(err),
+        // A refusal on a call path: the call's record says so.
+        Err(err) => Err(crate::gateway::delivery_facts::refused(err)),
     }
 }
 
@@ -282,11 +283,11 @@ pub(crate) fn require_tls_for_credentials(url: &str) -> Result<()> {
     if url::Url::parse(url).is_ok_and(|u| crate::gateway::is_tls_or_loopback(&u)) {
         return Ok(());
     }
-    Err(Error::Config(
+    Err(crate::gateway::delivery_facts::refused(Error::Config(
         "refusing to send a capability credential in cleartext to a host off this machine; \
          use https:// (http:// is allowed only on a loopback host)"
             .to_string(),
-    ))
+    )))
 }
 
 /// [`require_tls_for_credentials`] when the request carries a credential:

@@ -151,8 +151,10 @@ impl ProtocolExecutor for JsonRpcExecutor<'_> {
                 "JSON-RPC endpoint URL not configured".to_string(),
             ));
         }
-        validate_url_not_ssrf(&jsonrpc_config.endpoint)?;
-        crate::security::ssrf::refuse_loopback_name(&jsonrpc_config.endpoint)?;
+        validate_url_not_ssrf(&jsonrpc_config.endpoint)
+            .map_err(crate::gateway::delivery_facts::refused)?;
+        crate::security::ssrf::refuse_loopback_name(&jsonrpc_config.endpoint)
+            .map_err(crate::gateway::delivery_facts::refused)?;
         crate::capability::require_tls_for_auth(
             &jsonrpc_config.endpoint,
             &ctx.capability.auth,

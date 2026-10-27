@@ -201,8 +201,10 @@ impl ProtocolExecutor for GraphqlExecutor<'_> {
                 "GraphQL endpoint URL not configured".to_string(),
             ));
         }
-        validate_url_not_ssrf(&graphql_config.endpoint)?;
-        crate::security::ssrf::refuse_loopback_name(&graphql_config.endpoint)?;
+        validate_url_not_ssrf(&graphql_config.endpoint)
+            .map_err(crate::gateway::delivery_facts::refused)?;
+        crate::security::ssrf::refuse_loopback_name(&graphql_config.endpoint)
+            .map_err(crate::gateway::delivery_facts::refused)?;
         crate::capability::require_tls_for_auth(
             &graphql_config.endpoint,
             &ctx.capability.auth,
