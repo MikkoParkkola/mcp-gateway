@@ -7,8 +7,10 @@
 //! a second call inside a listed function, a row with no class, or a row
 //! nothing matches fails.
 //!
-//! Classes: `raised-at-join` (the caller awaits the task in its own task and
-//! records a refusal the task returns, as the OAuth token step does),
+//! Classes: `raised-at-join` (the caller awaits the task in its own task, so
+//! a refusal the task returns is back in the task that holds the call's cell;
+//! whether the caller records it is the refusal scan's row, as for the OAuth
+//! token step),
 //! `own-cell` (the task serves deliveries itself and opens a cell for each),
 //! `no-refusal-inside` (nothing the task runs refuses a call), and
 //! `outside-calls` (it runs at start-up or in the background, and no call's
