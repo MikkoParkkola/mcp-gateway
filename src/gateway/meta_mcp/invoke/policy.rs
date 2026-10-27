@@ -420,7 +420,13 @@ impl MetaMcp {
         let delivered = self.apply_context_integrity(server, tool, api_key_name, trace_id, result);
         // MIN.2: past every gate, so this dispatch's raw reading counts.
         crate::security::tenant_reads::note_attribution(raw_read);
-        if round && delivered.1 != super::super::response_security::GateEffect::PassedThrough {
+        if round
+            && matches!(
+                delivered.1,
+                super::super::response_security::GateEffect::Enforced
+                    | super::super::response_security::GateEffect::Withheld
+            )
+        {
             return Err(Error::ResponseFirewallRefused);
         }
         Ok(delivered)
