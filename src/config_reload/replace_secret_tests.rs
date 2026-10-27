@@ -342,3 +342,20 @@ async fn a_panic_before_the_rename_discards_the_entries() {
     // vault lock it holds until it finishes.
     assert_eq!(live_entries(dir.path()), Vec::<String>::new());
 }
+
+/// An empty step saves nothing, so unchanged bytes are the usual no-op.
+#[tokio::test]
+async fn an_empty_secret_step_counts_as_none() {
+    let (dir, path, ctx) = setup();
+    let mut save = secret_save(dir.path(), Expected::Any, |current, _| Ok(current.to_vec()));
+    if let Some(step) = save.secrets.as_mut() {
+        step.values.clear();
+    }
+
+    replace_detached(ctx, save, WAIT)
+        .await
+        .expect("an unchanged save with nothing to store stands");
+
+    assert_eq!(read(&path), START);
+    assert_eq!(live_entries(dir.path()), Vec::<String>::new());
+}

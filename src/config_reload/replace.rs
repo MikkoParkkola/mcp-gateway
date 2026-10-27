@@ -554,6 +554,11 @@ impl ReloadContext {
                 ReplaceError::Stage(format!("writing the replace journal failed: {e}")),
             ));
         }
+        // From here the file on disk may name this save's entries: set before
+        // the write, so a death inside it keeps them (listed as unused)
+        // rather than deleting what the new file may already name. A write
+        // error comes back after a proven rollback and discards.
+        entries.renamed = true;
         // gateway.yaml is owner-only, as every config write leaves it.
         if let Err(e) = write_atomic(target, new, FileMode::Private, Symlink::Replace) {
             unkeep();
@@ -562,8 +567,6 @@ impl ReloadContext {
                 ReplaceError::Write(format!("writing {} failed: {e}", target.display())),
             ));
         }
-        // From here the file on disk may name this save's entries.
-        entries.renamed = true;
         let reloaded = self.reload_outcome_locked_at(target).await;
         // The reload reads gateway.yaml through its configured path. If a
         // symlink there moved meanwhile, it loaded some other file: put ours
