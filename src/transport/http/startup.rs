@@ -449,6 +449,12 @@ impl HttpTransport {
         Ok(())
     }
 
+    /// The `serverInfo` the accepted `initialize` answer carried, as sent:
+    /// untrusted, for display only, cleaned by whoever shows it.
+    pub(crate) fn reported_server_info(&self) -> Option<Value> {
+        None
+    }
+
     /// Negotiate protocol version from error message.
     ///
     /// Delegates to shared helpers in [`crate::protocol::negotiate`].

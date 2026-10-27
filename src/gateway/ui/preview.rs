@@ -404,6 +404,7 @@ fn listed_body(listing: &PreviewListing, mut preview: Value, elapsed: Duration) 
             })
         })
         .collect();
+    preview["package"] = super::preview_identity::package(None);
     preview["stopped"] = json!(true);
     preview["truncated"] = json!(listing.truncated);
     preview["elapsed_ms"] = json!(millis(elapsed));

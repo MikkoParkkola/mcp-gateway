@@ -19,6 +19,7 @@ mod errors;
 mod events;
 pub mod import;
 mod preview;
+mod preview_identity;
 pub(crate) mod session;
 mod shell;
 

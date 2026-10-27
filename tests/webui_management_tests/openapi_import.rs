@@ -198,6 +198,13 @@ async fn the_spec_preview_has_the_preview_block_and_a_class_per_tool() {
         body["preview"]["publisher"],
         json!({"verified": false, "source": null})
     );
+    // No server to ask, so no reported identity; the key is there all the same.
+    assert!(
+        body["preview"]
+            .as_object()
+            .is_some_and(|p| p.get("package") == Some(&Value::Null)),
+        "{body}"
+    );
     let tools = body["tools"].as_array().expect("tools");
     let by_method = |method: &str| {
         tools
