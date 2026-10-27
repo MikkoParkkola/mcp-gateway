@@ -242,16 +242,16 @@ fn inline_comment(line: &str) -> Option<&str> {
 }
 
 /// Columns of indent before `line`'s first non-blank character.
-pub(super) fn depth(line: &str) -> usize {
+fn depth(line: &str) -> usize {
     line.len() - line.trim_start_matches(BLANKS).len()
 }
 
 /// YAML's blanks: a space or a tab. Any other Unicode space is content,
 /// never indentation or padding (one rule for every in-place edit).
-pub(super) const BLANKS: [char; 2] = [' ', '\t'];
+const BLANKS: [char; 2] = [' ', '\t'];
 
 /// Whether `line` holds YAML content: neither blank nor a comment line.
-pub(super) fn content(line: &str) -> bool {
+fn content(line: &str) -> bool {
     let t = line.trim_start_matches(BLANKS);
     !t.is_empty() && !t.starts_with('#')
 }

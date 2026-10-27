@@ -19,10 +19,9 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
-use crate::yaml::Value;
+use crate::yaml::{Value, ValueSpan};
 
 use super::eol::{Line, render};
-use super::splice::{BLANKS, content, depth};
 
 /// The field a secret slot belongs to: its dotted path, the same text as the
 /// secret's `NewSecretOwned::field`.
@@ -127,6 +126,8 @@ pub(crate) fn edit_in_place(
 ) -> Result<Template, ComputeRefusal> {
     whole_file_is_plain(original)?;
     no_overlap(changes)?;
+    let spans = crate::yaml::mapping_values(original)
+        .map_err(|_| unprovable("the parser gives no value positions for this file"))?;
     let lines: Vec<&str> = original
         .split('\n')
         .map(|l| l.trim_end_matches('\r'))
@@ -142,7 +143,7 @@ pub(crate) fn edit_in_place(
         {
             return Err(ComputeRefusal::SlotMismatch);
         }
-        let field = locate(&lines, path)?;
+        let field = locate(original, &lines, &spans, path)?;
         let new_value = match change {
             Change::Set(Scalar::Str(s)) => crate::yaml::double_quoted(s),
             Change::Set(Scalar::Int(n)) => n.to_string(),
@@ -256,123 +257,41 @@ fn plain_key(segment: &str) -> bool {
         && crate::yaml::from_str::<Value>(segment).is_ok_and(|v| v.as_str() == Some(segment))
 }
 
-/// The line holding `path`'s existing scalar value, walking one indented
-/// block per segment. Every shape not proven safe is `Unprovable`.
-fn locate(lines: &[&str], path: &FieldPath) -> Result<Located, ComputeRefusal> {
+/// The line and in-line byte range of `path`'s value, as the parser placed
+/// it: exactly one scalar value at that path, one the parser's spans allow
+/// replacing in place.
+fn locate(
+    original: &str,
+    lines: &[&str],
+    spans: &[ValueSpan],
+    path: &FieldPath,
+) -> Result<Located, ComputeRefusal> {
     if !path.0.iter().all(|s| plain_key(s)) {
         return Err(unprovable("a path segment is not a plain key"));
     }
-    let (mut start, mut end) = (0, lines.len());
-    for (depth, segment) in path.0.iter().enumerate() {
-        let want = (start..end)
-            .find(|&i| content(lines[i]))
-            .map_or(0, |i| depth(lines[i]));
-        let head = format!("{segment}:");
-        let found: Vec<usize> = (start..end)
-            .filter(|&i| {
-                let line = lines[i];
-                depth(line) == want
-                    && line[want..].starts_with(&head)
-                    && line[want + head.len()..]
-                        .chars()
-                        .next()
-                        .is_none_or(|c| c == ' ')
-            })
-            .collect();
-        let [at] = found[..] else {
-            return Err(unprovable(
-                "the field is missing, or its key is not found once",
-            ));
-        };
-        let child_end = (at + 1..end)
-            .find(|&i| content(lines[i]) && depth(lines[i]) <= want)
-            .unwrap_or(end);
-        let value = value_span(lines, at, want + head.len())?;
-        let last = depth + 1 == path.0.len();
-        if !last {
-            (start, end) = (at + 1, child_end);
-            continue;
-        }
-        if value.is_empty() || (at + 1..child_end).any(|i| content(lines[i])) {
-            return Err(unprovable("the field is not a scalar on its own line"));
-        }
-        return Ok(Located { line: at, value });
-    }
-    Err(unprovable("an empty path"))
-}
-
-/// The byte range of the value after `key:` on `lines[at]` (from `after`).
-/// The value ends where YAML says: after a quoted scalar's closing quote,
-/// which must be on this line, or at a plain scalar's first blank-then-`#`.
-/// What follows must be blanks or a comment the parser confirms (one parse
-/// at most). Refuses a flow collection, a block scalar, and an anchor, alias
-/// or tag outside quotes.
-fn value_span(lines: &[&str], at: usize, after: usize) -> Result<Range<usize>, ComputeRefusal> {
-    let line = lines[at];
-    let start = after + (line[after..].len() - line[after..].trim_start_matches(BLANKS).len());
-    let rest = &line[start..];
-    // `key: # note` is a null field with a comment, not a scalar.
-    if rest.starts_with('#') {
-        return Ok(start..start);
-    }
-    let value_end = match rest.chars().next() {
-        Some(quote @ ('"' | '\'')) => closing_quote(rest, quote)
-            .ok_or_else(|| unprovable("a quoted value that does not close on its own line"))?,
-        _ => plain_end(rest),
+    let mut found = spans.iter().filter(|s| s.path == path.0);
+    let (Some(span), None) = (found.next(), found.next()) else {
+        return Err(unprovable("the field is not one scalar value in the file"));
     };
-    let end = start + rest[..value_end].trim_end_matches(BLANKS).len();
-    let tail = &line[end..];
-    if !tail.trim_start_matches(BLANKS).is_empty() {
-        let comment = tail.starts_with(BLANKS) && tail.trim_start_matches(BLANKS).starts_with('#');
-        if !comment || !super::splice::parsed_as_comment(lines, at, tail) {
-            return Err(unprovable(
-                "text after the value is not a confirmed comment",
-            ));
-        }
+    if let Some(why) = span.refused {
+        return Err(unprovable(why));
     }
-    let value = &line[start..end];
-    if value.starts_with(['{', '[', '|', '>']) || has_node_marker(value) {
-        return Err(unprovable(
-            "a flow, block, anchored, aliased or tagged value",
-        ));
-    }
-    Ok(start..end)
-}
-
-/// The byte just past the quote that closes the scalar `text` opens with
-/// `quote`, if it closes on this line: `\` escapes in double quotes, `''`
-/// in single quotes.
-fn closing_quote(text: &str, quote: char) -> Option<usize> {
-    let mut chars = text.char_indices().skip(1).peekable();
-    while let Some((i, c)) = chars.next() {
-        match (quote, c) {
-            ('"', '\\') => {
-                chars.next();
+    // Byte accounting over the raw lines, endings included; the length
+    // check over the same line without its ending.
+    let mut line_start = 0;
+    for (line, raw) in original.split_inclusive('\n').enumerate() {
+        let text = lines[line];
+        let next = line_start + raw.len();
+        if span.bytes.start < next {
+            let value = span.bytes.start - line_start..span.bytes.end - line_start;
+            if value.end > text.len() {
+                return Err(unprovable("the value runs past the end of its line"));
             }
-            ('\'', '\'') if chars.peek().is_some_and(|&(_, n)| n == '\'') => {
-                chars.next();
-            }
-            (q, c) if q == c => return Some(i + c.len_utf8()),
-            _ => {}
+            return Ok(Located { line, value });
         }
+        line_start = next;
     }
-    None
-}
-
-/// Where a plain scalar ends: at its first `#` after a blank, which YAML
-/// always reads as a comment, or at the end of the line.
-fn plain_end(text: &str) -> usize {
-    text.char_indices()
-        .find(|&(i, c)| c == '#' && i > 0 && text[..i].ends_with(BLANKS))
-        .map_or(text.len(), |(i, _)| i)
-}
-
-/// An anchor, alias or tag mark outside a quoted scalar.
-fn has_node_marker(value: &str) -> bool {
-    match value.chars().next() {
-        Some('"' | '\'') => false,
-        _ => value.contains(['&', '*', '!']),
-    }
+    Err(unprovable("the value lies outside the file"))
 }
 
 /// The text a secret slot holds until the writer fills it: unique per path,
@@ -398,7 +317,7 @@ fn expected_value(change: &Change) -> Value {
 
 /// Proof 1: `edited` parses to `original` with exactly `changes` applied,
 /// each secret slot holding its own placeholder. Value equality only: the
-/// structure check refuses anchors, aliases and tags before this runs.
+/// parser's spans refuse anchors, aliases and tags before this runs.
 fn meaning_holds(original: &str, changes: &[(FieldPath, Change)], edited: &str) -> bool {
     let Ok(mut want) = crate::yaml::from_str::<Value>(original) else {
         return false;

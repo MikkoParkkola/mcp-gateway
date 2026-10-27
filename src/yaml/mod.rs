@@ -35,6 +35,7 @@ mod number;
 mod rep;
 mod resolve;
 mod ser;
+mod spans;
 mod tagged;
 mod value;
 mod value_de;
@@ -47,6 +48,7 @@ use guard::guard;
 pub(crate) use guard::guard_work;
 pub(crate) use mapping::Mapping;
 pub(crate) use number::Number;
+pub(crate) use spans::{ValueSpan, mapping_values};
 pub(crate) use tagged::{Tag, TaggedValue};
 pub(crate) use value::{Sequence, Value};
 

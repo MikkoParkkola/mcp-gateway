@@ -74,12 +74,12 @@ fn an_anchored_field_is_unprovable() {
     assert_unprovable(file, &[set_int("defaults.limit", 6)]);
 }
 
-// Proof 1 compares values, which cannot see an alias: the structure check
+// Proof 1 compares values, which cannot see an alias: the parser's span
 // refuses one. `other.limit` resolves to 5, so setting it to 5 by value
 // would compare equal while dropping the alias.
 
 #[test]
-fn a_dropped_alias_is_refused_by_the_structure_check() {
+fn a_dropped_alias_is_refused() {
     let file = "defaults:\n  limit: &lim 5\nother:\n  limit: *lim\n";
     assert_unprovable(file, &[set_int("other.limit", 5)]);
 }
@@ -136,9 +136,9 @@ fn a_duplicate_key_anywhere_is_unprovable() {
     assert_unprovable("x: 1\nx: 2\na:\n  b: 1\n", &[set_int("a.b", 2)]);
 }
 
-/// Refused because the field is not found: nothing reads inside flow style.
+/// The parser reports the field, but inside a flow mapping: refused.
 #[test]
-fn a_field_inside_a_flow_mapping_is_not_found() {
+fn a_field_inside_a_flow_mapping_is_unprovable() {
     assert_unprovable("auth: {enabled: false}\n", &[set_int("auth.enabled", 1)]);
 }
 
@@ -410,4 +410,30 @@ fn text_touching_a_quoted_value_is_unprovable() {
 fn a_comment_after_a_quoted_value_survives() {
     let got = edited("a:\n  t: \"old # x\"   # keep\n", &[set_str("a.t", "new")]);
     assert_eq!(got, "a:\n  t: \"new\"   # keep\n");
+}
+
+/// An explicit tag refuses; an untagged number and a quoted one both edit.
+#[test]
+fn only_an_explicit_tag_refuses() {
+    let file = "a:\n  x: 5\n  y: \"5\"\n";
+    let got = edited(file, &[set_int("a.x", 6), set_str("a.y", "7")]);
+    assert_eq!(got, "a:\n  x: 6\n  y: \"7\"\n");
+    assert_unprovable(
+        "a:\n  b: !<tag:yaml.org,2002:int> 5\n",
+        &[set_int("a.b", 6)],
+    );
+}
+
+/// The parser's span is the value's own bytes, after any multi-byte text.
+#[test]
+fn unicode_before_the_value_keeps_every_byte() {
+    let file = "# \u{fc}nic\u{f6}de \u{1f389}\na:\n  b: \"h\u{e9}llo\"  # \u{2713} ok\n";
+    let got = edited(file, &[set_str("a.b", "x")]);
+    assert_eq!(got, file.replace("\"h\u{e9}llo\"", "\"x\""));
+}
+
+/// A key with no value is a null field the parser synthesizes: refused.
+#[test]
+fn an_empty_value_is_unprovable() {
+    assert_unprovable("a:\n  t:\n  u: 1\n", &[set_int("a.t", 2)]);
 }
