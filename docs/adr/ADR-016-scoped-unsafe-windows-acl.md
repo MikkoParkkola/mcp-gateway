@@ -150,7 +150,7 @@ Every `unsafe` block carries a `// SAFETY:` comment naming which of these it rel
   live on the caller's frame until the call returns; the result is checked against
   `INVALID_HANDLE_VALUE` and owned exactly once. The caller compares the new file's
   owner, DACL and SACL count with the model before any byte is written.
-- Owner kept (amendment 3, pending ratification): the owner now travels in the
+- Owner kept (amendment 3, lead-ratified 2026-10-27 on two independent reviews, both SHIP with no HIGH): the owner now travels in the
   descriptor `create_file_like` passes, so the copy keeps the original's owner. The kernel
   assigns the token user's own SID, or a group the token may own by (BUILTIN\Administrators
   on an elevated token), without a privilege, and fails any other owner with
