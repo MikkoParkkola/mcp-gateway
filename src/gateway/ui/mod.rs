@@ -22,6 +22,7 @@ mod history;
 pub mod import;
 mod overview;
 mod preview;
+mod refusals;
 pub(crate) mod session;
 mod shell;
 
@@ -71,6 +72,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route(routes::UI_STATUS, get(status))
         .route(routes::UI_OVERVIEW, get(overview::overview))
         .route(routes::UI_TOOLS, get(tools))
+        .route(routes::UI_REFUSALS, get(refusals::refusals))
         .route(routes::UI_CONFIG, get(config))
         .route(routes::UI_RELOAD, post(reload))
         .route(routes::UI_DASHBOARD_LINK, post(session::dashboard_link))
@@ -406,6 +408,7 @@ async fn status(
     let mut cb_open: usize = 0;
     let mut cb_half_open: usize = 0;
 
+    let now = crate::clock::system_time_or_before_epoch();
     for backend in &backends {
         let bs = backend.status();
         let cb = backend.circuit_breaker_stats();
@@ -419,7 +422,14 @@ async fn status(
             crate::failsafe::CircuitState::HalfOpen => cb_half_open += 1,
         }
 
+        let view = backend.server_state(now);
         servers.push(ServerStatus {
+            state: view.state,
+            reason: view.reason,
+            next_retry_at: view
+                .next_retry_at
+                .and_then(crate::config_reload::refusals::rfc3339),
+            cleartext_credentials_accepted: backend.cleartext_override_in_effect(),
             name: bs.name,
             running: bs.running,
             transport: bs.transport,
@@ -714,6 +724,13 @@ struct ServerStatus {
     latency_p50_ms: Option<u64>,
     latency_p95_ms: Option<u64>,
     latency_p99_ms: Option<u64>,
+    /// The operator's one-word state, with why and when it retries.
+    state: crate::backend::server_state::ServerState,
+    reason: String,
+    next_retry_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Loads only because `allow_cleartext_credentials` accepts sending its
+    /// credentials in cleartext.
+    cleartext_credentials_accepted: bool,
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
