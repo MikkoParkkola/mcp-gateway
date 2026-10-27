@@ -55,6 +55,7 @@ pub mod context_integrity;
 pub mod control_plane;
 #[doc(hidden)]
 pub mod cost_accounting;
+mod counters;
 mod debug_trust_roots;
 #[doc(hidden)]
 pub mod discovery;

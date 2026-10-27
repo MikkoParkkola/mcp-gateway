@@ -32,12 +32,21 @@ export function register(id, spec) {
   pages.set(id, spec);
 }
 
-/** The palette's entries: every page and visible tab, plus each page's declared entries. Navigation only. */
+/**
+ * The palette's entries, navigation only: every sidebar page, each visible
+ * tab, and each page's declared entries (named actions and settings, each a
+ * route to its tab). An entry is plain data, `{label, path, kind}`, with no
+ * callback, so choosing one can only change the address.
+ */
 export function entries() {
   const out = [];
   for (const [id, label] of NAV) {
-    for (const [tab, tabLabel] of visibleTabs(id)) out.push({ label: `${label} › ${tabLabel}`, path: `/ui/${id}/${tab}` });
-    for (const e of pages.get(id)?.entries ?? []) out.push({ label: String(e.label), path: String(e.path) });
+    out.push({ label, path: `/ui/${id}`, kind: 'go' });
+    for (const [tab, tabLabel] of visibleTabs(id)) out.push({ label: `${label} › ${tabLabel}`, path: `/ui/${id}/${tab}`, kind: 'go' });
+    for (const e of pages.get(id)?.entries ?? []) {
+      const kind = e.kind === 'action' || e.kind === 'setting' ? e.kind : 'go';
+      out.push({ label: String(e.label), path: String(e.path), kind });
+    }
   }
   return out;
 }
@@ -82,6 +91,8 @@ export function state(kind, { title, body, action } = {}) {
 // ---------------------------------------------------------------- api
 
 let bearer = null;
+/** Counts sign-ins; an answer to a request started before the latest one is stale. */
+let authEpoch = 0;
 
 /** An error from /ui/api with its HTTP status. */
 export class ApiError extends Error {
@@ -95,9 +106,137 @@ export class ApiError extends Error {
 export async function api(path, init = {}) {
   const headers = new Headers(init.headers);
   if (bearer) headers.set('Authorization', `Bearer ${bearer}`);
+  const epoch = authEpoch;
   const reply = await fetch(path, { credentials: 'same-origin', ...init, headers });
+  // A 401 to a request sent before the latest sign-in says nothing about now.
+  if (reply.status === 401 && epoch === authEpoch) showSignIn();
   if (!reply.ok) throw new ApiError(reply.status, path);
   return reply.status === 204 ? null : reply.json();
+}
+
+// ---------------------------------------------------------------- palette
+
+const GROUPS = [['go', 'Go to'], ['action', 'Actions, opens the Actions tab'], ['setting', 'Settings']];
+
+/** Where an entry leads, in words: "Servers › github › Actions". */
+function crumb(path) {
+  const parts = path.split('#')[0].replace(/^\/ui\/?/, '').split('/').filter(Boolean);
+  return parts.map((p, i) => {
+    if (i === 0) return NAV.find(([id]) => id === p)?.[1] ?? p;
+    return TABS.find(([t]) => t === p)?.[1] ?? safeDecode(p);
+  }).join(' › ');
+}
+
+function safeDecode(p) {
+  try { return decodeURIComponent(p); } catch { return p; }
+}
+
+let paletteEl = null;
+
+/** Open the palette. It finds pages, actions and settings and opens them on their tab; nothing runs from it. */
+export function openPalette() {
+  if (paletteEl) return; // also while a closing palette's cleanup is pending
+  if (document.body.classList.contains('signed-out')) return;
+  const opener = document.activeElement;
+  const input = el('input', { type: 'text', role: 'combobox', 'aria-expanded': 'true', 'aria-controls': 'palette-list', 'aria-autocomplete': 'list', 'aria-label': 'Go to anything', placeholder: 'Go to anything', autocomplete: 'off', spellcheck: 'false' });
+  const list = el('div', { id: 'palette-list', role: 'listbox', 'aria-label': 'Results' });
+  const foot = el('div', { class: 'palette-foot muted' },
+    el('span', {}, '↵ open · ↑↓ move · esc close'), el('span', {}, 'Actions open on their tab. Nothing runs from here.'));
+  paletteEl = el('dialog', { class: 'palette', 'aria-label': 'Go to anything' }, input, list, foot);
+  document.body.append(paletteEl);
+  let options = [];
+  let active = 0;
+  let chosen = false;
+  const draw = () => {
+    const q = input.value.trim().toLowerCase();
+    const found = entries().filter((e) => !q || e.label.toLowerCase().includes(q) || crumb(e.path).toLowerCase().includes(q));
+    list.replaceChildren();
+    options = [];
+    for (const [kind, heading] of GROUPS) {
+      const group = found.filter((e) => e.kind === kind);
+      if (!group.length) continue;
+      const hid = `palette-g-${kind}`;
+      const box = el('div', { role: 'group', 'aria-labelledby': hid }, el('div', { class: 'palette-group', id: hid }, heading));
+      for (const e of group) {
+        const option = el('div', { role: 'option', id: `palette-o-${options.length}`, class: 'palette-option', 'data-path': e.path },
+          el('span', {}, e.label), el('span', { class: 'muted' }, crumb(e.path)));
+        option.addEventListener('click', () => choose(e.path));
+        box.append(option);
+        options.push(option);
+      }
+      list.append(box);
+    }
+    if (!options.length) list.append(el('p', { class: 'muted palette-empty' }, 'No page, action or setting matches.'));
+    active = Math.min(active, Math.max(options.length - 1, 0));
+    mark();
+  };
+  const mark = () => {
+    options.forEach((o, i) => o.setAttribute('aria-selected', i === active ? 'true' : 'false'));
+    if (options[active]) {
+      input.setAttribute('aria-activedescendant', options[active].id);
+      options[active].scrollIntoView({ block: 'nearest' });
+    } else {
+      input.removeAttribute('aria-activedescendant');
+    }
+  };
+  const search = document.querySelector('button.search');
+  const close = () => {
+    paletteEl.close();
+  };
+  const choose = (path) => {
+    chosen = true;
+    close();
+    closeMenu();
+    go(path);
+    document.getElementById('content').focus({ preventScroll: true });
+  };
+  input.addEventListener('input', () => { active = 0; draw(); });
+  input.addEventListener('keydown', (ev) => {
+    if (ev.isComposing) return; // an IME is still committing text
+    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+      ev.preventDefault();
+      if (!options.length) return;
+      active = (active + (ev.key === 'ArrowDown' ? 1 : options.length - 1)) % options.length;
+      mark();
+    } else if (ev.key === 'Enter' && options[active]) {
+      ev.preventDefault();
+      choose(options[active].dataset.path);
+    }
+  });
+  paletteEl.addEventListener('close', () => {
+    paletteEl.remove();
+    paletteEl = null;
+    search?.setAttribute('aria-expanded', 'false');
+    // A choice hands focus to the content (choose() moves it after this);
+    // Esc or a click outside gives it back to the opener.
+    if (!chosen && opener && document.contains(opener)) opener.focus();
+  });
+  paletteEl.addEventListener('click', (ev) => { if (ev.target === paletteEl) close(); });
+  draw();
+  search?.setAttribute('aria-expanded', 'true');
+  paletteEl.showModal();
+  input.focus();
+}
+
+// ---------------------------------------------------------------- segmented
+
+/**
+ * A segmented control: one pressed button among a few (range pickers, view
+ * switches). `onChange(value)` runs on a choice; it is the screen's code.
+ */
+export function segmented({ label, options, value, onChange }) {
+  const group = el('div', { class: 'segmented', role: 'group', 'aria-label': label });
+  const buttons = options.map(([v, text]) => {
+    const b = el('button', { type: 'button', 'aria-pressed': v === value ? 'true' : 'false', 'data-value': v }, text);
+    b.addEventListener('click', () => {
+      if (b.getAttribute('aria-pressed') === 'true') return;
+      for (const other of buttons) other.setAttribute('aria-pressed', other === b ? 'true' : 'false');
+      onChange?.(v);
+    });
+    return b;
+  });
+  group.append(...buttons);
+  return group;
 }
 
 // ---------------------------------------------------------------- router
@@ -188,6 +327,7 @@ export function render() {
     .catch((err) => {
       if (seq !== renderSeq) return;
       const status = err instanceof ApiError ? err.status : 0;
+      if (status === 401) return; // the sign-in view is showing; it re-renders after sign-in
       content.replaceChildren(mark(state(status === 403 ? 'forbidden' : 'error')));
     });
 }
@@ -234,13 +374,98 @@ async function loadCounts() {
   drawNav(parse(location.pathname).page);
 }
 
+/** Read who is signed in; when auth is on and nobody is, ask for sign-in. */
 async function loadWho() {
+  const epoch = authEpoch;
   try {
     const { auth } = await api('/ui/api/status');
+    if (epoch !== authEpoch) return true; // answered for a session that has since signed in
+    if (auth?.enabled && !auth.signed_in) {
+      showSignIn();
+      return false;
+    }
     document.querySelector('.top .who').textContent = auth?.signed_in ? (auth.admin ? 'Signed in · admin' : 'Signed in') : '';
+    return true;
   } catch {
-    // the page states report reachability; the label just stays empty
+    return false; // a 401 already shows sign-in; other failures show in the page states
   }
+}
+
+// ---------------------------------------------------------------- sign-in
+
+/**
+ * Show the sign-in view at the current address, so the same page and tab
+ * render after sign-in. A cookie session comes from the one-time link or
+ * the handoff code; a key typed here is held in this module only (never in
+ * storage, a cookie or the URL), so a reload asks for it again.
+ */
+function showSignIn() {
+  if (document.body.classList.contains('signed-out')) return;
+  closeMenu();
+  paletteEl?.close(); // a modal palette would keep the key field inert
+  document.body.classList.add('signed-out');
+  document.getElementById('signin').hidden = false;
+  document.querySelector('.signin-host').textContent = location.host;
+  document.getElementById('signin-key').focus();
+}
+
+let signingIn = false;
+/** How long a key check may take before it counts as unreachable. */
+const KEY_CHECK_MS = 10_000;
+
+/**
+ * Check a typed key on its own and keep it only if it signs in. The check
+ * leaves cookies off the request (credentials: 'omit'), so an existing
+ * session cookie can never make a wrong key look accepted.
+ */
+async function signIn(ev) {
+  ev.preventDefault();
+  if (signingIn) return;
+  const input = document.getElementById('signin-key');
+  const error = document.querySelector('.signin-error');
+  const button = document.querySelector('#signin button[type="submit"]');
+  const key = input.value.trim();
+  error.hidden = true;
+  if (!key) {
+    error.textContent = 'Paste an API key, or use the sign-in link.';
+    error.hidden = false;
+    return;
+  }
+  signingIn = true;
+  button.disabled = true;
+  let auth = null;
+  let message = '';
+  try {
+    // A gateway that takes the connection but never answers must not leave
+    // the button disabled: give up after the check's own deadline.
+    const reply = await fetch('/ui/api/status', {
+      credentials: 'omit',
+      headers: { Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(KEY_CHECK_MS),
+    });
+    if (reply.ok) auth = (await reply.json())?.auth ?? null;
+    else if (reply.status !== 401 && reply.status !== 403) message = 'Could not reach the gateway. Try again.';
+  } catch {
+    message = 'Could not reach the gateway. Try again.';
+  } finally {
+    signingIn = false;
+    button.disabled = false;
+  }
+  if (!auth?.signed_in) {
+    error.textContent = message || 'That key was not accepted.';
+    error.hidden = false;
+    input.select();
+    return;
+  }
+  bearer = key;
+  authEpoch++;
+  input.value = '';
+  document.getElementById('signin').hidden = true;
+  document.body.classList.remove('signed-out');
+  document.querySelector('.top .who').textContent = auth.admin ? 'Signed in · admin' : 'Signed in';
+  render();
+  loadCounts();
+  document.getElementById('content').focus({ preventScroll: true });
 }
 
 /** The phone menu: the sidebar shown as a sheet under the top bar. */
@@ -270,6 +495,16 @@ function boot() {
     if (fromTabs) document.querySelector('nav.tabs a[aria-current="page"]')?.focus();
     else document.getElementById('content').focus({ preventScroll: true });
   });
+  const search = document.querySelector('button.search');
+  search.addEventListener('click', openPalette);
+  // The hint names the key this platform uses; both work everywhere.
+  if (!/Mac|iPhone|iPad/.test(navigator.platform)) search.querySelector('kbd').textContent = 'Ctrl K';
+  document.addEventListener('keydown', (ev) => {
+    if ((ev.metaKey || ev.ctrlKey) && !ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === 'k') {
+      ev.preventDefault();
+      openPalette();
+    }
+  });
   const menu = document.querySelector('button.menu');
   menu.addEventListener('click', () => (document.body.classList.contains('menu-open') ? closeMenu() : openMenu()));
   document.addEventListener('keydown', (ev) => {
@@ -279,6 +514,7 @@ function boot() {
     }
   });
   addEventListener('popstate', render);
+  document.getElementById('signin-form').addEventListener('submit', signIn);
   document.querySelector('a.skip').addEventListener('click', (ev) => {
     ev.preventDefault();
     document.getElementById('content').focus();

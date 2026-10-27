@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use super::Backend;
-use crate::transport::{StdioTransport, assigned_package_cache_dir, isolated_package_manager_env};
+use crate::transport::{StdioTransport, isolated_env_and_assigned_cache};
 use crate::{Error, Result};
 
 impl Backend {
@@ -17,13 +17,16 @@ impl Backend {
         protocol_version: Option<&String>,
     ) -> Result<Arc<StdioTransport>> {
         let launch = self.resolve_stdio_runtime_launch(command)?;
-        // Read before the environment is built: this is what says the cache is
-        // the gateway's to clear. A backend whose `env:` already names one gets
-        // `None`, and the repair leaves that path alone.
-        let assigned_cache = assigned_package_cache_dir(&self.name, &launch.command, &launch.env);
+        // The child's environment and the cache the repair may clear come from
+        // one assignment, so a write probe that answers differently between two
+        // reads cannot hand the child a cache the repair does not own. A backend
+        // whose `env:` already names one gets `None`, and the repair leaves that
+        // path alone.
+        let (env, assigned_cache) =
+            isolated_env_and_assigned_cache(&self.name, &launch.command, launch.env);
         let transport = StdioTransport::new_with_assigned_cache(
             &launch.command,
-            isolated_package_manager_env(&self.name, &launch.command, launch.env),
+            env,
             cwd.cloned(),
             self.config.timeout,
             protocol_version.cloned(),

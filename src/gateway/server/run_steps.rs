@@ -229,6 +229,10 @@ impl Gateway {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the watcher's parts, each owned by a different start step; forwarded as one"
+    )]
     pub(super) fn start_config_watcher(
         &self,
         live_config: &Arc<LiveConfig>,
@@ -237,6 +241,7 @@ impl Gateway {
         shutdown_tx: &tokio::sync::broadcast::Sender<()>,
         warmer: &WarmerGuard,
         surfaced: crate::config_reload::SurfacedHook,
+        reporting: crate::config_reload::refusals::ReloadReporting,
     ) -> Option<ConfigWatcher> {
         if let Some(path) = self.reload_path() {
             match ConfigWatcher::start_with_hook(
@@ -250,6 +255,7 @@ impl Gateway {
                 shutdown_tx.subscribe(),
                 Some(warmer.hook()),
                 Some(surfaced),
+                reporting,
             ) {
                 Ok(w) => {
                     info!(path = %path.display(), "Config hot-reload enabled");

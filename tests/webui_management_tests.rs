@@ -74,6 +74,8 @@ mod backend_mutation;
 mod backend_preview;
 #[path = "webui_management_tests/capabilities.rs"]
 mod capabilities;
+#[path = "webui_management_tests/capability_editor.rs"]
+mod capability_editor;
 #[path = "webui_management_tests/internal_routes.rs"]
 mod internal_routes;
 #[path = "webui_management_tests/openapi_import.rs"]
@@ -82,6 +84,8 @@ mod openapi_import;
 mod registry;
 #[path = "webui_management_tests/secret_slot_surfaces.rs"]
 mod secret_slot_surfaces;
+#[path = "webui_management_tests/server_state.rs"]
+mod server_state;
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
