@@ -505,6 +505,13 @@ impl MetaMcp {
         refusal: Error,
     ) -> Result<GuardedValue> {
         if crate::playbook::current_step().is_some() {
+            // A playbook's steps meet the caller's policy here and nowhere
+            // earlier (the route stage never sees them), so this refusal is
+            // the gateway's and the step records it; a tool name the
+            // definition spells wrong is no decision about the caller.
+            if crate::security::validate_tool_name(tool).is_ok() {
+                crate::gateway::delivery_facts::refused_while_vouched();
+            }
             // A playbook step keeps its neutral refusal (A3) and asks, as a
             // chain step does: the witness decides (MIK-8353 3d-2).
             super::nonce_settle::settle_pre_send(

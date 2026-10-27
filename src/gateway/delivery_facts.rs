@@ -184,7 +184,7 @@ impl CompositeEnd {
     /// `Failed` for an error or a tool error result (`isError: true`).
     pub(crate) fn of(result: &crate::Result<Value>) -> Self {
         match result {
-            Ok(answer) if answer["isError"] != true => Self::Succeeded,
+            Ok(answer) if !crate::protocol::cacheable::is_error(answer) => Self::Succeeded,
             _ => Self::Failed,
         }
     }

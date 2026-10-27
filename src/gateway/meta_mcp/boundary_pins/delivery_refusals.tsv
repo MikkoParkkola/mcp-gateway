@@ -260,7 +260,7 @@ src/protocol/mrtr.rs	undeclared	refusal	1	feeds	the undeclared-question refusal 
 src/provider/mcp_provider.rs	invoke	blocked_tool_refusal	1	feeds	the provider's withheld-tool answer; the meta gate withholds first (raised)
 src/registry/mod.rs	build_index	refuse_unloadable	1	no-record	registry index build
 src/registry/mod.rs	fetch_capability	ssrf_refusal	1	no-record	registry fetch (admin), not a call
-src/security/http_diagnostics.rs	oauth_request_error	ssrf_refusal	1	not-a-decision	an OAuth request error's wording
+src/security/http_diagnostics.rs	oauth_request_error	ssrf_refusal	1	pending:capability-refusals	an OAuth destination refusal, reached in a call by a token refresh (refresh_flight); fixed by the capability-refusals follow-up
 src/security/http_diagnostics.rs	safe_request_error	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_with_retry
 src/security/http_diagnostics.rs	safe_request_error_for	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_with_retry
 src/security/http_diagnostics.rs	status_refusal	is_deterministic_refusal	1	not-delivered	predicate

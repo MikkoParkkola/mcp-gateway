@@ -60,7 +60,8 @@ const CLASSES: [&str; 6] = [
 ];
 
 /// Known gaps, each fixed by a follow-up that deletes its slug here when it
-/// flips the last `pending:<slug>` row: a row left pending then fails.
+/// flips the last `pending:<slug>` row: a row left pending then fails, and
+/// so does a slug with no rows.
 const PENDING: [&str; 1] = ["capability-refusals"];
 
 #[derive(Default)]
@@ -262,6 +263,13 @@ fn every_refusal_site_is_classified() {
         assert!(
             CLASSES.contains(&class) || pending,
             "unclassified refusal site: {row}"
+        );
+    }
+    // A slug whose last row was flipped must go too, or it re-admits rows.
+    for slug in PENDING {
+        assert!(
+            text.contains(&format!("\tpending:{slug}\t")),
+            "pending:{slug} has no rows left; delete it from PENDING"
         );
     }
 }
