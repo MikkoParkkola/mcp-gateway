@@ -181,3 +181,4 @@ src/gateway/ui/backends.rs	add_backend	add_refusal	1	no-record	accounts, SSE, st
 src/gateway/ui/events.rs	replay_one	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/ui/import.rs	fetch_error_message	ssrf_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/ui/preview.rs	preview_backend	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
+src/gateway/ui/refusals.rs	refusals	startup_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
