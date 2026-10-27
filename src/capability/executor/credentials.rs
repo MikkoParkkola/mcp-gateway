@@ -437,6 +437,13 @@ impl CapabilityExecutor {
             if crate::oauth::client::is_credential_lock_busy(&error) {
                 return error;
             }
+            // Recorded before the wrap: the wrapped error no longer reads as
+            // a destination refusal.
+            if crate::security::ssrf::is_ssrf_refusal(&error) {
+                crate::gateway::delivery_facts::raise(
+                    crate::gateway::delivery_facts::ResponseEffect::Refused,
+                );
+            }
             Error::Config(format!(
                 "OAuth refresh request to '{}' for '{provider}' failed: {error}",
                 crate::security::sanitize::redact_url_for_diagnostics(token_endpoint)
