@@ -415,10 +415,44 @@ fn cleartext_credentials_off_this_machine_refuse() {
     assert_eq!(refused(&no_credential), vec![]);
 }
 
+/// Any query refuses, named or not, ordinary or not: no name list can tell
+/// a secret from a page number, and the value would reach gateway.yaml.
 #[test]
-fn an_ordinary_query_is_adoptable() {
+fn any_query_refuses_without_echoing_it() {
+    for url in [
+        "https://mcp.example.test/mcp?passphrase=hunter2",
+        "https://mcp.example.test/mcp?page=2",
+        "https://mcp.example.test/mcp?",
+        "http://127.0.0.1:9000/mcp?page=2",
+    ] {
+        let server = find(&json!({"url": url}));
+        assert_eq!(
+            refusals(&server),
+            one(AdoptRefusal::CredentialInUrl, "url"),
+            "{url}"
+        );
+        let report = ShadowScanReport::from_discovered(
+            &[server],
+            &HashSet::new(),
+            Some(Path::new("gateway.yaml")),
+        );
+        let risk = report.assets[0]
+            .risks
+            .iter()
+            .find(|risk| risk.code == "credential_in_url")
+            .expect("the radar names the reason");
+        assert!(
+            !risk.detail.contains("hunter2") && !risk.detail.contains("page="),
+            "{}",
+            risk.detail
+        );
+    }
+}
+
+#[test]
+fn a_url_without_a_query_is_adoptable() {
     assert_eq!(
-        refused(&json!({"url": "https://mcp.example.test/mcp?page=2"})),
+        refused(&json!({"url": "https://mcp.example.test/mcp"})),
         vec![]
     );
 }

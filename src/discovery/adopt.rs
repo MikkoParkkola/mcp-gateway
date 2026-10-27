@@ -29,8 +29,8 @@ pub(crate) enum AdoptRefusal {
     /// `${NAME:-default}` with a non-empty default: the default is a literal
     /// that would be written into gateway.yaml as text.
     LiteralDefault,
-    /// A URL carrying a credential: a user name or password, a query
-    /// parameter named like one, or a fragment.
+    /// A URL that may carry a credential: a user name or password, a query
+    /// string, or a fragment.
     CredentialInUrl,
     /// Credentials the client sends in cleartext to a host off this machine,
     /// which a gateway load refuses for an enabled backend.
@@ -64,23 +64,6 @@ fn only_scheme_beside_templates(value: &str) -> bool {
     outside.is_empty()
         || (SCHEME_PREFIXES.contains(&outside.as_str()) && value.starts_with(&outside))
 }
-
-/// Query parameter names, matched case-insensitively as substrings, that
-/// carry a credential: `access_token`, `apikey`, `X-Amz-Signature`.
-const CREDENTIAL_QUERY_NAMES: &[&str] = &[
-    "token",
-    "key",
-    "secret",
-    "password",
-    "passwd",
-    "auth",
-    "sig",
-    "credential",
-    "session",
-    "bearer",
-    "pwd",
-    "jwt",
-];
 
 /// Every reason `server` is not adoptable, each with the client field it
 /// names (`env.API_KEY`, `args[2]`, `url`), sorted by field. Empty when it
@@ -178,16 +161,16 @@ fn url(transport: &TransportConfig) -> Option<&str> {
     }
 }
 
+/// A query counts whatever its names: no list of names can tell a secret
+/// from an ordinary parameter, and adoption would copy the value into
+/// gateway.yaml as text. (The cleartext guard counts a query for the same
+/// reason; here loopback is no exemption, since the risk is the file, not
+/// the wire.)
 fn carries_credential(url: &url::Url) -> bool {
-    if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
-        return true;
-    }
-    url.query_pairs().any(|(name, _)| {
-        let name = name.to_ascii_lowercase();
-        CREDENTIAL_QUERY_NAMES
-            .iter()
-            .any(|credential| name.contains(credential))
-    })
+    !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || url.query().is_some()
 }
 
 #[cfg(test)]

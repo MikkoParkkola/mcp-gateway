@@ -324,7 +324,8 @@ fn risk_detail(code: &str) -> &'static str {
              as text. Move the whole value into a variable or secret, then rescan."
         }
         "credential_in_url" => {
-            "Not adoptable: the URL carries a credential. Move it into a header, then rescan."
+            "Not adoptable: the URL has a query, a fragment or a user name, which could hold a \
+             credential. Move query parameters into headers or the server's config, then rescan."
         }
         "cleartext_credential" => {
             "Not adoptable: credentials go in cleartext to a host off this machine. Use TLS, \
