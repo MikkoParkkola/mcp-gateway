@@ -89,6 +89,9 @@ pub(crate) struct DeliveryFacts {
     findings: BTreeSet<Finding>,
     vouched: bool,
     lone_target: bool,
+    /// A composite's latest step ended in a gateway refusal and the
+    /// composite has not carried on past it.
+    step_refused: bool,
 }
 
 impl Default for DeliveryFacts {
@@ -99,6 +102,7 @@ impl Default for DeliveryFacts {
             findings: BTreeSet::new(),
             vouched: true,
             lone_target: false,
+            step_refused: false,
         }
     }
 }
@@ -121,19 +125,33 @@ pub(crate) async fn scope<F: std::future::Future>(future: F) -> F::Output {
 /// on the composite's cell whether this step ended in a gateway refusal.
 /// Only the latest step's note is kept: a later step replaces it.
 pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
-    scope(future).await
+    let (output, refused) = FACTS
+        .scope(RefCell::new(DeliveryFacts::default()), async {
+            let output = future.await;
+            let refused = FACTS.with(|cell| cell.borrow().effect == ResponseEffect::Refused);
+            (output, refused)
+        })
+        .await;
+    with(|facts| facts.step_refused = refused);
+    output
 }
 
 /// The composite carried on past its latest step's failure (a playbook's
 /// `continue`, or its `retry` once attempts run out): that step's refusal is
 /// no longer what the composite can end on.
-pub(crate) fn step_absorbed() {}
+pub(crate) fn step_absorbed() {
+    with(|facts| facts.step_refused = false);
+}
 
 /// The composite ends with `error` (`None`: it succeeded). It records
 /// `refused` when it ends with an error while its latest step's refusal still
 /// stands: the step it ends on was refused.
 pub(crate) fn composite_ended(error: Option<&crate::Error>) {
-    let _ = error;
+    with(|facts| {
+        if error.is_some() && facts.step_refused {
+            facts.effect = facts.effect.max(ResponseEffect::Refused);
+        }
+    });
 }
 
 /// Run `f` with the facts suspended: a scan of a value that is not delivered
