@@ -914,7 +914,7 @@ function renderControlPlaneServers(servers) {
   }
   tbody.innerHTML = servers.map(s => `<tr>
     <td><div class="row-main">${esc(s.name)}</div><div class="row-sub mono">${esc(s.server_id)}</div></td>
-    <td>${humanize(s.status)}</td>
+    <td>${esc(humanize(s.status))}</td>
     <td>${esc(s.owner_group_id || '-')}</td>
   </tr>`).join('');
 }
@@ -976,8 +976,8 @@ function renderControlPlaneDecisions(decisions) {
       <div class="row-sub">${esc(item.next_step || '')}</div>
       <div class="row-sub mono">${esc(item.reason_code)}</div>
     </td>
-    <td><div>${humanize(item.target_kind)}</div><div class="row-sub mono">${esc(item.target_id)}</div></td>
-    <td><div>${humanize(item.required_role)}</div><div class="row-sub">${humanize(item.required_action)}</div></td>
+    <td><div>${esc(humanize(item.target_kind))}</div><div class="row-sub mono">${esc(item.target_id)}</div></td>
+    <td><div>${esc(humanize(item.required_role))}</div><div class="row-sub">${esc(humanize(item.required_action))}</div></td>
     <td>${licenseBadge(item.license_tier)}</td>
     <td>${boolBadge(item.can_act, 'Can Act', 'Review Only')}</td>
   </tr>`).join('');
@@ -990,7 +990,7 @@ function renderControlPlaneFeatures(features) {
     return;
   }
   tbody.innerHTML = features.map(f => `<tr>
-    <td>${humanize(f.feature)}</td>
+    <td>${esc(humanize(f.feature))}</td>
     <td>${licenseBadge(f.license_tier)}</td>
     <td>${boolBadge(f.available_in_this_route, 'Available', 'Gated')}</td>
   </tr>`).join('');
@@ -1004,7 +1004,7 @@ function renderControlPlaneRbac(authorizations) {
     return;
   }
   tbody.innerHTML = entries.map(([action, auth]) => `<tr>
-    <td><div class="row-main">${humanize(action)}</div><div class="row-sub mono">${esc(auth.reason_code)}</div></td>
+    <td><div class="row-main">${esc(humanize(action))}</div><div class="row-sub mono">${esc(auth.reason_code)}</div></td>
     <td>${boolBadge(auth.allowed, 'Allowed', 'Denied')}</td>
     <td>${auth.audit_required || auth.rollback_required
       ? 'Audit + rollback'
