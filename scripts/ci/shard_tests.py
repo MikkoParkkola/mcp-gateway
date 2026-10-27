@@ -21,9 +21,12 @@ were deleted is lowered in the same diff, where review sees it.
 """
 from __future__ import annotations
 
+import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 SDK = "a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result"
 BURST = "mik_7479_full_burst"
@@ -69,6 +72,15 @@ EXAMPLES = {"linux": "int-b", "macos": "int", "windows": "int-b"}
 # Windows printed every test's output (`--show-output`) before sharding.
 OUTPUT = {"windows": ["--show-output"]}
 
+# MIK-8980: a test leaves nothing in the temp directory. The Linux shards run
+# cargo with TMPDIR set to a fresh private directory and fail on any entry left
+# there that KNOWN_LEFTOVERS does not allow. The list holds only what a pending
+# fix removes, each as (pattern on the entry name, most allowed, why). It may
+# only shrink: the self-test holds every pattern to LEFTOVER_CEILING.
+TMP_GUARDED = {"linux"}
+KNOWN_LEFTOVERS: list[tuple[str, int, str]] = []
+LEFTOVER_CEILING: frozenset[str] = frozenset()
+
 HEADER = re.compile(r"^\s*(Running|Doc-tests) ")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 RUNNING = re.compile(r"^running (\d+) tests?$")
@@ -103,7 +115,11 @@ def selected(lines: list[str]) -> int:
     return total
 
 
-def cargo(args: list[str], program: tuple[str, ...] = ("cargo",)) -> tuple[int, list[str]]:
+def cargo(
+    args: list[str],
+    program: tuple[str, ...] = ("cargo",),
+    env: dict[str, str] | None = None,
+) -> tuple[int, list[str]]:
     """Run cargo with output mirrored to this job's log.
 
     Bytes are mirrored as they arrive and decoded (UTF-8, lossy) only for
@@ -111,7 +127,9 @@ def cargo(args: list[str], program: tuple[str, ...] = ("cargo",)) -> tuple[int, 
     Windows: cp1252 turned an output byte into U+FFFD, which cp1252 stdout
     cannot encode (#3944, Windows int-a).
     """
-    p = subprocess.Popen([*program, *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    p = subprocess.Popen(
+        [*program, *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env
+    )
     lines = []
     assert p.stdout is not None
     out = sys.stdout.buffer
@@ -123,10 +141,37 @@ def cargo(args: list[str], program: tuple[str, ...] = ("cargo",)) -> tuple[int, 
     return p.wait(), lines
 
 
-def run(os_kind: str, shard: str) -> int:
+def unexpected(names: list[str], known: list[tuple[str, int, str]] = KNOWN_LEFTOVERS) -> list[str]:
+    """The entries `known` does not allow, each pattern up to its count."""
+    used: dict[str, int] = {}
+    bad = []
+    for name in sorted(names):
+        for pattern, most, _why in known:
+            if re.fullmatch(pattern, name) and used.get(pattern, 0) < most:
+                used[pattern] = used.get(pattern, 0) + 1
+                break
+        else:
+            bad.append(name)
+    return bad
+
+
+def run(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -> int:
+    failed = run_steps(os_kind, shard, program)
+    for f in failed:
+        print(f"::error::{os_kind} {shard} {f}")
+    return 1 if failed else 0
+
+
+def run_steps(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -> list[str]:
     failed = []
+    tmp = tempfile.mkdtemp(prefix="shard-tmp-") if os_kind in TMP_GUARDED else None
+    env = {**os.environ, "TMPDIR": tmp} if tmp else None
     for step, cargo_args, test_args, floor in SHARDS[os_kind][shard]:
-        rc, lines = cargo([*BASE, *cargo_args, "--", *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]])
+        rc, lines = cargo(
+            [*BASE, *cargo_args, "--", *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]],
+            program,
+            env,
+        )
         n = selected(lines)
         results = [tuple(map(int, m.groups())) for m in map(RESULT.search, lines) if m]
         print(f"::notice::{os_kind} {shard} {step}: selected {n} (floor {floor}), "
@@ -137,12 +182,13 @@ def run(os_kind: str, shard: str) -> int:
         if n < floor:
             failed.append(f"{step}: selected {n} tests, below the floor of {floor}")
     if EXAMPLES.get(os_kind) == shard:
-        rc, _ = cargo(["build", "--all-features", "--examples"])
+        rc, _ = cargo(["build", "--all-features", "--examples"], program, env)
         if rc != 0:
             failed.append(f"examples: cargo build exited {rc}")
-    for f in failed:
-        print(f"::error::{os_kind} {shard} {f}")
-    return 1 if failed else 0
+    if tmp:
+        failed += [f"left in TMPDIR: {name}" for name in unexpected(os.listdir(tmp))]
+        shutil.rmtree(tmp, ignore_errors=True)
+    return failed
 
 
 def self_test() -> int:
@@ -188,6 +234,26 @@ def self_test() -> int:
     for os_kind, shards in SHARDS.items():
         for name, steps in shards.items():
             assert steps and all(floor > 0 for *_, floor in steps), (os_kind, name)
+    # MIK-8980: the TMPDIR guard. A planted test that leaks one file turns a
+    # guarded shard red on that file alone, and the same run without the leak
+    # stays green. The fake cargo clears the shard's floor.
+    fake = (sys.executable, "-c", (
+        "import os\n"
+        "print('     Running unittests src/lib.rs (x)')\n"
+        "print('running 99999 tests')\n"
+        "print('test result: ok. 99999 passed; 0 failed; 0 ignored')\n"
+        "if os.environ.get('PLANT_LEAK'):\n"
+        "    open(os.path.join(os.environ['TMPDIR'], '.tmpAbC123.hwm'), 'w').close()\n"
+    ))
+    os.environ["PLANT_LEAK"] = "1"
+    try:
+        planted = run_steps("linux", "lib-a", fake)
+    finally:
+        del os.environ["PLANT_LEAK"]
+    assert planted == ["left in TMPDIR: .tmpAbC123.hwm"], planted
+    assert run_steps("linux", "lib-a", fake) == [], "the control run must stay green"
+    assert unexpected(["a", "b"], [("[ab]", 1, "one allowed")]) == ["b"], "the count bounds a pattern"
+    assert all(p in LEFTOVER_CEILING for p, _, _ in KNOWN_LEFTOVERS), "KNOWN_LEFTOVERS may only shrink"
     print("shard_tests self-test: ok")
     return 0
 
