@@ -199,10 +199,10 @@ fn new_matches_featureless_constructor_defaults() {
     assert!(from_with_features.reload_context.read().is_none());
     assert!(!from_new.code_mode_enabled);
     assert!(!from_with_features.code_mode_enabled);
-    assert!(from_new.surfaced_tools.is_empty());
-    assert!(from_with_features.surfaced_tools.is_empty());
-    assert!(from_new.surfaced_tools_map.is_empty());
-    assert!(from_with_features.surfaced_tools_map.is_empty());
+    assert!(from_new.surfaced_state_live().tools.is_empty());
+    assert!(from_with_features.surfaced_state_live().tools.is_empty());
+    assert!(from_new.surfaced_state_live().map.is_empty());
+    assert!(from_with_features.surfaced_state_live().map.is_empty());
     // Projection rollout defaults to Off — dormant until an operator opts in.
     assert_eq!(
         from_new.projection_mode,

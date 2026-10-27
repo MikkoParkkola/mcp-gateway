@@ -18,6 +18,7 @@ mod dashboard;
 mod errors;
 mod events;
 pub mod import;
+mod overview;
 mod preview;
 pub(crate) mod session;
 mod shell;
@@ -66,6 +67,7 @@ fn is_admin(client: Option<&AuthenticatedClient>) -> bool {
 pub fn api_router() -> Router<Arc<AppState>> {
     let router = Router::new()
         .route(routes::UI_STATUS, get(status))
+        .route(routes::UI_OVERVIEW, get(overview::overview))
         .route(routes::UI_TOOLS, get(tools))
         .route(routes::UI_CONFIG, get(config))
         .route(routes::UI_RELOAD, post(reload))

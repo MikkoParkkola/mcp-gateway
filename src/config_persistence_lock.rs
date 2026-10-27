@@ -22,6 +22,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use super::journal::Recovered;
 use crate::fs_lock::ExclusiveFileLock;
 use crate::identity_grants::journal::resolved;
 
@@ -206,16 +207,43 @@ fn keep_private(lock: &Path, _owners: Owners) -> io::Result<()> {
 /// Take the lock for `config`, waiting until `deadline` while another writer
 /// holds it. For async callers: the wait is an async sleep, never a thread
 /// blocked on an executor worker.
+///
+/// A replace journal left beside the config is recovered before this
+/// returns, so no holder ever reads a half-replaced file
+/// ([`super::journal`]).
 pub(crate) async fn lock_config(
     config: &Path,
     deadline: Instant,
 ) -> Result<ExclusiveFileLock, NotLocked> {
-    let lock = lock_path(&resolved(config));
+    lock_config_recovering(config, deadline)
+        .await
+        .map(|(held, _)| held)
+}
+
+/// [`lock_config`], also saying what recovery did, for a holder with a live
+/// gateway: after [`Recovered::RolledBack`] the running config is on bytes
+/// that are no longer on disk, and it owes a reload.
+pub(crate) async fn lock_config_recovering(
+    config: &Path,
+    deadline: Instant,
+) -> Result<(ExclusiveFileLock, Recovered), NotLocked> {
+    // Resolved once: the lock and the recovery are about the same file, even
+    // if a symlink is re-pointed meanwhile.
+    let target = resolved(config);
+    let lock = lock_path(&target);
     #[cfg(test)]
     let mut waiting = Waiting::default();
     loop {
         if let Some(held) = try_once(config, &lock, Owners::UserOrRoot)? {
-            return Ok(held);
+            // Recovery reads, writes and fsyncs: off the async workers. The
+            // lock moves into the task, so a caller cancelled while waiting
+            // here never leaves recovery running unlocked.
+            let target = target.clone();
+            return tokio::task::spawn_blocking(move || recovered(&target, held))
+                .await
+                .map_err(|e| {
+                    NotLocked::Failed(format!("recovering the replace journal failed: {e}"))
+                })?;
         }
         #[cfg(test)]
         waiting.start(&lock);
@@ -282,8 +310,10 @@ pub(crate) fn lock_config_blocking(
     deadline: Instant,
     on_wait: impl FnOnce(&Path),
 ) -> Result<ExclusiveFileLock, NotLocked> {
-    let lock = lock_path(&resolved(config));
-    poll_blocking(config, &lock, Owners::UserOrRoot, deadline, Some(on_wait))
+    let target = resolved(config);
+    let lock = lock_path(&target);
+    let held = poll_blocking(config, &lock, Owners::UserOrRoot, deadline, Some(on_wait))?;
+    recovered(&target, held).map(|(held, _)| held)
 }
 
 /// The one blocking wait both synchronous locks share: one attempt per
@@ -309,6 +339,18 @@ fn poll_blocking(
             return Err(NotLocked::Busy);
         }
         std::thread::sleep(POLL.min(left));
+    }
+}
+
+/// Recover a replace journal beside the resolved `target` under `held`; an
+/// unusable one releases the lock and refuses, naming what to do by hand.
+fn recovered(
+    target: &Path,
+    held: ExclusiveFileLock,
+) -> Result<(ExclusiveFileLock, Recovered), NotLocked> {
+    match super::journal::recover(target) {
+        Ok(recovered) => Ok((held, recovered)),
+        Err(message) => Err(NotLocked::Failed(message)),
     }
 }
 
