@@ -15,12 +15,15 @@ use crate::config::{Config, EnvOverlay, LiveEnv, ResolvedEnvFiles};
 use crate::security::{posture, ssrf::DestinationPolicy};
 
 use super::{
-    ConfigPatch, ConfigWriteError, IdentityGrantSink, LiveConfig, POSTURE_REFUSED_PREFIX,
-    ReloadOutcome, SHUTDOWN_ABORTED_ERROR, apply_patch, compute_diff,
+    ConfigPatch, IdentityGrantSink, LiveConfig, POSTURE_REFUSED_PREFIX, ReloadOutcome,
+    SHUTDOWN_ABORTED_ERROR, apply_patch, compute_diff,
 };
 
 #[path = "reload_context_write.rs"]
 mod write_api;
+
+#[path = "reload_context_lock.rs"]
+mod lock_api;
 
 #[path = "replace.rs"]
 pub(crate) mod replace;
@@ -181,6 +184,8 @@ pub struct ReloadContext {
     pub(super) capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
     /// Told which backends each applied reload registered (`MIK-8054`).
     pub(super) on_registered: Option<super::reload_warm_hook::OnRegistered>,
+    /// Where an applied reload marks the web UI's charts.
+    pub(super) markers: Option<Arc<crate::counters::CounterStore>>,
     /// Set when lock recovery put an earlier gateway.yaml back on disk: the
     /// running config is then on bytes that are gone, so the next holder of
     /// the reload lock reloads before its own work. Cleared only by an
@@ -197,7 +202,14 @@ pub struct ReloadContext {
         )
     )]
     pub(super) trusted_config: PathBuf,
+    /// Applies `meta_mcp.surfaced_tools` from each published config,
+    /// set by the gateway when it attaches to this context.
+    surfaced_hook: parking_lot::Mutex<Option<SurfacedHook>>,
 }
+
+/// Applies a published config's `meta_mcp.surfaced_tools` to the running
+/// gateway, under `lock_reload`.
+pub(crate) type SurfacedHook = Arc<dyn Fn(&Config) + Send + Sync>;
 
 /// The refusal a reload returns when the gateway's shutdown ended its wait.
 pub(super) const STOPPED: &str = "config reload stopped: the gateway is shutting down";
@@ -269,7 +281,25 @@ impl ReloadContext {
             stop: tokio_util::sync::CancellationToken::new(),
             capabilities: None,
             on_registered: None,
+            markers: None,
+            surfaced_hook: parking_lot::Mutex::new(None),
         })
+    }
+
+    /// Mark every applied reload on `markers`.
+    #[must_use]
+    pub(crate) fn with_markers(
+        mut self,
+        markers: Option<Arc<crate::counters::CounterStore>>,
+    ) -> Self {
+        self.markers = markers;
+        self
+    }
+
+    /// Install the hook that applies `surfaced_tools` on every applied
+    /// reload. The gateway calls it when it attaches to this context.
+    pub(crate) fn set_surfaced_hook(&self, hook: SurfacedHook) {
+        *self.surfaced_hook.lock() = Some(hook);
     }
 
     /// Announce `tools/list_changed` for `capabilities` when a reload's env
@@ -433,7 +463,14 @@ impl ReloadContext {
             }
         };
         let mut outcome = match self.reload_outcome_locked_at(&target).await {
-            Ok(outcome) => outcome,
+            Ok(outcome) => {
+                // An applied reload marks the charts; a refused one
+                // returns below and marks nothing.
+                if let Some(markers) = &self.markers {
+                    markers.mark_now(crate::counters::MarkerKind::ConfigReload, None);
+                }
+                outcome
+            }
             // Both steps render on every path: a config refusal read alone
             // hides whether the revocation landed. Appended, so every consumer
             // keying on the refusal's prefix still matches.
@@ -453,133 +490,6 @@ impl ReloadContext {
             None => None,
         };
         Ok(outcome)
-    }
-
-    /// Take the reload lock, giving up after `wait`.
-    ///
-    /// The bound covers *acquiring* the lock, not holding it. A write that wins
-    /// the lock then runs its reload to completion, however long that takes;
-    /// what the bound prevents is every other write queueing behind that one
-    /// forever.
-    ///
-    /// Only config *writes* are bounded at all. A reload triggered by the
-    /// meta-tool, the admin UI reload button, or the file watcher still waits as
-    /// long as it takes: refusing one of those would silently drop a config
-    /// change the operator already made on disk, which trades a hang for a lost
-    /// edit. A refused write, by contrast, has changed nothing and can be
-    /// retried.
-    async fn lock_reload_within(
-        &self,
-        wait: Duration,
-    ) -> std::result::Result<tokio::sync::MutexGuard<'_, ()>, ConfigWriteError> {
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "Lifecycle: config reload applies the operator's backend set; no caller request"
-        )]
-        tokio::time::timeout(wait, self.registry.lock_reload())
-            .await
-            .map_err(|_| ConfigWriteError::Busy)
-    }
-
-    /// Run the file load on its own thread and wait for it without holding a
-    /// runtime worker (#1808).
-    ///
-    /// The load reads the config file and every env file; on a stalled NFS or
-    /// FUSE mount that read blocks for as long as the mount does. Awaiting it
-    /// here keeps the workers free and lets shutdown drop this future; nothing
-    /// the thread computes is published unless this future is still waiting.
-    /// Both failure arms refuse the reload, as a failed load always has. A
-    /// panicking load is a refusal only where panics unwind: the release
-    /// profile aborts on any panic, here as everywhere else.
-    async fn load_off_worker(
-        &self,
-        path: std::path::PathBuf,
-    ) -> std::result::Result<EvaluatedReload, String> {
-        // The reload lock alone does not bound threads: a reload whose future
-        // is dropped (a client that disconnects, a caller's timeout) releases
-        // the lock while its read is still stalled. The permit travels into the
-        // thread and is released only when that read returns.
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "Lifecycle: config reload applies the operator's backend set; no caller request"
-        )]
-        let read_slot = self.registry.reload_read_slot();
-        let slot = tokio::select! {
-            biased;
-            () = self.stop.cancelled() => return Err(STOPPED.to_owned()),
-            slot = read_slot.acquire_owned() => {
-                slot.map_err(|_| "config reload load slot closed".to_owned())?
-            }
-        };
-        let (done, result) = tokio::sync::oneshot::channel();
-        let (load, path, live, env) = (
-            self.load,
-            path,
-            Arc::clone(&self.live_config),
-            Arc::clone(&self.env),
-        );
-        (self.spawn)(Box::new(move || {
-            // Released when the read returns, not when the reload that asked
-            // for it gives up.
-            let _slot = slot;
-            drop(done.send(load(&path, &live, &env)));
-        }))
-        .map_err(|e| format!("config reload could not start its file read: {e}"))?;
-        tokio::select! {
-            biased;
-            () = self.stop.cancelled() => Err(STOPPED.to_owned()),
-            done = result => {
-                done.map_err(|_| "config reload file read ended without a result".to_owned())?
-            }
-        }
-    }
-
-    /// The reload transaction itself, loading gateway.yaml from `path`: the
-    /// target the caller's config lock resolved, so the reload reads the file
-    /// it locked even if a symlink at `config_path` moves meanwhile. The
-    /// caller must already hold the reload lock; taking it here as well would
-    /// deadlock on the non-reentrant mutex. An accepted reload pays any reload
-    /// a lock recovery left owed.
-    async fn reload_outcome_locked_at(
-        &self,
-        path: &std::path::Path,
-    ) -> std::result::Result<ReloadOutcome, String> {
-        let outcome = self.reload_transaction(path).await;
-        if outcome.is_ok() {
-            self.reload_owed
-                .store(false, std::sync::atomic::Ordering::SeqCst);
-        }
-        outcome
-    }
-
-    /// Note what a lock recovery did, then pay an owed reload of `target`,
-    /// the file the caller locked, before the caller's own work, so no early return leaves the running config on
-    /// bytes recovery took away. The caller holds the reload lock. A failed
-    /// reload stays owed and is logged; the caller's work goes on, and its
-    /// own reload (every writer ends with one) tries again.
-    async fn pay_owed_reload(
-        &self,
-        recovered: crate::config_persistence::journal::Recovered,
-        target: &std::path::Path,
-    ) {
-        use std::sync::atomic::Ordering::SeqCst;
-        if recovered == crate::config_persistence::journal::Recovered::RolledBack {
-            self.reload_owed.store(true, SeqCst);
-        }
-        if self.reload_owed.load(SeqCst)
-            && let Err(error) = self.reload_outcome_locked_at(target).await
-        {
-            tracing::warn!(%error, path = %target.display(), "the reload owed after restoring gateway.yaml failed; it is retried on the next one");
-        }
-    }
-
-    /// A refused lock may still have restored gateway.yaml (its journal then
-    /// could not be removed): owe the reload back to the restored bytes.
-    fn note_refused_lock(&self) {
-        if crate::config_persistence::journal::take_restored(&self.config_path) {
-            self.reload_owed
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-        }
     }
 
     async fn reload_transaction(
@@ -742,6 +652,11 @@ impl ReloadContext {
         self.publish_overlay(overlay);
         // Still under `lock_reload`, against the config just published.
         self.report_registered(&patch.registered_change(), &self.live_config.get());
+        // `surfaced_tools` applies here too, under the same lock.
+        let surfaced_hook = self.surfaced_hook.lock().clone();
+        if let Some(hook) = surfaced_hook {
+            hook(&self.live_config.get());
+        }
 
         Ok(with_pending_restart(
             outcome,

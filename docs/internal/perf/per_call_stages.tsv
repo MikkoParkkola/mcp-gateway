@@ -93,6 +93,11 @@ src/gateway/meta_mcp/invoke/audit.rs	sha256_of	-	on-path, untimed: audit-record 
 src/gateway/meta_mcp/invoke/audit.rs	stored_failure	-	on-path, untimed: raw-receipt chain refusals stored under an idempotency key only
 src/gateway/meta_mcp/invoke/audit.rs	with_dispatch_scope	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/audit.rs	write_invocation	-	on-path, untimed: only with a transparency logger, which the harness does not configure
+src/gateway/meta_mcp/invoke/audit_counting.rs	count_invocation	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/audit_counting.rs	counted	http_invoke_tiny	on the HTTP gateway_invoke path, inside count_invocation
+src/gateway/meta_mcp/invoke/audit_counting.rs	note_cache_hit	-	on-path, untimed: response-cache hits only; the timed rows execute fresh
+src/gateway/meta_mcp/invoke/audit_counting.rs	note_replay	-	on-path, untimed: idempotency replays only; the timed rows execute fresh
+src/gateway/meta_mcp/invoke/audit_counting.rs	note_request_firewall	-	on-path, untimed: request-firewall refusals only; the timed backend is not refused
 src/gateway/meta_mcp/invoke/bridge_dispatch.rs	admit	-	on-path, untimed: bridged input rounds (legacy client, backend asking for input) only; the timed backend answers at once
 src/gateway/meta_mcp/invoke/bridge_dispatch.rs	delivered_challenge	-	on-path, untimed: bridged input rounds only; the timed backend answers at once
 src/gateway/meta_mcp/invoke/bridge_dispatch.rs	invoke	-	on-path, untimed: bridged re-dispatch rounds only; the timed backend answers at once

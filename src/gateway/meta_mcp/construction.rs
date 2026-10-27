@@ -9,7 +9,7 @@ use super::{
     CostTracker, Duration, ErrorBudgetConfig, KillSwitch, LocalIdentityGrantStore, LoggingLevel,
     MetaMcp, MetaToolExposure, PlaybookEngine, ProfileRegistry, ResponseCache, RwLock,
     SearchRanker, SessionProfileStore, SessionStateStore, UsageStats, admission, catalogue_cache,
-    signing, visible,
+    signing,
 };
 
 // ============================================================================
@@ -31,6 +31,7 @@ impl MetaMcp {
             backends: super::scoped_backends::Registry::new(backends),
             change_feed: std::sync::OnceLock::new(),
             events: std::sync::OnceLock::new(),
+            counters: std::sync::OnceLock::new(),
             capabilities: RwLock::new(None),
             cache,
             default_cache_ttl,
@@ -72,8 +73,7 @@ impl MetaMcp {
             budget_enforcer: None,
             #[cfg(feature = "cost-governance")]
             cost_registry: None,
-            surfaced_tools: Vec::new(),
-            surfaced_tools_map: visible::SurfacedMap::default(),
+            surfaced: Arc::default(),
             meta_tool_exposure: MetaToolExposure::expose_all(),
             meta_catalogues: catalogue_cache::MetaCatalogues::default(),
             meta_projections: crate::trust::SharedProjections::default(),

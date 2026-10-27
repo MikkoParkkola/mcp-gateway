@@ -32,12 +32,21 @@ export function register(id, spec) {
   pages.set(id, spec);
 }
 
-/** The palette's entries: every page and visible tab, plus each page's declared entries. Navigation only. */
+/**
+ * The palette's entries, navigation only: every sidebar page, each visible
+ * tab, and each page's declared entries (named actions and settings, each a
+ * route to its tab). An entry is plain data, `{label, path, kind}`, with no
+ * callback, so choosing one can only change the address.
+ */
 export function entries() {
   const out = [];
   for (const [id, label] of NAV) {
-    for (const [tab, tabLabel] of visibleTabs(id)) out.push({ label: `${label} › ${tabLabel}`, path: `/ui/${id}/${tab}` });
-    for (const e of pages.get(id)?.entries ?? []) out.push({ label: String(e.label), path: String(e.path) });
+    out.push({ label, path: `/ui/${id}`, kind: 'go' });
+    for (const [tab, tabLabel] of visibleTabs(id)) out.push({ label: `${label} › ${tabLabel}`, path: `/ui/${id}/${tab}`, kind: 'go' });
+    for (const e of pages.get(id)?.entries ?? []) {
+      const kind = e.kind === 'action' || e.kind === 'setting' ? e.kind : 'go';
+      out.push({ label: String(e.label), path: String(e.path), kind });
+    }
   }
   return out;
 }
@@ -98,6 +107,130 @@ export async function api(path, init = {}) {
   const reply = await fetch(path, { credentials: 'same-origin', ...init, headers });
   if (!reply.ok) throw new ApiError(reply.status, path);
   return reply.status === 204 ? null : reply.json();
+}
+
+// ---------------------------------------------------------------- palette
+
+const GROUPS = [['go', 'Go to'], ['action', 'Actions, opens the Actions tab'], ['setting', 'Settings']];
+
+/** Where an entry leads, in words: "Servers › github › Actions". */
+function crumb(path) {
+  const parts = path.split('#')[0].replace(/^\/ui\/?/, '').split('/').filter(Boolean);
+  return parts.map((p, i) => {
+    if (i === 0) return NAV.find(([id]) => id === p)?.[1] ?? p;
+    return TABS.find(([t]) => t === p)?.[1] ?? safeDecode(p);
+  }).join(' › ');
+}
+
+function safeDecode(p) {
+  try { return decodeURIComponent(p); } catch { return p; }
+}
+
+let paletteEl = null;
+
+/** Open the palette. It finds pages, actions and settings and opens them on their tab; nothing runs from it. */
+export function openPalette() {
+  if (paletteEl) return; // also while a closing palette's cleanup is pending
+  const opener = document.activeElement;
+  const input = el('input', { type: 'text', role: 'combobox', 'aria-expanded': 'true', 'aria-controls': 'palette-list', 'aria-autocomplete': 'list', 'aria-label': 'Go to anything', placeholder: 'Go to anything', autocomplete: 'off', spellcheck: 'false' });
+  const list = el('div', { id: 'palette-list', role: 'listbox', 'aria-label': 'Results' });
+  const foot = el('div', { class: 'palette-foot muted' },
+    el('span', {}, '↵ open · ↑↓ move · esc close'), el('span', {}, 'Actions open on their tab. Nothing runs from here.'));
+  paletteEl = el('dialog', { class: 'palette', 'aria-label': 'Go to anything' }, input, list, foot);
+  document.body.append(paletteEl);
+  let options = [];
+  let active = 0;
+  let chosen = false;
+  const draw = () => {
+    const q = input.value.trim().toLowerCase();
+    const found = entries().filter((e) => !q || e.label.toLowerCase().includes(q) || crumb(e.path).toLowerCase().includes(q));
+    list.replaceChildren();
+    options = [];
+    for (const [kind, heading] of GROUPS) {
+      const group = found.filter((e) => e.kind === kind);
+      if (!group.length) continue;
+      const hid = `palette-g-${kind}`;
+      const box = el('div', { role: 'group', 'aria-labelledby': hid }, el('div', { class: 'palette-group', id: hid }, heading));
+      for (const e of group) {
+        const option = el('div', { role: 'option', id: `palette-o-${options.length}`, class: 'palette-option', 'data-path': e.path },
+          el('span', {}, e.label), el('span', { class: 'muted' }, crumb(e.path)));
+        option.addEventListener('click', () => choose(e.path));
+        box.append(option);
+        options.push(option);
+      }
+      list.append(box);
+    }
+    if (!options.length) list.append(el('p', { class: 'muted palette-empty' }, 'No page, action or setting matches.'));
+    active = Math.min(active, Math.max(options.length - 1, 0));
+    mark();
+  };
+  const mark = () => {
+    options.forEach((o, i) => o.setAttribute('aria-selected', i === active ? 'true' : 'false'));
+    if (options[active]) {
+      input.setAttribute('aria-activedescendant', options[active].id);
+      options[active].scrollIntoView({ block: 'nearest' });
+    } else {
+      input.removeAttribute('aria-activedescendant');
+    }
+  };
+  const search = document.querySelector('button.search');
+  const close = () => {
+    paletteEl.close();
+  };
+  const choose = (path) => {
+    chosen = true;
+    close();
+    closeMenu();
+    go(path);
+    document.getElementById('content').focus({ preventScroll: true });
+  };
+  input.addEventListener('input', () => { active = 0; draw(); });
+  input.addEventListener('keydown', (ev) => {
+    if (ev.isComposing) return; // an IME is still committing text
+    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+      ev.preventDefault();
+      if (!options.length) return;
+      active = (active + (ev.key === 'ArrowDown' ? 1 : options.length - 1)) % options.length;
+      mark();
+    } else if (ev.key === 'Enter' && options[active]) {
+      ev.preventDefault();
+      choose(options[active].dataset.path);
+    }
+  });
+  paletteEl.addEventListener('close', () => {
+    paletteEl.remove();
+    paletteEl = null;
+    search?.setAttribute('aria-expanded', 'false');
+    // A choice hands focus to the content (choose() moves it after this);
+    // Esc or a click outside gives it back to the opener.
+    if (!chosen && opener && document.contains(opener)) opener.focus();
+  });
+  paletteEl.addEventListener('click', (ev) => { if (ev.target === paletteEl) close(); });
+  draw();
+  search?.setAttribute('aria-expanded', 'true');
+  paletteEl.showModal();
+  input.focus();
+}
+
+// ---------------------------------------------------------------- segmented
+
+/**
+ * A segmented control: one pressed button among a few (range pickers, view
+ * switches). `onChange(value)` runs on a choice; it is the screen's code.
+ */
+export function segmented({ label, options, value, onChange }) {
+  const group = el('div', { class: 'segmented', role: 'group', 'aria-label': label });
+  const buttons = options.map(([v, text]) => {
+    const b = el('button', { type: 'button', 'aria-pressed': v === value ? 'true' : 'false', 'data-value': v }, text);
+    b.addEventListener('click', () => {
+      if (b.getAttribute('aria-pressed') === 'true') return;
+      for (const other of buttons) other.setAttribute('aria-pressed', other === b ? 'true' : 'false');
+      onChange?.(v);
+    });
+    return b;
+  });
+  group.append(...buttons);
+  return group;
 }
 
 // ---------------------------------------------------------------- router
@@ -269,6 +402,16 @@ function boot() {
     // away; any other link hands focus to the new content, as a load would.
     if (fromTabs) document.querySelector('nav.tabs a[aria-current="page"]')?.focus();
     else document.getElementById('content').focus({ preventScroll: true });
+  });
+  const search = document.querySelector('button.search');
+  search.addEventListener('click', openPalette);
+  // The hint names the key this platform uses; both work everywhere.
+  if (!/Mac|iPhone|iPad/.test(navigator.platform)) search.querySelector('kbd').textContent = 'Ctrl K';
+  document.addEventListener('keydown', (ev) => {
+    if ((ev.metaKey || ev.ctrlKey) && !ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === 'k') {
+      ev.preventDefault();
+      openPalette();
+    }
   });
   const menu = document.querySelector('button.menu');
   menu.addEventListener('click', () => (document.body.classList.contains('menu-open') ? closeMenu() : openMenu()));
