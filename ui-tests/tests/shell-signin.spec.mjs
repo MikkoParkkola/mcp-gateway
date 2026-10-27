@@ -501,3 +501,29 @@ test('S20 the kept key signs in on the next try once the limit lifts', async ({ 
   await page.keyboard.press('Enter');
   await expect(page.locator('#signin')).toBeHidden();
 });
+
+const LINK_REFUSED = 'That sign-in link or code did not work. It may be wrong, already used or expired. Run `mcp-gateway dashboard-link` on the gateway’s machine for a new one.';
+
+test('S19 a refused sign-in link lands on sign-in with the reason, and the hint leaves the address', async ({ page }) => {
+  await gate(page);
+  await page.goto('/ui/overview/status?signin=link-refused');
+  await expect(page.locator('#signin')).toBeVisible();
+  await expect(page.locator('.signin-error')).toBeVisible();
+  await expect(page.locator('.signin-error')).toHaveText(LINK_REFUSED);
+  await expect(page).toHaveURL('/ui/overview/status');
+});
+
+test('S19 any other hint value changes nothing', async ({ page }) => {
+  await gate(page);
+  await page.goto('/ui/overview/status?signin=<b>x</b>');
+  await expect(page.locator('#signin')).toBeVisible();
+  await expect(page.locator('.signin-error')).toBeHidden();
+});
+
+test('S19 a session already signed in drops the hint and shows nothing', async ({ page }) => {
+  await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: false, signed_in: false, admin: false } } }));
+  await page.goto('/ui/overview/status?signin=link-refused');
+  await page.locator('#content [data-rendered]').waitFor();
+  await expect(page).toHaveURL('/ui/overview/status');
+  await expect(page.locator('#signin')).toBeHidden();
+});
