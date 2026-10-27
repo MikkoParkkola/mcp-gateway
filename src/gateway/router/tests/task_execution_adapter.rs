@@ -54,6 +54,9 @@
 //! Both are compile limits, not behaviour findings, and the receipt reports them
 //! under a separate heading for exactly that reason.
 
+/// A backend's `allowed_tools` narrowed between a task's intake and its run.
+#[cfg(feature = "firewall")]
+mod allowed_tools_task;
 mod support;
 
 #[cfg(feature = "firewall")]
