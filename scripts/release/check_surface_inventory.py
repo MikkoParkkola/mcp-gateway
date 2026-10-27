@@ -3,13 +3,17 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Zero-unclassified check for docs/design/surface-4.0.md (MIK-8044).
 
-Extracts every item on the five user-facing surfaces from the source and
-fails when one is missing from the inventory, carries no valid class, or
-when the inventory lists an item the code no longer has.
+Extracts every item on four user-facing surfaces from the source and fails
+when one is missing from the inventory, carries no valid class, or when the
+inventory lists an item the code no longer has.
 
-Surfaces: config (gateway.yaml keys), cli (subcommands and flags),
-env (MCP_GATEWAY_* variables), routes (HTTP listener paths),
-lib (crate-root public items in src/lib.rs).
+Surfaces: config (gateway.yaml keys), env (MCP_GATEWAY_* variables),
+routes (HTTP listener paths), lib (crate-root public items in src/lib.rs).
+
+cli (subcommands and flags): membership is tests/cli_surface_inventory.rs
+only, which walks clap's built Command; this script has no cli extractor.
+Row format is unchanged for all tables, cli included: class, reason,
+migration, one row per item, and a defined-at path under src/cli/.
 
 Usage:
   check_surface_inventory.py            check the doc, exit 1 on any gap
@@ -520,112 +524,6 @@ def annotation_rows(code: str, path: Path) -> list[Entry]:
     return [Entry(f"{a or b}*", rel(path), line, "annotation: any mapping level, never read") for a, b in prefixes]
 
 
-# ── Surface: CLI ─────────────────────────────────────────────────────────────
-
-CLAP = "Parser|Subcommand|Args"
-
-
-def unwrap(ty: str) -> str:
-    head, args = generic(ty)
-    return unwrap(args[0]) if head.split("::")[-1] in WRAP | {"Vec"} and args else head
-
-
-class CliWalker:
-    def __init__(self, index: Index) -> None:
-        self.index = index
-        self.out: dict[str, Entry] = {}
-
-    def emit(self, key: str, file: Path, line: int, note: str) -> None:
-        self.out.setdefault(key, Entry(key, rel(file), line, note))
-
-    def args(self, fields: list[Member], file: Path, line: int, prefix: str) -> None:
-        for f in fields:
-            a = f.attrs
-            ln = f.line or line
-            if attr_value(a, "command", "subcommand") is not None or attr_value(a, "clap", "subcommand") is not None:
-                item = self.index.resolve(unwrap(f.ty), file, CLAP)
-                if item:
-                    self.subcommands(item, prefix)
-                continue
-            if attr_value(a, "command", "flatten") is not None or attr_value(a, "clap", "flatten") is not None:
-                item = self.index.resolve(unwrap(f.ty), file, CLAP)
-                if item:
-                    self.args(item.members, item.file, item.line, prefix)
-                continue
-            long = attr_value(a, "arg", "long")
-            short = attr_value(a, "arg", "short")
-            short_flag = None if short is None else "-" + (short.strip("'") or f.name[0])
-            if long is not None:
-                flag = "--" + (long or f.name.replace("_", "-"))
-            elif short_flag is not None:
-                flag = short_flag
-            else:
-                # A positional is shown by its `value_name` when it has one, as clap does.
-                flag = f"<{attr_value(a, 'arg', 'value_name') or f.name.replace('_', '-')}>"
-            notes = []
-            if (env := attr_value(a, "arg", "env")) is not None:
-                notes.append(f"env {env}")
-            if attr_value(a, "arg", "global") == "true":
-                notes.append("global")
-            if attr_value(a, "arg", "hide") == "true":
-                notes.append("hidden")
-            self.emit(f"{prefix} {flag}", file, ln, ", ".join(notes))
-            if long is not None and short_flag is not None:
-                # Its own row, so dropping the `short` attribute is a removed flag;
-                # `check` holds it to its long form's class.
-                self.emit(f"{prefix} {short_flag}", file, ln, f"alias of {flag}")
-
-    def subcommands(self, item: Item, prefix: str) -> None:
-        for v in item.members:
-            a = v.attrs
-            if attr_value(a, "command", "skip") is not None:
-                continue
-            if attr_value(a, "command", "flatten") is not None:
-                inner = self.index.resolve(unwrap(v.ty[1:-1]), item.file, CLAP)
-                if inner:
-                    self.subcommands(inner, prefix)
-                continue
-            name = attr_value(a, "command", "name") or rename(v.name, "kebab-case")
-            key = f"{prefix} {name}"
-            notes = [n for n in (feature_of(a), "hidden" if attr_value(a, "command", "hide") == "true" else "") if n]
-            self.emit(key, item.file, v.line, ", ".join(notes))
-            if v.ty.startswith("{"):
-                self.args(member_fields(v.ty, item.file), item.file, v.line, key)
-            elif v.ty.startswith("("):
-                inner = self.index.resolve(unwrap(v.ty[1:-1]), item.file, CLAP)
-                if inner is None:
-                    continue
-                if inner.kind == "enum":
-                    self.subcommands(inner, key)
-                else:
-                    self.args(inner.members, inner.file, inner.line, key)
-
-
-def cli_root_rows(root: Item) -> list[Entry]:
-    """The flags clap generates from the root command's own attributes."""
-    out = []
-    if attr_value(root.attrs, "command", "version") is not None and not is_set(root.attrs, "disable_version_flag"):
-        out.append(Entry("mcp-gateway --version", rel(root.file), root.line, "clap-generated"))
-    if not is_set(root.attrs, "disable_help_flag"):
-        out.append(Entry("mcp-gateway --help", rel(root.file), root.line, "clap-generated"))
-    return out
-
-
-def is_set(attrs: str, key: str) -> bool:
-    """A boolean `command(...)` setting: bare `key` or `key = true`."""
-    return attr_value(attrs, "command", key) in ("", "true")
-
-
-def extract_cli(index: Index | None = None) -> list[Entry]:
-    w = CliWalker(index or Index())
-    root = w.index.resolve("Cli", SRC / "cli/mod.rs", "Parser")
-    w.emit("mcp-gateway", root.file, root.line, "")
-    for e in cli_root_rows(root):
-        w.out.setdefault(e.id, e)
-    w.args(root.members, root.file, root.line, "mcp-gateway")
-    return sorted(w.out.values(), key=lambda e: e.id)
-
-
 # ── Surface: env ─────────────────────────────────────────────────────────────
 
 ENV_RE = re.compile(r"MCP_GATEWAY_[A-Z0-9_]*")
@@ -830,7 +728,6 @@ def lib_documented(path: Path | None = None, keep: frozenset[str] = LIB_KEEP) ->
 
 EXTRACTORS = {
     "config": extract_config,
-    "cli": extract_cli,
     "env": extract_env,
     "routes": extract_routes,
     "lib": extract_lib,
@@ -916,6 +813,14 @@ def check(doc_text: str, extracted: dict[str, list[Entry]]) -> list[str]:
     for surface in sorted(set(extracted) - set(SURFACES)):
         errors.append(f"{surface}: extracted surface has no section in the doc's vocabulary")
     for surface in SURFACES:
+        if surface in MEMBERSHIP_ELSEWHERE:
+            # No extractor here: membership is another check's (see the map).
+            # Each row's place is still checked.
+            prefix = MEMBERSHIP_ELSEWHERE[surface]
+            for r in by_surface[surface].values():
+                if not r.defined.startswith(prefix):
+                    errors.append(f"line {r.lineno}: {surface} item {r.id!r} is defined at {r.defined!r}, want {prefix}...")
+            continue
         entries = extracted.get(surface)
         if not entries:
             # An extractor that finds nothing is broken, never "all classified".
@@ -923,16 +828,9 @@ def check(doc_text: str, extracted: dict[str, list[Entry]]) -> list[str]:
             continue
         listed = by_surface[surface]
         for e in entries:
-            if e.note.startswith("alias of "):
-                long_id = e.id.rsplit(" ", 1)[0] + " " + e.note.removeprefix("alias of ")
-                r, lr = listed.get(e.id), listed.get(long_id)
-                if r is not None and lr is not None and r.cls != lr.cls:
-                    errors.append(f"line {r.lineno}: alias {e.id!r} is {r.cls}, its long form {long_id!r} is {lr.cls}")
-        for e in entries:
             r = listed.pop(e.id, None)
             if r is None:
-                if surface not in MEMBERSHIP_ELSEWHERE:
-                    errors.append(f"{surface}: unclassified {e.id!r} ({e.file}:{e.line})")
+                errors.append(f"{surface}: unclassified {e.id!r} ({e.file}:{e.line})")
             elif r.defined.split(":")[0] != e.file:
                 errors.append(f"line {r.lineno}: {e.id!r} is defined in {e.file}, doc says {r.defined!r}")
             elif surface == "routes" and e.file == ROUTES_FILE and r.defined != f"{e.file}:{e.note}":
@@ -940,28 +838,20 @@ def check(doc_text: str, extracted: dict[str, list[Entry]]) -> list[str]:
                 # route added above it, and a stale one was never caught.
                 errors.append(f"line {r.lineno}: {e.id!r} cites {r.defined!r}, want {e.file}:{e.note}")
         for r in listed.values():
-            if surface in MEMBERSHIP_ELSEWHERE:
-                # Rows clap reports but this walker cannot see (generated flags,
-                # aliases): membership is the Rust test's; the place is still checked.
-                if not r.defined.startswith(MEMBERSHIP_ELSEWHERE[surface]):
-                    errors.append(f"line {r.lineno}: {surface} item {r.id!r} is defined at {r.defined!r}, want {MEMBERSHIP_ELSEWHERE[surface]}...")
-                continue
             errors.append(f"line {r.lineno}: {surface} item {r.id!r} no longer exists in the code")
     return errors
 
 
-# Surfaces whose membership (missing and stale rows) another check owns, with the
-# path prefix their rows must still name. cli: clap's own built Command, walked by
-# tests/cli_surface_inventory.rs (MIK-8170), so an unmodelled clap feature cannot
-# hide a flag; this walker still checks class, reason, migration and file.
+# Surfaces with no extractor here: membership (missing and stale rows) is another
+# check's, and this script checks only the path prefix their rows must name, plus
+# the row format every table gets. cli: membership is tests/cli_surface_inventory.rs,
+# which walks clap's own built Command, so no clap feature can hide a flag. This
+# script once parsed the clap derive source by pattern and missed subcommand flags.
 MEMBERSHIP_ELSEWHERE = {"cli": "src/cli/"}
 
 
 def extract_all() -> dict[str, list[Entry]]:
-    index = Index()
-    out = {s: f() for s, f in EXTRACTORS.items() if s != "cli"}
-    out["cli"] = extract_cli(index)
-    return out
+    return {s: f() for s, f in EXTRACTORS.items()}
 
 
 HIDDEN_TABLE = SRC / "commands" / "doctor" / "hidden_keys.rs"
@@ -982,7 +872,7 @@ def check_hidden_table(doc_text: str, table_src: str) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--list", choices=SURFACES, help="print one surface's extracted items")
+    ap.add_argument("--list", choices=sorted(EXTRACTORS), help="print one surface's extracted items")
     ap.add_argument("--doc", type=Path, default=DOC)
     ap.add_argument("--summary", action="store_true", help="print class counts per surface from the doc")
     args = ap.parse_args(argv)
@@ -1010,7 +900,8 @@ def main(argv: list[str] | None = None) -> int:
     if errors:
         print(f"surface inventory: {len(errors)} problem(s); extracted {counts}", file=sys.stderr)
         return 1
-    print(f"surface inventory complete: {counts}")
+    elsewhere = ", ".join(sorted(MEMBERSHIP_ELSEWHERE))
+    print(f"surface inventory complete: {counts}; {elsewhere} membership is checked by its Rust test")
     return 0
 
 
