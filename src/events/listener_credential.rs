@@ -240,3 +240,7 @@ pub(super) fn for_key(
     };
     Some((credential, fence))
 }
+
+#[cfg(test)]
+#[path = "listener_credential_tests.rs"]
+mod tests;
