@@ -701,25 +701,59 @@ async fn fixture_two() -> Fx {
     fixture_on(gateway, &auth, &[BACKEND, PERSONAL_BACKEND], |_| {}).await
 }
 
-/// SHARED.5 (deadline): two cold backends, one slow past the listing's
-/// deadline. The listing returns by the deadline with the fast backend's own
-/// tool and without the slow one's; the slow fill finishes on its own lease,
-/// and the next listing shows it with no further fill.
-#[tokio::test(start_paused = true)]
-async fn a_slow_backend_is_withheld_by_the_deadline_then_listed_http() {
-    let fx = fixture_two().await;
-    let deadline = fx
-        .gateway
+/// The fill bound of `server`.
+fn fill_bound(fx: &Fx, server: &str) -> std::time::Duration {
+    fx.gateway
         .backends()
-        .get(PERSONAL_BACKEND)
-        .expect("the second backend")
-        .tools_fill_bound();
-    fx.gateway.delay_lists_on(PERSONAL_BACKEND, deadline * 2);
+        .get(server)
+        .expect("the backend")
+        .tools_fill_bound()
+}
+
+/// The per-user slots of `server` that hold a stored list.
+fn stored_slots(fx: &Fx, server: &str) -> Vec<String> {
+    fx.gateway
+        .backends()
+        .get(server)
+        .expect("the backend")
+        .populated_per_user_bindings_for_test()
+}
+
+/// SHARED.5 (deadline, inside the bound): two cold backends, one slow but
+/// inside its own fill bound. The listing waits for it: both backends' own
+/// tools are in the same response, each from one fill.
+#[tokio::test(start_paused = true)]
+async fn a_slow_backend_inside_its_bound_is_in_the_same_response_http() {
+    let fx = fixture_two().await;
+    let bound = fill_bound(&fx, PERSONAL_BACKEND);
+    fx.gateway.delay_lists_on(PERSONAL_BACKEND, bound / 2);
+    let first = rpc(&fx, 1, "tools/list", json!({})).await;
+    for server in [BACKEND, PERSONAL_BACKEND] {
+        assert!(
+            surfaced_on(&first, server)
+                .iter()
+                .any(|t| !is_shared_schema(t)),
+            "{server}'s own tool was not in the first response: {first}"
+        );
+        assert_eq!(fx.gateway.lists_to(server), 1, "{server}: one fill");
+    }
+}
+
+/// SHARED.5 (deadline, past the bound): a backend slower than its own fill
+/// bound is cut off. The listing returns with the fast backend's own tool
+/// and without the slow one's, and nothing stores into the slow backend's
+/// slot afterwards, so no `tools/list_changed` follows (a per-user store is
+/// what sends one, MIK-8148).
+#[tokio::test(start_paused = true)]
+async fn a_backend_past_its_bound_is_cut_off_with_no_later_store_http() {
+    let fx = fixture_two().await;
+    let bound = fill_bound(&fx, PERSONAL_BACKEND);
+    fx.gateway.delay_lists_on(PERSONAL_BACKEND, bound * 2);
     let started = tokio::time::Instant::now();
     let first = rpc(&fx, 1, "tools/list", json!({})).await;
     assert!(
-        started.elapsed() <= deadline + std::time::Duration::from_secs(1),
-        "the listing waited past its deadline: {:?}",
+        started.elapsed() < bound * 2,
+        "the listing waited for the slow backend's answer: {:?}",
         started.elapsed()
     );
     assert!(
@@ -730,53 +764,88 @@ async fn a_slow_backend_is_withheld_by_the_deadline_then_listed_http() {
     );
     assert!(
         surfaced_on(&first, PERSONAL_BACKEND).is_empty(),
-        "the slow backend was listed before its own fill finished: {first}"
+        "the slow backend was listed past its own bound: {first}"
     );
-    tokio::time::sleep(deadline * 2).await;
-    let fills = fx.gateway.lists_to(PERSONAL_BACKEND);
-    let second = rpc(&fx, 2, "tools/list", json!({})).await;
-    assert!(
-        surfaced_on(&second, PERSONAL_BACKEND)
-            .iter()
-            .any(|t| !is_shared_schema(t)),
-        "the slow fill did not finish on its own lease: {second}"
-    );
+    tokio::time::sleep(bound * 3).await;
     assert_eq!(
-        fx.gateway.lists_to(PERSONAL_BACKEND),
-        fills,
-        "listed from a new fill, not the one the first listing started"
+        stored_slots(&fx, PERSONAL_BACKEND),
+        Vec::<String>::new(),
+        "the cut-off fill stored after the response"
     );
 }
 
-/// SHARED.5 (transient): a busy custody during a listing's revalidation
-/// leaves a running cold lease standing, and that lease's fill publishes.
+/// SHARED.5 (busy custody): a second listing that starts while the first
+/// one's lease is mid-fill, with custody busy, waits on that lease and serves
+/// its result, with no second fill.
 #[tokio::test(start_paused = true)]
-async fn a_busy_custody_leaves_a_running_cold_lease_http() {
-    let fx = fixture().await;
-    let bound = fx
-        .gateway
-        .backends()
-        .get(BACKEND)
-        .expect("the backend")
-        .tools_fill_bound();
-    fx.gateway.delay_lists_on(BACKEND, bound * 2);
-    // Claims the lease and starts the fill, which outlives this listing.
-    let _ = rpc(&fx, 1, "tools/list", json!({})).await;
-    fx.gateway.fail_custody_for_test(true);
-    let _ = rpc(&fx, 2, "tools/list", json!({})).await;
-    fx.gateway.fail_custody_for_test(false);
-    tokio::time::sleep(bound * 2).await;
-    let fills = fx.gateway.lists_to(BACKEND);
-    let after = rpc(&fx, 3, "tools/list", json!({})).await;
-    assert!(
-        surfaced_on(&after, BACKEND)
-            .iter()
-            .any(|t| !is_shared_schema(t)),
-        "the running lease's fill did not publish: {after}"
-    );
+async fn a_listing_waits_on_a_running_lease_through_a_busy_custody_http() {
+    let fx = Arc::new(fixture().await);
+    let bound = fill_bound(&fx, BACKEND);
+    fx.gateway.delay_lists_on(BACKEND, bound / 2);
+    let first = tokio::spawn({
+        let fx = Arc::clone(&fx);
+        async move { rpc(&fx, 1, "tools/list", json!({})).await }
+    });
+    tokio::time::sleep(bound / 4).await;
     assert_eq!(
         fx.gateway.lists_to(BACKEND),
-        fills,
-        "a busy custody forced a second fill"
+        1,
+        "premise: the first listing's fill is running"
+    );
+    fx.gateway.fail_custody_for_test(true);
+    let second = rpc(&fx, 2, "tools/list", json!({})).await;
+    fx.gateway.fail_custody_for_test(false);
+    assert!(
+        surfaced_on(&second, BACKEND)
+            .iter()
+            .any(|t| !is_shared_schema(t)),
+        "the second listing did not serve the running lease's fill: {second}"
+    );
+    assert_eq!(fx.gateway.lists_to(BACKEND), 1, "a second fill ran");
+    let first = first.await.expect("the first listing");
+    assert!(
+        surfaced_on(&first, BACKEND)
+            .iter()
+            .any(|t| !is_shared_schema(t)),
+        "the first listing lost its own fill: {first}"
+    );
+}
+
+/// The lease covers the fill (MIK-8962): a backend whose fill bound is past
+/// the 60 s cold backoff fills for 90 s. A second listing at 70 s does not
+/// claim the view again, and the first fill's publish lands. RED with a lease
+/// of the backoff alone: the second listing wins a fresh claim, fills again,
+/// and the first fill's publish is dropped.
+#[tokio::test(start_paused = true)]
+async fn a_fill_past_the_cold_backoff_still_publishes_http() {
+    let auth = sole_operator();
+    let gateway = DirectAccountGateway::new_configured(
+        crate::gateway::server::account_bindings::ServeMode::Http,
+        auth.clone(),
+        &Binding::Connected,
+        |config| config.timeout = std::time::Duration::from_secs(120),
+    );
+    let fx = Arc::new(fixture_on(gateway, &auth, &[BACKEND], |_| {}).await);
+    fx.gateway
+        .delay_lists_on(BACKEND, std::time::Duration::from_secs(90));
+    let first = tokio::spawn({
+        let fx = Arc::clone(&fx);
+        async move { rpc(&fx, 1, "tools/list", json!({})).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_secs(70)).await;
+    let second = rpc(&fx, 2, "tools/list", json!({})).await;
+    let first = first.await.expect("the first listing");
+    for answer in [&first, &second] {
+        assert!(
+            surfaced_on(answer, BACKEND)
+                .iter()
+                .any(|t| !is_shared_schema(t)),
+            "a listing did not show the 90 s fill: {answer}"
+        );
+    }
+    assert_eq!(
+        fx.gateway.lists_to(BACKEND),
+        1,
+        "the view was claimed again while its fill ran"
     );
 }
