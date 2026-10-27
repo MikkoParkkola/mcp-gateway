@@ -39,13 +39,16 @@ pub(crate) async fn fixture_propagating(answer: Answer, arm: impl FnOnce(&mut Me
     super::PROPAGATING.with(|p| p.set(true));
     let log = TempLog::new();
     let logger = transparency_log_in(&log);
-    let mut fx = fixture(answer, |meta| {
+    let fx = fixture(answer, |meta| {
         // The meta layer checks for its own audit sink before a required mint.
         meta.enable_transparency_log(logger);
         arm(meta);
     })
     .await;
-    fx._audit = Some(log);
+    let fx = Fx {
+        _audit: Some(log),
+        ..fx
+    };
     super::PROPAGATING.with(|p| p.set(false));
     fx
 }
@@ -75,13 +78,16 @@ pub(crate) async fn fixture_propagating_budgeted(
     super::PROPAGATING.with(|p| p.set(true));
     let log = TempLog::new();
     let logger = transparency_log_in(&log);
-    let mut fx = super::fixture_firewalled_budget_built(Answer::Ok, (audit, calls), |mut meta| {
+    let fx = super::fixture_firewalled_budget_built(Answer::Ok, (audit, calls), |mut meta| {
         meta.enable_transparency_log(logger);
         arm(&mut meta);
         meta
     })
     .await;
-    fx._audit = Some(log);
+    let fx = Fx {
+        _audit: Some(log),
+        ..fx
+    };
     super::PROPAGATING.with(|p| p.set(false));
     fx
 }
@@ -171,14 +177,17 @@ pub(crate) async fn fixture_propagating_signed(
     super::PROPAGATING.with(|p| p.set(true));
     let log = TempLog::new();
     let logger = transparency_log_in(&log);
-    let mut fx = super::fixture_inner(answer, firewalled, |meta| {
+    let fx = super::fixture_inner(answer, firewalled, |meta| {
         let mut meta = build(super::signing(meta, true));
         meta.enable_transparency_log(logger);
         meta.set_identity_propagation(strategy);
         meta
     })
     .await;
-    fx._audit = Some(log);
+    let fx = Fx {
+        _audit: Some(log),
+        ..fx
+    };
     super::PROPAGATING.with(|p| p.set(false));
     super::HARDENED.with(|h| h.set(false));
     (fx, minting)
@@ -263,14 +272,17 @@ pub(crate) async fn fixture_optional_failing_mint(
     super::OPTIONAL.with(|o| o.set(true));
     let log = TempLog::new();
     let logger = transparency_log_in(&log);
-    let mut fx = super::fixture_inner(answer, false, |meta| {
+    let fx = super::fixture_inner(answer, false, |meta| {
         let mut meta = build(super::signing(meta, true));
         meta.enable_transparency_log(logger);
         meta.set_identity_propagation(strategy);
         meta
     })
     .await;
-    fx._audit = Some(log);
+    let fx = Fx {
+        _audit: Some(log),
+        ..fx
+    };
     super::OPTIONAL.with(|o| o.set(false));
     super::PROPAGATING.with(|p| p.set(false));
     super::HARDENED.with(|h| h.set(false));

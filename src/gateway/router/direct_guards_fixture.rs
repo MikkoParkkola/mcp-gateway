@@ -625,6 +625,19 @@ async fn fixture_state() -> (Arc<super::AppState>, tempfile::TempDir) {
     }
 }
 
+/// A required propagation refuses to mint without a durable audit sink
+/// (MIK-6740), so a propagating fixture's route gets a transparency log. The
+/// returned log is held by the [`Fx`], so it drops after the state.
+fn propagating_route_log(
+    state: &mut super::AppState,
+) -> Option<crate::security::transparency_log::temp::TempLog> {
+    let log = PROPAGATING
+        .with(std::cell::Cell::get)
+        .then(crate::security::transparency_log::temp::TempLog::new)?;
+    state.transparency_log = Some(transparency_log_in(&log));
+    Some(log)
+}
+
 /// The rebuilt Meta-MCP keeps the state's admission store: sync calls and
 /// tasks share one, as `server/task_runtime.rs` wires it.
 async fn fixture_inner(
@@ -636,14 +649,7 @@ async fn fixture_inner(
     let (calls, seen) = (Arc::new(AtomicUsize::new(0)), Arc::default());
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.sanitize_input = SANITIZE.with(std::cell::Cell::get);
-    // A required propagation refuses to mint without a durable audit sink
-    // (MIK-6740), so a propagating fixture gets a transparency log.
-    let route_log = PROPAGATING
-        .with(std::cell::Cell::get)
-        .then(crate::security::transparency_log::temp::TempLog::new);
-    if let Some(log) = &route_log {
-        state_mut.transparency_log = Some(transparency_log_in(log));
-    }
+    let route_log = propagating_route_log(state_mut);
     if let Some(log) = STATE_LOG.with(|l| l.borrow().clone()) {
         state_mut.transparency_log = Some(log);
     }
