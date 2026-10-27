@@ -179,6 +179,7 @@ impl EventsHub {
         services: &Services,
         record: &OutboxRecord,
         current: &crate::events::records::Subscription,
+        fence: Option<&str>,
         ended: &(impl Fn(&'static str) -> Attempt<'a> + Sync),
     ) -> bool {
         #[cfg(test)]
@@ -200,9 +201,10 @@ impl EventsHub {
             return true;
         }
         // After every wait, the row must still be observed as
-        // it was at fan-out (same grant, identity config and lease); nothing
-        // awaits between this and the send. A shared row compares `None`.
-        if self.observed_now(current, &services.live.get()) != Ok(record.observed.clone()) {
+        // it was at fan-out (same grant, identity config and lease, and a
+        // vault row's grant as just read); nothing awaits between this and
+        // the send. A shared row compares `None`.
+        if self.observed_now(current, &services.live.get(), fence) != Ok(record.observed.clone()) {
             services.audit_outcome(&ended("observation_changed")).await;
             self.settle(services, record, quiet_dead(DeadReason::Observation))
                 .await;

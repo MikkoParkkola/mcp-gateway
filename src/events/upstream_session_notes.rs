@@ -150,6 +150,7 @@ impl State<'_> {
                     occurred_at,
                     data: json!({}),
                     lifecycle_key,
+                    fence: self.fence.as_ref().and_then(|run| run.binding()),
                 });
             } else {
                 hub.backend_tools_changed(&self.shared.name);
@@ -195,6 +196,7 @@ impl State<'_> {
                 occurred_at,
                 data,
                 lifecycle_key,
+                fence: self.fence.as_ref().and_then(|run| run.binding()),
             });
         }
         false

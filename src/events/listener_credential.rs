@@ -5,7 +5,9 @@
 //! fresh through the gateway's audited path, or lent from their passthrough
 //! lease. Never the gateway's.
 
-use std::sync::{Arc, Weak};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock, Weak};
+use std::time::Duration;
 
 use futures::future::BoxFuture;
 
@@ -63,12 +65,64 @@ pub(crate) enum FenceRead {
     Closed,
 }
 
+/// The longest a fence read may take; longer is read as busy.
+pub(crate) const FENCE_READ: Duration = Duration::from_secs(5);
+
+/// A per-user listener run's fence: the binding of the grant its first mint
+/// released, fixed for the run, so every occurrence the run emits carries
+/// one binding. A later mint, or the run's own periodic read, that finds
+/// another binding or no view of the grant ends the run; that mint's request
+/// is never sent.
+pub(super) struct RunFence {
+    mint: Arc<dyn ListenerMint>,
+    backend: String,
+    identity: VerifiedIdentity,
+    binding: OnceLock<Option<String>>,
+    ended: AtomicBool,
+}
+
+impl RunFence {
+    /// Whether a mint releasing `minted` may send in this run; the first
+    /// mint fixes the run's binding.
+    fn admits(&self, minted: Option<&str>) -> bool {
+        let fixed = self.binding.get_or_init(|| minted.map(str::to_owned));
+        if fixed.as_deref() != minted {
+            self.ended.store(true, Ordering::SeqCst);
+        }
+        !self.ended()
+    }
+
+    /// The run's binding, stamped on every occurrence it emits: `None`
+    /// before its first mint, or for a grant no vault backs.
+    pub(super) fn binding(&self) -> Option<String> {
+        self.binding.get().cloned().flatten()
+    }
+
+    /// The grant this run was fixed on has moved or gives no view.
+    pub(super) fn ended(&self) -> bool {
+        self.ended.load(Ordering::SeqCst)
+    }
+
+    /// A quiet run's own read: ends it when the grant moved or gives no
+    /// view. A busy or slow custody keeps it, since every occurrence is
+    /// checked again at delivery.
+    pub(super) async fn recheck(&self) {
+        let Some(fixed) = self.binding.get() else {
+            return;
+        };
+        let read = self.mint.fence_binding(&self.backend, &self.identity);
+        match tokio::time::timeout(FENCE_READ, read).await {
+            Ok(Ok(now)) if now == *fixed => {}
+            Ok(Err(FenceRead::Busy)) | Err(_) => {}
+            Ok(Ok(_) | Err(FenceRead::Closed)) => self.ended.store(true, Ordering::SeqCst),
+        }
+    }
+}
+
 /// `signed_assertion`, `token_exchange` and vault: a fresh, audited mint for
 /// every request, so a rotation or a revocation takes effect at the next one.
 pub(super) struct Minted {
-    pub mint: Arc<dyn ListenerMint>,
-    pub backend: String,
-    pub identity: VerifiedIdentity,
+    pub run: Arc<RunFence>,
     /// The listener's observation: its session bucket.
     pub obs: String,
 }
@@ -79,7 +133,13 @@ impl CredentialSource for Minted {
         send: CredentialedSend<'a>,
     ) -> BoxFuture<'a, crate::Result<reqwest::Response>> {
         Box::pin(async move {
-            let grant = self.mint.mint(&self.backend, &self.identity).await?;
+            let run = &self.run;
+            let grant = run.mint.mint(&run.backend, &run.identity).await?;
+            if !run.admits(grant.fence.as_deref()) {
+                return Err(crate::Error::Transport(
+                    "the listener's grant moved; its run ends".to_owned(),
+                ));
+            }
             send(grant.headers).await
         })
     }
@@ -129,11 +189,16 @@ impl CredentialSource for Leased {
 /// key; for a per-user key its subscriber's own, leased (passthrough) or
 /// minted (every other strategy). `None` when a per-user key has none to
 /// be had now (no lease, no stored identity, no mint wired): it then does
-/// not run, and never falls back to the gateway's credential.
-pub(super) fn for_key(key: &ListenerKey, hub: &Weak<EventsHub>) -> Option<ListenerCredential> {
+/// not run, and never falls back to the gateway's credential. A minted
+/// credential comes with its run's fence.
+pub(super) fn for_key(
+    key: &ListenerKey,
+    hub: &Weak<EventsHub>,
+) -> Option<(ListenerCredential, Option<Arc<RunFence>>)> {
     let Some(obs) = &key.obs else {
-        return Some(ListenerCredential::shared());
+        return Some((ListenerCredential::shared(), None));
     };
+    let mut fence = None;
     let live = hub.upgrade()?;
     let config = live.runtime.services.get()?.live.get();
     let binding = super::observation::binding(&config, &key.backend)?;
@@ -156,15 +221,22 @@ pub(super) fn for_key(key: &ListenerKey, hub: &Weak<EventsHub>) -> Option<Listen
                 .into_iter()
                 .find(|s| live.listens_as(s, key))?
                 .observed_as()?;
-            Arc::new(Minted {
+            let run = Arc::new(RunFence {
                 mint: Arc::clone(live.runtime.listener_mint.get()?),
                 backend: key.backend.clone(),
                 identity,
+                binding: OnceLock::new(),
+                ended: AtomicBool::new(false),
+            });
+            fence = Some(Arc::clone(&run));
+            Arc::new(Minted {
+                run,
                 obs: obs.clone(),
             })
         };
-    Some(ListenerCredential {
+    let credential = ListenerCredential {
         identity_key: Some(obs.clone()),
         source: Some(source),
-    })
+    };
+    Some((credential, fence))
 }

@@ -24,6 +24,7 @@ async fn fan_out_to_a_source_that_cannot_judge_on_the_clock_counts_a_drop() {
         occurred_at: now(),
         data: serde_json::json!({}),
         lifecycle_key: None,
+        fence: None,
     };
     hub.fan_out(&services, &event).await;
     assert_eq!(hub.runtime.clock_drops(), 1, "the drop is counted");

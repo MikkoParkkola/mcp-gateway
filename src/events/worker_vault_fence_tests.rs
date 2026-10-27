@@ -93,13 +93,13 @@ impl ListenerMint for Fence {
 }
 
 /// `subject`'s row on the managed backend and one record for it, stamped
-/// as fan-out stamps an emission of a listener run fenced on `_run`.
+/// as fan-out stamps an emission of a listener run fenced on `run`.
 fn queued_for(
     hub: &EventsHub,
     config: &crate::config::Config,
     port: u16,
     subject: &str,
-    _run: &str,
+    run: &str,
 ) {
     let event_id = format!("evt_{subject}");
     let edit = |sub: &mut crate::events::records::Subscription, record: &mut OutboxRecord| {
@@ -120,7 +120,9 @@ fn queued_for(
     };
     // Fan-out's own stamp call (`offer`), on the stored row.
     queued_stamped(hub, port, &event_id, NAME, edit, |row, record| {
-        record.observed = hub.observed_now(row, config).expect("observable");
+        record.observed = hub
+            .observed_now(row, config, Some(run))
+            .expect("observable");
     });
 }
 
@@ -219,4 +221,40 @@ async fn iso_t2_an_old_run_emission_after_the_rotation_is_buried() {
         posts.load(Ordering::SeqCst)
     );
     assert_eq!(posts.load(Ordering::SeqCst), 0);
+}
+
+/// The control for the burials above: after the rotation, an occurrence the
+/// listener's new run emits, under the new grant, reaches the subscriber.
+#[tokio::test]
+async fn iso_t2_a_record_under_the_new_grant_is_delivered() {
+    use std::sync::atomic::Ordering;
+    let dir = tempfile::tempdir().expect("dir");
+    let events = crate::config::EventsConfig {
+        callback_allow_private: vec!["127.0.0.0/8".into()],
+        ..crate::config::EventsConfig::default()
+    };
+    let hub = EventsHub::open(&events, dir.path()).expect("hub");
+    let config = managed_config();
+    let mut services = logged_services(dir.path());
+    services.live = Arc::new(crate::config_reload::LiveConfig::new(config.clone()));
+    let fence = Fence::of(&["u1"]);
+    hub.set_listener_mint(Arc::clone(&fence) as Arc<dyn ListenerMint>);
+    hub.register_source(Arc::new(Offering {
+        kind: crate::events::types::SourceKind::BackendNotification,
+        names: vec![NAME],
+    }));
+    let (port, posts) = counting_callback().await;
+    fence.rotate_grant("u1");
+    queued_for(&hub, &config, port, "u1", &fence.current("u1"));
+    hub.attempt(&services, "evt_u1").await;
+
+    assert_eq!(buried_as(&hub, "evt_u1"), None, "not buried");
+    crate::test_wait::wait_until(crate::test_wait::HANG_BOUND, || async {
+        match posts.load(Ordering::SeqCst) {
+            0 => std::ops::ControlFlow::Continue("no send yet".to_owned()),
+            _ => std::ops::ControlFlow::Break(()),
+        }
+    })
+    .await
+    .expect("the record under the new grant is delivered");
 }

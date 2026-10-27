@@ -230,6 +230,12 @@ impl EventsHub {
         if self.settled_by_recheck(services, sub, record, &ended).await {
             return;
         }
+        // A vault row's grant, read after every wait; one deadline bounds
+        // everything from this read to the request's end.
+        let deadline = tokio::time::Instant::now() + fence::FENCE_WINDOW;
+        let Some(fence) = self.fence_now(services, sub, record, &ended).await else {
+            return;
+        };
         // The wait for the record can span a rotation or an unsubscribe: the
         // row that signs is read after it, never before.
         let Some(current) = self.store.signing_row(record) else {
@@ -239,7 +245,7 @@ impl EventsHub {
             return;
         };
         if self
-            .settled_unsendable(services, record, &current, &ended)
+            .settled_unsendable(services, record, &current, fence.binding(), &ended)
             .await
         {
             return;
@@ -265,6 +271,18 @@ impl EventsHub {
             .await;
             return;
         }
+        let limit = match fence {
+            fence::Fence::Unfenced => None,
+            fence::Fence::Bound(_) => {
+                let Some(remaining) = self
+                    .fence_remaining(services, record, deadline, &ended)
+                    .await
+                else {
+                    return;
+                };
+                Some(remaining)
+            }
+        };
         // Charged once the attempt is on record, so a retry after an audit
         // outage is not charged for an attempt that never left. A type its
         // source exempts (a budget event) is never charged.
@@ -282,7 +300,7 @@ impl EventsHub {
         // time; an enqueued record keeps its stored eventId (MIK-8697 §14.2).
         let handle = services.alias(&current.id);
         let answer = self
-            .send_event(url, &current, &handle, event_id, frame, now)
+            .send_event(url, &current, &handle, event_id, frame, now, limit)
             .await;
         self.settle_answer(services, ctx, answer, verdict, &ended)
             .await;
@@ -368,7 +386,12 @@ impl EventsHub {
 
     /// The one path an event's bytes take to a callback: signed with the
     /// subscription's current secret, and its previous one during the
-    /// rotation grace, through the hardened client.
+    /// rotation grace, through the hardened client. `limit` is what remains
+    /// of a fenced send's window.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each is one part of the one signed POST"
+    )]
     async fn send_event(
         &self,
         url: &url::Url,
@@ -377,6 +400,7 @@ impl EventsHub {
         event_id: &str,
         frame: OutboundFrame,
         now: chrono::DateTime<chrono::Utc>,
+        limit: Option<Duration>,
     ) -> Result<super::client::Answer, CallbackFailure> {
         // The caller's reading picks the signing keys and dates the
         // signature (MIK-8202).
@@ -397,18 +421,23 @@ impl EventsHub {
                 // Only a failure before any byte could be written releases the
                 // frame's reservation; any other may follow a written byte, and
                 // the frame commits.
-                match self
-                    .client
-                    .post_tracked(
-                        url,
-                        handle,
-                        event_id,
-                        super::client::Signing { keys: &keys, now },
-                        body,
-                        ReadBody::Discard,
-                    )
-                    .await
-                {
+                let post = self.client.post_tracked(
+                    url,
+                    handle,
+                    event_id,
+                    super::client::Signing { keys: &keys, now },
+                    body,
+                    ReadBody::Discard,
+                );
+                // A fenced send gets what remains of its window; one cut
+                // short may have written a byte, so it counts as sent.
+                let posted = match limit {
+                    Some(limit) => tokio::time::timeout(limit, post)
+                        .await
+                        .unwrap_or(Err((CallbackFailure::Timeout, false))),
+                    None => post.await,
+                };
+                match posted {
                     Err((failure, true)) => CallbackSend::NotSent(failure),
                     Err((failure, false)) => CallbackSend::Sent(Err(failure)),
                     Ok(answer) => CallbackSend::Sent(Ok(answer)),
@@ -730,6 +759,8 @@ const fn dead(reason: DeadReason, status: &'static str) -> Settle {
 
 #[path = "worker_dispatch.rs"]
 mod dispatch;
+#[path = "worker_fence.rs"]
+mod fence;
 #[path = "worker_settle.rs"]
 mod settle;
 
