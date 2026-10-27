@@ -80,7 +80,7 @@ impl MetaMcp {
                 .await;
             // Concurrent, so a slow resolution on one backend does not eat
             // another's share of the deadline.
-            futures::future::join_all(targets.iter().map(|&(server, tool)| async move {
+            futures::future::join_all(refused.iter().map(|((server, tool), backend)| async move {
                 match self
                     .claim_caller_view(server, tool, scope, session_id)
                     .await
@@ -89,10 +89,14 @@ impl MetaMcp {
                         fill.backend_bound(),
                         tokio::spawn(fill.run()),
                     )),
-                    None => self
-                        .running_cold_lease(server, scope)
-                        .await
-                        .map(|(backend, id)| Pending::Leased(backend, id)),
+                    None => {
+                        #[cfg(test)]
+                        backend.before_lease_lookup.pause().await;
+                        #[cfg(not(test))]
+                        let _ = backend;
+                        self.running_cold_lease(server, scope)
+                            .map(|(backend, id)| Pending::Leased(backend, id))
+                    }
                 }
             }))
             .await
@@ -130,7 +134,7 @@ impl MetaMcp {
 
     /// The caller's cold lease on `server` another reader holds, if one
     /// runs, through the caller's own backend grant.
-    async fn running_cold_lease(
+    fn running_cold_lease(
         &self,
         server: &str,
         scope: InvokeScope<'_>,
@@ -138,8 +142,6 @@ impl MetaMcp {
         let backend = self
             .scoped(scope.authorizer.backend_grant())
             .scoped_get(server)?;
-        #[cfg(test)]
-        backend.before_lease_lookup.pause().await;
         let id = self
             .principal_for(&backend, scope.caller)?
             .stable_actor_id();

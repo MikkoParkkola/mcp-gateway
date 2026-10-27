@@ -331,9 +331,6 @@ impl Backend {
         // headers with it. `stateless_tools_slot_tests` keeps a cell that fails
         // if this is deleted, because every other cell would still pass.
         let fetch_headers: &[(String, String)] = identity_key.map_or(&[], |_| extra_headers);
-        // Before the slot, the lease and the fill's admission: a refused
-        // shared fill charges and counts nothing.
-        self.refuse_shared_start(&key)?;
         // Resolve the slot ONCE and keep it for both the cache and the fetch.
         let lease = self.begin_internal_activity_for(&key)?;
         let entry = Arc::clone(lease.entry());
@@ -359,6 +356,13 @@ impl Backend {
                             self.name,
                             LIST_FILL_COOLDOWN.as_secs()
                         )));
+                    }
+                    // A fill that would have to start a refused shared slot is
+                    // refused before its admission, so it charges and counts
+                    // nothing; one over a transport already in place starts
+                    // nothing and is not a start.
+                    if entry.transport.read().is_none() {
+                        self.refuse_shared_start(&key)?;
                     }
                     let counted = (self.name.as_str(), &self.list_fills);
                     admit_fill(&entry, counted, bound, family.cooldown)?;
