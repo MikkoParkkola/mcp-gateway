@@ -437,6 +437,51 @@ fn a_retired_cache_carries_the_gateways_proof() {
     );
 }
 
+/// A container restart gives the gateway the same pid, and the tombstone
+/// counter starts again at zero, so a tombstone a crashed run left behind
+/// can hold the exact name this run's first retire picks. The rename then
+/// fails and the repair is refused (MIK-8831.REL.7).
+#[test]
+fn a_crashed_runs_tombstone_with_this_pid_does_not_block_a_retire() {
+    let root = tempfile::tempdir().expect("root");
+    let leaf = "backend-0123456789abcdef";
+    // Every name a pid-and-counter scheme could pick in this test binary:
+    // far more retires than the whole suite makes. Non-empty, so a rename
+    // onto one fails on every platform.
+    for seq in 0..512 {
+        let leftover = root.path().join(format!(
+            "{leaf}{TOMBSTONE_MARK}{}-{seq}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(leftover.join("_npx")).expect("a crashed run's tombstone");
+    }
+    let dir = root.path().join(leaf);
+    std::fs::create_dir_all(dir.join("_npx")).expect("a cache");
+
+    let Retired::Moved(tombstone) = retire_now(&dir) else {
+        panic!("a leftover from a crashed run refused this run's retire");
+    };
+    assert!(
+        is_gateway_tombstone(&tombstone),
+        "the new name still carries the proof the sweep reads"
+    );
+    assert!(
+        tombstone
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().contains(TOMBSTONE_MARK)),
+        "and the mark the sweep matches: {tombstone:?}"
+    );
+    sweep_now(root.path());
+    assert!(!tombstone.exists(), "the sweep clears the new name");
+    assert!(
+        root.path()
+            .join(format!("{leaf}{TOMBSTONE_MARK}{}-0", std::process::id()))
+            .join("_npx")
+            .is_dir(),
+        "an unmarked leftover is still not the sweep's to delete"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn a_proof_that_is_a_link_is_neither_followed_nor_accepted() {
