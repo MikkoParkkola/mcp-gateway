@@ -22,7 +22,9 @@ pub(crate) use self::http::guarded_client;
 pub(crate) use self::http::is_budget_refusal;
 #[doc(hidden)]
 pub use self::http::transport_follows_redirect;
+#[cfg(test)]
 pub(crate) use self::stdio::assigned_package_cache_dir;
+pub(crate) use self::stdio::isolated_env_and_assigned_cache;
 pub use self::stdio::{
     CEILING_MAX_FRAME_BYTES, DEFAULT_MAX_FRAME_BYTES, MIN_MAX_FRAME_BYTES, StdioTransport,
     isolated_package_manager_env,
