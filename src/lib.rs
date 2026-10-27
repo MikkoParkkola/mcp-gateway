@@ -67,6 +67,8 @@ mod events;
 pub mod failsafe;
 mod fs_lock;
 #[doc(hidden)]
+pub use fs_lock::lock_directory_finding;
+#[doc(hidden)]
 pub mod gateway;
 mod hashing;
 mod home_dir;

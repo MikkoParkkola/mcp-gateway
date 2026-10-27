@@ -13,7 +13,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crate::fs_lock::ExclusiveFileLock;
+use crate::fs_lock::{Attempt, ExclusiveFileLock};
 
 /// How often a contended lease is retried while waiting.
 pub(super) const LEASE_RETRY: Duration = Duration::from_millis(100);
@@ -72,10 +72,16 @@ pub(super) fn acquire_with(
     let start = now();
     let mut warned = false;
     loop {
-        if let Some(lease) = ExclusiveFileLock::try_lease(&lock_path)? {
-            return Ok(lease);
-        }
+        let refused = match ExclusiveFileLock::try_lease(&lock_path)? {
+            Attempt::Taken(lease) => return Ok(lease),
+            Attempt::Held => None,
+            Attempt::Refused(error) => Some(error),
+        };
         if now().duration_since(start) >= wait {
+            // A lock file that cannot be used names its own repair.
+            if let Some(error) = refused {
+                return Err(error);
+            }
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
                 LeaseHeld {

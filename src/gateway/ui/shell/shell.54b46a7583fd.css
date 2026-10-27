@@ -765,6 +765,9 @@ a { color: inherit; text-decoration: none; }
 .top .search { margin-left: auto; width: 300px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border: var(--size-rule) solid var(--color-border-default); border-radius: var(--radius-md); background: none; color: var(--color-text-tertiary); font: var(--type-body); cursor: pointer; }
 .top .search kbd { font: var(--type-small); font-family: var(--font-family-mono); }
 .top .who { font: var(--type-small); }
+/* Sign-out sits in the top bar; on a phone it is the menu's last row instead.
+   `hidden` must win over the button's own display. */
+.signout[hidden], .side-signout { display: none; }
 .palette { margin: 120px auto auto; width: min(640px, calc(100% - 24px)); padding: 0; border: var(--size-rule) solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-raised); color: var(--color-text-primary); box-shadow: var(--shadow-3); }
 .palette::backdrop { background: var(--color-bg-overlay); }
 .palette input { width: 100%; padding: 14px 16px; border: 0; border-bottom: var(--size-rule) solid var(--color-border-subtle); background: none; color: inherit; font: var(--type-body); outline: none; }
@@ -803,6 +806,7 @@ body.signed-out > .side, body.signed-out > .main, body.signed-out > .skip { disp
 .signin label { font: var(--type-small); color: var(--color-text-secondary); }
 .signin .btn { justify-content: center; }
 .signin-error { color: var(--color-status-danger-fg); font: var(--type-small); }
+.signin-notice { color: var(--color-text-secondary); font: var(--type-small); }
 .signin-note { font: var(--type-small); }
 .signin-note code { font-family: var(--font-family-mono); }
 
@@ -824,6 +828,8 @@ body.signed-out > .side, body.signed-out > .main, body.signed-out > .skip { disp
   .menu { display: grid; place-items: center; width: 44px; height: 44px; font-size: 18px; color: var(--color-text-primary); background: none; border: 0; }
   .mbrand { display: flex; align-items: center; font: var(--type-title); letter-spacing: var(--type-title-tracking); text-transform: uppercase; font-size: 15px; }
   .top .who { display: none; }
+  .top .signout { display: none; }
+  .menu-open .side-signout:not([hidden]) { display: flex; justify-content: center; margin: 16px; }
   .top .search { width: 44px; height: 44px; border: 0; padding: 0; justify-content: center; }
   .top .search kbd { display: none; }
   .top .search .stxt { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
