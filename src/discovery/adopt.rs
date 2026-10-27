@@ -11,7 +11,7 @@
 //! gateway as before, and a literal (no `${`), which goes to the secret
 //! store, never into gateway.yaml.
 
-use crate::config::{TransportConfig, has_literal_default, is_reference};
+use crate::config::{Config, TransportConfig, has_literal_default, is_reference};
 
 use super::DiscoveredServer;
 
@@ -25,9 +25,12 @@ pub(crate) enum AdoptRefusal {
     /// `${NAME:-default}` with a non-empty default: the default is a literal
     /// that would be written into gateway.yaml as text.
     LiteralDefault,
-    /// A URL carrying a credential: a user name or password, or a query
-    /// parameter named like one.
+    /// A URL carrying a credential: a user name or password, a query
+    /// parameter named like one, or a fragment.
     CredentialInUrl,
+    /// Credentials the client sends in cleartext to a host off this machine,
+    /// which a gateway load refuses for an enabled backend.
+    CleartextCredential,
 }
 
 /// Query parameter names, matched case-insensitively as substrings, that
@@ -42,6 +45,9 @@ const CREDENTIAL_QUERY_NAMES: &[&str] = &[
     "sig",
     "credential",
     "session",
+    "bearer",
+    "pwd",
+    "jwt",
 ];
 
 /// Every reason `server` is not adoptable, each with the client field it
@@ -70,8 +76,19 @@ pub(crate) fn refusals(server: &DiscoveredServer) -> Vec<(AdoptRefusal, String)>
             refused.push((AdoptRefusal::NeedsClientOnlySecret, format!("{map}.{key}")));
         }
     }
-    if url(&server.transport).is_some_and(carries_credential) {
-        refused.push((AdoptRefusal::CredentialInUrl, "url".to_string()));
+    // A URL that does not parse is already uncarried by the scanner.
+    if let Some(parsed) = url(&server.transport).and_then(|raw| url::Url::parse(raw).ok()) {
+        if carries_credential(&parsed) {
+            refused.push((AdoptRefusal::CredentialInUrl, "url".to_string()));
+        } else if Config::reject_cleartext_credentials(
+            &server.name,
+            &server.to_backend_config(),
+            &parsed,
+        )
+        .is_err()
+        {
+            refused.push((AdoptRefusal::CleartextCredential, "url".to_string()));
+        }
     }
     // By field name: a client file's key order is not one to depend on.
     refused.sort_by(|a, b| a.1.cmp(&b.1));
@@ -86,13 +103,8 @@ fn url(transport: &TransportConfig) -> Option<&str> {
     }
 }
 
-/// A URL that does not parse carries nothing the parser could see; the
-/// load refuses it on its own.
-fn carries_credential(raw: &str) -> bool {
-    let Ok(url) = url::Url::parse(raw) else {
-        return false;
-    };
-    if !url.username().is_empty() || url.password().is_some() {
+fn carries_credential(url: &url::Url) -> bool {
+    if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
         return true;
     }
     url.query_pairs().any(|(name, _)| {

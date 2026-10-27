@@ -467,7 +467,7 @@ impl Config {
     /// Runs only for an enabled backend: a disabled one opens no connection, so
     /// it leaks nothing. The skip covers this predicate alone — an empty or
     /// malformed URL still fails above, whatever `enabled` says.
-    pub(super) fn reject_cleartext_credentials(
+    pub(crate) fn reject_cleartext_credentials(
         name: &str,
         backend: &BackendConfig,
         url: &url::Url,

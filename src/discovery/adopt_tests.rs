@@ -230,6 +230,8 @@ fn a_credential_in_a_url_refuses_naming_url() {
         "https://mcp.example.test/mcp?access_token=t",
         "https://mcp.example.test/mcp?X-Amz-Signature=s",
         "wss://mcp.example.test/ws?Session=s",
+        "https://mcp.example.test/mcp?jwt=j",
+        "https://mcp.example.test/mcp#token=t",
     ] {
         assert_eq!(
             refused(&json!({"url": url})),
@@ -237,6 +239,23 @@ fn a_credential_in_a_url_refuses_naming_url() {
             "{url}"
         );
     }
+}
+
+#[test]
+fn cleartext_credentials_off_this_machine_refuse() {
+    // The gateway refuses this backend once enabled, so adopting it would
+    // write one that cannot run.
+    let off_host =
+        json!({"url": "http://mcp.lan.test/mcp", "headers": {"Authorization": "Bearer t"}});
+    assert_eq!(
+        refused(&off_host),
+        one(AdoptRefusal::CleartextCredential, "url")
+    );
+    let loopback =
+        json!({"url": "http://127.0.0.1:9000/mcp", "headers": {"Authorization": "Bearer t"}});
+    assert_eq!(refused(&loopback), vec![]);
+    let no_credential = json!({"url": "http://mcp.lan.test/mcp"});
+    assert_eq!(refused(&no_credential), vec![]);
 }
 
 #[test]
