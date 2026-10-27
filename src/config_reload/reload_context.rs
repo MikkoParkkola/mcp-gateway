@@ -184,6 +184,8 @@ pub struct ReloadContext {
     pub(super) capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
     /// Told which backends each applied reload registered (`MIK-8054`).
     pub(super) on_registered: Option<super::reload_warm_hook::OnRegistered>,
+    /// The shared refusal ledger and override auditor (`GET /ui/api/refusals`).
+    pub(super) reporting: super::refusals::ReloadReporting,
     /// Where an applied reload marks the web UI's charts.
     pub(super) markers: Option<Arc<crate::counters::CounterStore>>,
     /// Set when lock recovery put an earlier gateway.yaml back on disk: the
@@ -281,6 +283,7 @@ impl ReloadContext {
             stop: tokio_util::sync::CancellationToken::new(),
             capabilities: None,
             on_registered: None,
+            reporting: super::refusals::ReloadReporting::default(),
             markers: None,
             surfaced_hook: parking_lot::Mutex::new(None),
         })
