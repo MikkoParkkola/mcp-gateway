@@ -25,9 +25,10 @@ use crate::transport::Transport;
 
 pub(in crate::gateway::router) mod anon_intake;
 mod extras;
-use extras::{Extra, arm_extras, backend_config, harden};
+use extras::{Extra, Log, arm_extras, audit_log, backend_config, harden};
 mod anon_key;
 mod backend_oracle;
+mod counting;
 mod delivery;
 mod delivery_who;
 mod empty_grant;
@@ -161,6 +162,8 @@ async fn post_modern_as(
 #[derive(Default)]
 struct Setup {
     auth: Option<AuthConfig>,
+    /// T21: whether either route has a transparency log.
+    log: Log,
     fail_closed: bool,
     backend_error: Option<i32>,
     /// MIK-7979: the backends' transport fails after counting each call.
@@ -231,6 +234,10 @@ enum MetaMode {
     SurfacedT,
     /// Code mode is on, so `gateway_execute` runs chains (MIK-8387 rows).
     CodeMode,
+    /// Only the dispatch layer has a firewall, so the send's own rescan is
+    /// what refuses a dangerous argument.
+    #[cfg(feature = "firewall")]
+    DispatchFirewall,
     /// Only `gateway_list_servers` is exposed: `gateway_invoke` is no tool.
     InvokeHidden,
 }
@@ -247,6 +254,17 @@ impl MetaMode {
                 crate::idempotency::CLEANUP_INTERVAL,
             ),
             Self::CodeMode => return meta.with_code_mode(true),
+            #[cfg(feature = "firewall")]
+            Self::DispatchFirewall => meta.set_firewall(Some(Arc::new(
+                crate::security::firewall::Firewall::from_config(
+                    crate::security::firewall::FirewallConfig {
+                        enabled: true,
+                        scan_requests: true,
+                        ..crate::security::firewall::FirewallConfig::default()
+                    },
+                    None,
+                ),
+            ))),
             Self::InvokeHidden => {
                 return meta.with_exposed_meta_tools(&["gateway_list_servers".to_string()]);
             }
@@ -268,23 +286,7 @@ fn sanitizing(state: &super::AppState, on: bool) {
 
 /// Backends `alpha` and `beta`, one logger shared by both routes.
 async fn fixture(setup: Setup) -> Fixture {
-    let audit = tempfile::tempdir().unwrap();
-    let path = audit.path().join("audit.jsonl");
-    let policy = if setup.fail_closed {
-        AuditFailurePolicy::FailClosed
-    } else {
-        AuditFailurePolicy::BestEffort
-    };
-    let log = Arc::new(
-        TransparencyLogger::open(Arc::new(TransparencyLogConfig {
-            enabled: true,
-            path: path.to_string_lossy().into_owned(),
-            key_id: "d2".to_string(),
-            ..TransparencyLogConfig::default()
-        }))
-        .expect("open log")
-        .with_failure_policy(policy),
-    );
+    let (audit, path, log) = audit_log(setup.fail_closed);
     let (mut state, store) = match &setup.auth {
         Some(auth) => super::tests::test_router_app_state_with_auth(auth).await,
         None => super::tests::test_router_app_state().await,
@@ -334,7 +336,9 @@ async fn fixture(setup: Setup) -> Fixture {
             .with_continuations(meta.continuation()),
         ));
     }
-    meta.enable_transparency_log(Arc::clone(&log));
+    if setup.log == Log::On {
+        meta.enable_transparency_log(Arc::clone(&log));
+    }
     meta = arm_extras(meta, extras);
     if setup.chain == crate::config::ChainMode::Require {
         meta.set_chain_signer(
@@ -356,7 +360,7 @@ async fn fixture(setup: Setup) -> Fixture {
         meta = meta.with_caller_identity(config);
     }
     state_mut.meta_mcp = Arc::new(setup.meta_mode.arm(meta));
-    state_mut.transparency_log = Some(Arc::clone(&log));
+    state_mut.transparency_log = (setup.log == Log::On).then(|| Arc::clone(&log));
     let router = create_router(Arc::clone(&state));
     Fixture {
         state,

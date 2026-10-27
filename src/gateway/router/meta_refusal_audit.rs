@@ -34,6 +34,8 @@ pub(super) struct Refused<'a> {
     /// credential kind, principal, key name and verified subject.
     who: AuditWho,
     session_id: &'a str,
+    /// The request firewall refused it, for the web UI's counters.
+    firewall: bool,
 }
 
 /// What a refusal records: its outcome and the target resolved before it.
@@ -56,7 +58,15 @@ impl<'a> Refused<'a> {
             arguments,
             who: AuditWho::from_request(client, grant_subject, record_key),
             session_id,
+            firewall: false,
         }
+    }
+
+    /// Mark this refusal as the request firewall's.
+    #[cfg(feature = "firewall")]
+    pub(super) const fn firewall(mut self) -> Self {
+        self.firewall = true;
+        self
     }
 
     /// Record the refusal of `target` as `denied` with `code`, then answer it; under
@@ -239,6 +249,18 @@ impl<'a> Refused<'a> {
         state: &AppState,
         refusal: Refusal<'_>,
     ) -> Option<Result<String, crate::Error>> {
+        // Every router refusal is written here, with or without a
+        // log, so the web UI's counters move here once per refused call.
+        state.meta_mcp.count_call(
+            refusal.server,
+            refusal.tool,
+            &self.who,
+            crate::counters::Outcome::Audited {
+                outcome: refusal.outcome,
+                firewall: self.firewall,
+                cache_hit: false,
+            },
+        );
         let log = state.transparency_log.as_ref()?;
         let otel_trace_id = self
             .arguments

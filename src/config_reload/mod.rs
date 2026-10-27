@@ -549,9 +549,18 @@ mod reload_pause;
 mod webhook_base_path_reload_tests;
 #[cfg(test)]
 mod writer_lock_tests;
+#[cfg(all(test, unix))]
+mod writer_symlink_tests;
 
 #[cfg(test)]
+mod replace_secret_tests;
+#[cfg(test)]
+mod replace_test_support;
+#[cfg(test)]
 mod replace_tests;
+
+#[cfg(test)]
+mod reader_lock_tests;
 
 #[cfg(test)]
 mod grant_change_trigger_tests;
