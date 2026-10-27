@@ -77,6 +77,8 @@ pub use executor::CapabilityExecutor;
 pub(crate) use executor::ProcessNote;
 pub use executor::graphql::GraphqlExecutor;
 pub use executor::jsonrpc::JsonRpcExecutor;
+#[cfg(target_os = "linux")]
+pub(crate) use executor::resolve_command;
 pub use executor::rest::{ExecutionContext, ProtocolExecutor};
 pub use hash::{compute_capability_hash, rewrite_with_pin, strip_sha256_line};
 pub use loader::CapabilityLoader;

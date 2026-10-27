@@ -82,6 +82,7 @@ impl Finalized {
     fn split(self) -> (JsonRpcResponse, Settle) {
         let stored = self.execution.as_ref().map(|_| self.response.clone());
         let settle = Settle {
+            trace: self.response.invocation_trace.clone(),
             tool: self.tool,
             execution: self.execution,
             signing: self.signing,
@@ -94,6 +95,8 @@ impl Finalized {
 
 /// What a recorded answer settles with.
 struct Settle {
+    /// The invocation's trace, taken before the judge can replace the answer.
+    trace: Option<std::sync::Arc<str>>,
     tool: String,
     execution: Option<SyncLease>,
     signing: Option<SigningInvocationContext>,
@@ -154,6 +157,7 @@ async fn deliver(
         external_server: "gateway",
         external_tool: &settle.tool,
         subject: None,
+        trace_id: settle.trace.as_deref(),
     };
     let (frame, stored) = crate::gateway::router::record_judged_delivery(
         meta,
@@ -197,6 +201,7 @@ mod tests {
         );
         let frame = crate::gateway::outbound::answer(None, None, response, None, None);
         let settle = Settle {
+            trace: None,
             tool: "gateway_execute".to_owned(),
             execution: None,
             signing: None,

@@ -122,6 +122,18 @@ async fn cell(setup: Setup, method: &'static str, part: Part, text: String) -> S
             .map_or(0, |f| f.response_inspection_counts().inspections)
     };
     let before = count();
+    let body = send(&meta, method, part).await;
+    Seen {
+        body,
+        calls: calls.load(Ordering::SeqCst),
+        inspections: count() - before,
+    }
+}
+
+/// `method`'s request for `part`, sent through the stdio dispatch inside the
+/// notification scope the stdio server opens: every frame the client was
+/// written, notifications first, as one text.
+async fn send(meta: &Arc<MetaMcp>, method: &'static str, part: Part) -> String {
     let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
@@ -136,7 +148,7 @@ async fn cell(setup: Setup, method: &'static str, part: Part, text: String) -> S
     let request = json!({"jsonrpc": "2.0", "id": 7, "method": sent, "params": params});
     let (answer, _) = Box::pin(super::super::Gateway::dispatch_streaming_notifications(
         Box::pin(super::super::Gateway::dispatch_single(
-            &meta,
+            meta,
             &policy,
             &mtls,
             &request,
@@ -157,11 +169,7 @@ async fn cell(setup: Setup, method: &'static str, part: Part, text: String) -> S
     if let Some(answer) = answer {
         seen.push_str(&answer.to_string());
     }
-    Seen {
-        body: seen,
-        calls: calls.load(Ordering::SeqCst),
-        inspections: count() - before,
-    }
+    seen
 }
 
 /// A 2026-07-28 request's `_meta` declaring `elicitation`: an interim
@@ -317,4 +325,35 @@ fn egress_every_stdio_catalogue_method_is_a_matrix_row() {
             "{method} is not a matrix row"
         );
     }
+}
+
+/// A stdio answer the egress refuses as it is finalized (an interim question
+/// carrying a credential) is replaced by the gateway's refusal, which keeps
+/// the invocation's trace: the refused delivery joins its invocation record.
+#[tokio::test]
+async fn a_refused_stdio_answer_joins_its_invocation() {
+    use crate::gateway::router::route_matrix_driver_tests::response::{delivery_rows, temp_log};
+    let backend = Arc::new(Planted::with_text(
+        "tools/call",
+        Part::InterimQuestion,
+        secret(),
+    ));
+    let (mut meta, _firewall) = stdio_on(backend, Setup::Default).await;
+    let (_dir, log) = temp_log(None);
+    Arc::get_mut(&mut meta)
+        .expect("the only handle")
+        .enable_transparency_log(Arc::clone(&log));
+    let body = send(&meta, "tools/call", Part::InterimQuestion).await;
+    assert!(refused(&body), "premise: refused whole: {body}");
+    let deliveries = delivery_rows(&log).await;
+    let invocations: Vec<Value> = std::fs::read_to_string(log.path())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| entry.get("route").is_some() && entry.get("kind").is_none())
+        .collect();
+    let ([delivery], [invocation]) = (deliveries.as_slice(), invocations.as_slice()) else {
+        panic!("one delivery and one invocation: {deliveries:?} {invocations:?}");
+    };
+    assert_eq!(delivery["trace_id"], invocation["trace_id"], "{delivery}");
 }

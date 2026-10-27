@@ -192,15 +192,13 @@ fn no_pending_restart_when_the_file_matches_the_running_process() {
     assert!(!live.restart_required());
 }
 
-/// MIK-7645 AC3 guard: surfaced tools are filled once at startup
-/// (`with_surfaced_tools` in `build_meta_mcp`), so a reload that changes them
-/// stays restart-pending. Admission already hands the resolved server to
-/// `audit_replay` (MIK-8520, `ReplayFacts`). What remains before this guard
-/// can go: a deferred surfaced replay that re-enters the live route resolves
-/// the name again, so it must dispatch the server it was admitted for
-/// (MIK-8520.REPLAY.3).
+/// L7: `surfaced_tools` is applied by a reload (the
+/// surfaced snapshot is swapped under the reload lock), so a change to it
+/// alone is not restart-pending. It replaces the earlier guard: the
+/// replay record carries its admitted server, and a deferred replay's live
+/// re-entry reads the request snapshot.
 #[test]
-fn a_surfaced_tools_change_is_restart_pending() {
+fn l7_a_surfaced_tools_change_alone_is_not_restart_pending() {
     let running = Config::default();
     let mut wanted = Config::default();
     wanted
@@ -212,7 +210,57 @@ fn a_surfaced_tools_change_is_restart_pending() {
         });
     let pending = super::pending_restart_fields(&running, &wanted);
     assert!(
-        pending.contains(&"meta_mcp"),
-        "surfaced tools changed without a restart; see MIK-7645 AC3: {pending:?}"
+        !pending.contains(&"meta_mcp"),
+        "L7: a surfaced_tools edit is applied live, yet reported restart-pending: {pending:?}"
     );
+}
+
+/// One named edit to a `meta_mcp` field.
+type Edit = (&'static str, fn(&mut crate::config::MetaMcpConfig));
+
+/// L7 (pin): every other `meta_mcp` field is still read
+/// once at startup, so a change to any of them stays restart-pending even
+/// alongside a `surfaced_tools` edit.
+#[test]
+fn l7_every_other_meta_mcp_field_stays_restart_pending() {
+    let edits: [Edit; 7] = [
+        ("enabled", |m| m.enabled = !m.enabled),
+        ("cache_ttl", |m| {
+            m.cache_ttl += std::time::Duration::from_secs(1);
+        }),
+        ("prompts_resources_fetch_timeout", |m| {
+            m.prompts_resources_fetch_timeout += std::time::Duration::from_secs(1);
+        }),
+        ("warm_start", |m| m.warm_start.push("alpha".to_string())),
+        ("projection_mode", |m| {
+            m.projection_mode = match m.projection_mode {
+                crate::projection::ProjectionMode::Off => crate::projection::ProjectionMode::On,
+                _ => crate::projection::ProjectionMode::Off,
+            };
+        }),
+        ("exposed_meta_tools", |m| {
+            m.exposed_meta_tools
+                .push("gateway_list_servers".to_string());
+        }),
+        ("expose_stats_tool", |m| {
+            m.expose_stats_tool = !m.expose_stats_tool;
+        }),
+    ];
+    for (field, edit) in edits {
+        let running = Config::default();
+        let mut wanted = Config::default();
+        edit(&mut wanted.meta_mcp);
+        wanted
+            .meta_mcp
+            .surfaced_tools
+            .push(crate::config::SurfacedToolConfig {
+                server: "alpha".to_string(),
+                tool: "t".to_string(),
+            });
+        let pending = super::pending_restart_fields(&running, &wanted);
+        assert!(
+            pending.contains(&"meta_mcp"),
+            "L7: a meta_mcp.{field} edit is no longer restart-pending: {pending:?}"
+        );
+    }
 }
