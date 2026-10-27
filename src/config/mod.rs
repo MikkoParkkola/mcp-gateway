@@ -35,7 +35,7 @@ mod pattern_grammar;
 mod record_key;
 mod remote_provenance_posture;
 mod secret_file;
-mod secret_ref;
+pub(crate) mod secret_ref;
 mod server_config;
 mod strict_keys;
 mod validation;
