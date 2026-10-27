@@ -47,7 +47,7 @@ impl FileRevision {
     /// The hex digest.
     #[must_use]
     #[cfg_attr(
-        not(feature = "webui"),
+        all(not(feature = "webui"), not(test)),
         expect(dead_code, reason = "read by the web UI's discovery route")
     )]
     pub(crate) fn as_str(&self) -> &str {
