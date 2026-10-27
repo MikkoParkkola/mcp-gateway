@@ -14,6 +14,8 @@ use super::Error;
 /// One scalar mapping value, by the keys from the root to it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ValueSpan {
+    /// The decoded key texts. Only `refused` says whether the value may be
+    /// edited; a caller naming a path also checks its own segments.
     pub(crate) path: Vec<String>,
     /// The scalar's own bytes, quotes included.
     pub(crate) bytes: Range<usize>,
@@ -40,7 +42,8 @@ struct Frame {
 /// The guard's refusal, a parser error, or a span the text cannot hold.
 pub(crate) fn mapping_values(text: &str) -> Result<Vec<ValueSpan>, Error> {
     super::guard(text)?;
-    let offsets = CharBytes::new(text);
+    let offsets = Bytes(text);
+    let mut documents = 0;
     let mut frames: Vec<Frame> = Vec::new();
     let mut out = Vec::new();
     for item in Parser::new_from_str(text) {
@@ -115,6 +118,12 @@ pub(crate) fn mapping_values(text: &str) -> Result<Vec<ValueSpan>, Error> {
             Event::MappingEnd | Event::SequenceEnd => {
                 frames.pop();
             }
+            Event::DocumentStart(..) => {
+                documents += 1;
+                if documents > 1 {
+                    return Err(Error::message("more than one document"));
+                }
+            }
             _ => {}
         }
     }
@@ -152,22 +161,25 @@ fn one_line(span: &Span) -> bool {
     span.start.line() == span.end.line()
 }
 
-/// Character offsets to byte offsets: the parser's markers count characters.
-struct CharBytes(Vec<usize>);
+/// Byte positions of the parser's markers: its own byte offset when it gives
+/// one, else counted from its character index. Nothing is allocated per
+/// character, so a large file costs no more memory than its text.
+struct Bytes<'a>(&'a str);
 
-impl CharBytes {
-    fn new(text: &str) -> Self {
-        let mut at: Vec<usize> = text.char_indices().map(|(b, _)| b).collect();
-        at.push(text.len());
-        Self(at)
-    }
-
+impl Bytes<'_> {
     fn byte(&self, marker: Marker) -> Result<usize, Error> {
-        // A position past the text would be a parser defect: refuse, never panic.
-        self.0
-            .get(marker.index())
-            .copied()
-            .ok_or_else(|| Error::message("a parser position the text cannot hold"))
+        let text = self.0;
+        let at = match marker.byte_offset() {
+            Some(b) => Some(b).filter(|&b| text.is_char_boundary(b)),
+            None => text
+                .char_indices()
+                .map(|(b, _)| b)
+                .chain(std::iter::once(text.len()))
+                .nth(marker.index()),
+        };
+        // A position the text cannot hold would be a parser defect: refuse,
+        // never panic on a slice.
+        at.ok_or_else(|| Error::message("a parser position the text cannot hold"))
     }
 
     fn range(&self, start: Marker, end: Marker) -> Result<Range<usize>, Error> {

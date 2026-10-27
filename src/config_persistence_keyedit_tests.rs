@@ -471,3 +471,38 @@ fn a_field_under_a_tagged_mapping_is_unprovable() {
 fn an_empty_block_scalar_is_unprovable() {
     assert_unprovable("a:\n  b: |\nc: 1\n", &[set_int("a.b", 2)]);
 }
+
+/// Edits are placed by `\n` line: a config breaking lines with a bare `\r`
+/// refuses rather than risk two changes on what it reads as one line.
+#[test]
+fn a_bare_carriage_return_break_is_unprovable() {
+    assert_unprovable("a: 1\rb: 2\r", &[set_int("a", 3)]);
+}
+
+/// A slot placeholder already present (here in a comment) would make the
+/// slot's place ambiguous: refused, nothing written.
+#[test]
+fn a_placeholder_already_present_is_unprovable() {
+    let text = "a:\n  t: old  # \"__mcpgw_slot_a.t__\"\n";
+    assert_unprovable(text, &[secret("a.t")]);
+}
+
+#[test]
+fn the_span_walk_refuses_a_second_document() {
+    assert!(crate::yaml::mapping_values("a: 1\n---\nb: 2\n").is_err());
+}
+
+/// The walk's bookkeeping recovers after a sequence value and after a
+/// collection used as a key: the next field is still found and edited.
+#[test]
+fn a_field_after_a_sequence_or_a_collection_key_is_editable() {
+    let flow = "a: [1, 2]\nb: 3\n";
+    assert_eq!(edited(flow, &[set_int("b", 4)]), "a: [1, 2]\nb: 4\n");
+    let block = "a:\n  - 1\n  - x: 2\nb: 3\n";
+    assert_eq!(
+        edited(block, &[set_int("b", 4)]),
+        "a:\n  - 1\n  - x: 2\nb: 4\n"
+    );
+    let keyed = "? [k]\n: v\nb: 3\n";
+    assert_eq!(edited(keyed, &[set_int("b", 4)]), "? [k]\n: v\nb: 4\n");
+}
