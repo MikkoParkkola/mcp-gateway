@@ -99,6 +99,10 @@ pub(crate) mod segments;
 #[cfg(test)]
 #[path = "transparency_log_temp.rs"]
 pub(crate) mod temp;
+// Read only by the web UI's Activity view.
+#[cfg(any(test, feature = "webui"))]
+#[path = "transparency_log_signature.rs"]
+pub(crate) mod signature;
 #[path = "transparency_log_verify.rs"]
 mod verify;
 // MIK-7713: verify against an off-host copy of `.hwm`.

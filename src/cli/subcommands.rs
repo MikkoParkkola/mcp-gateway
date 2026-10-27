@@ -716,6 +716,14 @@ pub enum AuditCommand {
         /// record it names (a wiped, rolled-back or replaced log fails)
         #[arg(long)]
         anchor: Option<PathBuf>,
+        /// Check an Activity export (NDJSON) offline instead of the log: its
+        /// manifest signature and the digest of its rows
+        #[arg(long, conflicts_with_all = ["path", "archive", "anchor"])]
+        export: Option<PathBuf>,
+        /// The public key to check `--export` against, as `provenance
+        /// public-key` prints it (default: this gateway's configured key)
+        #[arg(long, requires = "export")]
+        jwk: Option<PathBuf>,
     },
 
     /// Show log entries for a specific session

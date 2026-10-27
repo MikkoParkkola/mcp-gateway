@@ -28,8 +28,21 @@ const CASES = [
     ['sidebar', 0, 0, 232, 400, 0.03, 'no logo mark; the frame shows a sample decisions count'],
     ['title', 232, 52, 500, 70]]],
   ['40-overview-390.png', 390, 844, 'dark', [
-    ['top bar', 0, 0, 390, 56, 0.07, 'no logo, search box or Live indicator yet'],
+    ['top bar', 0, 0, 390, 56, 0.07, 'no logo or Live indicator yet; the frame draws the search glyph differently'],
     ['title', 0, 56, 390, 60]]],
+  // Frame 46 exists only at 1440 px, dark. Its entries are the github page's
+  // own data, so only the palette's input row is compared; the frame draws
+  // the dialog 80 px further right, given as the frame box's x.
+  ['46-command-palette.png', 1440, 1000, 'dark', [
+    ['palette input', 400, 120, 640, 50, 0.02, '', 480, 120]], 'palette:github'],
+  // Frame 32 exists at 1440 and 390 px, dark only. The shell's card adds two
+  // lines (the handoff route and the in-memory key note the shell ADR asks
+  // for), so it centres 21 px higher; the key form is compared, frame box
+  // shifted down by that much. The frame's logo mark is not drawn yet.
+  ['32-sign-in.png', 1440, 1000, 'dark', [
+    ['key form', 546, 446, 348, 135, 0.02, '', 546, 467]], 'signin'],
+  ['32-sign-in-390.png', 390, 800, 'dark', [
+    ['key form', 42, 346, 306, 135, 0.02, '', 42, 367]], 'signin'],
 ];
 
 test.describe('frames', () => {
@@ -38,15 +51,24 @@ test.describe('frames', () => {
     for (const [file] of CASES) expect(existsSync(join(FRAMES, file)), file).toBe(true);
   });
 
-  for (const [file, width, height, scheme, regions] of CASES) {
+  for (const [file, width, height, scheme, regions, act] of CASES) {
     test(`F17 ${file}`, async ({ page }) => {
       expect(FRAMES).toBeTruthy();
       await page.setViewportSize({ width, height });
       await page.emulateMedia({ colorScheme: scheme });
+      if (act === 'signin') {
+        await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: false, admin: false } } }));
+      }
       // The fixture pages give Overview its subtitle, as a real screen will.
       await withFixturePages(page);
       await page.goto('/ui/overview/status');
-      await page.waitForSelector('#content [data-rendered]');
+      await page.waitForSelector(act === 'signin' ? '#signin:not([hidden])' : '#content [data-rendered]');
+      if (act?.startsWith('palette:')) {
+        await page.keyboard.press('Control+KeyK');
+        await page.keyboard.type(act.slice('palette:'.length));
+      }
+      // Focus is state, not look: the frames draw the controls unfocused.
+      if (act === 'signin') await page.evaluate(() => document.activeElement?.blur());
       await page.evaluate(() => document.fonts.ready);
       const shot = (await page.screenshot()).toString('base64');
       const frame = readFileSync(join(FRAMES, file)).toString('base64');
@@ -71,15 +93,16 @@ test.describe('frames', () => {
           c.getContext('2d').drawImage(img, x, y, w, h, 0, 0, w, h);
           return c.toDataURL('image/png').split(',')[1];
         };
-        return regions.map(([name, x, y, w, h]) => {
+        return regions.map(([name, x, y, w, h, , , fx = x, fy = y]) => {
           const box = [x, y, w, h];
+          const frameBox = [fx, fy, w, h];
           const p = pixels(a, box);
-          const q = pixels(b, box);
+          const q = pixels(b, frameBox);
           let diff = 0;
           for (let i = 0; i < p.length; i += 4) {
             if (Math.abs(p[i] - q[i]) + Math.abs(p[i + 1] - q[i + 1]) + Math.abs(p[i + 2] - q[i + 2]) > 96) diff++;
           }
-          return [name, diff / (p.length / 4), crop(a, box), crop(b, box)];
+          return [name, diff / (p.length / 4), crop(a, box), crop(b, frameBox)];
         });
       }, { shot, frame, regions });
       // The two crops of each region, side by side in the test output, for the PR.
