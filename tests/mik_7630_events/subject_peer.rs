@@ -4,11 +4,12 @@
 //!
 //! Each request names its caller by the subject of the bearer it carries: the
 //! `sub` claim of a JWT (a gateway-signed assertion), or the part after `at.`
-//! (an opaque token issued for that subject). A request with no bearer is
-//! the gateway's own, subject `""`. Every subject has its own session, its own
-//! catalogue (one tool and one resource named after it), its own legacy
-//! subscriptions and its own GET streams, and a test pushes a notification to
-//! one subject's streams only. The peer records which subject every request
+//! (an opaque token issued for that subject). A request with no
+//! `Authorization` header is the gateway's own, subject `""`; one whose
+//! header names no subject is `"<unreadable>"`. Every subject has its own
+//! session, its own catalogue (one tool and one resource named after it), its
+//! own legacy subscriptions and its own GET streams, and a test pushes a
+//! notification to one subject's streams only. The peer records which subject every request
 //! carried, so a test can assert that no request for one user ever went out
 //! as anyone else.
 
@@ -48,14 +49,14 @@ impl State {
     }
 }
 
-/// The subject a bearer names, or `""` for none.
+/// The subject a bearer names: `""` with no `Authorization` header at all,
+/// `"<unreadable>"` for one that names no subject.
 pub fn subject_of(headers: &HeaderMap) -> String {
-    let Some(token) = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-    else {
+    let Some(header) = headers.get("authorization") else {
         return String::new();
+    };
+    let Some(token) = header.to_str().ok().and_then(|v| v.strip_prefix("Bearer ")) else {
+        return "<unreadable>".to_owned();
     };
     if let Some(subject) = token.strip_prefix("at.") {
         return subject.to_owned();
