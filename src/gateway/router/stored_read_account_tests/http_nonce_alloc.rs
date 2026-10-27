@@ -416,7 +416,7 @@ fn test_path(name: &str) -> String {
 /// cost stays fixed. The record write alone is 28,631 B across 237 calls,
 /// none of 2 KiB or more (serializing and hashing the answer is 1,531 B of
 /// it): many small allocations, no one buffer to shrink. Trimming that path
-/// is MIK-8985. Margin: about 11 KB (98,304 B cap over 87,369 B measured); a
+/// back under 64 KiB is tracked for 4.0.1. Margin: about 11 KB (98,304 B cap over 87,369 B measured); a
 /// further raise needs its own breakdown.
 const OVER_PARSE: u64 = 96 * 1024;
 /// How much that excess may grow from 1 to 3 MiB: no payload term (measured
