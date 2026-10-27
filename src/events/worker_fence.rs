@@ -100,24 +100,23 @@ impl EventsHub {
         }
     }
 
-    /// What remains of the fence window for the send, or `None` when the
-    /// window ran out and the record went back unsent.
-    pub(super) async fn fence_remaining<'a>(
+    /// Whether the fence window is still open for the send; when it ran
+    /// out the record went back unsent.
+    pub(super) async fn fence_open<'a>(
         &self,
         services: &Services,
         record: &OutboxRecord,
         deadline: tokio::time::Instant,
         ended: &(impl Fn(&'static str) -> Attempt<'a> + Sync),
-    ) -> Option<Duration> {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if !remaining.is_zero() {
-            return Some(remaining);
+    ) -> bool {
+        if tokio::time::Instant::now() < deadline {
+            return true;
         }
         services.audit_outcome(&ended(FENCE_STALE)).await;
         self.settle_with(services, record, |now| {
             unsent_later(FENCE_STALE, record, now)
         })
         .await;
-        None
+        false
     }
 }

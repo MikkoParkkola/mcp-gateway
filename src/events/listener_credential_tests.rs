@@ -16,6 +16,7 @@ use super::*;
 struct Scripted {
     grant: Mutex<String>,
     read: Mutex<Option<Result<Option<String>, FenceRead>>>,
+    refuse: Mutex<bool>,
 }
 
 impl Scripted {
@@ -23,6 +24,7 @@ impl Scripted {
         Arc::new(Self {
             grant: Mutex::new("acct:fence:v1:u1:1".to_owned()),
             read: Mutex::new(None),
+            refuse: Mutex::new(false),
         })
     }
 
@@ -38,6 +40,9 @@ impl ListenerMint for Scripted {
         _backend: &str,
         _identity: &VerifiedIdentity,
     ) -> crate::Result<ListenerGrant> {
+        if *self.refuse.lock() {
+            return Err(crate::Error::Config("the grant was revoked".to_owned()));
+        }
         Ok(ListenerGrant {
             headers: vec![("authorization".to_owned(), "Bearer at.u1".to_owned())],
             fence: Some(self.grant.lock().clone()),
@@ -174,4 +179,34 @@ async fn a_read_before_any_mint_fixes_nothing() {
     run.recheck().await;
     assert!(!run.ended());
     assert_eq!(run.binding(), None);
+}
+
+#[tokio::test]
+async fn a_refused_mint_on_a_grant_with_no_view_ends_the_run() {
+    let mint = Scripted::new();
+    let run = run_on(&mint);
+    let minted = Minted {
+        run: Arc::clone(&run),
+        obs: "obs".to_owned(),
+    };
+    let sent = Arc::new(AtomicUsize::new(0));
+    assert!(
+        request(&minted, &sent).await,
+        "the first mint fixes the run"
+    );
+    *mint.refuse.lock() = true;
+    *mint.read.lock() = Some(Err(FenceRead::Busy));
+    let _ = request(&minted, &sent).await;
+    assert!(!run.ended(), "a busy custody decides nothing");
+    *mint.read.lock() = Some(Err(FenceRead::Closed));
+    let _ = request(&minted, &sent).await;
+    assert!(
+        run.ended(),
+        "a revoked grant ends the run at its refused mint"
+    );
+    assert_eq!(
+        sent.load(Ordering::SeqCst),
+        1,
+        "nothing sent after the refusals"
+    );
 }

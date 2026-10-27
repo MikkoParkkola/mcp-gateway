@@ -74,6 +74,8 @@ pub(super) struct ToolsDebt {
     retrying: bool,
     /// A notice the hub has not heard of yet.
     unannounced: bool,
+    /// The fence binding of the run that heard the notice.
+    pub(super) fence: Option<String>,
 }
 
 enum Outcome {

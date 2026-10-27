@@ -274,13 +274,10 @@ impl EventsHub {
         let limit = match fence {
             fence::Fence::Unfenced => None,
             fence::Fence::Bound(_) => {
-                let Some(remaining) = self
-                    .fence_remaining(services, record, deadline, &ended)
-                    .await
-                else {
+                if !self.fence_open(services, record, deadline, &ended).await {
                     return;
-                };
-                Some(remaining)
+                }
+                Some(deadline)
             }
         };
         // Charged once the attempt is on record, so a retry after an audit
@@ -386,8 +383,8 @@ impl EventsHub {
 
     /// The one path an event's bytes take to a callback: signed with the
     /// subscription's current secret, and its previous one during the
-    /// rotation grace, through the hardened client. `limit` is what remains
-    /// of a fenced send's window.
+    /// rotation grace, through the hardened client. `limit` is a fenced
+    /// send's deadline: the request ends by it, and none starts after it.
     #[allow(
         clippy::too_many_arguments,
         reason = "each is one part of the one signed POST"
@@ -400,7 +397,7 @@ impl EventsHub {
         event_id: &str,
         frame: OutboundFrame,
         now: chrono::DateTime<chrono::Utc>,
-        limit: Option<Duration>,
+        limit: Option<tokio::time::Instant>,
     ) -> Result<super::client::Answer, CallbackFailure> {
         // The caller's reading picks the signing keys and dates the
         // signature (MIK-8202).
@@ -429,10 +426,14 @@ impl EventsHub {
                     body,
                     ReadBody::Discard,
                 );
-                // A fenced send gets what remains of its window; one cut
-                // short may have written a byte, so it counts as sent.
+                // A fenced send ends by its deadline: none starts after it,
+                // and one cut short may have written a byte, so it counts as
+                // sent.
                 let posted = match limit {
-                    Some(limit) => tokio::time::timeout(limit, post)
+                    Some(limit) if tokio::time::Instant::now() >= limit => {
+                        Err((CallbackFailure::Timeout, true))
+                    }
+                    Some(limit) => tokio::time::timeout_at(limit, post)
                         .await
                         .unwrap_or(Err((CallbackFailure::Timeout, false))),
                     None => post.await,

@@ -134,7 +134,15 @@ impl CredentialSource for Minted {
     ) -> BoxFuture<'a, crate::Result<reqwest::Response>> {
         Box::pin(async move {
             let run = &self.run;
-            let grant = run.mint.mint(&run.backend, &run.identity).await?;
+            let grant = match run.mint.mint(&run.backend, &run.identity).await {
+                Ok(grant) => grant,
+                // A refusal may be a revoked grant: the fence says, and no
+                // view ends the run now rather than at its next read.
+                Err(refused) => {
+                    run.recheck().await;
+                    return Err(refused);
+                }
+            };
             if !run.admits(grant.fence.as_deref()) {
                 return Err(crate::Error::Transport(
                     "the listener's grant moved; its run ends".to_owned(),

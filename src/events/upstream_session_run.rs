@@ -11,6 +11,7 @@ use tracing::debug;
 use crate::backend::Backend;
 use crate::backend::listen::ListenTarget;
 use crate::events::upstream_listener::Shared;
+use crate::events::upstream_session::ToolsDebt;
 use crate::protocol::era::PeerEra;
 use crate::transport::upstream_tap::{ListenerCredential, UpstreamListen};
 
@@ -112,6 +113,10 @@ async fn begin_per_user_run(
         debug!(backend = %shared.name, "upstream listener: an identity credential has no session of its own");
         return None;
     };
+    // Its session's first mint has fixed the run's grant by now.
+    if let Some(run) = &fence {
+        forget_foreign_debt(&mut shared.tools.lock(), run.binding());
+    }
     Some(Run {
         _lease: None,
         transport: None,
@@ -123,6 +128,14 @@ async fn begin_per_user_run(
         _own_transport: Some(transport),
         fence,
     })
+}
+
+/// A tools notice an earlier run left pending was heard under that run's
+/// grant: a run fixed on another grant (`binding`) never announces it.
+fn forget_foreign_debt(debt: &mut ToolsDebt, binding: Option<String>) {
+    if debt.fence != binding {
+        *debt = ToolsDebt::default();
+    }
 }
 
 /// Whether a run speaks the modern transport: never on an own session, which
@@ -164,3 +177,7 @@ pub(super) fn pick_session(
         None => Some((None, transport.clone())),
     }
 }
+
+#[cfg(test)]
+#[path = "upstream_session_run_tests.rs"]
+mod tests;

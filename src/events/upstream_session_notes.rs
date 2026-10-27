@@ -38,6 +38,7 @@ impl State<'_> {
                         let mut debt = self.shared.tools.lock();
                         debt.due.get_or_insert(Instant::now() + TICK);
                         debt.unannounced = true;
+                        debt.fence = self.fence.as_ref().and_then(|run| run.binding());
                     }
                 } else if self.shared.need.lock().emits(kind, uri.as_deref()) {
                     self.coalescer.offer(kind, uri, Instant::now());
