@@ -48,6 +48,7 @@ const probed = {
   gateway: (el, ctx) => {
     el.textContent = 'gateway - status';
     ctx.announce('Gateway status read.');
+    window.gatewayAnnounce = ctx.announce; // L15: kept past navigation
   },
   // L13: a screen marks its data stale, then clears it.
   activity: (el, ctx) => {

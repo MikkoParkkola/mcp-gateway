@@ -240,6 +240,7 @@ test('L10 no shell source makes a live region but the announcer, or inserts a ba
   const files = readdirSync(dir).filter((f) => /\.(js|html)$/.test(f));
   const live = /aria-live|role(?:=|:\s*)['"](?:status|alert|log|marquee|timer)['"]|<output\b/g;
   const found = [];
+  let modals = 0;
   for (const file of files) {
     const source = readFileSync(dir + file, 'utf8');
     for (const line of source.split('\n')) {
@@ -247,11 +248,11 @@ test('L10 no shell source makes a live region but the announcer, or inserts a ba
     }
     if (file.endsWith('.js')) {
       for (const m of source.match(/state\(\s*'(error|forbidden|stale)'/g) ?? []) found.push(`${file}: ${m}`);
-      // The announcer follows the palette into its modal; a second modal would leave it inert.
-      const modals = (source.match(/\.showModal\(/g) ?? []).length;
-      if (modals !== 1) found.push(`${file}: ${modals} showModal() sites, expected the palette's one`);
+      modals += (source.match(/\.showModal\(/g) ?? []).length;
     }
   }
+  // The announcer follows the palette into its modal; a second modal would leave it inert.
+  expect(modals, 'showModal() sites').toBe(1);
   expect(found).toEqual([]);
 });
 
@@ -370,4 +371,39 @@ test('L9b a key check that gets no answer is announced, and the field is not mar
   await drained(page);
   expect(await announced(page)).toContain((await error.textContent()).trim());
   await expect(page.locator('#signin-key')).not.toHaveAttribute('aria-invalid', 'true');
+});
+
+test('L15 a screen\'s announce kept past navigation says nothing', async ({ page }) => {
+  await recordAnnouncements(page);
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/gateway/status');
+  await shellReady(page);
+  await drained(page);
+  await page.locator('nav.route-nav a[href="/ui/servers"]').click();
+  await expect(page.locator('#content')).toContainText('servers - status');
+  await page.evaluate(() => window.gatewayAnnounce('Late gateway news.'));
+  await drained(page);
+  expect(await announced(page)).not.toContain('Late gateway news.');
+});
+
+test('L16 a message queued as the session expires is not said over sign-in', async ({ page }) => {
+  await recordAnnouncements(page);
+  await gate(page);
+  await page.route(PROBE, (r) => r.fulfill({ status: 401, json: {} }));
+  await page.goto('/ui/overview/status');
+  await signIn(page);
+  await expect(page.locator('#signin')).toBeHidden();
+  const url = await shellModuleUrl(page);
+  await page.evaluate(async (u) => {
+    const m = await import(u);
+    // Written at once; the next message then waits out the pause, so it is still
+    // queued when the 401 below signs the session out.
+    m.announce('First news.');
+    await new Promise((done) => setTimeout(done, 50));
+    m.announce('Count news.', { subject: 'count' });
+    await m.api('/ui/api/page-probe').catch(() => {});
+  }, url);
+  await expect(page.locator('#signin')).toBeVisible();
+  await drained(page);
+  expect(await announced(page)).not.toContain('Count news.');
 });

@@ -153,9 +153,10 @@ const idleWaiters = [];
  * screen's own) is dropped once the user moves to another page, and every
  * message once the signed-in identity changes.
  */
-export function announce(text, { subject = 'page' } = {}) {
+export function announce(text, { subject = 'page', guard: given = null } = {}) {
   const pageBound = subject === 'page' || subject.startsWith('screen:');
-  const guard = { epoch: authEpoch, seq: pageBound ? renderSeq : null };
+  const guard = given ?? { epoch: authEpoch, seq: pageBound ? renderSeq : null };
+  if (!guardHolds(guard)) return; // asked for by a page or identity already gone
   if (subject === 'count') {
     const i = pending.findIndex((m) => m.subject === 'count');
     if (i >= 0) pending.splice(i, 1);
@@ -167,8 +168,10 @@ export function announce(text, { subject = 'page' } = {}) {
 /** Append everything still current as one entry; queue the rest for the next dwell. */
 function pump() {
   pumpTimer = null;
-  const current = pending.splice(0).filter(({ guard }) =>
-    guard.epoch === authEpoch && (guard.seq === null || guard.seq === renderSeq));
+  const signedOut = document.body.classList.contains('signed-out');
+  // While sign-in shows, only its own messages still describe what the user sees.
+  const current = pending.splice(0).filter(({ subject, guard }) =>
+    guardHolds(guard) && (!signedOut || subject.startsWith('signin')));
   if (current.length) {
     const entry = el('p', {}, current.map((m) => sentence(m.text)).join(' '));
     document.getElementById('announcer').append(entry);
@@ -178,6 +181,9 @@ function pump() {
   if (pending.length) pumpTimer = setTimeout(pump, DWELL_MS);
   else for (const done of idleWaiters.splice(0)) done();
 }
+
+/** Whether the page and identity a message was asked for are still the ones shown. */
+const guardHolds = (guard) => guard.epoch === authEpoch && (guard.seq === null || guard.seq === renderSeq);
 
 /** `text` ending as a sentence, so a batch reads as separate sentences. */
 const sentence = (text) => (/[.!?…]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
@@ -448,12 +454,17 @@ function failure(err, key, onRetry) {
 }
 
 /** Run a page's tab into `into`; a fault thrown synchronously becomes a rejection. */
-const runTab = (spec, route, into) => Promise.resolve().then(() => spec.tabs[route.tab](into, {
-  object: route.object, tab: route.tab, api, state,
-  show: screenBanner(into, route.page),
-  refreshCounts,
-  announce: (text) => announce(text, { subject: `screen:${route.page}` }),
-}));
+const runTab = (spec, route, into) => {
+  // Taken when the context is made: a screen holding on to it after the user moved
+  // on, or after another identity signed in, announces nothing.
+  const guard = { epoch: authEpoch, seq: renderSeq };
+  return Promise.resolve().then(() => spec.tabs[route.tab](into, {
+    object: route.object, tab: route.tab, api, state,
+    show: screenBanner(into, route.page, guard),
+    refreshCounts,
+    announce: (text) => announce(text, { subject: `screen:${route.page}`, guard }),
+  }));
+};
 
 /**
  * A banner state (error, forbidden, stale) for showBanner() or failure() only:
@@ -474,19 +485,20 @@ function showBanner(container, node) {
  * says its title; show(null) takes it away, saying "Updates resumed." when it
  * was stale.
  */
-function screenBanner(into, page) {
+function screenBanner(into, page, guard) {
   return (kind, opts = {}) => {
+    if (!guardHolds(guard)) return; // a screen the user has left
     const old = into.querySelector(':scope > .state[data-banner]');
     old?.remove();
     const subject = `screen:${page}`;
     if (!kind) {
-      if (old?.dataset.state === 'stale') announce('Updates resumed.', { subject });
+      if (old?.dataset.state === 'stale') announce('Updates resumed.', { subject, guard });
       return;
     }
     const node = bannerState(kind, opts);
     node.dataset.banner = '';
     into.prepend(node);
-    announce(node.querySelector('h2').textContent, { subject });
+    announce(node.querySelector('h2').textContent, { subject, guard });
   };
 }
 
