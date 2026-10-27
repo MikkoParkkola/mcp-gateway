@@ -29,6 +29,8 @@ pub(super) enum Extra {
     /// Message signing on, scoped by the posture (`gateway_invoke` only,
     /// every `tools/call` under [`Extra::Hardened`]).
     Signing,
+    /// Tool `t` declares one argument, `q`, and no other.
+    DeclaredKeys,
 }
 
 impl Setup {

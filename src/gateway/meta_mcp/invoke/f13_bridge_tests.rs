@@ -608,3 +608,7 @@ async fn a_killed_bridged_round_records_refused_only_while_vouched() {
     let composite = effect(true).await;
     assert!(composite.get("response_effect").is_none(), "{composite:?}");
 }
+
+/// The bridged refusals beside the kill switch: the undeclared key and the
+/// firewall.
+mod refusals;

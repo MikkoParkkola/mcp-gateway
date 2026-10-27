@@ -88,7 +88,13 @@ impl Transport for Scripted {
             if self.extras.contains(&Extra::ListFail) {
                 return Err(crate::Error::Transport("connection refused".into()));
             }
-            let tool = json!({"name": "t", "inputSchema": {"type": "object"}});
+            let schema = if self.extras.contains(&Extra::DeclaredKeys) {
+                json!({"type": "object", "properties": {"q": {"type": "string"}},
+                       "additionalProperties": false})
+            } else {
+                json!({"type": "object"})
+            };
+            let tool = json!({"name": "t", "inputSchema": schema});
             return Ok(JsonRpcResponse::success(id, json!({ "tools": [tool] })));
         }
         self.calls.fetch_add(1, Ordering::SeqCst);
