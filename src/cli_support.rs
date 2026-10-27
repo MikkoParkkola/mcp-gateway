@@ -154,8 +154,6 @@ pub(crate) fn adopt_with(
     servers: &[crate::discovery::DiscoveredServer],
     open: impl FnOnce() -> Result<Opened, String>,
 ) -> Result<Adoption, String> {
-    use crate::secret_store::{LOCK_WAIT, NewSecretOwned, SaveError, create_secrets};
-
     let (mut outcomes, mut candidates) = classify(config, servers);
 
     let opened = if candidates.iter().any(|c| !c.literals.is_empty()) {
@@ -193,54 +191,11 @@ pub(crate) fn adopt_with(
 
     // Outside an `Adoption` until the end: an `Err` before then drops it
     // undecided, which removes the entries, since no config names them.
-    let literals: Vec<NewSecretOwned> = candidates
-        .iter()
-        .flat_map(|c| {
-            c.literals
-                .iter()
-                .map(|(header, key, value)| NewSecretOwned {
-                    field: format!("backends.{}.{}", c.name, field_of(*header, key)),
-                    value: crate::wiped_bytes::WipedBytes::new(value.clone().into_bytes()),
-                })
-        })
-        .collect();
     let pending = match opened {
-        Some((vault, store)) if !literals.is_empty() => {
-            let pending = create_secrets(
-                vault,
-                store,
-                &literals,
-                std::time::Instant::now() + LOCK_WAIT,
-            )
-            .map_err(|error| match error {
-                SaveError::Refused(e) | SaveError::Store(e) => {
-                    store_refused(config.secrets.store, &e)
-                }
-                SaveError::Commit(never) => match never {},
-            })?;
-            // References come back in input order: the same walk as above.
-            // A short list would leave a literal as text: refuse instead.
-            if pending.refs().len() != literals.len() {
-                return Err("the secret store returned fewer references than values; \
-                     nothing was written"
-                    .to_owned());
-            }
-            let mut references = pending.refs().iter();
-            for candidate in &mut candidates {
-                for (header, key, _) in &candidate.literals {
-                    let map = if *header {
-                        &mut candidate.backend.headers
-                    } else {
-                        &mut candidate.backend.env
-                    };
-                    if let Some(reference) = references.next() {
-                        map.insert(key.clone(), reference.clone());
-                    }
-                }
-            }
-            Some(pending)
+        Some((vault, store)) => {
+            store_literals(config.secrets.store, vault, store, &mut candidates)?
         }
-        _ => None,
+        None => None,
     };
     // B3's backstop: a literal is now a fresh reference and a template is
     // not checked, so this should never refuse.
@@ -317,6 +272,64 @@ fn classify(
         outcomes.push(Outcome::Adopted { name });
     }
     (outcomes, candidates)
+}
+
+/// Saves every candidate's literals in one batch and puts each reference in
+/// its place. `None` when there is no literal. The pending save is returned
+/// undecided: an `Err` after this drops it, which removes the entries.
+fn store_literals(
+    choice: crate::config::SecretStoreChoice,
+    vault: crate::secret_store::Vault,
+    store: std::sync::Arc<dyn crate::secret_store::SecretStore + Send + Sync>,
+    candidates: &mut [Candidate],
+) -> Result<Option<crate::secret_store::PendingSecrets>, String> {
+    use crate::secret_store::{LOCK_WAIT, NewSecretOwned, SaveError, create_secrets};
+
+    let literals: Vec<NewSecretOwned> = candidates
+        .iter()
+        .flat_map(|c| {
+            c.literals
+                .iter()
+                .map(|(header, key, value)| NewSecretOwned {
+                    field: format!("backends.{}.{}", c.name, field_of(*header, key)),
+                    value: crate::wiped_bytes::WipedBytes::new(value.clone().into_bytes()),
+                })
+        })
+        .collect();
+    if literals.is_empty() {
+        return Ok(None);
+    }
+    let pending = create_secrets(
+        vault,
+        store,
+        &literals,
+        std::time::Instant::now() + LOCK_WAIT,
+    )
+    .map_err(|error| match error {
+        SaveError::Refused(e) | SaveError::Store(e) => store_refused(choice, &e),
+        SaveError::Commit(never) => match never {},
+    })?;
+    // References come back in input order: the same walk as above.
+    // A short list would leave a literal as text: refuse instead.
+    if pending.refs().len() != literals.len() {
+        return Err("the secret store returned fewer references than values; \
+             nothing was written"
+            .to_owned());
+    }
+    let mut references = pending.refs().iter();
+    for candidate in candidates.iter_mut() {
+        for (header, key, _) in &candidate.literals {
+            let map = if *header {
+                &mut candidate.backend.headers
+            } else {
+                &mut candidate.backend.env
+            };
+            if let Some(reference) = references.next() {
+                map.insert(key.clone(), reference.clone());
+            }
+        }
+    }
+    Ok(Some(pending))
 }
 
 /// A server that passed the rule, before its literals are stored.
