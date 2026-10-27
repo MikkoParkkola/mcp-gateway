@@ -345,6 +345,10 @@ function neutralised(node) {
     e.removeAttribute('contenteditable');
     for (const { name } of [...e.attributes]) if (name.startsWith('on')) e.removeAttribute(name);
     if (e.matches('a[href]')) e.removeAttribute('href');
+    if (e.matches('iframe, object, embed')) {
+      for (const attr of ['src', 'srcdoc', 'data']) e.removeAttribute(attr);
+      e.setAttribute('tabindex', '-1');
+    }
     if (e.matches('button, input, select, textarea')) e.disabled = true;
     if (e.hasAttribute('tabindex') || e.matches('summary')) e.setAttribute('tabindex', '-1');
   }
@@ -428,8 +432,10 @@ export function render() {
   const settle = (err) => {
     const status = err instanceof ApiError ? err.status : null;
     if (status === 401) return; // the sign-in view is showing; it re-renders after sign-in
-    if (status === 403) content.replaceChildren(mark(state('forbidden')));
-    else content.replaceChildren(mark(failure(err, key, retry)));
+    if (status === 403) {
+      snapshotsNow().delete(key); // this identity may no longer see it
+      content.replaceChildren(mark(state('forbidden')));
+    } else content.replaceChildren(mark(failure(err, key, retry)));
   };
 
   // Retry runs the tab again into a staging container laid out under the banner, so the
@@ -453,7 +459,9 @@ export function render() {
       .catch((err) => {
         if (!current()) return;
         settle(err);
-        content.querySelector('[data-state="error"] button')?.focus();
+        const again = content.querySelector('[data-state="error"] button');
+        if (again) again.focus();
+        else content.focus({ preventScroll: true });
       })
       .finally(() => {
         if (stage.classList.contains('staging')) stage.remove();

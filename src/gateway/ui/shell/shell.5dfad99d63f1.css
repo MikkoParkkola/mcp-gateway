@@ -721,10 +721,9 @@ table.t { width: 100%; border-collapse: collapse; }
 .failure { display: grid; gap: var(--space-3); }
 .failure [data-dimmed] { padding: var(--space-3); border: var(--size-rule) dashed var(--color-border-subtle); border-radius: var(--radius-sm);
   color: var(--color-text-secondary); pointer-events: none; }
-.failure [data-dimmed] * { color: inherit; }
 .btn:disabled { cursor: default; }
 /* Retry renders here, laid out at full width but unseen, until it succeeds. */
-.staging { visibility: hidden; position: absolute; inset-inline: 0; }
+.staging { visibility: hidden; position: absolute; inset: 0 0 auto; padding: inherit; box-sizing: border-box; }
 
 /* Flow map (metro): see patterns/components.md#flow-map */
 .fm-route { stroke: var(--color-route-line); fill: none; stroke-linejoin: round; stroke-linecap: round; }

@@ -307,6 +307,7 @@ test.describe('round 3 cases', () => {
     await retry(page).click();
     await expect(page.locator('#content [data-state="forbidden"]')).toBeVisible();
     await expect(page.locator('#content [data-dimmed]')).toHaveCount(0);
+    expect(await page.evaluate(() => !!document.activeElement?.closest('#content'))).toBe(true);
   });
 
   test('E11 a 404 with an empty body reads not found, not unreadable', async ({ page }) => {
