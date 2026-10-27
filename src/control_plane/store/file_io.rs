@@ -122,3 +122,8 @@ pub(super) fn injected_fault() -> std::io::Error {
         "injected write-phase fault",
     )
 }
+
+// Windows: the store writer's result is owner-only (the creation table).
+#[cfg(all(test, windows))]
+#[path = "file_io_winacl_tests.rs"]
+mod winacl_tests;
