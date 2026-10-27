@@ -87,16 +87,6 @@ impl Gateway {
         // Give stdio the same explicit reload context as HTTP, built once the
         // capability backend is installed, so a reload refreshes and announces
         // the catalogue the session serves (MIK-8278).
-        // Taken whether or not a reload context is built, so the startup
-        // load's raw bytes never outlive this function.
-        let startup_inputs = self.env.take_startup_inputs();
-        // Built with or without a config file: records name its revision.
-        let live_config = Arc::new(
-            LiveConfig::new(self.config.clone())
-                .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch))
-                .with_startup_revision(meta_mcp.record_key(), startup_inputs),
-        );
-        meta_mcp.set_live_config(Arc::clone(&live_config));
         if let Some(path) = self.reload_path() {
             let reload_ctx = Arc::new(
                 ReloadContext::new(

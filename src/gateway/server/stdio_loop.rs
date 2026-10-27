@@ -107,10 +107,14 @@ impl Gateway {
         };
         // One config for everything stdio judges with and for its reload
         // context, so a stdio reload reaches intake, tasks and policy (ADR-023).
+        // Records name its revision with or without a config file; the startup
+        // load's raw bytes are taken here and never outlive this function.
         let live_config = Arc::new(
             crate::config_reload::LiveConfig::new(self.config.clone())
-                .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
+                .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch))
+                .with_startup_revision(meta_mcp.record_key(), self.env.take_startup_inputs()),
         );
+        meta_mcp.set_live_config(Arc::clone(&live_config));
         // MIK-7272.OWNER.2: `<tasks.store_dir>/stdio`, or `None` to serve as before.
         let task_store = stdio_tasks::open(
             &self.config,
