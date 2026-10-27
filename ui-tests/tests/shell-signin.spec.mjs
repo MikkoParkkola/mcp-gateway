@@ -298,3 +298,35 @@ test('S16 sign-out is offered only to a signed-in session', async ({ page }) => 
   await page.keyboard.press('Enter');
   await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
 });
+
+/** Sign in with KEY at the current viewport. */
+async function signedIn(page) {
+  await gate(page);
+  await page.route('**/dashboard/logout', (route) => route.fulfill({ status: 303, headers: { location: '/ui' } }));
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#signin')).toBeHidden();
+}
+
+test.describe('sign-out on a phone', () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+  test('S17 at 390 px sign-out is the menu\'s last row, not in the top bar', async ({ page }) => {
+    await signedIn(page);
+    await expect(page.locator('.top .signout')).toBeHidden();
+    await page.locator('button.menu').click();
+    const inMenu = page.locator('#pages').getByRole('button', { name: 'Sign out' });
+    await expect(inMenu).toBeVisible();
+    await inMenu.click();
+    await expect(page.locator('#signin')).toBeVisible();
+  });
+});
+
+test.describe('sign-out on a desktop', () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+  test('S17 at 1440 px sign-out is in the top bar, not in the sidebar', async ({ page }) => {
+    await signedIn(page);
+    await expect(page.locator('.top').getByRole('button', { name: 'Sign out' })).toBeVisible();
+    await expect(page.locator('#pages').getByRole('button', { name: 'Sign out' })).toBeHidden();
+  });
+});

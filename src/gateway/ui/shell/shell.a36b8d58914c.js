@@ -393,11 +393,14 @@ async function loadWho() {
 
 // ---------------------------------------------------------------- sign-in
 
-/** The top bar's sign-in line, and sign-out offered only to a signed-in session. */
+/**
+ * The top bar's sign-in line, and sign-out offered only to a signed-in
+ * session: in the top bar from 641 px up, as the phone menu's last row below.
+ */
 function showWho(auth) {
   const signedIn = Boolean(auth?.signed_in);
   document.querySelector('.top .who').textContent = signedIn ? (auth.admin ? 'Signed in · admin' : 'Signed in') : '';
-  document.querySelector('.top .signout').hidden = !signedIn;
+  for (const b of document.querySelectorAll('.signout')) b.hidden = !signedIn;
 }
 
 /**
@@ -546,7 +549,7 @@ function boot() {
   });
   addEventListener('popstate', render);
   document.getElementById('signin-form').addEventListener('submit', signIn);
-  document.querySelector('.top .signout').addEventListener('click', signOut);
+  for (const b of document.querySelectorAll('.signout')) b.addEventListener('click', signOut);
   document.querySelector('a.skip').addEventListener('click', (ev) => {
     ev.preventDefault();
     document.getElementById('content').focus();
