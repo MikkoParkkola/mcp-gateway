@@ -339,3 +339,38 @@ async fn a_stdio_task_read_states_no_effect() {
         assert!(row.get(field).is_none(), "{field}: {row}");
     }
 }
+
+/// The delivery record of the one `gateway_invoke` call in the log at `log`.
+fn only_invoke_delivery(log: &std::path::Path) -> Value {
+    let rows = invoke_deliveries(log);
+    let [row] = rows.as_slice() else {
+        panic!("one delivery record: {rows:?}");
+    };
+    row.clone()
+}
+
+/// MIK-8993: response inspection read this clean answer and found nothing,
+/// so with no firewall the record says scanned clean (`[]`), not unscanned.
+#[tokio::test]
+async fn an_inspected_clean_answer_records_no_findings() {
+    let (mut session, log) = logged_session().await;
+    let answer = session.ask(&invoke(5), 5).await;
+    assert!(answer.get("error").is_none(), "premise: answered: {answer}");
+    let row = only_invoke_delivery(&log);
+    assert_eq!(row["response_findings"], json!([]), "{row}");
+    assert_eq!(row["response_effect"], "delivered", "{row}");
+}
+
+/// KNOWN GAP, MIK-8997 (inspection-ignores-enabled): with response
+/// inspection disabled, inspection still runs, so the record still says
+/// scanned clean. MIK-8997's fix stops the inspector and flips this row to
+/// `null` (no scan of this request read the answer).
+#[tokio::test]
+async fn a_disabled_inspection_still_scans_known_gap() {
+    let disabled = "  response_inspection:\n    enabled: false\n";
+    let (mut session, log) = logged_session_with(disabled).await;
+    let answer = session.ask(&invoke(6), 6).await;
+    assert!(answer.get("error").is_none(), "premise: answered: {answer}");
+    let row = only_invoke_delivery(&log);
+    assert_eq!(row["response_findings"], json!([]), "{row}");
+}

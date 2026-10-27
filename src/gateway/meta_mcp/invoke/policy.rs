@@ -466,7 +466,9 @@ impl MetaMcp {
             self.response_inspection_action_mode,
         );
         // This delivery's findings, written before the block decision so a
-        // blocked answer keeps the finding that blocked it (MIK-8993).
+        // blocked answer keeps the finding that blocked it (MIK-8993). The
+        // inspector ran on this answer, and that alone marks it scanned: a
+        // gate that skips the inspector must return before this point.
         crate::gateway::delivery_facts::scanned();
         for finding in &inspection.findings {
             let kind = format!("inspect:{}", finding.category);
