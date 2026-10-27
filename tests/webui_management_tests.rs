@@ -84,6 +84,8 @@ mod openapi_import;
 mod registry;
 #[path = "webui_management_tests/secret_slot_surfaces.rs"]
 mod secret_slot_surfaces;
+#[path = "webui_management_tests/server_state.rs"]
+mod server_state;
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 

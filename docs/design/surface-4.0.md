@@ -7,13 +7,19 @@ gateway becomes internal, and the gateway decides what it can decide on its own.
 item on the five surfaces a user can touch, gives each one a class, and says what happens to an existing
 user of anything that is not kept. Pieces P2 to P6 implement it; nothing here changes code.
 
-`python3 scripts/release/check_surface_inventory.py` extracts the five surfaces from the source and fails
-when any item is missing from the tables below, is listed twice, carries no valid class, has no migration
-story, or no longer exists. `--summary` prints the counts. The check runs in CI through
+`python3 scripts/release/check_surface_inventory.py` extracts four surfaces (config, env, routes, lib) from the
+source and fails when any item is missing from the tables below, is listed twice, carries no valid class, has no
+migration story, or no longer exists. `--summary` prints the counts. The check runs in CI through
 `scripts/release/test_check_surface_inventory.py`.
 
-What the check guards against: a contributor adding a config key, flag, variable, route or crate-root
-item in the forms this codebase uses (serde derives, clap derives, axum `route`/`nest` calls in either
+The cli table: membership is `tests/cli_surface_inventory.rs` only. It walks the `Command` clap builds, so a
+flag no source pattern models still needs a row; it runs in CI's all-features test job, not in the cargo-free
+pre-push step. Row format is unchanged for all tables, cli included: the Python check still fails a cli row with
+no valid class, no reason, no migration story, a second row for the same item, or a defined-at path outside
+`src/cli/`.
+
+What the Python check guards against: a contributor adding a config key, variable, route or crate-root
+item in the forms this codebase uses (serde derives, axum `route`/`nest` calls in either
 call form, `pub` items in `src/lib.rs`, `#[macro_export]` macros in any module the library compiles) without classifying it. It reads
 source text, not compiled types, so it is not a proof against code written to evade it; a construct it
 cannot read is added to the extractor, with a planted-source test, when the codebase first uses it.
@@ -180,7 +186,7 @@ counts, and `/sse` answers 410 Gone pointing to `POST /mcp` (MIK-8044.SURF.4b).
 | `/metrics` | 1 |  |  |  |  |
 | `/readyz` | 1 |  |  |  |  |
 | `/sse` |  |  |  | `/sse` |  |
-| `/ui` | 3 |  |  | `/ui/api/activity`; `/ui/api/activity/export`; `/ui/api/activity/{id}`; `/ui/api/backends`; `/ui/api/backends/{name}`; `/ui/api/backends/{name}/revive`; `/ui/api/capabilities`; `/ui/api/capabilities/{name}`; `/ui/api/capabilities/{name}/validate`; `/ui/api/config`; `/ui/api/control-plane`; `/ui/api/control-plane/decisions`; `/ui/api/control-plane/export-status`; `/ui/api/control-plane/grants`; `/ui/api/control-plane/policies`; `/ui/api/costs`; `/ui/api/dashboard-link`; `/ui/api/events/dead-letters`; `/ui/api/events/dead-letters/replay`; `/ui/api/events/dead-letters/{id}/replay`; `/ui/api/events/held`; `/ui/api/events/leases`; `/ui/api/import/openapi`; `/ui/api/import/openapi/preview`; `/ui/api/markers`; `/ui/api/metrics/series`; `/ui/api/overview`; `/ui/api/previews`; `/ui/api/registry`; `/ui/api/registry/search`; `/ui/api/reload`; `/ui/api/status`; `/ui/api/tools`; `/ui/assets/{file}` |  |
+| `/ui` | 3 |  |  | `/ui/api/activity`; `/ui/api/activity/export`; `/ui/api/activity/{id}`; `/ui/api/backends`; `/ui/api/backends/{name}`; `/ui/api/backends/{name}/revive`; `/ui/api/capabilities`; `/ui/api/capabilities/{name}`; `/ui/api/capabilities/{name}/validate`; `/ui/api/config`; `/ui/api/control-plane`; `/ui/api/control-plane/decisions`; `/ui/api/control-plane/export-status`; `/ui/api/control-plane/grants`; `/ui/api/control-plane/policies`; `/ui/api/costs`; `/ui/api/dashboard-link`; `/ui/api/events/dead-letters`; `/ui/api/events/dead-letters/replay`; `/ui/api/events/dead-letters/{id}/replay`; `/ui/api/events/held`; `/ui/api/events/leases`; `/ui/api/import/openapi`; `/ui/api/import/openapi/preview`; `/ui/api/markers`; `/ui/api/metrics/series`; `/ui/api/overview`; `/ui/api/previews`; `/ui/api/refusals`; `/ui/api/registry`; `/ui/api/registry/search`; `/ui/api/reload`; `/ui/api/status`; `/ui/api/tools`; `/ui/assets/{file}` |  |
 | `config-driven` | 3 |  |  |  |  |
 
 Response-code changes from backend secret references (ADR-028). Only the new condition changes; every other answer of these routes is unchanged:
@@ -1448,6 +1454,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `/ui/api/previews` | INTERNAL | private JSON API of the bundled web UI | admin only; describe-then-confirm start-once preview of a server before it is added, nothing persisted | src/gateway/routes.rs:77 |
 | `/ui/api/registry` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:60 |
 | `/ui/api/registry/search` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:61 |
+| `/ui/api/refusals` | INTERNAL | private JSON API of the bundled web UI | admin-only read of what the gateway refused to apply and how to fix it; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:80 |
 | `/ui/api/reload` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:47 |
 | `/ui/api/status` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:44 |
 | `/ui/api/tools` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:45 |

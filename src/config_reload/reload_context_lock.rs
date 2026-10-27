@@ -101,10 +101,22 @@ impl ReloadContext {
         &self,
         path: &std::path::Path,
     ) -> std::result::Result<ReloadOutcome, String> {
+        // Audits the overrides the registry holds however this ends: applied,
+        // refused, or dropped at an await after registering backends.
+        let _audit = (self.reporting.override_audit.as_deref()).map(|a| a.guard(&self.registry));
         let outcome = self.reload_transaction(path).await;
-        if outcome.is_ok() {
-            self.reload_owed
-                .store(false, std::sync::atomic::Ordering::SeqCst);
+        let refusals = &self.reporting.refusals;
+        match &outcome {
+            Ok(_) => {
+                self.reload_owed
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                refusals.reload_applied();
+            }
+            Err(refusal) => refusals.record(
+                crate::config_reload::refusals::RefusalKind::Reload,
+                None,
+                refusal,
+            ),
         }
         outcome
     }
