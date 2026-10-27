@@ -15,9 +15,9 @@ use super::config_write::CommentLoss;
 
 use mcp_gateway::{
     config::TransportConfig,
+    config_persistence::load_existing_or_default,
     gateway::ui::backend_ops::{
-        self, add_backend, get_backend, list_backends, parse_env_vars, remove_backend,
-        resolve_backend,
+        add_backend, get_backend, list_backends, parse_env_vars, remove_backend, resolve_backend,
     },
     gateway::ui::backends::RegistryEntryJson,
     registry::server_registry,
@@ -134,7 +134,13 @@ pub fn run_remove_command(name: &str, config: &Path, mode: CommentLoss) -> ExitC
 
 /// Run `mcp-gateway list`.
 pub fn run_list_command(json: bool, config: &Path) -> ExitCode {
-    let gateway_config = backend_ops::load_config_or_default(config);
+    let gateway_config = match load_existing_or_default(config) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Error: Failed to load {}: {e}", config.display());
+            return ExitCode::FAILURE;
+        }
+    };
 
     if gateway_config.backends.is_empty() {
         if json {
@@ -208,7 +214,13 @@ pub fn run_list_available_command(json: bool) -> ExitCode {
 
 /// Run `mcp-gateway get`.
 pub fn run_get_command(name: &str, config: &Path) -> ExitCode {
-    let gateway_config = backend_ops::load_config_or_default(config);
+    let gateway_config = match load_existing_or_default(config) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Error: Failed to load {}: {e}", config.display());
+            return ExitCode::FAILURE;
+        }
+    };
 
     let info = match get_backend(&gateway_config, name) {
         Ok(i) => i,
@@ -240,20 +252,28 @@ pub fn run_get_command(name: &str, config: &Path) -> ExitCode {
         println!("URL:         {url}");
     }
 
-    // Names and presence, never values. This output is routinely pasted into
-    // bug reports and CI logs, which is what made the previous `{k}={v}` a
-    // credential disclosure rather than a cosmetic issue (MIK-7221).
+    // Names and references, never values. This output is routinely pasted
+    // into bug reports and CI logs, which is what made the previous `{k}={v}`
+    // a credential disclosure rather than a cosmetic issue. A
+    // secret reference is shown as written (ADR-028); a value never is.
+    let backend = &gateway_config.backends[name];
+    let shown = |map: &std::collections::HashMap<String, String>, key: &str| {
+        map.get(key).map_or_else(
+            || "<set>".to_owned(),
+            |v| mcp_gateway::config::secret_slot(v),
+        )
+    };
     if !info.env.is_empty() {
         println!("Environment:");
         for key in &info.env {
-            println!("  {key}=<set>");
+            println!("  {key}={}", shown(&backend.env, key));
         }
     }
 
     if !info.headers.is_empty() {
         println!("Headers:");
         for key in &info.headers {
-            println!("  {key}=<set>");
+            println!("  {key}={}", shown(&backend.headers, key));
         }
     }
 
@@ -659,5 +679,50 @@ mod tests {
         assert_guarded_writers_preserve_invalid_config(
             "backends:\n  bad/name:\n    command: echo original\n",
         );
+    }
+
+    /// A real CLI edit after a crashed byte write: `remove` meets a pending
+    /// replace journal over an unparseable candidate, the config lock puts
+    /// the original back first, and the edit then lands on it, with its
+    /// comments kept and no journal left. The journal is planted by hand in
+    /// its on-disk form, so this also pins that format.
+    #[test]
+    fn remove_recovers_a_crashed_byte_write_first() {
+        use sha2::Digest as _;
+        let dir = TempDir::new().unwrap();
+        let config = dir.path().join("gateway.yaml");
+        let original = "# operator's note\nbackends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n  b:\n    http_url: \"http://127.0.0.1:9/mcp\"\n";
+        std::fs::write(&config, "backends: [not: yaml\n").unwrap();
+        let target = std::fs::canonicalize(&config).unwrap();
+        let staged = target.with_file_name(".gateway.yaml.replace-original");
+        std::fs::write(&staged, original).unwrap();
+        let journal = target.with_file_name(".gateway.yaml.replace-journal");
+        let revision = hex::encode(sha2::Sha256::digest(original.as_bytes()));
+        std::fs::write(
+            &journal,
+            serde_json::json!({
+                "version": 1,
+                "state": "staged",
+                "target": target,
+                "original": staged,
+                "original_revision": revision,
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let _ = run_remove_command("b", &config, CommentLoss::Refuse);
+
+        let text = std::fs::read_to_string(&config).unwrap();
+        assert!(
+            text.contains("# operator's note"),
+            "the comment survives: {text}"
+        );
+        assert!(
+            text.contains("a:") && !text.contains("  b:"),
+            "b removed from the original: {text}"
+        );
+        assert!(!journal.exists(), "the journal is gone");
+        assert!(!staged.exists(), "the staged original is gone");
     }
 }

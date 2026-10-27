@@ -477,6 +477,10 @@ A 3.x config that raised one still applies it, and `mcp-gateway doctor` lists it
   stays operator-only.
 - `auth.api_keys` hold `key_sha256` digests from `mcp-gateway hash-key`, never the
   keys, and a key handed to someone temporary carries `expires_at`.
+- A key that has to change while its agent keeps running is rotated with
+  `previous_key_sha256` and `previous_expires_at` (DEPLOYMENT.md, "Rotating a key
+  without a gap"): the old secret works only until the grace ends, and `principal`
+  keeps the key's sessions, grants and tasks. A leaked key gets no grace.
 - `mtls` or a TLS terminator in front. Bearer tokens on plain HTTP are readable
   by anything on the path, and the gateway refuses backend URLs that carry
   credentials over plain HTTP for the same reason.

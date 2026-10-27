@@ -625,6 +625,21 @@ fn cache_binding(
     ))
 }
 
+/// The events observation key for `account` on `audience`: the account digest and audience only. No
+/// lease field is in it, so a rotation keeps the listener's route; the lease is fenced separately.
+///
+/// # Errors
+/// The account key cannot be digested.
+pub(crate) fn observation_key(
+    account: &AccountKey,
+    audience: &str,
+) -> Result<String, PropagationError> {
+    let digest = account
+        .digest()
+        .map_err(|error| PropagationError::Refuse(format!("account key is unusable: {error}")))?;
+    Ok(format!("acct:v1:{digest}:{}:{audience}", audience.len()))
+}
+
 /// [`cache_binding`] for a lease of `generation`, so a test plants the key
 /// dispatch mints rather than a hand-written copy of its format.
 #[cfg(test)]

@@ -144,7 +144,7 @@ impl Services {
                 k.key_sha256
                     .as_deref()
                     .and_then(crate::config::parse_api_key_digest)
-                    .is_some_and(|digest| hex::encode(&digest[..6]) == key.principal)
+                    .is_some_and(|digest| k.principal_for(&digest).storage_form() == key.principal)
             })
             .is_some_and(|k| {
                 backend.is_none_or(|backend| k.backends.iter().any(|b| b == "*" || b == backend))
@@ -347,6 +347,7 @@ impl Services {
             external_server: subject.backend,
             external_tool: subject.name,
             subject: None,
+            trace_id: None,
         };
         match firewall.check_response_artifact(
             data,

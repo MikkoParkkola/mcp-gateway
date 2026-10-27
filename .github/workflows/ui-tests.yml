@@ -34,7 +34,8 @@ jobs:
     name: UI tests (Playwright)
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) || contains(github.head_ref, 'ui-tests') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # 15, not 5: a cold Chromium install exceeds 5 min, and the cache saves only on success.
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: ui-tests
@@ -42,7 +43,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
       - name: Install the locked packages without install scripts
@@ -65,10 +66,12 @@ jobs:
       - name: Run the browser tests
         env:
           CI: 'true'
-        run: npx playwright test
+        # The `visual` project needs the design frames, which are not in
+        # this repository; it runs locally.
+        run: npx playwright test --project=chromium
       - name: Keep the report of a failed run
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ui-tests-report
           path: |

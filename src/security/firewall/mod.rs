@@ -62,9 +62,7 @@ mod response;
 mod verdict;
 #[cfg(test)]
 use verdict::rule_matches;
-use verdict::{
-    compile_rule, decide_firewall_action, first_matching_rule_action, strongest_finding_severity,
-};
+use verdict::{compile_rule, decide_firewall_action, first_matching_rule_action};
 pub mod tenant_guard;
 /// Re-exported here, where the guard that attributes reads lives.
 pub(crate) use crate::security::tenant_reads;
@@ -77,6 +75,10 @@ mod anomaly_posture_tests;
 mod response_observer;
 #[cfg(test)]
 pub(crate) mod response_tests;
+#[cfg(test)]
+mod rule_glob_tests;
+#[cfg(test)]
+mod rule_scan_tests;
 
 // ─── Runtime types ───────────────────────────────────────────────────────────
 
@@ -119,9 +121,9 @@ pub struct Firewall {
 
 /// A compiled firewall rule with a pre-processed glob pattern.
 struct CompiledRule {
-    pattern: glob::Pattern,
+    /// `None` when the rule's glob did not parse; such a rule matches no tool.
+    pattern: Option<glob::Pattern>,
     action: FirewallAction,
-    #[allow(dead_code)]
     scans: Vec<ScanType>,
     #[allow(dead_code)]
     reason: Option<String>,
@@ -423,6 +425,7 @@ impl Firewall {
                 external_server: server,
                 external_tool: tool,
                 subject: None,
+                trace_id: None,
             };
             let tenants = self.tenant_guard.request_tenants(args);
             audit.log_request_attributed(&labels, args, &verdict, &tenants);
@@ -585,6 +588,7 @@ impl Firewall {
             external_server: server,
             external_tool: tool,
             subject: None,
+            trace_id: None,
         };
         // The compatibility API always supplies one target. Keep the defensive
         // error branch fail-closed rather than panicking at an inspection boundary.
@@ -603,16 +607,22 @@ impl Firewall {
         })
     }
 
-    /// Match tool name against rules; fall back to severity-based default action.
+    /// Resolve each finding on its own, then take the most restrictive result.
     ///
-    /// First matching rule wins. When no rule matches, the highest-severity
-    /// finding determines the action: High→Block, Medium→Warn, Low→Allow.
+    /// A finding is decided by the first rule whose glob covers `tool` and
+    /// whose `scan` list holds the finding's type, or else by its severity:
+    /// High→Block, Medium→Warn, Low→Allow. Deciding per finding is what keeps
+    /// an `allow` scoped to one type from allowing another type beside it.
     fn resolve_action(&self, tool: &str, findings: &[Finding]) -> FirewallAction {
-        let highest_severity = strongest_finding_severity(findings);
-        let matching_rule_action =
-            highest_severity.and_then(|_| first_matching_rule_action(&self.rules, tool));
-
-        decide_firewall_action(matching_rule_action, highest_severity)
+        findings
+            .iter()
+            .fold(FirewallAction::Allow, |combined, finding| {
+                let rule = first_matching_rule_action(&self.rules, tool, finding.scan_type);
+                response::strongest_action(
+                    combined,
+                    decide_firewall_action(rule, Some(finding.severity)),
+                )
+            })
     }
 
     /// Clean up per-session state in the anomaly detector.

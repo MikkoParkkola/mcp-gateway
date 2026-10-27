@@ -46,6 +46,30 @@ impl HttpTransport {
         mode: HeaderMode<'_>,
         identity_key: Option<&str>,
     ) -> Result<header::HeaderMap> {
+        self.build_headers(mode, identity_key, CredentialOrigin::Gateway)
+            .await
+    }
+
+    /// [`Self::build_mcp_headers`] for a request whose credential a
+    /// [`CredentialSource`](crate::transport::upstream_tap::CredentialSource)
+    /// lends: protocol headers only. It never reads the
+    /// gateway's OAuth token, so it never starts a login, and never adds the
+    /// operator's static headers; the source's own headers are merged later.
+    pub(super) async fn build_lent_headers(
+        &self,
+        mode: HeaderMode<'_>,
+        identity_key: Option<&str>,
+    ) -> Result<header::HeaderMap> {
+        self.build_headers(mode, identity_key, CredentialOrigin::Lent)
+            .await
+    }
+
+    async fn build_headers(
+        &self,
+        mode: HeaderMode<'_>,
+        identity_key: Option<&str>,
+        origin: CredentialOrigin,
+    ) -> Result<header::HeaderMap> {
         let version = self
             .protocol_version
             .read()
@@ -78,7 +102,11 @@ impl HttpTransport {
         // `MetaMcp::enforce_oauth_isolation`); by the time we build headers the
         // isolation decision has already been made. `insert` replaces (never
         // appends) Authorization, so no caller-supplied header is duplicated.
-        if let Some(token) = self.get_oauth_token().await? {
+        let token = match origin {
+            CredentialOrigin::Gateway => self.get_oauth_token().await?,
+            CredentialOrigin::Lent => None,
+        };
+        if let Some(token) = token {
             // A token carrying bytes illegal in an HTTP header value must fail as
             // a clean auth error, never panic the request path (MIK-6909).
             headers.insert(header::AUTHORIZATION, bearer_header_value(&token)?);
@@ -117,7 +145,11 @@ impl HttpTransport {
         // User-supplied custom headers apply to all calls, including
         // notifications, because some backends require the same auth header for
         // `notifications/initialized` as for normal requests.
-        for (key, value) in &self.headers {
+        let statics = match origin {
+            CredentialOrigin::Gateway => self.headers.iter().collect::<Vec<_>>(),
+            CredentialOrigin::Lent => Vec::new(),
+        };
+        for (key, value) in statics {
             if let (Ok(k), Ok(v)) = (
                 key.parse::<reqwest::header::HeaderName>(),
                 value.parse::<reqwest::header::HeaderValue>(),
@@ -347,6 +379,22 @@ impl HttpTransport {
         // receive (MIK-7642 R10.1). A no-op unless a submission is armed.
         crate::transport::submit_mark::response_head_received();
 
+        self.read_answer(request, response, message_url, identity_key, waiting)
+            .await
+    }
+
+    /// The answer to `request` from its `response`: the caller's session id
+    /// bound to its bucket, a refusal typed, and a JSON or SSE body read. Split
+    /// from [`Self::post_and_read`] so a send a credential source makes is
+    /// read the same way.
+    pub(super) async fn read_answer(
+        &self,
+        request: &JsonRpcRequest,
+        response: reqwest::Response,
+        message_url: &str,
+        identity_key: Option<&str>,
+        waiting: Option<super::sse_channel::Waiting>,
+    ) -> Result<JsonRpcResponse> {
         // Extract session ID from response headers if this caller's bucket is
         // empty (MIK-6784: store under the caller's identity key, never a shared
         // slot). The first request for a new identity has no session; the
@@ -404,7 +452,7 @@ impl HttpTransport {
         if !status.is_success() {
             // A11-b/g: a deterministic refusal is typed by its STATUS alone.
             let typed = response.error_for_status_ref().err();
-            let body = response.text().await.unwrap_or_default();
+            let body = self.error_body(response).await?;
             // Some servers refuse a protocol version with a status, not a
             // JSON-RPC error, so the body with the supported versions is read
             // first. Three signals together, because this parser sees every
@@ -454,15 +502,38 @@ impl HttpTransport {
             let stream = response
                 .bytes_stream()
                 .map_err(|e| safe_request_error("Failed to read SSE response", &e));
-            super::sse_decoder::decode_sse_exchange(stream).await
+            match self.body_budget.get() {
+                Some(budget) => {
+                    super::sse_decoder::decode_sse_exchange(budget.metered(stream)).await
+                }
+                None => super::sse_decoder::decode_sse_exchange(stream).await,
+            }
         } else if let Some(waiting) = waiting {
             self.body_or_stream(status, response, waiting).await
         } else {
-            // Parse JSON response
-            response
+            self.json_body(response).await
+        }
+    }
+
+    /// A non-2xx body as text. Under a byte budget an over-budget body is
+    /// that refusal, never an empty body read past; without one, an unreadable
+    /// body is empty, as before.
+    async fn error_body(&self, response: reqwest::Response) -> Result<String> {
+        Ok(match self.body_budget.get() {
+            Some(budget) => String::from_utf8_lossy(&budget.read(response).await?).into_owned(),
+            None => response.text().await.unwrap_or_default(),
+        })
+    }
+
+    /// A 2xx JSON body, counted against the byte budget when one is set.
+    async fn json_body(&self, response: reqwest::Response) -> Result<JsonRpcResponse> {
+        match self.body_budget.get() {
+            Some(budget) => serde_json::from_slice(&budget.read(response).await?)
+                .map_err(|e| Error::Transport(format!("Failed to parse response: {e}"))),
+            None => response
                 .json()
                 .await
-                .map_err(|e| safe_request_error("Failed to parse response", &e))
+                .map_err(|e| safe_request_error("Failed to parse response", &e)),
         }
     }
 
@@ -477,10 +548,13 @@ impl HttpTransport {
         // A 2024-11-05 SSE peer answers 202 and puts the response on the
         // session stream (MIK-8835.SSE.2); a JSON body, if one came, is the
         // answer as before.
-        let body = response
-            .bytes()
-            .await
-            .map_err(|e| safe_request_error("Failed to read response", &e))?;
+        let body = match self.body_budget.get() {
+            Some(budget) => budget.read(response).await?,
+            None => response
+                .bytes()
+                .await
+                .map_err(|e| safe_request_error("Failed to read response", &e))?,
+        };
         // 202 is "the answer comes on the stream" whatever its body (the
         // TS SDK's SSE server writes "Accepted"); an empty 2xx is too.
         if status == reqwest::StatusCode::ACCEPTED || body.iter().all(u8::is_ascii_whitespace) {
@@ -620,4 +694,13 @@ async fn detach_token_step(
     }));
     task.await
         .map_err(|e| Error::OAuth(format!("the detached token step failed: {e}")))?
+}
+
+/// Whose credential a request's headers carry.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CredentialOrigin {
+    /// The gateway's own: its OAuth login and the operator's static headers.
+    Gateway,
+    /// A subscriber's, lent per request by a credential source: neither.
+    Lent,
 }

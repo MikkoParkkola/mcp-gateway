@@ -132,14 +132,24 @@ and then, inside the namespaces, in this order:
 2. Stages a fresh root on a tmpfs (`size=16M`). Every tmpfs it mounts, this one included, carries `MS_NOSUID |
    MS_NODEV`. Each runtime path is bind-mounted recursively (`MS_BIND | MS_REC`), and then it and every submount
    under it is remounted `MS_REMOUNT | MS_BIND | MS_RDONLY | MS_NOSUID | MS_NODEV` (an initial bind ignores
-   those flags, and a remount reaches only one mount). Runtime paths: `/usr`, `/bin`, `/lib*`, `/etc/ssl`, `/etc/ca-certificates`, `/etc/pki/tls`, and for
-   the command's interpreter only the resolved binary's directory plus the library directories it needs, never a
-   whole prefix. Every masking mount is a tmpfs with `size=4k`, mounted writable only long enough to create the
+   those flags, and a remount reaches only one mount). Runtime paths: `/usr`, `/bin`, `/lib*`, `/etc/ssl`, `/etc/ca-certificates`, `/etc/pki/tls`. The
+   command's program binds on an allowlist, by where its real file is: under those roots, nothing more; under
+   `/usr/local`, its directory and a sibling `lib`, bound back; inside a known runtime tree (an NVM node version, a
+   pyenv version, a Homebrew keg), that tree alone; anywhere else, the file alone, never the directory around it,
+   so a home or any other private directory is excluded without having to be found. The drop execs the program under the name
+   it was asked for (`argv[0]`): by the path asked for (its directory links resolved) when that path and every link after it
+   lie where the root shows them and every later link's target is written with no `.`, no `..` and no directory link
+   (a kernel-started script sees the exec path as its `$0`), and by its real file otherwise; so on Debian a program
+   reached through `/etc/alternatives`, and an alias whose link climbs with `..` (an nvm `npm`), runs as its real file. The run phase's `PATH`
+   names the exec path's directory, so an alias outside the binds never puts its own directory there. Every masking mount is a tmpfs with `size=4k`, mounted writable only long enough to create the
    mountpoints of any bind-back under it, then remounted `MS_RDONLY`: one over `/usr/local` (with that
    interpreter directory bound back if it lies there), one each over `/etc/ssl/private` and
    `/etc/pki/tls/private`, and one over every resolved gateway state, config and data path that falls under any
    bind. Plus the preview home (tmpfs `size=1G`, read-write), a `/tmp` (tmpfs `size=256M`), `/dev/null`,
-   `/dev/zero`, `/dev/urandom`, and the PID namespace's `/proc` mounted at the new root's `/proc`. The gateway
+   `/dev/zero`, `/dev/urandom`, and the PID namespace's `/proc` mounted at the new root's `/proc` with `hidepid=2,gid=1` (then remounted, as
+   kernels before 5.8 keep the options per superblock), so the helper (PID 1), which the target cannot ptrace, is
+   not listed there, whatever host groups the gateway's user holds. The remount for kernels before 5.8 is untested on a real
+   5.4-5.7 kernel; CI covers 6.x (a pre-release run on such a kernel is tracked as SBX.8). The gateway
    proxy's Unix socket is bound in now, while its host path is still reachable, onto a file under the writable
    `/tmp`, so the helper alone can unmount and remove it after the fetch (step 6); nothing in the new root is from `/run`, `/var` or any home; no
    `/etc/resolv.conf` (the fetch reaches only the proxy on `127.0.0.1`, which resolves names on the gateway
@@ -150,7 +160,7 @@ and then, inside the namespaces, in this order:
    or data path exists inside, wherever those paths live.
 4. Brings `lo` up with iproute2's `ip link set lo up` (present wherever util-linux is; rustix's only interface
    call is an unsafe ioctl), for the fetch.
-5. Starts every phase child as `<gateway binary> __preview-drop <limits> -- <target argv>` (by `/proc/self/exe`,
+5. Starts every phase child as `<gateway binary> __preview-drop <limits> <program> -- <target argv>` (by `/proc/self/exe`,
    which the private root keeps reachable as the helper's own image), so the helper itself keeps its namespace
    capabilities for the step-6 unmount and never runs untrusted code. `__preview-drop` drops every privilege, in
    the order the kernel needs (clearing `CAP_SETPCAP` first would make the later calls fail): the secure bits
@@ -214,10 +224,19 @@ and then, inside the namespaces, in this order:
 
 **Cleanup.** Killing the helper, which is PID 1 of the namespace, makes the kernel SIGKILL every process in it
 (`pid_namespaces(7)`), `setsid` and double-forked descendants included. The launcher records the target's host
-pid before teardown and checks it is gone. Teardown follows the repo's teardown-reachability rule
-(`docs/design/2026-10-09-teardown-reachability.md`): the helper kill, the macOS scan and the
-`hdiutil detach` each add a row there and fill all three cells (dropped future, idle runtime, stalled I/O) with
-a named test, a synchronous backstop that needs no driven runtime, and a deadline on every wait.
+pid before teardown and checks it is gone.
+
+**Teardown reachability.** A teardown that runs only when an async path is driven to its end leaves the
+sandbox running when that path is dropped, or when its runtime is never driven again; a teardown wait with no
+deadline can hold shutdown. So each teardown below has a synchronous backstop that needs no driven runtime, a
+deadline on every wait, and a named test for each of three cases: the owning future dropped, the runtime idle,
+and the teardown's own I/O stalled.
+
+| Teardown | Dropped future | Idle runtime | Stalled I/O |
+|---|---|---|---|
+| Linux helper kill (`preview_sandbox::Started`) | `a_dropped_preview_kills_its_namespace` | `a_preview_dropped_after_its_runtime_still_ends` | N/A: one `SIGKILL` sent in `Drop` with no wait to bound; `--kill-child` then kills the namespace's first process, and the kernel every process in it |
+| macOS marker scan | named with the macOS sandbox | named with the macOS sandbox | its 2 s deadline |
+| macOS `hdiutil detach` | named with the macOS sandbox | named with the macOS sandbox | a deadline on the detach |
 
 **Probe and refusal (SBX.5).** Run once at gateway start with `/bin/true` as the target, through the real setup
 (namespaces, mounts, pivot, seccomp), then once more with `<interpreter> --version` for each interpreter the

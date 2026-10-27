@@ -14,26 +14,6 @@ use crate::fs_lock::ExclusiveFileLock;
 mod data_dir;
 pub use data_dir::gateway_data_dir;
 
-/// Load config tolerantly, returning defaults when the file is absent or unloadable.
-///
-/// New read-modify-write callers must use [`load_existing_or_default`] so a load
-/// failure cannot replace an operator's config with defaults. The reviewed
-/// production callers remaining here are CLI list/get, and legacy remove/update
-/// whose missing-backend guards reject the empty default before any write.
-/// See the issue 462 config preservation design for the caller inventory.
-/// Literal loading, per [`Config::load_literal`], preserves secret references.
-#[must_use]
-pub fn load_config_or_default(path: &Path) -> Config {
-    if path.exists() {
-        Config::load_literal(Some(path)).unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "Could not load config, using defaults");
-            Config::default()
-        })
-    } else {
-        Config::default()
-    }
-}
-
 /// Load config from `path`, returning `Config::default()` when the file is absent.
 ///
 /// Literal, per [`Config::load_literal`].
@@ -88,6 +68,11 @@ mod eol;
 
 #[path = "config_persistence_lock.rs"]
 pub(crate) mod lock;
+
+// The replace journal: undoing a byte replacement after a crash or a refused
+// reload (ADR-024).
+#[path = "config_persistence_journal.rs"]
+pub(crate) mod journal;
 
 // Names the comments a write drops, for the web UI and the CLI (MIK-8051).
 #[path = "config_persistence_comments.rs"]
@@ -275,9 +260,12 @@ where
 {
     // Advisory only: a file that does not load is refused before the lock
     // file is made, so the refusal leaves the directory as it was. The load
-    // under the lock is the authoritative one.
-    load_existing_or_default(path)
-        .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
+    // under the lock is the authoritative one. Skipped while a replace journal
+    // is pending: the lock recovers the file before that load.
+    if !journal::exists(path) {
+        load_existing_or_default(path)
+            .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
+    }
     let mut dropped = Vec::new();
     edit_locked(path, read_config, |current| {
         let mut config = current

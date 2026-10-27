@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8870 T5/T6: the asset table's names are honest content hashes, and
-//! nothing the shell serves reaches outside this origin.
+//! T5/T6: the asset table's names are honest content hashes, and nothing
+//! the shell serves reaches outside this origin.
 
 use super::*;
 
@@ -19,11 +19,82 @@ fn t5_every_asset_name_carries_its_content_hash() {
     }
 }
 
+/// CSS with its comments removed. Only real comments go: a `/*` inside a
+/// quoted string or inside `url(...)` is text, not a comment, so a URL there
+/// is still seen. The stylesheet carries the fonts' licences in a comment,
+/// and those name web addresses that nothing fetches.
+fn strip_css_comments(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let mut rest = css;
+    while let Some(c) = rest.chars().next() {
+        if rest.starts_with("/*") {
+            rest = rest[2..].find("*/").map_or("", |end| &rest[2 + end + 2..]);
+            continue;
+        }
+        let quoted = c == '"' || c == '\'';
+        let url = rest
+            .get(..4)
+            .is_some_and(|p| p.eq_ignore_ascii_case("url("));
+        if quoted || url {
+            // Copy the whole string or url(...) verbatim, escapes included.
+            let close = if quoted { c } else { ')' };
+            let start = if quoted { c.len_utf8() } else { 4 };
+            let mut end = rest.len();
+            let mut escaped = false;
+            for (i, ch) in rest[start..].char_indices() {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == close {
+                    end = start + i + ch.len_utf8();
+                    break;
+                }
+            }
+            out.push_str(&rest[..end]);
+            rest = &rest[end..];
+            continue;
+        }
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    out
+}
+
+#[test]
+fn t6a_the_comment_strip_hides_nothing_that_is_fetched() {
+    // A real comment goes, and its address with it.
+    assert!(!strip_css_comments("a{} /* see https://fonts.test/ofl */ b{}").contains("https:"));
+    // An address in a string or in url() stays, even beside a comment opener.
+    for css in [
+        r"a{background:url(https://off-origin.test/x.png)} /* note */",
+        r"a{background:url(https://off-origin.test/*x*/.png)}",
+        r#"a{content:"/* https://off-origin.test */"}"#,
+        r"a{content:'https://off-origin.test' /* trailing */}",
+        r#"a{background:URL("https://off-origin.test/a.png")}"#,
+        // An escaped quote does not end the string, so this is all text.
+        r#"a{content:"\" /* https://off-origin.test"}"#,
+    ] {
+        assert!(strip_css_comments(css).contains("https:"), "{css}");
+    }
+    // An unterminated comment removes the rest, as a browser would.
+    assert_eq!(strip_css_comments("a{} /* open"), "a{} ");
+}
+
 #[test]
 fn t6_the_shell_references_nothing_off_origin() {
-    let texts = std::iter::once(DOCUMENT.as_bytes()).chain(ASSETS.iter().map(|(_, b)| *b));
-    for text in texts {
-        let text = String::from_utf8_lossy(text);
+    let texts = std::iter::once(("index.html", DOCUMENT.as_bytes()))
+        .chain(ASSETS.iter().map(|(name, b)| (*name, *b)));
+    for (name, bytes) in texts {
+        let raw = String::from_utf8_lossy(bytes);
+        let css = std::path::Path::new(name)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("css"));
+        let text = if css {
+            strip_css_comments(&raw)
+        } else {
+            raw.into_owned()
+        };
         let lower = text.to_ascii_lowercase();
         assert!(
             !lower.contains("http:") && !lower.contains("https:"),
@@ -34,12 +105,32 @@ fn t6_the_shell_references_nothing_off_origin() {
         }
     }
     assert!(
-        DOCUMENT.contains(r#"<meta http-equiv="refresh" content="0; url=/ui">"#),
-        "until UI1 the document hands the visitor to /ui"
+        !DOCUMENT.contains("http-equiv=\"refresh\""),
+        "the shell renders in place; it no longer hands the visitor to /ui"
     );
+    assert!(
+        DOCUMENT.contains("<noscript>") && DOCUMENT.contains(r#"href="/ui/classic""#),
+        "without JavaScript the document points to the classic page"
+    );
+    assert!(
+        DOCUMENT.contains(r#"<script type="module" src="/ui/assets/shell."#),
+        "the shell's module is loaded from the asset table"
+    );
+    // Every asset is named by the document or by a stylesheet it loads
+    // (the fonts), so none ships unused.
+    let stylesheets: Vec<String> = ASSETS
+        .iter()
+        .filter(|(n, _)| {
+            std::path::Path::new(n)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("css"))
+        })
+        .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+        .collect();
     for (name, _) in ASSETS {
+        let reference = format!("/ui/assets/{name}");
         assert!(
-            DOCUMENT.contains(&format!("/ui/assets/{name}")),
+            DOCUMENT.contains(&reference) || stylesheets.iter().any(|css| css.contains(&reference)),
             "{name} is linked"
         );
     }

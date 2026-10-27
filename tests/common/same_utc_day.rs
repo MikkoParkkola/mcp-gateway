@@ -15,13 +15,20 @@
 use std::future::Future;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Today's UTC day number, from the clock that dates a cost save.
+/// Today's UTC day number and the host's local date, packed into one value,
+/// from the clock that dates a cost save. A child gateway counts days in the
+/// host's zone, or in UTC while a pre-upgrade snapshot's UTC day is open
+/// (ADR-026), so a change of either is a day change.
 fn utc_day() -> u64 {
-    SystemTime::now()
+    let now = SystemTime::now();
+    let utc = now
         .duration_since(UNIX_EPOCH)
         .expect("the host clock reads after 1970")
         .as_secs()
-        / 86_400
+        / 86_400;
+    let local = chrono::DateTime::<chrono::Local>::from(now).date_naive();
+    let local = u64::try_from(chrono::Datelike::num_days_from_ce(&local)).unwrap_or(0);
+    (utc << 32) | local
 }
 
 /// Run `scenario` within one UTC day and return what it observed.

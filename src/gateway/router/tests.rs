@@ -64,6 +64,8 @@ mod metrics_scrape;
 mod authz_and_sse;
 mod code_mode_param;
 mod direct_route_identity;
+#[cfg(feature = "webui")]
+mod key_digest_read;
 /// `MIK-7642.PR.B` C2: a client disconnect cancels the backend call.
 mod mik7642_disconnect;
 mod origin_gate;
@@ -457,6 +459,7 @@ pub(super) fn scoped_auth_config(admin: bool) -> AuthConfig {
             denied_tools: None,
             admin,
             kind: crate::config::ApiKeyKind::Shared,
+            ..Default::default()
         }],
         public_paths: vec!["/health".to_string()],
         ..AuthConfig::default()

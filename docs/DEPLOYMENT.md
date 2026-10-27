@@ -1088,6 +1088,9 @@ the key itself:
 | `allowed_tools` / `denied_tools` | Optional glob allowlist and blocklist |
 | `rate_limit` | Requests per minute; 0 is unlimited |
 | `admin` | Admin UI and management tools |
+| `principal` | Written when the key is rotated: the key's identity, 12 lowercase hex characters. Absent: derived from `key_sha256` |
+| `previous_key_sha256` | Written when the key is rotated: the digest before the last rotation, accepted until `previous_expires_at` |
+| `previous_expires_at` | Written when the key is rotated: RFC 3339 end of the grace. `previous_key_sha256` without it is refused at load |
 
 ```bash
 printf %s "$KEY" | mcp-gateway hash-key                       # prints sha256:<hex>
@@ -1097,6 +1100,23 @@ printf %s "$KEY" | mcp-gateway hash-key --verify sha256:<hex>  # exit 0 match, 1
 Use a long random key, for example `openssl rand -base64 32`. The digest is an unsalted
 sha256, so a short or guessable key can be recovered from a leaked config by offline
 guessing; a 32-byte random key cannot.
+
+#### Rotating a key without a gap
+
+A key you have never rotated needs none of the three rotation fields. To replace its secret while
+the agent that holds it is updated:
+
+1. Hash the new key and put its digest in `key_sha256`.
+2. Move the old digest to `previous_key_sha256`, and set `previous_expires_at` to the moment the
+   old secret must stop working, for example 15 minutes ahead.
+3. Set `principal` to the first 12 hex characters of the old digest (after `sha256:`). The key
+   keeps its sessions, grants and tasks under that identity; without it they would belong to the
+   new digest's identity instead. On a key rotated before, keep the `principal` it already has.
+
+Both secrets work until `previous_expires_at`, then only the new one. For a leaked key, skip
+step 2: the old secret stops working as soon as the change applies. Rotation fields apply on
+restart. Load refuses a `principal` another credential already resolves to, and any two equal
+digests among all keys and the bearer token.
 
 `hash-key` reads the key from stdin (at most 64 KiB), strips one trailing newline, and reads no config. A
 plaintext API key in `auth.api_keys`, or an `env:` variable that holds a key rather than a digest, fails the

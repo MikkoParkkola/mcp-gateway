@@ -33,6 +33,7 @@ src/gateway/meta_mcp/scoped_backends.rs	all_for	statement	Lifecycle	allx1
 src/gateway/meta_mcp/scoped_backends.rs	get_for	statement	Lifecycle	getx1
 src/gateway/meta_mcp/scoped_backends.rs	membership_for	statement	Lifecycle	with_membershipx1
 src/gateway/meta_mcp/scoped_backends.rs	nudge_catalogue_for	statement	Lifecycle	nudge_cataloguex1
+src/gateway/meta_mcp/scoped_backends.rs	nudge_surfaced	statement	Lifecycle	nudge_surfacedx1
 src/gateway/meta_mcp/scoped_backends.rs	scoped_get	statement	Visibility	getx1
 src/gateway/meta_mcp/scoped_backends.rs	statuses_for	statement	Lifecycle	statusesx1
 src/gateway/meta_mcp/scoped_backends.rs	subscribe_started_for	statement	Lifecycle	subscribe_startedx1
@@ -68,3 +69,4 @@ src/home_dir.rs	-	item	the one place the platform lookups are called
 src/home_dir.rs	-	item	the one place the platform lookups are called	
 src/home_dir.rs	-	item	the one place the platform lookups are called	
 src/home_dir.rs	-	item	the one place the platform lookups are called	
+src/gateway/ui/overview.rs	kpi_and_servers	statement	Admin	allx1

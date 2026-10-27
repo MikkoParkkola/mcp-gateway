@@ -240,12 +240,15 @@ impl MetaMcp {
 
     /// [`Self::invoke_tool`] plus the result's chain eligibility (A3) and its
     /// upstream chain outcome (inc3 D4), or the lift's already-shaped stored
-    /// answer, delivered unchanged (MIK-8392 STORED.2 D8).
+    /// answer, delivered unchanged (MIK-8392 STORED.2 D8). The invocation
+    /// runs under `trace_id`, which the caller keeps for the answer's
+    /// delivery record.
     pub(in crate::gateway::meta_mcp) async fn invoke_tool_sourced(
         &self,
         args: &Value,
         session_id: Option<&str>,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+        trace_id: String,
     ) -> Result<super::SourcedOutcome> {
         // D1-f: a degraded audit log refuses before dispatch, after one probe.
         if let Some(log) = &self.transparency_logger
@@ -261,7 +264,6 @@ impl MetaMcp {
             );
             return Err(refused);
         }
-        let trace_id = trace::generate();
         let trace_id_clone = trace_id.clone();
         // An in-process call has no request memo of its own: one per call, so
         // a refusal's code reaches its one record (MIK-8361). A request's

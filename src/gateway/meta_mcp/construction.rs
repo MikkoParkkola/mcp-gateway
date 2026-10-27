@@ -9,7 +9,7 @@ use super::{
     CostTracker, Duration, ErrorBudgetConfig, KillSwitch, LocalIdentityGrantStore, LoggingLevel,
     MetaMcp, MetaToolExposure, PlaybookEngine, ProfileRegistry, ResponseCache, RwLock,
     SearchRanker, SessionProfileStore, SessionStateStore, UsageStats, admission, catalogue_cache,
-    signing, visible,
+    signing,
 };
 
 // ============================================================================
@@ -73,8 +73,7 @@ impl MetaMcp {
             budget_enforcer: None,
             #[cfg(feature = "cost-governance")]
             cost_registry: None,
-            surfaced_tools: Vec::new(),
-            surfaced_tools_map: visible::SurfacedMap::default(),
+            surfaced: Arc::default(),
             meta_tool_exposure: MetaToolExposure::expose_all(),
             meta_catalogues: catalogue_cache::MetaCatalogues::default(),
             meta_projections: crate::trust::SharedProjections::default(),
@@ -181,6 +180,23 @@ impl MetaMcp {
     #[must_use]
     pub fn cost_tracker(&self) -> Arc<CostTracker> {
         Arc::clone(&self.cost_tracker)
+    }
+
+    /// The zone daily budgets count days in (ADR-026): the budget enforcer's,
+    /// or the host's when none runs.
+    #[cfg_attr(
+        not(feature = "cost-governance"),
+        expect(
+            clippy::unused_self,
+            reason = "only the budget enforcer is read through self"
+        )
+    )]
+    pub(crate) fn day_zone(&self) -> &'static str {
+        #[cfg(feature = "cost-governance")]
+        if let Some(enforcer) = &self.budget_enforcer {
+            return enforcer.day_zone();
+        }
+        crate::local_day::host_zone_name()
     }
 
     /// Return a [`StatsSnapshot`] for the operator dashboard and other external consumers.

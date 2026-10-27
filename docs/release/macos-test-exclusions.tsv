@@ -2,8 +2,13 @@ path	item	portable	reason
 scripts/ci/shard_tests.py	a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result	n/a	Skipped by the Tests job too: needs Python and Redis, which only the task-sdk-recovery job provisions (MIK-7534).
 scripts/ci/shard_tests.py	mik_7479_full_burst	n/a	Skipped by the Tests job too: runs in full in mrtr7b-full-burst.yml (MIK-7479).
 src/commands/stats.rs	stats_outcome_reaches_a_127_8_loopback_address	inherent	Binds a listener on 127.8.0.1; macOS configures only 127.0.0.1 on lo0, so other 127/8 addresses cannot be bound without an ifconfig alias (MIK-8660 T7b).
+src/config/mod.rs	keychain_linux_tests	inherent	The Linux keychain reader and writer (the Secret Service through gdbus and secret-tool) are compiled on Linux only, the writer's tests in keychain_linux.rs's writer_tests with them; macOS reads and writes the keychain through security-framework, tested by keychain_macos_tests.
 src/config_persistence_atomic.rs	acl_tests	inherent	Writes and reads POSIX ACL xattrs (system.posix_acl_access), which only the Linux probe reads; off Linux the writer keeps owner bits only.
 src/file_mode_inherit_tests.rs	a_skills_save_keeps_a_group_readable_file	inherent	The full group mode survives a save only after the Linux ACL probe proves no ACL; off Linux the writer keeps owner bits only by design.
 src/gateway/task_service/store_tests/durability.rs	open_refuses_a_lease_it_cannot_inspect_and_creates_none	inherent	Builds a path at the Linux PATH_MAX (4096); macOS PATH_MAX is 1024, so the fixture cannot be made the same way.
 src/test_ports.rs	the_reserved_range_is_outside_the_ephemeral_range	inherent	Reads /proc/sys/net/ipv4/ip_local_port_range, which exists only on Linux.
 tests/cli_broken_pipe.rs	any_other_stdout_error_still_fails	inherent	Writes to /dev/full for ENOSPC; macOS has no /dev/full.
+src/security/dump_guard_tests.rs	lease_t11_child	inherent	The child half of lease_t11_linux_guard_is_observable: asserts prctl(PR_GET_DUMPABLE) reads not-dumpable, a flag only Linux and Android have.
+src/security/dump_guard_tests.rs	lease_t11_linux_guard_is_observable	inherent	Runs lease_t11_child in a fresh process to observe the not-dumpable mark, which only Linux and Android have; on macOS no test observes the guard's zero core limit.
+tests/preview_sandbox_inherited_fd.rs	*	inherent	The Linux preview sandbox (util-linux unshare, mount namespaces); macOS has its own sandbox, tested separately (ADR-027).
+tests/preview_sandbox_linux.rs	*	inherent	The Linux preview sandbox (util-linux unshare, mount namespaces); macOS has its own sandbox, tested separately (ADR-027).

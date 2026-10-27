@@ -5,7 +5,8 @@
 //! value spans projected, keys a match starts in renamed, members paired,
 //! exempt values kept. Every row goes through the same [`expected`] oracle,
 //! which validates with `serde_json::Value`, or is compared with the same
-//! document delivered under the cap.
+//! document delivered under the cap. The cost rows, which time the
+//! projection against the whole-leaf path, live here too.
 
 use super::*;
 
@@ -251,13 +252,19 @@ fn time_against_base(label: &str, text: &str) -> (String, f64) {
 /// so when every match sits inside one literal.
 fn time_against(label: &str, text: &str, differs: bool) -> (String, f64) {
     let warm = redactor();
-    let mut value = json!({ "content": [{ "type": "text", "text": text }] });
-    let started = std::time::Instant::now();
-    warm.scan_and_redact(&mut value);
-    let projected = started.elapsed();
-    let started = std::time::Instant::now();
-    let whole = splice(text, &warm.credential_spans(text));
-    let base = started.elapsed();
+    // The fastest of five alternating runs each: one slow sample cannot move a ratio.
+    // Inputs built up front, so a sample times the scan, not a 1 MB copy.
+    let mut fresh: Vec<Value> = (0..5)
+        .map(|_| json!({ "content": [{ "type": "text", "text": text }] }))
+        .collect();
+    let ((value, projected), (whole, base)) = fastest_pair(
+        || {
+            let mut value = fresh.pop().expect("one input per run");
+            warm.scan_and_redact(&mut value);
+            value
+        },
+        || splice(text, &warm.credential_spans(text)),
+    );
     let out = value["content"][0]["text"].as_str().expect("text");
     if differs {
         assert_ne!(out, whole, "{label}: the projection must have run");
@@ -474,4 +481,155 @@ fn s14_offsets_past_32_bits_are_not_walked() {
     let max = usize::try_from(u32::MAX).expect("fits");
     assert!(json_literal::fits_offsets(max));
     assert!(!json_literal::fits_offsets(max + 1));
+}
+
+// ── F: cost ───────────────────────────────────────────────────────────────
+
+/// The fastest of five runs each of `projection` and `base`, with their
+/// outputs. The two alternate, so a load change on a busy machine slows both
+/// sides of a ratio, and one slow sample cannot move it.
+fn fastest_pair<P, B>(
+    mut projection: impl FnMut() -> P,
+    mut base: impl FnMut() -> B,
+) -> ((P, std::time::Duration), (B, std::time::Duration)) {
+    fn keep<T>(best: &mut Option<(T, std::time::Duration)>, run: &mut impl FnMut() -> T) {
+        let started = std::time::Instant::now();
+        let out = run();
+        let took = started.elapsed();
+        if best.as_ref().is_none_or(|(_, b)| took < *b) {
+            *best = Some((out, took));
+        }
+    }
+    let (mut p, mut b) = (None, None);
+    // Each side goes first in turn, so neither gains from running second.
+    for round in 0..5_u32 {
+        if round.is_multiple_of(2) {
+            keep(&mut p, &mut projection);
+            keep(&mut b, &mut base);
+        } else {
+            keep(&mut b, &mut base);
+            keep(&mut p, &mut projection);
+        }
+    }
+    (p.expect("five runs"), b.expect("five runs"))
+}
+
+/// The ratio bar the cost rows guard (MIK-8896.COST.4: fail when a ratio is
+/// over 3x).
+const COST_BAR: f64 = 3.0;
+
+/// Trials a ratio must breach in a row before a cost row fails.
+const BREACHES_TO_FAIL: usize = 3;
+
+/// `trial`'s ratio, re-measured on a breach: the row fails only when
+/// [`BREACHES_TO_FAIL`] independent trials in a row are all at or over
+/// [`COST_BAR`]. The lowest ratio is returned, with every trial's.
+///
+/// Why: one fastest-of-five trial on a loaded runner has read 3.02 (debug,
+/// firewall suite, Spark load about 34) where the row's true ratio is about
+/// 2x. The regressing writer reads 6 to 9x on every trial, so needing three
+/// breaches in a row keeps its detection and drops the one-trial flake.
+///
+/// Spread, F1 run alone on Spark at 16 to 41 load (f93a8bea2, 10 runs each,
+/// fastest of five per side): debug every 50000 1.91 to 1.95, every 10 1.71
+/// to 1.76, dense escapes 1.45 to 1.51; release 2.01 to 2.11, 1.76 to 1.82,
+/// 1.39 to 1.43. The 3.02 came from the full firewall suite, where other
+/// tests share the process: contention a second trial does not repeat.
+fn confirmed_ratio(mut trial: impl FnMut() -> f64) -> (f64, Vec<f64>) {
+    let mut ratios = Vec::with_capacity(BREACHES_TO_FAIL);
+    while ratios.len() < BREACHES_TO_FAIL {
+        let ratio = trial();
+        ratios.push(ratio);
+        if ratio < COST_BAR {
+            break;
+        }
+    }
+    let lowest = ratios.iter().copied().fold(f64::INFINITY, f64::min);
+    (lowest, ratios)
+}
+
+#[test]
+fn one_slow_trial_does_not_fail_a_cost_row() {
+    let mut script = [3.5, 2.1].into_iter();
+    let (lowest, ratios) = confirmed_ratio(|| script.next().expect("two trials"));
+    assert!(lowest < COST_BAR, "{ratios:?}");
+    assert_eq!(ratios, [3.5, 2.1]);
+}
+
+#[test]
+fn three_breaches_in_a_row_fail_a_cost_row() {
+    let mut script = [3.5, 3.4, 3.3, 1.0].into_iter();
+    let (lowest, ratios) = confirmed_ratio(|| script.next().expect("three trials"));
+    assert!(lowest >= COST_BAR, "{ratios:?}");
+    assert_eq!(ratios, [3.5, 3.4, 3.3], "no fourth trial");
+}
+
+/// F1: the projection on a document near the size cap, of short literals with
+/// one connection string (sparse) or one in every 10 (dense), against base's
+/// whole-leaf path. A regression guard in every test run: each ratio is the
+/// fastest of five projections over the fastest of five whole-leaf passes,
+/// alternating in the same run, so a loaded runner slows both sides, and no
+/// wall-clock bound is asserted. A breach is re-measured: a shape fails only
+/// when [`BREACHES_TO_FAIL`] trials in a row are over the bar
+/// ([`confirmed_ratio`]). Run alone, unoptimised builds sit near 1.9x and
+/// release near 2.1x.
+#[test]
+fn f1_projection_cost() {
+    use std::fmt::Write as _;
+    // Every shape is measured before any fails, so one slow shape cannot hide
+    // another's ratio.
+    let mut over = Vec::new();
+    for every in [50_000_usize, 10] {
+        let mut text = String::from("[");
+        let mut i = 0_usize;
+        while text.len() < CAP - 200 {
+            if i > 0 {
+                text.push(',');
+            }
+            if i.is_multiple_of(every) {
+                write!(text, "\"{}\"", pg_url()).unwrap();
+            } else {
+                text.push_str("\"short\"");
+            }
+            i += 1;
+        }
+        text.push(']');
+        let (ratio, ratios) = confirmed_ratio(|| {
+            let ((out, projected), (whole, base)) =
+                fastest_pair(|| deliver(&text).0, || today(&text));
+            assert!(parses(&out), "every {every}");
+            assert_ne!(out, whole, "every {every}: the projection must have run");
+            let ratio = projected.as_secs_f64() / base.as_secs_f64();
+            println!(
+                "every {every}: projection {projected:?}, whole leaf {base:?}, ratio {ratio:.2}"
+            );
+            ratio
+        });
+        if ratio >= COST_BAR {
+            over.push(format!(
+                "every {every}: ratios {ratios:.2?}, each over the plan's 3x"
+            ));
+        }
+    }
+    assert!(over.is_empty(), "{}", over.join("; "));
+    // One literal near the cap with 40 000 matches, each beside an escape: the
+    // escape widening must stay a search, not a rescan per match.
+    let mut body = String::new();
+    for i in 0..40_000 {
+        write!(body, "AKIA{i:016} \\n ").unwrap();
+    }
+    let text = format!(r#"{{"s":"{body}"}}"#);
+    let (ratio, ratios) = confirmed_ratio(|| {
+        let ((out, projected), (whole, base)) = fastest_pair(|| deliver(&text).0, || today(&text));
+        assert_eq!(out, whole, "matches inside one literal redact as base");
+        let ratio = projected.as_secs_f64() / base.as_secs_f64();
+        println!(
+            "one literal, 40000 matches: projection {projected:?}, whole leaf {base:?}, ratio {ratio:.2}"
+        );
+        ratio
+    });
+    assert!(
+        ratio < COST_BAR,
+        "dense escapes: ratios {ratios:.2?}, each over the plan's 3x"
+    );
 }

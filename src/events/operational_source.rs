@@ -53,9 +53,7 @@ fn standing(
             && k.key_sha256
                 .as_deref()
                 .and_then(crate::config::parse_api_key_digest)
-                .is_some_and(|digest| {
-                    crate::gateway::auth::principal_of_digest(&digest).storage_form() == principal
-                })
+                .is_some_and(|digest| k.principal_for(&digest).storage_form() == principal)
     });
     match (bearer, keys.next(), keys.next()) {
         (true, None, _) => Some(Standing {

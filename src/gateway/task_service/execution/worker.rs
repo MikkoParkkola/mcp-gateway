@@ -86,7 +86,10 @@ fn creation_targets(intent: &TaskIntent, call: &TaskCall) -> Vec<Target> {
         .upgrade()
         .and_then(|host| host.meta_mcp().direct_job(&call.tool, &call.arguments))
         .map(|job| Target {
-            server: job.server,
+            server: call
+                .surfaced_server
+                .as_ref()
+                .map_or(job.server, |target| target.server.clone()),
             tool: job.tool,
         })
         .into_iter()
@@ -137,6 +140,17 @@ async fn run_dispatched(
         return;
     }
 
+    // A surfaced task runs on the server it recorded at
+    // creation, or is refused before any backend is called when a reload has
+    // moved or removed that name since.
+    #[cfg(test)]
+    crate::gateway::meta_mcp::visible::seams::task_starts();
+    let recorded = call.surfaced_server.as_ref();
+    if !state.meta_mcp().surfaced_target_holds(&call.tool, recorded) {
+        settle_surfaced_refused(&executor, &principal, &id, revision, &mut cancel_rx).await;
+        return;
+    }
+
     // The upstream slot, armed only for a supported direct backend job whose
     // backend a trusted adapter claims right now. Nothing else is armed, so a
     // playbook, a code-mode program or an unclaimed backend takes exactly the
@@ -153,6 +167,11 @@ async fn run_dispatched(
     let mut job = executor
         .recovery()
         .and_then(|_| state.meta_mcp().direct_job(&call.tool, &call.arguments));
+    // Asked of the recorded server, before trust is asked below: the live
+    // lookup may already name another one.
+    if let (Some(job), Some(recorded)) = (job.as_mut(), recorded) {
+        recorded.server.clone_into(&mut job.server);
+    }
     // Trust is a live question with an await in it, so it cannot be a match
     // guard: asked here, after the shape is known and before anything is armed.
     // The verdict is computed first and the option cleared after, so nothing
@@ -215,12 +234,17 @@ async fn run_dispatched(
     // `input_required` round from it before anything is committed.
     #[cfg(test)]
     crate::gateway::meta_mcp::visible::seams::task_dispatch_starts();
-    let dispatch = state.meta_mcp().dispatch_below_gate_native_result(
-        RequestId::Number(0),
+    let meta = state.meta_mcp();
+    let dispatch = meta.with_surfaced_pin(
         &call.tool,
-        call.arguments.clone(),
-        session_id.as_deref(),
-        &caller,
+        recorded,
+        meta.dispatch_below_gate_native_result(
+            RequestId::Number(0),
+            &call.tool,
+            call.arguments.clone(),
+            session_id.as_deref(),
+            &caller,
+        ),
     );
     let dispatch = async {
         match submission.as_ref() {
@@ -570,9 +594,45 @@ async fn settle_descriptor_refused(
         .await;
 }
 
+/// A surfaced task whose name a reload moved or removed since creation,
+/// settled before any backend is called. A resume and a state-only round
+/// settle through here too, so every refusal reads the same.
+pub(super) async fn settle_surfaced_refused(
+    executor: &TaskExecutor,
+    principal: &str,
+    id: &str,
+    revision: u64,
+    cancel_rx: &mut watch::Receiver<bool>,
+) {
+    let event = TaskTransition::Complete(interrupted_result(
+        "not_executed",
+        "surfaced_target_changed",
+        "surfaced target changed since the task was created",
+    ));
+    executor
+        .settle_cas(principal, id, revision, event, cancel_rx)
+        .await;
+}
+
 /// The response firewall on a native task result, under the targets the
 /// synchronous call would use (#2351): a refusal is what the task settles on.
 pub(super) fn inspect_settled(
+    state: &crate::gateway::task_service::host::LiveHost,
+    call: &TaskCall,
+    id: &str,
+    response: crate::protocol::JsonRpcResponse,
+) -> crate::protocol::JsonRpcResponse {
+    // A surfaced task's result is inspected as the recorded server's answer:
+    // a reload that moved the name during the call must not lend it the new
+    // server's targets.
+    crate::gateway::meta_mcp::MetaMcp::with_surfaced_pin_sync(
+        &call.tool,
+        call.surfaced_server.as_ref(),
+        || inspect_settled_pinned(state, call, id, response),
+    )
+}
+
+fn inspect_settled_pinned(
     state: &crate::gateway::task_service::host::LiveHost,
     call: &TaskCall,
     id: &str,
@@ -589,6 +649,10 @@ pub(super) fn inspect_settled(
         &call.tool,
         &call.arguments,
         crate::gateway::meta_mcp::visible::TargetView::Dispatched,
+    );
+    #[cfg(test)]
+    crate::gateway::meta_mcp::visible::seams::inspected_under(
+        backend.iter().map(|target| target.server.clone()).collect(),
     );
     let targets =
         crate::gateway::meta_mcp::response_security::meta_response_targets(&call.tool, &backend);

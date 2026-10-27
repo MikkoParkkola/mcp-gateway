@@ -28,6 +28,11 @@ pub(crate) struct ResponseCorrelation<'a> {
     /// The caller's verified grant subject, when one resolved (MIK-7938): the
     /// delivery record names it as the invocation record does.
     pub(crate) subject: Option<&'a crate::identity_grants::GrantSubject>,
+    /// The trace of the invocation the delivered answer belongs to, so its
+    /// delivery record joins that invocation's record. `None`
+    /// where no single invocation produced the answer (a notification, a
+    /// plan) or the correlation only labels a scan.
+    pub(crate) trace_id: Option<&'a str>,
 }
 
 /// Distinguishes a served result from an internally consumed legacy question.

@@ -8,6 +8,13 @@
 //! the spring one, and a zone may skip midnight itself. [`local_day`] dates an
 //! instant and returns that day's exact bounds, so callers never divide by
 //! 86 400.
+#![cfg_attr(
+    not(any(test, feature = "cost-governance")),
+    expect(
+        dead_code,
+        reason = "only the zone name has a caller without the budget enforcer"
+    )
+)]
 
 use std::sync::OnceLock;
 

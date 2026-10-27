@@ -334,6 +334,11 @@ fn charged_binding(
     digest.map(|digest| crate::backend::passthrough_binding(&principal, &digest))
 }
 
+/// The inbound header a capable client attaches its backend credential in
+/// (advertised via RFC 9728 protected-resource metadata). Distinct
+/// from `Authorization` so the gateway-auth token is never forwarded.
+const PASSTHROUGH_HEADER: &str = "x-mcp-passthrough-authorization";
+
 /// Resolve passthrough headers for the direct backend route (ADR-008 rung 2,
 /// MIK-6746). Reads the caller's own backend credential from a fixed,
 /// gateway-specific inbound header and forwards it to the backend under
@@ -363,10 +368,6 @@ fn resolve_passthrough_headers(
     inbound: &axum::http::HeaderMap,
     transport_carries_headers: bool,
 ) -> Result<PassthroughResolution, String> {
-    // The inbound header a capable client attaches its backend credential in
-    // (advertised via RFC 9728 protected-resource metadata, MIK-6750). Distinct
-    // from `Authorization` so the gateway-auth token is never forwarded.
-    const PASSTHROUGH_HEADER: &str = "x-mcp-passthrough-authorization";
     crate::identity_propagation::ensure_transport_carries_identity_headers(
         cfg.required,
         transport_carries_headers,
@@ -506,6 +507,12 @@ async fn backend_handler_inner(
         .id
         .take()
         .expect("id should exist for non-notification requests");
+    // After authentication and the scope route, before any
+    // propagation or dispatch, so the backend never sees it.
+    if envelope.method == "events/lease" {
+        return direct_caller::events_lease(state, &name, &caller, envelope.params.as_ref(), id)
+            .await;
+    }
     let preflight = match direct_preflight::preflight(state, &caller, &mut envelope, &route, &id) {
         Ok(preflight) => preflight,
         Err(response) => return response,

@@ -19,6 +19,8 @@ mod errors;
 mod events;
 mod history;
 pub mod import;
+mod overview;
+mod preview;
 pub(crate) mod session;
 mod shell;
 
@@ -66,11 +68,13 @@ fn is_admin(client: Option<&AuthenticatedClient>) -> bool {
 pub fn api_router() -> Router<Arc<AppState>> {
     let router = Router::new()
         .route(routes::UI_STATUS, get(status))
+        .route(routes::UI_OVERVIEW, get(overview::overview))
         .route(routes::UI_TOOLS, get(tools))
         .route(routes::UI_CONFIG, get(config))
         .route(routes::UI_RELOAD, post(reload))
         .route(routes::UI_DASHBOARD_LINK, post(session::dashboard_link))
         .route(routes::DASHBOARD, get(dashboard_handler))
+        .route(routes::UI_PREVIEWS, post(preview::preview_backend))
         .merge(capabilities::capabilities_router())
         .merge(control_plane::control_plane_router())
         .merge(backends::backends_router())
@@ -535,6 +539,23 @@ async fn config(
         })
         .collect();
 
+    // Each backend secret slot that holds a reference, as written, read from
+    // the literal file: never a resolved value (ADR-028).
+    let secret_references = match state.config_path.clone() {
+        Some(path) => tokio::task::spawn_blocking(move || {
+            crate::config::Config::load_literal(Some(&path)).map_or_else(
+                |e| {
+                    tracing::warn!(error = %e, "secret references hidden: config did not load");
+                    std::collections::BTreeMap::new()
+                },
+                |literal| crate::config::display::backend_secret_references(&literal),
+            )
+        })
+        .await
+        .unwrap_or_default(),
+        None => std::collections::BTreeMap::new(),
+    };
+
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "meta_mcp_enabled": state.meta_mcp_enabled,
@@ -542,6 +563,7 @@ async fn config(
         "sanitize_input": state.sanitize_input,
         "ssrf_protection": state.ssrf_protection,
         "servers": servers,
+        "secret_references": secret_references,
     }))
     .into_response()
 }
@@ -609,6 +631,8 @@ async fn costs(
         "aggregate": serde_json::to_value(tracker.aggregate()).unwrap_or(serde_json::Value::Null),
         "by_key":     serde_json::to_value(tracker.all_keys()).unwrap_or(serde_json::json!([])),
         "by_session": serde_json::to_value(tracker.all_sessions_fingerprinted()).unwrap_or_default(),
+        // The zone daily budgets count days in (ADR-026).
+        "day_zone": state.meta_mcp.day_zone(),
     }))
     .into_response()
 }

@@ -24,10 +24,12 @@ use serde_json::{Value, json};
 
 mod health;
 mod hidden_keys;
+mod lease_custody;
 mod npm_pin;
 mod posture;
 mod provenance;
 mod remedy;
+mod secret_store;
 mod shadow;
 mod ws_reach;
 
@@ -192,14 +194,23 @@ pub async fn run_doctor_command(
     };
     if let Some(path) = resolve_config_path(config_path) {
         results.extend(hidden_keys::check_hidden_keys(&path));
+        results.push(secret_store::check_secret_store(
+            &path,
+            config.secrets.store,
+        ));
     }
 
     // ── 2. Port and gateway runtime ────────────────────────────────────────
     results.extend(check_port_and_gateway_runtime(&config).await);
 
     // ── 3. Backend env vars ────────────────────────────────────────────────
+    // References are shown as written, from a literal load;
+    // the evaluated `config` holds their values.
+    let literal = resolve_config_path(config_path)
+        .and_then(|path| mcp_gateway::config::Config::load_literal(Some(&path)).ok());
     for (name, backend) in config.enabled_backends() {
-        results.extend(check_backend_env(name, backend));
+        let written = literal.as_ref().and_then(|l| l.backends.get(name));
+        results.extend(check_backend_env(name, backend, written));
     }
 
     // ── 4. HTTP backends reachability ──────────────────────────────────────
@@ -234,6 +245,8 @@ pub async fn run_doctor_command(
     results.extend(check_shadow_radar(&config, config_path).await);
     // ── 9. Remote backend provenance (#1943) ──────────────────────────────
     results.extend(provenance::check_remote_provenance(&config));
+    // ── 10. Passthrough event-lease custody ────────────────────
+    results.extend(lease_custody::check_passthrough_custody(&config));
 
     // ── Print and summarize ────────────────────────────────────────────────
     print_results(&results, format);
@@ -387,7 +400,11 @@ fn check_config(path: Option<&Path>, _fix: bool) -> (CheckResult, Option<Config>
     }
 }
 
-fn check_backend_env(name: &str, backend: &mcp_gateway::config::BackendConfig) -> Vec<CheckResult> {
+fn check_backend_env(
+    name: &str,
+    backend: &mcp_gateway::config::BackendConfig,
+    written: Option<&mcp_gateway::config::BackendConfig>,
+) -> Vec<CheckResult> {
     use mcp_gateway::registry::server_registry;
     let mut results = Vec::new();
 
@@ -398,7 +415,16 @@ fn check_backend_env(name: &str, backend: &mcp_gateway::config::BackendConfig) -
     for key in entry.required_env {
         let label = format!("{name}: {key}");
         if std::env::var(key).is_ok() || backend.env.contains_key(*key) {
-            results.push(CheckResult::pass(label, "is set").with_category("auth"));
+            // A reference shows where the value comes from; a value never shows.
+            let detail = written
+                .and_then(|w| w.env.get(*key))
+                .map(|text| mcp_gateway::config::secret_slot(text))
+                .filter(|shown| shown != "<set>" && shown != "<empty>")
+                .map_or_else(
+                    || "is set".to_owned(),
+                    |reference| format!("is set as {reference}"),
+                );
+            results.push(CheckResult::pass(label, detail).with_category("auth"));
         } else {
             results.push(
                 CheckResult::fail(label, "not set")
@@ -763,6 +789,9 @@ pub(super) fn which_command(bin: &str) -> bool {
 #[path = "doctor/start_stdio.rs"]
 mod start_stdio;
 pub use start_stdio::StdioProbe;
+#[cfg(test)]
+#[path = "doctor/key_digest_tests.rs"]
+mod key_digest_tests;
 #[cfg(test)]
 #[path = "doctor/runtime_tests.rs"]
 mod runtime_tests;

@@ -180,14 +180,25 @@ counts, and `/sse` answers 410 Gone pointing to `POST /mcp` (MIK-8044.SURF.4b).
 | `/metrics` | 1 |  |  |  |  |
 | `/readyz` | 1 |  |  |  |  |
 | `/sse` |  |  |  | `/sse` |  |
-| `/ui` | 3 |  |  | `/ui/api/backends`; `/ui/api/backends/{name}`; `/ui/api/backends/{name}/revive`; `/ui/api/capabilities`; `/ui/api/capabilities/{name}`; `/ui/api/config`; `/ui/api/control-plane`; `/ui/api/control-plane/decisions`; `/ui/api/control-plane/export-status`; `/ui/api/control-plane/grants`; `/ui/api/control-plane/policies`; `/ui/api/costs`; `/ui/api/dashboard-link`; `/ui/api/events/dead-letters`; `/ui/api/events/dead-letters/replay`; `/ui/api/events/dead-letters/{id}/replay`; `/ui/api/events/held`; `/ui/api/import/openapi`; `/ui/api/import/openapi/preview`; `/ui/api/markers`; `/ui/api/metrics/series`; `/ui/api/registry`; `/ui/api/registry/search`; `/ui/api/reload`; `/ui/api/status`; `/ui/api/tools`; `/ui/assets/{file}` |  |
+| `/ui` | 3 |  |  | `/ui/api/backends`; `/ui/api/backends/{name}`; `/ui/api/backends/{name}/revive`; `/ui/api/capabilities`; `/ui/api/capabilities/{name}`; `/ui/api/config`; `/ui/api/control-plane`; `/ui/api/control-plane/decisions`; `/ui/api/control-plane/export-status`; `/ui/api/control-plane/grants`; `/ui/api/control-plane/policies`; `/ui/api/costs`; `/ui/api/dashboard-link`; `/ui/api/events/dead-letters`; `/ui/api/events/dead-letters/replay`; `/ui/api/events/dead-letters/{id}/replay`; `/ui/api/events/held`; `/ui/api/events/leases`; `/ui/api/import/openapi`; `/ui/api/import/openapi/preview`; `/ui/api/markers`; `/ui/api/metrics/series`; `/ui/api/overview`; `/ui/api/previews`; `/ui/api/registry`; `/ui/api/registry/search`; `/ui/api/reload`; `/ui/api/status`; `/ui/api/tools`; `/ui/assets/{file}` |  |
 | `config-driven` | 3 |  |  |  |  |
+
+Response-code changes from backend secret references (ADR-028). Only the new condition changes; every other answer of these routes is unchanged:
+
+| Route | Condition | Before | After |
+|---|---|---|---|
+| `POST /ui/api/backends` | a whole `env:`, `file:` or `keychain:` value in `env` or `headers` that does not resolve | 201, the text written as the value | 422, nothing written |
+| `PATCH /ui/api/backends/{name}` | the same, in the updated backend | 200, the text written | 422, nothing written |
 
 ### lib
 
 | Area | KEEP | AUTO | INTERNAL, hidden but honoured | INTERNAL | REMOVE |
 |---|---|---|---|---|---|
 | `lib` |  |  |  | 64 |  |
+
+Two items are `pub` beyond the module items above, both for backend secret references (ADR-028), under the `#[doc(hidden)]` `config` module:
+- `mcp_gateway::config::BackendConfig::check_secret_references`, the pre-write reference check. It is `pub` only for the binary's two writers of `backends`, `discover --write` and the setup import, and it returns to `pub(crate)` once no binary-side writer of `backends` remains.
+- `mcp_gateway::config::secret_slot(&str) -> String`, the display projection: a reference as written, an empty value as `<empty>`, anything else as `<set>`. It is pure. `mcp-gateway get`, `doctor` and the web UI's config read use it. Configuration history is to use it too, in a separate change.
 
 
 ## Findings filed on the way (0-bug rule)
@@ -316,6 +327,9 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `auth.api_keys[].key_sha256` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:74 |
 | `auth.api_keys[].kind` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:101 |
 | `auth.api_keys[].name` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:81 |
+| `auth.api_keys[].previous_expires_at` | KEEP | — | end of a rotated key's grace; written by key rotation, absent on an unrotated key | - | src/config/features/api_key.rs:121 |
+| `auth.api_keys[].previous_key_sha256` | KEEP | — | a rotated key's previous digest, accepted until previous_expires_at; written by key rotation | - | src/config/features/api_key.rs:117 |
+| `auth.api_keys[].principal` | KEEP | — | keeps a rotated key's identity across digests; written by key rotation, derived when absent | - | src/config/features/api_key.rs:113 |
 | `auth.api_keys[].rate_limit` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:84 |
 | `auth.bearer_token` | KEEP | `None` | who may call the gateway | - | src/config/features/auth.rs:22 |
 | `auth.client_circuit_breaker` | KEEP | `None` | opt-in per-client circuit breaker | - | src/config/features/auth.rs:32 |
@@ -607,6 +621,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `runtime.profiles.<name>.restart` | KEEP | `RuntimeRestartPolicy::default()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:134 |
 | `runtime.profiles.<name>.restart.backoff_secs` | KEEP | `5` | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:276 |
 | `runtime.profiles.<name>.restart.max_restarts` | KEEP | `2` | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:274 |
+| `secrets` | KEEP | `type default` | where secrets saved through the gateway are written (ADR-028) | - | src/config/mod.rs:143 |
+| `secrets.store` | KEEP | `SecretStoreChoice::Auto` | the store for new UI secret saves: `auto`, `keychain` or `files` (ADR-028); an operator setting by ruling | - | src/config/features/secrets.rs:14 |
 | `security` | KEEP | `type default` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/mod.rs:115 |
 | `security.agent_identity` | KEEP | `AgentIdentityConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:642 |
 | `security.agent_identity.allow_unverified_agent_identity` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/agent_identity.rs:89 |
@@ -1417,10 +1433,13 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `/ui/api/events/dead-letters/replay` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:63 |
 | `/ui/api/events/dead-letters/{id}/replay` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:64 |
 | `/ui/api/events/held` | INTERNAL | private JSON API of the bundled web UI | admin only, like the dead-letter listing; held webhook subscriptions per type (MIK-8057) | src/gateway/routes.rs:65 |
+| `/ui/api/events/leases` | INTERNAL | private JSON API of the bundled web UI | admin only, like the dead-letter listing; each passthrough event subscription's held credential, never the token | src/gateway/routes.rs:66 |
 | `/ui/api/import/openapi` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:67 |
 | `/ui/api/import/openapi/preview` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:66 |
-| `/ui/api/markers` | INTERNAL | private JSON API of the bundled web UI | admin only; restarts, upgrades, reloads, pauses and switch-offs for the charts | src/gateway/routes.rs:71 |
-| `/ui/api/metrics/series` | INTERNAL | private JSON API of the bundled web UI | admin only; windowed call counters for the charts (ADR-017) | src/gateway/routes.rs:69 |
+| `/ui/api/markers` | INTERNAL | private JSON API of the bundled web UI | admin only; restarts, upgrades, reloads, pauses and switch-offs for the charts | src/gateway/routes.rs:75 |
+| `/ui/api/metrics/series` | INTERNAL | private JSON API of the bundled web UI | admin only; windowed call counters for the charts (ADR-017) | src/gateway/routes.rs:73 |
+| `/ui/api/overview` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:88 |
+| `/ui/api/previews` | INTERNAL | private JSON API of the bundled web UI | admin only; describe-then-confirm start-once preview of a server before it is added, nothing persisted | src/gateway/routes.rs:71 |
 | `/ui/api/registry` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:60 |
 | `/ui/api/registry/search` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:61 |
 | `/ui/api/reload` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:47 |
@@ -1444,6 +1463,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp_gateway::OfflineInitError` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:168 |
 | `mcp_gateway::OfflineMigrationError` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:168 |
 | `mcp_gateway::Result` | INTERNAL | bin 1, tests 8, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from error) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:161 |
+| `mcp_gateway::SecretStoreReport` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from secret_store) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:131 |
 | `mcp_gateway::attestation` | INTERNAL | bin 1, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:28 |
 | `mcp_gateway::autotag` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:30 |
 | `mcp_gateway::backend` | INTERNAL | bin 0, tests 52, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:32 |
@@ -1459,6 +1479,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp_gateway::control_plane` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:53 |
 | `mcp_gateway::cost_accounting` | INTERNAL | bin 0, tests 4, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:55 |
 | `mcp_gateway::discovery` | INTERNAL | bin 4, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:58 |
+| `mcp_gateway::doctor_report` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from secret_store) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:131 |
 | `mcp_gateway::error` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:61 |
 | `mcp_gateway::failsafe` | INTERNAL | bin 0, tests 4, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:64 |
 | `mcp_gateway::gateway` | INTERNAL | bin 5, tests 105, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:67 |
@@ -1475,6 +1496,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp_gateway::mtls` | INTERNAL | bin 2, tests 28, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:88 |
 | `mcp_gateway::oauth` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:90 |
 | `mcp_gateway::playbook` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:94 |
+| `mcp_gateway::preview_sandbox` | INTERNAL | bin 1, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:98 |
 | `mcp_gateway::projection` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:96 |
 | `mcp_gateway::protocol` | INTERNAL | bin 0, tests 74, benches/examples 2 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:98 |
 | `mcp_gateway::protocol_imports` | INTERNAL | bin 2, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:100 |

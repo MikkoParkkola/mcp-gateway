@@ -30,6 +30,7 @@ use regex::{Regex, RegexSet};
 use serde_json::{Map, Value};
 
 use super::json_literal::{self, Literal, decoded, trimmed_content};
+use super::json_valid;
 use super::{Finding, FindingLocation, ScanType};
 use crate::security::Severity;
 use crate::truncate::{Budget, Suffix, truncate};
@@ -56,8 +57,8 @@ pub struct Redactor {
     member_value: Regex,
 }
 
-/// The connection-string rule's prefix, one text for the rule and for the
-/// barrier [`Spliced`] writes (MIK-8794).
+/// The connection-string rule's prefix. The barrier [`Spliced`] writes
+/// tracks the same schemes byte by byte; a test pins the lists.
 macro_rules! connection_prefix {
     () => {
         "(?i)(?:postgres|mysql|mongodb|redis)://"
@@ -314,7 +315,8 @@ impl Redactor {
         if text.len() > B2_MAX_LEAF_BYTES {
             return self.redact_large_json(text, exempt, findings);
         }
-        if b2_gate(text).is_none() {
+        // An object, an array or a string, as `Value` would read it.
+        if json_valid::walkable(text) != Some(true) {
             return JsonText::NotJson;
         }
         self.redact_collected(text, exempt, findings)
@@ -329,21 +331,19 @@ impl Redactor {
         findings: &mut Vec<Finding>,
     ) -> JsonText {
         let literals = json_literal::string_literals(text);
+        let found_by: Vec<(usize, Vec<(usize, usize)>)> = (self.set.matches(text).iter())
+            .map(|idx| (idx, overlapping_spans(&self.regexes[idx], text)))
+            .collect();
         // A value literal whose decoded text is exempt keeps every byte, and a
         // pattern counts only where it still redacts something (MIK-8756).
-        let exempt_contents: Vec<(usize, usize)> = literals
-            .iter()
-            .filter(|lit| !lit.key && decoded(text, lit).is_some_and(|v| exempt(&v)))
-            .map(|lit| (lit.start(), lit.end()))
-            .collect();
+        let exempt_contents = exempt_crossed(text, &literals, &found_by, exempt);
         let starts_in_literal = |at: usize| {
             let after = literals.partition_point(|lit| lit.start() <= at);
             after.checked_sub(1).is_some_and(|i| at < literals[i].end())
         };
         let mut matched = Vec::new();
         let mut spans = Vec::new();
-        for idx in &self.set.matches(text) {
-            let found = overlapping_spans(&self.regexes[idx], text);
+        for (idx, found) in found_by {
             // Judged on the matches as found: a piece left after an exempt
             // value is cut out can start on that value's closing quote. No
             // pattern starts on a quote (P2 pins their text), so a match in
@@ -432,10 +432,24 @@ impl Redactor {
         literals: &'a [Literal],
         exempt: &dyn Fn(&str) -> bool,
     ) -> Vec<(&'a Literal, Family)> {
+        // Whether a key can name a credential at all depends on its text
+        // alone, and a document repeats few keys, so each is decided once; a
+        // key that names none makes [`Self::credential_member`] refuse any value.
+        let mut names: HashMap<&str, bool> = HashMap::new();
         literals
             .windows(2)
             .filter(|pair| pair[0].key && !pair[1].key)
             .filter(|pair| text[pair[0].end() + 1..pair[1].start() - 1].trim() == ":")
+            .filter(|pair| {
+                *names
+                    .entry(&text[pair[0].start()..pair[0].end()])
+                    .or_insert_with(|| {
+                        decoded(text, &pair[0]).is_some_and(|key| {
+                            self.member_key.is_match(&key)
+                                || credential_names::family_of(&key).is_some()
+                        })
+                    })
+            })
             .filter_map(
                 |pair| match (decoded(text, &pair[0]), decoded(text, &pair[1])) {
                     (Some(key), Some(value)) if !exempt(&value) => self
@@ -455,10 +469,7 @@ impl Redactor {
     /// [`KEY_MATCH_TAIL`] cannot invent a match, and that tail holds every
     /// match a key can start.
     fn match_starts_in(&self, text: &str, lit: &Literal) -> bool {
-        let mut end = (lit.end() + KEY_MATCH_TAIL).min(text.len());
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
+        let end = text.floor_char_boundary((lit.end() + KEY_MATCH_TAIL).min(text.len()));
         let near = &text[..end];
         self.set
             .matches_at(near, lit.start())
@@ -634,29 +645,10 @@ fn overlapping_spans(re: &Regex, text: &str) -> Vec<(usize, usize)> {
             break; // an empty match at the end; no pattern matches empty today
         }
         let next = m.start() + text[m.start()..].chars().next().map_or(1, char::len_utf8);
-        let mut floor = covered.saturating_sub(OVERLAP_WINDOW);
-        while !text.is_char_boundary(floor) {
-            floor -= 1;
-        }
+        let floor = text.floor_char_boundary(covered.saturating_sub(OVERLAP_WINDOW));
         at = next.max(floor);
     }
     spans
-}
-
-/// The parsed document when `text` is JSON whose credential spans can be
-/// redacted inside its string values: an object, an array or a string, within
-/// the size cap. One function, so MIK-8756 can widen the entry.
-fn b2_gate(text: &str) -> Option<Value> {
-    let opens = matches!(
-        text.trim_start().as_bytes().first(),
-        Some(b'{' | b'[' | b'"')
-    );
-    if text.len() > B2_MAX_LEAF_BYTES || !opens {
-        return None;
-    }
-    serde_json::from_str::<Value>(text)
-        .ok()
-        .filter(|value| value.is_object() || value.is_array() || value.is_string())
 }
 
 /// `spans` (merged, in order) clipped to every value literal they overlap
@@ -791,7 +783,10 @@ fn replace_spans(text: &str, ranges: &[(usize, usize)]) -> String {
 
 #[path = "redactor_spans.rs"]
 mod spans;
-use spans::{covers, escape_around, merge_spans, overlaps, spliced_capacity, spliced_len, without};
+use spans::{
+    covers, escape_around, exempt_crossed, merge_spans, overlaps, spliced_capacity, spliced_len,
+    without,
+};
 
 #[path = "redactor_large.rs"]
 mod large;

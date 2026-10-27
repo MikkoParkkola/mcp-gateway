@@ -238,6 +238,8 @@ enum MetaMode {
     /// what refuses a dangerous argument.
     #[cfg(feature = "firewall")]
     DispatchFirewall,
+    /// Only `gateway_list_servers` is exposed: `gateway_invoke` is no tool.
+    InvokeHidden,
 }
 
 impl MetaMode {
@@ -263,6 +265,9 @@ impl MetaMode {
                     None,
                 ),
             ))),
+            Self::InvokeHidden => {
+                return meta.with_exposed_meta_tools(&["gateway_list_servers".to_string()]);
+            }
             Self::SurfacedT => {
                 return meta.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
                     server: "alpha".to_string(),
@@ -379,6 +384,7 @@ fn key_for_alpha(denied_tools: Option<Vec<String>>) -> AuthConfig {
             denied_tools,
             admin: false,
             kind: crate::config::ApiKeyKind::Shared,
+            ..Default::default()
         }],
         public_paths: vec!["/health".to_string()],
         client_circuit_breaker: None,

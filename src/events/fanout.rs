@@ -111,11 +111,18 @@ impl EventsHub {
                 .filter(|s| {
                     // A row's own key first: a held watch keeps its class's
                     // key whatever the catalogue says now (MIK-8122).
-                    event.lifecycle_key.as_deref().is_none_or(|key| {
-                        source.row_key(s).unwrap_or_else(|| {
-                            source.lifecycle_key(&s.principal, &s.name, &s.arguments, now)
-                        }) == key
-                    })
+                    match event.lifecycle_key.as_deref() {
+                        // An unkeyed occurrence never reaches a row observed
+                        // as one subscriber.
+                        None => s.obs_basis.is_none(),
+                        Some(key) => {
+                            source
+                                .row_key(s)
+                                .or_else(|| source.key_of_row(s, now))
+                                .as_deref()
+                                == Some(key)
+                        }
+                    }
                 })
                 .filter(|s| source.matches(&s.principal, &s.arguments, event, now))
                 .collect()
@@ -172,6 +179,11 @@ impl EventsHub {
         sub: &Subscription,
         now: DateTime<Utc>,
     ) {
+        // What the row is observed under now, stamped so its send can check
+        // it still is; a row that cannot be observed gets none.
+        let Ok(observed) = self.observed_now(sub, &services.live.get()) else {
+            return;
+        };
         // From the alias, so the eventId names no stored id (MIK-8697 §14.2).
         let id = event_id(event.kind, &event.upstream_id, &services.alias(&sub.id));
         let mut data = event.data.clone();
@@ -221,6 +233,7 @@ impl EventsHub {
             last_status: None,
             dead_as: None,
             replayed: false,
+            observed,
         };
         let refusal = if scan == Scan::Block {
             Some(DeadReason::FirewallBlocked)

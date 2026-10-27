@@ -426,6 +426,7 @@ async fn a_task_mode_discovery_settles_with_one_inspection() {
     let call = TaskCall {
         tool: "gateway_search_tools".to_owned(),
         arguments,
+        surfaced_server: None,
     };
     let before = inspections(&meta);
 
@@ -474,6 +475,7 @@ async fn a_blocked_direct_tool_list_is_not_a_client_success() {
             denied_tools: None,
             admin: false,
             kind: crate::config::ApiKeyKind::Shared,
+            ..Default::default()
         }],
         client_circuit_breaker: Some(crate::config::CircuitBreakerConfig {
             failure_threshold: 2,
