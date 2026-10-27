@@ -351,7 +351,7 @@ pub struct HttpTransport {
     /// The `serverInfo` of the last accepted `initialize` answer, as sent.
     /// Only the web UI's preview reads it.
     #[cfg(any(feature = "webui", test))]
-    server_info: RwLock<Option<Value>>,
+    server_info: RwLock<Option<serde_json::Value>>,
 }
 
 /// Outgoing header modes for the HTTP transport call-sites.

@@ -26,7 +26,7 @@ async fn package_from(reply: fn(&Value) -> Response) -> Value {
 }
 
 /// A legacy stub whose `initialize` reports `info` as its `serverInfo`.
-fn legacy(request: &Value, info: Value) -> Response {
+fn legacy(request: &Value, info: &Value) -> Response {
     if request.get("method").and_then(Value::as_str) == Some("initialize") {
         return Json(json!({"jsonrpc": "2.0", "id": request["id"], "result": {
             "protocolVersion": "2025-06-18",
@@ -39,7 +39,7 @@ fn legacy(request: &Value, info: Value) -> Response {
 }
 
 /// A modern stub whose discover answer carries `info` in its `_meta`.
-fn modern(request: &Value, info: Value) -> Response {
+fn modern(request: &Value, info: &Value) -> Response {
     let id = request["id"].clone();
     match request.get("method").and_then(Value::as_str) {
         Some("server/discover") => Json(json!({"jsonrpc": "2.0", "id": id, "result": {
@@ -58,7 +58,7 @@ fn modern(request: &Value, info: Value) -> Response {
 #[tokio::test]
 async fn a_legacy_server_reports_its_name_and_version() {
     let package =
-        package_from(|r| legacy(r, json!({"name": "notes-server", "version": "1.2.3"}))).await;
+        package_from(|r| legacy(r, &json!({"name": "notes-server", "version": "1.2.3"}))).await;
     assert_eq!(
         package,
         json!({"name": "notes-server", "version": "1.2.3",
@@ -69,7 +69,7 @@ async fn a_legacy_server_reports_its_name_and_version() {
 #[tokio::test]
 async fn a_modern_server_reports_its_name_and_version_from_meta() {
     let package =
-        package_from(|r| modern(r, json!({"name": "notes-modern", "version": "2.0.0"}))).await;
+        package_from(|r| modern(r, &json!({"name": "notes-modern", "version": "2.0.0"}))).await;
     assert_eq!(
         package,
         json!({"name": "notes-modern", "version": "2.0.0",
@@ -81,10 +81,10 @@ async fn a_modern_server_reports_its_name_and_version_from_meta() {
 /// the name, and the version is null.
 #[tokio::test]
 async fn a_name_without_a_usable_version_keeps_the_name() {
-    let package = package_from(|r| legacy(r, json!({"name": "half", "version": 7}))).await;
+    let package = package_from(|r| legacy(r, &json!({"name": "half", "version": 7}))).await;
     assert_eq!(package["name"], "half");
     assert_eq!(package["version"], Value::Null);
-    let package = package_from(|r| modern(r, json!({"version": "3"}))).await;
+    let package = package_from(|r| modern(r, &json!({"version": "3"}))).await;
     assert_eq!(package["name"], Value::Null);
     assert_eq!(package["version"], "3");
 }
@@ -93,10 +93,10 @@ async fn a_name_without_a_usable_version_keeps_the_name() {
 #[tokio::test]
 async fn nothing_usable_is_a_null_package() {
     assert_eq!(
-        package_from(|r| legacy(r, json!("not an object"))).await,
+        package_from(|r| legacy(r, &json!("not an object"))).await,
         Value::Null
     );
-    assert_eq!(package_from(|r| modern(r, json!({}))).await, Value::Null);
+    assert_eq!(package_from(|r| modern(r, &json!({}))).await, Value::Null);
     // Only format and control characters: empty once cleaned, so missing.
     assert_eq!(
         package_from(|r| legacy(
@@ -119,8 +119,8 @@ async fn reported_text_is_cleaned_in_both_eras() {
             "version": " 1.0\u{200d} ",
         })
     }
-    let a = package_from(|r| legacy(r, dirty())).await;
-    let b = package_from(|r| modern(r, dirty())).await;
+    let a = package_from(|r| legacy(r, &dirty())).await;
+    let b = package_from(|r| modern(r, &dirty())).await;
     for package in [a, b] {
         let name = package["name"].as_str().expect("a name");
         assert!(name.starts_with("evilgpj.exe"), "{name}");
