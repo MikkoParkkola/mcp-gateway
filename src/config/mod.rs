@@ -16,6 +16,7 @@ mod backend_ownership;
 mod backend_transport;
 mod config_file;
 mod env_overlay;
+mod env_provider;
 mod features;
 pub(crate) mod load_error;
 pub(crate) use features::DEFAULT_TASK_TTL_MS;
@@ -48,10 +49,7 @@ use std::{
     time::Duration,
 };
 
-use figment::{
-    Figment, Metadata, Profile, Provider,
-    value::{Dict, Map, Tag, Value},
-};
+use figment::Figment;
 use serde::{Deserialize, Serialize};
 
 use crate::config_reload::revision::RawInputs;
@@ -61,6 +59,7 @@ use crate::security::{posture, verify_remote_server_provenance};
 use crate::{Error, Result};
 pub(crate) use backend_transport::transport_key_for;
 use config_file::ConfigFile;
+use env_provider::OverlayEnv;
 
 pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvFiles, SystemHome};
 use env_overlay::{SecretFileDigests, SecretRefsRead, digest};
@@ -209,111 +208,6 @@ enum Tolerance {
     Warn,
     /// Refuse the load, for callers that can decline to start.
     Fail,
-}
-
-/// Figment provider reading `MCP_GATEWAY_*` from the overlay, then the process
-/// environment.
-///
-/// Replaces `Env::prefixed(..)`, which reads the process environment only and
-/// would therefore ignore every assignment made by an env file that is no
-/// longer exported into the process.
-struct OverlayEnv<'a> {
-    overlay: &'a EnvOverlay,
-}
-
-/// The `MCP_GATEWAY_*` names a CLI flag owns (clap `env = ...`). They are not
-/// config overrides: `MCP_GATEWAY_CAPABILITIES` names a directory for the tool
-/// subcommands, and read as the `capabilities` key it failed every config load
-/// (MIK-8367). A test walks `Cli::command()` and requires this list to equal
-/// its env names, so a new flag's variable cannot reach the overlay unlisted.
-pub(crate) const CLI_OWNED_ENV: &[&str] = &[
-    "MCP_GATEWAY_CA_CERT",
-    "MCP_GATEWAY_CAPABILITIES",
-    "MCP_GATEWAY_CLIENT_CERT",
-    "MCP_GATEWAY_CLIENT_KEY",
-    "MCP_GATEWAY_CONFIG",
-    "MCP_GATEWAY_CONFIG_DIR",
-    "MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK",
-    "MCP_GATEWAY_HOST",
-    "MCP_GATEWAY_LOG_FORMAT",
-    "MCP_GATEWAY_LOG_LEVEL",
-    "MCP_GATEWAY_PORT",
-    "MCP_GATEWAY_PROTOCOL_REVISION_WINDOW",
-    "MCP_GATEWAY_SKILLS_REGISTRY",
-];
-
-impl<'a> OverlayEnv<'a> {
-    const PREFIX: &'static str = "MCP_GATEWAY_";
-
-    fn new(overlay: &'a EnvOverlay) -> Self {
-        Self { overlay }
-    }
-
-    /// The variables the provider sees: `base` overlaid with the env files.
-    ///
-    /// `base` is the process environment as `OsString` pairs, converted the way
-    /// `Env` converts them. Reading it through `std::env::vars` instead would
-    /// panic the process on a single non-UTF-8 variable belonging to someone
-    /// else, which is a startup failure `Env` never had.
-    fn merged_vars<I>(&self, base: I) -> std::collections::BTreeMap<String, String>
-    where
-        I: Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
-    {
-        let mut merged: std::collections::BTreeMap<String, String> = base
-            .filter(|(key, _)| !key.is_empty())
-            .map(|(key, value)| {
-                (
-                    key.to_string_lossy().into_owned(),
-                    value.to_string_lossy().into_owned(),
-                )
-            })
-            .collect();
-        // Process environment first so an env-file assignment wins, which is
-        // the precedence `EnvOverlay::resolve` states.
-        merged.extend(self.overlay.effective_vars());
-        merged
-    }
-
-    /// Places `value` at the path `parts` names, creating dictionaries on the
-    /// way down — the nesting `__` in a key stands for.
-    fn insert_nested(dict: &mut Dict, parts: &[String], value: String) {
-        match parts {
-            [] => {}
-            [leaf] => {
-                // Parsed, not stored as a string: `Env` reads `9090` as a
-                // number and `[a, b]` as a list, and `Figment::extract` does
-                // not coerce a string into either. Inserting the raw string
-                // would fail every non-string field an operator can override.
-                dict.insert(leaf.clone(), value.parse().expect("infallible"));
-            }
-            [head, tail @ ..] => {
-                let entry = dict
-                    .entry(head.clone())
-                    .or_insert_with(|| Value::Dict(Tag::Default, Dict::new()));
-                let mut inner = match entry {
-                    Value::Dict(_, existing) => std::mem::take(existing),
-                    _ => Dict::new(),
-                };
-                Self::insert_nested(&mut inner, tail, value);
-                *entry = Value::Dict(Tag::Default, inner);
-            }
-        }
-    }
-}
-
-impl Provider for OverlayEnv<'_> {
-    fn metadata(&self) -> Metadata {
-        Metadata::named("environment variable(s)")
-    }
-
-    fn data(&self) -> figment::Result<Map<Profile, Dict>> {
-        let mut dict = Dict::new();
-        for (_, parts, value) in self.overrides(std::env::vars_os()) {
-            Self::insert_nested(&mut dict, &parts, value);
-        }
-        backend_transport::refuse_backend_url(&dict).map_err(figment::Error::from)?;
-        Ok(Profile::Default.collect(dict))
-    }
 }
 
 /// Whether a load substitutes the environment into the config it returns.
