@@ -7,6 +7,13 @@ use super::{
     features, flagged_tools, log_once, remote_transport_identity, verify_remote_server_provenance,
 };
 
+/// Everything a cleartext-credential refusal says after the backend's quoted
+/// name. Shared with the refusal ledger, which recognises a refusal only when
+/// it is exactly this message, never on a copy of the sentence.
+pub(crate) const CLEARTEXT_REFUSAL: &str = "would send credentials in cleartext to a host off this \
+     machine. Use TLS, or set allow_cleartext_credentials on this backend to accept that the \
+     credentials are readable and replayable in transit.";
+
 impl Config {
     /// A firewall rule's `keys` and an exception's `key` name configured API
     /// keys, and need API-key authentication to match anything: a rule that
@@ -505,6 +512,30 @@ impl Config {
         Ok(())
     }
 
+    /// Whether `backend`'s `allow_cleartext_credentials` is what lets it load:
+    /// the flag is set, and [`Self::reject_cleartext_credentials`] would refuse
+    /// the backend without it. One rule, asked twice; never a copy of it.
+    pub(crate) fn cleartext_override_in_effect(name: &str, backend: &BackendConfig) -> bool {
+        if !backend.allow_cleartext_credentials {
+            return false;
+        }
+        let url = match &backend.transport {
+            TransportConfig::Http { http_url: url, .. }
+            | TransportConfig::WebSocket { ws_url: url, .. } => url,
+            #[cfg(feature = "a2a")]
+            TransportConfig::A2a { a2a_url: url, .. } => url,
+            TransportConfig::Stdio { .. } => return false,
+        };
+        let Ok(url) = url::Url::parse(url) else {
+            return false;
+        };
+        let without = BackendConfig {
+            allow_cleartext_credentials: false,
+            ..backend.clone()
+        };
+        Self::reject_cleartext_credentials(name, &without, &url).is_err()
+    }
+
     /// Refuse a backend that would put a credential on a cleartext wire.
     ///
     /// A credential sent over `http://` to a host off this machine is readable
@@ -551,9 +582,7 @@ impl Config {
         // startup and pasted into support threads, and the URL it would
         // otherwise echo is exactly the credential-bearing one (MIK-7221).
         Err(Error::ConfigValidation(format!(
-            "Backend '{name}' would send credentials in cleartext to a host off this \
-             machine. Use TLS, or set allow_cleartext_credentials on this backend to \
-             accept that the credentials are readable and replayable in transit."
+            "Backend '{name}' {CLEARTEXT_REFUSAL}"
         )))
     }
 

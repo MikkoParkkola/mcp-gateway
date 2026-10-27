@@ -914,7 +914,7 @@ function renderControlPlaneServers(servers) {
   }
   tbody.innerHTML = servers.map(s => `<tr>
     <td><div class="row-main">${esc(s.name)}</div><div class="row-sub mono">${esc(s.server_id)}</div></td>
-    <td>${humanize(s.status)}</td>
+    <td>${esc(humanize(s.status))}</td>
     <td>${esc(s.owner_group_id || '-')}</td>
   </tr>`).join('');
 }
@@ -976,8 +976,8 @@ function renderControlPlaneDecisions(decisions) {
       <div class="row-sub">${esc(item.next_step || '')}</div>
       <div class="row-sub mono">${esc(item.reason_code)}</div>
     </td>
-    <td><div>${humanize(item.target_kind)}</div><div class="row-sub mono">${esc(item.target_id)}</div></td>
-    <td><div>${humanize(item.required_role)}</div><div class="row-sub">${humanize(item.required_action)}</div></td>
+    <td><div>${esc(humanize(item.target_kind))}</div><div class="row-sub mono">${esc(item.target_id)}</div></td>
+    <td><div>${esc(humanize(item.required_role))}</div><div class="row-sub">${esc(humanize(item.required_action))}</div></td>
     <td>${licenseBadge(item.license_tier)}</td>
     <td>${boolBadge(item.can_act, 'Can Act', 'Review Only')}</td>
   </tr>`).join('');
@@ -990,7 +990,7 @@ function renderControlPlaneFeatures(features) {
     return;
   }
   tbody.innerHTML = features.map(f => `<tr>
-    <td>${humanize(f.feature)}</td>
+    <td>${esc(humanize(f.feature))}</td>
     <td>${licenseBadge(f.license_tier)}</td>
     <td>${boolBadge(f.available_in_this_route, 'Available', 'Gated')}</td>
   </tr>`).join('');
@@ -1004,7 +1004,7 @@ function renderControlPlaneRbac(authorizations) {
     return;
   }
   tbody.innerHTML = entries.map(([action, auth]) => `<tr>
-    <td><div class="row-main">${humanize(action)}</div><div class="row-sub mono">${esc(auth.reason_code)}</div></td>
+    <td><div class="row-main">${esc(humanize(action))}</div><div class="row-sub mono">${esc(auth.reason_code)}</div></td>
     <td>${boolBadge(auth.allowed, 'Allowed', 'Denied')}</td>
     <td>${auth.audit_required || auth.rollback_required
       ? 'Audit + rollback'
@@ -1040,7 +1040,7 @@ function refreshServersTable(servers) {
     <td>${s.failure_count}</td>
     <td>${fmtMs(s.latency_p50_ms)}</td>
     <td>${fmtMs(s.latency_p95_ms)}</td>
-    <td><button class="btn btn-sm btn-danger" onclick="removeServer(${JSON.stringify(esc(s.name))})">Remove</button></td>
+    <td><button class="btn btn-sm btn-danger" data-action="remove-server" data-value="${esc(s.name)}">Remove</button></td>
   </tr>`).join('');
 }
 
@@ -1068,6 +1068,8 @@ async function removeServer(name) {
 let serverMode = 'registry';
 let regAllServers = [];
 let regSelected = null;
+// The registry entries the open dropdown shows, picked by index.
+let regMatches = [];
 
 function toggleAddServerForm() {
   const form = document.getElementById('add-server-form');
@@ -1120,7 +1122,8 @@ async function loadRegistry() {
   if (regAllServers.length > 0) return;
   try {
     const d = await apiFetch('/ui/api/registry');
-    regAllServers = d.servers || d || [];
+    // The endpoint answers {"entries": [...]}; anything else is an empty list.
+    regAllServers = Array.isArray(d && d.entries) ? d.entries : [];
   } catch (e) {
     if (e instanceof AuthRefused) {
       const note = document.getElementById('add-server-note');
@@ -1141,8 +1144,9 @@ function onRegSearch(q) {
       ).slice(0, 30);
 
   if (matches.length === 0) { dd.style.display = 'none'; return; }
-  dd.innerHTML = matches.map(s => `
-    <div class="reg-opt" onclick="selectRegServer(${JSON.stringify(JSON.stringify(s))})">
+  regMatches = matches;
+  dd.innerHTML = matches.map((s, i) => `
+    <div class="reg-opt" data-action="select-reg" data-value="${i}">
       <div>${esc(s.name)}</div>
       <div class="reg-desc">${esc(truncate(s.description || '', 80))}</div>
       <div class="reg-desc">login: ${esc(s.login || 'none')}${s.reach_reason ? ' - added disabled: can reach any address' : ''}${s.setup ? ' - needs ' + esc(s.setup) : ''}</div>
@@ -1150,8 +1154,9 @@ function onRegSearch(q) {
   dd.style.display = 'block';
 }
 
-function selectRegServer(sJson) {
-  regSelected = JSON.parse(sJson);
+function selectRegServer(s) {
+  // A copy, as before: editing the form never changes the listed entry.
+  regSelected = JSON.parse(JSON.stringify(s));
   document.getElementById('reg-search-input').value = regSelected.name;
   document.getElementById('reg-dropdown').style.display = 'none';
   document.getElementById('reg-selected-info').style.display = '';
@@ -1407,11 +1412,8 @@ function renderCapabilities() {
   list.innerHTML = capabilitiesData.map(cap => {
     const name = cap.name || cap;
     const toolCount = cap.tool_count != null ? cap.tool_count : '';
-    // The name as a JS string literal inside a double-quoted attribute: a raw
-    // JSON.stringify quote would end the attribute and leave a dead handler.
-    const arg = esc(JSON.stringify(name));
     return `<div class="cap-item" id="cap-item-${esc(name)}">
-      <div class="cap-header" onclick="toggleCap(${arg})">
+      <div class="cap-header" data-action="toggle-cap" data-value="${esc(name)}">
         <div class="cap-title">
           <span>${esc(name)}</span>
           ${toolCount !== '' ? `<span class="badge badge-running">${toolCount} tool${toolCount !== 1 ? 's' : ''}</span>` : ''}
@@ -1422,9 +1424,9 @@ function renderCapabilities() {
         <textarea id="cap-editor-${esc(name)}" spellcheck="false" placeholder="Loading YAML..."
           onkeydown="capTabIndent(event)"></textarea>
         <div class="cap-body-actions">
-          <button class="btn btn-sm" onclick="saveCap(${arg})">Save</button>
-          <button class="btn btn-sm btn-secondary" onclick="revertCap(${arg})">Revert</button>
-          <button class="btn btn-sm btn-danger" onclick="deleteCap(${arg})">Delete</button>
+          <button class="btn btn-sm" data-action="save-cap" data-value="${esc(name)}">Save</button>
+          <button class="btn btn-sm btn-secondary" data-action="revert-cap" data-value="${esc(name)}">Revert</button>
+          <button class="btn btn-sm btn-danger" data-action="delete-cap" data-value="${esc(name)}">Delete</button>
           <span id="cap-msg-${esc(name)}" class="form-msg"></span>
         </div>
       </div>
@@ -1681,21 +1683,6 @@ async function doImport() {
   }
 }
 
-function capCard(c) {
-  const id = 'cap-' + c.name.replace(/[^a-z0-9_-]/gi, '_');
-  return `<div class="yaml-editor-wrap" id="wrap-${id}">
-    <div class="yaml-toolbar">
-      <span class="cap-name">${esc(c.name)}</span>
-      <span style="font-size:0.8rem;color:var(--fg2)">${c.tool_count != null ? c.tool_count + ' tools' : ''}</span>
-      <button class="btn btn-sm btn-secondary" onclick="revertCap('${esc(c.name)}','${id}')">Revert</button>
-      <button class="btn btn-sm" onclick="saveCap('${esc(c.name)}','${id}')">Save</button>
-    </div>
-    <div class="yaml-line-numbers" id="ln-${id}"></div>
-    <textarea class="yaml-ta" id="ta-${id}" data-cap="${esc(c.name)}" spellcheck="false">${esc(c.content || '')}</textarea>
-    <div class="yaml-error-msg" id="err-${id}"></div>
-  </div>`;
-}
-
 // ── YAML editor: line numbers + Tab key ──
 function initYamlEditor(ta) {
   updateLineNumbers(ta);
@@ -1884,12 +1871,32 @@ async function doImport() {
 // XSS escape
 function esc(s) {
   if (s == null) return '';
-  const d = document.createElement('div');
-  d.appendChild(document.createTextNode(String(s)));
-  // innerHTML escapes & < > only; quotes too, so the result is safe inside a
-  // quoted attribute as well as in text.
-  return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  // Both quotes too: esc() output is placed inside quoted attributes, where
+  // a bare quote would end the attribute and start new ones.
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
+
+// Handlers read their values from data- attributes, which the browser hands
+// back as the raw string; no value is ever written into markup that runs as
+// script, so a name holding a quote cannot add a handler of its own.
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-action]');
+  if (!el) return;
+  const value = el.dataset.value;
+  switch (el.dataset.action) {
+    case 'remove-server': removeServer(value); break;
+    case 'select-reg': selectRegServer(regMatches[Number(value)]); break;
+    case 'toggle-cap': toggleCap(value); break;
+    case 'save-cap': saveCap(value); break;
+    case 'revert-cap': revertCap(value); break;
+    case 'delete-cap': deleteCap(value); break;
+  }
+});
 
 // Auto-refresh
 function refreshAll(poll = false) {
