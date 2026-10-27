@@ -124,6 +124,10 @@ impl Backend {
         match answer {
             Ok(_) => {
                 self.unserved_consecutive.store(0, Ordering::SeqCst);
+                // Answered: nobody is waiting to sign in.
+                self.shared_entry()
+                    .auth_wait
+                    .store(false, Ordering::Relaxed);
                 if self.is_circuit_tripped() {
                     info!(
                         backend = %self.name,
@@ -134,7 +138,10 @@ impl Backend {
                 Ok(())
             }
             // The token step wanted a login: skip the tick, keep the login.
-            Err(e) if e.is_authorization_wait() => Err(e),
+            Err(e) if e.is_authorization_wait() => {
+                self.shared_entry().auth_wait.store(true, Ordering::Relaxed);
+                Err(e)
+            }
             // A busy lock skips the rebuild too: no breaker sample, debug,
             // and the next tick retries.
             Err(e) if crate::oauth::client::is_credential_lock_busy(&e) => {
@@ -201,6 +208,10 @@ impl Backend {
         // the faults across the answers that proved it alive.
         if code == METHOD_NOT_FOUND {
             self.unserved_consecutive.store(0, Ordering::SeqCst);
+            // Answered: nobody is waiting to sign in.
+            self.shared_entry()
+                .auth_wait
+                .store(false, Ordering::Relaxed);
             debug!(
                 backend = %self.name,
                 method,

@@ -11,6 +11,7 @@
 
 use crate::error::rpc_codes::INTERNAL_ERROR;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use super::LIST_MAX_PAGES;
@@ -308,6 +309,9 @@ fn record_fill(
     // failure nor reachability: the backend was never asked (MIK-7982,
     // MIK-8619).
     if error.is_authorization_wait() || is_credential_lock_busy(error) {
+        if error.is_authorization_wait() {
+            entry.auth_wait.store(true, Ordering::Relaxed);
+        }
         return;
     }
     let reason = error.to_string();
@@ -353,6 +357,11 @@ pub(super) fn record_request_success(entry: &PooledEntry, latency: Duration) {
 /// remains, so the provenance flag clears.
 fn success_under(entry: &PooledEntry, request_failed: &mut bool, latency: Duration) {
     entry.failsafe.record_success(latency);
+    // A served answer means nobody is waiting to sign in. Load first: the
+    // per-call path pays a store only on the rare clear.
+    if entry.auth_wait.load(Ordering::Relaxed) {
+        entry.auth_wait.store(false, Ordering::Relaxed);
+    }
     if entry.failsafe.circuit_breaker.stats().state == CircuitState::Closed {
         *request_failed = false;
     }
