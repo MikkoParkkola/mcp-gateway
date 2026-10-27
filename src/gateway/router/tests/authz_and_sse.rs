@@ -42,8 +42,6 @@ async fn test_router_app_state_with_ssrf(
         key_server: None,
         tool_policy: Arc::new(crate::security::ToolPolicy::default()),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
-        sanitize_input: false,
-        ssrf_protection,
         trust_configured_backends,
         inflight: Arc::new(tokio::sync::Semaphore::new(8)),
         agent_auth,
@@ -55,9 +53,11 @@ async fn test_router_app_state_with_ssrf(
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
-            crate::config::Config::default(),
-        )),
+        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new({
+            let mut config = crate::config_reload::flags_off(crate::config::Config::default());
+            config.security.ssrf_protection = ssrf_protection;
+            config
+        })),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
@@ -165,6 +165,7 @@ async fn authorize_tool_target_enforces_agent_scope() {
 
     let result = authorize_tool_target(
         state.as_ref(),
+        &state.live_config.generation(),
         None,
         Some(&identity),
         None,
@@ -183,6 +184,7 @@ async fn authorize_tool_target_enforces_agent_scope() {
     let (enabled_state, _enabled_store) = test_router_app_state_with_agent_auth_enabled().await;
     let result = authorize_tool_target(
         enabled_state.as_ref(),
+        &enabled_state.live_config.generation(),
         None,
         Some(&identity),
         None,
@@ -228,6 +230,7 @@ async fn authorize_tool_target_blocks_ssrf_when_protection_enabled() {
 
     let result = authorize_tool_target(
         state.as_ref(),
+        &state.live_config.generation(),
         None,
         None,
         None,
@@ -256,6 +259,7 @@ async fn authorize_tool_target_allows_public_host_when_ssrf_protection_enabled()
 
     let result = authorize_tool_target(
         state.as_ref(),
+        &state.live_config.generation(),
         None,
         None,
         None,
@@ -283,6 +287,7 @@ async fn authorize_tool_target_skips_ssrf_when_trust_configured_backends_enabled
 
     let result = authorize_tool_target(
         state.as_ref(),
+        &state.live_config.generation(),
         None,
         None,
         None,

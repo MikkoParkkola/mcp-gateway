@@ -42,6 +42,11 @@ pub(crate) struct SourceEvent {
     /// credential must put that principal in its `lifecycle_key`, computed
     /// from the same canonical arguments on both sides.
     pub lifecycle_key: Option<String>,
+    /// The fence binding of the vault grant the per-user listener run that
+    /// observed this occurrence was fixed on; stamped into each record, so
+    /// one observed under a grant that has since moved is never delivered.
+    /// `None` from every other source.
+    pub fence: Option<String>,
 }
 
 /// `evt_` + 32 hex of SHA-256 over kind, upstream id and the subscription's
@@ -181,7 +186,8 @@ impl EventsHub {
     ) {
         // What the row is observed under now, stamped so its send can check
         // it still is; a row that cannot be observed gets none.
-        let Ok(observed) = self.observed_now(sub, &services.live.get()) else {
+        let Ok(observed) = self.observed_now(sub, &services.live.get(), event.fence.as_deref())
+        else {
             return;
         };
         // From the alias, so the eventId names no stored id (MIK-8697 §14.2).

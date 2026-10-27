@@ -153,7 +153,10 @@ async fn b6_scoped_key_outside_its_backends_keeps_its_scope_answer() {
 #[tokio::test]
 async fn b9b_sanitize_off_runs_no_protocol_field_validation() {
     let fx = fixture(idempotent()).await;
-    assert!(!fx.state.sanitize_input, "b9b premise: sanitizing is on");
+    assert!(
+        !fx.state.live_config.get().security.sanitize_input,
+        "b9b premise: sanitizing is on"
+    );
     let body = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/\u{7}call",
         "params": {"name": "t", "arguments": {},
             "_meta": {(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): KEY}}});

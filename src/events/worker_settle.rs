@@ -6,8 +6,9 @@
 use std::sync::Arc;
 
 use super::{
-    AccessVerdict, Attempt, CLOCK_UNREADABLE, Clock, Ctx, HELD, OutboxRecord, SOURCE_UNAVAILABLE,
-    Services, Settle, Verdict, clock_unsent, grant, refusal_retry, unsent_later,
+    AccessVerdict, Attempt, CLOCK_UNREADABLE, Clock, Ctx, DeadReason, HELD, OutboxRecord,
+    SOURCE_UNAVAILABLE, Services, Settle, Verdict, clock_unsent, grant, quiet_dead, refusal_retry,
+    unsent_later, unsent_now,
 };
 use crate::events::EventsHub;
 
@@ -167,5 +168,54 @@ impl EventsHub {
             self.dead_lettered(services, record, reason).await;
         }
         services.audit_evictions(evicted).await;
+    }
+
+    /// Settle a record that cannot go out after the waits before its send:
+    /// past its lease it is unsent; past its bounds it is dead and unsent; on
+    /// a clock that cannot be read it is neither sent nor buried. The record just written says
+    /// how that attempt ended. `true` when settled here.
+    pub(super) async fn settled_unsendable<'a>(
+        &self,
+        services: &Services,
+        record: &OutboxRecord,
+        current: &crate::events::records::Subscription,
+        fence: Option<&str>,
+        ended: &(impl Fn(&'static str) -> Attempt<'a> + Sync),
+    ) -> bool {
+        #[cfg(test)]
+        self.before_window.pause().await;
+        // One reading judges the lease and the retry window.
+        let Ok(now) = crate::clock::utc_now() else {
+            services.audit_outcome(&ended(CLOCK_UNREADABLE)).await;
+            self.settle(services, record, clock_unsent(record)).await;
+            return true;
+        };
+        // An expired row kept for its burials still signs but is not sent
+        // to: unsent, and the next expiry pass settles it.
+        if !current.live(now) {
+            services.audit_outcome(&ended("subscription_expired")).await;
+            self.settle_with(services, record, |now| {
+                unsent_now("subscription_expired", record, now)
+            })
+            .await;
+            return true;
+        }
+        // After every wait, the row must still be observed as
+        // it was at fan-out (same grant, identity config and lease, and a
+        // vault row's grant as just read); nothing awaits between this and
+        // the send. A shared row compares `None`.
+        if self.observed_now(current, &services.live.get(), fence) != Ok(record.observed.clone()) {
+            services.audit_outcome(&ended("observation_changed")).await;
+            self.settle(services, record, quiet_dead(DeadReason::Observation))
+                .await;
+            return true;
+        }
+        if !self.overdue(record, now) {
+            return false;
+        }
+        services.audit_outcome(&ended("exhausted")).await;
+        self.settle(services, record, quiet_dead(DeadReason::Exhausted))
+            .await;
+        true
     }
 }

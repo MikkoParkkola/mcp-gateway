@@ -103,6 +103,10 @@ pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir) {
     let mut config = Config::default();
     config.server.modern_protocol = f.modern_protocol;
     config.auth = f.auth;
+    // The flags apply from the published config (ADR-023); SSRF stays off
+    // as these fixtures always had it.
+    config.security.sanitize_input = f.sanitize_input;
+    config.security.ssrf_protection = false;
     let backends = Arc::new(BackendRegistry::new());
     let multiplexer = Arc::new(NotificationMultiplexer::new(
         Arc::clone(&backends),
@@ -152,8 +156,6 @@ pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir) {
         key_server: None,
         tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
-        sanitize_input: f.sanitize_input,
-        ssrf_protection: false,
         trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(100)),
         agent_auth: AgentAuthState::new(f.agent_auth_enabled, Arc::new(AgentRegistry::new())),
