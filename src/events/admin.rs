@@ -195,14 +195,8 @@ impl EventsHub {
             .into_iter()
             .find(|s| s.id == dead.record.subscription_id && s.live(now))
             .ok_or(ReplayRefusal::SubscriptionGone)?;
-        let grant = (!dead.record.owner_scoped).then_some(dead.record.backend.as_str());
-        match services.admission(&sub, grant).await {
-            super::services::AccessVerdict::Admits => {}
-            super::services::AccessVerdict::Refuses => return Err(ReplayRefusal::AccessRevoked),
-            // No verdict on the access: the clock cannot be read (MIK-8202).
-            super::services::AccessVerdict::Undated => return Err(ReplayRefusal::Unavailable),
-        }
-        self.still_observed(&sub.id, &dead.record, services, now)?;
+        self.replay_admitted(&sub, &dead.record, services, now)
+            .await?;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&dead.record.body_b64)
             .map_err(|_| ReplayRefusal::Unavailable)?;
@@ -278,21 +272,60 @@ impl EventsHub {
         }
     }
 
+    /// Whether `record` may be replayed to `sub` now: the access re-check,
+    /// then the send path's observation check.
+    async fn replay_admitted(
+        &self,
+        sub: &super::records::Subscription,
+        record: &OutboxRecord,
+        services: &super::Services,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), ReplayRefusal> {
+        let grant = (!record.owner_scoped).then_some(record.backend.as_str());
+        match services.admission(sub, grant).await {
+            super::services::AccessVerdict::Admits => {}
+            super::services::AccessVerdict::Refuses => return Err(ReplayRefusal::AccessRevoked),
+            // No verdict on the access: the clock cannot be read (MIK-8202).
+            super::services::AccessVerdict::Undated => return Err(ReplayRefusal::Unavailable),
+        }
+        self.still_observed(record, services, now).await
+    }
+
     /// The send path's own observation check, on the row as it is after the
     /// admission await (a re-grant may have landed meanwhile): a record it
     /// would bury again is refused here, by name, and nothing is queued. A
-    /// row changed between this and `revive` is still buried at send.
-    fn still_observed(
+    /// row changed between this and `revive` is still buried at send. A
+    /// vault row's grant is read fresh, as delivery reads it: a grant that
+    /// moved refuses the replay now, and a custody that cannot answer queues
+    /// nothing on a guess.
+    async fn still_observed(
         &self,
-        subscription_id: &str,
         record: &OutboxRecord,
         services: &super::Services,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), ReplayRefusal> {
         let current = (self.store.subscriptions().into_iter())
-            .find(|s| s.id == subscription_id && s.live(now))
+            .find(|s| s.id == record.subscription_id && s.live(now))
             .ok_or(ReplayRefusal::SubscriptionGone)?;
-        if self.observed_now(&current, &services.live.get()) == Ok(record.observed.clone()) {
+        let vault = current.obs_basis.as_ref().is_some_and(|basis| {
+            basis.strategy == crate::identity_propagation::PropagationStrategyKind::Vault
+        });
+        let fence = if vault {
+            match self.read_fence(&current).await {
+                Ok(binding) => Some(binding),
+                Err(super::listener_credential::FenceRead::Busy) => {
+                    return Err(ReplayRefusal::Unavailable);
+                }
+                Err(super::listener_credential::FenceRead::Closed) => {
+                    return Err(ReplayRefusal::ObservationChanged);
+                }
+            }
+        } else {
+            None
+        };
+        if self.observed_now(&current, &services.live.get(), fence.as_deref())
+            == Ok(record.observed.clone())
+        {
             Ok(())
         } else {
             Err(ReplayRefusal::ObservationChanged)

@@ -34,6 +34,7 @@ pub(super) async fn guard_before_credential(
     let caller = scope.caller;
     let client = caller.client.as_ref();
     let auth = BackendAuthContext {
+        generation: &caller.generation,
         client,
         oauth_agent_identity: caller.oauth_agent_identity.as_ref(),
         cert_identity: caller.cert_identity.as_ref(),

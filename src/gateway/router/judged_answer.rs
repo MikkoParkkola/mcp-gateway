@@ -21,9 +21,24 @@ pub(in crate::gateway) async fn record_delivery(
     mut frame: OutboundFrame,
     correlation: &ResponseCorrelation<'_>,
     credential: DeliveryCredential,
-    finalized: Option<JsonRpcResponse>,
+    mut finalized: Option<JsonRpcResponse>,
 ) -> (OutboundFrame, Option<JsonRpcResponse>) {
     let read = frame.take_record_fields();
+    // A1: the grant slot's decisions are written before this record, and the
+    // slot sealed, so a failed write refuses the answer here, before it is
+    // recorded, and the stored delivery keeps that refusal too.
+    if crate::gateway::meta_mcp::grant_audit::seal_open_slot()
+        .await
+        .is_err()
+    {
+        let mut refusal = MetaMcp::audit_unavailable_refusal(frame.answer_id());
+        refusal.invocation_trace = frame.response().and_then(|r| r.invocation_trace.clone());
+        crate::gateway::delivery_facts::raise(
+            crate::gateway::delivery_facts::ResponseEffect::Refused,
+        );
+        finalized = finalized.map(|_| refusal.clone());
+        frame = frame.replaced_by(refusal);
+    }
     let logged = meta
         .record_delivery_of(
             frame

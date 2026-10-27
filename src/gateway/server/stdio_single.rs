@@ -301,17 +301,22 @@ impl Gateway {
         client: StdioClient<'_>,
     ) -> Option<serde_json::Value> {
         let session_id = client.session_id;
-        let (answer, staged) =
-            Self::dispatch_single_staged(meta_mcp, tool_policy, mtls_policy, request, client).await;
-        // No frame is judged here: recorded and settled as built, and the
-        // receipts follow the frame as `judge_and_commit` has them follow it.
-        let Some(answer) = answer else {
-            staged.commit(false);
-            return None;
-        };
-        let frame = answer.delivered_unjudged(meta_mcp, session_id).await;
-        staged.commit(frame.delivers_result());
-        frame.stdio_value().map(std::borrow::Cow::into_owned)
+        // One delivery's facts, as the serve loop opens them per message.
+        crate::gateway::delivery_facts::scope(async move {
+            let (answer, staged) =
+                Self::dispatch_single_staged(meta_mcp, tool_policy, mtls_policy, request, client)
+                    .await;
+            // No frame is judged here: recorded and settled as built, and the
+            // receipts follow the frame as `judge_and_commit` has them follow it.
+            let Some(answer) = answer else {
+                staged.commit(false);
+                return None;
+            };
+            let frame = answer.delivered_unjudged(meta_mcp, session_id).await;
+            staged.commit(frame.delivers_result());
+            frame.stdio_value().map(std::borrow::Cow::into_owned)
+        })
+        .await
     }
 
     /// [`Self::dispatch_relay_scoped`] inside one relay-receipt collector,

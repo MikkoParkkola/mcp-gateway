@@ -659,7 +659,9 @@ async fn sanitizing_gateway(slot: CallerSlot) -> Gateway {
             |c: &mut crate::config::BackendConfig| c.passthrough = true,
             |_: &mut _| {},
         ),
-        |state: &mut super::AppState| state.sanitize_input = true,
+        |state: &mut super::AppState| {
+            state.live_config.edit(|c| c.security.sanitize_input = true);
+        },
     )
     .await
 }
@@ -733,7 +735,9 @@ async fn x1_per_user_surfaced_names_are_always_sanitized() {
             },
             |_: &mut _| {},
         ),
-        |state: &mut super::AppState| state.sanitize_input = true,
+        |state: &mut super::AppState| {
+            state.live_config.edit(|c| c.security.sanitize_input = true);
+        },
     )
     .await;
     let exempt = nul_call(&shared, TOOL, true).await;

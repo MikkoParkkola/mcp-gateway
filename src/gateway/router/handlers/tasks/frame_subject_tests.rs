@@ -51,7 +51,9 @@ async fn a_task_frame_record_names_the_listener_subject() {
         authenticated: false,
         credential_kind: crate::security::audit::CredentialKind::ApiKey,
     };
+    let generation = state.live_config.generation();
     let caller = RecoveryCaller {
+        generation: &generation,
         client: Some(&reader),
         oauth_agent_identity: None,
         cert_identity: None,
@@ -133,7 +135,9 @@ async fn a_task_frame_delivery_names_the_api_key_credential() {
         authenticated: true,
         credential_kind: crate::security::audit::CredentialKind::ApiKey,
     };
+    let generation = state.live_config.generation();
     let caller = RecoveryCaller {
+        generation: &generation,
         client: Some(&reader),
         oauth_agent_identity: None,
         cert_identity: None,

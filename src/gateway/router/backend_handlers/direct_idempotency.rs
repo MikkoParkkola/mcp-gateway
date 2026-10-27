@@ -192,9 +192,16 @@ pub(super) fn deliver_replay(
     (guarded, replay): (Option<GuardOutcome>, Option<StoredReplay>),
 ) -> Result<(), Rejection> {
     let (state, id, client) = (scope.state, scope.id, scope.caller.client.as_ref());
+    // A stored answer is about to be served or refused: either way no scan of
+    // this request judged it, so the delivery states no findings (A6).
+    if replay.is_some() {
+        crate::gateway::delivery_facts::unvouched();
+    }
     if replay.is_some()
         && let Some(e) = propagation.unproven.as_ref()
     {
+        // Refused, not delivered: the stored answer never leaves (A6).
+        let e = crate::gateway::delivery_facts::refused(e);
         let refused = super::super::direct_guards::refusal(Some(id.clone()), e);
         return Err(build_http_response(
             &Egressed::gateway_own(refused),
@@ -212,7 +219,8 @@ pub(super) fn deliver_replay(
             if let Err(e) = crate::gateway::meta_mcp::stored_binding::judge(&bindings, |_, _| {
                 current.map(str::to_owned)
             }) {
-                let refused = super::super::direct_guards::refusal(Some(id.clone()), &e);
+                let e = crate::gateway::delivery_facts::refused(&e);
+                let refused = super::super::direct_guards::refusal(Some(id.clone()), e);
                 return Err(build_http_response(
                     &Egressed::gateway_own(refused),
                     StatusCode::OK,

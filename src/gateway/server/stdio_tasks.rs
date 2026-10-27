@@ -83,10 +83,13 @@ pub(super) async fn open(
     overlay: &crate::config::EnvOverlay,
     meta_mcp: &Arc<MetaMcp>,
     tool_policy: &Arc<ToolPolicy>,
-    record_key: &Arc<crate::gateway::record_principal::RecordPrincipalKey>,
+    (record_key, live_config): (
+        &Arc<crate::gateway::record_principal::RecordPrincipalKey>,
+        &Arc<crate::config_reload::LiveConfig>,
+    ),
 ) -> Option<(Arc<StdioTasks>, ExpirySweep)> {
     let dir = store_dir(config);
-    let subscriptions = subscriptions(config, overlay, record_key);
+    let subscriptions = subscriptions(overlay, (record_key, live_config));
     // No upstream adapter on stdio: every interrupted row it holds is settled
     // on open, and none is kept for an upstream read (D6 rev 5 item 4).
     let opened = super::task_runtime::open(config, &dir, subscriptions, meta_mcp, &[]).await;
@@ -113,9 +116,7 @@ pub(super) async fn open(
             meta_mcp: Arc::clone(meta_mcp),
             tool_policy: Arc::clone(tool_policy),
             nonce: super::StdioNonce::process(),
-            sanitize: crate::security::sanitize::InputSanitizing::from_setting(
-                config.security.sanitize_input,
-            ),
+            live_config: Arc::clone(live_config),
         }),
         options: TaskOptions {
             ttl_ms: (config.tasks.default_ttl_ms > 0).then_some(config.tasks.default_ttl_ms),
@@ -133,9 +134,11 @@ pub(super) async fn open(
 /// so one that does not resolve cannot turn stdio's tasks off (MIK-7638).
 /// Publishing never consults the authorizer; only a delivery would.
 fn subscriptions(
-    config: &Config,
     overlay: &crate::config::EnvOverlay,
-    record_key: &Arc<crate::gateway::record_principal::RecordPrincipalKey>,
+    (record_key, live_config): (
+        &Arc<crate::gateway::record_principal::RecordPrincipalKey>,
+        &Arc<crate::config_reload::LiveConfig>,
+    ),
 ) -> Arc<crate::gateway::subscription_registry::SubscriptionRegistry> {
     use crate::gateway::auth::{AuthState, DashboardBootstrap, ResolvedAuthConfig};
     let auth_config = ResolvedAuthConfig::try_from_config_keyed(
@@ -152,7 +155,9 @@ fn subscriptions(
                 key_server: None,
                 dashboard_bootstrap: Arc::new(DashboardBootstrap::new()),
                 tls_enabled: false,
-                live_config: Arc::new(crate::config_reload::LiveConfig::new(config.clone())),
+                // The session's own config, so a reload reaches what this
+                // registry re-validates listeners with (ADR-023).
+                live_config: Arc::clone(live_config),
                 // stdio has no agent middleware: nothing presents an agent token.
                 agent_auth: crate::gateway::oauth::AgentAuthState::new(false, Arc::default()),
             },
@@ -328,7 +333,11 @@ impl StdioTasks {
         match method {
             // Boxed, as the `tools/call` dispatch is: only a `tasks/get`
             // request pays for this arm's future state (MIK-8392).
-            "tasks/get" => Box::pin(self.dispatch_get(id, params, caller, session_id)).await,
+            "tasks/get" => {
+                // A task read serves a stored answer: not this request's.
+                crate::gateway::delivery_facts::unvouched();
+                Box::pin(self.dispatch_get(id, params, caller, session_id)).await
+            }
             "tasks/update" => {
                 // THIS update request's caller resumes the round; a resumed
                 // result is never response-cached, so no revision is carried.

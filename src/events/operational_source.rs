@@ -95,6 +95,7 @@ impl OperationalSource {
             occurred_at,
             data,
             lifecycle_key: None,
+            fence: None,
         });
     }
 }

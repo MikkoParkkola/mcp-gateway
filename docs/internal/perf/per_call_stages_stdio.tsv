@@ -58,6 +58,8 @@ src/gateway/server/control_plane_store.rs	write_probe_does_not_follow_a_planted_
 src/gateway/server/counter_wiring.rs	shutdown_save	-	shutdown saves, off the request path
 src/gateway/server/counter_wiring.rs	start	-	startup counter restore and periodic saver, once per serve
 src/gateway/server/events_wiring.rs	install	-	startup events-hub and webhook wiring, once per serve
+src/gateway/server/events_wiring.rs	fence_binding	-	off-path: the events hub's fence read for a delivery and a listener run, never a tools/call
+src/gateway/server/events_wiring.rs	listener_mint_for_test	-	test-only: compiled out of every build but tests
 src/gateway/server/events_wiring.rs	mint	-	off-path: the events hub's per-user listener mint, never a tools/call
 src/gateway/server/identity_grants.rs	audit_startup	-	startup identity-grant audit, before serving
 src/gateway/server/identity_grants.rs	from	-	startup identity-grant audit error conversion, before serving
