@@ -415,10 +415,9 @@ async fn a_stdio_inspection_finding_is_recorded() {
 async fn a_stdio_annotated_answer_records_annotated() {
     let text = format!("base64: {}", "A".repeat(120));
     let (body, row) = recorded_delivery(Setup::Default, Part::ResultText, text.clone()).await;
-    let sent = body.to_string();
     assert!(
-        sent.contains("_security_findings") && sent.contains(&text),
-        "premise: annotated, text unchanged: {sent}"
+        body.contains("_security_findings") && body.contains(&text),
+        "premise: annotated, text unchanged: {body}"
     );
     assert_eq!(row["response_effect"], "annotated", "{row}");
 }

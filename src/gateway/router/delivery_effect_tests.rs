@@ -242,7 +242,7 @@ async fn a_recovery_hint_records_annotated() {
 /// gateway's `_cost_warnings` and nothing else added: noted after the egress
 /// scan, it records `annotated`. (`_security_findings` cannot stand alone:
 /// the context-integrity kernel runs the same inspection and attaches its
-/// verdict, src/context_integrity/kernel.rs:235.)
+/// verdict, `src/context_integrity/kernel.rs:235`.)
 #[tokio::test]
 async fn a_direct_cost_warning_records_annotated() {
     use crate::cost_accounting::config::CostGovernanceConfig;
