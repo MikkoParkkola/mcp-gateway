@@ -644,7 +644,7 @@ impl crate::gateway::authz::ToolAuthorizer for Granted {
 /// judged by `authorizer`: the resumed answer and its delivery record's
 /// fields, and how often the pending step reached the backend in all.
 async fn resume_as(
-    authorizer: &dyn crate::gateway::authz::ToolAuthorizer,
+    authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync),
 ) -> (Value, serde_json::Map<String, Value>, usize) {
     use crate::gateway::delivery_facts;
     let stub = Arc::new(AsksOnce::default());
