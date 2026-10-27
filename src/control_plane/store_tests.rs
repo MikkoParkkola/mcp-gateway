@@ -355,6 +355,8 @@ fn file_audit_read_caps_bytes_on_a_log_larger_than_the_window() {
 // MIK-6710.AUDIT.1 — a single line longer than the whole scan window can
 // never be read by any page, so it fails closed instead of returning a cursor
 // that never advances.
+// A line longer than the scan window but within the record cap is assembled
+// whole now; one that is not a record (here, not JSON) still fails closed.
 #[test]
 fn file_audit_read_fails_closed_on_a_line_longer_than_the_window() {
     use std::io::Write;

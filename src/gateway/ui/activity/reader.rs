@@ -16,7 +16,7 @@ use serde_json::Value;
 use crate::security::transparency_log::pager::{
     self, ASSEMBLY_WINDOW, Tail, lines_newest_first, older_segment, tail_window_assembled,
 };
-use crate::security::transparency_log::segments::{active_segment_seq, list_segments, sealed_path};
+use crate::security::transparency_log::segments::{active_segment_seq, list_segments};
 
 /// The window each read takes.
 pub(super) const WINDOW: u64 = 1 << 20;
@@ -146,33 +146,10 @@ impl LogTail {
     /// then checked: if rotation sealed it meanwhile, the sealed file holds
     /// its bytes, so that is the one read.
     fn open_segment(&self) -> io::Result<Option<File>> {
-        let sealed_now = |seq: u64| -> io::Result<bool> {
-            Ok(list_segments(&self.log)?.iter().any(|s| s.seq == seq))
-        };
-        let path = if sealed_now(self.segment)? {
-            sealed_path(&self.log, self.segment)
-        } else {
-            self.log.clone()
-        };
-        #[cfg(test)]
-        tests::before_open();
-        let file = match File::open(&path) {
-            Ok(f) => f,
-            // Rotation renames the active file before it creates the next:
-            // in that gap the bytes are under the sealed name.
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                return if path == self.log && sealed_now(self.segment)? {
-                    File::open(sealed_path(&self.log, self.segment)).map(Some)
-                } else {
-                    Ok(None)
-                };
-            }
-            Err(e) => return Err(e),
-        };
-        if path == self.log && sealed_now(self.segment)? {
-            return File::open(sealed_path(&self.log, self.segment)).map(Some);
-        }
-        Ok(Some(file))
+        pager::open_segment(&self.log, self.segment, || {
+            #[cfg(test)]
+            tests::before_open();
+        })
     }
 
     /// The position a later page resumes from.

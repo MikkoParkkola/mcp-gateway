@@ -146,8 +146,20 @@ async fn recovery_refuses_past_an_unreadable_line_and_appends_nothing() {
     f.store.hole.store(false, Ordering::SeqCst);
     f.restart();
     f.reconcile().await.unwrap();
-    let got: Vec<_> = f.records().into_iter().map(|r| r.1).collect();
-    assert_eq!(got, ["g000", "g001", "g002"]);
+    let records = f.records();
+    let added: Vec<_> = records
+        .iter()
+        .filter(|r| r.0 == V::Add)
+        .map(|r| r.1.as_str())
+        .collect();
+    assert_eq!(added, ["g000", "g001", "g002"], "{records:?}");
+    // The refusal left a gap, which the healed run records.
+    assert!(
+        records
+            .iter()
+            .all(|r| r.0 == V::Add || r.0 == V::Indeterminate),
+        "{records:?}"
+    );
     assert_unique(&f);
 }
 

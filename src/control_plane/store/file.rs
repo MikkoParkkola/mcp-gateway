@@ -339,8 +339,22 @@ impl ControlPlaneStore for FileControlPlaneStore {
         filter.validate()?;
         let log = self.audit.path();
         let at = pager::position(&log, filter.cursor.map(|c| (c.offset, c.segment)))?;
-        let Some((file, len)) = pager::open_segment(&at.file)? else {
-            // Nothing to read in this file: page on to the older segment.
+        let opened = match at.segment {
+            Some(seq) => pager::open_segment(&log, seq, || {})?,
+            None => pager::open_segment(&at.file, 0, || {})?,
+        };
+        let Some(file) = opened else {
+            // Bytes the cursor still names are under neither the active nor
+            // the sealed name: refuse, rather than page past records unread.
+            if at.end > 0 {
+                return Err(StoreError::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!(
+                        "audit segment {:?} vanished with {} bytes unread",
+                        at.segment, at.end
+                    ),
+                )));
+            }
             return Ok(AuditPage {
                 next_cursor: next_page(&log, 0, at.segment)?,
                 ..AuditPage::empty(at.reset)
@@ -355,7 +369,10 @@ impl ControlPlaneStore for FileControlPlaneStore {
         // A cursor this store hands out sits at a line start, at 0, or at a
         // file's end, so a page ending inside a line is one stepping through
         // an over-cap line already reported: the line is skipped, not re-read.
+        let len = file.metadata()?.len();
         let continuation = continues_a_skipped_line(&file, at.end, len)?;
+        // The one byte that probe reads, when it reads one.
+        let window_len = window_len + u64::from(at.end > 0 && at.end < len);
         let pager::Tail::Lines {
             start: body_start, ..
         } = tail

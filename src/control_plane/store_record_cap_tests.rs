@@ -7,7 +7,7 @@ use super::*;
 
 /// Page the whole governance log, newest first, returning each event's id and
 /// the length of its reason. Every page must read.
-fn page_all(store: &FileControlPlaneStore) -> Vec<(String, usize)> {
+fn page_all(store: &FileControlPlaneStore) -> Vec<(String, String)> {
     let mut seen = Vec::new();
     let mut cursor = None;
     for _ in 0..100 {
@@ -19,7 +19,7 @@ fn page_all(store: &FileControlPlaneStore) -> Vec<(String, usize)> {
         seen.extend(
             page.events
                 .iter()
-                .map(|event| (event.event_id.clone(), event.reason.len())),
+                .map(|event| (event.event_id.clone(), event.reason.clone())),
         );
         match page.next_cursor {
             Some(at) => cursor = Some(at),
@@ -39,7 +39,12 @@ fn a_record_between_the_scan_window_and_the_cap_reads_back_with_its_neighbours()
     let store = FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
     let three_mib = 3 * 1024 * 1024;
     let mut large = audit_event("large", "alice", ControlPlaneAction::MutatePolicy);
-    large.reason = "r".repeat(three_mib);
+    // A payload that varies along its length, so a shifted or truncated read
+    // cannot match it.
+    let payload: String = (0..three_mib)
+        .map(|i| char::from(b'a' + u8::try_from(i % 26).unwrap()))
+        .collect();
+    large.reason.clone_from(&payload);
     for event in [
         audit_event("before", "alice", ControlPlaneAction::MutateGrant),
         large,
@@ -48,14 +53,12 @@ fn a_record_between_the_scan_window_and_the_cap_reads_back_with_its_neighbours()
         store.append_audit(&event).unwrap();
     }
 
-    let small = audit_event("x", "alice", ControlPlaneAction::MutateGrant)
-        .reason
-        .len();
+    let small = audit_event("x", "alice", ControlPlaneAction::MutateGrant).reason;
     assert_eq!(
         page_all(&store),
         [
-            ("after".to_string(), small),
-            ("large".to_string(), three_mib),
+            ("after".to_string(), small.clone()),
+            ("large".to_string(), payload),
             ("before".to_string(), small),
         ]
     );
@@ -161,10 +164,21 @@ fn an_over_cap_line_is_reported_once_and_later_pages_still_read() {
 fn two_adjacent_over_cap_lines_are_reported_once_each() {
     let (_dir, store, path, template) = store_with_template();
     let big = "z".repeat(5 * 1024 * 1024);
-    append_raw(&path, &[big.clone(), big, record(&template, "after")]);
+    let starts = append_raw(&path, &[big.clone(), big, record(&template, "after")]);
     let (ids, holes) = page_reports(&store);
     assert_eq!(ids, ["after", "seed"]);
-    assert_eq!(holes.len(), 2, "{holes:?}");
+    let offsets: Vec<u64> = holes.iter().map(|h| h.offset).collect();
+    assert_eq!(offsets.len(), 2, "{holes:?}");
+    // Newest first: the second line's report, then the first's, each inside
+    // its own line.
+    assert!(
+        (starts[1]..starts[2]).contains(&offsets[0]),
+        "{offsets:?} {starts:?}"
+    );
+    assert!(
+        (starts[0]..starts[1]).contains(&offsets[1]),
+        "{offsets:?} {starts:?}"
+    );
 }
 
 /// The cap counts the newline: a line of `cap - 1` bytes is a record and
@@ -226,4 +240,32 @@ fn an_over_cap_line_starting_exactly_one_window_down_drops_nothing() {
         holes.iter().map(|h| h.offset).collect::<Vec<_>>(),
         [starts[0]]
     );
+}
+
+/// READ.3: one line assembler. Both readers call the shared pager's
+/// `tail_window_assembled`, and it is defined once.
+#[test]
+fn the_governance_and_activity_readers_share_one_line_assembler() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let read = |rel: &str| std::fs::read_to_string(root.join(rel)).unwrap();
+    // Built here, so this file's own text does not count as a definition.
+    let needle = format!("fn {}(", "tail_window_assembled");
+    let mut definitions = 0;
+    let mut stack = vec![root.join("src")];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                definitions += std::fs::read_to_string(&path)
+                    .unwrap()
+                    .matches(needle.as_str())
+                    .count();
+            }
+        }
+    }
+    assert_eq!(definitions, 1, "one line assembler");
+    assert!(read("src/control_plane/store/file.rs").contains("pager::tail_window_assembled("));
+    assert!(read("src/gateway/ui/activity/reader.rs").contains("tail_window_assembled("));
 }

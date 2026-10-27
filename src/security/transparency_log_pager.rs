@@ -100,18 +100,40 @@ pub(crate) fn read_window(path: &Path, start: u64, len: u64) -> io::Result<Vec<u
     }
 }
 
-/// `path` open for reading, with its length; `None` when it does not exist.
-/// A reader that holds the handle keeps reading the same bytes when rotation
-/// renames the file under it.
-pub(crate) fn open_segment(path: &Path) -> io::Result<Option<(std::fs::File, u64)>> {
-    match std::fs::File::open(path) {
-        Ok(file) => {
-            let len = file.metadata()?.len();
-            Ok(Some((file, len)))
+/// Open segment `seq` of `log` for reading. The active file is opened by name
+/// and then checked: if rotation sealed it meanwhile, the sealed file holds
+/// its bytes, so that is the one read; in the gap where rotation has renamed
+/// the active file but not yet created the next, its bytes are under the
+/// sealed name too. `None` when neither exists. `before_open` runs just
+/// before the open: a test's seam to rotate in that window.
+pub(crate) fn open_segment(
+    log: &Path,
+    seq: u64,
+    before_open: impl FnOnce(),
+) -> io::Result<Option<std::fs::File>> {
+    let sealed_now =
+        || -> io::Result<bool> { Ok(list_segments(log)?.iter().any(|s| s.seq == seq)) };
+    let path = if sealed_now()? {
+        sealed_path(log, seq)
+    } else {
+        log.to_path_buf()
+    };
+    before_open();
+    let file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return if path == log && sealed_now()? {
+                std::fs::File::open(sealed_path(log, seq)).map(Some)
+            } else {
+                Ok(None)
+            };
         }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
+        Err(e) => return Err(e),
+    };
+    if path == log && sealed_now()? {
+        return std::fs::File::open(sealed_path(log, seq)).map(Some);
     }
+    Ok(Some(file))
 }
 
 /// [`read_window`] on a file already open. A reader that holds the handle
