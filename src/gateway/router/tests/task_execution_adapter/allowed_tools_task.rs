@@ -63,12 +63,24 @@ async fn a_task_queued_before_a_deselect_is_refused_at_its_dispatch() {
     })
     .await
     .unwrap_or_else(|_| panic!("the task never settled"));
+    // A worker refusal settles as the gateway's own answer: completed, an
+    // isError result that was not executed, and nothing dispatched.
+    std::assert_eq!(mock.calls(), 0, "the backend was called");
+    std::assert!(
+        committed.targets_recorded && committed.targets.is_empty(),
+        "a call was recorded as dispatched"
+    );
     std::assert_eq!(
         committed.task.status(),
-        crate::protocol::tasks::TaskStatus::Failed,
-        "the worker refused the deselected tool"
+        crate::protocol::tasks::TaskStatus::Completed
     );
-    std::assert_eq!(mock.calls(), 0, "the backend was called");
+    let result = committed.task.result().cloned().unwrap_or(Value::Null);
+    std::assert_eq!(result.pointer("/isError"), Some(&json!(true)), "{result}");
+    std::assert_eq!(
+        result.pointer("/_meta/io.mcp-gateway~1executionOutcome"),
+        Some(&json!("not_executed")),
+        "{result}"
+    );
     let read = get_task(&state, "key-a", &task).await;
     std::assert_eq!(
         read.pointer("/error/code"),
