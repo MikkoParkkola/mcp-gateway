@@ -363,7 +363,7 @@ impl Backend {
         };
         // A call sent at most once (as `with_retry` sends under a disabled
         // policy) moves its payload in; only a resend copies (NFR.WORKLOAD.1).
-        let result = if matches!(attempts, Attempts::TaskCapabilityOnce) || !policy.enabled {
+        let mut result = if matches!(attempts, Attempts::TaskCapabilityOnce) || !policy.enabled {
             send(params, extra_headers).await
         } else {
             with_retry(&policy, &name, || {
@@ -371,6 +371,12 @@ impl Backend {
             })
             .await
         };
+        // MIK-9000: every backend answer enters here, so this is the one
+        // place a backend's copy of a gateway-only member is removed, before
+        // any gate, cache or store reads the answer.
+        if let Ok(response) = &mut result {
+            crate::protocol::reserved_members::strip_ingress(&self.name, method, response);
+        }
 
         // Calculate latency
         let latency = start_time.elapsed();
