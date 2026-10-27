@@ -40,7 +40,7 @@ fn gateway_only() -> Vec<String> {
         .collect()
 }
 
-/// FORGE.2: every GatewayOnly member goes, everything else stays.
+/// FORGE.2: every `GatewayOnly` member goes, everything else stays.
 #[test]
 fn a_full_strip_removes_every_gateway_only_member_and_nothing_else() {
     let mut value = every_member();
@@ -180,7 +180,7 @@ fn an_answer_with_nothing_reserved_is_unchanged() {
     assert_eq!(value, honest);
 }
 
-/// FORGE.6: a GatewayOnly row is stripped with no other code change.
+/// FORGE.6: a `GatewayOnly` row is stripped with no other code change.
 #[test]
 fn a_row_added_to_the_table_is_stripped() {
     const TABLE: &[Member] = &[row(&["_new_verdict"], Counted, GatewayOnly, Outside)];

@@ -108,8 +108,8 @@ pub(crate) fn receive(
             _ => Ok(None),
         };
     }
-    let signed = crate::protocol::reserved_members::chain_view(result, withheld);
-    let received = content_digest(&signed).map_err(|_| refusal("Unhashable"))?;
+    let as_sent = crate::protocol::reserved_members::chain_view(result, withheld);
+    let received = content_digest(&as_sent).map_err(|_| refusal("Unhashable"))?;
     let chain = result
         .get("_meta")
         .and_then(|meta| meta.get(CHAIN_META))

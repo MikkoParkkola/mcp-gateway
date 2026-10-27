@@ -280,10 +280,13 @@ fn has_path(value: &Value, path: &[&str]) -> bool {
 fn remove_path(value: &mut Value, path: &[&str]) -> bool {
     match path {
         [] => false,
+        // Every element, not the first match: a planted member in any of them goes.
         ["*", rest @ ..] => value.as_array_mut().is_some_and(|items| {
             items
                 .iter_mut()
-                .fold(false, |any, item| remove_path(item, rest) || any)
+                .filter(|item| remove_path(item, rest))
+                .count()
+                > 0
         }),
         [last] => value
             .as_object_mut()
