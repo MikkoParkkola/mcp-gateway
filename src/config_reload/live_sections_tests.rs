@@ -403,6 +403,7 @@ async fn g7_the_meta_tool_and_the_watcher_both_publish_the_flag() {
         None,
         shutdown_rx,
         None,
+        None,
     )
     .expect("the watcher starts");
     write(&path, &flag(true)).expect("write");

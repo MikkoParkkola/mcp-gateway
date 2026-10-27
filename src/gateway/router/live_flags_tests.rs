@@ -230,6 +230,7 @@ async fn f3_a_resume_takes_the_flag_current_at_resume() {
     let call = crate::gateway::task_service::TaskCall {
         tool: "gateway_invoke".to_owned(),
         arguments: json!({"ser\u{7}ver": "alpha", "tool": "read", "arguments": {}}),
+        surfaced_server: None,
     };
     let caller = crate::gateway::meta_mcp::anonymous_caller();
     let refused = match host

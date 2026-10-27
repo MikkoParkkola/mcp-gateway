@@ -113,9 +113,8 @@ pub struct Config {
     /// Environment files to load before processing config.
     /// Paths support ~ expansion. Loaded in order, later files override earlier.
     pub env_files: Vec<String>,
-    /// The operator's name for this gateway's environment (`staging`,
-    /// `prod`), shown by the UI. Nothing can infer it, so it is set by hand;
-    /// it applies on reload (ADR-023). Left out of a written file when unset.
+    /// The operator's name for this environment (`staging`, `prod`), shown by
+    /// the UI: set by hand, applied on reload (ADR-023), omitted when unset.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment: Option<String>,
     /// Server configuration.

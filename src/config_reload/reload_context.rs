@@ -688,7 +688,6 @@ impl ReloadContext {
                  configuration was published."
             )
         })?);
-        let new_config = generation.config();
 
         let outcome = patch.outcome();
         let fully_applied = apply_patch(
@@ -696,7 +695,7 @@ impl ReloadContext {
             &self.registry,
             &self.failsafe_config,
             self.cache_ttl,
-            &new_config.runtime,
+            &generation.config().runtime,
         )
         .await;
 
