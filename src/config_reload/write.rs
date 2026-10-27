@@ -154,9 +154,16 @@ pub async fn write_config_and_reload_outcome(
 
     // No reload lock without a live gateway, but the config lock still
     // orders this write against every other process's writer.
-    let held = lock_config(path, Instant::now() + super::RELOAD_LOCK_WAIT).await?;
-    crate::config_persistence::write_config_with(path, config, CommentLoss::Rewrite, &held)
-        .map_err(|e| ConfigWriteError::from(MutateError::from(e)))?;
+    // Written through the target the lock resolved, never `path` again.
+    let locked = lock_config(path, Instant::now() + super::RELOAD_LOCK_WAIT).await?;
+    locked.may_write(path)?;
+    crate::config_persistence::write_config_with(
+        &locked.target,
+        config,
+        CommentLoss::Rewrite,
+        &locked.held,
+    )
+    .map_err(|e| ConfigWriteError::from(MutateError::from(e)))?;
     Ok(None)
 }
 
@@ -278,23 +285,28 @@ where
     // No live gateway to reload, so no reload lock exists to hold. The config
     // lock is still held from the load to the write: another process (a CLI,
     // a second gateway) may be writing the same file.
-    // A file that does not load is refused before the lock is taken, so the
-    // refusal leaves the directory as it was, no lock file added (GH462). It
-    // is loaded again under the lock: this check only decides refusal early.
-    // Skipped when a replace journal is pending: the file may be a refused
-    // candidate, and the lock recovers it before the load below.
-    if !crate::config_persistence::journal::exists(path) {
-        crate::config_persistence::load_existing_or_default(path)
-            .map_err(|e| load_failure(path, &e, mode))?;
-    }
-    let held = lock_config(path, Instant::now() + super::RELOAD_LOCK_WAIT)
-        .await
-        .map_err(ConfigWriteError::from)?;
-    let mut config = crate::config_persistence::load_existing_or_default(path)
+    // A file that does not load is refused before the lock is taken, on the
+    // lock thread, so the refusal leaves no lock file (GH462). It is loaded
+    // again under the lock, and that load decides. Loaded and written through
+    // the target the lock resolved, never `path` again.
+    let locked = crate::config_persistence::lock::lock_config_loading(
+        path,
+        Instant::now() + super::RELOAD_LOCK_WAIT,
+    )
+    .await
+    .map_err(|e| load_failure(path, &e, mode))?
+    .map_err(ConfigWriteError::from)?;
+    let mut config = crate::config_persistence::load_locked(path, &locked)
         .map_err(|e| load_failure(path, &e, mode))?;
     match mutate(&mut config) {
         Ok(value) => {
-            crate::config_persistence::write_config_with(path, &config, mode, &held)?;
+            locked.may_write(path)?;
+            crate::config_persistence::write_config_with(
+                &locked.target,
+                &config,
+                mode,
+                &locked.held,
+            )?;
             Ok(ConfigMutation::Applied(value, None))
         }
         Err(rejection) => Ok(ConfigMutation::Rejected(rejection)),

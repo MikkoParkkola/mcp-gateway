@@ -14,16 +14,20 @@
 //!
 //! Lock order, for every holder: the reload lock, then the config sidecar
 //! lock, then (for a save that also writes secrets) the vault lock. Nothing
-//! ranked earlier is taken while a later one is held.
+//! ranked earlier is taken while a later one is held: the config sidecar
+//! before the vault, never the reverse.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::config_persistence::journal;
-use crate::config_persistence::lock::{NotLocked, lock_config_recovering};
+use crate::config_persistence::lock::{Locked, NotLocked, lock_config};
 use crate::config_persistence::{FileMode, Symlink, write_atomic};
 use crate::config_reload::{ConfigWriteError, ReloadOutcome};
+use crate::secret_store::{
+    NewSecretOwned, PendingSecrets, SaveError, SecretStore, Vault, create_secrets,
+};
 
 use super::ReloadContext;
 
@@ -86,7 +90,27 @@ pub(crate) enum Replaced {
         reason = "first callers: the web UI settings save and the configuration-history restore"
     )
 )]
-pub(crate) type Compute = Box<dyn FnOnce(&[u8]) -> Result<Vec<u8>, String> + Send>;
+/// The second argument is the reference texts of the [`SecretStep`]'s new
+/// entries, in its order; empty without one.
+pub(crate) type Compute = Box<dyn FnOnce(&[u8], &[String]) -> Result<Vec<u8>, String> + Send>;
+
+/// Secrets a replacement saves with the file: created in the store under the
+/// config hold, after the revision check and before `compute`, which writes
+/// their references. The writer keeps them when the new bytes stand, deletes
+/// them only when the old file provably stayed, and otherwise leaves them
+/// listed as unused.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and discovery adopt"
+    )
+)]
+pub(crate) struct SecretStep {
+    pub(crate) vault: Vault,
+    pub(crate) store: Arc<dyn SecretStore + Send + Sync>,
+    pub(crate) values: Vec<NewSecretOwned>,
+}
 
 /// One replacement of gateway.yaml.
 #[cfg_attr(
@@ -100,6 +124,7 @@ pub(crate) struct Replace {
     pub(crate) expected: Expected,
     pub(crate) compute: Compute,
     pub(crate) replaced: Replaced,
+    pub(crate) secrets: Option<SecretStep>,
 }
 
 /// A replacement that was written and accepted.
@@ -159,6 +184,8 @@ pub(crate) enum ReplaceError {
     /// Anything else: a lock that cannot be taken at all, an unusable
     /// journal, an unreadable file, a write task that died.
     Failed(String),
+    /// The secret store refused the [`SecretStep`]; nothing was written.
+    Secrets(SaveError<std::convert::Infallible>),
 }
 
 /// Write `replace` in a task of its own: dropping the caller (a request
@@ -185,6 +212,165 @@ pub(crate) async fn replace_detached(
         })
 }
 
+/// What happens to a replacement's new store entries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and discovery adopt"
+    )
+)]
+pub(crate) enum Settle {
+    /// The new bytes stand and name them.
+    Keep,
+    /// The old file provably stayed: delete them.
+    Discard,
+    /// The file on disk may name them: keep them, listed as unused.
+    Abandon,
+}
+
+/// How a finished replacement settles its entries, by its final result:
+/// a rollback that fails becomes `RollbackFailed`, so every other refusal
+/// left the old file in place. `Failed` keeps them: it proves nothing about
+/// the file. A write task that dies never reaches this: [`Entries`]' drop
+/// settles that case.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and discovery adopt"
+    )
+)]
+pub(crate) fn settle_for(result: &Result<ReplaceOutcome, ReplaceError>) -> Settle {
+    // Every kind named, no wildcard: a new one must say whether it proves
+    // the old file stayed, or it would delete entries the file may name.
+    let Err(error) = result else {
+        return Settle::Keep;
+    };
+    match error {
+        // Refused before anything was written.
+        ReplaceError::Busy
+        | ReplaceError::Stale { .. }
+        | ReplaceError::Refused(_)
+        | ReplaceError::Stage(_)
+        | ReplaceError::Secrets(_)
+        // The rollback came back: a failed one is `RollbackFailed`.
+        | ReplaceError::Unsupported(_)
+        | ReplaceError::Write(_)
+        | ReplaceError::ReloadRefused(_) => Settle::Discard,
+        // The file on disk may name them; `Failed` proves nothing either way.
+        ReplaceError::RollbackFailed { .. }
+        | ReplaceError::Unconfirmed { .. }
+        | ReplaceError::Failed(_) => Settle::Abandon,
+    }
+}
+
+/// This replacement's new entries until they are settled. Dropped unsettled
+/// (a panic, a write task that died) it discards them while the old file
+/// stands and abandons them once `write_atomic` may have replaced it.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and discovery adopt"
+    )
+)]
+struct Entries {
+    pending: Option<PendingSecrets>,
+    renamed: bool,
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and discovery adopt"
+    )
+)]
+impl Entries {
+    /// Keep and abandon touch no store, so they run here and now: a queued
+    /// closure that a shutting-down runtime never runs would drop the
+    /// entries undecided, which deletes them. Only a discard calls the
+    /// store, off the async worker (a keychain call blocks for up to 2 s);
+    /// if that closure never runs, the drop discards all the same.
+    async fn settle(mut self, how: Settle) {
+        let Some(pending) = self.pending.take() else {
+            return;
+        };
+        match how {
+            Settle::Keep | Settle::Abandon => settle_now(pending, how),
+            Settle::Discard => {
+                if let Err(e) = tokio::task::spawn_blocking(move || settle_now(pending, how)).await
+                {
+                    tracing::warn!(error = %e, "discarding a refused save's secret entries failed; they are listed as unused");
+                }
+            }
+        }
+    }
+}
+
+impl Drop for Entries {
+    fn drop(&mut self) {
+        let Some(pending) = self.pending.take() else {
+            return;
+        };
+        let how = if self.renamed {
+            Settle::Abandon
+        } else {
+            Settle::Discard
+        };
+        match (how, tokio::runtime::Handle::try_current()) {
+            (Settle::Discard, Ok(runtime)) => {
+                drop(runtime.spawn_blocking(move || settle_now(pending, how)));
+            }
+            _ => settle_now(pending, how),
+        }
+    }
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and discovery adopt"
+    )
+)]
+fn settle_now(pending: PendingSecrets, how: Settle) {
+    match how {
+        Settle::Keep => pending.keep(),
+        Settle::Abandon => pending.abandon(),
+        Settle::Discard => {
+            let left = pending.discard();
+            if !left.is_empty() {
+                tracing::warn!(
+                    entries = left.len(),
+                    "secret entries of a refused config save could not be removed; they are listed as unused"
+                );
+            }
+        }
+    }
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and discovery adopt"
+    )
+)]
+async fn create_entries(
+    step: SecretStep,
+    deadline: Instant,
+) -> Result<PendingSecrets, ReplaceError> {
+    tokio::task::spawn_blocking(move || {
+        create_secrets(step.vault, step.store, &step.values, deadline)
+    })
+    .await
+    .map_err(|e| ReplaceError::Failed(format!("the secret save task failed: {e}")))?
+    .map_err(ReplaceError::Secrets)
+}
+
 #[cfg_attr(
     not(test),
     expect(
@@ -201,19 +387,24 @@ impl ReloadContext {
         let deadline = Instant::now() + wait;
         // The reload lock, then the config sidecar lock: the order every
         // holder takes them in (module docs).
-        let _reload_guard = self.lock_reload_within(wait).await.map_err(|e| match e {
+        let reload_guard = self.lock_reload_within(wait).await.map_err(|e| match e {
             ConfigWriteError::Busy => ReplaceError::Busy,
             ConfigWriteError::Failed(message) => ReplaceError::Failed(message),
         })?;
-        let (_held, recovered) = lock_config_recovering(&self.config_path, deadline)
+        // The target is resolved once, by the lock: the owed reload, the
+        // trust check, the read and the commit are all about that one file.
+        let locked = lock_config(&self.config_path, deadline)
             .await
-            .map_err(|e| match e {
-                NotLocked::Busy => ReplaceError::Busy,
-                NotLocked::Failed(message) => ReplaceError::Failed(message),
+            .map_err(|e| {
+                self.note_refused_lock();
+                match e {
+                    NotLocked::Busy => ReplaceError::Busy,
+                    NotLocked::Failed(message) => ReplaceError::Failed(message),
+                }
             })?;
-        self.pay_owed_reload(recovered).await;
+        let target = locked.target.clone();
+        self.pay_owed_reload(locked.recovered, &target).await;
 
-        let target = crate::identity_grants::journal::resolved(&self.config_path);
         if target != self.trusted_config {
             return Err(ReplaceError::Unsupported(format!(
                 "{} now resolves to {}, not to {}, the file this gateway started on; nothing was written",
@@ -231,18 +422,76 @@ impl ReloadContext {
                 return Err(ReplaceError::Stale { current: now });
             }
         }
-        let new = (replace.compute)(&current).map_err(ReplaceError::Refused)?;
+        let mut entries = Entries {
+            pending: None,
+            renamed: false,
+        };
+        let refs = match replace.secrets {
+            // An empty step saves nothing: no entry for the bytes to name.
+            Some(step) if !step.values.is_empty() => {
+                let pending = create_entries(step, deadline).await?;
+                let refs = pending.refs().to_vec();
+                entries.pending = Some(pending);
+                refs
+            }
+            _ => Vec::new(),
+        };
+        let result = self
+            .write_computed(
+                &locked,
+                &target,
+                &current,
+                (replace.compute, replace.replaced),
+                &refs,
+                &mut entries,
+            )
+            .await;
+        // The config locks go before any store call: a discard's keychain
+        // deletes must not hold up the next writer. A death in between is
+        // the `Entries` guard's.
+        drop(locked);
+        drop(reload_guard);
+        let how = settle_for(&result);
+        entries.settle(how).await;
+        result
+    }
+
+    /// Compute, check and commit the new bytes; `entries` learns when the
+    /// rename happened.
+    async fn write_computed(
+        &self,
+        locked: &Locked,
+        target: &std::path::Path,
+        current: &[u8],
+        (compute, replaced): (Compute, Replaced),
+        refs: &[String],
+        entries: &mut Entries,
+    ) -> Result<ReplaceOutcome, ReplaceError> {
+        let new = compute(current, refs).map_err(ReplaceError::Refused)?;
         if std::str::from_utf8(&new).is_err() {
             return Err(ReplaceError::Refused(
                 "the new gateway.yaml is not UTF-8 text".to_string(),
             ));
         }
+        // The path may have moved, or the config been deleted, while the
+        // bytes were computed: refuse before anything is reloaded or staged,
+        // rather than report on a config the path no longer names.
+        locked
+            .may_write(&self.config_path)
+            .map_err(ReplaceError::Unsupported)?;
         if new == current {
+            if entries.pending.is_some() {
+                // The compute dropped the references: nothing would name the
+                // entries just created.
+                return Err(ReplaceError::Refused(
+                    "the new config does not name the saved secrets".to_string(),
+                ));
+            }
             // Nothing to write, but still a reload, so a retry after a failed
             // one does not leave the runtime stale. Nothing was committed, so
             // a refusal needs no rollback.
             let reload = self
-                .reload_outcome_locked()
+                .reload_outcome_locked_at(target)
                 .await
                 .map_err(ReplaceError::ReloadRefused)?;
             return Ok(ReplaceOutcome {
@@ -251,7 +500,7 @@ impl ReloadContext {
                 reload,
             });
         }
-        self.commit(&target, &current, &new, replace.replaced).await
+        self.commit(target, current, &new, replaced, entries).await
     }
 
     /// Stage, journal, write, reload; then keep the new bytes or put the
@@ -262,6 +511,7 @@ impl ReloadContext {
         current: &[u8],
         new: &[u8],
         replaced: Replaced,
+        entries: &mut Entries,
     ) -> Result<ReplaceOutcome, ReplaceError> {
         // Every step uses `target`, resolved once and checked against the
         // trusted path, so a link re-pointed mid-write cannot split them.
@@ -290,6 +540,11 @@ impl ReloadContext {
                 ReplaceError::Stage(format!("writing the replace journal failed: {e}")),
             ));
         }
+        // From here the file on disk may name this save's entries: set before
+        // the write, so a death inside it keeps them (listed as unused)
+        // rather than deleting what the new file may already name. A write
+        // error comes back after a proven rollback and discards.
+        entries.renamed = true;
         // gateway.yaml is owner-only, as every config write leaves it.
         if let Err(e) = write_atomic(target, new, FileMode::Private, Symlink::Replace) {
             unkeep();
@@ -298,7 +553,7 @@ impl ReloadContext {
                 ReplaceError::Write(format!("writing {} failed: {e}", target.display())),
             ));
         }
-        let reloaded = self.reload_outcome_locked().await;
+        let reloaded = self.reload_outcome_locked_at(target).await;
         // The reload reads gateway.yaml through its configured path. If a
         // symlink there moved meanwhile, it loaded some other file: put ours
         // back, and owe a reload so the runtime leaves that other file too.

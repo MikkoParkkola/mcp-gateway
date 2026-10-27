@@ -49,11 +49,18 @@ owned_routes! {
     UI_COSTS = "/ui/api/costs",
     UI_CAPABILITIES = "/ui/api/capabilities",
     UI_CAPABILITY = "/ui/api/capabilities/{name}",
+    UI_CAPABILITY_VALIDATE = "/ui/api/capabilities/{name}/validate",
     UI_CONTROL_PLANE = "/ui/api/control-plane",
     UI_CONTROL_PLANE_GRANTS = "/ui/api/control-plane/grants",
     UI_CONTROL_PLANE_POLICIES = "/ui/api/control-plane/policies",
     UI_CONTROL_PLANE_DECISIONS = "/ui/api/control-plane/decisions",
     UI_CONTROL_PLANE_EXPORT_STATUS = "/ui/api/control-plane/export-status",
+    /// The Activity list over both transparency logs.
+    UI_ACTIVITY = "/ui/api/activity",
+    /// The Activity export: signed NDJSON or CSV.
+    UI_ACTIVITY_EXPORT = "/ui/api/activity/export",
+    /// One Activity row's receipt.
+    UI_ACTIVITY_RECEIPT = "/ui/api/activity/{id}",
     UI_BACKENDS = "/ui/api/backends",
     UI_BACKEND = "/ui/api/backends/{name}",
     UI_BACKEND_REVIVE = "/ui/api/backends/{name}/revive",
@@ -71,6 +78,10 @@ owned_routes! {
     UI_PREVIEWS = "/ui/api/previews",
     /// Servers named in other MCP clients' config files on this host.
     UI_DISCOVERY = "/ui/api/discovery",
+    /// The web UI's windowed call counters.
+    UI_METRICS_SERIES = "/ui/api/metrics/series",
+    /// Restarts, upgrades, reloads, pauses and switch-offs.
+    UI_MARKERS = "/ui/api/markers",
     /// The bare prefix, which the catch-all does not match; claimed so it
     /// never reaches the main router's full-URI trace span.
     ACCOUNTS_ROOT = "/accounts/v1",

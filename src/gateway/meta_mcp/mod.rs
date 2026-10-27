@@ -80,6 +80,7 @@ mod chain_interim;
 #[cfg(test)]
 mod chain_interim_tests;
 mod confirmation;
+pub(crate) mod counting;
 #[cfg(test)]
 pub(crate) mod plan_entries;
 mod warn_limit;
@@ -177,6 +178,8 @@ pub struct MetaMcp {
     pub(super) change_feed: std::sync::OnceLock<crate::gateway::ChangeFeed>,
     /// MCP Events hub (MIK-7630); unset while events are off or on stdio.
     pub(super) events: std::sync::OnceLock<Arc<crate::events::EventsHub>>,
+    /// The web UI's windowed call counters; set by the HTTP server.
+    pub(super) counters: std::sync::OnceLock<Arc<crate::counters::CounterStore>>,
     pub(super) capabilities: RwLock<Option<Arc<CapabilityBackend>>>,
     pub(super) cache: Option<Arc<ResponseCache>>,
     pub(super) default_cache_ttl: Duration,

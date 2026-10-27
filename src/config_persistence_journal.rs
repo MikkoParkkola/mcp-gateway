@@ -253,6 +253,8 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, String> {
             // A `staged` journal left behind would roll back whatever the
             // next writer saves. Refuse until it is gone: each later lock
             // retries, and restoring the same original again is harmless.
+            // The file did change, so a running gateway still owes a reload.
+            note_restored(&target);
             return Err(format!(
                 "{} was restored, but its journal {} could not be removed ({e}); no config write proceeds until it is: delete the journal",
                 target.display(),
@@ -263,6 +265,32 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, String> {
         tracing::warn!(error = %e, journal = %path.display(), "cleaning up a recovered replace journal failed; the next config write retries");
     }
     Ok(recovered)
+}
+
+/// Targets whose original was restored by a recovery that then refused the
+/// lock (its journal could not be removed). A running gateway takes the mark
+/// and owes a reload, so it is reconciled while writes stay refused.
+static RESTORED: std::sync::Mutex<Option<std::collections::HashSet<PathBuf>>> =
+    std::sync::Mutex::new(None);
+
+fn note_restored(target: &Path) {
+    // A poisoned lock still holds the set: losing the mark would lose the
+    // owed reload.
+    RESTORED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get_or_insert_with(std::collections::HashSet::new)
+        .insert(target.to_path_buf());
+}
+
+/// Take the restored mark for `config`, if a refused recovery left one.
+pub(crate) fn take_restored(config: &Path) -> bool {
+    let target = resolved(config);
+    RESTORED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_mut()
+        .is_some_and(|set| set.remove(&target))
 }
 
 fn read(path: &Path) -> std::io::Result<Journal> {
