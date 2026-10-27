@@ -595,28 +595,7 @@ async fn search_registry(
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
-/// Validate that a backend name contains only safe characters.
-///
-/// Allowed: ASCII alphanumerics, hyphens, underscores, dots.
-/// Max length: 128 characters.
-pub(super) fn validate_backend_name(name: &str) -> Result<(), String> {
-    if name.is_empty() {
-        return Err("Backend name must not be empty".to_string());
-    }
-    if name.len() > 128 {
-        return Err("Backend name exceeds 128 characters".to_string());
-    }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
-    {
-        return Err(
-            "Backend name may only contain ASCII letters, digits, hyphens, underscores, and dots"
-                .to_string(),
-        );
-    }
-    Ok(())
-}
+pub(super) use crate::config::backend_add::validate_backend_name;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
