@@ -210,10 +210,6 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "debug-build test hook writing a task id marker (#2298); compiled out of release",
     ),
     (
-        "src/gateway/ui/activity/reader.rs",
-        "reads audit log segments for the Activity list; hash-only, no secret",
-    ),
-    (
         "src/gateway/ui/activity/seek.rs",
         "reads audit log segments to find one receipt; hash-only, no secret",
     ),
