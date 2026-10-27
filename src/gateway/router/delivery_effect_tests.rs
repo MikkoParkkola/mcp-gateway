@@ -238,6 +238,55 @@ async fn a_recovery_hint_records_annotated() {
     assert_eq!(row["response_effect"], "annotated", "{row}");
 }
 
+/// On the direct route a call at 83 % of its key's budget goes out with the
+/// gateway's `_cost_warnings` and nothing else added: noted after the egress
+/// scan, it records `annotated`. (`_security_findings` cannot stand alone:
+/// the context-integrity kernel runs the same inspection and attaches its
+/// verdict, src/context_integrity/kernel.rs:235.)
+#[tokio::test]
+async fn a_direct_cost_warning_records_annotated() {
+    use crate::cost_accounting::config::CostGovernanceConfig;
+    let (_dir, log) = temp_log(None);
+    let meta_log = std::sync::Arc::clone(&log);
+    let fx = fixture::fixture_firewalled_logged(
+        Answer::Ok,
+        None,
+        std::sync::Arc::clone(&log),
+        move |mut meta| {
+            meta.enable_transparency_log(meta_log);
+            let mut cfg = CostGovernanceConfig {
+                enabled: true,
+                ..Default::default()
+            };
+            cfg.tool_costs.insert("read".to_string(), 1.0);
+            cfg.budgets.per_key.insert("k-std".to_string(), 1.2);
+            let registry =
+                std::sync::Arc::new(crate::cost_accounting::registry::CostRegistry::new(&cfg));
+            let enforcer =
+                std::sync::Arc::new(crate::cost_accounting::enforcer::BudgetEnforcer::new(
+                    cfg,
+                    std::sync::Arc::clone(&registry),
+                ));
+            meta.with_cost_governance(enforcer, registry)
+        },
+    )
+    .await;
+    let params = serde_json::json!({"name": "read", "arguments": {}});
+    let body = fixture::send(&fx, "/mcp/alpha", "k-std", "tools/call", params, None)
+        .await
+        .1;
+    let sent = body.to_string();
+    assert!(
+        sent.contains("_cost_warnings")
+            && !sent.contains("_context_integrity")
+            && !sent.contains("_security_findings"),
+        "premise: the warning is the only addition: {sent}"
+    );
+    let rows = delivery_rows(&log).await;
+    let row = only_delivery(HttpRoute::Direct, &rows);
+    assert_eq!(row["response_effect"], "annotated", "{row}");
+}
+
 /// The same answer goes out with the gateway's `_security_findings` added
 /// and its text unchanged: the record says `annotated`, never `delivered`.
 #[tokio::test]

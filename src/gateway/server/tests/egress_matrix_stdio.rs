@@ -423,6 +423,26 @@ async fn a_stdio_annotated_answer_records_annotated() {
     assert_eq!(row["response_effect"], "annotated", "{row}");
 }
 
+/// On stdio, a backend error comes back as a tool error carrying the
+/// gateway's `recovery` hint and nothing else added: the hint is noted, so
+/// the record says `annotated`.
+#[tokio::test]
+async fn a_stdio_recovery_hint_records_annotated() {
+    let (body, row) = recorded_delivery(
+        Setup::FirewallOff,
+        Part::ErrorMessage,
+        "upstream unavailable".into(),
+    )
+    .await;
+    assert!(
+        body.contains("recovery")
+            && !body.contains("_context_integrity")
+            && !body.contains("_security_findings"),
+        "premise: the hint is the only addition: {body}"
+    );
+    assert_eq!(row["response_effect"], "annotated", "{row}");
+}
+
 /// On stdio, a context-integrity verdict attached to an unchanged answer,
 /// the only member the gateway adds, records `annotated`.
 #[tokio::test]
