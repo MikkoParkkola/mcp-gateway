@@ -68,7 +68,7 @@ impl StderrReader {
 
 /// Test-only: where the reader task is held on an OS thread, and for how long,
 /// as a loaded host can hold it. The read loop itself is never held.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[derive(Clone, Copy)]
 pub(super) enum ReaderHold {
     /// Before it first polls the loop: it has never run.
@@ -77,7 +77,7 @@ pub(super) enum ReaderHold {
     AfterFirstLine(std::time::Duration),
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 thread_local! {
     /// The hold for a stderr reader spawned on this thread.
     pub(super) static STDERR_READER_HOLD: std::cell::Cell<Option<ReaderHold>> =
@@ -85,14 +85,14 @@ thread_local! {
 }
 
 /// Holds the task on an OS thread, so its runtime keeps running.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 async fn hold_reader(hold: std::time::Duration) {
     let _ = tokio::task::spawn_blocking(move || std::thread::sleep(hold)).await;
 }
 
 /// The task's side of [`ReaderHold`]: returns once the task should drive the
 /// loop as usual, or `true` if the loop already ended while it was watched.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 async fn held_task(hold: Option<ReaderHold>, read_loop: &mut ReadLoop, tail: &StderrTail) -> bool {
     use futures::FutureExt as _;
     match hold {
@@ -131,13 +131,15 @@ pub(super) fn spawn_stderr_tail(stderr: ChildStderr, command: String) -> StderrR
     let read_loop = read_to_end(stderr, command, std::sync::Arc::clone(&tail))
         .boxed()
         .shared();
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     let hold = STDERR_READER_HOLD.with(std::cell::Cell::get);
+    // Mutable only for the test hold, which polls it in place.
+    #[cfg_attr(not(all(test, unix)), allow(unused_mut))]
     let mut driven = read_loop.clone();
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     let watched = std::sync::Arc::clone(&tail);
     let task = tokio::spawn(async move {
-        #[cfg(test)]
+        #[cfg(all(test, unix))]
         if held_task(hold, &mut driven, &watched).await {
             return;
         }
