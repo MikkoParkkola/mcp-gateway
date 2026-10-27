@@ -24,6 +24,18 @@ pub(super) fn transparency_log_in(log: &TempLog) -> Arc<crate::security::Transpa
     Arc::new(crate::security::TransparencyLogger::open(config).expect("logger opens"))
 }
 
+/// A required propagation refuses to mint without a durable audit sink, so a
+/// propagating fixture's route gets a log; the caller keeps it on the [`Fx`].
+pub(super) fn propagating_route_log(
+    state: &mut crate::gateway::router::AppState,
+) -> Option<TempLog> {
+    let log = super::PROPAGATING
+        .with(std::cell::Cell::get)
+        .then(TempLog::new)?;
+    state.transparency_log = Some(transparency_log_in(&log));
+    Some(log)
+}
+
 /// The fixture's backends with the per-backend rate limiter off: no row here
 /// tests it (`probe_tests` does, on its own backend), and the slot-cap rows
 /// (MIK-8293) send 65 calls in a burst.

@@ -104,15 +104,7 @@ async fn app_state_with_log() -> (
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
 
-    // The log lives in its own temp dir, returned first so the caller's
-    // `let (_log_dir, ..)` drops it last: the log writes `.hwm` and `.lock`
-    // beside itself, and the dir takes them with it.
-    let log_dir = tempfile::Builder::new()
-        .prefix("audit-log-")
-        .tempdir()
-        .expect("a private log directory");
-    let path = log_dir.path().join("audit.jsonl");
-    std::fs::File::create(&path).expect("the log file");
+    let (log_dir, path) = temp_log();
     let logger = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
@@ -188,6 +180,19 @@ async fn app_state_with_log() -> (
         continuation,
     });
     (log_dir, state, path, store_dir)
+}
+
+/// An empty log file in its own temp dir. The dir is returned first so the
+/// caller's `let (_log_dir, ..)` drops it last: the log writes `.hwm` and
+/// `.lock` beside itself, and the dir takes them with it.
+fn temp_log() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::Builder::new()
+        .prefix("audit-log-")
+        .tempdir()
+        .expect("a private log directory");
+    let path = dir.path().join("audit.jsonl");
+    std::fs::File::create(&path).expect("the log file");
+    (dir, path)
 }
 
 /// A loopback MCP server: enough protocol surface to be dispatched to.
