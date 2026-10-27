@@ -190,10 +190,11 @@ the policies can still exchange a provider token for a new gateway token.
 The certain cut-off is a restart once no rule admits them. If a rule names only
 them, delete it and restart. If a shared `group` or `domain` rule admits them,
 do not delete a rule other people depend on: disable their account at the
-identity provider, and restart once `key_server.max_oidc_token_age_secs`
-(default 300) has passed, so no provider token issued before the disable is
-still young enough to exchange. A restart also drops every issued key-server
-token, since the token store is in memory.
+identity provider, and restart once every provider token issued before the
+disable has expired, that is, your provider's token lifetime plus the
+gateway's 60-second clock leeway. Until then such a token can still be
+exchanged, restart or not. A restart also drops every issued key-server token,
+since the token store is in memory.
 
 If the restart has to wait, these steps narrow the gap in the meantime; only
 the restart is certain:
