@@ -237,8 +237,9 @@ async fn logged_session() -> (Session, std::path::PathBuf) {
 /// [`logged_session`] with `security` appended under its `security:` key.
 async fn logged_session_with(security: &str) -> (Session, std::path::PathBuf) {
     let backend_url = spawn_backend().await;
+    // Single quotes: in a double-quoted scalar a Windows path's backslashes are escapes.
     let extra = format!(
-        "security:\n  transparency_log:\n    enabled: true\n    path: \"{{DIR}}/audit.jsonl\"\n{security}"
+        "security:\n  transparency_log:\n    enabled: true\n    path: '{{DIR}}/audit.jsonl'\n{security}"
     );
     let session = Session::open_with(&backend_url, &extra).await;
     let log = session.dir.path().join("audit.jsonl");
