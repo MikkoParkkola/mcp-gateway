@@ -117,6 +117,9 @@ enum RoundBlock {
 #[tokio::test]
 async fn a_firewall_refused_bridged_round_records_refused_only_while_vouched() {
     use crate::security::firewall::{CollusionAction, CollusionConfig, Firewall, FirewallConfig};
+    // One BridgeDispatcher literal per cell, as every bridged row here
+    // builds it: splitting it would hide which field the row varies.
+    #[allow(clippy::too_many_lines)]
     async fn effect(block: RoundBlock, composite: bool) -> serde_json::Map<String, Value> {
         crate::gateway::delivery_facts::scope(async move {
             if composite {

@@ -611,4 +611,4 @@ async fn a_killed_bridged_round_records_refused_only_while_vouched() {
 
 /// The bridged refusals beside the kill switch: the undeclared key and the
 /// firewall.
-mod refusals;
+mod refusals_tests;

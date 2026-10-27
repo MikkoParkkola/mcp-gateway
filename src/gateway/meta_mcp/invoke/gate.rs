@@ -587,6 +587,28 @@ impl MetaMcp {
             .await
     }
 
+    /// The lens the key check reads a named tool under: withheld when the
+    /// gate judged it so (recorded, and raised for a policy reason); as
+    /// listed for a miss or a fill that failed, which the check below meets
+    /// and answers as F13 does.
+    async fn gate_lens(
+        &self,
+        judged: Option<Withholding>,
+        (server, tool): (&str, &str),
+        caller: &MetaMcpCallerContext<'_>,
+        session_id: Option<&str>,
+    ) -> Lens {
+        let Some(reason) = judged else {
+            return Lens::Catalogue;
+        };
+        if reason != Withholding::Lacked {
+            self.record_withheld(server, tool, reason, caller, session_id)
+                .await;
+        }
+        withheld_for(reason);
+        Lens::Withheld
+    }
+
     /// [`Self::gate_answer`] for a name that is not absent.
     async fn named_gate_answer(
         &self,
@@ -677,19 +699,9 @@ impl MetaMcp {
                 Shared::Withheld(reason) => Some(reason),
             },
         };
-        let lens = match judged {
-            Some(reason) => {
-                if reason != Withholding::Lacked {
-                    self.record_withheld(server, tool, reason, caller, session_id)
-                        .await;
-                }
-                withheld_for(reason);
-                Lens::Withheld
-            }
-            // A miss, or a fill that failed: the check below meets the same
-            // state and answers it as F13 does.
-            None => Lens::Catalogue,
-        };
+        let lens = self
+            .gate_lens(judged, (server, tool), caller, session_id)
+            .await;
         let checked_at = std::time::Instant::now();
         let refusal = self
             .undeclared_key_refusal_through(

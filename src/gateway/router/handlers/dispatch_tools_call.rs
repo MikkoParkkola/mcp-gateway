@@ -7,6 +7,7 @@
 //! carries the status it must be sent with is `Err`, returned unchanged.
 
 use crate::error::rpc_codes::INVALID_REQUEST;
+use crate::gateway::delivery_facts::{self, ResponseEffect};
 use std::sync::Arc;
 
 use axum::http::StatusCode;
@@ -158,9 +159,7 @@ pub(super) async fn tools_call(
         )
         .await
     {
-        crate::gateway::delivery_facts::raise(
-            crate::gateway::delivery_facts::ResponseEffect::Refused,
-        );
+        delivery_facts::raise(ResponseEffect::Refused);
         return Err(build_error_response(
             Some(id),
             e.code,
@@ -196,7 +195,7 @@ pub(super) async fn tools_call(
     // (MIK-8362).
     let request_targets = backend_targets.len();
     if request_targets == 1 {
-        crate::gateway::delivery_facts::lone_target();
+        delivery_facts::lone_target();
     }
     backend_targets.extend(state.meta_mcp.playbook_step_targets(tool_name, &arguments));
     // Authorize every target before scanning any, so a refused later target
@@ -229,9 +228,7 @@ pub(super) async fn tools_call(
                     // refusal; a withheld step in a call that still delivers
                     // is not.
                     if backend_targets.len() == 1 {
-                        crate::gateway::delivery_facts::raise(
-                            crate::gateway::delivery_facts::ResponseEffect::Refused,
-                        );
+                        delivery_facts::raise(ResponseEffect::Refused);
                     }
                     // One record per call: an invoked target's answer writes
                     // it, as a missing target's does; a surfaced name's
@@ -296,9 +293,7 @@ pub(super) async fn tools_call(
                 // A requested target the session profile withholds ends the
                 // whole request: refused, whatever the target count.
                 if matches!(other, crate::Error::ToolNotFound(_)) {
-                    crate::gateway::delivery_facts::raise(
-                        crate::gateway::delivery_facts::ResponseEffect::Refused,
-                    );
+                    delivery_facts::raise(ResponseEffect::Refused);
                 }
                 return Ok(error_response_preserving_status(id, &other));
             }
@@ -523,7 +518,7 @@ pub(super) async fn tools_call(
             .filter(|target| !scoped.absent_step(&target.server, &target.tool))
             .find_map(|target| state.meta_mcp.admit_backend_wide(&target.server).err())
         {
-            crate::gateway::delivery_facts::outlet(&refusal);
+            delivery_facts::outlet(&refusal);
             return Err(build_error_response(
                 Some(id),
                 refusal.to_rpc_code(),
@@ -697,7 +692,7 @@ pub(super) async fn tools_call(
             &caller,
         )
     {
-        crate::gateway::delivery_facts::outlet(&error);
+        delivery_facts::outlet(&error);
         return Err(build_error_response(
             Some(id),
             error.to_rpc_code(),
@@ -748,7 +743,7 @@ pub(super) async fn tools_call(
         }
         Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Unprotected) => (None, None),
         Err(error) => {
-            crate::gateway::delivery_facts::outlet(&error);
+            delivery_facts::outlet(&error);
             let status = match &error {
                 crate::Error::Forbidden { status, .. } => {
                     StatusCode::from_u16(*status).unwrap_or(StatusCode::FORBIDDEN)
