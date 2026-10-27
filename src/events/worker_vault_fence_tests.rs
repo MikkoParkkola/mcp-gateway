@@ -157,21 +157,31 @@ async fn iso_t2_a_rotation_buries_only_the_rotated_users_queued_record() {
     fence.rotate_grant("u1");
     hub.attempt(&services, "evt_u1").await;
     hub.attempt(&services, "evt_u2").await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
 
-    assert!(
-        other_posts.load(Ordering::SeqCst) >= 1,
-        "the other user's record is delivered (buried as {:?})",
-        buried_as(&hub, "evt_u2")
+    // The burial is settled within the attempt, before any send.
+    assert_eq!(
+        buried_as(&hub, "evt_u2"),
+        None,
+        "the other user's record is not buried"
+    );
+    crate::test_wait::wait_until(crate::test_wait::HANG_BOUND, || async {
+        match other_posts.load(Ordering::SeqCst) {
+            0 => std::ops::ControlFlow::Continue("no send yet".to_owned()),
+            _ => std::ops::ControlFlow::Break(()),
+        }
+    })
+    .await
+    .expect("the other user's record is delivered");
+    assert_eq!(
+        buried_as(&hub, "evt_u1").as_deref(),
+        Some(DeadReason::Observation.as_str()),
+        "buried under the old grant ({} sends)",
+        rotated_posts.load(Ordering::SeqCst)
     );
     assert_eq!(
         rotated_posts.load(Ordering::SeqCst),
         0,
         "nothing observed under the old grant is sent after the rotation"
-    );
-    assert_eq!(
-        buried_as(&hub, "evt_u1").as_deref(),
-        Some(DeadReason::Observation.as_str())
     );
 }
 
@@ -200,11 +210,13 @@ async fn iso_t2_an_old_run_emission_after_the_rotation_is_buried() {
     fence.rotate_grant("u1");
     queued_for(&hub, &config, port, "u1", &old_run);
     hub.attempt(&services, "evt_u1").await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
 
-    assert_eq!(posts.load(Ordering::SeqCst), 0);
+    // The burial is settled within the attempt, before any send.
     assert_eq!(
         buried_as(&hub, "evt_u1").as_deref(),
-        Some(DeadReason::Observation.as_str())
+        Some(DeadReason::Observation.as_str()),
+        "buried under the old run's grant ({} sends)",
+        posts.load(Ordering::SeqCst)
     );
+    assert_eq!(posts.load(Ordering::SeqCst), 0);
 }
