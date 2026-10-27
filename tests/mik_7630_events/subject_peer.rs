@@ -28,6 +28,8 @@ pub struct Request {
     pub subject: String,
     /// The JSON-RPC method, or `GET` for a stream.
     pub method: String,
+    /// The `Mcp-Session-Id` it carried (`session-<subject>` as issued), or `""`.
+    pub session: String,
 }
 
 #[derive(Default)]
@@ -50,11 +52,21 @@ impl State {
 }
 
 /// The subject a bearer names: `""` with no `Authorization` header at all,
-/// `"<unreadable>"` for one that names no subject.
+/// `"<unreadable>"` for one that names no subject, an empty one included.
 pub fn subject_of(headers: &HeaderMap) -> String {
     let Some(header) = headers.get("authorization") else {
         return String::new();
     };
+    let subject = named_subject(header);
+    if subject.is_empty() {
+        "<unreadable>".to_owned()
+    } else {
+        subject
+    }
+}
+
+/// The subject a present `Authorization` header's bearer names, if any.
+fn named_subject(header: &axum::http::HeaderValue) -> String {
     let Some(token) = header.to_str().ok().and_then(|v| v.strip_prefix("Bearer ")) else {
         return "<unreadable>".to_owned();
     };
@@ -96,6 +108,8 @@ impl SubjectPeer {
                     let state = post_state.clone();
                     async move {
                         let subject = subject_of(&headers);
+                        let method = frame["method"].as_str().unwrap_or_default();
+                        record(&state, &subject, method, &headers);
                         if lost_session(&state, &subject, &headers) {
                             return axum::http::StatusCode::NOT_FOUND.into_response();
                         }
@@ -107,6 +121,7 @@ impl SubjectPeer {
                 let state = get_state.clone();
                 async move {
                     let subject = subject_of(&headers);
+                    record(&state, &subject, "GET", &headers);
                     if lost_session(&state, &subject, &headers) {
                         return axum::http::StatusCode::NOT_FOUND.into_response();
                     }
@@ -181,14 +196,25 @@ fn reply(id: &Value, result: &Value) -> Response {
     axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": result})).into_response()
 }
 
-fn answer(state: &State, subject: &str, frame: &Value) -> Response {
-    let method = frame["method"].as_str().unwrap_or_default().to_owned();
+/// Every request is recorded on arrival, the ones a dropped session refuses
+/// included.
+fn record(state: &State, subject: &str, method: &str, headers: &HeaderMap) {
+    let session = headers
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
     state.with(|s| {
         s.seen.push(Request {
             subject: subject.to_owned(),
-            method: method.clone(),
+            method: method.to_owned(),
+            session,
         });
     });
+}
+
+fn answer(state: &State, subject: &str, frame: &Value) -> Response {
+    let method = frame["method"].as_str().unwrap_or_default().to_owned();
     let Some(id) = frame.get("id").cloned() else {
         return axum::http::StatusCode::ACCEPTED.into_response();
     };
@@ -244,13 +270,7 @@ fn answer(state: &State, subject: &str, frame: &Value) -> Response {
 
 fn stream(state: &State, subject: String) -> Response {
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    state.with(|s| {
-        s.seen.push(Request {
-            subject: subject.clone(),
-            method: "GET".to_owned(),
-        });
-        s.streams.push((subject, tx));
-    });
+    state.with(|s| s.streams.push((subject, tx)));
     let body = async_stream::stream! {
         while let Some(frame) = rx.recv().await {
             yield Ok::<_, std::io::Error>(format!("event: message\ndata: {frame}\n\n"));
