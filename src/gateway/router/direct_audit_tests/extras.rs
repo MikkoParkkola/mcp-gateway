@@ -31,6 +31,9 @@ pub(super) enum Extra {
     Signing,
     /// Tool `t` declares one argument, `q`, and no other.
     DeclaredKeys,
+    /// Tool `t` is listed with an input schema that is not an object, so the
+    /// catalogue withholds it.
+    InvalidSchema,
     /// The meta layer's own request firewall, as the gateway arms it beside
     /// the router's: the dispatch chokepoint rescans with it.
     #[cfg(feature = "firewall")]

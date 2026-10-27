@@ -113,9 +113,9 @@ async fn an_unchained_answer_refused_records_refused_on_both_routes() {
         } else {
             post(&fx, "alpha", &tools_call("t"), &Caller::Anonymous).await
         };
-        assert!(
-            body.get("error").is_some(),
-            "{route} premise: refused: {status} {body}"
+        assert_eq!(
+            body["error"]["code"], -32001,
+            "{route} premise: the chain refusal: {status} {body}"
         );
         assert_eq!(
             fx.calls.load(Ordering::SeqCst),
@@ -138,9 +138,9 @@ async fn an_undeclared_question_records_refused_on_both_routes() {
         .await;
         let (uri, body) = undeclaring(route);
         let (status, answer) = post_modern_as(&fx, uri, &body, &Caller::ModernOidc).await;
-        assert!(
-            answer.get("error").is_some(),
-            "{route} premise: refused: {status} {answer}"
+        assert_eq!(
+            answer["error"]["code"], -32021,
+            "{route} premise: the undeclared-question refusal: {status} {answer}"
         );
         assert_eq!(
             fx.calls.load(Ordering::SeqCst),
@@ -256,5 +256,106 @@ async fn a_retry_answer_the_rescan_blocks_records_refused() {
         1,
         "premise: the retry was never sent"
     );
+    assert_last_refused(&fx);
+}
+
+/// A `/mcp` `prompts/get` of `{server}/p`.
+fn prompt_get(server: &str) -> String {
+    json!({"jsonrpc": "2.0", "id": 7, "method": "prompts/get",
+           "params": {"name": format!("{server}/p")}})
+    .to_string()
+}
+
+/// `prompts/get` scope refusals: a backend outside the key's scope answers as
+/// a missing one, and an empty grant answers with its grant refusal. Both are
+/// the gateway refusing the read, so both record refused.
+#[tokio::test]
+async fn a_prompt_read_outside_the_key_scope_records_refused() {
+    for (backends, server) in [(vec!["alpha".to_string()], "beta"), (Vec::new(), "alpha")] {
+        let mut auth = key_for_alpha(None);
+        auth.api_keys[0].backends = backends;
+        let fx = fixture(Setup {
+            auth: Some(auth),
+            ..Setup::default()
+        })
+        .await;
+        let (status, body) = post_to(&fx, "/mcp", &prompt_get(server), &Caller::Key).await;
+        assert!(
+            body.get("error").is_some(),
+            "{server} premise: refused: {status} {body}"
+        );
+        assert_eq!(
+            fx.calls.load(Ordering::SeqCst),
+            0,
+            "{server} premise: never sent"
+        );
+        assert_last_refused(&fx);
+    }
+}
+
+/// A task submission of `gateway_invoke` on `alpha:t` as key `k`, on the
+/// 2026-07-28 revision with the tasks extension declared.
+async fn submit_task(fx: &Fixture) -> (StatusCode, Value) {
+    let meta = json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {
+            "extensions": {"io.modelcontextprotocol/tasks": {}}},
+        (crate::protocol::mrtr::IDEMPOTENCY_KEY_META): "k-late-task"});
+    let params = json!({"name": "gateway_invoke", "task": {}, "_meta": meta,
+        "arguments": {"server": "alpha", "tool": "t", "arguments": {}}});
+    let body = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params});
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("authorization", "Bearer k")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", "gateway_invoke")
+        .body(axum::body::Body::from(body.to_string()))
+        .expect("request");
+    let response = fx.router.clone().oneshot(request).await.expect("response");
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    (status, super::backend_oracle::sse_or_json(&bytes))
+}
+
+/// A task submission to a backend that requires a signature chain is
+/// refused before any task exists: the delivered refusal records refused.
+#[tokio::test]
+async fn a_task_refused_by_the_chain_policy_records_refused() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(None)),
+        chain: crate::config::ChainMode::Require,
+        ..Setup::default()
+    })
+    .await;
+    let (status, body) = submit_task(&fx).await;
+    assert_eq!(
+        body["error"]["code"], -32001,
+        "premise: chain refusal: {status} {body}"
+    );
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "premise: never sent");
+    assert_last_refused(&fx);
+}
+
+/// A direct call of a tool the shared catalogue withholds (its listed schema
+/// is not an object) is answered as an absent name, never sent: the gateway
+/// refusing it records refused, as the meta gate records it.
+#[tokio::test]
+async fn a_catalogue_withheld_direct_call_records_refused() {
+    let fx = fixture(Setup {
+        extras: &[Extra::InvalidSchema],
+        ..Setup::default()
+    })
+    .await;
+    let (status, body) = post(&fx, "alpha", &tools_call("t"), &Caller::Anonymous).await;
+    assert!(
+        body.get("error").is_some() || body["result"]["isError"] == true,
+        "premise: answered absent: {status} {body}"
+    );
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "premise: never sent");
     assert_last_refused(&fx);
 }

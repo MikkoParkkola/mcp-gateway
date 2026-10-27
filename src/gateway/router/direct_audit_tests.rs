@@ -88,7 +88,9 @@ impl Transport for Scripted {
             if self.extras.contains(&Extra::ListFail) {
                 return Err(crate::Error::Transport("connection refused".into()));
             }
-            let schema = if self.extras.contains(&Extra::DeclaredKeys) {
+            let schema = if self.extras.contains(&Extra::InvalidSchema) {
+                json!("not a schema")
+            } else if self.extras.contains(&Extra::DeclaredKeys) {
                 json!({"type": "object", "properties": {"q": {"type": "string"}},
                        "additionalProperties": false})
             } else {

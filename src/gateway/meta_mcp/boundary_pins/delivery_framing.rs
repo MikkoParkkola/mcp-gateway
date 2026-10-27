@@ -10,8 +10,11 @@
 //! - `delivery_framing_inventory.tsv`: the generic error builders and
 //!   seal-erasing conversions, by (file, fn, needle, count). Inventoried,
 //!   not classified.
-//! - `delivery_refusals.tsv`: every call to a `*refusal` function, by
-//!   (file, fn, callee, count, class). Classified per site.
+//! - `delivery_refusals.tsv`: every gateway refusal built or answered, by
+//!   (file, fn, needle, count, class): a call to a `*refusal`, `refuse_*` or
+//!   `gateway_refused` function or one handed on as a value, a `Refused::of`
+//!   answer, and an `Error::Forbidden`, `GatewayRefused` or
+//!   `ResponseFirewallRefused` built. Classified per site.
 //!
 //! Regenerating either is a reviewed diff, never a silent refresh: run this
 //! test, copy the printed table, and put the diff in front of a reviewer.
@@ -60,6 +63,21 @@ const CLASSES: [&str; 6] = [
 struct Found {
     builders: std::collections::BTreeMap<String, usize>,
     refusals: std::collections::BTreeMap<String, usize>,
+}
+
+/// A function that builds or answers a refusal, by its name: `*refusal`,
+/// `refuse_*`, or the sealed constructor `gateway_refused`.
+fn is_refusal_name(name: &str) -> bool {
+    name.ends_with("refusal") || name.starts_with("refuse_") || name == "gateway_refused"
+}
+
+/// The arguments of a call or method call; none for any other expression.
+fn call_args(expr: &syn::Expr) -> Vec<&syn::Expr> {
+    match expr {
+        syn::Expr::Call(call) => call.args.iter().collect(),
+        syn::Expr::MethodCall(call) => call.args.iter().collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// Whether `path` names `Error::<variant>` (by its last two segments).
@@ -122,6 +140,20 @@ impl Sink for Found {
         {
             note(&mut self.refusals, "Error::ResponseFirewallRefused");
         }
+        if let syn::Expr::Struct(literal) = expr
+            && is_error_variant(&literal.path, "GatewayRefused")
+        {
+            note(&mut self.refusals, "Error::GatewayRefused{}");
+        }
+        // A refusal function handed on as a value (`.map_err(refusal)`).
+        for arg in call_args(expr) {
+            if let syn::Expr::Path(path) = arg
+                && let Some(last) = path.path.segments.last()
+                && is_refusal_name(&last.ident.to_string())
+            {
+                note(&mut self.refusals, &format!("{} (as value)", last.ident));
+            }
+        }
         let Some((owner, name)) = callee(expr) else {
             return;
         };
@@ -131,7 +163,8 @@ impl Sink for Found {
             }
             (Some("Error"), "json_rpc") => note(&mut self.builders, "Error::json_rpc"),
             (_, builder) if BUILDERS.contains(&builder) => note(&mut self.builders, builder),
-            (_, refusal) if refusal.ends_with("refusal") => note(&mut self.refusals, refusal),
+            (Some("Refused"), "of") => note(&mut self.refusals, "Refused::of"),
+            (_, refusal) if is_refusal_name(refusal) => note(&mut self.refusals, refusal),
             _ => {}
         }
     }
