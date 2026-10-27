@@ -500,7 +500,7 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
     // `load_evaluated`, not `load`: an env file is read into an overlay the
     // gateway carries, never into the process environment, so the environment
     // has to travel with the config it was evaluated against.
-    let (config, env) = match Config::load_evaluated(load_path.as_deref()) {
+    let (config, env) = match commands::load_for_serve(load_path.as_deref()) {
         Ok(evaluated) => {
             let mut config = evaluated.config;
             if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli, &evaluated.overlay)
@@ -560,7 +560,7 @@ async fn run_server(cli: Cli) -> ExitCode {
     // stdio path (a local pipe, no network auth surface) degrades — see
     // serve_config_path / run_stdio_server.
     let (discovered, load_path) = discovered_config::resolve(cli.config.as_deref());
-    let (config, env) = match Config::load_evaluated(load_path.as_deref()) {
+    let (config, env) = match commands::load_for_serve(load_path.as_deref()) {
         Ok(evaluated) => {
             let mut config = evaluated.config;
             if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli, &evaluated.overlay)
