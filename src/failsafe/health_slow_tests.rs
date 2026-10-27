@@ -90,3 +90,19 @@ fn api4_2_a_faster_server_lowers_its_usual_without_underflow() {
     feed(&tracker, 99, 400);
     assert_eq!(tracker.slow(), None);
 }
+
+#[test]
+fn api4_2_a_tenfold_slowdown_shows_for_nineteen_batches() {
+    let tracker = warm_at(100);
+    feed(&tracker, 1900, 1000);
+    assert!(
+        tracker.slow().is_some(),
+        "still slow after nineteen batches"
+    );
+    feed(&tracker, 100, 1000);
+    assert_eq!(
+        tracker.slow(),
+        None,
+        "1000 ms is the new usual after twenty"
+    );
+}
