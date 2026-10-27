@@ -15,9 +15,8 @@ impl DispatchNotes {
     /// live call's record gives it, with the code the task commits. The
     /// settlement result is built from a committed code alone, so a bare
     /// `-32001`/`-32004` reads as `denied` in `from_result`: without a refusal
-    /// a gate noted it is the peer's own answer, an `error` (MIK-7735). The
-    /// same holds for a bare `-32602`, which `from_result` reads as `invalid`
-    /// (MIK-7960).
+    /// a gate noted it is the peer's own answer, an `error`. The
+    /// same holds for a bare `-32602`, which `from_result` reads as `invalid`.
     fn settled_outcome(&self, outcome: AuditOutcome) -> AuditOutcome {
         match (self.outcome(outcome), self.refusal) {
             (AuditOutcome::Denied(code) | AuditOutcome::Invalid(code), None) => {
@@ -88,7 +87,7 @@ impl MetaMcp {
             otel_trace_id: None,
             outcome: notes.settled_outcome(outcome),
             // The task owner, keyed for the record when it is credential-derived;
-            // the task lookup keeps the owner (MIK-8697 §16.12).
+            // the task lookup keeps the owner.
             who: AuditWho::from_actor_id(&crate::gateway::record_principal::record_owner(
                 principal,
                 self.record_key(),
