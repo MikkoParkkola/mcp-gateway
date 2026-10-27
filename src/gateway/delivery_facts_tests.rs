@@ -7,28 +7,28 @@ use serde_json::{Map, Value, json};
 use super::{Part, ResponseEffect, found, raise, record_fields, scanned, scope, snapshot};
 use crate::security::Severity;
 
-/// The fields the open cell records, given the frame's refusal and annotation.
-fn recorded(frame_refused: bool, annotated: bool) -> Map<String, Value> {
+/// The fields the open cell records, given the frame's refusal.
+fn recorded(frame_refused: bool) -> Map<String, Value> {
     let mut fields = Map::new();
-    record_fields(snapshot().as_ref(), frame_refused, annotated, &mut fields);
+    record_fields(snapshot().as_ref(), frame_refused, &mut fields);
     fields
 }
 
 #[tokio::test]
 async fn outside_a_cell_nothing_is_recorded() {
     let mut fields = Map::new();
-    record_fields(snapshot().as_ref(), true, true, &mut fields);
+    record_fields(snapshot().as_ref(), true, &mut fields);
     assert!(fields.is_empty(), "{fields:?}");
 }
 
 #[tokio::test]
 async fn unscanned_is_null_findings_and_scanned_clean_is_empty() {
     scope(async {
-        let fields = recorded(false, false);
+        let fields = recorded(false);
         assert_eq!(fields["response_effect"], "delivered");
         assert_eq!(fields["response_findings"], Value::Null);
         scanned();
-        assert_eq!(recorded(false, false)["response_findings"], json!([]));
+        assert_eq!(recorded(false)["response_findings"], json!([]));
     })
     .await;
 }
@@ -38,12 +38,14 @@ async fn the_strongest_effect_wins_whatever_the_order() {
     scope(async {
         raise(ResponseEffect::Refused);
         raise(ResponseEffect::Rewritten);
-        assert_eq!(recorded(false, true)["response_effect"], "refused");
+        raise(ResponseEffect::Annotated);
+        assert_eq!(recorded(false)["response_effect"], "refused");
     })
     .await;
     scope(async {
-        assert_eq!(recorded(false, true)["response_effect"], "annotated");
-        assert_eq!(recorded(true, false)["response_effect"], "refused");
+        raise(ResponseEffect::Annotated);
+        assert_eq!(recorded(false)["response_effect"], "annotated");
+        assert_eq!(recorded(true)["response_effect"], "refused");
     })
     .await;
 }
@@ -55,7 +57,7 @@ async fn findings_are_most_severe_first_capped_at_32_with_a_total() {
             found(format!("firewall:k{i:02}"), Severity::Low, Part::Result);
         }
         found("firewall:z".into(), Severity::Critical, Part::Error);
-        let fields = recorded(false, false);
+        let fields = recorded(false);
         let listed = fields["response_findings"].as_array().expect("a list");
         assert_eq!(listed.len(), 32);
         assert_eq!(
@@ -72,8 +74,8 @@ async fn an_unvouched_delivery_records_only_a_refusal() {
     scope(async {
         found("firewall:k".into(), Severity::High, Part::Result);
         super::unvouched();
-        assert!(recorded(false, false).is_empty());
-        let fields = recorded(true, false);
+        assert!(recorded(false).is_empty());
+        let fields = recorded(true);
         assert_eq!(fields["response_effect"], "refused");
         assert!(fields.get("response_findings").is_none(), "{fields:?}");
     })
@@ -87,7 +89,7 @@ async fn a_suspended_scan_writes_nothing_to_the_delivery() {
             raise(ResponseEffect::Refused);
             found("firewall:k".into(), Severity::High, Part::Result);
         });
-        let fields = recorded(false, false);
+        let fields = recorded(false);
         assert_eq!(fields["response_effect"], "delivered");
         assert_eq!(fields["response_findings"], Value::Null);
     })

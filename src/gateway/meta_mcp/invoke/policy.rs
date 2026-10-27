@@ -420,16 +420,11 @@ impl MetaMcp {
             )
             .map_err(crate::gateway::delivery_facts::refused)?;
         if !findings.is_empty() {
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert(
-                    "_security_findings".to_string(),
-                    serde_json::to_value(&findings).unwrap_or_default(),
-                );
-            }
-            super::gateway_writes::note(
+            super::gateway_writes::insert_noted(
                 super::gateway_writes::Layer::Value,
                 &["_security_findings"],
-                &result,
+                &mut result,
+                serde_json::to_value(&findings).unwrap_or_default(),
             );
         }
 
@@ -540,17 +535,7 @@ impl MetaMcp {
                     ),
                 ));
             }
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert(
-                    "_contract_violation".to_string(),
-                    serde_json::Value::Bool(true),
-                );
-                obj.insert(
-                    "_contract_reason".to_string(),
-                    serde_json::Value::String("no_contract_declared".to_string()),
-                );
-            }
-            super::gateway_writes::note_contract(result);
+            super::gateway_writes::write_contract(result, "no_contract_declared".to_string());
         } else if !text.is_empty() {
             // Build effective contract merging global defaults with per-tool overrides.
             let effective_max_bytes = tool_entry
@@ -604,17 +589,7 @@ impl MetaMcp {
                         ),
                     ));
                 }
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert(
-                        "_contract_violation".to_string(),
-                        serde_json::Value::Bool(true),
-                    );
-                    obj.insert(
-                        "_contract_reason".to_string(),
-                        serde_json::Value::String(violation.reason.to_string()),
-                    );
-                }
-                super::gateway_writes::note_contract(result);
+                super::gateway_writes::write_contract(result, violation.reason.to_string());
             }
         }
         Ok(())

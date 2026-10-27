@@ -163,14 +163,13 @@ pub(crate) fn unvouched() {
 ///
 /// `facts` is the cell's snapshot (`None` outside a cell: both omitted).
 /// `frame_refused` is whether the delivered frame is the gateway's own
-/// refusal, and `annotated` whether the gateway added a counted annotation:
-/// both are read off what is actually sent, so no later rebuild can hide
-/// them. An unvouched delivery still records a refusal this request made,
-/// and omits everything else.
+/// refusal, read off what is actually sent, so no later rebuild can hide
+/// it. A counted annotation raises `Annotated` in the cell where the gateway
+/// notes it. An unvouched delivery still records a refusal this request
+/// made, and omits everything else.
 pub(crate) fn record_fields(
     facts: Option<&DeliveryFacts>,
     frame_refused: bool,
-    annotated: bool,
     fields: &mut Map<String, Value>,
 ) {
     let Some(facts) = facts else {
@@ -179,9 +178,6 @@ pub(crate) fn record_fields(
     let mut effect = facts.effect;
     if frame_refused {
         effect = effect.max(ResponseEffect::Refused);
-    }
-    if annotated {
-        effect = effect.max(ResponseEffect::Annotated);
     }
     if !facts.vouched {
         if effect == ResponseEffect::Refused {
