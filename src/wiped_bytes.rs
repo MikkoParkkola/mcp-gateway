@@ -22,7 +22,15 @@ impl WipedBytes {
     /// allocation is kept until the `Vec` drops.
     fn wipe(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.0);
+        #[cfg(test)]
+        WIPES.with(|wipes| wipes.set(wipes.get() + 1));
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Wipes run on this thread, so a test can see that dropping wipes.
+    static WIPES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 impl Drop for WipedBytes {
@@ -42,7 +50,16 @@ impl std::fmt::Debug for WipedBytes {
 
 #[cfg(test)]
 mod tests {
-    use super::WipedBytes;
+    use super::{WIPES, WipedBytes};
+
+    /// Dropping is what wipes: a value that only goes out of scope runs
+    /// `wipe`, so the zeroize path above is the one every drop takes.
+    #[test]
+    fn dropping_wipes() {
+        let before = WIPES.with(std::cell::Cell::get);
+        drop(WipedBytes::new(b"s3cret-token".to_vec()));
+        assert_eq!(WIPES.with(std::cell::Cell::get), before + 1);
+    }
 
     /// `wipe` (what `Drop` runs) goes through `zeroize`'s `Vec` impl, the one
     /// that also covers the spare capacity: it leaves the buffer cleared with
