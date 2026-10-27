@@ -84,7 +84,7 @@ fn d16_a_literal_goes_to_the_store_and_only_its_reference_is_written() {
         read_reference(&backend.headers["Authorization"]),
         "Bearer sk-header"
     );
-    let yaml = serde_yaml_ng::to_string(&config).expect("yaml");
+    let yaml = crate::yaml::to_string(&config).expect("yaml");
     assert!(!yaml.contains("sk-test"), "{yaml}");
 }
 

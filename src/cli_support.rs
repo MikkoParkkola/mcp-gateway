@@ -156,51 +156,7 @@ pub(crate) fn adopt_with(
 ) -> Result<Adoption, String> {
     use crate::secret_store::{LOCK_WAIT, NewSecretOwned, SaveError, create_secrets};
 
-    let mut outcomes = Vec::with_capacity(servers.len());
-    // Adoptable so far: the outcome index, the name, the backend, and its
-    // literal values as (header?, key, value).
-    let mut candidates: Vec<Candidate> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for server in servers {
-        let name = server.name.clone();
-        let mut reasons: Vec<(&'static str, String)> = Vec::new();
-        if name == config.capabilities.name {
-            reasons.push(("capabilities_name", "name".to_owned()));
-        } else if crate::config::backend_add::validate_backend_name(&name).is_err() {
-            reasons.push(("invalid_name", "name".to_owned()));
-        } else if seen.contains(&name) {
-            // The first adoptable find of a name wins, as discovery's own
-            // dedup does.
-            reasons.push(("duplicate_name", "name".to_owned()));
-        }
-        reasons.extend(
-            crate::discovery::adopt::refusals(server)
-                .into_iter()
-                .map(|(refusal, field)| (refusal.code(), field)),
-        );
-        if !reasons.is_empty() {
-            reasons.sort_by(|a, b| a.1.cmp(&b.1));
-            outcomes.push(Outcome::Skipped { name, reasons });
-            continue;
-        }
-        seen.insert(name.clone());
-        let backend = server.to_backend_config();
-        let mut literals = Vec::new();
-        for (header, map) in [(false, &backend.env), (true, &backend.headers)] {
-            for (key, value) in map {
-                if !value.is_empty() && !value.contains("${") {
-                    literals.push((header, key.clone(), value.clone()));
-                }
-            }
-        }
-        candidates.push(Candidate {
-            outcome: outcomes.len(),
-            name: name.clone(),
-            backend,
-            literals,
-        });
-        outcomes.push(Outcome::Adopted { name });
-    }
+    let (mut outcomes, mut candidates) = classify(config, servers);
 
     let opened = if candidates.iter().any(|c| !c.literals.is_empty()) {
         Some(open()?)
@@ -306,6 +262,61 @@ pub(crate) fn adopt_with(
         outcomes,
         secrets: pending,
     })
+}
+
+/// Each server's fate under the shared rule, before any store is opened:
+/// the outcomes in input order, and the servers that passed with their
+/// literal values.
+fn classify(
+    config: &crate::config::Config,
+    servers: &[crate::discovery::DiscoveredServer],
+) -> (Vec<Outcome>, Vec<Candidate>) {
+    let mut outcomes = Vec::with_capacity(servers.len());
+    // Adoptable so far: the outcome index, the name, the backend, and its
+    // literal values as (header?, key, value).
+    let mut candidates: Vec<Candidate> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for server in servers {
+        let name = server.name.clone();
+        let mut reasons: Vec<(&'static str, String)> = Vec::new();
+        if name == config.capabilities.name {
+            reasons.push(("capabilities_name", "name".to_owned()));
+        } else if crate::config::backend_add::validate_backend_name(&name).is_err() {
+            reasons.push(("invalid_name", "name".to_owned()));
+        } else if seen.contains(&name) {
+            // The first adoptable find of a name wins, as discovery's own
+            // dedup does.
+            reasons.push(("duplicate_name", "name".to_owned()));
+        }
+        reasons.extend(
+            crate::discovery::adopt::refusals(server)
+                .into_iter()
+                .map(|(refusal, field)| (refusal.code(), field)),
+        );
+        if !reasons.is_empty() {
+            reasons.sort_by(|a, b| a.1.cmp(&b.1));
+            outcomes.push(Outcome::Skipped { name, reasons });
+            continue;
+        }
+        seen.insert(name.clone());
+        let backend = server.to_backend_config();
+        let mut literals = Vec::new();
+        for (header, map) in [(false, &backend.env), (true, &backend.headers)] {
+            for (key, value) in map {
+                if !value.is_empty() && !value.contains("${") {
+                    literals.push((header, key.clone(), value.clone()));
+                }
+            }
+        }
+        candidates.push(Candidate {
+            outcome: outcomes.len(),
+            name: name.clone(),
+            backend,
+            literals,
+        });
+        outcomes.push(Outcome::Adopted { name });
+    }
+    (outcomes, candidates)
 }
 
 /// A server that passed the rule, before its literals are stored.
