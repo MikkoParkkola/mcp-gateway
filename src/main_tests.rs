@@ -223,6 +223,26 @@ fn write_discovered_to_config_creates_file_when_missing() {
 }
 
 #[test]
+fn b3j_discover_write_refuses_an_unresolved_reference_before_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("discovered.yaml");
+    let mut server = make_discovered_server("tool");
+    server.env = [(
+        "API_KEY".to_string(),
+        "file:/nonexistent/mcp-gateway-b3/token".to_string(),
+    )]
+    .into_iter()
+    .collect();
+    let refused = write_discovered_to_config(&[server], Some(&output), CommentLoss::Refuse)
+        .expect_err("refused");
+    assert!(
+        refused.to_string().contains("backends.tool.env.API_KEY"),
+        "{refused}"
+    );
+    assert!(!output.exists(), "the file was written anyway");
+}
+
+#[test]
 fn write_discovered_to_config_preserves_existing_backends() {
     let dir = tempfile::tempdir().unwrap();
     let output = dir.path().join("discovered.yaml");

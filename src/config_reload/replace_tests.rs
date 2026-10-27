@@ -535,8 +535,10 @@ async fn within_hang_bound(test: &str, body: impl std::future::Future<Output = (
 }
 
 /// Paths the recording loader below was asked to load.
+#[cfg(unix)] // only the symlink tests read it
 static LOADED: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
 
+#[cfg(unix)]
 fn recording_load(
     path: &Path,
     live: &Arc<LiveConfig>,

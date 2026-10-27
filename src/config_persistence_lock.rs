@@ -63,9 +63,13 @@ pub(crate) enum NotLocked {
 /// followed.
 /// A failure names `config` first: that is the file the user selected, and
 /// the sidecar is a detail of how it is locked.
-fn try_once(config: &Path, lock: &Path) -> Result<Option<ExclusiveFileLock>, NotLocked> {
+fn try_once(
+    config: &Path,
+    lock: &Path,
+    owners: Owners,
+) -> Result<Option<ExclusiveFileLock>, NotLocked> {
     #[cfg(any(unix, windows))]
-    keep_private(lock).map_err(|error| {
+    keep_private(lock, owners).map_err(|error| {
         NotLocked::Failed(format!(
             "cannot lock {} (lock file {}): {error}",
             config.display(),
@@ -93,8 +97,49 @@ fn try_once(config: &Path, lock: &Path) -> Result<Option<ExclusiveFileLock>, Not
 /// may write a user's config. A holder that opened it while it was readable
 /// keeps its handle: closing that would mean replacing the file, which the
 /// never-delete rule forbids.
+/// Whose sidecar a lock accepts.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Owners {
+    /// A config lock: root may tighten a user's sidecar, since root may write
+    /// that user's config.
+    UserOrRoot,
+    /// A per-user lock (the vault): only the effective user's own sidecar,
+    /// whatever its mode, with no exception for root.
+    UserOnly,
+}
+
+/// A per-user sidecar must belong to `expected_uid`, the effective user,
+/// whatever its mode and with no exception for root. Pure, so it is tested
+/// without a second account.
 #[cfg(unix)]
-fn keep_private(lock: &Path) -> io::Result<()> {
+fn judge_owner(file_uid: u32, expected_uid: u32) -> io::Result<()> {
+    if file_uid == expected_uid {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        "it belongs to another user; remove it so the gateway recreates it as yours",
+    ))
+}
+
+/// The uid a per-user sidecar must belong to: the effective user. A test
+/// can name another, to show the lock path really asks.
+#[cfg(unix)]
+fn expected_owner_uid() -> u32 {
+    #[cfg(test)]
+    if let Some(uid) = EXPECTED_OWNER.with(std::cell::Cell::get) {
+        return uid;
+    }
+    rustix::process::geteuid().as_raw()
+}
+
+#[cfg(all(test, unix))]
+thread_local! {
+    static EXPECTED_OWNER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(unix)]
+fn keep_private(lock: &Path, owners: Owners) -> io::Result<()> {
     use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
     let file = match std::fs::OpenOptions::new()
         .read(true)
@@ -114,6 +159,9 @@ fn keep_private(lock: &Path) -> io::Result<()> {
     };
     let meta = file.metadata()?;
     let me = rustix::process::geteuid().as_raw();
+    if owners == Owners::UserOnly && meta.is_file() {
+        judge_owner(meta.uid(), expected_owner_uid())?;
+    }
     let shared = meta.mode() & 0o077 != 0;
     if !meta.is_file() || !shared {
         return Ok(());
@@ -137,7 +185,9 @@ fn keep_private(lock: &Path) -> io::Result<()> {
 /// file), so the user is never left with an error they cannot act on. An
 /// open that fails (a holder sharing less, a link) is left to `try_acquire`.
 #[cfg(windows)]
-fn keep_private(lock: &Path) -> io::Result<()> {
+fn keep_private(lock: &Path, _owners: Owners) -> io::Result<()> {
+    // Windows already refuses any sidecar not private to this user, owner
+    // included, so both owner rules are the same here.
     let Ok(file) = crate::private_fs::open_file_read(lock) else {
         return Ok(());
     };
@@ -349,7 +399,7 @@ fn acquire(
     let lock = lock_path(&target);
     let mut on_wait = Some(on_wait);
     loop {
-        if let Some(held) = try_once(config, &lock)? {
+        if let Some(held) = try_once(config, &lock, Owners::UserOrRoot)? {
             // An unusable journal releases the lock and refuses, naming what
             // to do by hand.
             let recovered = super::journal::recover(&target).map_err(NotLocked::Failed)?;
@@ -554,6 +604,33 @@ pub(crate) async fn reader_lock(config: &Path, deadline: Instant) -> ReaderLock 
     }
 }
 
+/// The vault lock's blocking wait: one attempt per `POLL` until `deadline`,
+/// with `on_wait` told once when the lock is held. The config locks wait in
+/// [`acquire`], which also recovers the journal.
+fn poll_blocking(
+    config: &Path,
+    lock: &Path,
+    owners: Owners,
+    deadline: Instant,
+    mut on_wait: Option<impl FnOnce(&Path)>,
+) -> Result<ExclusiveFileLock, NotLocked> {
+    loop {
+        if let Some(held) = try_once(config, lock, owners)? {
+            return Ok(held);
+        }
+        if let Some(say) = on_wait.take() {
+            say(lock);
+        }
+        // Never sleep past the deadline: a lock released after it is not
+        // taken late.
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(NotLocked::Busy);
+        }
+        std::thread::sleep(POLL.min(left));
+    }
+}
+
 /// What a reader does when its lock cannot be taken at all, given the probe
 /// (why no writer can exist, whether a journal is pending, the resolved
 /// config and its journal path); a probe that did not run skips.
@@ -615,6 +692,19 @@ pub(crate) fn journal_pending(config: &Path) -> bool {
         std::fs::symlink_metadata(super::journal::journal_path(config)),
         Err(e) if e.kind() == io::ErrorKind::NotFound
     )
+}
+
+/// Take the lock file `lock` itself, blocking until `deadline`: the same
+/// owner-only sidecar and the same attempt as the config lock, for a lock
+/// that is not beside a config (ADR-028's per-user vault lock). Only the
+/// effective user's own sidecar is accepted, with no exception for root.
+pub(crate) fn lock_file_blocking(
+    lock: &Path,
+    deadline: Instant,
+) -> Result<ExclusiveFileLock, NotLocked> {
+    // Named for what it guards; the path follows in the refusal.
+    let subject = Path::new("the secret vault");
+    poll_blocking(subject, lock, Owners::UserOnly, deadline, None::<fn(&Path)>)
 }
 
 #[cfg(test)]
