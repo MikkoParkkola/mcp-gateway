@@ -483,7 +483,7 @@ async fn update_backend(
     )
     .await;
 
-    let reload = match mutation {
+    let (selection, reload) = match mutation {
         Ok(ConfigMutation::Applied(selection, reload)) => {
             ticket.committed(&updated);
             (selection, reload)
@@ -493,7 +493,6 @@ async fn update_backend(
         }
         Err(e) => return unwritten(e),
     };
-    let (selection, reload) = reload;
 
     let mut response =
         Json(json!({"status": "updated", "name": updated, "reload": reload})).into_response();
