@@ -49,6 +49,12 @@ const probed = {
     el.textContent = 'gateway - status';
     ctx.announce('Gateway status read.');
   },
+  // L13: a screen marks its data stale, then clears it.
+  activity: (el, ctx) => {
+    el.textContent = 'activity - status';
+    ctx.show('stale');
+    setTimeout(() => ctx.show(null), 50);
+  },
   costs: async (el) => {
     const reply = await api('/ui/api/fault-probe');
     reply.missing.call();
