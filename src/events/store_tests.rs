@@ -54,6 +54,8 @@ fn sub(principal: &str, url: &str, now: DateTime<Utc>) -> Subscription {
         unoffered_since: None,
         held_until: None,
         watch_class: None,
+        observed_identity: None,
+        obs_basis: None,
     }
 }
 
@@ -501,6 +503,8 @@ fn a_held_refresh_keeps_the_rows_watch_class() {
         .expect("admitted");
     let refresh = Subscription {
         watch_class: None,
+        observed_identity: None,
+        obs_basis: None,
         ..s.clone()
     };
     let grant = Grant {

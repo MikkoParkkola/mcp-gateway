@@ -111,18 +111,19 @@ pub(super) fn rule_matches(rule: &CompiledRule, tool: &str) -> bool {
     rule.pattern.as_ref().is_some_and(|p| p.matches(tool))
 }
 
+/// The first rule whose glob covers `tool` and whose `scan` list holds
+/// `scan_type`; an empty list holds every type.
 pub(super) fn first_matching_rule_action(
     rules: &[CompiledRule],
     tool: &str,
+    scan_type: ScanType,
 ) -> Option<FirewallAction> {
     rules
         .iter()
-        .find(|rule| rule_matches(rule, tool))
+        .find(|rule| {
+            rule_matches(rule, tool) && (rule.scans.is_empty() || rule.scans.contains(&scan_type))
+        })
         .map(|rule| rule.action)
-}
-
-pub(super) fn strongest_finding_severity(findings: &[Finding]) -> Option<Severity> {
-    findings.iter().map(|finding| finding.severity).max()
 }
 
 pub(super) const fn default_action_for_severity(severity: Severity) -> FirewallAction {

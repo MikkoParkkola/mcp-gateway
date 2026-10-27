@@ -184,8 +184,9 @@ async fn an_unset_key_on_an_sse_server_is_offered_after_connecting() {
     );
 }
 
-/// T5 guard (green before the fix): identity propagation is refused before
-/// the transport is judged, so the subscribe never connects the backend.
+/// T5 guard: on an identity-propagated backend a caller with no verified
+/// identity to observe as is refused (`-32012`) before the transport is
+/// judged, so the subscribe never connects the backend.
 #[tokio::test]
 async fn an_identity_backend_is_refused_without_a_connect() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -198,11 +199,7 @@ async fn an_identity_backend_is_refused_without_a_connect() {
     });
     let gw = start_cfg(dir.path(), &receiver, cold_config(dir.path(), backend, &[])).await;
     let answer = subscribe(&gw, &receiver).await;
-    assert_eq!(
-        error(&answer)["data"]["reason"],
-        "identity_propagation",
-        "{answer}"
-    );
+    assert_eq!(error(&answer)["code"], -32012, "{answer}");
     assert_eq!(starts(&peer), 0, "no connect for a refused backend");
 }
 
