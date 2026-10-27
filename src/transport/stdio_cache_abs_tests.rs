@@ -78,3 +78,57 @@ fn relative_state_dir_scenario() {
         "the child is handed the recorded path"
     );
 }
+
+const BLOCKED_SCENARIO_ENV: &str = "MCP_GATEWAY_TEST_BLOCKED_STATE_SCENARIO";
+const BLOCKED_SCENARIO: &str = "transport::stdio::cache_abs_tests::blocked_state_dir_scenario";
+
+/// MIK-8831.REL.5: a state dir the cache cannot be created in hands no runner
+/// a cache, so the backend starts on its shared default instead of failing to
+/// install. A path through a regular file fails for every user, root included,
+/// where a read-only mode would not.
+#[tokio::test]
+async fn a_cache_dir_that_cannot_be_created_is_assigned_to_no_runner() {
+    let scratch = tempfile::tempdir().expect("scratch directory");
+    let blocker = scratch.path().join("blocker");
+    std::fs::write(&blocker, b"").expect("a regular file in the state path");
+    let mut nested = tokio::process::Command::new(std::env::current_exe().expect("test binary"));
+    nested
+        .args(["--exact", BLOCKED_SCENARIO, "--nocapture"])
+        .env(BLOCKED_SCENARIO_ENV, "1")
+        .env("MCP_GATEWAY_CONFIG_DIR", blocker.join("state"))
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(NESTED_RUN_LIMIT, nested.output())
+        .await
+        .expect("the scenario finished within the limit")
+        .expect("run the blocked-state scenario");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "blocked-state scenario failed; stdout={stdout:?} stderr={stderr:?}"
+    );
+}
+
+#[test]
+fn blocked_state_dir_scenario() {
+    if std::env::var_os(BLOCKED_SCENARIO_ENV).is_none() {
+        return;
+    }
+    for (command, var) in [
+        ("npx -y pkg", "npm_config_cache"),
+        ("bunx pkg", "BUN_INSTALL_CACHE_DIR"),
+    ] {
+        let env = isolated_package_manager_env("thing", command, HashMap::new());
+        assert!(
+            !env.contains_key(var),
+            "{command} was handed {var}={:?}, a cache it cannot create",
+            env.get(var)
+        );
+    }
+    assert_eq!(
+        assigned_package_cache_dir("thing", "npx -y pkg", &HashMap::new()),
+        None,
+        "the repair records a cache the child was never handed"
+    );
+}
