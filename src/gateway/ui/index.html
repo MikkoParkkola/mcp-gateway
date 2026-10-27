@@ -415,7 +415,7 @@ tr:hover td { background: var(--bg3); }
         <div id="add-preview" class="add-preview" aria-live="polite" style="display:none"></div>
 
         <div class="form-actions">
-          <button class="btn" onclick="submitAddServer()">Add Server</button>
+          <button class="btn" id="add-server-btn" onclick="submitAddServer()">Add Server</button>
           <button class="btn btn-secondary" id="preview-tools-btn" onclick="previewServerTools()">Preview tools</button>
           <button class="btn btn-secondary" onclick="toggleAddServerForm()">Cancel</button>
           <span id="add-server-msg" class="form-msg"></span>
@@ -1302,7 +1302,15 @@ function clearAddPreview() {
   const panel = addPreviewPanel();
   panel.replaceChildren();
   panel.style.display = 'none';
-  document.getElementById('preview-tools-btn').disabled = false;
+  setStartRunning(false);
+}
+
+// While a start runs, neither a second Preview (it would meet "a preview is
+// already running" and lose this listing) nor an Add (it would save every
+// tool the operator chose to preview first) may begin.
+function setStartRunning(running) {
+  document.getElementById('preview-tools-btn').disabled = running;
+  document.getElementById('add-server-btn').disabled = running;
 }
 
 function addPreviewError(text) {
@@ -1391,22 +1399,21 @@ function renderDescribed(described, body, confirm, gen) {
 // current generation installs a listing.
 async function startServerPreview(body, confirm, gen, start) {
   document.getElementById('add-server-msg').textContent = '';
-  // One request at a time: a second Preview while this one runs would only
-  // meet "a preview is already running" and lose this listing.
-  const previewBtn = document.getElementById('preview-tools-btn');
   start.disabled = true;
-  previewBtn.disabled = true;
+  setStartRunning(true);
   let answer;
   try {
     answer = await postPreview({ ...body, confirm });
   } catch (e) {
-    if (gen === addPreviewGen) { previewBtn.disabled = false; addPreviewError('Preview failed: ' + e.message); }
+    if (gen === addPreviewGen) { setStartRunning(false); start.remove(); addPreviewError('Preview failed: ' + e.message); }
     return;
   }
   if (gen !== addPreviewGen) return;
-  previewBtn.disabled = false;
+  setStartRunning(false);
   if (answer.status !== 200) {
-    // A spent or expired confirmation cannot be retried: Preview again.
+    // A spent or expired confirmation cannot be retried, so its button goes:
+    // the next step is Preview tools again.
+    start.remove();
     return addPreviewError('Preview failed: ' + answer.error);
   }
   const listing = answer.body;
@@ -1488,6 +1495,9 @@ function renderPreviewTools(entries, withheld) {
   panel.appendChild(actions);
   recount();
   panel.style.display = '';
+  // The Start button that had focus is gone: hand focus to the list.
+  const first = panel.querySelector('input[data-tool]:not(:disabled)') || panel.querySelector('button');
+  if (first) first.focus();
 }
 
 // Tools

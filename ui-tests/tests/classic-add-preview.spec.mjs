@@ -193,6 +193,8 @@ test('P1b: nothing is started before Start preview, and a spent confirmation ins
   await page.getByRole('button', { name: 'Start preview' }).click();
   await expect(msg(page)).toContainText('the confirmation is invalid, expired or spent');
   await expect(tick(page, 'read_a')).toHaveCount(0);
+  // A spent confirmation leaves no dead Start button behind.
+  await expect(page.getByRole('button', { name: 'Start preview' })).toHaveCount(0);
   confirmAnswer = null;
   await preview(page);
   await expect(tick(page, 'read_a')).toBeChecked();
@@ -287,9 +289,14 @@ test('P13: Preview tools is off while a start runs, so the listing it brings is 
   await page.getByRole('button', { name: 'Preview tools' }).click();
   await page.getByRole('button', { name: 'Start preview' }).click();
   await expect(page.getByRole('button', { name: 'Preview tools' })).toBeDisabled();
+  // Nor Add: it would save every tool while the operator waits for the list.
+  await expect(page.locator('#add-server-btn')).toBeDisabled();
   release();
   await expect(tick(page, 'read_a')).toBeChecked();
   await expect(page.getByRole('button', { name: 'Preview tools' })).toBeEnabled();
+  await expect(page.locator('#add-server-btn')).toBeEnabled();
+  // The focused Start button is gone; focus moves to the first tick.
+  await expect(tick(page, 'read_a')).toBeFocused();
 });
 
 test('P7: a refused preview shows the server’s reason, and Add still works without a selection', async ({ page }) => {
