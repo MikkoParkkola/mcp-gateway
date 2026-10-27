@@ -147,6 +147,15 @@ pub(crate) fn decide(inputs: &StateInputs, now: SystemTime) -> StateView {
     // A connected transport serves even when a rebuild beside it failed:
     // the failed start only matters once nothing is connected.
     if inputs.running {
+        if let Some((recent, usual)) = inputs.slow {
+            return view(
+                ServerState::Slow,
+                format!(
+                    "Answering, but its slowest calls take {recent} ms, over three times its usual {usual} ms."
+                ),
+                None,
+            );
+        }
         return view(ServerState::Running, "Running.".to_owned(), None);
     }
     if inputs.start_failed {

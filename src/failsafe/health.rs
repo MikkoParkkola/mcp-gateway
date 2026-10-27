@@ -18,6 +18,19 @@ use tracing::{debug, info, warn};
 /// Default capacity for latency histogram
 const DEFAULT_HISTOGRAM_CAPACITY: usize = 1000;
 
+/// Successful calls in one batch: the recent window, and one baseline update.
+const SLOW_BATCH: usize = 100;
+/// Batches the baseline absorbs before any Slow verdict (500 calls), so a
+/// restart or a quiet server never flags noise.
+const SLOW_WARM_BATCHES: u32 = 5;
+/// The recent p95 must exceed this many times the baseline.
+const SLOW_FACTOR: u64 = 3;
+/// Below this recent p95 nothing is slow: a few-ms swing is slow to nobody.
+const SLOW_FLOOR_MS: u64 = 50;
+/// The baseline is an average of batch p95s with weight 1 / `SLOW_DECAY`,
+/// held times `SLOW_DECAY` so steps under `SLOW_DECAY` ms still move it.
+const SLOW_DECAY: u64 = 64;
+
 /// Backend health tracker
 pub struct HealthTracker {
     /// Backend name
@@ -123,7 +136,7 @@ impl HealthTracker {
     /// three times the usual and at least 50 ms; `None` until 500 successful
     /// calls have warmed the usual one.
     pub(crate) fn slow(&self) -> Option<(u64, u64)> {
-        None
+        self.latencies.read().slow()
     }
 
     /// Reset all metrics
@@ -173,6 +186,12 @@ struct LatencyHistogram {
     capacity: usize,
     /// Sorted flag to avoid repeated sorting
     sorted: bool,
+    /// The baseline p95 in ms, times `SLOW_DECAY`.
+    baseline_x64: u64,
+    /// Complete batches folded into the baseline.
+    batches: u32,
+    /// Samples recorded since the last complete batch.
+    in_batch: usize,
 }
 
 impl LatencyHistogram {
@@ -182,6 +201,9 @@ impl LatencyHistogram {
             samples: Vec::with_capacity(capacity),
             capacity,
             sorted: true,
+            baseline_x64: 0,
+            batches: 0,
+            in_batch: 0,
         }
     }
 
@@ -197,6 +219,20 @@ impl LatencyHistogram {
 
         self.samples.push(millis);
         self.sorted = false;
+
+        // Every full batch folds its p95 into the baseline; the first seeds it.
+        self.in_batch += 1;
+        if self.in_batch == SLOW_BATCH {
+            self.in_batch = 0;
+            let batch = self.recent_p95();
+            self.baseline_x64 = if self.batches == 0 {
+                batch.saturating_mul(SLOW_DECAY)
+            } else {
+                // Never underflows: the subtracted part is at most the whole.
+                (self.baseline_x64 - self.baseline_x64 / SLOW_DECAY).saturating_add(batch)
+            };
+            self.batches = self.batches.saturating_add(1);
+        }
     }
 
     /// Calculate percentile (0.0 to 1.0)
@@ -228,10 +264,43 @@ impl LatencyHistogram {
         Some(Duration::from_millis(self.samples[index]))
     }
 
-    /// Clear all samples
+    /// The p95 of the last `SLOW_BATCH` samples (fewer, before that many),
+    /// by the same index rule as [`Self::percentile`].
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
+    fn recent_p95(&self) -> u64 {
+        let from = self.samples.len().saturating_sub(SLOW_BATCH);
+        let mut recent = self.samples[from..].to_vec();
+        recent.sort_unstable();
+        let index = ((recent.len() as f64) * 0.95).floor() as usize;
+        recent
+            .get(index.min(recent.len().saturating_sub(1)))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// The recent p95 and the baseline, when the baseline is warm and the
+    /// recent one is over `SLOW_FACTOR` times it and at least `SLOW_FLOOR_MS`.
+    fn slow(&self) -> Option<(u64, u64)> {
+        if self.batches < SLOW_WARM_BATCHES {
+            return None;
+        }
+        let recent = self.recent_p95();
+        let usual = self.baseline_x64 / SLOW_DECAY;
+        (recent >= SLOW_FLOOR_MS && recent > SLOW_FACTOR.saturating_mul(usual))
+            .then_some((recent, usual))
+    }
+
+    /// Clear all samples, and the baseline with them: a reset warms up again.
     fn clear(&mut self) {
         self.samples.clear();
         self.sorted = true;
+        self.baseline_x64 = 0;
+        self.batches = 0;
+        self.in_batch = 0;
     }
 }
 
