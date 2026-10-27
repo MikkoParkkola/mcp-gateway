@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use super::EventsHub;
 use super::governance::{Attribution, Lifecycle};
 use super::records::{Credential, Subscription};
-use super::store::{CapHit, Grant};
+use super::store::{CapHit, Caps, Grant, HoldCommit};
 use super::types::{EventDescriptor, RpcError, Visibility};
 use super::upstream::{self, Ineligible, Judged, Kind};
 
