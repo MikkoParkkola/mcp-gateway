@@ -51,10 +51,9 @@ pub struct AuditPage {
     /// Audit records examined by this call; never exceeds `filter.scan_budget`.
     pub records_examined: usize,
     /// Bytes read from storage by this call; never exceeds
-    /// [`MAX_AUDIT_SCAN_BYTES`] plus one assembly window (a record at the logger's cap and the newline before it) and one byte: the window
-    /// is read again when a line is longer than it, and one byte tells whether
-    /// the page starts inside a line. The in-memory backend does no
-    /// I/O and reports 0.
+    /// [`MAX_AUDIT_SCAN_BYTES`] plus one assembly window (a record at the
+    /// logger's cap and the newline before it), read when a line is longer
+    /// than the scan window. The in-memory backend does no I/O and reports 0.
     pub bytes_examined: u64,
     /// The cursor passed in no longer named a position (a pre-D6 cursor after
     /// the log rotated), so this page restarts at the newest record. Records

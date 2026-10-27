@@ -155,6 +155,10 @@ async fn recovery_refuses_past_an_unreadable_line_and_appends_nothing() {
     assert_eq!(added, ["g000", "g001", "g002"], "{records:?}");
     // The refusal left a gap, which the healed run records.
     assert!(
+        records.iter().any(|r| r.0 == V::Indeterminate),
+        "{records:?}"
+    );
+    assert!(
         records
             .iter()
             .all(|r| r.0 == V::Add || r.0 == V::Indeterminate),

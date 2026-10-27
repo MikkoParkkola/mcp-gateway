@@ -146,10 +146,22 @@ impl LogTail {
     /// then checked: if rotation sealed it meanwhile, the sealed file holds
     /// its bytes, so that is the one read.
     fn open_segment(&self) -> io::Result<Option<File>> {
-        pager::open_segment(&self.log, self.segment, || {
+        let file = pager::open_segment(&self.log, self.segment, || {
             #[cfg(test)]
             tests::before_open();
-        })
+        })?;
+        // Bytes the page still names under neither name: retention removed
+        // the segment as it was opened. Refuse rather than page past them.
+        if file.is_none() && self.end > 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "log segment {} vanished with {} bytes unread",
+                    self.segment, self.end
+                ),
+            ));
+        }
+        Ok(file)
     }
 
     /// The position a later page resumes from.

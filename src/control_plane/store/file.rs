@@ -339,10 +339,8 @@ impl ControlPlaneStore for FileControlPlaneStore {
         filter.validate()?;
         let log = self.audit.path();
         let at = pager::position(&log, filter.cursor.map(|c| (c.offset, c.segment)))?;
-        let opened = match at.segment {
-            Some(seq) => pager::open_segment(&log, seq, || {})?,
-            None => pager::open_segment(&at.file, 0, || {})?,
-        };
+        // A resolved position always names its segment.
+        let opened = pager::open_segment(&log, at.segment.unwrap_or(0), || {})?;
         let Some(file) = opened else {
             // Bytes the cursor still names are under neither the active nor
             // the sealed name: refuse, rather than page past records unread.
@@ -371,8 +369,6 @@ impl ControlPlaneStore for FileControlPlaneStore {
         // an over-cap line already reported: the line is skipped, not re-read.
         let len = file.metadata()?.len();
         let continuation = continues_a_skipped_line(&file, at.end, len)?;
-        // The one byte that probe reads, when it reads one.
-        let window_len = window_len + u64::from(at.end > 0 && at.end < len);
         let pager::Tail::Lines {
             start: body_start, ..
         } = tail

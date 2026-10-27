@@ -62,7 +62,7 @@ const MAX_AUDIT_SCAN_RECORDS: usize = 50_000;
 /// [`ControlPlaneStore::read_audit`] call, regardless of the scan budget. The
 /// scan is a reverse tail window, so this bounds the work of one page even when
 /// the log is gigabytes long. A line longer than this window is assembled up to
-/// the logger's record cap, so a page reads at most this plus one assembly window (a record at the logger's cap and the newline before it) and one byte.
+/// the logger's record cap, so a page reads at most this plus one assembly window (a record at the logger's cap and the newline before it).
 const MAX_AUDIT_SCAN_BYTES: u64 = 1 << 20;
 
 /// Errors returned by a [`ControlPlaneStore`].
@@ -167,7 +167,7 @@ pub trait ControlPlaneStore: Send + Sync {
     ///
     /// The page holds at most `filter.limit` matching events and the call
     /// examines at most `filter.scan_budget` records (and, on a file backend, at
-    /// most [`MAX_AUDIT_SCAN_BYTES`] bytes plus one assembly window (a record at the logger's cap and the newline before it) and one byte). When the scan stops before the
+    /// most [`MAX_AUDIT_SCAN_BYTES`] bytes plus one assembly window (a record at the logger's cap and the newline before it)). When the scan stops before the
     /// start of the log — because the page filled or the budget ran out — the
     /// returned [`AuditPage::next_cursor`] resumes it, so a filter matching
     /// nothing costs one bounded page per call and is never silently truncated.

@@ -9,7 +9,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use super::rotation::MAX_RECORD_BYTES;
-use super::segments::{active_segment_seq, list_segments, sealed_path};
+use super::segments::{active_segment_seq, list_segments, sealed_path, segment_seq_in};
 
 /// Where a page starts reading: bytes below `end` in `file` are unread.
 pub(crate) struct Position {
@@ -133,7 +133,21 @@ pub(crate) fn open_segment(
     if path == log && sealed_now()? {
         return std::fs::File::open(sealed_path(log, seq)).map(Some);
     }
+    // Opened by the active name: it must hold `seq`. Retention can delete a
+    // sealed segment after a cursor into it was resolved, and the active file
+    // then holds a later segment, whose bytes are not the ones asked for.
+    if path == log && active_seq_of(&file, log)? != seq {
+        return Ok(None);
+    }
     Ok(Some(file))
+}
+
+/// The segment the open active file holds, read from that descriptor by the
+/// same rule as [`active_segment_seq`]: its open record, or for a log written
+/// before open records, the newest sealed segment plus one.
+fn active_seq_of(file: &std::fs::File, log: &Path) -> io::Result<u64> {
+    let after = list_segments(log)?.last().map_or(0, |s| s.seq + 1);
+    segment_seq_in(file, after)
 }
 
 /// [`read_window`] on a file already open. A reader that holds the handle
