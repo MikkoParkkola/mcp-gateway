@@ -150,7 +150,9 @@ impl MetaMcp {
     /// entry, so the synchronous readers after it read a rotated or revoked
     /// grant's slot as cold, never as the caller's. A revoked caller's entry
     /// becomes `NoView` even over a stored read's running cold lease
-    /// (MIK-8392 d1 F9): intended, the revocation is the newer fact.
+    /// (MIK-8392 d1 F9): intended, the revocation is the newer fact. A busy
+    /// custody is not a revocation: it leaves a running cold lease standing,
+    /// so that lease's winner still publishes (MIK-8962).
     pub(crate) async fn revalidate_caller_slots(&self, caller: CallerProof<'_>) {
         for backend in self
             .backends
@@ -166,9 +168,13 @@ impl MetaMcp {
             // R3.7: a caller with no view lacks the backend on every listing
             // after this entry. One decision, `has_no_view_for`; a caller with
             // no principal at all is read synchronously by `listing_view`.
-            if self.has_no_view_for(&backend, caller).await {
-                backend.record_no_view(&id);
-                continue;
+            match self.has_no_view_for_classified(&backend, caller).await {
+                Ok(false) => {}
+                Err(_) if backend.cold_lease_remaining(&id).is_some() => continue,
+                Ok(true) | Err(_) => {
+                    backend.record_no_view(&id);
+                    continue;
+                }
             }
             if backend.caller_has_no_view(&id) {
                 backend.forget_caller_principal(&id);
