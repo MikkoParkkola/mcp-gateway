@@ -2,7 +2,9 @@
 src/backend/package_cache.rs	retire_now	helper:create_new_private	1	helper	calls the crate's create_new_private
 src/capability/executor/cli_run.rs	create	helper:create_dir_private	1	helper	calls the crate's create_dir_private
 src/capability/executor/save_file.rs	create_new	open-create	1	no-secret	user-fetched content, saved where the user directs; inherits that folder's access like any file the user saves; not a gateway credential
+src/capability/file_writer.rs	write	helper:write_atomic	1	helper	calls the crate's write_atomic
 src/capability/openapi/generated.rs	write_to_file	fs-write	1	no-secret	generated capability YAML; public
+src/capability/pin_file.rs	pin_file_until	helper:write_atomic	1	helper	calls the crate's write_atomic
 src/chains/checkpoint.rs	append	open-create	1	no-secret	chain checkpoints; not a trust decision
 src/commands/mod.rs	write_init_files	fs-write	1	no-secret	starter sample capability files; public (the config goes through the config writer)
 src/commands/protocol_import.rs	apply_plan_to_directory	helper:write_atomic	2	helper	calls the crate's write_atomic
@@ -71,3 +73,15 @@ src/validator/cli_handler.rs	run_validate_command	fs-write	1	no-secret	validatio
 src/commands/upgrade.rs	backup_config	helper:copy_keeping_access	1	helper	config backup keeps the config's access
 src/commands/config_export/mod.rs	create_backup	helper:copy_keeping_access	1	helper	config backup keeps the config's access
 src/config_persistence_atomic.rs	copy_keeping_access	fs-copy	1	helper	unix branch of the backup helper; fs::copy keeps the mode
+src/config_persistence_journal.rs	begin	helper:create_new_private	1	helper	calls the crate's create_new_private
+src/config_persistence_journal.rs	mark_all_renamed	helper:write_atomic	1	helper	calls the crate's write_atomic
+src/config_persistence_journal.rs	recover	helper:write_atomic	1	helper	calls the crate's write_atomic
+src/config_persistence_journal.rs	stage_original	helper:create_new_private	1	helper	calls the crate's create_new_private
+src/config_persistence_lock.rs	no_writer_possible	helper:create_new_private	1	helper	calls the crate's create_new_private
+src/config_reload/replace.rs	commit	helper:write_atomic	1	helper	calls the crate's write_atomic
+src/counters/persist.rs	write	helper:write_atomic	1	helper	calls the crate's write_atomic
+src/fs_lock_windows.rs	sidecar	helper:create_file_private	2	helper	calls the crate's create_file_private
+src/preview_sandbox/linux/mounts.rs	bind_device	fs-write	1	no-secret	empty mount-point file inside the preview sandbox's own root; Linux only; holds no content
+src/preview_sandbox/linux/mounts.rs	bind_read_only	fs-write	1	no-secret	empty mount-point file inside the preview sandbox's own root; Linux only; holds no content
+src/preview_sandbox/linux/mounts.rs	build_root	fs-write	1	no-secret	empty placeholder file inside the preview sandbox's own root; Linux only; holds no content
+src/transport/stdio_cache.rs	writable	open-create	1	no-secret	one-byte write probe in a runner cache directory, removed at once
