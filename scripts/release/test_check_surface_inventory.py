@@ -78,6 +78,22 @@ def test_wrong_file_fails() -> None:
     assert any("is defined in src/b.rs" in e for e in errors), errors
 
 
+def test_route_row_cites_its_constant() -> None:
+    doc = """## Surface: routes
+| Item | Class | Reason | Migration | Defined at |
+|---|---|---|---|---|
+| `/h` | KEEP | probes | - | src/gateway/routes.rs:HEALTH |
+"""
+    routes = {"routes": [inv.Entry("/h", inv.ROUTES_FILE, 7, "HEALTH")]}
+    filler = {k: v for k, v in FILLER.items() if k != "routes"}
+    rows = FILLER_ROWS.replace("## Surface: routes\n| Item | Class | Reason | Migration | Defined at |\n|---|---|---|---|---|\n| `x-routes` | KEEP | filler | - | src/x.rs:1 |\n", "")
+    run = lambda d: inv.check(DOC + d + rows, {**filler, **EXTRACTED, **routes})
+    assert run(doc) == [], run(doc)
+    for cite in ("src/gateway/routes.rs:7", "src/gateway/routes.rs:NOT_A_ROUTE", "src/gateway/routes.rs"):
+        errors = run(doc.replace("src/gateway/routes.rs:HEALTH", cite))
+        assert any(f"'/h' cites {cite!r}, want src/gateway/routes.rs:HEALTH" in e for e in errors), (cite, errors)
+
+
 def test_duplicate_row_fails() -> None:
     dup = DOC.replace("| `B` |", "| `A` | KEEP | x | - | src/a.rs:1 |\n| `B` |")
     assert any("listed twice" in e for e in check(dup)), check(dup)
