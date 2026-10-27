@@ -36,7 +36,7 @@ impl MetaMcp {
 
     /// The public provenance signer, when one is installed: Activity signs
     /// its export manifests with the same key.
-    #[cfg(any(test, feature = "webui"))]
+    #[cfg(feature = "webui")]
     pub(crate) fn public_provenance_signer(
         &self,
     ) -> Option<Arc<crate::trust::provenance_public::ProvenancePublicSigner>> {

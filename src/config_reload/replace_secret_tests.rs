@@ -37,9 +37,12 @@ fn step(dir: &Path, store: Arc<dyn SecretStore + Send + Sync>) -> SecretStep {
     }
 }
 
-/// `NEXT`, with backend `b`'s env naming the first reference.
+/// `NEXT`, with backend `b`'s env naming the first reference. Single-quoted:
+/// a Windows reference holds backslashes, which a double-quoted YAML scalar
+/// reads as escapes.
 fn with_ref(refs: &[String]) -> Vec<u8> {
-    format!("{NEXT}    env:\n      K: \"{}\"\n", refs[0]).into_bytes()
+    let quoted = refs[0].replace('\'', "''");
+    format!("{NEXT}    env:\n      K: '{quoted}'\n").into_bytes()
 }
 
 /// A replacement of `START` that writes `compute`'s bytes and saves one
@@ -80,7 +83,7 @@ async fn a_save_that_stands_keeps_its_entries_and_writes_only_references() {
     .expect("the save stands");
 
     let written = read(&path);
-    assert!(written.contains("K: \""), "{written}");
+    assert!(written.contains("K: '"), "{written}");
     assert!(
         !written.contains(std::str::from_utf8(VALUE).unwrap()),
         "the value never reaches gateway.yaml"

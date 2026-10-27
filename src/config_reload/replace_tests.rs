@@ -3,14 +3,17 @@
 //! The shared byte writer: gateway.yaml's exact bytes under the config lock
 //! pair, then one reload, and the old file back whenever that reload refuses.
 
-use std::{path::Path, path::PathBuf, sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
+
+#[cfg(unix)] // only the symlink tests read it
+use std::path::PathBuf;
 
 use super::reload_context::replace::{
     Expected, FileRevision, Replace, ReplaceError, Replaced, replace_detached,
 };
-use super::replace_test_support::{
-    NEXT, START, WAIT, context, names, read, running_has_b, setup, to,
-};
+#[cfg(unix)]
+use super::replace_test_support::context;
+use super::replace_test_support::{NEXT, START, WAIT, names, read, running_has_b, setup, to};
 use super::*;
 use crate::config::Config;
 use crate::fs_lock::ExclusiveFileLock;
@@ -639,8 +642,8 @@ async fn repointed_mid_reload(
     std::fs::remove_file(link).expect("unlink");
     std::os::unix::fs::symlink(dir.join("other.yaml"), link).expect("re-point");
     pause.release.notify_one();
-    let applied = tokio::time::timeout(BOUND, reload).await.expect("ends");
-    assert_eq!(applied.expect("reload task"), applies, "applies");
+    let outcome = tokio::time::timeout(BOUND, reload).await.expect("ends");
+    assert_eq!(outcome.expect("reload task"), applies, "applies");
     let dir = crate::identity_grants::journal::resolved(dir);
     LOADED
         .lock()
