@@ -215,7 +215,8 @@ fn a_web_ui_write_after_a_concurrent_removal_is_refused() {
         std::time::Instant::now(),
         |_| {},
     )
-    .expect("config lock");
+    .expect("config lock")
+    .held;
     let result = write_config_with(&path, &stale, CommentLoss::Refuse, &held);
     assert!(
         matches!(result, Err(Unwritten::CommentLoss(_))),
