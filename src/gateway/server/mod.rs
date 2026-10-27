@@ -23,6 +23,8 @@ mod cost_restart_tests;
 mod cost_save_stamp_tests;
 mod events_wiring;
 #[cfg(test)]
+pub(crate) use events_wiring::listener_mint_for_test;
+#[cfg(test)]
 mod gh475_budget_decides_tests;
 mod identity_grants;
 #[cfg(all(test, feature = "firewall"))]

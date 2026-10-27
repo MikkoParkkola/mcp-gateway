@@ -85,6 +85,12 @@ pub(super) fn install(
 /// The events hub's way to mint a per-user listener's credential.
 struct ListenerMint(std::sync::Weak<MetaMcp>);
 
+/// The listener mint the hub is given, for a row that drives it directly.
+#[cfg(test)]
+pub(crate) fn listener_mint_for_test(meta: &Arc<MetaMcp>) -> Arc<dyn crate::events::ListenerMint> {
+    Arc::new(ListenerMint(Arc::downgrade(meta)))
+}
+
 #[async_trait::async_trait]
 impl crate::events::ListenerMint for ListenerMint {
     async fn mint(
