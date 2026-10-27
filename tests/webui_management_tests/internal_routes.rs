@@ -330,6 +330,16 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 200],
     ),
+    // src/gateway/ui/refusals.rs:24 (refusals; admin-only read, the codes the
+    // design requires: the auth layer refuses an unauthenticated caller, the
+    // handler refuses any non-admin, an admin reads the list)
+    row(
+        "/ui/api/refusals",
+        Method::GET,
+        "/ui/api/refusals",
+        Payload::None,
+        [401, 403, 403, 200],
+    ),
     // src/gateway/ui/mod.rs:520 (config)
     row(
         "/ui/api/config",
