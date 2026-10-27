@@ -61,6 +61,10 @@ pub struct AddBackendRequest {
     /// Registry entry to add under `name` (the dashboard's registry mode). When
     /// absent, `name` itself is looked up in the registry.
     pub registry: Option<String>,
+    /// The only tools the backend offers (`backends.<name>.allowed_tools`).
+    /// Absent: every tool.
+    #[serde(default)]
+    pub allowed_tools: Option<Vec<String>>,
 }
 
 /// Request body for `PATCH /ui/api/backends/:name`.
@@ -82,6 +86,20 @@ pub struct UpdateBackendRequest {
     /// stop — without an explicit clear the setting would be impossible to turn
     /// off from the panel once enabled.
     pub stop_when_idle_for_secs: Option<u64>,
+    /// `allowed_tools`: absent keeps the current list, `null` removes it
+    /// (every tool), a list replaces it.
+    #[serde(default, deserialize_with = "present")]
+    pub allowed_tools: Option<Option<Vec<String>>>,
+}
+
+/// A key that is present, `null` included, as `Some`; serde's default keeps
+/// an absent key `None`, so a PATCH can tell "leave it" from "clear it".
+fn present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 /// Query parameters for `GET /ui/api/registry/search`.
@@ -220,6 +238,8 @@ async fn add_backend(
     // Load, check for duplicates, persist and reload - all inside one lock, so
     // a second request cannot build its change on the pre-edit config.
     let name = req.name.clone();
+    let allowed_tools = req.allowed_tools;
+    let selected = allowed_tools.clone();
     let mutation = mutate_config_and_reload_detached(
         config_path.clone(),
         state.meta_mcp.reload_context(),
@@ -227,6 +247,9 @@ async fn add_backend(
         move |config| {
             add_backend_config(config, &name, resolved)
                 .map(|notes| {
+                    if let Some(backend) = config.backends.get_mut(&name) {
+                        backend.allowed_tools = allowed_tools;
+                    }
                     // Whether it went in enabled: notes alone do not say, an
                     // OAuth login note comes with an enabled backend.
                     let enabled = config.backends.get(&name).is_some_and(|b| b.enabled);
@@ -248,7 +271,7 @@ async fn add_backend(
     // The reload registered it; listeners hear of it once its tools are
     // listed, through the change drain (F24, `MIK-8127`).
 
-    (
+    let mut response = (
         StatusCode::CREATED,
         Json(json!({
             "status": "created",
@@ -258,7 +281,11 @@ async fn add_backend(
             "enabled": enabled,
         })),
     )
-        .into_response()
+        .into_response();
+    if selected.is_some() {
+        attach_selection(&mut response, &req.name, None, selected.as_deref());
+    }
+    response
 }
 
 /// `DELETE /ui/api/backends/:name` — remove a backend.
@@ -407,6 +434,7 @@ async fn update_backend(
         description,
         env,
         enabled,
+        allowed_tools,
     } = req;
 
     // Validate: only one of command/url may be specified
@@ -463,6 +491,12 @@ async fn update_backend(
                     stop_when_idle_for,
                 },
             )
+            .map(|()| {
+                let backend = config.backends.get_mut(&name)?;
+                let after = allowed_tools?;
+                let before = std::mem::replace(&mut backend.allowed_tools, after.clone());
+                Some((before, after))
+            })
             .map_err(|message| {
                 // Surface the refusal verbatim. An operator setting "stop when idle" on a
                 // backend the gateway does not start needs to be told why, not silently
@@ -474,14 +508,38 @@ async fn update_backend(
     .await;
 
     let reload = match mutation {
-        Ok(ConfigMutation::Applied((), reload)) => reload,
+        Ok(ConfigMutation::Applied(selection, reload)) => (selection, reload),
         Ok(ConfigMutation::Rejected((code, message))) => {
             return flat_error(code, message).into_response();
         }
         Err(e) => return unwritten(e),
     };
+    let (selection, reload) = reload;
 
-    Json(json!({"status": "updated", "name": updated, "reload": reload})).into_response()
+    let mut response =
+        Json(json!({"status": "updated", "name": updated, "reload": reload})).into_response();
+    if let Some((before, after)) = selection {
+        attach_selection(&mut response, &updated, before.as_deref(), after.as_deref());
+    }
+    response
+}
+
+/// Record a change of `name`'s `allowed_tools` on its `admin_action` record:
+/// the backend and the list before and after (`null`: every tool).
+fn attach_selection(
+    response: &mut axum::response::Response,
+    name: &str,
+    before: Option<&[String]>,
+    after: Option<&[String]>,
+) {
+    let mut detail = serde_json::Map::new();
+    detail.insert(
+        "allowed_tools".into(),
+        json!({"backend": name, "before": before, "after": after}),
+    );
+    response
+        .extensions_mut()
+        .insert(super::admin_audit::AuditDetail(detail));
 }
 
 /// An add that `add_backend` refused: 422 for a secret reference that does

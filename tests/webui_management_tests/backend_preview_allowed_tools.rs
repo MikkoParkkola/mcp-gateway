@@ -261,3 +261,80 @@ async fn a_preview_offers_no_invalid_name_for_selection() {
         assert_eq!(tool["selectable"], selectable, "{tool}");
     }
 }
+
+/// Every change of a selection, on add and on PATCH (a list and a clear),
+/// is on that request's `admin_action` record with the list before and
+/// after; request bodies are otherwise never logged.
+#[tokio::test]
+async fn a_selection_change_is_on_its_audit_record() {
+    use mcp_gateway::security::{TransparencyLogConfig, TransparencyLogger};
+    let url = stub(Arc::default()).await;
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("gateway.yaml");
+    let audit = dir.path().join("audit.jsonl");
+    let config = mcp_gateway::config::Config::default();
+    write_owner_only(&path, crate::yaml::to_string(&config).unwrap()).unwrap();
+    let (mut state, _, _store) = make_app_state_with_reload(config, None, path.clone()).await;
+    let log = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+        enabled: true,
+        path: audit.to_string_lossy().into_owned(),
+        key_id: "sel".to_string(),
+        ..TransparencyLogConfig::default()
+    }))
+    .expect("open log");
+    Arc::get_mut(&mut state).expect("unique").transparency_log = Some(Arc::new(log));
+    let router = create_router(state);
+    let send = |method: Method, uri: &'static str, body: Value| {
+        send_json(&router, method, uri, Some(body))
+    };
+    let (status, _) = send(
+        Method::POST,
+        "/ui/api/backends",
+        json!({"name": "sel", "url": url, "allowed_tools": ["read_a"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    send(
+        Method::PATCH,
+        "/ui/api/backends/sel",
+        json!({"allowed_tools": ["read_a", "write_b"]}),
+    )
+    .await;
+    send(
+        Method::PATCH,
+        "/ui/api/backends/sel",
+        json!({"allowed_tools": null}),
+    )
+    .await;
+    send(
+        Method::PATCH,
+        "/ui/api/backends/sel",
+        json!({"description": "unrelated"}),
+    )
+    .await;
+    let records: Vec<Value> = std::fs::read_to_string(&audit)
+        .unwrap()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect();
+    // Wherever the record's envelope nests the fields.
+    fn find(value: &Value) -> Option<&Value> {
+        match value {
+            Value::Object(map) => map
+                .get("allowed_tools")
+                .or_else(|| map.values().find_map(find)),
+            Value::Array(items) => items.iter().find_map(find),
+            _ => None,
+        }
+    }
+    let changes: Vec<Value> = records.iter().filter_map(find).cloned().collect();
+    assert_eq!(
+        changes,
+        [
+            json!({"backend": "sel", "before": null, "after": ["read_a"]}),
+            json!({"backend": "sel", "before": ["read_a"], "after": ["read_a", "write_b"]}),
+            json!({"backend": "sel", "before": ["read_a", "write_b"], "after": null}),
+        ],
+        "{records:?}"
+    );
+}

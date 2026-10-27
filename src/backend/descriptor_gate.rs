@@ -300,6 +300,12 @@ impl Backend {
         _identity_key: Option<&str>,
         tool: &str,
     ) -> Option<String> {
+        if self.is_unselected(tool) {
+            return Some(format!(
+                "tool `{tool}` on server `{}` is not in the server's allowed_tools",
+                self.name
+            ));
+        }
         if self.is_withheld_name(tool) {
             return Some(format!(
                 "tool `{tool}` is withheld: its description failed the tool-poisoning \
@@ -346,20 +352,12 @@ impl Backend {
             };
         }
         let blocked = self.descriptor_gate.blocked.read();
-        if blocked.is_empty()
-            || !tools
-                .iter()
-                .any(|t| blocked.contains_key(&name_key(&t.name)))
-        {
+        let out =
+            |t: &Tool| blocked.contains_key(&name_key(&t.name)) || self.is_unselected(&t.name);
+        if (blocked.is_empty() && self.config.allowed_tools.is_none()) || !tools.iter().any(out) {
             return tools;
         }
-        Arc::new(
-            tools
-                .iter()
-                .filter(|t| !blocked.contains_key(&name_key(&t.name)))
-                .cloned()
-                .collect(),
-        )
+        Arc::new(tools.iter().filter(|t| !out(t)).cloned().collect())
     }
 
     /// Whether every tool in `tools` is blocked, decided from one snapshot of
@@ -371,12 +369,23 @@ impl Backend {
         let blocked = self.descriptor_gate.blocked.read();
         tools
             .iter()
-            .all(|t| blocked.contains_key(&name_key(&t.name)))
+            .all(|t| blocked.contains_key(&name_key(&t.name)) || self.is_unselected(&t.name))
     }
 
     /// Whether a served list may carry `tool`.
     pub(crate) fn is_blocked_tool(&self, tool: &str) -> bool {
-        self.gate_saturated() || self.is_withheld_name(tool)
+        self.gate_saturated() || self.is_unselected(tool) || self.is_withheld_name(tool)
+    }
+
+    /// Whether this backend's `allowed_tools` leaves `tool` out. One of the
+    /// three tool scopes, all of which must permit a call (the API key's
+    /// lists, this one, the global `tool_policy`); checked with the
+    /// descriptor gate, so every serve and call path that asks the gate asks
+    /// this too. Judged when a call is admitted, like the other scopes.
+    pub(crate) fn is_unselected(&self, tool: &str) -> bool {
+        self.config.allowed_tools.as_ref().is_some_and(|patterns| {
+            !crate::config::tool_pattern_matches(patterns, tool, &format!("{}:{tool}", self.name))
+        })
     }
 
     /// Whether `tool` is in the blocked-name map. The map is keyed by digest;

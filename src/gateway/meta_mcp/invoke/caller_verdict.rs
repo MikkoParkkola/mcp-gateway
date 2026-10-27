@@ -504,7 +504,9 @@ impl MetaMcp {
         let (recorded, judgement) = match verdict? {
             CatalogueVerdict::Offers => (Some(Visibility::Visible), SlotJudgement::Offered),
             CatalogueVerdict::Withholds => {
-                let reason = if backend.is_blocked_tool(tool) {
+                let reason = if backend.is_unselected(tool) {
+                    Withholding::Unselected
+                } else if backend.is_blocked_tool(tool) {
                     Withholding::Descriptor
                 } else {
                     Withholding::Schema
