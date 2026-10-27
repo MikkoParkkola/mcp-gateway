@@ -26,8 +26,9 @@ use serde_json::json;
 
 use super::{
     backend_ops::{
-        BackendUpdate, add_backend as add_backend_config, remove_backend as remove_backend_config,
-        resolve_backend, update_backend as update_backend_config,
+        BackendUpdate, UNRESOLVED_SECRETS, add_backend as add_backend_config,
+        remove_backend as remove_backend_config, resolve_backend,
+        update_backend as update_backend_config,
     },
     errors::{admin_auth_required, config_path_unavailable, flat_error},
     is_admin,
@@ -231,12 +232,7 @@ async fn add_backend(
                     let enabled = config.backends.get(&name).is_some_and(|b| b.enabled);
                     (notes, enabled)
                 })
-                .map_err(|_| {
-                    (
-                        StatusCode::CONFLICT,
-                        format!("Backend '{name}' already exists"),
-                    )
-                })
+                .map_err(|message| add_refusal(&name, message))
         },
     )
     .await;
@@ -471,12 +467,7 @@ async fn update_backend(
                 // Surface the refusal verbatim. An operator setting "stop when idle" on a
                 // backend the gateway does not start needs to be told why, not silently
                 // ignored - being silently ignored is what this whole change corrects.
-                let code = if message.contains("not found") {
-                    StatusCode::NOT_FOUND
-                } else {
-                    StatusCode::BAD_REQUEST
-                };
-                (code, message)
+                (update_refusal_status(&message), message)
             })
         },
     )
@@ -491,6 +482,33 @@ async fn update_backend(
     };
 
     Json(json!({"status": "updated", "name": updated, "reload": reload})).into_response()
+}
+
+/// An add that `add_backend` refused: 422 for a secret reference that does
+/// not resolve (ADR-028), otherwise the duplicate's 409.
+fn add_refusal(name: &str, message: String) -> (StatusCode, String) {
+    if message.contains(UNRESOLVED_SECRETS) {
+        (StatusCode::UNPROCESSABLE_ENTITY, message)
+    } else {
+        (
+            StatusCode::CONFLICT,
+            format!("Backend '{name}' already exists"),
+        )
+    }
+}
+
+/// An update that `update_backend` refused: 404 for a missing backend, 422
+/// for a secret reference that does not resolve (ADR-028), else 400.
+fn update_refusal_status(message: &str) -> StatusCode {
+    // The marker first: an unresolved `env:` names a missing env file in its
+    // hint, which says "not found".
+    if message.contains(UNRESOLVED_SECRETS) {
+        StatusCode::UNPROCESSABLE_ENTITY
+    } else if message.contains("not found") {
+        StatusCode::NOT_FOUND
+    } else {
+        StatusCode::BAD_REQUEST
+    }
 }
 
 /// The answer to a backend write that did not happen.
@@ -559,7 +577,7 @@ async fn search_registry(
 ///
 /// Allowed: ASCII alphanumerics, hyphens, underscores, dots.
 /// Max length: 128 characters.
-fn validate_backend_name(name: &str) -> Result<(), String> {
+pub(super) fn validate_backend_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("Backend name must not be empty".to_string());
     }
@@ -584,6 +602,40 @@ fn validate_backend_name(name: &str) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::gateway::ui::backend_ops::resolve_parts;
+
+    // ── refusal codes (ADR-028) ───────────────────────────────
+
+    #[test]
+    fn b3i_an_unresolved_secret_is_422_on_add_and_patch() {
+        let message = format!("Backend 'x' {UNRESOLVED_SECRETS}: backends.x.env.K");
+        assert_eq!(
+            add_refusal("x", message.clone()).0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(
+            update_refusal_status(&message),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        // A missing env file's hint says "not found"; it is still a 422.
+        let hinted = format!("{message} (env file /x/.env not found)");
+        assert_eq!(
+            update_refusal_status(&hinted),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        // The other refusals keep their codes.
+        assert_eq!(
+            add_refusal("x", "Backend 'x' already exists. Remove it first.".into()).0,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            update_refusal_status("Backend 'x' not found."),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            update_refusal_status("stop when idle refused"),
+            StatusCode::BAD_REQUEST
+        );
+    }
 
     // ── validate_backend_name ──────────────────────────────────────────────────
 

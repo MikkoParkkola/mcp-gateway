@@ -573,3 +573,80 @@ fn spend_restored_on_an_unreadable_clock_counts_once_the_clock_reads() {
     assert!((snap.tool_overflow_usd - 0.5).abs() < 1e-9, "{snap:?}");
     assert!((snap.key_overflow_usd - 0.125).abs() < 1e-9, "{snap:?}");
 }
+
+/// A damaged or hand-edited costs.json restores nothing for a value no run
+/// could have saved, rather than saturating into a cap that refuses all day.
+#[test]
+fn a_saved_value_out_of_range_restores_nothing() {
+    use super::super::persistence::{PersistedCosts, ToolTotal};
+    let saved_at = 1_791_500_000;
+    let mut saved = PersistedCosts {
+        saved_at,
+        tool_overflow_usd: f64::INFINITY,
+        key_overflow_usd: 1e300,
+        ..PersistedCosts::default()
+    };
+    for (tool, usd) in [
+        ("neg", -1.0),
+        ("nan", f64::NAN),
+        ("inf", f64::INFINITY),
+        ("huge", 1e15),
+        ("ok", 0.25),
+        ("large", 1e10),
+    ] {
+        let total = ToolTotal {
+            call_count: 1,
+            total_cost_usd: usd,
+            avg_cost_usd: usd,
+        };
+        saved.tool_totals.insert(tool.to_owned(), total);
+    }
+    saved.key_totals.insert("k".to_owned(), 1e300);
+    let _same_day = crate::clock::test_clock::at_secs(saved_at + 60);
+    let e = enforcer_with(true, Some(10.0), &[], &[], &[]);
+    e.restore(&saved);
+    let snap = e.snapshot();
+    // 1e10 USD is large but a micro-USD count holds it, so it restores.
+    assert!(
+        (snap.global_daily_usd - (0.25 + 1e10)).abs() < 1e-3,
+        "{snap:?}"
+    );
+    for tool in ["neg", "nan", "inf", "huge"] {
+        assert!(!snap.tool_daily.contains_key(tool), "{tool}: {snap:?}");
+    }
+    assert!(!snap.key_daily.contains_key("k"), "{snap:?}");
+    assert!(snap.tool_overflow_usd.abs() < 1e-9, "{snap:?}");
+    assert!(snap.key_overflow_usd.abs() < 1e-9, "{snap:?}");
+}
+
+/// A counter that saturated saves as `usd(u64::MAX)`; that value restores
+/// saturated, and the next value above it is out of range.
+#[test]
+fn a_saturated_saved_total_restores_saturated() {
+    use super::super::persistence::{PersistedCosts, ToolTotal};
+    let saved_at = 1_791_500_000;
+    let mut saved = PersistedCosts {
+        saved_at,
+        ..PersistedCosts::default()
+    };
+    for (tool, total_usd) in [("max", usd(u64::MAX)), ("past", usd(u64::MAX).next_up())] {
+        let total = ToolTotal {
+            call_count: 1,
+            total_cost_usd: total_usd,
+            avg_cost_usd: total_usd,
+        };
+        saved.tool_totals.insert(tool.to_owned(), total);
+    }
+    let _same_day = crate::clock::test_clock::at_secs(saved_at + 60);
+    let e = enforcer_with(true, None, &[], &[], &[]);
+    e.restore(&saved);
+    let snap = e.snapshot();
+    let max = usd(u64::MAX).to_bits();
+    assert_eq!(
+        snap.tool_daily.get("max").map(|v| v.to_bits()),
+        Some(max),
+        "{snap:?}"
+    );
+    assert!(!snap.tool_daily.contains_key("past"), "{snap:?}");
+    assert_eq!(snap.global_daily_usd.to_bits(), max, "{snap:?}");
+}

@@ -180,6 +180,7 @@ pub(super) fn key(name: &str, backends: &[&str]) -> ApiKeyConfig {
         denied_tools: None,
         admin: false,
         kind: crate::config::ApiKeyKind::Shared,
+        ..Default::default()
     }
 }
 

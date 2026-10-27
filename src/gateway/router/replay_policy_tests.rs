@@ -139,6 +139,7 @@ async fn fixture_with(answer: Answer, passthrough: bool) -> Fixture {
             denied_tools: None,
             admin: false,
             kind: crate::config::ApiKeyKind::Shared,
+            ..Default::default()
         }],
         public_paths: vec!["/health".to_string()],
         ..AuthConfig::default()
