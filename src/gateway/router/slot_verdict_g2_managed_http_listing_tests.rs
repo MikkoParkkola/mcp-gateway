@@ -69,16 +69,19 @@ async fn a_cold_callers_first_tools_list_shows_its_own_schema_http() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn overlapping_listings_of_a_cold_caller_fill_once_http() {
     let fx = fixture().await;
+    // The fill is held open, so both listings are in flight together.
+    let bound = fill_bound(&fx, BACKEND);
+    fx.gateway.delay_lists_on(BACKEND, bound / 2);
     let (a, b) = tokio::join!(
         rpc(&fx, 1, "tools/list", json!({})),
         rpc(&fx, 2, "tools/list", json!({}))
     );
     for answer in [&a, &b] {
         assert!(
-            !surfaced_on(answer, BACKEND)
-                .into_iter()
-                .any(is_shared_schema),
-            "a listing showed the shared schema: {answer}"
+            surfaced_on(answer, BACKEND)
+                .iter()
+                .any(|t| !is_shared_schema(t)),
+            "a listing did not show the caller's own schema: {answer}"
         );
     }
     assert_eq!(
@@ -296,4 +299,46 @@ async fn a_fill_past_the_cold_backoff_still_publishes_http() {
         "the second listing did not show the 90 s fill: {second}"
     );
     assert_eq!(fx.gateway.lists_to(BACKEND), 1, "one fill");
+}
+
+/// A grant that rotates while another listing's lease is filling: the
+/// second listing, begun after the rotation, waits on that lease, but the
+/// view it published belongs to the old grant, so it is forgotten and the
+/// listing withholds the tool rather than serve the old grant's schema.
+#[tokio::test(start_paused = true)]
+async fn a_lease_filled_under_a_rotated_grant_is_not_served_http() {
+    let fx = Arc::new(fixture().await);
+    let bound = fill_bound(&fx, BACKEND);
+    fx.gateway.delay_lists_on(BACKEND, bound / 2);
+    let first = tokio::spawn({
+        let fx = Arc::clone(&fx);
+        async move { rpc(&fx, 1, "tools/list", json!({})).await }
+    });
+    tokio::time::sleep(bound / 4).await;
+    assert_eq!(
+        fx.gateway.lists_to(BACKEND),
+        1,
+        "premise: the old grant's fill is running"
+    );
+    fx.gateway.rotate_operator_grant().await;
+    let rotated = fx
+        .state
+        .meta_mcp
+        .account_strategies()
+        .managed_vault(Some("work-gmail"))
+        .expect("the managed vault")
+        .view_binding(crate::personal_accounts::identity::Principal::SoleOperator)
+        .await
+        .expect("premise: the rotated grant has a view");
+    assert_ne!(
+        rotated,
+        DirectAccountGateway::operator_binding(),
+        "premise: rotation selects a new slot"
+    );
+    let second = rpc(&fx, 2, "tools/list", json!({})).await;
+    assert!(
+        surfaced_on(&second, BACKEND).is_empty(),
+        "the old grant's schema was served after the rotation: {second}"
+    );
+    first.await.expect("the first listing");
 }
