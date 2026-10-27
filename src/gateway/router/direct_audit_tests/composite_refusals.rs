@@ -151,8 +151,9 @@ async fn a_single_tool_execute_ending_on_an_undeclared_argument_records_refused(
     assert_eq!(record["response_effect"], "refused", "{record}");
 }
 
-/// A chain whose step names a backend outside the key's scope is answered
-/// with that step withheld: the chain ends on the gateway's refusal.
+/// A chain whose step names a backend outside the key's scope is refused
+/// whole at the route stage, before any step runs: refused (a guard row; the
+/// step's own cell is pinned by the invalid-schema row below).
 #[tokio::test]
 async fn a_chain_ending_on_a_withheld_step_records_refused() {
     let fx = fixture(Setup {
@@ -186,6 +187,30 @@ async fn a_playbook_refused_before_any_step_records_refused() {
     assert!(
         body.to_string().contains("sealed requestState"),
         "premise: refused whole: {status} {body}"
+    );
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "premise: never sent");
+    let record = last_delivery(&fx);
+    assert_eq!(record["response_effect"], "refused", "{record}");
+}
+
+/// A chain whose one step names a tool withheld for its invalid schema is
+/// answered with that step absent, inside the step's own cell: the chain
+/// ends on the gateway's refusal.
+#[tokio::test]
+async fn a_chain_ending_on_a_step_withheld_for_its_schema_records_refused() {
+    let fx = fixture(Setup {
+        meta_mode: MetaMode::CodeMode,
+        extras: &[Extra::InvalidSchema],
+        ..Setup::default()
+    })
+    .await;
+    let chain = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+        "params": {"name": "gateway_execute",
+                   "arguments": {"chain": [{"tool": "alpha:t", "arguments": {}}]}}});
+    let (status, body) = post_to(&fx, "/mcp", &chain.to_string(), &Caller::Anonymous).await;
+    assert!(
+        body.get("error").is_some() || body["result"]["isError"] == true,
+        "premise: the step was withheld: {status} {body}"
     );
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "premise: never sent");
     let record = last_delivery(&fx);
