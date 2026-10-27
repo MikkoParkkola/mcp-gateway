@@ -1391,15 +1391,20 @@ function renderDescribed(described, body, confirm, gen) {
 // current generation installs a listing.
 async function startServerPreview(body, confirm, gen, start) {
   document.getElementById('add-server-msg').textContent = '';
+  // One request at a time: a second Preview while this one runs would only
+  // meet "a preview is already running" and lose this listing.
+  const previewBtn = document.getElementById('preview-tools-btn');
   start.disabled = true;
+  previewBtn.disabled = true;
   let answer;
   try {
     answer = await postPreview({ ...body, confirm });
   } catch (e) {
-    if (gen === addPreviewGen) addPreviewError('Preview failed: ' + e.message);
+    if (gen === addPreviewGen) { previewBtn.disabled = false; addPreviewError('Preview failed: ' + e.message); }
     return;
   }
   if (gen !== addPreviewGen) return;
+  previewBtn.disabled = false;
   if (answer.status !== 200) {
     // A spent or expired confirmation cannot be retried: Preview again.
     return addPreviewError('Preview failed: ' + answer.error);

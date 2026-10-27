@@ -31,11 +31,13 @@ const TOOLS = [
 /**
  * Serve the real classic page with a mocked API. `tools`, `describe` and
  * `confirm` override the preview answers (a `confirm` hook that resolves to
- * anything but `true` falls through to the listing); the returned object records every
+ * anything but `true` falls through to the listing); `described` replaces the
+ * describe step's preview block and `listing` adds `preview` fields and
+ * `withheld_tools` to the listing; `seen.answered` counts confirmed answers; the returned object records every
  * request.
  */
-async function classicPage(page, { tools = TOOLS, describe, confirm } = {}) {
-  const seen = { adds: [], previews: [] };
+async function classicPage(page, { tools = TOOLS, describe, confirm, described = DESCRIBED, listing = {} } = {}) {
+  const seen = { adds: [], previews: [], answered: 0 };
   await page.route('**/ui/classic', (route) => route.fulfill({
     status: 200,
     headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache, no-store, must-revalidate' },
@@ -53,12 +55,14 @@ async function classicPage(page, { tools = TOOLS, describe, confirm } = {}) {
     if (path === '/ui/api/previews' && req.method() === 'POST') {
       const body = req.postDataJSON();
       seen.previews.push(body);
-      if (!body.confirm) return describe ? describe(json, body) : json(202, { confirm: 'tok-1', preview: DESCRIBED });
+      if (!body.confirm) return describe ? describe(json, body) : json(202, { confirm: 'tok-1', preview: described });
       if (confirm) {
         const answered = await confirm(json, body);
-        if (answered) return;
+        if (answered) { seen.answered++; return; }
       }
-      return json(200, { preview: { ...DESCRIBED, stopped: true, truncated: false, elapsed_ms: 5 }, tools, withheld_tools: [] });
+      await json(200, { preview: { ...described, stopped: true, truncated: false, elapsed_ms: 5, ...listing.preview }, tools, withheld_tools: listing.withheld_tools ?? [] });
+      seen.answered++;
+      return;
     }
     if (path === '/ui/api/backends' && req.method() === 'POST') {
       seen.adds.push(req.postDataJSON());
@@ -221,12 +225,71 @@ test('P10: a preview overtaken by Clear preview installs nothing when it answers
   await page.getByRole('button', { name: 'Start preview' }).click();
   await expect.poll(() => seen.previews.length).toBe(2);
   await page.getByRole('button', { name: 'Clear preview' }).click();
+  const late = page.waitForResponse((r) => r.url().endsWith('/ui/api/previews') && !!r.request().postDataJSON()?.confirm);
   release();
-  await page.waitForTimeout(300);
+  await late;
+  await expect.poll(() => seen.answered).toBe(1);
+  // Past the page's own handling of the late answer: two frames.
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   await expect(tick(page, 'read_a')).toHaveCount(0);
   await add(page);
   await expect.poll(() => seen.adds.length).toBe(1);
   expect(seen.adds[0]).not.toHaveProperty('allowed_tools');
+});
+
+test('P11: a cut-short listing refuses Add', async ({ page }) => {
+  const seen = await classicPage(page, { listing: { preview: { truncated: true } } });
+  await preview(page);
+  await expect(page.locator('#add-preview')).toContainText('The list is incomplete');
+  await add(page);
+  await expect(msg(page)).toContainText('The preview list is incomplete');
+  expect(seen.adds).toEqual([]);
+});
+
+test('P12: Cancel and reopen leaves no listing in force', async ({ page }) => {
+  const seen = await classicPage(page);
+  await preview(page);
+  await page.locator('#add-server-form').getByRole('button', { name: 'Cancel' }).click();
+  await page.getByRole('button', { name: '+ Add Server' }).click();
+  await expect(page.locator('#add-preview input[data-tool]')).toHaveCount(0);
+  await page.locator('#mode-custom').click();
+  await page.locator('#custom-name').fill('tools');
+  await page.locator('#custom-transport').selectOption('http');
+  await page.locator('#custom-url').fill(URL_SERVER);
+  await add(page);
+  await expect.poll(() => seen.adds.length).toBe(1);
+  expect(seen.adds[0]).not.toHaveProperty('allowed_tools');
+});
+
+test('P6b: markup in the describe step and in withheld tools renders as text', async ({ page }) => {
+  const hostile = '<img src=x onerror="window.__pwned=1">';
+  const quoted = 'q" onfocus="window.__pwned=1';
+  const described = {
+    ...DESCRIBED,
+    url: `https://tools.example.test/${hostile}`,
+    withheld: { ...DESCRIBED.withheld, env: [quoted], headers: [hostile] },
+  };
+  const listing = { withheld_tools: [{ name: hostile, issues: [quoted] }] };
+  await classicPage(page, { described, listing });
+  await page.getByRole('button', { name: 'Preview tools' }).click();
+  await expect(page.locator('#add-preview')).toContainText(`env ${quoted}`);
+  await page.getByRole('button', { name: 'Start preview' }).click();
+  await expect(page.locator('#add-preview')).toContainText(`Not offered: ${hostile} (${quoted})`);
+  await expect(page.locator('#add-preview img')).toHaveCount(0);
+  await expect(page.locator('#add-preview [onfocus], #add-preview [onerror]')).toHaveCount(0);
+  expect(await page.evaluate(() => window.__pwned)).toBeUndefined();
+});
+
+test('P13: Preview tools is off while a start runs, so the listing it brings is kept', async ({ page }) => {
+  let release;
+  const held = new Promise((r) => { release = r; });
+  await classicPage(page, { confirm: async () => { await held; return null; } });
+  await page.getByRole('button', { name: 'Preview tools' }).click();
+  await page.getByRole('button', { name: 'Start preview' }).click();
+  await expect(page.getByRole('button', { name: 'Preview tools' })).toBeDisabled();
+  release();
+  await expect(tick(page, 'read_a')).toBeChecked();
+  await expect(page.getByRole('button', { name: 'Preview tools' })).toBeEnabled();
 });
 
 test('P7: a refused preview shows the server’s reason, and Add still works without a selection', async ({ page }) => {
