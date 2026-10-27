@@ -778,3 +778,6 @@ mod owner;
 
 #[path = "worker_clock_tests.rs"]
 mod clock;
+
+#[path = "worker_obs_tests.rs"]
+mod obs;
