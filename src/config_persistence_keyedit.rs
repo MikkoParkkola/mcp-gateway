@@ -47,8 +47,6 @@ pub(crate) enum Change {
 pub(crate) enum ComputeRefusal {
     /// The edit cannot be proven in place: the caller offers a patch instead.
     Unprovable { reason: String },
-    /// The new bytes are wrong (a bad value).
-    Invalid(String),
     /// The template's slots and the save's secret values name different fields.
     SlotMismatch,
 }
@@ -61,14 +59,6 @@ pub(crate) struct Template {
 }
 
 impl Template {
-    /// Bytes with no slot: a save without secrets.
-    pub(crate) fn plain(bytes: Vec<u8>) -> Self {
-        Self {
-            bytes,
-            slots: Vec::new(),
-        }
-    }
-
     /// A template whose every slot range holds exactly its own field's
     /// placeholder, in order and disjoint; anything else is refused, so a
     /// slot can never be filled with another field's reference.
@@ -93,11 +83,6 @@ impl Template {
     /// The bytes as they stand, slots still holding their placeholders.
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.bytes
-    }
-
-    /// The fields this template has slots for, in file order.
-    pub(crate) fn slot_ids(&self) -> impl Iterator<Item = &SlotId> {
-        self.slots.iter().map(|(id, _)| id)
     }
 
     /// The bytes with each slot replaced by the reference made for its own

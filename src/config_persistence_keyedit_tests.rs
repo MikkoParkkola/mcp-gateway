@@ -262,9 +262,9 @@ fn crossed_slots_fail_the_meaning_proof() {
     assert!(!super::meaning_holds(TWO_SECRETS, &changes, &crossed));
 }
 
-/// Two slot ranges swapped: each range holds the other field's placeholder.
-/// With one shared placeholder this could not be told apart; with one per
-/// path the constructor refuses it.
+/// The ids swapped while the ranges stay in file order: each range holds
+/// the other field's placeholder. With one shared placeholder this could not
+/// be told apart; with one per path the constructor refuses it.
 #[test]
 fn crossed_slot_ranges_are_refused() {
     let text = "a: \"__mcpgw_slot_a__\"\nb: \"__mcpgw_slot_b__\"\n";
@@ -282,7 +282,7 @@ fn crossed_slot_ranges_are_refused() {
     assert!(straight.is_ok());
     let crossed = Template::checked(
         text.into(),
-        vec![(SlotId("a".into()), b), (SlotId("b".into()), a)],
+        vec![(SlotId("b".into()), a), (SlotId("a".into()), b)],
     );
     assert_eq!(crossed, Err(ComputeRefusal::SlotMismatch));
 }
