@@ -349,6 +349,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `backends.<name>.account` | KEEP | `None` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:99 |
 | `backends.<name>.allow_cleartext_credentials` | KEEP | `false` | per-backend security opt-out; stays explicit | - | src/config/backend_config.rs:83 |
 | `backends.<name>.allow_flagged_tools` | KEEP | `std::collections::BTreeMap::new()` | per-backend security opt-out; stays explicit | - | src/config/backend_config.rs:70 |
+| `backends.<name>.allowed_tools` | KEEP | `None` | which tools a backend offers, to every caller; the grammar of an API key's `allowed_tools` (exact name or trailing `prefix*`); unset offers every tool | - | src/config/backend_config.rs:76 |
 | `backends.<name>.chain_origins` | KEEP | `Vec::new()` | multi-user and provenance deployments (MULTI_USER.md) | - | src/config/backend_config.rs:104 |
 | `backends.<name>.chain_signer` | KEEP | `None` | multi-user and provenance deployments (MULTI_USER.md) | - | src/config/backend_config.rs:106 |
 | `backends.<name>.circuit_breaker` | REMOVE | — | retired in 4.0; never had an effect | a load error naming the key and `mcp-gateway upgrade`, which deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs); see upgrading.d/8044-2.md | src/config/strict_keys.rs:33 |
