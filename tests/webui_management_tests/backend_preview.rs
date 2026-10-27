@@ -15,6 +15,8 @@ use mcp_gateway::protocol::meta::MODERN_VERSIONS;
 
 use super::*;
 
+#[path = "backend_preview_allowed_tools.rs"]
+mod allowed_tools;
 #[path = "backend_preview_lifecycle.rs"]
 mod lifecycle;
 #[path = "backend_preview_tools_class.rs"]

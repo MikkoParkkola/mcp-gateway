@@ -195,6 +195,18 @@ impl Config {
                 Grammar::ToolPrefix(Role::Allow),
             )?;
         }
+        for (name, backend) in &self.backends {
+            if let Some(list) = &backend.allowed_tools {
+                let at = format!("backends.{name}.allowed_tools");
+                if list.is_empty() {
+                    return Err(Error::ConfigValidation(format!(
+                        "{at} is empty, so the backend would offer no tool. List the tools \
+                         it should offer, or remove the key to offer every tool."
+                    )));
+                }
+                refuse(&at, list, Grammar::ToolPrefix(Role::Allow))?;
+            }
+        }
         // The capability backend is a backend too: '*' is never in a name.
         let name = &self.capabilities.name;
         if name.contains('*') {

@@ -436,3 +436,7 @@ impl Backend {
         tools.retain(|tool| !self.is_blocked_tool(&tool.name));
     }
 }
+
+#[cfg(test)]
+#[path = "allowed_tools_tests.rs"]
+mod allowed_tools_tests;
