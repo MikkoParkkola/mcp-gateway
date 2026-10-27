@@ -158,20 +158,16 @@ impl DiscoveryCache {
         {
             return stale(&current);
         }
-        match tokio::time::timeout(SCAN_TIMEOUT, self.source.scan()).await {
-            Ok(scan) => {
-                let listing = Arc::new(self.project(scan));
-                *current = Cached {
-                    listing: Some(Arc::clone(&listing)),
-                    timed_out_at: None,
-                };
-                Ok((listing, false))
-            }
-            Err(_) => {
-                current.timed_out_at = Some(self.source.now());
-                stale(&current)
-            }
-        }
+        let Ok(scan) = tokio::time::timeout(SCAN_TIMEOUT, self.source.scan()).await else {
+            current.timed_out_at = Some(self.source.now());
+            return stale(&current);
+        };
+        let listing = Arc::new(self.project(scan));
+        *current = Cached {
+            listing: Some(Arc::clone(&listing)),
+            timed_out_at: None,
+        };
+        Ok((listing, false))
     }
 
     /// Reduce a scan to what may be cached, then drop the scan, values and
