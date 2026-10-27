@@ -72,11 +72,11 @@ EXAMPLES = {"linux": "int-b", "macos": "int", "windows": "int-b"}
 # Windows printed every test's output (`--show-output`) before sharding.
 OUTPUT = {"windows": ["--show-output"]}
 
-# MIK-8980: a test leaves nothing in the temp directory. The Linux shards run
+# A test leaves nothing in the temp directory. The Linux shards run
 # cargo with TMPDIR set to a fresh private directory and fail on any entry left
 # there that KNOWN_LEFTOVERS does not allow. The list holds only what a pending
 # fix removes, each as (pattern on the entry name, most allowed, why). It may
-# only shrink: the self-test holds every pattern to LEFTOVER_CEILING.
+# only shrink: the self-test holds each pattern and count to LEFTOVER_CEILING.
 TMP_GUARDED = {"linux"}
 _UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 KNOWN_LEFTOVERS: list[tuple[str, int, str]] = [
@@ -89,14 +89,16 @@ KNOWN_LEFTOVERS: list[tuple[str, int, str]] = [
      "identity_propagation::audit_fail_closed); hardened_signing_e2e and mik_7272_task_1_acs"),
 ]
 # Written out, not derived from the list above: a pattern added there and not
-# here fails the self-test, so the list can only lose entries.
-LEFTOVER_CEILING: frozenset[str] = frozenset({
-    "oauth_test_[a-z0-9_]+",
-    f"chain-(test|resume-test|cleanup)-{_UUID}",
-    "http_transport_tls_guard",
-    "stdio-tail-[0-9]+",
-    r"\.tmp[A-Za-z0-9]{6}",
-})
+# here, or a count raised past its ceiling, fails the self-test, so the list
+# can only lose entries. A leaked TempLog folder is named `audit-log-*` and
+# matches none of these.
+LEFTOVER_CEILING: dict[str, int] = {
+    "oauth_test_[a-z0-9_]+": 10,
+    f"chain-(test|resume-test|cleanup)-{_UUID}": 9,
+    "http_transport_tls_guard": 1,
+    "stdio-tail-[0-9]+": 1,
+    r"\.tmp[A-Za-z0-9]{6}": 3,
+}
 
 HEADER = re.compile(r"^\s*(Running|Doc-tests) ")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -251,7 +253,7 @@ def self_test() -> int:
     for os_kind, shards in SHARDS.items():
         for name, steps in shards.items():
             assert steps and all(floor > 0 for *_, floor in steps), (os_kind, name)
-    # MIK-8980: the TMPDIR guard. A planted test that leaks one file turns a
+    # The TMPDIR guard. A planted test that leaks one file turns a
     # guarded shard red on that file alone, and the same run without the leak
     # stays green. The fake cargo clears the shard's floor.
     fake = (sys.executable, "-c", (
@@ -270,7 +272,10 @@ def self_test() -> int:
     assert planted == ["left in TMPDIR: .tmpAbC123.hwm"], planted
     assert run_steps("linux", "lib-a", fake) == [], "the control run must stay green"
     assert unexpected(["a", "b"], [("[ab]", 1, "one allowed")]) == ["b"], "the count bounds a pattern"
-    assert all(p in LEFTOVER_CEILING for p, _, _ in KNOWN_LEFTOVERS), "KNOWN_LEFTOVERS may only shrink"
+    assert all(n <= LEFTOVER_CEILING.get(p, 0) for p, n, _ in KNOWN_LEFTOVERS), \
+        "KNOWN_LEFTOVERS may only shrink"
+    # A leaked TempLog folder is never one of the tolerated plain temp dirs.
+    assert unexpected(["audit-log-Ab12Cd", ".tmpAb12Cd"]) == ["audit-log-Ab12Cd"]
     print("shard_tests self-test: ok")
     return 0
 

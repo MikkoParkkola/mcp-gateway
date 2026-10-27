@@ -107,10 +107,11 @@ struct Gateway {
     auth: Arc<crate::gateway::auth::ResolvedAuthConfig>,
     seen: Seen,
     _store: tempfile::TempDir,
-    audit: [crate::security::transparency_log::temp::TempLog; 2],
     /// The route's own transparency log (the one the direct route writes its
     /// mint and refusal rows to), so a cell can fail its next append.
     route_log: Arc<TransparencyLogger>,
+    /// Last, so the logs drop after every field holding a logger.
+    audit: [crate::security::transparency_log::temp::TempLog; 2],
 }
 
 impl Gateway {

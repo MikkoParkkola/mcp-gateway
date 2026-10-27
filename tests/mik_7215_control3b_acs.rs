@@ -107,7 +107,10 @@ async fn app_state_with_log() -> (
     // The log lives in its own temp dir, returned first so the caller's
     // `let (_log_dir, ..)` drops it last: the log writes `.hwm` and `.lock`
     // beside itself, and the dir takes them with it.
-    let log_dir = tempfile::tempdir().expect("a private log directory");
+    let log_dir = tempfile::Builder::new()
+        .prefix("audit-log-")
+        .tempdir()
+        .expect("a private log directory");
     let path = log_dir.path().join("audit.jsonl");
     std::fs::File::create(&path).expect("the log file");
     let logger = Arc::new(
