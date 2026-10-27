@@ -167,6 +167,19 @@ fn queued_with(
     name: &str,
     edit: impl FnOnce(&mut crate::events::records::Subscription, &mut OutboxRecord),
 ) {
+    queued_stamped(hub, port, event_id, name, edit, |_, _| {});
+}
+
+/// [`queued_with`], then `stamp` sets the record from the stored row, as
+/// fan-out stamps it: admission hands the row its incarnation.
+fn queued_stamped(
+    hub: &EventsHub,
+    port: u16,
+    event_id: &str,
+    name: &str,
+    edit: impl FnOnce(&mut crate::events::records::Subscription, &mut OutboxRecord),
+    stamp: impl FnOnce(&crate::events::records::Subscription, &mut OutboxRecord),
+) {
     use crate::events::outbox::{Enqueued, OutboxCaps, OutboxState};
     use crate::events::records::Subscription;
     use crate::events::store::{Caps, TailPolicy};
@@ -241,17 +254,12 @@ fn queued_with(
         .admit(sub, true, caps, chrono::Duration::zero(), now, tail)
         .expect("io")
         .expect("admitted");
-    // Admission hands the row its incarnation; fan-out stamps the stored row,
-    // so a stamp taken before admission is brought up to it.
-    if let Some(observed) = record.observed.as_mut() {
-        observed.incarnation = hub
-            .store
-            .subscriptions()
-            .into_iter()
-            .find(|row| row.id == id)
-            .expect("stored")
-            .incarnation;
-    }
+    let stored = hub
+        .store
+        .subscriptions()
+        .into_iter()
+        .find(|row| row.id == id);
+    stamp(&stored.expect("stored"), &mut record);
     let caps = OutboxCaps {
         global: 10,
         per_subscription: 10,

@@ -93,16 +93,16 @@ impl ListenerMint for Fence {
 }
 
 /// `subject`'s row on the managed backend and one record for it, stamped
-/// as fan-out stamps an emission of a listener run fenced on `run`.
+/// as fan-out stamps an emission of a listener run fenced on `_run`.
 fn queued_for(
     hub: &EventsHub,
     config: &crate::config::Config,
     port: u16,
     subject: &str,
-    run: &str,
+    _run: &str,
 ) {
     let event_id = format!("evt_{subject}");
-    queued_with(hub, port, &event_id, NAME, |sub, record| {
+    let edit = |sub: &mut crate::events::records::Subscription, record: &mut OutboxRecord| {
         sub.id = format!("sub_{subject}");
         sub.principal = subject.into();
         sub.obs_basis = observe_subscriber(config, "managed", Some(&person(subject)))
@@ -117,18 +117,11 @@ fn queued_for(
         sub.observed_identity = Some(person(subject));
         record.subscription_id = sub.id.clone();
         record.backend = "managed".into();
-        record.observed = stamped(hub, sub, config, run);
+    };
+    // Fan-out's own stamp call (`offer`), on the stored row.
+    queued_stamped(hub, port, &event_id, NAME, edit, |row, record| {
+        record.observed = hub.observed_now(row, config).expect("observable");
     });
-}
-
-/// The stamp fan-out writes for an emission of a run fenced on `run`.
-fn stamped(
-    hub: &EventsHub,
-    sub: &crate::events::records::Subscription,
-    config: &crate::config::Config,
-    _run: &str,
-) -> Option<crate::events::outbox::ObservedUnder> {
-    hub.observed_now(sub, config).expect("observable")
 }
 
 /// Why `event_id` was buried; `None` while it is not.
