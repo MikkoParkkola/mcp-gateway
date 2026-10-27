@@ -18,6 +18,7 @@ use crate::{Error, Result};
 /// there is nothing to write or seal.
 pub(crate) async fn seal_open_slot() -> Result<()> {
     let Ok((logger, notes)) = GRANT_SLOT.try_with(|slot| {
+        // invariant: nothing panics while holding the slot lock, so it is never poisoned.
         let mut held = slot.notes.lock().expect("grant slot lock");
         slot.sealed.store(true, Ordering::SeqCst);
         (Arc::clone(&slot.logger), std::mem::take(&mut *held))
@@ -32,6 +33,7 @@ pub(crate) async fn seal_open_slot() -> Result<()> {
 
 /// Put `note` in `slot` unless it is sealed; `false` when sealed.
 pub(super) fn note_unless_sealed(slot: &Slot, note: &GrantNote) -> bool {
+    // invariant: nothing panics while holding the slot lock, so it is never poisoned.
     let mut notes = slot.notes.lock().expect("grant slot lock");
     if slot.sealed.load(Ordering::SeqCst) {
         return false;
