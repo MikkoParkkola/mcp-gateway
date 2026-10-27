@@ -51,12 +51,12 @@ fn identity() -> VerifiedIdentity {
 // leave no audit entry at all.
 #[tokio::test]
 async fn gateway_invoke_route_audits_mint_and_refuse() {
-    use tempfile::NamedTempFile;
+    use crate::security::transparency_log::temp::TempLog;
 
     use crate::security::TransparencyLogger;
     use crate::security::transparency_log::TransparencyLogConfig;
 
-    let file = NamedTempFile::new().expect("tempfile");
+    let file = TempLog::new();
     let cfg = Arc::new(TransparencyLogConfig {
         enabled: true,
         path: file.path().to_string_lossy().to_string(),

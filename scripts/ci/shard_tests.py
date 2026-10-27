@@ -78,8 +78,25 @@ OUTPUT = {"windows": ["--show-output"]}
 # fix removes, each as (pattern on the entry name, most allowed, why). It may
 # only shrink: the self-test holds every pattern to LEFTOVER_CEILING.
 TMP_GUARDED = {"linux"}
-KNOWN_LEFTOVERS: list[tuple[str, int, str]] = []
-LEFTOVER_CEILING: frozenset[str] = frozenset()
+_UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+KNOWN_LEFTOVERS: list[tuple[str, int, str]] = [
+    ("oauth_test_[a-z0-9_]+", 10, "oauth::client tests' token stores"),
+    (f"chain-(test|resume-test|cleanup)-{_UUID}", 9, "chains::executor tests"),
+    ("http_transport_tls_guard", 1, "transport::http tests' token store"),
+    ("stdio-tail-[0-9]+", 1, "transport::stdio start-failure test"),
+    (r"\.tmp[A-Za-z0-9]{6}", 3,
+     "a bounded audit write that outlives its test (transparency_log::bounded_tests, "
+     "identity_propagation::audit_fail_closed); hardened_signing_e2e and mik_7272_task_1_acs"),
+]
+# Written out, not derived from the list above: a pattern added there and not
+# here fails the self-test, so the list can only lose entries.
+LEFTOVER_CEILING: frozenset[str] = frozenset({
+    "oauth_test_[a-z0-9_]+",
+    f"chain-(test|resume-test|cleanup)-{_UUID}",
+    "http_transport_tls_guard",
+    "stdio-tail-[0-9]+",
+    r"\.tmp[A-Za-z0-9]{6}",
+})
 
 HEADER = re.compile(r"^\s*(Running|Doc-tests) ")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
