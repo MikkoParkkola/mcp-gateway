@@ -228,3 +228,63 @@ async fn an_admitted_call_keeps_its_retries_after_a_narrowing_reload() {
         "the narrowed instance sent nothing"
     );
 }
+
+/// The provider adapter asks the same gate before it dispatches.
+#[tokio::test]
+async fn the_provider_refuses_an_unselected_tool_with_no_upstream_call() {
+    use crate::provider::Provider;
+    let calls = Calls::default();
+    let url = stub(Arc::clone(&calls), First::Answer, Arc::default()).await;
+    let backend = backend(&url, Some(&["read_a"]));
+    backend.get_tools_shared().await.expect("listed");
+    let provider = crate::provider::McpProvider::new(backend);
+    let refused = provider.invoke("write_b", json!({})).await;
+    assert!(
+        refused
+            .as_ref()
+            .is_err_and(|e| e.to_string().contains("allowed_tools")),
+        "{refused:?}"
+    );
+    assert_eq!(count(&calls, "write_b"), 0, "the upstream saw write_b");
+}
+
+/// A `tools/call` sent as a notification meets the same refusal.
+#[tokio::test]
+async fn a_notified_call_to_an_unselected_tool_is_refused() {
+    let calls = Calls::default();
+    let url = stub(Arc::clone(&calls), First::Answer, Arc::default()).await;
+    let backend = backend(&url, Some(&["read_a"]));
+    backend.get_tools_shared().await.expect("listed");
+    let refused = backend.notify("tools/call", Some(call("write_b"))).await;
+    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(count(&calls, "write_b"), 0, "the upstream saw write_b");
+}
+
+/// The loader refuses an empty list and a pattern that matches nothing; a
+/// lone `*` (every tool) and an exact name load, as on an API key.
+#[test]
+fn the_loader_refuses_an_unusable_list() {
+    let config = |list: &[&str]| {
+        let mut config = crate::config::Config::default();
+        config.backends.insert(
+            "sel".to_string(),
+            BackendConfig {
+                transport: TransportConfig::Http {
+                    http_url: "http://127.0.0.1:9/mcp".to_string(),
+                    streamable_http: Some(true),
+                    protocol_version: None,
+                },
+                allowed_tools: Some(list.iter().map(ToString::to_string).collect()),
+                ..BackendConfig::default()
+            },
+        );
+        config.validate().map_err(|e| e.to_string())
+    };
+    for bad in [&[][..], &["re*ad"][..], &["*_write"][..]] {
+        let refused = config(bad).expect_err("refused");
+        assert!(refused.contains("backends.sel.allowed_tools"), "{refused}");
+    }
+    for good in [&["*"][..], &["read_a", "sel:write_*"][..]] {
+        config(good).unwrap_or_else(|e| panic!("{good:?}: {e}"));
+    }
+}
