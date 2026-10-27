@@ -91,3 +91,26 @@ async fn capability_connect_error_still_retried() {
         "an ordinary failure keeps the retry"
     );
 }
+
+/// A send the pin refuses records `refused` on the call's delivery.
+#[tokio::test]
+async fn capability_ssrf_denial_records_refused() {
+    use crate::gateway::delivery_facts;
+    let (client, _lookups) = pinned_client(Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
+    let health = crate::failsafe::HealthTracker::new("test");
+    let (outcome, facts) = delivery_facts::scope(async {
+        let outcome =
+            send_with_retry(client.get("http://private.test/"), "test", true, &health).await;
+        (outcome, delivery_facts::snapshot())
+    })
+    .await;
+    let error = outcome.expect_err("a private destination is refused");
+    assert!(error.to_string().contains("SSRF blocked"), "{error}");
+    let mut fields = serde_json::Map::new();
+    delivery_facts::record_fields(facts.as_ref(), false, false, &mut fields);
+    assert_eq!(
+        fields.get("response_effect"),
+        Some(&"refused".into()),
+        "{fields:?}"
+    );
+}

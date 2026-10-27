@@ -518,3 +518,6 @@ mod tests {
 #[cfg(test)]
 #[path = "cleartext_tests.rs"]
 mod cleartext_tests;
+#[cfg(test)]
+#[path = "refusal_record_tests.rs"]
+mod refusal_record_tests;
