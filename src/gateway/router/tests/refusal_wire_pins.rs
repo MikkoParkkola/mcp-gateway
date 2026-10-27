@@ -25,6 +25,7 @@ fn http_refusal(
     let args = json!({});
     let refused = authorize_tool_target(
         state,
+        &state.live_config.generation(),
         client,
         agent,
         None,
@@ -106,9 +107,12 @@ async fn mtls_agent_and_ssrf_refusals_keep_code_status_and_message() {
     let (mut guarded, _guarded_store) = test_router_app_state().await;
     {
         let s = Arc::get_mut(&mut guarded).expect("sole owner");
-        s.ssrf_protection = true;
         s.trust_configured_backends = false;
     }
+    // SSRF protection is a reloadable flag: it lives on the published config.
+    let mut config = (*guarded.live_config.get()).clone();
+    config.security.ssrf_protection = true;
+    guarded.live_config.set(config);
     let _ = guarded
         .backends
         .register(http_backend_at("loopback", "http://127.0.0.1:9000/mcp"));

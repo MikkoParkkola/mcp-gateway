@@ -160,9 +160,9 @@ fn decided() -> crate::security::decision_record::Decision {
         kind: DecisionKind::DefaultAllow,
         rule_id: None,
         grant_id: None,
-        findings: Some(Vec::new()),
-        findings_truncated: false,
-        effect: None,
+        request_findings: Some(Vec::new()),
+        request_findings_truncated: false,
+        declared_effect: None,
         decided: Decided::Fresh,
     }
 }
