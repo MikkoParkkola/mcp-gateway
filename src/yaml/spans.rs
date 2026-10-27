@@ -55,8 +55,7 @@ pub(crate) fn mapping_values(text: &str) -> Result<Vec<ValueSpan>, Error> {
                     continue;
                 };
                 let Some((key, plain_key)) = top.key.take() else {
-                    let plain =
-                        style == ScalarStyle::Plain && anchor == 0 && !tagged && one_line(&span);
+                    let plain = style == ScalarStyle::Plain && anchor == 0 && !tagged;
                     top.key = Some((value.into_owned(), plain));
                     continue;
                 };
@@ -153,8 +152,7 @@ fn one_line(span: &Span) -> bool {
     span.start.line() == span.end.line()
 }
 
-/// Character offsets to byte offsets, checked against the parser's own
-/// byte offsets where it gives them.
+/// Character offsets to byte offsets: the parser's markers count characters.
 struct CharBytes(Vec<usize>);
 
 impl CharBytes {
@@ -165,12 +163,11 @@ impl CharBytes {
     }
 
     fn byte(&self, marker: Marker) -> Result<usize, Error> {
-        let from_chars = self.0.get(marker.index()).copied();
-        match (from_chars, marker.byte_offset()) {
-            (Some(b), None) => Ok(b),
-            (Some(b), Some(parser)) if b == parser => Ok(b),
-            _ => Err(Error::message("a parser position the text cannot hold")),
-        }
+        // A position past the text would be a parser defect: refuse, never panic.
+        self.0
+            .get(marker.index())
+            .copied()
+            .ok_or_else(|| Error::message("a parser position the text cannot hold"))
     }
 
     fn range(&self, start: Marker, end: Marker) -> Result<Range<usize>, Error> {

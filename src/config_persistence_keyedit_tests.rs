@@ -437,3 +437,37 @@ fn unicode_before_the_value_keeps_every_byte() {
 fn an_empty_value_is_unprovable() {
     assert_unprovable("a:\n  t:\n  u: 1\n", &[set_int("a.t", 2)]);
 }
+
+// Keys and mappings on the path: only plain keys of plain block mappings.
+
+#[test]
+fn a_quoted_key_on_the_path_is_unprovable() {
+    assert_unprovable("\"a\":\n  b: 1\n", &[set_int("a.b", 2)]);
+}
+
+#[test]
+fn an_anchored_key_is_unprovable() {
+    assert_unprovable("&k a: 1\n", &[set_int("a", 2)]);
+}
+
+#[test]
+fn a_tagged_key_is_unprovable() {
+    assert_unprovable("!!str a: 1\n", &[set_int("a", 2)]);
+}
+
+#[test]
+fn a_field_under_an_anchored_mapping_is_unprovable() {
+    assert_unprovable("a: &m\n  b: 1\n", &[set_int("a.b", 2)]);
+}
+
+#[test]
+fn a_field_under_a_tagged_mapping_is_unprovable() {
+    assert_unprovable("a: !!map\n  b: 1\n", &[set_int("a.b", 2)]);
+}
+
+/// An empty block scalar may be one line with a non-empty span: only the
+/// block check refuses it.
+#[test]
+fn an_empty_block_scalar_is_unprovable() {
+    assert_unprovable("a:\n  b: |\nc: 1\n", &[set_int("a.b", 2)]);
+}
