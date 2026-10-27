@@ -43,7 +43,7 @@ tr:hover td { background: var(--bg3); }
 /* Badges */
 .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 10px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; }
 .badge-closed, .badge-healthy { background: rgba(63,185,80,0.15); color: var(--green); }
-.badge-open, .badge-down { background: rgba(248,81,73,0.15); color: var(--red); }
+.badge-open, .badge-down { background: rgba(248,81,73,0.15); color: #ff7b72; }
 .badge-halfopen { background: rgba(210,153,34,0.15); color: var(--yellow); }
 .badge-running { background: rgba(88,166,255,0.15); color: var(--accent); }
 
@@ -57,7 +57,7 @@ tr:hover td { background: var(--bg3); }
 .search-bar input::placeholder { color: var(--fg2); }
 
 /* Buttons */
-.btn { background: var(--accent); color: #fff; border: none; border-radius: var(--radius); padding: 0.5rem 1rem; font-size: 0.875rem; cursor: pointer; font-weight: 600; }
+.btn { background: var(--accent); color: var(--bg); border: none; border-radius: var(--radius); padding: 0.5rem 1rem; font-size: 0.875rem; cursor: pointer; font-weight: 600; }
 .btn:hover { opacity: 0.9; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-danger { background: var(--red); }
@@ -110,7 +110,7 @@ tr:hover td { background: var(--bg3); }
 .form-msg.err { color: var(--red); }
 .mode-toggle { display: flex; gap: 0; margin-bottom: 1rem; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; width: fit-content; }
 .mode-toggle button { background: var(--bg3); color: var(--fg2); border: none; padding: 0.4rem 1rem; font-size: 0.8rem; cursor: pointer; }
-.mode-toggle button.active { background: var(--accent); color: #fff; font-weight: 600; }
+.mode-toggle button.active { background: var(--accent); color: var(--bg); font-weight: 600; }
 .env-rows { display: flex; flex-direction: column; gap: 0.4rem; }
 .env-row { display: flex; gap: 0.5rem; align-items: center; }
 .env-row input { flex: 1; }
@@ -140,6 +140,8 @@ tr:hover td { background: var(--bg3); }
 /* Control plane */
 .split-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
 .table-scroll { overflow-x: auto; margin-bottom: 1.5rem; }
+/* Focusable so a keyboard can scroll a table wider than the screen. */
+.table-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .muted { color: var(--fg2); }
 .mono { font-family: "SFMono-Regular", Consolas, monospace; font-size: 0.8rem; }
 .tag-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.5rem; }
@@ -324,8 +326,8 @@ tr:hover td { background: var(--bg3); }
     <div id="page-tools" class="page">
       <h1>Tools</h1>
       <div class="search-bar">
-        <input type="text" id="tool-search" placeholder="Search tools..." autocomplete="off">
-        <select id="tool-server-filter"><option value="">All servers</option></select>
+        <input type="text" id="tool-search" placeholder="Search tools..." aria-label="Search tools" autocomplete="off">
+        <select id="tool-server-filter" aria-label="Filter by server"><option value="">All servers</option></select>
       </div>
       <div id="tools-table-wrap">
         <table>
@@ -353,7 +355,7 @@ tr:hover td { background: var(--bg3); }
         <!-- Registry mode -->
         <div id="server-registry-fields">
           <div class="form-group" style="margin-bottom:0.75rem">
-            <label>Search Registry</label>
+            <label for="reg-search-input">Search Registry</label>
             <div class="reg-search-wrap">
               <input type="text" id="reg-search-input" placeholder="Search 48+ built-in servers..."
                 autocomplete="off" oninput="onRegSearch(this.value)" onfocus="onRegSearch(this.value)">
@@ -362,7 +364,7 @@ tr:hover td { background: var(--bg3); }
           </div>
           <div id="reg-selected-info" style="display:none;margin-bottom:0.75rem">
             <div class="form-group">
-              <label>Override Name (optional)</label>
+              <label for="reg-name-override">Override Name (optional)</label>
               <input type="text" id="reg-name-override" placeholder="Leave blank to use registry name">
             </div>
           </div>
@@ -372,11 +374,11 @@ tr:hover td { background: var(--bg3); }
         <div id="server-custom-fields" style="display:none">
           <div class="form-row">
             <div class="form-group">
-              <label>Name <span style="color:var(--red)">*</span></label>
+              <label for="custom-name">Name <span style="color:var(--red)">*</span></label>
               <input type="text" id="custom-name" placeholder="my-server">
             </div>
             <div class="form-group">
-              <label>Transport</label>
+              <label for="custom-transport">Transport</label>
               <select id="custom-transport" onchange="onTransportChange()">
                 <option value="stdio">stdio (command)</option>
                 <option value="http">HTTP/SSE or WebSocket (URL)</option>
@@ -385,13 +387,13 @@ tr:hover td { background: var(--bg3); }
           </div>
           <div class="form-row" id="custom-command-row">
             <div class="form-group" style="flex:2">
-              <label>Command</label>
+              <label for="custom-command">Command</label>
               <input type="text" id="custom-command" placeholder="npx -y @modelcontextprotocol/server-foo">
             </div>
           </div>
           <div class="form-row" id="custom-url-row" style="display:none">
             <div class="form-group" style="flex:2">
-              <label>URL</label>
+              <label for="custom-url">URL</label>
               <input type="text" id="custom-url" placeholder="http://localhost:8080/sse">
             </div>
           </div>
@@ -442,7 +444,7 @@ tr:hover td { background: var(--bg3); }
       <div class="split-grid">
         <div>
           <h2>Server Inventory</h2>
-          <div class="table-scroll">
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Server Inventory">
             <table>
               <thead><tr><th>Name</th><th>Status</th><th>Owner</th></tr></thead>
               <tbody id="cp-servers-tbody"><tr><td colspan="3" class="muted">Loading...</td></tr></tbody>
@@ -451,7 +453,7 @@ tr:hover td { background: var(--bg3); }
         </div>
         <div>
           <h2>Runtime Health</h2>
-          <div class="table-scroll">
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Runtime Health">
             <table>
               <thead><tr><th>Server</th><th>Provider</th><th>Health</th></tr></thead>
               <tbody id="cp-runtime-tbody"><tr><td colspan="3" class="muted">Loading...</td></tr></tbody>
@@ -461,7 +463,7 @@ tr:hover td { background: var(--bg3); }
       </div>
 
       <h2>TrustCards</h2>
-      <div class="table-scroll">
+      <div class="table-scroll" tabindex="0" role="region" aria-label="TrustCards">
         <table>
           <thead><tr><th>Server</th><th>Digest</th><th>Schema</th></tr></thead>
           <tbody id="cp-trustcards-tbody"><tr><td colspan="3" class="muted">Loading...</td></tr></tbody>
@@ -469,7 +471,7 @@ tr:hover td { background: var(--bg3); }
       </div>
 
       <h2>ShadowRadar</h2>
-      <div class="table-scroll">
+      <div class="table-scroll" tabindex="0" role="region" aria-label="ShadowRadar">
         <table>
           <thead><tr><th>Asset</th><th>Transport</th><th>Severity</th><th>Action</th><th>Review</th></tr></thead>
           <tbody id="cp-shadow-tbody"><tr><td colspan="5" class="muted">Loading...</td></tr></tbody>
@@ -477,7 +479,7 @@ tr:hover td { background: var(--bg3); }
       </div>
 
       <h2>Decision Queue</h2>
-      <div class="table-scroll">
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Decision Queue">
         <table>
           <thead><tr><th>Decision</th><th>Target</th><th>Required</th><th>Tier</th><th>Actor</th></tr></thead>
           <tbody id="cp-decisions-tbody"><tr><td colspan="5" class="muted">Loading...</td></tr></tbody>
@@ -487,7 +489,7 @@ tr:hover td { background: var(--bg3); }
       <div class="split-grid">
         <div>
           <h2>Feature Boundary</h2>
-          <div class="table-scroll">
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Feature Boundary">
             <table>
               <thead><tr><th>Feature</th><th>Tier</th><th>This Route</th></tr></thead>
               <tbody id="cp-features-tbody"><tr><td colspan="3" class="muted">Loading...</td></tr></tbody>
@@ -496,7 +498,7 @@ tr:hover td { background: var(--bg3); }
         </div>
         <div>
           <h2>RBAC</h2>
-          <div class="table-scroll">
+          <div class="table-scroll" tabindex="0" role="region" aria-label="RBAC">
             <table>
               <thead><tr><th>Action</th><th>Access</th><th>Evidence</th></tr></thead>
               <tbody id="cp-rbac-tbody"><tr><td colspan="3" class="muted">Loading...</td></tr></tbody>
@@ -566,7 +568,7 @@ tr:hover td { background: var(--bg3); }
       <button class="modal-close" onclick="closeImportModal()" aria-label="Close">&times;</button>
     </div>
     <div class="modal-url-row">
-      <input type="url" id="import-url" placeholder="https://petstore3.swagger.io/api/v3/openapi.json" autocomplete="off">
+      <input type="url" id="import-url" aria-label="OpenAPI spec URL" placeholder="https://petstore3.swagger.io/api/v3/openapi.json" autocomplete="off">
       <button class="btn btn-sm" id="preview-btn" onclick="previewOpenAPI()">Preview</button>
     </div>
     <div class="modal-preview" id="import-preview">
@@ -1173,9 +1175,9 @@ function addEnvRow(k = '', v = '') {
   const row = document.createElement('div');
   row.className = 'env-row';
   row.innerHTML = `
-    <input type="text" placeholder="KEY" value="${esc(k)}" style="flex:1;min-width:100px">
+    <input type="text" placeholder="KEY" aria-label="Variable name" value="${esc(k)}" style="flex:1;min-width:100px">
     <span style="color:var(--fg2);font-size:0.85rem">=</span>
-    <input type="text" placeholder="value" value="${esc(v)}" style="flex:2">
+    <input type="text" placeholder="value" aria-label="Variable value" value="${esc(v)}" style="flex:2">
     <button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">x</button>`;
   document.getElementById('env-rows').appendChild(row);
 }
@@ -1421,7 +1423,7 @@ function renderCapabilities() {
         <span class="cap-meta" id="cap-chevron-${esc(name)}">&#9660;</span>
       </div>
       <div class="cap-body" id="cap-body-${esc(name)}">
-        <textarea id="cap-editor-${esc(name)}" spellcheck="false" placeholder="Loading YAML..."
+        <textarea id="cap-editor-${esc(name)}" spellcheck="false" aria-label="YAML for ${esc(name)}" placeholder="Loading YAML..."
           onkeydown="capTabIndent(event)"></textarea>
         <div class="cap-body-actions">
           <button class="btn btn-sm" data-action="save-cap" data-value="${esc(name)}">Save</button>
