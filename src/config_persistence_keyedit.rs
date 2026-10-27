@@ -8,6 +8,13 @@
 //!
 //! A secret field is written as a slot: a placeholder the byte writer fills
 //! with the store reference it creates, after this edit has been proven.
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "first callers: the byte writer's secret step and the web UI save core"
+    )
+)]
 
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -303,25 +310,36 @@ fn locate(lines: &[&str], path: &FieldPath) -> Result<Located, ComputeRefusal> {
 /// collection, a block scalar, and an anchor, alias or tag outside quotes.
 fn value_span(lines: &[&str], at: usize, after: usize) -> Result<Range<usize>, ComputeRefusal> {
     let line = lines[at];
-    let start = after + (line[after..].len() - line[after..].trim_start().len());
+    // YAML whitespace is a space or a tab only: never trim other Unicode
+    // spaces, which belong to the value.
+    let blank = [' ', '\t'];
+    let start = after + (line[after..].len() - line[after..].trim_start_matches(blank).len());
     // `key: # note` is a null field with a comment, not a scalar.
     if line[start..].starts_with('#') {
         return Ok(start..start);
     }
-    let mut end = line.trim_end().len().max(start);
+    let mut end = line.trim_end_matches(blank).len().max(start);
     let bytes = line.as_bytes();
     for (p, _) in line[start..].match_indices('#') {
         let p = start + p;
-        if p == start || !bytes[p - 1].is_ascii_whitespace() {
+        if p == start || !matches!(bytes[p - 1], b' ' | b'\t') {
             continue;
         }
-        let ws = line[..p].trim_end().len();
+        let ws = line[..p].trim_end_matches(blank).len();
         if super::splice::parsed_as_comment(lines, at, &line[ws..]) {
             end = ws;
             break;
         }
     }
     let value = &line[start..end];
+    // In a plain scalar a `#` after a blank always starts a comment: one
+    // left in the span means the cut is wrong, so refuse rather than drop it.
+    let plain = !value.starts_with(['"', '\'']);
+    if plain && (value.contains(" #") || value.contains("\t#")) {
+        return Err(unprovable(
+            "a comment could not be told apart from the value",
+        ));
+    }
     if value.starts_with(['{', '[', '|', '>']) || has_node_marker(value) {
         return Err(unprovable(
             "a flow, block, anchored, aliased or tagged value",

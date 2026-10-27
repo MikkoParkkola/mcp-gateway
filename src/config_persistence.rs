@@ -62,13 +62,6 @@ pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
 }
 
 #[path = "config_persistence_keyedit.rs"]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "first callers: the byte writer's secret step and the web UI save core"
-    )
-)]
 pub(crate) mod keyedit;
 #[path = "config_persistence_splice.rs"]
 mod splice;
