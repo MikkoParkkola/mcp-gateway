@@ -204,11 +204,10 @@ the restart is certain:
    `DELETE /auth/tokens?issuer={issuer}&subject={subject}` with the
    `admin_token`. `issuer` and `subject` are the `iss` and `sub` of their
    provider token (URL-encode both).
-3. Revoke again once `key_server.max_oidc_token_age_secs` (default 300) has
-   passed since step 1. Disabling the account does not invalidate a provider
-   token issued before it, and the gateway accepts such a token for an
-   exchange until it is that old, so a token minted in that window survives
-   step 2.
+3. Revoke again five minutes after step 1. Disabling the account does not
+   invalidate a provider token issued before it, and the gateway accepts such
+   a token for an exchange until it is five minutes old, so a token minted in
+   that window survives step 2.
 4. Remove their rule if they have one, and restart as soon as you can.
 
 ### Admins from your identity provider
