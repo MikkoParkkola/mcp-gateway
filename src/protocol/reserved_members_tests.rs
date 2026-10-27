@@ -3,8 +3,8 @@
 use serde_json::{Value, json};
 
 use super::{
-    Class::Counted, EPOCH, MEMBERS, Member, Origin, Origin::GatewayOnly, Writer::Outside,
-    chain_view, row, strip_ingress, strip_with,
+    Class::Counted, MEMBERS, Member, Origin, Origin::GatewayOnly, Writer::Outside, chain_view, row,
+    strip_ingress, strip_with,
 };
 use crate::protocol::{JsonRpcResponse, RequestId};
 
@@ -75,7 +75,11 @@ fn ingress_withholds_what_a_chain_digest_covers() {
     let mut expected = sent.clone();
     strip_with(MEMBERS, &mut expected);
     assert_eq!(delivered, expected);
-    let withheld = response.ingress_withheld.as_deref().expect("withheld");
+    let withheld = response
+        .ingress_withheld
+        .as_deref()
+        .expect("withheld")
+        .members();
     let mut got: Vec<&str> = withheld.keys().map(String::as_str).collect();
     got.sort_unstable();
     let mut want = vec![
@@ -193,10 +197,10 @@ fn every_meta_row_has_exactly_two_segments() {
     }
 }
 
-/// Changing the GatewayOnly set must bump [`EPOCH`], so stored answers
-/// written under the old set are stripped again when served.
+/// The gateway-only set, spelled out: a change to what ingress strips is a
+/// visible change to this list.
 #[test]
-fn the_epoch_names_the_gateway_only_set() {
+fn the_gateway_only_set_is_pinned() {
     let pinned = [
         "_security_findings",
         "_contract_violation",
@@ -211,8 +215,24 @@ fn the_epoch_names_the_gateway_only_set() {
         "_meta.io.mcp-gateway/reason",
     ];
     assert_eq!(
-        (EPOCH, gateway_only()),
-        (1, pinned.map(str::to_owned).to_vec()),
-        "the GatewayOnly set changed: bump EPOCH and update this list"
+        gateway_only(),
+        pinned.map(str::to_owned).to_vec(),
+        "the GatewayOnly set changed: update this list and UPGRADING"
     );
+}
+
+/// What ingress withheld never leaves the process: not in `Debug` output
+/// (responses are logged with `{:?}`), not when the response is serialized.
+#[test]
+fn withheld_members_never_show_in_debug_or_on_the_wire() {
+    let mut response = JsonRpcResponse::success(
+        RequestId::Number(1),
+        json!({"content": [], "_security_findings": ["FORGED-withheld"]}),
+    );
+    strip_ingress("b", "tools/call", &mut response);
+    assert!(response.ingress_withheld.is_some(), "premise: withheld");
+    let debug = format!("{response:?}");
+    assert!(!debug.contains("FORGED-withheld"), "{debug}");
+    let wire = serde_json::to_string(&response).expect("serializes");
+    assert!(!wire.contains("FORGED-withheld"), "{wire}");
 }

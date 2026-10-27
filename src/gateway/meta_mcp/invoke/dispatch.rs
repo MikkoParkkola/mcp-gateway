@@ -463,7 +463,12 @@ impl MetaMcp {
         // Raw receipt (inc3 R1): verify before anything reads the reply.
         self.chain_receive(
             chained,
-            (&mut result, withheld.as_deref()),
+            (
+                &mut result,
+                withheld
+                    .as_deref()
+                    .map(crate::protocol::reserved_members::Withheld::members),
+            ),
             challenge.as_deref(),
             chain,
         )?;

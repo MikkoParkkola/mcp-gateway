@@ -11,11 +11,19 @@ use crate::protocol::reserved_members::test_support::{assert_nothing_forged, pla
 #[tokio::test]
 async fn a_task_result_delivers_no_planted_member() {
     let mock = MockBackend::answering(Answer::Result(planted()));
-    let (state, _store) = state_with(&mock).await;
+    let (state, store) = state_with(&mock).await;
     let created = post(&state, "key-a", task_invoke(1, "forge-task", json!({}))).await;
-    let settled = poll_until_terminal(&state, "key-a", &task_id(&created)).await;
+    let task = task_id(&created);
+    let settled = poll_until_terminal(&state, "key-a", &task).await;
     std::assert_eq!(status_of(&settled), "completed", "{settled}");
     assert_nothing_forged("task result", &settled);
+    // The row on disk: what ingress withheld for a chain is never stored.
+    let row = std::fs::read_to_string(store.path().join("tasks").join(format!("{task}.json")))
+        .expect("the task row is on disk");
+    assert!(
+        !row.contains("FORGED-"),
+        "a stripped member was stored: {row}"
+    );
 }
 
 /// FORGE.3, a stored replay: the same keyed call again is answered from the

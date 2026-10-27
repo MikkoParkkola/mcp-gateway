@@ -709,6 +709,9 @@ mod grant_slot_wrap_tests;
 mod grant_withheld_parity_tests;
 #[cfg(test)]
 mod guide_alloc_tests;
+/// A published pre-release's task row is refused, never stripped, when served.
+#[cfg(test)]
+mod legacy_row_planted_tests;
 #[cfg(test)]
 mod oracle_audit_tests;
 #[cfg(test)]

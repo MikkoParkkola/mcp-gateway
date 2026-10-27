@@ -144,7 +144,13 @@ impl DirectRouteGuards {
             meta.chain_receive_for(
                 &meta.scoped(crate::gateway::authz::BackendGrant::of(client)),
                 call.server,
-                (result, response.ingress_withheld.as_deref()),
+                (
+                    result,
+                    response
+                        .ingress_withheld
+                        .as_deref()
+                        .map(crate::protocol::reserved_members::Withheld::members),
+                ),
                 challenge,
                 &slot,
             )?;

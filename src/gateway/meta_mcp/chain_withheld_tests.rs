@@ -82,7 +82,11 @@ fn a_chain_verifies_over_what_ingress_withheld() {
         result.get("_security_findings").is_none(),
         "ingress removed the member: {result}"
     );
-    let (outcome, receipt) = receive(&meta, &mut result, response.ingress_withheld.as_deref());
+    let withheld = response
+        .ingress_withheld
+        .as_deref()
+        .map(crate::protocol::reserved_members::Withheld::members);
+    let (outcome, receipt) = receive(&meta, &mut result, withheld);
     outcome.expect("the chain verifies over the signed result");
     let ChainReceipt::Checked(Some(upstream)) = receipt else {
         panic!("a checked receipt");

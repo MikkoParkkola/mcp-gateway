@@ -94,7 +94,7 @@ pub struct JsonRpcResponse {
     /// verified over the content the backend signed. Never on the wire and
     /// never put back into the result.
     #[serde(skip)]
-    pub(crate) ingress_withheld: Option<Box<serde_json::Map<String, Value>>>,
+    pub(crate) ingress_withheld: Option<Box<super::reserved_members::Withheld>>,
 }
 
 #[path = "messages_classify.rs"]

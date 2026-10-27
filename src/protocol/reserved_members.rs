@@ -128,12 +128,6 @@ pub(crate) const MEMBERS: &[Member] = &[
     ),
 ];
 
-/// The table's epoch. A stored answer written under an older epoch may hold a
-/// member this build strips, so it is stripped again when served. Bump it
-/// whenever the [`Origin::GatewayOnly`] set changes; `the_epoch_names_the_gateway_only_set`
-/// fails until it is.
-pub(crate) const EPOCH: u32 = 1;
-
 /// The paths the delivery record notes.
 pub(crate) fn noted() -> impl Iterator<Item = &'static [&'static str]> {
     MEMBERS
@@ -205,7 +199,7 @@ pub(crate) fn strip_ingress(backend: &str, method: &str, response: &mut JsonRpcR
                     .map(|p| format!("result.{p}")),
             );
         }
-        response.ingress_withheld = (!withheld.is_empty()).then(|| Box::new(withheld));
+        response.ingress_withheld = (!withheld.is_empty()).then(|| Box::new(Withheld(withheld)));
     }
     if let Some(data) = response.error.as_mut().and_then(|e| e.data.as_mut()) {
         removed.extend(
@@ -221,6 +215,24 @@ pub(crate) fn strip_ingress(backend: &str, method: &str, response: &mut JsonRpcR
             members = ?removed,
             "removed gateway-only members a backend put in its answer"
         );
+    }
+}
+
+/// What ingress removed from a result, kept only for a signature chain's
+/// digest. Its `Debug` names the count, never a member: a response is logged
+/// with `{:?}` in places, and this must not print what was stripped.
+#[derive(Clone, Default)]
+pub(crate) struct Withheld(serde_json::Map<String, Value>);
+
+impl Withheld {
+    pub(crate) fn members(&self) -> &serde_json::Map<String, Value> {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Withheld {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Withheld({} members)", self.0.len())
     }
 }
 
