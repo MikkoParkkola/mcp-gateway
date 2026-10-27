@@ -254,48 +254,24 @@ fn entries_settle_by_the_final_result() {
     let journal = std::path::PathBuf::from("j");
     let err = |e: ReplaceError| -> Result<ReplaceOutcome, ReplaceError> { Err(e) };
     let cases = [
-        (err(ReplaceError::Busy), false, Settle::Discard),
-        (
-            err(ReplaceError::Refused(String::new())),
-            false,
-            Settle::Discard,
-        ),
-        (
-            err(ReplaceError::Stage(String::new())),
-            false,
-            Settle::Discard,
-        ),
-        (
-            err(ReplaceError::Write(String::new())),
-            true,
-            Settle::Discard,
-        ),
+        (err(ReplaceError::Busy), Settle::Discard),
+        (err(ReplaceError::Refused(String::new())), Settle::Discard),
+        (err(ReplaceError::Stage(String::new())), Settle::Discard),
+        (err(ReplaceError::Write(String::new())), Settle::Discard),
         (
             err(ReplaceError::ReloadRefused(String::new())),
-            true,
             Settle::Discard,
         ),
         (
             err(ReplaceError::Unsupported(String::new())),
-            true,
             Settle::Discard,
         ),
-        (
-            err(ReplaceError::Failed(String::new())),
-            false,
-            Settle::Discard,
-        ),
-        (
-            err(ReplaceError::Failed(String::new())),
-            true,
-            Settle::Abandon,
-        ),
+        (err(ReplaceError::Failed(String::new())), Settle::Discard),
         (
             err(ReplaceError::RollbackFailed {
                 journal: journal.clone(),
                 error: String::new(),
             }),
-            true,
             Settle::Abandon,
         ),
         (
@@ -303,11 +279,10 @@ fn entries_settle_by_the_final_result() {
                 journal,
                 error: String::new(),
             }),
-            true,
             Settle::Abandon,
         ),
     ];
-    for (result, renamed, settle) in cases {
-        assert_eq!(settle_for(&result, renamed), settle, "{result:?}");
+    for (result, settle) in cases {
+        assert_eq!(settle_for(&result), settle, "{result:?}");
     }
 }

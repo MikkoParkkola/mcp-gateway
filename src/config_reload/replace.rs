@@ -246,8 +246,8 @@ pub(crate) enum Settle {
 
 /// How a finished replacement settles its entries, by its final result:
 /// a rollback that fails becomes `RollbackFailed`, so every other refusal
-/// left the old file in place. `renamed` says whether `write_atomic` had
-/// put the new bytes in place.
+/// left the old file in place. A write task that dies never reaches this:
+/// [`Entries`]' drop settles that case.
 #[cfg_attr(
     not(test),
     expect(
@@ -255,13 +255,12 @@ pub(crate) enum Settle {
         reason = "first callers: the web UI settings save and discovery adopt"
     )
 )]
-pub(crate) fn settle_for(result: &Result<ReplaceOutcome, ReplaceError>, renamed: bool) -> Settle {
+pub(crate) fn settle_for(result: &Result<ReplaceOutcome, ReplaceError>) -> Settle {
     match result {
         Ok(_) => Settle::Keep,
         Err(ReplaceError::RollbackFailed { .. } | ReplaceError::Unconfirmed { .. }) => {
             Settle::Abandon
         }
-        Err(ReplaceError::Failed(_)) if renamed => Settle::Abandon,
         Err(_) => Settle::Discard,
     }
 }
@@ -430,7 +429,7 @@ impl ReloadContext {
                 &mut entries,
             )
             .await;
-        let how = settle_for(&result, entries.renamed);
+        let how = settle_for(&result);
         entries.settle(how).await;
         result
     }
