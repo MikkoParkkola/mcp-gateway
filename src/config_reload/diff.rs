@@ -236,6 +236,17 @@ pub(super) fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'stat
         "cost_governance" => cost_governance,
     ];
     sections[0].1 = running.auth.restart_only_json() != wanted.auth.restart_only_json();
+    // `meta_mcp.surfaced_tools` is applied by the reload (the surfaced
+    // snapshot is swapped under `lock_reload`), so it is masked out on both
+    // sides; every other meta_mcp field is still read once at startup.
+    let meta_mcp_restart_only = |c: &Config| {
+        let mut meta_mcp = c.meta_mcp.clone();
+        meta_mcp.surfaced_tools.clear();
+        canonical_json(&meta_mcp)
+    };
+    if let Some(entry) = sections.iter_mut().find(|(name, _)| *name == "meta_mcp") {
+        entry.1 = meta_mcp_restart_only(running) != meta_mcp_restart_only(wanted);
+    }
     sections
 }
 

@@ -83,6 +83,8 @@ pub(crate) mod comments;
 
 #[path = "config_persistence_atomic.rs"]
 mod atomic;
+#[cfg(test)]
+pub(crate) use atomic::write_atomic_observed_for_test;
 pub use atomic::{FileMode, Symlink, write_atomic};
 
 /// Recover a byte write a crash left behind, before a serving gateway first

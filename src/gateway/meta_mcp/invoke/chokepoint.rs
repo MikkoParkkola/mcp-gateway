@@ -394,6 +394,7 @@ impl MetaMcp {
             external_server: server,
             external_tool: tool,
             subject: None,
+            trace_id: None,
         };
         firewall.audit_dispatch(&labels, outbound.arguments, &verdict, source.as_str());
         if verdict.allowed {
@@ -414,6 +415,8 @@ impl MetaMcp {
                 "Firewall blocked: Security firewall blocked this request".to_owned(),
             )
         });
+        // The call history counts this refusal as a firewall catch.
+        super::audit::counting::note_request_firewall();
         Err(Error::Forbidden {
             code,
             status: 400,

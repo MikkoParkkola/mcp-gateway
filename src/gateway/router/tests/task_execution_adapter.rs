@@ -150,6 +150,8 @@ mod stored_result_policy;
 mod stored_read_access;
 /// MIK-7974: a task keeps its request's meta-tool surface for its hints.
 mod surface_hints;
+/// A surfaced task runs where it was created, or is refused.
+mod surfaced_reload;
 #[cfg(feature = "metrics")]
 mod unkeyed_task;
 mod upstream_cancel;

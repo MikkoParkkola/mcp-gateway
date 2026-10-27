@@ -18,10 +18,12 @@ const LISTENER_FILES: &[&str] = &[
     "src/gateway/router/accounts/connections.rs",
     "src/gateway/router/accounts/hosted.rs",
     "src/gateway/ui/mod.rs",
+    "src/gateway/ui/activity/mod.rs",
     "src/gateway/ui/backends.rs",
     "src/gateway/ui/capabilities.rs",
     "src/gateway/ui/control_plane.rs",
     "src/gateway/ui/events.rs",
+    "src/gateway/ui/history.rs",
     "src/gateway/ui/import.rs",
     "src/gateway/ui/session.rs",
     "src/key_server/handler.rs",
@@ -93,6 +95,11 @@ const REVIEWED_MERGES: &[(&str, &str, Option<&str>)] = &[
     ),
     (
         "src/gateway/ui/mod.rs",
+        "activity::activity_router()",
+        Some("src/gateway/ui/activity/mod.rs"),
+    ),
+    (
+        "src/gateway/ui/mod.rs",
         "capabilities::capabilities_router()",
         Some("src/gateway/ui/capabilities.rs"),
     ),
@@ -115,6 +122,11 @@ const REVIEWED_MERGES: &[(&str, &str, Option<&str>)] = &[
         "src/gateway/ui/mod.rs",
         "import::import_router()",
         Some("src/gateway/ui/import.rs"),
+    ),
+    (
+        "src/gateway/ui/mod.rs",
+        "history::history_router()",
+        Some("src/gateway/ui/history.rs"),
     ),
 ];
 

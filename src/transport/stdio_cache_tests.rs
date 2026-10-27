@@ -54,6 +54,95 @@ fn only_npm_invoking_commands_get_a_cache() {
     }
 }
 
+/// A quoted program is the one the launch spawns, so it gets the same cache
+/// as the unquoted spelling; a whitespace split read `"/opt/node` and skipped
+/// isolation (MIK-8831.REL.4).
+#[test]
+fn a_quoted_runner_gets_the_cache_its_unquoted_spelling_gets() {
+    for (quoted, plain, var) in [
+        (
+            r#""/opt/node js/bin/npx" -y pkg"#,
+            "npx -y pkg",
+            "npm_config_cache",
+        ),
+        (r#""npx" -y pkg"#, "npx -y pkg", "npm_config_cache"),
+        (
+            r#""/opt/bun dir/bunx" pkg"#,
+            "bunx pkg",
+            "BUN_INSTALL_CACHE_DIR",
+        ),
+        (
+            r#""/opt/node js/bin/npm" exec pkg"#,
+            "npm exec pkg",
+            "npm_config_cache",
+        ),
+        (
+            r#""/opt/node js/bin/pnpm" dlx pkg"#,
+            "pnpm dlx pkg",
+            "pnpm_config_store_dir",
+        ),
+        (
+            r#""/opt/node js/bin/pnpm" dlx pkg"#,
+            "pnpm dlx pkg",
+            "npm_config_store_dir",
+        ),
+        (
+            r#""/opt/node js/bin/yarn" dlx pkg"#,
+            "yarn dlx pkg",
+            "YARN_CACHE_FOLDER",
+        ),
+        (
+            r#""/opt/node js/bin/yarn" dlx pkg"#,
+            "yarn dlx pkg",
+            "YARN_ENABLE_GLOBAL_CACHE",
+        ),
+        // Windows: either separator, and a `.cmd` or `.exe` launcher.
+        (
+            r#""C:\Program Files\nodejs\npx.cmd" -y pkg"#,
+            "npx -y pkg",
+            "npm_config_cache",
+        ),
+        (
+            r#""C:\Program Files\nodejs\npx.CMD" -y pkg"#,
+            "npx -y pkg",
+            "npm_config_cache",
+        ),
+        (
+            r#""C:\bun\bunx.exe" pkg"#,
+            "bunx pkg",
+            "BUN_INSTALL_CACHE_DIR",
+        ),
+    ] {
+        let want = isolated_package_manager_env("thing", plain, HashMap::new());
+        let got = isolated_package_manager_env("thing", quoted, HashMap::new());
+        assert_eq!(got.get(var), want.get(var), "{quoted} was missed");
+        assert!(got.contains_key(var), "{plain} itself got no {var}");
+        assert_eq!(
+            assigned_package_cache_dir("thing", quoted, &HashMap::new()),
+            assigned_package_cache_dir("thing", plain, &HashMap::new()),
+            "{quoted}: the repair records what the plain spelling records"
+        );
+    }
+}
+
+/// One start reads one assignment: the cache handed to the child is the one
+/// the repair records (MIK-8831.REL.5).
+#[test]
+fn the_child_env_and_the_recorded_cache_come_from_one_assignment() {
+    let (env, recorded) =
+        crate::transport::isolated_env_and_assigned_cache("thing", "npx -y pkg", HashMap::new());
+    assert_eq!(
+        recorded
+            .as_deref()
+            .map(|dir| dir.to_string_lossy().into_owned()),
+        env.get("npm_config_cache").cloned()
+    );
+    let (env, recorded) =
+        crate::transport::isolated_env_and_assigned_cache("thing", "bunx pkg", HashMap::new());
+    assert!(env.contains_key("BUN_INSTALL_CACHE_DIR"));
+    assert_eq!(recorded, None, "only npm's cache is the repair's");
+}
+
 #[test]
 fn a_name_cannot_escape_the_state_directory() {
     let root = crate::config_persistence::gateway_data_dir()
@@ -477,7 +566,7 @@ fn each_runner_gets_the_variable_it_reads() {
     // folder (MIK-8147 D3b).
     for (cmd, var, count) in [
         ("npx -y pkg", "npm_config_cache", 1),
-        ("bunx pkg", "BUN_INSTALL_CACHE_DIR", 1),
+        ("bunx pkg", "BUN_INSTALL_CACHE_DIR", 2),
         ("/opt/bin/yarn dlx pkg", "YARN_CACHE_FOLDER", 2),
     ] {
         let out = isolated_package_manager_env("thing", cmd, HashMap::new());
@@ -485,13 +574,72 @@ fn each_runner_gets_the_variable_it_reads() {
         assert!(out[var].contains("pkg-cache"), "{cmd} lacked {var}");
     }
     let out = isolated_package_manager_env("thing", "pnpm dlx pkg", HashMap::new());
-    assert_eq!(out.len(), 2, "{out:?}");
+    assert_eq!(out.len(), 4, "{out:?}");
     assert!(out["pnpm_config_store_dir"].contains("pkg-cache"));
-    assert_eq!(out["pnpm_config_store_dir"], out["npm_config_store_dir"]);
+    // `pnpm dlx` installs under `<cache-dir>/dlx`, not the store (MIK-8831.REL.6).
+    for var in [
+        "npm_config_store_dir",
+        "pnpm_config_cache_dir",
+        "npm_config_cache_dir",
+    ] {
+        assert_eq!(out["pnpm_config_store_dir"], out[var], "{var}");
+    }
+    // bunx installs the executable under the platform temp dir, which Bun
+    // reads from `TMPDIR` first (MIK-8831.REL.6).
+    let out = isolated_package_manager_env("thing", "bunx pkg", HashMap::new());
+    assert_eq!(out["TMPDIR"], out["BUN_INSTALL_CACHE_DIR"]);
     let mut env = HashMap::new();
     env.insert("BUN_INSTALL_CACHE_DIR".to_string(), "/mine".to_string());
     let out = isolated_package_manager_env("thing", "bunx pkg", env);
     assert_eq!(out["BUN_INSTALL_CACHE_DIR"], "/mine");
+    assert!(
+        !out.contains_key("TMPDIR"),
+        "an operator who chose one of bunx's dirs gets no other filled in: {out:?}"
+    );
+}
+
+/// An operator who sets one of a runner's cache or store variables keeps
+/// their choice: the gateway fills in none of that runner's others, or a
+/// second variable could override or split what they asked for
+/// (MIK-8831.REL.6).
+#[test]
+fn an_operator_value_for_one_runner_variable_leaves_all_of_them_alone() {
+    for (command, key, vars) in [
+        (
+            "pnpm dlx pkg",
+            "npm_config_store_dir",
+            &[
+                "pnpm_config_store_dir",
+                "pnpm_config_cache_dir",
+                "npm_config_cache_dir",
+            ][..],
+        ),
+        (
+            "pnpm dlx pkg",
+            "pnpm_config_cache_dir",
+            &[
+                "pnpm_config_store_dir",
+                "npm_config_store_dir",
+                "npm_config_cache_dir",
+            ][..],
+        ),
+        ("bunx pkg", "TMPDIR", &["BUN_INSTALL_CACHE_DIR"][..]),
+        // Bun falls back from `TMPDIR` to `TMP` and `TEMP`: either is the
+        // operator choosing the temp dir, which an injected `TMPDIR` would
+        // override.
+        ("bunx pkg", "TMP", &["BUN_INSTALL_CACHE_DIR", "TMPDIR"][..]),
+        ("bunx pkg", "TEMP", &["BUN_INSTALL_CACHE_DIR", "TMPDIR"][..]),
+    ] {
+        let operator = HashMap::from([(key.to_owned(), "/operator/dir".to_owned())]);
+        let out = isolated_package_manager_env("thing", command, operator);
+        for var in vars {
+            assert!(
+                !out.contains_key(*var),
+                "{command} with {key}: the gateway filled in {var}: {out:?}"
+            );
+        }
+        assert_eq!(out[key], "/operator/dir");
+    }
 }
 
 #[test]

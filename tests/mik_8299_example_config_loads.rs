@@ -198,6 +198,7 @@ fn in_clean_child_with(test: &str, vars: &[(String, String)]) -> bool {
 const EXPECTED_BLOCKS: &[&str] = &[
     "cleartext_http",
     "cluster_domain",
+    "secrets",
     "bearer_token",
     "api_keys",
     "security",

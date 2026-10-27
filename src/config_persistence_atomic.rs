@@ -35,6 +35,21 @@ pub fn write_atomic(
     write_atomic_observed(path, bytes, mode, link, |_| {})
 }
 
+/// [`write_atomic_observed`] for tests outside this module (lead ruling
+/// 2026-10-26): the capability writer's tests inject a failure at the rename
+/// through it. Test builds only, so production code cannot reach the
+/// observed variant.
+#[cfg(test)]
+pub(crate) fn write_atomic_observed_for_test(
+    path: &Path,
+    bytes: &[u8],
+    mode: FileMode,
+    link: Symlink,
+    observe: impl FnOnce(&std::fs::File),
+) -> std::io::Result<()> {
+    write_atomic_observed(path, bytes, mode, link, observe)
+}
+
 /// `write_atomic` with `observe` called on the open scratch after `sync_all` and
 /// before the mode step: the test seam that pins "private while the bytes are in it".
 fn write_atomic_observed(
