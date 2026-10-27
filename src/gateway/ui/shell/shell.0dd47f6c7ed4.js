@@ -407,28 +407,36 @@ function showWho(auth) {
  * Sign out: forget the typed key, end the cookie session on the server
  * (POST /dashboard/logout revokes it there, not only in this browser), and
  * show sign-in at the same address. The key goes first, so a slow or failed
- * logout never leaves it usable. Logout answers with a redirect; any other
- * answer, or none, means the cookie session may still be open, and the
- * sign-in view says so rather than look like a clean sign-out.
+ * logout never leaves it usable. The session cookie outlives the browser
+ * (it has a Max-Age), so until the gateway confirms the logout the sign-in
+ * view says the session is still being ended; a logout that fails, or does
+ * not answer within the key check's deadline, says this browser may still be
+ * signed in. An answer arriving after a newer sign-in changes nothing.
  */
 async function signOut() {
   bearer = null;
-  authEpoch++;
+  const epoch = ++authEpoch;
   showWho(null);
   const error = document.querySelector('.signin-error');
-  error.hidden = true;
   showSignIn();
+  error.textContent = 'Ending the session on the gateway…';
+  error.hidden = false;
   let ended = false;
   try {
-    const reply = await fetch('/dashboard/logout', { method: 'POST', credentials: 'same-origin', redirect: 'manual', keepalive: true });
+    const reply = await fetch('/dashboard/logout', {
+      method: 'POST',
+      credentials: 'same-origin',
+      redirect: 'manual',
+      keepalive: true,
+      signal: AbortSignal.timeout(KEY_CHECK_MS),
+    });
     ended = reply.ok || reply.type === 'opaqueredirect';
   } catch {
     ended = false;
   }
-  if (!ended) {
-    error.textContent = 'Signed out here, but the gateway did not confirm the browser session ended. Close the browser to end it.';
-    error.hidden = false;
-  }
+  if (epoch !== authEpoch) return;
+  if (ended) error.hidden = true;
+  else error.textContent = "Signed out here, but the gateway did not confirm the session ended, so this browser may still be signed in. Reload and sign out again, or clear this site's cookies.";
 }
 
 /**
