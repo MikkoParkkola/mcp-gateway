@@ -201,6 +201,41 @@ fn p2a_rotation_inside_one_request_reads_the_sealed_bytes() {
     assert_eq!(got, (0..8).rev().collect::<Vec<_>>());
 }
 
+/// Retention removes the segment a cursor names after the page resolved it:
+/// the page fails rather than read the active file, a different segment, in
+/// its place.
+#[test]
+fn a_segment_removed_after_resolving_fails_the_page() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir, "inv.jsonl");
+    let l = logger(&path, 1000);
+    for i in 0..30 {
+        call(&l, i);
+    }
+    let limits = Limits {
+        matches: 5,
+        bytes: 8 << 20,
+    };
+    let first = read_page(&path, None, None, limits, is_call).unwrap();
+    // Seal the active file the cursor points into.
+    let before = list_segments(&path).unwrap().len();
+    let mut i = 30;
+    while list_segments(&path).unwrap().len() == before {
+        call(&l, i);
+        i += 1;
+    }
+    let gone = path.clone();
+    AFTER_RESOLVE.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move || {
+            for segment in list_segments(&gone).unwrap() {
+                std::fs::remove_file(sealed_path(&gone, segment.seq)).unwrap();
+            }
+        }));
+    });
+    let page = read_page(&path, None, first.next.as_ref(), limits, is_call);
+    assert!(page.is_err(), "read another segment instead: {page:?}");
+}
+
 /// Write hand-made lines; the reader parses JSON and needs no chain.
 fn write_lines(path: &Path, lines: &[Value]) {
     let body: String = lines.iter().map(|v| v.to_string() + "\n").collect();
