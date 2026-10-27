@@ -498,20 +498,9 @@ impl ReloadContext {
         Ok(outcome)
     }
 
-    async fn reload_transaction(
-        &self,
-        path: &std::path::Path,
-    ) -> std::result::Result<ReloadOutcome, String> {
-        #[cfg(test)]
-        super::reload_pause::pause_here(&self.config_path).await;
-        let evaluated = self.load_off_worker(path.to_path_buf()).await?;
-        // First: a posture change also changes what the posture forces (signing
-        // among it), and the posture is the cause the operator must act on.
-        if let Some(refusal) =
-            posture::reload_refusal(self.live_config.running(), &evaluated.config)
-        {
-            return Err(refusal);
-        }
+    /// A refusal when `evaluated` changes a security field only a restart
+    /// applies: message signing, the signature chain or the record key.
+    fn restart_only_refusal(&self, evaluated: &EvaluatedReload) -> std::result::Result<(), String> {
         let (running, proposed) = (&self.live_config.running().security, &evaluated.config);
         let (env, overlay): (&crate::config::EnvOverlay, &crate::config::EnvOverlay) =
             (self.env.startup(), &evaluated.overlay);
@@ -533,6 +522,24 @@ impl ReloadContext {
                 "config reload refused: security.{field} requires restart"
             ));
         }
+        Ok(())
+    }
+
+    async fn reload_transaction(
+        &self,
+        path: &std::path::Path,
+    ) -> std::result::Result<ReloadOutcome, String> {
+        #[cfg(test)]
+        super::reload_pause::pause_here(&self.config_path).await;
+        let evaluated = self.load_off_worker(path.to_path_buf()).await?;
+        // First: a posture change also changes what the posture forces (signing
+        // among it), and the posture is the cause the operator must act on.
+        if let Some(refusal) =
+            posture::reload_refusal(self.live_config.running(), &evaluated.config)
+        {
+            return Err(refusal);
+        }
+        self.restart_only_refusal(&evaluated)?;
         // Measured against the overlay startup captured, so a requirement stays
         // reported on every reload until the process actually restarts.
         let env_restart_keys = changed_startup_env_keys(&self.env, &evaluated);
