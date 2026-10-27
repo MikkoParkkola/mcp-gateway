@@ -314,3 +314,20 @@ test.describe('round 3 cases', () => {
     await expect(banner(page)).toHaveAttribute('data-cause', 'not-found');
   });
 });
+
+test.describe('code review cases', () => {
+  test('E7c moving to a missing page during a Retry leaves nothing busy', async ({ page }) => {
+    let calls = 0;
+    const held = new Promise(() => {}); // the Retry never answers
+    await openProbed(page, async (r) => {
+      calls += 1;
+      if (calls === 1) return r.fulfill({ status: 500, json: {} });
+      await held;
+    });
+    await retry(page).click();
+    await expect(page.locator('#content')).toHaveAttribute('aria-busy', 'true');
+    await inApp(page, '/ui/no-such-page');
+    await expect(page.locator('.head .plate')).toHaveText('Not found');
+    await expect(page.locator('#content')).not.toHaveAttribute('aria-busy', 'true');
+  });
+});

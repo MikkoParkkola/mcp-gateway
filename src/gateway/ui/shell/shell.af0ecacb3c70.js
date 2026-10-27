@@ -128,7 +128,8 @@ export async function api(path, init = {}) {
   if (reply.status === 204) return null;
   try {
     return await reply.json();
-  } catch {
+  } catch (err) {
+    if (err?.name === 'AbortError') throw err; // the caller cancelled the read
     throw new ApiError(reply.status, path, { unreadable: true });
   }
 }
@@ -380,6 +381,8 @@ const runTab = (spec, route, into) =>
 /** Render the current address. */
 export function render() {
   const seq = ++renderSeq;
+  // A Retry left running by the last page has nothing to show here.
+  document.getElementById('content').removeAttribute('aria-busy');
   const route = parse(location.pathname);
   const label = NAV.find(([id]) => id === route.page)?.[1];
   drawNav(route.page);
@@ -416,7 +419,6 @@ export function render() {
     tabsNav.append(el('a', { href, 'aria-current': t === route.tab ? 'page' : null }, tabLabel));
   }
   const body = el('div', { class: 'body' });
-  content.removeAttribute('aria-busy');
   content.replaceChildren(mark(body));
   // Every effect of this render is dropped once the user navigates or signs in as someone else.
   const epoch = authEpoch;
