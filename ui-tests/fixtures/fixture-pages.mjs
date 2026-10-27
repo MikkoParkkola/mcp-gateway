@@ -54,6 +54,7 @@ const probed = {
   activity: (el, ctx) => {
     el.textContent = 'activity - status';
     ctx.show('stale');
+    ctx.show('stale'); // the same banner again is no news
     setTimeout(() => ctx.show(null), 50);
   },
   costs: async (el) => {

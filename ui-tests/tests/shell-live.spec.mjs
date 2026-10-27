@@ -211,6 +211,8 @@ test('L5c a new identity\'s first count is not announced', async ({ page }) => {
   count = 7;
   await page.locator('.top .signout').click();
   await expect(page.locator('#signin')).toBeVisible();
+  await drained(page);
+  expect(await announced(page)).toContain('Signed out.');
   await signIn(page);
   await expect(page.locator('nav.route-nav .count')).toHaveText('7');
   await drained(page);
@@ -296,7 +298,7 @@ test('L13 stale data is announced, and so is its recovery', async ({ page }) => 
   await drained(page);
   // Both are said, in order: the first is written at once, the second after the dwell.
   const said = (await announced(page)).join(' ');
-  expect(said.indexOf('Updates stopped.')).toBeGreaterThanOrEqual(0);
+  expect(said.split('Updates stopped.').length - 1, 'said once, though shown twice').toBe(1);
   expect(said.indexOf('Updates resumed.')).toBeGreaterThan(said.indexOf('Updates stopped.'));
 });
 

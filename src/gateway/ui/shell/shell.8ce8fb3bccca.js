@@ -489,6 +489,8 @@ function screenBanner(into, page, guard) {
   return (kind, opts = {}) => {
     if (!guardHolds(guard)) return; // a screen the user has left
     const old = into.querySelector(':scope > .state[data-banner]');
+    // The same banner again is no transition: leave it, say nothing.
+    if (kind && old?.dataset.state === kind && !opts.title) return;
     old?.remove();
     const subject = `screen:${page}`;
     if (!kind) {
@@ -751,6 +753,7 @@ async function signOut() {
   if (ended) {
     notice.hidden = true;
     notice.textContent = '';
+    announce('Signed out.', { subject: 'signin-session' });
   } else {
     signinMessage(notice, "Signed out here, but the gateway did not confirm the session ended, so this browser may still be signed in. Reload and sign out again, or clear this site's cookies.", { subject: 'signin-session' });
   }
