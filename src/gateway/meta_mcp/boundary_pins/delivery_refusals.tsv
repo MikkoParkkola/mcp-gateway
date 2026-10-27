@@ -1,46 +1,68 @@
 # file	fn	callee	count	class	note (classes: see delivery_framing.rs)
 src/gateway/authz.rs	authorize_backend	backend_refusal	1	feeds	the authorization error; meta and stdio route stages raise it, the direct 403 is classed Denied
 src/gateway/meta_mcp/account_outcome.rs	judge_account	audit_transient_refusal	1	not-delivered	audit row
+src/gateway/meta_mcp/caller_forward.rs	scope_refusal	Error::Forbidden{}	1	no-record	prompts/get scope refusal, not a tools/call delivery
 src/gateway/meta_mcp/caller_forward.rs	scope_refusal	audit_refusal	1	not-delivered	audit row
 src/gateway/meta_mcp/chain_receipt.rs	chain_receive	refusal	1	recorded	chain-receipt refusal of the backend answer; raised at its delivering callers (meta and direct)
 src/gateway/meta_mcp/chain_receipt.rs	receive	refusal	4	feeds	chain-receipt refusal, delivered through chain_receive
 src/gateway/meta_mcp/invoke/bridge_dispatch.rs	invoke	undeclared_key_refusal	1	recorded	bridged round undeclared key; raised while vouched where it ends the exchange
 src/gateway/meta_mcp/invoke/caller_verdict.rs	caller_verdict	audit_transient_refusal	1	not-delivered	audit row
+src/gateway/meta_mcp/invoke/chokepoint.rs	recheck_target	Error::Forbidden{}	1	recorded	raised while vouched at the send and bridged chokepoints
 src/gateway/meta_mcp/invoke/chokepoint.rs	recheck_target	audit_refusal	1	not-delivered	audit row
+src/gateway/meta_mcp/invoke/chokepoint.rs	rescan_outbound	Error::Forbidden{}	2	recorded	raised while vouched at the send and bridged chokepoints
 src/gateway/meta_mcp/invoke/chokepoint.rs	rescan_outbound	request_refusal	1	recorded	dispatch rescan (a retry answer); raised while vouched at the send chokepoint
+src/gateway/meta_mcp/invoke/chokepoint.rs	route_request_scan	Error::Forbidden{}	1	recorded	stdio route stage raises its Forbidden
 src/gateway/meta_mcp/invoke/chokepoint.rs	route_request_scan	request_refusal	1	recorded	stdio route stage raises its Forbidden
 src/gateway/meta_mcp/invoke/continuation.rs	redeem_retry	note_refusal	1	not-delivered	worker clock note
 src/gateway/meta_mcp/invoke/continuation.rs	seal_direct_interim	refusal	1	recorded	direct undeclared question, after dispatch; raised here
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	firewall_refusal_body	Error::ResponseFirewallRefused	1	not-delivered	the stored body a replay serves
+src/gateway/meta_mcp/invoke/egress.rs	inspect_discovery_value	Error::ResponseFirewallRefused	1	recorded	the frame is marked delivery_refusal at the outlet
 src/gateway/meta_mcp/invoke/gate.rs	absent_answer	seal_key_refusal	1	recorded	withheld answer; withheld raised in this fn for an out-of-scope name
 src/gateway/meta_mcp/invoke/gate.rs	as_undefined_capability	capability_rule_refusal	1	not-delivered	predicate comparing the rule's text
+src/gateway/meta_mcp/invoke/gate.rs	check_call_level_policy	Error::Forbidden{}	1	not-a-decision	a malformed tool name
 src/gateway/meta_mcp/invoke/gate.rs	check_call_level_policy	audit_refusal	1	not-delivered	audit row
 src/gateway/meta_mcp/invoke/gate.rs	named_gate_answer	capability_rule_refusal	1	not-delivered	predicate
 src/gateway/meta_mcp/invoke/gate.rs	named_gate_answer	seal_key_refusal	1	recorded	withheld answer; withheld_for raises in this fn
 src/gateway/meta_mcp/invoke/gate.rs	withheld_invoke_target	blocked_tool_refusal	1	not-delivered	predicate
+src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	Error::ResponseFirewallRefused	1	recorded	the frame is marked delivery_refusal at the outlet
 src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	bridge_refusal	1	recorded	bridged undeclared last round; raised while vouched
+src/gateway/meta_mcp/invoke/policy.rs	apply_response_gates_effect	Error::ResponseFirewallRefused	1	recorded	the frame is marked delivery_refusal at the outlet
+src/gateway/meta_mcp/invoke/policy.rs	authorize_invocation	Error::Forbidden{}	1	composite-or-replay	backstop: a lone call is refused first by the route stage (raised); reached by composite steps
 src/gateway/meta_mcp/invoke/policy.rs	authorize_invocation	audit_refusal	1	not-delivered	audit row
 src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	blocked_tool_refusal	1	recorded	Protocol refusal; the route stage withholds it first (PR-2a raise)
+src/gateway/meta_mcp/invoke/pre_dispatch.rs	admit_idempotency_key	Error::ResponseFirewallRefused	1	composite-or-replay	an idempotent replay of a stored firewall refusal; its frame is marked
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	admit_idempotency_key	is_firewall_refusal	1	not-delivered	predicate
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	answer_undeclared_key	seal_key_refusal	1	recorded	dispatch-time undeclared key; raised while vouched before the seal
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	answer_undeclared_key	undeclared_key_refusal	1	feeds	builds the refusal sealed beside it
+src/gateway/meta_mcp/invoke/pre_dispatch.rs	seal_key_refusal	Error::ResponseFirewallRefused	1	recorded	the frame is marked delivery_refusal at the outlet
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_caller_credential_as	transient_mint_refusal	1	not-delivered	a credential mint failure, not a policy decision
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_credential_attempted_for	unminted_refusal	1	not-delivered	a credential mint failure, not a policy decision
 src/gateway/meta_mcp/invoke/r2_check.rs	undeclared_key_refusal_through	catalogue_refusal	1	feeds	builds the key refusal its callers seal
 src/gateway/meta_mcp/invoke/relay.rs	refuse_relay	relay_refusal	1	recorded	pre-send relay block on the meta route; raised while vouched
 src/gateway/meta_mcp/invoke/relay.rs	refuse_relaying_round	relay_refusal	1	recorded	pre-send relay block on a bridged round; raised while vouched
+src/gateway/meta_mcp/invoke/relay.rs	relay_refusal	Error::Forbidden{}	1	feeds	the relay block, raised by refuse_relay and refuse_relaying_round
+src/gateway/meta_mcp/invoke/relay_catalogue.rs	catalogue_refusal	Error::Forbidden{}	1	feeds	the catalogue relay refusal forward_catalogue raises
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	forward_catalogue	catalogue_refusal	1	recorded	raised here (design section 2 row)
 src/gateway/meta_mcp/invoke/stored_proof.rs	prove_target_live	take_account_refusal	1	composite-or-replay	stored replay's account refusal
 src/gateway/meta_mcp/invoke/stored_proof.rs	prove_target_live	unminted_refusal	1	composite-or-replay	stored replay's credential proof
 src/gateway/meta_mcp/invoke/stored_proof.rs	refuse_unproven	unminted_refusal	1	composite-or-replay	stored replay's credential proof
 src/gateway/meta_mcp/invoke/undeclared_gate.rs	bridge_refusal	refusal	1	feeds	builds the bridged undeclared refusal
 src/gateway/meta_mcp/invoke/undeclared_gate.rs	refuse_undeclared	refusal	1	recorded	meta undeclared question, after dispatch; raised while vouched at its caller
+src/gateway/meta_mcp/playbook_invoker.rs	step_not_permitted	Error::Forbidden{}	1	feeds	the neutral step refusal its callers deliver
 src/gateway/meta_mcp/protocol.rs	handle_prompts_get	scope_refusal	2	no-record	prompts/get, not a tools/call delivery
+src/gateway/meta_mcp/response_security.rs	enforce_firewall_challenge	Error::ResponseFirewallRefused	2	recorded	the frame is marked delivery_refusal at the outlet
+src/gateway/meta_mcp/response_security.rs	inspect_task_result	Error::ResponseFirewallRefused	1	composite-or-replay	a task result, settled for a later tasks/get
+src/gateway/meta_mcp/search/chain_exec.rs	step_failure	Error::Forbidden{}	1	composite-or-replay	a chain step's refusal, rebuilt for the chain
+src/gateway/meta_mcp/search/chain_exec.rs	step_failure	Error::ResponseFirewallRefused	1	composite-or-replay	a chain step's refusal, rebuilt for the chain
 src/gateway/meta_mcp/task_replay.rs	keep_permanent_refusal	live_refusal	1	not-delivered	memo
 src/gateway/meta_mcp/task_replay.rs	keep_permanent_refusal	record_account_refusal	1	not-delivered	memo
 src/gateway/meta_mcp/task_replay.rs	prepare_stored_read_kind	keep_permanent_refusal	1	not-delivered	memo
+src/gateway/meta_mcp/task_replay/judging.rs	authorize_stored	Error::Forbidden{}	1	composite-or-replay	a stored task read re-judged at tasks/get; refuse_stored delivers it, raised there
 src/gateway/meta_mcp/task_replay/judging.rs	judge_stored_accounts	take_account_refusal	1	composite-or-replay	stored task read
 src/gateway/meta_mcp/task_replay/judging.rs	refuse_stored	unknown_server_refusal	1	recorded	tasks/get refuse_stored raises where it returns Some
 src/gateway/meta_mcp/upstream.rs	recover_task_result	note_refusal	1	not-delivered	audit note
+src/gateway/meta_mcp/visibility.rs	admin_capability_rule	Error::Forbidden{}	1	feeds	delivered by the route stage or the send chokepoint, both raised
+src/gateway/meta_mcp/visibility.rs	may_invoke_before_grants	Error::Forbidden{}	1	feeds	the authorization refusal the route stage delivers and raises
 src/gateway/meta_mcp/visibility.rs	withheld_surfaced_in	audit_refusal	1	not-delivered	audit row
 src/gateway/router/accounts.rs	revoke_for	refusal	3	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/router/accounts/connections.rs	api_route	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
@@ -52,6 +74,7 @@ src/gateway/router/accounts/journeys.rs	status	journey_refusal	1	no-record	accou
 src/gateway/router/accounts/journeys.rs	status	refusal	3	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/router/authorization.rs	require_admin_log_level	audit_refusal	1	not-delivered	audit row
 src/gateway/router/backend_handlers.rs	apply_backend_tool_call_security	key_refusal	1	recorded	direct undeclared key; raised in key_check where the text refuses
+src/gateway/router/backend_handlers.rs	cached_error_response	Error::ResponseFirewallRefused	1	recorded	the frame is marked delivery_refusal
 src/gateway/router/backend_handlers.rs	cached_error_response	is_firewall_refusal	1	not-delivered	predicate
 src/gateway/router/backend_handlers.rs	cached_error_response	refusal	1	composite-or-replay	idempotency replay of a cached firewall refusal
 src/gateway/router/backend_handlers.rs	guard_tool_call	blocked_tool_refusal	1	not-delivered	predicate
