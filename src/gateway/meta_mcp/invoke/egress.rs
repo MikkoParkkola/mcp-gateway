@@ -268,6 +268,7 @@ impl MetaMcp {
             external_server: server,
             external_tool: tool,
             subject: None,
+            trace_id: None,
         };
         let at = Egress {
             content: ContentChecks::Here,
@@ -337,6 +338,7 @@ impl crate::transport::notification_sink::NotificationScreen for NotificationEgr
             external_server: "gateway",
             external_tool: &method,
             subject: None,
+            trace_id: None,
         };
         let at = Egress {
             content: ContentChecks::Here,
@@ -483,6 +485,7 @@ impl MetaMcp {
             external_server: server,
             external_tool: tool,
             subject: None,
+            trace_id: None,
         };
         let at = Egress {
             content: ContentChecks::Dispatched,
@@ -542,6 +545,7 @@ impl MetaMcp {
             external_server: "gateway",
             external_tool: "tools/list",
             subject: None,
+            trace_id: None,
         };
         let at = Egress {
             content: ContentChecks::Here,
@@ -579,6 +583,7 @@ impl MetaMcp {
             external_server: server,
             external_tool: tool,
             subject: None,
+            trace_id: None,
         };
         let at = Egress {
             content: ContentChecks::Here,

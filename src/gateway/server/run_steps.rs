@@ -236,6 +236,7 @@ impl Gateway {
         capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
         shutdown_tx: &tokio::sync::broadcast::Sender<()>,
         warmer: &WarmerGuard,
+        surfaced: crate::config_reload::SurfacedHook,
         reporting: crate::config_reload::refusals::ReloadReporting,
     ) -> Option<ConfigWatcher> {
         if let Some(path) = self.reload_path() {
@@ -249,6 +250,7 @@ impl Gateway {
                 capabilities,
                 shutdown_tx.subscribe(),
                 Some(warmer.hook()),
+                Some(surfaced),
                 reporting,
             ) {
                 Ok(w) => {

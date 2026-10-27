@@ -27,6 +27,7 @@ fn smallest_round() -> (InputRequired, InputRound) {
         arguments: json!({}),
         accepted_inputs: serde_json::Map::new(),
         continuation_deadline: None,
+        surfaced_server: None,
     };
     (requested, round)
 }

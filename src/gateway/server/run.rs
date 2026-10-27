@@ -230,6 +230,8 @@ impl Gateway {
             );
             meta_mcp.set_reload_context(Arc::clone(&reload_ctx));
         }
+        // The watcher's own reload context applies `surfaced_tools` too.
+        let surfaced_hook = meta_mcp.surfaced_hook();
 
         // In-flight request tracker: large initial permits, drain waits for
         // all permits to be returned (i.e., all in-flight requests complete).
@@ -528,6 +530,7 @@ impl Gateway {
             capabilities_for_watcher,
             &shutdown_tx,
             &warmer,
+            surfaced_hook,
             reload_reporting,
         );
 

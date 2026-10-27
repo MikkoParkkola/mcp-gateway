@@ -487,7 +487,7 @@ impl MetaMcp {
         }
         // A multi-step meta-tool is deliberately absent from this match.
         Some(DirectJob {
-            server: self.surfaced_tools_map.unscoped(tool_name)?.to_owned(),
+            server: self.surfaced_server_unscoped(tool_name)?.to_owned(),
             tool: tool_name.to_owned(),
             arguments: arguments.clone(),
         })

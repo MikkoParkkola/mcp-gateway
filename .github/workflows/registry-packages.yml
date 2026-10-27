@@ -32,6 +32,15 @@ on:
     - cron: "41 5 * * *"
   workflow_dispatch:
 
+# A train lands its pull requests on the release line as one squash commit
+# each, seconds apart. The live lookup answers for the registry as it is now,
+# so only the newest line commit's run is kept: a newer push to the line
+# cancels the older one. Every other event has a group of its own and is never
+# cancelled.
+concurrency:
+  group: registry-packages-${{ (github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+
 permissions:
   contents: read
 

@@ -159,12 +159,14 @@ impl ConfigWatcher {
             capabilities,
             shutdown_rx,
             None,
+            None,
             super::refusals::ReloadReporting::default(),
         )
     }
 
     /// [`Self::start`], with a hook told which backends each applied reload
-    /// registered (`MIK-8054`: the server warm-starts them).
+    /// registered (the server warm-starts them), and the hook
+    /// that applies `meta_mcp.surfaced_tools`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn start_with_hook(
         config_path: PathBuf,
@@ -176,6 +178,7 @@ impl ConfigWatcher {
         capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
         on_registered: Option<super::OnRegistered>,
+        surfaced: Option<super::SurfacedHook>,
         reporting: super::refusals::ReloadReporting,
     ) -> Result<Self> {
         // Pair first, so a refusal is returned before any watcher or task
@@ -227,7 +230,7 @@ impl ConfigWatcher {
             env,
             identity_grants,
             capabilities,
-            on_registered,
+            (on_registered, surfaced),
             event_rx,
             shutdown_rx,
             Arc::clone(&env_reloads),
@@ -298,7 +301,7 @@ impl ConfigWatcher {
         env: Arc<LiveEnv>,
         identity_grants: Option<Arc<IdentityGrantSink>>,
         capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
-        on_registered: Option<super::OnRegistered>,
+        (on_registered, surfaced): (Option<super::OnRegistered>, Option<super::SurfacedHook>),
         mut event_rx: tokio::sync::mpsc::Receiver<ReloadTrigger>,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
         env_reloads: Arc<env_poll::EnvReloadCounts>,
@@ -332,6 +335,9 @@ impl ConfigWatcher {
                         .with_env(env)
                         .with_identity_grant_sink_opt(identity_grants)
                         .with_capabilities(capabilities);
+                    if let Some(hook) = surfaced {
+                        ctx.set_surfaced_hook(hook);
+                    }
                     match on_registered {
                         Some(hook) => ctx.with_on_registered(hook),
                         None => ctx,

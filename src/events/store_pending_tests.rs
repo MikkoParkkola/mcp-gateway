@@ -64,6 +64,8 @@ fn sub(id: &str, now: DateTime<Utc>) -> Subscription {
         unoffered_since: None,
         held_until: None,
         watch_class: None,
+        observed_identity: None,
+        obs_basis: None,
     }
 }
 
@@ -90,6 +92,7 @@ fn record(event: &str, sub: &str, now: DateTime<Utc>) -> OutboxRecord {
         last_status: None,
         dead_as: None,
         replayed: false,
+        observed: None,
     }
 }
 
