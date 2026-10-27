@@ -206,7 +206,7 @@ async fn health_and_kill_switch_transitions_become_events() {
     let (hub, _) = hub(dir.path(), Vec::new());
     let kill = crate::kill_switch::KillSwitch::new();
     let backends = crate::backend::BackendRegistry::new();
-    hub.install_operational_source(&kill, &backends);
+    hub.install_operational_source(&kill, &backends, None);
     kill.kill("alpha");
     kill.kill("alpha");
     kill.revive("alpha");
@@ -244,7 +244,7 @@ async fn an_undatable_operational_event_is_dropped_and_counted() {
     let dir = tempfile::tempdir().expect("dir");
     let (hub, _) = hub(dir.path(), Vec::new());
     let kill = crate::kill_switch::KillSwitch::new();
-    hub.install_operational_source(&kill, &crate::backend::BackendRegistry::new());
+    hub.install_operational_source(&kill, &crate::backend::BackendRegistry::new(), None);
     {
         let _clock = crate::clock::test_clock::before_epoch();
         kill.kill("alpha");
@@ -272,6 +272,7 @@ async fn a_spent_budget_becomes_threshold_and_exhaustion_events() {
     let source = hub.install_operational_source(
         &crate::kill_switch::KillSwitch::new(),
         &crate::backend::BackendRegistry::new(),
+        None,
     );
     source.report_budgets(&enforcer);
     enforcer.record_spend("search", Some("dev"), 1.0);
@@ -332,6 +333,7 @@ async fn a_non_admin_never_receives_an_operator_event() {
     hub.install_operational_source(
         &crate::kill_switch::KillSwitch::new(),
         &crate::backend::BackendRegistry::new(),
+        None,
     );
     admit(&hub, "ops", "s-ops", KILL_SWITCH_CHANGED);
     admit(&hub, "dev", "s-dev", KILL_SWITCH_CHANGED);
@@ -519,6 +521,34 @@ async fn standing_is_judged_on_one_clock_reading() {
             "a clock failure not told apart: {refused:?}"
         );
     }
+}
+
+/// T30, both on: one observer per slot feeds the markers and the
+/// events alike; neither side is silenced by the other.
+#[tokio::test]
+async fn markers_and_events_share_the_one_observer_slot() {
+    let dir = tempfile::tempdir().expect("dir");
+    let (hub, _) = hub(dir.path(), Vec::new());
+    let kill = crate::kill_switch::KillSwitch::new();
+    let store = Arc::new(crate::counters::CounterStore::new(0));
+    hub.install_operational_source(
+        &kill,
+        &crate::backend::BackendRegistry::new(),
+        Some(crate::events::Markers {
+            store: Arc::clone(&store),
+            known: Arc::new(|_: &str| true),
+        }),
+    );
+    kill.kill("alpha");
+    assert_eq!(
+        drained(&hub),
+        [(
+            KILL_SWITCH_CHANGED.to_owned(),
+            json!({"backend": "alpha", "state": "killed"})
+        )]
+    );
+    let kinds: Vec<_> = store.markers(0).into_iter().map(|m| m.kind).collect();
+    assert_eq!(kinds, vec![crate::counters::MarkerKind::SwitchOff]);
 }
 
 /// ADR-022 (MIK-8862.ROT.5): a rotated key keeps its standing under its
