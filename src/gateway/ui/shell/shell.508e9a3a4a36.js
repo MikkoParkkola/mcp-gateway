@@ -420,7 +420,7 @@ async function signOut() {
   showSignIn();
   let ended = false;
   try {
-    const reply = await fetch('/dashboard/logout', { method: 'POST', credentials: 'same-origin', redirect: 'manual' });
+    const reply = await fetch('/dashboard/logout', { method: 'POST', credentials: 'same-origin', redirect: 'manual', keepalive: true });
     ended = reply.ok || reply.type === 'opaqueredirect';
   } catch {
     ended = false;

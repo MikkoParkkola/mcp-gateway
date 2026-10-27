@@ -372,3 +372,11 @@ test.describe('sign-out on a desktop', () => {
     await expect(page.locator('#pages').getByRole('button', { name: 'Sign out' })).toBeHidden();
   });
 });
+
+test('S16 with authentication off there is no session, so no sign-out', async ({ page }) => {
+  await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: false, signed_in: false, admin: false } } }));
+  await page.goto('/ui/overview/status');
+  await page.locator('#content [data-rendered]').waitFor();
+  await expect(page.locator('.top .signout')).toBeHidden();
+  await expect(page.locator('#pages .signout')).toBeHidden();
+});
