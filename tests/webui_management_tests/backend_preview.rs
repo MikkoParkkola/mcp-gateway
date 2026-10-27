@@ -168,6 +168,12 @@ async fn an_unconfirmed_preview_starts_nothing_and_returns_a_token() {
     );
     assert_eq!(body["preview"]["transport"], "http", "{body}");
     assert!(
+        body["preview"]
+            .as_object()
+            .is_some_and(|p| p.get("package") == Some(&Value::Null)),
+        "not known before the server answers: {body}"
+    );
+    assert!(
         log.lock().unwrap().is_empty(),
         "nothing may start before confirm"
     );

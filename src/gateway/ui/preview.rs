@@ -238,6 +238,8 @@ pub(super) async fn preview_backend(
         "url": url,
         "withheld": withheld,
         "publisher": {"verified": false, "source": null},
+        // Known only once the server answers; the key keeps one shape.
+        "package": null,
     });
     let digest = crate::hashing::sha256_hex(
         &serde_json::to_vec(&json!({"name": add.name, "backend": backend})).unwrap_or_default(),

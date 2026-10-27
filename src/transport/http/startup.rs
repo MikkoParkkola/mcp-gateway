@@ -275,6 +275,11 @@ impl HttpTransport {
     /// [`Self::connect`] has already resolved the endpoint and the credential.
     #[allow(clippy::too_many_lines)] // MIK-4486 OAuth detach adds ~2 lines
     pub(super) async fn legacy_handshake(&self) -> Result<()> {
+        // A handshake names the server afresh: a failed one names nobody.
+        #[cfg(any(feature = "webui", test))]
+        {
+            *self.server_info.write() = None;
+        }
         // Send initialize request via the message endpoint
         // Use configured protocol version if set, otherwise use latest
         let version = self

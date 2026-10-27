@@ -129,3 +129,23 @@ async fn reported_text_is_cleaned_in_both_eras() {
         assert_eq!(package["truncated"], true);
     }
 }
+
+/// A discover answer that names only 2025 revisions is legacy, so its
+/// `_meta` identity is a decoy: the preview shows what `initialize` reports.
+#[tokio::test]
+async fn a_discover_answer_classed_legacy_yields_to_initialize() {
+    fn dual(request: &Value) -> Response {
+        let id = request["id"].clone();
+        match request.get("method").and_then(Value::as_str) {
+            Some("server/discover") => Json(json!({"jsonrpc": "2.0", "id": id, "result": {
+                "supportedVersions": ["2025-06-18"],
+                "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "decoy", "version": "9"}},
+            }}))
+            .into_response(),
+            _ => legacy(request, &json!({"name": "real", "version": "1"})),
+        }
+    }
+    let package = package_from(dual).await;
+    assert_eq!(package["name"], "real", "{package}");
+    assert_eq!(package["version"], "1", "{package}");
+}
