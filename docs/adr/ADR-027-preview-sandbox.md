@@ -132,14 +132,24 @@ and then, inside the namespaces, in this order:
 2. Stages a fresh root on a tmpfs (`size=16M`). Every tmpfs it mounts, this one included, carries `MS_NOSUID |
    MS_NODEV`. Each runtime path is bind-mounted recursively (`MS_BIND | MS_REC`), and then it and every submount
    under it is remounted `MS_REMOUNT | MS_BIND | MS_RDONLY | MS_NOSUID | MS_NODEV` (an initial bind ignores
-   those flags, and a remount reaches only one mount). Runtime paths: `/usr`, `/bin`, `/lib*`, `/etc/ssl`, `/etc/ca-certificates`, `/etc/pki/tls`, and for
-   the command's interpreter only the resolved binary's directory plus the library directories it needs, never a
-   whole prefix. Every masking mount is a tmpfs with `size=4k`, mounted writable only long enough to create the
+   those flags, and a remount reaches only one mount). Runtime paths: `/usr`, `/bin`, `/lib*`, `/etc/ssl`, `/etc/ca-certificates`, `/etc/pki/tls`. The
+   command's program binds on an allowlist, by where its real file is: under those roots, nothing more; under
+   `/usr/local`, its directory and a sibling `lib`, bound back; inside a known runtime tree (an NVM node version, a
+   pyenv version, a Homebrew keg), that tree alone; anywhere else, the file alone, never the directory around it,
+   so a home or any other private directory is excluded without having to be found. The drop execs the program under the name
+   it was asked for (`argv[0]`): by the path asked for (its directory links resolved) when that path and every link after it
+   lie where the root shows them and every later link's target is written with no `.`, no `..` and no directory link
+   (a kernel-started script sees the exec path as its `$0`), and by its real file otherwise; so on Debian a program
+   reached through `/etc/alternatives`, and an alias whose link climbs with `..` (an nvm `npm`), runs as its real file. The run phase's `PATH`
+   names the exec path's directory, so an alias outside the binds never puts its own directory there. Every masking mount is a tmpfs with `size=4k`, mounted writable only long enough to create the
    mountpoints of any bind-back under it, then remounted `MS_RDONLY`: one over `/usr/local` (with that
    interpreter directory bound back if it lies there), one each over `/etc/ssl/private` and
    `/etc/pki/tls/private`, and one over every resolved gateway state, config and data path that falls under any
    bind. Plus the preview home (tmpfs `size=1G`, read-write), a `/tmp` (tmpfs `size=256M`), `/dev/null`,
-   `/dev/zero`, `/dev/urandom`, and the PID namespace's `/proc` mounted at the new root's `/proc`. The gateway
+   `/dev/zero`, `/dev/urandom`, and the PID namespace's `/proc` mounted at the new root's `/proc` with `hidepid=2,gid=1` (then remounted, as
+   kernels before 5.8 keep the options per superblock), so the helper (PID 1), which the target cannot ptrace, is
+   not listed there, whatever host groups the gateway's user holds. The remount for kernels before 5.8 is untested on a real
+   5.4-5.7 kernel; CI covers 6.x (a pre-release run on such a kernel is tracked as SBX.8). The gateway
    proxy's Unix socket is bound in now, while its host path is still reachable, onto a file under the writable
    `/tmp`, so the helper alone can unmount and remove it after the fetch (step 6); nothing in the new root is from `/run`, `/var` or any home; no
    `/etc/resolv.conf` (the fetch reaches only the proxy on `127.0.0.1`, which resolves names on the gateway
@@ -150,7 +160,7 @@ and then, inside the namespaces, in this order:
    or data path exists inside, wherever those paths live.
 4. Brings `lo` up with iproute2's `ip link set lo up` (present wherever util-linux is; rustix's only interface
    call is an unsafe ioctl), for the fetch.
-5. Starts every phase child as `<gateway binary> __preview-drop <limits> -- <target argv>` (by `/proc/self/exe`,
+5. Starts every phase child as `<gateway binary> __preview-drop <limits> <program> -- <target argv>` (by `/proc/self/exe`,
    which the private root keeps reachable as the helper's own image), so the helper itself keeps its namespace
    capabilities for the step-6 unmount and never runs untrusted code. `__preview-drop` drops every privilege, in
    the order the kernel needs (clearing `CAP_SETPCAP` first would make the later calls fail): the secure bits

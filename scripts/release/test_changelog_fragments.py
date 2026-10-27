@@ -87,6 +87,16 @@ class Assemble(unittest.TestCase):
         }
         self.assertEqual(cf.assemble(CHANGELOG, fragments), EXPECTED)
 
+    def test_suffixed_fragments_follow_their_number_in_suffix_order(self):
+        fragments = {
+            "9-10.added.md": "- c (#9)\n",
+            "9-2.added.md": "- b (#9)\n",
+            "9.added.md": "- a (#9)\n",
+            "10.added.md": "- d (#10)\n",
+        }
+        got = cf.assemble(CHANGELOG, fragments)
+        self.assertIn("- a (#9)\n- b (#9)\n- c (#9)\n- d (#10)\n", got)
+
     def test_no_fragments_changes_nothing(self):
         self.assertEqual(cf.assemble(CHANGELOG, {}), CHANGELOG)
         # Right after a release there may be no Unreleased heading yet.
@@ -171,6 +181,41 @@ class Check(unittest.TestCase):
 
     def test_deleting_the_placeholder_is_not_a_release_fold(self):
         self.assertEqual(len(cf.check([("M", "CHANGELOG.md"), ("D", "changelog.d/.gitkeep")], set())), 1)
+
+    def test_a_numeric_suffix_names_a_further_fragment_of_one_number(self):
+        # A second PR for the same number cannot reuse its first fragment's name.
+        changes = [("M", "src/lib.rs"), ("A", "changelog.d/8875-2.added.md")]
+        self.assertEqual(cf.check(changes, set()), [])
+
+    def test_a_suffix_must_be_digits_after_one_hyphen(self):
+        # 0 and a leading zero would tie with or alias another name in the fold.
+        for name in (
+            "8875-x.added.md",
+            "8875-.added.md",
+            "8875-2-3.added.md",
+            "-2.added.md",
+            "8875-0.added.md",
+            "8875-02.added.md",
+        ):
+            errors = cf.check([("A", f"changelog.d/{name}")], set())
+            self.assertEqual(len(errors), 1, name)
+            self.assertIn(f"changelog.d/{name}", errors[0])
+
+    def test_a_suffixed_add_does_not_excuse_deleting_the_unsuffixed_fragment(self):
+        changes = [("D", "changelog.d/8875.added.md"), ("A", "changelog.d/8875-2.added.md")]
+        errors = cf.check(changes, set())
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("changelog.d/8875.added.md", errors[0])
+
+    def test_an_unsuffixed_add_does_not_excuse_deleting_a_suffixed_fragment(self):
+        changes = [("D", "changelog.d/8875-2.added.md"), ("A", "changelog.d/8875.changed.md")]
+        errors = cf.check(changes, set())
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("changelog.d/8875-2.added.md", errors[0])
+
+    def test_retyping_a_suffixed_fragment_under_its_own_name_passes(self):
+        changes = [("D", "changelog.d/8875-2.added.md"), ("A", "changelog.d/8875-2.changed.md")]
+        self.assertEqual(cf.check(changes, set()), [])
 
     def test_editing_an_existing_fragment_does_not_count_as_adding_one(self):
         self.assertEqual(len(cf.check([("M", "src/a.rs"), ("M", "changelog.d/1.fixed.md")], set())), 1)

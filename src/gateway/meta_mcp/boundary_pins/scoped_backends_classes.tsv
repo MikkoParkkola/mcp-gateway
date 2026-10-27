@@ -7,6 +7,7 @@ src/gateway/meta_mcp/admission_replay.rs	mints_per_caller	scoped_get	scoped
 src/gateway/meta_mcp/audience.rs	visible_digest	get_for	Visibility
 src/gateway/meta_mcp/chain_receipt.rs	chain_mode_of	scoped_get	scoped
 src/gateway/meta_mcp/chain_receipt.rs	chain_receive_for	scoped_get	scoped
+src/gateway/meta_mcp/counting.rs	configured	get_for	Admin
 src/gateway/meta_mcp/discovery_fetch.rs	code_mode_backend_candidates	all_for	Discovery
 src/gateway/meta_mcp/discovery_fetch.rs	code_mode_backend_candidates	get_for	Discovery
 src/gateway/meta_mcp/discovery_fetch.rs	revalidate_caller_slots	all_for	Discovery
@@ -46,9 +47,11 @@ src/gateway/meta_mcp/search.rs	list_tools_single_server	get_for	Visibility
 src/gateway/meta_mcp/spec_preview.rs	collect_all_cached_tool_names	all_for	Discovery
 src/gateway/meta_mcp/spec_preview.rs	collect_filtered_backend_tools	all_for	Discovery
 src/gateway/meta_mcp/spec_preview.rs	resolve_tool_by_name	all_for	Discovery
+src/gateway/meta_mcp/surfaced.rs	apply_surfaced_reload	get_for	Visibility
 src/gateway/meta_mcp/surfaced.rs	list_servers	all_for	Visibility
 src/gateway/meta_mcp/surfaced.rs	resolve_surfaced_tool	get_for	Visibility
 src/gateway/meta_mcp/surfaced.rs	surfaced_schema_withheld	get_for	Visibility
+src/gateway/meta_mcp/surfaced.rs	surfaced_kind	get_for	Visibility
 src/gateway/meta_mcp/task_confirmation.rs	classify_surfaced	get_for	Visibility
 src/gateway/meta_mcp/task_replay.rs	cold_lease_remaining	scoped_get	scoped
 src/gateway/meta_mcp/task_replay.rs	settle_caller_view	scoped_get	scoped
