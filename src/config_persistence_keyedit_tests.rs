@@ -492,22 +492,32 @@ fn a_field_under_a_tagged_mapping_is_unprovable() {
     assert_unprovable("a: !!map\n  b: 1\n", &[set_int("a.b", 2)]);
 }
 
-/// An empty block scalar: with no block check, the span past its line
-/// is what refuses it.
+/// An empty block scalar: with no block check, the meaning proof is what
+/// refuses it.
 #[test]
-fn an_empty_block_scalar_is_refused_by_the_line_end_guard() {
+fn an_empty_block_scalar_is_refused_by_the_meaning_proof() {
     assert_refused_by(
         "a:\n  b: |\nc: 1\n",
         &[set_int("a.b", 2)],
-        "runs past the end of its line",
+        "does not mean the original",
     );
 }
 
-/// Edits are placed by `\n` line: a config breaking lines with a bare `\r`
-/// refuses rather than risk two changes on what it reads as one line.
+/// Edits are placed by `\n` line, so a config breaking lines with a bare
+/// `\r` holds several parser lines on one: the bytes proof refuses a
+/// rebuilt line that lost its trailing `\r`, and two changes on one line.
 #[test]
-fn a_bare_carriage_return_break_is_unprovable() {
-    assert_unprovable("a: 1\rb: 2\r", &[set_int("a", 3)]);
+fn bare_carriage_return_lines_are_refused_by_the_bytes_proof() {
+    assert_refused_by(
+        "a: 1\rb: 2\r",
+        &[set_int("a", 3)],
+        "an untouched line changed",
+    );
+    assert_refused_by(
+        "a: 1\rb: 2",
+        &[set_int("a", 3), set_int("b", 4)],
+        "an untouched line changed",
+    );
 }
 
 /// A slot placeholder already present (here in a comment) would make the

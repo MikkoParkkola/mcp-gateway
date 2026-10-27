@@ -201,13 +201,6 @@ struct Located {
 /// mark, no directive or document marker, no duplicate key (the parser
 /// refuses those), and a mapping at the root.
 fn whole_file_is_plain(original: &str) -> Result<(), ComputeRefusal> {
-    // Edits are placed by `\n` line; a bare `\r` break would put two
-    // lines the parser sees on one.
-    if original.replace("\r\n", "\n").contains('\r') {
-        return Err(unprovable(
-            "the file uses a bare carriage return as a line break",
-        ));
-    }
     if original.starts_with('\u{feff}') {
         return Err(unprovable("the file starts with a byte order mark"));
     }
