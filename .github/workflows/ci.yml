@@ -739,7 +739,15 @@ jobs:
       # Not a flake skip (MIK-7534): it needs Python and Redis, which only
       # that job provisions, and the gate below `needs` that job.
       # The skips themselves live in scripts/ci/shard_tests.py (SKIPS).
+      # ADR-027: ubuntu-latest restricts unprivileged user namespaces through
+      # AppArmor, which refuses the command preview's sandbox. Lifting it here
+      # lets the sandbox tests run, and PREVIEW_SANDBOX_REQUIRED turns a
+      # refused sandbox into a failure instead of a skip.
+      - name: Allow unprivileged user namespaces (preview sandbox tests)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Shard suite
+        env:
+          PREVIEW_SANDBOX_REQUIRED: "1"
         run: python3 scripts/ci/shard_tests.py run linux ${{ matrix.shard }}
       # MIK-8185: the UPGRADING checks again, on the guide as release
       # preparation will assemble it from upgrading.d/, so a fragment that
