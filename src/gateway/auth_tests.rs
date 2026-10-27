@@ -646,6 +646,8 @@ fn redeem(state: &AuthState, printed: &str) -> axum::http::StatusCode {
         .status()
 }
 
+#[path = "auth/tests/bootstrap_oracle_tests.rs"]
+mod bootstrap_oracle_tests;
 #[path = "auth/tests/bootstrap_spend_tests.rs"]
 mod bootstrap_spend_tests;
 #[path = "auth/tests/principal_ident_tests.rs"]

@@ -32,6 +32,8 @@ mod watch;
 mod mode_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(all(test, windows))]
+mod winacl_tests;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -316,7 +318,8 @@ fn create_backup(path: &Path) -> Result<Option<PathBuf>, String> {
         .ok_or_else(|| "System clock is past 2262: cannot stamp the backup".to_owned())?;
     let backup_path = parent.join(format!("{file_name}{BACKUP_MARKER}{timestamp}"));
 
-    std::fs::copy(path, &backup_path).map_err(|e| {
+    // Keeps the config's access: a plain copy on Windows takes the folder's.
+    mcp_gateway::config_persistence::copy_keeping_access(path, &backup_path).map_err(|e| {
         format!(
             "Cannot create backup {} from {}: {e}",
             backup_path.display(),
