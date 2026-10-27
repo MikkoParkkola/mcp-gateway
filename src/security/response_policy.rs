@@ -27,6 +27,7 @@ pub(crate) enum TargetOrigin {
     NoBackend,
     /// One of those backends, added by `MetaMcp::expand_targets` for rule
     /// matching only: the audit row lists the targets the call had.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
     Expanded,
 }
 

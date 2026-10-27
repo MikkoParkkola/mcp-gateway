@@ -607,6 +607,7 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
 }
 
 /// The routed policy target of a call to `asks` under the discovery name.
+#[cfg(feature = "firewall")]
 fn asks_target() -> crate::security::response_policy::ResponsePolicyTarget {
     crate::security::response_policy::ResponsePolicyTarget {
         server: "asks".to_owned(),
