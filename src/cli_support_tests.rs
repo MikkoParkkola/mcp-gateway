@@ -308,6 +308,10 @@ fn no_refusal_shows_a_url_or_an_argument() {
         message.contains("needs_client_only_secret (cwd)"),
         "{message}"
     );
+    assert!(
+        message.contains("needs_client_only_secret (args[1]), literal_in_template (env.KEY)"),
+        "sorted by field: {message}"
+    );
     assert!(!message.contains("zq-"), "{message}");
 }
 
