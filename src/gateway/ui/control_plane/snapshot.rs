@@ -137,7 +137,18 @@ pub(super) fn merge_store_into_snapshot(
     // One bounded page: the newest 200 events, newest first. The view never
     // walks the whole log, however long it has grown.
     match store.read_audit(&AuditFilter::new(200)) {
-        Ok(page) => snapshot.audit_events = page.events,
+        Ok(page) => {
+            // A line over the record cap stops the page short: the view is not
+            // the newest 200 events, so say so rather than show it as complete.
+            if let Some(hole) = &page.unreadable {
+                degraded = true;
+                tracing::warn!(
+                    at = ?hole,
+                    "control-plane audit log has a line over the record cap; audit view incomplete"
+                );
+            }
+            snapshot.audit_events = page.events;
+        }
         Err(e) => {
             degraded = true;
             tracing::warn!(error = %e, "control-plane store read_audit failed; audit view left empty");

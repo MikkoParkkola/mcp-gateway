@@ -181,6 +181,32 @@ fn store_read_failure_marks_degraded() {
     assert!(degraded, "a failing store read must report degraded");
 }
 
+/// A page that met a line over the record cap is not the newest 200 events:
+/// the view keeps what it read and says it is incomplete.
+#[test]
+fn an_unreadable_audit_line_marks_degraded_and_keeps_the_events_read() {
+    use std::sync::atomic::Ordering;
+    let store = crate::config_reload::grant_audit_tests::FlakyStore::default();
+    store
+        .append_audit(&ControlPlaneAuditEvent {
+            grant_change: None,
+            event_id: "e1".to_string(),
+            actor_id: "alice".to_string(),
+            action: ControlPlaneAction::MutateGrant,
+            target_id: "g1".to_string(),
+            reason: "change".to_string(),
+            rollback: ControlPlaneRollbackPlan {
+                summary: "revert".to_string(),
+                step: "restore".to_string(),
+            },
+        })
+        .unwrap();
+    store.hole.store(true, Ordering::SeqCst);
+    let mut snapshot = ControlPlaneSnapshot::default();
+    assert!(merge_store_into_snapshot(&store, &mut snapshot), "degraded");
+    assert_eq!(snapshot.audit_events.len(), 1, "the events read are kept");
+}
+
 // MIK-6701.CP.READ.3 — feature entitlements report GovernanceMutation as
 // available exactly when the mutation endpoint is active, instead of always
 // reporting only LocalStatus.
