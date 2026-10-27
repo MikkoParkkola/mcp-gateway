@@ -40,10 +40,13 @@ fn with_surfaced_tools_stores_valid_entries() {
     // WHEN: building MetaMcp
     let mm = MetaMcp::new(Arc::new(BackendRegistry::new())).with_surfaced_tools(tools);
     // THEN: entry is stored
-    assert_eq!(mm.surfaced_tools.len(), 1);
-    assert_eq!(mm.surfaced_tools[0].tool, "my_custom_tool");
+    assert_eq!(mm.surfaced_state_live().tools.len(), 1);
+    assert_eq!(mm.surfaced_state_live().tools[0].tool, "my_custom_tool");
     assert_eq!(
-        mm.surfaced_tools_map.unscoped("my_custom_tool").unwrap(),
+        mm.surfaced_state_live()
+            .map
+            .unscoped("my_custom_tool")
+            .unwrap(),
         "backend_a"
     );
 }
@@ -64,9 +67,9 @@ fn with_surfaced_tools_drops_collision_with_meta_tool() {
     // WHEN: building MetaMcp
     let mm = MetaMcp::new(Arc::new(BackendRegistry::new())).with_surfaced_tools(tools);
     // THEN: only the non-colliding entry is kept
-    assert_eq!(mm.surfaced_tools.len(), 1);
-    assert_eq!(mm.surfaced_tools[0].tool, "my_real_tool");
-    assert!(!mm.surfaced_tools_map.contains("gateway_invoke"));
+    assert_eq!(mm.surfaced_state_live().tools.len(), 1);
+    assert_eq!(mm.surfaced_state_live().tools[0].tool, "my_real_tool");
+    assert!(!mm.surfaced_state_live().map.contains("gateway_invoke"));
 }
 
 #[test]
@@ -86,8 +89,8 @@ fn with_surfaced_tools_drops_all_known_meta_tool_names() {
     // WHEN
     let mm = MetaMcp::new(Arc::new(BackendRegistry::new())).with_surfaced_tools(tools);
     // THEN: all are dropped
-    assert!(mm.surfaced_tools.is_empty());
-    assert!(mm.surfaced_tools_map.is_empty());
+    assert!(mm.surfaced_state_live().tools.is_empty());
+    assert!(mm.surfaced_state_live().map.is_empty());
 }
 
 #[test]
@@ -106,8 +109,8 @@ fn with_surfaced_tools_drops_duplicate_tool_names() {
     // WHEN
     let mm = MetaMcp::new(Arc::new(BackendRegistry::new())).with_surfaced_tools(tools);
     // THEN: only the first occurrence is retained
-    assert_eq!(mm.surfaced_tools.len(), 1);
-    assert_eq!(mm.surfaced_tools[0].server, "server_a");
+    assert_eq!(mm.surfaced_state_live().tools.len(), 1);
+    assert_eq!(mm.surfaced_state_live().tools[0].server, "server_a");
 }
 
 #[test]
@@ -115,8 +118,8 @@ fn with_surfaced_tools_empty_input_is_no_op() {
     // GIVEN: empty list
     let mm = MetaMcp::new(Arc::new(BackendRegistry::new())).with_surfaced_tools(vec![]);
     // WHEN / THEN: no entries
-    assert!(mm.surfaced_tools.is_empty());
-    assert!(mm.surfaced_tools_map.is_empty());
+    assert!(mm.surfaced_state_live().tools.is_empty());
+    assert!(mm.surfaced_state_live().map.is_empty());
 }
 
 // ── T2.3: Surfaced tools appear in tools/list ─────────────────────────────
@@ -398,7 +401,10 @@ async fn colliding_name_is_dispatched_as_meta_tool_not_proxy() {
         tool: "gateway_list_servers".to_string(),
     }];
     let mm = MetaMcp::new(Arc::new(BackendRegistry::new())).with_surfaced_tools(surfaced);
-    assert!(mm.surfaced_tools.is_empty(), "Collision should be dropped");
+    assert!(
+        mm.surfaced_state_live().tools.is_empty(),
+        "Collision should be dropped"
+    );
 
     // WHEN: calling gateway_list_servers
     let resp = Box::pin(mm.handle_tools_call(

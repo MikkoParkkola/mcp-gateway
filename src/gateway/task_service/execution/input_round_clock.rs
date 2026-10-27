@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use tokio::sync::watch;
 
-use super::{Settling, TaskCall, TaskExecutor, dispatch};
+use super::{Settling, TaskCall, TaskExecutor, dispatch, settle_surfaced_refused};
 use crate::gateway::task_service::ErrorAuthor;
 use crate::gateway::task_service::execution::OwnedCallerContext;
 use crate::gateway::task_service::host::LiveHost;
@@ -150,6 +150,22 @@ pub(super) async fn redeeming_dispatch(
 ) -> Option<JsonRpcResponse> {
     let store = &executor.service.store;
     loop {
+        // A resume, or a state-only round, runs on the server the task
+        // recorded, or is settled as the worker's refusal when a reload has
+        // moved or removed that surfaced name since. Nothing awaits between
+        // this check and the pin `dispatch` takes. A cancel is seen first, as
+        // `dispatch` sees it.
+        if *cancel_rx.borrow() {
+            return None;
+        }
+        if !state
+            .meta_mcp()
+            .surfaced_target_holds(&call.tool, call.surfaced_server.as_ref())
+        {
+            let (principal, id, revision) = ids;
+            settle_surfaced_refused(executor, principal, id, revision, cancel_rx).await;
+            return None;
+        }
         owned.dispatch_log().worker().arm(store);
         let response = dispatch(state, owned, call, retry, cancel_rx).await?;
         if !owned.dispatch_log().worker().take_redemption_unreadable() {
