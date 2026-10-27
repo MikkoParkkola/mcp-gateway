@@ -195,14 +195,8 @@ impl EventsHub {
             .into_iter()
             .find(|s| s.id == dead.record.subscription_id && s.live(now))
             .ok_or(ReplayRefusal::SubscriptionGone)?;
-        let grant = (!dead.record.owner_scoped).then_some(dead.record.backend.as_str());
-        match services.admission(&sub, grant).await {
-            super::services::AccessVerdict::Admits => {}
-            super::services::AccessVerdict::Refuses => return Err(ReplayRefusal::AccessRevoked),
-            // No verdict on the access: the clock cannot be read (MIK-8202).
-            super::services::AccessVerdict::Undated => return Err(ReplayRefusal::Unavailable),
-        }
-        self.still_observed(&dead.record, services, now).await?;
+        self.replay_admitted(&sub, &dead.record, services, now)
+            .await?;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&dead.record.body_b64)
             .map_err(|_| ReplayRefusal::Unavailable)?;
@@ -276,6 +270,25 @@ impl EventsHub {
             Some(Revived::Missing) => Err(ReplayRefusal::NotFound),
             Some(Revived::Undated) | None => Err(ReplayRefusal::Unavailable),
         }
+    }
+
+    /// Whether `record` may be replayed to `sub` now: the access re-check,
+    /// then the send path's observation check.
+    async fn replay_admitted(
+        &self,
+        sub: &super::records::Subscription,
+        record: &OutboxRecord,
+        services: &super::Services,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), ReplayRefusal> {
+        let grant = (!record.owner_scoped).then_some(record.backend.as_str());
+        match services.admission(sub, grant).await {
+            super::services::AccessVerdict::Admits => {}
+            super::services::AccessVerdict::Refuses => return Err(ReplayRefusal::AccessRevoked),
+            // No verdict on the access: the clock cannot be read (MIK-8202).
+            super::services::AccessVerdict::Undated => return Err(ReplayRefusal::Unavailable),
+        }
+        self.still_observed(record, services, now).await
     }
 
     /// The send path's own observation check, on the row as it is after the
