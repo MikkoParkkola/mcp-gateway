@@ -141,7 +141,17 @@ impl Gateway {
         // leads its own process group, leave their trees running.
         let signalled_early = futures::FutureExt::now_or_never(stop_signal.as_mut()).is_some();
 
-        self.install_stdio_startup_catalogue(&meta_mcp, grant_sink.as_ref(), &warmer)
+        // The overrides in effect at start are recorded now; reloads share it.
+        let (override_auditor, override_drain) =
+            crate::config_reload::override_audit::OverrideAuditor::start(
+                meta_mcp.transparency_log().cloned(),
+            );
+        override_auditor
+            .record_at_start(&self.backends, meta_mcp.transparency_log())
+            .await?;
+        let reporting =
+            crate::config_reload::refusals::ReloadReporting::with_override_audit(override_auditor);
+        self.install_stdio_startup_catalogue(&meta_mcp, grant_sink.as_ref(), &warmer, reporting)
             .await?;
 
         // Warm-start backends (same as HTTP mode). Held for the rest of the
@@ -686,6 +696,8 @@ impl Gateway {
         // any other exit path, which is the point of them.
         drop(idle_reaper);
         drop(health_loop);
+        let left = shutdown_deadline.saturating_duration_since(tokio::time::Instant::now());
+        override_drain.drain(&self.backends, left).await;
         self.stdio_teardown(shutdown_deadline, warmer, task_store)
             .await;
         Ok(())

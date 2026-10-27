@@ -28,10 +28,14 @@ DOC = """# x
 EXTRACTED = {"env": [inv.Entry("A", "src/a.rs", 1), inv.Entry("B", "src/b.rs", 9)]}
 
 
-FILLER = {s: [inv.Entry(f"x-{s}", "src/x.rs", 1)] for s in inv.SURFACES if s != "env"}
+# cli has no extractor here (its membership is tests/cli_surface_inventory.rs):
+# its filler row is extracted by nothing and must sit under src/cli/.
+FILLER = {s: [inv.Entry(f"x-{s}", "src/x.rs", 1)] for s in inv.EXTRACTORS if s != "env"}
 FILLER_ROWS = "".join(
-    f"## Surface: {s}\n| Item | Class | Reason | Migration | Defined at |\n|---|---|---|---|---|\n| `x-{s}` | KEEP | filler | - | src/x.rs:1 |\n"
-    for s in FILLER
+    f"## Surface: {s}\n| Item | Class | Reason | Migration | Defined at |\n|---|---|---|---|---|\n"
+    f"| `x-{s}` | KEEP | filler | - | {'src/cli/x.rs:1' if s == 'cli' else 'src/x.rs:1'} |\n"
+    for s in inv.SURFACES
+    if s != "env"
 )
 
 
@@ -221,12 +225,6 @@ def test_backend_keys_match_strict_keys_oracle() -> None:
     assert got - retired == want, (sorted(got - retired - want), sorted(want - got))
 
 
-def test_cli_root_globals_carry_their_env() -> None:
-    cli = {e.id: e for e in inv.extract_cli()}
-    assert "env MCP_GATEWAY_CONFIG" in cli["mcp-gateway --config"].note
-    assert "mcp-gateway serve --stdio" in cli
-
-
 def test_placeholder_reasons_fail() -> None:
     # MIK-8077.1/.2: every listed placeholder, plus the spellings reviewers found.
     words = set(inv.PLACEHOLDER_REASONS) | {"TODO", "TBD", "FIXME", "XXX", "later", "pending"}
@@ -240,84 +238,6 @@ def test_real_reasons_with_punctuation_pass() -> None:
     for reason in ("A2A transport (MIK-8063)", "TLS cert path", "later-stage hook, kept for tests"):
         doc = DOC.replace("| `A` | KEEP | needed |", f"| `A` | KEEP | {reason} |")
         assert check(doc) == [], (reason, check(doc))
-
-
-CLI_FIXTURE = """
-pub struct Args {
-    #[arg(short, long)]
-    config: String,
-    #[arg(short = 'e', long = "env", value_name = "KEY=VALUE")]
-    env: Vec<String>,
-    #[arg(long)]
-    force: bool,
-    #[arg(value_name = "DESCRIPTOR")]
-    descriptor: PathBuf,
-    target: String,
-}
-"""
-
-
-def cli_rows(source: str) -> dict[str, inv.Entry]:
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "args.rs"
-        path.write_text(source, encoding="utf-8")
-        item = inv.parse_items(path)[0]
-        walker = inv.CliWalker.__new__(inv.CliWalker)
-        walker.out = {}
-        orig_rel = inv.rel
-        inv.rel = lambda p: p.name  # the fixture lives outside the repository
-        try:
-            walker.args(item.members, path, item.line, "x")
-        finally:
-            inv.rel = orig_rel
-    return walker.out
-
-
-def test_short_flag_alias_is_its_own_row() -> None:
-    # MIK-8077.5: `-c` and `-e` are rows, each naming the long form it aliases.
-    rows = cli_rows(CLI_FIXTURE)
-    assert {"x --config", "x -c", "x --env", "x -e", "x --force"} <= set(rows), sorted(rows)
-    assert rows["x -c"].note == "alias of --config", rows["x -c"]
-    assert rows["x -e"].note == "alias of --env", rows["x -e"]
-    assert "x -f" not in rows, sorted(rows)
-    # Removing the `short` attribute removes the row, so the doc's row goes stale.
-    assert "x -c" not in cli_rows(CLI_FIXTURE.replace("#[arg(short, long)]", "#[arg(long)]"))
-
-
-def test_alias_class_must_match_its_long_form() -> None:
-    # MIK-8077.5: an alias inherits its long form's class.
-    head = "## Surface: cli\n| Item | Class | Reason | Migration | Defined at |\n|---|---|---|---|---|\n"
-    entries = {"cli": [inv.Entry("x --config", "src/a.rs", 1), inv.Entry("x -c", "src/a.rs", 1, "alias of --config")]}
-    full = {s: [inv.Entry(f"x-{s}", "src/x.rs", 1)] for s in inv.SURFACES if s != "cli"}
-    full.update(entries)
-    rows = "".join(f"## Surface: {s}\n| Item | Class | Reason | Migration | Defined at |\n|---|---|---|---|---|\n| `x-{s}` | KEEP | filler | - | src/x.rs:1 |\n" for s in full if s != "cli")
-    same = head + "| `x --config` | KEEP | config path | - | src/a.rs:1 |\n| `x -c` | KEEP | short alias | - | src/a.rs:1 |\n"
-    assert inv.check(same + rows, full) == [], inv.check(same + rows, full)
-    differ = same.replace("| `x -c` | KEEP | short alias | - |", "| `x -c` | INTERNAL | short alias | use --config |")
-    errors = inv.check(differ + rows, full)
-    assert any("'x -c'" in e and "long form" in e for e in errors), errors
-
-
-def test_positional_uses_value_name() -> None:
-    # MIK-8077.8: clap shows `value_name`, so the row does too.
-    rows = cli_rows(CLI_FIXTURE)
-    assert "x <DESCRIPTOR>" in rows and "x <target>" in rows, sorted(rows)
-    renamed = cli_rows(CLI_FIXTURE.replace('value_name = "DESCRIPTOR"', 'value_name = "FILE"'))
-    assert "x <DESCRIPTOR>" not in renamed and "x <FILE>" in renamed, sorted(renamed)
-
-
-def test_root_version_and_help_are_rows() -> None:
-    # MIK-8077.6: clap generates them from the root `Cli` attributes.
-    cli = {e.id for e in inv.extract_cli()}
-    assert {"mcp-gateway --version", "mcp-gateway --help"} <= cli, sorted(i for i in cli if i.count(" ") == 1)
-    root_rows = getattr(inv, "cli_root_rows", None)
-    assert root_rows is not None, "no root-flag extractor"
-    root = inv.Index().resolve("Cli", inv.SRC / "cli/mod.rs", "Parser")
-    assert "mcp-gateway --version" in {e.id for e in root_rows(root)}
-    root.attrs = root.attrs.replace("#[command(version, ", "#[command(")
-    assert "mcp-gateway --version" not in {e.id for e in root_rows(root)}, root.attrs
 
 
 def test_annotation_keys_are_config_rows() -> None:
@@ -355,35 +275,36 @@ def test_annotation_keys_are_config_rows() -> None:
         assert got == ["is_annotation: accepting branches changed, re-read the annotation rows"], got
 
 
-def test_generated_flag_settings_are_read() -> None:
-    # Review r1: `disable_version_flag` removes --version; `disable_help_flag = false` keeps --help.
-    root = inv.Index().resolve("Cli", inv.SRC / "cli/mod.rs", "Parser")
-    ids = lambda: {e.id for e in inv.cli_root_rows(root)}
-    base = root.attrs
-    root.attrs = base.replace("#[command(version, ", "#[command(version, disable_version_flag = true, ")
-    assert "mcp-gateway --version" not in ids(), root.attrs
-    root.attrs = base.replace("#[command(version, ", "#[command(version, disable_help_flag = false, ")
-    assert {"mcp-gateway --version", "mcp-gateway --help"} <= ids(), root.attrs
-    root.attrs = base.replace("#[command(version, ", "#[command(version, disable_help_flag, ")
-    assert "mcp-gateway --help" not in ids(), root.attrs
-
-
-def test_cli_membership_belongs_to_the_clap_walker() -> None:
-    # MIK-8170: tests/cli_surface_inventory.rs owns cli missing/stale rows; this
-    # checker keeps class, reason, migration and the defined-at place.
+def test_cli_membership_is_the_rust_tests_and_row_format_stays() -> None:
+    # Membership: tests/cli_surface_inventory.rs only; there is no cli extractor
+    # here. Row format (class, reason, migration, one row per item, defined under
+    # src/cli/) is checked as for every table.
     head = "## Surface: cli\n| Item | Class | Reason | Migration | Defined at |\n|---|---|---|---|---|\n"
-    full = {s: [inv.Entry(f"x-{s}", "src/x.rs", 1)] for s in inv.SURFACES if s != "cli"}
-    full["cli"] = [inv.Entry("x --config", "src/cli/mod.rs", 1)]
-    rows = "".join(f"## Surface: {s}\n| Item | Class | Reason | Migration | Defined at |\n|---|---|---|---|---|\n| `x-{s}` | KEEP | filler | - | src/x.rs:1 |\n" for s in full if s != "cli")
-    clap_only = head + "| `x --config` | KEEP | path | - | src/cli/mod.rs:1 |\n| `x --help` | KEEP | clap-generated | - | src/cli/mod.rs:1 |\n"
-    assert inv.check(clap_only + rows, full) == [], inv.check(clap_only + rows, full)
-    no_row = head + "| `x --help` | KEEP | clap-generated | - | src/cli/mod.rs:1 |\n"
-    assert inv.check(no_row + rows, full) == [], "a missing cli row is the Rust test's to report"
-    elsewhere = clap_only.replace("| `x --help` | KEEP | clap-generated | - | src/cli/mod.rs:1 |", "| `x --help` | KEEP | clap-generated | - | src/other.rs:1 |")
+    full = {s: [inv.Entry(f"x-{s}", "src/x.rs", 1)] for s in inv.EXTRACTORS}
+    rows = "".join(f"## Surface: {s}\n| Item | Class | Reason | Migration | Defined at |\n|---|---|---|---|---|\n| `x-{s}` | KEEP | filler | - | src/x.rs:1 |\n" for s in full)
+    good = head + "| `x --config` | KEEP | path | - | src/cli/mod.rs:1 |\n| `x --help` | KEEP | clap-generated | - | src/cli/mod.rs:1 |\n"
+    assert inv.check(good + rows, full) == [], inv.check(good + rows, full)
+    assert "cli" not in inv.EXTRACTORS, "no second cli extractor"
+    for gone in ("extract_cli", "CliWalker", "cli_root_rows"):
+        assert not hasattr(inv, gone), f"{gone} is back: cli membership is the Rust test's"
+    try:
+        inv.main(["--list", "cli"])
+    except SystemExit as exc:
+        assert exc.code == 2, f"--list cli exits {exc.code}, want argparse's 2"
+    else:
+        raise AssertionError("--list cli must be refused by argparse")
+    no_rows = head
+    assert inv.check(no_rows + rows, full) == [], "a missing cli row is the Rust test's to report, and no 'no items' error"
+    elsewhere = good.replace("src/cli/mod.rs:1 |\n| `x --help`", "src/other.rs:1 |\n| `x --help`")
     assert any("want src/cli/" in e for e in inv.check(elsewhere + rows, full)), inv.check(elsewhere + rows, full)
-    no_reason = clap_only.replace("| clap-generated |", "| - |")
+    no_reason = good.replace("| clap-generated |", "| - |")
     assert any("has no reason" in e for e in inv.check(no_reason + rows, full))
-
+    bad_class = good.replace("| `x --config` | KEEP |", "| `x --config` | BOGUS |")
+    assert any("has class 'BOGUS'" in e for e in inv.check(bad_class + rows, full))
+    no_migration = good.replace("| `x --config` | KEEP | path | - |", "| `x --config` | INTERNAL | path | - |")
+    assert any("has no migration story" in e for e in inv.check(no_migration + rows, full))
+    twice = good + "| `x --help` | KEEP | clap-generated | - | src/cli/mod.rs:1 |\n"
+    assert any("listed twice" in e for e in inv.check(twice + rows, full))
 
 def test_repository_inventory_is_complete() -> None:
     assert inv.main([]) == 0, "docs/design/surface-4.0.md misses surface items; see stderr"
@@ -411,7 +332,6 @@ def test_hidden_table_matches_internal_and_auto_rows() -> None:
     twice = inv.check_hidden_table(HIDDEN_DOC, table("a.hidden", "a.auto", "a.auto"))
     assert any("twice" in e for e in twice), twice
     assert inv.check_hidden_table(HIDDEN_DOC, "no table here") != []
-
 
 
 def _lib_api(text: str, keep: frozenset[str] = frozenset()) -> list[str]:
