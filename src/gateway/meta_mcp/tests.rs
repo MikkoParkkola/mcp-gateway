@@ -247,6 +247,10 @@ mod chain_strip;
 #[cfg(test)]
 #[path = "clock_p2_tests.rs"]
 mod clock_p2;
+/// A playbook step the policy refuses at dispatch records refused.
+#[cfg(test)]
+#[path = "playbook_dispatch_refusal_tests.rs"]
+mod playbook_dispatch_refusal;
 /// `MIK-7993` r5: a playbook's step notes are carried onto its answer.
 #[cfg(test)]
 #[path = "playbook_writes_tests.rs"]
