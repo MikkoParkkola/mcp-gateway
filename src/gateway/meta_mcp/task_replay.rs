@@ -125,6 +125,34 @@ impl MetaMcp {
         } else {
             super::account_outcome::AccountWrites::All
         };
+        self.account_prepass(&targets, scope, session_id, writes)
+            .await;
+        let view = self.scoped(scope.authorizer.backend_grant());
+        for &(server, tool) in &targets {
+            self.keep_permanent_refusal(&view, server, tool, caller)
+                .await;
+            if let Some(fill) = self
+                .claim_caller_view(server, tool, scope, session_id)
+                .await
+            {
+                fill.run().await;
+            }
+            self.settle_shared_view((server, tool), scope, session_id)
+                .await;
+        }
+    }
+
+    /// The account half shared by a stored read and a listing's warm: the
+    /// targets policy does not already refuse without a catalogue get their
+    /// account outcomes filled, through the caller's own backend grant, so a
+    /// backend the grant excludes is never read for this caller.
+    pub(super) async fn account_prepass(
+        &self,
+        targets: &[(&str, &str)],
+        scope: super::visibility::InvokeScope<'_>,
+        session_id: Option<&str>,
+        writes: super::account_outcome::AccountWrites,
+    ) {
         let judged: Vec<(&str, &str)> = targets
             .iter()
             .copied()
@@ -133,16 +161,8 @@ impl MetaMcp {
             })
             .collect();
         let view = self.scoped(scope.authorizer.backend_grant());
-        self.fill_account_outcomes(&view, &judged, caller, writes)
+        self.fill_account_outcomes(&view, &judged, scope.caller, writes)
             .await;
-        for &(server, tool) in &targets {
-            self.keep_permanent_refusal(&view, server, tool, caller)
-                .await;
-            self.settle_caller_view(server, tool, scope, session_id)
-                .await;
-            self.settle_shared_view((server, tool), scope, session_id)
-                .await;
-        }
     }
 
     /// An account that read unavailable because this caller can never bind
@@ -169,27 +189,30 @@ impl MetaMcp {
         }
     }
 
-    /// The per-user half of a stored read (MIK-8392 B' and touch-on-read):
-    /// a caller's live slot is touched so reading it keeps it from idle
-    /// eviction; a cold one is re-established by the one reader that claims
-    /// it, and only while its account reads live. Every other reader answers
-    /// retryable until the lease ends.
-    async fn settle_caller_view(
+    /// The per-user half of a stored read (MIK-8392 B' and touch-on-read),
+    /// shared with a listing's warm: a caller's live slot is touched so
+    /// reading it keeps it from idle eviction; a cold one is claimed by the
+    /// one reader that wins it, and only through the caller's own backend
+    /// grant, while its account reads live and policy does not refuse it.
+    /// Every check runs before any credential is resolved. The winner gets
+    /// the fill to run; every other reader answers retryable until the lease
+    /// ends.
+    pub(super) async fn claim_caller_view(
         &self,
         server: &str,
         tool: &str,
         scope: super::visibility::InvokeScope<'_>,
         session_id: Option<&str>,
-    ) {
+    ) -> Option<super::invoke::ColdFill> {
         let caller = scope.caller;
         let Some(backend) = self
             .scoped(scope.authorizer.backend_grant())
             .scoped_get(server)
         else {
-            return;
+            return None;
         };
         if !backend.keeps_per_user_catalogues() {
-            return;
+            return None;
         }
         // A Passthrough view can never warm (`remember_caller_slot` skips it)
         // and the stored read judges the shared catalogue for it: nothing to
@@ -200,10 +223,10 @@ impl MetaMcp {
                 crate::identity_propagation::PropagationStrategyKind::Passthrough
             )
         }) {
-            return;
+            return None;
         }
         let Some(principal) = self.principal_for(&backend, caller) else {
-            return;
+            return None;
         };
         let id = principal.stable_actor_id();
         if let Some(held) = backend.caller_slot_held(&id) {
@@ -223,7 +246,7 @@ impl MetaMcp {
                 // stays warm: no extra resolution (C1, K1).
                 if backend.has_cached_tools_for(Some(held.binding())) {
                     backend.touch_caller_slot(held.binding());
-                    return;
+                    return None;
                 }
                 backend.forget_caller_held(&id, &held);
             } else {
@@ -243,17 +266,18 @@ impl MetaMcp {
             account,
             None | Some(Some(AccountOutcome::Live | AccountOutcome::Unjudged))
         ) {
-            return;
+            return None;
         }
         if self.refused_without_catalogue(&backend, (server, tool), scope, session_id) {
-            return;
+            return None;
         }
-        if let crate::backend::ColdClaim::Won(generation) =
+        let crate::backend::ColdClaim::Won(generation) =
             backend.claim_cold_view(&id, COLD_RETRY_BACKOFF, account_live)
-        {
-            self.warm_cold_view((server, tool), &backend, caller, generation)
-                .await;
-        }
+        else {
+            return None;
+        };
+        self.resolve_cold_view((server, tool), &backend, caller, generation)
+            .await
     }
 
     /// The shared half of a stored read (MIK-8392 F2): a shared catalogue

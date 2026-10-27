@@ -186,37 +186,6 @@ impl MetaMcp {
                 backend.forget_caller_principal(&id);
             }
         }
-        // Revision 3 shape (red-first only, replaced before review): warm the
-        // caller's cold view of every surfaced tool's backend, unscoped.
-        for surfaced in &self.surfaced_state().tools {
-            let Some(backend) = self.backends.get_for(
-                crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility,
-                &surfaced.server,
-            ) else {
-                continue;
-            };
-            if !backend.keeps_per_user_catalogues() {
-                continue;
-            }
-            let Some(principal) = self.principal_for(&backend, caller) else {
-                continue;
-            };
-            let id = principal.stable_actor_id();
-            if backend.caller_slot_held(&id).is_some() {
-                continue;
-            }
-            if let crate::backend::ColdClaim::Won(generation) =
-                backend.claim_cold_view(&id, std::time::Duration::from_secs(60), true)
-            {
-                self.warm_cold_view(
-                    (surfaced.server.as_str(), surfaced.tool.as_str()),
-                    &backend,
-                    caller,
-                    generation,
-                )
-                .await;
-            }
-        }
     }
 
     /// Whether `backend` must be omitted from a per-caller catalogue

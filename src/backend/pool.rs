@@ -296,6 +296,17 @@ impl Backend {
             .map(|c| c.session_mode)
     }
 
+    /// Whether this backend's Shared slot must never start: a required
+    /// identity binding with per-user sessions. ADR-007 IDP.7 forbids reaching
+    /// such a backend through a shared session, so no gateway-internal path
+    /// (warm-start, the health probe, a restart, an unbound fill) opens one
+    /// as the gateway (MIK-8962).
+    pub(crate) fn shared_slot_refused(&self) -> bool {
+        self.config.identity_propagation.as_ref().is_some_and(|c| {
+            c.required && c.session_mode == crate::identity_propagation::SessionMode::PerUser
+        })
+    }
+
     /// Whether this backend keeps one catalogue per caller: with identity
     /// propagation configured, a caller that resolves a binding gets its own
     /// slot (MIK-8356). The predicate visibility judgements key on.

@@ -100,6 +100,7 @@ mod interim_promotion;
 #[cfg(test)]
 mod interim_promotion_tests;
 pub(crate) mod invoke;
+mod listing_warm;
 mod prompt_cache;
 mod protocol;
 pub(crate) mod refund_witness;

@@ -532,6 +532,12 @@ impl Backend {
         .await
     }
 
+    /// The longest one fill for a check may take: the backend's call timeout
+    /// and the list wait's grace (MIK-7982 C3/C4).
+    pub(crate) fn tools_fill_bound(&self) -> std::time::Duration {
+        self.config.timeout + super::fill_check::LIST_FILL_WAIT_GRACE
+    }
+
     /// The caller's tool list for R2's check, and whether it is the slot's
     /// whole catalogue (design §2 step 2).
     ///
@@ -553,7 +559,7 @@ impl Backend {
         let fill = self.tools_fill(binding, headers, FillBound::CallTimeout(limit), stale_hit);
         // MIK-7982 C3/C4: both deadlines below read this caller's provenance.
         let bounded = async {
-            tokio::time::timeout(limit + super::fill_check::LIST_FILL_WAIT_GRACE, fill)
+            tokio::time::timeout(self.tools_fill_bound(), fill)
                 .await
                 .unwrap_or_else(|_| {
                     Err(Provenance::expired(
