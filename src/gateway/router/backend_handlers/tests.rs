@@ -551,6 +551,9 @@ mod normalize_edge_tests;
 #[path = "direct_refusal_edge_tests.rs"]
 mod direct_refusal_edge_tests;
 
+#[path = "direct_lease_edge_tests.rs"]
+mod direct_lease_edge_tests;
+
 #[path = "direct_firewall_edge_tests.rs"]
 mod direct_firewall_edge_tests;
 

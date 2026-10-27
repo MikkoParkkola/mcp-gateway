@@ -30,13 +30,15 @@ WORKDIR="${RUNNER_TEMP:-/tmp}"
 ROOT_CASE="smoke-full-root-$$"
 STOP_CASE="smoke-full-stop-$$"
 ENVSH_CASE="smoke-full-envsh-$$"
+CALL_CASE="smoke-full-call-$$"
+CALL_VOLUME="smoke-full-call-$$"
 
 # Probe output lands here rather than in a command substitution: `fail` has to
 # report and exit from this shell, and inside a substitution it would only exit
 # the subshell, leaving the caller to report the same fault again with the
 # annotation for its own empty capture.
 ANSWER="${WORKDIR}/smoke-full-answer.$$"
-trap 'rm -f "${ANSWER}"; docker rm -f "${ROOT_CASE}" "${STOP_CASE}" "${ENVSH_CASE}" > /dev/null 2>&1 || true' EXIT
+trap 'rm -f "${ANSWER}"; docker rm -f "${ROOT_CASE}" "${STOP_CASE}" "${ENVSH_CASE}" "${CALL_CASE}" > /dev/null 2>&1 || true; docker volume rm "${CALL_VOLUME}" > /dev/null 2>&1 || true' EXIT
 
 # Make the image local before the first probe. On a runner that has not pulled
 # this digest, `docker run` writes its pull progress to stderr, and
@@ -269,4 +271,161 @@ if [ "${ELAPSED}" -ge 10 ] || [ "${ENVSH_EXIT}" != 143 ]; then
 fi
 docker rm -f "${ENVSH_CASE}" > /dev/null
 
-echo "${IMAGE} spawns npx and uvx backends, its caches are writable by the service user, and its root path installs, drops privileges, stops on a failing step or install, and stops promptly on TERM, a sourced step included"
+# Running path, a stop while a backend call is in flight. tini -g sends the
+# stop to the whole process group, so a stdio backend in the gateway's own
+# group would die with it and the call the gateway is draining would lose its
+# answer. Each backend leads its own group so that the drain can finish the
+# call; this case checks that promise in the shipped image.
+#
+# The backend holds its answer until the case has seen the gateway log the
+# stop, so a passing run is a drained in-flight call by construction, with no
+# timing window. Backend stderr is not forwarded to `docker logs`, so the
+# backend and the case talk through marker files in a per-run volume. The
+# volume is owned by the image's user (UID 1001), which lets the gateway read
+# an owner-only config on any host, not only where the runner is UID 1001.
+call_log_tail() { docker logs --tail 30 "${CALL_CASE}" 2>&1 || true; }
+in_volume() {
+  docker run --rm -i --pull never --user 1001:1001 --entrypoint sh \
+    -v "${CALL_VOLUME}:/case" "${IMAGE}" -c "$1"
+}
+docker volume create "${CALL_VOLUME}" > /dev/null
+docker run --rm --pull never --user 0 --entrypoint sh -v "${CALL_VOLUME}:/case" \
+  "${IMAGE}" -c 'chown 1001:1001 /case && chmod 0700 /case'
+in_volume 'cat > /case/slow.js' <<'JS'
+const { spawn } = require('child_process');
+const fs = require('fs');
+const readline = require('readline');
+// A descendant only a group signal ends, as an npx launcher's node child can be.
+spawn('sleep', ['600'], { stdio: 'ignore' });
+const reply = (id, result) =>
+  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n');
+readline.createInterface({ input: process.stdin }).on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (!('id' in msg)) return;
+  if (msg.method === 'initialize') {
+    reply(msg.id, { protocolVersion: msg.params.protocolVersion,
+      capabilities: { tools: {} }, serverInfo: { name: 'slow', version: '1' } });
+  } else if (msg.method === 'tools/list') {
+    // No readOnlyHint: the response cache must not answer this call.
+    reply(msg.id, { tools: [{ name: 'slow_answer', inputSchema: { type: 'object' } }] });
+  } else if (msg.method === 'tools/call') {
+    fs.writeFileSync('/case/started', '');
+    const wait = setInterval(() => {
+      if (!fs.existsSync('/case/release')) return;
+      clearInterval(wait);
+      reply(msg.id, { content: [{ type: 'text', text: 'answered-after-the-stop' }] });
+      fs.writeFileSync('/case/done', String(Date.now()));
+    }, 100);
+  } else {
+    reply(msg.id, {});
+  }
+});
+JS
+in_volume 'cat > /case/gateway.yaml && chmod 600 /case/gateway.yaml' <<'YAML'
+server:
+  host: 0.0.0.0
+  port: 39400
+  allow_unauthenticated_network_bind: true
+  # Inside docker stop's 30 s grace, so the drain bound is what ends a stuck stop.
+  shutdown_timeout: "20s"
+auth:
+  enabled: false
+backends:
+  slow:
+    command: "node /case/slow.js"
+    cwd: "/tmp"
+    timeout: "60s"
+YAML
+in_volume 'test ! -e /case/started && test ! -e /case/release && test ! -e /case/done' \
+  || fail "the call case's volume holds a marker before the gateway started"
+docker run -d --name "${CALL_CASE}" --pull never -p "127.0.0.1::39400" \
+  -v "${CALL_VOLUME}:/case" "${IMAGE}" --config /case/gateway.yaml > /dev/null
+CALL_PORT="$(docker port "${CALL_CASE}" 39400/tcp | head -1 | sed 's/.*://')"
+[ -n "${CALL_PORT}" ] || fail "docker published no host port for 39400/tcp: $(call_log_tail)"
+# Polled from the host, not with wait_for_gateway: on a 0.0.0.0 bind with no
+# public_url the Host gate admits only numeric hosts, so its in-container
+# `localhost` probe is refused however ready the gateway is.
+CALL_READY=
+for _ in $(seq 1 30); do
+  [ "$(docker inspect -f '{{.State.Running}}' "${CALL_CASE}" 2> /dev/null || true)" = "true" ] \
+    || fail "the call case exited during startup: $(call_log_tail)"
+  if curl -fsS --max-time 5 -o /dev/null "http://127.0.0.1:${CALL_PORT}/livez" 2> /dev/null; then
+    CALL_READY=1
+    break
+  fi
+  sleep 2
+done
+[ -n "${CALL_READY}" ] || fail "the call case never answered /livez within 60s: $(call_log_tail)"
+CALL_URL="http://127.0.0.1:${CALL_PORT}/mcp"
+CALLDIR="${WORKDIR}/smoke-full-call-$$"
+mkdir -p "${CALLDIR}"
+SESSION=""
+mcp_post() {
+  curl -sS --max-time "$1" -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -H 'MCP-Protocol-Version: 2025-11-25' \
+    ${SESSION:+-H "Mcp-Session-Id: ${SESSION}"} "${@:3}" -d "$2" "${CALL_URL}"
+}
+mcp_post 10 '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}' \
+  -D "${CALLDIR}/init.headers" -o "${CALLDIR}/init.body" \
+  || fail "the call case did not answer initialize: $(call_log_tail)"
+INIT_BODY="$(cat "${CALLDIR}/init.body")"
+[[ "${INIT_BODY}" == *'"jsonrpc"'* ]] \
+  || fail "the call case answered initialize with no JSON-RPC body: ${INIT_BODY} $(call_log_tail)"
+SESSION="$(tr -d '\r' < "${CALLDIR}/init.headers" | sed -n 's/^[Mm][Cc][Pp]-[Ss]ession-[Ii][Dd]: *//p' | head -1)"
+mcp_post 10 '{"jsonrpc":"2.0","method":"notifications/initialized"}' -o /dev/null
+mcp_post 90 '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"gateway_invoke","arguments":{"server":"slow","tool":"slow_answer","arguments":{}}}}' \
+  -o "${CALLDIR}/call.body" 2> "${CALLDIR}/call.err" &
+CALL_PID=$!
+for _ in $(seq 1 60); do
+  docker exec "${CALL_CASE}" test -e /case/started 2> /dev/null && break
+  sleep 0.5
+done
+docker exec "${CALL_CASE}" test -e /case/started 2> /dev/null \
+  || fail "the backend call never started: $(cat "${CALLDIR}/call.body" "${CALLDIR}/call.err" 2> /dev/null) $(call_log_tail)"
+echo "call case: the backend call started; stopping the container"
+STARTED="$(date +%s)"
+docker stop -t 30 "${CALL_CASE}" > /dev/null &
+STOP_PID=$!
+SIGNALLED=""
+for _ in $(seq 1 20); do
+  # Captured and matched, never piped into `grep -q` (pipefail).
+  CALL_LOG="$(docker logs "${CALL_CASE}" 2>&1 || true)"
+  if [[ "${CALL_LOG}" == *'Shutdown signal received'* ]]; then
+    SIGNALLED=yes
+    break
+  fi
+  sleep 0.5
+done
+[ -n "${SIGNALLED}" ] \
+  || fail "SMOKE.1: the gateway never logged the stop within 10s: $(call_log_tail)"
+echo "call case: the gateway logged the stop; releasing the held call"
+docker exec "${CALL_CASE}" touch /case/release 2> /dev/null \
+  || fail "SMOKE.1: the container was gone before the held call could be released, so the stop ended it with the call unanswered: $(call_log_tail)"
+# Both background commands' statuses are kept: a container still running after
+# a failed `docker stop` reports ExitCode 0 too, and a cut-off reply can still
+# hold the answer token.
+STOP_RC=0
+wait "${STOP_PID}" || STOP_RC=$?
+ELAPSED="$(( $(date +%s) - STARTED ))"
+CALL_RUNNING="$(docker inspect -f '{{.State.Running}}' "${CALL_CASE}")"
+CALL_EXIT="$(docker inspect -f '{{.State.ExitCode}}' "${CALL_CASE}")"
+CALL_RC=0
+wait "${CALL_PID}" || CALL_RC=$?
+CALL_BODY="$(cat "${CALLDIR}/call.body" 2> /dev/null || true)"
+ID2_RE='"id"[[:space:]]*:[[:space:]]*2[^0-9]'
+RESULT_RE='"result"[[:space:]]*:'
+if [ "${CALL_RC}" != 0 ] || ! [[ "${CALL_BODY}" =~ ${ID2_RE} ]] || ! [[ "${CALL_BODY}" =~ ${RESULT_RE} ]] \
+   || [[ "${CALL_BODY}" != *'answered-after-the-stop'* ]]; then
+  fail "SMOKE.1: a stop during a backend call lost the call's answer (curl exit ${CALL_RC}, container exit ${CALL_EXIT} after ${ELAPSED}s): ${CALL_BODY} $(cat "${CALLDIR}/call.err" 2> /dev/null) $(call_log_tail)"
+fi
+in_volume 'test -e /case/done' \
+  || fail "SMOKE.1: the answer arrived but the backend never recorded finishing the call: $(call_log_tail)"
+if [ "${STOP_RC}" != 0 ] || [ "${CALL_RUNNING}" != false ] || [ "${CALL_EXIT}" != 0 ] || [ "${ELAPSED}" -ge 15 ]; then
+  fail "SMOKE.2: a stop during a backend call took ${ELAPSED}s (docker stop exit ${STOP_RC}, still running: ${CALL_RUNNING}) and exited ${CALL_EXIT}; a drained stop answers and exits 0 well inside the grace period: $(call_log_tail)"
+fi
+docker rm -f "${CALL_CASE}" > /dev/null
+docker volume rm "${CALL_VOLUME}" > /dev/null
+rm -rf "${CALLDIR}"
+
+echo "${IMAGE} spawns npx and uvx backends, its caches are writable by the service user, and its root path installs, drops privileges, stops on a failing step or install, and stops promptly on TERM, a sourced step included, and a stop during a backend call still answers it"

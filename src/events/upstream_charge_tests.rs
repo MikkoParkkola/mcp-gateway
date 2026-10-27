@@ -166,21 +166,42 @@ fn watched(uri: &str) -> Interest {
 async fn an_uncertain_subscribe_stays_charged_across_retries_after_unwatch() {
     let (peer, url) = Peer::start().await;
     let listeners = listeners_for(&url);
-    listeners.add("b", &watched(URI_A)).expect("room for A");
+    listeners
+        .add(
+            &crate::events::upstream_listener::ListenerKey::shared("b"),
+            &watched(URI_A),
+        )
+        .expect("room for A");
     peer.until("the first subscribe of A", |p| p.subscribes_of(URI_A) >= 1)
         .await;
     // A second URI wakes a pass, which retries A.
-    listeners.add("b", &watched("u:0")).expect("room for u:0");
+    listeners
+        .add(
+            &crate::events::upstream_listener::ListenerKey::shared("b"),
+            &watched("u:0"),
+        )
+        .expect("room for u:0");
     peer.until("a retried subscribe of A", |p| p.subscribes_of(URI_A) >= 2)
         .await;
-    listeners.remove("b", &watched(URI_A));
+    listeners.remove(
+        &crate::events::upstream_listener::ListenerKey::shared("b"),
+        &watched(URI_A),
+    );
     for i in 1..MAX_URIS - 1 {
         listeners
-            .add("b", &watched(&format!("u:{i}")))
+            .add(
+                &crate::events::upstream_listener::ListenerKey::shared("b"),
+                &watched(&format!("u:{i}")),
+            )
             .expect("room below the cap");
     }
     assert!(
-        listeners.add("b", &watched("u:last")).is_err(),
+        listeners
+            .add(
+                &crate::events::upstream_listener::ListenerKey::shared("b"),
+                &watched("u:last")
+            )
+            .is_err(),
         "A's uncertain subscribe still counts against the URI cap after its watcher left"
     );
 }

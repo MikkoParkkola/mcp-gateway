@@ -26,29 +26,49 @@ fn watched(uri: &str) -> Interest {
 #[tokio::test]
 async fn a_good_snapshot_decides_authorization() {
     let hub = listeners();
-    hub.add("b", &watched("file:///a")).expect("room");
+    hub.add(
+        &crate::events::upstream_listener::ListenerKey::shared("b"),
+        &watched("file:///a"),
+    )
+    .expect("room");
     let set: HashSet<String> = ["file:///a".to_owned()].into();
     let read = |complete: bool| {
         hub.backends
             .lock()
-            .get("b")
+            .get(&crate::events::upstream_listener::ListenerKey::shared("b"))
             .expect("listener")
             .snapshot
             .lock()
             .read(set.clone(), complete);
     };
     read(true);
-    assert!(hub.authorize_uri("b", "file:///a", None).await.is_ok());
+    assert!(
+        hub.authorize_uri(
+            &crate::events::upstream_listener::ListenerKey::shared("b"),
+            "file:///a",
+            None
+        )
+        .await
+        .is_ok()
+    );
     let refused = hub
-        .authorize_uri("b", "file:///missing", None)
+        .authorize_uri(
+            &crate::events::upstream_listener::ListenerKey::shared("b"),
+            "file:///missing",
+            None,
+        )
         .await
         .expect_err("absent");
     assert_eq!(refused.code, -32012);
     read(false);
     assert!(
-        hub.authorize_uri("b", "file:///missing", None)
-            .await
-            .is_ok()
+        hub.authorize_uri(
+            &crate::events::upstream_listener::ListenerKey::shared("b"),
+            "file:///missing",
+            None
+        )
+        .await
+        .is_ok()
     );
 }
 
@@ -56,15 +76,35 @@ async fn a_good_snapshot_decides_authorization() {
 #[tokio::test]
 async fn the_last_interest_ends_the_listener() {
     let hub = listeners();
-    hub.add("b", &watched("file:///a")).expect("room");
-    hub.add("b", &Interest::PromptsChanged).expect("room");
-    hub.remove("b", &watched("file:///a"));
+    hub.add(
+        &crate::events::upstream_listener::ListenerKey::shared("b"),
+        &watched("file:///a"),
+    )
+    .expect("room");
+    hub.add(
+        &crate::events::upstream_listener::ListenerKey::shared("b"),
+        &Interest::PromptsChanged,
+    )
+    .expect("room");
+    hub.remove(
+        &crate::events::upstream_listener::ListenerKey::shared("b"),
+        &watched("file:///a"),
+    );
     assert!(
-        hub.backends.lock().contains_key("b"),
+        hub.backends
+            .lock()
+            .contains_key(&crate::events::upstream_listener::ListenerKey::shared("b")),
         "prompts still wanted"
     );
-    hub.remove("b", &Interest::PromptsChanged);
-    assert!(!hub.backends.lock().contains_key("b"));
+    hub.remove(
+        &crate::events::upstream_listener::ListenerKey::shared("b"),
+        &Interest::PromptsChanged,
+    );
+    assert!(
+        !hub.backends
+            .lock()
+            .contains_key(&crate::events::upstream_listener::ListenerKey::shared("b"))
+    );
 }
 
 /// MIK-7894: a task a reload ended (its backend became ineligible) is not
@@ -72,11 +112,29 @@ async fn the_last_interest_ends_the_listener() {
 #[tokio::test]
 async fn a_listener_task_a_reload_ended_is_replaced_when_interest_returns() {
     let hub = listeners();
-    hub.add("b", &Interest::ResourcesChanged).expect("room");
-    let first = hub.backends.lock().get("b").cloned().expect("listener");
+    hub.add(
+        &crate::events::upstream_listener::ListenerKey::shared("b"),
+        &Interest::ResourcesChanged,
+    )
+    .expect("room");
+    let first = hub
+        .backends
+        .lock()
+        .get(&crate::events::upstream_listener::ListenerKey::shared("b"))
+        .cloned()
+        .expect("listener");
     first.stop.cancel();
-    hub.add("b", &Interest::PromptsChanged).expect("room");
-    let second = hub.backends.lock().get("b").cloned().expect("listener");
+    hub.add(
+        &crate::events::upstream_listener::ListenerKey::shared("b"),
+        &Interest::PromptsChanged,
+    )
+    .expect("room");
+    let second = hub
+        .backends
+        .lock()
+        .get(&crate::events::upstream_listener::ListenerKey::shared("b"))
+        .cloned()
+        .expect("listener");
     assert!(!Arc::ptr_eq(&first, &second), "the ended task was reused");
     assert!(!second.stop.is_cancelled());
 }
@@ -87,21 +145,41 @@ async fn a_listener_task_a_reload_ended_is_replaced_when_interest_returns() {
 #[tokio::test]
 async fn a_replaced_listener_keeps_the_interest_that_stayed() {
     let hub = listeners();
-    hub.add("b", &Interest::ToolsChanged).expect("room");
+    hub.add(
+        &crate::events::upstream_listener::ListenerKey::shared("b"),
+        &Interest::ToolsChanged,
+    )
+    .expect("room");
     hub.backends
         .lock()
-        .get("b")
+        .get(&crate::events::upstream_listener::ListenerKey::shared("b"))
         .expect("listener")
         .stop
         .cancel();
-    hub.add("b", &Interest::PromptsChanged).expect("room");
-    hub.remove("b", &Interest::PromptsChanged);
+    hub.add(
+        &crate::events::upstream_listener::ListenerKey::shared("b"),
+        &Interest::PromptsChanged,
+    )
+    .expect("room");
+    hub.remove(
+        &crate::events::upstream_listener::ListenerKey::shared("b"),
+        &Interest::PromptsChanged,
+    );
     assert!(
-        hub.backends.lock().contains_key("b"),
+        hub.backends
+            .lock()
+            .contains_key(&crate::events::upstream_listener::ListenerKey::shared("b")),
         "the tools_changed interest was lost"
     );
-    hub.remove("b", &Interest::ToolsChanged);
-    assert!(!hub.backends.lock().contains_key("b"));
+    hub.remove(
+        &crate::events::upstream_listener::ListenerKey::shared("b"),
+        &Interest::ToolsChanged,
+    );
+    assert!(
+        !hub.backends
+            .lock()
+            .contains_key(&crate::events::upstream_listener::ListenerKey::shared("b"))
+    );
 }
 
 /// MIK-7894 ELIG.2: authorization consults the live eligibility predicate,
@@ -131,11 +209,16 @@ async fn authorize_refuses_an_ineligible_backend() {
         std::time::Duration::from_secs(60),
     ))));
     let listeners = UpstreamListeners::new(registry, Weak::new(), Arc::clone(&ineligible));
-    listeners.add("b", &watched("file:///a")).expect("room");
+    listeners
+        .add(
+            &crate::events::upstream_listener::ListenerKey::shared("b"),
+            &watched("file:///a"),
+        )
+        .expect("room");
     listeners
         .backends
         .lock()
-        .get("b")
+        .get(&crate::events::upstream_listener::ListenerKey::shared("b"))
         .expect("listener")
         .snapshot
         .lock()
@@ -301,12 +384,26 @@ async fn a_replaced_backend_gets_a_fresh_ledger_carrying_its_interest() {
         Weak::new(),
         Arc::new(std::collections::BTreeSet::new),
     );
-    listeners.add("b", &watched("file:///a")).expect("room");
-    let first = listeners.backends.lock()["b"].ledger();
+    listeners
+        .add(
+            &crate::events::upstream_listener::ListenerKey::shared("b"),
+            &watched("file:///a"),
+        )
+        .expect("room");
+    let first = listeners.backends.lock()
+        [&crate::events::upstream_listener::ListenerKey::shared("b")]
+        .ledger();
     assert!(registry.remove("b"));
     assert!(registry.register(offline("b")));
-    listeners.add("b", &watched("file:///b")).expect("room");
-    let second = listeners.backends.lock()["b"].ledger();
+    listeners
+        .add(
+            &crate::events::upstream_listener::ListenerKey::shared("b"),
+            &watched("file:///b"),
+        )
+        .expect("room");
+    let second = listeners.backends.lock()
+        [&crate::events::upstream_listener::ListenerKey::shared("b")]
+        .ledger();
     assert!(!Arc::ptr_eq(&first, &second), "fresh ledger");
     assert_eq!(second.lock().size().0, 2, "a carried, b admitted");
 }
@@ -321,12 +418,25 @@ async fn the_same_backend_keeps_its_ledger() {
         Weak::new(),
         Arc::new(std::collections::BTreeSet::new),
     );
-    listeners.add("b", &watched("file:///a")).expect("room");
-    let first = listeners.backends.lock()["b"].ledger();
-    listeners.add("b", &watched("file:///b")).expect("room");
+    listeners
+        .add(
+            &crate::events::upstream_listener::ListenerKey::shared("b"),
+            &watched("file:///a"),
+        )
+        .expect("room");
+    let first = listeners.backends.lock()
+        [&crate::events::upstream_listener::ListenerKey::shared("b")]
+        .ledger();
+    listeners
+        .add(
+            &crate::events::upstream_listener::ListenerKey::shared("b"),
+            &watched("file:///b"),
+        )
+        .expect("room");
     assert!(Arc::ptr_eq(
         &first,
-        &listeners.backends.lock()["b"].ledger()
+        &listeners.backends.lock()[&crate::events::upstream_listener::ListenerKey::shared("b")]
+            .ledger()
     ));
 }
 
@@ -342,8 +452,15 @@ async fn a_running_task_takes_the_replaced_backends_ledger_at_session_start() {
         Weak::new(),
         Arc::new(std::collections::BTreeSet::new),
     );
-    listeners.add("b", &watched("file:///a")).expect("room");
-    let shared = Arc::clone(&listeners.backends.lock()["b"]);
+    listeners
+        .add(
+            &crate::events::upstream_listener::ListenerKey::shared("b"),
+            &watched("file:///a"),
+        )
+        .expect("room");
+    let shared = Arc::clone(
+        &listeners.backends.lock()[&crate::events::upstream_listener::ListenerKey::shared("b")],
+    );
     let first = shared.ledger();
     shared.refresh_ledger();
     assert!(
@@ -361,7 +478,10 @@ async fn a_running_task_takes_the_replaced_backends_ledger_at_session_start() {
         "the watched URI took a key there"
     );
     assert!(
-        Arc::ptr_eq(&second, &listeners.ledger("b")),
+        Arc::ptr_eq(
+            &second,
+            &listeners.ledger(&crate::events::upstream_listener::ListenerKey::shared("b"))
+        ),
         "the map and the task agree"
     );
 }
@@ -379,8 +499,17 @@ mod reconcile_table;
 async fn an_event_session_never_runs_where_a_login_may_begin() {
     let hub = listeners();
     assert!(crate::oauth::login_gate::interactive(), "premise");
-    hub.add("b", &Interest::ResourcesChanged).expect("room");
-    let shared = hub.backends.lock().get("b").cloned().expect("listener");
+    hub.add(
+        &crate::events::upstream_listener::ListenerKey::shared("b"),
+        &Interest::ResourcesChanged,
+    )
+    .expect("room");
+    let shared = hub
+        .backends
+        .lock()
+        .get(&crate::events::upstream_listener::ListenerKey::shared("b"))
+        .cloned()
+        .expect("listener");
     let ran = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
             if let Some(ran) = *shared.ran_interactive.lock() {
