@@ -153,6 +153,7 @@ async fn each_user_only_their_own(
         );
         expect_events(rx, tools, TOOLS, 1).await;
         expect_events(rx, updated, UPDATED, 1).await;
+        // timing: absence
         tokio::time::sleep(QUIET).await;
         for (m, (other, other_tools, other_updated)) in subs.iter().enumerate() {
             // Users already pushed to have their one delivery; later ones none yet.

@@ -86,7 +86,7 @@ async fn each_listener_has_its_own_confirm_clock() {
 
 /// A per-user key with no snapshot of its own admits without a confirming
 /// read. That it never reads as the gateway is pinned end to end by ISO-T7
-/// (`tests/mik_7630_events_iso.rs`, the `iso_t7_*` rows).
+/// (`tests/per_subscriber_isolation.rs`, the `iso_t7_*` rows).
 #[tokio::test]
 async fn a_per_user_key_without_a_snapshot_admits() {
     let l = listeners();
