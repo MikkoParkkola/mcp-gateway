@@ -18,6 +18,7 @@ const LISTENER_FILES: &[&str] = &[
     "src/gateway/router/accounts/connections.rs",
     "src/gateway/router/accounts/hosted.rs",
     "src/gateway/ui/mod.rs",
+    "src/gateway/ui/activity/mod.rs",
     "src/gateway/ui/backends.rs",
     "src/gateway/ui/capabilities.rs",
     "src/gateway/ui/control_plane.rs",
@@ -90,6 +91,11 @@ const REVIEWED_MERGES: &[(&str, &str, Option<&str>)] = &[
         "src/gateway/ui/session.rs",
         "handoff",
         Some("src/gateway/ui/session.rs"),
+    ),
+    (
+        "src/gateway/ui/mod.rs",
+        "activity::activity_router()",
+        Some("src/gateway/ui/activity/mod.rs"),
     ),
     (
         "src/gateway/ui/mod.rs",
