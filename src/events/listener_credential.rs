@@ -98,10 +98,9 @@ impl RunFence {
         self.binding.get().cloned().flatten()
     }
 
-    /// The run's binding once its first mint fixed it (`Some(None)` for a
-    /// grant no vault backs); `None` before then.
-    pub(super) fn fixed(&self) -> Option<Option<String>> {
-        self.binding.get().cloned()
+    /// The run's first mint has fixed its binding.
+    pub(super) fn is_fixed(&self) -> bool {
+        self.binding.get().is_some()
     }
 
     /// The grant this run was fixed on has moved or gives no view.

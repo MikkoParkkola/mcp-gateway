@@ -192,10 +192,7 @@ fn debt_under(binding: Option<&str>) -> ToolsDebt {
 #[test]
 fn a_run_on_another_grant_drops_the_carried_tools_notice() {
     let mut debt = debt_under(Some("acct:fence:v1:u1:1"));
-    super::super::run::forget_foreign_debt(
-        &mut debt,
-        Some("acct:fence:v1:u1:1:rotated".to_owned()),
-    );
+    super::super::run::forget_foreign_debt(&mut debt, Some("acct:fence:v1:u1:1:rotated"));
     assert_eq!(
         (debt.due, debt.unannounced, debt.fence),
         (None, false, None)
@@ -206,7 +203,7 @@ fn a_run_on_another_grant_drops_the_carried_tools_notice() {
 #[test]
 fn an_untagged_notice_is_not_announced_under_a_grant() {
     let mut debt = debt_under(None);
-    super::super::run::forget_foreign_debt(&mut debt, Some("acct:fence:v1:u1:1".to_owned()));
+    super::super::run::forget_foreign_debt(&mut debt, Some("acct:fence:v1:u1:1"));
     assert_eq!(
         (debt.due, debt.unannounced, debt.fence),
         (None, false, None)
@@ -218,7 +215,7 @@ fn an_untagged_notice_is_not_announced_under_a_grant() {
 fn a_run_on_the_same_grant_keeps_the_carried_tools_notice() {
     let mut debt = debt_under(Some("acct:fence:v1:u1:1"));
     let due = debt.due;
-    super::super::run::forget_foreign_debt(&mut debt, Some("acct:fence:v1:u1:1".to_owned()));
+    super::super::run::forget_foreign_debt(&mut debt, Some("acct:fence:v1:u1:1"));
     assert_eq!(debt.due, due);
     assert!(debt.unannounced);
 }

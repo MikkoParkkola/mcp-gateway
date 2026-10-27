@@ -420,8 +420,8 @@ async fn grant_moved(
     };
     // Once the run's first request fixed its grant, before any refill: a
     // tools notice another run left pending was heard under that grant.
-    if let Some(fixed) = fence.fixed() {
-        run::forget_foreign_debt(&mut shared.tools.lock(), fixed);
+    if fence.is_fixed() {
+        run::forget_foreign_debt(&mut shared.tools.lock(), fence.binding().as_deref());
     }
     if Instant::now() >= state.fence_due {
         state.fence_due = Instant::now() + FENCE_EVERY;

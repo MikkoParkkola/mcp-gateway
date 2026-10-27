@@ -128,8 +128,8 @@ async fn begin_per_user_run(
 
 /// A tools notice an earlier run left pending was heard under that run's
 /// grant: a run fixed on another grant (`binding`) never announces it.
-pub(super) fn forget_foreign_debt(debt: &mut ToolsDebt, binding: Option<String>) {
-    if debt.fence != binding {
+pub(super) fn forget_foreign_debt(debt: &mut ToolsDebt, binding: Option<&str>) {
+    if debt.fence.as_deref() != binding {
         *debt = ToolsDebt::default();
     }
 }
