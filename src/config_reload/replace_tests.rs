@@ -639,8 +639,8 @@ async fn repointed_mid_reload(
     std::fs::remove_file(link).expect("unlink");
     std::os::unix::fs::symlink(dir.join("other.yaml"), link).expect("re-point");
     pause.release.notify_one();
-    let applied = tokio::time::timeout(BOUND, reload).await.expect("ends");
-    assert_eq!(applied.expect("reload task"), applies, "applies");
+    let outcome = tokio::time::timeout(BOUND, reload).await.expect("ends");
+    assert_eq!(outcome.expect("reload task"), applies, "applies");
     let dir = crate::identity_grants::journal::resolved(dir);
     LOADED
         .lock()
