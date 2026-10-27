@@ -432,7 +432,12 @@ impl MetaMcp {
         let mut trace = None;
         let result = match MetaArm::parse(tool_name) {
             Some(MetaArm::Search) => self.code_mode_search(&arguments, session_id, caller).await,
-            Some(MetaArm::Execute) => self.code_mode_execute(&arguments, session_id, caller).await,
+            // Composites are unvouched at their arm, before any step runs: a
+            // plan that runs no step delivers nothing of this request's either.
+            Some(MetaArm::Execute) => {
+                crate::gateway::delivery_facts::unvouched();
+                self.code_mode_execute(&arguments, session_id, caller).await
+            }
             Some(MetaArm::ListServers) => {
                 self.revalidate_caller_slots(Self::proof_of(caller)).await;
                 self.list_servers(caller, session_id).await
@@ -458,7 +463,10 @@ impl MetaMcp {
             Some(MetaArm::GetStats) => self.get_stats(&arguments, caller.is_admin).await,
             Some(MetaArm::CostReport) => self.get_cost_report(&arguments, session_id, caller).await,
             Some(MetaArm::WebhookStatus) => self.webhook_status(),
-            Some(MetaArm::RunPlaybook) => self.run_playbook(&arguments, caller).await,
+            Some(MetaArm::RunPlaybook) => {
+                crate::gateway::delivery_facts::unvouched();
+                self.run_playbook(&arguments, caller).await
+            }
             Some(MetaArm::KillServer) => self.kill_server(&arguments),
             Some(MetaArm::ReviveServer) => self.revive_server(&arguments),
             Some(MetaArm::ListDisabledCapabilities) => {

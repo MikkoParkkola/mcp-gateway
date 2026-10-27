@@ -193,7 +193,7 @@ fn readable_page(result: Option<&Value>) -> bool {
 /// Keep only the tools the direct `tools/call` predicate would admit for this
 /// caller, decided silently: listing writes no invocation audit record.
 pub(super) fn retain_invocable(
-    state: &AppState,
+    (state, generation): (&AppState, &crate::config_reload::Generation),
     client: Option<&AuthenticatedClient>,
     oauth_agent_identity: Option<&OAuthAgentIdentity>,
     cert_identity: Option<&CertIdentity>,
@@ -218,9 +218,16 @@ pub(super) fn retain_invocable(
             tool: name,
             arguments: &empty,
         };
-        decide_tool_target(state, client, oauth_agent_identity, cert_identity, target)
-            .emit(crate::gateway::authz::Emit::Silent)
-            .is_ok()
+        decide_tool_target(
+            state,
+            generation,
+            client,
+            oauth_agent_identity,
+            cert_identity,
+            target,
+        )
+        .emit(crate::gateway::authz::Emit::Silent)
+        .is_ok()
     });
 }
 

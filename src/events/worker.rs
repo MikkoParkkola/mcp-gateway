@@ -230,6 +230,12 @@ impl EventsHub {
         if self.settled_by_recheck(services, sub, record, &ended).await {
             return;
         }
+        // A vault row's grant, read after every wait; one deadline bounds
+        // everything from this read to the request's end.
+        let deadline = tokio::time::Instant::now() + fence::FENCE_WINDOW;
+        let Some(fence) = self.fence_now(services, sub, record, &ended).await else {
+            return;
+        };
         // The wait for the record can span a rotation or an unsubscribe: the
         // row that signs is read after it, never before.
         let Some(current) = self.store.signing_row(record) else {
@@ -239,7 +245,7 @@ impl EventsHub {
             return;
         };
         if self
-            .settled_unsendable(services, record, &current, &ended)
+            .settled_unsendable(services, record, &current, fence.binding(), &ended)
             .await
         {
             return;
@@ -265,6 +271,15 @@ impl EventsHub {
             .await;
             return;
         }
+        let limit = match fence {
+            fence::Fence::Unfenced => None,
+            fence::Fence::Bound(_) => {
+                if !self.fence_open(services, record, deadline, &ended).await {
+                    return;
+                }
+                Some(deadline)
+            }
+        };
         // Charged once the attempt is on record, so a retry after an audit
         // outage is not charged for an attempt that never left. A type its
         // source exempts (a budget event) is never charged.
@@ -282,7 +297,7 @@ impl EventsHub {
         // time; an enqueued record keeps its stored eventId (MIK-8697 §14.2).
         let handle = services.alias(&current.id);
         let answer = self
-            .send_event(url, &current, &handle, event_id, frame, now)
+            .send_event(url, &current, &handle, event_id, frame, now, limit)
             .await;
         self.settle_answer(services, ctx, answer, verdict, &ended)
             .await;
@@ -319,53 +334,6 @@ impl EventsHub {
             tracing::warn!(subscription = %services.alias(&sub.id), "events: sustained delivery failure, subscription suspended");
         }
         self.settle_at(services, record, outcome, now).await;
-    }
-
-    /// Settle a record that cannot go out after the waits before its send:
-    /// past its lease it is unsent; past its bounds it is dead and unsent; on
-    /// a clock that cannot be read it is neither sent nor buried (MIK-8202). The record just written says
-    /// how that attempt ended. `true` when settled here.
-    async fn settled_unsendable<'a>(
-        &self,
-        services: &Services,
-        record: &OutboxRecord,
-        current: &super::records::Subscription,
-        ended: &(impl Fn(&'static str) -> Attempt<'a> + Sync),
-    ) -> bool {
-        #[cfg(test)]
-        self.before_window.pause().await;
-        // One reading judges the lease and the retry window (MIK-8202).
-        let Ok(now) = crate::clock::utc_now() else {
-            services.audit_outcome(&ended(CLOCK_UNREADABLE)).await;
-            self.settle(services, record, clock_unsent(record)).await;
-            return true;
-        };
-        // An expired row kept for its burials still signs but is not sent
-        // to: unsent, and the next expiry pass settles it (MIK-8061).
-        if !current.live(now) {
-            services.audit_outcome(&ended("subscription_expired")).await;
-            self.settle_with(services, record, |now| {
-                unsent_now("subscription_expired", record, now)
-            })
-            .await;
-            return true;
-        }
-        // After every wait, the row must still be observed as
-        // it was at fan-out (same grant, identity config and lease); nothing
-        // awaits between this and the send. A shared row compares `None`.
-        if self.observed_now(current, &services.live.get()) != Ok(record.observed.clone()) {
-            services.audit_outcome(&ended("observation_changed")).await;
-            self.settle(services, record, quiet_dead(DeadReason::Observation))
-                .await;
-            return true;
-        }
-        if !self.overdue(record, now) {
-            return false;
-        }
-        services.audit_outcome(&ended("exhausted")).await;
-        self.settle(services, record, quiet_dead(DeadReason::Exhausted))
-            .await;
-        true
     }
 
     /// MIN.2 E1: the delivery is a read by the subscription's caller, on the
@@ -415,7 +383,12 @@ impl EventsHub {
 
     /// The one path an event's bytes take to a callback: signed with the
     /// subscription's current secret, and its previous one during the
-    /// rotation grace, through the hardened client.
+    /// rotation grace, through the hardened client. `limit` is a fenced
+    /// send's deadline: the request ends by it, and none starts after it.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each is one part of the one signed POST"
+    )]
     async fn send_event(
         &self,
         url: &url::Url,
@@ -424,6 +397,7 @@ impl EventsHub {
         event_id: &str,
         frame: OutboundFrame,
         now: chrono::DateTime<chrono::Utc>,
+        limit: Option<tokio::time::Instant>,
     ) -> Result<super::client::Answer, CallbackFailure> {
         // The caller's reading picks the signing keys and dates the
         // signature (MIK-8202).
@@ -444,18 +418,27 @@ impl EventsHub {
                 // Only a failure before any byte could be written releases the
                 // frame's reservation; any other may follow a written byte, and
                 // the frame commits.
-                match self
-                    .client
-                    .post_tracked(
-                        url,
-                        handle,
-                        event_id,
-                        super::client::Signing { keys: &keys, now },
-                        body,
-                        ReadBody::Discard,
-                    )
-                    .await
-                {
+                let post = self.client.post_tracked(
+                    url,
+                    handle,
+                    event_id,
+                    super::client::Signing { keys: &keys, now },
+                    body,
+                    ReadBody::Discard,
+                );
+                // A fenced send ends by its deadline: none starts after it,
+                // and one cut short may have written a byte, so it counts as
+                // sent.
+                let posted = match limit {
+                    Some(limit) if tokio::time::Instant::now() >= limit => {
+                        Err((CallbackFailure::Timeout, true))
+                    }
+                    Some(limit) => tokio::time::timeout_at(limit, post)
+                        .await
+                        .unwrap_or(Err((CallbackFailure::Timeout, false))),
+                    None => post.await,
+                };
+                match posted {
                     Err((failure, true)) => CallbackSend::NotSent(failure),
                     Err((failure, false)) => CallbackSend::Sent(Err(failure)),
                     Ok(answer) => CallbackSend::Sent(Ok(answer)),
@@ -777,6 +760,8 @@ const fn dead(reason: DeadReason, status: &'static str) -> Settle {
 
 #[path = "worker_dispatch.rs"]
 mod dispatch;
+#[path = "worker_fence.rs"]
+mod fence;
 #[path = "worker_settle.rs"]
 mod settle;
 

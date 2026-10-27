@@ -55,7 +55,7 @@ impl MetaMcp {
             if let Some(refusal) =
                 self.catalogue_refusal(caller.as_ref(), &backend.name, method, &params, &id)
             {
-                return refusal;
+                return crate::gateway::delivery_facts::refused(refusal);
             }
         }
         let response =

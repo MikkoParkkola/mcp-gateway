@@ -459,6 +459,17 @@ function showSignIn() {
   document.getElementById('signin-key').focus();
 }
 
+/**
+ * The rate-limited key check's message. `Retry-After` is read as whole
+ * seconds; any other form (an HTTP date, a typo) falls back to a minute,
+ * the gateway's own default wait.
+ */
+function rateLimited(retryAfter) {
+  const seconds = /^\d+$/.test(retryAfter ?? '') ? Number(retryAfter) : 0;
+  const wait = seconds === 1 ? '1 second' : seconds > 0 ? `${seconds} seconds` : 'a minute';
+  return `The gateway is limiting sign-in attempts. Wait ${wait}, then try again.`;
+}
+
 let signingIn = false;
 /** How long a key check may take before it counts as unreachable. */
 const KEY_CHECK_MS = 10_000;
@@ -498,6 +509,7 @@ async function signIn(ev) {
     });
     if (reply.ok) auth = (await reply.json())?.auth ?? null;
     else if (reply.status === 403) message = 'That key is valid, but it is not allowed into the web UI. Ask an admin for access.';
+    else if (reply.status === 429) message = rateLimited(reply.headers.get('retry-after'));
     else if (reply.status !== 401) message = 'Could not reach the gateway. Try again.';
   } catch {
     message = 'Could not reach the gateway. Try again.';

@@ -337,3 +337,28 @@ async fn direct_relay_scan_skips_the_progress_token() {
         "the caller's progress token reached the backend: {reached}"
     );
 }
+
+/// The catalogue relay refusal on the meta route is the gateway's own, and
+/// its frame carries no refusal marker: the delivery records `refused`.
+#[tokio::test]
+async fn meta_catalogue_relay_refusal_records_refused() {
+    let mut fx = fixture_for(Route::Meta).await;
+    let (_dir, log) = super::super::route_matrix_driver_tests::response::temp_log(None);
+    let state = Arc::get_mut(&mut fx.state).expect("state is unique");
+    state.transparency_log = Some(Arc::clone(&log));
+    Arc::get_mut(&mut state.meta_mcp)
+        .expect("meta is unique")
+        .enable_transparency_log(Arc::clone(&log));
+    read_resource(&fx, Route::Meta, "a").await;
+    let relay = prompt_with(&fx, Route::Meta, "b", PROSE).await;
+    assert_catalogue_refused(&fx, &relay, 1);
+    // The last delivery is B's refused prompt; A's read came before it.
+    let rows: Vec<Value> = std::fs::read_to_string(log.path())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|row| row["event"] == "response_delivery_attempt")
+        .collect();
+    let row = rows.last().expect("a delivery record");
+    assert_eq!(row["response_effect"], "refused", "{row}");
+}
