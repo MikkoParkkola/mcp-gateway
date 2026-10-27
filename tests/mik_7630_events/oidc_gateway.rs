@@ -27,6 +27,18 @@ pub async fn start(
     backend: Value,
     extra_trust: &[&Path],
 ) -> Gateway {
+    start_with(root, rx, issuer, backend, extra_trust, |_| {}).await
+}
+
+/// [`start`], with `tweak` applied to the config before the gateway starts.
+pub async fn start_with(
+    root: &Path,
+    rx: &Receiver,
+    issuer: &issuer::Issuer,
+    backend: Value,
+    extra_trust: &[&Path],
+    tweak: impl FnOnce(&mut Value),
+) -> Gateway {
     let mut cfg = upstream_config(root, backend, &[]);
     let policies: Vec<Value> = ["u1", "u2"]
         .iter()
@@ -52,6 +64,7 @@ pub async fn start(
         pem.push_str(&std::fs::read_to_string(ca).expect("extra CA"));
     }
     std::fs::write(&both, pem).expect("combined trust file");
+    tweak(&mut cfg);
     let trust = both.to_string_lossy();
     Gateway::start_with_env(root, cfg, &[("SSL_CERT_FILE", &trust), (TRUST_CA, &trust)]).await
 }

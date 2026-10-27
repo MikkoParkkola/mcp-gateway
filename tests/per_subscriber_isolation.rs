@@ -194,19 +194,14 @@ async fn each_user_only_their_own(
     assert!(gateway_streams.is_empty(), "{gateway_streams:?}");
 }
 
-/// Requests from index `from` on that carried no user's own subject.
-///
-/// One exemption: a `ping` with no `Authorization` header at all (subject
-/// `""`) is the gateway's background health probe of the backend
-/// (`src/backend/probe.rs`, `ping` on a legacy-era peer), not a listener, and
-/// presents no one's credential. Any other credential-less request, and a
-/// `ping` carrying an unreadable credential, still counts.
+/// Requests from index `from` on that carried no user's own subject. A
+/// backend with per-user sessions only gets no gateway session at all, so
+/// nothing is exempt: not warm-start, not the health probe.
 fn as_anyone_else(peer: &SubjectPeer, from: usize) -> Vec<subject_peer::Request> {
     peer.seen()
         .into_iter()
         .skip(from)
         .filter(|r| !["u1", "u2"].contains(&r.subject.as_str()))
-        .filter(|r| !(r.subject.is_empty() && r.method == "ping"))
         .collect()
 }
 
@@ -263,21 +258,6 @@ async fn only_its_users_credential(
     rx: &Receiver,
     issuer: &issuer::Issuer,
 ) {
-    // The gateway's warm-start reads the catalogue on its own shared session,
-    // with no user's credential. Wait for it to finish, so it lands before
-    // the window opens and nothing credential-less belongs inside it.
-    let warmed = wait_until(DEADLINE, || {
-        peer.seen()
-            .iter()
-            .any(|r| r.subject.is_empty() && r.method == "tools/list" && r.session == "session-")
-    })
-    .await;
-    assert!(
-        warmed,
-        "the gateway's warm-start was not seen; peer saw {:?}\n{}",
-        peer.seen(),
-        gw.logs()
-    );
     let from = peer.seen().len();
     for user in ["u1", "u2"] {
         let bearer = issuer.mint(user, &email(user));
