@@ -51,76 +51,81 @@ fn propagated(strategy: &str, required: bool, session_mode: &str) -> String {
     )
 }
 
+/// Load `rows` (name, backend body, whether it refuses a shared session) beside
+/// `descriptors`, and check each compiled backend.
+fn check(port: u16, descriptors: &str, rows: &[(&str, String, bool)]) {
+    let root = tempfile::TempDir::new().unwrap();
+    let mut backends = String::from("backends:\n");
+    for (name, body, _) in rows {
+        backends.push_str(&format!("  {name}:\n{body}"));
+    }
+    let compiled = effective(root.path(), port, descriptors, &backends);
+    for (name, _, refused) in rows {
+        let config = compiled
+            .get(*name)
+            .unwrap_or_else(|| panic!("{name} compiled: {:?}", compiled.keys()));
+        assert_eq!(refuses_shared(config), *refused, "{name}");
+    }
+}
+
+fn on_account(account: &str) -> String {
+    format!("    http_url: https://backend.example.invalid/mcp\n    account: {account}\n")
+}
+
+/// The gateway installs one minting strategy per config, so the signed
+/// assertion rows and the token exchange rows load separately.
 #[test]
 fn every_binding_syntax_refuses_a_shared_session_only_when_required_per_user() {
-    let root = tempfile::TempDir::new().unwrap();
     let descriptors = format!(
-        "{}{}{}{}",
+        "{}{}",
         managed_descriptor("work", "google"),
+        shared_descriptor("team", "partner"),
+    );
+    check(
+        18962,
+        &descriptors,
+        &[
+            (
+                "signed",
+                propagated("signed_assertion", true, "per_user"),
+                true,
+            ),
+            (
+                "signed-stateless",
+                propagated("signed_assertion", true, "stateless"),
+                false,
+            ),
+            (
+                "signed-optional",
+                propagated("signed_assertion", false, "per_user"),
+                false,
+            ),
+            ("managed", on_account("work"), true),
+            ("shared-account", on_account("team"), false),
+            (
+                "plain",
+                "    http_url: https://backend.example.invalid/mcp\n".to_string(),
+                false,
+            ),
+        ],
+    );
+    let descriptors = format!(
+        "{}{}",
         external_descriptor("ext-stateless", "partner", "token_exchange"),
         external_descriptor("ext-per-user", "partner", "token_exchange")
             .replace("session_mode: stateless", "session_mode: per_user"),
-        shared_descriptor("team", "partner"),
     );
-    let mut backends = String::from("backends:\n");
-    let mut want = Vec::new();
-    for (name, body, refused) in [
-        (
-            "signed",
-            propagated("signed_assertion", true, "per_user"),
-            true,
-        ),
-        (
-            "exchanged",
-            propagated("token_exchange", true, "per_user"),
-            true,
-        ),
-        (
-            "signed-stateless",
-            propagated("signed_assertion", true, "stateless"),
-            false,
-        ),
-        (
-            "signed-optional",
-            propagated("signed_assertion", false, "per_user"),
-            false,
-        ),
-        (
-            "managed",
-            "    http_url: https://backend.example.invalid/mcp\n    account: work\n".to_string(),
-            true,
-        ),
-        (
-            "external-per-user",
-            "    http_url: https://backend.example.invalid/mcp\n    account: ext-per-user\n"
-                .to_string(),
-            true,
-        ),
-        (
-            "external-stateless",
-            "    http_url: https://backend.example.invalid/mcp\n    account: ext-stateless\n"
-                .to_string(),
-            false,
-        ),
-        (
-            "shared-account",
-            "    http_url: https://backend.example.invalid/mcp\n    account: team\n".to_string(),
-            false,
-        ),
-        (
-            "plain",
-            "    http_url: https://backend.example.invalid/mcp\n".to_string(),
-            false,
-        ),
-    ] {
-        backends.push_str(&format!("  {name}:\n{body}"));
-        want.push((name, refused));
-    }
-    let compiled = effective(root.path(), 18962, &descriptors, &backends);
-    for (name, refused) in want {
-        let config = compiled
-            .get(name)
-            .unwrap_or_else(|| panic!("{name} compiled: {:?}", compiled.keys()));
-        assert_eq!(refuses_shared(config), refused, "{name}");
-    }
+    check(
+        18963,
+        &descriptors,
+        &[
+            (
+                "exchanged",
+                propagated("token_exchange", true, "per_user"),
+                true,
+            ),
+            ("external-per-user", on_account("ext-per-user"), true),
+            ("external-stateless", on_account("ext-stateless"), false),
+        ],
+    );
 }
