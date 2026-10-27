@@ -256,7 +256,7 @@ pub(crate) async fn lock_config_recovering(
 
 /// How many callers have found `lock` held and are waiting on it: the seam a
 /// test uses to know its racers reached the lock. Red-first stub.
-#[cfg(test)]
+#[cfg(all(test, feature = "webui"))]
 pub(crate) fn waiters_for_test(lock: &Path) -> usize {
     waiters()
         .lock()
