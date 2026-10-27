@@ -75,6 +75,10 @@ owned_routes! {
     /// Start-once preview of a server before it is added. Its own
     /// prefix, so it can never shadow a backend name under `/ui/api/backends`.
     UI_PREVIEWS = "/ui/api/previews",
+    /// The web UI's windowed call counters.
+    UI_METRICS_SERIES = "/ui/api/metrics/series",
+    /// Restarts, upgrades, reloads, pauses and switch-offs.
+    UI_MARKERS = "/ui/api/markers",
     /// The bare prefix, which the catch-all does not match; claimed so it
     /// never reaches the main router's full-URI trace span.
     ACCOUNTS_ROOT = "/accounts/v1",

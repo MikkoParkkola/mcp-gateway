@@ -537,6 +537,34 @@ const ROWS: &[Row] = &[
         Payload::Import,
         [401, 403, 403, 200],
     ),
+    // src/gateway/ui/history.rs (markers). The codes come from the
+    // design (admin only: no credential 401, non-admin 403). This fixture
+    // never runs the server's start, so no counter store is attached and the
+    // admin is told counting is off (503), as /ui/api/events/held answers 404
+    // without an events hub; the served 200 is cited in `SERVED_BY`.
+    row(
+        "/ui/api/markers",
+        Method::GET,
+        "/ui/api/markers",
+        Payload::None,
+        [401, 403, 403, 503],
+    ),
+    // history.rs (series), as above.
+    row(
+        "/ui/api/metrics/series",
+        Method::GET,
+        "/ui/api/metrics/series?metric=calls&window=24h",
+        Payload::None,
+        [401, 403, 403, 503],
+    ),
+    // history.rs (series): an unsupported query is refused for the admin too.
+    row(
+        "/ui/api/metrics/series",
+        Method::GET,
+        "/ui/api/metrics/series?window=7d",
+        Payload::None,
+        [401, 403, 403, 400],
+    ),
     // src/gateway/ui/shell.rs, fn asset: static, outside auth like /ui
     row(
         "/ui/assets/{file}",

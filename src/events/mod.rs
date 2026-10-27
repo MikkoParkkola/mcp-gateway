@@ -43,6 +43,7 @@ mod lifecycle;
 mod limiter;
 pub(crate) mod observation;
 mod operational_source;
+pub(crate) use operational_source::{Markers, install_marker_observers};
 mod outbox;
 mod rate;
 mod reconcile;

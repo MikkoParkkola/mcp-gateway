@@ -13,6 +13,8 @@ const CP_AUTHORITY: &str = "tests/e2min_control_plane_authority.rs";
 const ACTIVITY_LIST: &str = "src/gateway/ui/activity/list_tests.rs";
 const ACTIVITY_EXPORT: &str = "src/gateway/ui/activity/export_tests.rs";
 const ACTIVITY_RECEIPT: &str = "src/gateway/ui/activity/receipt_tests.rs";
+const HISTORY_ROUTES: &str = "src/gateway/router/history_route_tests.rs";
+const HISTORY_PARAMS: &str = "src/gateway/ui/history_tests.rs";
 const CP_WRITES: &[Citation] = &[(
     CP_AUTHORITY,
     "admin_grant_and_policy_writes_are_refused_and_point_at_config",
@@ -112,6 +114,28 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
     ("/ui/api/control-plane/grants", Method::POST, CP_WRITES),
     ("/ui/api/control-plane/policies", Method::POST, CP_WRITES),
     ("/ui/api/control-plane/decisions", Method::POST, CP_WRITES),
+    // The admin's 200 with a counter store attached, and the 400
+    // for an unsupported query, which this fixture's row also records.
+    (
+        "/ui/api/markers",
+        Method::GET,
+        &[(HISTORY_ROUTES, "t41_both_routes_are_admin_only")],
+    ),
+    (
+        "/ui/api/metrics/series",
+        Method::GET,
+        &[
+            (HISTORY_ROUTES, "t41_both_routes_are_admin_only"),
+            (
+                HISTORY_ROUTES,
+                "t34_the_series_route_answers_points_and_the_previous_period",
+            ),
+            (
+                HISTORY_PARAMS,
+                "t38_a_bad_metric_or_window_names_the_allowed_values",
+            ),
+        ],
+    ),
 ];
 
 /// Whether `status` on `path` is a served admin answer: success, or `/sse`'s

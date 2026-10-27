@@ -18,6 +18,7 @@ pub mod control_plane;
 mod dashboard;
 mod errors;
 mod events;
+mod history;
 pub mod import;
 mod overview;
 mod preview;
@@ -80,7 +81,8 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .merge(control_plane::control_plane_router())
         .merge(backends::backends_router())
         .merge(events::events_router())
-        .merge(import::import_router());
+        .merge(import::import_router())
+        .merge(history::history_router());
 
     #[cfg(feature = "cost-governance")]
     let router = router.route(routes::UI_COSTS, get(costs));
