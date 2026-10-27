@@ -172,7 +172,7 @@ impl EventsHub {
 
     /// Settle a record that cannot go out after the waits before its send:
     /// past its lease it is unsent; past its bounds it is dead and unsent; on
-    /// a clock that cannot be read it is neither sent nor buried (MIK-8202). The record just written says
+    /// a clock that cannot be read it is neither sent nor buried. The record just written says
     /// how that attempt ended. `true` when settled here.
     pub(super) async fn settled_unsendable<'a>(
         &self,
@@ -183,14 +183,14 @@ impl EventsHub {
     ) -> bool {
         #[cfg(test)]
         self.before_window.pause().await;
-        // One reading judges the lease and the retry window (MIK-8202).
+        // One reading judges the lease and the retry window.
         let Ok(now) = crate::clock::utc_now() else {
             services.audit_outcome(&ended(CLOCK_UNREADABLE)).await;
             self.settle(services, record, clock_unsent(record)).await;
             return true;
         };
         // An expired row kept for its burials still signs but is not sent
-        // to: unsent, and the next expiry pass settles it (MIK-8061).
+        // to: unsent, and the next expiry pass settles it.
         if !current.live(now) {
             services.audit_outcome(&ended("subscription_expired")).await;
             self.settle_with(services, record, |now| {
