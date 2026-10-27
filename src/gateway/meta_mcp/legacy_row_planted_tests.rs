@@ -45,7 +45,8 @@ async fn a_pre_binding_row_with_a_planted_member_is_refused_when_served() {
         // As every row a published pre-release wrote reads.
         bindings_recorded: false,
     };
-    let caller = context(&api_key("alice"));
+    let alice = api_key("alice");
+    let caller = context(&alice);
     let (refusal, _, _) = with_grant_slot(meta.transparency_logger.as_ref(), async {
         meta.refuse_stored_delivery(&RequestId::Number(1), &stored, None, Some("s"), &caller)
     })
