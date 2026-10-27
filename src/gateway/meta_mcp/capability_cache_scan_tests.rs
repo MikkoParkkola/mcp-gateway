@@ -59,7 +59,7 @@ fn gateway(port: u16) -> MetaMcp {
          \x20 primary:\n\
          \x20   service: rest\n\
          \x20   config:\n\
-         \x20     base_url: http://127.0.0.1:{port}\n\
+         \x20     base_url: http://localhost:{port}\n\
          \x20     path: /read\n\
          \x20     method: GET\n"
     ))
