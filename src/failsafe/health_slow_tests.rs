@@ -106,3 +106,33 @@ fn api4_2_a_tenfold_slowdown_shows_for_nineteen_batches() {
         "1000 ms is the new usual after twenty"
     );
 }
+
+#[test]
+fn api4_2_small_steps_still_move_the_usual() {
+    // Twenty batches at 110 ms: plain integer averaging would never move a
+    // 100 ms baseline by a 10 ms step; the fixed point does.
+    let up = warm_at(100);
+    feed(&up, 2000, 110);
+    feed(&up, 99, 2000);
+    assert_eq!(up.slow(), Some((2000, 102)));
+
+    // And down: twenty batches at 100 ms from a 400 ms usual.
+    let down = warm_at(400);
+    feed(&down, 2000, 100);
+    feed(&down, 99, 2000);
+    assert_eq!(down.slow(), Some((2000, 319)));
+}
+
+#[test]
+fn api4_2_the_window_p95_is_its_ninety_sixth_value() {
+    // Five slow calls in the last hundred reach the p95; four do not.
+    let five = warm_at(100);
+    feed(&five, 94, 100);
+    feed(&five, 5, 1000);
+    assert_eq!(five.slow(), Some((1000, 100)));
+
+    let four = warm_at(100);
+    feed(&four, 95, 100);
+    feed(&four, 4, 1000);
+    assert_eq!(four.slow(), None);
+}

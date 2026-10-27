@@ -22,10 +22,16 @@ const DEFAULT_HISTOGRAM_CAPACITY: usize = 1000;
 const SLOW_BATCH: usize = 100;
 /// Batches the baseline absorbs before any Slow verdict (500 calls), so a
 /// restart or a quiet server never flags noise.
+// The verdict's only reader is the web UI's status row.
+#[cfg(any(test, feature = "webui"))]
 const SLOW_WARM_BATCHES: u32 = 5;
 /// The recent p95 must exceed this many times the baseline.
+// The verdict's only reader is the web UI's status row.
+#[cfg(any(test, feature = "webui"))]
 const SLOW_FACTOR: u64 = 3;
 /// Below this recent p95 nothing is slow: a few-ms swing is slow to nobody.
+// The verdict's only reader is the web UI's status row.
+#[cfg(any(test, feature = "webui"))]
 const SLOW_FLOOR_MS: u64 = 50;
 /// The baseline is an average of batch p95s with weight 1 / `SLOW_DECAY`,
 /// held times `SLOW_DECAY` so steps under `SLOW_DECAY` ms still move it.
@@ -135,6 +141,7 @@ impl HealthTracker {
     /// Its recent p95 and its usual p95 in ms, when the recent one is over
     /// three times the usual and at least 50 ms; `None` until 500 successful
     /// calls have warmed the usual one.
+    #[cfg(any(test, feature = "webui"))]
     pub(crate) fn slow(&self) -> Option<(u64, u64)> {
         self.latencies.read().slow()
     }
@@ -284,6 +291,7 @@ impl LatencyHistogram {
 
     /// The recent p95 and the baseline, when the baseline is warm and the
     /// recent one is over `SLOW_FACTOR` times it and at least `SLOW_FLOOR_MS`.
+    #[cfg(any(test, feature = "webui"))]
     fn slow(&self) -> Option<(u64, u64)> {
         if self.batches < SLOW_WARM_BATCHES {
             return None;

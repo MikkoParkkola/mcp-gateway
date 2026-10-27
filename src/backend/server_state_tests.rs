@@ -420,6 +420,25 @@ mod through_a_backend {
         }
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn api4_2_a_running_backend_far_over_its_usual_reads_slow() {
+        let backend = http(
+            "slowing",
+            crate::backend::publish_order_tests::upstream().await,
+        );
+        backend.ensure_started().await.expect("starts");
+        assert_eq!(state(&backend), ServerState::Running, "premise");
+        let tracker = &backend.shared_entry().failsafe.health_tracker;
+        for _ in 0..500 {
+            tracker.record_success(Duration::from_millis(100));
+        }
+        assert_eq!(state(&backend), ServerState::Running, "a steady usual");
+        for _ in 0..99 {
+            tracker.record_success(Duration::from_millis(1000));
+        }
+        assert_eq!(state(&backend), ServerState::Slow);
+    }
+
     #[tokio::test]
     async fn api4_1_a_fresh_backend_whose_revive_fails_reads_unhealthy() {
         // Nothing listens on the discard port.
