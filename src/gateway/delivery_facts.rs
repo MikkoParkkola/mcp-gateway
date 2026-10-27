@@ -89,9 +89,18 @@ pub(crate) struct DeliveryFacts {
     findings: BTreeSet<Finding>,
     vouched: bool,
     lone_target: bool,
-    /// A composite's latest step ended in a gateway refusal and the
-    /// composite has not carried on past it.
-    step_refused: bool,
+    /// Whether a composite's latest step ended in a gateway refusal the
+    /// composite has not carried on past.
+    last_step: LastStep,
+}
+
+/// How a composite's latest step ended, for the composite's own record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LastStep {
+    /// No step, a served step, or one the composite carried on past.
+    Settled,
+    /// Refused by the gateway, and nothing has carried on past it.
+    Refused,
 }
 
 impl Default for DeliveryFacts {
@@ -102,7 +111,7 @@ impl Default for DeliveryFacts {
             findings: BTreeSet::new(),
             vouched: true,
             lone_target: false,
-            step_refused: false,
+            last_step: LastStep::Settled,
         }
     }
 }
@@ -132,7 +141,13 @@ pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
             (output, refused)
         })
         .await;
-    with(|facts| facts.step_refused = refused);
+    with(|facts| {
+        facts.last_step = if refused {
+            LastStep::Refused
+        } else {
+            LastStep::Settled
+        };
+    });
     output
 }
 
@@ -140,7 +155,7 @@ pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
 /// `continue`, or its `retry` once attempts run out): that step's refusal is
 /// no longer what the composite can end on.
 pub(crate) fn step_absorbed() {
-    with(|facts| facts.step_refused = false);
+    with(|facts| facts.last_step = LastStep::Settled);
 }
 
 /// The composite ends with `error` (`None`: it succeeded). It records
@@ -148,7 +163,7 @@ pub(crate) fn step_absorbed() {
 /// stands: the step it ends on was refused.
 pub(crate) fn composite_ended(error: Option<&crate::Error>) {
     with(|facts| {
-        if error.is_some() && facts.step_refused {
+        if error.is_some() && facts.last_step == LastStep::Refused {
             facts.effect = facts.effect.max(ResponseEffect::Refused);
         }
     });

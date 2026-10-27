@@ -529,8 +529,8 @@ mod reload_tests {
         .expect("the registry pairs with the config");
         let meta = MetaMcp::new(registry);
         meta.set_reload_context(Arc::new(ctx));
-        crate::gateway::delivery_facts::scope(async move {
-            let answer = meta.reload_config().await;
+        Box::pin(crate::gateway::delivery_facts::scope(async move {
+            let answer = Box::pin(meta.reload_config()).await;
             let mut fields = serde_json::Map::new();
             crate::gateway::delivery_facts::record_fields(
                 crate::gateway::delivery_facts::snapshot().as_ref(),
@@ -539,7 +539,7 @@ mod reload_tests {
                 &mut fields,
             );
             (answer, fields.get("response_effect").cloned())
-        })
+        }))
         .await
     }
 
@@ -550,8 +550,10 @@ mod reload_tests {
     #[tokio::test]
     async fn only_a_posture_refused_reload_records_refused() {
         // Publishing the gateway over open tools: the posture refusal.
-        let (refused, effect) =
-            reload_effect("server:\n  public_url: \"https://gw.example.com\"\n").await;
+        let (refused, effect) = Box::pin(reload_effect(
+            "server:\n  public_url: \"https://gw.example.com\"\n",
+        ))
+        .await;
         let error = refused.expect_err("premise: the posture refusal");
         assert_eq!(
             error.to_rpc_code(),
@@ -560,7 +562,7 @@ mod reload_tests {
         );
         assert_eq!(effect, Some(serde_json::json!("refused")), "{error}");
 
-        let (unparsed, effect) = reload_effect("server: [unclosed\n").await;
+        let (unparsed, effect) = Box::pin(reload_effect("server: [unclosed\n")).await;
         let error = unparsed.expect_err("premise: the file does not parse");
         assert_eq!(
             error.to_rpc_code(),

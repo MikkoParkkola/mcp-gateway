@@ -15,7 +15,7 @@ fn last_delivery(fx: &Fixture) -> Value {
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
         .filter(|entry| entry["event"] == "response_delivery_attempt")
-        .last()
+        .next_back()
         .expect("the composite's delivery record")
 }
 
