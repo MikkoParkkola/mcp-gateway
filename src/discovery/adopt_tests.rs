@@ -198,6 +198,41 @@ fn a_field_of_the_wrong_shape_refuses_rather_than_vanishing() {
 }
 
 #[test]
+fn a_switched_off_entry_refuses() {
+    // Adopted, it would run: the client keeps it off.
+    for (key, value) in [
+        ("disabled", json!(true)),
+        ("enabled", json!(false)),
+        ("disabled", json!("no")),
+    ] {
+        let mut entry = json!({"command": "srv"});
+        entry[key] = value;
+        assert_eq!(
+            refused(&entry),
+            one(AdoptRefusal::NeedsClientOnlySecret, key),
+            "{entry}"
+        );
+    }
+}
+
+#[test]
+fn a_client_timeout_refuses() {
+    // The gateway's own default would replace it.
+    assert_eq!(
+        refused(&json!({"command": "srv", "timeout": 600})),
+        one(AdoptRefusal::NeedsClientOnlySecret, "timeout")
+    );
+}
+
+#[test]
+fn a_relative_working_directory_refuses() {
+    assert_eq!(
+        refused(&json!({"command": "srv", "cwd": "tools/srv"})),
+        one(AdoptRefusal::NeedsClientOnlySecret, "cwd")
+    );
+}
+
+#[test]
 fn a_socket_endpoint_refuses() {
     for url in ["unix:///tmp/mcp.sock", "pipe:///mcp"] {
         assert_eq!(
@@ -215,7 +250,7 @@ fn descriptive_client_keys_do_not_refuse() {
         "command": "srv",
         "description": "d",
         "disabled": false,
-        "timeout": 30,
+        "enabled": true,
         "autoApprove": ["read"],
     });
     assert_eq!(refused(&entry), vec![]);

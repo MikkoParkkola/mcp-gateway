@@ -71,9 +71,6 @@ const DESCRIPTIVE_KEYS: &[&str] = &[
     "name",
     "description",
     "title",
-    "disabled",
-    "enabled",
-    "timeout",
     "autoApprove",
     "alwaysAllow",
     "source",
@@ -90,6 +87,19 @@ fn record_dropped_keys(
         return;
     };
     for (key, value) in object {
+        // An entry the client keeps switched off would be adopted switched
+        // on: only an explicit "on" leaves nothing behind.
+        let active = match key.as_str() {
+            "disabled" => Some(value == &Value::Bool(false)),
+            "enabled" => Some(value == &Value::Bool(true)),
+            _ => None,
+        };
+        if let Some(active) = active {
+            if !active {
+                uncarried.push(key.clone());
+            }
+            continue;
+        }
         match carried.iter().find(|(name, _)| *name == key.as_str()) {
             Some((_, shape_ok)) if !shape_ok(value) => uncarried.push(key.clone()),
             Some(_) => {}
@@ -152,9 +162,11 @@ pub(super) fn parse(
             return None;
         };
         let working_dir = config.get("cwd").and_then(Value::as_str).map(PathBuf::from);
+        // A relative one names a directory under the client's, not the
+        // gateway's, working directory.
         if working_dir
             .as_ref()
-            .is_some_and(|dir| client_expands(&dir.to_string_lossy()))
+            .is_some_and(|dir| client_expands(&dir.to_string_lossy()) || dir.is_relative())
         {
             uncarried.push("cwd".to_string());
         }
