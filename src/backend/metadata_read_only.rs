@@ -20,6 +20,13 @@ impl Backend {
             .contains(tool)
     }
 
+    /// Whether `binding`'s slot saw `tool`'s `readOnlyHint` declared by the
+    /// server, as of its last `tools/list`, rather than inferred from its name.
+    #[must_use]
+    pub(crate) fn hint_declared_for(&self, binding: Option<&str>, tool: &str) -> bool {
+        self.tools_slot(binding).hint_declared.read().contains(tool)
+    }
+
     /// An accepted fill's own derived state: its resend and read-only sets,
     /// and its descriptor verdicts. Written only from the store callback, so
     /// a fill voided by a mid-fill invalidation writes none of it (F13,
@@ -33,6 +40,7 @@ impl Backend {
     ) {
         *entry.resend_permitted.write() = prepared.resend_permitted;
         *entry.read_only_declared.write() = prepared.read_only_declared;
+        *entry.hint_declared.write() = prepared.hint_declared;
         let listing = if truncated {
             crate::backend::Listing::Truncated
         } else {

@@ -493,11 +493,15 @@ async fn tools(
                     }
                 }
 
+                let (class, class_source) =
+                    preview::tool_class(tool, backend.hint_declared_for(None, &tool.name));
                 entries.push(json!({
                     "name": tool.name,
                     "server": name,
                     "description": tool.description,
                     "schema": tool.input_schema,
+                    "class": class,
+                    "class_source": class_source,
                 }));
             }
         }

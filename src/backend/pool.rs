@@ -132,6 +132,10 @@ pub(crate) struct PooledEntry {
     /// no effect to lose. Per slot for the same reason as that set, and absent
     /// means deny: an unfilled slot caches nothing.
     pub(crate) read_only_declared: RwLock<std::collections::HashSet<String>>,
+    /// Tools whose `readOnlyHint` this slot's upstream declared, either way,
+    /// as of its last `tools/list`: the UI's declared-or-inferred label.
+    /// Grants nothing, so revocation never narrows it; the next fill rewrites it.
+    pub(crate) hint_declared: RwLock<std::collections::HashSet<String>>,
     /// Set when the last drain (MIK 7570 PAGING.1) stopped before the
     /// catalogue was exhausted (page cap, repeated cursor, or the fill
     /// budget); cleared by the next complete fill. Tools and resources only.
@@ -245,6 +249,7 @@ impl PooledEntry {
             tools_cache: CachedMetadata::new(),
             resend_permitted: RwLock::default(),
             read_only_declared: RwLock::default(),
+            hint_declared: RwLock::default(),
             tools_truncated: AtomicBool::new(false),
             resources_truncated: AtomicBool::new(false),
             tools_fill_failed_at: parking_lot::Mutex::new(None),
