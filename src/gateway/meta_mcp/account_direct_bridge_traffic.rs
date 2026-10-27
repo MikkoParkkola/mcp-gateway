@@ -50,7 +50,7 @@ impl DirectAccountGateway {
     }
 
     /// Fail the next non-`tools/list` request with the HTTP `status` the
-    /// transport would report, with every account left live (MIK-8406 P8i).
+    /// transport would report, with every account left live.
     pub(crate) fn fail_next(&self, status: u16) {
         self.dispatches.answer_with(&[status]);
     }
@@ -73,7 +73,7 @@ impl DirectAccountGateway {
     }
 
     /// Answer the next requests, `tools/list` included, with these HTTP
-    /// statuses (MIK-8356 C9: a cold slot's first list gets a 401).
+    /// statuses: a cold slot's first list gets a 401, for one.
     pub(crate) fn answer_lists_with(&self, statuses: &[u16]) {
         self.dispatches.script_lists();
         self.dispatches.answer_with(statuses);
