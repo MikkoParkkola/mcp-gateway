@@ -51,18 +51,18 @@ pub(super) struct StderrReader {
 }
 
 impl StderrReader {
-    /// Read the child's stderr to its end, within `window`. Past it, something
-    /// still holds the pipe: the task is aborted and what was read is kept.
+    /// Read the child's stderr to its end, within `window`; past it, something
+    /// still holds the pipe, and what was read is kept.
     ///
-    /// Returns only once the task is gone, so no line lands in the tail after
-    /// the caller reads it, even from a poll in flight on another worker.
+    /// The task lets go of the loop first, so the drain is its only reader: a
+    /// poll in flight on another worker ends before the drain's first poll,
+    /// and nothing reads into the tail once this returns.
     pub(super) async fn drain(self, window: std::time::Duration) {
+        self.task.abort();
+        let _ = self.task.await;
         // `timeout` polls the read loop before its clock, so the clock wins
         // only once a read has found the pipe empty.
-        if tokio::time::timeout(window, self.read_loop).await.is_err() {
-            self.task.abort();
-            let _ = self.task.await;
-        }
+        let _ = tokio::time::timeout(window, self.read_loop).await;
     }
 }
 

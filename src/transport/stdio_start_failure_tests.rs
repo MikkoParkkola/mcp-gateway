@@ -388,6 +388,19 @@ async fn drain_held(holder: &str) -> (String, std::time::Duration) {
     (drained, took)
 }
 
+/// The drain ran out its window, so the pipe really was held (a holder that
+/// failed to start would close it), and the window still bounded it.
+fn assert_held(took: std::time::Duration) {
+    assert!(
+        took >= std::time::Duration::from_millis(150),
+        "the drain ended early, so nothing held the pipe: {took:?}"
+    );
+    assert!(
+        took < std::time::Duration::from_secs(2),
+        "the drain took {took:?}"
+    );
+}
+
 /// A quiet holder: the drain returns at its window with what was read.
 #[cfg(unix)]
 #[tokio::test]
@@ -397,10 +410,7 @@ async fn a_held_pipe_ends_the_drain_and_the_reader_task() {
         tail.contains("EACCES"),
         "the line before the hold is kept: {tail:?}"
     );
-    assert!(
-        took < std::time::Duration::from_secs(2),
-        "the drain took {took:?}"
-    );
+    assert_held(took);
 }
 
 /// A chatty holder never leaves the pipe empty for long: the window still
@@ -412,8 +422,5 @@ async fn a_chatty_held_pipe_still_ends_the_drain_at_its_window() {
         drain_held("i=0; while [ $i -lt 500 ]; do echo tick $i >&2; sleep 0.01; i=$((i+1)); done")
             .await;
     assert!(tail.contains("tick"), "{tail:?}");
-    assert!(
-        took < std::time::Duration::from_secs(2),
-        "the drain took {took:?}"
-    );
+    assert_held(took);
 }
