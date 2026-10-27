@@ -451,7 +451,7 @@ async fn update_backend(
                 let backend = config.backends.get_mut(&name)?;
                 let after = allowed_tools?;
                 let before = std::mem::replace(&mut backend.allowed_tools, after.clone());
-                Some((before, after))
+                (before != after).then_some((before, after))
             })
             .map_err(|message| {
                 // Surface the refusal verbatim. An operator setting "stop when idle" on a

@@ -377,6 +377,13 @@ impl Backend {
         self.gate_saturated() || self.is_unselected(tool) || self.is_withheld_name(tool)
     }
 
+    /// This backend's `allowed_tools` as written, for the admin config view:
+    /// a pattern that matches no current tool still shows there.
+    #[cfg(feature = "webui")]
+    pub(crate) fn allowed_tools(&self) -> Option<&[String]> {
+        self.config.allowed_tools.as_deref()
+    }
+
     /// Whether this backend's `allowed_tools` leaves `tool` out. One of the
     /// three tool scopes, all of which must permit a call (the API key's
     /// lists, this one, the global `tool_policy`); checked with the

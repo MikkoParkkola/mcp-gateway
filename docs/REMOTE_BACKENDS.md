@@ -254,8 +254,9 @@ backends:
 Each entry is an exact name or a trailing `prefix*`, matched on `tool` or `my-backend:tool`, the
 same grammar as an API key's `allowed_tools`. A tool outside the list is left out of every tool
 list and refused by name as an absent tool, including one the server adds later. The admin tools
-list still shows it, marked not selected, so it can be added. The web UI's add-after-preview writes
-the tools you ticked.
+list still shows it, marked not selected, so it can be added, and the admin config view
+(`/ui/api/config`) shows each backend's list as written. The web UI's add API takes the ticked tools
+(`allowed_tools` in `POST /ui/api/backends`); the preview's checkboxes come with the Servers screen.
 
 The list narrows and never widens. A call must pass all three tool scopes: the API key's
 `allowed_tools` and `denied_tools`, the backend's `allowed_tools`, and the global

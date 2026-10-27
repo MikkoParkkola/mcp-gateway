@@ -538,6 +538,8 @@ async fn config(
                 "name": s.name,
                 "transport": s.transport,
                 "running": s.running,
+                // As written, so a pattern that matches no current tool shows.
+                "allowed_tools": b.allowed_tools(),
             })
         })
         .collect();
