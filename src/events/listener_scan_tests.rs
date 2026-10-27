@@ -41,6 +41,8 @@ const SEND_FILES: &[&str] = &[
 ];
 /// `send` helpers those files hold today.
 const SEND_HELPERS: usize = 2;
+/// The listener seam's types: a transport naming one is a listener transport.
+const SEAM: &[&str] = &["CredentialSource", "ListenerCredential", "UpstreamListen"];
 /// Listener-side transport files the credential rule does not scan, and why.
 const NOT_PER_USER: &[(&str, &str)] = &[
     ("upstream_tap.rs", "defines CredentialSource; sends nothing"),
@@ -54,15 +56,29 @@ const NOT_PER_USER: &[(&str, &str)] = &[
     ),
 ];
 
-/// `#[cfg(test)]` (and not `#[cfg(not(test))]`).
+/// Test-only: `#[cfg(test)]` or `#[cfg(all(test, ..))]`. Anything else, as
+/// `any(test, unix)` or `not(test)`, also builds outside tests and is scanned.
 fn is_cfg_test(attrs: &[syn::Attribute]) -> bool {
+    fn test_only(meta: &syn::Meta) -> bool {
+        match meta {
+            syn::Meta::Path(path) => path.is_ident("test"),
+            syn::Meta::List(list) if list.path.is_ident("all") => list
+                .parse_args_with(
+                    syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+                )
+                .is_ok_and(|all| all.iter().any(test_only)),
+            _ => false,
+        }
+    }
     attrs.iter().any(|attr| {
-        let syn::Meta::List(list) = &attr.meta else {
-            return false;
-        };
-        let tokens = list.tokens.to_string();
-        attr.path().is_ident("cfg") && tokens.contains("test") && !tokens.contains("not")
+        attr.path().is_ident("cfg") && attr.parse_args::<syn::Meta>().is_ok_and(|m| test_only(&m))
     })
+}
+
+/// A macro body's tokens with the whitespace `to_string` puts between them
+/// removed, so `request . send ()` reads `request.send()`.
+fn macro_text(mac: &syn::Macro) -> String {
+    mac.tokens.to_string().split_whitespace().collect()
 }
 
 fn last_ident(path: &syn::Path) -> String {
@@ -83,42 +99,67 @@ fn field<'a>(s: &'a syn::ExprStruct, name: &str) -> Option<&'a syn::Expr> {
     })
 }
 
+/// What a name is known to hold, judged where it is bound against the names
+/// visible there.
+struct Binding {
+    name: String,
+    /// Why it is not a listener's key, or `None` when it is one.
+    verdict: Option<String>,
+    /// It holds `None`: as the observation, the gateway's own.
+    none: bool,
+}
+
 /// The key rule over one file: emits counted, breaches named.
 struct Emits<'f> {
     file: &'f str,
     count: usize,
     bad: Vec<String>,
-    /// `let` bindings seen so far in the current fn, newest last.
-    bindings: Vec<(String, syn::Expr)>,
+    /// Names bound so far in the current fn and its open blocks, newest last.
+    bindings: Vec<Binding>,
 }
 
 impl Emits<'_> {
-    /// Why a key expression breaks the rule, if it does. A name resolves to
-    /// its nearest earlier binding in the same fn.
-    fn judge_key(&self, expr: &syn::Expr, depth: u8) -> Option<String> {
+    fn binding(&self, expr: &syn::Expr) -> Option<&Binding> {
+        let syn::Expr::Path(p) = expr else {
+            return None;
+        };
+        let name = p.path.get_ident()?.to_string();
+        self.bindings.iter().rev().find(|b| b.name == name)
+    }
+
+    /// Whether `expr` is `None`, directly or through a name bound to it.
+    fn is_none(&self, expr: &syn::Expr) -> bool {
         match expr {
-            syn::Expr::Paren(e) => self.judge_key(&e.expr, depth),
-            syn::Expr::Group(e) => self.judge_key(&e.expr, depth),
+            syn::Expr::Paren(e) => self.is_none(&e.expr),
+            syn::Expr::Group(e) => self.is_none(&e.expr),
+            syn::Expr::Path(p) if last_ident(&p.path) == "None" => true,
+            other => self.binding(other).is_some_and(|b| b.none),
+        }
+    }
+
+    /// Why a key expression breaks the rule, if it does.
+    fn judge_key(&self, expr: &syn::Expr) -> Option<String> {
+        const ELSEWHERE: &str = "is not from key_of or backend_key";
+        match expr {
+            syn::Expr::Paren(e) => self.judge_key(&e.expr),
+            syn::Expr::Group(e) => self.judge_key(&e.expr),
             syn::Expr::MethodCall(m) if m.method == "key_of" => None,
             syn::Expr::Call(c) => match &*c.func {
                 syn::Expr::Path(p) if last_ident(&p.path) == "backend_key" => {
-                    let gateway = matches!(c.args.first(),
-                        Some(syn::Expr::Path(a)) if last_ident(&a.path) == "None");
+                    let gateway = c.args.first().is_some_and(|obs| self.is_none(obs));
                     (gateway && self.file != SHARED_VIEW_FILE)
                         .then(|| "is keyed as the gateway (backend_key(None, ..))".to_owned())
                 }
-                _ => Some("is not from key_of or backend_key".to_owned()),
+                _ => Some(ELSEWHERE.to_owned()),
             },
-            syn::Expr::Path(p) if depth < 4 => {
-                let Some(name) = p.path.get_ident().map(ToString::to_string) else {
-                    return Some("is not from key_of or backend_key".to_owned());
-                };
-                match self.bindings.iter().rev().find(|(n, _)| *n == name) {
-                    Some((_, init)) => self.judge_key(init, depth + 1),
-                    None => Some(format!("{name} is not bound from key_of or backend_key")),
+            syn::Expr::Path(p) => match self.binding(expr) {
+                Some(bound) => bound.verdict.clone(),
+                None if p.path.get_ident().is_some() => {
+                    Some(format!("{} is not bound in this fn", last_ident(&p.path)))
                 }
-            }
-            _ => Some("is not from key_of or backend_key".to_owned()),
+                None => Some(ELSEWHERE.to_owned()),
+            },
+            _ => Some(ELSEWHERE.to_owned()),
         }
     }
 
@@ -155,41 +196,116 @@ impl<'ast> Visit<'ast> for Emits<'_> {
         self.bindings.truncate(outer);
     }
 
+    fn visit_item_impl(&mut self, i: &'ast syn::ItemImpl) {
+        if !is_cfg_test(&i.attrs) {
+            syn::visit::visit_item_impl(self, i);
+        }
+    }
+
+    /// A name bound by a pattern (a match arm, a closure or loop variable, a
+    /// destructuring `let`) holds what the scan cannot judge.
+    fn visit_pat_ident(&mut self, p: &'ast syn::PatIdent) {
+        self.bindings.push(Binding {
+            name: p.ident.to_string(),
+            verdict: Some(format!(
+                "{} is bound by a pattern, not from key_of or backend_key",
+                p.ident
+            )),
+            none: false,
+        });
+        syn::visit::visit_pat_ident(self, p);
+    }
+
+    fn visit_expr_closure(&mut self, closure: &'ast syn::ExprClosure) {
+        // A closure's parameters end with it.
+        let outer = self.bindings.len();
+        syn::visit::visit_expr_closure(self, closure);
+        self.bindings.truncate(outer);
+    }
+
     fn visit_local(&mut self, local: &'ast syn::Local) {
-        syn::visit::visit_local(self, local);
         let pat = match &local.pat {
             syn::Pat::Type(t) => &*t.pat,
             other => other,
         };
-        if let (syn::Pat::Ident(p), Some(init)) = (pat, &local.init) {
-            self.bindings
-                .push((p.ident.to_string(), (*init.expr).clone()));
+        // Judged against the names visible before this `let`.
+        let simple = match (pat, &local.init) {
+            (syn::Pat::Ident(p), Some(init)) => Some((
+                p.ident.to_string(),
+                self.judge_key(&init.expr),
+                self.is_none(&init.expr),
+            )),
+            _ => None,
+        };
+        syn::visit::visit_local(self, local);
+        if let Some((name, verdict, none)) = simple {
+            self.bindings.push(Binding {
+                name,
+                verdict,
+                none,
+            });
+        }
+    }
+
+    /// `key = ..` re-judges every binding of that name, in an outer block too.
+    fn visit_expr_assign(&mut self, assign: &'ast syn::ExprAssign) {
+        syn::visit::visit_expr_assign(self, assign);
+        if let syn::Expr::Path(p) = &*assign.left
+            && let Some(name) = p.path.get_ident().map(ToString::to_string)
+        {
+            let (verdict, none) = (self.judge_key(&assign.right), self.is_none(&assign.right));
+            for bound in self.bindings.iter_mut().filter(|b| b.name == name) {
+                bound.verdict.clone_from(&verdict);
+                bound.none = none;
+            }
+        }
+    }
+
+    /// A macro body is not parsed: one that names the kind fails.
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        if macro_text(mac).contains("BackendNotification") {
+            self.bad.push(format!(
+                "{}: a macro body names BackendNotification; the scan cannot read it",
+                self.file
+            ));
         }
     }
 
     fn visit_expr_struct(&mut self, s: &'ast syn::ExprStruct) {
-        let notification = matches!(field(s, "kind"),
-            Some(syn::Expr::Path(p)) if last_ident(&p.path) == "BackendNotification");
-        if notification {
-            match last_ident(&s.path).as_str() {
-                "SourceEvent" => {
-                    self.count += 1;
-                    let place = format!("{}: emit {}", self.file, self.count);
-                    match field(s, "lifecycle_key") {
-                        None => self.bad.push(format!("{place}: no lifecycle_key")),
-                        Some(key) => {
-                            if let Some(why) = self.judge_key(key, 0) {
-                                self.bad.push(format!("{place}: lifecycle_key {why}"));
-                            }
+        // The kind as a `SourceKind::Variant` path; anything else (a variable,
+        // a shorthand field, a `..base` update) is not a kind the scan can read.
+        let variant = match field(s, "kind") {
+            Some(syn::Expr::Path(p))
+                if p.path.segments.len() >= 2
+                    && p.path.segments[p.path.segments.len() - 2].ident == "SourceKind" =>
+            {
+                Some(last_ident(&p.path))
+            }
+            _ => None,
+        };
+        match (last_ident(&s.path).as_str(), variant.as_deref()) {
+            (_, Some(other)) if other != "BackendNotification" => {}
+            ("SourceEvent", Some(_)) => {
+                self.count += 1;
+                let place = format!("{}: emit {}", self.file, self.count);
+                match field(s, "lifecycle_key") {
+                    None => self.bad.push(format!("{place}: no lifecycle_key")),
+                    Some(key) => {
+                        if let Some(why) = self.judge_key(key) {
+                            self.bad.push(format!("{place}: lifecycle_key {why}"));
                         }
                     }
                 }
-                "EventDescriptor" => {}
-                other => self.bad.push(format!(
-                    "{}: a {other} of kind BackendNotification is neither an emit nor a descriptor",
-                    self.file
-                )),
             }
+            ("SourceEvent", None) => self.bad.push(format!(
+                "{}: a SourceEvent whose kind is not a SourceKind path cannot be judged",
+                self.file
+            )),
+            ("EventDescriptor", _) | (_, None) => {}
+            (other, Some(_)) => self.bad.push(format!(
+                "{}: a {other} of kind BackendNotification is neither an emit nor a descriptor",
+                self.file
+            )),
         }
         syn::visit::visit_expr_struct(self, s);
     }
@@ -249,6 +365,39 @@ impl<'ast> Visit<'ast> for Sends<'_> {
         if !is_cfg_test(&f.attrs) {
             self.in_fn(&f.sig.ident, |me| syn::visit::visit_impl_item_fn(me, f));
         }
+    }
+
+    fn visit_item_impl(&mut self, i: &'ast syn::ItemImpl) {
+        if !is_cfg_test(&i.attrs) {
+            syn::visit::visit_item_impl(self, i);
+        }
+    }
+
+    /// A macro body is not parsed: a request sent in one, outside the
+    /// helper, fails.
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        let in_helper = self.frames.last().is_some_and(|(helper, _)| *helper);
+        if macro_text(mac).contains(".send()") && !in_helper {
+            self.bad.push(format!(
+                "{}: request sent in a macro body outside a send helper",
+                self.file
+            ));
+        }
+    }
+
+    /// `RequestBuilder::send(request)`, the call written as a path.
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        let in_helper = self.frames.last().is_some_and(|(helper, _)| *helper);
+        if let syn::Expr::Path(p) = &*call.func
+            && p.path.segments.len() >= 2
+            && last_ident(&p.path) == "send"
+            && call.args.len() == 1
+            && !in_helper
+        {
+            self.bad
+                .push(format!("{}: request sent outside a send helper", self.file));
+        }
+        syn::visit::visit_expr_call(self, call);
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
@@ -326,13 +475,17 @@ fn names_in_code(text: &str, word: &str) -> bool {
 /// classified files.
 #[test]
 fn iso_t5_no_listener_emit_or_transport_escapes_the_scan() {
-    let unscanned: Vec<String> = product_files("src/events")
+    // Anywhere in the crate: only a file building a `SourceEvent` can emit
+    // one, and only those are parsed.
+    let unscanned: Vec<String> = product_files("src")
         .into_iter()
-        .filter(|file| !EMIT_FILES.contains(&file.as_str()))
         .filter(|file| {
-            let text = read("src/events", file);
-            // Only a file naming the kind can emit it; only those are parsed.
-            names_in_code(&text, "BackendNotification") && {
+            file.strip_prefix("events/")
+                .is_none_or(|rest| !EMIT_FILES.contains(&rest))
+        })
+        .filter(|file| {
+            let text = read("src", file);
+            names_in_code(&text, "SourceEvent") && {
                 let (bad, emits) = bad_emits(file, &text);
                 emits > 0 || !bad.is_empty()
             }
@@ -345,8 +498,8 @@ fn iso_t5_no_listener_emit_or_transport_escapes_the_scan() {
     let listeners: Vec<String> = product_files("src/transport")
         .into_iter()
         .filter(|file| {
-            file.contains("listen")
-                || names_in_code(&read("src/transport", file), "CredentialSource")
+            let text = read("src/transport", file);
+            file.contains("listen") || SEAM.iter().any(|name| names_in_code(&text, name))
         })
         .collect();
     let mut known: Vec<String> = SEND_FILES
@@ -358,6 +511,18 @@ fn iso_t5_no_listener_emit_or_transport_escapes_the_scan() {
     assert_eq!(
         listeners, known,
         "a listener transport is neither in SEND_FILES nor classified in NOT_PER_USER"
+    );
+    // The classification is re-checked, not trusted: the unscanned files send
+    // nothing outside a helper either, and the rule that keeps a per-user
+    // listener off stdio and WebSocket still stands.
+    for (file, _) in NOT_PER_USER {
+        let (bad, _) = bad_sends(file, &read("src/transport", file));
+        assert!(bad.is_empty(), "{file}: {bad:?}");
+    }
+    assert!(
+        read("src/config", "validation.rs")
+            .contains("identity_propagation requires an http transport"),
+        "the rule NOT_PER_USER rests on is gone: re-classify stdio_listen.rs and websocket_listen.rs"
     );
 }
 
@@ -443,6 +608,52 @@ fn iso_t5_the_key_rule_fails_on_a_broken_emit() {
     assert_eq!(bad_emits("descriptor.rs", &descriptor), (vec![], 0));
     let stranger = emit_fn("out.push(Other { kind: SourceKind::BackendNotification });");
     assert_eq!(bad_emits("other.rs", &stranger).0.len(), 1);
+    let listener = "upstream_session_notes.rs";
+    // Every way a key reaches the emit is judged where it was bound.
+    for (case, body) in [
+        (
+            "kind from a variable",
+            "let kind = SourceKind::BackendNotification;\nhub.emit(SourceEvent { kind, lifecycle_key: self.key_of(&n, &d) });",
+        ),
+        (
+            "kind from an update",
+            "hub.emit(SourceEvent { lifecycle_key: self.key_of(&n, &d), ..base });",
+        ),
+        (
+            "parenthesised None",
+            "let key = backend_key((None), &n, &d);\nhub.emit(SourceEvent { kind: SourceKind::BackendNotification, lifecycle_key: key });",
+        ),
+        (
+            "None through a name",
+            "let obs = None;\nlet key = backend_key(obs, &n, &d);\nhub.emit(SourceEvent { kind: SourceKind::BackendNotification, lifecycle_key: key });",
+        ),
+        (
+            "alias, then shadowed",
+            "let key = None;\nlet lifecycle_key = key;\nlet key = self.key_of(&n, &d);\nhub.emit(SourceEvent { kind: SourceKind::BackendNotification, lifecycle_key });",
+        ),
+        (
+            "reassigned",
+            "let mut key = self.key_of(&n, &d);\nkey = None;\nhub.emit(SourceEvent { kind: SourceKind::BackendNotification, lifecycle_key: key });",
+        ),
+        (
+            "closure parameter",
+            "let key = self.key_of(&n, &d);\nhub.emit_with(|key| SourceEvent { kind: SourceKind::BackendNotification, lifecycle_key: key });",
+        ),
+        (
+            "macro body",
+            "emit!(SourceEvent { kind: SourceKind::BackendNotification, lifecycle_key: None });",
+        ),
+    ] {
+        assert!(
+            !bad_emits(listener, &emit_fn(body)).0.is_empty(),
+            "{case} passed"
+        );
+    }
+    // A fn that also builds outside tests is scanned; a test-only one is not.
+    let both = "#[cfg(any(test, unix))]\nfn f() { hub.emit(SourceEvent { kind: SourceKind::BackendNotification, lifecycle_key: None }); }\n";
+    assert_eq!(bad_emits(listener, both).0.len(), 1);
+    let test_only = both.replace("any(test, unix)", "test");
+    assert_eq!(bad_emits(listener, &test_only), (vec![], 0));
 }
 
 /// The credential rule passes the product's shape and fails a request sent
@@ -458,4 +669,9 @@ fn iso_t5_the_credential_rule_fails_on_a_broken_send() {
     assert_eq!(bad_sends("stored.rs", stored).0.len(), 1);
     let bypass = "async fn send(&self) {\n    build(headers).send().await\n}\n";
     assert_eq!(bad_sends("bypass.rs", bypass).0.len(), 1);
+    let path_call = "async fn notify(&self) {\n    reqwest::RequestBuilder::send(t.client.post(url)).await\n}\n";
+    assert_eq!(bad_sends("path_call.rs", path_call).0.len(), 1);
+    let in_macro =
+        "async fn notify(&self) {\n    tokio::select! { r = t.client.post(url).send() => r }\n}\n";
+    assert_eq!(bad_sends("in_macro.rs", in_macro).0.len(), 1);
 }
