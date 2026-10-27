@@ -172,9 +172,15 @@ a rotation yet.
   starts under the lifecycle lock and re-admits the now-existing row. A failure
   after commit releases the reservation and revokes the row.
 - **Revocation is pushed.** A gateway credential revocation (an API key removed on
-  reload, a key-server token revoked, an OIDC provider configuration change)
-  signals the events runtime from the same hooks that fire -32012. On its next
-  scheduler turn it revokes the rows that can no longer be observed or admitted,
+  reload, a key-server token revoked) signals the events runtime from the same
+  hooks that fire -32012. An OIDC provider or key-server policy change is not
+  one of them: providers live in `key_server.oidc`
+  (src/config/features/key_server.rs:67), and `key_server` is a restart-only
+  section (src/config_reload/diff.rs:212, pinned by
+  src/config_reload/restart_required_tests.rs:176). It takes effect on restart,
+  where the rows it no longer admits are revoked before replay
+  (src/events/runtime.rs:203). After a signal, on its next scheduler turn the
+  runtime revokes the rows that can no longer be observed or admitted,
   which cancels their listeners and wipes their leases. As a fallback, the
   events worker's housekeeping sweep (every 30 seconds) runs the same
   revocation, so a quiet listener stops even if a signal was missed.
