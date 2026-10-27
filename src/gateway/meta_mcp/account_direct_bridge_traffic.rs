@@ -3,6 +3,7 @@
 //! What reached the fixture's backends, and how they answer next: split out
 //! of `account_direct_bridge.rs` to keep that file under its size ceiling.
 
+use super::super::Answer;
 use super::DirectAccountGateway;
 
 impl DirectAccountGateway {
