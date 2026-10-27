@@ -14,7 +14,7 @@ use std::sync::atomic::AtomicUsize;
 use super::{
     ALICE_TOKEN, AccountCustody, AccountKey, CustodyHandle, GrantRecord, PersonalAccountStore,
     Principal, ProviderRefreshError, RefreshProvider, SilentObserver, TokenRefresh, VaultStrategy,
-    ViewBinding, block_on, custody, descriptor, identity, key_for, seed, seeded_revision,
+    ViewBinding, backend, block_on, custody, descriptor, identity, key_for, seed, seeded_revision,
     store_config, unexpired_grant,
 };
 
@@ -195,4 +195,31 @@ fn the_fence_counts_no_refresh() {
         calls
     });
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+/// A listener run is stamped with its minted lease's binding and delivery
+/// compares it with custody's read of the same grant: the two must agree
+/// byte for byte, or every vault record would be buried.
+#[test]
+fn a_minted_lease_and_custody_name_the_same_fence() {
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed(tmp.path(), &[(alice(), unexpired_grant(ALICE_TOKEN))]);
+    block_on(async {
+        let (custody, _) = custody(tmp.path());
+        let vault = Arc::new(VaultStrategy::new(
+            custody,
+            descriptor(),
+            seeded_revision(),
+            false,
+        ));
+        let id = identity();
+        let (_credential, held) = vault
+            .prepare_held_classified(Principal::Verified(&id), &backend())
+            .await
+            .expect("the grant leases");
+        assert_eq!(
+            held.fence_binding().expect("the lease encodes"),
+            bound(vault.fence_binding(Principal::Verified(&id)).await)
+        );
+    });
 }

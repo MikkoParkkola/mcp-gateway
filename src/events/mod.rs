@@ -38,7 +38,7 @@ pub(crate) fn credentials_changed() {
 }
 mod lease_rpc;
 mod listener_credential;
-pub(crate) use listener_credential::ListenerMint;
+pub(crate) use listener_credential::{FenceRead, ListenerGrant, ListenerMint};
 mod lifecycle;
 mod limiter;
 pub(crate) mod observation;

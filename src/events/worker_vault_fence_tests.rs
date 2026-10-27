@@ -79,7 +79,7 @@ impl ListenerMint for Fence {
         &self,
         _backend: &str,
         _identity: &VerifiedIdentity,
-    ) -> crate::Result<Vec<(String, String)>> {
+    ) -> crate::Result<crate::events::ListenerGrant> {
         Err(crate::Error::Config("no listener runs here".into()))
     }
 

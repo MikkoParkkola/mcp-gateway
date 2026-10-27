@@ -20,7 +20,8 @@ use crate::transport::upstream_tap::{CredentialSource, CredentialedSend, Listene
 /// (B2); implemented by the gateway at events wiring.
 #[async_trait::async_trait]
 pub(crate) trait ListenerMint: Send + Sync {
-    /// Fresh headers for a listener of `backend` observing as `identity`.
+    /// Fresh headers for a listener of `backend` observing as `identity`,
+    /// with the fence binding of the grant they were released under.
     ///
     /// # Errors
     /// The strategy refuses, auditing is unavailable, or nothing was minted:
@@ -29,7 +30,7 @@ pub(crate) trait ListenerMint: Send + Sync {
         &self,
         backend: &str,
         identity: &VerifiedIdentity,
-    ) -> crate::Result<Vec<(String, String)>>;
+    ) -> crate::Result<ListenerGrant>;
 
     /// The grant binding a listener of `backend` observing as `identity` is
     /// fenced on, read without minting; `None` for a backend no vault
@@ -40,11 +41,17 @@ pub(crate) trait ListenerMint: Send + Sync {
     /// gives no view ([`FenceRead::Closed`]).
     async fn fence_binding(
         &self,
-        _backend: &str,
-        _identity: &VerifiedIdentity,
-    ) -> Result<Option<String>, FenceRead> {
-        Ok(None)
-    }
+        backend: &str,
+        identity: &VerifiedIdentity,
+    ) -> Result<Option<String>, FenceRead>;
+}
+
+/// One listener mint: the headers to send with, and the fence binding of
+/// the grant they were released under (`None` when no vault grant backs
+/// them, so nothing rotates under them).
+pub(crate) struct ListenerGrant {
+    pub headers: Vec<(String, String)>,
+    pub fence: Option<String>,
 }
 
 /// Why a fence binding could not be read.
@@ -72,8 +79,8 @@ impl CredentialSource for Minted {
         send: CredentialedSend<'a>,
     ) -> BoxFuture<'a, crate::Result<reqwest::Response>> {
         Box::pin(async move {
-            let headers = self.mint.mint(&self.backend, &self.identity).await?;
-            send(headers).await
+            let grant = self.mint.mint(&self.backend, &self.identity).await?;
+            send(grant.headers).await
         })
     }
 
