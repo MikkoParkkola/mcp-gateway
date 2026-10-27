@@ -400,12 +400,14 @@ only when a test exists that fails on its mutant.
   delivery. Once with `signed_assertion` and once with `token_exchange`.
 - **ISO-T2.** *Required, not yet implemented.* The same with managed accounts on a multi-user gateway, plus a lease
   rotation mid-test: nothing observed under the old lease is delivered after it.
-- **ISO-T3.** *Partly covered: the replay refusal is pinned, the send-time burial is not.* Durable path: U1's
-  occurrence is queued, then U1's row is re-granted or its lease rotates. The queued record is buried as
-  `observation_changed`, and dead-letter replay refuses it. Pinned by
+- **ISO-T3.** *Covered.* Durable path: U1's occurrence is queued, then U1's row is re-granted or its
+  lease rotates. The queued record is buried as `observation_changed`, and dead-letter replay refuses
+  it. Pinned by
+  `events::worker::tests::obs::a_record_queued_before_a_regrant_is_buried_as_observation_changed`
+  (src/events/worker_obs_tests.rs; the burial) and
   `events::admin::replay_obs_tests::a_replay_after_a_regrant_is_refused_as_observation_changed` and
-  `a_replay_after_a_lease_rotation_is_refused_by_name` (src/events/admin_replay_obs_tests.rs), which bury
-  the record directly and assert the refusal. The worker's burial on send has no row yet.
+  `a_replay_after_a_lease_rotation_is_refused_by_name` (src/events/admin_replay_obs_tests.rs; the
+  refusal).
 - **ISO-T4.** *Required, not yet implemented for the cross-user revoke row.* U1's complete catalogue read never revokes U2's `resource_updated`
   rows. One row per shared-state class, each with the mutation that shares it:
   - **ISO-T4a** *(partly covered)* overlapping tools notices across keys, against a shared debounce;
