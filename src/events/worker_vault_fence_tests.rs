@@ -435,3 +435,6 @@ async fn an_unsubscribe_during_the_fence_read_cancels_the_record() {
     assert_eq!(outcomes(dir.path()), ["cancelled"]);
     assert_eq!(posts.load(Ordering::SeqCst), 0);
 }
+
+#[path = "worker_vault_replay_tests.rs"]
+mod replay;

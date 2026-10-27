@@ -81,8 +81,12 @@ impl EventsHub {
         }
     }
 
-    /// The vault grant `sub` observes under, read without minting.
-    async fn read_fence(&self, sub: &Subscription) -> Result<String, FenceRead> {
+    /// The vault grant `sub` observes under, read without minting. Delivery
+    /// and a dead-letter replay both judge a vault row by it.
+    pub(in crate::events) async fn read_fence(
+        &self,
+        sub: &Subscription,
+    ) -> Result<String, FenceRead> {
         let (Some((backend, _)), Some(identity)) = (
             crate::events::upstream::parse_name(&sub.name),
             sub.observed_as(),
