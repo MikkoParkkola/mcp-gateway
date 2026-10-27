@@ -480,6 +480,7 @@ async fn lease_acquires_when_released_just_before_the_deadline() {
         let lock_path = dir.path().join("boundary.lock");
         let holder = crate::fs_lock::ExclusiveFileLock::try_lease(&lock_path)
             .expect("a free lock leases")
+            .taken()
             .expect("a free lock gives Some");
         let deadline = Instant::now() + Duration::from_secs(2);
         let waiter = tokio::spawn({
@@ -511,6 +512,7 @@ async fn lease_times_out_at_the_deadline_under_ongoing_contention() {
     let lock_path = dir.path().join("contention.lock");
     let _holder = crate::fs_lock::ExclusiveFileLock::try_lease(&lock_path)
         .expect("a free lock leases")
+        .taken()
         .expect("a free lock gives Some");
     let deadline = Instant::now() + bound;
     let start = Instant::now();
