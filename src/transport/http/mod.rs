@@ -348,6 +348,10 @@ pub struct HttpTransport {
     refresh_task: RwLock<Option<JoinHandle<()>>>,
     /// Protocol version override (if `None`, uses `PROTOCOL_VERSION` with fallback)
     protocol_version: RwLock<Option<String>>,
+    /// The `serverInfo` of the last accepted `initialize` answer, as sent.
+    /// Only the web UI's preview reads it.
+    #[cfg(any(feature = "webui", test))]
+    server_info: RwLock<Option<serde_json::Value>>,
 }
 
 /// Outgoing header modes for the HTTP transport call-sites.
@@ -506,6 +510,8 @@ impl HttpTransport {
             login_gate,
             refresh_task: RwLock::new(None),
             protocol_version: RwLock::new(protocol_version),
+            #[cfg(any(feature = "webui", test))]
+            server_info: RwLock::new(None),
         }))
     }
 
