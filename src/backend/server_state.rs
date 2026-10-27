@@ -151,7 +151,7 @@ pub(crate) fn decide(inputs: &StateInputs, now: SystemTime) -> StateView {
             return view(
                 ServerState::Slow,
                 format!(
-                    "Answering, but its recent p95 is {} ms, over three times its usual {} ms.",
+                    "Answering, but the p95 of its last 100 answered calls is {} ms, over three times its usual {} ms.",
                     slow.recent_ms, slow.usual_ms
                 ),
                 None,

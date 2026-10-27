@@ -11,7 +11,7 @@ pub(crate) use circuit_breaker::HealthChange;
 pub use circuit_breaker::{
     CircuitBreaker, CircuitBreakerStats, CircuitState, build_circuit_breaker_error,
 };
-#[cfg(any(test, feature = "webui"))]
+#[cfg(feature = "webui")]
 pub(crate) use health::Slow;
 pub use health::{HealthMetrics, HealthTracker};
 pub use rate_limiter::RateLimiter;

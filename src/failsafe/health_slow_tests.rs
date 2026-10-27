@@ -203,3 +203,15 @@ fn api4_2_a_reset_partway_through_a_batch_restarts_the_batch() {
     feed(&tracker, 99, 1000);
     assert_eq!(tracker.slow(), None, "only four batches since the reset");
 }
+
+#[test]
+fn api4_2_the_panel_and_the_window_agree_on_the_same_calls() {
+    let tracker = HealthTracker::new("slow-test");
+    // 1 to 100 ms, each once, out of order (37 and 100 share no factor).
+    for i in 0..100_u64 {
+        tracker.record_success(Duration::from_millis((i * 37) % 100 + 1));
+    }
+    let window = tracker.latencies.read().recent_p95();
+    assert_eq!(tracker.metrics().latency_p95_ms, Some(window));
+    assert_eq!(window, 96, "the 96th of 100 sorted values");
+}

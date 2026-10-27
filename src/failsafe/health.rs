@@ -211,6 +211,18 @@ pub struct HealthMetrics {
     pub latency_p99_ms: Option<u64>,
 }
 
+/// Which sorted sample is the `p` percentile of `len` samples: floor(len × p),
+/// capped at the last. The one rule the latency panel and the Slow window both
+/// read, so their p95s can differ only by the samples each window holds.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+fn percentile_index(len: usize, p: f64) -> usize {
+    (((len as f64) * p).floor() as usize).min(len.saturating_sub(1))
+}
+
 /// Latency histogram for percentile calculation
 struct LatencyHistogram {
     /// Recent latency samples (in milliseconds)
@@ -280,11 +292,6 @@ impl LatencyHistogram {
     }
 
     /// Calculate percentile (0.0 to 1.0)
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::cast_precision_loss
-    )]
     fn percentile(&self, p: f64) -> Option<Duration> {
         if self.samples.is_empty() {
             return None;
@@ -298,29 +305,21 @@ impl LatencyHistogram {
             let mut sorted_samples = self.samples.clone();
             sorted_samples.sort_unstable();
 
-            let index = ((sorted_samples.len() as f64) * p).floor() as usize;
-            let index = index.min(sorted_samples.len() - 1);
+            let index = percentile_index(sorted_samples.len(), p);
             return Some(Duration::from_millis(sorted_samples[index]));
         }
 
-        let index = ((self.samples.len() as f64) * p).floor() as usize;
-        let index = index.min(self.samples.len() - 1);
+        let index = percentile_index(self.samples.len(), p);
         Some(Duration::from_millis(self.samples[index]))
     }
 
     /// The p95 of the Slow window (the last `SLOW_BATCH` answered calls, or
-    /// fewer before that many), by the same index rule as [`Self::percentile`].
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::cast_precision_loss
-    )]
+    /// fewer before that many), by [`percentile_index`] as the panel's is.
     fn recent_p95(&self) -> u64 {
         let mut recent: Vec<u64> = self.window.iter().copied().collect();
         recent.sort_unstable();
-        let index = ((recent.len() as f64) * 0.95).floor() as usize;
         recent
-            .get(index.min(recent.len().saturating_sub(1)))
+            .get(percentile_index(recent.len(), 0.95))
             .copied()
             .unwrap_or(0)
     }
@@ -418,11 +417,11 @@ mod tests {
         let mut histogram = LatencyHistogram::new(10);
 
         // Record some latencies
-        histogram.record(Duration::from_millis(10));
-        histogram.record(Duration::from_millis(20));
-        histogram.record(Duration::from_millis(30));
-        histogram.record(Duration::from_millis(40));
-        histogram.record(Duration::from_millis(50));
+        histogram.record(Duration::from_millis(10), Reply::Answered);
+        histogram.record(Duration::from_millis(20), Reply::Answered);
+        histogram.record(Duration::from_millis(30), Reply::Answered);
+        histogram.record(Duration::from_millis(40), Reply::Answered);
+        histogram.record(Duration::from_millis(50), Reply::Answered);
 
         // Check percentiles
         let p50 = histogram.percentile(0.50).unwrap();
@@ -438,7 +437,7 @@ mod tests {
 
         // Record more than capacity
         for i in 1..=10 {
-            histogram.record(Duration::from_millis(i * 10));
+            histogram.record(Duration::from_millis(i * 10), Reply::Answered);
         }
 
         // Should only keep last 5
