@@ -13,7 +13,6 @@
 //! hot-reload after a successful change.
 
 use crate::gateway::routes;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::{Extension, Path as AxumPath, Query, State};
@@ -44,63 +43,8 @@ use crate::registry::server_registry;
 
 // ── Request / response types ────────────────────────────────────────────────
 
-/// Request body for `POST /ui/api/backends`.
-#[derive(Debug, Deserialize)]
-pub struct AddBackendRequest {
-    /// Backend name / key.
-    pub name: String,
-    /// Explicit stdio command (overrides registry lookup).
-    pub command: Option<String>,
-    /// Explicit HTTP URL (overrides registry lookup).
-    pub url: Option<String>,
-    /// Human-readable description.
-    pub description: Option<String>,
-    /// Environment variables as `{ "KEY": "VALUE" }` map.
-    #[serde(default)]
-    pub env: HashMap<String, String>,
-    /// Registry entry to add under `name` (the dashboard's registry mode). When
-    /// absent, `name` itself is looked up in the registry.
-    pub registry: Option<String>,
-    /// The only tools the backend offers (`backends.<name>.allowed_tools`).
-    /// Absent: every tool.
-    #[serde(default)]
-    pub allowed_tools: Option<Vec<String>>,
-}
-
-/// Request body for `PATCH /ui/api/backends/:name`.
-#[derive(Debug, Deserialize)]
-pub struct UpdateBackendRequest {
-    /// New stdio command (replaces existing).
-    pub command: Option<String>,
-    /// New HTTP URL (replaces existing).
-    pub url: Option<String>,
-    /// New description.
-    pub description: Option<String>,
-    /// Env vars to merge (existing keys updated, new keys added; no deletion).
-    pub env: Option<HashMap<String, String>>,
-    /// Whether the backend is enabled.
-    pub enabled: Option<bool>,
-    /// Seconds of idleness after which the gateway stops this backend.
-    ///
-    /// Absent leaves the current setting alone. `0` clears it, meaning never
-    /// stop — without an explicit clear the setting would be impossible to turn
-    /// off from the panel once enabled.
-    pub stop_when_idle_for_secs: Option<u64>,
-    /// `allowed_tools`: absent keeps the current list, `null` removes it
-    /// (every tool), a list replaces it.
-    #[serde(default, deserialize_with = "present")]
-    pub allowed_tools: Option<Option<Vec<String>>>,
-}
-
-/// A key that is present, `null` included, as `Some`; serde's default keeps
-/// an absent key `None`, so a PATCH can tell "leave it" from "clear it".
-fn present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(deserializer).map(Some)
-}
+mod requests;
+pub use requests::{AddBackendRequest, UpdateBackendRequest};
 
 /// Query parameters for `GET /ui/api/registry/search`.
 #[derive(Debug, Deserialize)]
