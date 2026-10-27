@@ -56,6 +56,7 @@ src/gateway/server/control_plane_store.rs	store_dir_change_is_restart_required	-
 src/gateway/server/control_plane_store.rs	store_opens_at_explicit_store_dir	-	test-only (inline cfg(test) module)
 src/gateway/server/control_plane_store.rs	write_probe_does_not_follow_a_planted_symlink	-	test-only (inline cfg(test) module)
 src/gateway/server/events_wiring.rs	install	-	startup events-hub and webhook wiring, once per serve
+src/gateway/server/events_wiring.rs	mint	-	off-path: the events hub's per-user listener mint, never a tools/call
 src/gateway/server/identity_grants.rs	audit_startup	-	startup identity-grant audit, before serving
 src/gateway/server/identity_grants.rs	from	-	startup identity-grant audit error conversion, before serving
 src/gateway/server/identity_grants.rs	identity_grant_sink_for	-	startup and reload grant-sink construction, not per call

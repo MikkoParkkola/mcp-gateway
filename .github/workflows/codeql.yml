@@ -17,6 +17,16 @@ on:
     - cron: "17 3 * * 1"
   workflow_dispatch:
 
+# A train lands its pull requests on the release line as one squash commit
+# each, seconds apart, and each started its own hour-long scan. Only the newest
+# line commit's scan is kept: a newer push to the line cancels the older one,
+# whose findings the newer tree carries anyway. Every other event (a main push,
+# a tag, the schedule, a dispatch) has a group of its own and is never
+# cancelled. The literal prefix keeps groups distinct from other workflows'.
+concurrency:
+  group: codeql-${{ (github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+
 permissions:
   contents: read
 

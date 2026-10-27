@@ -350,6 +350,15 @@ impl EventsHub {
             .await;
             return true;
         }
+        // After every wait, the row must still be observed as
+        // it was at fan-out (same grant, identity config and lease); nothing
+        // awaits between this and the send. A shared row compares `None`.
+        if self.observed_now(current, &services.live.get()) != Ok(record.observed.clone()) {
+            services.audit_outcome(&ended("observation_changed")).await;
+            self.settle(services, record, quiet_dead(DeadReason::Observation))
+                .await;
+            return true;
+        }
         if !self.overdue(record, now) {
             return false;
         }
