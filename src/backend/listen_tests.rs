@@ -106,9 +106,49 @@ async fn a_tools_notice_clears_the_declared_hint_set() {
         .insert("was_declared".to_owned());
     backend.invalidate_tools();
     assert!(
-        !backend.hint_declared_for(None, "was_declared"),
+        entry.hint_declared.read().is_empty(),
         "a stale declared-hint set outlived the tool list"
     );
+}
+
+/// A direct listing that replaces the slot's tools replaces their labels in
+/// the same step: a tool that stops declaring its hint reads as inferred,
+/// and one that starts reads as declared.
+#[tokio::test]
+async fn a_replacing_listing_relabels_which_hints_were_declared() {
+    let backend = backend();
+    let tool = |name: &str, declared: bool| {
+        let mut t = serde_json::json!({"name": name, "inputSchema": {"type": "object"}});
+        if declared {
+            t["annotations"] = serde_json::json!({"readOnlyHint": true});
+        }
+        t
+    };
+    let declared = |backend: &Backend| {
+        let mut names: Vec<String> = backend
+            .shared_entry()
+            .hint_declared
+            .read()
+            .iter()
+            .cloned()
+            .collect();
+        names.sort_unstable();
+        names
+    };
+    let _ = backend.remember_listed_tools_as(
+        None,
+        false,
+        &[tool("first", true), tool("second", false)],
+        crate::backend::Listing::Complete,
+    );
+    assert_eq!(declared(&backend), ["first"]);
+    let _ = backend.remember_listed_tools_as(
+        None,
+        false,
+        &[tool("first", false), tool("second", true)],
+        crate::backend::Listing::Complete,
+    );
+    assert_eq!(declared(&backend), ["second"]);
 }
 
 /// A server that accepts connections and never answers.
