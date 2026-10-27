@@ -25,15 +25,15 @@ pub(crate) const LISTING_DEADLINE_CAP: std::time::Duration = std::time::Duration
 
 impl MetaMcp {
     /// Warm the caller's cold views of the surfaced tools' backends that
-    /// refuse a shared session, one claim per backend, all at once, and wait
-    /// for them under one deadline from here: the longest fill bound among
-    /// the backends this listing fills or waits on, capped at
-    /// [`LISTING_DEADLINE_CAP`]. A won claim's fill runs as its own task,
-    /// bounded by its backend's own fill bound; a view another reader's lease
-    /// is filling is waited on and served from that fill, unless the caller's
-    /// grant rotated meanwhile. A fill still running at the deadline is left
-    /// out of this listing and finishes on its own lease; when its slot
-    /// stores, `tools_nudge` sends the caller `tools/list_changed`.
+    /// refuse a shared session, every claim at once, and wait for them under
+    /// one deadline from here: the longest fill bound among the backends this
+    /// listing fills or waits on, capped at [`LISTING_DEADLINE_CAP`]. A won
+    /// claim's fill runs as its own task, bounded by its backend's own fill
+    /// bound; a view another reader's lease is filling is waited on and served
+    /// from that fill, and a view filled under a grant that rotated since
+    /// reads as cold. A fill still running at the deadline is left out of this
+    /// listing and finishes on its own lease; when its slot stores,
+    /// `tools_nudge` sends the caller `tools/list_changed`.
     pub(crate) async fn warm_listing_views(
         &self,
         scope: InvokeScope<'_>,
@@ -54,15 +54,21 @@ impl MetaMcp {
                     .then_some(((surfaced.server.as_str(), surfaced.tool.as_str()), backend))
             })
             .collect();
-        // One claim per backend: several surfaced tools of one backend share
-        // the caller's one slot there.
-        let mut seen = std::collections::HashSet::new();
-        let targets: Vec<(&str, &str)> = refused
+        // Every surfaced tool claims: a policy that refuses one tool must not
+        // keep its allowed sibling on the same backend cold. A second claim on
+        // one backend finds the first's lease and waits on it.
+        let targets: Vec<(&str, &str)> = refused.iter().map(|(target, _)| *target).collect();
+        let Some(ceiling) = refused
             .iter()
-            .map(|(target, _)| *target)
-            .filter(|(server, _)| seen.insert(*server))
-            .collect();
+            .map(|(_, backend)| backend.tools_fill_bound())
+            .max()
+        else {
+            return;
+        };
         let started = tokio::time::Instant::now();
+        // One deadline for the whole step: the claims and the waits both end
+        // by it.
+        let ceiling = started + ceiling.min(LISTING_DEADLINE_CAP);
         let claims = async {
             // A listing is not a call: a busy custody writes no transient
             // refusal record here.
@@ -81,12 +87,12 @@ impl MetaMcp {
                     )),
                     None => self
                         .running_cold_lease(server, scope)
-                        .map(|(backend, id)| Pending::Leased((server, tool), backend, id)),
+                        .map(|(backend, id)| Pending::Leased(backend, id)),
                 }
             }))
             .await
         };
-        let Ok(pending) = tokio::time::timeout(LISTING_DEADLINE_CAP, claims).await else {
+        let Ok(pending) = tokio::time::timeout_at(ceiling, claims).await else {
             return;
         };
         let pending: Vec<Pending> = pending.into_iter().flatten().collect();
@@ -100,36 +106,11 @@ impl MetaMcp {
                 Pending::Fill(_, fill) => {
                     let _ = fill.await;
                 }
-                Pending::Leased(target, backend, id) => {
-                    backend.wait_cold_lease(&id).await;
-                    self.forget_if_rotated(target, scope, &backend, &id);
-                }
+                Pending::Leased(backend, id) => backend.wait_cold_lease(&id).await,
             }
         });
-        let deadline = started + bound.min(LISTING_DEADLINE_CAP);
+        let deadline = ceiling.min(started + bound.min(LISTING_DEADLINE_CAP));
         let _ = tokio::time::timeout_at(deadline, futures::future::join_all(waits)).await;
-    }
-
-    /// A view another reader's lease filled is kept only while it is still
-    /// the caller's current grant's: a lease claimed before a rotation
-    /// publishes the old grant's slot, and that view is forgotten here, as a
-    /// warm view's revalidation forgets it.
-    fn forget_if_rotated(
-        &self,
-        (server, tool): (&str, &str),
-        scope: InvokeScope<'_>,
-        backend: &crate::backend::Backend,
-        id: &str,
-    ) {
-        let Some(held) = backend.caller_slot_held(id) else {
-            return;
-        };
-        let current = self
-            .target_account(&self.scoped(scope.authorizer.backend_grant()), server, tool)
-            .and_then(|account| super::visible::memo::account_binding(server, &account));
-        if !current.is_none_or(|current| current == held.binding()) {
-            backend.forget_caller_held(id, &held);
-        }
     }
 
     /// The caller's cold lease on `server` another reader holds, if one
@@ -151,19 +132,20 @@ impl MetaMcp {
 }
 
 /// What a listing's claim on one backend left it to wait for.
-enum Pending<'a> {
+enum Pending {
     /// This listing won the claim; its fill runs as its own task.
     Fill(std::time::Duration, tokio::task::JoinHandle<()>),
-    /// Another reader's lease is filling the caller's view.
-    Leased((&'a str, &'a str), Arc<crate::backend::Backend>, String),
+    /// Another reader's lease is filling the caller's view; a view it filled
+    /// under a grant that rotated since reads as cold when the list is built.
+    Leased(Arc<crate::backend::Backend>, String),
 }
 
-impl Pending<'_> {
+impl Pending {
     /// The backend's fill bound.
     fn bound(&self) -> std::time::Duration {
         match self {
             Self::Fill(bound, _) => *bound,
-            Self::Leased(_, backend, _) => backend.tools_fill_bound(),
+            Self::Leased(backend, _) => backend.tools_fill_bound(),
         }
     }
 }

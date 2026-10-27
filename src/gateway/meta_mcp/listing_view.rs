@@ -73,9 +73,25 @@ impl MetaMcp {
             return ListingView::NoView;
         }
         match backend.caller_slot_binding(&id) {
-            Some(binding) => ListingView::Caller(binding),
-            None => ListingView::Cold,
+            Some(binding) if self.held_binding_current(backend, &binding) => {
+                ListingView::Caller(binding)
+            }
+            _ => ListingView::Cold,
         }
+    }
+
+    /// Whether `binding`, the caller's held slot on `backend`, is still the
+    /// binding this request's account read gave. A rotated grant's slot reads
+    /// as cold, never as the old grant's view, however its publish raced the
+    /// listing. With no account read in this request there is nothing to
+    /// judge it by, and the held slot stands, as a stored read's revalidation
+    /// keeps it.
+    fn held_binding_current(&self, backend: &Backend, binding: &str) -> bool {
+        backend
+            .account_descriptor_id()
+            .map(|account| super::visible::memo::DescriptorId(account.to_owned()))
+            .and_then(|account| super::visible::memo::account_binding(&backend.name, &account))
+            .is_none_or(|current| current == binding)
     }
 
     /// Whether `caller` has no principal on `backend`, a `required` per-user
