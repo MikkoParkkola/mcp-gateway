@@ -246,17 +246,16 @@ fn indent(line: &str) -> usize {
 /// A segment this module can address: letters, digits, `_` and `-`, read by
 /// YAML as that same string (not a number, a bool or null).
 fn plain_key(segment: &str) -> bool {
-    !segment.is_empty()
-        && segment
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    segment
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
         && crate::yaml::from_str::<Value>(segment).is_ok_and(|v| v.as_str() == Some(segment))
 }
 
 /// The line holding `path`'s existing scalar value, walking one indented
 /// block per segment. Every shape not proven safe is `Unprovable`.
 fn locate(lines: &[&str], path: &FieldPath) -> Result<Located, ComputeRefusal> {
-    if path.0.is_empty() || !path.0.iter().all(|s| plain_key(s)) {
+    if !path.0.iter().all(|s| plain_key(s)) {
         return Err(unprovable("a path segment is not a plain key"));
     }
     let (mut start, mut end) = (0, lines.len());
@@ -287,11 +286,6 @@ fn locate(lines: &[&str], path: &FieldPath) -> Result<Located, ComputeRefusal> {
         let value = value_span(lines, at, want + head.len())?;
         let last = depth + 1 == path.0.len();
         if !last {
-            if !value.is_empty() {
-                return Err(unprovable(
-                    "a parent on the path carries a value, anchor or tag",
-                ));
-            }
             (start, end) = (at + 1, child_end);
             continue;
         }

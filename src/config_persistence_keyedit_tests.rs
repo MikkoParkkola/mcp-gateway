@@ -136,8 +136,9 @@ fn a_duplicate_key_anywhere_is_unprovable() {
     assert_unprovable("x: 1\nx: 2\na:\n  b: 1\n", &[set_int("a.b", 2)]);
 }
 
+/// Refused because the field is not found: nothing reads inside flow style.
 #[test]
-fn a_flow_mapping_on_the_path_is_unprovable() {
+fn a_field_inside_a_flow_mapping_is_not_found() {
     assert_unprovable("auth: {enabled: false}\n", &[set_int("auth.enabled", 1)]);
 }
 
@@ -197,20 +198,28 @@ fn a_segment_yaml_reads_as_a_number_or_bool_is_unprovable() {
     }
 }
 
+/// Reaches the flow check: the field is found, and replacing its flow
+/// mapping with a scalar would pass the meaning proof.
 #[test]
-fn an_empty_or_dotted_segment_is_unprovable() {
-    let file = "a:\n  b: 1\n";
-    assert_unprovable(
-        file,
-        &[(
-            FieldPath(vec!["a".into(), String::new()]),
-            Change::Set(Scalar::Int(2)),
-        )],
+fn a_flow_mapping_as_the_edited_value_is_unprovable() {
+    assert_unprovable("a: {b: 1}\n", &[set_int("a", 1)]);
+}
+
+/// Reaches the segment check: a literal `a.b` key, which a dotted slot name
+/// could not tell apart from the path `a` then `b`.
+#[test]
+fn a_literal_dotted_key_is_unprovable() {
+    let change = (FieldPath(vec!["a.b".into()]), Change::Set(Scalar::Int(2)));
+    assert_unprovable("a.b: 1\n", &[change]);
+}
+
+#[test]
+fn an_empty_segment_is_refused() {
+    let change = (
+        FieldPath(vec!["a".into(), String::new()]),
+        Change::Set(Scalar::Int(2)),
     );
-    assert_unprovable(
-        file,
-        &[(FieldPath(vec!["a.b".into()]), Change::Set(Scalar::Int(2)))],
-    );
+    assert_unprovable("a:\n  b: 1\n", &[change]);
 }
 
 // Secret slots.
