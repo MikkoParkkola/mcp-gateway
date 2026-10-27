@@ -36,11 +36,14 @@ export async function shellModuleUrl(page) {
  * Ask the fixture server to inject fixtures/fixture-pages.mjs into the shell
  * document: real tabs for every sidebar page, except that HIDDEN.page has no
  * HIDDEN.tab. Set before navigation, so the shell's cold start sees them.
+ * With `probes`, Policies › Status and Costs › Status read the page-error
+ * probes instead (see fixtures/fixture-pages.mjs).
  */
-export async function withFixturePages(page, { title } = {}) {
+export async function withFixturePages(page, { title, probes } = {}) {
   const url = `http://127.0.0.1:${process.env.UI_TESTS_PORT ?? 4173}`;
   const cookies = [{ name: 'fixture-pages', value: '1', url }];
   if (title) cookies.push({ name: 'fixture-title', value: encodeURIComponent(title), url });
+  if (probes) cookies.push({ name: 'fixture-probes', value: '1', url });
   await page.context().addCookies(cookies);
 }
 
