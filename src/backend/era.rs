@@ -403,12 +403,15 @@ fn probe_cap() -> Duration {
 /// peer's era once, and finish startup with that verdict. The same sequence
 /// `Backend::start_entry` runs, so a modern stateless server that refuses
 /// `initialize` previews like a legacy one.
+///
+/// Returns the `serverInfo` the peer reported, as sent: a modern peer's from
+/// its discover answer's `_meta`, a legacy peer's from its `initialize`.
 #[cfg(feature = "webui")]
 pub(crate) async fn start_detached_http(
     transport: &Arc<crate::transport::HttpTransport>,
     name: &str,
     timeout: Duration,
-) -> Result<()> {
+) -> Result<Option<serde_json::Value>> {
     let cache = Arc::new(crate::protocol::era::EraCache::for_backend(name));
     transport.attach_era(Arc::clone(&cache));
     transport.connect().await?;
@@ -422,8 +425,19 @@ pub(crate) async fn start_detached_http(
     };
     // Installed in the attached cache, as a slot's start does: every request
     // after the probe is shaped for that verdict.
+    let reported = match &outcome {
+        ProbeOutcome::Result(result) => result
+            .get("_meta")
+            .and_then(|meta| meta.get(crate::protocol::meta::KEY_SERVER_INFO))
+            .cloned(),
+        ProbeOutcome::Error(_) | ProbeOutcome::NoAnswer => None,
+    };
     let era = cache.resolve_with(|| async { outcome }).await;
-    transport.finish_startup(era).await
+    transport.finish_startup(era).await?;
+    Ok(match era {
+        PeerEra::Modern => reported,
+        PeerEra::Legacy => transport.reported_server_info(),
+    })
 }
 
 /// What a refusal of a method the 2026-07-28 revision removed carries, so the
