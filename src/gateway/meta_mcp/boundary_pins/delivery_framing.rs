@@ -71,11 +71,27 @@ fn is_refusal_name(name: &str) -> bool {
     name.ends_with("refusal") || name.starts_with("refuse_") || name == "gateway_refused"
 }
 
-/// The arguments of a call or method call; none for any other expression.
+/// Combinators whose argument is a function: a refusal name there is a
+/// refusal function handed on, never a local value.
+const COMBINATORS: [&str; 10] = [
+    "map",
+    "map_err",
+    "and_then",
+    "or_else",
+    "ok_or_else",
+    "map_or_else",
+    "unwrap_or_else",
+    "inspect_err",
+    "then",
+    "filter_map",
+];
+
+/// The arguments of a combinator call; none for any other expression.
 fn call_args(expr: &syn::Expr) -> Vec<&syn::Expr> {
     match expr {
-        syn::Expr::Call(call) => call.args.iter().collect(),
-        syn::Expr::MethodCall(call) => call.args.iter().collect(),
+        syn::Expr::MethodCall(call) if COMBINATORS.contains(&call.method.to_string().as_str()) => {
+            call.args.iter().collect()
+        }
         _ => Vec::new(),
     }
 }
@@ -145,7 +161,8 @@ impl Sink for Found {
         {
             note(&mut self.refusals, "Error::GatewayRefused{}");
         }
-        // A refusal function handed on as a value (`.map_err(refusal)`).
+        // A refusal function handed on as a value (`.map_err(refusal)`); a
+        // local named `refusal` passed to `Err(..)` is not one.
         for arg in call_args(expr) {
             if let syn::Expr::Path(path) = arg
                 && let Some(last) = path.path.segments.last()
