@@ -564,10 +564,14 @@ pub(crate) async fn slot_rpc<'a, X: Send + 'a>(
         // The same answer a failed record gets on the meta path, status data
         // included, so a withheld call's slot cannot tell itself apart
         // (MIK-8361 review F4).
-        ((_, extra), Err(error), _) => (
-            super::response_security::error_response_preserving_status(id, &error),
-            extra,
-        ),
+        // It still answers the recorded invocation: its delivery keeps that
+        // invocation's trace.
+        ((response, extra), Err(error), _) => {
+            let mut refusal =
+                super::response_security::error_response_preserving_status(id, &error);
+            refusal.invocation_trace = response.invocation_trace;
+            (refusal, extra)
+        }
     }
 }
 
@@ -629,7 +633,12 @@ impl super::MetaMcp {
         session_id: Option<&str>,
         caller: &super::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
-        let sourced = self.invoke_tool_with_source(args, session_id, caller).await;
+        // Plans and code mode deliver through their own arm: their delivery
+        // record names no invocation trace.
+        let trace_id = crate::gateway::trace::generate();
+        let sourced = self
+            .invoke_tool_with_source(args, session_id, caller, trace_id)
+            .await;
         match sourced {
             Ok(super::invoke::SourcedOutcome::Live((value, _, _))) => Ok(value),
             // A nested invocation's key never matches a deferred entry
@@ -652,19 +661,21 @@ impl super::MetaMcp {
     /// [`Self::invoke_tool`] keeping the result's chain source and upstream
     /// chain, for a reply that links it (MIK-8159: a backend tool called by
     /// its own name), or the lift's already-shaped stored answer, delivered
-    /// unchanged (MIK-8392 STORED.2 D8).
+    /// unchanged (MIK-8392 STORED.2 D8). The invocation runs under
+    /// `trace_id`.
     pub(super) async fn invoke_tool_with_source(
         &self,
         args: &Value,
         session_id: Option<&str>,
         caller: &super::MetaMcpCallerContext<'_>,
+        trace_id: String,
     ) -> Result<super::invoke::SourcedOutcome> {
         let logger = self.transparency_logger.as_ref();
         // Erased: the dispatch futures recurse (a chain step is an
         // invocation), and a concrete type here overflows auto-trait checks.
         let future: Pin<
             Box<dyn Future<Output = Result<super::invoke::SourcedOutcome>> + Send + '_>,
-        > = Box::pin(self.invoke_tool_sourced(args, session_id, caller));
+        > = Box::pin(self.invoke_tool_sourced(args, session_id, caller, trace_id));
         let outcome = slot_result(logger, future).await;
         // #2450: every step that got past the authorization chokepoint is a
         // target of the task's result, whatever it then did: an error, or an

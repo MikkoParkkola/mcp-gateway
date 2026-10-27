@@ -271,6 +271,7 @@ fn t1e_the_backend_registry_surface_is_pinned() {
         "catalogue_hook",
         "nudge_catalogue",
         "nudge_catalogue_scanned",
+        "nudge_surfaced",
         "resolve_unwarmed",
         "with_membership",
         "get",

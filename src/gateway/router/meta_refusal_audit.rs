@@ -160,7 +160,14 @@ impl<'a> Refused<'a> {
     /// record names the real reason, as every refusal's does; it is written
     /// best-effort (a failed write is counted, never answered), so an outage
     /// cannot tell a withheld name from a missing one (D3-a narrowed).
-    pub(super) async fn note_withheld(&self, state: &AppState, target: ToolTarget<'_>, code: i32) {
+    ///
+    /// The written record's trace, for the answer's delivery record.
+    pub(super) async fn note_withheld(
+        &self,
+        state: &AppState,
+        target: ToolTarget<'_>,
+        code: i32,
+    ) -> Option<String> {
         let tenants = state.meta_mcp.request_tenants(target.arguments);
         let refusal = Refusal {
             outcome: AuditOutcome::Denied(code),
@@ -169,18 +176,21 @@ impl<'a> Refused<'a> {
             tenants,
         };
         crate::security::security_metrics::meta_refused(code);
-        if let Some(Err(error)) = self.write(state, refusal).await {
-            // Counted by the log's own `mcp_audit_append_failures_total`;
-            // named here with its trace id so the operator sees the gap.
-            let trace_id = crate::gateway::trace::current().unwrap_or_default();
-            tracing::warn!(
-                %error,
-                trace_id,
-                server = target.server,
-                tool = target.tool,
-                "withheld-target refusal record write failed (counted, not answered)"
-            );
-        }
+        let error = match self.write(state, refusal).await? {
+            Ok(trace) => return Some(trace),
+            Err(error) => error,
+        };
+        // Counted by the log's own `mcp_audit_append_failures_total`;
+        // named here with its trace id so the operator sees the gap.
+        let trace_id = crate::gateway::trace::current().unwrap_or_default();
+        tracing::warn!(
+            %error,
+            trace_id,
+            server = target.server,
+            tool = target.tool,
+            "withheld-target refusal record write failed (counted, not answered)"
+        );
+        None
     }
 
     async fn record(
@@ -203,7 +213,7 @@ impl<'a> Refused<'a> {
             .as_ref()
             .map(|log| log.failure_policy());
         match written {
-            Ok(()) => build_error_response(Some(id), code, message, self.session_id, status),
+            Ok(_) => build_error_response(Some(id), code, message, self.session_id, status),
             Err(error) if failure_policy == Some(AuditFailurePolicy::FailClosed) => {
                 tracing::error!(%error, "meta-route refusal audit write failed; answering 503");
                 let error = crate::Error::AuditUnavailable;
@@ -222,12 +232,13 @@ impl<'a> Refused<'a> {
         }
     }
 
-    /// The refusal record, written; `None` with no transparency log.
+    /// The refusal record, written under the returned trace; `None` with no
+    /// transparency log.
     async fn write(
         &self,
         state: &AppState,
         refusal: Refusal<'_>,
-    ) -> Option<Result<(), crate::Error>> {
+    ) -> Option<Result<String, crate::Error>> {
         let log = state.transparency_log.as_ref()?;
         let otel_trace_id = self
             .arguments
@@ -251,6 +262,7 @@ impl<'a> Refused<'a> {
         let attribution =
             DispatchNotes::default().attribution(&state.meta_mcp, refusal.tenants, None);
         let session = self.session_id.to_string();
+        let recorded = trace_id.clone();
         // The meta writer's correlation ladder; a modern call's session is
         // `""`, so it falls to the minted trace id (MIK-7640).
         let written = log
@@ -271,7 +283,7 @@ impl<'a> Refused<'a> {
                 )
             })
             .await;
-        Some(written.map_err(Into::into))
+        Some(written.map(|()| recorded).map_err(Into::into))
     }
 }
 

@@ -219,6 +219,18 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "own stricter check: O_NOFOLLOW, fstat, no group or world bits (R4)",
     ),
     (
+        "src/preview_sandbox/linux/mod.rs",
+        "kernel settings under /proc/sys, read to name why a host refuses user namespaces; no secret",
+    ),
+    (
+        "src/preview_sandbox/linux/mounts.rs",
+        "inside the sandbox's own mount namespace: empty mountpoint files and /proc/self/mountinfo; no secret",
+    ),
+    (
+        "src/preview_sandbox/mod.rs",
+        "the sandboxed child's stderr pipe, capped at 64 KiB, to classify a refusal; not a file",
+    ),
+    (
         "src/private_fs.rs",
         "Windows store custody: no-follow open, DACL judged on the handle (ADR-016)",
     ),

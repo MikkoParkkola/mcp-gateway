@@ -9,6 +9,7 @@ disallowed-methods = [
     { path = "mcp_gateway::backend::registry::BackendRegistry::catalogue_hook", reason = "go through Registry or a leaf allow naming its class (MIK-8387)" },
     { path = "mcp_gateway::backend::registry::BackendRegistry::nudge_catalogue", reason = "go through Registry or a leaf allow naming its class (MIK-8387)" },
     { path = "mcp_gateway::backend::registry::BackendRegistry::nudge_catalogue_scanned", reason = "go through Registry or a leaf allow naming its class (MIK-8387)" },
+    { path = "mcp_gateway::backend::registry::BackendRegistry::nudge_surfaced", reason = "go through Registry or a leaf allow naming its class" },
     { path = "mcp_gateway::backend::registry::BackendRegistry::resolve_unwarmed", reason = "go through Registry or a leaf allow naming its class (MIK-8387)" },
     { path = "mcp_gateway::backend::registry::BackendRegistry::with_membership", reason = "go through Registry or a leaf allow naming its class (MIK-8387)" },
     { path = "mcp_gateway::backend::registry::BackendRegistry::get", reason = "go through Registry or a leaf allow naming its class (MIK-8387)" },
