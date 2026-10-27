@@ -312,3 +312,160 @@ async fn meta_replay_of_a_surfaced_tool_writes_an_invocation_record() {
         assert_eq!(replay[field], original[field], "{field}: {replay}");
     }
 }
+
+/// MIK-8929.EFFECT.4: a replayed answer's delivery record names the replaying
+/// request's own trace, so it joins that request's invocation record and not
+/// the first execution's.
+#[tokio::test]
+async fn meta_replay_delivery_joins_the_replaying_invocation() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(None)),
+        ..Setup::default()
+    })
+    .await;
+    let (status, first) = post_modern(&fx, &keyed_invoke(1).0).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let (status, second) = post_modern(&fx, &keyed_invoke(2).0).await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "a replay: {second}");
+
+    let traces = |rows: Vec<Value>| -> Vec<Value> {
+        rows.into_iter()
+            .map(|row| row["trace_id"].clone())
+            .collect()
+    };
+    let invoked = traces(invocations(&fx));
+    let delivered = traces(
+        std::fs::read_to_string(&fx.path)
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
+            .filter(|entry| entry["event"] == "response_delivery_attempt")
+            .collect(),
+    );
+    assert_eq!(invoked.len(), 2, "{invoked:?}");
+    assert_ne!(invoked[0], invoked[1], "{invoked:?}");
+    assert_eq!(delivered, invoked, "each delivery joins its own invocation");
+}
+
+/// A meta tool this gateway does not expose (`gateway_invoke`, outside the
+/// exposure allow-list) whose one target the caller's key denies: the route stage writes the
+/// call's one invocation record, `denied`, and the absent name's answer
+/// carries its trace, so the delivery joins it. (A surfaced name the caller
+/// cannot see is no target at all; its one record is the meta layer's grant
+/// decision.)
+#[tokio::test]
+async fn a_withheld_target_delivery_joins_its_denied_record() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(Some(vec!["t".to_string()]))),
+        meta_mode: MetaMode::InvokeHidden,
+        ..Setup::default()
+    })
+    .await;
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                      "params": {"name": "gateway_invoke",
+                                 "arguments": {"server": "alpha", "tool": "t", "arguments": {"q": 1}},
+                                 "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                                           "io.modelcontextprotocol/clientCapabilities": {}}}});
+    let (status, answer) = post_modern_named(&fx, "gateway_invoke", &body.to_string()).await;
+    // The absent name's answer, as for any name that matches no tool.
+    assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+    assert_eq!(sse_error_code(&answer), Some(-32601), "{answer}");
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "never dispatched");
+    let invoked = invocations(&fx);
+    let [denied] = invoked.as_slice() else {
+        panic!("one invocation record: {invoked:?}");
+    };
+    assert_eq!(denied["outcome"], "denied", "{denied}");
+    let delivered = deliveries(&fx);
+    let [delivery] = delivered.as_slice() else {
+        panic!("one delivery record: {delivered:?}");
+    };
+    assert_eq!(delivery["trace_id"], denied["trace_id"], "{delivery}");
+}
+
+/// A backend tool called by its own (surfaced) name on `/mcp`: its delivery
+/// joins its one invocation record.
+#[tokio::test]
+async fn a_surfaced_tool_delivery_joins_its_invocation() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(None)),
+        meta_mode: MetaMode::SurfacedT,
+        ..Setup::default()
+    })
+    .await;
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                      "params": {"name": "t", "arguments": {"q": 1},
+                                 "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                                           "io.modelcontextprotocol/clientCapabilities": {}}}});
+    let (status, answer) = post_modern_named(&fx, "t", &body.to_string()).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "dispatched once");
+    let invoked = invocations(&fx);
+    let [invocation] = invoked.as_slice() else {
+        panic!("one invocation record: {invoked:?}");
+    };
+    let delivered = deliveries(&fx);
+    let [delivery] = delivered.as_slice() else {
+        panic!("one delivery record: {delivered:?}");
+    };
+    assert_eq!(delivery["trace_id"], invocation["trace_id"], "{delivery}");
+}
+
+/// The JSON-RPC error code of a one-event SSE answer.
+fn sse_error_code(answer: &str) -> Option<i64> {
+    let data = answer
+        .lines()
+        .find_map(|line| line.strip_prefix("data: "))?;
+    serde_json::from_str::<Value>(data).ok()?["error"]["code"].as_i64()
+}
+
+/// The deliveries in `fx`'s log.
+fn deliveries(fx: &Fixture) -> Vec<Value> {
+    std::fs::read_to_string(&fx.path)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
+        .filter(|entry| entry["event"] == "response_delivery_attempt")
+        .collect()
+}
+
+/// A hidden meta tool naming two targets, both withheld: one `denied` record
+/// per target and no single invocation, so the delivery joins none of them
+/// (read as "not linked to a single call", as a plan is).
+#[tokio::test]
+async fn an_all_withheld_multi_target_delivery_joins_no_record() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(Some(vec!["t".to_string(), "u".to_string()]))),
+        meta_mode: MetaMode::InvokeHidden,
+        ..Setup::default()
+    })
+    .await;
+    let chain = json!([{"tool": "alpha:t", "arguments": {}}, {"tool": "alpha:u", "arguments": {}}]);
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                      "params": {"name": "gateway_execute", "arguments": {"chain": chain},
+                                 "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                                           "io.modelcontextprotocol/clientCapabilities": {}}}});
+    let (_, answer) = post_modern_named(&fx, "gateway_execute", &body.to_string()).await;
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        0,
+        "never dispatched: {answer}"
+    );
+    let invoked = invocations(&fx);
+    assert_eq!(
+        invoked.len(),
+        2,
+        "one denied record per target: {invoked:?}"
+    );
+    let delivered = deliveries(&fx);
+    let [delivery] = delivered.as_slice() else {
+        panic!("one delivery record: {delivered:?}");
+    };
+    assert!(
+        invoked
+            .iter()
+            .all(|row| row["trace_id"] != delivery["trace_id"]),
+        "joined one target's record: {delivery}"
+    );
+}

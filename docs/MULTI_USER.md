@@ -180,6 +180,36 @@ Order matters — put the narrow rules first, because the first rule that
 matches is the only one that applies. There is no implicit allow-all rule at the
 end: an identity that matches nothing gets nothing.
 
+### Removing a person
+
+Policy edits apply on restart, not on a config reload: the key server reads its
+policies once at startup, and a reload that changes `key_server` lists it among
+the changes that need a restart. Until the restart, a person you removed from
+the policies can still exchange a provider token for a new gateway token.
+
+The certain cut-off is a restart once no rule admits them. If a rule names only
+them, delete it and restart. If a shared `group` or `domain` rule admits them,
+do not delete a rule other people depend on: disable their account at the
+identity provider, and restart once every provider token issued before the
+disable has expired, that is, your provider's token lifetime plus the
+gateway's 60-second clock leeway. Until then such a token can still be
+exchanged, restart or not. A restart also drops every issued key-server token,
+since the token store is in memory.
+
+If the restart has to wait, these steps narrow the gap in the meantime; only
+the restart is certain:
+
+1. Disable their account at the identity provider.
+2. Revoke what the gateway already issued them:
+   `DELETE /auth/tokens?issuer={issuer}&subject={subject}` with the
+   `admin_token`. `issuer` and `subject` are the `iss` and `sub` of their
+   provider token (URL-encode both).
+3. Revoke again five minutes after step 1. Disabling the account does not
+   invalidate a provider token issued before it, and the gateway accepts such
+   a token for an exchange until it is five minutes old, so a token minted in
+   that window survives step 2.
+4. Remove their rule if they have one, and restart as soon as you can.
+
 ### Admins from your identity provider
 
 Scopes never make anyone an admin. A person signed in through the key server is
@@ -339,7 +369,10 @@ success:
 - Send a request with no credential. With `required: true` it must be refused,
   not served from the static credential.
 - Revoke user A's token via `DELETE /auth/token/{jti}` and confirm the next call
-  is refused.
+  is refused. That cuts off one token, not the person: they can exchange a
+  provider token for a new one, and removing their policy only takes effect on
+  restart. To remove a person, follow
+  [Removing a person](#removing-a-person).
 
 A managed account (`mode: personal_managed`) whose provider grant is revoked
 early is noticed on the backend's first HTTP 401: the gateway forces one

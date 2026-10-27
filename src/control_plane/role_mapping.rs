@@ -39,6 +39,9 @@ pub struct ControlPlaneConfig {
     pub store_dir: Option<String>,
 }
 
+/// The governance audit log's file name inside [`ControlPlaneBaseInfo::path`].
+pub(crate) const GOVERNANCE_LOG_FILE: &str = "audit.jsonl";
+
 /// Where the control-plane store lives, resolved once at startup from
 /// `store_dir` and the config path (MIK-7570 F6). The admin API reports it, so
 /// it names the directory the running process chose, not a later reload's.

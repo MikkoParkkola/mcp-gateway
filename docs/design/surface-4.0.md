@@ -7,13 +7,19 @@ gateway becomes internal, and the gateway decides what it can decide on its own.
 item on the five surfaces a user can touch, gives each one a class, and says what happens to an existing
 user of anything that is not kept. Pieces P2 to P6 implement it; nothing here changes code.
 
-`python3 scripts/release/check_surface_inventory.py` extracts the five surfaces from the source and fails
-when any item is missing from the tables below, is listed twice, carries no valid class, has no migration
-story, or no longer exists. `--summary` prints the counts. The check runs in CI through
+`python3 scripts/release/check_surface_inventory.py` extracts four surfaces (config, env, routes, lib) from the
+source and fails when any item is missing from the tables below, is listed twice, carries no valid class, has no
+migration story, or no longer exists. `--summary` prints the counts. The check runs in CI through
 `scripts/release/test_check_surface_inventory.py`.
 
-What the check guards against: a contributor adding a config key, flag, variable, route or crate-root
-item in the forms this codebase uses (serde derives, clap derives, axum `route`/`nest` calls in either
+The cli table: membership is `tests/cli_surface_inventory.rs` only. It walks the `Command` clap builds, so a
+flag no source pattern models still needs a row; it runs in CI's all-features test job, not in the cargo-free
+pre-push step. Row format is unchanged for all tables, cli included: the Python check still fails a cli row with
+no valid class, no reason, no migration story, a second row for the same item, or a defined-at path outside
+`src/cli/`.
+
+What the Python check guards against: a contributor adding a config key, variable, route or crate-root
+item in the forms this codebase uses (serde derives, axum `route`/`nest` calls in either
 call form, `pub` items in `src/lib.rs`, `#[macro_export]` macros in any module the library compiles) without classifying it. It reads
 source text, not compiled types, so it is not a proof against code written to evade it; a construct it
 cannot read is added to the extractor, with a planted-source test, when the codebase first uses it.
@@ -127,7 +133,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `(global)` | 13 |  | `mcp-gateway --protocol-revision-window` |  |  |
 | `accounts` | 13 |  |  |  |  |
 | `add` | 11 |  |  |  | `mcp-gateway add --config`; `mcp-gateway add -c` |
-| `audit` | 15 |  |  |  |  |
+| `audit` | 17 |  |  |  |  |
 | `cap` | 73 |  |  |  |  |
 | `dashboard-link` | 8 |  |  |  |  |
 | `doctor` | 12 |  |  |  |  |
@@ -180,7 +186,7 @@ counts, and `/sse` answers 410 Gone pointing to `POST /mcp` (MIK-8044.SURF.4b).
 | `/metrics` | 1 |  |  |  |  |
 | `/readyz` | 1 |  |  |  |  |
 | `/sse` |  |  |  | `/sse` |  |
-| `/ui` | 3 |  |  | `/ui/api/backends`; `/ui/api/backends/{name}`; `/ui/api/backends/{name}/revive`; `/ui/api/capabilities`; `/ui/api/capabilities/{name}`; `/ui/api/config`; `/ui/api/control-plane`; `/ui/api/control-plane/decisions`; `/ui/api/control-plane/export-status`; `/ui/api/control-plane/grants`; `/ui/api/control-plane/policies`; `/ui/api/costs`; `/ui/api/dashboard-link`; `/ui/api/events/dead-letters`; `/ui/api/events/dead-letters/replay`; `/ui/api/events/dead-letters/{id}/replay`; `/ui/api/events/held`; `/ui/api/import/openapi`; `/ui/api/import/openapi/preview`; `/ui/api/previews`; `/ui/api/registry`; `/ui/api/registry/search`; `/ui/api/reload`; `/ui/api/status`; `/ui/api/tools`; `/ui/assets/{file}` |  |
+| `/ui` | 3 |  |  | `/ui/api/activity`; `/ui/api/activity/export`; `/ui/api/activity/{id}`; `/ui/api/backends`; `/ui/api/backends/{name}`; `/ui/api/backends/{name}/revive`; `/ui/api/capabilities`; `/ui/api/capabilities/{name}`; `/ui/api/capabilities/{name}/validate`; `/ui/api/config`; `/ui/api/control-plane`; `/ui/api/control-plane/decisions`; `/ui/api/control-plane/export-status`; `/ui/api/control-plane/grants`; `/ui/api/control-plane/policies`; `/ui/api/costs`; `/ui/api/dashboard-link`; `/ui/api/events/dead-letters`; `/ui/api/events/dead-letters/replay`; `/ui/api/events/dead-letters/{id}/replay`; `/ui/api/events/held`; `/ui/api/events/leases`; `/ui/api/import/openapi`; `/ui/api/import/openapi/preview`; `/ui/api/markers`; `/ui/api/metrics/series`; `/ui/api/overview`; `/ui/api/previews`; `/ui/api/refusals`; `/ui/api/registry`; `/ui/api/registry/search`; `/ui/api/reload`; `/ui/api/status`; `/ui/api/tools`; `/ui/assets/{file}` |  |
 | `config-driven` | 3 |  |  |  |  |
 
 Response-code changes from backend secret references (ADR-028). Only the new condition changes; every other answer of these routes is unchanged:
@@ -852,6 +858,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway audit verify -h` | KEEP | short alias of `--help` | - | src/cli/subcommands.rs:708 |
 | `mcp-gateway audit verify --anchor` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:708 |
 | `mcp-gateway audit verify --archive` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:708 |
+| `mcp-gateway audit verify --export` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:708 |
+| `mcp-gateway audit verify --jwk` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:708 |
 | `mcp-gateway audit verify --path` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:708 |
 | `mcp-gateway cap` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:240 |
 | `mcp-gateway cap --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:240 |
@@ -1390,60 +1398,69 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 
 | Item | Class | Reason | Migration | Defined at |
 |---|---|---|---|---|
-| `/.well-known/jwks.json` | KEEP | OAuth discovery documents clients fetch | - | src/gateway/routes.rs:29 |
-| `/.well-known/oauth-protected-resource` | KEEP | OAuth discovery documents clients fetch | - | src/gateway/routes.rs:30 |
-| `/accounts/v1` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:70 |
-| `/accounts/v1/assets/complete.js` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:79 |
-| `/accounts/v1/callback` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:77 |
-| `/accounts/v1/complete` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:78 |
-| `/accounts/v1/connections/{account_id}` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:76 |
-| `/accounts/v1/journeys` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:73 |
-| `/accounts/v1/journeys/{id}` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:74 |
-| `/accounts/v1/journeys/{id}/start` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:75 |
-| `/accounts/v1/{*rest}` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:72 |
-| `/api/costs` | KEEP | admin cost API for scripts (raw session ids) | - | src/gateway/routes.rs:25 |
-| `/auth/token` | KEEP | key-server token issue and revoke (MULTI_USER.md); mounted only with `key_server.enabled` | - | src/gateway/routes.rs:31 |
-| `/auth/token/{jti}` | KEEP | key-server token issue and revoke (MULTI_USER.md); mounted only with `key_server.enabled` | - | src/gateway/routes.rs:32 |
-| `/auth/tokens` | KEEP | key-server token issue and revoke (MULTI_USER.md); mounted only with `key_server.enabled` | - | src/gateway/routes.rs:33 |
-| `/dashboard` | KEEP | the web dashboard and its sign-in hand-off | - | src/gateway/routes.rs:41 |
-| `/dashboard/handoff` | KEEP | the web dashboard and its sign-in hand-off | - | src/gateway/routes.rs:42 |
-| `/dashboard/logout` | KEEP | the web dashboard and its sign-in hand-off | - | src/gateway/routes.rs:43 |
-| `/health` | KEEP | liveness and readiness probes for supervisors and Kubernetes | - | src/gateway/routes.rs:21 |
-| `/livez` | KEEP | liveness and readiness probes for supervisors and Kubernetes | - | src/gateway/routes.rs:22 |
-| `/mcp` | KEEP | the MCP endpoint every client uses | - | src/gateway/routes.rs:26 |
-| `/mcp/{name}` | KEEP | direct endpoint for one backend | - | src/gateway/routes.rs:27 |
-| `/metrics` | KEEP | Prometheus scrape, behind `server.metrics_token` | - | src/gateway/routes.rs:24 |
-| `/readyz` | KEEP | liveness and readiness probes for supervisors and Kubernetes | - | src/gateway/routes.rs:23 |
-| `/sse` | INTERNAL | not a transport: answers a pointer to `/mcp` for clients configured for the removed SSE endpoint; SSE-transport clients use `/mcp` (Streamable HTTP; `GET /mcp` opens the stream) | unchanged; listed as a deprecation helper | src/gateway/routes.rs:28 |
-| `/ui` | KEEP | the web dashboard and its sign-in hand-off | - | src/gateway/routes.rs:34 |
-| `/ui/api/backends` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:57 |
-| `/ui/api/backends/{name}` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:58 |
-| `/ui/api/backends/{name}/revive` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:59 |
-| `/ui/api/capabilities` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:50 |
-| `/ui/api/capabilities/{name}` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:51 |
-| `/ui/api/config` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:46 |
-| `/ui/api/control-plane` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:52 |
-| `/ui/api/control-plane/decisions` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:55 |
-| `/ui/api/control-plane/export-status` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:56 |
-| `/ui/api/control-plane/grants` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:53 |
-| `/ui/api/control-plane/policies` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:54 |
-| `/ui/api/costs` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:49 |
-| `/ui/api/dashboard-link` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:48 |
-| `/ui/api/events/dead-letters` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface; MIK-8697: a row names its subscription as `subscriptionAlias` (keyed) and `subscriptionId` is removed, and the `subscription` filter takes the alias or a stored id | src/gateway/routes.rs:62 |
-| `/ui/api/events/dead-letters/replay` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:63 |
-| `/ui/api/events/dead-letters/{id}/replay` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:64 |
-| `/ui/api/events/held` | INTERNAL | private JSON API of the bundled web UI | admin only, like the dead-letter listing; held webhook subscriptions per type (MIK-8057) | src/gateway/routes.rs:65 |
-| `/ui/api/import/openapi` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:67 |
-| `/ui/api/import/openapi/preview` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:66 |
-| `/ui/api/previews` | INTERNAL | private JSON API of the bundled web UI | admin only; describe-then-confirm start-once preview of a server before it is added, nothing persisted | src/gateway/routes.rs:70 |
-| `/ui/api/registry` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:60 |
-| `/ui/api/registry/search` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:61 |
-| `/ui/api/reload` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:47 |
-| `/ui/api/status` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:44 |
-| `/ui/api/tools` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:45 |
-| `/ui/assets/{file}` | INTERNAL | content-hashed static files of the bundled web UI (MIK-8870) | none: the UI's own files, not an integration surface | src/gateway/routes.rs:38 |
-| `/ui/classic` | KEEP | the current web dashboard, kept for one release beside the new UI (MIK-8870) | - | src/gateway/routes.rs:36 |
-| `/ui/{*path}` | KEEP | deep links into the web dashboard; until the new UI ships they hand the visitor to `/ui` (MIK-8870) | - | src/gateway/routes.rs:40 |
+| `/.well-known/jwks.json` | KEEP | OAuth discovery documents clients fetch | - | src/gateway/routes.rs:JWKS |
+| `/.well-known/oauth-protected-resource` | KEEP | OAuth discovery documents clients fetch | - | src/gateway/routes.rs:PROTECTED_RESOURCE |
+| `/accounts/v1` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:ACCOUNTS_ROOT |
+| `/accounts/v1/assets/complete.js` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:ACCOUNTS_COMPLETE_SCRIPT |
+| `/accounts/v1/callback` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:ACCOUNTS_CALLBACK |
+| `/accounts/v1/complete` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:ACCOUNTS_COMPLETE |
+| `/accounts/v1/connections/{account_id}` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:ACCOUNTS_CONNECTION |
+| `/accounts/v1/journeys` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:ACCOUNTS_JOURNEYS |
+| `/accounts/v1/journeys/{id}` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:ACCOUNTS_JOURNEY |
+| `/accounts/v1/journeys/{id}/start` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:ACCOUNTS_JOURNEY_START |
+| `/accounts/v1/{*rest}` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:ACCOUNTS_UNROUTED |
+| `/api/costs` | KEEP | admin cost API for scripts (raw session ids) | - | src/gateway/routes.rs:API_COSTS |
+| `/auth/token` | KEEP | key-server token issue and revoke (MULTI_USER.md); mounted only with `key_server.enabled` | - | src/gateway/routes.rs:AUTH_TOKEN |
+| `/auth/token/{jti}` | KEEP | key-server token issue and revoke (MULTI_USER.md); mounted only with `key_server.enabled` | - | src/gateway/routes.rs:AUTH_TOKEN_JTI |
+| `/auth/tokens` | KEEP | key-server token issue and revoke (MULTI_USER.md); mounted only with `key_server.enabled` | - | src/gateway/routes.rs:AUTH_TOKENS |
+| `/dashboard` | KEEP | the web dashboard and its sign-in hand-off | - | src/gateway/routes.rs:DASHBOARD |
+| `/dashboard/handoff` | KEEP | the web dashboard and its sign-in hand-off | - | src/gateway/routes.rs:DASHBOARD_HANDOFF |
+| `/dashboard/logout` | KEEP | the web dashboard and its sign-in hand-off | - | src/gateway/routes.rs:DASHBOARD_LOGOUT |
+| `/health` | KEEP | liveness and readiness probes for supervisors and Kubernetes | - | src/gateway/routes.rs:HEALTH |
+| `/livez` | KEEP | liveness and readiness probes for supervisors and Kubernetes | - | src/gateway/routes.rs:LIVEZ |
+| `/mcp` | KEEP | the MCP endpoint every client uses | - | src/gateway/routes.rs:MCP |
+| `/mcp/{name}` | KEEP | direct endpoint for one backend | - | src/gateway/routes.rs:MCP_BACKEND |
+| `/metrics` | KEEP | Prometheus scrape, behind `server.metrics_token` | - | src/gateway/routes.rs:METRICS |
+| `/readyz` | KEEP | liveness and readiness probes for supervisors and Kubernetes | - | src/gateway/routes.rs:READYZ |
+| `/sse` | INTERNAL | not a transport: answers a pointer to `/mcp` for clients configured for the removed SSE endpoint; SSE-transport clients use `/mcp` (Streamable HTTP; `GET /mcp` opens the stream) | unchanged; listed as a deprecation helper | src/gateway/routes.rs:SSE |
+| `/ui` | KEEP | the web dashboard and its sign-in hand-off | - | src/gateway/routes.rs:UI |
+| `/ui/api/activity` | INTERNAL | private JSON API of the bundled web UI | the Activity list: admin, a mapped auditor, or a mapped developer's own calls; any other credential 403 (UPGRADING 176); documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_ACTIVITY |
+| `/ui/api/activity/export` | INTERNAL | private JSON API of the bundled web UI | the Activity export: signed NDJSON (409 without a provenance key) or CSV, same access as the list; checked offline by `audit verify --export` | src/gateway/routes.rs:UI_ACTIVITY_EXPORT |
+| `/ui/api/activity/{id}` | INTERNAL | private JSON API of the bundled web UI | one Activity row's receipt, same access as the list; 404 for a row the caller may not read | src/gateway/routes.rs:UI_ACTIVITY_RECEIPT |
+| `/ui/api/backends` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_BACKENDS |
+| `/ui/api/backends/{name}` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_BACKEND |
+| `/ui/api/backends/{name}/revive` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_BACKEND_REVIVE |
+| `/ui/api/capabilities` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_CAPABILITIES |
+| `/ui/api/capabilities/{name}` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_CAPABILITY |
+| `/ui/api/capabilities/{name}/validate` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_CAPABILITY_VALIDATE |
+| `/ui/api/config` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_CONFIG |
+| `/ui/api/control-plane` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_CONTROL_PLANE |
+| `/ui/api/control-plane/decisions` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_CONTROL_PLANE_DECISIONS |
+| `/ui/api/control-plane/export-status` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_CONTROL_PLANE_EXPORT_STATUS |
+| `/ui/api/control-plane/grants` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_CONTROL_PLANE_GRANTS |
+| `/ui/api/control-plane/policies` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_CONTROL_PLANE_POLICIES |
+| `/ui/api/costs` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_COSTS |
+| `/ui/api/dashboard-link` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_DASHBOARD_LINK |
+| `/ui/api/events/dead-letters` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface; MIK-8697: a row names its subscription as `subscriptionAlias` (keyed) and `subscriptionId` is removed, and the `subscription` filter takes the alias or a stored id | src/gateway/routes.rs:UI_DEAD_LETTERS |
+| `/ui/api/events/dead-letters/replay` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_DEAD_LETTERS_REPLAY |
+| `/ui/api/events/dead-letters/{id}/replay` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_DEAD_LETTER_REPLAY |
+| `/ui/api/events/held` | INTERNAL | private JSON API of the bundled web UI | admin only, like the dead-letter listing; held webhook subscriptions per type (MIK-8057) | src/gateway/routes.rs:UI_EVENTS_HELD |
+| `/ui/api/events/leases` | INTERNAL | private JSON API of the bundled web UI | admin only, like the dead-letter listing; each passthrough event subscription's held credential, never the token | src/gateway/routes.rs:UI_EVENTS_LEASES |
+| `/ui/api/import/openapi` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_IMPORT |
+| `/ui/api/import/openapi/preview` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_IMPORT_PREVIEW |
+| `/ui/api/markers` | INTERNAL | private JSON API of the bundled web UI | admin only; restarts, upgrades, reloads, pauses and switch-offs for the charts | src/gateway/routes.rs:UI_MARKERS |
+| `/ui/api/metrics/series` | INTERNAL | private JSON API of the bundled web UI | admin only; windowed call counters for the charts (ADR-017) | src/gateway/routes.rs:UI_METRICS_SERIES |
+| `/ui/api/overview` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_OVERVIEW |
+| `/ui/api/previews` | INTERNAL | private JSON API of the bundled web UI | admin only; describe-then-confirm start-once preview of a server before it is added, nothing persisted | src/gateway/routes.rs:UI_PREVIEWS |
+| `/ui/api/registry` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_REGISTRY |
+| `/ui/api/registry/search` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_REGISTRY_SEARCH |
+| `/ui/api/refusals` | INTERNAL | private JSON API of the bundled web UI | admin-only read of what the gateway refused to apply and how to fix it; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_REFUSALS |
+| `/ui/api/reload` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_RELOAD |
+| `/ui/api/status` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_STATUS |
+| `/ui/api/tools` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_TOOLS |
+| `/ui/assets/{file}` | INTERNAL | content-hashed static files of the bundled web UI (MIK-8870) | none: the UI's own files, not an integration surface | src/gateway/routes.rs:UI_ASSET |
+| `/ui/classic` | KEEP | the current web dashboard, kept for one release beside the new UI (MIK-8870) | - | src/gateway/routes.rs:UI_CLASSIC |
+| `/ui/{*path}` | KEEP | deep links into the web dashboard; until the new UI ships they hand the visitor to `/ui` (MIK-8870) | - | src/gateway/routes.rs:UI_SHELL |
 | `dynamic &route (src/gateway/webhooks/mod.rs)` | KEEP | inbound webhooks under `webhooks.base_path` | - | src/gateway/webhooks/mod.rs:323 |
 | `dynamic callback_path (src/oauth/callback.rs)` | KEEP | backend OAuth redirect on its own short-lived loopback listener | - | src/oauth/callback.rs:309 |
 | `dynamic path (src/gateway/webhooks/mod.rs)` | KEEP | inbound webhooks under `webhooks.base_path` | - | src/gateway/webhooks/mod.rs:300 |
@@ -1487,11 +1504,13 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp_gateway::key_server` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:79 |
 | `mcp_gateway::kill_switch` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:81 |
 | `mcp_gateway::kubernetes` | INTERNAL | bin 1, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:83 |
+| `mcp_gateway::lock_directory_finding` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from fs_lock, for `doctor`) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:67 |
 | `mcp_gateway::metrics` | INTERNAL | bin 0, tests 4, benches/examples 0 | the crate ships a binary; README documents no library use (mod feature metrics) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:86 |
 | `mcp_gateway::migrate_legacy_credential_offline` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:168 |
 | `mcp_gateway::mtls` | INTERNAL | bin 2, tests 28, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:88 |
 | `mcp_gateway::oauth` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:90 |
 | `mcp_gateway::playbook` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:94 |
+| `mcp_gateway::preview_sandbox` | INTERNAL | bin 1, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:98 |
 | `mcp_gateway::projection` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:96 |
 | `mcp_gateway::protocol` | INTERNAL | bin 0, tests 74, benches/examples 2 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:98 |
 | `mcp_gateway::protocol_imports` | INTERNAL | bin 2, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:100 |

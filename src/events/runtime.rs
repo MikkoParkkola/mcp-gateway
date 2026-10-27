@@ -46,6 +46,9 @@ pub(crate) struct Runtime {
     pub busy: Mutex<HashSet<String>>,
     /// The gateway's controls, once [`EventsHub::start`] ran.
     pub services: std::sync::OnceLock<Arc<Services>>,
+    /// Mints a per-user listener's credential through the gateway's audited
+    /// path; set once at events wiring.
+    pub listener_mint: std::sync::OnceLock<Arc<dyn super::ListenerMint>>,
     /// The backends the upstream-notification source listens on, once it is
     /// installed: their live connections decide HTTP eligibility (MIK-7969).
     pub backends: std::sync::OnceLock<Arc<crate::backend::BackendRegistry>>,
@@ -75,6 +78,7 @@ impl Runtime {
             failures: FailureWindows::new(config.suspend_window, config.suspend_min_attempts),
             busy: Mutex::new(HashSet::new()),
             services: std::sync::OnceLock::new(),
+            listener_mint: std::sync::OnceLock::new(),
             backends: std::sync::OnceLock::new(),
             reconciled: AtomicBool::new(false),
             expiry_seen: Mutex::new(ExpirySeen {
@@ -181,9 +185,27 @@ impl EventsHub {
         });
         let hub = Arc::clone(self);
         tokio::spawn(async move { hub.deliver_forever(&services).await });
+        // C8: a revocation re-checks the per-user listeners at once. Weak, so
+        // the watch never keeps a dropped hub alive.
+        let (weak, mut changed) = (Arc::downgrade(self), super::CREDENTIALS_CHANGED.subscribe());
+        tokio::spawn(async move {
+            while changed.changed().await.is_ok() {
+                let Some(hub) = weak.upgrade() else {
+                    return;
+                };
+                hub.revoke_unobservable(None).await;
+                hub.revoke_inadmissible(None).await;
+            }
+        });
         // After a restart the upstream state is rebuilt from the store.
         let hub = Arc::clone(self);
-        tokio::spawn(async move { hub.replay_starts().await });
+        tokio::spawn(async move {
+            // Before replay: a row observed under config that changed while
+            // the gateway was down is revoked, not started.
+            hub.revoke_unobservable(None).await;
+            hub.revoke_inadmissible(None).await;
+            hub.replay_starts().await;
+        });
     }
 
     /// Whether a caller holding API key `key` may still see `backend` under

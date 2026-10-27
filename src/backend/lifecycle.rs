@@ -409,6 +409,44 @@ impl Backend {
         Err(Error::BackendUnavailable(self.name.clone()))
     }
 
+    /// A per-user listener's own HTTP transport, unstarted: the backend's URL,
+    /// timeout, flavour and protocol version under its live destination
+    /// policy, and nothing of the gateway's own credential (no static
+    /// headers, no OAuth). Built per run, so the shared slot is never started
+    /// or read for a listener that observes as one subscriber.
+    ///
+    /// # Errors
+    /// The backend is not reached over HTTP, its URL cannot be sent to, or
+    /// its destination policy changed while the transport was built.
+    pub(crate) fn listener_transport(&self) -> Result<Arc<crate::transport::HttpTransport>> {
+        let crate::config::TransportConfig::Http {
+            http_url,
+            streamable_http,
+            protocol_version,
+        } = &self.config.transport
+        else {
+            return Err(Error::Transport(
+                "a per-user listener needs an HTTP backend".to_owned(),
+            ));
+        };
+        http_target(http_url)?;
+        let built_under = self.destination();
+        let transport = crate::transport::HttpTransport::with_destination(
+            http_url,
+            std::collections::HashMap::new(),
+            self.config.timeout,
+            *streamable_http,
+            None,
+            protocol_version.clone(),
+            built_under,
+        )?;
+        transport.mark_single_tenant();
+        // The same pairing check a slot's start runs: refused when the
+        // policy changed since it was read, and recorded when none is pinned.
+        self.begin_connecting(built_under)?;
+        Ok(transport)
+    }
+
     /// Build a fresh transport for the pooled `entry`, store it, and return a
     /// clone. Per-user slots build the same transport shape as the shared slot;
     /// end-user identity is carried per-request via headers, not baked into the
@@ -426,7 +464,30 @@ impl Backend {
     }
 
     /// [`Self::start_entry`], resolving the slot's era as `era` says.
+    ///
+    /// Every start runs through here (lazy, `start()`, restart and revive,
+    /// warm start), so this is where the slot's start outcome is recorded for
+    /// the operator's state view (`server_state`).
     pub(super) async fn start_entry_as(
+        &self,
+        key: &PoolKey,
+        entry: &PooledEntry,
+        era: EraResolution,
+    ) -> Result<Arc<dyn Transport>> {
+        let started = self.start_entry_inner(key, entry, era).await;
+        match &started {
+            Ok(_) => {
+                entry.ever_started.store(true, Ordering::Relaxed);
+                entry.start_failed.store(false, Ordering::Relaxed);
+                entry.auth_wait.store(false, Ordering::Relaxed);
+            }
+            Err(e) if e.is_authorization_wait() => entry.auth_wait.store(true, Ordering::Relaxed),
+            Err(_) => entry.start_failed.store(true, Ordering::Relaxed),
+        }
+        started
+    }
+
+    async fn start_entry_inner(
         &self,
         key: &PoolKey,
         entry: &PooledEntry,

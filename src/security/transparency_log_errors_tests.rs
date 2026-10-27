@@ -97,7 +97,9 @@ fn recovery_read_names_the_segment() {
 }
 
 /// End to end: the log's directory removed under a live writer; the kind
-/// stays `NotFound` and the text names the operation and the path.
+/// stays `NotFound` and the text names the operation and the path. On
+/// Windows the removal itself is refused: the writer's lease sidecar never
+/// shares delete, so a held lock file cannot be deleted by name.
 #[test]
 fn a_removed_directory_is_named_and_keeps_its_kind() {
     let outer = tempfile::tempdir().unwrap();
@@ -106,13 +108,26 @@ fn a_removed_directory_is_named_and_keeps_its_kind() {
     let path = dir.join("transparency.jsonl");
     let l = TransparencyLogger::open(cfg(&path, 2, false)).unwrap();
     append(&l, 0);
-    std::fs::remove_dir_all(&dir).unwrap();
-    let e = l
-        .log_invocation("s", "c", "srv", "t", "a", "b")
-        .expect_err("the directory is gone");
-    assert_eq!(e.kind(), io::ErrorKind::NotFound, "{e}");
-    assert!(e.to_string().contains("audit log:"), "{e}");
-    assert!(e.to_string().contains(&dir.display().to_string()), "{e}");
+    let removed = std::fs::remove_dir_all(&dir);
+    #[cfg(windows)]
+    {
+        const SHARING_VIOLATION: i32 = 32;
+        let error = removed.expect_err("a held lease sidecar is not deletable");
+        assert_eq!(error.raw_os_error(), Some(SHARING_VIOLATION), "{error}");
+        // The control: once the writer and its lease are gone, it goes.
+        drop(l);
+        std::fs::remove_dir_all(&dir).expect("removable once the lease is released");
+    }
+    #[cfg(not(windows))]
+    {
+        removed.unwrap();
+        let e = l
+            .log_invocation("s", "c", "srv", "t", "a", "b")
+            .expect_err("the directory is gone");
+        assert_eq!(e.kind(), io::ErrorKind::NotFound, "{e}");
+        assert!(e.to_string().contains("audit log:"), "{e}");
+        assert!(e.to_string().contains(&dir.display().to_string()), "{e}");
+    }
 }
 
 /// Writing a line (a plain fault through the write seam, not ENOSPC).

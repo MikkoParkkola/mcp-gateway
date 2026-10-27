@@ -5,7 +5,8 @@
 
 Every open pull request used to edit `## [Unreleased]` in CHANGELOG.md, so each
 merge made the others conflict. A PR now adds `changelog.d/<number>.<type>.md`
-holding its bullet(s), and the release folds them in.
+holding its bullet(s), and the release folds them in. A further PR under the
+same number adds `<number>-<n>.<type>.md` (n a positive number, no leading zero).
 
     changelog_fragments.py check --base <ref> [--head <ref>]
         Fail a PR that changes src/ without adding a fragment. The label
@@ -32,7 +33,10 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 FRAGMENT_DIR = "changelog.d"
 # Keep a Changelog order; a missing subsection is created in this order.
 TYPES = ("added", "changed", "removed", "fixed", "security")
-FRAGMENT = re.compile(r"^(\d+)\.(" + "|".join(TYPES) + r")\.md$")
+# Group 1 is the number, group 2 the type; the optional -<n> suffix names a
+# further fragment under one number. No 0 and no leading zero, so every
+# accepted name is the only spelling of its stem and sorts after the bare one.
+FRAGMENT = re.compile(r"^(\d+)(?:-[1-9]\d*)?\.(" + "|".join(TYPES) + r")\.md$")
 # Files in changelog.d/ that are not fragments.
 NOT_FRAGMENTS = {".gitkeep"}
 SKIP_LABEL = "no-changelog"
@@ -45,9 +49,21 @@ SOURCE = re.compile(
 )
 
 
+def _stem(name: str) -> str:
+    """`<number>` or `<number>-<n>`: what a retype keeps and the fold orders by."""
+    return name.split(".", 1)[0]
+
+
+def _order(name: str) -> tuple[int, int]:
+    """Number, then suffix (none sorts first), so 9-10 follows 9-2."""
+    number, _, n = _stem(name).partition("-")
+    return int(number), int(n or 0)
+
+
 def fragment_name_errors(names: list[str]) -> list[str]:
     return [
-        f"{FRAGMENT_DIR}/{n}: fragment names are <number>.<type>.md, type one of {', '.join(TYPES)}"
+        f"{FRAGMENT_DIR}/{n}: fragment names are <number>.<type>.md or "
+        f"<number>-<n>.<type>.md, type one of {', '.join(TYPES)}"
         for n in names
         if n not in NOT_FRAGMENTS and not FRAGMENT.match(n)
     ]
@@ -69,26 +85,26 @@ def check(
     errors = fragment_name_errors(added)
     if SKIP_LABEL in labels:
         return errors
-    # A fragment re-added under the same number with another type is a retype
+    # A fragment re-added under the same name with another type is a retype
     # (the diff runs without rename detection, so a rename arrives as a delete
     # plus an add), not a loss. Pairs are one to one (MIK-7946): each addition
-    # excuses one deletion of its number, and an addition so paired replaces
-    # an old entry rather than adding a new one.
-    unpaired = Counter(FRAGMENT.match(n)[1] for n in added if FRAGMENT.match(n))
+    # excuses one deletion of its name (number and any suffix), and an addition
+    # so paired replaces an old entry rather than adding a new one.
+    unpaired = Counter(_stem(n) for n in added if FRAGMENT.match(n))
     deleted = []
     for status, path in changes:
         name = path.split("/", 1)[1] if path.startswith(f"{FRAGMENT_DIR}/") else ""
         if not (status.startswith("D") and FRAGMENT.match(name)):
             continue
-        number = FRAGMENT.match(name)[1]
-        if unpaired[number]:
-            unpaired[number] -= 1
+        stem = _stem(name)
+        if unpaired[stem]:
+            unpaired[stem] -= 1
         else:
             deleted.append(path)
     touches_shipped = any(SOURCE.match(path) for _, path in changes)
     if touches_shipped and not any(unpaired.values()):
         errors.append(
-            f"this PR changes shipped files but adds no {FRAGMENT_DIR}/<number>.<type>.md; "
+            f"this PR changes shipped files but adds no {FRAGMENT_DIR}/<number>[-<n>].<type>.md; "
             f"add one (see CONTRIBUTING.md) or apply the '{SKIP_LABEL}' label"
         )
     # Only the release fold, which deletes every fragment it folds in, edits
@@ -102,7 +118,7 @@ def check(
     edits_changelog = any(path == "CHANGELOG.md" for _, path in changes)
     if edits_changelog and not folds:
         errors.append(
-            f"this PR edits CHANGELOG.md; put the entry in {FRAGMENT_DIR}/<number>.<type>.md "
+            f"this PR edits CHANGELOG.md; put the entry in {FRAGMENT_DIR}/<number>[-<n>].<type>.md "
             f"instead, or apply the '{SKIP_LABEL}' label"
         )
     # A fragment leaves only by being folded into CHANGELOG.md; deleting one
@@ -130,7 +146,7 @@ def assemble(changelog: str, fragments: dict[str, str]) -> str:
         len(lines),
     )
     section = lines[start:end]
-    ordered = sorted(fragments, key=lambda n: (int(FRAGMENT.match(n)[1]), n))
+    ordered = sorted(fragments, key=lambda n: (*_order(n), n))
     for kind in TYPES:
         body = [
             fragments[n].strip("\n") for n in ordered if FRAGMENT.match(n)[2] == kind

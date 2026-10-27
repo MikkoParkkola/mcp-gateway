@@ -152,7 +152,7 @@ backend" and "fails a capability file" first.**
 | 125 | A 2026-07-28 `subscriptions/listen` stream opens with a `notifications/subscriptions/acknowledged` notification instead of a JSON-RPC response | A client that read the subscription id from the response `result` reads it from the notification `params._meta` |
 | 126 | `mcp-gateway add <registry name>` writes the server's `${VAR}` env or header references, its OAuth stanza and its transport dialect; it writes the server disabled when a reference does not resolve or the server can reach any address (Playwright, Chrome DevTools, fetch, git without a pinned repository). `init` (local profile) enables memory, sequential-thinking, context7 and time. Enabling a backend with an unresolved reference is refused | Set the named variable, then `enabled: true`; nothing changes for backends already in `gateway.yaml` |
 | 127 | `service: cli` capabilities now run: a pinned capability whose command is on the `capabilities.process_commands` list starts a local process (no shell, private directories, cleared environment). Unpinned ones and unlisted commands are refused | Set `capabilities.process_execution: disabled` to keep the 3.x behaviour; list your own CLI capabilities in `capabilities.process_commands`; set `capabilities.files.*` roots for path parameters |
-| 128 | MCP Events: a subscription to `backend.<name>.resource_updated`, `resources_changed` or `prompts_changed` on an SSE-handshake HTTP, A2A, identity-propagating (personal or external account included) or (multi-user) per-user OAuth backend answers `-32014` naming the reason, never a silent subscription; stdio, WebSocket and streamable HTTP backends offer the three events | Set `streamable_http: true` where the backend speaks it; otherwise poll `resources/list` or `prompts/list` for that backend |
+| 128 | MCP Events: `backend.<name>.resource_updated`, `resources_changed` and `prompts_changed` are offered for every HTTP transport, stdio and WebSocket; an identity-propagating or managed/external-account backend is listened to once per subscriber, as that subscriber; A2A resource and prompt kinds, and a personal OAuth login on a multi-user gateway, still answer `-32014` naming the reason | Subscribe to an identity-bound backend as a caller with a verified identity; on a `passthrough` backend, lease the token with `events/lease`; for a personal OAuth backend on a multi-user gateway, poll `resources/list` or `prompts/list` |
 | 129 | A capability that declares `auth.required: true` is left out of `tools/list` and search until its credential exists (an environment or `env_files` variable that is set and non-empty, or a stored login for its `oauth:` provider); 79 bundled capabilities declare it. A `keychain:` or `file:` key and a per-caller account credential cannot be checked here and stay listed | Set the key the capability names; a call to a hidden capability by name is unchanged |
 | 130 | With `tenant_guard.arg_keys` set, every frame the gateway sends a caller (answers, errors, notifications and server requests, on every transport) is checked: a caller whose frames name more than one tenant inside `window_secs` gets a `tenant_read` audit record with `cross_tenant_read: flagged`, or `unattributable` without an identity (for an answer on `POST /mcp`, `/mcp/{name}` or stdio the fields ride its `response_delivery_attempt` record); an unreadable response counts as a tenant of its own. The new key `tenant_guard.cross_tenant_reads` takes `off`, `observe` (default) or `block`. Tenant ids are compared across backends | None. Set `off` to silence it, or `block` to withhold such frames; namespace tenant ids that two backends reuse |
 | 131 | A capability `webhooks:` route that names no `method` accepts `POST`, as its documentation said; it accepted only `GET`, so a sender that POSTed got 405 | A route that relied on the `GET` default: add `method: GET` |
@@ -3708,25 +3708,33 @@ REST with an empty URL. It now runs the command, under these rules:
 capabilities, pin them (`mcp-gateway cap pin`) and list their commands in
 `capabilities.process_commands` (the list then replaces the default).
 
-## 128. Backend upstream events are refused where the gateway cannot listen
+## 128. Backend upstream events: per-subscriber listening, and what is still refused
 
-**Startup:** no notice, a subscription to such an event answers -32014
+**Startup:** no notice, a subscription to a refused event answers -32014
 
 MCP Events turns a backend's `notifications/resources/updated`,
 `notifications/resources/list_changed` and `notifications/prompts/list_changed` into the events
 `backend.<name>.resource_updated`, `backend.<name>.resources_changed` and
-`backend.<name>.prompts_changed`, listened for on one shared connection per backend while an
-event subscription needs it (stdio, WebSocket, streamable HTTP). A `resource_updated`
-subscription names a `uri` from the backend's own resource list; bursts of one kind become one
-event per second.
-The four kinds of backend below do not offer them in 4.0, and say why:
+`backend.<name>.prompts_changed`, listened for while an event subscription needs it, on stdio,
+WebSocket and both HTTP transports (streamable HTTP and the SSE handshake). A
+`resource_updated` subscription names a `uri` from the backend's own resource list; bursts of one
+kind become one event per second.
+
+A backend whose credential is the gateway's own is listened to on one shared connection. A
+backend reached with a propagated identity (`signed_assertion`, `token_exchange`, `passthrough`),
+or through an `account` whose descriptor is `personal_managed` or `external`, is listened to once
+per subscriber, as that subscriber: each request the listener sends carries the subscriber's own
+credential, never the gateway's, and each change reaches only the subscribers it was observed
+for. Such a subscription needs a caller with a verified identity (OIDC or a key-server token); a
+caller without one is refused `-32012`. A subscription whose backend's identity configuration
+changes is revoked (`-32012`) rather than moved to the new configuration.
+
+Two kinds of backend still do not offer these events, and say why:
 
 | Backend | `data.reason` | Why |
 |---|---|---|
-| `http_url` without `streamable_http: true` (the SSE handshake, `/sse` or not) | `sse_handshake_transport` | the handshake stream is read only up to its `endpoint` event |
-| `a2a_url` | `a2a_transport` | A2A carries no MCP notifications |
-| an `identity_propagation` block (`required: false` included), or an `account` whose descriptor is `personal_managed` or `external` | `identity_propagation` | the shared connection would observe under the gateway's credential, not the subscriber's |
-| a per-user OAuth login (`oauth` without `shared_account: true`), on a multi-user gateway | `per_user_credential` | as above: the credential is one person's |
+| `a2a_url` (its resource and prompt kinds; per subscriber on an identity-bound agent, `tools_changed` too) | `a2a_no_such_capability` | A2A carries no MCP notifications |
+| a per-user OAuth login (`oauth` without `shared_account: true`) with no identity propagation, on a multi-user gateway | `per_user_credential` | no listener can act as each subscriber |
 
 `events/list` does not list these names for such a backend. `events/subscribe` on one answers
 `-32014 Unsupported` with `data = {"feature": "backendEvents", "value": <name>, "reason": <reason>}`,
@@ -3734,8 +3742,10 @@ before any callback traffic, to a caller who may reach the backend; any other ca
 `-32011`, the answer for a name that does not exist. A disabled backend (`enabled: false`) is
 absent and also answers `-32011`.
 
-**Action:** set `streamable_http: true` on an HTTP backend that speaks streamable HTTP. For the
-others, poll `resources/list` or `prompts/list` instead.
+**Action:** none for a shared backend. On an identity-bound backend, subscribe as a caller with a
+verified identity. For a personal OAuth backend on a multi-user gateway, poll `resources/list` or
+`prompts/list` instead. A `passthrough` backend also needs its subscribers to lease their token
+(see the passthrough lease item).
 
 ## 129. A capability that needs a login is listed once the login exists
 
@@ -4767,15 +4777,22 @@ mounted. Derived items work out their value when unset. Removed items are refuse
 | Item | Class | What 4.0 does | Why |
 |---|---|---|---|
 | `/sse` | hidden | unchanged; listed as a deprecation helper |  |
-| `/ui/api/backends`, `/ui/api/backends/{name}`, `/ui/api/backends/{name}/revive`, `/ui/api/capabilities`, `/ui/api/capabilities/{name}`, `/ui/api/config`, `/ui/api/control-plane`, `/ui/api/control-plane/decisions`, `/ui/api/control-plane/export-status`, `/ui/api/control-plane/grants`, `/ui/api/control-plane/policies`, `/ui/api/costs`, `/ui/api/dashboard-link`, `/ui/api/events/dead-letters/replay`, `/ui/api/events/dead-letters/{id}/replay`, `/ui/api/import/openapi`, `/ui/api/import/openapi/preview`, `/ui/api/registry`, `/ui/api/registry/search`, `/ui/api/reload`, `/ui/api/status`, `/ui/api/tools` | hidden | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface |  |
+| `/ui/api/activity` | hidden | the Activity list: admin, a mapped auditor, or a mapped developer's own calls; any other credential 403 (UPGRADING 176); documented as the bundled UI's private API, not an integration surface |  |
+| `/ui/api/activity/export` | hidden | the Activity export: signed NDJSON (409 without a provenance key) or CSV, same access as the list; checked offline by `audit verify --export` |  |
+| `/ui/api/activity/{id}` | hidden | one Activity row's receipt, same access as the list; 404 for a row the caller may not read |  |
+| `/ui/api/backends`, `/ui/api/backends/{name}`, `/ui/api/backends/{name}/revive`, `/ui/api/capabilities`, `/ui/api/capabilities/{name}`, `/ui/api/capabilities/{name}/validate`, `/ui/api/config`, `/ui/api/control-plane`, `/ui/api/control-plane/decisions`, `/ui/api/control-plane/export-status`, `/ui/api/control-plane/grants`, `/ui/api/control-plane/policies`, `/ui/api/costs`, `/ui/api/dashboard-link`, `/ui/api/events/dead-letters/replay`, `/ui/api/events/dead-letters/{id}/replay`, `/ui/api/import/openapi`, `/ui/api/import/openapi/preview`, `/ui/api/overview`, `/ui/api/registry`, `/ui/api/registry/search`, `/ui/api/reload`, `/ui/api/status`, `/ui/api/tools` | hidden | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface |  |
 | `/ui/api/events/dead-letters` | hidden | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface; MIK-8697: a row names its subscription as `subscriptionAlias` (keyed) and `subscriptionId` is removed, and the `subscription` filter takes the alias or a stored id |  |
 | `/ui/api/events/held` | hidden | admin only, like the dead-letter listing; held webhook subscriptions per type (MIK-8057) |  |
+| `/ui/api/events/leases` | hidden | admin only, like the dead-letter listing; each passthrough event subscription's held credential, never the token |  |
+| `/ui/api/markers` | hidden | admin only; restarts, upgrades, reloads, pauses and switch-offs for the charts |  |
+| `/ui/api/metrics/series` | hidden | admin only; windowed call counters for the charts (ADR-017) |  |
 | `/ui/api/previews` | hidden | admin only; describe-then-confirm start-once preview of a server before it is added, nothing persisted |  |
+| `/ui/api/refusals` | hidden | admin-only read of what the gateway refused to apply and how to fix it; documented as the bundled UI's private API, not an integration surface |  |
 | `/ui/assets/{file}` | hidden | none: the UI's own files, not an integration surface |  |
 ### Library items
 
 | Item | Class | What 4.0 does | Why |
 |---|---|---|---|
-| `mcp_gateway::Error`, `mcp_gateway::InitializedStore`, `mcp_gateway::MCP_PROTOCOL_VERSION`, `mcp_gateway::MigratedCredential`, `mcp_gateway::OfflineInitError`, `mcp_gateway::OfflineMigrationError`, `mcp_gateway::Result`, `mcp_gateway::SecretStoreReport`, `mcp_gateway::attestation`, `mcp_gateway::autotag`, `mcp_gateway::backend`, `mcp_gateway::cache`, `mcp_gateway::capability`, `mcp_gateway::chains`, `mcp_gateway::cli`, `mcp_gateway::config`, `mcp_gateway::config_persistence`, `mcp_gateway::config_reload`, `mcp_gateway::context_compression`, `mcp_gateway::context_integrity`, `mcp_gateway::control_plane`, `mcp_gateway::cost_accounting`, `mcp_gateway::discovery`, `mcp_gateway::doctor_report`, `mcp_gateway::error`, `mcp_gateway::failsafe`, `mcp_gateway::gateway`, `mcp_gateway::honest_task_tokens`, `mcp_gateway::idempotency`, `mcp_gateway::identity_grants`, `mcp_gateway::identity_propagation`, `mcp_gateway::initialize_store_offline`, `mcp_gateway::key_server`, `mcp_gateway::kill_switch`, `mcp_gateway::kubernetes`, `mcp_gateway::metrics`, `mcp_gateway::migrate_legacy_credential_offline`, `mcp_gateway::mtls`, `mcp_gateway::oauth`, `mcp_gateway::playbook`, `mcp_gateway::projection`, `mcp_gateway::protocol`, `mcp_gateway::protocol_imports`, `mcp_gateway::protocol_revision_telemetry`, `mcp_gateway::provider`, `mcp_gateway::ranking`, `mcp_gateway::registry`, `mcp_gateway::routing_profile`, `mcp_gateway::runtime`, `mcp_gateway::scheduler`, `mcp_gateway::secret_injection`, `mcp_gateway::secrets`, `mcp_gateway::security`, `mcp_gateway::semantic_search`, `mcp_gateway::setup_tracing`, `mcp_gateway::simhash`, `mcp_gateway::skills`, `mcp_gateway::stats`, `mcp_gateway::tool_profiles`, `mcp_gateway::tool_registry`, `mcp_gateway::tracing_context`, `mcp_gateway::transform`, `mcp_gateway::transition`, `mcp_gateway::transport`, `mcp_gateway::trust`, `mcp_gateway::validator` | hidden | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise |  |
+| `mcp_gateway::Error`, `mcp_gateway::InitializedStore`, `mcp_gateway::MCP_PROTOCOL_VERSION`, `mcp_gateway::MigratedCredential`, `mcp_gateway::OfflineInitError`, `mcp_gateway::OfflineMigrationError`, `mcp_gateway::Result`, `mcp_gateway::SecretStoreReport`, `mcp_gateway::attestation`, `mcp_gateway::autotag`, `mcp_gateway::backend`, `mcp_gateway::cache`, `mcp_gateway::capability`, `mcp_gateway::chains`, `mcp_gateway::cli`, `mcp_gateway::config`, `mcp_gateway::config_persistence`, `mcp_gateway::config_reload`, `mcp_gateway::context_compression`, `mcp_gateway::context_integrity`, `mcp_gateway::control_plane`, `mcp_gateway::cost_accounting`, `mcp_gateway::discovery`, `mcp_gateway::doctor_report`, `mcp_gateway::error`, `mcp_gateway::failsafe`, `mcp_gateway::gateway`, `mcp_gateway::honest_task_tokens`, `mcp_gateway::idempotency`, `mcp_gateway::identity_grants`, `mcp_gateway::identity_propagation`, `mcp_gateway::initialize_store_offline`, `mcp_gateway::key_server`, `mcp_gateway::kill_switch`, `mcp_gateway::kubernetes`, `mcp_gateway::lock_directory_finding`, `mcp_gateway::metrics`, `mcp_gateway::migrate_legacy_credential_offline`, `mcp_gateway::mtls`, `mcp_gateway::oauth`, `mcp_gateway::playbook`, `mcp_gateway::preview_sandbox`, `mcp_gateway::projection`, `mcp_gateway::protocol`, `mcp_gateway::protocol_imports`, `mcp_gateway::protocol_revision_telemetry`, `mcp_gateway::provider`, `mcp_gateway::ranking`, `mcp_gateway::registry`, `mcp_gateway::routing_profile`, `mcp_gateway::runtime`, `mcp_gateway::scheduler`, `mcp_gateway::secret_injection`, `mcp_gateway::secrets`, `mcp_gateway::security`, `mcp_gateway::semantic_search`, `mcp_gateway::setup_tracing`, `mcp_gateway::simhash`, `mcp_gateway::skills`, `mcp_gateway::stats`, `mcp_gateway::tool_profiles`, `mcp_gateway::tool_registry`, `mcp_gateway::tracing_context`, `mcp_gateway::transform`, `mcp_gateway::transition`, `mcp_gateway::transport`, `mcp_gateway::trust`, `mcp_gateway::validator` | hidden | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise |  |
 
 <!-- surface-appendix:end -->

@@ -242,10 +242,11 @@ async fn w_a_watcher_driven_config_reload_applies_a_revocation() {
         )),
         Some(sink),
         None,
-        None,
+        (None, None),
         event_rx,
         shutdown_rx,
         Arc::default(),
+        super::refusals::ReloadReporting::default(),
     );
     event_tx
         .send(ReloadTrigger::ConfigFile)

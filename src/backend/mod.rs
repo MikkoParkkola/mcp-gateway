@@ -32,6 +32,8 @@ mod descriptor_gate;
 mod era;
 mod fill_check;
 mod identity_slots;
+/// The identity-slot budget, which also bounds per-user event listeners.
+pub(crate) use identity_slots::{MAX_IDENTITY_SLOTS, MAX_SLOTS_PER_PRINCIPAL};
 mod input_keys;
 mod lifecycle;
 mod list_drain;
@@ -46,6 +48,9 @@ mod registry;
 mod repin;
 mod restart;
 mod runtime_launch;
+// The web UI's status rows are its only reader.
+#[cfg(feature = "webui")]
+pub(crate) mod server_state;
 mod status;
 mod stdio_start;
 mod stop;

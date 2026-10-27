@@ -628,3 +628,36 @@ fn p16_a_refusal_re_read_renders_the_view_a_failure_then_keeps() {
         "P16: the previous key's view stayed: {servers:?}: {s}"
     );
 }
+
+/// T22 (capability editor): two saves in a row without a reload. The second
+/// names the hash the first answered, not the base first loaded: the bytes a
+/// save writes can differ from the text sent (the pin value, line endings).
+#[test]
+fn a_second_capability_save_names_the_answered_base() {
+    let then = "const ta = el('cap-editor-c'); ta.value = 'x: 1'; ta.dataset.etag = '\"loaded\"';\n\
+                await saveCap('c'); await tick();\n\
+                ta.value = 'x: 2'; await saveCap('c');";
+    let s = run_with(
+        &format!(
+            "{{ '/ui/api/status': [{}], '/ui/api/capabilities/c': [{{ status: 200, body: {{ status: 'saved', sha256: 'first' }} }}, {{ status: 200, body: {{ status: 'saved', sha256: 'second' }} }}] }}",
+            status(
+                200,
+                "{ enabled: true, signed_in: true, admin: true }",
+                false
+            )
+        ),
+        then,
+        &format!(
+            "globalThis.refreshCapabilities = () => {{}};\n{}",
+            function("async function saveCap(")
+        ),
+    );
+    let bases: Vec<&str> = s["sent"]
+        .as_array()
+        .expect("sent requests")
+        .iter()
+        .filter(|r| r["url"] == "/ui/api/capabilities/c")
+        .filter_map(|r| r["headers"]["If-Match"].as_str())
+        .collect();
+    assert_eq!(bases, ["\"loaded\"", "\"first\""], "{s}");
+}

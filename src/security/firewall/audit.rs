@@ -187,6 +187,7 @@ impl AuditLogger {
             external_server: server,
             external_tool: tool,
             subject: None,
+            trace_id: None,
         };
         self.log_request_attributed(&correlation, args, verdict, &BTreeSet::new());
     }
@@ -206,6 +207,7 @@ impl AuditLogger {
             external_server: server,
             external_tool: tool,
             subject: _,
+            trace_id: _,
         } = *correlation;
         let tenants = (!tenants.is_empty()).then(|| {
             let hashed: BTreeSet<String> = tenants
@@ -288,6 +290,7 @@ impl AuditLogger {
                 external_server: server,
                 external_tool: tool,
                 subject: None,
+                trace_id: None,
             },
             &[ResponsePolicyTarget {
                 server: server.into(),
@@ -537,6 +540,7 @@ mod tests {
             external_server: "srv",
             external_tool: "t",
             subject: None,
+            trace_id: None,
         };
         logger.log_dispatch(
             &correlation,

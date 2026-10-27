@@ -649,6 +649,7 @@ async fn a_refresh_inside_the_grace_period_answers_not_found_and_keeps_the_row()
     assert!(before.is_some(), "beta's row outlives the startup pass");
     let caller = crate::events::Caller {
         principal: Some("p".to_owned()),
+        identity: None,
         read_key: None,
         credential: crate::events::Credential {
             kind: crate::security::audit::CredentialKind::None,

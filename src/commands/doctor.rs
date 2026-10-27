@@ -24,6 +24,8 @@ use serde_json::{Value, json};
 
 mod health;
 mod hidden_keys;
+mod lease_custody;
+mod lock_dirs;
 mod npm_pin;
 mod posture;
 mod provenance;
@@ -239,11 +241,14 @@ pub async fn run_doctor_command(
     // ── 7. AI client configuration ─────────────────────────────────────────
     results.push(check_ai_client_config(&config).await);
     results.push(posture::check_security_posture(&config));
+    results.push(lock_dirs::check_lock_directories(&config));
 
     // ── 8. Passive ShadowRadar handoff ─────────────────────────────────────
     results.extend(check_shadow_radar(&config, config_path).await);
     // ── 9. Remote backend provenance (#1943) ──────────────────────────────
     results.extend(provenance::check_remote_provenance(&config));
+    // ── 10. Passthrough event-lease custody ────────────────────
+    results.extend(lease_custody::check_passthrough_custody(&config));
 
     // ── Print and summarize ────────────────────────────────────────────────
     print_results(&results, format);
