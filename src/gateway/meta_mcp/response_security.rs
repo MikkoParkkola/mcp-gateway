@@ -123,7 +123,7 @@ pub(crate) fn meta_response_targets(
                 external_tool
             }
             .to_owned(),
-            no_backend: true,
+            origin: crate::security::response_policy::TargetOrigin::NoBackend,
         }];
     }
     let mut targets: Vec<_> = targets
@@ -131,7 +131,7 @@ pub(crate) fn meta_response_targets(
         .map(|target| ResponsePolicyTarget {
             server: target.server.clone(),
             tool: target.tool.clone(),
-            no_backend: false,
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         })
         .collect();
     targets.sort();

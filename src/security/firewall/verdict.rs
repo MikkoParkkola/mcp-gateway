@@ -112,8 +112,8 @@ pub(super) fn compile_rule(rule: &FirewallRule) -> CompiledRule {
             .iter()
             .flatten()
             .map(|entry| CompiledException {
-                server: entry.server.as_deref().map(|g| glob::Pattern::new(g).ok()),
-                tool: entry.tool.as_deref().map(|g| glob::Pattern::new(g).ok()),
+                server: ExceptGlob::of(entry.server.as_deref()),
+                tool: ExceptGlob::of(entry.tool.as_deref()),
                 key: entry.key.clone(),
             })
             .collect(),
@@ -121,16 +121,32 @@ pub(super) fn compile_rule(rule: &FirewallRule) -> CompiledRule {
     }
 }
 
-/// One compiled `except` entry. A field that is `Some(None)` held a glob that
-/// did not parse (refused at load) and matches nothing.
+/// One compiled `except` entry.
 #[derive(Debug, Clone)]
 pub(super) struct CompiledException {
-    server: Option<Option<glob::Pattern>>,
-    tool: Option<Option<glob::Pattern>>,
+    server: ExceptGlob,
+    tool: ExceptGlob,
     key: Option<String>,
 }
 
+/// One glob field of an `except` entry.
+#[derive(Debug, Clone)]
+enum ExceptGlob {
+    /// Not set: any value matches.
+    Any,
+    /// Set; `None` held a glob that did not parse (refused at load) and
+    /// matches nothing.
+    Set(Option<glob::Pattern>),
+}
+
+impl ExceptGlob {
+    fn of(glob: Option<&str>) -> Self {
+        glob.map_or(Self::Any, |g| Self::Set(glob::Pattern::new(g).ok()))
+    }
+}
+
 /// Whether `rule`'s `match` glob covers `tool`, ignoring its scopes.
+#[cfg(test)]
 pub(super) fn rule_matches(rule: &CompiledRule, tool: &str) -> bool {
     glob_covers(rule.pattern.as_ref(), tool)
 }
@@ -150,14 +166,15 @@ impl CompiledException {
     /// Every field the entry sets matches the call. `key` is the one concrete
     /// key being resolved (`None`: no key).
     fn matches(&self, target: RuleTarget<'_>, key: Option<&str>) -> bool {
-        self.server
-            .as_ref()
-            .is_none_or(|g| server_covered(std::slice::from_ref(g), target.server))
-            && self
-                .tool
-                .as_ref()
-                .is_none_or(|g| glob_covers(g.as_ref(), target.tool))
-            && self.key.as_deref().is_none_or(|k| key == Some(k))
+        let server = match &self.server {
+            ExceptGlob::Any => true,
+            ExceptGlob::Set(g) => server_covered(std::slice::from_ref(g), target.server),
+        };
+        let tool = match &self.tool {
+            ExceptGlob::Any => true,
+            ExceptGlob::Set(g) => glob_covers(g.as_ref(), target.tool),
+        };
+        server && tool && self.key.as_deref().is_none_or(|k| key == Some(k))
     }
 }
 

@@ -60,7 +60,7 @@ fn targets() -> [ResponsePolicyTarget; 1] {
     [ResponsePolicyTarget {
         server: "origin-backend".into(),
         tool: "ask_user".into(),
-        no_backend: false,
+        origin: crate::security::response_policy::TargetOrigin::Routed,
     }]
 }
 

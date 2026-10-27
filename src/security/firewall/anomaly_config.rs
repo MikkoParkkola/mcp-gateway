@@ -103,6 +103,39 @@ pub(crate) fn refuse_keyless_http_anomaly(config: &crate::config::Config) -> Res
     Ok(())
 }
 
+/// The scope keys of rule `i` (`servers`, `keys`, `except`): an absent key
+/// means unscoped, so an empty list is refused rather than read as "nothing";
+/// every glob must parse; an exception must set a field. Paths, never values.
+fn validate_rule_scope(i: usize, rule: &super::FirewallRule) -> Result<(), String> {
+    let path = format!("security.firewall.rules[{i}]");
+    let invalid = |glob: &str| glob::Pattern::new(glob).is_err();
+    for (key, empty) in [
+        ("servers", rule.servers.as_ref().is_some_and(Vec::is_empty)),
+        ("keys", rule.keys.as_ref().is_some_and(Vec::is_empty)),
+        ("except", rule.except.as_ref().is_some_and(Vec::is_empty)),
+    ] {
+        if empty {
+            return Err(format!(
+                "{path}.{key} must not be empty; leave it out to apply to all"
+            ));
+        }
+    }
+    if let Some(j) = rule.servers.iter().flatten().position(|g| invalid(g)) {
+        return Err(format!("{path}.servers[{j}] is not a valid glob"));
+    }
+    for (j, entry) in rule.except.iter().flatten().enumerate() {
+        if entry.server.is_none() && entry.tool.is_none() && entry.key.is_none() {
+            return Err(format!("{path}.except[{j}] sets no field"));
+        }
+        for (field, glob) in [("server", &entry.server), ("tool", &entry.tool)] {
+            if glob.as_deref().is_some_and(invalid) {
+                return Err(format!("{path}.except[{j}].{field} is not a valid glob"));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::config::Config;
@@ -206,37 +239,4 @@ mod tests {
             );
         }
     }
-}
-
-/// The scope keys of rule `i` (`servers`, `keys`, `except`): an absent key
-/// means unscoped, so an empty list is refused rather than read as "nothing";
-/// every glob must parse; an exception must set a field. Paths, never values.
-fn validate_rule_scope(i: usize, rule: &super::FirewallRule) -> Result<(), String> {
-    let path = format!("security.firewall.rules[{i}]");
-    let invalid = |glob: &str| glob::Pattern::new(glob).is_err();
-    for (key, empty) in [
-        ("servers", rule.servers.as_ref().is_some_and(Vec::is_empty)),
-        ("keys", rule.keys.as_ref().is_some_and(Vec::is_empty)),
-        ("except", rule.except.as_ref().is_some_and(Vec::is_empty)),
-    ] {
-        if empty {
-            return Err(format!(
-                "{path}.{key} must not be empty; leave it out to apply to all"
-            ));
-        }
-    }
-    if let Some(j) = rule.servers.iter().flatten().position(|g| invalid(g)) {
-        return Err(format!("{path}.servers[{j}] is not a valid glob"));
-    }
-    for (j, entry) in rule.except.iter().flatten().enumerate() {
-        if entry.server.is_none() && entry.tool.is_none() && entry.key.is_none() {
-            return Err(format!("{path}.except[{j}] sets no field"));
-        }
-        for (field, glob) in [("server", &entry.server), ("tool", &entry.tool)] {
-            if glob.as_deref().is_some_and(invalid) {
-                return Err(format!("{path}.except[{j}].{field} is not a valid glob"));
-            }
-        }
-    }
-    Ok(())
 }

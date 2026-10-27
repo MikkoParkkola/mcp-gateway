@@ -86,7 +86,7 @@ fn firewall_pass(mut artifact: Value) -> (FirewallVerdict, Value, Vec<Value>) {
             &[ResponsePolicyTarget {
                 server: "cap".into(),
                 tool: "tool".into(),
-                no_backend: false,
+                origin: crate::security::response_policy::TargetOrigin::Routed,
             }],
             &ResponseCorrelation {
                 session_id: "s",

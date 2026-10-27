@@ -353,7 +353,7 @@ async fn the_suites_firewall_delivers_a_minted_continuation() {
     let targets = [ResponsePolicyTarget {
         server: BACKEND.to_string(),
         tool: TOOL.to_string(),
-        no_backend: false,
+        origin: crate::security::response_policy::TargetOrigin::Routed,
     }];
     let context = ResponseDeliveryContext {
         method: "tools/call",

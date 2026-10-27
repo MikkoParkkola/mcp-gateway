@@ -380,7 +380,7 @@ async fn delivery_attempt_append_is_bounded() {
                 targets: &[ResponsePolicyTarget {
                     server: "alpha".into(),
                     tool: "read".into(),
-                    no_backend: false,
+                    origin: crate::security::response_policy::TargetOrigin::Routed,
                 }],
                 correlation: ResponseCorrelation {
                     session_id: "s",
@@ -431,7 +431,7 @@ async fn withheld_call_leaves_no_delivery_attempt_row() {
                 targets: &[ResponsePolicyTarget {
                     server: "alpha".into(),
                     tool: "read".into(),
-                    no_backend: false,
+                    origin: crate::security::response_policy::TargetOrigin::Routed,
                 }],
                 correlation: ResponseCorrelation {
                     session_id: "s",

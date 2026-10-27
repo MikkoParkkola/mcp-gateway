@@ -127,7 +127,7 @@ pub(crate) async fn poll_capability(
     let targets = [crate::security::response_policy::ResponsePolicyTarget {
         server: target.backend.clone(),
         tool: target.capability.clone(),
-        no_backend: false,
+        origin: crate::security::response_policy::TargetOrigin::Routed,
     }];
     state
         .meta_mcp

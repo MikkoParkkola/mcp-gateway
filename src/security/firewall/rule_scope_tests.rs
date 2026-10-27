@@ -13,7 +13,7 @@ use crate::security::response_policy::{
 use serde_json::{Value, json};
 
 /// A firewall built from config JSON, as gateway.yaml would deserialize it.
-fn firewall(rules: Value) -> Firewall {
+fn firewall(rules: &Value) -> Firewall {
     let config: FirewallConfig = serde_json::from_value(json!({
         "enabled": true,
         "scan_requests": true,
@@ -46,7 +46,7 @@ fn answer(fw: &Firewall, targets: &[&str]) -> FirewallAction {
         .map(|server| ResponsePolicyTarget {
             server: (*server).to_string(),
             tool: "t".to_string(),
-            no_backend: false,
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         })
         .collect();
     let correlation = ResponseCorrelation {
@@ -73,7 +73,7 @@ fn answer(fw: &Firewall, targets: &[&str]) -> FirewallAction {
 /// where the injection falls through to its default.
 #[test]
 fn a_servers_scoped_rule_is_skipped_on_another_backend_request() {
-    let fw = firewall(json!([{"match": "*", "scan": ["shell_injection"],
+    let fw = firewall(&json!([{"match": "*", "scan": ["shell_injection"],
                               "action": "allow", "servers": ["a"]}]));
     assert_eq!(request(&fw, "a"), FirewallAction::Allow, "applies on a");
     assert_eq!(request(&fw, "b"), FirewallAction::Block, "skipped on b");
@@ -82,7 +82,7 @@ fn a_servers_scoped_rule_is_skipped_on_another_backend_request() {
 /// A3: the same on the answer side.
 #[test]
 fn a_servers_scoped_rule_is_skipped_on_another_backend_answer() {
-    let fw = firewall(json!([{"match": "*", "scan": ["credentials"],
+    let fw = firewall(&json!([{"match": "*", "scan": ["credentials"],
                               "action": "allow", "servers": ["a"]}]));
     assert_eq!(answer(&fw, &["a"]), FirewallAction::Allow, "applies on a");
     assert_eq!(answer(&fw, &["b"]), FirewallAction::Block, "skipped on b");
@@ -91,7 +91,7 @@ fn a_servers_scoped_rule_is_skipped_on_another_backend_answer() {
 /// A7: an `except` entry exempts exactly its backend; a sibling is judged.
 #[test]
 fn an_except_entry_exempts_exactly_its_backend() {
-    let fw = firewall(json!([{"match": "*", "scan": ["shell_injection"],
+    let fw = firewall(&json!([{"match": "*", "scan": ["shell_injection"],
                               "action": "allow", "except": [{"server": "b"}]}]));
     assert_eq!(
         request(&fw, "a"),
@@ -105,7 +105,7 @@ fn an_except_entry_exempts_exactly_its_backend() {
 /// target order cannot hide it (`b` sorts last).
 #[test]
 fn each_answer_target_resolves_with_its_own_backend() {
-    let fw = firewall(json!([{"match": "*", "scan": ["credentials"],
+    let fw = firewall(&json!([{"match": "*", "scan": ["credentials"],
                               "action": "block", "servers": ["b"]},
                              {"match": "*", "scan": ["credentials"], "action": "allow"}]));
     assert_eq!(answer(&fw, &["a"]), FirewallAction::Allow);
@@ -116,7 +116,7 @@ fn each_answer_target_resolves_with_its_own_backend() {
 /// A12: a skipped scoped rule falls through to the next rule.
 #[test]
 fn a_skipped_scoped_rule_falls_through_to_the_next() {
-    let fw = firewall(json!([{"match": "*", "scan": ["shell_injection"],
+    let fw = firewall(&json!([{"match": "*", "scan": ["shell_injection"],
                               "action": "block", "servers": ["a"]},
                              {"match": "*", "scan": ["shell_injection"], "action": "allow"}]));
     assert_eq!(request(&fw, "b"), FirewallAction::Allow);
@@ -279,7 +279,7 @@ fn keyed(fw: &Firewall, key: KeyOf<'_>) -> FirewallAction {
 /// caller with no key fall through to the default.
 #[test]
 fn a_keys_scoped_rule_applies_to_its_key_only_request() {
-    let fw = firewall(json!([{"match": "*", "scan": ["shell_injection"],
+    let fw = firewall(&json!([{"match": "*", "scan": ["shell_injection"],
                               "action": "allow", "keys": ["k1"]}]));
     assert_eq!(keyed(&fw, KeyOf::Key("k1")), FirewallAction::Allow);
     assert_eq!(keyed(&fw, KeyOf::Key("k2")), FirewallAction::Block);
@@ -289,7 +289,7 @@ fn a_keys_scoped_rule_applies_to_its_key_only_request() {
 /// A5: the same in the dispatch chokepoint's rescan.
 #[test]
 fn a_keys_scoped_rule_applies_to_its_key_only_rescan() {
-    let fw = firewall(json!([{"match": "*", "scan": ["shell_injection"],
+    let fw = firewall(&json!([{"match": "*", "scan": ["shell_injection"],
                               "action": "allow", "keys": ["k1"]}]));
     let rescan = |key| {
         fw.rescan(
@@ -309,7 +309,7 @@ fn a_keys_scoped_rule_applies_to_its_key_only_rescan() {
 /// A6: the same on the answer side, the key carried on the correlation.
 #[test]
 fn a_keys_scoped_rule_applies_to_its_key_only_answer() {
-    let fw = firewall(json!([{"match": "*", "scan": ["credentials"],
+    let fw = firewall(&json!([{"match": "*", "scan": ["credentials"],
                               "action": "allow", "keys": ["k1"]}]));
     let judged = |key| {
         let key_text = ["AKIA", "IOSFODNN7", "EXAMPLE"].concat();
@@ -327,7 +327,7 @@ fn a_keys_scoped_rule_applies_to_its_key_only_answer() {
         let targets = [ResponsePolicyTarget {
             server: "a".to_string(),
             tool: "t".to_string(),
-            no_backend: false,
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         }];
         fw.check_response_artifact(
             &mut value,
@@ -366,7 +366,7 @@ fn resolve(fw: &Firewall, key: KeyOf<'_>, severity: Severity) -> FirewallAction 
 /// where a caller with no key gets the allow.
 #[test]
 fn a_key_not_known_takes_the_strongest_over_candidates_low() {
-    let fw = firewall(json!([
+    let fw = firewall(&json!([
         {"match": "*", "scan": ["credentials"], "action": "warn", "keys": ["k1"]},
         {"match": "*", "scan": ["credentials"], "action": "allow"},
     ]));
@@ -384,7 +384,7 @@ fn a_key_not_known_takes_the_strongest_over_candidates_low() {
 /// to the default block through the no-key candidate, never the warn.
 #[test]
 fn a_key_not_known_takes_the_strongest_over_candidates_high() {
-    let fw = firewall(json!([
+    let fw = firewall(&json!([
         {"match": "*", "scan": ["credentials"], "action": "warn", "keys": ["k1"]},
     ]));
     assert_eq!(
@@ -401,7 +401,7 @@ fn a_key_not_known_takes_the_strongest_over_candidates_high() {
 /// key is not known.
 #[test]
 fn an_except_key_does_not_exempt_a_key_not_known_from_a_block() {
-    let fw = firewall(json!([
+    let fw = firewall(&json!([
         {"match": "*", "scan": ["credentials"], "action": "block", "except": [{"key": "k1"}]},
         {"match": "*", "scan": ["credentials"], "action": "allow"},
     ]));

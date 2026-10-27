@@ -90,7 +90,7 @@ async fn deliver(
             targets: &[ResponsePolicyTarget {
                 server: "backend".into(),
                 tool: "echo".into(),
-                no_backend: false,
+                origin: crate::security::response_policy::TargetOrigin::Routed,
             }],
             correlation: ResponseCorrelation {
                 session_id: "t4-session",

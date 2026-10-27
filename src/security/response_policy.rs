@@ -11,12 +11,23 @@ use serde::Serialize;
 pub(crate) struct ResponsePolicyTarget {
     pub server: String,
     pub tool: String,
-    /// Built for an answer no one backend can be named for (discovery, a
-    /// notification, a target-less meta answer): `server` is the `gateway`
-    /// label, and the scan judges it as every registered backend could have
-    /// sent it (`MetaMcp::expand_targets`).
+    /// Where the target came from; never written to the audit row.
     #[serde(skip)]
-    pub(crate) no_backend: bool,
+    pub(crate) origin: TargetOrigin,
+}
+
+/// Where a [`ResponsePolicyTarget`] came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum TargetOrigin {
+    /// The backend the call was routed to.
+    Routed,
+    /// An answer no one backend can be named for (discovery, a notification,
+    /// a target-less meta answer): `server` is the `gateway` label, and the
+    /// scan judges it as every registered backend could have sent it.
+    NoBackend,
+    /// One of those backends, added by `MetaMcp::expand_targets` for rule
+    /// matching only: the audit row lists the targets the call had.
+    Expanded,
 }
 
 /// The API key a call was authenticated with, for a firewall rule's `keys`

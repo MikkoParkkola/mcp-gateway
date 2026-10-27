@@ -150,7 +150,7 @@ fn c4_a_response_artifact_row_carries_no_content() {
     let targets = [ResponsePolicyTarget {
         server: "srv".to_owned(),
         tool: "t".to_owned(),
-        no_backend: false,
+        origin: crate::security::response_policy::TargetOrigin::Routed,
     }];
     let row = row(|log| {
         log.log_response_artifact(

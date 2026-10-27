@@ -336,7 +336,7 @@ impl Services {
         let targets = [ResponsePolicyTarget {
             server: subject.backend.to_owned(),
             tool: subject.name.to_owned(),
-            no_backend: false,
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         }];
         // The firewall audit names the caller: a subscription owner is keyed
         // for that record (MIK-8697 §16.12).

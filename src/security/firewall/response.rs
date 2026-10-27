@@ -10,7 +10,7 @@ use crate::protocol::continuation::Keyring;
 use crate::security::Severity;
 use crate::security::response_policy::{
     InvalidResponseTargets, ResponseArtifactKind, ResponseCorrelation, ResponseMutationPolicy,
-    ResponsePolicyTarget, RuleTarget, ServerOf,
+    ResponsePolicyTarget, RuleTarget, ServerOf, TargetOrigin,
 };
 
 impl Firewall {
@@ -47,7 +47,7 @@ impl Firewall {
                     combined,
                     self.resolve_action(
                         RuleTarget {
-                            server: if target.no_backend {
+                            server: if target.origin == TargetOrigin::NoBackend {
                                 ServerOf::NoBackend
                             } else {
                                 ServerOf::Backend(&target.server)
@@ -72,7 +72,12 @@ impl Firewall {
             anomaly_score: None,
         };
         if let Some(audit) = &self.audit {
-            audit.log_response_artifact(correlation, &targets, artifact, &verdict);
+            let recorded: Vec<ResponsePolicyTarget> = targets
+                .iter()
+                .filter(|t| t.origin != TargetOrigin::Expanded)
+                .cloned()
+                .collect();
+            audit.log_response_artifact(correlation, &recorded, artifact, &verdict);
         }
         Ok(verdict)
     }

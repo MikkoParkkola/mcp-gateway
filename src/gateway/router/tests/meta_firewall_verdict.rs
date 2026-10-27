@@ -541,12 +541,12 @@ async fn response_artifact_folds_every_target_after_a_single_redacting_scan() {
         ResponsePolicyTarget {
             server: "demo".to_string(),
             tool: "alpha_echo".to_string(),
-            no_backend: false,
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         },
         ResponsePolicyTarget {
             server: "demo".to_string(),
             tool: "zeta_echo".to_string(),
-            no_backend: false,
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         },
     ];
     let mut artifact = json!({

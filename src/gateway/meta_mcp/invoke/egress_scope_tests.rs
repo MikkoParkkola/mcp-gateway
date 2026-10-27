@@ -16,7 +16,7 @@ use crate::protocol::JsonRpcNotification;
 use crate::security::firewall::{Firewall, FirewallConfig};
 
 /// The meta layer over backend `alpha`, its firewall built from `rules`.
-fn meta_with(rules: serde_json::Value) -> Arc<MetaMcp> {
+fn meta_with(rules: &serde_json::Value) -> Arc<MetaMcp> {
     let registry = Arc::new(BackendRegistry::new());
     assert!(registry.register(Arc::new(Backend::new(
         "alpha",
@@ -50,7 +50,7 @@ fn progress() -> JsonRpcNotification {
 /// unnamed origin, ahead of an unscoped `allow`.
 #[test]
 fn a_backend_scoped_block_applies_to_a_notification_of_unnamed_origin() {
-    let meta = meta_with(json!([
+    let meta = meta_with(&json!([
         {"match": "*", "scan": ["credentials"], "action": "block", "servers": ["alpha"]},
         {"match": "*", "scan": ["credentials"], "action": "allow"},
     ]));
@@ -65,7 +65,7 @@ fn a_backend_scoped_block_applies_to_a_notification_of_unnamed_origin() {
 /// the `allow` to decide, so the redacted notification is admitted.
 #[test]
 fn a_block_scoped_to_an_unregistered_backend_does_not_apply() {
-    let meta = meta_with(json!([
+    let meta = meta_with(&json!([
         {"match": "*", "scan": ["credentials"], "action": "block", "servers": ["beta"]},
         {"match": "*", "scan": ["credentials"], "action": "allow"},
     ]));
@@ -78,7 +78,7 @@ fn a_block_scoped_to_an_unregistered_backend_does_not_apply() {
 /// withheld.
 #[test]
 fn the_backend_and_key_cross_product_reaches_a_notification() {
-    let meta = meta_with(json!([
+    let meta = meta_with(&json!([
         {"match": "*", "scan": ["credentials"], "action": "block",
          "servers": ["alpha"], "keys": ["k1"]},
         {"match": "*", "scan": ["credentials"], "action": "allow"},

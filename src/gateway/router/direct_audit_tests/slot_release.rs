@@ -330,7 +330,7 @@ async fn the_fixtures_firewalls_deliver_a_minted_continuation() {
     let targets = [ResponsePolicyTarget {
         server: "alpha".to_string(),
         tool: "t".to_string(),
-        no_backend: false,
+        origin: crate::security::response_policy::TargetOrigin::Routed,
     }];
     let context = ResponseDeliveryContext {
         method: "tools/call",

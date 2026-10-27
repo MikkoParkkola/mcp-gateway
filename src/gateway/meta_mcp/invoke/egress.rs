@@ -220,7 +220,10 @@ impl MetaMcp {
         targets: &[ResponsePolicyTarget],
     ) -> Vec<ResponsePolicyTarget> {
         let mut out = targets.to_vec();
-        if targets.iter().any(|t| t.no_backend) {
+        if targets
+            .iter()
+            .any(|t| t.origin == crate::security::response_policy::TargetOrigin::NoBackend)
+        {
             // Names only: no backend is contacted or dispatched to and no
             // credential resolved; the class row in
             // `boundary_pins/scoped_backends_classes.tsv` pins this one caller.
@@ -230,11 +233,14 @@ impl MetaMcp {
                 .iter()
                 .map(|b| b.name.clone())
                 .collect();
-            for target in targets.iter().filter(|t| t.no_backend) {
+            for target in targets
+                .iter()
+                .filter(|t| t.origin == crate::security::response_policy::TargetOrigin::NoBackend)
+            {
                 out.extend(names.iter().map(|name| ResponsePolicyTarget {
                     server: name.clone(),
                     tool: target.tool.clone(),
-                    no_backend: false,
+                    origin: crate::security::response_policy::TargetOrigin::Expanded,
                 }));
             }
             out.sort();
@@ -298,7 +304,7 @@ impl MetaMcp {
         let targets = [ResponsePolicyTarget {
             server: server.to_owned(),
             tool: tool.to_owned(),
-            no_backend: false,
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         }];
         let correlation = ResponseCorrelation {
             session_id: trace_id,
@@ -370,7 +376,7 @@ impl crate::transport::notification_sink::NotificationScreen for NotificationEgr
         let targets = [ResponsePolicyTarget {
             server: "gateway".to_owned(),
             tool: method.clone(),
-            no_backend: true,
+            origin: crate::security::response_policy::TargetOrigin::NoBackend,
         }];
         let correlation = ResponseCorrelation {
             session_id,
@@ -496,14 +502,14 @@ fn stored_targets(task: &crate::gateway::task_service::CommittedTask) -> Vec<Res
         .map(|t| ResponsePolicyTarget {
             server: t.server.clone(),
             tool: t.tool.clone(),
-            no_backend: false,
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         })
         .collect();
     if recorded.is_empty() {
         vec![ResponsePolicyTarget {
             server: "gateway".to_owned(),
             tool: "tasks/get".to_owned(),
-            no_backend: true,
+            origin: crate::security::response_policy::TargetOrigin::NoBackend,
         }]
     } else {
         recorded
@@ -582,7 +588,7 @@ impl MetaMcp {
         let targets = [ResponsePolicyTarget {
             server: "gateway".to_owned(),
             tool: "tools/list".to_owned(),
-            no_backend: true,
+            origin: crate::security::response_policy::TargetOrigin::NoBackend,
         }];
         let correlation = ResponseCorrelation {
             session_id: "meta:tools/list",
@@ -623,7 +629,7 @@ impl MetaMcp {
         let targets = [ResponsePolicyTarget {
             server: server.to_owned(),
             tool: tool.to_owned(),
-            no_backend: false,
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         }];
         let correlation = ResponseCorrelation {
             session_id: session_id.unwrap_or(tool),

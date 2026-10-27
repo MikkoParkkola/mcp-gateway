@@ -298,7 +298,7 @@ impl AuditLogger {
             &[ResponsePolicyTarget {
                 server: server.into(),
                 tool: tool.into(),
-                no_backend: false,
+                origin: crate::security::response_policy::TargetOrigin::Routed,
             }],
             ResponseArtifactKind::FinalResponse,
             verdict,

@@ -293,7 +293,7 @@ pub(super) fn scan_direct_egress(
     let targets = [ResponsePolicyTarget {
         server: call.server.to_owned(),
         tool: call.tool.to_owned(),
-        no_backend: false,
+        origin: crate::security::response_policy::TargetOrigin::Routed,
     }];
     let correlation = ResponseCorrelation {
         session_id: &session_id,

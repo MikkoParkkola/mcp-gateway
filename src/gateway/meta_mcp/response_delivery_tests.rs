@@ -152,7 +152,7 @@ fn targets() -> [ResponsePolicyTarget; 1] {
     [ResponsePolicyTarget {
         server: "actual-backend".into(),
         tool: "echo".into(),
-        no_backend: false,
+        origin: crate::security::response_policy::TargetOrigin::Routed,
     }]
 }
 
@@ -248,12 +248,12 @@ fn firewall_delivery_all_targets_and_correlation_reach_enforcement() {
         ResponsePolicyTarget {
             server: "allow-backend".into(),
             tool: "permitted".into(),
-            no_backend: false,
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         },
         ResponsePolicyTarget {
             server: "block-backend".into(),
             tool: "restricted".into(),
-            no_backend: false,
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         },
     ];
     for targets in [
@@ -314,7 +314,7 @@ fn firewall_delivery_tools_list_success_is_inspected_and_refused_when_blocked() 
         let targets = [ResponsePolicyTarget {
             server: "gateway".into(),
             tool: "tools/list".into(),
-            no_backend: false,
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         }];
         let original = JsonRpcResponse::success(
             RequestId::String("list-current-id".into()),
