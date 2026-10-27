@@ -28,6 +28,7 @@ src/gateway/meta_mcp/invoke/gate.rs	invisible_at_route	scoped_get	scoped
 src/gateway/meta_mcp/invoke/gate.rs	named_gate_answer	scoped_get	scoped
 src/gateway/meta_mcp/invoke/gate.rs	withheld_invoke_target	scoped_get	scoped
 src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	scoped_get	scoped
+src/gateway/meta_mcp/invoke/propagation.rs	listener_fence_binding	get_for	Background
 src/gateway/meta_mcp/invoke/propagation.rs	mint_listener_credential	get_for	Background
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_credential	get_for	Discovery
 src/gateway/meta_mcp/invoke/step_fingerprint.rs	step_fingerprint	scoped_get	scoped
