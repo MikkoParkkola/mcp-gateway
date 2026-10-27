@@ -301,6 +301,7 @@ impl super::Backend {
         );
         let entry = self.shared_entry();
         *entry.resend_permitted.write() = prepared.resend_permitted;
+        *entry.hint_declared.write() = prepared.hint_declared;
         self.commit_verdicts("", super::Listing::Complete, prepared.verdicts);
         entry.tools_cache.replace(tools, || ());
     }

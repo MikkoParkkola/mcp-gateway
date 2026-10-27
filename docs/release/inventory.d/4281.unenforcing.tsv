@@ -1,0 +1,1 @@
+src/transport/http/startup.rs	reported_server_info	1	Returns the serverInfo the accepted initialize answer carried, as sent, for the preview to clean and show; decides nothing.

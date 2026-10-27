@@ -23,10 +23,8 @@ use super::CheckResult;
 
 mod helpers;
 
-use helpers::{
-    fetch_doc, has_absolute_memory_path, is_exact_version, is_format_char, strip_escapes,
-    usable_proxy,
-};
+use helpers::{fetch_doc, has_absolute_memory_path, is_exact_version, strip_escapes, usable_proxy};
+use mcp_gateway::cli_support::is_format_char;
 
 /// The one registry this check reads.
 pub(super) const REGISTRY_BASE: &str = "https://registry.npmjs.org/";
