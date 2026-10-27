@@ -126,3 +126,15 @@ pub(super) fn arm_extras(mut meta: MetaMcp, extras: &[Extra]) -> MetaMcp {
     }
     meta
 }
+
+/// Tool `t`'s listed input schema under the cell's [`Extra`] switches.
+pub(super) fn listed_schema(extras: &[Extra]) -> serde_json::Value {
+    if extras.contains(&Extra::InvalidSchema) {
+        serde_json::json!("not a schema")
+    } else if extras.contains(&Extra::DeclaredKeys) {
+        serde_json::json!({"type": "object", "properties": {"q": {"type": "string"}},
+                           "additionalProperties": false})
+    } else {
+        serde_json::json!({"type": "object"})
+    }
+}
