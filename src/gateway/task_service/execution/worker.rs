@@ -214,7 +214,13 @@ async fn run_dispatched(
         return;
     }
 
-    let authorizer = state.authorizer(intent.owned.authorizer());
+    // The test seam a reload lands in before this dispatch takes its
+    // generation (the C2e2 and F3 rows).
+    #[cfg(test)]
+    crate::gateway::meta_mcp::visible::seams::task_dispatch_starts();
+    // A queued dispatch is judged by the generation current now (ADR-023).
+    let generation = state.generation();
+    let authorizer = state.authorizer(intent.owned.authorizer(), &generation);
     // Held through the call and an upstream job's follow, released before
     // settling: a parked round ends this worker, and its caller is idle then.
     let key_hold = intent.owned.hold_caller_key(&state);
@@ -232,20 +238,41 @@ async fn run_dispatched(
     // result rather than the synchronous wrapper: design §4 settles a task on
     // that result verbatim, `isError` included, and classifies an interim
     // `input_required` round from it before anything is committed.
-    #[cfg(test)]
-    crate::gateway::meta_mcp::visible::seams::task_dispatch_starts();
     let meta = state.meta_mcp();
-    let dispatch = meta.with_surfaced_pin(
-        &call.tool,
-        recorded,
-        meta.dispatch_below_gate_native_result(
-            RequestId::Number(0),
-            &call.tool,
-            call.arguments.clone(),
-            session_id.as_deref(),
-            &caller,
-        ),
-    );
+    // The pin covers the readmission as well as the dispatch.
+    let dispatch = meta.with_surfaced_pin(&call.tool, recorded, async {
+        // A task whose intake judged nothing (sanitising was off, or nothing
+        // was exempt) is re-admitted under this step's generation, as a resume
+        // is, so one admitted while sanitising was off is sanitised if a reload
+        // turned it on (ADR-023). One whose intake judged an exemption keeps
+        // that judgement: the dispatch compares against it and refuses a
+        // change. A refusal is the dispatch's answer, and nothing is sent.
+        let readmitted = if intent.owned.judged().is_empty() {
+            state
+                .readmit(&call, &caller, (session_id.as_deref(), &generation))
+                .await
+        } else {
+            // The intake's own judgement, not an empty one: the inner scope
+            // shadows the worker's, so an empty one would switch off the
+            // playbook and backend-instance guards this task was admitted under.
+            Ok((call.arguments.clone(), intent.owned.judged()))
+        };
+        let (arguments, judged) = match readmitted {
+            Ok(readmitted) => readmitted,
+            Err(refused) => return *refused,
+        };
+        crate::gateway::meta_mcp::visible::memo::with_judged(
+            judged,
+            meta.dispatch_below_gate_native_result(
+                RequestId::Number(0),
+                &call.tool,
+                arguments,
+                session_id.as_deref(),
+                &caller,
+            ),
+        )
+        .await
+    });
     let dispatch = async {
         match submission.as_ref() {
             Some(submission) => {

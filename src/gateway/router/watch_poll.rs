@@ -105,7 +105,8 @@ pub(crate) async fn poll_capability(
     )
     .with_caller_key(Some(identity));
     let live = owned.host().upgrade().ok_or(PollRefused::Dispatch)?;
-    let authorizer = live.authorizer(owned.authorizer());
+    let generation = live.generation();
+    let authorizer = live.authorizer(owned.authorizer(), &generation);
     let caller = owned.dispatch_context(&live, &authorizer);
     // Read-only, and credential-free for a shared poller, by the definition
     // the executor runs, not only by the catalogue the source read before.
@@ -207,7 +208,8 @@ impl WatchHost for GatewayWatchHost {
             return false;
         };
         let owned = OwnedRouterAuthorizer::capture(Some(&client), None, None);
-        let authorizer = owned.borrow(&state);
+        let generation = state.live_config.generation();
+        let authorizer = owned.borrow(&state, &generation);
         let scope = InvokeScope {
             authorizer: &authorizer,
             is_admin: client.admin,

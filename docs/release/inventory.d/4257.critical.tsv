@@ -1,0 +1,3 @@
+src/gateway/router/mod.rs	pin_generation	1	standard	borderline	pin_generation	Outermost layer: puts the published generation on every request before auth, so every later judgement on the request reads one configuration; a missing pin is refused downstream, never replaced by the current one.
+src/gateway/router/mod.rs	pinned_generation	1	standard	borderline	pinned_generation	Reads the request's pinned generation for the readers that judge it; returns None for a request that never passed the pin layer, which its callers refuse.
+src/gateway/task_service/host.rs	generation	1	standard	a	LiveHost::generation	The generation a queued dispatch or resume step takes and judges by: its authorizer and its re-admission read this one value.
