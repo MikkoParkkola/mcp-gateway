@@ -84,8 +84,10 @@ async fn a_playbook_step_the_policy_refuses_at_dispatch_records_refused() {
         serde_json::to_value(&response).expect("response is JSON")
     })
     .await;
-    assert!(
-        answer.to_string().contains("refused for its arguments"),
+    // A step's refusal is answered neutrally (A3), whatever the policy said.
+    assert_eq!(
+        answer["error"]["message"],
+        crate::gateway::meta_mcp::STEP_NOT_PERMITTED,
         "premise: the dispatch-time refusal ended it: {answer}"
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0, "premise: never sent");
