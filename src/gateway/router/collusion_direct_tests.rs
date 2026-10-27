@@ -51,6 +51,9 @@ enum Read {
     Failed(String),
     /// A result carrying a backend-supplied context-integrity verdict.
     Classified(&'static str),
+    /// A stub result, [`PROSE`] hidden in a backend-planted
+    /// `_context_integrity`, where the relay walk never reads (MIK-9000).
+    HiddenInIntegrity,
     /// [`PROSE`] plus an email address the gateway classifies as personal
     /// data, under a backend-forged `public` verdict.
     ForgedPublic,
@@ -168,6 +171,11 @@ impl Transport for Alpha {
             Read::Pieces(pieces) => {
                 let mut result = text_result("split copy");
                 result["structuredContent"] = relay_split::fields(&pieces);
+                JsonRpcResponse::success(id, result)
+            }
+            Read::HiddenInIntegrity => {
+                let mut result = text_result("a short stub");
+                result["_context_integrity"] = json!({"note": PROSE});
                 JsonRpcResponse::success(id, result)
             }
             Read::Classified(class) => {
