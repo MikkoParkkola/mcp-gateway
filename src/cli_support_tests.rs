@@ -195,21 +195,29 @@ fn when_every_server_is_skipped_nothing_is_written_or_stored() {
 }
 
 #[test]
-fn a_store_refusal_writes_nothing_and_leaves_no_entry() {
+fn a_value_the_store_cannot_keep_skips_its_server_only() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut config = Config::default();
-    // Over the files store's limit, after a value it would take.
+    // One byte over the files store's limit.
     let huge = "x".repeat(64 * 1024);
-    let found = server("tool", &[("A", "zq-small"), ("B", huge.as_str())]);
+    let servers = [
+        server("big", &[("A", "zq-small"), ("B", huge.as_str())]),
+        server("fine", &[("K", "zq-kept")]),
+    ];
 
-    let Err(message) = adopt_with(&mut config, &[found], || Ok(opened(dir.path()))) else {
-        panic!("an oversized value was stored");
-    };
+    let adoption = adopt_with(&mut config, &servers, || Ok(opened(dir.path()))).expect("adopts");
 
-    assert!(message.contains("secrets.store"), "{message}");
-    assert!(!message.contains("zq-small"), "{message}");
-    assert!(config.backends.is_empty());
-    assert_eq!(entries(dir.path()), 0);
+    assert_eq!(
+        adoption.outcomes[0],
+        Outcome::Skipped {
+            name: "big".to_string(),
+            reasons: vec![("value_too_large", "env.B".to_string())],
+        }
+    );
+    adoption.settle(&Ok(()));
+    let names: Vec<&String> = config.backends.keys().collect();
+    assert_eq!(names, ["fine"]);
+    assert_eq!(entries(dir.path()), 1, "only the adopted server's value");
 }
 
 #[test]
@@ -217,12 +225,75 @@ fn an_unopenable_store_writes_nothing() {
     let mut config = Config::default();
     let found = server("tool", &[("A", "zq-small")]);
 
-    let refused = adopt_with(&mut config, &[found], || {
+    let Err(message) = adopt_with(&mut config, &[found], || {
         Err("secrets.store (keychain) refused: locked".to_string())
-    });
+    }) else {
+        panic!("adopted without a store");
+    };
 
-    assert!(refused.is_err());
+    assert!(message.contains("secrets.store"), "{message}");
     assert!(config.backends.is_empty());
+}
+
+/// A later server of a name already offered is skipped: the first wins, and
+/// no entry is made for a backend the file would not name.
+#[test]
+fn a_repeated_name_is_skipped_and_stores_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut config = Config::default();
+    let servers = [
+        server("tool", &[("K", "zq-first")]),
+        server("tool", &[("K", "zq-second")]),
+    ];
+
+    let adoption = adopt_with(&mut config, &servers, || Ok(opened(dir.path()))).expect("adopts");
+
+    assert_eq!(
+        adoption.outcomes[1],
+        Outcome::Skipped {
+            name: "tool".to_string(),
+            reasons: vec![("duplicate_name", "name".to_string())],
+        }
+    );
+    adoption.settle(&Ok(()));
+    assert_eq!(entries(dir.path()), 1);
+    assert_eq!(
+        read_reference(&config.backends["tool"].env["K"]),
+        "zq-first"
+    );
+}
+
+/// Every refusal names its field only: no URL, argument or path reaches the
+/// warning, whichever rule refused.
+#[test]
+fn no_refusal_shows_a_url_or_an_argument() {
+    let mut url = server("remote", &[]);
+    url.transport = TransportConfig::Http {
+        http_url: "https://zq-host.example/mcp?token=zq-query".to_string(),
+        streamable_http: None,
+        protocol_version: None,
+    };
+    let mut args = server("local", &[]);
+    if let TransportConfig::Stdio { command, cwd, .. } = &mut args.transport {
+        *command = "npx ${zq-arg}".to_string();
+        *cwd = Some("zq-relative/dir".to_string());
+    }
+    let mut config = Config::default();
+
+    let Err(message) = adopt_with(&mut config, &[url, args], || Err("unused".to_string())) else {
+        panic!("a refused server was adopted");
+    };
+
+    assert!(message.contains("credential_in_url (url)"), "{message}");
+    assert!(
+        message.contains("needs_client_only_secret (command)"),
+        "{message}"
+    );
+    assert!(
+        message.contains("needs_client_only_secret (cwd)"),
+        "{message}"
+    );
+    assert!(!message.contains("zq-"), "{message}");
 }
 
 /// r4 F4: once the edit returned, a panic (printing the comments note after
@@ -243,13 +314,12 @@ fn f4_a_panic_after_the_edit_keeps_the_entries() {
     assert_eq!(entries(dir.path()), 1, "the entry was deleted on unwind");
 }
 
+/// The writer's last fallible step is the atomic rename, so any error means
+/// the file was not replaced and nothing names the entries.
 #[test]
-fn a_failed_save_keeps_the_entries_unless_it_was_refused_before_writing() {
+fn a_failed_save_removes_the_entries_and_a_saved_one_keeps_them() {
     for (saved, kept) in [
-        (
-            Err("Failed to write gateway.yaml: disk full".to_string()),
-            1,
-        ),
+        (Err("Failed to replace config: disk full".to_string()), 0),
         (Err("Not saved: it would drop comments".to_string()), 0),
         (Ok(()), 1),
     ] {
