@@ -187,15 +187,18 @@ policies once at startup, and a reload that changes `key_server` lists it among
 the changes that need a restart. Until the restart, a person you removed from
 the policies can still exchange a provider token for a new gateway token.
 
-The definitive cut-off is to remove them from the policies and restart. A
-restart also drops every issued key-server token, since the token store is in
-memory.
+The certain cut-off is a restart once no rule admits them. If a rule names only
+them, delete it and restart. If a shared `group` or `domain` rule admits them,
+do not delete a rule other people depend on: disable their account at the
+identity provider, and restart once `key_server.max_oidc_token_age_secs`
+(default 300) has passed, so no provider token issued before the disable is
+still young enough to exchange. A restart also drops every issued key-server
+token, since the token store is in memory.
 
-If a restart has to wait:
+If the restart has to wait, these steps narrow the gap in the meantime; only
+the restart is certain:
 
-1. Disable them at the identity provider. If a shared `group` or `domain` rule
-   admits them, removing them from that group at the provider is the change;
-   do not delete a rule other people depend on.
+1. Disable their account at the identity provider.
 2. Revoke what the gateway already issued them:
    `DELETE /auth/tokens?issuer={issuer}&subject={subject}` with the
    `admin_token`. `issuer` and `subject` are the `iss` and `sub` of their
@@ -205,7 +208,7 @@ If a restart has to wait:
    token issued before it, and the gateway accepts such a token for an
    exchange until it is that old, so a token minted in that window survives
    step 2.
-4. Remove them from the policies, effective on the next restart.
+4. Remove their rule if they have one, and restart as soon as you can.
 
 ### Admins from your identity provider
 

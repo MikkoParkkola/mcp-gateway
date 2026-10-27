@@ -266,8 +266,8 @@ like success:
    policies also takes effect only on restart, which drops every issued
    key-server token. Revoking their token with `DELETE /auth/token/{jti}` cuts
    off that one token, not the person: they can exchange a provider token for
-   a new one. If the restart has to wait, see
-   [Removing a person](MULTI_USER.md#removing-a-person).
+   a new one. For a person a shared rule admits, or a restart that has to
+   wait, see [Removing a person](MULTI_USER.md#removing-a-person).
 4. Call one backend tool as each person and confirm the audit log has a
    record for each call, naming the caller. The requests refused in steps 2
    and 3 are turned away by authentication, before a tool call exists, so
