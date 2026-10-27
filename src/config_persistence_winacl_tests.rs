@@ -481,3 +481,49 @@ fn the_private_create_helpers_make_owner_only_results() {
     crate::private_fs::create_dir_private(&sub).unwrap();
     assert_owner_only("WINACL-T3 create_dir_private", &sub, true);
 }
+
+/// Table rows for the cross-process lock sidecars: every `fs_lock`
+/// constructor leaves an owner-only sidecar. The folder is a plain temporary
+/// one, since the lock refuses a folder that hands Everyone write access.
+#[test]
+fn every_lock_constructor_makes_an_owner_only_sidecar() {
+    use crate::fs_lock::{Attempt, ExclusiveFileLock};
+    use std::time::{Duration, Instant};
+
+    let poll = Duration::from_millis(10);
+    let dir = tempfile::tempdir().unwrap();
+
+    let path = dir.path().join("try-acquire.lock");
+    drop(ExclusiveFileLock::try_acquire(&path).unwrap());
+    assert_owner_only("WINACL-T4 fs_lock try_acquire", &path, false);
+
+    let path = dir.path().join("acquire.lock");
+    drop(ExclusiveFileLock::acquire(&path).unwrap());
+    assert_owner_only("WINACL-T5 fs_lock acquire", &path, false);
+
+    let path = dir.path().join("acquire-until.lock");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    drop(ExclusiveFileLock::acquire_until(&path, poll, deadline).unwrap());
+    assert_owner_only("WINACL-T6 fs_lock acquire_until", &path, false);
+
+    let path = dir.path().join("try-lease.lock");
+    match ExclusiveFileLock::try_lease(&path).unwrap() {
+        Attempt::Taken(lock) => drop(lock),
+        Attempt::Held => panic!("WINACL-T7: a fresh sidecar read as held"),
+        Attempt::Refused(error) => panic!("WINACL-T7: {error}"),
+    }
+    assert_owner_only("WINACL-T7 fs_lock try_lease", &path, false);
+
+    let path = dir.path().join("lease.lock");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    drop(
+        runtime
+            .block_on(ExclusiveFileLock::lease(&path, poll, deadline))
+            .unwrap(),
+    );
+    assert_owner_only("WINACL-T8 fs_lock lease", &path, false);
+}
