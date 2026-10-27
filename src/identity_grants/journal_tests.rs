@@ -342,6 +342,7 @@ async fn t10a_the_lock_spans_the_write_and_the_append() {
         after_grant_write: Some(Box::new(move || {
             let free = crate::fs_lock::ExclusiveFileLock::try_lease(&lock)
                 .expect("lock file usable")
+                .taken()
                 .is_some();
             probe.store(!free, Ordering::SeqCst);
         })),
@@ -658,4 +659,78 @@ fn a_torn_line_digest_matches_its_independent_golden() {
         parsed.torn,
         ["sha256:7ccfa1fbf3940e6f0c0375d87c0f9235a50514e14cb427bdfaf5077987b26ccf"]
     );
+}
+
+/// Windows: a journal lock file that is not owner-only and is held by an
+/// older build reads as busy (no read, no empty baseline), and the reason is
+/// logged so the operator sees why.
+#[cfg(windows)]
+#[test]
+fn a_refused_journal_lock_is_busy_and_logs_why() {
+    let dir = tempfile::tempdir().unwrap();
+    let grants = dir.path().join("grants.yaml");
+    let lock = lock_path(&grants);
+    std::fs::write(&lock, b"").unwrap();
+    let user = crate::private_fs::test_support::user_sid();
+    crate::private_fs::test_support::plant_any(
+        "journal",
+        &lock,
+        &format!("O:{user}D:(A;;FA;;;WD)"),
+    );
+    let holder = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock)
+        .unwrap();
+    holder.try_lock().unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (read, warnings) = crate::test_log_capture::capture_warnings(|| {
+        runtime.block_on(super::journal::read_locked(
+            &grants,
+            std::time::Duration::from_millis(100),
+        ))
+    });
+    assert!(read.is_none(), "busy, not read");
+    assert!(
+        warnings.contains("grant journal lock file refused"),
+        "{warnings}"
+    );
+    drop(holder);
+}
+
+/// Windows: a lock directory other accounts can write is refused like a
+/// refused lock file: busy, so no start-up seeds an empty grant baseline from
+/// a grant file it never read.
+#[cfg(windows)]
+#[test]
+fn a_refused_journal_lock_directory_is_busy_not_unreadable() {
+    let parent = tempfile::tempdir().unwrap();
+    let dir = parent.path().join("grants");
+    std::fs::create_dir(&dir).unwrap();
+    let user = crate::private_fs::test_support::user_sid();
+    crate::private_fs::test_support::plant_any(
+        "journal dir",
+        &dir,
+        &format!("O:{user}D:P(A;OICI;FA;;;{user})(A;OICI;0x1301bf;;;WD)"),
+    );
+    let grants = dir.join("grants.yaml");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (read, warnings) = crate::test_log_capture::capture_warnings(|| {
+        runtime.block_on(super::journal::read_locked(
+            &grants,
+            std::time::Duration::from_millis(100),
+        ))
+    });
+    assert!(read.is_none(), "busy, never an unreadable grant file");
+    assert!(
+        warnings.contains("grant journal lock file refused"),
+        "{warnings}"
+    );
+    assert!(warnings.contains("lock directory"), "{warnings}");
 }
