@@ -798,3 +798,7 @@ enum CredentialOrigin {
     /// A subscriber's, lent per request by a credential source: neither.
     Lent,
 }
+
+#[cfg(test)]
+#[path = "token_refusal_tests.rs"]
+mod token_refusal_tests;
