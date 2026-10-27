@@ -717,6 +717,7 @@ pub(crate) fn error_response_preserving_status(
     id: crate::protocol::RequestId,
     error: &crate::Error,
 ) -> crate::protocol::JsonRpcResponse {
+    crate::gateway::delivery_facts::outlet(error);
     let mut response = match error {
         crate::Error::ResponseFirewallRefused => {
             crate::protocol::JsonRpcResponse::delivery_refusal_error(

@@ -204,7 +204,7 @@ impl MetaMcp {
         match verdict {
             Ok(_claims) => Ok(()),
             Err(rejection) => match self.attestation_mode {
-                crate::attestation::AttestationMode::Enforce => Err(Error::json_rpc(
+                crate::attestation::AttestationMode::Enforce => Err(Error::gateway_refused(
                     -32002,
                     format!("Attestation rejected at {boundary}: {rejection}"),
                 )),
@@ -229,7 +229,7 @@ impl MetaMcp {
         if self.attestation_validator.is_some()
             && self.attestation_mode == crate::attestation::AttestationMode::Enforce
         {
-            return Err(Error::json_rpc(
+            return Err(Error::gateway_refused(
                 -32002,
                 "Attestation rejected: multi-step plans carry no attestation in 4.0.0; \
                  call each tool with its own token",

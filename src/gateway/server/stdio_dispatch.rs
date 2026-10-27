@@ -616,6 +616,7 @@ impl Gateway {
                     &caller,
                 )
             {
+                crate::gateway::delivery_facts::outlet(&error);
                 break 'tool_call JsonRpcResponse::gateway_error(
                     Some(id),
                     error.to_rpc_code(),
@@ -730,6 +731,7 @@ impl Gateway {
                     }
                 }
                 Err(error) => {
+                    crate::gateway::delivery_facts::outlet(&error);
                     // MIK-8747: gateway-authored refusal data (the cross-era
                     // replay refusal) stays on the frame.
                     if let crate::Error::JsonRpc {

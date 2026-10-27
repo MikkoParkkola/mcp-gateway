@@ -270,9 +270,15 @@ pub(super) fn refusal(id: Option<RequestId>, error: &Error) -> JsonRpcResponse {
         Error::ResponseFirewallRefused => {
             JsonRpcResponse::delivery_refusal_error(id, error.to_rpc_code(), &error.to_string())
         }
-        Error::JsonRpc { code, message, .. } => JsonRpcResponse::error(id, *code, message.clone()),
-        _ => JsonRpcResponse::error(id, error.to_rpc_code(), error.to_string()),
+        // The raw text for a JSON-RPC error or a sealed refusal, Display for
+        // the rest: one authority with the meta route.
+        _ => JsonRpcResponse::error(
+            id,
+            error.to_rpc_code(),
+            crate::gateway::meta_mcp::signing::wire_error_message(error),
+        ),
     };
+    crate::gateway::delivery_facts::outlet(error);
     frame.egress_scanned = true;
     frame
 }

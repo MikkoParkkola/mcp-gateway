@@ -137,6 +137,15 @@ pub(crate) fn refused<E>(error: E) -> E {
     error
 }
 
+/// Where an error becomes the delivered frame: a refusal a gateway decision
+/// sealed ([`crate::Error::GatewayRefused`]) raises `Refused`; any other error
+/// raises nothing.
+pub(crate) fn outlet(error: &crate::Error) {
+    if matches!(error, crate::Error::GatewayRefused { .. }) {
+        raise(ResponseEffect::Refused);
+    }
+}
+
 /// A scanner returned a verdict on a non-empty `part` of this delivery.
 #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
 pub(crate) fn scanned() {

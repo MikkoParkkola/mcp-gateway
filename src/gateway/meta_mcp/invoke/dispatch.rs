@@ -48,7 +48,7 @@ impl MetaMcp {
         };
         let result = enforcer.check(tool, cost_key);
         if !result.allowed {
-            return Err(Error::json_rpc(
+            return Err(Error::gateway_refused(
                 -32003,
                 result
                     .block_reason

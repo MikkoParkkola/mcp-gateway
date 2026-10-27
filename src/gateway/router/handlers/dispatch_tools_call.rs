@@ -510,6 +510,7 @@ pub(super) async fn tools_call(
             .filter(|target| !scoped.absent_step(&target.server, &target.tool))
             .find_map(|target| state.meta_mcp.admit_backend_wide(&target.server).err())
         {
+            crate::gateway::delivery_facts::outlet(&refusal);
             return Err(build_error_response(
                 Some(id),
                 refusal.to_rpc_code(),
@@ -683,6 +684,7 @@ pub(super) async fn tools_call(
             &caller,
         )
     {
+        crate::gateway::delivery_facts::outlet(&error);
         return Err(build_error_response(
             Some(id),
             error.to_rpc_code(),
@@ -733,6 +735,7 @@ pub(super) async fn tools_call(
         }
         Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Unprotected) => (None, None),
         Err(error) => {
+            crate::gateway::delivery_facts::outlet(&error);
             let status = match &error {
                 crate::Error::Forbidden { status, .. } => {
                     StatusCode::from_u16(*status).unwrap_or(StatusCode::FORBIDDEN)

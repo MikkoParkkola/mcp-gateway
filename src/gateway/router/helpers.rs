@@ -81,13 +81,24 @@ pub(super) fn build_json_response(
     build_session_response(body, session_id, status)
 }
 
+/// The JSON-RPC error an HTTP error response was built from, kept beside it so
+/// the `/mcp` exit that returns it unrendered can record its delivery
+/// (`judged_answer::record_error_exit`).
+#[derive(Clone)]
+pub(super) struct ErrorFrame(pub(super) JsonRpcResponse);
+
 /// Build an HTTP response with a `mcp-session-id` header and a given status.
 pub(super) fn build_response(
     rpc: JsonRpcResponse,
     session_id: &str,
     status: StatusCode,
 ) -> axum::response::Response {
-    build_session_response(rpc, session_id, status)
+    let frame = rpc.error.is_some().then(|| ErrorFrame(rpc.clone()));
+    let mut response = build_session_response(rpc, session_id, status);
+    if let Some(frame) = frame {
+        response.extensions_mut().insert(frame);
+    }
+    response
 }
 
 /// Build a JSON-RPC error response with a `mcp-session-id` header and status.
@@ -148,7 +159,17 @@ pub(super) fn session_capacity_refusal(id: Option<RequestId>) -> axum::response:
 }
 
 /// Build a JSON-RPC HTTP response body without attaching a session header.
+///
+/// `to_value_lossy` drops the frame's refusal marker, so a refusal frame raises
+/// `Refused` here first. Only refusal frames raise, and only the direct route
+/// builds them through this function, so a route with no delivery cell never
+/// raises.
 pub(super) fn build_http_response(rpc: &Egressed, status: StatusCode) -> (StatusCode, Json<Value>) {
+    if rpc.frame().delivery_refusal {
+        crate::gateway::delivery_facts::raise(
+            crate::gateway::delivery_facts::ResponseEffect::Refused,
+        );
+    }
     let body = rpc.frame().to_value_lossy();
     (status, Json(body))
 }
