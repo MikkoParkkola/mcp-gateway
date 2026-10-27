@@ -302,6 +302,54 @@ pub(crate) fn judge_dir(dir: &File, configured: &Path) -> Result<(), PrivacyRefu
     first(privacy_refusals(dir))
 }
 
+/// Every rule a lock directory (`fs_lock`) breaks; empty when another
+/// non-admin account can neither plant nor remove a sidecar in it. The
+/// checks [`judge_dir`] makes of the object (a link, a non-directory, a
+/// network volume, a path that no longer leads to the handle) come first and
+/// alone; then the Integrity rule ([`refusals_for`]: a NULL DACL, an ACE type
+/// it cannot judge, a foreign owner, a foreign write), with delete-child also
+/// counted as a write, since it lets another account remove an idle sidecar.
+/// The user, SYSTEM and Administrators are trusted, as unix trusts root.
+pub(crate) fn judge_lock_dir(dir: &File, configured: &Path) -> Vec<PrivacyRefusal> {
+    use windows_sys::Win32::Storage::FileSystem::FILE_DELETE_CHILD;
+    let attrs = match attributes(dir) {
+        Ok(attrs) => attrs,
+        Err(refusal) => return vec![refusal],
+    };
+    if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return vec![PrivacyRefusal::ReparsePoint];
+    }
+    if attrs & FILE_ATTRIBUTE_DIRECTORY == 0 {
+        return vec![PrivacyRefusal::NotRegular];
+    }
+    match crate::win_acl::volume_is_local(dir) {
+        Ok(true) => {}
+        Ok(false) => return vec![PrivacyRefusal::NotLocal],
+        Err(_) => return vec![PrivacyRefusal::Unreadable],
+    }
+    if let Err(refusal) = same_place(dir, configured) {
+        return vec![refusal];
+    }
+    let (Ok(user), Ok(inspection)) = (user(), crate::win_acl::inspect(dir)) else {
+        return vec![PrivacyRefusal::Unreadable];
+    };
+    let mut found = refusals_for(&inspection, user, crate::config::Protects::Integrity);
+    for ace in inspection.dacl.iter().flatten() {
+        if let Ace::Allowed { flags, mask, sid } = ace
+            && sid != user
+            && !is_system_or_admins(sid)
+            && flags & INHERIT_ONLY == 0
+            && mask & FILE_DELETE_CHILD != 0
+        {
+            let refusal = PrivacyRefusal::ForeignSid(sid.to_sddl());
+            if !found.contains(&refusal) {
+                found.push(refusal);
+            }
+        }
+    }
+    found
+}
+
 /// Every rule an open file breaks for class `what`: a link or a non-regular
 /// file is refused alone (there is no DACL worth judging on it), otherwise
 /// [`refusals_for`] on the handle's own descriptor.

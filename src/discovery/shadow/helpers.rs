@@ -1,9 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-use std::{
-    collections::{BTreeMap, HashMap},
-    path::Path,
-};
+use std::collections::{BTreeMap, HashMap};
 
 use crate::config::TransportConfig;
 
@@ -365,11 +362,11 @@ pub(super) fn executable_name(command: &str) -> Option<String> {
         Some(argv) => argv.first()?.as_str(),
         None => command.split_whitespace().next()?,
     };
-    let name = Path::new(first)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(first);
-    Some(name.to_string())
+    // The last segment after either separator, whatever the platform: a
+    // client file may name a Windows path. No program name (`dir/..`,
+    // `dir/`) is `None`, never the text itself, which is a private path.
+    let name = first.rsplit(['/', '\\']).next()?;
+    (!matches!(name, "" | "." | "..")).then(|| name.to_string())
 }
 
 fn slug(value: &str) -> String {
