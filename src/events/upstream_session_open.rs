@@ -34,7 +34,7 @@ pub(super) async fn open_first(
         Err(Refused::Unsupported) => Err(Outcome::Unsupported),
         Err(Refused::Expired) => Err(failed()),
         Err(Refused::Failed(error)) => {
-            debug!(backend = %shared.name, %error, "upstream listener: stream refused");
+            debug!(backend = %shared.name, error = %shared.error_text(&error), "upstream listener: stream refused");
             Err(failed())
         }
     }
