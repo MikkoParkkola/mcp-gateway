@@ -11,14 +11,10 @@ use sha2::Digest as _;
 const ORIGINAL: &str = "backends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n";
 const CANDIDATE: &str = "backends: [not: yaml\n";
 
-/// Write `text` owner-only, as the loader requires of a config.
+/// Write `text` owner-only, as the loader requires of a config (a bare
+/// `fs::write` inherits an ACL the Windows loader refuses).
 fn write_private(path: &Path, text: &str) {
-    std::fs::write(path, text).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    }
+    mcp_gateway::gateway::test_helpers::write_owner_only(path, text).unwrap();
 }
 
 /// The disk a writer killed after its rename leaves, written by hand in the
