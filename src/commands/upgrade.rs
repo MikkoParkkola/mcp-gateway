@@ -279,7 +279,8 @@ fn backup_config(config_dir: &Path, old_version: &str) -> std::io::Result<Option
         return Ok(None);
     }
     let dst = src.with_extension(format!("yaml.bak.{old_version}"));
-    std::fs::copy(&src, &dst)?;
+    // Keeps the config's access: a plain copy on Windows takes the folder's.
+    mcp_gateway::config_persistence::copy_keeping_access(&src, &dst)?;
     Ok(Some(dst))
 }
 
@@ -584,6 +585,9 @@ mod upgrade_webhook_notice_tests;
 #[cfg(test)]
 #[path = "upgrade_prerelease_tests.rs"]
 mod prerelease_tests;
+#[cfg(all(test, windows))]
+#[path = "upgrade_winacl_tests.rs"]
+mod winacl_tests;
 
 #[cfg(test)]
 mod tests;

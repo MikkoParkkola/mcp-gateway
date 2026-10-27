@@ -571,6 +571,9 @@ fn read_ca_files(
 mod dashboard_link_tls_tests;
 #[cfg(test)]
 mod tls_ca_key_tests;
+// Windows owner-only fixtures for the binary's `Inherit` callers.
+#[cfg(all(test, windows))]
+mod winacl_test_support;
 
 #[cfg(test)]
 mod admin_credential_tests {
