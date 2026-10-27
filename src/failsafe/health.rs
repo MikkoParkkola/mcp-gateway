@@ -165,7 +165,7 @@ impl HealthTracker {
     }
 
     /// Its recent p95 and its usual p95 in ms, when the recent one is over
-    /// three times the usual and at least 50 ms; `None` until 500 successful
+    /// three times the usual and at least 50 ms; `None` until 500 answered
     /// calls have warmed the usual one.
     #[cfg(any(test, feature = "webui"))]
     pub(crate) fn slow(&self) -> Option<Slow> {
@@ -277,6 +277,8 @@ impl LatencyHistogram {
         }
         self.window.push_back(millis);
         // Every full batch folds its p95 into the baseline; the first seeds it.
+        // The window and the batch are both SLOW_BATCH long, so at this point
+        // the window holds exactly the batch just completed.
         self.in_batch += 1;
         if self.in_batch == SLOW_BATCH {
             self.in_batch = 0;

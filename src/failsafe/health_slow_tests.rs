@@ -168,19 +168,47 @@ fn api4_2_throttled_replies_never_warm_the_usual() {
 }
 
 #[test]
-fn api4_2_reading_metrics_between_calls_changes_nothing() {
-    let tracker = HealthTracker::new("slow-test");
-    for _ in 0..500 {
-        tracker.record_success(Duration::from_millis(100));
-        let _ = tracker.metrics();
-    }
-    for _ in 0..99 {
-        tracker.record_success(Duration::from_millis(301));
-        let _ = tracker.metrics();
+fn api4_2_throttles_on_a_warm_server_move_nothing() {
+    let tracker = warm_at(100);
+    feed(&tracker, 5, 1000);
+    for _ in 0..100 {
+        tracker.record_throttled(Duration::from_millis(1));
+        tracker.record_throttled(Duration::from_millis(5000));
     }
     assert_eq!(
         tracker.slow(),
-        Some(seen(301, 100)),
+        Some(seen(1000, 100)),
+        "throttles neither expire answered calls nor enter the window"
+    );
+    // 95 more answered calls close the batch the five opened: the usual moves
+    // once, by (6400 - 100 + 1000) / 64.
+    feed(&tracker, 95, 100);
+    assert_eq!(tracker.slow(), Some(seen(1000, 114)));
+}
+
+#[test]
+fn api4_2_reading_metrics_between_calls_changes_nothing() {
+    let tracker = HealthTracker::new("slow-test");
+    let call = |ms: u64| {
+        tracker.record_success(Duration::from_millis(ms));
+        let _ = tracker.metrics();
+    };
+    // Every batch holds 25 each of four latencies: its p95 is 100.
+    for i in 0..500 {
+        call([100, 20, 60, 40][i % 4]);
+    }
+    // A spike batch: the usual becomes (6400 - 100 + 1000) / 64.
+    for _ in 0..100 {
+        call(1000);
+    }
+    for i in 0..99 {
+        call([400, 20, 60][i % 3]);
+    }
+    // The last 100 calls hold one 1000 and 33 each of 400, 60 and 20: their
+    // p95 is 400. The 100 largest samples would read 1000.
+    assert_eq!(
+        tracker.slow(),
+        Some(seen(400, 114)),
         "the window keeps call order"
     );
 }
