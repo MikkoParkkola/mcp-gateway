@@ -107,6 +107,11 @@ pub(super) async fn key_refusal(
     match checked.await {
         Ok(None) => None,
         Ok(Some(text)) => {
+            if crate::backend::key_check_refuses(tool, &text) {
+                crate::gateway::delivery_facts::raise(
+                    crate::gateway::delivery_facts::ResponseEffect::Refused,
+                );
+            }
             let result = json!({ "content": [{ "type": "text", "text": text }], "isError": true });
             let mut response = JsonRpcResponse::success(id.clone(), result);
             // The text lists the backend's own parameter names, which no

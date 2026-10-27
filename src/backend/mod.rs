@@ -87,7 +87,7 @@ pub(crate) use annotations::prepare_tool_metadata;
 #[cfg(all(test, feature = "firewall"))]
 pub(crate) use descriptor_gate::descriptor_digest;
 pub(crate) use descriptor_gate::{Judging, Listing};
-pub(crate) use fill_check::{LIST_FILL_COOLDOWN, text_absent};
+pub(crate) use fill_check::{LIST_FILL_COOLDOWN, key_check_refuses, text_absent};
 pub(crate) use identity_slots::passthrough_binding;
 pub use registry::{
     BackendLifecycle, BackendRegistry, BackendRuntimeState, BackendRuntimeStatus, BackendStatus,

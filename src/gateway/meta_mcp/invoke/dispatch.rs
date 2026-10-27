@@ -460,7 +460,9 @@ impl MetaMcp {
 
         let mut result = response.result.unwrap_or(json!(null));
         // Raw receipt (inc3 R1): verify before anything reads the reply.
-        self.chain_receive(chained, &mut result, challenge.as_deref(), chain)?;
+        // A refused receipt is the delivered refusal of the backend's answer.
+        self.chain_receive(chained, &mut result, challenge.as_deref(), chain)
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
         // The RAW reply, here and nowhere else: this value has not been through
         // projection, the contract gate or any shaping, so a `resultType:
         // "task"` in it is the peer's own envelope and never one this gateway

@@ -436,6 +436,13 @@ pub(crate) fn text_absent(tool: &str) -> String {
     format!("the backend does not list a tool named `{tool}`")
 }
 
+/// Whether the argument-key check's answer `text` for `tool` is the gateway
+/// refusing the call (undeclared keys), not a name it cannot serve: texts A,
+/// P and U describe the catalogue, and a withheld name answers as text A.
+pub(crate) fn key_check_refuses(tool: &str, text: &str) -> bool {
+    text != text_absent(tool) && text != text_partial() && text != TEXT_UNAVAILABLE
+}
+
 #[cfg(test)]
 mod tests {
     use super::{LIST_FILL_COOLDOWN, LIST_MAX_PAGES};

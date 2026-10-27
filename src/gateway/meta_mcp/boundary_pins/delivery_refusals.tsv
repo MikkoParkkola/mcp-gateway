@@ -2,38 +2,38 @@
 src/gateway/authz.rs	authorize_backend	backend_refusal	1	feeds	the authorization error; meta and stdio route stages raise it, the direct 403 is classed Denied
 src/gateway/meta_mcp/account_outcome.rs	judge_account	audit_transient_refusal	1	not-delivered	audit row
 src/gateway/meta_mcp/caller_forward.rs	scope_refusal	audit_refusal	1	not-delivered	audit row
-src/gateway/meta_mcp/chain_receipt.rs	chain_receive	refusal	1	unrecorded	chain-receipt refusal of the backend's answer, after dispatch; delivered unsealed
+src/gateway/meta_mcp/chain_receipt.rs	chain_receive	refusal	1	recorded	chain-receipt refusal of the backend answer; raised at its delivering callers (meta and direct)
 src/gateway/meta_mcp/chain_receipt.rs	receive	refusal	4	feeds	chain-receipt refusal, delivered through chain_receive
-src/gateway/meta_mcp/invoke/bridge_dispatch.rs	invoke	undeclared_key_refusal	1	unrecorded	bridged round's undeclared-key refusal, rebuilt as NotAdmitted with no raise
+src/gateway/meta_mcp/invoke/bridge_dispatch.rs	invoke	undeclared_key_refusal	1	recorded	bridged round undeclared key; raised while vouched where it ends the exchange
 src/gateway/meta_mcp/invoke/caller_verdict.rs	caller_verdict	audit_transient_refusal	1	not-delivered	audit row
 src/gateway/meta_mcp/invoke/chokepoint.rs	recheck_target	audit_refusal	1	not-delivered	audit row
-src/gateway/meta_mcp/invoke/chokepoint.rs	rescan_outbound	request_refusal	1	unrecorded	stateless dispatch rescan; reached when the outbound form differs from the route-stage scan
+src/gateway/meta_mcp/invoke/chokepoint.rs	rescan_outbound	request_refusal	1	recorded	dispatch rescan (a retry answer); raised while vouched at the send chokepoint
 src/gateway/meta_mcp/invoke/chokepoint.rs	route_request_scan	request_refusal	1	recorded	stdio route stage raises its Forbidden
 src/gateway/meta_mcp/invoke/continuation.rs	redeem_retry	note_refusal	1	not-delivered	worker clock note
-src/gateway/meta_mcp/invoke/continuation.rs	seal_direct_interim	refusal	1	unrecorded	direct undeclared input request, after dispatch; outlet records sealed errors only
+src/gateway/meta_mcp/invoke/continuation.rs	seal_direct_interim	refusal	1	recorded	direct undeclared question, after dispatch; raised here
 src/gateway/meta_mcp/invoke/gate.rs	absent_answer	seal_key_refusal	1	recorded	withheld answer; withheld raised in this fn for an out-of-scope name
 src/gateway/meta_mcp/invoke/gate.rs	as_undefined_capability	capability_rule_refusal	1	not-delivered	predicate comparing the rule's text
 src/gateway/meta_mcp/invoke/gate.rs	check_call_level_policy	audit_refusal	1	not-delivered	audit row
 src/gateway/meta_mcp/invoke/gate.rs	named_gate_answer	capability_rule_refusal	1	not-delivered	predicate
 src/gateway/meta_mcp/invoke/gate.rs	named_gate_answer	seal_key_refusal	1	recorded	withheld answer; withheld_for raises in this fn
 src/gateway/meta_mcp/invoke/gate.rs	withheld_invoke_target	blocked_tool_refusal	1	not-delivered	predicate
-src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	bridge_refusal	1	unrecorded	bridged undeclared input request, after dispatch
+src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	bridge_refusal	1	recorded	bridged undeclared last round; raised while vouched
 src/gateway/meta_mcp/invoke/policy.rs	authorize_invocation	audit_refusal	1	not-delivered	audit row
 src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	blocked_tool_refusal	1	recorded	Protocol refusal; the route stage withholds it first (PR-2a raise)
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	admit_idempotency_key	is_firewall_refusal	1	not-delivered	predicate
-src/gateway/meta_mcp/invoke/pre_dispatch.rs	answer_undeclared_key	seal_key_refusal	1	unrecorded	dispatch-time undeclared-key answer; no withheld raise on this path
+src/gateway/meta_mcp/invoke/pre_dispatch.rs	answer_undeclared_key	seal_key_refusal	1	recorded	dispatch-time undeclared key; raised while vouched before the seal
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	answer_undeclared_key	undeclared_key_refusal	1	feeds	builds the refusal sealed beside it
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_caller_credential_as	transient_mint_refusal	1	not-delivered	a credential mint failure, not a policy decision
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_credential_attempted_for	unminted_refusal	1	not-delivered	a credential mint failure, not a policy decision
 src/gateway/meta_mcp/invoke/r2_check.rs	undeclared_key_refusal_through	catalogue_refusal	1	feeds	builds the key refusal its callers seal
-src/gateway/meta_mcp/invoke/relay.rs	refuse_relay	relay_refusal	1	unrecorded	pre-send relay block (-32002) on the meta route; no raise
-src/gateway/meta_mcp/invoke/relay.rs	refuse_relaying_round	relay_refusal	1	unrecorded	pre-send relay block on a bridged round
+src/gateway/meta_mcp/invoke/relay.rs	refuse_relay	relay_refusal	1	recorded	pre-send relay block on the meta route; raised while vouched
+src/gateway/meta_mcp/invoke/relay.rs	refuse_relaying_round	relay_refusal	1	recorded	pre-send relay block on a bridged round; raised while vouched
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	forward_catalogue	catalogue_refusal	1	recorded	raised here (design section 2 row)
 src/gateway/meta_mcp/invoke/stored_proof.rs	prove_target_live	take_account_refusal	1	composite-or-replay	stored replay's account refusal
 src/gateway/meta_mcp/invoke/stored_proof.rs	prove_target_live	unminted_refusal	1	composite-or-replay	stored replay's credential proof
 src/gateway/meta_mcp/invoke/stored_proof.rs	refuse_unproven	unminted_refusal	1	composite-or-replay	stored replay's credential proof
 src/gateway/meta_mcp/invoke/undeclared_gate.rs	bridge_refusal	refusal	1	feeds	builds the bridged undeclared refusal
-src/gateway/meta_mcp/invoke/undeclared_gate.rs	refuse_undeclared	refusal	1	unrecorded	meta undeclared input request, after dispatch
+src/gateway/meta_mcp/invoke/undeclared_gate.rs	refuse_undeclared	refusal	1	recorded	meta undeclared question, after dispatch; raised while vouched at its caller
 src/gateway/meta_mcp/protocol.rs	handle_prompts_get	scope_refusal	2	no-record	prompts/get, not a tools/call delivery
 src/gateway/meta_mcp/task_replay.rs	keep_permanent_refusal	live_refusal	1	not-delivered	memo
 src/gateway/meta_mcp/task_replay.rs	keep_permanent_refusal	record_account_refusal	1	not-delivered	memo
@@ -51,7 +51,7 @@ src/gateway/router/accounts/journeys.rs	journey_refusal	refusal	3	no-record	acco
 src/gateway/router/accounts/journeys.rs	status	journey_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/router/accounts/journeys.rs	status	refusal	3	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/router/authorization.rs	require_admin_log_level	audit_refusal	1	not-delivered	audit row
-src/gateway/router/backend_handlers.rs	apply_backend_tool_call_security	key_refusal	1	unrecorded	direct dispatch-time undeclared-key answer; no raise on this path
+src/gateway/router/backend_handlers.rs	apply_backend_tool_call_security	key_refusal	1	recorded	direct undeclared key; raised in key_check where the text refuses
 src/gateway/router/backend_handlers.rs	cached_error_response	is_firewall_refusal	1	not-delivered	predicate
 src/gateway/router/backend_handlers.rs	cached_error_response	refusal	1	composite-or-replay	idempotency replay of a cached firewall refusal
 src/gateway/router/backend_handlers.rs	guard_tool_call	blocked_tool_refusal	1	not-delivered	predicate

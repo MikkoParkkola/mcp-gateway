@@ -207,6 +207,8 @@ impl MetaMcp {
                     caller,
                     nonce_settle::PreSendExit::GiveBackUnsent(idem_reservation),
                 );
+                // The delivered refusal, before anything was sent.
+                crate::gateway::delivery_facts::refused_while_vouched();
                 return Err(error);
             }
         };

@@ -157,7 +157,9 @@ impl DirectRouteGuards {
                 result,
                 challenge,
                 &slot,
-            )?;
+            )
+            // A refused receipt is the delivered refusal of the backend's answer.
+            .map_err(crate::gateway::delivery_facts::refused)?;
         }
         let receipt = std::mem::take(&mut *slot.lock());
         // MIK-8078 (MRTR.2a): the backend's state is sealed after the raw

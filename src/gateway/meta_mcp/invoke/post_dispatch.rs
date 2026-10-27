@@ -364,7 +364,8 @@ impl MetaMcp {
         // survives the refusal. Relaying it instead leaves the client holding
         // an `inputRequests` entry it has no handler for and the backend
         // holding an exchange that can never be completed.
-        undeclared_gate::refuse_undeclared(result, caller, server, tool, trace_id)?;
+        undeclared_gate::refuse_undeclared(result, caller, server, tool, trace_id)
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
 
         if let Some(answer) = self
             .bridge_legacy_ask(
