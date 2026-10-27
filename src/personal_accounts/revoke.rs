@@ -59,7 +59,10 @@ impl RevocationMaterial {
             .iter()
             .map(|(token, hint)| {
                 (
-                    String::from_utf8_lossy(token.as_bytes()).into_owned(),
+                    // Decoded as the send path decodes it.
+                    std::str::from_utf8(token.as_bytes())
+                        .unwrap_or_default()
+                        .to_owned(),
                     *hint,
                 )
             })
