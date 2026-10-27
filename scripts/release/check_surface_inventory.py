@@ -3,13 +3,17 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Zero-unclassified check for docs/design/surface-4.0.md (MIK-8044).
 
-Extracts every item on the five user-facing surfaces from the source and
-fails when one is missing from the inventory, carries no valid class, or
-when the inventory lists an item the code no longer has.
+Extracts every item on four user-facing surfaces from the source and fails
+when one is missing from the inventory, carries no valid class, or when the
+inventory lists an item the code no longer has.
 
-Surfaces: config (gateway.yaml keys), cli (subcommands and flags),
-env (MCP_GATEWAY_* variables), routes (HTTP listener paths),
-lib (crate-root public items in src/lib.rs).
+Surfaces: config (gateway.yaml keys), env (MCP_GATEWAY_* variables),
+routes (HTTP listener paths), lib (crate-root public items in src/lib.rs).
+
+cli (subcommands and flags): membership is tests/cli_surface_inventory.rs
+only, which walks clap's built Command; this script has no cli extractor.
+Row format is unchanged for all tables, cli included: class, reason,
+migration, one row per item, and a defined-at path under src/cli/.
 
 Usage:
   check_surface_inventory.py            check the doc, exit 1 on any gap

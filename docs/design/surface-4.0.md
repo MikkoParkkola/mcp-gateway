@@ -7,13 +7,19 @@ gateway becomes internal, and the gateway decides what it can decide on its own.
 item on the five surfaces a user can touch, gives each one a class, and says what happens to an existing
 user of anything that is not kept. Pieces P2 to P6 implement it; nothing here changes code.
 
-`python3 scripts/release/check_surface_inventory.py` extracts the five surfaces from the source and fails
-when any item is missing from the tables below, is listed twice, carries no valid class, has no migration
-story, or no longer exists. `--summary` prints the counts. The check runs in CI through
+`python3 scripts/release/check_surface_inventory.py` extracts four surfaces (config, env, routes, lib) from the
+source and fails when any item is missing from the tables below, is listed twice, carries no valid class, has no
+migration story, or no longer exists. `--summary` prints the counts. The check runs in CI through
 `scripts/release/test_check_surface_inventory.py`.
 
-What the check guards against: a contributor adding a config key, flag, variable, route or crate-root
-item in the forms this codebase uses (serde derives, clap derives, axum `route`/`nest` calls in either
+The cli table: membership is `tests/cli_surface_inventory.rs` only. It walks the `Command` clap builds, so a
+flag no source pattern models still needs a row; it runs in CI's all-features test job, not in the cargo-free
+pre-push step. Row format is unchanged for all tables, cli included: the Python check still fails a cli row with
+no valid class, no reason, no migration story, a second row for the same item, or a defined-at path outside
+`src/cli/`.
+
+What the Python check guards against: a contributor adding a config key, variable, route or crate-root
+item in the forms this codebase uses (serde derives, axum `route`/`nest` calls in either
 call form, `pub` items in `src/lib.rs`, `#[macro_export]` macros in any module the library compiles) without classifying it. It reads
 source text, not compiled types, so it is not a proof against code written to evade it; a construct it
 cannot read is added to the extractor, with a planted-source test, when the codebase first uses it.
