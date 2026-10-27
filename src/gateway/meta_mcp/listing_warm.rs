@@ -81,22 +81,21 @@ impl MetaMcp {
             // Concurrent, so a slow resolution on one backend does not eat
             // another's share of the deadline.
             futures::future::join_all(refused.iter().map(|((server, tool), backend)| async move {
-                match self
+                if let Some(fill) = self
                     .claim_caller_view(server, tool, scope, session_id)
                     .await
                 {
-                    Some(fill) => Some(Pending::Fill(
+                    Some(Pending::Fill(
                         fill.backend_bound(),
                         tokio::spawn(fill.run()),
-                    )),
-                    None => {
-                        #[cfg(test)]
-                        backend.before_lease_lookup.pause().await;
-                        #[cfg(not(test))]
-                        let _ = backend;
-                        self.running_cold_lease(server, scope)
-                            .map(|(backend, id)| Pending::Leased(backend, id))
-                    }
+                    ))
+                } else {
+                    #[cfg(test)]
+                    backend.before_lease_lookup.pause().await;
+                    #[cfg(not(test))]
+                    let _ = backend;
+                    self.running_cold_lease(server, scope)
+                        .map(|(backend, id)| Pending::Leased(backend, id))
                 }
             }))
             .await
