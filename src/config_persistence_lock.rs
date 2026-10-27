@@ -272,6 +272,9 @@ fn acquire(
     let target = resolved(config);
     let lock = lock_path(&target);
     let mut on_wait = Some(on_wait);
+    // Test-only: counts this caller as a waiter once it finds the lock held.
+    #[cfg(test)]
+    let mut counted = Waiting::default();
     loop {
         if let Some(held) = try_once(config, &lock, Owners::UserOrRoot)? {
             // An unusable journal releases the lock and refuses, naming what
@@ -286,6 +289,8 @@ fn acquire(
         if let Some(say) = on_wait.take() {
             say(&lock);
         }
+        #[cfg(test)]
+        counted.start(&lock);
         if !waiting() || Instant::now() >= deadline {
             return Err(NotLocked::Busy);
         }
@@ -414,6 +419,54 @@ impl Drop for Left {
             .is_err()
         {
             self.abandoned.0.fetch_sub(1, SeqCst);
+        }
+    }
+}
+
+/// How many callers have found `lock` held and are waiting on it: the seam a
+/// test uses to know its racers reached the lock. Red-first stub.
+#[cfg(test)]
+pub(crate) fn waiters_for_test(lock: &Path) -> usize {
+    waiters()
+        .lock()
+        .map_or(0, |w| w.get(lock).copied().unwrap_or(0))
+}
+
+/// Process-wide, not per thread: the racers a test counts run on workers.
+#[cfg(test)]
+fn waiters() -> &'static std::sync::Mutex<std::collections::HashMap<PathBuf, usize>> {
+    static WAITERS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<PathBuf, usize>>,
+    > = std::sync::OnceLock::new();
+    WAITERS.get_or_init(Default::default)
+}
+
+/// Counts one waiter on its lock while it lives, from the first time the
+/// lock is found held.
+#[cfg(test)]
+#[derive(Default)]
+struct Waiting(Option<PathBuf>);
+
+#[cfg(test)]
+impl Waiting {
+    fn start(&mut self, lock: &Path) {
+        if self.0.is_none() {
+            if let Ok(mut w) = waiters().lock() {
+                *w.entry(lock.to_path_buf()).or_insert(0) += 1;
+            }
+            self.0 = Some(lock.to_path_buf());
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        if let Some(lock) = &self.0
+            && let Ok(mut w) = waiters().lock()
+            && let Some(n) = w.get_mut(lock)
+        {
+            *n = n.saturating_sub(1);
         }
     }
 }

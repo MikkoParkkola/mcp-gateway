@@ -556,6 +556,8 @@ async fn meta_mcp_dispatch(
     let caller = client
         .as_ref()
         .map_or("anonymous", |client| client.name.as_str());
+    // Taken before finalizing, which may replace the answer.
+    let invocation_trace = response.invocation_trace.clone();
     let delivery = crate::gateway::meta_mcp::response_security::ResponseDeliveryContext {
         method,
         targets: &response_targets,
@@ -565,6 +567,7 @@ async fn meta_mcp_dispatch(
             external_server: "gateway",
             external_tool,
             subject: grant_subject.as_ref(),
+            trace_id: invocation_trace.as_deref(),
         },
         signing: signing_context.as_ref(),
         chain_source: response.chain_source,

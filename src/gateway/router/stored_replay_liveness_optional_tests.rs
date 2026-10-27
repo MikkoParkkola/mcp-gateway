@@ -389,3 +389,83 @@ async fn p10u_an_unminted_plan_refusal_keeps_its_nonce_spent() {
         "P10u: a replay was sent again: {fresh}"
     );
 }
+
+/// The `trace_id`s of `log`'s invocation records, then of its delivery
+/// records, once nothing is in flight.
+#[cfg(feature = "firewall")]
+async fn invocation_and_delivery_traces(
+    log: &crate::security::TransparencyLogger,
+) -> (Vec<Value>, Vec<Value>) {
+    use crate::gateway::router::route_matrix_driver_tests::response::delivery_rows;
+    let traces =
+        |rows: &[Value]| -> Vec<Value> { rows.iter().map(|row| row["trace_id"].clone()).collect() };
+    let delivered = traces(&delivery_rows(log).await);
+    let entries: Vec<Value> = std::fs::read_to_string(log.path())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| entry.get("route").is_some() && entry.get("kind").is_none())
+        .collect();
+    (traces(&entries), delivered)
+}
+
+/// MIK-8929.EFFECT.4 on the two replay paths a keyed retry can take inside
+/// the dispatch: served from the idempotency cache (`cache`) or lifted from
+/// the stored answer. Each delivery names its own request's trace, so it
+/// joins that request's invocation record, not the first run's.
+#[cfg(feature = "firewall")]
+async fn replay_delivery_joins_its_own_invocation(cache: bool, key_name: &str) {
+    use crate::gateway::router::route_matrix_driver_tests::response::temp_log;
+    use std::sync::atomic::Ordering;
+
+    let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
+    let idp = r6m_token_exchange::LiveIdp::start(&key).await;
+    let (_log_dir, log) = temp_log(None);
+    let meta_log = Arc::clone(&log);
+    let (router, sends, _dirs) = r6m_token_exchange::gateway_with(
+        &key,
+        idp.endpoint(),
+        &r6m_token_exchange::alice(),
+        r6m_token_exchange::Requirement::Optional,
+        move |mut meta| {
+            if cache {
+                meta.enable_idempotency(
+                    Arc::new(crate::idempotency::IdempotencyCache::new()),
+                    std::time::Duration::from_secs(60),
+                );
+            }
+            meta.enable_transparency_log(meta_log);
+            meta
+        },
+    )
+    .await;
+    if cache {
+        // Unminted, as S-unminted: only the cache can serve the retry.
+        idp.kill();
+    }
+    let alice = r6m_token_exchange::alice();
+    let first = r6m_token_exchange::send_as(&router, &alice, call(key_name, false)).await;
+    let again = r6m_token_exchange::send_as(&router, &alice, call(key_name, false)).await;
+    assert!(again.get("error").is_none(), "premise: served: {again}");
+    assert_eq!(
+        sends.load(Ordering::SeqCst),
+        1,
+        "premise: a replay: {first}"
+    );
+    let (invoked, delivered) = invocation_and_delivery_traces(&log).await;
+    assert_eq!(invoked.len(), 2, "{invoked:?}");
+    assert_ne!(invoked[0], invoked[1], "{invoked:?}");
+    assert_eq!(delivered, invoked, "each delivery joins its own invocation");
+}
+
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_cached_replay_delivery_joins_its_own_invocation() {
+    replay_delivery_joins_its_own_invocation(true, "trace-cache").await;
+}
+
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_lifted_replay_delivery_joins_its_own_invocation() {
+    replay_delivery_joins_its_own_invocation(false, "trace-lift").await;
+}

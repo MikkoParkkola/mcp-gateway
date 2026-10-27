@@ -181,6 +181,8 @@ pub struct ReloadContext {
     pub(super) capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
     /// Told which backends each applied reload registered (`MIK-8054`).
     pub(super) on_registered: Option<super::reload_warm_hook::OnRegistered>,
+    /// Where an applied reload marks the web UI's charts.
+    pub(super) markers: Option<Arc<crate::counters::CounterStore>>,
     /// Set when lock recovery put an earlier gateway.yaml back on disk: the
     /// running config is then on bytes that are gone, so the next holder of
     /// the reload lock reloads before its own work. Cleared only by an
@@ -197,7 +199,14 @@ pub struct ReloadContext {
         )
     )]
     pub(super) trusted_config: PathBuf,
+    /// Applies `meta_mcp.surfaced_tools` from each published config,
+    /// set by the gateway when it attaches to this context.
+    surfaced_hook: parking_lot::Mutex<Option<SurfacedHook>>,
 }
+
+/// Applies a published config's `meta_mcp.surfaced_tools` to the running
+/// gateway, under `lock_reload`.
+pub(crate) type SurfacedHook = Arc<dyn Fn(&Config) + Send + Sync>;
 
 /// The refusal a reload returns when the gateway's shutdown ended its wait.
 pub(super) const STOPPED: &str = "config reload stopped: the gateway is shutting down";
@@ -269,7 +278,25 @@ impl ReloadContext {
             stop: tokio_util::sync::CancellationToken::new(),
             capabilities: None,
             on_registered: None,
+            markers: None,
+            surfaced_hook: parking_lot::Mutex::new(None),
         })
+    }
+
+    /// Mark every applied reload on `markers`.
+    #[must_use]
+    pub(crate) fn with_markers(
+        mut self,
+        markers: Option<Arc<crate::counters::CounterStore>>,
+    ) -> Self {
+        self.markers = markers;
+        self
+    }
+
+    /// Install the hook that applies `surfaced_tools` on every applied
+    /// reload. The gateway calls it when it attaches to this context.
+    pub(crate) fn set_surfaced_hook(&self, hook: SurfacedHook) {
+        *self.surfaced_hook.lock() = Some(hook);
     }
 
     /// Announce `tools/list_changed` for `capabilities` when a reload's env
@@ -433,7 +460,14 @@ impl ReloadContext {
             }
         };
         let mut outcome = match self.reload_outcome_locked_at(&target).await {
-            Ok(outcome) => outcome,
+            Ok(outcome) => {
+                // An applied reload marks the charts; a refused one
+                // returns below and marks nothing.
+                if let Some(markers) = &self.markers {
+                    markers.mark_now(crate::counters::MarkerKind::ConfigReload, None);
+                }
+                outcome
+            }
             // Both steps render on every path: a config refusal read alone
             // hides whether the revocation landed. Appended, so every consumer
             // keying on the refusal's prefix still matches.
@@ -742,6 +776,11 @@ impl ReloadContext {
         self.publish_overlay(overlay);
         // Still under `lock_reload`, against the config just published.
         self.report_registered(&patch.registered_change(), &self.live_config.get());
+        // `surfaced_tools` applies here too, under the same lock.
+        let surfaced_hook = self.surfaced_hook.lock().clone();
+        if let Some(hook) = surfaced_hook {
+            hook(&self.live_config.get());
+        }
 
         Ok(with_pending_restart(
             outcome,

@@ -1407,8 +1407,11 @@ function renderCapabilities() {
   list.innerHTML = capabilitiesData.map(cap => {
     const name = cap.name || cap;
     const toolCount = cap.tool_count != null ? cap.tool_count : '';
+    // The name as a JS string literal inside a double-quoted attribute: a raw
+    // JSON.stringify quote would end the attribute and leave a dead handler.
+    const arg = esc(JSON.stringify(name));
     return `<div class="cap-item" id="cap-item-${esc(name)}">
-      <div class="cap-header" onclick="toggleCap(${JSON.stringify(name)})">
+      <div class="cap-header" onclick="toggleCap(${arg})">
         <div class="cap-title">
           <span>${esc(name)}</span>
           ${toolCount !== '' ? `<span class="badge badge-running">${toolCount} tool${toolCount !== 1 ? 's' : ''}</span>` : ''}
@@ -1419,9 +1422,9 @@ function renderCapabilities() {
         <textarea id="cap-editor-${esc(name)}" spellcheck="false" placeholder="Loading YAML..."
           onkeydown="capTabIndent(event)"></textarea>
         <div class="cap-body-actions">
-          <button class="btn btn-sm" onclick="saveCap(${JSON.stringify(name)})">Save</button>
-          <button class="btn btn-sm btn-secondary" onclick="revertCap(${JSON.stringify(name)})">Revert</button>
-          <button class="btn btn-sm btn-danger" onclick="deleteCap(${JSON.stringify(name)})">Delete</button>
+          <button class="btn btn-sm" onclick="saveCap(${arg})">Save</button>
+          <button class="btn btn-sm btn-secondary" onclick="revertCap(${arg})">Revert</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteCap(${arg})">Delete</button>
           <span id="cap-msg-${esc(name)}" class="form-msg"></span>
         </div>
       </div>
@@ -1454,6 +1457,8 @@ async function loadCapContent(name) {
     ta.value = text;
     ta.dataset.loaded = '1';
     ta.dataset.original = text;
+    // The base a save names: the ETag of the bytes loaded.
+    ta.dataset.etag = r.headers.get('ETag') || '';
   } catch (e) {
     ta.value = '# Error loading: ' + e.message;
   }
@@ -1475,13 +1480,17 @@ async function saveCap(name) {
   try {
     const r = await uiFetch(`/ui/api/capabilities/${encodeURIComponent(name)}`, {
       method: 'PUT',
-      headers: { ...authHeaders(), 'Content-Type': 'application/x-yaml' },
+      headers: { ...authHeaders(), 'Content-Type': 'application/x-yaml', 'If-Match': ta.dataset.etag || '' },
       body: ta.value,
     });
     if (!r.ok) {
       const errData = await r.json().catch(() => ({ error: r.statusText }));
-      throw new Error(errData.error || errData.message || r.statusText);
+      throw new Error(errData.message || errData.error || r.statusText);
     }
+    // The bytes written can differ from the text sent (the pin value, the
+    // file's line endings), so the next save's base is the answered hash.
+    const saved = await r.json().catch(() => ({}));
+    if (saved.sha256) ta.dataset.etag = `"${saved.sha256}"`;
     msg.textContent = 'Saved.';
     msg.className = 'form-msg ok';
     ta.dataset.original = ta.value;
@@ -1497,9 +1506,12 @@ async function deleteCap(name) {
   if (!confirm(`Delete capability file "${name}"? This cannot be undone.`)) return;
   const msg = document.getElementById('cap-msg-' + name);
   try {
+    const ta = document.getElementById('cap-editor-' + name);
+    const listed = capabilitiesData.find(c => c.name === name);
+    const base = (ta && ta.dataset.etag) || (listed && listed.sha256 ? `"${listed.sha256}"` : '');
     const r = await uiFetch(`/ui/api/capabilities/${encodeURIComponent(name)}`, {
       method: 'DELETE',
-      headers: authHeaders(),
+      headers: { ...authHeaders(), 'If-Match': base },
     });
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
     refreshCapabilities();
@@ -1746,51 +1758,6 @@ async function validateCapBlur(ta) {
   }
 }
 
-// ── Save capability ──
-async function saveCap(name, id) {
-  const ta = document.getElementById('ta-' + id);
-  const errDiv = document.getElementById('err-' + id);
-  if (!ta || !errDiv) return;
-  try {
-    const r = await uiFetch('/ui/api/capabilities/' + encodeURIComponent(name), {
-      method: 'PUT',
-      headers: { ...authHeaders(), 'Content-Type': 'application/x-yaml' },
-      body: ta.value
-    });
-    if (r.ok) {
-      ta.classList.remove('yaml-error');
-      errDiv.textContent = '';
-      errDiv.style.color = 'var(--green)';
-      errDiv.textContent = 'Saved.';
-      setTimeout(() => { errDiv.textContent = ''; errDiv.style.color = ''; }, 2000);
-    } else {
-      const body = await r.json().catch(() => ({ error: r.statusText }));
-      ta.classList.add('yaml-error');
-      errDiv.style.color = '';
-      errDiv.textContent = body.error || 'Save failed';
-    }
-  } catch (e) {
-    errDiv.textContent = 'Save error: ' + e.message;
-    errDiv.style.color = '';
-  }
-}
-
-// ── Revert capability ──
-async function revertCap(name, id) {
-  const ta = document.getElementById('ta-' + id);
-  const errDiv = document.getElementById('err-' + id);
-  if (!ta) return;
-  try {
-    const data = await apiFetch('/ui/api/capabilities/' + encodeURIComponent(name));
-    ta.value = data.content || '';
-    ta.classList.remove('yaml-error');
-    if (errDiv) errDiv.textContent = '';
-    updateLineNumbers(ta);
-  } catch (e) {
-    if (errDiv) errDiv.textContent = 'Revert error: ' + e.message;
-  }
-}
-
 // ── OpenAPI import modal ──
 function showImportModal() {
   document.getElementById('import-modal').classList.add('open');
@@ -1919,7 +1886,9 @@ function esc(s) {
   if (s == null) return '';
   const d = document.createElement('div');
   d.appendChild(document.createTextNode(String(s)));
-  return d.innerHTML;
+  // innerHTML escapes & < > only; quotes too, so the result is safe inside a
+  // quoted attribute as well as in text.
+  return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 // Auto-refresh
