@@ -40,7 +40,15 @@ const LARGE_BUDGET: u64 = 16 * 1024;
 /// 62,260 B, most of it the custody read on the blocking pool.
 const SMALL_BUDGET: u64 = 96 * 1024;
 /// The share may differ by at most this much between 1 and 3 MiB.
-const SIZE_SLACK: u64 = 1024;
+///
+/// 2 KiB (lead ruling 2026-10-27; was 1 KiB): the refused call's delivery
+/// record now adds about 237 small allocations, and about one loaded run in
+/// 30 puts a one-off ~1 KB on the first measured call (1,042 and 1,082 B
+/// observed, the 3 MiB share identical both times), likely a buffer stepping
+/// up its capacity in the record write. A payload copy would cost megabytes,
+/// and `PLAIN_SLOPE_PER_MIB` pins that separately. Restoring 1 KiB waits on
+/// finding and pre-sizing that buffer.
+const SIZE_SLACK: u64 = 2 * 1024;
 /// How much more the plain target's refusal may allocate per extra MiB of
 /// payload. A payload copy in the shared verdict loop is paid by both targets
 /// and so cancels out of the share; this bounds it on the plain target.
