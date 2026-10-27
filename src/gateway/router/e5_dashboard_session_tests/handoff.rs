@@ -342,3 +342,130 @@ async fn a_code_posted_on_the_loopback_origin_is_not_spent() {
         real.body
     );
 }
+
+/// R11: behind an HTTPS front, a clock before 1970 is decided before any
+/// hand-off or compare: the live link and a wrong one get the same clock
+/// refusal, and the live link is kept.
+#[tokio::test]
+async fn r11_a_clock_refusal_behind_an_https_front_is_the_same_for_every_link() {
+    let (state, _dir) = behind_https_front().await;
+    let value = state.dashboard_bootstrap.peek().expect("startup value");
+    let (live, wrong) = {
+        let _clock = crate::clock::test_clock::before_epoch();
+        let live = send(&state, redeem(&value, None)).await;
+        let wrong = send(&state, redeem("not-the-value", None)).await;
+        (live, wrong)
+    };
+    assert_eq!(live.status, wrong.status, "{} / {}", live.body, wrong.body);
+    assert_eq!(live.body, wrong.body);
+    assert_eq!(live.headers, wrong.headers);
+    assert!(live.body.contains("before 1970"), "{}", live.body);
+    assert_eq!(
+        state.dashboard_bootstrap.peek(),
+        Some(value),
+        "the live link is kept"
+    );
+}
+
+/// `submit` as a browser's form POST navigation sends it.
+fn submit_navigating(code: &str) -> Request<Body> {
+    let mut request = submit(code, None);
+    let headers = request.headers_mut();
+    headers.insert(
+        "sec-fetch-mode",
+        axum::http::HeaderValue::from_static("navigate"),
+    );
+    headers.insert(
+        "sec-fetch-dest",
+        axum::http::HeaderValue::from_static("document"),
+    );
+    request
+}
+
+/// R5: a wrong, a used and an expired code send a browser to the same shell
+/// address, byte for byte; without Fetch Metadata each keeps today's 401.
+#[tokio::test]
+async fn r5_every_refused_code_sends_a_browser_to_the_same_place() {
+    let (wrong_state, _a) = behind_https_front().await;
+    let (_, wrong_code) = code_from_link(&wrong_state).await;
+    let wrong = send(
+        &wrong_state,
+        submit_navigating(&"A".repeat(wrong_code.len())),
+    )
+    .await;
+
+    let (used_state, _b) = behind_https_front().await;
+    let (_, used_code) = code_from_link(&used_state).await;
+    assert_eq!(
+        send(&used_state, submit(&used_code, None)).await.status,
+        StatusCode::SEE_OTHER
+    );
+    let used = send(&used_state, submit_navigating(&used_code)).await;
+
+    let (expired_state, _c) = behind_https_front().await;
+    let (_, expired_code) = code_from_link(&expired_state).await;
+    expired_state
+        .dashboard_bootstrap
+        .backdate_handoff(Duration::from_secs(61));
+    let expired = send(&expired_state, submit_navigating(&expired_code)).await;
+
+    assert_eq!(wrong.status, StatusCode::SEE_OTHER, "{}", wrong.body);
+    assert_eq!(location(&wrong), "/ui/overview/status?signin=link-refused");
+    assert_private(&wrong);
+    // The link path's refusal is the same answer, so a browser cannot tell
+    // which path refused it either.
+    let link = Request::builder()
+        .method("GET")
+        .uri(format!("/dashboard?bootstrap={}", "B".repeat(43)))
+        .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 52_349))))
+        .header("sec-fetch-mode", "navigate")
+        .header("sec-fetch-dest", "document")
+        .body(Body::empty())
+        .expect("request builds");
+    let by_link = send(&wrong_state, link).await;
+    for other in [&used, &expired, &by_link] {
+        assert_eq!(
+            (other.status, &other.headers, &other.body),
+            (wrong.status, &wrong.headers, &wrong.body)
+        );
+    }
+
+    let (plain_state, _d) = behind_https_front().await;
+    let (_, plain_code) = code_from_link(&plain_state).await;
+    let plain = send(&plain_state, submit(&"A".repeat(plain_code.len()), None)).await;
+    assert_eq!(plain.status, StatusCode::UNAUTHORIZED, "{}", plain.body);
+    assert!(
+        plain.body.contains("The code is wrong, used or expired."),
+        "{}",
+        plain.body
+    );
+    // The wrong code spent nothing: the live one still signs in.
+    assert_eq!(
+        send(&plain_state, submit(&plain_code, None)).await.status,
+        StatusCode::SEE_OTHER
+    );
+}
+
+/// R7 (F): a code posted on another origin keeps its own 401 for a browser
+/// too: it says where to enter the code, and says nothing about the code.
+#[tokio::test]
+async fn r7_a_code_on_another_origin_is_not_redirected() {
+    let (state, _dir) = behind_https_front().await;
+    let (_, code) = code_from_link(&state).await;
+    let port = state.live_config.running().server.port;
+    let local = Request::builder()
+        .method("POST")
+        .uri(HANDOFF)
+        .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 52_348))))
+        .header(header::HOST, format!("127.0.0.1:{port}"))
+        .header(header::ORIGIN, format!("http://127.0.0.1:{port}"))
+        .header("sec-fetch-site", "same-origin")
+        .header("sec-fetch-mode", "navigate")
+        .header("sec-fetch-dest", "document")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(format!("code={code}")))
+        .expect("request builds");
+    let out = send(&state, local).await;
+    assert_eq!(out.status, StatusCode::UNAUTHORIZED, "{}", out.body);
+    assert!(out.body.contains("public HTTPS address"), "{}", out.body);
+}

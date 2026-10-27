@@ -216,14 +216,19 @@ pub(crate) fn is_template_syntax(text: &str) -> bool {
     refuse_stray(&text[end..]).is_ok()
 }
 
-/// Expands every `${VAR}` in `text`. As in POSIX `${VAR:-default}`, a variable
-/// that is unset or empty takes the default; with no default it is refused.
-/// `${VAR:-}` is the explicit way to allow empty.
-///
-/// # Errors
-///
-/// The first variable that is unset or empty with no default, or the first
-/// `${` that is not a `${NAME}` reference.
+/// The text of `text` outside its `${NAME}` references, in order.
+pub(crate) fn literal_outside_templates(text: &str) -> String {
+    TEMPLATE.replace_all(text, "").into_owned()
+}
+
+/// Whether a `${NAME:-default}` in `text` has a non-empty default: text that
+/// a load writes in place of an unset variable. `${NAME:-}` has none.
+pub(crate) fn has_literal_default(text: &str) -> bool {
+    TEMPLATE
+        .captures_iter(text)
+        .any(|caps| caps.get(2).is_some_and(|default| !default.is_empty()))
+}
+
 /// The `${NAME}` names `text` references, in order.
 pub(super) fn template_names(text: &str) -> impl Iterator<Item = &str> {
     TEMPLATE
@@ -232,6 +237,14 @@ pub(super) fn template_names(text: &str) -> impl Iterator<Item = &str> {
         .map(|name| name.as_str())
 }
 
+/// Expands every `${VAR}` in `text`. As in POSIX `${VAR:-default}`, a variable
+/// that is unset or empty takes the default; with no default it is refused.
+/// `${VAR:-}` is the explicit way to allow empty.
+///
+/// # Errors
+///
+/// The first variable that is unset or empty with no default, or the first
+/// `${` that is not a `${NAME}` reference.
 pub(crate) fn expand_template(
     text: &str,
     overlay: &EnvOverlay,

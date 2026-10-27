@@ -17,6 +17,7 @@ mod backend_transport;
 mod config_file;
 mod env_overlay;
 mod env_provider;
+use env_provider::{EnvFileConfig, Expansion, OverlayEnv, Tolerance};
 mod features;
 pub(crate) mod load_error;
 pub(crate) use features::DEFAULT_TASK_TTL_MS;
@@ -37,7 +38,7 @@ mod pattern_grammar;
 mod record_key;
 mod remote_provenance_posture;
 mod secret_file;
-mod secret_ref;
+pub(crate) mod secret_ref;
 mod server_config;
 mod strict_keys;
 mod validation;
@@ -60,7 +61,6 @@ use crate::security::{posture, verify_remote_server_provenance};
 use crate::{Error, Result};
 pub(crate) use backend_transport::transport_key_for;
 use config_file::ConfigFile;
-use env_provider::OverlayEnv;
 
 pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvFiles, SystemHome};
 use env_overlay::{SecretFileDigests, SecretRefsRead, digest};
@@ -194,37 +194,6 @@ fn default_routing_profile() -> String {
 
 fn default_prompts_resources_fetch_timeout() -> Duration {
     Duration::from_secs(10)
-}
-
-#[derive(Default, Deserialize)]
-#[serde(default)]
-struct EnvFileConfig {
-    env_files: Vec<String>,
-}
-
-/// How a malformed env file is treated during evaluation.
-///
-/// An enum rather than a bool so the call site says which behaviour it wants
-/// without the reader opening the signature.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Tolerance {
-    /// Warn and carry on — what [`Config::load`] has always done.
-    Warn,
-    /// Refuse the load, for callers that can decline to start.
-    Fail,
-}
-
-/// Whether a load substitutes the environment into the config it returns.
-///
-/// A config destined for a rewrite must stay [`Expansion::Literal`]: the write
-/// path serialises the whole struct, so a substituted secret becomes a
-/// plaintext secret on disk.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Expansion {
-    /// Resolve `env:` references and expand `${VAR}` patterns.
-    Resolve,
-    /// Leave every reference exactly as the file spells it.
-    Literal,
 }
 
 impl Config {

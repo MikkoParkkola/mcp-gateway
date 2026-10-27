@@ -1,13 +1,32 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The figment provider that reads `MCP_GATEWAY_*` overrides from the env files and the process.
+//! The env-overlay provider: `MCP_GATEWAY_*` overrides read from the overlay, and the settings around it.
 
 use figment::{
     Metadata, Profile, Provider,
     value::{Dict, Map, Tag, Value},
 };
+use serde::Deserialize;
 
 use super::{EnvOverlay, backend_transport};
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub(super) struct EnvFileConfig {
+    pub(super) env_files: Vec<String>,
+}
+
+/// How a malformed env file is treated during evaluation.
+///
+/// An enum rather than a bool so the call site says which behaviour it wants
+/// without the reader opening the signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Tolerance {
+    /// Warn and carry on — what [`Config::load`] has always done.
+    Warn,
+    /// Refuse the load, for callers that can decline to start.
+    Fail,
+}
 
 /// Figment provider reading `MCP_GATEWAY_*` from the overlay, then the process
 /// environment.
@@ -21,10 +40,10 @@ pub(super) struct OverlayEnv<'a> {
 
 /// The `MCP_GATEWAY_*` names a CLI flag owns (clap `env = ...`). They are not
 /// config overrides: `MCP_GATEWAY_CAPABILITIES` names a directory for the tool
-/// subcommands, and read as the `capabilities` key it failed every config
-/// load. A test walks `Cli::command()` and requires this list to equal its env
-/// names, so a new flag's variable cannot reach the overlay unlisted.
-pub(super) const CLI_OWNED_ENV: &[&str] = &[
+/// subcommands, and read as the `capabilities` key it failed every config load.
+/// A test walks `Cli::command()` and requires this list to equal
+/// its env names, so a new flag's variable cannot reach the overlay unlisted.
+pub(crate) const CLI_OWNED_ENV: &[&str] = &[
     "MCP_GATEWAY_CA_CERT",
     "MCP_GATEWAY_CAPABILITIES",
     "MCP_GATEWAY_CLIENT_CERT",
@@ -82,7 +101,7 @@ impl<'a> OverlayEnv<'a> {
                 // number and `[a, b]` as a list, and `Figment::extract` does
                 // not coerce a string into either. Inserting the raw string
                 // would fail every non-string field an operator can override.
-                // invariant: figment's `Value: FromStr` has `Err = Infallible`.
+                // invariant: figment's `Value` parses from any string (`Err = Infallible`).
                 dict.insert(leaf.clone(), value.parse().expect("infallible"));
             }
             [head, tail @ ..] => {
@@ -107,7 +126,19 @@ impl Provider for OverlayEnv<'_> {
 
     fn data(&self) -> figment::Result<Map<Profile, Dict>> {
         let mut dict = Dict::new();
-        for (_, parts, value) in self.overrides(std::env::vars_os()) {
+        for (key, value) in self.merged_vars(std::env::vars_os()) {
+            // Whole names only: `MCP_GATEWAY_CAPABILITIES__NAME` is still a
+            // nested override of `capabilities.name`.
+            if CLI_OWNED_ENV.contains(&key.as_str()) {
+                continue;
+            }
+            let Some(rest) = key.strip_prefix(Self::PREFIX) else {
+                continue;
+            };
+            let parts: Vec<String> = rest.split("__").map(str::to_lowercase).collect();
+            if parts.iter().any(String::is_empty) {
+                continue;
+            }
             Self::insert_nested(&mut dict, &parts, value);
         }
         backend_transport::refuse_backend_url(&dict).map_err(figment::Error::from)?;
@@ -115,29 +146,15 @@ impl Provider for OverlayEnv<'_> {
     }
 }
 
-impl OverlayEnv<'_> {
-    /// The `MCP_GATEWAY_*` overrides applied from `base` and the env files:
-    /// (name, nested path, value). The one filter both the provider and the
-    /// revision capture read, so they cannot disagree on what was applied.
-    pub(super) fn overrides<I>(&self, base: I) -> Vec<(String, Vec<String>, String)>
-    where
-        I: Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
-    {
-        self.merged_vars(base)
-            .into_iter()
-            .filter_map(|(key, value)| {
-                // Whole names only: `MCP_GATEWAY_CAPABILITIES__NAME` is still a
-                // nested override of `capabilities.name`.
-                if CLI_OWNED_ENV.contains(&key.as_str()) {
-                    return None;
-                }
-                let rest = key.strip_prefix(Self::PREFIX)?;
-                let parts: Vec<String> = rest.split("__").map(str::to_lowercase).collect();
-                if parts.iter().any(String::is_empty) {
-                    return None;
-                }
-                Some((key, parts, value))
-            })
-            .collect()
-    }
+/// Whether a load substitutes the environment into the config it returns.
+///
+/// A config destined for a rewrite must stay [`Expansion::Literal`]: the write
+/// path serialises the whole struct, so a substituted secret becomes a
+/// plaintext secret on disk.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Expansion {
+    /// Resolve `env:` references and expand `${VAR}` patterns.
+    Resolve,
+    /// Leave every reference exactly as the file spells it.
+    Literal,
 }
