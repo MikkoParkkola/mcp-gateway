@@ -502,12 +502,12 @@ const TRANSIENT_SITES: &[(&str, usize)] = &[
     ),
     // A capability mint's resolve or refresh admission.
     (
-        "identity_propagation::account_strategies::AccountStrategyRegistry::resolve",
+        "identity_propagation::account_strategies_resolve::AccountStrategyRegistry::resolve",
         1,
     ),
     // The lease recheck before the send, from three callers.
     (
-        "identity_propagation::account_strategies::AccountStrategyRegistry::revalidate",
+        "identity_propagation::account_strategies_resolve::AccountStrategyRegistry::revalidate",
         1,
     ),
     // A per-user mint's admission, before the dispatch.

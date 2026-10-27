@@ -53,6 +53,7 @@ async fn reload_as_admin(ctx: ReloadContext) -> (StatusCode, Value) {
             denied_tools: None,
             admin: true,
             kind: crate::config::ApiKeyKind::Shared,
+            ..Default::default()
         }],
         ..Default::default()
     };

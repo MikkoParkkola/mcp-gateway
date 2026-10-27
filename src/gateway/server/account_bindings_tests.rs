@@ -21,6 +21,7 @@ fn api_key(name: &str) -> ApiKeyConfig {
         denied_tools: None,
         admin: false,
         kind: crate::config::ApiKeyKind::Shared,
+        ..Default::default()
     }
 }
 

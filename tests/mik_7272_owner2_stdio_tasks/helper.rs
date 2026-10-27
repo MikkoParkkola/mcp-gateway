@@ -246,6 +246,7 @@ pub fn write_config(
             denied_tools: None,
             admin: false,
             kind: ApiKeyKind::Shared,
+            ..Default::default()
         });
     }
     config.backends.insert(
