@@ -8,67 +8,13 @@ use std::{path::Path, path::PathBuf, sync::Arc, time::Duration};
 use super::reload_context::replace::{
     Expected, FileRevision, Replace, ReplaceError, Replaced, replace_detached,
 };
+use super::replace_test_support::{
+    NEXT, START, WAIT, context, names, read, running_has_b, setup, to,
+};
 use super::*;
 use crate::config::Config;
 use crate::fs_lock::ExclusiveFileLock;
 use crate::gateway::test_helpers::write_owner_only;
-
-const WAIT: Duration = Duration::from_secs(5);
-
-/// A commented config, so the bytes test sees comments survive.
-const START: &str =
-    "# operator's note\nbackends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\" # first\n";
-/// The same file with backend `b` added and every comment kept.
-const NEXT: &str = "# operator's note\nbackends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\" # first\n  b:\n    http_url: \"http://127.0.0.1:9/mcp\"\n";
-
-fn setup() -> (tempfile::TempDir, PathBuf, Arc<ReloadContext>) {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("gateway.yaml");
-    write_owner_only(&path, START).expect("write config");
-    let ctx = context(&path);
-    (dir, path, ctx)
-}
-
-fn context(path: &Path) -> Arc<ReloadContext> {
-    let running = Config::load(Some(path)).expect("config loads");
-    Arc::new(
-        ReloadContext::new(
-            path.to_path_buf(),
-            Arc::new(LiveConfig::new(running)),
-            Arc::new(crate::backend::BackendRegistry::new()),
-            crate::config::FailsafeConfig::default(),
-            Duration::from_secs(60),
-        )
-        .expect("the registry pairs with the config"),
-    )
-}
-
-/// Replace gateway.yaml with `bytes`.
-fn to(expected: Expected, bytes: &'static str, replaced: Replaced) -> Replace {
-    Replace {
-        expected,
-        compute: Box::new(move |_| Ok(bytes.as_bytes().to_vec())),
-        replaced,
-    }
-}
-
-fn running_has_b(ctx: &ReloadContext) -> bool {
-    ctx.live_config.get().backends.contains_key("b")
-}
-
-fn read(path: &Path) -> String {
-    std::fs::read_to_string(path).expect("read")
-}
-
-/// Every name in `dir`, for "nothing staged beside it" assertions.
-fn names(dir: &Path) -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(dir)
-        .expect("list")
-        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
-        .collect();
-    names.sort();
-    names
-}
 
 /// T1: the file holds exactly the given bytes, comments included, and the
 /// running config is reloaded from them; nothing is left beside it.
@@ -115,9 +61,8 @@ async fn a_stale_revision_is_refused_with_the_current_one() {
 async fn a_refused_compute_writes_and_stages_nothing() {
     let (dir, path, ctx) = setup();
     let refuse = Replace {
-        expected: Expected::Any,
-        compute: Box::new(|_| Err("the splice cannot be proven".to_string())),
-        replaced: Replaced::KeepBeside,
+        compute: Box::new(|_, _| Err("the splice cannot be proven".to_string())),
+        ..to(Expected::Any, START, Replaced::KeepBeside)
     };
 
     let failure = replace_detached(ctx, refuse, WAIT)
@@ -134,9 +79,8 @@ async fn a_refused_compute_writes_and_stages_nothing() {
 async fn non_utf8_config_bytes_are_refused() {
     let (_dir, path, ctx) = setup();
     let bad = Replace {
-        expected: Expected::Any,
-        compute: Box::new(|_| Ok(vec![0xff, 0xfe, b'\n'])),
-        replaced: Replaced::Discard,
+        compute: Box::new(|_, _| Ok(vec![0xff, 0xfe, b'\n'])),
+        ..to(Expected::Any, START, Replaced::Discard)
     };
 
     let failure = replace_detached(ctx, bad, WAIT)
@@ -321,12 +265,12 @@ fn crashed_after_rename(path: &Path, bytes: &str) {
     write_owner_only(crate::identity_grants::journal::resolved(path), bytes).expect("rename");
 }
 
-fn lock_now(
+async fn lock_now(
     path: &Path,
-) -> impl std::future::Future<
-    Output = Result<ExclusiveFileLock, crate::config_persistence::lock::NotLocked>,
-> + '_ {
+) -> Result<ExclusiveFileLock, crate::config_persistence::lock::NotLocked> {
     crate::config_persistence::lock::lock_config(path, std::time::Instant::now() + WAIT)
+        .await
+        .map(|locked| locked.held)
 }
 
 /// T7: a `staged` journal is rolled back by the next holder of the config
@@ -486,7 +430,7 @@ async fn a_cancelled_lock_stays_held_until_its_recovery_ends() {
             let armed = fault::set(&path, fault::Fault::Pause(Arc::clone(&pause)));
             let locking = path.clone();
             let task = tokio::spawn(async move {
-                crate::config_persistence::lock::lock_config_recovering(
+                crate::config_persistence::lock::lock_config(
                     &locking,
                     std::time::Instant::now() + WAIT,
                 )
@@ -532,4 +476,267 @@ async fn within_hang_bound(test: &str, body: impl std::future::Future<Output = (
     tokio::time::timeout(Duration::from_secs(30), body)
         .await
         .unwrap_or_else(|_| panic!("{test} hung past 30 s"));
+}
+
+/// Paths the recording loader below was asked to load.
+#[cfg(unix)] // only the symlink tests read it
+static LOADED: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(unix)]
+fn recording_load(
+    path: &Path,
+    live: &Arc<LiveConfig>,
+    env: &crate::config::LiveEnv,
+) -> Result<super::reload_context::EvaluatedReload, String> {
+    LOADED.lock().expect("loaded").push(path.to_path_buf());
+    super::reload_context::load_config_patch(path, live, env)
+}
+
+/// The write's reload loads the target the writer resolved and checked, not
+/// the symlink spelling: a link moved A→B→A during the reload can never make
+/// the writer report success on bytes the runtime did not load.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_writes_reload_reads_the_pinned_target_not_the_link() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let real = dir.path().join("real.yaml");
+    write_owner_only(&real, START).expect("write config");
+    let link = dir.path().join("gateway.yaml");
+    std::os::unix::fs::symlink(&real, &link).expect("symlink");
+    let running = Config::load(Some(&link)).expect("config loads");
+    let mut ctx = ReloadContext::new(
+        link.clone(),
+        Arc::new(LiveConfig::new(running)),
+        Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    )
+    .expect("context");
+    ctx.load = recording_load;
+
+    replace_detached(
+        Arc::new(ctx),
+        to(Expected::Any, NEXT, Replaced::Discard),
+        WAIT,
+    )
+    .await
+    .expect("applies");
+
+    let target = crate::identity_grants::journal::resolved(&link);
+    let mine: Vec<PathBuf> = LOADED
+        .lock()
+        .expect("loaded")
+        .iter()
+        .filter(|p| p.starts_with(dir.path()) || p.starts_with(target.parent().expect("dir")))
+        .cloned()
+        .collect();
+    assert!(
+        mine.contains(&target),
+        "the reload read the pinned target: {mine:?}"
+    );
+    assert!(!mine.contains(&link), "never the link spelling: {mine:?}");
+}
+
+/// A restore whose journal then cannot be removed refuses the lock, and the
+/// context still owes the reload that brings the runtime to the restored
+/// bytes.
+#[tokio::test]
+async fn a_restore_whose_journal_stays_still_owes_a_reload() {
+    use crate::config_persistence::journal::fault;
+    let (_dir, path, ctx) = setup();
+    crashed_after_rename(&path, NEXT);
+    let armed = fault::set(&path, fault::Fault::FailJournalRemove);
+
+    let refused = ctx
+        .mutate_and_reload_outcome_within(&path, WAIT, |_: &mut Config| Ok::<(), String>(()))
+        .await;
+    drop(armed);
+
+    assert!(
+        refused.is_err(),
+        "the lock is refused while the journal stays"
+    );
+    assert_eq!(read(&path), START, "the original is back on disk");
+    assert!(
+        ctx.reload_owed.load(std::sync::atomic::Ordering::SeqCst),
+        "the runtime still owes the reload to the restored bytes"
+    );
+}
+
+/// A reload not started by a write (the watcher's) resolves the config once
+/// and loads that same target it locked, never the symlink spelling.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_watcher_reload_loads_the_target_it_locked() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let real = dir.path().join("real.yaml");
+    write_owner_only(&real, START).expect("write config");
+    let link = dir.path().join("gateway.yaml");
+    std::os::unix::fs::symlink(&real, &link).expect("symlink");
+    let running = Config::load(Some(&link)).expect("config loads");
+    let mut ctx = ReloadContext::new(
+        link.clone(),
+        Arc::new(LiveConfig::new(running)),
+        Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    )
+    .expect("context");
+    ctx.load = recording_load;
+
+    ctx.reload_outcome().await.expect("the reload loads");
+
+    let target = crate::identity_grants::journal::resolved(&link);
+    let loaded = LOADED.lock().expect("loaded");
+    assert!(
+        loaded.contains(&target),
+        "the reload read its locked target: {loaded:?}"
+    );
+    assert!(
+        !loaded.contains(&link),
+        "never the link spelling: {loaded:?}"
+    );
+}
+
+/// A gateway on `gateway.yaml`, a symlink to `real.yaml`, with a second
+/// config beside it to re-point the link at, and every load recorded.
+#[cfg(unix)]
+fn linked_context() -> (tempfile::TempDir, PathBuf, PathBuf, Arc<ReloadContext>) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let real = dir.path().join("real.yaml");
+    write_owner_only(&real, START).expect("write config");
+    write_owner_only(dir.path().join("other.yaml"), START).expect("write other");
+    let link = dir.path().join("gateway.yaml");
+    std::os::unix::fs::symlink(&real, &link).expect("symlink");
+    let running = Config::load(Some(&link)).expect("config loads");
+    let mut ctx = ReloadContext::new(
+        link.clone(),
+        Arc::new(LiveConfig::new(running)),
+        Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    )
+    .expect("context");
+    ctx.load = recording_load;
+    (dir, real, link, Arc::new(ctx))
+}
+
+/// Run `reload` until it has taken its locks, re-point `link` at
+/// `other.yaml`, let it finish, check it `applies`, return the paths loaded.
+#[cfg(unix)]
+async fn repointed_mid_reload(
+    dir: &Path,
+    link: &Path,
+    reload: impl std::future::Future<Output = bool> + Send + 'static,
+    applies: bool,
+) -> Vec<PathBuf> {
+    const BOUND: Duration = Duration::from_secs(30); // fail, never hang
+    let pause = super::reload_pause::arm(link);
+    let reload = tokio::spawn(reload);
+    tokio::time::timeout(BOUND, pause.reached.notified())
+        .await
+        .expect("the reload reaches its pause");
+    std::fs::remove_file(link).expect("unlink");
+    std::os::unix::fs::symlink(dir.join("other.yaml"), link).expect("re-point");
+    pause.release.notify_one();
+    let outcome = tokio::time::timeout(BOUND, reload).await.expect("ends");
+    assert_eq!(outcome.expect("reload task"), applies, "applies");
+    let dir = crate::identity_grants::journal::resolved(dir);
+    LOADED
+        .lock()
+        .expect("loaded")
+        .iter()
+        .filter(|p| p.starts_with(&dir) || p.as_path() == link)
+        .cloned()
+        .collect()
+}
+
+/// Every load this test saw read `real`, the target its lock resolved:
+/// never the link spelling, nor what the link names after it moved.
+#[cfg(unix)]
+fn only_the_locked_target(loaded: &[PathBuf], real: &Path) {
+    let real = crate::identity_grants::journal::resolved(real);
+    assert!(
+        !loaded.is_empty() && loaded.iter().all(|p| *p == real),
+        "only the locked target {} is loaded: {loaded:?}",
+        real.display()
+    );
+}
+
+/// H1 for writers: the lock, the write and the reload are one config. A link
+/// re-pointed while the reload is under way does not move it elsewhere.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_write_reloads_what_it_locked_when_the_link_moves() {
+    let (dir, real, link, ctx) = linked_context();
+    let at = link.clone();
+    let write = async move {
+        ctx.mutate_and_reload_outcome_within(&at, WAIT, |_: &mut Config| Ok::<(), String>(()))
+            .await
+            .is_ok()
+    };
+    let loaded = repointed_mid_reload(dir.path(), &link, write, true).await;
+    only_the_locked_target(&loaded, &real);
+}
+
+/// H1 for readers, under the same race: the watcher's reload stays on the
+/// target its lock resolved.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_watcher_reload_stays_put_when_the_link_moves() {
+    let (dir, real, link, ctx) = linked_context();
+    let reload = async move { ctx.reload_outcome().await.is_ok() };
+    let loaded = repointed_mid_reload(dir.path(), &link, reload, true).await;
+    only_the_locked_target(&loaded, &real);
+}
+
+/// H1 for the whole-config writer, under the same race.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_whole_config_write_reloads_what_it_locked_when_the_link_moves() {
+    let (dir, real, link, ctx) = linked_context();
+    let config = Config::load(Some(&real)).expect("config loads");
+    let at = link.clone();
+    let write = async move {
+        ctx.write_and_reload_outcome_within(&at, WAIT, &config)
+            .await
+            .is_ok()
+    };
+    let loaded = repointed_mid_reload(dir.path(), &link, write, true).await;
+    only_the_locked_target(&loaded, &real);
+}
+
+/// H1 for the reload a lock recovery left owed: paid before the writer's
+/// own work, it loads the target the writer locked, not the link.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_owed_reload_loads_what_the_writer_locked_when_the_link_moves() {
+    let (dir, real, link, ctx) = linked_context();
+    ctx.reload_owed
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let at = link.clone();
+    let write = async move {
+        ctx.mutate_and_reload_outcome_within(&at, WAIT, |_: &mut Config| Ok::<(), String>(()))
+            .await
+            .is_ok()
+    };
+    // Moved before the write: the write refuses after the owed reload.
+    let loaded = repointed_mid_reload(dir.path(), &link, write, false).await;
+    assert_eq!(loaded.len(), 1, "only the owed reload: {loaded:?}");
+    only_the_locked_target(&loaded, &real);
+}
+
+/// H1 for a replace that changes nothing: its reload still loads the
+/// target the lock resolved.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unchanged_replace_reloads_what_it_locked_when_the_link_moves() {
+    let (dir, real, link, ctx) = linked_context();
+    let replace = async move {
+        replace_detached(ctx, to(Expected::Any, START, Replaced::Discard), WAIT)
+            .await
+            .is_ok()
+    };
+    let loaded = repointed_mid_reload(dir.path(), &link, replace, true).await;
+    only_the_locked_target(&loaded, &real);
 }
