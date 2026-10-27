@@ -95,6 +95,17 @@ async fn direct_call(router: &axum::Router, tool: &str) -> Value {
     serde_json::from_slice(&bytes).unwrap_or(Value::Null)
 }
 
+/// Whether a direct answer refuses the call: a JSON-RPC error, or the
+/// absent-tool result the direct route gives a withheld name.
+fn refused(answer: &Value) -> bool {
+    answer.get("error").is_some() || answer["result"]["isError"] == true
+}
+
+/// Whether a direct answer is the tool's own result.
+fn served(answer: &Value) -> bool {
+    answer.get("result").is_some() && answer["result"]["isError"] != true
+}
+
 /// `(name, selected)` per tool the admin list shows for `sel`.
 async fn admin_selection(router: &axum::Router) -> Vec<(String, Value)> {
     let (status, body) = send_json(router, Method::GET, "/ui/api/tools?server=sel", None).await;
@@ -135,15 +146,15 @@ async fn an_add_with_a_selection_serves_only_the_ticked_tools() {
     assert_eq!(status, StatusCode::CREATED, "{body}");
     let saved = std::fs::read_to_string(&fixture.path).unwrap();
     assert!(saved.contains("allowed_tools"), "{saved}");
-    let refused = direct_call(&fixture.router, "write_b").await;
-    assert!(refused.get("error").is_some(), "{refused}");
+    let answer = direct_call(&fixture.router, "write_b").await;
+    assert!(refused(&answer), "{answer}");
     assert_eq!(
         upstream.write_b.load(Ordering::SeqCst),
         0,
         "write_b reached the server"
     );
-    let served = direct_call(&fixture.router, "read_a").await;
-    assert!(served.get("result").is_some(), "{served}");
+    let answer = direct_call(&fixture.router, "read_a").await;
+    assert!(served(&answer), "{answer}");
     assert_eq!(
         admin_selection(&fixture.router).await,
         [
@@ -176,46 +187,26 @@ async fn a_patch_keeps_replaces_or_clears_the_selection() {
         patch(json!({"description": "unrelated"})).await.0,
         StatusCode::OK
     );
-    assert!(
-        direct_call(&fixture.router, "write_b")
-            .await
-            .get("error")
-            .is_some()
-    );
+    assert!(refused(&direct_call(&fixture.router, "write_b").await));
     assert_eq!(
         patch(json!({"allowed_tools": ["read_a", "write_b"]}))
             .await
             .0,
         StatusCode::OK
     );
-    assert!(
-        direct_call(&fixture.router, "write_b")
-            .await
-            .get("result")
-            .is_some()
-    );
+    assert!(served(&direct_call(&fixture.router, "write_b").await));
     assert_eq!(
         patch(json!({"allowed_tools": ["read_a"]})).await.0,
         StatusCode::OK
     );
-    assert!(
-        direct_call(&fixture.router, "write_b")
-            .await
-            .get("error")
-            .is_some()
-    );
+    assert!(refused(&direct_call(&fixture.router, "write_b").await));
     assert_eq!(
         patch(json!({"allowed_tools": null})).await.0,
         StatusCode::OK
     );
     let saved = std::fs::read_to_string(&fixture.path).unwrap();
     assert!(!saved.contains("allowed_tools"), "{saved}");
-    assert!(
-        direct_call(&fixture.router, "write_b")
-            .await
-            .get("result")
-            .is_some()
-    );
+    assert!(served(&direct_call(&fixture.router, "write_b").await));
 }
 
 /// An empty list or a pattern that matches nothing is refused, and the
@@ -225,7 +216,7 @@ async fn an_unusable_selection_is_refused_and_writes_nothing() {
     let url = stub(Arc::default()).await;
     let fixture = fixture().await;
     let before = std::fs::read(&fixture.path).unwrap();
-    for bad in [json!([]), json!(["re*ad"]), json!(["*"])] {
+    for bad in [json!([]), json!(["re*ad"]), json!(["*_write"])] {
         let (status, body) = add(&fixture, &url, bad.clone()).await;
         assert!(status.is_client_error(), "{bad}: {status} {body}");
         assert_eq!(std::fs::read(&fixture.path).unwrap(), before, "{bad}");

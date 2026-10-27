@@ -159,6 +159,12 @@ async fn add_backend(
         return flat_error(StatusCode::UNPROCESSABLE_ENTITY, msg).into_response();
     }
 
+    if let Some(list) = &req.allowed_tools
+        && let Err(refused) = crate::config::check_backend_allowed_tools(&req.name, list)
+    {
+        return flat_error(StatusCode::UNPROCESSABLE_ENTITY, refused.to_string()).into_response();
+    }
+
     // Require a config path to write to
     let Some(ref config_path) = state.config_path else {
         return config_path_unavailable().into_response();
@@ -380,6 +386,12 @@ async fn update_backend(
         enabled,
         allowed_tools,
     } = req;
+
+    if let Some(Some(list)) = &allowed_tools
+        && let Err(refused) = crate::config::check_backend_allowed_tools(&name, list)
+    {
+        return flat_error(StatusCode::UNPROCESSABLE_ENTITY, refused.to_string()).into_response();
+    }
 
     // Validate: only one of command/url may be specified
     if command.is_some() && url.is_some() {

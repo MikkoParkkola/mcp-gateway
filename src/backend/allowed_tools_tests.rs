@@ -109,8 +109,8 @@ fn backend(url: &str, allowed: Option<&[&str]>) -> Arc<Backend> {
     ))
 }
 
-fn call(tool: &str) -> Option<Value> {
-    Some(json!({"name": tool, "arguments": {}}))
+fn call(tool: &str) -> Value {
+    json!({"name": tool, "arguments": {}})
 }
 
 fn count(calls: &Calls, tool: &str) -> usize {
@@ -125,11 +125,11 @@ async fn an_unselected_tool_is_refused_at_dispatch_with_no_upstream_call() {
     let url = stub(Arc::clone(&calls), First::Answer, Arc::default()).await;
     let backend = backend(&url, Some(&["read_a"]));
     backend.get_tools_shared().await.expect("listed");
-    let refused = backend.request("tools/call", call("write_b")).await;
+    let refused = backend.request("tools/call", Some(call("write_b"))).await;
     assert!(refused.is_err(), "write_b dispatched: {refused:?}");
     assert_eq!(count(&calls, "write_b"), 0, "the upstream saw write_b");
     backend
-        .request("tools/call", call("read_a"))
+        .request("tools/call", Some(call("read_a")))
         .await
         .expect("read_a is selected");
     assert_eq!(count(&calls, "read_a"), 1);
@@ -160,7 +160,12 @@ async fn the_served_catalogue_leaves_out_unselected_and_later_tools() {
         assert!(backend.blocked_tool_refusal(None, tool).is_some(), "{tool}");
     }
     assert!(!backend.is_blocked_tool("read_a"));
-    assert!(backend.request("tools/call", call("new_c")).await.is_err());
+    assert!(
+        backend
+            .request("tools/call", Some(call("new_c")))
+            .await
+            .is_err()
+    );
     assert_eq!(count(&calls, "new_c"), 0, "the upstream saw new_c");
 }
 
@@ -199,7 +204,7 @@ async fn an_admitted_call_keeps_its_retries_after_a_narrowing_reload() {
     admitted.get_tools_shared().await.expect("listed");
     let in_flight = tokio::spawn({
         let admitted = Arc::clone(&admitted);
-        async move { admitted.request("tools/call", call("read_a")).await }
+        async move { admitted.request("tools/call", Some(call("read_a"))).await }
     });
     arrived.notified().await;
     assert!(registry.remove("sel"));
@@ -213,7 +218,7 @@ async fn an_admitted_call_keeps_its_retries_after_a_narrowing_reload() {
     assert_eq!(count(&calls, "read_a"), 2, "first attempt plus one retry");
     assert!(
         narrowed
-            .request("tools/call", call("read_a"))
+            .request("tools/call", Some(call("read_a")))
             .await
             .is_err()
     );

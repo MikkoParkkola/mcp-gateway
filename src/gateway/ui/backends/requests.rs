@@ -52,11 +52,19 @@ pub struct UpdateBackendRequest {
     /// `allowed_tools`: absent keeps the current list, `null` removes it
     /// (every tool), a list replaces it.
     #[serde(default, deserialize_with = "present")]
+    #[allow(
+        clippy::option_option,
+        reason = "three states on the wire: absent keeps, null clears, a list replaces"
+    )]
     pub allowed_tools: Option<Option<Vec<String>>>,
 }
 
 /// A key that is present, `null` included, as `Some`; serde's default keeps
 /// an absent key `None`, so a PATCH can tell "leave it" from "clear it".
+#[allow(
+    clippy::option_option,
+    reason = "the absent/null distinction is the point of this deserializer"
+)]
 fn present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
     D: serde::Deserializer<'de>,

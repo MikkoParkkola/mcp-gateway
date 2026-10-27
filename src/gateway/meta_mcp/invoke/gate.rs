@@ -613,8 +613,9 @@ impl MetaMcp {
                 Withholding::Refused
             } else {
                 match self.tool_visible_to(server, tool, scope, session_id) {
-                    Visibility::Withheld(Withholding::Descriptor) => Withholding::Descriptor,
-                    Visibility::Withheld(Withholding::Unselected) => Withholding::Unselected,
+                    Visibility::Withheld(
+                        reason @ (Withholding::Descriptor | Withholding::Unselected),
+                    ) => reason,
                     _ => return None,
                 }
             };

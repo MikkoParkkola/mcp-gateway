@@ -146,6 +146,20 @@ pub(crate) fn tool_pattern_matches(patterns: &[String], tool: &str, qualified: &
     })
 }
 
+/// Refuse a backend's `allowed_tools` that is empty or holds a pattern that
+/// matches nothing. The loader and the web UI's add and edit both ask this,
+/// so a list the file would refuse is refused at the request too.
+pub(crate) fn check_backend_allowed_tools(name: &str, list: &[String]) -> Result<()> {
+    let at = format!("backends.{name}.allowed_tools");
+    if list.is_empty() {
+        return Err(Error::ConfigValidation(format!(
+            "{at} is empty, so the backend would offer no tool. List the tools it should \
+             offer, or remove the key to offer every tool."
+        )));
+    }
+    refuse(&at, list, Grammar::ToolPrefix(Role::Allow))
+}
+
 impl Config {
     /// Refuse a pattern its section cannot match (MIK-8298).
     pub(super) fn validate_pattern_grammar(&self) -> Result<()> {
@@ -197,14 +211,7 @@ impl Config {
         }
         for (name, backend) in &self.backends {
             if let Some(list) = &backend.allowed_tools {
-                let at = format!("backends.{name}.allowed_tools");
-                if list.is_empty() {
-                    return Err(Error::ConfigValidation(format!(
-                        "{at} is empty, so the backend would offer no tool. List the tools \
-                         it should offer, or remove the key to offer every tool."
-                    )));
-                }
-                refuse(&at, list, Grammar::ToolPrefix(Role::Allow))?;
+                check_backend_allowed_tools(name, list)?;
             }
         }
         // The capability backend is a backend too: '*' is never in a name.
