@@ -125,3 +125,27 @@ fn r13_no_plain_compare_of_the_secret_remains() {
     }
     assert!(hits.is_empty(), "plain compares of the secret: {hits:#?}");
 }
+
+/// R10: without the dashboard there is no hand-off, so an HTTPS `public_url`
+/// on this plain-HTTP listener refuses every value as a wrong one: the live
+/// value and a guess look the same, nothing is spent, and only the operator's
+/// log names the deployment.
+#[cfg(not(feature = "webui"))]
+#[test]
+fn r10_an_https_front_without_a_handoff_answers_every_value_as_a_wrong_one() {
+    let (mut state, printed) = bootstrap_state(Some("bearer"), vec![]);
+    let mut config = crate::config::Config::default();
+    config.server.public_url = Some("https://gw.example".to_string());
+    state.live_config = std::sync::Arc::new(crate::config_reload::LiveConfig::new(config));
+    let live = observe(&state, &printed, LOCAL);
+    let guess = observe(&state, "not-the-value", LOCAL);
+    assert_eq!(
+        live, guess,
+        "the deployment refusal must not say whether the guess was live"
+    );
+    assert_eq!(live.0, StatusCode::UNAUTHORIZED);
+    assert!(
+        state.dashboard_bootstrap.peek().is_some(),
+        "nothing was spent"
+    );
+}

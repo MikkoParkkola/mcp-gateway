@@ -42,15 +42,29 @@ fn public_origin_of(live: &crate::config_reload::LiveConfig) -> Option<String> {
     (url.scheme() == "https").then(|| url.origin().ascii_serialization())
 }
 
-/// The loopback redemption's hand-off (#2130): spend the link and answer
-/// with a one-time code for the public origin. `None` when there is no HTTPS
-/// public origin, or the link is no longer the live value.
+/// What the hand-off did: shown the code page, or failed for any reason (no
+/// HTTPS public origin, the clock, or not the live value). A failure carries
+/// nothing about which, so the caller can only answer it as a wrong value.
 #[cfg(feature = "webui")]
-pub(super) fn hand_off(state: &AuthState, candidate: &str) -> Option<Response> {
-    let origin = public_origin(state)?;
-    let Redemption { not_after, now } = state.dashboard_bootstrap.consume_capped(candidate)?;
+pub(super) enum Handoff {
+    Shown(Response),
+    Failed,
+}
+
+/// The loopback redemption's hand-off (#2130): spend the link and answer
+/// with a one-time code for the public origin.
+#[cfg(feature = "webui")]
+pub(super) fn hand_off(state: &AuthState, candidate: &str) -> Handoff {
+    let Some(origin) = public_origin(state) else {
+        return Handoff::Failed;
+    };
+    let super::Redeem::Issued(Redemption { not_after, now }) =
+        state.dashboard_bootstrap.consume_capped(candidate)
+    else {
+        return Handoff::Failed;
+    };
     let code = state.dashboard_bootstrap.mint_handoff(now, not_after);
-    Some(code_page(&origin, &code))
+    Handoff::Shown(code_page(&origin, &code))
 }
 
 /// The loopback redemption's answer: the code, and where to enter it. There is

@@ -40,7 +40,7 @@ pub(crate) use api_key::{PreviousDigest, refuse_shared_digests};
 #[path = "auth_dashboard.rs"]
 mod dashboard;
 pub use dashboard::DashboardBootstrap;
-pub(crate) use dashboard::{Now, Redemption, SessionCheck, SessionLimits, Touch};
+pub(crate) use dashboard::{Now, Redeem, Redemption, SessionCheck, SessionLimits, Touch};
 #[path = "auth_bootstrap.rs"]
 mod bootstrap;
 #[path = "auth_handoff.rs"]

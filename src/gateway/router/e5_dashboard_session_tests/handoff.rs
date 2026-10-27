@@ -342,3 +342,25 @@ async fn a_code_posted_on_the_loopback_origin_is_not_spent() {
         real.body
     );
 }
+
+/// R11: a hand-off that cannot happen (here the clock reads before 1970)
+/// answers the live link exactly as it answers a wrong one, and keeps it.
+#[tokio::test]
+async fn r11_a_hand_off_that_fails_answers_as_a_wrong_link() {
+    let (state, _dir) = behind_https_front().await;
+    let value = state.dashboard_bootstrap.peek().expect("startup value");
+    let (live, wrong) = {
+        let _clock = crate::clock::test_clock::before_epoch();
+        let live = send(&state, redeem(&value, None)).await;
+        let wrong = send(&state, redeem("not-the-value", None)).await;
+        (live, wrong)
+    };
+    assert_eq!(live.status, wrong.status, "{} / {}", live.body, wrong.body);
+    assert_eq!(live.body, wrong.body);
+    assert_eq!(live.headers, wrong.headers);
+    assert_eq!(
+        state.dashboard_bootstrap.peek(),
+        Some(value),
+        "the live link is kept"
+    );
+}

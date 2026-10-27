@@ -11,8 +11,8 @@ use tracing::warn;
 use crate::security::security_metrics::{AuthFailureKind, auth_failure};
 
 use super::{
-    AuthState, DashboardBootstrap, Now, Redemption, SessionLimits, bearer_unauthorized_response,
-    cookie_secure, session_cookie,
+    AuthState, DashboardBootstrap, Now, Redeem, Redemption, SessionLimits,
+    bearer_unauthorized_response, cookie_secure, session_cookie,
 };
 
 /// Exchange a dashboard bootstrap link for a session, if this is one.
@@ -81,12 +81,14 @@ pub(super) fn try_dashboard_bootstrap(
                 spent,
                 "Dashboard bootstrap refused: redeemable only from this machine"
             );
-            return Some(bearer_unauthorized_response(if spent {
-                "The dashboard link works only from the machine running the gateway, and this \
-                 attempt has used it up. Run `mcp-gateway dashboard-link` for a fresh one."
-            } else {
-                "The dashboard link works only from the machine running the gateway."
-            }));
+            // One answer whether or not it was spent: saying "used up" only
+            // for the live value told a caller from elsewhere that they had
+            // guessed it. The operator sees `spent` in the log above.
+            return Some(bearer_unauthorized_response(
+                "The dashboard link works only from the machine running the gateway. If this \
+                 was the live link, it is now used up: run `mcp-gateway dashboard-link` for a \
+                 fresh one.",
+            ));
         }
 
         // Checked BEFORE the value is spent. The bootstrap is one-time, so
@@ -114,53 +116,56 @@ pub(super) fn try_dashboard_bootstrap(
         // Checked BEFORE the value is spent, like the admin-credential check:
         // an HTTPS `public_url` added by reload makes the session cookie
         // `Secure`, and a browser on this plain-HTTP listener would drop it,
-        // wasting the only link. The same refusal the link endpoint gives.
-        // One reading, used for both this refusal and the cookie below, so a
-        // reload in between cannot split them. Only a caller holding the right
-        // value learns about the deployment; any other gets the plain 401.
+        // wasting the only link. One reading, used for both this check and the
+        // cookie below, so a reload in between cannot split them.
+        //
+        // Decided from configuration alone, never by comparing the value: with
+        // the dashboard built, the live value is handed off (the one success
+        // here); every other outcome, the live value included when the hand-off
+        // cannot happen, gets exactly the wrong-value refusal and spends
+        // nothing. So no caller learns whether they hold the live value, and
+        // only the operator learns about the deployment, from this log line and
+        // from `mcp-gateway dashboard-link`.
         let secure = cookie_secure(state);
-        let holds_value = state.dashboard_bootstrap.peek().as_deref() == Some(candidate.as_str());
-        if secure && !state.tls_enabled && holds_value {
-            // A cookie set here would be scoped to this loopback host, and a
-            // browser drops a `Secure` one over plain HTTP anyway. Hand off to
-            // the public origin instead (#2130): this page shows a one-time
+        if secure && !state.tls_enabled {
+            // A cookie set here would be scoped to this loopback host. Hand off
+            // to the public origin instead (#2130): the page shows a one-time
             // code the operator enters there, in a same-origin form, so the
-            // code never travels in a URL and no proxy header is trusted.
-            // Only a build with the dashboard serves the page the code is
-            // entered on; without it this listener has no `/dashboard` route.
+            // code never travels in a URL and no proxy header is trusted. Only
+            // a build with the dashboard serves the page the code is entered on.
             #[cfg(feature = "webui")]
-            let handed_off = super::handoff::hand_off(state, &candidate);
-            #[cfg(not(feature = "webui"))]
-            let handed_off: Option<Response> = None;
-            if let Some(page) = handed_off {
+            if let super::handoff::Handoff::Shown(page) =
+                super::handoff::hand_off(state, &candidate)
+            {
                 return Some(page);
             }
-            warn!("Dashboard bootstrap refused: HTTPS public_url on a plain-HTTP listener");
-            return Some(axum::response::IntoResponse::into_response((
-                axum::http::StatusCode::CONFLICT,
-                "server.public_url is HTTPS but this listener is plain HTTP, so the session \
-                 cookie would be discarded, even through an HTTPS proxy in front of it. \
-                 Enable mtls or remove public_url.",
-            )));
-        }
-        let Some(Redemption { not_after, now }) =
-            state.dashboard_bootstrap.consume_capped(&candidate)
-        else {
             auth_failure(AuthFailureKind::BootstrapRefused);
-            // Refused but kept: the clock reads before 1970 (MIK-8202). Say
-            // so, or the operator would throw away a link that still works.
-            if state.dashboard_bootstrap.peek().as_deref() == Some(candidate.as_str()) {
-                return Some(bearer_unauthorized_response(
-                    "The host clock reads before 1970, so this sign-in cannot be dated. The \
-                     link is kept: open it again once the clock is set.",
-                ));
-            }
-            warn!("Dashboard bootstrap rejected: wrong or already-used value");
-            return Some(bearer_unauthorized_response(
-                "Bootstrap link is invalid or already used. Run `mcp-gateway \
-                 dashboard-link` for a fresh one.",
-            ));
-        };
+            warn!(
+                "Dashboard bootstrap refused: server.public_url is HTTPS but this listener is \
+                 plain HTTP, so the session cookie would be discarded; enable mtls or remove \
+                 public_url"
+            );
+            return Some(refused_value());
+        }
+        let Redemption { not_after, now } =
+            match state.dashboard_bootstrap.consume_capped(&candidate) {
+                Redeem::Issued(redemption) => redemption,
+                // Refused but kept: the clock reads before 1970 (MIK-8202). Said
+                // to every candidate, decided before any compare, so it does not
+                // tell the live value from a guess.
+                Redeem::ClockUnreadable => {
+                    auth_failure(AuthFailureKind::BootstrapRefused);
+                    return Some(bearer_unauthorized_response(
+                        "The host clock reads before 1970, so a sign-in cannot be dated. Set the \
+                     clock; if this was the live link, it still works afterwards.",
+                    ));
+                }
+                Redeem::Refused => {
+                    auth_failure(AuthFailureKind::BootstrapRefused);
+                    warn!("Dashboard bootstrap rejected: wrong or already-used value");
+                    return Some(refused_value());
+                }
+            };
         // Hand the browser an opaque session in an HttpOnly cookie and redirect.
         // Done here rather than in the handler so the token never leaves this
         // module, and so the address bar keeps nothing after the redirect.
@@ -172,6 +177,16 @@ pub(super) fn try_dashboard_bootstrap(
             secure,
         ))
     }
+}
+
+/// The refusal of a value that is not the live one, and of every value where
+/// telling them apart would leak which is live: one response, built in one
+/// place, so the paths that share it cannot drift apart.
+fn refused_value() -> Response {
+    bearer_unauthorized_response(
+        "Bootstrap link is invalid or already used. Run `mcp-gateway dashboard-link` for a \
+         fresh one.",
+    )
 }
 
 /// A fresh session for a redeemed link or handoff code: an opaque handle in a

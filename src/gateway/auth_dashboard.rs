@@ -191,28 +191,37 @@ impl DashboardBootstrap {
     }
 
     /// Consume the value if it matches, returning the cap it was minted with.
-    /// A wall clock before 1970 refuses it unspent: the session it would
-    /// issue could not be dated, and the operator keeps a working link
+    /// A wall clock before 1970 refuses every candidate unspent, decided before
+    /// any compare, so the answer is the same for the live value and a guess:
+    /// the session could not be dated, and the operator keeps a working link
     /// (MIK-8202).
-    pub(crate) fn consume_capped(&self, candidate: &str) -> Option<Redemption> {
+    pub(crate) fn consume_capped(&self, candidate: &str) -> Redeem {
         let now = Now::read();
         if wall_unreadable(now) {
             tracing::warn!(
                 "dashboard bootstrap refused: the host clock reads before 1970; the link is kept"
             );
-            return None;
+            return Redeem::ClockUnreadable;
         }
-        self.take_matching(candidate)
-            .map(|(_, not_after)| Redemption { not_after, now })
+        match self.take_matching(candidate) {
+            Some((_, not_after)) => Redeem::Issued(Redemption { not_after, now }),
+            None => Redeem::Refused,
+        }
     }
 
-    /// Take the value and its cap if `candidate` matches it.
+    /// Take the value and its cap if `candidate` matches it. An empty slot
+    /// still runs the compare, against a dummy, so whether a live link is
+    /// outstanding cannot be timed.
     fn take_matching(&self, candidate: &str) -> Option<(String, Option<SystemTime>)> {
         let mut guard = self.value.lock().ok()?;
-        match guard.as_ref() {
-            Some((expected, _)) if expected == candidate => guard.take(),
-            _ => None,
-        }
+        let matches = match guard.as_ref() {
+            Some((expected, _)) => secret_eq(expected.as_bytes(), candidate),
+            None => {
+                let _ = secret_eq(&EMPTY_SLOT_DUMMY, candidate);
+                false
+            }
+        };
+        if matches { guard.take() } else { None }
     }
 
     /// Whether some live session at `now` has a handle whose SHA-256 is
@@ -310,15 +319,18 @@ impl DashboardBootstrap {
     /// sign-in. Compared in constant time; every code has the same length.
     #[cfg(feature = "webui")]
     pub(crate) fn take_handoff(&self, candidate: &str, now: Now) -> Option<Redemption> {
-        use subtle::ConstantTimeEq as _;
         let mut slot = self.handoff.lock().ok()?;
         let (expired, matches) = {
-            let live = slot.as_ref()?;
+            let Some(live) = slot.as_ref() else {
+                // No code outstanding: pay for the compare anyway.
+                let _ = secret_eq(&EMPTY_SLOT_DUMMY, candidate);
+                return None;
+            };
             (
                 wall_unreadable(now)
                     || exceeds(live.minted, now, HANDOFF_TTL)
                     || live.cap.is_some_and(|cap| cap_reached(now, cap)),
-                bool::from(live.value.as_bytes().ct_eq(candidate.as_bytes())),
+                secret_eq(live.value.as_bytes(), candidate),
             )
         };
         if expired {
@@ -488,6 +500,30 @@ impl Default for DashboardBootstrap {
 #[cfg(test)]
 #[path = "auth_dashboard_tests.rs"]
 mod tests;
+
+/// The outcome of spending a bootstrap value, decided so that no branch
+/// depends on comparing the candidate except `Issued` versus `Refused`.
+pub(crate) enum Redeem {
+    /// The candidate was the live value; it is spent.
+    Issued(Redemption),
+    /// The clock reads before 1970: every candidate is refused, none spent.
+    ClockUnreadable,
+    /// Not the live value, or none is outstanding.
+    Refused,
+}
+
+/// The one compare of a candidate with a secret: constant time for equal
+/// lengths (every value and code is 43 base64url characters).
+fn secret_eq(secret: &[u8], candidate: &str) -> bool {
+    use subtle::ConstantTimeEq as _;
+    #[cfg(test)]
+    CT_COMPARES.with(|n| n.set(n.get() + 1));
+    bool::from(secret.ct_eq(candidate.as_bytes()))
+}
+
+/// Compared against when no value is outstanding, so an empty slot costs
+/// the same as a full one: the length of `random_value`'s output.
+const EMPTY_SLOT_DUMMY: [u8; 43] = [b'A'; 43];
 
 #[cfg(test)]
 thread_local! {
