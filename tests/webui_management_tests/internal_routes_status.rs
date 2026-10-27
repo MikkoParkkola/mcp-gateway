@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! What `/ui/status` shows a non-admin (moved from the parent table's file).
+//! `/ui/api/status` as a non-admin sees it: the same answer with the admin
+//! fields redacted.
 
 use super::*;
 

@@ -389,10 +389,19 @@ const ROWS: &[Row] = &[
         [401, 403, 403, 200],
     ),
     // src/gateway/ui/capabilities.rs:319 (put_capability)
+    // The admin reaches the handler, which refuses a save without If-Match.
     row(
         "/ui/api/capabilities/{name}",
         Method::PUT,
         "/ui/api/capabilities/test_cap",
+        Payload::Yaml,
+        [401, 403, 403, 428],
+    ),
+    // src/gateway/ui/capabilities.rs (validate_capability_route; writes nothing)
+    row(
+        "/ui/api/capabilities/{name}/validate",
+        Method::POST,
+        "/ui/api/capabilities/test_cap/validate",
         Payload::Yaml,
         [401, 403, 403, 200],
     ),
@@ -405,12 +414,36 @@ const ROWS: &[Row] = &[
         [401, 403, 403, 200],
     ),
     // src/gateway/ui/capabilities.rs:486 (delete_capability)
+    // The admin reaches the handler, which refuses a delete without If-Match.
     row(
         "/ui/api/capabilities/{name}",
         Method::DELETE,
         "/ui/api/capabilities/test_cap",
         Payload::None,
-        [401, 403, 403, 200],
+        [401, 403, 403, 428],
+    ),
+    // src/gateway/ui/activity/access.rs (resolve: no credential 401, a key
+    // with no Activity role 403); mod.rs (admit: no transparency log 404)
+    row(
+        "/ui/api/activity",
+        Method::GET,
+        "/ui/api/activity",
+        Payload::None,
+        [401, 401, 403, 404],
+    ),
+    row(
+        "/ui/api/activity/export",
+        Method::GET,
+        "/ui/api/activity/export",
+        Payload::None,
+        [401, 401, 403, 404],
+    ),
+    row(
+        "/ui/api/activity/{id}",
+        Method::GET,
+        "/ui/api/activity/1-0123456789abcdef",
+        Payload::None,
+        [401, 401, 403, 404],
     ),
     // src/gateway/ui/backends.rs:184 (add_backend; no config path in the fixture)
     row(
@@ -523,6 +556,34 @@ const ROWS: &[Row] = &[
         "/ui/api/import/openapi",
         Payload::Import,
         [401, 403, 403, 200],
+    ),
+    // src/gateway/ui/history.rs (markers). The codes come from the
+    // design (admin only: no credential 401, non-admin 403). This fixture
+    // never runs the server's start, so no counter store is attached and the
+    // admin is told counting is off (503), as /ui/api/events/held answers 404
+    // without an events hub; the served 200 is cited in `SERVED_BY`.
+    row(
+        "/ui/api/markers",
+        Method::GET,
+        "/ui/api/markers",
+        Payload::None,
+        [401, 403, 403, 503],
+    ),
+    // history.rs (series), as above.
+    row(
+        "/ui/api/metrics/series",
+        Method::GET,
+        "/ui/api/metrics/series?metric=calls&window=24h",
+        Payload::None,
+        [401, 403, 403, 503],
+    ),
+    // history.rs (series): an unsupported query is refused for the admin too.
+    row(
+        "/ui/api/metrics/series",
+        Method::GET,
+        "/ui/api/metrics/series?window=7d",
+        Payload::None,
+        [401, 403, 403, 400],
     ),
     // src/gateway/ui/shell.rs, fn asset: static, outside auth like /ui
     row(

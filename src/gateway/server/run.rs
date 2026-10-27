@@ -17,9 +17,9 @@ use super::support::log_startup_banner;
 use super::test_seams;
 use super::warmstart::{WarmStartMode, WarmerGuard, build_warm_start_list};
 use super::{
-    BuiltMetaMcp, events_wiring, expand_home_path, identity_grants, listener, persistence,
-    spawn_export_task, spawn_health_loop, spawn_idle_reaper, start_checks, task_runtime,
-    tools_changed, window_saver,
+    BuiltMetaMcp, counter_wiring, events_wiring, expand_home_path, identity_grants, listener,
+    persistence, spawn_export_task, spawn_health_loop, spawn_idle_reaper, start_checks,
+    task_runtime, tools_changed, window_saver,
 };
 use crate::capability::CapabilityWatcher;
 use crate::config_reload::{ConfigWatcher, LiveConfig, ReloadContext};
@@ -92,6 +92,9 @@ impl Gateway {
             .await?;
         let reload_reporting =
             crate::config_reload::refusals::ReloadReporting::with_override_audit(override_auditor);
+        // Restored before anything is served or reloaded.
+        let (counters, counter_saver) =
+            counter_wiring::start(&data_dir, &meta_mcp, shutdown_tx.subscribe());
         // F24: this mode delivers tools/list_changed, so it may advertise it.
         meta_mcp.set_change_feed(crate::gateway::ChangeFeed::Http);
         let (tools_changed_tx, tools_changed_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -226,7 +229,8 @@ impl Gateway {
                 .with_identity_grant_sink_opt(identity_grant_sink.clone())
                 .with_stop(reload_stop)
                 .with_capabilities(meta_mcp.get_capabilities())
-                .with_on_registered(warmer.hook()),
+                .with_on_registered(warmer.hook())
+                .with_markers(Some(Arc::clone(&counters.store))),
             );
             meta_mcp.set_reload_context(Arc::clone(&reload_ctx));
         }
@@ -312,6 +316,7 @@ impl Gateway {
             &webhook_registry,
             &live_config,
             credentials,
+            &counters.store,
         )?;
         let subscriptions = Arc::new(
             crate::gateway::subscription_registry::SubscriptionRegistry::new(
@@ -610,7 +615,10 @@ impl Gateway {
         let cost = None;
         let (ranker, tracker) = (ranker_for_shutdown, tracker_for_shutdown);
         let paths = (ranker_path.clone(), transition_path.clone());
-        persistence::save_state_on_shutdown(ranker, paths.0, tracker, paths.1, cost).await;
+        // Ends on the shutdown broadcast, like the cost saver.
+        drop(counter_saver);
+        let more = vec![counters.shutdown_save()];
+        persistence::save_state_on_shutdown(ranker, paths.0, tracker, paths.1, cost, more).await;
         // Awaited after the state saves, not before: its own deadline runs
         // from the broadcast, so a stalled window disk never delays them.
         if let Some(saver) = window_saver {
