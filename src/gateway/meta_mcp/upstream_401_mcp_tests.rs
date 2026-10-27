@@ -280,7 +280,7 @@ async fn a_bridged_cold_list_401_refreshes_and_releases_the_key() {
         &[ProviderStep::InvalidGrant],
     );
     let installed = custody.installed();
-    let (mut meta, dispatches) = gateway(
+    let (_log, mut meta, dispatches) = gateway(
         &[("mail", Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &installed,
