@@ -96,7 +96,7 @@ impl Sink for Found {
             return;
         }
         let func = at.func.clone().unwrap_or_else(|| "<module>".to_string());
-        let mut note = |table: &mut std::collections::BTreeMap<String, usize>, needle: &str| {
+        let note = |table: &mut std::collections::BTreeMap<String, usize>, needle: &str| {
             *table
                 .entry(format!("{}\t{func}\t{needle}", at.file))
                 .or_default() += 1;
