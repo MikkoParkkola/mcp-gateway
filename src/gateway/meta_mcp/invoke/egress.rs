@@ -303,6 +303,7 @@ impl MetaMcp {
             external_tool: tool,
             subject: None,
             trace_id: None,
+            key: crate::security::response_policy::KeyOf::NotKnown,
         };
         let at = Egress {
             content: ContentChecks::Here,
@@ -374,6 +375,7 @@ impl crate::transport::notification_sink::NotificationScreen for NotificationEgr
             external_tool: &method,
             subject: None,
             trace_id: None,
+            key: crate::security::response_policy::KeyOf::NotKnown,
         };
         let at = Egress {
             content: ContentChecks::Here,
@@ -523,6 +525,7 @@ impl MetaMcp {
             external_tool: tool,
             subject: None,
             trace_id: None,
+            key: crate::security::response_policy::KeyOf::NotKnown,
         };
         let at = Egress {
             content: ContentChecks::Dispatched,
@@ -584,6 +587,7 @@ impl MetaMcp {
             external_tool: "tools/list",
             subject: None,
             trace_id: None,
+            key: crate::security::response_policy::KeyOf::NotKnown,
         };
         let at = Egress {
             content: ContentChecks::Here,
@@ -624,6 +628,7 @@ impl MetaMcp {
             external_tool: tool,
             subject: None,
             trace_id: None,
+            key: crate::security::response_policy::KeyOf::NotKnown,
         };
         let at = Egress {
             content: ContentChecks::Here,

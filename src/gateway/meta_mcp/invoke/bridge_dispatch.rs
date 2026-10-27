@@ -185,6 +185,7 @@ impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
             external_tool: "gateway_invoke",
             subject: None,
             trace_id: None,
+            key: crate::security::response_policy::KeyOf::NotKnown,
         };
         self.meta
             .enforce_firewall_challenge(&delivered_challenge(challenge), &targets, &correlation)

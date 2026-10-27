@@ -72,3 +72,20 @@ fn a_block_scoped_to_an_unregistered_backend_does_not_apply() {
     let screen = meta.notification_screen("caller", "session");
     assert!(screen.admit(&mut progress()), "admitted, redacted");
 }
+
+/// X1: backend and key both unnamed. Only the pair (`alpha`, `k1`) meets the
+/// block rule, and that pair is among the candidates, so the notification is
+/// withheld.
+#[test]
+fn the_backend_and_key_cross_product_reaches_a_notification() {
+    let meta = meta_with(json!([
+        {"match": "*", "scan": ["credentials"], "action": "block",
+         "servers": ["alpha"], "keys": ["k1"]},
+        {"match": "*", "scan": ["credentials"], "action": "allow"},
+    ]));
+    let screen = meta.notification_screen("caller", "session");
+    assert!(
+        !screen.admit(&mut progress()),
+        "withheld: (alpha, k1) could have sent it"
+    );
+}

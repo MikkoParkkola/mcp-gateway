@@ -171,10 +171,16 @@ async fn guard_tool_call(
         let caller_name = auth.client.map_or("anonymous", |c| c.name.as_str());
         let session_id = format!("direct:{backend_name}");
         let control_identity = direct_control_identity(state, auth, &session_id);
-        let verdict = fw.check_request(
+        let target = crate::security::response_policy::RuleTarget {
+            server: crate::security::response_policy::ServerOf::Backend(backend_name),
+            tool: tool_name,
+            key: crate::security::response_policy::KeyOf::of_client(
+                auth.client.and_then(AuthenticatedClient::api_key_identity),
+            ),
+        };
+        let verdict = fw.check_request_keyed(
             &session_id,
-            backend_name,
-            tool_name,
+            target,
             arguments,
             caller_name,
             &control_identity,

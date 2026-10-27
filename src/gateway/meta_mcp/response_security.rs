@@ -350,6 +350,7 @@ impl super::MetaMcp {
             external_tool: tool,
             subject: None,
             trace_id: None,
+            key: crate::security::response_policy::KeyOf::NotKnown,
         };
         // A task's result is a `tools/call` result: its content gates ran at
         // dispatch.

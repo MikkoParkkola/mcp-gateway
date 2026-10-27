@@ -55,6 +55,7 @@ fn correlation() -> ResponseCorrelation<'static> {
         external_tool: "t",
         subject: None,
         trace_id: None,
+        key: crate::security::response_policy::KeyOf::NotKnown,
     }
 }
 

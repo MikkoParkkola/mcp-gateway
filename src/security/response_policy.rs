@@ -32,6 +32,14 @@ pub(crate) enum KeyOf<'a> {
     NotKnown,
 }
 
+impl<'a> KeyOf<'a> {
+    /// From a caller whose credential is known: its proven API key name
+    /// (`AuthenticatedClient::api_key_identity`), or none.
+    pub(crate) fn of_client(api_key: Option<&'a str>) -> Self {
+        api_key.map_or(Self::NoKey, Self::Key)
+    }
+}
+
 /// The backend a firewall rule's `servers` scope is judged against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ServerOf<'a> {
@@ -39,6 +47,17 @@ pub(crate) enum ServerOf<'a> {
     Backend(&'a str),
     /// No backend: matches no `servers` glob.
     NoBackend,
+}
+
+impl<'a> ServerOf<'a> {
+    /// The name records and per-backend guards key on: the backend, or the
+    /// `gateway` label for none.
+    pub(crate) const fn label(self) -> &'a str {
+        match self {
+            Self::Backend(name) => name,
+            Self::NoBackend => "gateway",
+        }
+    }
 }
 
 /// What a firewall rule is matched against.
@@ -69,6 +88,10 @@ pub(crate) struct ResponseCorrelation<'a> {
     /// where no single invocation produced the answer (a notification, a
     /// plan) or the correlation only labels a scan.
     pub(crate) trace_id: Option<&'a str>,
+    /// The API key the caller authenticated with, for a firewall rule's
+    /// `keys` scope. Only the firewall reads it; `NotKnown` where this
+    /// surface carries no proven key.
+    pub(crate) key: KeyOf<'a>,
 }
 
 /// Distinguishes a served result from an internally consumed legacy question.

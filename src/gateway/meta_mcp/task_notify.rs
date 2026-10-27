@@ -155,6 +155,7 @@ impl MetaMcp {
             external_tool: "notifications/tasks",
             subject: reader.subject,
             trace_id: None,
+            key: crate::security::response_policy::KeyOf::NotKnown,
         };
         let delivered = self
             .record_notification_delivery_attempt(sent, &correlation, reader.credential.clone())

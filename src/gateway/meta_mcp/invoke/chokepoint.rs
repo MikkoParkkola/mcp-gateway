@@ -276,14 +276,14 @@ impl MetaMcp {
         (caller, control_identity, target): (&str, &str, ScanTarget),
     ) -> Option<Error> {
         let firewall = self.firewall.as_deref()?;
-        let verdict = firewall.check_request(
-            session_id,
-            server,
+        // stdio only: no API keys on that transport.
+        let target = crate::security::response_policy::RuleTarget {
+            server: crate::security::response_policy::ServerOf::Backend(server),
             tool,
-            arguments,
-            caller,
-            control_identity,
-        );
+            key: crate::security::response_policy::KeyOf::NoKey,
+        };
+        let verdict =
+            firewall.check_request_keyed(session_id, target, arguments, caller, control_identity);
         if verdict.action == crate::security::firewall::FirewallAction::Warn {
             tracing::warn!(
                 server,
@@ -376,12 +376,16 @@ impl MetaMcp {
                 message: "inputResponses must be an object".to_owned(),
             });
         }
-        // The key is threaded to this check with the request side's (POLICY.2
-        // section 3); until then it resolves as not known, which only fails closed.
+        // The proven key when the scope carries one; otherwise not known, never
+        // "no key": an internal scope (`unscoped`, `allow_all`) has no caller
+        // to prove it, and not known can only fail closed.
         let target = crate::security::response_policy::RuleTarget {
             server: crate::security::response_policy::ServerOf::Backend(server),
             tool,
-            key: crate::security::response_policy::KeyOf::NotKnown,
+            key: scope.grant_key.map_or(
+                crate::security::response_policy::KeyOf::NotKnown,
+                crate::security::response_policy::KeyOf::Key,
+            ),
         };
         let mut verdict = firewall.rescan(target, outbound.arguments);
         if let Some(answers) = outbound.answers {
@@ -402,6 +406,7 @@ impl MetaMcp {
             external_tool: tool,
             subject: None,
             trace_id: None,
+            key: crate::security::response_policy::KeyOf::NotKnown,
         };
         firewall.audit_dispatch(&labels, outbound.arguments, &verdict, source.as_str());
         if verdict.allowed {

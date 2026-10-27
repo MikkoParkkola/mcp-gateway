@@ -99,6 +99,7 @@ async fn deliver(
                 external_tool: "gateway_invoke",
                 subject: None,
                 trace_id: None,
+                key: crate::security::response_policy::KeyOf::NotKnown,
             },
             signing: None,
             chain_source: ChainSource::Backend,

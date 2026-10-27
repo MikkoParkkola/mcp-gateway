@@ -9,8 +9,8 @@ use super::{Finding, FindingLocation, Firewall, FirewallAction, FirewallVerdict,
 use crate::protocol::continuation::Keyring;
 use crate::security::Severity;
 use crate::security::response_policy::{
-    InvalidResponseTargets, KeyOf, ResponseArtifactKind, ResponseCorrelation,
-    ResponseMutationPolicy, ResponsePolicyTarget, RuleTarget, ServerOf,
+    InvalidResponseTargets, ResponseArtifactKind, ResponseCorrelation, ResponseMutationPolicy,
+    ResponsePolicyTarget, RuleTarget, ServerOf,
 };
 
 impl Firewall {
@@ -53,7 +53,7 @@ impl Firewall {
                                 ServerOf::Backend(&target.server)
                             },
                             tool: &target.tool,
-                            key: KeyOf::NotKnown,
+                            key: correlation.key,
                         },
                         &findings,
                     ),

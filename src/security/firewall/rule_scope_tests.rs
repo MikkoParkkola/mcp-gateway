@@ -56,6 +56,7 @@ fn answer(fw: &Firewall, targets: &[&str]) -> FirewallAction {
         external_tool: "gateway_invoke",
         subject: None,
         trace_id: None,
+        key: crate::security::response_policy::KeyOf::NotKnown,
     };
     fw.check_response_artifact(
         &mut value,
@@ -256,5 +257,160 @@ fn t9_the_new_fields_load_and_a_misspelt_exception_field_is_refused() {
         &with_rule("{match: \"*\", action: allow, except: [{servr: a}]}"),
         "security.firewall.rules[0].except[0].servr",
         "servr",
+    );
+}
+
+// ─── The `keys` scope (the caller's proven API key) ─────────────────────────
+
+use crate::security::Severity;
+use crate::security::response_policy::{KeyOf, RuleTarget, ServerOf};
+
+fn keyed(fw: &Firewall, key: KeyOf<'_>) -> FirewallAction {
+    let target = RuleTarget {
+        server: ServerOf::Backend("a"),
+        tool: "t",
+        key,
+    };
+    fw.check_request_keyed("s", target, &injected(), "caller", "caller")
+        .action
+}
+
+/// A4: a rule scoped to key `k1` applies to `k1` only; another key and a
+/// caller with no key fall through to the default.
+#[test]
+fn a_keys_scoped_rule_applies_to_its_key_only_request() {
+    let fw = firewall(json!([{"match": "*", "scan": ["shell_injection"],
+                              "action": "allow", "keys": ["k1"]}]));
+    assert_eq!(keyed(&fw, KeyOf::Key("k1")), FirewallAction::Allow);
+    assert_eq!(keyed(&fw, KeyOf::Key("k2")), FirewallAction::Block);
+    assert_eq!(keyed(&fw, KeyOf::NoKey), FirewallAction::Block);
+}
+
+/// A5: the same in the dispatch chokepoint's rescan.
+#[test]
+fn a_keys_scoped_rule_applies_to_its_key_only_rescan() {
+    let fw = firewall(json!([{"match": "*", "scan": ["shell_injection"],
+                              "action": "allow", "keys": ["k1"]}]));
+    let rescan = |key| {
+        fw.rescan(
+            RuleTarget {
+                server: ServerOf::Backend("a"),
+                tool: "t",
+                key,
+            },
+            &injected(),
+        )
+        .action
+    };
+    assert_eq!(rescan(KeyOf::Key("k1")), FirewallAction::Allow);
+    assert_eq!(rescan(KeyOf::Key("k2")), FirewallAction::Block);
+}
+
+/// A6: the same on the answer side, the key carried on the correlation.
+#[test]
+fn a_keys_scoped_rule_applies_to_its_key_only_answer() {
+    let fw = firewall(json!([{"match": "*", "scan": ["credentials"],
+                              "action": "allow", "keys": ["k1"]}]));
+    let judged = |key| {
+        let key_text = ["AKIA", "IOSFODNN7", "EXAMPLE"].concat();
+        let mut value =
+            json!({"content": [{"type": "text", "text": format!("AWS_ACCESS_KEY_ID={key_text}")}]});
+        let correlation = ResponseCorrelation {
+            session_id: "s",
+            caller: "caller",
+            external_server: "gateway",
+            external_tool: "gateway_invoke",
+            subject: None,
+            trace_id: None,
+            key,
+        };
+        let targets = [ResponsePolicyTarget {
+            server: "a".to_string(),
+            tool: "t".to_string(),
+            no_backend: false,
+        }];
+        fw.check_response_artifact(
+            &mut value,
+            &targets,
+            &correlation,
+            ResponseArtifactKind::FinalResponse,
+            ResponseMutationPolicy::Redact,
+        )
+        .expect("server-bound targets")
+        .action
+    };
+    assert_eq!(judged(KeyOf::Key("k1")), FirewallAction::Allow);
+    assert_eq!(judged(KeyOf::Key("k2")), FirewallAction::Block);
+}
+
+/// Resolve injected findings for a target with `key` (production credential
+/// findings are always High, so Low and High are injected here).
+fn resolve(fw: &Firewall, key: KeyOf<'_>, severity: Severity) -> FirewallAction {
+    let finding = Finding {
+        scan_type: ScanType::Credentials,
+        severity,
+        description: "fixture".to_string(),
+        matched: "fixture".to_string(),
+        location: FindingLocation::RequestArgs,
+    };
+    let target = RuleTarget {
+        server: ServerOf::Backend("a"),
+        tool: "t",
+        key,
+    };
+    fw.resolve_action(target, &[finding])
+}
+
+/// A10d: a key that is not known resolves over every key a rule names, and
+/// none: a `k1` warn before an unscoped allow gives warn for a Low finding,
+/// where a caller with no key gets the allow.
+#[test]
+fn a_key_not_known_takes_the_strongest_over_candidates_low() {
+    let fw = firewall(json!([
+        {"match": "*", "scan": ["credentials"], "action": "warn", "keys": ["k1"]},
+        {"match": "*", "scan": ["credentials"], "action": "allow"},
+    ]));
+    assert_eq!(
+        resolve(&fw, KeyOf::NotKnown, Severity::Low),
+        FirewallAction::Warn
+    );
+    assert_eq!(
+        resolve(&fw, KeyOf::NoKey, Severity::Low),
+        FirewallAction::Allow
+    );
+}
+
+/// A10e: the `k1` warn alone; a High finding under a key not known resolves
+/// to the default block through the no-key candidate, never the warn.
+#[test]
+fn a_key_not_known_takes_the_strongest_over_candidates_high() {
+    let fw = firewall(json!([
+        {"match": "*", "scan": ["credentials"], "action": "warn", "keys": ["k1"]},
+    ]));
+    assert_eq!(
+        resolve(&fw, KeyOf::NotKnown, Severity::High),
+        FirewallAction::Block
+    );
+    assert_eq!(
+        resolve(&fw, KeyOf::Key("k1"), Severity::High),
+        FirewallAction::Warn
+    );
+}
+
+/// A10f: an `except` key entry on a block rule does not exempt a call whose
+/// key is not known.
+#[test]
+fn an_except_key_does_not_exempt_a_key_not_known_from_a_block() {
+    let fw = firewall(json!([
+        {"match": "*", "scan": ["credentials"], "action": "block", "except": [{"key": "k1"}]},
+        {"match": "*", "scan": ["credentials"], "action": "allow"},
+    ]));
+    assert_eq!(
+        resolve(&fw, KeyOf::NotKnown, Severity::Low),
+        FirewallAction::Block
+    );
+    assert_eq!(
+        resolve(&fw, KeyOf::Key("k1"), Severity::Low),
+        FirewallAction::Allow
     );
 }

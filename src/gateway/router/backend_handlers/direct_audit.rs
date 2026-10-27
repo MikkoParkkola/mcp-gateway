@@ -247,6 +247,7 @@ async fn audited_call_judged(
         external_tool: &reads.tool,
         subject: reads.subject.as_ref(),
         trace_id: trace.as_deref(),
+        key: crate::security::response_policy::KeyOf::NotKnown,
     };
     // No log, nothing to record: the answer is not copied to be hashed.
     let document = state

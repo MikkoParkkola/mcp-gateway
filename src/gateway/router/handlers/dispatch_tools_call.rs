@@ -306,10 +306,18 @@ pub(super) async fn tools_call(
             {
                 lifecycle.renew(control_identity.clone());
             }
-            let verdict = fw.check_request(
+            let rule_target = crate::security::response_policy::RuleTarget {
+                server: crate::security::response_policy::ServerOf::Backend(target.server),
+                tool: target.tool,
+                key: crate::security::response_policy::KeyOf::of_client(
+                    client
+                        .as_ref()
+                        .and_then(crate::gateway::auth::AuthenticatedClient::api_key_identity),
+                ),
+            };
+            let verdict = fw.check_request_keyed(
                 session_id,
-                target.server,
-                target.tool,
+                rule_target,
                 target.arguments,
                 caller_name,
                 &control_identity,

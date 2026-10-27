@@ -158,6 +158,7 @@ async fn deliver(
         external_tool: &settle.tool,
         subject: None,
         trace_id: settle.trace.as_deref(),
+        key: crate::security::response_policy::KeyOf::NoKey,
     };
     let (frame, stored) = crate::gateway::router::record_judged_delivery(
         meta,

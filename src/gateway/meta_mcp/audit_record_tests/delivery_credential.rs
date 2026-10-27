@@ -50,6 +50,7 @@ async fn record_delivery_for(
         external_tool: "gateway_invoke",
         subject: who.grant.as_ref(),
         trace_id: None,
+        key: crate::security::response_policy::KeyOf::NotKnown,
     };
     assert!(
         meta.record_delivery_of(

@@ -67,6 +67,7 @@ fn correlation() -> ResponseCorrelation<'static> {
         external_tool: "gateway_execute",
         subject: None,
         trace_id: None,
+        key: crate::security::response_policy::KeyOf::NotKnown,
     }
 }
 

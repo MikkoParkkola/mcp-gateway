@@ -378,9 +378,28 @@ impl Firewall {
         caller: &str,
         control_identity: &str,
     ) -> FirewallVerdict {
+        let target = RuleTarget {
+            server: ServerOf::Backend(server),
+            tool,
+            key: KeyOf::NotKnown,
+        };
+        self.check_request_keyed(session_id, target, args, caller, control_identity)
+    }
+
+    /// [`Self::check_request`] with the caller's proven key, for a rule's
+    /// `keys` scope; the entry point every gateway route uses (POLICY.2).
+    pub(crate) fn check_request_keyed(
+        &self,
+        session_id: &str,
+        target: RuleTarget<'_>,
+        args: &Value,
+        caller: &str,
+        control_identity: &str,
+    ) -> FirewallVerdict {
         if !self.config.enabled {
             return FirewallVerdict::allow();
         }
+        let (server, tool) = (target.server.label(), target.tool);
 
         // 1. Content scan (input patterns, memory poisoning), shared with the
         //    dispatch chokepoint's `rescan`.
@@ -411,11 +430,6 @@ impl Firewall {
         let action = if gate.blind || gate.forced_block || tenant_blind || budget_refuse {
             FirewallAction::Block
         } else {
-            let target = RuleTarget {
-                server: ServerOf::Backend(server),
-                tool,
-                key: KeyOf::NotKnown,
-            };
             self.resolve_action(target, &findings)
         };
         let allowed = action != FirewallAction::Block;
@@ -438,6 +452,7 @@ impl Firewall {
                 external_tool: tool,
                 subject: None,
                 trace_id: None,
+                key: target.key,
             };
             let tenants = self.tenant_guard.request_tenants(args);
             audit.log_request_attributed(&labels, args, &verdict, &tenants);
@@ -602,6 +617,7 @@ impl Firewall {
             external_tool: tool,
             subject: None,
             trace_id: None,
+            key: crate::security::response_policy::KeyOf::NotKnown,
         };
         // The compatibility API always supplies one target. Keep the defensive
         // error branch fail-closed rather than panicking at an inspection boundary.

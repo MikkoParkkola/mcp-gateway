@@ -349,6 +349,7 @@ impl Services {
             external_tool: subject.name,
             subject: None,
             trace_id: None,
+            key: crate::security::response_policy::KeyOf::NotKnown,
         };
         match firewall.check_response_artifact(
             data,

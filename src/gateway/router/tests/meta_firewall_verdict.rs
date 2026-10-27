@@ -564,6 +564,7 @@ async fn response_artifact_folds_every_target_after_a_single_redacting_scan() {
                 external_tool: "gateway_execute",
                 subject: None,
                 trace_id: None,
+                key: crate::security::response_policy::KeyOf::NotKnown,
             },
             ResponseArtifactKind::FinalResponse,
             ResponseMutationPolicy::Redact,
