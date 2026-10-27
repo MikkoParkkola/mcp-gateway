@@ -22,6 +22,9 @@ use super::{
 #[path = "reload_context_write.rs"]
 mod write_api;
 
+#[path = "replace.rs"]
+pub(crate) mod replace;
+
 /// A candidate config, evaluated against the recorded env files.
 pub(super) struct EvaluatedReload {
     pub(super) config: Config,
@@ -178,7 +181,30 @@ pub struct ReloadContext {
     pub(super) capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
     /// Told which backends each applied reload registered (`MIK-8054`).
     pub(super) on_registered: Option<super::reload_warm_hook::OnRegistered>,
+    /// Set when lock recovery put an earlier gateway.yaml back on disk: the
+    /// running config is then on bytes that are gone, so the next holder of
+    /// the reload lock reloads before its own work. Cleared only by an
+    /// accepted reload, so a reload that fails is retried, never forgotten.
+    pub(super) reload_owed: std::sync::atomic::AtomicBool,
+    /// gateway.yaml as this gateway resolved it at start, through any
+    /// symlink. The byte writer writes only there: a link re-pointed since
+    /// would send config bytes, secrets included, wherever it now leads.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read only by the byte writer, whose first caller lands next"
+        )
+    )]
+    pub(super) trusted_config: PathBuf,
+    /// Applies `meta_mcp.surfaced_tools` from each published config,
+    /// set by the gateway when it attaches to this context.
+    surfaced_hook: parking_lot::Mutex<Option<SurfacedHook>>,
 }
+
+/// Applies a published config's `meta_mcp.surfaced_tools` to the running
+/// gateway, under `lock_reload`.
+pub(crate) type SurfacedHook = Arc<dyn Fn(&Config) + Send + Sync>;
 
 /// The refusal a reload returns when the gateway's shutdown ended its wait.
 pub(super) const STOPPED: &str = "config reload stopped: the gateway is shutting down";
@@ -228,8 +254,11 @@ impl ReloadContext {
             DestinationPolicy::for_posture(running.security.posture),
             &running.security.hardened.private_backends,
         )?;
+        let trusted_config = crate::identity_grants::journal::resolved(&config_path);
         Ok(Self {
             config_path,
+            trusted_config,
+            reload_owed: std::sync::atomic::AtomicBool::new(false),
             live_config,
             registry,
             failsafe_config,
@@ -247,7 +276,14 @@ impl ReloadContext {
             stop: tokio_util::sync::CancellationToken::new(),
             capabilities: None,
             on_registered: None,
+            surfaced_hook: parking_lot::Mutex::new(None),
         })
+    }
+
+    /// Install the hook that applies `surfaced_tools` on every applied
+    /// reload. The gateway calls it when it attaches to this context.
+    pub(crate) fn set_surfaced_hook(&self, hook: SurfacedHook) {
+        *self.surfaced_hook.lock() = Some(hook);
     }
 
     /// Announce `tools/list_changed` for `capabilities` when a reload's env
@@ -483,7 +519,34 @@ impl ReloadContext {
 
     /// The reload transaction itself. The caller must already hold the reload
     /// lock; taking it here as well would deadlock on the non-reentrant mutex.
+    /// An accepted reload pays any reload a lock recovery left owed.
     async fn reload_outcome_locked(&self) -> std::result::Result<ReloadOutcome, String> {
+        let outcome = self.reload_transaction().await;
+        if outcome.is_ok() {
+            self.reload_owed
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+        outcome
+    }
+
+    /// Note what a lock recovery did, then pay an owed reload before the
+    /// caller's own work, so no early return leaves the running config on
+    /// bytes recovery took away. The caller holds the reload lock. A failed
+    /// reload stays owed and is logged; the caller's work goes on, and its
+    /// own reload (every writer ends with one) tries again.
+    async fn pay_owed_reload(&self, recovered: crate::config_persistence::journal::Recovered) {
+        use std::sync::atomic::Ordering::SeqCst;
+        if recovered == crate::config_persistence::journal::Recovered::RolledBack {
+            self.reload_owed.store(true, SeqCst);
+        }
+        if self.reload_owed.load(SeqCst)
+            && let Err(error) = self.reload_outcome_locked().await
+        {
+            tracing::warn!(%error, path = %self.config_path.display(), "the reload owed after restoring gateway.yaml failed; it is retried on the next one");
+        }
+    }
+
+    async fn reload_transaction(&self) -> std::result::Result<ReloadOutcome, String> {
         #[cfg(test)]
         super::reload_pause::pause_here(&self.config_path).await;
         let evaluated = self.load_off_worker().await?;
@@ -640,6 +703,11 @@ impl ReloadContext {
         self.publish_overlay(overlay);
         // Still under `lock_reload`, against the config just published.
         self.report_registered(&patch.registered_change(), &self.live_config.get());
+        // `surfaced_tools` applies here too, under the same lock.
+        let surfaced_hook = self.surfaced_hook.lock().clone();
+        if let Some(hook) = surfaced_hook {
+            hook(&self.live_config.get());
+        }
 
         Ok(with_pending_restart(
             outcome,

@@ -333,6 +333,20 @@ impl TaskStore {
         (entry.record.input_round.clone(), entry.record.revision)
     }
 
+    /// Test-only: turn `id`'s open round into one written before the round
+    /// recorded its surfaced server.
+    #[cfg(test)]
+    pub(crate) fn unrecord_surfaced_for_test(&self, id: &str) {
+        let mut state = self.0.state();
+        let entry = state.entries.get_mut(id).expect("the fixture task exists");
+        let round = entry
+            .record
+            .input_round
+            .as_mut()
+            .expect("the round is open");
+        round.surfaced_server = None;
+    }
+
     /// Settle an open round `cancelled` with `reason` as its status message,
     /// in ONE write: the round is dropped before the record is measured.
     ///

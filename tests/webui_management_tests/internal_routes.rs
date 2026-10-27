@@ -246,9 +246,6 @@ fn mounted(path: &str) -> bool {
 }
 
 /// Bodies from `src/gateway/ui/control_plane_mutation_tests.rs` (grant-1, pol-1).
-const GRANT: &str = r#"{"grant":{"grant_id":"grant-1","subject_id":"user-1","server_id":"srv-1","status":"approved"},"reason":"MIK-1","rollback":{"summary":"revert","step":"restore prior grant"}}"#;
-const POLICY: &str = r#"{"policy":{"policy_id":"pol-1","name":"p","enforced":false},"reason":"MIK-1","rollback":{"summary":"revert","step":"restore prior grant"}}"#;
-const DECISION: &str = r#"{"target_kind":"grant","target_id":"grant-1","decision":"approve","reason":"MIK-1","rollback":{"summary":"revert","step":"restore prior grant"}}"#;
 /// `AddBackendRequest` / `UpdateBackendRequest` (src/gateway/ui/backends.rs:48, :67).
 const ADD_BACKEND: &str = r#"{"name":"probe","url":"http://127.0.0.1:9/probe"}"#;
 const UPDATE_BACKEND: &str = r#"{"description":"probe"}"#;
@@ -316,6 +313,14 @@ const ROWS: &[Row] = &[
         "/ui/api/status",
         Payload::None,
         [401, 200, 200, 200],
+    ),
+    // src/gateway/ui/overview.rs (overview)
+    row(
+        "/ui/api/overview",
+        Method::GET,
+        "/ui/api/overview",
+        Payload::None,
+        [401, 403, 403, 200],
     ),
     // src/gateway/ui/mod.rs:464 (tools)
     row(
@@ -420,50 +425,6 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 401, 403, 404],
     ),
-    // src/gateway/ui/control_plane.rs:72 (require_authenticated layer), :116 (snapshot)
-    row(
-        "/ui/api/control-plane",
-        Method::GET,
-        "/ui/api/control-plane",
-        Payload::None,
-        [401, 403, 200, 200],
-    ),
-    // control_plane.rs:72, mutations.rs:53 (mutate_grant), :310 (store), :330 (RBAC), :342 (409)
-    row_cfg(
-        "/ui/api/control-plane/grants",
-        Method::POST,
-        "/ui/api/control-plane/grants",
-        Payload::Json(GRANT),
-        [401, 403, 503, 503],
-        [401, 403, 409],
-    ),
-    // control_plane.rs:72, mutations.rs:79 (mutate_policy), :310, :330, :342
-    row_cfg(
-        "/ui/api/control-plane/policies",
-        Method::POST,
-        "/ui/api/control-plane/policies",
-        Payload::Json(POLICY),
-        [401, 403, 503, 503],
-        [401, 403, 409],
-    ),
-    // control_plane.rs:72, mutations.rs:131 (resolve_decision), :194 (store), :245 (RBAC), :258 (409)
-    row_cfg(
-        "/ui/api/control-plane/decisions",
-        Method::POST,
-        "/ui/api/control-plane/decisions",
-        Payload::Json(DECISION),
-        [401, 403, 503, 503],
-        [401, 403, 409],
-    ),
-    // control_plane.rs:72, :89 (export_status_handler: 404 `configured: false` when unset)
-    row_cfg(
-        "/ui/api/control-plane/export-status",
-        Method::GET,
-        "/ui/api/control-plane/export-status",
-        Payload::None,
-        [401, 403, 404, 404],
-        [401, 200, 200],
-    ),
     // src/gateway/ui/backends.rs:184 (add_backend; no config path in the fixture)
     row(
         "/ui/api/backends",
@@ -544,6 +505,14 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 404],
     ),
+    // events.rs (leases), :59, :71
+    row(
+        "/ui/api/events/leases",
+        Method::GET,
+        "/ui/api/events/leases",
+        Payload::None,
+        [401, 403, 403, 404],
+    ),
     // src/gateway/ui/preview.rs (preview_backend): describe step
     row(
         "/ui/api/previews",
@@ -577,6 +546,11 @@ const ROWS: &[Row] = &[
         [200, 200, 200, 200],
     ),
 ];
+
+/// Every row: this table, then the control-plane group beside it.
+fn all_rows() -> impl Iterator<Item = &'static Row> {
+    ROWS.iter().chain(control_plane::ROWS)
+}
 
 /// Send one row as one caller and record any answer that is not today's.
 async fn check(
@@ -624,7 +598,7 @@ async fn internal_routes_answer_as_today() {
     let off = gateway(Fixture::AuthOff).await;
     let configured = gateway(Fixture::Configured).await;
     let mut wrong = Vec::new();
-    for row in ROWS.iter().filter(|r| mounted(r.path)) {
+    for row in all_rows().filter(|r| mounted(r.path)) {
         for (caller, want) in BASE_CALLERS.into_iter().zip(row.base) {
             let (gw, fixture) = if caller == Caller::AnonOff {
                 (&off, Fixture::AuthOff)
@@ -667,8 +641,7 @@ fn every_doc_internal_route_has_rows_and_no_other() {
         doc.contains("/sse"),
         "the routes table was not read: {doc:?}"
     );
-    let rows: BTreeSet<String> = ROWS
-        .iter()
+    let rows: BTreeSet<String> = all_rows()
         .filter(|r| mounted(r.path))
         .map(|r| r.path.to_owned())
         .collect();
@@ -704,7 +677,7 @@ async fn internal_routes_refuse_every_other_method() {
         .iter()
         .filter(|p| mounted(p))
     {
-        let rows: Vec<&Row> = ROWS.iter().filter(|r| r.path == path).collect();
+        let rows: Vec<&Row> = all_rows().filter(|r| r.path == path).collect();
         let Some(first) = rows.first() else { continue };
         let has = |m: &Method| rows.iter().any(|r| r.method == *m);
         for method in PROBE_METHODS.iter().filter(|m| !has(m)) {
@@ -745,6 +718,8 @@ async fn internal_routes_refuse_every_other_method() {
     );
 }
 
+#[path = "internal_routes_control_plane_tests.rs"]
+mod control_plane;
 #[path = "internal_routes_served.rs"]
 mod served;
 #[path = "internal_routes_status.rs"]
