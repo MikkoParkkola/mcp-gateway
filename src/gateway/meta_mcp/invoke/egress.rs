@@ -9,6 +9,9 @@ use crate::error::rpc_codes::INVALID_REQUEST;
 use serde_json::Value;
 
 use super::super::MetaMcp;
+#[cfg(feature = "firewall")]
+use crate::gateway::delivery_facts::Part;
+use crate::gateway::delivery_facts::ResponseEffect;
 use crate::protocol::{JsonRpcError, JsonRpcResponse};
 use crate::security::response_policy::{ResponseCorrelation, ResponsePolicyTarget};
 
@@ -101,6 +104,7 @@ impl MetaMcp {
             outcome = outcome.max(self.scan_error(error, at));
         }
         if outcome == EgressOutcome::Refused {
+            crate::gateway::delivery_facts::raise(ResponseEffect::Refused);
             *frame =
                 JsonRpcResponse::delivery_refusal_error(frame.id.take(), INVALID_REQUEST, REFUSAL);
         }
@@ -146,6 +150,7 @@ impl MetaMcp {
                 ResponseArtifactKind::FinalResponse,
                 ResponseMutationPolicy::Redact,
             );
+            note_verdict(firewall, &verdict, Part::Error);
             // Rewritten only when the redactor changed a field: a finding it
             // let through untouched leaves the backend's error as sent.
             if firewall_outcome(verdict) == EgressOutcome::Refused {
@@ -161,6 +166,7 @@ impl MetaMcp {
             if error.data.is_some() {
                 error.data = artifact.as_object_mut().and_then(|a| a.remove("data"));
             }
+            crate::gateway::delivery_facts::raise(ResponseEffect::Rewritten);
             return EgressOutcome::Rewritten;
         }
         EgressOutcome::Delivered
@@ -195,6 +201,9 @@ impl MetaMcp {
         #[cfg(feature = "firewall")]
         if let Some(firewall) = at.firewall {
             use crate::security::response_policy::{ResponseArtifactKind, ResponseMutationPolicy};
+            // Kept only where the scan may rewrite: a finding let through
+            // untouched is not a rewrite.
+            let before = firewall.redacts().then(|| result.clone());
             let verdict = firewall.check_response_artifact(
                 result,
                 &self.expand_targets(at.targets),
@@ -202,7 +211,13 @@ impl MetaMcp {
                 ResponseArtifactKind::FinalResponse,
                 ResponseMutationPolicy::for_result(result),
             );
-            return firewall_outcome(verdict);
+            note_verdict(firewall, &verdict, Part::Result);
+            let outcome = firewall_outcome(verdict);
+            if outcome == EgressOutcome::Rewritten && before.is_some_and(|before| before != *result)
+            {
+                crate::gateway::delivery_facts::raise(ResponseEffect::Rewritten);
+            }
+            return outcome;
         }
         #[cfg(not(feature = "firewall"))]
         let _ = (result, at);
@@ -247,6 +262,34 @@ impl MetaMcp {
             out.dedup();
         }
         out
+    }
+}
+
+/// A firewall verdict's scan and findings, for the delivery's record: each
+/// finding by its scan type and severity in `part`, never its text. A
+/// firewall with response scanning off read nothing, so it notes nothing.
+#[cfg(feature = "firewall")]
+fn note_verdict(
+    firewall: &crate::security::firewall::Firewall,
+    verdict: &Result<
+        crate::security::firewall::FirewallVerdict,
+        crate::security::response_policy::InvalidResponseTargets,
+    >,
+    part: Part,
+) {
+    let Ok(verdict) = verdict else {
+        return;
+    };
+    if !firewall.scans_responses() {
+        return;
+    }
+    crate::gateway::delivery_facts::scanned();
+    for finding in &verdict.findings {
+        let kind = serde_json::to_value(finding.scan_type)
+            .ok()
+            .and_then(|kind| kind.as_str().map(str::to_owned))
+            .unwrap_or_default();
+        crate::gateway::delivery_facts::found(format!("firewall:{kind}"), finding.severity, part);
     }
 }
 
@@ -346,7 +389,10 @@ impl MetaMcp {
             message: message.clone(),
             data: data.clone(),
         };
-        self.scan_backend_error((server, tool, tool), None, &mut error) == EgressOutcome::Delivered
+        // A classification probe: nothing it finds or rewrites is delivered.
+        crate::gateway::delivery_facts::suspended(|| {
+            self.scan_backend_error((server, tool, tool), None, &mut error)
+        }) == EgressOutcome::Delivered
     }
 }
 
@@ -394,7 +440,10 @@ impl crate::transport::notification_sink::NotificationScreen for NotificationEgr
             api_key_name: None,
             firewall: self.meta.firewall.as_deref(),
         };
-        self.meta.scan_notification(notification, &at) != EgressOutcome::Refused
+        // A notification is not the answer: its scan writes nothing into the
+        // delivery's facts (A4).
+        crate::gateway::delivery_facts::suspended(|| self.meta.scan_notification(notification, &at))
+            != EgressOutcome::Refused
     }
 }
 

@@ -211,7 +211,6 @@ pub(super) fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'stat
         "mtls" => mtls,
         "key_server" => key_server,
         "agent_auth" => agent_auth,
-        "security" => security,
         "webhooks" => webhooks,
         "meta_mcp" => meta_mcp,
         "capabilities" => capabilities,
@@ -225,6 +224,7 @@ pub(super) fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'stat
         "runtime" => runtime,
         "tasks" => tasks,
         "events" => events,
+        "idempotency" => idempotency,
         // Fail-closed on purpose. Eager replacement of a descriptor's authority,
         // resource, issuer or scopes is NOT implemented, so an `accounts` edit
         // is reported as outstanding until a restart rather than claimed as
@@ -236,6 +236,14 @@ pub(super) fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'stat
         "cost_governance" => cost_governance,
     ];
     sections[0].1 = running.auth.restart_only_json() != wanted.auth.restart_only_json();
+    // ADR-023: the two request-path flags apply on reload, so `security` is
+    // compared without them; a change to any other field in it still counts.
+    // Pushed here, not listed above, so nothing has to find it to mask it.
+    sections.push((
+        "security",
+        security_restart_only_json(&running.security)
+            != security_restart_only_json(&wanted.security),
+    ));
     // `meta_mcp.surfaced_tools` is applied by the reload (the surfaced
     // snapshot is swapped under `lock_reload`), so it is masked out on both
     // sides; every other meta_mcp field is still read once at startup.
@@ -248,6 +256,15 @@ pub(super) fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'stat
         entry.1 = meta_mcp_restart_only(running) != meta_mcp_restart_only(wanted);
     }
     sections
+}
+
+/// `security` with the fields that apply on reload set to one fixed value, so
+/// only the restart-only remainder is compared.
+fn security_restart_only_json(security: &crate::config::SecurityConfig) -> String {
+    let mut view = security.clone();
+    view.sanitize_input = false;
+    view.ssrf_protection = false;
+    canonical_json(&view)
 }
 
 /// Returns `true` when the TCP-listener address differs.
@@ -347,6 +364,14 @@ pub(super) struct MetaFields {
     #[cfg(feature = "cost-governance")]
     cost_governance: String,
     tasks: String,
+    /// Read once at startup, so detected and reported as restart-required.
+    idempotency: String,
+    events: String,
+    /// Every `server` field, so a change to one beyond the listener address
+    /// and `public_url` is detected; `pending_restart_fields` decides which.
+    server: String,
+    /// Read by the UI from the published generation; applies on reload.
+    environment: Option<String>,
     /// The `accounts` block. Absent from this comparison, an accounts-only edit
     /// — a descriptor's issuer, resource or scopes — produced no diff at all,
     /// so the reload reported nothing and the running gateway kept minting
@@ -379,6 +404,10 @@ impl MetaFields {
             #[cfg(feature = "cost-governance")]
             cost_governance: canonical_json(&c.cost_governance),
             tasks: canonical_json(&c.tasks),
+            idempotency: canonical_json(&c.idempotency),
+            events: canonical_json(&c.events),
+            server: canonical_json(&c.server),
+            environment: c.environment.clone(),
             accounts: canonical_json(&c.accounts),
         }
     }

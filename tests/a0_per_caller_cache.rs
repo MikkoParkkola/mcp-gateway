@@ -11,6 +11,9 @@
 //! Every backend answer carries its delivery number (`call-N`), so a replay is
 //! proved by content as well as by the delivery count.
 
+#[path = "common/flags_off.rs"]
+mod flags_off;
+use flags_off::flags_off;
 #[path = "common/record_key.rs"]
 mod record_key;
 
@@ -231,8 +234,6 @@ async fn gateway(setup: Setup, calls: &Arc<AtomicUsize>) -> (Arc<AppState>, temp
         key_server: None,
         tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
-        sanitize_input: false,
-        ssrf_protection: false,
         trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(100)),
         agent_auth: AgentAuthState::new(false, Arc::new(AgentRegistry::new())),
@@ -244,7 +245,9 @@ async fn gateway(setup: Setup, calls: &Arc<AtomicUsize>) -> (Arc<AppState>, temp
         agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new(config.clone())),
+        live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new(flags_off(
+            &config,
+        ))),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),

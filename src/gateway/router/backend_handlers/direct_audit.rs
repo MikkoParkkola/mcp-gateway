@@ -9,6 +9,7 @@ use axum::{Json, http::StatusCode};
 use serde_json::Value;
 
 use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::delivery_facts;
 use crate::gateway::meta_mcp::invoke::audit::DispatchNotes;
 use crate::gateway::meta_mcp::response_security::DeliveryCredential;
 use crate::identity_grants::GrantSubject;
@@ -170,7 +171,12 @@ pub(super) async fn audited_call(
 ) -> crate::gateway::outbound::OutboundReply {
     // MIK-8176: the slots this call's mints take are owned here, outside the
     // audits and the judge, whether or not relay detection is on.
-    let judged = audited_call_judged(Arc::clone(&state), name, request);
+    // One delivery's facts: the dispatch, its judge and its record.
+    let judged = crate::gateway::delivery_facts::scope(audited_call_judged(
+        Arc::clone(&state),
+        name,
+        request,
+    ));
     #[cfg(feature = "firewall")]
     if state.firewall.as_ref().is_some_and(|fw| fw.relay_active()) {
         let collected = crate::gateway::meta_mcp::invoke::relay::collecting(Box::pin(judged));
@@ -261,6 +267,10 @@ async fn audited_call_judged(
             // 429 refusal carries the body `{}` and no error code (L1254).
             let body = document.as_ref().unwrap_or(&Value::Null);
             let outcome = direct_outcome(status, body);
+            // A gateway refusal, classed as the invocation record classes it.
+            if matches!(outcome, AuditOutcome::Denied(_)) {
+                delivery_facts::raise(delivery_facts::ResponseEffect::Refused);
+            }
             crate::gateway::meta_mcp::response_security::record_answer_delivery(
                 state.transparency_log.as_ref(),
                 document,

@@ -165,7 +165,10 @@ async fn r5_a_resume_refuses_a_dirty_meta_key_it_stored() {
         surfaced_server: None,
     };
     let caller = crate::gateway::meta_mcp::anonymous_caller();
-    let refused = match host.readmit(&call, &caller, None).await {
+    let refused = match host
+        .readmit(&call, &caller, (None, &host.generation()))
+        .await
+    {
         Ok((arguments, _)) => panic!("r5: re-admitted, stripped to {arguments}"),
         Err(refused) => serde_json::to_value(&*refused).expect("a response serializes"),
     };
@@ -197,7 +200,10 @@ async fn r6_a_resume_still_exempt_refuses_a_dirty_meta_key() {
         surfaced_server: None,
     };
     let caller = crate::gateway::meta_mcp::anonymous_caller();
-    let refused = match host.readmit(&call, &caller, None).await {
+    let refused = match host
+        .readmit(&call, &caller, (None, &host.generation()))
+        .await
+    {
         Ok((arguments, _)) => panic!("r6: re-admitted as {arguments}"),
         Err(refused) => serde_json::to_value(&*refused).expect("a response serializes"),
     };

@@ -11,6 +11,7 @@ use tracing::debug;
 use crate::backend::Backend;
 use crate::backend::listen::ListenTarget;
 use crate::events::upstream_listener::Shared;
+use crate::events::upstream_session::ToolsDebt;
 use crate::protocol::era::PeerEra;
 use crate::transport::upstream_tap::{ListenerCredential, UpstreamListen};
 
@@ -38,6 +39,9 @@ pub(super) struct Run {
     /// An own session's subscriptions end with it, however the run ends; any
     /// `release` runs first, inside the run (B14').
     _retire: Option<RetireOnEnd>,
+    /// A minted per-user run's fence: its binding stamps what it emits, and a
+    /// moved grant ends it. `None` for a shared or leased run.
+    pub(super) fence: Option<Arc<crate::events::listener_credential::RunFence>>,
 }
 
 /// Start a run: reach the backend and choose its session. A shared key
@@ -79,6 +83,7 @@ pub(super) async fn begin_run(
         _retire: own.is_some().then(|| RetireOnEnd(Arc::clone(shared))),
         _own: own,
         _own_transport: None,
+        fence: None,
     })
 }
 
@@ -92,7 +97,8 @@ async fn begin_per_user_run(
     backend: &Backend,
     hub: &Weak<crate::events::EventsHub>,
 ) -> Option<Run> {
-    let Some(credential) = crate::events::listener_credential::for_key(&shared.key, hub) else {
+    let Some((credential, fence)) = crate::events::listener_credential::for_key(&shared.key, hub)
+    else {
         debug!(backend = %shared.name, "upstream listener: no credential for a per-user key");
         return None;
     };
@@ -116,7 +122,16 @@ async fn begin_per_user_run(
         _retire: Some(RetireOnEnd(Arc::clone(shared))),
         _own: Some(own),
         _own_transport: Some(transport),
+        fence,
     })
+}
+
+/// A tools notice an earlier run left pending was heard under that run's
+/// grant: a run fixed on another grant (`binding`) never announces it.
+pub(super) fn forget_foreign_debt(debt: &mut ToolsDebt, binding: Option<&str>) {
+    if debt.fence.as_deref() != binding {
+        *debt = ToolsDebt::default();
+    }
 }
 
 /// Whether a run speaks the modern transport: never on an own session, which

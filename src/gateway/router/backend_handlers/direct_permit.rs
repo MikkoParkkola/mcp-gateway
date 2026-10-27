@@ -37,6 +37,7 @@ pub(super) fn mint_permit(
     let client = caller.client.as_ref();
     let authorizer = super::super::authorization::RouterAuthorizer {
         state: scope.state,
+        generation: &caller.generation,
         client,
         oauth_agent_identity: caller.oauth_agent_identity.as_ref(),
         cert_identity: caller.cert_identity.as_ref(),

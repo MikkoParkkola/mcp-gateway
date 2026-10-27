@@ -115,6 +115,7 @@ async fn export_status_handler(
 
 async fn control_plane_snapshot(
     State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
     client: Option<Extension<AuthenticatedClient>>,
     identity: Option<Extension<VerifiedIdentity>>,
 ) -> impl IntoResponse {
@@ -123,7 +124,7 @@ async fn control_plane_snapshot(
     let actor = actor_from_client(
         client.as_ref(),
         identity.as_ref(),
-        &state.live_config.get().control_plane.role_mapping,
+        &generation.config().control_plane.role_mapping,
     );
     // Grant status is judged against the time; on a clock before 1970 it
     // cannot be, so the view is refused rather than guessed (MIK-8202).
@@ -135,7 +136,7 @@ async fn control_plane_snapshot(
         .into_response();
     };
     let (snapshot, store_read_degraded) =
-        local_runtime_snapshot(&state, client.as_ref(), &actor, now);
+        local_runtime_snapshot((&state, &generation), client.as_ref(), &actor, now);
     let shadow_radar = local_shadow_radar(&state).await;
 
     let Some(view) = snapshot.read_only_view(&actor) else {

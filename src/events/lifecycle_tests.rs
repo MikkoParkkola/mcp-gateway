@@ -242,6 +242,7 @@ async fn a_test_source_plugs_in_without_core_changes() {
         occurred_at: chrono::Utc::now(),
         data: json!({"x": 1}),
         lifecycle_key: None,
+        fence: None,
     };
     // Through the runtime's own entry points: start, then the emit queue.
     hub.start(services());
@@ -299,6 +300,7 @@ fn event() -> SourceEvent {
         occurred_at: chrono::Utc::now(),
         data: json!({}),
         lifecycle_key: None,
+        fence: None,
     }
 }
 
