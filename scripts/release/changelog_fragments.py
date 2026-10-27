@@ -6,7 +6,7 @@
 Every open pull request used to edit `## [Unreleased]` in CHANGELOG.md, so each
 merge made the others conflict. A PR now adds `changelog.d/<number>.<type>.md`
 holding its bullet(s), and the release folds them in. A further PR under the
-same number adds `<number>-<n>.<type>.md` (n digits, as in upgrading.d).
+same number adds `<number>-<n>.<type>.md` (n a positive number, no leading zero).
 
     changelog_fragments.py check --base <ref> [--head <ref>]
         Fail a PR that changes src/ without adding a fragment. The label
@@ -34,8 +34,9 @@ FRAGMENT_DIR = "changelog.d"
 # Keep a Changelog order; a missing subsection is created in this order.
 TYPES = ("added", "changed", "removed", "fixed", "security")
 # Group 1 is the number, group 2 the type; the optional -<n> suffix names a
-# further fragment under one number.
-FRAGMENT = re.compile(r"^(\d+)(?:-\d+)?\.(" + "|".join(TYPES) + r")\.md$")
+# further fragment under one number. No 0 and no leading zero, so every
+# accepted name is the only spelling of its stem and sorts after the bare one.
+FRAGMENT = re.compile(r"^(\d+)(?:-[1-9]\d*)?\.(" + "|".join(TYPES) + r")\.md$")
 # Files in changelog.d/ that are not fragments.
 NOT_FRAGMENTS = {".gitkeep"}
 SKIP_LABEL = "no-changelog"
@@ -84,7 +85,7 @@ def check(
     errors = fragment_name_errors(added)
     if SKIP_LABEL in labels:
         return errors
-    # A fragment re-added under the same number with another type is a retype
+    # A fragment re-added under the same name with another type is a retype
     # (the diff runs without rename detection, so a rename arrives as a delete
     # plus an add), not a loss. Pairs are one to one (MIK-7946): each addition
     # excuses one deletion of its name (number and any suffix), and an addition
@@ -103,7 +104,7 @@ def check(
     touches_shipped = any(SOURCE.match(path) for _, path in changes)
     if touches_shipped and not any(unpaired.values()):
         errors.append(
-            f"this PR changes shipped files but adds no {FRAGMENT_DIR}/<number>.<type>.md; "
+            f"this PR changes shipped files but adds no {FRAGMENT_DIR}/<number>[-<n>].<type>.md; "
             f"add one (see CONTRIBUTING.md) or apply the '{SKIP_LABEL}' label"
         )
     # Only the release fold, which deletes every fragment it folds in, edits
@@ -117,7 +118,7 @@ def check(
     edits_changelog = any(path == "CHANGELOG.md" for _, path in changes)
     if edits_changelog and not folds:
         errors.append(
-            f"this PR edits CHANGELOG.md; put the entry in {FRAGMENT_DIR}/<number>.<type>.md "
+            f"this PR edits CHANGELOG.md; put the entry in {FRAGMENT_DIR}/<number>[-<n>].<type>.md "
             f"instead, or apply the '{SKIP_LABEL}' label"
         )
     # A fragment leaves only by being folded into CHANGELOG.md; deleting one

@@ -188,7 +188,15 @@ class Check(unittest.TestCase):
         self.assertEqual(cf.check(changes, set()), [])
 
     def test_a_suffix_must_be_digits_after_one_hyphen(self):
-        for name in ("8875-x.added.md", "8875-.added.md", "8875-2-3.added.md", "-2.added.md"):
+        # 0 and a leading zero would tie with or alias another name in the fold.
+        for name in (
+            "8875-x.added.md",
+            "8875-.added.md",
+            "8875-2-3.added.md",
+            "-2.added.md",
+            "8875-0.added.md",
+            "8875-02.added.md",
+        ):
             errors = cf.check([("A", f"changelog.d/{name}")], set())
             self.assertEqual(len(errors), 1, name)
             self.assertIn(f"changelog.d/{name}", errors[0])
@@ -198,6 +206,12 @@ class Check(unittest.TestCase):
         errors = cf.check(changes, set())
         self.assertEqual(len(errors), 1, errors)
         self.assertIn("changelog.d/8875.added.md", errors[0])
+
+    def test_an_unsuffixed_add_does_not_excuse_deleting_a_suffixed_fragment(self):
+        changes = [("D", "changelog.d/8875-2.added.md"), ("A", "changelog.d/8875.changed.md")]
+        errors = cf.check(changes, set())
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("changelog.d/8875-2.added.md", errors[0])
 
     def test_retyping_a_suffixed_fragment_under_its_own_name_passes(self):
         changes = [("D", "changelog.d/8875-2.added.md"), ("A", "changelog.d/8875-2.changed.md")]

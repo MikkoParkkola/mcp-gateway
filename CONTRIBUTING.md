@@ -381,8 +381,8 @@ We want your PR to merge fast. Here is what helps.
 - [ ] **Changelog fragment** if the change is user-visible: add `changelog.d/<number>.<type>.md`,
   where `<number>` is the PR (or issue) number and `<type>` is one of `added`, `changed`,
   `removed`, `fixed`, `security`. When that name is taken by an earlier PR under the same
-  number, add `changelog.d/<number>-<n>.<type>.md` with `<n>` digits, for example
-  `526-2.fixed.md`. It holds your bullet(s) exactly as they should read in
+  number, add `changelog.d/<number>-<n>.<type>.md` with the next unused `<n>` from 2 up, for
+  example `526-2.fixed.md`. It holds your bullet(s) exactly as they should read in
   CHANGELOG.md, for example `- doctor: report why a stdio backend died (#526)`. Do not edit
   CHANGELOG.md itself: a shared section makes every open PR conflict whenever one merges.
   A PR that changes a shipped file without a fragment, or edits CHANGELOG.md
