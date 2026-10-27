@@ -267,3 +267,23 @@ fn the_preserving_writer_reports_each_outcome() {
             .contains("# kept by hand")
     );
 }
+
+/// YAML indentation is spaces only: a key that starts with a non-breaking
+/// space sits at its spaces' depth, so a sibling after it is still in the
+/// same mapping and the edit stays in place.
+#[test]
+fn a_key_starting_with_a_non_breaking_space_keeps_its_depth() {
+    use crate::config::Config;
+    let original = "backends:\n  svc:\n    command: x\n    env:\n      \u{a0}FOO: one  # keep\n      BAR: two\n";
+    let before: Config = crate::yaml::from_str(original).expect("loads");
+    let mut config = before.clone();
+    config
+        .backends
+        .get_mut("svc")
+        .expect("svc")
+        .env
+        .insert("BAR".into(), "three".into());
+    let got = super::with_backend_edited(original, &before, &config, "svc")
+        .expect("an in-place edit, not a refusal");
+    assert_eq!(got, original.replace("BAR: two", "BAR: three"));
+}
