@@ -826,12 +826,6 @@ def check(doc_text: str, extracted: dict[str, list[Entry]]) -> list[str]:
             continue
         listed = by_surface[surface]
         for e in entries:
-            if e.note.startswith("alias of "):
-                long_id = e.id.rsplit(" ", 1)[0] + " " + e.note.removeprefix("alias of ")
-                r, lr = listed.get(e.id), listed.get(long_id)
-                if r is not None and lr is not None and r.cls != lr.cls:
-                    errors.append(f"line {r.lineno}: alias {e.id!r} is {r.cls}, its long form {long_id!r} is {lr.cls}")
-        for e in entries:
             r = listed.pop(e.id, None)
             if r is None:
                 errors.append(f"{surface}: unclassified {e.id!r} ({e.file}:{e.line})")

@@ -285,6 +285,14 @@ def test_cli_membership_is_the_rust_tests_and_row_format_stays() -> None:
     good = head + "| `x --config` | KEEP | path | - | src/cli/mod.rs:1 |\n| `x --help` | KEEP | clap-generated | - | src/cli/mod.rs:1 |\n"
     assert inv.check(good + rows, full) == [], inv.check(good + rows, full)
     assert "cli" not in inv.EXTRACTORS, "no second cli extractor"
+    for gone in ("extract_cli", "CliWalker", "cli_root_rows"):
+        assert not hasattr(inv, gone), f"{gone} is back: cli membership is the Rust test's"
+    try:
+        inv.main(["--list", "cli"])
+    except SystemExit as exc:
+        assert exc.code == 2, f"--list cli exits {exc.code}, want argparse's 2"
+    else:
+        raise AssertionError("--list cli must be refused by argparse")
     no_rows = head
     assert inv.check(no_rows + rows, full) == [], "a missing cli row is the Rust test's to report, and no 'no items' error"
     elsewhere = good.replace("src/cli/mod.rs:1 |\n| `x --help`", "src/other.rs:1 |\n| `x --help`")
