@@ -170,6 +170,7 @@ impl DiscoveryCache {
             TransportConfig::Stdio { command, .. } => ("stdio", executable_name(command), None),
             TransportConfig::Http { http_url, .. } => ("http", None, origin(http_url)),
             TransportConfig::WebSocket { ws_url, .. } => ("ws", None, origin(ws_url)),
+            #[cfg(feature = "a2a")]
             TransportConfig::A2a { .. } => ("a2a", None, None),
         };
         let severity =
