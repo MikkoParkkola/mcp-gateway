@@ -301,44 +301,70 @@ fn locate(lines: &[&str], path: &FieldPath) -> Result<Located, ComputeRefusal> {
     Err(unprovable("an empty path"))
 }
 
-/// The byte range of the value after `key:` on `lines[at]` (from `after`),
-/// ending before an inline comment the parser confirms. Refuses a flow
-/// collection, a block scalar, and an anchor, alias or tag outside quotes.
+/// The byte range of the value after `key:` on `lines[at]` (from `after`).
+/// The value ends where YAML says: after a quoted scalar's closing quote,
+/// which must be on this line, or at a plain scalar's first blank-then-`#`.
+/// What follows must be blanks or a comment the parser confirms (one parse
+/// at most). Refuses a flow collection, a block scalar, and an anchor, alias
+/// or tag outside quotes.
 fn value_span(lines: &[&str], at: usize, after: usize) -> Result<Range<usize>, ComputeRefusal> {
     let line = lines[at];
     let start = after + (line[after..].len() - line[after..].trim_start_matches(BLANKS).len());
+    let rest = &line[start..];
     // `key: # note` is a null field with a comment, not a scalar.
-    if line[start..].starts_with('#') {
+    if rest.starts_with('#') {
         return Ok(start..start);
     }
-    let mut end = line.trim_end_matches(BLANKS).len().max(start);
-    let bytes = line.as_bytes();
-    for (p, _) in line[start..].match_indices('#') {
-        let p = start + p;
-        if p == start || !matches!(bytes[p - 1], b' ' | b'\t') {
-            continue;
-        }
-        let ws = line[..p].trim_end_matches(BLANKS).len();
-        if super::splice::parsed_as_comment(lines, at, &line[ws..]) {
-            end = ws;
-            break;
+    let value_end = match rest.chars().next() {
+        Some(quote @ ('"' | '\'')) => closing_quote(rest, quote)
+            .ok_or_else(|| unprovable("a quoted value that does not close on its own line"))?,
+        _ => plain_end(rest),
+    };
+    let end = start + rest[..value_end].trim_end_matches(BLANKS).len();
+    let tail = &line[end..];
+    if !tail.trim_start_matches(BLANKS).is_empty() {
+        let comment = tail.starts_with(BLANKS) && tail.trim_start_matches(BLANKS).starts_with('#');
+        if !comment || !super::splice::parsed_as_comment(lines, at, tail) {
+            return Err(unprovable(
+                "text after the value is not a confirmed comment",
+            ));
         }
     }
     let value = &line[start..end];
-    // In a plain scalar a `#` after a blank always starts a comment: one
-    // left in the span means the cut is wrong, so refuse rather than drop it.
-    let plain = !value.starts_with(['"', '\'']);
-    if plain && (value.contains(" #") || value.contains("\t#")) {
-        return Err(unprovable(
-            "a comment could not be told apart from the value",
-        ));
-    }
     if value.starts_with(['{', '[', '|', '>']) || has_node_marker(value) {
         return Err(unprovable(
             "a flow, block, anchored, aliased or tagged value",
         ));
     }
     Ok(start..end)
+}
+
+/// The byte just past the quote that closes the scalar `text` opens with
+/// `quote`, if it closes on this line: `\` escapes in double quotes, `''`
+/// in single quotes.
+fn closing_quote(text: &str, quote: char) -> Option<usize> {
+    let mut chars = text.char_indices().skip(1).peekable();
+    while let Some((i, c)) = chars.next() {
+        match (quote, c) {
+            ('"', '\\') => {
+                chars.next();
+            }
+            ('\'', '\'') if chars.peek().is_some_and(|&(_, n)| n == '\'') => {
+                chars.next();
+            }
+            (q, c) if q == c => return Some(i + c.len_utf8()),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Where a plain scalar ends: at its first `#` after a blank, which YAML
+/// always reads as a comment, or at the end of the line.
+fn plain_end(text: &str) -> usize {
+    text.char_indices()
+        .find(|&(i, c)| c == '#' && i > 0 && text[..i].ends_with(BLANKS))
+        .map_or(text.len(), |(i, _)| i)
 }
 
 /// An anchor, alias or tag mark outside a quoted scalar.
