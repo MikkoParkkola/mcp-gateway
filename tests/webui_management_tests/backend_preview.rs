@@ -17,6 +17,8 @@ use super::*;
 
 #[path = "backend_preview_lifecycle.rs"]
 mod lifecycle;
+#[path = "backend_preview_tools_class.rs"]
+mod tools_class;
 
 const PREVIEW: &str = "/ui/api/previews";
 

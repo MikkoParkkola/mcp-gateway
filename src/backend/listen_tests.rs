@@ -94,6 +94,23 @@ async fn a_tools_notice_clears_the_cache_read_only_set() {
     );
 }
 
+/// The UI's declared-hint set is derived from the same list, so the same
+/// notice drops it; a stale one would label a relisted tool's class wrongly.
+#[tokio::test]
+async fn a_tools_notice_clears_the_declared_hint_set() {
+    let backend = backend();
+    let entry = backend.shared_entry();
+    entry
+        .hint_declared
+        .write()
+        .insert("was_declared".to_owned());
+    backend.invalidate_tools();
+    assert!(
+        !backend.hint_declared_for(None, "was_declared"),
+        "a stale declared-hint set outlived the tool list"
+    );
+}
+
 /// A server that accepts connections and never answers.
 async fn silent_url() -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
