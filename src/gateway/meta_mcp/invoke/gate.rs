@@ -613,9 +613,7 @@ impl MetaMcp {
                 Withholding::Refused
             } else {
                 match self.tool_visible_to(server, tool, scope, session_id) {
-                    Visibility::Withheld(
-                        reason @ (Withholding::Descriptor | Withholding::Unselected),
-                    ) => reason,
+                    Visibility::Withheld(reason) if reason.is_backend_gate() => reason,
                     _ => return None,
                 }
             };

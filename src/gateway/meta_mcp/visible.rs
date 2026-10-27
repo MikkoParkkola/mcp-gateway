@@ -35,6 +35,15 @@ pub(crate) enum Withholding {
     Absent,
 }
 
+impl Withholding {
+    /// Withheld by the backend's own gate (its `allowed_tools`, or the
+    /// descriptor check): answered at once, whatever the caller's slot holds.
+    #[must_use]
+    pub(crate) fn is_backend_gate(self) -> bool {
+        matches!(self, Self::Descriptor | Self::Unselected)
+    }
+}
+
 /// Whether a caller may be shown a tool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Visibility {
