@@ -95,10 +95,14 @@ async fn direct_call(router: &axum::Router, tool: &str) -> Value {
     serde_json::from_slice(&bytes).unwrap_or(Value::Null)
 }
 
-/// Whether a direct answer refuses the call: a JSON-RPC error, or the
-/// absent-tool result the direct route gives a withheld name.
-fn refused(answer: &Value) -> bool {
-    answer.get("error").is_some() || answer["result"]["isError"] == true
+/// Whether a direct answer is the direct route's answer for an absent tool:
+/// an `isError` result saying the backend lists no tool of that name, as it
+/// answers any withheld name. Nothing else counts as this refusal.
+fn absent_write_b(answer: &Value) -> bool {
+    answer.get("error").is_none()
+        && answer["result"]["isError"] == true
+        && answer["result"]["content"][0]["text"]
+            == "the backend does not list a tool named `write_b`"
 }
 
 /// Whether a direct answer is the tool's own result.
@@ -147,7 +151,7 @@ async fn an_add_with_a_selection_serves_only_the_ticked_tools() {
     let saved = std::fs::read_to_string(&fixture.path).unwrap();
     assert!(saved.contains("allowed_tools"), "{saved}");
     let answer = direct_call(&fixture.router, "write_b").await;
-    assert!(refused(&answer), "{answer}");
+    assert!(absent_write_b(&answer), "{answer}");
     assert_eq!(
         upstream.write_b.load(Ordering::SeqCst),
         0,
@@ -187,7 +191,10 @@ async fn a_patch_keeps_replaces_or_clears_the_selection() {
         patch(json!({"description": "unrelated"})).await.0,
         StatusCode::OK
     );
-    assert!(refused(&direct_call(&fixture.router, "write_b").await));
+    assert!(absent_write_b(
+        &direct_call(&fixture.router, "write_b").await
+    ));
+    assert_eq!(upstream.write_b.load(Ordering::SeqCst), 0, "kept selection");
     assert_eq!(
         patch(json!({"allowed_tools": ["read_a", "write_b"]}))
             .await
@@ -195,11 +202,15 @@ async fn a_patch_keeps_replaces_or_clears_the_selection() {
         StatusCode::OK
     );
     assert!(served(&direct_call(&fixture.router, "write_b").await));
+    assert_eq!(upstream.write_b.load(Ordering::SeqCst), 1, "widened");
     assert_eq!(
         patch(json!({"allowed_tools": ["read_a"]})).await.0,
         StatusCode::OK
     );
-    assert!(refused(&direct_call(&fixture.router, "write_b").await));
+    assert!(absent_write_b(
+        &direct_call(&fixture.router, "write_b").await
+    ));
+    assert_eq!(upstream.write_b.load(Ordering::SeqCst), 1, "narrowed again");
     assert_eq!(
         patch(json!({"allowed_tools": null})).await.0,
         StatusCode::OK
