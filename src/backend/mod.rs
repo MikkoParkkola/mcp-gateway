@@ -92,6 +92,7 @@ pub(crate) use descriptor_gate::descriptor_digest;
 pub(crate) use descriptor_gate::{Judging, Listing};
 pub(crate) use fill_check::{LIST_FILL_COOLDOWN, text_absent};
 pub(crate) use identity_slots::passthrough_binding;
+pub(crate) use registry::PER_USER_SESSIONS;
 pub use registry::{
     BackendLifecycle, BackendRegistry, BackendRuntimeState, BackendRuntimeStatus, BackendStatus,
 };

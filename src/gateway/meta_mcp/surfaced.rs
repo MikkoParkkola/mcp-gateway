@@ -489,7 +489,16 @@ impl MetaMcp {
             // The era determination rides on the same entry as the rest of the
             // backend's state, so an operator reading one server reads one row.
             if let Some(fields) = entry.as_object_mut() {
-                fields.extend(b.era_observation().await.render());
+                if b.shared_slot_refused() {
+                    // MIK-8962: no shared session, so no shared era or health
+                    // to show; say why, rather than an era that never resolves.
+                    fields.insert(
+                        "sessions".to_string(),
+                        json!(crate::backend::PER_USER_SESSIONS),
+                    );
+                } else {
+                    fields.extend(b.era_observation().await.render());
+                }
             }
             servers.push(entry);
         }

@@ -611,6 +611,19 @@ async fn warm_start_until_cached(
     mode: WarmStartMode,
     instance: &Weak<Backend>,
 ) {
+    // MIK-8962: a backend with per-user sessions only has no shared session
+    // to warm; each user's own slot starts on that user's first call.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "Background: background work over the registered backends; no caller request"
+    )]
+    if backends
+        .get(name)
+        .is_some_and(|backend| backend.shared_slot_refused())
+    {
+        debug!(backend = %name, "Warm-start skipped: per-user sessions only");
+        return;
+    }
     // Prefetch is what fills the cache, so without it there is nothing for this
     // loop to wait for. Handled before the loop rather than inside it: an
     // attempt that cannot produce tools would otherwise retry forever against a

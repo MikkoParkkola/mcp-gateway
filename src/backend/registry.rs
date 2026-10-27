@@ -33,7 +33,16 @@ pub enum BackendLifecycle {
     /// Never started. The gateway starts backends lazily, so this is the normal
     /// state for a configured backend nothing has used yet.
     NotStarted,
+    /// Per-user sessions only (MIK-8962): there is no shared session to be up
+    /// or down, the health loop never probes it, and each user's own session
+    /// starts on that user's first call. [`PER_USER_SESSIONS`] says so.
+    #[serde(rename = "per_user")]
+    PerUser,
 }
+
+/// What an operator is told about a backend with per-user sessions only,
+/// where a shared backend shows its running state and era.
+pub(crate) const PER_USER_SESSIONS: &str = "per-user: starts on each user's first call";
 
 impl std::fmt::Display for BackendLifecycle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -42,6 +51,7 @@ impl std::fmt::Display for BackendLifecycle {
             Self::Dormant => "dormant",
             Self::Unhealthy => "unhealthy",
             Self::NotStarted => "not_started",
+            Self::PerUser => "per_user",
         };
         f.write_str(s)
     }
