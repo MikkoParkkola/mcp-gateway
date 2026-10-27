@@ -37,7 +37,8 @@ async fn spawn_backend() -> String {
                 "tools/call" => {
                     let leak = request.pointer("/params/arguments/cmd") == Some(&json!("leak"));
                     let text = if leak {
-                        crate::gateway::egress_fixture::secret()
+                        // The egress fixture's credential, which is firewall-gated.
+                        format!("ghp_{}", "abcdefghijklmnopqrstuvwxyz1234567890")
                     } else {
                         OUTPUT.to_owned()
                     };
@@ -284,6 +285,7 @@ async fn the_serve_loop_records_a_delivery_effect() {
 /// Each batch item through the real serve loop gets its own delivery's facts
 /// (A14): of a redacted item and a clean one, one records `rewritten` and the
 /// other `delivered`, never one cell's effect for both.
+#[cfg(feature = "firewall")]
 #[tokio::test]
 async fn a_batch_item_records_a_delivery_effect() {
     let warn = "  firewall:\n    enabled: true\n    rules:\n      - match: \"rows\"\n        action: warn\n";

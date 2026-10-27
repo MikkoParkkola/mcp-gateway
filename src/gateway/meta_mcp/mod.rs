@@ -693,6 +693,8 @@ pub(super) use test_callers::{anonymous_caller, callback_capability, identified_
 
 #[cfg(test)]
 mod boundary_pins;
+#[cfg(all(test, feature = "firewall"))]
+mod capability_cache_scan_tests;
 #[cfg(test)]
 pub(super) mod grant_audit_fixture;
 #[cfg(test)]
