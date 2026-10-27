@@ -43,15 +43,6 @@ pub(crate) async fn list_tools_for_preview(
         .and_then(Value::as_array)
         .map_or(&[][..], Vec::as_slice);
     let (mut tools, unparseable) = super::super::descriptor_gate::parse_listed(raw);
-    let hint_declared = tools
-        .iter()
-        .filter(|tool| {
-            tool.annotations
-                .as_ref()
-                .is_some_and(|a| a.read_only_hint.is_some())
-        })
-        .map(|tool| tool.name.clone())
-        .collect();
     let mut prepared = prepare_tool_metadata(
         name,
         &std::collections::BTreeMap::new(),
@@ -63,7 +54,7 @@ pub(crate) async fn list_tools_for_preview(
     tools.retain(|tool| !withheld.contains_key(&tool.name));
     Ok(PreviewListing {
         tools,
-        hint_declared,
+        hint_declared: prepared.hint_declared,
         withheld,
         truncated,
     })

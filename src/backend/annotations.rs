@@ -174,6 +174,17 @@ pub(crate) fn prepare_tool_metadata(
         hints.read_only_hint == Some(true) || hints.idempotent_hint == Some(true)
     });
     let not_read_only = names_failing(tools, |hints| hints.read_only_hint == Some(true));
+    // Display only: which names the server classed itself, either way, read
+    // before the inference below fills every omitted hint.
+    let hint_declared = tools
+        .iter()
+        .filter(|tool| {
+            tool.annotations
+                .as_ref()
+                .is_some_and(|a| a.read_only_hint.is_some())
+        })
+        .map(|tool| tool.name.clone())
+        .collect();
     // First, so a poisoned tool that also breaks a header rule is still
     // recorded as withheld and refused by name (#1441).
     let verdicts = match judging {
@@ -193,6 +204,7 @@ pub(crate) fn prepare_tool_metadata(
     PreparedTools {
         resend_permitted,
         read_only_declared,
+        hint_declared,
         verdicts,
     }
 }
@@ -225,5 +237,8 @@ pub(crate) struct PreparedTools {
     /// The tools declared `readOnlyHint: true`: the only ones the response
     /// cache may store or serve (MIK-8393).
     pub(crate) read_only_declared: HashSet<String>,
+    /// The listed names with a declared `readOnlyHint`, true or false: whether
+    /// the UI shows a tool's class as declared or inferred. Grants nothing.
+    pub(crate) hint_declared: HashSet<String>,
     pub(crate) verdicts: super::descriptor_gate::Verdicts,
 }
