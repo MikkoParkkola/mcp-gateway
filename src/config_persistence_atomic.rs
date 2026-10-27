@@ -37,9 +37,9 @@ pub fn write_atomic(
 
 /// [`write_atomic_observed`] for tests outside this module (lead ruling
 /// 2026-10-26): the capability writer's tests inject a failure at the rename
-/// through it. Test builds only, so production code cannot reach the
-/// observed variant.
-#[cfg(test)]
+/// through it. Test builds with the web UI only (the writer's only
+/// build), so production code cannot reach the observed variant.
+#[cfg(all(test, feature = "webui"))]
 pub(crate) fn write_atomic_observed_for_test(
     path: &Path,
     bytes: &[u8],
