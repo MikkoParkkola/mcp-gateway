@@ -603,7 +603,20 @@ async fn test_save_keeps_mode() {
         .await;
         assert_eq!(status, StatusCode::OK, "{mode:o}: {body}");
         let now = std::fs::metadata(&cap_file).unwrap().permissions().mode() & 0o777;
-        assert_eq!(now, mode, "mode {mode:o} was not kept");
+        // The shared writer keeps a file's mode only as far as it can prove
+        // safe (`inherit_mode` in src/config_persistence_atomic.rs): the full
+        // mode when the group is matched and no ACL can widen it, else the
+        // owner bits only. Never wider, and the owner's bits always kept.
+        assert_eq!(now & !mode, 0, "mode {mode:o} was widened to {now:o}");
+        assert_eq!(
+            now & 0o700,
+            mode & 0o700,
+            "mode {mode:o}: owner bits not kept"
+        );
+        // Only Linux can prove an ACL absent, so only there is the full mode kept.
+        if cfg!(target_os = "linux") {
+            assert_eq!(now, mode, "mode {mode:o} was not kept");
+        }
     }
 }
 
