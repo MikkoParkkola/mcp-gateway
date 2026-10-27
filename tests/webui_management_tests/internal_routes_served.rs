@@ -10,6 +10,9 @@ const MUTATION: &str = "tests/webui_management_tests/backend_mutation.rs";
 const EVENTS_ADMIN: &str = "tests/mik_7630_events_admin.rs";
 const EVENTS_RECONCILE: &str = "tests/mik_7630_events_reconcile.rs";
 const CP_AUTHORITY: &str = "tests/e2min_control_plane_authority.rs";
+const ACTIVITY_LIST: &str = "src/gateway/ui/activity/list_tests.rs";
+const ACTIVITY_EXPORT: &str = "src/gateway/ui/activity/export_tests.rs";
+const ACTIVITY_RECEIPT: &str = "src/gateway/ui/activity/receipt_tests.rs";
 const HISTORY_ROUTES: &str = "src/gateway/router/history_route_tests.rs";
 const HISTORY_PARAMS: &str = "src/gateway/ui/history_tests.rs";
 const CP_WRITES: &[Citation] = &[(
@@ -75,6 +78,32 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
         &[(
             EVENTS_RECONCILE,
             "a_held_subscription_is_listed_with_its_queued_record",
+        )],
+    ),
+    // This fixture has no transparency log; the served answers are pinned
+    // against real log files in the Activity unit tests.
+    (
+        "/ui/api/activity",
+        Method::GET,
+        &[(
+            ACTIVITY_LIST,
+            "l1_l2_admin_and_mapped_auditor_read_every_row",
+        )],
+    ),
+    (
+        "/ui/api/activity/export",
+        Method::GET,
+        &[(
+            ACTIVITY_EXPORT,
+            "e2_ndjson_without_a_key_is_409_and_csv_still_works",
+        )],
+    ),
+    (
+        "/ui/api/activity/{id}",
+        Method::GET,
+        &[(
+            ACTIVITY_RECEIPT,
+            "c3_links_mid_segment_and_across_a_seam_verify",
         )],
     ),
     (

@@ -193,6 +193,14 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "src/gateway/task_service/execution/pause_hook.rs",
         "debug-build test hook writing a task id marker (#2298); compiled out of release",
     ),
+    (
+        "src/gateway/ui/activity/reader.rs",
+        "reads audit log segments for the Activity list; hash-only, no secret",
+    ),
+    (
+        "src/gateway/ui/activity/seek.rs",
+        "reads audit log segments to find one receipt; hash-only, no secret",
+    ),
     ("src/gateway/ui/capabilities.rs", "capability YAML; public"),
     (
         "src/identity_grants/journal.rs",
@@ -307,6 +315,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/trust/claim_capture.rs",
         "append-only claim log; no secret",
+    ),
+    (
+        "src/trust/export_verify.rs",
+        "reads an Activity export bundle given to audit verify; no secret",
     ),
     (
         "src/trust/provenance_public.rs",
