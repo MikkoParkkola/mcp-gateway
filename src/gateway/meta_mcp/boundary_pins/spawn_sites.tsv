@@ -83,7 +83,7 @@ src/identity_grants/journal.rs	apply_change_with	spawn-blocking	2	outside-calls	
 src/identity_grants/journal.rs	read_locked	spawn-blocking	2	outside-calls	locked grant-file and journal reads at start-up and config reload
 src/key_server/store.rs	spawn_reaper	spawn	1	outside-calls	expired temporary token reaper loop
 src/oauth/callback.rs	start_callback_server	spawn	2	outside-calls	OAuth callback HTTP listeners (IPv4 and IPv6) for a login
-src/oauth/client/refresh_flight.rs	spawn	spawn	1	review	token-endpoint refresh exchange can return an SSRF refusal through the JoinHandle; only detach_token_step records it, unclear for get_token callers; MIK-8991.REFUSE.7
+src/oauth/client/refresh_flight.rs	spawn	spawn	1	raised-at-join	refresh_stored awaits the exchange in the caller's task, so a destination refusal returns there
 src/oauth/client/renewal.rs	spawn_refresh_task	spawn	1	outside-calls	background OAuth token renewal loop
 src/personal_accounts/mod.rs	start_custody_with_http	spawn-blocking	1	outside-calls	opens personal-account custody at start-up
 src/personal_accounts/worker.rs	offload	spawn-blocking	1	raised-at-join	personal-account store operation on the blocking pool; a refusal (e.g. scope broadening) returns as AccountServiceError through the join
