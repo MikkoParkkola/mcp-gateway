@@ -388,7 +388,8 @@ only when a test exists that fails on its mutant.
   delivery. Once with `signed_assertion` and once with `token_exchange`.
 - **ISO-T2.** *Required, not yet implemented.* The same with managed accounts on a multi-user gateway, plus a lease
   rotation mid-test: nothing observed under the old lease is delivered after it.
-- **ISO-T3.** *Required, not yet implemented.* Durable path: U1's occurrence is queued, then U1's row is re-granted or
+- **ISO-T3.** *Required, not yet implemented; delivered with its row by the
+  dead-letter replay check fix.* Durable path: U1's occurrence is queued, then U1's row is re-granted or
   its lease rotates. The queued record is buried as `observation_changed`, and
   dead-letter replay refuses it.
 - **ISO-T4.** *Required, not yet implemented for the cross-user revoke row.* U1's complete catalogue read never revokes U2's `resource_updated`
