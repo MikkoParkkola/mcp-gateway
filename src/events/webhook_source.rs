@@ -121,6 +121,7 @@ impl EventsHub {
             scope: Visibility::Backend(inbound.backend.to_owned()),
             owner: None,
             lifecycle_key: None,
+            fence: None,
         });
         Ok(())
     }

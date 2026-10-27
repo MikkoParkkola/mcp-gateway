@@ -121,6 +121,8 @@ async fn state_with(
 /// the sole operator, where a vault says so.
 fn credentialed_caller() -> Caller {
     Caller {
+        generation: crate::config_reload::LiveConfig::new(crate::config::Config::default())
+            .generation(),
         client: Some(AuthenticatedClient {
             name: "key".to_string(),
             principal: principal_of("a-validated-secret"),

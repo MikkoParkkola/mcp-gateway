@@ -791,3 +791,7 @@ pub(crate) fn cooldown_refusal(server: &str, tool: &str) -> String {
          gateway_list_disabled_capabilities to see all disabled capabilities."
     )
 }
+
+#[cfg(test)]
+#[path = "account_direct_bridge_fence_tests.rs"]
+mod fence_tests;

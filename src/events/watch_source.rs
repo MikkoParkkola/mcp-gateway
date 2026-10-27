@@ -579,6 +579,7 @@ impl Run {
                     "observed_at": now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
                 }),
                 lifecycle_key: Some(self.key.clone()),
+                fence: None,
             });
         }
         *last = Some((after, digest_after));

@@ -336,7 +336,8 @@ async fn dispatch(
     if *cancel_rx.borrow() {
         return None;
     }
-    let authorizer = state.authorizer(owned.authorizer());
+    let generation = state.generation();
+    let authorizer = state.authorizer(owned.authorizer(), &generation);
     let _key_hold = owned.hold_caller_key(state);
     let caller = owned.dispatch_context_retrying(state, &authorizer, retry);
     // `redeeming_dispatch` has checked the surfaced target holds. The pin
@@ -344,7 +345,10 @@ async fn dispatch(
     let meta = state.meta_mcp();
     let recorded = call.surfaced_server.as_ref();
     meta.with_surfaced_pin(&call.tool, recorded, async {
-        let (arguments, judged) = match state.readmit(call, &caller, owned.session_id()).await {
+        let (arguments, judged) = match state
+            .readmit(call, &caller, (owned.session_id(), &generation))
+            .await
+        {
             Ok(readmitted) => readmitted,
             Err(refused) => return Some(*refused),
         };

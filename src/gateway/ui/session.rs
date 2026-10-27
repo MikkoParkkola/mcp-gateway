@@ -235,7 +235,7 @@ mod mik_8659_dashboard_tests {
             dashboard_bootstrap: Arc::default(),
             tls_enabled: false,
             live_config: Arc::new(crate::config_reload::LiveConfig::new(
-                crate::config::Config::default(),
+                crate::config_reload::flags_off(crate::config::Config::default()),
             )),
             agent_auth: agent_auth.clone(),
         };
@@ -268,8 +268,6 @@ mod mik_8659_dashboard_tests {
             mtls_policy: Arc::new(crate::mtls::MtlsPolicy::from_config(
                 &crate::mtls::MtlsConfig::default(),
             )),
-            sanitize_input: false,
-            ssrf_protection: false,
             trust_configured_backends: false,
             inflight: Arc::new(tokio::sync::Semaphore::new(8)),
             agent_auth,
@@ -282,7 +280,7 @@ mod mik_8659_dashboard_tests {
             control_plane_store: None,
             control_plane_base: None,
             live_config: Arc::new(crate::config_reload::LiveConfig::new(
-                crate::config::Config::default(),
+                crate::config_reload::flags_off(crate::config::Config::default()),
             )),
             export_status: None,
             transparency_log: None,

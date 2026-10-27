@@ -21,6 +21,7 @@ impl Gateway {
     pub(super) async fn install_stdio_startup_catalogue(
         &self,
         meta_mcp: &Arc<MetaMcp>,
+        live_config: &Arc<LiveConfig>,
         grant_sink: Option<&Arc<IdentityGrantSink>>,
         warmer: &WarmerGuard,
         reporting: crate::config_reload::refusals::ReloadReporting,
@@ -87,14 +88,10 @@ impl Gateway {
         // capability backend is installed, so a reload refreshes and announces
         // the catalogue the session serves (MIK-8278).
         if let Some(path) = self.reload_path() {
-            let live_config = Arc::new(
-                LiveConfig::new(self.config.clone())
-                    .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
-            );
             let reload_ctx = Arc::new(
                 ReloadContext::new(
                     path.clone(),
-                    Arc::clone(&live_config),
+                    Arc::clone(live_config),
                     Arc::clone(&self.backends),
                     self.config.failsafe.clone(),
                     self.config.meta_mcp.cache_ttl,

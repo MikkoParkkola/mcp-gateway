@@ -31,6 +31,7 @@ fn body_carries_only_protocol_fields_and_data() {
         occurred_at: Utc::now(),
         data: json!({"event_type": "t", "fields": {}}),
         lifecycle_key: None,
+        fence: None,
     };
     let receipt = json!({"receipt": {"subject_kind": "event"}});
     let body: Value =
@@ -434,6 +435,7 @@ async fn an_occurrence_with_a_lifecycle_key_reaches_only_its_holders() {
         occurred_at: Utc::now(),
         data: json!({}),
         lifecycle_key,
+        fence: None,
     };
     let alices = PerPrincipal.lifecycle_key(
         "alice",
@@ -514,6 +516,7 @@ async fn an_operator_record_asks_no_backend_grant() {
         occurred_at: Utc::now(),
         data: json!({}),
         lifecycle_key: None,
+        fence: None,
     };
     hub.offer(
         &services,
@@ -584,6 +587,7 @@ async fn a_clock_before_the_epoch_delivers_nothing_on_a_live_lease() {
         occurred_at: Utc::now(),
         data: json!({}),
         lifecycle_key: None,
+        fence: None,
     };
     let outbox = |dir: &std::path::Path| {
         std::fs::read_dir(dir.join("outbox")).map_or(0, |entries| entries.flatten().count())
