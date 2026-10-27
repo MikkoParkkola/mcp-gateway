@@ -16,11 +16,15 @@ use super::visibility::InvokeScope;
 
 impl MetaMcp {
     /// Warm the caller's cold views of the surfaced tools' backends that
-    /// refuse a shared session. Each won claim's fill runs as its own task,
-    /// and the listing waits for all of them under one deadline measured from
-    /// here: the longest fill bound among those backends. A fill still running
-    /// then is left out of this listing, finishes on its own lease, and the
-    /// caller hears `tools/list_changed` when its slot stores (MIK-8148).
+    /// refuse a shared session, and wait for each before the list is built.
+    /// A won claim's fill runs as its own task, bounded by its backend's own
+    /// fill bound; a view another reader's lease is filling is waited on, up
+    /// to the same bound, and served from that fill. The listing waits for
+    /// every fill to end, so none publishes after this response: a backend
+    /// past its own bound is cut off and absent, with no later
+    /// `tools/list_changed` from here. The claims themselves (the pre-pass
+    /// and the credential resolution) are bounded by the longest fill bound;
+    /// a claim cut there spawned no fill, and its lease lapses.
     pub(crate) async fn warm_listing_views(
         &self,
         scope: InvokeScope<'_>,
@@ -41,7 +45,7 @@ impl MetaMcp {
                     .then(|| ((surfaced.server.as_str(), surfaced.tool.as_str()), backend))
             })
             .collect();
-        let Some(deadline) = refused
+        let Some(claims_bound) = refused
             .iter()
             .map(|(_, backend)| backend.tools_fill_bound())
             .max()
@@ -49,24 +53,49 @@ impl MetaMcp {
             return;
         };
         let targets: Vec<(&str, &str)> = refused.iter().map(|(target, _)| *target).collect();
-        let warm = async {
+        let mut fills = Vec::new();
+        let mut leased = Vec::new();
+        let claim = async {
             // A listing is not a call: a busy custody writes no transient
             // refusal record here.
             self.account_prepass(&targets, scope, session_id, AccountWrites::PermanentOnly)
                 .await;
-            let mut fills = Vec::new();
             for &(server, tool) in &targets {
-                if let Some(fill) = self
+                match self
                     .claim_caller_view(server, tool, scope, session_id)
                     .await
                 {
-                    fills.push(tokio::spawn(fill.run()));
+                    Some(fill) => fills.push(tokio::spawn(fill.run())),
+                    None => leased.extend(self.running_cold_lease(server, scope)),
                 }
             }
-            for fill in fills {
-                let _ = fill.await;
-            }
         };
-        let _ = tokio::time::timeout(deadline, warm).await;
+        let _ = tokio::time::timeout(claims_bound, claim).await;
+        let waits = leased.iter().map(|(backend, id)| async move {
+            let _ =
+                tokio::time::timeout(backend.tools_fill_bound(), backend.wait_cold_lease(id)).await;
+        });
+        futures::future::join(
+            futures::future::join_all(fills),
+            futures::future::join_all(waits),
+        )
+        .await;
+    }
+
+    /// The caller's cold lease on `server` another reader holds, if one
+    /// runs, through the caller's own backend grant.
+    fn running_cold_lease(
+        &self,
+        server: &str,
+        scope: InvokeScope<'_>,
+    ) -> Option<(std::sync::Arc<crate::backend::Backend>, String)> {
+        let backend = self
+            .scoped(scope.authorizer.backend_grant())
+            .scoped_get(server)?;
+        let id = self
+            .principal_for(&backend, scope.caller)?
+            .stable_actor_id();
+        backend.cold_lease_remaining(&id)?;
+        Some((backend, id))
     }
 }

@@ -122,6 +122,9 @@ pub struct Backend {
     /// Written when a fill stores into the slot, removed with the entry
     /// (`retire`), so an entry lives exactly as long as its slot.
     caller_slots: DashMap<String, caller_slots::CallerSlot>,
+    /// Woken when a caller's own slot is recorded or a cold view published,
+    /// so a listing waiting on another's lease serves its result (MIK-8962).
+    caller_slot_stored: tokio::sync::Notify,
     /// Failsafe configuration, cloned so a freshly created pool slot
     /// (`pooled_entry`) can build its own independent `Failsafe` (MIK-6735
     /// fix 1). The per-backend `Failsafe` this replaced is gone; every slot,

@@ -108,6 +108,7 @@ impl Backend {
                 entry: Arc::downgrade(&entry),
             },
         );
+        self.caller_slot_stored.notify_waiters();
     }
 
     /// Record that `principal_id` has no view of this backend. Replaced by
@@ -202,6 +203,24 @@ impl Backend {
                 binding: binding.to_string(),
                 entry: Arc::downgrade(&entry),
             };
+            drop(slot);
+            self.caller_slot_stored.notify_waiters();
+        }
+    }
+
+    /// Wait while `principal_id`'s cold lease runs: until its winner (or any
+    /// fill of the caller's own slot) stores, or the lease ends.
+    pub(crate) async fn wait_cold_lease(&self, principal_id: &str) {
+        loop {
+            let stored = self.caller_slot_stored.notified();
+            tokio::pin!(stored);
+            // Registered before the check, so a store between the check and
+            // the wait still wakes it.
+            stored.as_mut().enable();
+            let Some(remaining) = self.cold_lease_remaining(principal_id) else {
+                return;
+            };
+            let _ = tokio::time::timeout(remaining, stored).await;
         }
     }
 
