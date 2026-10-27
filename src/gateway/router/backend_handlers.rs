@@ -36,6 +36,8 @@ type PassthroughResolution = (Vec<(String, String)>, Option<String>);
 
 #[derive(Clone, Copy)]
 struct BackendAuthContext<'a> {
+    /// The call's pinned generation (ADR-023).
+    generation: &'a crate::config_reload::Generation,
     client: Option<&'a AuthenticatedClient>,
     oauth_agent_identity: Option<&'a OAuthAgentIdentity>,
     cert_identity: Option<&'a CertIdentity>,
@@ -143,6 +145,7 @@ async fn guard_tool_call(
     };
     let withheld_code = authorize_tool_target(
         state,
+        auth.generation,
         auth.client,
         auth.oauth_agent_identity,
         auth.cert_identity,
@@ -783,3 +786,6 @@ mod direct_captured_backend_tests;
 
 #[cfg(test)]
 mod direct_audit_subject_tests;
+
+#[cfg(test)]
+mod direct_unpinned_tests;

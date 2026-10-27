@@ -118,6 +118,7 @@ async fn meta_mcp_dispatch(
     // network path.
     let router_authorizer = RouterAuthorizer {
         state: state.as_ref(),
+        generation: &intake.generation,
         client: client.as_ref(),
         oauth_agent_identity: oauth_agent_identity.as_ref(),
         cert_identity: cert_identity.as_ref(),
@@ -221,6 +222,7 @@ async fn meta_mcp_dispatch(
             // reader's credential as it is resolved at that moment.
             let task_frames = (!request.task_ids().is_empty()).then(|| {
                 let reader = tasks::RecoveryCaller {
+                    generation: &intake.generation,
                     client: client.as_ref(),
                     oauth_agent_identity: oauth_agent_identity.as_ref(),
                     cert_identity: cert_identity.as_ref(),
@@ -517,6 +519,7 @@ async fn meta_mcp_dispatch(
         // completes an input round resumes the call as it.
         "tasks/get" | "tasks/update" => {
             let caller = tasks::RecoveryCaller {
+                generation: &intake.generation,
                 client: client.as_ref(),
                 oauth_agent_identity: oauth_agent_identity.as_ref(),
                 cert_identity: cert_identity.as_ref(),

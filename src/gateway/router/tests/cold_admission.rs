@@ -66,6 +66,7 @@ async fn admission_reads_a_cold_cache_and_never_fills_it() {
     };
     let authorizer = super::authorization::RouterAuthorizer {
         state: &state,
+        generation: &state.live_config.generation(),
         client: None,
         oauth_agent_identity: Some(&agent),
         cert_identity: None,
