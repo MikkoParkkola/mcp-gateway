@@ -1672,21 +1672,6 @@ async function doImport() {
   }
 }
 
-function capCard(c) {
-  const id = 'cap-' + c.name.replace(/[^a-z0-9_-]/gi, '_');
-  return `<div class="yaml-editor-wrap" id="wrap-${id}">
-    <div class="yaml-toolbar">
-      <span class="cap-name">${esc(c.name)}</span>
-      <span style="font-size:0.8rem;color:var(--fg2)">${c.tool_count != null ? c.tool_count + ' tools' : ''}</span>
-      <button class="btn btn-sm btn-secondary" data-action="revert-cap" data-value="${esc(c.name)}" data-editor="${id}">Revert</button>
-      <button class="btn btn-sm" data-action="save-cap" data-value="${esc(c.name)}" data-editor="${id}">Save</button>
-    </div>
-    <div class="yaml-line-numbers" id="ln-${id}"></div>
-    <textarea class="yaml-ta" id="ta-${id}" data-cap="${esc(c.name)}" spellcheck="false">${esc(c.content || '')}</textarea>
-    <div class="yaml-error-msg" id="err-${id}"></div>
-  </div>`;
-}
-
 // ── YAML editor: line numbers + Tab key ──
 function initYamlEditor(ta) {
   updateLineNumbers(ta);
@@ -1746,51 +1731,6 @@ async function validateCapBlur(ta) {
       ta.classList.add('yaml-error');
       errDiv.textContent = e.message;
     }
-  }
-}
-
-// ── Save capability ──
-async function saveCap(name, id) {
-  const ta = document.getElementById('ta-' + id);
-  const errDiv = document.getElementById('err-' + id);
-  if (!ta || !errDiv) return;
-  try {
-    const r = await uiFetch('/ui/api/capabilities/' + encodeURIComponent(name), {
-      method: 'PUT',
-      headers: { ...authHeaders(), 'Content-Type': 'application/x-yaml' },
-      body: ta.value
-    });
-    if (r.ok) {
-      ta.classList.remove('yaml-error');
-      errDiv.textContent = '';
-      errDiv.style.color = 'var(--green)';
-      errDiv.textContent = 'Saved.';
-      setTimeout(() => { errDiv.textContent = ''; errDiv.style.color = ''; }, 2000);
-    } else {
-      const body = await r.json().catch(() => ({ error: r.statusText }));
-      ta.classList.add('yaml-error');
-      errDiv.style.color = '';
-      errDiv.textContent = body.error || 'Save failed';
-    }
-  } catch (e) {
-    errDiv.textContent = 'Save error: ' + e.message;
-    errDiv.style.color = '';
-  }
-}
-
-// ── Revert capability ──
-async function revertCap(name, id) {
-  const ta = document.getElementById('ta-' + id);
-  const errDiv = document.getElementById('err-' + id);
-  if (!ta) return;
-  try {
-    const data = await apiFetch('/ui/api/capabilities/' + encodeURIComponent(name));
-    ta.value = data.content || '';
-    ta.classList.remove('yaml-error');
-    if (errDiv) errDiv.textContent = '';
-    updateLineNumbers(ta);
-  } catch (e) {
-    if (errDiv) errDiv.textContent = 'Revert error: ' + e.message;
   }
 }
 
@@ -1941,8 +1881,8 @@ document.addEventListener('click', e => {
     case 'remove-server': removeServer(value); break;
     case 'select-reg': selectRegServer(regMatches[Number(value)]); break;
     case 'toggle-cap': toggleCap(value); break;
-    case 'save-cap': saveCap(value, el.dataset.editor); break;
-    case 'revert-cap': revertCap(value, el.dataset.editor); break;
+    case 'save-cap': saveCap(value); break;
+    case 'revert-cap': revertCap(value); break;
     case 'delete-cap': deleteCap(value); break;
   }
 });
