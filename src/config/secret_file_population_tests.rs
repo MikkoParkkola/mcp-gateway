@@ -191,6 +191,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ),
     ("src/gateway/ui/capabilities.rs", "capability YAML; public"),
     (
+        "src/gateway/ui/discovery.rs",
+        "gateway.yaml bytes, hashed only for their revision; the config itself loads through Config::load_literal",
+    ),
+    (
         "src/identity_grants/journal.rs",
         "grant-change journal append; O_NOFOLLOW, owner-only; no secret",
     ),

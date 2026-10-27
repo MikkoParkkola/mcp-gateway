@@ -69,6 +69,8 @@ owned_routes! {
     /// Start-once preview of a server before it is added. Its own
     /// prefix, so it can never shadow a backend name under `/ui/api/backends`.
     UI_PREVIEWS = "/ui/api/previews",
+    /// Servers named in other MCP clients' config files on this host.
+    UI_DISCOVERY = "/ui/api/discovery",
     /// The bare prefix, which the catch-all does not match; claimed so it
     /// never reaches the main router's full-URI trace span.
     ACCOUNTS_ROOT = "/accounts/v1",
