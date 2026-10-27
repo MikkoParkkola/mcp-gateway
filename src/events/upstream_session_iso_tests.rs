@@ -52,7 +52,16 @@ async fn iso_t4a_overlapping_tools_notices_emit_once_per_subscriber_key() {
             false,
         );
     }
-    for state in &mut states {
+    // A tools notice emits after its refill: each listener owes its own,
+    // which is then made due and served before the flush.
+    for (state, shared) in states.iter_mut().zip(&shared) {
+        assert!(
+            shared.tools.lock().unannounced,
+            "each listener owes its own"
+        );
+        shared.tools.lock().due = Some(std::time::Instant::now());
+        assert!(state.take_due_refill(), "the refill is due");
+        state.refill_ended(true);
         state.flush_at(&weak, at);
     }
     let mut emitted = Vec::new();
