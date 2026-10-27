@@ -48,14 +48,32 @@ const CREDENTIAL_QUERY_NAMES: &[&str] = &[
 /// names (`env.API_KEY`, `args[2]`, `url`), in a stable order. Empty when it
 /// is adoptable.
 pub(crate) fn refusals(server: &DiscoveredServer) -> Vec<(AdoptRefusal, String)> {
-    let _ = (
-        server,
-        AdoptRefusal::NeedsClientOnlySecret,
-        AdoptRefusal::LiteralDefault,
-    );
-    let _ = (has_literal_default, is_reference, url, carries_credential);
-    let _ = AdoptRefusal::CredentialInUrl;
-    Vec::new()
+    let mut refused: Vec<(AdoptRefusal, String)> = server
+        .uncarried
+        .iter()
+        .map(|field| (AdoptRefusal::NeedsClientOnlySecret, field.clone()))
+        .collect();
+    let env = server.env.expose().iter().map(|(k, v)| ("env", k, v));
+    let headers = server
+        .headers
+        .expose()
+        .iter()
+        .map(|(k, v)| ("headers", k, v));
+    for (map, key, value) in env.chain(headers) {
+        if !value.contains("${") {
+            continue;
+        }
+        if has_literal_default(value) {
+            refused.push((AdoptRefusal::LiteralDefault, format!("{map}.{key}")));
+        } else if is_reference(value) {
+            // A load reads `file:${HOME}/t` as a file reference first.
+            refused.push((AdoptRefusal::NeedsClientOnlySecret, format!("{map}.{key}")));
+        }
+    }
+    if url(&server.transport).is_some_and(carries_credential) {
+        refused.push((AdoptRefusal::CredentialInUrl, "url".to_string()));
+    }
+    refused
 }
 
 fn url(transport: &TransportConfig) -> Option<&str> {
