@@ -61,12 +61,19 @@ async fn a_redacted_answer_records_rewritten_and_its_finding() {
             .as_array()
             .cloned()
             .unwrap_or_default();
-        assert!(!findings.is_empty(), "{route:?}: a finding: {row}");
+        // Response inspection reads the same credential, so its finding sits
+        // beside the firewall's; the firewall's must still be there.
+        assert!(
+            findings.iter().any(|f| f["kind"]
+                .as_str()
+                .is_some_and(|k| k.starts_with("firewall:"))),
+            "{route:?}: a firewall finding: {row}"
+        );
         for finding in &findings {
             assert!(
                 finding["kind"]
                     .as_str()
-                    .is_some_and(|k| k.starts_with("firewall:")),
+                    .is_some_and(|k| k.starts_with("firewall:") || k.starts_with("inspect:")),
                 "{route:?}: {finding}"
             );
             assert_eq!(finding["where"], "result", "{route:?}: {finding}");
