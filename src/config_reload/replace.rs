@@ -246,8 +246,9 @@ pub(crate) enum Settle {
 
 /// How a finished replacement settles its entries, by its final result:
 /// a rollback that fails becomes `RollbackFailed`, so every other refusal
-/// left the old file in place. A write task that dies never reaches this:
-/// [`Entries`]' drop settles that case.
+/// left the old file in place. `Failed` keeps them: it proves nothing about
+/// the file. A write task that dies never reaches this: [`Entries`]' drop
+/// settles that case.
 #[cfg_attr(
     not(test),
     expect(
@@ -256,12 +257,26 @@ pub(crate) enum Settle {
     )
 )]
 pub(crate) fn settle_for(result: &Result<ReplaceOutcome, ReplaceError>) -> Settle {
-    match result {
-        Ok(_) => Settle::Keep,
-        Err(ReplaceError::RollbackFailed { .. } | ReplaceError::Unconfirmed { .. }) => {
-            Settle::Abandon
-        }
-        Err(_) => Settle::Discard,
+    // Every kind named, no wildcard: a new one must say whether it proves
+    // the old file stayed, or it would delete entries the file may name.
+    let Err(error) = result else {
+        return Settle::Keep;
+    };
+    match error {
+        // Refused before anything was written.
+        ReplaceError::Busy
+        | ReplaceError::Stale { .. }
+        | ReplaceError::Refused(_)
+        | ReplaceError::Stage(_)
+        | ReplaceError::Secrets(_)
+        // The rollback came back: a failed one is `RollbackFailed`.
+        | ReplaceError::Unsupported(_)
+        | ReplaceError::Write(_)
+        | ReplaceError::ReloadRefused(_) => Settle::Discard,
+        // The file on disk may name them; `Failed` proves nothing either way.
+        ReplaceError::RollbackFailed { .. }
+        | ReplaceError::Unconfirmed { .. }
+        | ReplaceError::Failed(_) => Settle::Abandon,
     }
 }
 
@@ -300,7 +315,10 @@ impl Entries {
         match how {
             Settle::Keep | Settle::Abandon => settle_now(pending, how),
             Settle::Discard => {
-                let _ = tokio::task::spawn_blocking(move || settle_now(pending, how)).await;
+                if let Err(e) = tokio::task::spawn_blocking(move || settle_now(pending, how)).await
+                {
+                    tracing::warn!(error = %e, "discarding a refused save's secret entries failed; they are listed as unused");
+                }
             }
         }
     }

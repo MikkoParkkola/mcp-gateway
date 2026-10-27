@@ -269,7 +269,7 @@ fn entries_settle_by_the_final_result() {
             err(ReplaceError::Unsupported(String::new())),
             Settle::Discard,
         ),
-        (err(ReplaceError::Failed(String::new())), Settle::Discard),
+        (err(ReplaceError::Failed(String::new())), Settle::Abandon),
         (
             err(ReplaceError::RollbackFailed {
                 journal: journal.clone(),
@@ -318,4 +318,27 @@ async fn a_rollback_that_fails_keeps_the_entries() {
         "{failure:?}"
     );
     assert_eq!(live_entries(dir.path()).len(), 1);
+}
+
+/// A compute that panics dies before the rename: the old file stands, so
+/// the guard deletes the entries.
+#[tokio::test]
+async fn a_panic_before_the_rename_discards_the_entries() {
+    let (dir, path, ctx) = setup();
+
+    let failure = replace_detached(
+        ctx,
+        secret_save(dir.path(), Expected::Any, |_, _| {
+            panic!("the compute dies before the rename")
+        }),
+        WAIT,
+    )
+    .await
+    .expect_err("the write task died");
+
+    assert!(matches!(failure, ReplaceError::Failed(_)), "{failure:?}");
+    assert_eq!(read(&path), START);
+    // The discard is queued off the dying task; the listing waits for the
+    // vault lock it holds until it finishes.
+    assert_eq!(live_entries(dir.path()), Vec::<String>::new());
 }
