@@ -140,11 +140,17 @@ impl ReloadContext {
         // A file that does not load is refused before the config lock is
         // taken, so the refusal adds no lock file (GH462); it is loaded again
         // under the lock.
-        crate::config_persistence::load_existing_or_default(path)
-            .map_err(|e| crate::config_reload::write::load_failure(path, &e, mode))?;
-        let held = lock_config(path, deadline)
-            .await
-            .map_err(ConfigWriteError::from)?;
+        // Skipped while a replace journal is pending: the file may be a
+        // refused candidate, which the lock recovers before the load below.
+        if !crate::config_persistence::journal::exists(path) {
+            crate::config_persistence::load_existing_or_default(path)
+                .map_err(|e| crate::config_reload::write::load_failure(path, &e, mode))?;
+        }
+        let (held, recovered) =
+            crate::config_persistence::lock::lock_config_recovering(path, deadline)
+                .await
+                .map_err(ConfigWriteError::from)?;
+        self.pay_owed_reload(recovered).await;
         let mut config = crate::config_persistence::load_existing_or_default(path)
             .map_err(|e| crate::config_reload::write::load_failure(path, &e, mode))?;
         let value = match mutate(&mut config) {

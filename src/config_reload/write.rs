@@ -281,8 +281,12 @@ where
     // A file that does not load is refused before the lock is taken, so the
     // refusal leaves the directory as it was, no lock file added (GH462). It
     // is loaded again under the lock: this check only decides refusal early.
-    crate::config_persistence::load_existing_or_default(path)
-        .map_err(|e| load_failure(path, &e, mode))?;
+    // Skipped when a replace journal is pending: the file may be a refused
+    // candidate, and the lock recovers it before the load below.
+    if !crate::config_persistence::journal::exists(path) {
+        crate::config_persistence::load_existing_or_default(path)
+            .map_err(|e| load_failure(path, &e, mode))?;
+    }
     let held = lock_config(path, Instant::now() + super::RELOAD_LOCK_WAIT)
         .await
         .map_err(ConfigWriteError::from)?;
