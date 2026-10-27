@@ -264,6 +264,18 @@ async fn tools_list_never_serves_a_rotated_grants_slot_http() {
             .contains(&old),
         "premise: rotation leaves the old slot warm, so this is the listing's check"
     );
+    // The rotated grant selects a new slot: attach its upstream there.
+    let binding = fx
+        .state
+        .meta_mcp
+        .account_strategies()
+        .managed_vault(Some("work-gmail"))
+        .expect("the managed vault")
+        .view_binding(crate::personal_accounts::identity::Principal::SoleOperator)
+        .await
+        .expect("premise: the rotated grant has a view");
+    assert_ne!(binding, old, "premise: rotation selects a new slot");
+    fx.gateway.rearm_operator_slot_at_for_test(&binding);
     let fills = fx.gateway.lists_to(BACKEND);
     assert!(
         !listed_schema_has_folder(&fx, 3).await,

@@ -226,7 +226,9 @@ impl Stdio {
 /// A rotated grant's slot is never a listing view (stdio twin of the HTTP
 /// row). The operator's slot is warmed by a real `gateway_list_tools` fill
 /// (schema A); the shared slot holds B. After rotation `tools/list` must not
-/// serve A; the now-cold caller sees the shared view B (SLOTVIS.6).
+/// serve the old slot, nor the shared view B: the backend has per-user
+/// sessions only, so the now-cold caller's view is a fresh fill on the
+/// current grant's own slot (MIK-8962).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tools_list_never_serves_a_rotated_grants_slot_stdio() {
     let mut gateway =
@@ -271,9 +273,32 @@ async fn tools_list_never_serves_a_rotated_grants_slot_stdio() {
             .contains(&old),
         "premise: rotation leaves the old slot warm, so this is the listing's check"
     );
+    // The rotated grant selects a new slot: attach its upstream there.
+    let binding = stdio
+        .meta
+        .account_strategies()
+        .managed_vault(Some("work-gmail"))
+        .expect("the managed vault")
+        .view_binding(crate::personal_accounts::identity::Principal::SoleOperator)
+        .await
+        .expect("premise: the rotated grant has a view");
+    assert_ne!(binding, old, "premise: rotation selects a new slot");
+    stdio.gateway.rearm_operator_slot_at_for_test(&binding);
+    let fills = stdio.gateway.lists_to(BACKEND);
     assert!(
-        stdio.listed_schema_has_folder(3).await,
-        "tools/list served the rotated grant's stale slot (schema A), not the shared view B"
+        !stdio.listed_schema_has_folder(3).await,
+        "tools/list served the shared view B to a backend with per-user sessions only"
+    );
+    assert_eq!(
+        stdio.gateway.lists_to(BACKEND),
+        fills + 1,
+        "the rotated caller's view was not re-established by a fresh fill"
+    );
+    assert!(
+        backend
+            .populated_per_user_bindings_for_test()
+            .contains(&binding),
+        "the fresh fill did not land on the current grant's own slot"
     );
 }
 
