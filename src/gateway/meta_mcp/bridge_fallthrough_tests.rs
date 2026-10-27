@@ -664,8 +664,10 @@ async fn an_undeclared_last_round_records_refused_only_while_vouched() {
             if composite {
                 crate::gateway::delivery_facts::unvouched();
             }
+            // Every asked round asks for roots; the round handed back after
+            // the last one asks what the caller never declared.
             let (m, calls) = meta_that_always_asks(|n| {
-                Some(if n == 1 {
+                Some(if n < last_round() {
                     "roots/list"
                 } else {
                     "elicitation/create"
@@ -686,8 +688,13 @@ async fn an_undeclared_last_round_records_refused_only_while_vouched() {
                 err.to_string().contains("did not declare"),
                 "premise: {err}"
             );
-            assert_eq!(*channel.asked.lock(), 1, "premise: one bridged round");
-            assert_eq!(calls.lock().len(), 2, "premise: the backend was called");
+            let last = last_round();
+            assert_eq!(
+                *channel.asked.lock(),
+                last - 1,
+                "premise: every round asked"
+            );
+            assert_eq!(calls.lock().len(), last, "premise: the backend was called");
             let mut fields = serde_json::Map::new();
             crate::gateway::delivery_facts::record_fields(
                 crate::gateway::delivery_facts::snapshot().as_ref(),

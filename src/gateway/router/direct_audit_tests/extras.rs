@@ -31,6 +31,10 @@ pub(super) enum Extra {
     Signing,
     /// Tool `t` declares one argument, `q`, and no other.
     DeclaredKeys,
+    /// The meta layer's own request firewall, as the gateway arms it beside
+    /// the router's: the dispatch chokepoint rescans with it.
+    #[cfg(feature = "firewall")]
+    MetaRequestFirewall,
 }
 
 impl Setup {
@@ -103,6 +107,19 @@ pub(super) fn arm_extras(mut meta: MetaMcp, extras: &[Extra]) -> MetaMcp {
             crate::security::SecurityPosture::Standard
         };
         signed(&mut meta, posture);
+    }
+    #[cfg(feature = "firewall")]
+    if extras.contains(&Extra::MetaRequestFirewall) {
+        let firewall = crate::security::firewall::Firewall::from_config(
+            crate::security::firewall::FirewallConfig {
+                enabled: true,
+                scan_requests: true,
+                ..crate::security::firewall::FirewallConfig::default()
+            },
+            None,
+        )
+        .with_continuations(meta.continuation());
+        meta.set_firewall(Some(Arc::new(firewall)));
     }
     meta
 }

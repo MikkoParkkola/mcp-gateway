@@ -223,6 +223,7 @@ async fn a_retry_answer_the_rescan_blocks_records_refused() {
     let fx = fixture(Setup {
         reply: Some(question()),
         request_firewall: true,
+        extras: &[Extra::MetaRequestFirewall],
         ..Setup::default()
     })
     .await;
