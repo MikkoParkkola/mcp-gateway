@@ -52,7 +52,7 @@ struct Session {
 impl Session {
     /// A session on `path`. `announce` sends `notifications/initialized`;
     /// a held row leaves it out, because every line but `initialize` passes
-    /// the one-shot dispatch pause (stdio_loop.rs, `hold.pause()`), and a
+    /// the one-shot dispatch pause (`stdio_loop.rs`, `hold.pause()`), and a
     /// notification still in flight when the row arms it would take the
     /// pause in place of the row's own line.
     async fn start(dir: &Path, path: std::path::PathBuf, announce: Announce) -> Self {

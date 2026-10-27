@@ -89,7 +89,7 @@ pub(super) async fn open(
     ),
 ) -> Option<(Arc<StdioTasks>, ExpirySweep)> {
     let dir = store_dir(config);
-    let subscriptions = subscriptions(config, overlay, (record_key, live_config));
+    let subscriptions = subscriptions(overlay, (record_key, live_config));
     // No upstream adapter on stdio: every interrupted row it holds is settled
     // on open, and none is kept for an upstream read (D6 rev 5 item 4).
     let opened = super::task_runtime::open(config, &dir, subscriptions, meta_mcp, &[]).await;
@@ -134,7 +134,6 @@ pub(super) async fn open(
 /// so one that does not resolve cannot turn stdio's tasks off (MIK-7638).
 /// Publishing never consults the authorizer; only a delivery would.
 fn subscriptions(
-    config: &Config,
     overlay: &crate::config::EnvOverlay,
     (record_key, live_config): (
         &Arc<crate::gateway::record_principal::RecordPrincipalKey>,
