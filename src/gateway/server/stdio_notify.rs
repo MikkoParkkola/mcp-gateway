@@ -99,49 +99,53 @@ impl Gateway {
         let mut frames = Vec::new();
         let judging = reads.judges();
         for req in requests {
-            // Each answer keeps its own request's params: ids may repeat.
-            let params = judging.then(|| req.get("params").cloned()).flatten();
-            let ((resp, staged), read) = crate::gateway::outbound::read_scoped(
-                reads.guard(),
-                Box::pin(Self::dispatch_single_staged(
-                    meta_mcp,
-                    tool_policy,
-                    mtls_policy,
-                    req,
-                    super::StdioClient {
-                        session_id,
-                        // A batch's items run one by one in the batch's own
-                        // task (MIK-7684), with no client channel: a batched
-                        // call cannot hold for input, so nothing would deliver
-                        // a reply. Nothing to declare to either — a retained
-                        // handshake would widen a channel that cannot ask.
-                        channel: &crate::gateway::input_bridge::NoClientChannel,
-                        handshake_capabilities: crate::protocol::meta::Declared::NONE,
-                        // A batch is a legacy shape; it serves no `tasks/*`.
-                        tasks: None,
-                        // Judged by the process setting like any request; only
-                        // the discover listing is the legacy set (MIK-8380).
-                        serving,
-                        discover: super::stdio_single::DiscoverListing::LegacyOnly,
-                        // Each item is sanitized as a single request is.
-                        sanitize,
-                    },
-                )),
-            )
-            .await;
-            match resp {
-                Some(resp) => frames.push(
-                    Self::judge_and_commit(
+            // One delivery's facts per item: dispatch, judge and record.
+            crate::gateway::delivery_facts::scope(async {
+                // Each answer keeps its own request's params: ids may repeat.
+                let params = judging.then(|| req.get("params").cloned()).flatten();
+                let ((resp, staged), read) = crate::gateway::outbound::read_scoped(
+                    reads.guard(),
+                    Box::pin(Self::dispatch_single_staged(
                         meta_mcp,
-                        reads,
-                        session_id,
-                        (resp, params.as_ref(), read.as_ref()),
-                        staged,
-                    )
-                    .await,
-                ),
-                None => staged.commit(false),
-            }
+                        tool_policy,
+                        mtls_policy,
+                        req,
+                        super::StdioClient {
+                            session_id,
+                            // A batch's items run one by one in the batch's own
+                            // task (MIK-7684), with no client channel: a batched
+                            // call cannot hold for input, so nothing would deliver
+                            // a reply. Nothing to declare to either — a retained
+                            // handshake would widen a channel that cannot ask.
+                            channel: &crate::gateway::input_bridge::NoClientChannel,
+                            handshake_capabilities: crate::protocol::meta::Declared::NONE,
+                            // A batch is a legacy shape; it serves no `tasks/*`.
+                            tasks: None,
+                            // Judged by the process setting like any request; only
+                            // the discover listing is the legacy set (MIK-8380).
+                            serving,
+                            discover: super::stdio_single::DiscoverListing::LegacyOnly,
+                            // Each item is sanitized as a single request is.
+                            sanitize,
+                        },
+                    )),
+                )
+                .await;
+                match resp {
+                    Some(resp) => frames.push(
+                        Self::judge_and_commit(
+                            meta_mcp,
+                            reads,
+                            session_id,
+                            (resp, params.as_ref(), read.as_ref()),
+                            staged,
+                        )
+                        .await,
+                    ),
+                    None => staged.commit(false),
+                }
+            })
+            .await;
         }
         frames
     }

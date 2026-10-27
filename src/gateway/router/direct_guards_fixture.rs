@@ -117,6 +117,9 @@ pub(crate) enum Answer {
     /// (MIK-8323: a backend handed an envelope can return it to a later,
     /// fresh call).
     AskThenStore,
+    /// Success whose text is the given payload when the call's `cmd` is
+    /// `"leak"`, and `ok` otherwise: two calls in flight get different answers.
+    LeakOnCmd(&'static str),
 }
 
 /// A router wired for the direct-route guard cells: non-admin keys
@@ -316,6 +319,22 @@ pub(crate) async fn fixture_firewalled_with_built(
     FIREWALL_RULE.with(|r| r.set(rule));
     let fx = fixture_inner(answer, true, build).await;
     FIREWALL_RULE.with(|r| r.set(None));
+    fx
+}
+
+/// [`fixture_firewalled_with_built`] with `log` as the state's transparency
+/// log; `build` arms the same log on the `MetaMcp`, so both routes record
+/// their deliveries in one file.
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_firewalled_logged(
+    answer: Answer,
+    rule: Option<crate::security::firewall::FirewallAction>,
+    log: Arc<crate::security::TransparencyLogger>,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    STATE_LOG.with(|l| *l.borrow_mut() = Some(log));
+    let fx = fixture_firewalled_with_built(answer, rule, build).await;
+    STATE_LOG.with(|l| *l.borrow_mut() = None);
     fx
 }
 

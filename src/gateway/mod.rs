@@ -26,6 +26,7 @@ pub(crate) use meta_mcp::admission::EXECUTION_DIRECTIVES;
 pub(crate) use meta_mcp::invoke::audit::note_process;
 /// The per-delivery write record, shared with the response and idempotency
 /// caches that store it beside an answer (MIK-7991).
+pub(crate) mod delivery_facts;
 pub(crate) use meta_mcp::invoke::gateway_writes;
 /// The one write-then-bump-under-lock grant publisher, re-exported so the
 /// reload path can share it WITHOUT `meta_mcp` itself becoming crate-visible.

@@ -399,7 +399,8 @@ impl MetaMcp {
     ) -> Result<(Value, super::super::response_security::GateEffect)> {
         crate::security::signature_chain::strip_chain(&mut result);
         let (mut result, raw_read) = audit::noted_response(self, result);
-        self.apply_response_contract_gate(server, tool, trace_id, &mut result)?;
+        self.apply_response_contract_gate(server, tool, trace_id, &mut result)
+            .map_err(crate::gateway::delivery_facts::refused)?;
 
         // === POST-INVOKE: Response content inspection (issue #133, D2) ===
         //
@@ -411,7 +412,9 @@ impl MetaMcp {
         // Action mode (`action_mode = true`): blocks any response with a
         // HIGH/CRITICAL finding, returning a security error to the caller.
         let text = crate::security::response_inspect::extract_text_from_result(&result);
-        let findings = self.inspect_backend_text((server, tool, trace_id), &text)?;
+        let findings = self
+            .inspect_backend_text((server, tool, trace_id), &text)
+            .map_err(crate::gateway::delivery_facts::refused)?;
         if !findings.is_empty() {
             if let Some(obj) = result.as_object_mut() {
                 obj.insert(
