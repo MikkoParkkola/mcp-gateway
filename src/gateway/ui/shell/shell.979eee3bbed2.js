@@ -70,7 +70,7 @@ function el(tag, attrs = {}, ...children) {
 const STATE_COPY = {
   loading: ['Loading', 'Reading the gateway.'],
   empty: ['Nothing here yet', ''],
-  error: ['Could not reach the gateway', 'The numbers below may be out of date.'],
+  error: ['Something went wrong', 'Try again.'],
   forbidden: ['Not available to this key', 'Ask an admin for access.'],
   stale: ['Updates stopped', 'Reconnecting.'],
   'not-built': ['Not built yet', 'This page is not in the new UI yet.'],
@@ -94,24 +94,55 @@ let bearer = null;
 /** Counts sign-ins; an answer to a request started before the latest one is stale. */
 let authEpoch = 0;
 
-/** An error from /ui/api with its HTTP status. */
+/**
+ * An error from /ui/api: its HTTP status (0 when no answer came at all), and
+ * whether an ok answer's body could not be read.
+ */
 export class ApiError extends Error {
-  constructor(status, path) {
+  constructor(status, path, { unreadable = false } = {}) {
     super(`${path} answered ${status}`);
     this.status = status;
+    this.unreadable = unreadable;
   }
 }
 
 /** GET (or another method) on /ui/api with the session cookie, or the key held in memory. */
 export async function api(path, init = {}) {
+  if (typeof path !== 'string' || !path.startsWith('/ui/api/')) throw new TypeError(`api: not a /ui/api/ path: ${path}`);
   const headers = new Headers(init.headers);
   if (bearer) headers.set('Authorization', `Bearer ${bearer}`);
+  // Built before the call, so a request the page cannot build stays the page's own fault.
+  const request = new Request(path, { credentials: 'same-origin', ...init, headers });
   const epoch = authEpoch;
-  const reply = await fetch(path, { credentials: 'same-origin', ...init, headers });
+  let reply;
+  try {
+    reply = await fetch(request);
+  } catch (err) {
+    if (err?.name === 'AbortError') throw err; // the caller's own abort, not the gateway
+    throw new ApiError(0, path);
+  }
   // A 401 to a request sent before the latest sign-in says nothing about now.
   if (reply.status === 401 && epoch === authEpoch) showSignIn();
+  // A refusal is judged by its status alone; its body is never read.
   if (!reply.ok) throw new ApiError(reply.status, path);
-  return reply.status === 204 ? null : reply.json();
+  if (reply.status === 204) return null;
+  try {
+    return await reply.json();
+  } catch {
+    throw new ApiError(reply.status, path, { unreadable: true });
+  }
+}
+
+/** What a page error says it was: the cause, its banner copy, and for a server answer its code. */
+export function causeOf(err) {
+  if (!(err instanceof ApiError)) {
+    const name = typeof err?.name === 'string' && err.name ? err.name : 'error';
+    return { cause: 'page-fault', title: 'This page failed', body: `A fault in the page itself (${name}), not in the gateway. Try again or reload; if it repeats, report it.` };
+  }
+  if (err.status === 0) return { cause: 'unreachable', title: 'Could not reach the gateway', body: 'Check that it is running and that this browser can reach it.' };
+  if (err.unreadable) return { cause: 'unreadable', title: "The gateway's answer could not be read", body: `It answered HTTP ${err.status} with something this page could not read. Try again; if it repeats, check the gateway's log.` };
+  if (err.status === 404) return { cause: 'not-found', title: 'Not found', body: 'The gateway has no such page or item.' };
+  return { cause: 'server', title: 'The gateway answered with an error', body: `It answered HTTP ${err.status}. Try again; if it repeats, check the gateway's log.` };
 }
 
 // ---------------------------------------------------------------- palette
@@ -282,6 +313,70 @@ export function go(path, { replace = false } = {}) {
 
 let renderSeq = 0;
 
+/** How many routes keep their last good render for a page error to show. */
+const SNAPSHOT_LIMIT = 9;
+/** The last good render of each recent route, for one signed-in identity only. */
+const snapshots = { epoch: -1, byRoute: new Map() };
+
+/** The snapshots of the identity signed in now; a sign-in change empties them. */
+function snapshotsNow() {
+  if (snapshots.epoch !== authEpoch) {
+    snapshots.epoch = authEpoch;
+    snapshots.byRoute.clear();
+  }
+  return snapshots.byRoute;
+}
+
+const routeKey = (route) => `${route.page}/${route.object ?? ''}/${route.tab}`;
+
+function saveSnapshot(key, body) {
+  const map = snapshotsNow();
+  map.delete(key);
+  map.set(key, { node: body.cloneNode(true), at: new Date() });
+  if (map.size > SNAPSHOT_LIMIT) map.delete(map.keys().next().value);
+}
+
+/** A copy of `node` that reads the same but that no one can operate. */
+function neutralised(node) {
+  const copy = node.cloneNode(true);
+  for (const e of [copy, ...copy.querySelectorAll('*')]) {
+    e.removeAttribute('id');
+    e.removeAttribute('contenteditable');
+    for (const { name } of [...e.attributes]) if (name.startsWith('on')) e.removeAttribute(name);
+    if (e.matches('a[href]')) e.removeAttribute('href');
+    if (e.matches('button, input, select, textarea')) e.disabled = true;
+    if (e.hasAttribute('tabindex') || e.matches('summary')) e.setAttribute('tabindex', '-1');
+  }
+  return copy;
+}
+
+/** HH:MM, and the date too when it is not today. */
+function stamp(at) {
+  const time = at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return at.toDateString() === new Date().toDateString() ? time : `${at.toLocaleDateString()} ${time}`;
+}
+
+/** The banner for `err`, over the route's last good data if any, with Retry. */
+function failure(err, key, onRetry) {
+  const { cause, title, body } = causeOf(err);
+  if (cause === 'page-fault') console.error(err);
+  const last = snapshotsNow().get(key);
+  const retry = el('button', { type: 'button', class: 'btn' }, 'Retry');
+  retry.addEventListener('click', () => onRetry(retry));
+  const text = last ? `${body} The data below is from ${stamp(last.at)}, before the error.` : body;
+  const banner = state('error', { title, body: text, action: retry });
+  banner.dataset.cause = cause;
+  const node = el('div', { class: 'failure' }, banner);
+  if (last) {
+    node.append(el('section', { role: 'region', 'aria-label': 'Data from before the error', 'data-dimmed': true }, neutralised(last.node)));
+  }
+  return node;
+}
+
+/** Run a page's tab into `into`; a fault thrown synchronously becomes a rejection. */
+const runTab = (spec, route, into) =>
+  Promise.resolve().then(() => spec.tabs[route.tab](into, { object: route.object, tab: route.tab, api, state }));
+
 /** Render the current address. */
 export function render() {
   const seq = ++renderSeq;
@@ -321,15 +416,52 @@ export function render() {
     tabsNav.append(el('a', { href, 'aria-current': t === route.tab ? 'page' : null }, tabLabel));
   }
   const body = el('div', { class: 'body' });
+  content.removeAttribute('aria-busy');
   content.replaceChildren(mark(body));
-  Promise.resolve()
-    .then(() => spec.tabs[route.tab](body, { object: route.object, tab: route.tab, api, state }))
-    .catch((err) => {
-      if (seq !== renderSeq) return;
-      const status = err instanceof ApiError ? err.status : 0;
-      if (status === 401) return; // the sign-in view is showing; it re-renders after sign-in
-      content.replaceChildren(mark(state(status === 403 ? 'forbidden' : 'error')));
-    });
+  // Every effect of this render is dropped once the user navigates or signs in as someone else.
+  const epoch = authEpoch;
+  const current = () => seq === renderSeq && epoch === authEpoch;
+  const key = routeKey(route);
+
+  const settle = (err) => {
+    const status = err instanceof ApiError ? err.status : null;
+    if (status === 401) return; // the sign-in view is showing; it re-renders after sign-in
+    if (status === 403) content.replaceChildren(mark(state('forbidden')));
+    else content.replaceChildren(mark(failure(err, key, retry)));
+  };
+
+  // Retry runs the tab again into a staging container laid out under the banner, so the
+  // banner and the last data stay until it succeeds.
+  const retry = (button) => {
+    if (button.disabled) return;
+    button.disabled = true;
+    button.textContent = 'Retrying…';
+    button.setAttribute('aria-busy', 'true');
+    content.setAttribute('aria-busy', 'true');
+    const stage = el('div', { class: 'body staging' });
+    content.append(stage);
+    runTab(spec, route, stage)
+      .then(() => {
+        if (!current()) return;
+        stage.classList.remove('staging');
+        content.replaceChildren(mark(stage));
+        saveSnapshot(key, stage);
+        content.focus({ preventScroll: true });
+      })
+      .catch((err) => {
+        if (!current()) return;
+        settle(err);
+        content.querySelector('[data-state="error"] button')?.focus();
+      })
+      .finally(() => {
+        if (stage.classList.contains('staging')) stage.remove();
+        if (current()) content.removeAttribute('aria-busy');
+      });
+  };
+
+  runTab(spec, route, body)
+    .then(() => { if (current()) saveSnapshot(key, body); })
+    .catch((err) => { if (current()) settle(err); });
 }
 
 /** Mark a node as the rendered content (tests and screens wait on it). */

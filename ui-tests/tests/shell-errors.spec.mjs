@@ -283,15 +283,13 @@ test.describe('round 3 cases', () => {
 
   test('E10 a Retry answered 401 shows sign-in', async ({ page }) => {
     await gate(page);
-    let calls = 0;
-    await page.route(PROBE, (r) => {
-      calls += 1;
-      return calls === 1 ? r.fulfill({ status: 500, json: {} }) : r.fulfill({ status: 401, json: {} });
-    });
+    let retried = false;
+    await page.route(PROBE, (r) => r.fulfill({ status: retried ? 401 : 500, json: {} }));
     await withFixturePages(page, { probes: true });
     await page.goto('/ui/policies/status');
     await signIn(page);
     await expect(banner(page)).toHaveAttribute('data-cause', 'server');
+    retried = true;
     await retry(page).click();
     await expect(page.locator('#signin')).toBeVisible();
   });
