@@ -202,8 +202,7 @@ impl EventsHub {
             // No verdict on the access: the clock cannot be read (MIK-8202).
             super::services::AccessVerdict::Undated => return Err(ReplayRefusal::Unavailable),
         }
-        self.still_observed(&sub.id, &dead.record, services, now)
-            .await?;
+        self.still_observed(&dead.record, services, now).await?;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&dead.record.body_b64)
             .map_err(|_| ReplayRefusal::Unavailable)?;
@@ -288,13 +287,12 @@ impl EventsHub {
     /// nothing on a guess.
     async fn still_observed(
         &self,
-        subscription_id: &str,
         record: &OutboxRecord,
         services: &super::Services,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), ReplayRefusal> {
         let current = (self.store.subscriptions().into_iter())
-            .find(|s| s.id == subscription_id && s.live(now))
+            .find(|s| s.id == record.subscription_id && s.live(now))
             .ok_or(ReplayRefusal::SubscriptionGone)?;
         let vault = current.obs_basis.as_ref().is_some_and(|basis| {
             basis.strategy == crate::identity_propagation::PropagationStrategyKind::Vault
