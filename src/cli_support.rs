@@ -88,9 +88,10 @@ impl Adoption {
 
 impl Drop for Adoption {
     fn drop(&mut self) {
-        // Unsettled means an unwind after the edit (a panic printing a note
-        // after the save, say): a saved file may name these entries, so they
-        // are never deleted here.
+        // Unsettled means an unwind somewhere after the edit returned: before
+        // the rename or after it (printing a note after the save, say). This
+        // side cannot tell which, and a saved file may name these entries,
+        // so they are kept; with no file naming them they list as unused.
         if let Some(pending) = self.secrets.take() {
             pending.abandon();
         }
@@ -167,8 +168,9 @@ pub(crate) fn adopt_with(
             reasons.push(("capabilities_name", "name".to_owned()));
         } else if crate::config::backend_add::validate_backend_name(&name).is_err() {
             reasons.push(("invalid_name", "name".to_owned()));
-        } else if !seen.insert(name.clone()) {
-            // The first find of a name wins, as discovery's own dedup does.
+        } else if seen.contains(&name) {
+            // The first adoptable find of a name wins, as discovery's own
+            // dedup does.
             reasons.push(("duplicate_name", "name".to_owned()));
         }
         reasons.extend(
@@ -177,9 +179,11 @@ pub(crate) fn adopt_with(
                 .map(|(refusal, field)| (refusal.code(), field)),
         );
         if !reasons.is_empty() {
+            reasons.sort_by(|a, b| a.1.cmp(&b.1));
             outcomes.push(Outcome::Skipped { name, reasons });
             continue;
         }
+        seen.insert(name.clone());
         let backend = server.to_backend_config();
         let mut literals = Vec::new();
         for (header, map) in [(false, &backend.env), (true, &backend.headers)] {
@@ -207,7 +211,7 @@ pub(crate) fn adopt_with(
         // A value the store cannot keep skips its server, not the import.
         let limit = store.limit();
         candidates.retain(|candidate| {
-            let over: Vec<(&'static str, String)> = candidate
+            let mut over: Vec<(&'static str, String)> = candidate
                 .literals
                 .iter()
                 .filter(|(_, _, value)| value.len() > limit)
@@ -216,6 +220,7 @@ pub(crate) fn adopt_with(
             if over.is_empty() {
                 return true;
             }
+            over.sort_by(|a, b| a.1.cmp(&b.1));
             outcomes[candidate.outcome] = Outcome::Skipped {
                 name: candidate.name.clone(),
                 reasons: over,
@@ -258,6 +263,12 @@ pub(crate) fn adopt_with(
                 SaveError::Commit(never) => match never {},
             })?;
             // References come back in input order: the same walk as above.
+            // A short list would leave a literal as text: refuse instead.
+            if pending.refs().len() != literals.len() {
+                return Err("the secret store returned fewer references than values; \
+                     nothing was written"
+                    .to_owned());
+            }
             let mut references = pending.refs().iter();
             for candidate in &mut candidates {
                 for (header, key, _) in &candidate.literals {
@@ -284,7 +295,7 @@ pub(crate) fn adopt_with(
             .map_err(|refused| {
                 format!(
                     "discovered server {name:?} has secret references that do not resolve: {}",
-                    refused.join("; ")
+                    refused.join("; ").escape_debug()
                 )
             })?;
     }

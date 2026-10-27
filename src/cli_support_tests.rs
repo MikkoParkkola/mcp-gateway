@@ -68,14 +68,22 @@ fn read_reference(reference: &str) -> String {
 fn d16_a_literal_goes_to_the_store_and_only_its_reference_is_written() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut config = Config::default();
-    let found = server("tool", &[("API_KEY", "sk-test")]);
+    let mut found = server("tool", &[("API_KEY", "sk-test")]);
+    found.headers = [("Authorization".to_string(), "Bearer sk-header".to_string())]
+        .into_iter()
+        .collect();
 
     let adoption = adopt_with(&mut config, &[found], || Ok(opened(dir.path()))).expect("adopts");
     adoption.settle(&Ok(()));
 
-    let written = &config.backends["tool"].env["API_KEY"];
+    let backend = &config.backends["tool"];
+    let written = &backend.env["API_KEY"];
     assert_ne!(written, "sk-test");
     assert_eq!(read_reference(written), "sk-test");
+    assert_eq!(
+        read_reference(&backend.headers["Authorization"]),
+        "Bearer sk-header"
+    );
     let yaml = serde_yaml_ng::to_string(&config).expect("yaml");
     assert!(!yaml.contains("sk-test"), "{yaml}");
 }
@@ -281,9 +289,13 @@ fn no_refusal_shows_a_url_or_an_argument() {
         *command = "npx ${zq-arg}".to_string();
         *cwd = Some("zq-relative/dir".to_string());
     }
+    let mut template = server("template", &[("KEY", "zq-${SUFFIX}")]);
+    template.uncarried = vec!["args[1]".to_string()];
     let mut config = Config::default();
 
-    let Err(message) = adopt_with(&mut config, &[url, args], || Err("unused".to_string())) else {
+    let Err(message) = adopt_with(&mut config, &[url, args, template], || {
+        Err("unused".to_string())
+    }) else {
         panic!("a refused server was adopted");
     };
 
