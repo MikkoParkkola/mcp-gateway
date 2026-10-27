@@ -137,7 +137,9 @@ fn the_shared_writer_syncs_no_directory_and_the_journal_keeps_its_two() {
         source
             .lines()
             .map(str::trim)
-            .take_while(|line| !line.starts_with("#[cfg(all(test"))
+            // The test modules sit at the file's end; a test-only item above
+            // them (a `#[cfg(all(test, ...))]` helper) is still scanned.
+            .take_while(|line| !line.starts_with("mod "))
             .filter(|line| !line.starts_with("//"))
             .collect()
     };

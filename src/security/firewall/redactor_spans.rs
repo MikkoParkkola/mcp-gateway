@@ -3,7 +3,7 @@
 
 //! Byte-span arithmetic for the credential redactor.
 
-use super::{Literal, REDACTED};
+use super::{Literal, REDACTED, decoded};
 
 /// `spans` (in order) with every byte of `holes` (in order, disjoint) cut
 /// out, so a span crossing a hole leaves the pieces on either side of it.
@@ -94,4 +94,35 @@ pub(super) fn spliced_len(text: &str, ranges: &[(usize, usize)]) -> usize {
 /// one rule for both walks, so neither can undersize its buffer.
 pub(super) fn spliced_capacity(len: usize, covered: usize, count: usize) -> usize {
     len - covered + count * (REDACTED.len() + 1)
+}
+
+/// The content ranges of the value literals a span of `found` crosses and
+/// whose decoded text `exempt` accepts. Only such a value can keep bytes
+/// from a span, so no other value is decoded. Spans go by start, each with
+/// the furthest end reached so far: a literal is crossed when a span starting
+/// before its end reaches past its start.
+pub(super) fn exempt_crossed(
+    text: &str,
+    literals: &[Literal],
+    found: &[(usize, Vec<(usize, usize)>)],
+    exempt: &dyn Fn(&str) -> bool,
+) -> Vec<(usize, usize)> {
+    let mut all: Vec<(usize, usize)> = found.iter().flat_map(|(_, f)| f.iter().copied()).collect();
+    all.sort_unstable();
+    let reach: Vec<usize> = (all.iter())
+        .scan(0, |far, &(_, end)| {
+            *far = (*far).max(end);
+            Some(*far)
+        })
+        .collect();
+    let crossed = |lit: &Literal| {
+        let n = all.partition_point(|&(start, _)| start < lit.end());
+        n > 0 && reach[n - 1] > lit.start()
+    };
+    literals
+        .iter()
+        .filter(|lit| !lit.key && crossed(lit))
+        .filter(|lit| decoded(text, lit).is_some_and(|v| exempt(&v)))
+        .map(|lit| (lit.start(), lit.end()))
+        .collect()
 }

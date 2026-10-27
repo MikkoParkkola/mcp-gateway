@@ -592,6 +592,7 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
                     external_server: "gateway",
                     external_tool: "gateway_list_tools",
                     subject: None,
+                    trace_id: None,
                 },
                 signing: None,
                 chain_source: ChainSource::NotEligible,
