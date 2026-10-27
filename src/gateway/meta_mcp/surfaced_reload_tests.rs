@@ -314,6 +314,7 @@ async fn l2_a_watcher_driven_reload_applies_surfaced_tools() {
         shutdown_rx,
         None,
         Some(meta.surfaced_hook()),
+        crate::config_reload::refusals::ReloadReporting::default(),
     )
     .expect("the watcher starts");
     write_file(&dir, &[("beta", "read")]);
