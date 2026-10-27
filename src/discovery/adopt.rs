@@ -115,6 +115,24 @@ pub(crate) fn refusals(server: &DiscoveredServer) -> Vec<(AdoptRefusal, String)>
             refused.push((AdoptRefusal::LiteralInTemplate, format!("{map}.{key}")));
         }
     }
+    // A stdio command or working directory the gateway would run as
+    // written: checked here too, whichever producer built the find.
+    if let TransportConfig::Stdio { command, cwd, .. } = &server.transport {
+        let relative = |dir: &str| std::path::Path::new(dir).is_relative();
+        for (field, bad) in [
+            ("command", command.contains("${")),
+            (
+                "cwd",
+                cwd.as_deref()
+                    .is_some_and(|dir| dir.contains("${") || relative(dir)),
+            ),
+        ] {
+            let named = |f: &str| f == field || (field == "command" && f.starts_with("args["));
+            if bad && !server.uncarried.iter().any(|f| named(f)) {
+                refused.push((AdoptRefusal::NeedsClientOnlySecret, field.to_string()));
+            }
+        }
+    }
     // Checked here, not only by the client config scanner: an environment
     // find never passes through it.
     let parsed = match url(&server.transport) {

@@ -86,6 +86,42 @@ fn a_variable_in_a_command_argument_or_cwd_refuses() {
 }
 
 #[test]
+fn a_variable_in_the_command_refuses() {
+    assert_eq!(
+        refused(&json!({"command": "${HOME}/bin/srv"})),
+        one(AdoptRefusal::NeedsClientOnlySecret, "command")
+    );
+}
+
+/// A find built by any producer gets its stdio command and working
+/// directory checked by the rule itself.
+#[test]
+fn a_stdio_find_is_checked_whatever_scanned_it() {
+    for (command, cwd, field) in [
+        ("${HOME}/srv", None, "command"),
+        ("srv", Some("tools"), "cwd"),
+        ("srv", Some("${workspaceFolder}"), "cwd"),
+    ] {
+        let server = DiscoveredServer::new(
+            "srv".to_string(),
+            String::new(),
+            DiscoverySource::Environment,
+            TransportConfig::Stdio {
+                command: command.to_string(),
+                cwd: cwd.map(str::to_string),
+                protocol_version: None,
+            },
+            crate::discovery::ServerMetadata::default(),
+        );
+        assert_eq!(
+            refusals(&server),
+            one(AdoptRefusal::NeedsClientOnlySecret, field),
+            "{command} {cwd:?}"
+        );
+    }
+}
+
+#[test]
 fn a_variable_in_a_url_refuses() {
     let entry = json!({"url": "https://${HOST}/mcp"});
     assert_eq!(
