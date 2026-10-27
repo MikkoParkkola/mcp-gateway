@@ -69,6 +69,7 @@ async fn a_keyless_occurrence_skips_rows_observed_per_user() {
             occurred_at: Utc::now(),
             data: json!({}),
             lifecycle_key: None,
+            fence: None,
         },
     )
     .await;

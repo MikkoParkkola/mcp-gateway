@@ -162,13 +162,24 @@ fn key(name: &str) -> ApiKeyConfig {
 /// live reload does (MIK-8168): same config, its own call counter, answering
 /// `Ok`. Returns the new backend's counter.
 pub(crate) fn replace_backend(fx: &Fx, name: &str) -> Arc<AtomicUsize> {
+    let config = BackendConfig {
+        passthrough: name.ends_with("-pt"),
+        ..BackendConfig::default()
+    };
+    replace_backend_configured(fx, name, config)
+}
+
+/// [`replace_backend`] with `config` as the replacement's declared config
+/// (its transport URL, say), still answered by the counting transport.
+pub(crate) fn replace_backend_configured(
+    fx: &Fx,
+    name: &str,
+    config: BackendConfig,
+) -> Arc<AtomicUsize> {
     let calls = Arc::new(AtomicUsize::new(0));
     let backend = Arc::new(Backend::new(
         name,
-        BackendConfig {
-            passthrough: name.ends_with("-pt"),
-            ..BackendConfig::default()
-        },
+        config,
         &fixture_failsafe(),
         Duration::from_secs(60),
     ));
@@ -200,6 +211,14 @@ pub(crate) async fn fixture_sanitizing(answer: Answer, on: bool) -> Fx {
     SANITIZE.with(|s| s.set(on));
     let fx = fixture_inner(answer, false, |meta| meta).await;
     SANITIZE.with(|s| s.set(false));
+    fx
+}
+
+/// Any fixture builder, run with authentication off.
+pub(crate) async fn auth_off<T, F: std::future::Future<Output = T>>(build: F) -> T {
+    AUTH_OFF.with(|s| s.set(true));
+    let fx = build.await;
+    AUTH_OFF.with(|s| s.set(false));
     fx
 }
 
@@ -520,6 +539,8 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
     /// `security.sanitize_input` for the state (the route x check matrix).
     static SANITIZE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Authentication off for the state (ADR-023: the pin holds without it).
+    static AUTH_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Both backends require identity propagation, each to its own audience
     /// (`aud-<name>`), so one caller reaches them under two bindings
     /// (MIK-8293 S3c).
@@ -567,7 +588,7 @@ thread_local! {
 /// The auth the fixture serves: four keys, plus a client breaker when asked.
 fn fixture_auth() -> AuthConfig {
     let mut auth = AuthConfig {
-        enabled: true,
+        enabled: !AUTH_OFF.with(std::cell::Cell::get),
         api_keys: vec![
             key("k-std"),
             key("k-other"),
@@ -649,7 +670,10 @@ async fn fixture_inner(
     let (mut state, store) = fixture_state().await;
     let (calls, seen) = (Arc::new(AtomicUsize::new(0)), Arc::default());
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
-    state_mut.sanitize_input = SANITIZE.with(std::cell::Cell::get);
+    // The flag applies from the published config (ADR-023).
+    let mut config = (*state_mut.live_config.get()).clone();
+    config.security.sanitize_input = SANITIZE.with(std::cell::Cell::get);
+    state_mut.live_config.set(config);
     // A required propagation refuses to mint without a durable audit sink
     // (MIK-6740), so a propagating fixture gets a transparency log.
     if PROPAGATING.with(std::cell::Cell::get) {

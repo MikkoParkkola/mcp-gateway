@@ -249,8 +249,18 @@ impl MetaMcp {
         trace_id: String,
     ) -> Result<super::SourcedOutcome> {
         // D1-f: a degraded audit log refuses before dispatch, after one probe.
-        if let Some(log) = &self.transparency_logger {
-            log.admit().await?;
+        if let Some(log) = &self.transparency_logger
+            && let Err(refused) = log.admit().await
+        {
+            self.count_call(
+                args.get("server")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                args.get("tool").and_then(Value::as_str),
+                &crate::security::audit::AuditWho::from_caller(caller),
+                crate::counters::Outcome::AdmissionRefused,
+            );
+            return Err(refused);
         }
         let trace_id_clone = trace_id.clone();
         // An in-process call has no request memo of its own: one per call, so
@@ -315,6 +325,12 @@ impl MetaMcp {
         if let Some(log) = &self.transparency_logger
             && let Err(refused) = log.admit().await
         {
+            self.count_call(
+                server,
+                Some(tool),
+                &crate::security::audit::AuditWho::from_caller(caller),
+                crate::counters::Outcome::AdmissionRefused,
+            );
             return refused;
         }
         let args = serde_json::json!({"server": server, "tool": tool, "arguments": arguments});

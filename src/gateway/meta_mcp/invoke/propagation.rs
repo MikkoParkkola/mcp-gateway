@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use super::account_mint;
 use super::{CallerCredential, DispatchCredential};
+use crate::events::FenceRead;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::identity_propagation::{CallerProof, CallerProvenance, audit_subject};
 use crate::personal_accounts::identity::Principal;
@@ -36,16 +37,18 @@ impl MetaMcp {
     /// the audited mint a call uses, with the same transport
     /// check, header validation, audit record and refusals. Fail-closed even
     /// on a non-required backend: a listener with nothing minted sends
-    /// nothing, never the gateway's own credential.
+    /// nothing, never the gateway's own credential. A vault mint names the
+    /// fence binding of the grant it released, from the lease itself.
     ///
     /// # Errors
     /// No such backend, no identity propagation on it, a refused or failed
-    /// mint, an unavailable audit log, or an empty minted set.
+    /// mint, an unavailable audit log, an empty minted set, or a vault lease
+    /// whose binding cannot be encoded.
     pub(crate) async fn mint_listener_credential(
         &self,
         server: &str,
         identity: &crate::key_server::oidc::VerifiedIdentity,
-    ) -> Result<Vec<(String, String)>> {
+    ) -> Result<crate::events::ListenerGrant> {
         let backend = self.backends.get_for(
             crate::gateway::meta_mcp::scoped_backends::Unscoped::Background,
             server,
@@ -67,7 +70,55 @@ impl MetaMcp {
                 "events listener for backend '{server}': nothing was minted"
             )));
         }
-        Ok(minted.headers)
+        let fence = minted
+            .managed
+            .as_ref()
+            .map(crate::personal_accounts::ManagedLease::fence_binding)
+            .transpose()
+            .map_err(|error| {
+                Error::Config(format!("events listener for backend '{server}': {error}"))
+            })?;
+        Ok(crate::events::ListenerGrant {
+            headers: minted.headers,
+            fence,
+        })
+    }
+
+    /// The grant an events listener of `server` observing as `identity` is
+    /// fenced on: the vault's stable binding, read without minting or
+    /// refreshing. `None` when no managed account backs the backend, so
+    /// nothing rotates under it.
+    ///
+    /// # Errors
+    /// [`FenceRead::Closed`] when the backend is gone or the caller has no
+    /// view of the grant (revoked, reconnect required, descriptor moved);
+    /// [`FenceRead::Busy`] when custody cannot answer now.
+    pub(crate) async fn listener_fence_binding(
+        &self,
+        server: &str,
+        identity: &crate::key_server::oidc::VerifiedIdentity,
+    ) -> std::result::Result<Option<String>, FenceRead> {
+        use crate::personal_accounts::ViewBinding;
+        let backend = self.backends.get_for(
+            crate::gateway::meta_mcp::scoped_backends::Unscoped::Background,
+            server,
+        );
+        let backend = backend.as_deref().ok_or(FenceRead::Closed)?;
+        let Some(vault) = self
+            .account_strategies
+            .managed_vault(backend.account_descriptor_id())
+        else {
+            return Ok(None);
+        };
+        let caller = CallerProof::new(Some(identity), CallerProvenance::Anonymous);
+        let principal = self
+            .principal_for(backend, caller)
+            .ok_or(FenceRead::Closed)?;
+        match vault.fence_binding(principal).await {
+            ViewBinding::Bound(binding) => Ok(Some(binding)),
+            ViewBinding::NoView(_) => Err(FenceRead::Closed),
+            ViewBinding::Transient(_) | ViewBinding::Unavailable(_) => Err(FenceRead::Busy),
+        }
     }
 
     /// Like [`Self::resolve_propagation_headers`] but also returns the caller's

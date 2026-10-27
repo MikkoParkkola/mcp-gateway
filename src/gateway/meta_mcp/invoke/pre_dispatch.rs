@@ -140,6 +140,7 @@ impl MetaMcp {
                         super::nonce_settle::PreSendExit::Served((server, tool)),
                     );
                     audit::note_cached_failure(&error);
+                    audit::counting::note_replay();
                     // A refusal keeps its provenance across the replay as well
                     // as across the bridge boundary. Served as a generic error
                     // it would skip the delivery-refusal projection and count
@@ -164,6 +165,7 @@ impl MetaMcp {
                 }
                 GuardOutcome::CachedResult(cached) => {
                     debug!(target: INVOKE_TARGET, server, tool, trace_id, "Idempotency cache hit");
+                    audit::counting::note_replay();
                     // A stored side-effect notice is the gateway's own text;
                     // its first call delivered no read either (MIK-7991).
                     // Reached when the sync admission's wall-clock entry has
@@ -410,6 +412,7 @@ impl MetaMcp {
         {
             cache_reads::restore(read.as_ref());
             debug!(target: INVOKE_TARGET, server, tool, trace_id, "Cache hit");
+            audit::counting::note_cache_hit();
             // MIK-7991: the hit serves what the storing call wrote; its
             // receipt and the delivered answer's rebuild both leave it out.
             self.stage_relay_receipt(

@@ -37,6 +37,7 @@ async fn run_step_with_identity(
 
     let authorizer = super::authorization::RouterAuthorizer {
         state: state.as_ref(),
+        generation: &state.live_config.generation(),
         client: Some(client),
         oauth_agent_identity,
         cert_identity,
@@ -263,6 +264,7 @@ async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
 
     let authorizer = super::authorization::RouterAuthorizer {
         state: state.as_ref(),
+        generation: &state.live_config.generation(),
         client: Some(&client),
         oauth_agent_identity: None,
         cert_identity: None,
@@ -639,6 +641,7 @@ async fn authz_ordinary_error_carries_no_status_stamp() {
 
     let authorizer = super::authorization::RouterAuthorizer {
         state: state.as_ref(),
+        generation: &state.live_config.generation(),
         client: Some(&client),
         oauth_agent_identity: None,
         cert_identity: None,

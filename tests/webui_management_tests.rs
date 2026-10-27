@@ -74,6 +74,8 @@ mod backend_mutation;
 mod backend_preview;
 #[path = "webui_management_tests/capabilities.rs"]
 mod capabilities;
+#[path = "webui_management_tests/capability_editor.rs"]
+mod capability_editor;
 #[path = "webui_management_tests/internal_routes.rs"]
 mod internal_routes;
 #[path = "webui_management_tests/openapi_import.rs"]
@@ -82,6 +84,8 @@ mod openapi_import;
 mod registry;
 #[path = "webui_management_tests/secret_slot_surfaces.rs"]
 mod secret_slot_surfaces;
+#[path = "webui_management_tests/server_state.rs"]
+mod server_state;
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -171,8 +175,6 @@ async fn make_app_state(
         key_server: None,
         tool_policy,
         mtls_policy,
-        sanitize_input: false,
-        ssrf_protection: false,
         trust_configured_backends: false,
         inflight,
         agent_auth,
@@ -184,9 +186,14 @@ async fn make_app_state(
         agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::new(
-            mcp_gateway::config::Config::default(),
-        )),
+        live_config: std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::new({
+            // Flags off, as this fixture set them on `AppState` before they
+            // moved into the published config (ADR-023).
+            let mut config = mcp_gateway::config::Config::default();
+            config.security.sanitize_input = false;
+            config.security.ssrf_protection = false;
+            config
+        })),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(
@@ -260,8 +267,6 @@ async fn make_app_state_with_reload(
             key_server: None,
             tool_policy,
             mtls_policy,
-            sanitize_input: false,
-            ssrf_protection: false,
             trust_configured_backends: false,
             inflight,
             agent_auth,
@@ -273,9 +278,14 @@ async fn make_app_state_with_reload(
             agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
             control_plane_store: None,
             control_plane_base: None,
-            live_config: std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::new(
-                mcp_gateway::config::Config::default(),
-            )),
+            live_config: std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::new({
+                // Flags off, as this fixture set them on `AppState` before they
+                // moved into the published config (ADR-023).
+                let mut config = mcp_gateway::config::Config::default();
+                config.security.sanitize_input = false;
+                config.security.ssrf_protection = false;
+                config
+            })),
             export_status: None,
             transparency_log: None,
             dashboard_bootstrap: std::sync::Arc::new(

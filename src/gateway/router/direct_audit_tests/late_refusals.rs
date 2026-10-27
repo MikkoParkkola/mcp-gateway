@@ -8,6 +8,7 @@
 use super::*;
 
 /// Ordinary prose, long enough for the relay detector's fingerprints.
+#[cfg(feature = "firewall")]
 const PROSE: &str = "The orchard ledger for the north slope records seven rows of late pears, \
     the grafting dates for each rootstock, the hours the drip lines ran during the dry weeks of \
     August, and which crew pruned the older trees after the second frost. It closes with the \
@@ -199,6 +200,7 @@ async fn an_undeclared_argument_records_refused_on_both_routes() {
 
 /// A modern `/mcp` call to `alpha:t` declaring elicitation, with `extra`
 /// merged into its params (a retry's `requestState` and `inputResponses`).
+#[cfg(feature = "firewall")]
 fn declaring_invoke(id: u64, extra: &Value) -> String {
     let meta = json!({
         "io.modelcontextprotocol/protocolVersion": "2026-07-28",

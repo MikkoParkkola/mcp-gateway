@@ -17,9 +17,9 @@ use super::support::log_startup_banner;
 use super::test_seams;
 use super::warmstart::{WarmStartMode, WarmerGuard, build_warm_start_list};
 use super::{
-    BuiltMetaMcp, events_wiring, expand_home_path, identity_grants, listener, persistence,
-    spawn_export_task, spawn_health_loop, spawn_idle_reaper, start_checks, task_runtime,
-    tools_changed, window_saver,
+    BuiltMetaMcp, counter_wiring, events_wiring, expand_home_path, identity_grants, listener,
+    persistence, spawn_export_task, spawn_health_loop, spawn_idle_reaper, start_checks,
+    task_runtime, tools_changed, window_saver,
 };
 use crate::capability::CapabilityWatcher;
 use crate::config_reload::{ConfigWatcher, LiveConfig, ReloadContext};
@@ -83,6 +83,18 @@ impl Gateway {
             record_key,
             transparency_log,
         } = self.build_meta_mcp().await?;
+        // One auditor for the process: the overrides in effect at start are
+        // recorded now, and every reload context shares it.
+        let (override_auditor, override_drain) =
+            crate::config_reload::override_audit::OverrideAuditor::start(transparency_log.clone());
+        override_auditor
+            .record_at_start(&self.backends, transparency_log.as_ref())
+            .await?;
+        let reload_reporting =
+            crate::config_reload::refusals::ReloadReporting::with_override_audit(override_auditor);
+        // Restored before anything is served or reloaded.
+        let (counters, counter_saver) =
+            counter_wiring::start(&data_dir, &meta_mcp, shutdown_tx.subscribe());
         // F24: this mode delivers tools/list_changed, so it may advertise it.
         meta_mcp.set_change_feed(crate::gateway::ChangeFeed::Http);
         let (tools_changed_tx, tools_changed_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -212,11 +224,13 @@ impl Gateway {
                     self.config.failsafe.clone(),
                     self.config.meta_mcp.cache_ttl,
                 )?
+                .with_reporting(reload_reporting.clone())
                 .with_env(Arc::clone(&self.env))
                 .with_identity_grant_sink_opt(identity_grant_sink.clone())
                 .with_stop(reload_stop)
                 .with_capabilities(meta_mcp.get_capabilities())
-                .with_on_registered(warmer.hook()),
+                .with_on_registered(warmer.hook())
+                .with_markers(Some(Arc::clone(&counters.store))),
             );
             meta_mcp.set_reload_context(Arc::clone(&reload_ctx));
         }
@@ -302,6 +316,7 @@ impl Gateway {
             &webhook_registry,
             &live_config,
             credentials,
+            &counters.store,
         )?;
         let subscriptions = Arc::new(
             crate::gateway::subscription_registry::SubscriptionRegistry::new(
@@ -419,8 +434,6 @@ impl Gateway {
             key_server,
             tool_policy,
             mtls_policy,
-            sanitize_input: self.config.security.sanitize_input,
-            ssrf_protection: self.config.security.ssrf_protection,
             trust_configured_backends: self.config.security.trust_configured_backends,
             inflight: Arc::clone(&inflight),
             agent_auth,
@@ -514,13 +527,14 @@ impl Gateway {
         // active. MIK-6750 r4: starting it earlier would let a startup-time
         // reload move `live_config` before the snapshot, surfacing a
         // never-bound host/port in the advertised resource.
-        let _config_watcher: Option<ConfigWatcher> = self.start_config_watcher(
+        let config_watcher: Option<ConfigWatcher> = self.start_config_watcher(
             &live_config,
             identity_grant_sink,
             capabilities_for_watcher,
             &shutdown_tx,
             &warmer,
             surfaced_hook,
+            reload_reporting,
         );
 
         // Start health check task. Shared with `run_stdio` for the same reason
@@ -599,7 +613,10 @@ impl Gateway {
         let cost = None;
         let (ranker, tracker) = (ranker_for_shutdown, tracker_for_shutdown);
         let paths = (ranker_path.clone(), transition_path.clone());
-        persistence::save_state_on_shutdown(ranker, paths.0, tracker, paths.1, cost).await;
+        // Ends on the shutdown broadcast, like the cost saver.
+        drop(counter_saver);
+        let more = vec![counters.shutdown_save()];
+        persistence::save_state_on_shutdown(ranker, paths.0, tracker, paths.1, cost, more).await;
         // Awaited after the state saves, not before: its own deadline runs
         // from the broadcast, so a stalled window disk never delays them.
         if let Some(saver) = window_saver {
@@ -608,6 +625,10 @@ impl Gateway {
 
         let drain_timeout = self.config.server.shutdown_timeout;
         Self::drain_inflight(&inflight, drain_timeout).await;
+        // Every reload entry point has stopped: the listener has returned and
+        // the watcher goes now. What they queued is written, or named.
+        drop(config_watcher);
+        override_drain.drain(&self.backends, drain_timeout).await;
 
         // Workers drain, and a drain that runs out cancels the rest; then the
         // expiry sweep is joined while the store is still open, and the store

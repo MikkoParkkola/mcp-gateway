@@ -171,6 +171,9 @@ pub(super) fn task_intent_for_call(
 /// the record: the durable descriptor supplies the target, and the target is
 /// then judged against the caller in front of us.
 pub(super) struct RecoveryCaller<'a> {
+    /// What the read is judged by: the request's pinned generation, or for a
+    /// stream frame the one current at delivery (ADR-023).
+    pub generation: &'a crate::config_reload::Generation,
     pub client: Option<&'a AuthenticatedClient>,
     pub oauth_agent_identity: Option<&'a OAuthAgentIdentity>,
     pub cert_identity: Option<&'a CertIdentity>,
@@ -202,7 +205,7 @@ fn with_policy_caller<R>(
         caller.oauth_agent_identity,
         caller.cert_identity,
     );
-    let borrowed = router_authorizer.borrow(state);
+    let borrowed = router_authorizer.borrow(state, caller.generation);
     let authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync) = &borrowed;
     let caller_key = super::super::identity::caller_key(
         caller.grant_subject.as_ref(),
@@ -597,7 +600,10 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
                         .is_none_or(|opened_as| *opened_as == reader.principal.storage_form())
             })
             .and_then(|id| self.state.tasks.get_held(&self.owner, id).ok());
+        // A stream frame is judged per delivery, by the generation current now.
+        let generation = self.state.live_config.generation();
         let live = RecoveryCaller {
+            generation: &generation,
             client: Some(reader),
             oauth_agent_identity: self.oauth_agent_identity.as_ref(),
             cert_identity: self.cert_identity.as_ref(),

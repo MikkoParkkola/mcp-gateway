@@ -67,8 +67,8 @@ src/gateway/meta_mcp/invoke/audit.rs	attribution	-	on-path, untimed: invocation-
 src/gateway/meta_mcp/invoke/audit.rs	audit_invocation	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/audit.rs	audit_refused_credential	-	on-path, untimed: identity-propagation refusals only; the timed backend propagates no credential
 src/gateway/meta_mcp/invoke/audit.rs	audit_replay	-	on-path, untimed: replayed executions only; the timed rows execute fresh
-src/gateway/meta_mcp/invoke/audit.rs	audit_settlement	-	test-only shorthand (cfg(test))
-src/gateway/meta_mcp/invoke/audit.rs	audit_settlement_kept	-	upstream task settlement (tasks/get recovery) only, not a live dispatch
+src/gateway/meta_mcp/invoke/audit/settlement.rs	audit_settlement	-	test-only shorthand (cfg(test))
+src/gateway/meta_mcp/invoke/audit/settlement.rs	audit_settlement_kept	-	upstream task settlement (tasks/get recovery) only, not a live dispatch
 src/gateway/meta_mcp/invoke/audit.rs	delivered_value	-	on-path, untimed: relay receipt rebuilds of delivered answers, with relay detection active; the harness stages no receipt
 src/gateway/meta_mcp/invoke/audit.rs	from_caller	-	on-path, untimed: invocation-record writer, only with a transparency logger, which the harness does not configure
 src/gateway/meta_mcp/invoke/audit.rs	note	http_invoke_tiny	on the HTTP gateway_invoke path
@@ -88,11 +88,16 @@ src/gateway/meta_mcp/invoke/audit.rs	response_reading	http_invoke_tiny	on the HT
 src/gateway/meta_mcp/invoke/audit.rs	response_tenants	-	on-path, untimed: transparency-logger attribution of cached deliveries only
 src/gateway/meta_mcp/invoke/audit.rs	response_uninspected	-	on-path, untimed: transparency-logger attribution of cached deliveries only
 src/gateway/meta_mcp/invoke/audit.rs	rewritten_text	-	on-path, untimed: relay receipts for wrappers a final pass rewrote, with relay detection active
-src/gateway/meta_mcp/invoke/audit.rs	settled_outcome	-	upstream task settlement (tasks/get recovery) only, not a live dispatch
+src/gateway/meta_mcp/invoke/audit/settlement.rs	settled_outcome	-	upstream task settlement (tasks/get recovery) only, not a live dispatch
 src/gateway/meta_mcp/invoke/audit.rs	sha256_of	-	on-path, untimed: audit-record hashes, only with a transparency logger, which the harness does not configure
 src/gateway/meta_mcp/invoke/audit.rs	stored_failure	-	on-path, untimed: raw-receipt chain refusals stored under an idempotency key only
 src/gateway/meta_mcp/invoke/audit.rs	with_dispatch_scope	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/audit.rs	write_invocation	-	on-path, untimed: only with a transparency logger, which the harness does not configure
+src/gateway/meta_mcp/invoke/audit_counting.rs	count_invocation	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/audit_counting.rs	counted	http_invoke_tiny	on the HTTP gateway_invoke path, inside count_invocation
+src/gateway/meta_mcp/invoke/audit_counting.rs	note_cache_hit	-	on-path, untimed: response-cache hits only; the timed rows execute fresh
+src/gateway/meta_mcp/invoke/audit_counting.rs	note_replay	-	on-path, untimed: idempotency replays only; the timed rows execute fresh
+src/gateway/meta_mcp/invoke/audit_counting.rs	note_request_firewall	-	on-path, untimed: request-firewall refusals only; the timed backend is not refused
 src/gateway/meta_mcp/invoke/bridge_dispatch.rs	admit	-	on-path, untimed: bridged input rounds (legacy client, backend asking for input) only; the timed backend answers at once
 src/gateway/meta_mcp/invoke/bridge_dispatch.rs	delivered_challenge	-	on-path, untimed: bridged input rounds only; the timed backend answers at once
 src/gateway/meta_mcp/invoke/bridge_dispatch.rs	invoke	-	on-path, untimed: bridged re-dispatch rounds only; the timed backend answers at once
@@ -217,6 +222,7 @@ src/gateway/meta_mcp/invoke/gate.rs	count_meta_denial	http_invoke_tiny	on the HT
 src/gateway/meta_mcp/invoke/gate.rs	fill_marks	http_invoke_tiny	on the HTTP gateway_invoke path (the gate's fill marks)
 src/gateway/meta_mcp/invoke/gate.rs	filled_since	http_invoke_tiny	on the HTTP gateway_invoke path (the gate's fill check)
 src/gateway/meta_mcp/invoke/gate.rs	gate_answer	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)
+src/gateway/meta_mcp/invoke/gate.rs	gate_lens	http_invoke_tiny	inside named_gate_answer on the HTTP gateway_invoke path; the timed tool is not withheld, so it returns the catalogue lens
 src/gateway/meta_mcp/invoke/gate.rs	gated	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)
 src/gateway/meta_mcp/invoke/gate.rs	is_authorization_refusal	-	on-path, untimed: a playbook step refused at dispatch only; the timed rows are lone calls that succeed
 src/gateway/meta_mcp/invoke/gate.rs	invisible_at_route	http_invoke_tiny	on the HTTP gateway_invoke path (the route stage's visibility judgement)
@@ -343,6 +349,7 @@ src/gateway/meta_mcp/invoke/projection.rs	quota_key_of	-	on-path, untimed: the o
 src/gateway/meta_mcp/invoke/propagation.rs	audit_minted_credential	-	on-path, untimed: minted propagation credentials only; the timed backend has no propagation config
 src/gateway/meta_mcp/invoke/propagation.rs	caller_principal	-	on-path, untimed: identity-propagation backends only; the timed backend has no propagation config
 src/gateway/meta_mcp/invoke/propagation.rs	into_parts	http_invoke_tiny	on the HTTP gateway_invoke path, once per dispatch: moves the resolved fields into a tuple, no allocation and no lock (MIK-8407)
+src/gateway/meta_mcp/invoke/propagation.rs	listener_fence_binding	-	off-path: the events fence read a delivery and a listener run make, never a tools/call
 src/gateway/meta_mcp/invoke/propagation.rs	mint_listener_credential	-	off-path: a per-user events listener mints through it per upstream request, never a tools/call
 src/gateway/meta_mcp/invoke/propagation.rs	minted	http_invoke_tiny	whether the credential step may have reached an issuer, once per dispatch
 src/gateway/meta_mcp/invoke/propagation.rs	refuse_unbound_account_backend	http_invoke_tiny	on the HTTP gateway_invoke path
@@ -461,6 +468,7 @@ src/gateway/meta_mcp/invoke/relay_seams_record.rs	seam_fingerprints	-	gateway_ex
 src/gateway/meta_mcp/invoke/relay_seams_record.rs	walk	-	gateway_execute and playbook plan answers only, not a single gateway_invoke
 src/gateway/meta_mcp/invoke/resolve.rs	resolve	http_invoke_tiny	on the HTTP gateway_invoke path (S3, MIK-8488)
 src/gateway/meta_mcp/invoke/send.rs	admit_send	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/send.rs	count_use	http_invoke_tiny	inside admit_send on the HTTP gateway_invoke path: the invocation stats and ranker counters
 src/gateway/meta_mcp/invoke/send.rs	send	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/side_effect_markers.rs	is_gateway_notice	-	on-path, untimed: idempotent replays serving a stored notice only
 src/gateway/meta_mcp/invoke/side_effect_markers.rs	settle_lost_round	-	on-path, untimed: lost dispatch rounds (a send with no answer) only; the timed rows are answered

@@ -27,7 +27,15 @@ async fn startup_on(gateway: Gateway) -> (crate::Result<()>, Arc<MetaMcp>) {
         .expect("VOID: the Meta-MCP builds");
     let warmer = WarmerGuard::new(&gateway.backends, WarmStartMode::Stdio, None);
     let outcome = gateway
-        .install_stdio_startup_catalogue(&built.meta_mcp, None, &warmer)
+        .install_stdio_startup_catalogue(
+            &built.meta_mcp,
+            &Arc::new(crate::config_reload::LiveConfig::new(
+                gateway.config.clone(),
+            )),
+            None,
+            &warmer,
+            crate::config_reload::refusals::ReloadReporting::default(),
+        )
         .await;
     (outcome, built.meta_mcp)
 }

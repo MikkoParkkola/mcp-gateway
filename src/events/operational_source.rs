@@ -95,6 +95,7 @@ impl OperationalSource {
             occurred_at,
             data,
             lifecycle_key: None,
+            fence: None,
         });
     }
 }
@@ -220,18 +221,68 @@ impl EventSource for OperationalSource {
 
 impl EventsHub {
     /// Offer the operational events and attach the kill-switch and breaker
-    /// hooks; budgets attach with [`OperationalSource::report_budgets`].
+    /// hooks, which also mark `markers`; budgets attach with
+    /// [`OperationalSource::report_budgets`].
     pub(crate) fn install_operational_source(
         self: &Arc<Self>,
         kill_switch: &crate::kill_switch::KillSwitch,
         backends: &crate::backend::BackendRegistry,
+        markers: Option<Markers>,
     ) -> Arc<OperationalSource> {
         let source = Arc::new(OperationalSource {
             hub: Arc::downgrade(self),
         });
         self.register_source(Arc::clone(&source) as Arc<dyn EventSource>);
-        let kills = Arc::clone(&source);
-        kill_switch.observe(Arc::new(move |change: crate::kill_switch::KillChange| {
+        observe(kill_switch, backends, markers, Some(Arc::clone(&source)));
+        source
+    }
+}
+
+/// Where the kill switch and the breakers mark the web UI's charts, and
+/// which server names a mark may keep: a kill of a name nobody configured
+/// is marked with no subject, so the caller's spelling is never stored.
+#[derive(Clone)]
+pub(crate) struct Markers {
+    pub(crate) store: Arc<crate::counters::CounterStore>,
+    /// Runs inside the kill switch's observer. Its one production caller
+    /// (`gateway_kill_server`) holds no registry or capabilities lock across
+    /// `kill()`, and the switch calls its observer after its own set has
+    /// released, so reading both here cannot invert a lock order.
+    pub(crate) known: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+}
+
+/// The kill switch and the breakers mark the web UI's charts when
+/// the operational events source is not installed. Each takes one observer,
+/// set once (`crate::observer`), so when the source is installed it carries
+/// the markers itself and this must not be called.
+pub(crate) fn install_marker_observers(
+    kill_switch: &crate::kill_switch::KillSwitch,
+    backends: &crate::backend::BackendRegistry,
+    markers: Markers,
+) {
+    observe(kill_switch, backends, Some(markers), None);
+}
+
+/// The one observer per slot: markers first, then the events source.
+fn observe(
+    kill_switch: &crate::kill_switch::KillSwitch,
+    backends: &crate::backend::BackendRegistry,
+    markers: Option<Markers>,
+    source: Option<Arc<OperationalSource>>,
+) {
+    use crate::counters::MarkerKind;
+    let (kills, kill_marks) = (source.clone(), markers.clone());
+    kill_switch.observe(Arc::new(move |change: crate::kill_switch::KillChange| {
+        if let Some(marks) = &kill_marks {
+            let kind = if change.killed {
+                MarkerKind::SwitchOff
+            } else {
+                MarkerKind::SwitchOn
+            };
+            let subject = (marks.known)(&change.backend).then_some(change.backend.as_str());
+            marks.store.mark_now(kind, subject);
+        }
+        if let Some(kills) = &kills {
             let state = if change.killed { "killed" } else { "live" };
             kills.emit(
                 KILL_SWITCH_CHANGED,
@@ -239,22 +290,31 @@ impl EventsHub {
                 Visibility::Operator,
                 json!({"backend": change.backend, "state": state}),
             );
-        }));
-        let health = Arc::clone(&source);
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "Background: the events source watches backends; no caller request"
-        )]
-        backends.observe_breakers(Arc::new(move |change: crate::failsafe::HealthChange| {
+        }
+    }));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "Background: the events source watches backends; no caller request"
+    )]
+    backends.observe_breakers(Arc::new(move |change: crate::failsafe::HealthChange| {
+        // Until U4 adds a paused state, a pause is a breaker opening.
+        // A breaker belongs to a registered backend: its name is configured.
+        if let Some(marks) = &markers
+            && change.to == crate::failsafe::CircuitState::Open
+        {
+            marks
+                .store
+                .mark_now(MarkerKind::Pause, Some(&change.backend));
+        }
+        if let Some(health) = &source {
             health.emit(
                 HEALTH_CHANGED,
                 &change.backend,
                 Visibility::Operator,
                 json!({"backend": change.backend, "from": change.from, "to": change.to}),
             );
-        }));
-        source
-    }
+        }
+    }));
 }
 
 #[cfg(feature = "cost-governance")]

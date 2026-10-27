@@ -103,13 +103,19 @@ impl Gateway {
                 move || Self::save_stdio_protocol_telemetry_unless_busy(&sink),
             ))
         };
+        // One config for everything stdio judges with and for its reload
+        // context, so a stdio reload reaches intake, tasks and policy (ADR-023).
+        let live_config = Arc::new(
+            crate::config_reload::LiveConfig::new(self.config.clone())
+                .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
+        );
         // MIK-7272.OWNER.2: `<tasks.store_dir>/stdio`, or `None` to serve as before.
         let task_store = stdio_tasks::open(
             &self.config,
             self.env.startup(),
             &meta_mcp,
             &tool_policy,
-            &record_key,
+            (&record_key, &live_config),
         )
         .await;
         // MIK-7839.CANCEL.3: a session future dropped before EOF never reaches
@@ -118,8 +124,6 @@ impl Gateway {
         // MIK-7217.STDIO.1: read once, as the store is; discover lists 2026-07-28 by it.
         let serving =
             super::stdio_single::ModernServing::from_setting(self.config.server.modern_protocol);
-        let sanitize =
-            super::stdio_single::InputSanitizing::from_setting(self.config.security.sanitize_input);
 
         // MIK-8364 (Option A): Ctrl+C and SIGTERM end stdio the way stdin EOF
         // does: stop reading, drain what was accepted under the same bound,
@@ -141,8 +145,24 @@ impl Gateway {
         // leads its own process group, leave their trees running.
         let signalled_early = futures::FutureExt::now_or_never(stop_signal.as_mut()).is_some();
 
-        self.install_stdio_startup_catalogue(&meta_mcp, grant_sink.as_ref(), &warmer)
+        // The overrides in effect at start are recorded now; reloads share it.
+        let (override_auditor, override_drain) =
+            crate::config_reload::override_audit::OverrideAuditor::start(
+                meta_mcp.transparency_log().cloned(),
+            );
+        override_auditor
+            .record_at_start(&self.backends, meta_mcp.transparency_log())
             .await?;
+        let reporting =
+            crate::config_reload::refusals::ReloadReporting::with_override_audit(override_auditor);
+        self.install_stdio_startup_catalogue(
+            &meta_mcp,
+            &live_config,
+            grant_sink.as_ref(),
+            &warmer,
+            reporting,
+        )
+        .await?;
 
         // Warm-start backends (same as HTTP mode). Held for the rest of the
         // function: dropping the guard aborts the retry tasks, so cancelling
@@ -293,6 +313,12 @@ impl Gateway {
                 },
             };
 
+            // ADR-023: this line is judged by the generation current as it is
+            // read, held for its whole dispatch; taken before parsing, so a
+            // reload while the line is parsed cannot reach it.
+            let sanitize = super::stdio_single::InputSanitizing::from_setting(
+                live_config.generation().sanitize_input(),
+            );
             let line = line.trim().to_string();
             if line.is_empty() {
                 continue;
@@ -686,6 +712,8 @@ impl Gateway {
         // any other exit path, which is the point of them.
         drop(idle_reaper);
         drop(health_loop);
+        let left = shutdown_deadline.saturating_duration_since(tokio::time::Instant::now());
+        override_drain.drain(&self.backends, left).await;
         self.stdio_teardown(shutdown_deadline, warmer, task_store)
             .await;
         Ok(())

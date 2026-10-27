@@ -23,7 +23,24 @@ pub(super) fn install(
     webhooks: &Arc<parking_lot::RwLock<WebhookRegistry>>,
     live_config: &Arc<crate::config_reload::LiveConfig>,
     credentials: crate::events::LiveCredentials,
+    counters: &Arc<crate::counters::CounterStore>,
 ) -> Result<()> {
+    // The kill switch and breakers mark the charts in every events
+    // configuration. Their observer slots are set once: when the operational
+    // source is installed below it carries the markers, otherwise this does.
+    // A mark keeps a server name only when it is configured, by the same
+    // test the counters use. Weak: the kill switch the observer sits in is
+    // the gateway's own.
+    let markers = crate::events::Markers {
+        store: Arc::clone(counters),
+        known: {
+            let meta = Arc::downgrade(meta_mcp);
+            Arc::new(move |name: &str| meta.upgrade().is_some_and(|m| m.configured_server(name)))
+        },
+    };
+    if !(config.events.enabled && config.events.sources.operational) {
+        crate::events::install_marker_observers(&meta_mcp.kill_switch(), registry, markers.clone());
+    }
     if config.webhooks.enabled {
         meta_mcp.set_webhook_registry(Arc::clone(webhooks));
     }
@@ -62,7 +79,8 @@ pub(super) fn install(
         );
     }
     if config.events.sources.operational {
-        let source = hub.install_operational_source(&meta_mcp.kill_switch(), registry);
+        let source =
+            hub.install_operational_source(&meta_mcp.kill_switch(), registry, Some(markers));
         #[cfg(feature = "cost-governance")]
         if let Some(budget) = &meta_mcp.budget_enforcer {
             source.report_budgets(budget);
@@ -85,17 +103,37 @@ pub(super) fn install(
 /// The events hub's way to mint a per-user listener's credential.
 struct ListenerMint(std::sync::Weak<MetaMcp>);
 
+/// The listener mint the hub is given, for a row that drives it directly.
+#[cfg(test)]
+pub(crate) fn listener_mint_for_test(meta: &Arc<MetaMcp>) -> Arc<dyn crate::events::ListenerMint> {
+    Arc::new(ListenerMint(Arc::downgrade(meta)))
+}
+
 #[async_trait::async_trait]
 impl crate::events::ListenerMint for ListenerMint {
     async fn mint(
         &self,
         backend: &str,
         identity: &crate::key_server::oidc::VerifiedIdentity,
-    ) -> Result<Vec<(String, String)>> {
+    ) -> Result<crate::events::ListenerGrant> {
         let meta = self
             .0
             .upgrade()
             .ok_or_else(|| crate::Error::Transport("gateway stopping".to_owned()))?;
         meta.mint_listener_credential(backend, identity).await
     }
+
+    async fn fence_binding(
+        &self,
+        backend: &str,
+        identity: &crate::key_server::oidc::VerifiedIdentity,
+    ) -> std::result::Result<Option<String>, crate::events::FenceRead> {
+        // A stopping gateway sends nothing: no answer is never "unchanged".
+        let meta = self.0.upgrade().ok_or(crate::events::FenceRead::Busy)?;
+        meta.listener_fence_binding(backend, identity).await
+    }
 }
+
+#[cfg(test)]
+#[path = "events_wiring_tests.rs"]
+mod tests;
