@@ -412,6 +412,29 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 428],
     ),
+    // src/gateway/ui/activity/access.rs (resolve: no credential 401, a key
+    // with no Activity role 403); mod.rs (admit: no transparency log 404)
+    row(
+        "/ui/api/activity",
+        Method::GET,
+        "/ui/api/activity",
+        Payload::None,
+        [401, 401, 403, 404],
+    ),
+    row(
+        "/ui/api/activity/export",
+        Method::GET,
+        "/ui/api/activity/export",
+        Payload::None,
+        [401, 401, 403, 404],
+    ),
+    row(
+        "/ui/api/activity/{id}",
+        Method::GET,
+        "/ui/api/activity/1-0123456789abcdef",
+        Payload::None,
+        [401, 401, 403, 404],
+    ),
     // src/gateway/ui/backends.rs:184 (add_backend; no config path in the fixture)
     row(
         "/ui/api/backends",
@@ -523,6 +546,34 @@ const ROWS: &[Row] = &[
         "/ui/api/import/openapi",
         Payload::Import,
         [401, 403, 403, 200],
+    ),
+    // src/gateway/ui/history.rs (markers). The codes come from the
+    // design (admin only: no credential 401, non-admin 403). This fixture
+    // never runs the server's start, so no counter store is attached and the
+    // admin is told counting is off (503), as /ui/api/events/held answers 404
+    // without an events hub; the served 200 is cited in `SERVED_BY`.
+    row(
+        "/ui/api/markers",
+        Method::GET,
+        "/ui/api/markers",
+        Payload::None,
+        [401, 403, 403, 503],
+    ),
+    // history.rs (series), as above.
+    row(
+        "/ui/api/metrics/series",
+        Method::GET,
+        "/ui/api/metrics/series?metric=calls&window=24h",
+        Payload::None,
+        [401, 403, 403, 503],
+    ),
+    // history.rs (series): an unsupported query is refused for the admin too.
+    row(
+        "/ui/api/metrics/series",
+        Method::GET,
+        "/ui/api/metrics/series?window=7d",
+        Payload::None,
+        [401, 403, 403, 400],
     ),
     // src/gateway/ui/shell.rs, fn asset: static, outside auth like /ui
     row(
@@ -705,77 +756,9 @@ async fn internal_routes_refuse_every_other_method() {
     );
 }
 
-/// A non-admin gets counts only: no backend name and no other field.
-#[tokio::test]
-async fn ui_status_redacts_for_a_non_admin() {
-    for (fixture, caller) in [
-        (Fixture::AuthOn, Caller::Auditor),
-        (Fixture::AuthOff, Caller::AnonOff),
-    ] {
-        let gw = gateway(fixture).await;
-        let (status, _, body) = send(
-            &gw,
-            request(&Method::GET, "/ui/api/status", caller, Payload::None),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{caller:?}");
-        let text = String::from_utf8_lossy(&body);
-        let json: Value = serde_json::from_slice(&body).expect("status is JSON");
-        let mut keys: Vec<&str> = json
-            .as_object()
-            .expect("an object")
-            .keys()
-            .map(String::as_str)
-            .collect();
-        keys.sort_unstable();
-        assert_eq!(
-            keys,
-            [
-                "auth",
-                "degraded_count",
-                "healthy_count",
-                "server_count",
-                "uptime_secs",
-                "version"
-            ],
-            "{caller:?} got a field beyond the counts: {text}"
-        );
-        // MIK-8786: `auth` states only three facts about the caller, never a
-        // backend detail.
-        let auth = json["auth"].as_object().expect("auth is an object");
-        let mut facts: Vec<&str> = auth.keys().map(String::as_str).collect();
-        facts.sort_unstable();
-        assert_eq!(
-            facts,
-            ["admin", "enabled", "signed_in"],
-            "{caller:?}: {text}"
-        );
-        assert!(
-            auth.values().all(Value::is_boolean),
-            "{caller:?}: every auth fact is a boolean: {text}"
-        );
-        assert_eq!(
-            json["server_count"], 1,
-            "the fixture's backend is counted: {text}"
-        );
-        assert!(
-            !text.contains("docs"),
-            "{caller:?} got the backend name: {text}"
-        );
-    }
-    // Positive control: the same fixture names the backend to an admin.
-    let gw = gateway(Fixture::AuthOn).await;
-    let (status, _, body) = send(
-        &gw,
-        request(&Method::GET, "/ui/api/status", Caller::Admin, Payload::None),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    let json: Value = serde_json::from_slice(&body).expect("status is JSON");
-    assert_eq!(json["servers"][0]["name"], "docs", "{json}");
-}
-
 #[path = "internal_routes_control_plane_tests.rs"]
 mod control_plane;
 #[path = "internal_routes_served.rs"]
 mod served;
+#[path = "internal_routes_status.rs"]
+mod status;

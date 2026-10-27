@@ -21,6 +21,7 @@ mod control_plane_store;
 mod cost_restart_tests;
 #[cfg(all(test, feature = "cost-governance"))]
 mod cost_save_stamp_tests;
+mod counter_wiring;
 mod events_wiring;
 #[cfg(test)]
 mod gh475_budget_decides_tests;

@@ -10,6 +10,11 @@ const MUTATION: &str = "tests/webui_management_tests/backend_mutation.rs";
 const EVENTS_ADMIN: &str = "tests/mik_7630_events_admin.rs";
 const EVENTS_RECONCILE: &str = "tests/mik_7630_events_reconcile.rs";
 const CP_AUTHORITY: &str = "tests/e2min_control_plane_authority.rs";
+const ACTIVITY_LIST: &str = "src/gateway/ui/activity/list_tests.rs";
+const ACTIVITY_EXPORT: &str = "src/gateway/ui/activity/export_tests.rs";
+const ACTIVITY_RECEIPT: &str = "src/gateway/ui/activity/receipt_tests.rs";
+const HISTORY_ROUTES: &str = "src/gateway/router/history_route_tests.rs";
+const HISTORY_PARAMS: &str = "src/gateway/ui/history_tests.rs";
 const EDITOR: &str = "tests/webui_management_tests/capability_editor.rs";
 const CAPABILITIES: &str = "tests/webui_management_tests/capabilities.rs";
 const CP_WRITES: &[Citation] = &[(
@@ -89,6 +94,32 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
             "a_held_subscription_is_listed_with_its_queued_record",
         )],
     ),
+    // This fixture has no transparency log; the served answers are pinned
+    // against real log files in the Activity unit tests.
+    (
+        "/ui/api/activity",
+        Method::GET,
+        &[(
+            ACTIVITY_LIST,
+            "l1_l2_admin_and_mapped_auditor_read_every_row",
+        )],
+    ),
+    (
+        "/ui/api/activity/export",
+        Method::GET,
+        &[(
+            ACTIVITY_EXPORT,
+            "e2_ndjson_without_a_key_is_409_and_csv_still_works",
+        )],
+    ),
+    (
+        "/ui/api/activity/{id}",
+        Method::GET,
+        &[(
+            ACTIVITY_RECEIPT,
+            "c3_links_mid_segment_and_across_a_seam_verify",
+        )],
+    ),
     (
         "/ui/api/events/leases",
         Method::GET,
@@ -97,6 +128,28 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
     ("/ui/api/control-plane/grants", Method::POST, CP_WRITES),
     ("/ui/api/control-plane/policies", Method::POST, CP_WRITES),
     ("/ui/api/control-plane/decisions", Method::POST, CP_WRITES),
+    // The admin's 200 with a counter store attached, and the 400
+    // for an unsupported query, which this fixture's row also records.
+    (
+        "/ui/api/markers",
+        Method::GET,
+        &[(HISTORY_ROUTES, "t41_both_routes_are_admin_only")],
+    ),
+    (
+        "/ui/api/metrics/series",
+        Method::GET,
+        &[
+            (HISTORY_ROUTES, "t41_both_routes_are_admin_only"),
+            (
+                HISTORY_ROUTES,
+                "t34_the_series_route_answers_points_and_the_previous_period",
+            ),
+            (
+                HISTORY_PARAMS,
+                "t38_a_bad_metric_or_window_names_the_allowed_values",
+            ),
+        ],
+    ),
 ];
 
 /// Whether `status` on `path` is a served admin answer: success, or `/sse`'s

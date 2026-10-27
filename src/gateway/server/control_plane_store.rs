@@ -157,7 +157,10 @@ fn governance_log_config(
     use crate::security::transparency_log::{RotationConfig, TransparencyLogConfig};
     TransparencyLogConfig {
         enabled: true,
-        path: base.join("audit.jsonl").to_string_lossy().into_owned(),
+        path: base
+            .join(crate::control_plane::role_mapping::GOVERNANCE_LOG_FILE)
+            .to_string_lossy()
+            .into_owned(),
         key_id: config.security.transparency_log.key_id.clone(),
         shared_secret: config.security.transparency_log.shared_secret.clone(),
         rotation: RotationConfig::governance(

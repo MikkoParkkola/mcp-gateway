@@ -152,6 +152,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "cost ledger; no secret",
     ),
     (
+        "src/counters/persist.rs",
+        "call counters and markers; no secret",
+    ),
+    (
         "src/debug_trust_roots.rs",
         "debug builds only (MIK-8188): a test CA PEM named by MCP_GATEWAY_TEST_TRUST_CA, public certificates and no secret; the binary's copy (dashboard-link) cannot reach the lib-internal mode-checked read, as dashboard_link.rs cannot; release builds compile no read",
     ),
@@ -199,6 +203,14 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/gateway/task_service/execution/pause_hook.rs",
         "debug-build test hook writing a task id marker (#2298); compiled out of release",
+    ),
+    (
+        "src/gateway/ui/activity/reader.rs",
+        "reads audit log segments for the Activity list; hash-only, no secret",
+    ),
+    (
+        "src/gateway/ui/activity/seek.rs",
+        "reads audit log segments to find one receipt; hash-only, no secret",
     ),
     ("src/gateway/ui/capabilities.rs", "capability YAML; public"),
     (
@@ -314,6 +326,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/trust/claim_capture.rs",
         "append-only claim log; no secret",
+    ),
+    (
+        "src/trust/export_verify.rs",
+        "reads an Activity export bundle given to audit verify; no secret",
     ),
     (
         "src/trust/provenance_public.rs",
