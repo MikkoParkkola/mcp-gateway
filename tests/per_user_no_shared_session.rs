@@ -1,12 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A backend with per-user sessions only is never reached as the gateway,
-//! end to end.
+//! A backend with per-user sessions only gets no gateway shared session, end
+//! to end.
 //!
 //! The backend records the credential on every request it receives. Across
 //! the gateway's start, its warm-start, several health-loop ticks, an
 //! operator's restart of the backend, and a reload that makes an optional
-//! binding required, no request reaches it without a subscriber's credential.
+//! binding required, all paths with no subscriber in them, no request reaches
+//! it without a subscriber's credential. Not covered here: a subscriber's own
+//! per-user session still starts with only the backend's static headers.
 //!
 //! Unix: the issuer is the owned HTTPS OIDC issuer of the upstream-recovery
 //! proof, trusted by the child through `SSL_CERT_FILE` and the debug-only
