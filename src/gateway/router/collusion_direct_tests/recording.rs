@@ -43,7 +43,7 @@ async fn a_passthrough_backend_is_checked() {
 /// or when the gateway's own context-integrity verdict names personal,
 /// financial or guarded material (A15 below). A verdict the backend planted
 /// is not the gateway's: ingress removes it, so whatever class it names, the
-/// relay decision is the one the same answer gets without it (MIK-9000; this
+/// relay decision is the one the same answer gets without it (this
 /// reverses the backend-planted classes this row used to accept).
 #[tokio::test]
 async fn sensitivity_comes_from_the_sources_glob_never_a_planted_class() {
@@ -72,7 +72,7 @@ async fn sensitivity_comes_from_the_sources_glob_never_a_planted_class() {
     }
 }
 
-/// MIK-9000: text a backend hides under a planted `_context_integrity`, a
+/// Text a backend hides under a planted `_context_integrity`, a
 /// member the relay walk skips, is never delivered, so it is in no receipt
 /// and nobody can relay it. Control: the same text delivered as content is
 /// receipted and its relay refused.

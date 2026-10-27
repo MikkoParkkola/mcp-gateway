@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-9000 over stdio: a backend's copy of a gateway-only member never
+//! Over stdio: a backend's copy of a gateway-only member never
 //! reaches the operator through `gateway_invoke`.
 
 use std::sync::Arc;

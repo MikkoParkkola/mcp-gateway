@@ -52,7 +52,7 @@ enum Read {
     /// A result carrying a backend-supplied context-integrity verdict.
     Classified(&'static str),
     /// A stub result, [`PROSE`] hidden in a backend-planted
-    /// `_context_integrity`, where the relay walk never reads (MIK-9000).
+    /// `_context_integrity`, where the relay walk never reads.
     HiddenInIntegrity,
     /// [`PROSE`] plus an email address the gateway classifies as personal
     /// data, under a backend-forged `public` verdict.

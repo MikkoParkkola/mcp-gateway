@@ -575,7 +575,7 @@ pub(crate) mod tests;
 #[path = "resend_isolation_tests.rs"]
 mod resend_isolation_tests;
 
-/// MIK-9000: a backend's gateway-only members are gone at ingress.
+/// A backend's gateway-only members are gone at ingress.
 #[cfg(test)]
 #[path = "reserved_ingress_tests.rs"]
 mod reserved_ingress_tests;

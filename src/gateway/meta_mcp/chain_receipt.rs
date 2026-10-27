@@ -88,7 +88,7 @@ fn is_interim(result: &Value) -> bool {
 ///   absent or fails a rule, named in the message, never the data.
 ///
 /// The chain is always removed from `result`; only this gateway re-emits it.
-/// `withheld` is what ingress removed from `result` (MIK-9000): the digest is
+/// `withheld` is what ingress removed from `result`: the digest is
 /// taken over the result the backend signed, which never reaches anyone.
 pub(crate) fn receive(
     identity: &ChainIdentity,

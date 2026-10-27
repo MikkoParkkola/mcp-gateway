@@ -90,7 +90,7 @@ pub struct JsonRpcResponse {
     #[serde(skip)]
     pub(crate) invocation_trace: Option<std::sync::Arc<str>>,
     /// Server-owned: the top-level gateway-only members ingress removed from
-    /// the backend's result (MIK-9000), kept only so a signature chain is
+    /// the backend's result, kept only so a signature chain is
     /// verified over the content the backend signed. Never on the wire and
     /// never put back into the result.
     #[serde(skip)]

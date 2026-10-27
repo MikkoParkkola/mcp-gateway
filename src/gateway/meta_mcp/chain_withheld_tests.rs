@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-9000: ingress strips an upstream gateway's own verdict members, which
+//! Ingress strips an upstream gateway's own verdict members, which
 //! its chain link signed. The chain is still verified over the result the
 //! upstream signed, through what ingress withheld, and the stripped members
 //! are still never delivered.

@@ -50,7 +50,7 @@ mod collusion_stdio_plan_replay_guards;
 #[cfg(feature = "firewall")]
 mod egress_matrix_stdio;
 mod r2_stdio_keys;
-/// MIK-9000 over stdio.
+/// Backend-planted gateway members over stdio.
 mod reserved_member_stdio;
 mod stdio_cache_scope;
 mod stdio_list_changed;

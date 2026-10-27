@@ -134,7 +134,7 @@ mod provide_input_guards;
 mod query_serialization;
 mod refusals;
 mod replay_policy;
-/// MIK-9000: no backend-planted gateway member in a task result or a replay.
+/// No backend-planted gateway member in a task result or a replay.
 mod reserved_members_task;
 mod result_shapes;
 mod settlement;

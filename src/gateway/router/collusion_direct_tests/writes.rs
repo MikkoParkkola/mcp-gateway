@@ -220,7 +220,7 @@ async fn a_direct_signature_stays_out_of_the_receipt() {
     assert!(sent.get("error").is_none(), "{sent}");
 }
 
-/// `MIK-8011.DIRECT.3`, reversed by MIK-9000: `_cost_warnings` is the
+/// Reverses the earlier rule that this member stays: `_cost_warnings` is the
 /// gateway's member, so a backend's copy, on an answer the gateway gave no
 /// warning, is a forged gateway warning. Ingress removes it: it is never
 /// delivered, so it is in no receipt and sending its text is not a relay.

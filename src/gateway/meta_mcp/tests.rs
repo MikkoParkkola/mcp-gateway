@@ -243,7 +243,7 @@ mod attestation_plan;
 #[cfg(test)]
 #[path = "chain_strip_tests.rs"]
 mod chain_strip;
-/// MIK-9000: a chain verifies over the members ingress withheld.
+/// A chain verifies over the members ingress withheld.
 #[cfg(test)]
 #[path = "chain_withheld_tests.rs"]
 mod chain_withheld;

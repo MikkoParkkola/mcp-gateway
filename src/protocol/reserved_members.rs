@@ -3,9 +3,9 @@
 //! Every member the gateway writes into an answer, and who else may write it.
 //!
 //! One table, read three ways: the ingress strip removes a backend's copy of
-//! each [`Origin::GatewayOnly`] member before any gate reads the answer
-//! (MIK-9000), the delivery record notes the [`Writer::Noted`] rows (MIK-7939),
-//! and the annotated raise counts the [`Class::Counted`] rows (MIK-8993).
+//! each [`Origin::GatewayOnly`] member before any gate reads the answer, the
+//! delivery record notes the [`Writer::Noted`] rows, and the annotated raise
+//! counts the [`Class::Counted`] rows.
 //!
 //! It lives here, below the backend and the gateway, so the backend's ingress
 //! can read it without depending upward, in every feature build.
@@ -79,7 +79,7 @@ pub(crate) const MEMBERS: &[Member] = &[
     row(&["_contract_reason"], Counted, GatewayOnly, Noted),
     row(&["_cost_warnings"], Counted, GatewayOnly, Noted),
     row(&["_cost_suggestion"], Counted, GatewayOnly, Noted),
-    // MIK-8993 adds its note and flips the writer.
+    // Outside until the delivery record notes it at its attach site.
     row(&["_context_integrity"], Counted, GatewayOnly, Outside),
     row(&["tools", "*", "trustCard"], Counted, GatewayOnly, Outside),
     row(&["_signature"], Envelope, GatewayOnly, Noted),
@@ -96,11 +96,11 @@ pub(crate) const MEMBERS: &[Member] = &[
         GatewayOnly,
         Outside,
     ),
-    // Plain names a backend may use for its own data (MIK-9002 renames them).
+    // Plain names a backend may use for its own data.
     row(&["recovery"], Counted, BackendMayCarry, Noted),
     row(&["predicted_next"], Counted, BackendMayCarry, Noted),
     row(&["trace_id"], Envelope, BackendMayCarry, Noted),
-    // Protocol members a backend sends (MIK-9003 scopes them by method).
+    // Protocol members a backend sends.
     row(&["taskId"], Envelope, BackendMayCarry, Noted),
     row(&["requestState"], Envelope, BackendMayCarry, Noted),
     row(&["resultType"], Envelope, BackendMayCarry, Noted),
@@ -169,7 +169,7 @@ fn digest_covers(key: &str) -> bool {
     !matches!(key, "_meta" | "_signature")
 }
 
-/// MIK-9000: remove a backend's copy of every gateway-only member from its
+/// Remove a backend's copy of every gateway-only member from its
 /// answer, before any gate reads it. Called once, where every backend answer
 /// enters (`Backend::request_attempted`).
 ///

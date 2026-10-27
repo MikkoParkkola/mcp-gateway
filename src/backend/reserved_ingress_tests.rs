@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-9000 at the one place every backend answer enters: a backend's copy
+//! The one place every backend answer enters: a backend's copy
 //! of a gateway-only member is gone before any caller of `Backend::request*`
 //! sees the answer. The catalogue is the case no tool-call row covers: a
 //! backend's own `trustCard` on a listed tool is a forged gateway verdict.

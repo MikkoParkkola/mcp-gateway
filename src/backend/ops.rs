@@ -371,7 +371,7 @@ impl Backend {
             })
             .await
         };
-        // MIK-9000: every backend answer enters here, so this is the one
+        // Every backend answer enters here, so this is the one
         // place a backend's copy of a gateway-only member is removed, before
         // any gate, cache or store reads the answer.
         if let Ok(response) = &mut result {

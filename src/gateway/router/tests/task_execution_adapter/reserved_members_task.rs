@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-9000: a backend's copy of a gateway-only member never reaches the
+//! A backend's copy of a gateway-only member never reaches the
 //! client through a task result or a stored replay.
 use super::super::*;
 use super::support::*;

@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-9000: a backend's copy of a gateway-only member never reaches the
+//! A backend's copy of a gateway-only member never reaches the
 //! client. The backend plants every gateway-only member, each value marked
 //! `FORGED-n`, beside a member of its own; the gateway's own checks write
 //! nothing on these calls (no findings, signing and stamping off), so any
