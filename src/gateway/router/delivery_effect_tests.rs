@@ -138,3 +138,35 @@ async fn concurrent_deliveries_record_their_own_effects() {
         ]
     );
 }
+
+/// A1: the grant slot's write fails under `FailClosed`, so the call's answer
+/// is replaced by -32005. Its delivery record says `refused`, never the
+/// replaced answer's `delivered`.
+#[tokio::test]
+async fn a_slot_refused_answer_records_refused() {
+    use crate::gateway::meta_mcp::grant_audit::seams;
+    use crate::security::audit::AuditFailurePolicy;
+    let (_dir, log) = temp_log(Some(AuditFailurePolicy::FailClosed));
+    let meta_log = std::sync::Arc::clone(&log);
+    let fx = fixture::fixture_firewalled_logged(
+        Answer::Ok,
+        None,
+        std::sync::Arc::clone(&log),
+        |mut meta| {
+            meta.enable_transparency_log(meta_log);
+            meta
+        },
+    )
+    .await;
+    seams::inject_note_for_test("alpha", "read", seams::Inject::NextSlotOpen);
+    seams::fail_append_at_for_test(1);
+    let args = serde_json::json!({});
+    let (_, body) = post_meta_invoke(&fx, "k-std", "alpha", "read", args, None, None).await;
+    assert_eq!(
+        body.pointer("/error/code").and_then(Value::as_i64),
+        Some(-32005),
+        "premise: the slot's refusal: {body}"
+    );
+    let row = only_delivery(HttpRoute::Mcp, &delivery_rows(&log).await);
+    assert_eq!(row["response_effect"], "refused", "{row}");
+}
