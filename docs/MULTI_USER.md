@@ -180,6 +180,18 @@ Order matters — put the narrow rules first, because the first rule that
 matches is the only one that applies. There is no implicit allow-all rule at the
 end: an identity that matches nothing gets nothing.
 
+Policy edits apply on restart, not on a config reload: the key server reads its
+policies once at startup, and a reload that changes `key_server` answers
+`restart required for: key_server`. Until the restart, a person you removed from
+the policies can still exchange a valid provider token for a new gateway token.
+To cut someone off at once:
+
+1. Disable them at the identity provider, so it stops issuing them tokens.
+2. Revoke what the gateway already issued them:
+   `DELETE /auth/tokens?issuer={issuer}&subject={subject}`.
+3. Remove them from the policies, effective on the next restart. A restart also
+   drops every issued key-server token, since the token store is in memory.
+
 ### Admins from your identity provider
 
 Scopes never make anyone an admin. A person signed in through the key server is
@@ -339,7 +351,10 @@ success:
 - Send a request with no credential. With `required: true` it must be refused,
   not served from the static credential.
 - Revoke user A's token via `DELETE /auth/token/{jti}` and confirm the next call
-  is refused.
+  is refused. That cuts off one token, not the person: while the identity
+  provider still signs them in, they can exchange for a new one, and removing
+  their policy only takes effect on restart. To remove a person, follow
+  [What they may reach](#2-what-they-may-reach).
 
 A managed account (`mode: personal_managed`) whose provider grant is revoked
 early is noticed on the backend's first HTTP 401: the gateway forces one
