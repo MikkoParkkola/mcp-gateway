@@ -584,6 +584,7 @@ pub(crate) struct LockedRead {
 /// `None` when the lock stayed busy for `wait`, or failed in any other way.
 pub(crate) async fn read_locked(grants: &Path, wait: std::time::Duration) -> Option<LockedRead> {
     use crate::config_reload::grant_audit::JournalRead;
+    use crate::fs_lock::Attempt;
     let spelled = grants;
     let grants = &resolved(grants);
     let lock = lock_path(grants);
@@ -596,11 +597,17 @@ pub(crate) async fn read_locked(grants: &Path, wait: std::time::Duration) -> Opt
         .await
         .ok()?;
         match attempt {
-            Ok(Some(guard)) => break Some(guard),
-            Ok(None) if tokio::time::Instant::now() < deadline => {
+            Ok(Attempt::Taken(guard)) => break Some(guard),
+            Ok(Attempt::Held | Attempt::Refused(_)) if tokio::time::Instant::now() < deadline => {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }
-            Ok(None) => return None,
+            Ok(Attempt::Held) => return None,
+            // Busy, as a held lock is, so no startup seeds an empty baseline;
+            // the warning names why the lock file cannot be used.
+            Ok(Attempt::Refused(error)) => {
+                tracing::warn!(%error, path = %lock.display(), "grant journal lock file refused");
+                return None;
+            }
             // A read-only filesystem (a Kubernetes Secret or ConfigMap mount)
             // has no writer at all, and such mounts update by an atomic
             // symlink swap: read without the lock. A directory that is only

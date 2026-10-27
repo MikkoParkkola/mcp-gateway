@@ -31,6 +31,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 DOC = ROOT / "docs/design/surface-4.0.md"
+# A route row cites this file by its `owned_routes!` constant, `file:NAME`.
+ROUTES_FILE = "src/gateway/routes.rs"
 CLASSES = {"KEEP", "AUTO", "INTERNAL", "REMOVE"}
 SURFACES = ("config", "cli", "env", "routes", "lib")
 
@@ -831,6 +833,10 @@ def check(doc_text: str, extracted: dict[str, list[Entry]]) -> list[str]:
                 errors.append(f"{surface}: unclassified {e.id!r} ({e.file}:{e.line})")
             elif r.defined.split(":")[0] != e.file:
                 errors.append(f"line {r.lineno}: {e.id!r} is defined in {e.file}, doc says {r.defined!r}")
+            elif surface == "routes" and e.file == ROUTES_FILE and r.defined != f"{e.file}:{e.note}":
+                # The constant, not a line: a line number goes stale with every
+                # route added above it, and a stale one was never caught.
+                errors.append(f"line {r.lineno}: {e.id!r} cites {r.defined!r}, want {e.file}:{e.note}")
         for r in listed.values():
             errors.append(f"line {r.lineno}: {surface} item {r.id!r} no longer exists in the code")
     return errors

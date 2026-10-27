@@ -2,17 +2,24 @@ name: Feature combinations
 
 # Heavy job, run once per merge instead of on every pull request: a push to the
 # release line or main, and on a tag. A red run here blocks the next merge.
+# A merge train (a pull request into the release line from a `train/` branch)
+# also runs it, called from ci.yml's `feature-combos-train`, so a
+# feature-gating break is caught before the train lands.
 on:
   push:
     branches: [main, docs/ranking-1-release-line]
     tags: ["v*"]
   workflow_dispatch:
+  workflow_call:
 
 # A newer push to the same branch supersedes an older run, so the latest merge's
-# run is the evidence. A tag run gets a group of its own run id and is never
-# cancelled or replaced.
+# run is the evidence; on a train, a newer push to its pull request supersedes
+# the older run the same way. A tag run gets a group of its own run id and is
+# never cancelled or replaced. The literal prefix matters: called from ci.yml,
+# `github.workflow` names the caller, and a group built from it could match the
+# caller's own and deadlock.
 concurrency:
-  group: ${{ github.workflow }}-${{ startsWith(github.ref, 'refs/tags/') && format('{0}-{1}', github.ref, github.run_id) || github.ref }}
+  group: feature-combos-${{ startsWith(github.ref, 'refs/tags/') && format('{0}-{1}', github.ref, github.run_id) || github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 permissions:
