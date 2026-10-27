@@ -43,6 +43,16 @@ fn edited(original: &str, changes: &[(FieldPath, Change)]) -> String {
     String::from_utf8(template.bytes().to_vec()).expect("utf-8")
 }
 
+/// Refused, and by the check whose reason contains `by`: pins which later
+/// check guards an input whose own check was removed as redundant.
+#[track_caller]
+fn assert_refused_by(original: &str, changes: &[(FieldPath, Change)], by: &str) {
+    match edit_in_place(original, changes) {
+        Err(ComputeRefusal::Unprovable { reason }) if reason.contains(by) => {}
+        other => panic!("expected Unprovable by `{by}`, got {other:?}"),
+    }
+}
+
 #[track_caller]
 fn assert_unprovable(original: &str, changes: &[(FieldPath, Change)]) {
     match edit_in_place(original, changes) {
@@ -143,8 +153,12 @@ fn a_field_inside_a_flow_mapping_is_unprovable() {
 }
 
 #[test]
-fn a_block_scalar_value_is_unprovable() {
-    assert_unprovable("a:\n  b: |\n    text\n", &[set_str("a.b", "x")]);
+fn a_block_scalar_value_is_refused_by_the_line_end_guard() {
+    assert_refused_by(
+        "a:\n  b: |\n    text\n",
+        &[set_str("a.b", "x")],
+        "runs past the end of its line",
+    );
 }
 
 #[test]
@@ -362,8 +376,12 @@ fn a_slot_named_for_another_field_is_refused() {
 /// A value that is only a comment is a null field, not a scalar: editing it
 /// would delete the comment.
 #[test]
-fn a_comment_only_value_is_unprovable() {
-    assert_unprovable("a:\n  t: # keep\n", &[set_int("a.t", 2)]);
+fn a_comment_only_value_is_refused_by_the_meaning_proof() {
+    assert_refused_by(
+        "a:\n  t: # keep\n",
+        &[set_int("a.t", 2)],
+        "does not mean the original",
+    );
 }
 
 /// A slot whose placeholder sits under another field: `fill` re-reads its
@@ -395,8 +413,12 @@ fn a_comment_after_a_non_breaking_space_survives() {
 /// line may start with `#`: only a value that closes on its own line is
 /// edited, so no old text survives as an apparent comment.
 #[test]
-fn a_quoted_value_continued_on_the_next_line_is_unprovable() {
-    assert_unprovable("a:\n  t: \"p1\n    #rest\"\n", &[set_str("a.t", "new")]);
+fn a_quoted_value_continued_on_the_next_line_is_refused_by_the_line_end_guard() {
+    assert_refused_by(
+        "a:\n  t: \"p1\n    #rest\"\n",
+        &[set_str("a.t", "new")],
+        "runs past the end of its line",
+    );
 }
 
 /// Text right after a closing quote is not valid YAML: the parser refuses
@@ -435,8 +457,12 @@ fn unicode_before_the_value_keeps_every_byte() {
 
 /// A key with no value is a null field the parser synthesizes: refused.
 #[test]
-fn an_empty_value_is_unprovable() {
-    assert_unprovable("a:\n  t:\n  u: 1\n", &[set_int("a.t", 2)]);
+fn an_empty_value_is_refused_by_the_meaning_proof() {
+    assert_refused_by(
+        "a:\n  t:\n  u: 1\n",
+        &[set_int("a.t", 2)],
+        "does not mean the original",
+    );
 }
 
 // Keys and mappings on the path: only plain keys of plain block mappings.
@@ -466,11 +492,15 @@ fn a_field_under_a_tagged_mapping_is_unprovable() {
     assert_unprovable("a: !!map\n  b: 1\n", &[set_int("a.b", 2)]);
 }
 
-/// An empty block scalar may be one line with a non-empty span: only the
-/// block check refuses it.
+/// An empty block scalar: with no block check, the span past its line
+/// is what refuses it.
 #[test]
-fn an_empty_block_scalar_is_unprovable() {
-    assert_unprovable("a:\n  b: |\nc: 1\n", &[set_int("a.b", 2)]);
+fn an_empty_block_scalar_is_refused_by_the_line_end_guard() {
+    assert_refused_by(
+        "a:\n  b: |\nc: 1\n",
+        &[set_int("a.b", 2)],
+        "runs past the end of its line",
+    );
 }
 
 /// Edits are placed by `\n` line: a config breaking lines with a bare `\r`
