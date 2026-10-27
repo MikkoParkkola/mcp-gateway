@@ -407,6 +407,46 @@ fn executable_name_keeps_raw_process_text_literal() {
     );
 }
 
+/// A command with no program name to take never falls back to its own
+/// text: the radar's asset id and evidence would carry the whole path.
+#[test]
+fn executable_name_never_returns_a_path() {
+    for command in [
+        "/home/zqpriv/..",
+        "/home/zqpriv/.",
+        "/home/zqpriv/",
+        r"C:\Users\zqpriv\srv.exe --flag",
+        "..",
+    ] {
+        let name = executable_name(command);
+        assert!(
+            name.as_deref()
+                .is_none_or(|n| !n.contains("zqpriv") && !n.contains(['/', '\\'])),
+            "{command} gave {name:?}"
+        );
+    }
+    assert_eq!(
+        executable_name(r"C:\Users\zqpriv\srv.exe --flag").as_deref(),
+        Some("srv.exe")
+    );
+}
+
+#[test]
+fn a_pathlike_command_leaves_no_path_in_the_radar() {
+    let server = stdio_server(
+        "srv",
+        "d",
+        "/home/zqpriv/..",
+        DiscoverySource::ClaudeDesktop,
+        None,
+        None,
+        None,
+    );
+    let report = report(&[server], &[]);
+    let json = serde_json::to_string(&report).expect("serializes");
+    assert!(!json.contains("zqpriv"), "{json}");
+}
+
 /// MIK-7716: a remote server whose client config sends an auth header is not
 /// reported or quarantined as unauthenticated. The header is judged by key
 /// name only; its value never reaches the report.
@@ -542,5 +582,53 @@ fn a_non_string_auth_header_is_no_auth_signal() {
     assert_eq!(
         report.assets[0].auth_exposure,
         ShadowAuthExposure::NetworkHttpNoAuthMetadata
+    );
+}
+
+#[test]
+fn a_command_with_no_program_name_has_none() {
+    for command in [
+        "/home/zqpriv/..",
+        "/home/zqpriv/.",
+        "/home/zqpriv/",
+        "/",
+        "..",
+        "",
+        r"C:\Users\zqpriv\",
+    ] {
+        assert_eq!(executable_name(command), None, "{command}");
+    }
+    // The quoted form discovery stores for a program path with spaces.
+    let nameless =
+        crate::transport::join_command(&["/home/zq priv/..".to_string()]).expect("joinable");
+    assert_eq!(executable_name(&nameless), None, "{nameless}");
+}
+
+#[test]
+fn a_quoted_windows_program_keeps_only_its_name() {
+    let argv = [
+        r"C:\Program Files\zqpriv\srv.exe".to_string(),
+        "--token".to_string(),
+        "zqsecret".to_string(),
+    ];
+    let command = crate::transport::join_command(&argv).expect("joinable");
+    assert_eq!(
+        executable_name(&command).as_deref(),
+        Some("srv.exe"),
+        "{command}"
+    );
+    let server = stdio_server(
+        "srv",
+        "d",
+        &command,
+        DiscoverySource::ClaudeDesktop,
+        None,
+        None,
+        None,
+    );
+    let json = serde_json::to_string(&report(&[server], &[])).expect("serializes");
+    assert!(
+        !json.contains("zqpriv") && !json.contains("zqsecret"),
+        "{json}"
     );
 }
