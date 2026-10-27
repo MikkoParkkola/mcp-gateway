@@ -133,6 +133,11 @@ pub(crate) struct Fx {
     /// The params every `tools/call` reached the backend with.
     pub seen: Arc<std::sync::Mutex<Vec<Value>>>,
     _store: tempfile::TempDir,
+    /// The meta layer's audit log, when a builder gives it one; last, so it
+    /// drops after the router and state that hold the logger.
+    _audit: Option<crate::security::transparency_log::temp::TempLog>,
+    /// The route's audit log, on a propagating fixture.
+    _route_audit: Option<crate::security::transparency_log::temp::TempLog>,
 }
 
 fn key(name: &str) -> ApiKeyConfig {
@@ -378,7 +383,7 @@ pub(crate) use egress::{
 pub(crate) use quota::Minting;
 #[cfg(feature = "cost-governance")]
 pub(crate) use quota::{MINT_MODES, fixture_optional_failing_mint};
-use quota::{fixture_backend_config, fixture_failsafe, leaked_transparency_log};
+use quota::{fixture_backend_config, fixture_failsafe, propagating_route_log};
 #[cfg(feature = "firewall")]
 pub(crate) use quota::{fixture_firewalled_budget_built, fixture_propagating_budgeted};
 pub(crate) use quota::{fixture_propagating, fixture_propagating_signed};
@@ -674,11 +679,7 @@ async fn fixture_inner(
     let mut config = (*state_mut.live_config.get()).clone();
     config.security.sanitize_input = SANITIZE.with(std::cell::Cell::get);
     state_mut.live_config.set(config);
-    // A required propagation refuses to mint without a durable audit sink
-    // (MIK-6740), so a propagating fixture gets a transparency log.
-    if PROPAGATING.with(std::cell::Cell::get) {
-        state_mut.transparency_log = Some(leaked_transparency_log());
-    }
+    let route_log = propagating_route_log(state_mut);
     if let Some(log) = STATE_LOG.with(|l| l.borrow().clone()) {
         state_mut.transparency_log = Some(log);
     }
@@ -767,6 +768,8 @@ async fn fixture_inner(
         calls,
         seen,
         _store: store,
+        _audit: None,
+        _route_audit: route_log,
     }
 }
 

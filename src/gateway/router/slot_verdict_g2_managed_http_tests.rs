@@ -51,12 +51,14 @@ fn sole_operator() -> AuthConfig {
 
 struct Fx {
     router: axum::Router,
-    gateway: DirectAccountGateway,
     /// The Meta-MCP the router serves (its kill switch, MIK-8439).
     meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
     /// The router's state (its task store, MIK-8439 R7).
     state: Arc<super::AppState>,
     dirs: (tempfile::TempDir, tempfile::TempDir),
+    /// Last: it owns the Meta-MCP's audit log, which must outlive every
+    /// field above that holds the logger.
+    gateway: DirectAccountGateway,
 }
 
 /// The router over the sole operator's managed backend, [`TOOL`] surfaced,
