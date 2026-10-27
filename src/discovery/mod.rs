@@ -17,6 +17,7 @@ pub(crate) mod adopt;
 mod client_entry;
 pub mod config_scanner;
 mod jsonc;
+pub(crate) mod listing;
 pub mod process_scanner;
 mod secret_map;
 pub mod shadow;
