@@ -31,7 +31,7 @@ fn watching(config: &crate::config::Config, subject: &str, uri: &str) -> Subscri
         "v": 1, "id": format!("sub_{subject}"), "principal": subject, "url": "https://cb/x",
         "name": "backend.signed.resource_updated", "arguments": {"uri": uri},
         "secret": "whsec_x", "previous_secret": null, "previous_until": null,
-        "granted_at": chrono::Utc::now(), "expires_at": null, "active": true,
+        "granted_at": crate::clock::utc_now().expect("the clock reads after 1970"), "expires_at": null, "active": true,
         "failed_since": null, "last_delivery_at": null, "last_error": null
     }))
     .expect("row");
@@ -75,7 +75,7 @@ async fn iso_t4_one_subscribers_catalogue_read_never_revokes_anothers_rows() {
                     global: 10,
                 },
                 chrono::Duration::zero(),
-                chrono::Utc::now(),
+                crate::clock::utc_now().expect("the clock reads after 1970"),
                 tail_policy(&events),
             )
             .expect("io")

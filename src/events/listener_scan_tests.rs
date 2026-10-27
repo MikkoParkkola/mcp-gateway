@@ -448,7 +448,11 @@ fn product_files(dir: &str) -> Vec<String> {
                 if name != "tests" {
                     walk(root, &path, out);
                 }
-            } else if name.ends_with(".rs") && !name.ends_with("_tests.rs") {
+            } else if std::path::Path::new(&name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
+                && !name.ends_with("_tests.rs")
+            {
                 out.push(path.to_string_lossy().into_owned());
             }
         }
