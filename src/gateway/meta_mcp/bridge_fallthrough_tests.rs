@@ -579,6 +579,7 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
     let targets = [crate::security::response_policy::ResponsePolicyTarget {
         server: "asks".to_owned(),
         tool: "gateway_list_tools".to_owned(),
+        no_backend: false,
     }];
     let delivered = m
         .finalize_response_for_delivery(

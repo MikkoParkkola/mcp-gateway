@@ -47,7 +47,11 @@ impl Firewall {
                     combined,
                     self.resolve_action(
                         RuleTarget {
-                            server: ServerOf::Backend(&target.server),
+                            server: if target.no_backend {
+                                ServerOf::NoBackend
+                            } else {
+                                ServerOf::Backend(&target.server)
+                            },
                             tool: &target.tool,
                             key: KeyOf::NotKnown,
                         },

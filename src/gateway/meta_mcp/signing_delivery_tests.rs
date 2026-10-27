@@ -64,6 +64,7 @@ async fn finalize(
             targets: &[ResponsePolicyTarget {
                 server: "actual-backend".into(),
                 tool: "echo".into(),
+                no_backend: false,
             }],
             correlation: ResponseCorrelation {
                 session_id: "signing-delivery-session",

@@ -121,7 +121,7 @@ impl MetaMcp {
             return EgressOutcome::Refused;
         }
         let snapshot = self.relay_snapshot(result);
-        let outcome = firewall_result(result, at);
+        let outcome = self.firewall_result(result, at);
         let shape = super::relay::AnswerShape::of(at.correlation.external_tool);
         self.restage_if_changed(snapshot, Some(&*result), shape);
         outcome
@@ -141,7 +141,7 @@ impl MetaMcp {
             let mut artifact = fields.clone();
             let verdict = firewall.check_response_artifact(
                 &mut artifact,
-                at.targets,
+                &self.expand_targets(at.targets),
                 at.correlation,
                 ResponseArtifactKind::FinalResponse,
                 ResponseMutationPolicy::Redact,
@@ -187,24 +187,57 @@ impl MetaMcp {
     }
 }
 
-/// The firewall on a result part under the part's own policy, without
-/// the relay receipt: a task settles its receipt itself.
-pub(crate) fn firewall_result(result: &mut Value, at: &Egress<'_>) -> EgressOutcome {
-    #[cfg(feature = "firewall")]
-    if let Some(firewall) = at.firewall {
-        use crate::security::response_policy::{ResponseArtifactKind, ResponseMutationPolicy};
-        let verdict = firewall.check_response_artifact(
-            result,
-            at.targets,
-            at.correlation,
-            ResponseArtifactKind::FinalResponse,
-            ResponseMutationPolicy::for_result(result),
-        );
-        return firewall_outcome(verdict);
+impl MetaMcp {
+    /// The firewall on a result part under the part's own policy, without
+    /// the relay receipt: a task settles its receipt itself.
+    pub(crate) fn firewall_result(&self, result: &mut Value, at: &Egress<'_>) -> EgressOutcome {
+        #[cfg(feature = "firewall")]
+        if let Some(firewall) = at.firewall {
+            use crate::security::response_policy::{ResponseArtifactKind, ResponseMutationPolicy};
+            let verdict = firewall.check_response_artifact(
+                result,
+                &self.expand_targets(at.targets),
+                at.correlation,
+                ResponseArtifactKind::FinalResponse,
+                ResponseMutationPolicy::for_result(result),
+            );
+            return firewall_outcome(verdict);
+        }
+        #[cfg(not(feature = "firewall"))]
+        let _ = (result, at);
+        EgressOutcome::Delivered
     }
-    #[cfg(not(feature = "firewall"))]
-    let _ = (result, at);
-    EgressOutcome::Delivered
+
+    /// `targets` with each one that names no backend (discovery, a
+    /// notification, a target-less meta answer) judged as every registered
+    /// backend could have sent it: one target per backend, plus the
+    /// backend-less one. The firewall takes the strongest outcome over
+    /// targets, so a rule scoped to any backend still applies (POLICY.2).
+    pub(crate) fn expand_targets(
+        &self,
+        targets: &[ResponsePolicyTarget],
+    ) -> Vec<ResponsePolicyTarget> {
+        let mut out = targets.to_vec();
+        if targets.iter().any(|t| t.no_backend) {
+            // Visibility: deciding what reaches the caller, over every backend.
+            let names: Vec<String> = self
+                .backends
+                .all_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility)
+                .iter()
+                .map(|b| b.name.clone())
+                .collect();
+            for target in targets.iter().filter(|t| t.no_backend) {
+                out.extend(names.iter().map(|name| ResponsePolicyTarget {
+                    server: name.clone(),
+                    tool: target.tool.clone(),
+                    no_backend: false,
+                }));
+            }
+            out.sort();
+            out.dedup();
+        }
+        out
+    }
 }
 
 /// A firewall verdict as an outcome: a refusal or a missing target refuses,
@@ -261,6 +294,7 @@ impl MetaMcp {
         let targets = [ResponsePolicyTarget {
             server: server.to_owned(),
             tool: tool.to_owned(),
+            no_backend: false,
         }];
         let correlation = ResponseCorrelation {
             session_id: trace_id,
@@ -331,6 +365,7 @@ impl crate::transport::notification_sink::NotificationScreen for NotificationEgr
         let targets = [ResponsePolicyTarget {
             server: "gateway".to_owned(),
             tool: method.clone(),
+            no_backend: true,
         }];
         let correlation = ResponseCorrelation {
             session_id,
@@ -388,7 +423,7 @@ impl MetaMcp {
             let mut artifact = fields.clone();
             let verdict = firewall.check_response_artifact(
                 &mut artifact,
-                at.targets,
+                &self.expand_targets(at.targets),
                 at.correlation,
                 ResponseArtifactKind::Notification,
                 ResponseMutationPolicy::Redact,
@@ -455,12 +490,14 @@ fn stored_targets(task: &crate::gateway::task_service::CommittedTask) -> Vec<Res
         .map(|t| ResponsePolicyTarget {
             server: t.server.clone(),
             tool: t.tool.clone(),
+            no_backend: false,
         })
         .collect();
     if recorded.is_empty() {
         vec![ResponsePolicyTarget {
             server: "gateway".to_owned(),
             tool: "tasks/get".to_owned(),
+            no_backend: true,
         }]
     } else {
         recorded
@@ -494,7 +531,7 @@ impl MetaMcp {
             api_key_name: None,
             firewall: self.firewall.as_deref(),
         };
-        firewall_result(value, &at)
+        self.firewall_result(value, &at)
     }
 
     /// [`Self::scan_stored_task`] on a `tasks/get` answer: a refusal becomes
@@ -538,6 +575,7 @@ impl MetaMcp {
         let targets = [ResponsePolicyTarget {
             server: "gateway".to_owned(),
             tool: "tools/list".to_owned(),
+            no_backend: true,
         }];
         let correlation = ResponseCorrelation {
             session_id: "meta:tools/list",
@@ -554,7 +592,8 @@ impl MetaMcp {
             api_key_name: None,
             firewall: self.firewall.as_deref(),
         };
-        if self.content_refuses(&at, value) || firewall_result(value, &at) == EgressOutcome::Refused
+        if self.content_refuses(&at, value)
+            || self.firewall_result(value, &at) == EgressOutcome::Refused
         {
             tracing::warn!("Egress scan: discovery response refused");
             return Err(crate::Error::ResponseFirewallRefused);
@@ -576,6 +615,7 @@ impl MetaMcp {
         let targets = [ResponsePolicyTarget {
             server: server.to_owned(),
             tool: tool.to_owned(),
+            no_backend: false,
         }];
         let correlation = ResponseCorrelation {
             session_id: session_id.unwrap_or(tool),

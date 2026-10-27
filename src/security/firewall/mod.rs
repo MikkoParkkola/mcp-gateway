@@ -593,6 +593,7 @@ impl Firewall {
         let targets = [ResponsePolicyTarget {
             server: server.into(),
             tool: tool.into(),
+            no_backend: false,
         }];
         let correlation = ResponseCorrelation {
             session_id,

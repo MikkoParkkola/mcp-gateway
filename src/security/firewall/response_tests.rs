@@ -55,6 +55,7 @@ fn target(server: &str, tool: &str) -> ResponsePolicyTarget {
     ResponsePolicyTarget {
         server: server.into(),
         tool: tool.into(),
+        no_backend: false,
     }
 }
 

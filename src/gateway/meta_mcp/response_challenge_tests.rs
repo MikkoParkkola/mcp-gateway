@@ -60,6 +60,7 @@ fn targets() -> [ResponsePolicyTarget; 1] {
     [ResponsePolicyTarget {
         server: "origin-backend".into(),
         tool: "ask_user".into(),
+        no_backend: false,
     }]
 }
 

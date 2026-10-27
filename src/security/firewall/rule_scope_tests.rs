@@ -46,6 +46,7 @@ fn answer(fw: &Firewall, targets: &[&str]) -> FirewallAction {
         .map(|server| ResponsePolicyTarget {
             server: (*server).to_string(),
             tool: "t".to_string(),
+            no_backend: false,
         })
         .collect();
     let correlation = ResponseCorrelation {

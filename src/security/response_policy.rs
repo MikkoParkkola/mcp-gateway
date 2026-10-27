@@ -11,6 +11,12 @@ use serde::Serialize;
 pub(crate) struct ResponsePolicyTarget {
     pub server: String,
     pub tool: String,
+    /// Built for an answer no one backend can be named for (discovery, a
+    /// notification, a target-less meta answer): `server` is the `gateway`
+    /// label, and the scan judges it as every registered backend could have
+    /// sent it (`MetaMcp::expand_targets`).
+    #[serde(skip)]
+    pub(crate) no_backend: bool,
 }
 
 /// The API key a call was authenticated with, for a firewall rule's `keys`

@@ -295,6 +295,7 @@ impl AuditLogger {
             &[ResponsePolicyTarget {
                 server: server.into(),
                 tool: tool.into(),
+                no_backend: false,
             }],
             ResponseArtifactKind::FinalResponse,
             verdict,

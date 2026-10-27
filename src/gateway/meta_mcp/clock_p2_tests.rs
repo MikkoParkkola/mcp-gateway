@@ -90,6 +90,7 @@ async fn deliver(
             targets: &[ResponsePolicyTarget {
                 server: "backend".into(),
                 tool: "echo".into(),
+                no_backend: false,
             }],
             correlation: ResponseCorrelation {
                 session_id: "t4-session",

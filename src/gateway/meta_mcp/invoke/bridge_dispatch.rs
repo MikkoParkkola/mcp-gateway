@@ -176,6 +176,7 @@ impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
         let targets = [crate::security::response_policy::ResponsePolicyTarget {
             server: self.server.to_owned(),
             tool: self.tool.to_owned(),
+            no_backend: false,
         }];
         let correlation = crate::security::response_policy::ResponseCorrelation {
             session_id: self.session_id.unwrap_or_default(),

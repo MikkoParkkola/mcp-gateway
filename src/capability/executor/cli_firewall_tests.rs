@@ -86,6 +86,7 @@ fn firewall_pass(mut artifact: Value) -> (FirewallVerdict, Value, Vec<Value>) {
             &[ResponsePolicyTarget {
                 server: "cap".into(),
                 tool: "tool".into(),
+                no_backend: false,
             }],
             &ResponseCorrelation {
                 session_id: "s",

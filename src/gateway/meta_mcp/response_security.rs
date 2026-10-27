@@ -123,6 +123,7 @@ pub(crate) fn meta_response_targets(
                 external_tool
             }
             .to_owned(),
+            no_backend: true,
         }];
     }
     let mut targets: Vec<_> = targets
@@ -130,6 +131,7 @@ pub(crate) fn meta_response_targets(
         .map(|target| ResponsePolicyTarget {
             server: target.server.clone(),
             tool: target.tool.clone(),
+            no_backend: false,
         })
         .collect();
     targets.sort();
@@ -337,7 +339,7 @@ impl super::MetaMcp {
         task_id: &str,
         result: &mut serde_json::Value,
     ) -> crate::Result<()> {
-        use super::invoke::egress::{Egress, EgressOutcome, firewall_result};
+        use super::invoke::egress::{Egress, EgressOutcome};
         let (server, tool) = targets.first().map_or(("gateway", "tasks/get"), |t| {
             (t.server.as_str(), t.tool.as_str())
         });
@@ -358,7 +360,7 @@ impl super::MetaMcp {
             api_key_name: None,
             firewall: self.firewall.as_deref(),
         };
-        if firewall_result(result, &at) == EgressOutcome::Refused {
+        if self.firewall_result(result, &at) == EgressOutcome::Refused {
             tracing::warn!(task_id, "Firewall: task result blocked");
             return Err(crate::Error::ResponseFirewallRefused);
         }
