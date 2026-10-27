@@ -126,9 +126,9 @@ fn alpha() -> VerifiedIdentity {
 /// refuses to mint at all. The file lives as long as the returned handle.
 fn audit_log() -> (
     Arc<crate::security::TransparencyLogger>,
-    tempfile::NamedTempFile,
+    crate::security::transparency_log::temp::TempLog,
 ) {
-    let file = tempfile::NamedTempFile::new().expect("tempfile");
+    let file = crate::security::transparency_log::temp::TempLog::new();
     let config = crate::security::TransparencyLogConfig {
         enabled: true,
         path: file.path().to_string_lossy().to_string(),
@@ -145,7 +145,7 @@ fn gateway() -> (
     MetaMcp,
     Arc<AlphaOnlyWire>,
     Arc<CountingMint>,
-    tempfile::NamedTempFile,
+    crate::security::transparency_log::temp::TempLog,
 ) {
     let config = BackendConfig {
         transport: TransportConfig::Http {

@@ -162,7 +162,7 @@ async fn a_minted_credential_is_validated_and_audited_before_it_is_used() {
 /// the audit error text to the caller.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_mint_audit_refuses_the_credential_without_the_error_text() {
-    let file = tempfile::NamedTempFile::new().expect("tempfile");
+    let file = crate::security::transparency_log::temp::TempLog::new();
     let config = Arc::new(crate::security::transparency_log::TransparencyLogConfig {
         enabled: true,
         path: file.path().to_string_lossy().to_string(),

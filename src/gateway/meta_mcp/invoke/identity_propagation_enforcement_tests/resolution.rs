@@ -7,7 +7,7 @@ use super::*;
 // Regression guard for the review finding that Code Mode dropped verified_identity.
 #[tokio::test]
 async fn code_mode_execute_propagates_identity_to_backend() {
-    let (m, captured) = meta_with_capturing_backend();
+    let (_log, m, captured) = meta_with_capturing_backend();
     let id = identity();
     m.seed_caller_slot_for_test("mem", &id).await;
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
@@ -53,7 +53,7 @@ async fn code_mode_execute_propagates_identity_to_backend() {
 // verified identity refuses at resolve, before dispatch.
 #[tokio::test]
 async fn code_mode_execute_fails_closed_without_identity() {
-    let (m, _captured) = meta_with_capturing_backend();
+    let (_log, m, _captured) = meta_with_capturing_backend();
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
         task: None,
         signing: None,
@@ -236,7 +236,8 @@ fn mint_audit_write_failure_returns_generic_error_no_leak() {
     let exe = std::env::current_exe().expect("current test binary path");
     // A new log's open() writes its genesis record (#2275); create it here,
     // outside the size limit, so the child's open() only reads.
-    let path = leaked_test_transparency_logger()
+    let log = crate::security::transparency_log::temp::TempLog::new();
+    let path = test_transparency_logger(&log)
         .path()
         .to_string_lossy()
         .to_string();
@@ -279,9 +280,10 @@ fn mint_audit_write_failure_returns_generic_error_no_leak() {
 
 #[tokio::test]
 async fn mints_bearer_credential_for_identity() {
+    let log = crate::security::transparency_log::temp::TempLog::new();
     let mut m = meta_with_strategy();
     // A `required` mint needs a durable audit sink (MIK-6740 fail-closed).
-    m.enable_transparency_log(leaked_test_transparency_logger());
+    m.enable_transparency_log(test_transparency_logger(&log));
     let cred = m
         .resolve_caller_credential("memory", &idp_cfg(true), Some(&identity()))
         .await
@@ -297,9 +299,10 @@ async fn mints_bearer_credential_for_identity() {
 // calling the same tool with the same arguments cannot collide in the cache.
 #[tokio::test]
 async fn distinct_identities_get_distinct_cache_bindings() {
+    let log = crate::security::transparency_log::temp::TempLog::new();
     let mut m = meta_with_strategy();
     // A `required` mint needs a durable audit sink (MIK-6740 fail-closed).
-    m.enable_transparency_log(leaked_test_transparency_logger());
+    m.enable_transparency_log(test_transparency_logger(&log));
     let alice = m
         .resolve_caller_credential("memory", &idp_cfg(true), Some(&identity()))
         .await
@@ -448,7 +451,7 @@ async fn optional_backend_without_identity_yields_no_headers() {
 // passthrough carries it too (MIK-6734 review finding 4).
 #[tokio::test]
 async fn direct_route_resolves_bearer_for_identity() {
-    let (m, _captured) = meta_with_capturing_backend();
+    let (_log, m, _captured) = meta_with_capturing_backend();
     let headers = m
         .resolve_propagation_headers("mem", Some(&identity()))
         .await
@@ -465,7 +468,7 @@ async fn direct_route_resolves_bearer_for_identity() {
 // forwards with only the static credential.
 #[tokio::test]
 async fn direct_route_fails_closed_without_identity() {
-    let (m, _captured) = meta_with_capturing_backend();
+    let (_log, m, _captured) = meta_with_capturing_backend();
     let err = m
         .resolve_propagation_headers("mem", None)
         .await
@@ -480,7 +483,7 @@ async fn direct_route_fails_closed_without_identity() {
 // (empty headers → static path).
 #[tokio::test]
 async fn direct_route_unconfigured_backend_yields_no_headers() {
-    let (m, _captured) = meta_with_capturing_backend();
+    let (_log, m, _captured) = meta_with_capturing_backend();
     let headers = m
         .resolve_propagation_headers("no-such-backend", Some(&identity()))
         .await

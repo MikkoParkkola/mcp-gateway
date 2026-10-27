@@ -170,7 +170,7 @@ async fn the_cache_asks_the_callers_own_slot() {
         Duration::from_secs(300),
     );
     meta.set_identity_propagation(Arc::new(Mint) as _);
-    let audit = tempfile::NamedTempFile::new().expect("tempfile");
+    let audit = crate::security::transparency_log::temp::TempLog::new();
     let logger = crate::security::TransparencyLogger::open(Arc::new(
         crate::security::TransparencyLogConfig {
             enabled: true,

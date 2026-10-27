@@ -130,6 +130,9 @@ pub(crate) struct Fx {
     /// The params every `tools/call` reached the backend with.
     pub seen: Arc<std::sync::Mutex<Vec<Value>>>,
     _store: tempfile::TempDir,
+    /// The meta layer's audit log, when a builder gives it one; last, so it
+    /// drops after the router and state that hold the logger.
+    _audit: Option<crate::security::transparency_log::temp::TempLog>,
 }
 
 fn key(name: &str) -> ApiKeyConfig {
@@ -724,6 +727,7 @@ async fn fixture_inner(
         calls,
         seen,
         _store: store,
+        _audit: None,
     }
 }
 
