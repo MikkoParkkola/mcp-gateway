@@ -77,11 +77,14 @@ async fn overlapping_listings_of_a_cold_caller_fill_once_http() {
         rpc(&fx, 2, "tools/list", json!({}))
     );
     for answer in [&a, &b] {
+        let entries = surfaced_on(answer, BACKEND);
         assert!(
-            surfaced_on(answer, BACKEND)
-                .iter()
-                .any(|t| !is_shared_schema(t)),
+            entries.iter().any(|t| !is_shared_schema(t)),
             "a listing did not show the caller's own schema: {answer}"
+        );
+        assert!(
+            !entries.into_iter().any(is_shared_schema),
+            "a listing showed the shared schema: {answer}"
         );
     }
     assert_eq!(
@@ -303,8 +306,9 @@ async fn a_fill_past_the_cold_backoff_still_publishes_http() {
 
 /// A grant that rotates while another listing's lease is filling: the
 /// second listing, begun after the rotation, waits on that lease, but the
-/// view it published belongs to the old grant, so it is forgotten and the
-/// listing withholds the tool rather than serve the old grant's schema.
+/// view it published belongs to the old grant, so it reads as cold and the
+/// listing withholds the tool rather than serve the old grant's schema. The
+/// next listing shows the current grant's own schema after one fresh fill.
 #[tokio::test(start_paused = true)]
 async fn a_lease_filled_under_a_rotated_grant_is_not_served_http() {
     let fx = Arc::new(fixture().await);
@@ -341,4 +345,19 @@ async fn a_lease_filled_under_a_rotated_grant_is_not_served_http() {
         "the old grant's schema was served after the rotation: {second}"
     );
     first.await.expect("the first listing");
+    // The current grant's own view comes from one fresh fill of its slot.
+    fx.gateway.rearm_operator_slot_at_for_test(&rotated);
+    let fills = fx.gateway.lists_to(BACKEND);
+    let third = rpc(&fx, 3, "tools/list", json!({})).await;
+    assert!(
+        surfaced_on(&third, BACKEND)
+            .iter()
+            .any(|t| !is_shared_schema(t)),
+        "the current grant's own schema was not listed: {third}"
+    );
+    assert_eq!(
+        fx.gateway.lists_to(BACKEND),
+        fills + 1,
+        "the current grant's view took other than one fill"
+    );
 }
