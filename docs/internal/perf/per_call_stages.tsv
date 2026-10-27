@@ -122,6 +122,7 @@ src/gateway/meta_mcp/invoke/cache_reads.rs	note_delivered_reading	http_invoke_ti
 src/gateway/meta_mcp/invoke/cache_reads.rs	reading	-	on-path, untimed: only when a result is stored (a read-only cache write or an idempotency completion); the timed rows store neither
 src/gateway/meta_mcp/invoke/cache_reads.rs	restore	-	on-path, untimed: response-cache hits only; the timed rows dispatch fresh every round
 src/gateway/meta_mcp/invoke/caller_credential.rs	fmt	-	Debug formatting (redacting); not called per call
+src/gateway/meta_mcp/invoke/caller_verdict.rs	backend_bound	-	on-path, untimed: the deadline bound of a cold per-user view's fill (ColdFill::backend_bound), cold tools/list warms only; the timed backend keeps no per-user catalogue
 src/gateway/meta_mcp/invoke/caller_verdict.rs	caller_verdict	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/caller_verdict.rs	caller_verdict_acting	-	on-path, untimed: per-user-catalogue backends only; the timed backend keeps none
 src/gateway/meta_mcp/invoke/caller_verdict.rs	caller_verdicts	http_invoke_tiny	on the HTTP gateway_invoke path (the route stage's verdicts)

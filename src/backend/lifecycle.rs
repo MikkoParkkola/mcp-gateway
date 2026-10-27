@@ -493,12 +493,9 @@ impl Backend {
         started
     }
 
-    /// A backend with per-user sessions only is never reached through a
-    /// shared session, so its Shared slot never starts or fills, whoever
-    /// asks. Refused before anything is built, charged or counted: no
-    /// transport, no start in flight, no breaker, budget or fill admission
-    /// sees it. The isolation refusal's code and a denial, so it is not
-    /// retried.
+    /// A per-user-sessions-only backend's Shared slot never starts or fills,
+    /// whoever asks: refused before anything is built, charged or counted,
+    /// with the isolation refusal's code (a denial, so never retried).
     pub(super) fn refuse_shared_start(&self, key: &PoolKey) -> Result<()> {
         if matches!(key, PoolKey::Shared) && self.shared_slot_refused() {
             debug!(backend = %self.name, "Not starting the shared slot: per-user sessions only");
