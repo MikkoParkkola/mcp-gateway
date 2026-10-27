@@ -30,7 +30,7 @@ use std::sync::Arc;
 /// store is configured but at least one read failed, so the view fell back to
 /// the local projection (MIK-6701).
 pub(super) fn local_runtime_snapshot(
-    state: &AppState,
+    (state, generation): (&AppState, &crate::config_reload::Generation),
     client: Option<&AuthenticatedClient>,
     actor: &ControlPlaneActor,
     now: chrono::DateTime<chrono::Utc>,
@@ -52,7 +52,7 @@ pub(super) fn local_runtime_snapshot(
             });
     }
 
-    snapshot.policies = local_policy_rows(state);
+    snapshot.policies = local_policy_rows(generation);
 
     #[allow(
         clippy::disallowed_methods,
@@ -217,17 +217,19 @@ pub(super) async fn local_shadow_radar(state: &AppState) -> ControlPlaneShadowRa
     ControlPlaneShadowRadar::from_report(&report)
 }
 
-pub(super) fn local_policy_rows(state: &AppState) -> Vec<crate::control_plane::ControlPlanePolicy> {
+pub(super) fn local_policy_rows(
+    generation: &crate::config_reload::Generation,
+) -> Vec<crate::control_plane::ControlPlanePolicy> {
     vec![
         crate::control_plane::ControlPlanePolicy {
             policy_id: "local:input_sanitization".to_string(),
             name: "Input sanitization".to_string(),
-            enforced: state.sanitize_input,
+            enforced: generation.sanitize_input(),
         },
         crate::control_plane::ControlPlanePolicy {
             policy_id: "local:ssrf_protection".to_string(),
             name: "SSRF protection".to_string(),
-            enforced: state.ssrf_protection,
+            enforced: generation.ssrf_protection(),
         },
     ]
 }

@@ -11,7 +11,7 @@ use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 
 /// A keyed modern `gateway_invoke` of `alpha`/`t`: the frame the admission
 /// lease replays when the key is re-issued.
-fn keyed_invoke(id: u32) -> (String, Value) {
+pub(super) fn keyed_invoke(id: u32) -> (String, Value) {
     let arguments = json!({"server": "alpha", "tool": "t", "arguments": {"q": 1}});
     let body = json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
                       "params": {"name": "gateway_invoke", "arguments": arguments,
@@ -22,7 +22,7 @@ fn keyed_invoke(id: u32) -> (String, Value) {
 }
 
 /// POST as key `k` on the 2026-07-28 revision.
-async fn post_modern(fx: &Fixture, body: &str) -> (StatusCode, String) {
+pub(super) async fn post_modern(fx: &Fixture, body: &str) -> (StatusCode, String) {
     post_modern_named(fx, "gateway_invoke", body).await
 }
 

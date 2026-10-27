@@ -29,6 +29,9 @@ async fn startup_on(gateway: Gateway) -> (crate::Result<()>, Arc<MetaMcp>) {
     let outcome = gateway
         .install_stdio_startup_catalogue(
             &built.meta_mcp,
+            &Arc::new(crate::config_reload::LiveConfig::new(
+                gateway.config.clone(),
+            )),
             None,
             &warmer,
             crate::config_reload::refusals::ReloadReporting::default(),

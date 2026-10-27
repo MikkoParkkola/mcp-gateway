@@ -446,3 +446,58 @@ test('S18 a key refused while the logout is pending keeps both messages', async 
   await expect(page.locator('.signin-notice')).toHaveText(UNCONFIRMED);
   await expect(page.locator('.signin-error')).toHaveText('That key was not accepted.');
 });
+
+test('S20 a rate-limited key check says how long to wait and keeps the key', async ({ page }) => {
+  await page.route('**/ui/api/status', (route) => {
+    if (route.request().headers().authorization) {
+      return route.fulfill({ status: 429, headers: { 'retry-after': '60' }, json: { error: { code: -32000, message: 'rate limited' } } });
+    }
+    return route.fulfill({ json: { auth: { enabled: true, signed_in: false, admin: false } } });
+  });
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.signin-error')).toBeVisible();
+  await expect(page.locator('.signin-error')).toHaveText('The gateway is limiting sign-in attempts. Wait 60 seconds, then try again.');
+  await expect(page.locator('#signin-key')).toHaveValue(KEY);
+});
+
+test('S20 a rate limit without a usable wait says a minute', async ({ page }) => {
+  await page.route('**/ui/api/status', (route) => {
+    if (route.request().headers().authorization) return route.fulfill({ status: 429, headers: { 'retry-after': 'soon' }, json: {} });
+    return route.fulfill({ json: { auth: { enabled: true, signed_in: false, admin: false } } });
+  });
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.signin-error')).toHaveText('The gateway is limiting sign-in attempts. Wait a minute, then try again.');
+});
+
+for (const [header, wait] of [['1', '1 second'], [null, 'a minute'], ['Wed, 21 Oct 2026 07:28:00 GMT', 'a minute']]) {
+  test(`S20 Retry-After ${header ?? 'absent'} reads as ${wait}`, async ({ page }) => {
+    await page.route('**/ui/api/status', (route) => {
+      if (!route.request().headers().authorization) return route.fulfill({ json: { auth: { enabled: true, signed_in: false, admin: false } } });
+      return route.fulfill({ status: 429, headers: header === null ? {} : { 'retry-after': header }, json: {} });
+    });
+    await page.goto('/ui/overview/status');
+    await page.locator('#signin-key').fill(KEY);
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.signin-error')).toHaveText(`The gateway is limiting sign-in attempts. Wait ${wait}, then try again.`);
+  });
+}
+
+test('S20 the kept key signs in on the next try once the limit lifts', async ({ page }) => {
+  let limited = true;
+  await page.route('**/ui/api/status', (route) => {
+    const auth = route.request().headers().authorization ?? '';
+    if (auth && limited) return route.fulfill({ status: 429, headers: { 'retry-after': '60' }, json: {} });
+    return route.fulfill({ json: { auth: { enabled: true, signed_in: auth === `Bearer ${KEY}`, admin: false } } });
+  });
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.signin-error')).toBeVisible();
+  limited = false;
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#signin')).toBeHidden();
+});

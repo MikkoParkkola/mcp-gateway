@@ -11,6 +11,8 @@
 //! and that failure is the point: a test written after the code agrees with the
 //! code, not with the requirement.
 
+#[path = "common/flags_off.rs"]
+mod flags_off;
 #[path = "common/record_key.rs"]
 mod record_key;
 use std::sync::Arc;
@@ -378,8 +380,6 @@ mod http {
             key_server: None,
             tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
             mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
-            sanitize_input: false,
-            ssrf_protection: false,
             trust_configured_backends: false,
             inflight: Arc::new(tokio::sync::Semaphore::new(100)),
             agent_auth: AgentAuthState::new(false, agent_registry),
@@ -392,7 +392,7 @@ mod http {
             control_plane_store: None,
             control_plane_base: None,
             live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new(
-                Config::default(),
+                crate::flags_off::flags_off(&Config::default()),
             )),
             export_status: None,
             transparency_log: None,

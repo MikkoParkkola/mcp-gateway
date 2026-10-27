@@ -146,7 +146,7 @@ fn admit_signing_nonce(
     }
     let caller = scope.caller;
     DirectRouteGuards::admit_nonce(
-        scope.state,
+        (scope.state, &caller.generation),
         (
             caller.client.as_ref(),
             caller.oauth_agent_identity.as_ref(),
@@ -212,6 +212,7 @@ pub(super) async fn admit<'a>(
         caller_key,
     };
     let auth = BackendAuthContext {
+        generation: &caller.generation,
         client,
         oauth_agent_identity: caller.oauth_agent_identity.as_ref(),
         cert_identity: caller.cert_identity.as_ref(),
@@ -542,7 +543,14 @@ async fn finish_response(
             caller.oauth_agent_identity.as_ref(),
             caller.cert_identity.as_ref(),
         );
-        super::direct_list::retain_invocable(state, client, oauth, cert, name, &mut response);
+        super::direct_list::retain_invocable(
+            (state, &caller.generation),
+            client,
+            oauth,
+            cert,
+            name,
+            &mut response,
+        );
     } else if method != "tools/call" {
         if !response.excludes_client_accounting() {
             super::record_client_success(state, client);
