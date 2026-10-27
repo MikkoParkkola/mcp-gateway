@@ -389,6 +389,26 @@ async fn a_clean_stdio_delivery_records_delivered() {
     assert_eq!(row["response_findings"], json!([]), "{row}");
 }
 
+/// MIK-8993.INSPECT.1 on stdio: response inspection's finding is recorded
+/// beside a firewall scan that found nothing.
+#[tokio::test]
+async fn a_stdio_inspection_finding_is_recorded() {
+    let text = format!("base64: {}", "A".repeat(120));
+    let (body, row) = recorded_delivery(Setup::Default, Part::ResultText, text.clone()).await;
+    assert!(!refused(&body), "premise: delivered: {body}");
+    let findings = row["response_findings"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        findings
+            .iter()
+            .any(|f| f["kind"] == "inspect:encoding" && f["where"] == "result"),
+        "inspection's finding is missing: {row}"
+    );
+    assert!(!row.to_string().contains(&text), "no content: {row}");
+}
+
 /// A firewall with response scanning off reads nothing: the answer is
 /// delivered and its findings are null, never an empty (scanned clean) list.
 #[tokio::test]

@@ -170,3 +170,41 @@ async fn a_slot_refused_answer_records_refused() {
     let row = only_delivery(HttpRoute::Mcp, &delivery_rows(&log).await);
     assert_eq!(row["response_effect"], "refused", "{row}");
 }
+
+/// Text response inspection flags (a long `base64:` blob, Medium, never
+/// blocked) and the firewall's own scans have no rule for. The record must
+/// list inspection's finding: a firewall that found nothing beside it is not
+/// a clean scan of this answer.
+fn inspection_only_text() -> &'static str {
+    Box::leak(format!("base64: {}", "A".repeat(120)).into_boxed_str())
+}
+
+/// MIK-8993.INSPECT.1, INSPECT.4: response inspection's findings are this
+/// delivery's findings, by kind, severity and part, never the matched text.
+#[tokio::test]
+async fn an_inspection_finding_is_recorded_beside_a_clean_firewall_scan() {
+    for route in [HttpRoute::Mcp, HttpRoute::Direct] {
+        let text = inspection_only_text();
+        let recorded = firewalled_recorded_call(route, Answer::Text(text), None).await;
+        assert!(
+            recorded.body.get("error").is_none(),
+            "{route:?}: premise: delivered: {}",
+            recorded.body
+        );
+        let row = only_delivery(route, &recorded.rows);
+        let findings = row["response_findings"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            findings.iter().any(|f| f["kind"] == "inspect:encoding"
+                && f["severity"] == "medium"
+                && f["where"] == "result"),
+            "{route:?}: inspection's finding is missing: {row}"
+        );
+        assert!(
+            !row.to_string().contains(text),
+            "{route:?}: no content: {row}"
+        );
+    }
+}
