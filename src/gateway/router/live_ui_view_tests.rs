@@ -197,6 +197,8 @@ async fn view_pinned(
         .extension(crate::gateway::auth::AuthenticatedClient {
             admin: true,
             authenticated: true,
+            // No credential was presented, so no principal (MIK-6704.IDENT.1a).
+            principal: crate::gateway::record_principal::InternalPrincipal::new(String::new()),
             ..crate::gateway::auth::anonymous_client()
         })
         .body(Body::empty())
