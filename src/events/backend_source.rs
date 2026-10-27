@@ -558,6 +558,7 @@ impl EventsHub {
                 occurred_at,
                 data: json!({}),
                 lifecycle_key: key,
+                fence: None,
             });
         });
     }

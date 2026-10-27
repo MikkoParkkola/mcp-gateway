@@ -281,6 +281,7 @@ impl ScheduleSource {
                 occurred_at: minute,
                 data: json!({ "scheduled_for": at, "label": label }),
                 lifecycle_key: None,
+                fence: None,
             });
         }
     }

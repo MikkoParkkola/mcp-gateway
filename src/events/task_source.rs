@@ -156,6 +156,7 @@ impl EventsHub {
                 "settledAt": at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             }),
             lifecycle_key: None,
+            fence: None,
         });
     }
 
