@@ -362,22 +362,10 @@ async fn session(
             }
             Ev::Wake | Ev::Tick => {}
         }
-        if let Some(fence) = &run.fence {
-            if Instant::now() >= state.fence_due {
-                state.fence_due = Instant::now() + FENCE_EVERY;
-                fence.recheck().await;
-            }
-            if fence.ended() {
-                // Nothing observed under the old grant is announced: the
-                // session's notices, refill and tools debounce go with it.
-                // A per-user key has no snapshot or confirm clock to drop:
-                // it never reads the catalogue (`read_snapshot`,
-                // `authorize_uri`).
-                debug!(backend = %shared.name, "upstream listener: the grant moved; ending the run");
-                drop(refill);
-                *shared.tools.lock() = ToolsDebt::default();
-                return state.ended(started);
-            }
+        if grant_moved(shared, run.fence.as_deref(), &mut state).await {
+            // Nothing observed under the old grant is announced: the
+            // session's notices and refill go with it.
+            return state.ended(started);
         }
         if refill.is_none() {
             refill = start_due_refill(&mut state, backend);
@@ -413,6 +401,31 @@ async fn session(
             return Outcome::Stopped;
         }
     }
+}
+
+/// Whether a minted run's grant moved: a refused mint says so at once, and
+/// the run reads its fence every [`FENCE_EVERY`] so a quiet stream notices
+/// too. A moved run's pending tools debounce goes with it. A per-user key
+/// has no snapshot or confirm clock to drop: it never reads the catalogue
+/// (`read_snapshot`, `authorize_uri`).
+async fn grant_moved(
+    shared: &Shared,
+    fence: Option<&crate::events::listener_credential::RunFence>,
+    state: &mut State<'_>,
+) -> bool {
+    let Some(fence) = fence else {
+        return false;
+    };
+    if Instant::now() >= state.fence_due {
+        state.fence_due = Instant::now() + FENCE_EVERY;
+        fence.recheck().await;
+    }
+    if !fence.ended() {
+        return false;
+    }
+    debug!(backend = %shared.name, "upstream listener: the grant moved; ending the run");
+    *shared.tools.lock() = ToolsDebt::default();
+    true
 }
 
 /// What a tick does about the backend's live transport (MIK-7969 H2).

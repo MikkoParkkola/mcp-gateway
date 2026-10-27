@@ -128,12 +128,11 @@ fn queued_aged(
         sub.principal = subject.into();
         sub.obs_basis = observe_subscriber(config, "managed", Some(&person(subject)))
             .expect("observes")
-            .map(|basis| {
+            .inspect(|basis| {
                 assert_eq!(
                     basis.strategy,
                     crate::identity_propagation::PropagationStrategyKind::Vault
                 );
-                basis
             });
         sub.observed_identity = Some(person(subject));
         record.subscription_id = sub.id.clone();
