@@ -662,6 +662,9 @@ async fn fixture_state() -> (Arc<super::AppState>, tempfile::TempDir) {
 
 /// The rebuilt Meta-MCP keeps the state's admission store: sync calls and
 /// tasks share one, as `server/task_runtime.rs` wires it.
+// One literal per fixture switch, as the cells read it: splitting would hide
+// which knob a cell turns.
+#[allow(clippy::too_many_lines)]
 async fn fixture_inner(
     answer: Answer,
     #[cfg_attr(not(feature = "firewall"), allow(unused_variables))] firewalled: bool,
