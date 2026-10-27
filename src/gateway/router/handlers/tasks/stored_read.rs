@@ -44,7 +44,7 @@ pub(super) async fn prepare_stored_read_with_policy(
         caller.oauth_agent_identity,
         caller.cert_identity,
     );
-    let borrowed = router_authorizer.borrow(state);
+    let borrowed = router_authorizer.borrow(state, caller.generation);
     let authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync) = &borrowed;
     let caller_key = crate::gateway::router::identity::caller_key(
         caller.grant_subject.as_ref(),
