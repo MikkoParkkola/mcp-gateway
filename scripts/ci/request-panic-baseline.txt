@@ -25,7 +25,6 @@ src/discovery/client_entry.rs	LazyLock::new(|| Regex::new(r"\$\{env:([^}]*)\}").
 src/duration_bound.rs	None => panic!(	1
 src/events/store.rs	let count = per_principal.get_mut(principal).expect("counted above");	1
 src/gateway/auth_resolved.rs	.expect("auth config secret references should resolve")	1
-src/gateway/meta_mcp/grant_audit.rs	.expect("grant slot lock")	1
 src/gateway/meta_mcp/grant_audit.rs	.try_with(|slot| slot.notes.lock().expect("grant slot lock").len())	1
 src/gateway/meta_mcp/grant_audit.rs	let mut held = slot.notes.lock().expect("grant slot lock");	1
 src/gateway/meta_mcp/grant_audit.rs	let mut notes = slot.notes.lock().expect("grant slot lock");	1

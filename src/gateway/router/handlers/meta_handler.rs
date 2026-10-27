@@ -57,7 +57,11 @@ pub(in crate::gateway::router) async fn meta_mcp_handler(
                         // The minted-receipt scope rides outside the memo.
                         crate::gateway::meta_mcp::invoke::with_minted_receipts(Box::pin(
                             crate::gateway::meta_mcp::visible::memo::with_visibility_memo(
-                                Box::pin(meta_mcp_dispatch(state, http_request)),
+                                // One delivery's facts: the dispatch and its record.
+                                Box::pin(crate::gateway::delivery_facts::scope(meta_mcp_dispatch(
+                                    state,
+                                    http_request,
+                                ))),
                             ),
                         )),
                     )),

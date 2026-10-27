@@ -438,7 +438,8 @@ impl MetaMcp {
         crate::security::signature_chain::strip_chain(&mut result);
         let (mut result, raw_read) = audit::noted_response(self, result);
         self.apply_response_contract_gate(server, tool, trace_id, &mut result)
-            .inspect_err(|_| note_response_gate())?;
+            .inspect_err(|_| note_response_gate())
+            .map_err(crate::gateway::delivery_facts::refused)?;
 
         // === POST-INVOKE: Response content inspection (issue #133, D2) ===
         //
@@ -452,7 +453,8 @@ impl MetaMcp {
         let text = crate::security::response_inspect::extract_text_from_result(&result);
         let findings = self
             .inspect_backend_text((server, tool, trace_id), &text)
-            .inspect_err(|_| note_response_gate())?;
+            .inspect_err(|_| note_response_gate())
+            .map_err(crate::gateway::delivery_facts::refused)?;
         if !findings.is_empty() {
             if let Some(obj) = result.as_object_mut() {
                 obj.insert(

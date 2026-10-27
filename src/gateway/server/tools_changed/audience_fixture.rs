@@ -443,7 +443,12 @@ impl World {
         let (feed, nudges) = tokio::sync::mpsc::unbounded_channel();
         let st = Arc::get_mut(&mut state).expect("state is unique");
         let adapter = live.map(|(config, dir)| {
-            st.live_config = Arc::new(crate::config_reload::LiveConfig::new(config));
+            // The security flags off, as every router fixture's generation
+            // has them: the views read SSRF protection from the generation
+            // (ADR-023), and on it hides the fixture's loopback backends.
+            st.live_config = Arc::new(crate::config_reload::LiveConfig::new(
+                crate::config_reload::flags_off(config),
+            ));
             dir
         });
         super::audience_access::apply(st, &access);

@@ -28,6 +28,9 @@ pub(super) type Rejection = (StatusCode, Json<Value>);
 
 /// Everything the route learns about the caller before the body is read.
 pub(super) struct Caller {
+    /// The generation pinned on arrival; every judgement on this call reads
+    /// it (ADR-023).
+    pub(super) generation: std::sync::Arc<crate::config_reload::Generation>,
     pub(super) client: Option<AuthenticatedClient>,
     pub(super) cert_identity: Option<CertIdentity>,
     pub(super) oauth_agent_identity: Option<OAuthAgentIdentity>,
@@ -129,6 +132,14 @@ pub(super) async fn resolve_caller(
     ),
     Rejection,
 > {
+    // Fail closed: a reader never falls back to the current generation.
+    let generation =
+        crate::gateway::router::pinned_generation(request.extensions()).ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": crate::gateway::router::UNPINNED })),
+            )
+        })?;
     let client = request.extensions().get::<AuthenticatedClient>().cloned();
     let cert_identity = request.extensions().get::<CertIdentity>().cloned();
     let oauth_agent_identity = request.extensions().get::<OAuthAgentIdentity>().cloned();
@@ -146,6 +157,7 @@ pub(super) async fn resolve_caller(
     // attach a VerifiedIdentity for temporary/delegated OIDC tokens.
     let verified_identity = request.extensions().get::<VerifiedIdentity>().cloned();
     let mut caller = Caller {
+        generation,
         client,
         cert_identity,
         oauth_agent_identity,
@@ -197,6 +209,9 @@ pub(super) async fn resolve_caller(
         note_refused_by(DecisionKind::Unrecorded, None);
         return Err(no);
     }
+    // The caller holds its generation; a reload from here on must not reach it.
+    #[cfg(test)]
+    crate::gateway::meta_mcp::visible::seams::caller_resolved();
     Ok((caller, key, request))
 }
 
@@ -258,6 +273,7 @@ pub(super) async fn read_envelope(
     ),
 ) -> Result<Envelope, Rejection> {
     reads.name_caller(caller.client.as_ref(), caller.grant_subject.as_ref());
+    let sanitize_input = caller.generation.sanitize_input();
     let body_bytes = crate::gateway::router::helpers::read_body(request).await?;
     let mut json_request: Value = match serde_json::from_slice(&body_bytes) {
         Ok(v) => v,
@@ -291,7 +307,7 @@ pub(super) async fn read_envelope(
     // refused before sanitizing, the parse, the backend lookup and every
     // backend touch, so it gets one answer whatever the tool or backend name.
     // It reads only fields validation checked and sanitizing never changes.
-    if state.sanitize_input {
+    if sanitize_input {
         validated(&json_request)?;
     }
     if let Some(refusal) = intake_refusal(state, &json_request, caller) {
@@ -299,7 +315,7 @@ pub(super) async fn read_envelope(
         note_refused_by(DecisionKind::Unrecorded, None);
         return Err(refusal);
     }
-    if state.sanitize_input {
+    if sanitize_input {
         let grant = crate::gateway::authz::BackendGrant::of(caller.client.as_ref());
         json_request = sanitized(state, (name, grant), json_request)?;
     }

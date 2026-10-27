@@ -36,6 +36,8 @@ type PassthroughResolution = (Vec<(String, String)>, Option<String>);
 
 #[derive(Clone, Copy)]
 struct BackendAuthContext<'a> {
+    /// The call's pinned generation (ADR-023).
+    generation: &'a crate::config_reload::Generation,
     client: Option<&'a AuthenticatedClient>,
     oauth_agent_identity: Option<&'a OAuthAgentIdentity>,
     cert_identity: Option<&'a CertIdentity>,
@@ -224,6 +226,9 @@ async fn guard_tool_call(
     if !withheld {
         return Ok(None);
     }
+    // Answered as absent, so neither the frame nor its outcome marks it: the
+    // gateway refused this call, and the record says so.
+    crate::gateway::delivery_facts::raise(crate::gateway::delivery_facts::ResponseEffect::Refused);
     let lens = crate::backend::Lens::Withheld;
     let answered = key_check::key_refusal(backend, ((None, &[]), failed), params, (id, lens));
     // A withheld name is always answered (`Some`); were it not, it is still
@@ -249,6 +254,7 @@ fn withheld_verdict(
     let (backend_name, tool_name) = (target.server, target.tool);
     let withheld_code = authorize_tool_target(
         state,
+        auth.generation,
         auth.client,
         auth.oauth_agent_identity,
         auth.cert_identity,
@@ -824,3 +830,6 @@ mod direct_captured_backend_tests;
 
 #[cfg(test)]
 mod direct_audit_subject_tests;
+
+#[cfg(test)]
+mod direct_unpinned_tests;

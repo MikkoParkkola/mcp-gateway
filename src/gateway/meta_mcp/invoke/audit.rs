@@ -191,9 +191,11 @@ pub(crate) fn note_refusal(result: &Result<Value>) {
     }
 }
 
-/// MIK-7116.MIN.1: this call is answered from a cache, past every gate.
+/// MIK-7116.MIN.1: this call is answered from a cache, past every gate. The
+/// answer is not this request's, so its delivery states no effect or findings.
 pub(crate) fn note_cached() {
     note(|notes| notes.cached = true);
+    crate::gateway::delivery_facts::unvouched();
 }
 
 /// MIK-7636: the member a stored failure carries when its call was noted

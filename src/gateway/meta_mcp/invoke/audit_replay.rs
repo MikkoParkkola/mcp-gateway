@@ -27,6 +27,8 @@ impl MetaMcp {
         replay: JsonRpcResponse,
         facts: crate::gateway::meta_mcp::admission::ReplayFacts,
     ) -> JsonRpcResponse {
+        // A replay delivers a first run's answer: not this request's to state.
+        crate::gateway::delivery_facts::unvouched();
         let server = facts.server.as_deref();
         self.stage_replay((tool_name, server), arguments, session_id, caller, &replay);
         let Some(log) = self.transparency_logger.as_ref() else {

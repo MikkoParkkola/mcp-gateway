@@ -1,14 +1,22 @@
 diff --git a/src/gateway/router/authorization.rs b/src/gateway/router/authorization.rs
-index 90cb27f7e..7e1691caa 100644
+index b53414e13..458ef5f15 100644
 --- a/src/gateway/router/authorization.rs
 +++ b/src/gateway/router/authorization.rs
-@@ -324,7 +324,9 @@ pub(super) fn authorize_tool_target(
+@@ -325,7 +325,7 @@ pub(super) fn authorize_tool_target(
      cert_identity: Option<&CertIdentity>,
      target: ToolTarget<'_>,
  ) -> Result<(), AuthorizationError> {
--    decide_tool_target(state, client, oauth_agent_identity, cert_identity, target).emit(Emit::Audit)
-+    let _ = decide_tool_target(state, client, oauth_agent_identity, cert_identity, target)
-+        .emit(Emit::Audit);
+-    decide_tool_target(
++    let _ = decide_tool_target(
+         state,
+         generation,
+         client,
+@@ -333,7 +333,8 @@ pub(super) fn authorize_tool_target(
+         cert_identity,
+         target,
+     )
+-    .emit(Emit::Audit)
++    .emit(Emit::Audit);
 +    Ok(())
  }
  

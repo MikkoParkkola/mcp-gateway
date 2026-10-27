@@ -437,6 +437,7 @@ pub(crate) mod seams {
         static AFTER_ROUTE_STAGE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static BEFORE_TASK_DISPATCH: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static AFTER_INTAKE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+        static AFTER_CALLER: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static AT_TASK_START: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static AFTER_LIST_SNAPSHOT: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static INSPECTED_SERVERS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
@@ -474,6 +475,21 @@ pub(crate) mod seams {
     /// Called where a task worker starts, before the surfaced-target check.
     pub(crate) fn task_starts() {
         if let Some(hook) = AT_TASK_START.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
+    }
+
+    /// Run `hook` once, the next time `/mcp/{name}` on this thread has
+    /// resolved its caller and pinned its generation, before it reads the
+    /// body (ADR-023: the window a reload lands in mid-request).
+    #[cfg(feature = "firewall")]
+    pub(crate) fn after_caller(hook: impl FnOnce() + 'static) {
+        AFTER_CALLER.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    /// Called where `/mcp/{name}` has resolved its caller.
+    pub(crate) fn caller_resolved() {
+        if let Some(hook) = AFTER_CALLER.with(|slot| slot.borrow_mut().take()) {
             hook();
         }
     }

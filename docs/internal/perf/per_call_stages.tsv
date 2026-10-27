@@ -203,6 +203,7 @@ src/gateway/meta_mcp/invoke/egress.rs	for_method	http_invoke_tiny	on the HTTP ga
 src/gateway/meta_mcp/invoke/egress.rs	frame	http_invoke_tiny	on the HTTP gateway_invoke path (the egressed frame every HTTP answer is built from)
 src/gateway/meta_mcp/invoke/egress.rs	gateway_own	-	on-path, untimed: frames the gateway built with no backend text (its own refusals and notices) only
 src/gateway/meta_mcp/invoke/egress.rs	inspect_discovery_value	-	gateway_list_tools and gateway_search_tools only, not the tools/call path
+src/gateway/meta_mcp/invoke/egress.rs	note_verdict	-	on-path, untimed: notes a configured firewall instance's verdict into the delivery's facts; the harness routes configure none for this scan
 src/gateway/meta_mcp/invoke/egress.rs	notification_screen	http_invoke_tiny	built once per HTTP request's notification scope
 src/gateway/meta_mcp/invoke/egress.rs	of	http_invoke_tiny	on the HTTP gateway_invoke path (Egressed::of, every scanned HTTP answer)
 src/gateway/meta_mcp/invoke/egress.rs	scan_backend_error	-	on-path, untimed: backend errors held outside a frame (task recovery, marked account errors) only
@@ -355,6 +356,7 @@ src/gateway/meta_mcp/invoke/projection.rs	quota_key_of	-	on-path, untimed: the o
 src/gateway/meta_mcp/invoke/propagation.rs	audit_minted_credential	-	on-path, untimed: minted propagation credentials only; the timed backend has no propagation config
 src/gateway/meta_mcp/invoke/propagation.rs	caller_principal	-	on-path, untimed: identity-propagation backends only; the timed backend has no propagation config
 src/gateway/meta_mcp/invoke/propagation.rs	into_parts	http_invoke_tiny	on the HTTP gateway_invoke path, once per dispatch: moves the resolved fields into a tuple, no allocation and no lock (MIK-8407)
+src/gateway/meta_mcp/invoke/propagation.rs	listener_fence_binding	-	off-path: the events fence read a delivery and a listener run make, never a tools/call
 src/gateway/meta_mcp/invoke/propagation.rs	mint_listener_credential	-	off-path: a per-user events listener mints through it per upstream request, never a tools/call
 src/gateway/meta_mcp/invoke/propagation.rs	minted	http_invoke_tiny	whether the credential step may have reached an issuer, once per dispatch
 src/gateway/meta_mcp/invoke/propagation.rs	refuse_unbound_account_backend	http_invoke_tiny	on the HTTP gateway_invoke path

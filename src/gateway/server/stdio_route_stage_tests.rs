@@ -52,12 +52,12 @@ impl ToolAuthorizer for RefusesArguments {
     }
 }
 
-/// A target the route refuses for its arguments passes as withheld, and its
-/// code is noted for the call's one record. Without the note, the gate's own
-/// check (which allows `{}`) leaves the record no code and it is not
-/// classed `denied`.
-#[tokio::test]
-async fn a_withheld_targets_route_code_is_noted_for_its_record() {
+/// The route stage over `targets` (all requested), in one visibility memo,
+/// and what `read` sees inside it afterwards.
+async fn route_stage<T>(
+    targets: &[CallTarget<'_>],
+    read: impl FnOnce() -> T,
+) -> (Option<crate::protocol::JsonRpcResponse>, T) {
     let registry = Arc::new(BackendRegistry::new());
     assert!(registry.register(Arc::new(Backend::new(
         "alpha",
@@ -75,24 +75,67 @@ async fn a_withheld_targets_route_code_is_noted_for_its_record() {
         grant_subject: None,
         caller: crate::identity_propagation::CallerProof::Anonymous,
     };
-    let target = CallTarget {
-        server: "alpha".to_owned(),
-        tool: "read".to_owned(),
-        arguments: std::borrow::Cow::Owned(json!({"q": "x"})),
-    };
-    let (answer, noted) = with_visibility_memo(async {
+    with_visibility_memo(async {
         let answer = super::authorize_targets(
             &meta,
             (scope, "stdio-session"),
-            (std::slice::from_ref(&target), 1),
+            (targets, targets.len()),
             &RequestId::Number(1),
         );
-        (answer, denial_code("alpha", "read"))
+        (answer, read())
     })
-    .await;
+    .await
+}
+
+/// A target `RefusesArguments` withholds (it carries arguments) or passes.
+fn target(withheld: bool) -> CallTarget<'static> {
+    let arguments = if withheld {
+        json!({"q": "x"})
+    } else {
+        json!({})
+    };
+    CallTarget {
+        server: "alpha".to_owned(),
+        tool: "read".to_owned(),
+        arguments: std::borrow::Cow::Owned(arguments),
+    }
+}
+
+/// A target the route refuses for its arguments passes as withheld, and its
+/// code is noted for the call's one record. Without the note, the gate's own
+/// check (which allows `{}`) leaves the record no code and it is not
+/// classed `denied`.
+#[tokio::test]
+async fn a_withheld_targets_route_code_is_noted_for_its_record() {
+    let (answer, noted) = route_stage(&[target(true)], || denial_code("alpha", "read")).await;
     assert!(
         answer.is_none(),
         "premise: a withheld target passes: {answer:?}"
     );
     assert_eq!(noted, Some(CODE), "the route's refusal code was not noted");
+}
+
+/// A lone withheld target is answered as absent: the gateway refused the
+/// call, and its delivery records so. One withheld among several is a step
+/// in a call that may still deliver, and raises nothing.
+#[tokio::test]
+async fn a_lone_withheld_target_records_refused() {
+    let effect = || {
+        let mut fields = serde_json::Map::new();
+        crate::gateway::delivery_facts::record_fields(
+            crate::gateway::delivery_facts::snapshot().as_ref(),
+            false,
+            false,
+            &mut fields,
+        );
+        fields["response_effect"].clone()
+    };
+    for (targets, expected) in [
+        (vec![target(true)], "refused"),
+        (vec![target(true), target(false)], "delivered"),
+    ] {
+        let (_, recorded) =
+            crate::gateway::delivery_facts::scope(route_stage(&targets, effect)).await;
+        assert_eq!(recorded, expected, "{} targets", targets.len());
+    }
 }

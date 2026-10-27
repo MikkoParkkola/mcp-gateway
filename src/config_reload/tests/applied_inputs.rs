@@ -80,7 +80,11 @@ fn the_published_revision_names_the_published_inputs() {
         gateway_yaml: b"server:\n  port: 1\n".to_vec(),
         ..RawInputs::default()
     };
-    live.set_applied(Config::default(), inputs.clone(), &[]);
+    live.set_applied(
+        Arc::new(Generation::of(Config::default())),
+        inputs.clone(),
+        &[],
+    );
     let id_of = |raw: RawInputs| {
         config_revision(
             &revision_key(),
@@ -106,7 +110,11 @@ fn the_published_revision_names_the_published_inputs() {
 #[test]
 fn without_a_revision_key_no_revision_is_published() {
     let live = LiveConfig::new(Config::default());
-    live.set_applied(Config::default(), RawInputs::default(), &[]);
+    live.set_applied(
+        Arc::new(Generation::of(Config::default())),
+        RawInputs::default(),
+        &[],
+    );
     assert_eq!(revision(&live), None);
 }
 
@@ -120,7 +128,11 @@ fn a_reload_keeps_the_grants_their_sink_published() {
         gateway_yaml: b"server:\n  port: 2\n".to_vec(),
         ..RawInputs::default()
     };
-    live.set_applied(Config::default(), reloaded.clone(), &[]);
+    live.set_applied(
+        Arc::new(Generation::of(Config::default())),
+        reloaded.clone(),
+        &[],
+    );
     let expected = RawInputs {
         grants: Some(b"[]\n".to_vec()),
         ..reloaded
@@ -231,7 +243,7 @@ fn an_outstanding_environment_change_is_pending_restart() {
     live.set_inputs(RawInputs::default(), &["GW_SECRET_NAME".to_owned()]);
     assert_eq!(pending(&live), vec![crate::config_reload::ENV_RESTART]);
     live.set_applied(
-        Config::default(),
+        Arc::new(Generation::of(Config::default())),
         RawInputs::default(),
         &["GW_SECRET_NAME".to_owned()],
     );

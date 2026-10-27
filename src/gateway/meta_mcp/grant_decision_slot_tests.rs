@@ -101,6 +101,32 @@ async fn unslotted_check_refuses_and_still_records() {
     assert_eq!(records.len(), 1, "{records:#?}");
 }
 
+/// A1. Once the answer's delivery record has flushed and sealed the slot, a
+/// later decision is refused (-32005) instead of queued for the slot's
+/// close, where a failed write would replace the recorded answer. Its record
+/// is still written, and the close has nothing left to fail.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_check_after_the_seal_refuses_and_still_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let endpoint = Endpoint::start(false).await;
+    let rows = vec![grant("g1", ALICE, ALICE)];
+    let meta = gateway(&endpoint, rows, Some(&dir), AuditFailurePolicy::BestEffort);
+    let who = api_key("alice");
+    let log = meta.transparency_logger.clone();
+    let (checked, written, _) = super::grant_audit::with_grant_slot(log.as_ref(), async {
+        super::grant_audit::seal_open_slot()
+            .await
+            .expect("an empty slot seals with nothing to write");
+        meta.check_invocation_policy(&invoke_args(), Some("a1-session"), &context(&who))
+    })
+    .await;
+    let refusal = checked.expect_err("a decision after the seal fails closed");
+    assert_eq!(refusal.to_rpc_code(), -32005, "{refusal}");
+    written.expect("the slot's close has nothing left to write");
+    let records = wait_for_decisions(&dir, 1).await;
+    assert_eq!(records.len(), 1, "{records:#?}");
+}
+
 /// T15b. The same unslotted check on a stalled log: the refusal comes at
 /// once and the spawned record write takes the bounded path, refused under
 /// the stall rather than pinning a thread.

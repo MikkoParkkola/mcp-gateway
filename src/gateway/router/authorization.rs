@@ -319,12 +319,21 @@ pub(super) fn require_admin_log_level(
 
 pub(super) fn authorize_tool_target(
     state: &AppState,
+    generation: &crate::config_reload::Generation,
     client: Option<&AuthenticatedClient>,
     oauth_agent_identity: Option<&OAuthAgentIdentity>,
     cert_identity: Option<&CertIdentity>,
     target: ToolTarget<'_>,
 ) -> Result<(), AuthorizationError> {
-    decide_tool_target(state, client, oauth_agent_identity, cert_identity, target).emit(Emit::Audit)
+    decide_tool_target(
+        state,
+        generation,
+        client,
+        oauth_agent_identity,
+        cert_identity,
+        target,
+    )
+    .emit(Emit::Audit)
 }
 
 /// A -32600 refusal by `kind`, the shape every `decide_tool_target` gate uses.
@@ -339,6 +348,7 @@ fn refused(kind: DecisionKind, message: impl Into<String>) -> AuthorizationError
 /// [`authorize_tool_target`]; discovery takes the verdict silently.
 pub(super) fn decide_tool_target<'a>(
     state: &'a AppState,
+    generation: &crate::config_reload::Generation,
     client: Option<&'a AuthenticatedClient>,
     oauth_agent_identity: Option<&'a OAuthAgentIdentity>,
     cert_identity: Option<&'a CertIdentity>,
@@ -433,7 +443,7 @@ pub(super) fn decide_tool_target<'a>(
     // load. Untrusted-input SSRF surfaces (capability fetch, UI config-import)
     // continue to call `validate_url_not_ssrf` directly. See MIK-3529.
     let mut verdict = Ok(());
-    if state.ssrf_protection
+    if generation.ssrf_protection()
         && !state.trust_configured_backends
         && let Some(backend) = backend_for(state, BackendGrant::of(client), target.server)
         && let Some(url) = backend.transport_url()
@@ -642,6 +652,9 @@ mod slot_principal_tests;
 /// reference cycle.
 pub(crate) struct RouterAuthorizer<'a> {
     pub(super) state: &'a AppState,
+    /// The generation this request is judged by (ADR-023): pinned on arrival
+    /// for a request, current at dispatch for a queued task.
+    pub(super) generation: &'a crate::config_reload::Generation,
     pub(super) client: Option<&'a AuthenticatedClient>,
     pub(super) oauth_agent_identity: Option<&'a OAuthAgentIdentity>,
     pub(super) cert_identity: Option<&'a CertIdentity>,
@@ -660,6 +673,7 @@ impl ToolAuthorizer for RouterAuthorizer<'_> {
     fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
         decide_tool_target(
             self.state,
+            self.generation,
             self.client,
             self.oauth_agent_identity,
             self.cert_identity,
@@ -726,9 +740,16 @@ impl OwnedRouterAuthorizer {
         }
     }
 
-    pub(crate) fn borrow<'a>(&'a self, state: &'a AppState) -> RouterAuthorizer<'a> {
+    /// The borrowed authorizer, judged by `generation`: the one current when
+    /// the queued work dispatches, not the one at admission.
+    pub(crate) fn borrow<'a>(
+        &'a self,
+        state: &'a AppState,
+        generation: &'a crate::config_reload::Generation,
+    ) -> RouterAuthorizer<'a> {
         RouterAuthorizer {
             state,
+            generation,
             client: self.client.as_ref(),
             oauth_agent_identity: self.oauth_agent_identity.as_ref(),
             cert_identity: self.cert_identity.as_ref(),

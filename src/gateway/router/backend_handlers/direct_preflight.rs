@@ -554,6 +554,8 @@ mod mik_8659_preflight_tests {
 
     fn caller_with(client: Option<crate::gateway::auth::AuthenticatedClient>) -> Caller {
         Caller {
+            generation: crate::config_reload::LiveConfig::new(crate::config::Config::default())
+                .generation(),
             client,
             cert_identity: None,
             oauth_agent_identity: None,

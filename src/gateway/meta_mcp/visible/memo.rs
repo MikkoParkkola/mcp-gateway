@@ -364,6 +364,14 @@ pub(crate) struct Judged {
     instances: Vec<(String, std::sync::Weak<crate::backend::Backend>)>,
 }
 
+impl Judged {
+    /// Nothing was judged: intake found no exemption, which it only looks
+    /// for while sanitising is on.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.playbook.is_none() && self.instances.is_empty()
+    }
+}
+
 impl VisibilityMemo {
     fn recorded(&self, server: &str, tool: &str) -> Option<Visibility> {
         self.visibility

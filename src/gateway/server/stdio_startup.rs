@@ -21,6 +21,7 @@ impl Gateway {
     pub(super) async fn install_stdio_startup_catalogue(
         &self,
         meta_mcp: &Arc<MetaMcp>,
+        live_config: &Arc<LiveConfig>,
         grant_sink: Option<&Arc<IdentityGrantSink>>,
         warmer: &WarmerGuard,
         reporting: crate::config_reload::refusals::ReloadReporting,
@@ -100,7 +101,7 @@ impl Gateway {
             let reload_ctx = Arc::new(
                 ReloadContext::new(
                     path.clone(),
-                    Arc::clone(&live_config),
+                    Arc::clone(live_config),
                     Arc::clone(&self.backends),
                     self.config.failsafe.clone(),
                     self.config.meta_mcp.cache_ttl,
