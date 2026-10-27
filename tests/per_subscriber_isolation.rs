@@ -263,6 +263,21 @@ async fn only_its_users_credential(
     rx: &Receiver,
     issuer: &issuer::Issuer,
 ) {
+    // The gateway's warm-start reads the catalogue on its own shared session,
+    // with no user's credential. Wait for it to finish, so it lands before
+    // the window opens and nothing credential-less belongs inside it.
+    let warmed = wait_until(DEADLINE, || {
+        peer.seen()
+            .iter()
+            .any(|r| r.subject.is_empty() && r.method == "tools/list" && r.session == "session-")
+    })
+    .await;
+    assert!(
+        warmed,
+        "the gateway's warm-start was not seen; peer saw {:?}\n{}",
+        peer.seen(),
+        gw.logs()
+    );
     let from = peer.seen().len();
     for user in ["u1", "u2"] {
         let bearer = issuer.mint(user, &email(user));
