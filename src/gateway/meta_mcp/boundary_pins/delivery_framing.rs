@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Where an error becomes a delivered frame, or a gateway refusal is built,
-//! in `src/gateway` production code. A gateway refusal records `refused` only
+//! in `src/gateway` production code (refusals in `src/playbook` too). A gateway refusal records `refused` only
 //! where it is delivered (sealed errors at the outlets, the rest per site),
 //! so a new framing site or a new refusal must be looked at, not slipped in.
 //!
@@ -126,7 +126,11 @@ fn callee(expr: &syn::Expr) -> Option<(Option<String>, String)> {
 
 impl Sink for Found {
     fn expr(&mut self, at: &Place, expr: &syn::Expr) {
-        if !at.file.starts_with("src/gateway/") {
+        // The playbook engine answers composite refusals the gateway
+        // delivers, so its refusals are classified too; its error builders
+        // are not delivery framing and stay out of the inventory.
+        let framing = at.file.starts_with("src/gateway/");
+        if !framing && !at.file.starts_with("src/playbook") {
             return;
         }
         let func = at.func.clone().unwrap_or_else(|| "<module>".to_string());
@@ -135,6 +139,11 @@ impl Sink for Found {
                 .entry(format!("{}\t{func}\t{needle}", at.file))
                 .or_default() += 1;
         };
+        let note_builder = |table: &mut std::collections::BTreeMap<String, usize>, needle: &str| {
+            if framing {
+                note(table, needle);
+            }
+        };
         if let syn::Expr::Struct(literal) = expr
             && literal
                 .path
@@ -142,7 +151,7 @@ impl Sink for Found {
                 .last()
                 .is_some_and(|s| s.ident == "JsonRpc")
         {
-            note(&mut self.builders, "Error::JsonRpc{}");
+            note_builder(&mut self.builders, "Error::JsonRpc{}");
         }
         // The gateway's own refusal variants, built without a `*refusal`
         // function (a firewall or authorization refusal at a chokepoint).
@@ -176,10 +185,12 @@ impl Sink for Found {
         };
         match (owner.as_deref(), name.as_str()) {
             (Some("JsonRpcResponse"), "error" | "error_with_data") => {
-                note(&mut self.builders, &format!("JsonRpcResponse::{name}"));
+                note_builder(&mut self.builders, &format!("JsonRpcResponse::{name}"));
             }
-            (Some("Error"), "json_rpc") => note(&mut self.builders, "Error::json_rpc"),
-            (_, builder) if BUILDERS.contains(&builder) => note(&mut self.builders, builder),
+            (Some("Error"), "json_rpc") => note_builder(&mut self.builders, "Error::json_rpc"),
+            (_, builder) if BUILDERS.contains(&builder) => {
+                note_builder(&mut self.builders, builder)
+            }
             (Some("Refused"), "of") => note(&mut self.refusals, "Refused::of"),
             (_, refusal) if is_refusal_name(refusal) => note(&mut self.refusals, refusal),
             _ => {}

@@ -130,14 +130,14 @@ src/gateway/router/backend_handlers/direct_dispatch.rs	forward_plain	refusal	1	r
 src/gateway/router/backend_handlers/direct_dispatch.rs	forward_sanitized	refusal	1	recorded	direct outlet: records a sealed refusal
 src/gateway/router/backend_handlers/direct_dispatch.rs	guard_and_sanitize	catalogue_refusal	1	recorded	catalogue relay 403, classed Denied by the direct recorder
 src/gateway/router/backend_handlers/direct_dispatch.rs	redeem_retry	refusal	1	recorded	direct outlet: records a sealed refusal
-src/gateway/router/backend_handlers/direct_failure.rs	answer	direct_refusal	1	not-a-decision	upstream 401 on an account backend
+src/gateway/router/backend_handlers/direct_failure.rs	answer	direct_refusal	1	recorded	a 403 the direct recorder classes Denied (an account backend refusing the caller)
 src/gateway/router/backend_handlers/direct_idempotency.rs	deliver_replay	refusal	2	recorded	refused() at each replay exit
 src/gateway/router/backend_handlers/direct_permit.rs	refused_send	refusal	1	recorded	direct outlet: records a sealed refusal
-src/gateway/router/backend_handlers/direct_preflight.rs	audit_mint	direct_refusal	1	not-a-decision	a credential mint failure
+src/gateway/router/backend_handlers/direct_preflight.rs	audit_mint	direct_refusal	1	recorded	a 403 the direct recorder classes Denied (missing required identity, or a mint failure)
 src/gateway/router/backend_handlers/direct_preflight.rs	preflight	refusal	1	not-a-decision	chain challenge mint failure or a malformed _meta
-src/gateway/router/backend_handlers/direct_preflight.rs	resolve_headers	unforwarded_refusal	1	not-a-decision	a credential that could not be forwarded
+src/gateway/router/backend_handlers/direct_preflight.rs	resolve_headers	unforwarded_refusal	1	composite-or-replay	the unproven credential proof a stored direct replay is refused with; deliver_replay raises it
 src/gateway/router/backend_handlers/key_check.rs	key_refusal	catalogue_refusal	1	feeds	builds the key refusal guard_tool_call delivers
-src/gateway/router/backend_handlers/notification_key.rs	resolve	refuse_audited	4	no-record	the notification key route; notifications carry no delivery record
+src/gateway/router/backend_handlers/notification_key.rs	resolve	refuse_audited	4	not-delivered	an audit writer; the 403 it accompanies on the direct route is recorded Denied
 src/gateway/router/backend_handlers/relay.rs	catalogue_refusal	relay_refusal	1	feeds	builds the catalogue relay refusal
 src/gateway/router/direct_guards.rs	after_dispatch	refusal	1	recorded	direct outlet: records a sealed refusal; the whole withhold raises in this fn
 src/gateway/router/handlers/dispatch_intake_run.rs	answer_intake	Refused::of	1	not-a-decision	client-protocol rejection: a keyed call with no execution principal
@@ -173,8 +173,8 @@ src/gateway/server/stdio_dispatch.rs	parse_and_observe	modern_method_refusal	1	n
 src/gateway/server/stdio_dispatch.rs	parse_and_observe	removed_method_refusal	1	not-a-decision	client-protocol rejection
 src/gateway/server/stdio_dispatch.rs	prepare_signing	refuse_malformed_nonce_early	1	not-a-decision	client-protocol rejection: a malformed signing nonce
 src/gateway/server/stdio_tasks.rs	dispatch_get	refuse_stored_delivery	1	recorded	stdio tasks/get: raised where it returns the refusal
-src/gateway/server/support.rs	start_refusal	replica_state_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
-src/gateway/server/support.rs	start_refusal	serve_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
+src/gateway/server/support.rs	start_refusal	replica_state_refusal	1	not-delivered	start-up, and restart advice text inside a reload answer, never the refusal delivered
+src/gateway/server/support.rs	start_refusal	serve_refusal	1	not-delivered	start-up, and restart advice text inside a reload answer, never the refusal delivered
 src/gateway/ui/backend_ops.rs	add_backend	refuse_unresolved_secrets	1	no-record	admin UI
 src/gateway/ui/backend_ops.rs	update_backend	refuse_unresolved_secrets	1	no-record	admin UI
 src/gateway/ui/backends.rs	add_backend	add_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
