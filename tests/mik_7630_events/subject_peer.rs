@@ -152,6 +152,16 @@ impl SubjectPeer {
         })
     }
 
+    /// Whether `subject` holds a registered subscription to `uri`, the state a
+    /// pushed resource update is routed by.
+    pub fn subscribed_to(&self, subject: &str, uri: &str) -> bool {
+        self.state.with(|s| {
+            s.subscribed
+                .get(subject)
+                .is_some_and(|uris| uris.iter().any(|u| u == uri))
+        })
+    }
+
     /// Drop `subject`'s session as a restarted backend would: its open streams
     /// end, and its next request carrying a session id is answered 404, so a
     /// client must initialize again.

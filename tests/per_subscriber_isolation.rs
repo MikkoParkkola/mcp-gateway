@@ -90,15 +90,11 @@ async fn listening(peer: &SubjectPeer, gw: &Gateway, subject: &str) {
     );
 }
 
-/// Wait until `subject`'s `resources/subscribe` reached `peer`, so a resource
-/// update pushed next is not dropped for want of a subscription.
+/// Wait until `peer` holds `subject`'s subscription to its resource, so a
+/// resource update pushed next is not dropped for want of one.
 async fn subscribed(peer: &SubjectPeer, gw: &Gateway, subject: &str) {
-    let done = wait_until(DEADLINE, || {
-        peer.seen()
-            .iter()
-            .any(|r| r.subject == subject && r.method == "resources/subscribe")
-    })
-    .await;
+    let uri = resource_of(subject);
+    let done = wait_until(DEADLINE, || peer.subscribed_to(subject, &uri)).await;
     assert!(
         done,
         "no resources/subscribe as {subject}; peer saw {:?}\n{}",
@@ -297,13 +293,14 @@ async fn only_its_users_credential(
 
     let before = peer.seen().len();
     peer.expire_session("u1");
+    // Recovered: re-initialized, streaming, and subscribed again, so the
+    // checks below see every request recovery sends.
     let recovered = wait_until(DEADLINE, || {
+        let after: Vec<_> = peer.seen().into_iter().skip(before).collect();
         peer.open_streams("u1") > 0
-            && peer
-                .seen()
+            && ["initialize", "resources/subscribe"]
                 .iter()
-                .skip(before)
-                .any(|r| r.subject == "u1" && r.method == "initialize")
+                .all(|m| after.iter().any(|r| r.subject == "u1" && r.method == *m))
     })
     .await;
     assert!(
