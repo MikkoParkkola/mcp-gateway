@@ -83,13 +83,25 @@ def test_route_row_cites_its_constant() -> None:
 | Item | Class | Reason | Migration | Defined at |
 |---|---|---|---|---|
 | `/h` | KEEP | probes | - | src/gateway/routes.rs:HEALTH |
+| `/hook` | KEEP | webhooks | - | src/gateway/webhooks/mod.rs:3 |
 """
-    routes = {"routes": [inv.Entry("/h", inv.ROUTES_FILE, 7, "HEALTH")]}
+    # `/hook` is a listener outside routes.rs: it keeps its file:line cite.
+    routes = {
+        "routes": [
+            inv.Entry("/h", inv.ROUTES_FILE, 7, "HEALTH"),
+            inv.Entry("/r", inv.ROUTES_FILE, 8, "READY"),
+            inv.Entry("/hook", "src/gateway/webhooks/mod.rs", 3, "path from config"),
+        ]
+    }
+    doc = doc.replace("| `/hook` |", "| `/r` | KEEP | probes | - | src/gateway/routes.rs:READY |\n| `/hook` |")
     filler = {k: v for k, v in FILLER.items() if k != "routes"}
-    rows = FILLER_ROWS.replace("## Surface: routes\n| Item | Class | Reason | Migration | Defined at |\n|---|---|---|---|---|\n| `x-routes` | KEEP | filler | - | src/x.rs:1 |\n", "")
+    filler_routes = "## Surface: routes\n| Item | Class | Reason | Migration | Defined at |\n|---|---|---|---|---|\n| `x-routes` | KEEP | filler | - | src/x.rs:1 |\n"
+    assert filler_routes in FILLER_ROWS
+    rows = FILLER_ROWS.replace(filler_routes, "")
     run = lambda d: inv.check(DOC + d + rows, {**filler, **EXTRACTED, **routes})
     assert run(doc) == [], run(doc)
-    for cite in ("src/gateway/routes.rs:7", "src/gateway/routes.rs:NOT_A_ROUTE", "src/gateway/routes.rs"):
+    # A line number, a missing name, a bare file, and another route's constant.
+    for cite in ("src/gateway/routes.rs:7", "src/gateway/routes.rs:NOT_A_ROUTE", "src/gateway/routes.rs", "src/gateway/routes.rs:READY"):
         errors = run(doc.replace("src/gateway/routes.rs:HEALTH", cite))
         assert any(f"'/h' cites {cite!r}, want src/gateway/routes.rs:HEALTH" in e for e in errors), (cite, errors)
 
