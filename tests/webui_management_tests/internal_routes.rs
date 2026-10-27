@@ -314,6 +314,14 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 200, 200, 200],
     ),
+    // src/gateway/ui/overview.rs (overview)
+    row(
+        "/ui/api/overview",
+        Method::GET,
+        "/ui/api/overview",
+        Payload::None,
+        [401, 403, 403, 200],
+    ),
     // src/gateway/ui/mod.rs:464 (tools)
     row(
         "/ui/api/tools",
