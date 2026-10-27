@@ -61,13 +61,13 @@ fn backend_timed(
         allow_cleartext_credentials: true,
         input_schema_enforcement: mcp_gateway::config::InputSchemaEnforcement::default(),
         allow_flagged_tools: std::collections::BTreeMap::new(),
-        allowed_tools: None,
         runtime_profile: None,
         identity_propagation: None,
         account: None,
         signature_chain: mcp_gateway::config::ChainMode::default(),
         chain_origins: Vec::new(),
         chain_signer: None,
+        ..BackendConfig::default()
     };
     Backend::new(
         "agent",

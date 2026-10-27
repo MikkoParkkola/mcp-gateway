@@ -29,13 +29,13 @@ fn create_test_backend(name: &str, command: &str) -> Backend {
         allow_cleartext_credentials: false,
         input_schema_enforcement: mcp_gateway::config::InputSchemaEnforcement::default(),
         allow_flagged_tools: std::collections::BTreeMap::new(),
-        allowed_tools: None,
         runtime_profile: None,
         identity_propagation: None,
         account: None,
         signature_chain: mcp_gateway::config::ChainMode::default(),
         chain_origins: Vec::new(),
         chain_signer: None,
+        ..BackendConfig::default()
     };
 
     let failsafe = FailsafeConfig::default();
