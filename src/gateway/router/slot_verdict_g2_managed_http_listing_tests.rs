@@ -361,3 +361,42 @@ async fn a_lease_filled_under_a_rotated_grant_is_not_served_http() {
         "the current grant's view took other than one fill"
     );
 }
+
+/// The race, laid out step by step: a listing begun after a rotation finds
+/// the old grant's lease running, so its claim returns nothing; before it
+/// looks for that lease, the old fill publishes. The listing then finds no
+/// lease to wait on and builds its list at once. The view it would read is
+/// the old grant's, and it must read as cold.
+#[tokio::test(start_paused = true)]
+async fn a_rotated_grant_publishing_inside_the_claim_window_is_not_served_http() {
+    let fx = Arc::new(fixture().await);
+    let bound = fill_bound(&fx, BACKEND);
+    fx.gateway.delay_lists_on(BACKEND, bound / 2);
+    let first = tokio::spawn({
+        let fx = Arc::clone(&fx);
+        async move { rpc(&fx, 1, "tools/list", json!({})).await }
+    });
+    tokio::time::sleep(bound / 4).await;
+    assert_eq!(
+        fx.gateway.lists_to(BACKEND),
+        1,
+        "premise: the old grant's fill is running"
+    );
+    fx.gateway.rotate_operator_grant().await;
+    let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
+    let (reached, release) = backend.before_lease_lookup.arm();
+    let second = tokio::spawn({
+        let fx = Arc::clone(&fx);
+        async move { rpc(&fx, 2, "tools/list", json!({})).await }
+    });
+    // The second listing's claim found the old lease and returned nothing.
+    reached.notified().await;
+    // The old fill publishes inside that window.
+    first.await.expect("the first listing");
+    release.notify_one();
+    let second = second.await.expect("the second listing");
+    assert!(
+        surfaced_on(&second, BACKEND).is_empty(),
+        "the old grant's schema was served through the claim window: {second}"
+    );
+}

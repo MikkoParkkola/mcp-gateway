@@ -87,6 +87,7 @@ impl MetaMcp {
                     )),
                     None => self
                         .running_cold_lease(server, scope)
+                        .await
                         .map(|(backend, id)| Pending::Leased(backend, id)),
                 }
             }))
@@ -115,7 +116,7 @@ impl MetaMcp {
 
     /// The caller's cold lease on `server` another reader holds, if one
     /// runs, through the caller's own backend grant.
-    fn running_cold_lease(
+    async fn running_cold_lease(
         &self,
         server: &str,
         scope: InvokeScope<'_>,
@@ -123,6 +124,8 @@ impl MetaMcp {
         let backend = self
             .scoped(scope.authorizer.backend_grant())
             .scoped_get(server)?;
+        #[cfg(test)]
+        backend.before_lease_lookup.pause().await;
         let id = self
             .principal_for(&backend, scope.caller)?
             .stable_actor_id();

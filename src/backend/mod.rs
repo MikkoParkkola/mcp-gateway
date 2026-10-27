@@ -134,6 +134,10 @@ pub struct Backend {
     /// the era, so a removal can land inside that window (MIK-7643).
     #[cfg(test)]
     after_reprobe_lookup: crate::test_pause::Slot,
+    /// Test-only: a listing whose claim found the view taken pauses before
+    /// it looks for the running lease, so a publish can land in between.
+    #[cfg(test)]
+    pub(crate) before_lease_lookup: crate::test_pause::Slot,
     /// Test-only: a stored read that won a cold claim pauses before it
     /// resolves (MIK-8392 C3, C4, L1, L1b).
     #[cfg(test)]
