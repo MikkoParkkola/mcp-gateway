@@ -1,4 +1,5 @@
 # file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/gateway/auth_bootstrap.rs	try_dashboard_bootstrap	clock_refusal	2	no-record	a dashboard sign-in link exchange, not a call delivery
 src/gateway/auth_resolved.rs	try_from_config_keyed	refuse_shared_digests	1	no-record	config load: two credentials sharing a secret
 src/gateway/auth_resolved.rs	try_from_config_keyed	refuse_shared_principals	1	no-record	config load: two credentials sharing a principal
 src/gateway/authz.rs	authorize_backend	backend_refusal	1	feeds	the authorization error; meta and stdio route stages raise it, the direct 403 is classed Denied
