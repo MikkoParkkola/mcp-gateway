@@ -163,6 +163,7 @@ async fn a_self_evicting_refusal_is_receipted_before_its_eviction() {
         occurred_at: Utc::now(),
         data: serde_json::json!({ "blob": "x".repeat(MAX_BODY + 1) }),
         lifecycle_key: None,
+        fence: None,
     };
     hub.fan_out(&services, &event).await;
     let id =
@@ -256,6 +257,7 @@ async fn an_eviction_by_a_fan_out_refusal_follows_the_burials_receipt() {
         occurred_at: Utc::now(),
         data: serde_json::json!({ "blob": "x".repeat(MAX_BODY + 1) }),
         lifecycle_key: None,
+        fence: None,
     };
     let (a, b) = (Arc::clone(&hub), Arc::clone(&hub));
     let (sa, sb) = (Arc::clone(&services), Arc::clone(&services));

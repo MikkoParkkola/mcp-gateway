@@ -99,7 +99,8 @@ pub(super) fn call_answer(answer: Answer, id: RequestId) -> crate::Result<JsonRp
         | Answer::AskEdited(_)
         | Answer::StateOnlyRounds(..)
         | Answer::AskThenEcho
-        | Answer::AskThenStore => {
+        | Answer::AskThenStore
+        | Answer::LeakOnCmd(_) => {
             unreachable!("answered above")
         }
         Answer::Text(text) => Ok(JsonRpcResponse::success(
@@ -192,8 +193,8 @@ pub(crate) fn envelope_in(fx: &Fx, value: &Value) -> Option<String> {
 
 /// The answers that read the call's own arguments: `AskThenStore` (a tiny
 /// store: `cmd` `"store <text>"` keeps `<text>`, anything else returns what was
-/// kept) and `AskThenEcho` (echoes the arguments). Both ask on call 0. `None`
-/// for every other answer.
+/// kept) and `AskThenEcho` (echoes the arguments). Both ask on call 0. And
+/// `LeakOnCmd`, which never asks. `None` for every other answer.
 pub(super) fn recording_answer(
     answer: Answer,
     n: usize,
@@ -215,6 +216,10 @@ pub(super) fn recording_answer(
             } else {
                 kept.lock().unwrap().clone()
             }))
+        }
+        Answer::LeakOnCmd(text) => {
+            let leak = params.and_then(|p| p.pointer("/arguments/cmd")) == Some(&json!("leak"));
+            Some(done(if leak { text } else { "ok" }.to_owned()))
         }
         Answer::AskThenEcho => Some(done(
             params

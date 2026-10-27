@@ -140,7 +140,10 @@ fn in_an_hour() -> u64 {
 /// Bury `event`, stamped with the row's observation now (`None` on a shared row).
 fn bury_observed(f: &Fixture, event: &str) {
     let now = crate::clock::utc_now().expect("clock");
-    let observed = f.hub.observed_now(&row(f), &f.config).expect("observable");
+    let observed = f
+        .hub
+        .observed_now(&row(f), &f.config, None)
+        .expect("observable");
     let record = OutboxRecord {
         v: 1,
         event_id: event.into(),
@@ -273,4 +276,49 @@ async fn a_shared_rows_replay_requeues() {
     let _admits = forced_verdict::answer(AccessVerdict::Admits);
     assert_eq!(f.hub.replay_dead("evt_shared", &actor()).await, Ok(()));
     assert!(!still_dead(&f, "evt_shared"), "re-queued");
+}
+
+/// Custody that never answers, counting how often it was asked.
+#[derive(Default)]
+struct BusyCustody(std::sync::atomic::AtomicUsize);
+
+#[async_trait::async_trait]
+impl crate::events::ListenerMint for BusyCustody {
+    async fn mint(
+        &self,
+        _backend: &str,
+        _identity: &VerifiedIdentity,
+    ) -> crate::Result<crate::events::ListenerGrant> {
+        Err(crate::Error::Config("no listener runs here".into()))
+    }
+
+    async fn fence_binding(
+        &self,
+        _backend: &str,
+        _identity: &VerifiedIdentity,
+    ) -> Result<Option<String>, crate::events::FenceRead> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(crate::events::FenceRead::Busy)
+    }
+}
+
+/// A passthrough row has no vault grant: its replay never asks custody, so
+/// a custody that cannot answer does not hold it back.
+#[tokio::test(flavor = "current_thread")]
+async fn a_passthrough_replay_never_reads_a_vault_grant() {
+    let f = fixture();
+    let custody = Arc::new(BusyCustody::default());
+    f.hub
+        .set_listener_mint(Arc::clone(&custody) as Arc<dyn crate::events::ListenerMint>);
+    let handle = grant(&f, false);
+    lease(&f, &handle, in_an_hour()).await;
+    bury_observed(&f, "evt_passthrough");
+    let _admits = forced_verdict::answer(AccessVerdict::Admits);
+    assert_eq!(f.hub.replay_dead("evt_passthrough", &actor()).await, Ok(()));
+    assert!(!still_dead(&f, "evt_passthrough"), "re-queued");
+    assert_eq!(
+        custody.0.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "custody was asked"
+    );
 }

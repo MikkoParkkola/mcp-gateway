@@ -100,8 +100,6 @@ async fn fixture_with(
         key_server,
         tool_policy: Arc::new(crate::security::ToolPolicy::default()),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
-        sanitize_input: false,
-        ssrf_protection: false,
         trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(8)),
         agent_auth,
@@ -114,7 +112,7 @@ async fn fixture_with(
         control_plane_store: None,
         control_plane_base: None,
         live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
-            crate::config::Config::default(),
+            crate::config_reload::flags_off(crate::config::Config::default()),
         )),
         export_status: None,
         transparency_log: None,

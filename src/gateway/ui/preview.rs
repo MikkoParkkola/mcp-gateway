@@ -195,6 +195,7 @@ fn transport_label(backend: &crate::config::BackendConfig) -> (&'static str, Opt
 /// `POST /ui/api/previews`: describe (no `confirm`) or run (with it).
 pub(super) async fn preview_backend(
     State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
     client: Option<Extension<AuthenticatedClient>>,
     Json(request): Json<PreviewRequest>,
 ) -> Response {
@@ -279,7 +280,7 @@ pub(super) async fn preview_backend(
     // request, never the teardown, and the guard goes only once that is done.
     let name = add.name;
     let task = tokio::spawn(async move {
-        let response = run_confirmed(&state, &name, &backend, described).await;
+        let response = run_confirmed(&generation, &name, &backend, described).await;
         drop(busy);
         response
     });
@@ -310,7 +311,7 @@ async fn redeem(state: &AppState, token: &str, principal: &str, digest: &str, no
 /// Start the scrubbed backend once, list its tools, and close it, all inside
 /// [`PREVIEW_CAP`].
 async fn run_confirmed(
-    state: &AppState,
+    generation: &crate::config_reload::Generation,
     name: &str,
     backend: &BackendConfig,
     described: Value,
@@ -327,7 +328,7 @@ async fn run_confirmed(
         )
         .into_response();
     };
-    let policy = if state.ssrf_protection {
+    let policy = if generation.ssrf_protection() {
         DestinationPolicy::Public
     } else {
         DestinationPolicy::Configured

@@ -69,6 +69,24 @@ fn assert_served(row: &str, (status, answer): &(axum::http::StatusCode, Value)) 
     );
 }
 
+/// What the last delivery record in the fixture's log (`dirs.0`) states as
+/// its effect: a refused replay states `refused`, never `delivered`, and no
+/// findings (`Absent` when it names none).
+fn last_effect(dirs: &(tempfile::TempDir, tempfile::TempDir)) -> Value {
+    std::fs::read_to_string(dirs.0.path().join("audit.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .rev()
+        .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
+        .find(|entry| entry["event"] == "response_delivery_attempt")
+        .map_or(Value::Null, |entry| {
+            let findings = entry
+                .get("response_findings")
+                .map_or("Absent".into(), Value::to_string);
+            json!([entry["response_effect"], findings])
+        })
+}
+
 /// Past the cached exchange token's one-hour TTL; the stored result (one
 /// day) is still held.
 fn past_the_token() -> impl Drop {
@@ -87,7 +105,7 @@ async fn d_opt_an_unminted_direct_retry_is_not_served_the_stored_result() {
     let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
     let idp = r6m_token_exchange::LiveIdp::start(&key).await;
     let alice = r6m_token_exchange::alice();
-    let (router, sends, _dirs) =
+    let (router, sends, dirs) =
         r6m_token_exchange::gateway_shaped(&key, idp.endpoint(), &alice, OPTIONAL_TX, armed).await;
     let direct = async |key: &str| {
         r6m_token_exchange::send_direct_as(&router, &alice, direct_call(key, None), &[]).await
@@ -108,6 +126,11 @@ async fn d_opt_an_unminted_direct_retry_is_not_served_the_stored_result() {
         "D-opt: the unproven retry was sent again: {again}"
     );
     assert_unproven("D-opt", &again);
+    assert_eq!(
+        last_effect(&dirs),
+        json!(["refused", "Absent"]),
+        "D-opt: the refusal's record"
+    );
     assert_eq!(
         exchanges.load(Ordering::SeqCst),
         minted,
@@ -389,7 +412,7 @@ const PASSTHROUGH: (&str, &str) = (
 async fn passthrough_after_forwarded() -> (
     axum::Router,
     Arc<std::sync::atomic::AtomicUsize>,
-    impl Sized,
+    (tempfile::TempDir, tempfile::TempDir),
     crate::key_server::oidc::VerifiedIdentity,
 ) {
     let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
@@ -464,7 +487,7 @@ const PASSTHROUGH_B: (&str, &str) = (
 /// 7b (PTBIND.3), with one send in all.
 #[tokio::test]
 async fn pt_b_a_retry_under_another_forwarded_credential_is_refused() {
-    let (router, sends, _dirs, alice) = passthrough_after_forwarded().await;
+    let (router, sends, dirs, alice) = passthrough_after_forwarded().await;
     for row in ["PT-B", "PT-B again"] {
         let (status, other) = r6m_token_exchange::send_direct_as(
             &router,
@@ -484,6 +507,11 @@ async fn pt_b_a_retry_under_another_forwarded_credential_is_refused() {
             "{row}: not the binding refusal: {other}"
         );
         assert_eq!(sends.load(Ordering::SeqCst), 1, "{row}: sent: {other}");
+        assert_eq!(
+            last_effect(&dirs),
+            json!(["refused", "Absent"]),
+            "{row}: the refusal's record"
+        );
     }
     let again = r6m_token_exchange::send_direct_as(
         &router,

@@ -144,10 +144,11 @@ async fn confirmed(router: &Router, body: &Value) -> (StatusCode, Value) {
 
 /// The router over a state whose `security.ssrf_protection` is `ssrf`.
 async fn router_with(ssrf: bool) -> (Router, TempDir) {
-    let (mut state, store_dir) = make_app_state(None, None).await;
-    Arc::get_mut(&mut state)
-        .expect("test AppState should be uniquely owned")
-        .ssrf_protection = ssrf;
+    let (state, store_dir) = make_app_state(None, None).await;
+    // The flag applies from the published config (ADR-023).
+    let mut config = (*state.live_config.get()).clone();
+    config.security.ssrf_protection = ssrf;
+    state.live_config.set(config);
     (create_router(state), store_dir)
 }
 

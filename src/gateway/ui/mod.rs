@@ -527,9 +527,11 @@ async fn tools(
     Json(json!({ "tools": entries, "total": entries.len() })).into_response()
 }
 
-/// `GET /ui/api/config` — sanitized configuration (secrets masked).
+/// `GET /ui/api/config` — sanitized configuration (secrets masked). One
+/// generation per response: the one pinned on this request (ADR-023).
 async fn config(
     State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
     client: Option<Extension<AuthenticatedClient>>,
 ) -> impl IntoResponse {
     let client = client.map(|Extension(c)| c);
@@ -577,8 +579,9 @@ async fn config(
         "version": env!("CARGO_PKG_VERSION"),
         "meta_mcp_enabled": state.meta_mcp_enabled,
         "streaming_enabled": state.streaming_config.enabled,
-        "sanitize_input": state.sanitize_input,
-        "ssrf_protection": state.ssrf_protection,
+        "sanitize_input": generation.sanitize_input(),
+        "ssrf_protection": generation.ssrf_protection(),
+        "environment": generation.environment(),
         "servers": servers,
         "secret_references": secret_references,
     }))
