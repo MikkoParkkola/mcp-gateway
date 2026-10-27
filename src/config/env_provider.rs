@@ -21,9 +21,9 @@ pub(super) struct OverlayEnv<'a> {
 
 /// The `MCP_GATEWAY_*` names a CLI flag owns (clap `env = ...`). They are not
 /// config overrides: `MCP_GATEWAY_CAPABILITIES` names a directory for the tool
-/// subcommands, and read as the `capabilities` key it failed every config load
-/// (MIK-8367). A test walks `Cli::command()` and requires this list to equal
-/// its env names, so a new flag's variable cannot reach the overlay unlisted.
+/// subcommands, and read as the `capabilities` key it failed every config
+/// load. A test walks `Cli::command()` and requires this list to equal its env
+/// names, so a new flag's variable cannot reach the overlay unlisted.
 pub(super) const CLI_OWNED_ENV: &[&str] = &[
     "MCP_GATEWAY_CA_CERT",
     "MCP_GATEWAY_CAPABILITIES",
