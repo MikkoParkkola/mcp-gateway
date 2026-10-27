@@ -49,10 +49,6 @@ pub(crate) struct Member {
     /// Segments from the answer's root. `*` is every element of an array; a
     /// `_meta` key is one segment, reverse-DNS dots included.
     pub(crate) path: &'static [&'static str],
-    #[expect(
-        dead_code,
-        reason = "the delivery record's annotated raise reads it; that change follows this one"
-    )]
     pub(crate) class: Class,
     pub(crate) origin: Origin,
     pub(crate) writer: Writer,
