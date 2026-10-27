@@ -148,11 +148,6 @@ impl DiscoveryCache {
         }
     }
 
-    /// Forget the cached listing: the next GET scans. Adopt calls this.
-    pub(crate) async fn clear(&self) {
-        *self.current.lock().await = None;
-    }
-
     /// Reduce a scan to what may be cached, then drop the scan, values and
     /// all. A find without a client entry is not listed (ADR-021).
     fn project(&self, scan: ClientScan) -> Listing {
@@ -175,7 +170,7 @@ impl DiscoveryCache {
             TransportConfig::Stdio { command, .. } => ("stdio", executable_name(command), None),
             TransportConfig::Http { http_url, .. } => ("http", None, origin(http_url)),
             TransportConfig::WebSocket { ws_url, .. } => ("ws", None, origin(ws_url)),
-            _ => ("other", None, None),
+            TransportConfig::A2a { .. } => ("a2a", None, None),
         };
         let severity =
             ShadowScanReport::from_discovered(std::slice::from_ref(server), &HashSet::new(), None)

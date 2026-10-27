@@ -254,11 +254,11 @@ async fn find_id_is_keyed_and_stable_within_a_process() {
     let first = cache_a.listing().await.expect("listing").0.finds[0]
         .find_id
         .clone();
-    cache_a.clear().await;
+    fake.advance(CACHE_WINDOW);
     let again = cache_a.listing().await.expect("listing").0.finds[0]
         .find_id
         .clone();
-    assert_eq!(first, again, "clearing keeps the key");
+    assert_eq!(first, again, "a fresh scan keeps the key");
     assert_eq!(
         first,
         crate::hashing::hmac_sha256_hex(&[7; 32], finds[0].entry_digest.as_bytes())

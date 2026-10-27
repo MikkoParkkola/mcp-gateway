@@ -159,7 +159,7 @@ async fn a_cached_listing_follows_a_config_change() {
 
     write_owner_only(
         &path,
-        &format!("{GATEWAY}  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n"),
+        format!("{GATEWAY}  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n"),
     )
     .expect("add a");
     let after = body(&read_gateway(Some(&path)).expect("reads"), &listing, false);

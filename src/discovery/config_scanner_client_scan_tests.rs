@@ -19,7 +19,7 @@ fn claude(path: &Path) -> Candidate {
 }
 
 fn write(path: &Path, value: &serde_json::Value) {
-    crate::gateway::test_helpers::write_owner_only(path, &value.to_string()).expect("write");
+    crate::gateway::test_helpers::write_owner_only(path, value.to_string()).expect("write");
 }
 
 fn entry(env_value: &str) -> serde_json::Value {
