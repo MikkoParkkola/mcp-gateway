@@ -6,6 +6,19 @@ use super::*;
 use crate::security::Severity;
 use serde_json::json;
 
+/// A rule for `tool` with `action`: no reason, scan list or scope.
+pub(super) fn rule(tool: &str, action: FirewallAction) -> FirewallRule {
+    FirewallRule {
+        tool_match: tool.to_owned(),
+        action,
+        scan: vec![],
+        reason: None,
+        servers: None,
+        keys: None,
+        except: None,
+    }
+}
+
 fn default_firewall() -> Firewall {
     Firewall::from_config(FirewallConfig::default(), None)
 }
@@ -137,13 +150,8 @@ fn clean_args_produce_allow_verdict() {
 fn rule_overrides_default_action_to_block() {
     let cfg = FirewallConfig {
         rules: vec![FirewallRule {
-            tool_match: "exec_*".to_string(),
-            action: FirewallAction::Block,
             reason: Some("Shell execution blocked".to_string()),
-            scan: vec![],
-            servers: None,
-            keys: None,
-            except: None,
+            ..rule("exec_*", FirewallAction::Block)
         }],
         ..FirewallConfig::default()
     };
@@ -158,15 +166,7 @@ fn rule_overrides_default_action_to_block() {
 #[test]
 fn rule_overrides_default_action_to_warn() {
     let cfg = FirewallConfig {
-        rules: vec![FirewallRule {
-            tool_match: "safe_shell".to_string(),
-            action: FirewallAction::Warn,
-            reason: None,
-            scan: vec![],
-            servers: None,
-            keys: None,
-            except: None,
-        }],
+        rules: vec![rule("safe_shell", FirewallAction::Warn)],
         ..FirewallConfig::default()
     };
     let fw = Firewall::from_config(cfg, None);
@@ -180,15 +180,7 @@ fn rule_overrides_default_action_to_warn() {
 #[test]
 fn glob_rule_matches_prefix() {
     let cfg = FirewallConfig {
-        rules: vec![FirewallRule {
-            tool_match: "exec_*".to_string(),
-            action: FirewallAction::Block,
-            reason: None,
-            scan: vec![],
-            servers: None,
-            keys: None,
-            except: None,
-        }],
+        rules: vec![rule("exec_*", FirewallAction::Block)],
         ..FirewallConfig::default()
     };
     let fw = Firewall::from_config(cfg, None);
@@ -200,15 +192,7 @@ fn glob_rule_matches_prefix() {
 #[test]
 fn wildcard_rule_matches_all_tools() {
     let cfg = FirewallConfig {
-        rules: vec![FirewallRule {
-            tool_match: "*".to_string(),
-            action: FirewallAction::Allow,
-            reason: None,
-            scan: vec![],
-            servers: None,
-            keys: None,
-            except: None,
-        }],
+        rules: vec![rule("*", FirewallAction::Allow)],
         ..FirewallConfig::default()
     };
     let fw = Firewall::from_config(cfg, None);
@@ -224,22 +208,12 @@ fn first_matching_rule_wins() {
     let cfg = FirewallConfig {
         rules: vec![
             FirewallRule {
-                tool_match: "*".to_string(),
-                action: FirewallAction::Warn,
                 reason: Some("Catch-all warning".to_string()),
-                scan: vec![],
-                servers: None,
-                keys: None,
-                except: None,
+                ..rule("*", FirewallAction::Warn)
             },
             FirewallRule {
-                tool_match: "exec_*".to_string(),
-                action: FirewallAction::Block,
                 reason: Some("Specific block".to_string()),
-                scan: vec![],
-                servers: None,
-                keys: None,
-                except: None,
+                ..rule("exec_*", FirewallAction::Block)
             },
         ],
         ..FirewallConfig::default()
@@ -255,13 +229,8 @@ fn first_matching_rule_wins() {
 fn clean_args_ignore_matching_rules() {
     let cfg = FirewallConfig {
         rules: vec![FirewallRule {
-            tool_match: "*".to_string(),
-            action: FirewallAction::Block,
             reason: Some("Only applies when a finding exists".to_string()),
-            scan: vec![],
-            servers: None,
-            keys: None,
-            except: None,
+            ..rule("*", FirewallAction::Block)
         }],
         ..FirewallConfig::default()
     };
@@ -344,13 +313,8 @@ fn an_unscoreable_call_cannot_be_downgraded_by_a_rule() {
         anomaly_threshold: 0.7,
         anomaly_block_threshold: Some(0.9),
         rules: vec![FirewallRule {
-            tool_match: "*".to_string(),
-            action: FirewallAction::Allow,
             reason: Some("allow everything".to_string()),
-            scan: Vec::new(),
-            servers: None,
-            keys: None,
-            except: None,
+            ..rule("*", FirewallAction::Allow)
         }],
         ..FirewallConfig::default()
     };
@@ -808,13 +772,8 @@ fn ac_control_2_a_budget_refusal_cannot_be_downgraded_by_a_rule() {
             window_secs: 60,
         },
         rules: vec![FirewallRule {
-            tool_match: "*".to_string(),
-            action: FirewallAction::Allow,
             reason: Some("allow everything".to_string()),
-            scan: Vec::new(),
-            servers: None,
-            keys: None,
-            except: None,
+            ..rule("*", FirewallAction::Allow)
         }],
         ..FirewallConfig::default()
     };
