@@ -217,9 +217,10 @@ async fn a_chain_ending_on_a_step_withheld_for_its_schema_records_refused() {
     assert_eq!(record["response_effect"], "refused", "{record}");
 }
 
-/// A playbook step the caller's key may not invoke: a playbook's steps meet
-/// the caller's policy only at dispatch, never at the route stage. The
-/// playbook (abort) ends on that refusal.
+/// A playbook step the caller's key may not invoke: the route stage
+/// authorizes the playbook's step targets and refuses the call whole, so it
+/// records refused (a guard row; the dispatch-time refusal is pinned in
+/// `meta_mcp/playbook_dispatch_refusal_tests.rs`).
 #[tokio::test]
 async fn a_playbook_ending_on_a_step_its_key_may_not_invoke_records_refused() {
     let fx = fixture(Setup {
@@ -229,9 +230,10 @@ async fn a_playbook_ending_on_a_step_its_key_may_not_invoke_records_refused() {
     .await;
     let yaml = format!("name: one\n{ONE_STEP}");
     let (status, body) = run_playbook_as(&fx, &yaml, "one", &Caller::Key).await;
-    assert!(
-        body.get("error").is_some(),
-        "premise: ended on the denial: {status} {body}"
+    assert_eq!(
+        body["error"]["message"],
+        crate::gateway::meta_mcp::STEP_NOT_PERMITTED,
+        "premise: the step's neutral refusal: {status} {body}"
     );
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "premise: never sent");
     let record = last_delivery(&fx);

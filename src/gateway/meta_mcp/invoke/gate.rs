@@ -505,11 +505,12 @@ impl MetaMcp {
         refusal: Error,
     ) -> Result<GuardedValue> {
         if crate::playbook::current_step().is_some() {
-            // A playbook's steps meet the caller's policy here and nowhere
-            // earlier (the route stage never sees them), so this refusal is
-            // the gateway's and the step records it; a tool name the
-            // definition spells wrong is no decision about the caller.
-            if crate::security::validate_tool_name(tool).is_ok() {
+            // An authorization refusal (`Forbidden`, the one a step answers
+            // neutrally) that the gate, judging the name alone, let through:
+            // a decision about the caller, so the step records it. Any other
+            // error here (an audit failure, an undefined capability, an
+            // absent name) is not one.
+            if is_authorization_refusal(&refusal) {
                 crate::gateway::delivery_facts::refused_while_vouched();
             }
             // A playbook step keeps its neutral refusal (A3) and asks, as a
@@ -777,6 +778,18 @@ mod fill_tests;
 #[cfg(test)]
 #[path = "gate_call_level_tests.rs"]
 mod call_level_tests;
+
+#[cfg(test)]
+#[path = "gate_refusal_kind_tests.rs"]
+mod refusal_kind_tests;
+
+/// Whether a refusal the dispatch-time policy check gave is an authorization
+/// decision about the caller (`Forbidden`, which a playbook step answers
+/// neutrally); an audit failure, an undefined capability or an absent name is
+/// not.
+fn is_authorization_refusal(error: &Error) -> bool {
+    matches!(error, Error::Forbidden { .. })
+}
 
 /// A name the gate answers as absent for `reason`: a policy reason (the
 /// caller may not invoke it, or its schema or description failed a check) is

@@ -713,6 +713,12 @@ async fn a_resume_whose_pending_step_is_out_of_scope_records_refused() {
         json!(-32001),
         "premise: the backend miss: {resumed}"
     );
+    assert!(
+        resumed["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("srv")),
+        "premise: the miss names the backend: {resumed}"
+    );
     assert_eq!(asks, 1, "premise: the pending step never re-ran: {resumed}");
     assert_eq!(
         fields.get("response_effect"),

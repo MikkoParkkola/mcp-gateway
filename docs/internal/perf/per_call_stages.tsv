@@ -218,6 +218,7 @@ src/gateway/meta_mcp/invoke/gate.rs	fill_marks	http_invoke_tiny	on the HTTP gate
 src/gateway/meta_mcp/invoke/gate.rs	filled_since	http_invoke_tiny	on the HTTP gateway_invoke path (the gate's fill check)
 src/gateway/meta_mcp/invoke/gate.rs	gate_answer	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)
 src/gateway/meta_mcp/invoke/gate.rs	gated	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)
+src/gateway/meta_mcp/invoke/gate.rs	is_authorization_refusal	-	on-path, untimed: a playbook step refused at dispatch only; the timed rows are lone calls that succeed
 src/gateway/meta_mcp/invoke/gate.rs	invisible_at_route	http_invoke_tiny	on the HTTP gateway_invoke path (the route stage's visibility judgement)
 src/gateway/meta_mcp/invoke/gate.rs	invisible_call	http_invoke_tiny	on the HTTP gateway_invoke path (the route stage's whole-call gate)
 src/gateway/meta_mcp/invoke/gate.rs	named_gate_answer	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)
