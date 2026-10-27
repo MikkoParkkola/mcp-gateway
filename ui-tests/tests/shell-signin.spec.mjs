@@ -232,3 +232,69 @@ test('S12 a key check that never answers gives up and frees the button', async (
   await expect(page.locator('.signin-error')).toHaveText('Could not reach the gateway. Try again.');
   await expect(button).toBeEnabled();
 });
+
+test('S13 the key check says Checking… and marks the form busy while it runs', async ({ page }) => {
+  let release;
+  const held = new Promise((ok) => { release = ok; });
+  await page.route('**/ui/api/status', async (route) => {
+    const auth = route.request().headers().authorization ?? '';
+    if (auth) await held;
+    return route.fulfill({ json: { auth: { enabled: true, signed_in: auth === `Bearer ${KEY}`, admin: false } } });
+  });
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  const button = page.locator('#signin button[type="submit"]');
+  await expect(button).toHaveText('Checking…');
+  await expect(page.locator('#signin-form')).toHaveAttribute('aria-busy', 'true');
+  release();
+  await expect(page.locator('#signin')).toBeHidden();
+  await expect(button).toHaveText('Sign in');
+  await expect(page.locator('#signin-form')).not.toHaveAttribute('aria-busy', 'true');
+});
+
+test('S14 a valid key the gateway does not let in (403) gets its own message', async ({ page }) => {
+  await page.route('**/ui/api/status', (route) => {
+    if (route.request().headers().authorization) return route.fulfill({ status: 403, json: {} });
+    return route.fulfill({ json: { auth: { enabled: true, signed_in: false, admin: false } } });
+  });
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.signin-error')).toHaveText('That key is valid, but it is not allowed into the web UI. Ask an admin for access.');
+  await expect(page.locator('#signin')).toBeVisible();
+});
+
+test('S15 sign-out drops the key, ends the cookie session and shows sign-in at the same address', async ({ page }) => {
+  const seen = await gate(page);
+  const logouts = [];
+  await page.route('**/dashboard/logout', (route) => {
+    logouts.push(route.request().method());
+    return route.fulfill({ status: 303, headers: { location: '/ui' } });
+  });
+  await withFixturePages(page);
+  await page.goto('/ui/servers/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#signin')).toBeHidden();
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.locator('#signin')).toBeVisible();
+  await expect(page).toHaveURL('/ui/servers/status');
+  expect(logouts).toEqual(['POST']);
+  await expect(page.locator('.top .who')).toHaveText('');
+  // The key is gone: the next status read carries no bearer.
+  const before = seen.length;
+  await page.reload();
+  await expect(page.locator('#signin')).toBeVisible();
+  expect(seen.slice(before)).not.toContain(`Bearer ${KEY}`);
+});
+
+test('S16 sign-out is offered only to a signed-in session', async ({ page }) => {
+  await gate(page);
+  await page.goto('/ui/overview/status');
+  await expect(page.locator('#signin')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Sign out' })).toBeHidden();
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+});
