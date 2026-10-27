@@ -181,6 +181,7 @@ async fn a_settled_task_is_matched_by_its_carried_owner_after_expiry() {
         data: serde_json::json!({"taskId": "task-gone", "status": "completed",
             "settledAt": "2026-10-03T00:00:00.000Z"}),
         lifecycle_key: None,
+        fence: None,
     };
     let args = serde_json::json!({});
     assert!(
@@ -277,6 +278,7 @@ async fn an_expired_tasks_event_reaches_named_and_all_task_subscribers() {
         data: serde_json::json!({"taskId": "task-gone", "status": "completed",
             "settledAt": "2026-10-03T00:00:00.000Z"}),
         lifecycle_key: None,
+        fence: None,
     };
     let services = Services {
         live: Arc::new(crate::config_reload::LiveConfig::new(
@@ -392,6 +394,7 @@ fn a_resource_update_matches_only_its_uri() {
         occurred_at: chrono::Utc::now(),
         data,
         lifecycle_key: None,
+        fence: None,
     };
     let updated = event(
         "backend.x.resource_updated",

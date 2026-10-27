@@ -141,11 +141,14 @@ pub(crate) async fn fixture_on_with(
         &crate::config::EnvOverlay::default(),
         &built.meta_mcp,
         &tool_policy,
-        &std::sync::Arc::new(
-            crate::gateway::record_principal::RecordPrincipalKey::from_text(
-                crate::gateway::record_principal::TEST_RECORD_KEY,
-            )
-            .expect("test key"),
+        (
+            &std::sync::Arc::new(
+                crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                    crate::gateway::record_principal::TEST_RECORD_KEY,
+                )
+                .expect("test key"),
+            ),
+            &std::sync::Arc::new(crate::config_reload::LiveConfig::new(config.clone())),
         ),
     )
     .await
@@ -208,7 +211,8 @@ async fn a_stdio_task_dispatch_keeps_its_owner_mark() {
     let retry = keyed("u1");
     let intent = intent(&fixture.tasks, TOOL, &retry);
     let live = intent.owned.host().upgrade().expect("the host is alive");
-    let authorizer = live.authorizer(intent.owned.authorizer());
+    let generation = live.generation();
+    let authorizer = live.authorizer(intent.owned.authorizer(), &generation);
     let caller = intent.owned.dispatch_context(&live, &authorizer);
     assert_eq!(caller.owner_principal(), Some(LOCAL_OPERATOR_PRINCIPAL));
     assert_eq!(
@@ -767,11 +771,14 @@ async fn an_unresolvable_auth_config_leaves_the_stdio_store_open() {
         &crate::config::EnvOverlay::default(),
         &fixture.meta,
         &fixture.policy,
-        &std::sync::Arc::new(
-            crate::gateway::record_principal::RecordPrincipalKey::from_text(
-                crate::gateway::record_principal::TEST_RECORD_KEY,
-            )
-            .expect("test key"),
+        (
+            &std::sync::Arc::new(
+                crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                    crate::gateway::record_principal::TEST_RECORD_KEY,
+                )
+                .expect("test key"),
+            ),
+            &std::sync::Arc::new(crate::config_reload::LiveConfig::new(config.clone())),
         ),
     )
     .await;

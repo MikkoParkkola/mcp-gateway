@@ -339,3 +339,80 @@ async fn a_reissued_idempotency_key_is_served_from_the_stored_result() {
          placeholder: first={first}, second={second}"
     );
 }
+
+/// The fields one `gateway_invoke` of `docs_a`'s `search` records, its
+/// delivery's facts read inside the cell the route opens around it.
+async fn recorded_invoke(
+    meta: &MetaMcp,
+    caller: crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+) -> serde_json::Map<String, serde_json::Value> {
+    crate::gateway::delivery_facts::scope(async {
+        let args = json!({"server": "docs_a", "tool": "search", "arguments": {}});
+        let answer = meta
+            .handle_tools_call(
+                RequestId::Number(1),
+                "gateway_invoke",
+                args,
+                Some("session-1"),
+                caller,
+            )
+            .await;
+        assert!(answer.error.is_none(), "premise: answered: {answer:?}");
+        let mut fields = serde_json::Map::new();
+        crate::gateway::delivery_facts::record_fields(
+            crate::gateway::delivery_facts::snapshot().as_ref(),
+            false,
+            false,
+            &mut fields,
+        );
+        fields
+    })
+    .await
+}
+
+/// A response-cache hit serves another request's answer: its delivery states
+/// no effect, where the call that stored it does.
+#[tokio::test]
+async fn a_response_cache_hit_states_no_effect() {
+    let registry = Arc::new(BackendRegistry::new());
+    let (docs_a, calls) = counting_backend("docs_a", "BODY-FROM-A");
+    let _ = registry.register(docs_a);
+    let meta = MetaMcp::with_features(
+        registry,
+        Some(Arc::new(crate::cache::ResponseCache::new())),
+        None,
+        None,
+        Duration::from_secs(300),
+    );
+    let first = recorded_invoke(&meta, allow_all_ctx()).await;
+    let hit = recorded_invoke(&meta, allow_all_ctx()).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "premise: a hit");
+    assert_eq!(first["response_effect"], "delivered", "{first:?}");
+    assert!(hit.is_empty(), "{hit:?}");
+}
+
+/// An idempotency-cache hit serves the first call's answer.
+#[tokio::test]
+async fn an_idempotency_hit_states_no_effect() {
+    let registry = Arc::new(BackendRegistry::new());
+    let (docs_a, calls) = counting_backend("docs_a", "BODY-FROM-A");
+    let _ = registry.register(docs_a);
+    let mut meta = MetaMcp::new(registry);
+    meta.enable_idempotency(
+        Arc::new(crate::idempotency::IdempotencyCache::new()),
+        crate::idempotency::CLEANUP_INTERVAL,
+    );
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some("k-unvouched-hit".to_owned()),
+        ..Default::default()
+    };
+    let keyed = || crate::gateway::meta_mcp::MetaMcpCallerContext {
+        retry: &retry,
+        ..allow_all_ctx()
+    };
+    let first = recorded_invoke(&meta, keyed()).await;
+    let hit = recorded_invoke(&meta, keyed()).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "premise: a hit");
+    assert_eq!(first["response_effect"], "delivered", "{first:?}");
+    assert!(hit.is_empty(), "{hit:?}");
+}

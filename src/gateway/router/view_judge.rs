@@ -154,7 +154,8 @@ fn digest_for(
     let oauth = caller.agent.as_ref();
     let cert = subject.cert.as_ref();
     let owned = OwnedRouterAuthorizer::capture(Some(client), oauth, cert);
-    let authorizer = owned.borrow(state);
+    let generation = state.live_config.generation();
+    let authorizer = owned.borrow(state, &generation);
     // Only the proven half of an agent identity matters, and it comes from the
     // certificate and the verified token alone, never a header.
     let agent = crate::security::extract_agent_identity(
