@@ -63,13 +63,11 @@ async fn a_task_queued_before_a_deselect_is_refused_at_its_dispatch() {
     })
     .await
     .unwrap_or_else(|_| panic!("the task never settled"));
-    // A worker refusal settles as the gateway's own answer: completed, an
-    // isError result that was not executed, and nothing dispatched.
+    // A worker refusal settles as the gateway's own answer: completed, with
+    // an isError result that was not executed (worker.rs's
+    // settle_descriptor_refused uses the same vocabulary). The row keeps its
+    // planned target, so the backend's count is the oracle for "not called".
     std::assert_eq!(mock.calls(), 0, "the backend was called");
-    std::assert!(
-        committed.targets_recorded && committed.targets.is_empty(),
-        "a call was recorded as dispatched"
-    );
     std::assert_eq!(
         committed.task.status(),
         crate::protocol::tasks::TaskStatus::Completed
