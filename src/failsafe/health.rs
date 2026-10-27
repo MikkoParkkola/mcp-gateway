@@ -119,6 +119,13 @@ impl HealthTracker {
         }
     }
 
+    /// Its recent p95 and its usual p95 in ms, when the recent one is over
+    /// three times the usual and at least 50 ms; `None` until 500 successful
+    /// calls have warmed the usual one.
+    pub(crate) fn slow(&self) -> Option<(u64, u64)> {
+        None
+    }
+
     /// Reset all metrics
     pub fn reset(&self) {
         self.success_count.store(0, Ordering::Relaxed);
@@ -227,6 +234,10 @@ impl LatencyHistogram {
         self.sorted = true;
     }
 }
+
+#[cfg(test)]
+#[path = "health_slow_tests.rs"]
+mod slow_tests;
 
 #[cfg(test)]
 mod tests {

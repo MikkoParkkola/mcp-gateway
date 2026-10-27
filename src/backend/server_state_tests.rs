@@ -26,6 +26,7 @@ fn fresh() -> StateInputs {
         reaped: false,
         ever_started: false,
         start_failed: false,
+        slow: None,
     }
 }
 
@@ -241,6 +242,69 @@ fn api4_1_precedence_worst_first() {
             ..fresh()
         }),
         ServerState::Unhealthy
+    );
+}
+
+#[test]
+fn api4_2_a_running_server_far_over_its_usual_reads_slow() {
+    let view = decide(
+        &StateInputs {
+            running: true,
+            ever_started: true,
+            slow: Some((400, 100)),
+            ..fresh()
+        },
+        now(),
+    );
+    assert_eq!(view.state, ServerState::Slow);
+    assert_eq!(view.next_retry_at, None);
+    assert!(
+        view.reason.contains("400 ms") && view.reason.contains("100 ms"),
+        "the reason names both: {}",
+        view.reason
+    );
+}
+
+#[test]
+fn api4_2_worse_states_win_over_slow() {
+    let slow = Some((400, 100));
+    let paused = StateInputs {
+        running: true,
+        ever_started: true,
+        breaker: CircuitState::Open,
+        healthy: false,
+        consecutive_failures: 5,
+        slow,
+        ..fresh()
+    };
+    assert_eq!(state_of(&paused), ServerState::Paused);
+    let unhealthy = StateInputs {
+        running: true,
+        ever_started: true,
+        healthy: false,
+        consecutive_failures: 2,
+        slow,
+        ..fresh()
+    };
+    assert_eq!(state_of(&unhealthy), ServerState::Unhealthy);
+    let reaped = StateInputs {
+        reaped: true,
+        ever_started: true,
+        slow,
+        ..fresh()
+    };
+    assert_eq!(
+        state_of(&reaped),
+        ServerState::Dormant,
+        "a server that is not running cannot be slow"
+    );
+}
+
+#[test]
+fn api4_2_slow_is_serialised_as_slow() {
+    assert_eq!(
+        serde_json::to_value(ServerState::Slow).expect("serialises"),
+        serde_json::json!("slow")
     );
 }
 

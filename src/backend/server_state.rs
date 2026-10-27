@@ -19,6 +19,9 @@ use crate::runtime::RuntimeDenyReason;
 pub enum ServerState {
     /// Connected and answering.
     Running,
+    /// Running and answering, but its recent calls are far slower than its
+    /// own usual: the recent p95 is over three times its baseline.
+    Slow,
     /// The breaker is open: calls are held back and it retries by itself.
     Paused,
     /// Not running, and nothing is wrong: stopped while idle, or not started yet.
@@ -66,6 +69,9 @@ pub(crate) struct StateInputs {
     pub ever_started: bool,
     /// The last start failed (not on a sign-in), and none has succeeded since.
     pub start_failed: bool,
+    /// Its recent p95 and its usual (baseline) p95 in ms, when the recent
+    /// one is far over the usual; `None` while the baseline is still warming.
+    pub slow: Option<(u64, u64)>,
 }
 
 /// [`decide`]'s answer.
