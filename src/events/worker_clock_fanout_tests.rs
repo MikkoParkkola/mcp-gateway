@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8202 at fan-out: an occurrence whose source cannot judge on the
-//! clock. Split from `worker_clock_tests.rs`.
+//! An unreadable clock at fan-out: an occurrence whose source cannot judge
+//! on the clock. Split from `worker_clock_tests.rs`.
 
 use super::{ClockBlind, EventsHub, NAME, logged_services, now, private_callbacks, queued};
 
