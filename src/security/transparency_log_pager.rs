@@ -8,7 +8,6 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-#[cfg(feature = "webui")]
 use super::rotation::MAX_RECORD_BYTES;
 use super::segments::{active_segment_seq, list_segments, sealed_path};
 
@@ -101,6 +100,20 @@ pub(crate) fn read_window(path: &Path, start: u64, len: u64) -> io::Result<Vec<u
     }
 }
 
+/// `path` open for reading, with its length; `None` when it does not exist.
+/// A reader that holds the handle keeps reading the same bytes when rotation
+/// renames the file under it.
+pub(crate) fn open_segment(path: &Path) -> io::Result<Option<(std::fs::File, u64)>> {
+    match std::fs::File::open(path) {
+        Ok(file) => {
+            let len = file.metadata()?.len();
+            Ok(Some((file, len)))
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// [`read_window`] on a file already open. A reader that holds the handle
 /// keeps reading the same bytes when rotation renames the file under it.
 pub(crate) fn read_window_in(file: &std::fs::File, start: u64, len: u64) -> io::Result<Vec<u8>> {
@@ -145,17 +158,19 @@ pub(crate) fn tail_window(file: &Path, end: u64, max: u64) -> io::Result<(Tail, 
     Ok(split_tail(window, end))
 }
 
-/// The longest window line assembly reads: one record at the logger's cap,
-/// its newline, and the newline ending the line before it.
-#[cfg(feature = "webui")]
-pub(crate) const ASSEMBLY_WINDOW: u64 = MAX_RECORD_BYTES as u64 + 2;
+/// The longest window line assembly reads: the newline ending the line
+/// before, and one record at the logger's cap. The cap counts the record's own
+/// newline (the logger refuses `line.len() + 1 > MAX_RECORD_BYTES`), so one
+/// byte more than the cap holds both.
+pub(crate) const ASSEMBLY_WINDOW: u64 = MAX_RECORD_BYTES as u64 + 1;
 
 /// [`tail_window`] on an open file, with line assembly: when no line starts
 /// inside `max`, the window is read again at [`ASSEMBLY_WINDOW`], so a line
 /// up to the record cap is returned whole. [`Tail::LineTooLong`] then means a
-/// line over the cap, which the logger never writes. The bytes returned count
+/// line over the cap, which the logger never writes, wherever it sits: a
+/// window that starts at byte 0 has no newline before its first line, so that
+/// line's length is checked against the cap too. The bytes returned count
 /// both reads.
-#[cfg(feature = "webui")]
 pub(crate) fn tail_window_assembled(
     file: &std::fs::File,
     end: u64,
@@ -168,9 +183,30 @@ pub(crate) fn tail_window_assembled(
     match read(max)? {
         (Tail::LineTooLong, first) if max < ASSEMBLY_WINDOW => {
             let (tail, second) = read(ASSEMBLY_WINDOW)?;
-            Ok((tail, first + second))
+            Ok((over_cap_at_start(tail), first + second))
         }
         done => Ok(done),
+    }
+}
+
+/// A window starting at byte 0 counts as starting on a line, so its first line
+/// is never `LineTooLong` by position; one longer than the record cap is.
+fn over_cap_at_start(tail: Tail) -> Tail {
+    match &tail {
+        Tail::Lines {
+            start: 0, window, ..
+        } => {
+            let first = window
+                .iter()
+                .position(|b| *b == b'\n')
+                .map_or(window.len(), |nl| nl + 1);
+            if first > MAX_RECORD_BYTES {
+                Tail::LineTooLong
+            } else {
+                tail
+            }
+        }
+        _ => tail,
     }
 }
 

@@ -339,44 +339,104 @@ impl ControlPlaneStore for FileControlPlaneStore {
         filter.validate()?;
         let log = self.audit.path();
         let at = pager::position(&log, filter.cursor.map(|c| (c.offset, c.segment)))?;
+        let Some((file, len)) = pager::open_segment(&at.file)? else {
+            // Nothing to read in this file: page on to the older segment.
+            return Ok(AuditPage {
+                next_cursor: next_page(&log, 0, at.segment)?,
+                ..AuditPage::empty(at.reset)
+            });
+        };
         // The cursor's offset is an exclusive upper bound: everything below it
-        // is still unread. Read one tail window ending there, capped so a single
-        // call never reads more than MAX_AUDIT_SCAN_BYTES no matter how long the
-        // log is.
-        let (tail, window_len) = pager::tail_window(&at.file, at.end, MAX_AUDIT_SCAN_BYTES)?;
-        // No complete line in a full window means one audit line is longer than
-        // the whole scan window, so no page could ever read it. Fail closed
-        // rather than hand back a cursor that never advances.
+        // is still unread. Read one tail window ending there, assembling a
+        // line up to the logger's record cap across windows (the shared pager,
+        // as the Activity reader does), so one call reads at most
+        // MAX_AUDIT_SCAN_BYTES plus one assembly window.
+        let (tail, window_len) = pager::tail_window_assembled(&file, at.end, MAX_AUDIT_SCAN_BYTES)?;
+        // A cursor this store hands out sits at a line start, at 0, or at a
+        // file's end, so a page ending inside a line is one stepping through
+        // an over-cap line already reported: the line is skipped, not re-read.
+        let continuation = continues_a_skipped_line(&file, at.end, len)?;
         let pager::Tail::Lines {
             start: body_start, ..
         } = tail
         else {
-            return Err(StoreError::Corrupt(format!(
-                "audit line ending before byte {} exceeds the {MAX_AUDIT_SCAN_BYTES}-byte scan window",
-                at.end
-            )));
+            // A line over the cap: report it once, at the bottom of the bytes
+            // read, and page on below it.
+            let below = at.end - at.end.min(pager::ASSEMBLY_WINDOW);
+            let unreadable = (!continuation).then_some(AuditCursor {
+                offset: below,
+                segment: at.segment,
+            });
+            if let Some(hole) = &unreadable {
+                tracing::warn!(
+                    offset = hole.offset,
+                    segment = ?hole.segment,
+                    "governance audit line over the record cap; skipped"
+                );
+            }
+            return Ok(AuditPage {
+                next_cursor: next_page(&log, below, at.segment)?,
+                bytes_examined: window_len,
+                unreadable,
+                ..AuditPage::empty(at.reset)
+            });
         };
-        let scan = scan_audit(reverse_audit_lines(tail.body(), body_start), filter)?;
+        let body = if continuation {
+            drop_trailing_fragment(tail.body())
+        } else {
+            tail.body()
+        };
+        let scan = scan_audit(reverse_audit_lines(body, body_start), filter)?;
         // Exhausting the window still leaves every byte below it unread; at
         // the start of a segment, the next page is the older segment's end.
         let resume = scan.stopped_at.unwrap_or(body_start);
-        let next_cursor = if resume > 0 {
-            Some(AuditCursor {
-                offset: resume,
-                segment: at.segment,
-            })
-        } else {
-            pager::older_segment(&log, at.segment)?.map(|(offset, seq)| AuditCursor {
-                offset,
-                segment: Some(seq),
-            })
-        };
         Ok(AuditPage {
             events: scan.events,
-            next_cursor,
+            next_cursor: next_page(&log, resume, at.segment)?,
             records_examined: scan.records_examined,
             bytes_examined: window_len,
             cursor_reset: at.reset,
+            unreadable: None,
         })
     }
+}
+
+/// The page below `resume` in `segment`: the same file while bytes remain,
+/// else the older segment's end, else none (the start of the log).
+fn next_page(
+    log: &std::path::Path,
+    resume: u64,
+    segment: Option<u64>,
+) -> StoreResult<Option<AuditCursor>> {
+    use crate::security::transparency_log::pager;
+    if resume > 0 {
+        return Ok(Some(AuditCursor {
+            offset: resume,
+            segment,
+        }));
+    }
+    Ok(
+        pager::older_segment(log, segment)?.map(|(offset, seq)| AuditCursor {
+            offset,
+            segment: Some(seq),
+        }),
+    )
+}
+
+/// Whether a page ending at `end` starts inside a line: below the file's end,
+/// and the byte before `end` is not a newline.
+fn continues_a_skipped_line(file: &std::fs::File, end: u64, len: u64) -> StoreResult<bool> {
+    if end == 0 || end >= len {
+        return Ok(false);
+    }
+    let last = crate::security::transparency_log::pager::read_window_in(file, end - 1, 1)?;
+    Ok(last != [b'\n'])
+}
+
+/// `body` without the bytes after its last newline: the head of a line the
+/// page above has already dealt with.
+fn drop_trailing_fragment(body: &[u8]) -> &[u8] {
+    body.iter()
+        .rposition(|b| *b == b'\n')
+        .map_or(&body[..0], |nl| &body[..=nl])
 }

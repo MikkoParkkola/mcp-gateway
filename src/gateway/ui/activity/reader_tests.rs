@@ -217,8 +217,14 @@ fn p3_a_record_at_the_cap_is_assembled_across_windows() {
     let path = log_path(&dir, "inv.jsonl");
     let mut big = json!({"tool": "tool_1", "pad": ""});
     let base = big.to_string().len();
-    big["pad"] = "x".repeat(4 * 1024 * 1024 - base).into();
-    assert_eq!(big.to_string().len(), 4 * 1024 * 1024, "exactly the cap");
+    // The logger's cap counts the record's newline, so the largest record it
+    // writes holds one byte less than 4 MiB.
+    big["pad"] = "x".repeat(4 * 1024 * 1024 - 1 - base).into();
+    assert_eq!(
+        big.to_string().len() + 1,
+        4 * 1024 * 1024,
+        "exactly the cap"
+    );
     write_lines(&path, &[entry("0", None), big, entry("2", None)]);
     let page = read_page(&path, None, None, ALL, is_call).unwrap();
     assert_eq!(
@@ -226,6 +232,29 @@ fn p3_a_record_at_the_cap_is_assembled_across_windows() {
         vec![2, 1, 0]
     );
     assert!(page.unreadable.is_empty());
+}
+
+/// One byte over the cap (4 MiB of content plus its newline), a line the
+/// logger refuses, is reported once and never served.
+#[test]
+fn p3_a_line_one_byte_over_the_cap_is_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir, "inv.jsonl");
+    let mut big = json!({"tool": "tool_1", "pad": ""});
+    let base = big.to_string().len();
+    big["pad"] = "x".repeat(4 * 1024 * 1024 - base).into();
+    assert_eq!(
+        big.to_string().len(),
+        4 * 1024 * 1024,
+        "one byte over the cap"
+    );
+    write_lines(&path, &[entry("0", None), big, entry("2", None)]);
+    let page = read_page(&path, None, None, ALL, is_call).unwrap();
+    assert_eq!(
+        page.lines.iter().filter_map(call_index).collect::<Vec<_>>(),
+        vec![2, 0]
+    );
+    assert_eq!(page.unreadable.len(), 1, "{:?}", page.unreadable);
 }
 
 #[test]
