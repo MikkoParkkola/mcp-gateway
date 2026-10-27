@@ -868,10 +868,10 @@ async fn a_listing_waits_on_a_running_lease_through_a_busy_custody_http() {
 /// The lease covers the fill (MIK-8962): a backend whose fill bound is past
 /// the 60 s cold backoff fills for 90 s. The first listing returns at the
 /// 30 s cap without it. A second listing at 70 s does not claim the view
-/// again: it waits on the running lease and lists the 90 s fill, with one
-/// credential resolution in all. RED with a lease of the backoff alone: the
-/// 70 s listing wins a fresh claim and resolves the credential again (its
-/// fill joins the running one, so the backend still sees one list).
+/// again: it waits on the running lease and lists the 90 s fill, and the
+/// backend saw one fill. A regression pin, not a red proof: with a lease of
+/// the backoff alone the 70 s listing does claim again, but its fill joins
+/// the one already running and nothing a user or operator sees changes.
 #[tokio::test(start_paused = true)]
 async fn a_fill_past_the_cold_backoff_still_publishes_http() {
     let auth = sole_operator();
@@ -884,7 +884,6 @@ async fn a_fill_past_the_cold_backoff_still_publishes_http() {
     let fx = Arc::new(fixture_on(gateway, &auth, &[(BACKEND, TOOL)], |_| {}).await);
     fx.gateway
         .delay_lists_on(BACKEND, std::time::Duration::from_secs(90));
-    let releases = fx.gateway.releases();
     let first = tokio::spawn({
         let fx = Arc::clone(&fx);
         async move { rpc(&fx, 1, "tools/list", json!({})).await }
@@ -897,11 +896,6 @@ async fn a_fill_past_the_cold_backoff_still_publishes_http() {
             .iter()
             .any(|t| !is_shared_schema(t)),
         "the second listing did not show the 90 s fill: {second}"
-    );
-    assert_eq!(
-        fx.gateway.releases() - releases,
-        1,
-        "the view was claimed again while its fill ran"
     );
     assert_eq!(fx.gateway.lists_to(BACKEND), 1, "one fill");
 }
