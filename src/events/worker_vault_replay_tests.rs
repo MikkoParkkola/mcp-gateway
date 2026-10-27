@@ -19,16 +19,24 @@ fn buried(dir: &std::path::Path) -> (Arc<EventsHub>, Arc<super::Fence>) {
     assert!(hub.runtime.services.set(Arc::new(services)).is_ok());
     queued_for(&hub, &config, 9, "u1", &fence.current("u1"));
     let now = crate::clock::utc_now().expect("clock");
-    let Claim::Ready(_) = hub.store.claim("evt_u1", now).expect("io") else {
+    let Claim::Ready(claimed) = hub.store.claim("evt_u1", now).expect("io") else {
         panic!("premise: the record is claimed");
     };
     let dead = Settle::Dead {
         reason: DeadReason::Observation,
         status: None,
     };
+    // Settled by the claimed occurrence's own stamp.
     (hub.store)
-        .settle("evt_u1", now, dead, Ok(now), hub.dead_policy())
+        .settle(
+            "evt_u1",
+            claimed.record.created_at,
+            dead,
+            Ok(now),
+            hub.dead_policy(),
+        )
         .expect("io");
+    assert!(still_dead(&hub), "premise: buried");
     (hub, fence)
 }
 
