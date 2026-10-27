@@ -22,8 +22,15 @@ use crate::config::TransportConfig;
 
 /// The string-valued members of `config[key]` in gateway syntax. A non-string
 /// value, or one only the client can resolve, is skipped with a warning that
-/// names the client, server and key, never the value.
-fn string_map(source: &DiscoverySource, name: &str, config: &Value, key: &str) -> SecretMap {
+/// names the client, server and key, never the value, and its field name
+/// (`env.K`) goes to `uncarried`.
+fn string_map(
+    source: &DiscoverySource,
+    name: &str,
+    config: &Value,
+    key: &str,
+    uncarried: &mut Vec<String>,
+) -> SecretMap {
     let Some(object) = config.get(key).and_then(Value::as_object) else {
         return SecretMap::default();
     };
@@ -32,17 +39,26 @@ fn string_map(source: &DiscoverySource, name: &str, config: &Value, key: &str) -
         .filter_map(|(k, v)| {
             let Some(value) = v.as_str() else {
                 warn!("{source:?} server {name}: {key}.{k} is not a string; skipped");
+                uncarried.push(format!("{key}.{k}"));
                 return None;
             };
             let Some(value) = gateway_value(value) else {
                 warn!(
                     "{source:?} server {name}: {key}.{k} uses a variable the gateway cannot resolve; skipped"
                 );
+                uncarried.push(format!("{key}.{k}"));
                 return None;
             };
             Some((k.clone(), value))
         })
         .collect()
+}
+
+/// The gateway expands `${...}` only in a backend's `env` and `headers`: in a
+/// command, an argument, a `cwd` or a URL it stays as written, where the
+/// client would have expanded it.
+fn client_expands(text: &str) -> bool {
+    text.contains("${")
 }
 
 /// A client `env`/header value in gateway syntax: `${env:NAME}` becomes
@@ -64,20 +80,40 @@ pub(super) fn parse(
 ) -> Option<DiscoveredServer> {
     let description = format!("MCP server from {source:?}");
     if let Some(program) = config.get("command").and_then(Value::as_str) {
+        let mut uncarried = Vec::new();
+        if client_expands(program) {
+            uncarried.push("command".to_string());
+        }
         let mut argv = vec![program.to_string()];
-        argv.extend(
-            config
-                .get("args")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|v| v.as_str().map(String::from)),
-        );
+        for (i, arg) in config
+            .get("args")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            match arg.as_str() {
+                Some(arg) => {
+                    if client_expands(arg) {
+                        uncarried.push(format!("args[{i}]"));
+                    }
+                    argv.push(arg.to_string());
+                }
+                // Skipped, as before; the find no longer passes as whole.
+                None => uncarried.push(format!("args[{i}]")),
+            }
+        }
         let Some(command) = crate::transport::join_command(&argv) else {
             warn!("server {name}: an argument cannot be quoted for the command line; skipped");
             return None;
         };
         let working_dir = config.get("cwd").and_then(Value::as_str).map(PathBuf::from);
+        if working_dir
+            .as_ref()
+            .is_some_and(|dir| client_expands(&dir.to_string_lossy()))
+        {
+            uncarried.push("cwd".to_string());
+        }
         let mut server = DiscoveredServer::new(
             name.to_string(),
             description,
@@ -97,7 +133,8 @@ pub(super) fn parse(
                 working_dir,
             },
         );
-        server.env = string_map(source, name, config, "env");
+        server.env = string_map(source, name, config, "env", &mut uncarried);
+        server.uncarried = uncarried;
         return Some(server);
     }
 
@@ -115,7 +152,10 @@ pub(super) fn parse(
                 working_dir: None,
             },
         );
-        server.headers = string_map(source, name, config, "headers");
+        if client_expands(url) {
+            server.uncarried.push("url".to_string());
+        }
+        server.headers = string_map(source, name, config, "headers", &mut server.uncarried);
         if let Some(headers) = config.get("headers").and_then(Value::as_object) {
             // A string the gateway cannot resolve; a non-string sends nothing.
             server.unresolved_header_names = headers

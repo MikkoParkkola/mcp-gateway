@@ -1,0 +1,252 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! The shared adopt rule: what a client config entry may hold and still
+//! become a backend the gateway runs exactly as the client does.
+
+use std::collections::HashSet;
+use std::path::Path;
+
+use serde_json::{Value, json};
+
+use super::*;
+use crate::discovery::DiscoverySource;
+use crate::discovery::shadow::{ShadowRemediationAction, ShadowScanReport};
+
+fn find(entry: &Value) -> DiscoveredServer {
+    crate::discovery::client_entry::parse(
+        "srv",
+        entry,
+        &DiscoverySource::ClaudeDesktop,
+        Path::new("/client/config.json"),
+    )
+    .expect("the entry parses")
+}
+
+fn refused(entry: &Value) -> Vec<(AdoptRefusal, String)> {
+    refusals(&find(entry))
+}
+
+fn one(reason: AdoptRefusal, field: &str) -> Vec<(AdoptRefusal, String)> {
+    vec![(reason, field.to_string())]
+}
+
+#[test]
+fn a_plain_stdio_entry_with_a_literal_secret_is_adoptable() {
+    let entry = json!({"command": "npx", "args": ["-y", "srv"], "env": {"API_KEY": "sk-test"}});
+    assert_eq!(refused(&entry), vec![]);
+}
+
+#[test]
+fn a_client_input_variable_refuses_naming_the_env_field() {
+    let entry =
+        json!({"command": "npx", "args": ["-y", "srv"], "env": {"TOKEN": "${input:token}"}});
+    assert_eq!(
+        refused(&entry),
+        one(AdoptRefusal::NeedsClientOnlySecret, "env.TOKEN")
+    );
+}
+
+#[test]
+fn a_client_input_header_refuses_naming_the_header() {
+    let entry = json!({
+        "url": "https://mcp.example.test/mcp",
+        "headers": {"Authorization": "Bearer ${input:token}"},
+    });
+    assert_eq!(
+        refused(&entry),
+        one(AdoptRefusal::NeedsClientOnlySecret, "headers.Authorization")
+    );
+}
+
+#[test]
+fn a_non_string_env_value_refuses_rather_than_dropping() {
+    let entry = json!({"command": "srv", "env": {"PORT": 3000}});
+    assert_eq!(
+        refused(&entry),
+        one(AdoptRefusal::NeedsClientOnlySecret, "env.PORT")
+    );
+}
+
+#[test]
+fn a_variable_in_a_command_argument_or_cwd_refuses() {
+    // The gateway expands `${...}` only in env and headers.
+    let entry = json!({
+        "command": "srv",
+        "args": ["--root", "${HOME}/data", 7],
+        "cwd": "${workspaceFolder}",
+    });
+    assert_eq!(
+        refused(&entry),
+        vec![
+            (AdoptRefusal::NeedsClientOnlySecret, "args[1]".to_string()),
+            (AdoptRefusal::NeedsClientOnlySecret, "args[2]".to_string()),
+            (AdoptRefusal::NeedsClientOnlySecret, "cwd".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn a_variable_in_a_url_refuses() {
+    let entry = json!({"url": "https://${HOST}/mcp"});
+    assert_eq!(
+        refused(&entry),
+        one(AdoptRefusal::NeedsClientOnlySecret, "url")
+    );
+}
+
+#[test]
+fn a_template_default_refuses_as_a_literal() {
+    let entry = json!({"command": "srv", "env": {"API_KEY": "${API_KEY:-sk-secret}"}});
+    assert_eq!(
+        refused(&entry),
+        one(AdoptRefusal::LiteralDefault, "env.API_KEY")
+    );
+    let empty_default = json!({"command": "srv", "env": {"API_KEY": "${API_KEY:-}"}});
+    assert_eq!(refused(&empty_default), vec![]);
+}
+
+#[test]
+fn a_mixed_template_is_carried_as_written() {
+    let entry = json!({
+        "url": "https://mcp.example.test/mcp",
+        "headers": {"Authorization": "Bearer ${API_KEY}"},
+    });
+    let server = find(&entry);
+    assert_eq!(refusals(&server), vec![]);
+    assert_eq!(
+        server
+            .headers
+            .expose()
+            .get("Authorization")
+            .map(String::as_str),
+        Some("Bearer ${API_KEY}")
+    );
+}
+
+#[test]
+fn a_client_env_variable_is_the_gateway_template() {
+    let server = find(&json!({"command": "srv", "env": {"TOKEN": "${env:API_TOKEN}"}}));
+    assert_eq!(refusals(&server), vec![]);
+    assert_eq!(
+        server.env.expose().get("TOKEN").map(String::as_str),
+        Some("${API_TOKEN}")
+    );
+}
+
+#[test]
+fn a_template_read_as_a_reference_refuses() {
+    // A load reads `file:...` as a file reference before expanding it.
+    let entry = json!({"command": "srv", "env": {"TOKEN": "file:${HOME}/token"}});
+    assert_eq!(
+        refused(&entry),
+        one(AdoptRefusal::NeedsClientOnlySecret, "env.TOKEN")
+    );
+}
+
+#[test]
+fn a_reference_shaped_literal_is_adoptable_as_bytes() {
+    // No `${`: it is the client's literal, stored as a secret, never read
+    // as a gateway reference.
+    let entry = json!({
+        "url": "https://mcp.example.test/mcp",
+        "headers": {"X-Token": "file:/private/token"},
+    });
+    assert_eq!(refused(&entry), vec![]);
+}
+
+#[test]
+fn a_credential_in_a_url_refuses_naming_url() {
+    for url in [
+        "https://user:pass@mcp.example.test/mcp",
+        "https://user@mcp.example.test/mcp",
+        "https://mcp.example.test/mcp?api_key=k",
+        "https://mcp.example.test/mcp?access_token=t",
+        "https://mcp.example.test/mcp?X-Amz-Signature=s",
+        "wss://mcp.example.test/ws?Session=s",
+    ] {
+        assert_eq!(
+            refused(&json!({"url": url})),
+            one(AdoptRefusal::CredentialInUrl, "url"),
+            "{url}"
+        );
+    }
+}
+
+#[test]
+fn an_ordinary_query_is_adoptable() {
+    assert_eq!(
+        refused(&json!({"url": "https://mcp.example.test/mcp?page=2"})),
+        vec![]
+    );
+}
+
+/// The radar offers adoption exactly where the rule allows it.
+#[test]
+fn the_radar_offers_adoption_only_where_the_rule_allows() {
+    let action = |entry: &Value| {
+        let report = ShadowScanReport::from_discovered(
+            &[find(entry)],
+            &HashSet::new(),
+            Some(Path::new("gateway.yaml")),
+        );
+        report.assets[0].remediation.action.clone()
+    };
+    assert_eq!(
+        action(&json!({"command": "npx", "args": ["-y", "srv"]})),
+        ShadowRemediationAction::AdoptIntoGateway
+    );
+    for refused in [
+        json!({"command": "srv", "args": ["${HOME}"]}),
+        json!({"command": "srv", "env": {"K": "${K:-v}"}}),
+        json!({"command": "srv", "env": {"K": "${input:k}"}}),
+    ] {
+        assert_eq!(
+            action(&refused),
+            ShadowRemediationAction::RequestOwner,
+            "{refused}"
+        );
+    }
+}
+
+/// Discovery reads client config files and local processes only: no file
+/// under `src/discovery` names a network socket, and no network-discovery
+/// crate is a dependency (ADR-021).
+#[test]
+fn discovery_scans_no_network() {
+    const SOCKETS: &[&str] = &["TcpStream", "TcpListener", "UdpSocket", "TcpSocket"];
+    const CRATES: &[&str] = &["mdns", "zeroconf", "libmdns", "dns-sd", "pnet"];
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    let mut dirs = vec![root.join("src/discovery")];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).expect("read src/discovery") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                files.push(path);
+            }
+        }
+    }
+    assert!(files.len() > 10, "the walk found {} files", files.len());
+    let this_file = Path::new(file!()).file_name().expect("file name");
+    for path in files.iter().filter(|p| p.file_name() != Some(this_file)) {
+        let source = std::fs::read_to_string(path).expect("read");
+        for socket in SOCKETS {
+            assert!(
+                !source.contains(socket),
+                "{} names {socket}",
+                path.display()
+            );
+        }
+    }
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("read Cargo.toml");
+    for line in manifest.lines().map(str::trim_start) {
+        for name in CRATES {
+            assert!(
+                !line.starts_with(&format!("{name} ")) && !line.starts_with(&format!("{name}=")),
+                "Cargo.toml depends on {name}"
+            );
+        }
+    }
+}

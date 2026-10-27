@@ -125,8 +125,8 @@ pub(super) fn classify_remediation(
         };
     }
 
-    // Adoption would drop a header only the client can resolve.
-    let lossless = server.unresolved_header_names.is_empty();
+    // Adoption would lose or leak something: the rule adopt itself applies.
+    let lossless = crate::discovery::adopt::refusals(server).is_empty();
     if lossless
         && (matches!(
             ownership,
