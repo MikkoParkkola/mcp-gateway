@@ -37,14 +37,18 @@ fn redeem_body(
     (status, String::from_utf8_lossy(&body).into_owned())
 }
 
-/// T5d: the refusal says whether the link was used up.
+/// T5d (inverted by MIK-8875 UI1.23): the refusal no longer says whether the
+/// link was used up. Saying so told a caller from elsewhere that their guess
+/// was the live value; the operator still sees `spent` in the log.
 #[test]
-fn t5d_the_refusal_says_whether_the_link_is_spent() {
+fn t5d_the_refusal_does_not_say_whether_the_link_is_spent() {
     let (state, printed) = bootstrap_state(Some("bearer"), vec![]);
     let (_, wrong) = redeem_body(&state, "not-the-value", REMOTE, false);
-    assert!(!wrong.contains("used it up"), "{wrong}");
     let (_, spent) = redeem_body(&state, &printed, REMOTE, false);
-    assert!(spent.contains("used it up"), "{spent}");
+    assert_eq!(
+        wrong, spent,
+        "the same words whether or not the guess was live"
+    );
 }
 
 const LOCAL: [u8; 4] = [127, 0, 0, 1];

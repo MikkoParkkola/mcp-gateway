@@ -488,3 +488,15 @@ impl Default for DashboardBootstrap {
 #[cfg(test)]
 #[path = "auth_dashboard_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+thread_local! {
+    /// Constant-time compares of a candidate with a secret on this thread.
+    static CT_COMPARES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many constant-time secret compares ran on this thread (R14).
+#[cfg(test)]
+pub(crate) fn ct_compares_for_test() -> usize {
+    CT_COMPARES.with(std::cell::Cell::get)
+}
