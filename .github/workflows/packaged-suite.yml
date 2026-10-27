@@ -17,6 +17,16 @@ on:
         required: false
         default: ''
 
+# A train lands its pull requests on the release line as one squash commit
+# each, seconds apart, and each started its own full packaged run. Only the
+# newest line commit's run is kept: a newer push to the line cancels the older
+# one. Every other event has a group of its own and is never cancelled. The
+# literal prefix matters here: called from ci.yml, `github.workflow` names the
+# caller, and a group built from it could match the caller's own and deadlock.
+concurrency:
+  group: packaged-suite-${{ (github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+
 permissions:
   contents: read
 
