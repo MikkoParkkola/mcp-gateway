@@ -22,8 +22,26 @@ mod client;
 mod dedupe;
 mod fanout;
 mod governance;
+pub(crate) mod lease;
+
+/// Bumped whenever a gateway credential may have been revoked: a key-server
+/// revocation or a config change (an API key removed, an identity provider
+/// changed). Every hub re-checks its per-user listeners at once rather than
+/// at its next sweep. Process-wide on purpose: a second hub in
+/// one process only re-checks once more.
+static CREDENTIALS_CHANGED: std::sync::LazyLock<tokio::sync::watch::Sender<u64>> =
+    std::sync::LazyLock::new(|| tokio::sync::watch::channel(0).0);
+
+/// A gateway credential may have been revoked: see [`CREDENTIALS_CHANGED`].
+pub(crate) fn credentials_changed() {
+    CREDENTIALS_CHANGED.send_modify(|n| *n = n.wrapping_add(1));
+}
+mod lease_rpc;
+mod listener_credential;
+pub(crate) use listener_credential::ListenerMint;
 mod lifecycle;
 mod limiter;
+pub(crate) mod observation;
 mod operational_source;
 mod outbox;
 mod rate;
@@ -85,6 +103,8 @@ pub(crate) struct EventsHub {
     /// Sources' started lifecycle keys; see [`lifecycle`].
     lifecycle: lifecycle::Started,
     debounce: backend_source::Debounce,
+    /// Passthrough tokens held for subscribers' listeners, memory only.
+    leases: lease::LeaseStore,
     /// Held while the catalogue changes or is read to delete from it.
     catalogue_gate: parking_lot::Mutex<()>,
     /// The webhook routes, for the payload fields a subscribe records
@@ -178,6 +198,18 @@ pub(crate) trait EventSource: Send + Sync {
         _now: chrono::DateTime<chrono::Utc>,
     ) -> String {
         String::from_utf8(rpc::canonical(&serde_json::json!([name, arguments]))).unwrap_or_default()
+    }
+    /// The lifecycle key a row holds while its type is offered: the one key
+    /// subscribe, replay, stop reconciliation and fan-out all compute, so
+    /// they cannot disagree. By default
+    /// [`Self::lifecycle_key`] of its principal, name and arguments; `None`
+    /// when the row holds no key, so nothing is started or delivered for it.
+    fn key_of_row(
+        &self,
+        sub: &records::Subscription,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Option<String> {
+        Some(self.lifecycle_key(&sub.principal, &sub.name, &sub.arguments, now))
     }
     /// The lifecycle key of a stored row this source owns even while it does
     /// not offer the row's type (a held REST watch, MIK-8122): the key comes
@@ -297,6 +329,7 @@ impl EventsHub {
             runtime: runtime::Runtime::new(config, store_dir),
             lifecycle: lifecycle::Started::default(),
             debounce: backend_source::Debounce::default(),
+            leases: lease::LeaseStore::for_hub(),
             catalogue_gate: parking_lot::Mutex::new(()),
             webhook_registry: std::sync::OnceLock::new(),
             receipts: tokio::sync::Mutex::new(()),
@@ -340,6 +373,12 @@ impl EventsHub {
                 }
             });
         }
+    }
+
+    /// Attach the gateway's audited listener mint. Without
+    /// one, no per-user listener of a minting backend runs.
+    pub(crate) fn set_listener_mint(&self, mint: Arc<dyn ListenerMint>) {
+        let _ = self.runtime.listener_mint.set(mint);
     }
 
     /// Attach the webhook registry whose `event:` routes are a source.

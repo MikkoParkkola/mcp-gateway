@@ -339,6 +339,7 @@ src/gateway/meta_mcp/invoke/projection.rs	quota_key_of	-	on-path, untimed: the o
 src/gateway/meta_mcp/invoke/propagation.rs	audit_minted_credential	-	on-path, untimed: minted propagation credentials only; the timed backend has no propagation config
 src/gateway/meta_mcp/invoke/propagation.rs	caller_principal	-	on-path, untimed: identity-propagation backends only; the timed backend has no propagation config
 src/gateway/meta_mcp/invoke/propagation.rs	into_parts	http_invoke_tiny	on the HTTP gateway_invoke path, once per dispatch: moves the resolved fields into a tuple, no allocation and no lock (MIK-8407)
+src/gateway/meta_mcp/invoke/propagation.rs	mint_listener_credential	-	off-path: a per-user events listener mints through it per upstream request, never a tools/call
 src/gateway/meta_mcp/invoke/propagation.rs	minted	http_invoke_tiny	whether the credential step may have reached an issuer, once per dispatch
 src/gateway/meta_mcp/invoke/propagation.rs	refuse_unbound_account_backend	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_caller_credential	-	test-only helper (cfg(test))

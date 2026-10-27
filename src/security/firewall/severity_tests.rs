@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Finding severity: the firewall action table, the strongest-severity choice
-//! and the serialized severity strings (MIK-8669).
+//! Finding severity: the firewall action table and the serialized severity
+//! strings (MIK-8669).
 
 use super::*;
 use crate::security::Severity;
@@ -64,29 +64,6 @@ fn finding_at(severity: Severity) -> Finding {
 }
 
 #[test]
-fn strongest_finding_severity_selects_highest_present() {
-    let mixed = [
-        finding_at(Severity::Low),
-        finding_at(Severity::High),
-        finding_at(Severity::Medium),
-    ];
-    assert_eq!(strongest_finding_severity(&mixed), Some(Severity::High));
-    let low_medium = [finding_at(Severity::Low), finding_at(Severity::Medium)];
-    assert_eq!(
-        strongest_finding_severity(&low_medium),
-        Some(Severity::Medium)
-    );
-    let low_only = [finding_at(Severity::Low)];
-    assert_eq!(strongest_finding_severity(&low_only), Some(Severity::Low));
-}
-
-#[test]
-fn strongest_finding_severity_is_none_for_no_findings() {
-    let empty: &[Finding] = &[];
-    assert_eq!(strongest_finding_severity(empty), None);
-}
-
-#[test]
 fn finding_severity_serializes_to_snake_case_names() {
     for (severity, expected) in [
         (Severity::High, "high"),
@@ -104,14 +81,10 @@ fn finding_severity_serializes_to_snake_case_names() {
 // ── MIK-8669 commit C1: critical severity ───────────────────────────────────
 
 #[test]
-fn critical_severity_blocks_and_is_strongest() {
+fn critical_severity_blocks() {
     assert_eq!(
         decide_firewall_action(None, Some(Severity::Critical)),
         FirewallAction::Block
-    );
-    assert_eq!(
-        strongest_finding_severity(&[finding_at(Severity::High), finding_at(Severity::Critical)]),
-        Some(Severity::Critical)
     );
 }
 
