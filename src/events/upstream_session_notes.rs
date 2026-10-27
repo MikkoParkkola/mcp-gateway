@@ -38,6 +38,7 @@ impl State<'_> {
                         let mut debt = self.shared.tools.lock();
                         debt.due.get_or_insert(Instant::now() + TICK);
                         debt.unannounced = true;
+                        debt.fence = self.fence.as_ref().and_then(|run| run.binding());
                     }
                 } else if self.shared.need.lock().emits(kind, uri.as_deref()) {
                     self.coalescer.offer(kind, uri, Instant::now());
@@ -150,6 +151,7 @@ impl State<'_> {
                     occurred_at,
                     data: json!({}),
                     lifecycle_key,
+                    fence: self.fence.as_ref().and_then(|run| run.binding()),
                 });
             } else {
                 hub.backend_tools_changed(&self.shared.name);
@@ -195,6 +197,7 @@ impl State<'_> {
                 occurred_at,
                 data,
                 lifecycle_key,
+                fence: self.fence.as_ref().and_then(|run| run.binding()),
             });
         }
         false

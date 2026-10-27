@@ -160,6 +160,7 @@ async fn t34_a_read_begun_before_a_renewal_does_not_revoke_it() {
         occurred_at: clock_now(),
         data: json!({"uri": "file:///x"}),
         lifecycle_key: None,
+        fence: None,
     };
     let services = crate::events::Services {
         live: Arc::new(crate::config_reload::LiveConfig::new(
@@ -272,6 +273,7 @@ async fn t34_a_cached_list_from_before_a_renewal_does_not_revoke_it() {
         occurred_at: clock_now(),
         data: json!({"uri": "file:///x"}),
         lifecycle_key: None,
+        fence: None,
     };
     let services = crate::events::Services {
         live: Arc::new(crate::config_reload::LiveConfig::new(

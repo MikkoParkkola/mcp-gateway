@@ -63,10 +63,10 @@ const DECISION_POINTS: &[(&str, &str, usize)] = &[
     ("worker.rs", "attempt_once", 2),
     ("worker.rs", "record_and_send", 1),
     ("worker.rs", "settle_answer", 1),
-    ("worker.rs", "settled_unsendable", 1),
     ("worker_dispatch.rs", "dispatch", 2),
     ("worker_dispatch.rs", "sweep_dead_letters", 1),
     ("worker_settle.rs", "settle_with", 1),
+    ("worker_settle.rs", "settled_unsendable", 1),
 ];
 
 const READS: &[&str] = &[

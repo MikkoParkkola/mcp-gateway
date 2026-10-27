@@ -18,7 +18,7 @@ use crate::hashing::sha256_hex;
 #[tokio::test]
 async fn intake_keeps_the_presented_bearer_and_session_digests() {
     let (state, _store) = test_router_app_state().await;
-    let request = Request::builder()
+    let mut request = Request::builder()
         .method("POST")
         .uri("/mcp")
         .header("content-type", "application/json")
@@ -26,6 +26,10 @@ async fn intake_keeps_the_presented_bearer_and_session_digests() {
         .header("cookie", format!("{SESSION_COOKIE}=intake-row-handle"))
         .body(Body::from(r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#))
         .unwrap();
+    // The router's outer layer pins a generation before intake runs.
+    request
+        .extensions_mut()
+        .insert(state.live_config.generation());
     let Ok((_, _, admitted)) = intake(&state, request).await else {
         panic!("intake refused the request");
     };
