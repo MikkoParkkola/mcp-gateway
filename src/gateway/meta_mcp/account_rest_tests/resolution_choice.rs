@@ -23,7 +23,7 @@ async fn rb_exec_choice_an_account_bound_after_resolve_is_refused_before_http() 
     let (port, captured) = capture_endpoint().await;
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let backend = backend_with(
         &registry,
         capability(&base_url(port), "oauth:google", Some(WORK)),

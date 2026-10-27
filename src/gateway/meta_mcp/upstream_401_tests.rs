@@ -48,7 +48,7 @@ async fn managed_capability(
         steps,
     );
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let (port, captured) = capture_endpoint_answering(statuses).await;
     let backend = backend_with(
         &registry,
