@@ -464,7 +464,30 @@ impl Backend {
     }
 
     /// [`Self::start_entry`], resolving the slot's era as `era` says.
+    ///
+    /// Every start runs through here (lazy, `start()`, restart and revive,
+    /// warm start), so this is where the slot's start outcome is recorded for
+    /// the operator's state view (`server_state`).
     pub(super) async fn start_entry_as(
+        &self,
+        key: &PoolKey,
+        entry: &PooledEntry,
+        era: EraResolution,
+    ) -> Result<Arc<dyn Transport>> {
+        let started = self.start_entry_inner(key, entry, era).await;
+        match &started {
+            Ok(_) => {
+                entry.ever_started.store(true, Ordering::Relaxed);
+                entry.start_failed.store(false, Ordering::Relaxed);
+                entry.auth_wait.store(false, Ordering::Relaxed);
+            }
+            Err(e) if e.is_authorization_wait() => entry.auth_wait.store(true, Ordering::Relaxed),
+            Err(_) => entry.start_failed.store(true, Ordering::Relaxed),
+        }
+        started
+    }
+
+    async fn start_entry_inner(
         &self,
         key: &PoolKey,
         entry: &PooledEntry,
