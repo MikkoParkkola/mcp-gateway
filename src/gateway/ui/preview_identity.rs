@@ -3,11 +3,51 @@
 //! The name and version a previewed server reports for itself: untrusted
 //! display text, cleaned once here for both protocol eras.
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
-/// The preview's `package` block for a reported `serverInfo` value.
-pub(super) fn package(_info: Option<&Value>) -> Value {
-    Value::Null
+use crate::security::sanitize::is_format_char;
+
+/// Characters kept of a reported name or version. Counted in characters, so
+/// a multibyte name is never cut inside one.
+const CAP: usize = 128;
+
+/// The preview's `package` block for a reported `serverInfo` value: each of
+/// `name` and `version` cleaned on its own, null when it is missing or not
+/// text, and the whole block null when neither survives.
+pub(super) fn package(info: Option<&Value>) -> Value {
+    let field = |key: &str| {
+        info.and_then(|info| info.get(key))
+            .and_then(Value::as_str)
+            .and_then(display_text)
+    };
+    let (name, version) = (field("name"), field("version"));
+    if name.is_none() && version.is_none() {
+        return Value::Null;
+    }
+    let truncated =
+        name.as_ref().is_some_and(|(_, cut)| *cut) || version.as_ref().is_some_and(|(_, cut)| *cut);
+    json!({
+        "name": name.map(|(text, _)| text),
+        "version": version.map(|(text, _)| text),
+        "source": "reported_by_server",
+        "truncated": truncated,
+    })
+}
+
+/// `raw` without controls (Cc), formats (Cf: bidi overrides, zero-width
+/// marks) or line and paragraph separators (Zl, Zp), trimmed and capped, with
+/// whether the cap cut it; `None` when nothing is left. A server picks these
+/// strings, so they must not be able to reorder or hide what is shown.
+fn display_text(raw: &str) -> Option<(String, bool)> {
+    let kept: String = raw
+        .chars()
+        .filter(|&c| !(c.is_control() || is_format_char(c) || matches!(c, '\u{2028}' | '\u{2029}')))
+        .collect();
+    let kept = kept.trim();
+    if kept.is_empty() {
+        return None;
+    }
+    Some((kept.chars().take(CAP).collect(), kept.chars().count() > CAP))
 }
 
 #[cfg(test)]

@@ -128,6 +128,8 @@ async fn preview_handler(
         "transport": "openapi",
         "url": body.url.as_deref().map(crate::security::sanitize::redact_url_keep_path),
         "publisher": {"verified": false, "source": null},
+        // No server to ask, so nothing reported; the key keeps one shape.
+        "package": null,
     });
 
     (

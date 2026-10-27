@@ -345,8 +345,10 @@ async fn run_confirmed(
     };
     transport.set_body_budget(RESPONSE_BUDGET, PREVIEW_BUDGET);
     let outcome = tokio::time::timeout(PREVIEW_CAP, async {
-        crate::backend::start_detached_http(&transport, name, REQUEST_TIMEOUT).await?;
-        crate::backend::list_tools_for_preview(name, transport.as_ref()).await
+        let reported =
+            crate::backend::start_detached_http(&transport, name, REQUEST_TIMEOUT).await?;
+        let listing = crate::backend::list_tools_for_preview(name, transport.as_ref()).await?;
+        Ok::<_, crate::Error>((reported, listing))
     })
     .await;
     // Teardown before any answer, the 504 and 502 included.
@@ -364,8 +366,9 @@ async fn run_confirmed(
         )
         .into_response(),
         Ok(Err(error)) => failed(&error),
-        Ok(Ok(listing)) => {
+        Ok(Ok((reported, listing))) => {
             let mut body = listed_body(&listing, described, started.elapsed());
+            body["preview"]["package"] = super::preview_identity::package(reported.as_ref());
             body["preview"]["teardown"] = json!({"ms": millis(teardown)});
             Json(body).into_response()
         }
@@ -404,7 +407,6 @@ fn listed_body(listing: &PreviewListing, mut preview: Value, elapsed: Duration) 
             })
         })
         .collect();
-    preview["package"] = super::preview_identity::package(None);
     preview["stopped"] = json!(true);
     preview["truncated"] = json!(listing.truncated);
     preview["elapsed_ms"] = json!(millis(elapsed));
