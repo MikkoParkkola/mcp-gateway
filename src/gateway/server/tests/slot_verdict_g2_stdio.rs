@@ -302,6 +302,40 @@ async fn tools_list_never_serves_a_rotated_grants_slot_stdio() {
     );
 }
 
+/// SHARED.5 (`tools/list` only, stdio twin): the sole operator's first
+/// listing of a backend with per-user sessions only shows its own schema,
+/// from one fill of its own slot, and never the shared slot's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cold_callers_first_tools_list_shows_its_own_schema_stdio() {
+    let stdio = operator_stdio();
+    assert!(
+        !stdio.listed_schema_has_folder(1).await,
+        "a cold caller was shown the shared schema"
+    );
+    assert_eq!(
+        stdio.gateway.lists_to(BACKEND),
+        1,
+        "one fill of the caller's own slot"
+    );
+}
+
+/// SHARED.5 (overlap, stdio twin): two overlapping listings of the cold sole
+/// operator never show the shared schema, and its slot is filled once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn overlapping_listings_of_a_cold_caller_fill_once_stdio() {
+    let stdio = operator_stdio();
+    let (a, b) = tokio::join!(
+        stdio.listed_schema_has_folder(1),
+        stdio.listed_schema_has_folder(2)
+    );
+    assert!(!a && !b, "a listing showed the shared schema");
+    assert_eq!(
+        stdio.gateway.lists_to(BACKEND),
+        1,
+        "the overlapping listings filled twice"
+    );
+}
+
 /// The stdio gateway over the sole operator's managed backend, [`TOOL`]
 /// surfaced and the shared slot warm: the operator's slot is cold.
 fn operator_stdio() -> Stdio {
