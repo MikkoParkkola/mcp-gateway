@@ -30,6 +30,8 @@ pub(crate) enum ResponseEffect {
     /// Delivered with a gateway annotation added (findings, contract notes).
     Annotated,
     /// Delivered with bytes the gateway changed.
+    // Only the firewall's egress scan rewrites.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
     Rewritten,
     /// Not delivered: the gateway answered with a refusal.
     Refused,
@@ -46,7 +48,9 @@ impl ResponseEffect {
     }
 }
 
-/// Which part of the answer a scan judged.
+/// Which part of the answer a scan judged. Only the firewall's egress scan
+/// judges a part.
+#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Part {
     Result,
@@ -134,11 +138,13 @@ pub(crate) fn refused<E>(error: E) -> E {
 }
 
 /// A scanner returned a verdict on a non-empty `part` of this delivery.
+#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
 pub(crate) fn scanned() {
     with(|facts| facts.scanned = true);
 }
 
 /// A scanner found `kind` (from its closed set) at `severity` in `part`.
+#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
 pub(crate) fn found(kind: String, severity: Severity, part: Part) {
     with(|facts| {
         facts.scanned = true;
