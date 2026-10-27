@@ -405,6 +405,7 @@ async fn g7_the_meta_tool_and_the_watcher_both_publish_the_flag() {
         shutdown_rx,
         None,
         None,
+        super::refusals::ReloadReporting::default(),
     )
     .expect("the watcher starts");
     write(&path, &flag(true)).expect("write");
