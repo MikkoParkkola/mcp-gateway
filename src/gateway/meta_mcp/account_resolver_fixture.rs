@@ -617,6 +617,9 @@ pub(super) struct Dispatches {
     /// Run once, as the next `tools/call` is answered (F13: empties the slot
     /// between a bridged exchange's rounds).
     on_call: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// How long each named backend waits, in tokio time, before it answers a
+    /// `tools/list` (MIK-8962: a slow backend against a listing's deadline).
+    list_delays: Mutex<std::collections::BTreeMap<String, std::time::Duration>>,
 }
 
 /// One scripted backend answer (A11 cells).
@@ -646,6 +649,11 @@ impl Dispatches {
     /// Run `hook` once, as the next `tools/call` is answered.
     pub(super) fn on_next_call(&self, hook: impl FnOnce() + Send + 'static) {
         *self.on_call.lock() = Some(Box::new(hook));
+    }
+
+    /// Make `server` wait `delay` before it answers a `tools/list`.
+    pub(super) fn delay_lists_on(&self, server: &str, delay: std::time::Duration) {
+        self.list_delays.lock().insert(server.to_string(), delay);
     }
 
     /// Let the script answer `tools/list` as well as `tools/call`.
@@ -747,6 +755,18 @@ impl crate::transport::Transport for CapturingTransport {
             && let Some(hook) = self.dispatches.on_call.lock().take()
         {
             hook();
+        }
+        let delay = (method == "tools/list")
+            .then(|| {
+                self.dispatches
+                    .list_delays
+                    .lock()
+                    .get(&self.server)
+                    .copied()
+            })
+            .flatten();
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
         }
         // The scripted answers are for `tools/call`; the cold-slot
         // `tools/list` R2 sends first (F13) keeps the fixture's catalogue.

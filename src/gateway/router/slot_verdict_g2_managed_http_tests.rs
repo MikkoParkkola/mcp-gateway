@@ -20,7 +20,7 @@ use tower::ServiceExt;
 use super::create_router;
 use crate::config::{ApiKeyConfig, AuthConfig, SurfacedToolConfig, api_key_digest_spec};
 use crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::{
-    BACKEND, Binding, DirectAccountGateway,
+    BACKEND, Binding, DirectAccountGateway, PERSONAL_BACKEND, Second,
 };
 use crate::security::TransparencyLogger;
 use crate::security::transparency_log::TransparencyLogConfig;
@@ -89,6 +89,18 @@ async fn fixture_for(
     binding: &Binding,
     arm: impl FnOnce(&mut crate::gateway::meta_mcp::MetaMcp),
 ) -> Fx {
+    let gateway = DirectAccountGateway::new(auth.clone(), binding);
+    fixture_on(gateway, &auth, &[BACKEND], arm).await
+}
+
+/// The router over `gateway`, [`TOOL`] surfaced on each of `surfaced`, each
+/// one's shared slot warm with a valid [`TOOL`] and the operator's slots cold.
+async fn fixture_on(
+    mut gateway: DirectAccountGateway,
+    auth: &AuthConfig,
+    surfaced: &[&str],
+    arm: impl FnOnce(&mut crate::gateway::meta_mcp::MetaMcp),
+) -> Fx {
     let audit = tempfile::tempdir().unwrap();
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
@@ -103,16 +115,18 @@ async fn fixture_for(
         }))
         .expect("open log"),
     );
-    let mut gateway = DirectAccountGateway::new(auth.clone(), binding);
-    let (mut state, store) = super::tests::test_router_app_state_with_auth(&auth).await;
+    let (mut state, store) = super::tests::test_router_app_state_with_auth(auth).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.backends = gateway.backends();
-    let mut meta = gateway
-        .take_meta()
-        .with_surfaced_tools(vec![SurfacedToolConfig {
-            server: BACKEND.to_string(),
-            tool: TOOL.to_string(),
-        }]);
+    let mut meta = gateway.take_meta().with_surfaced_tools(
+        surfaced
+            .iter()
+            .map(|server| SurfacedToolConfig {
+                server: (*server).to_string(),
+                tool: TOOL.to_string(),
+            })
+            .collect(),
+    );
     meta.enable_transparency_log(Arc::clone(&log));
     arm(&mut meta);
     let meta = Arc::new(meta);
@@ -122,11 +136,13 @@ async fn fixture_for(
         "name": TOOL, "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}}
     }))
     .expect("a tool");
-    gateway
-        .backends()
-        .get(BACKEND)
-        .expect("the backend")
-        .store_shared_tools_for_test(vec![tool]);
+    for server in surfaced {
+        gateway
+            .backends()
+            .get(server)
+            .expect("the backend")
+            .store_shared_tools_for_test(vec![tool.clone()]);
+    }
     Fx {
         router: create_router(Arc::clone(&state)),
         gateway,
@@ -215,8 +231,10 @@ async fn listed_schema_has_folder(fx: &Fx, id: u64) -> bool {
 /// A rotated grant's slot is never a listing view (HTTP). The operator's slot
 /// is warmed by a real `gateway_list_tools` fill (schema A, no properties);
 /// the shared slot holds schema B. After the grant rotates the old slot is
-/// still warm and indexed, but `tools/list` must not serve A: the now-cold
-/// caller sees the shared view B (SLOTVIS.6). RED without the recheck.
+/// still warm and indexed, but `tools/list` must not serve it: the now-cold
+/// caller's view is re-established under the current grant, a fresh fill on a
+/// slot of its own, and never the shared view B (MIK-8962). RED without the
+/// recheck.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tools_list_never_serves_a_rotated_grants_slot_http() {
     let fx = fixture().await;
@@ -246,9 +264,22 @@ async fn tools_list_never_serves_a_rotated_grants_slot_http() {
             .contains(&old),
         "premise: rotation leaves the old slot warm, so this is the listing's check"
     );
+    let fills = fx.gateway.lists_to(BACKEND);
     assert!(
-        listed_schema_has_folder(&fx, 3).await,
-        "tools/list served the rotated grant's stale slot (schema A), not the shared view B"
+        !listed_schema_has_folder(&fx, 3).await,
+        "tools/list served the shared view B to a backend with per-user sessions only"
+    );
+    assert_eq!(
+        fx.gateway.lists_to(BACKEND),
+        fills + 1,
+        "the rotated caller's view was not re-established by a fresh fill"
+    );
+    assert!(
+        backend
+            .populated_per_user_bindings_for_test()
+            .iter()
+            .any(|binding| *binding != old),
+        "the fresh fill did not land on the current grant's own slot"
     );
 }
 
@@ -586,5 +617,154 @@ async fn tools_list_never_warms_a_backend_the_grant_excludes_http() {
     assert!(
         reached.is_empty(),
         "tools/list reached a backend the caller's grant excludes: {reached:?}"
+    );
+}
+
+/// The surfaced entries in a `tools/list` answer whose trust card names
+/// `server`.
+fn surfaced_on<'a>(answer: &'a Value, server: &str) -> Vec<&'a Value> {
+    answer
+        .pointer("/result/tools")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|t| t["name"] == TOOL && t.to_string().contains(server))
+        .collect()
+}
+
+/// Whether an entry carries the shared slot's schema B (a `folder` property).
+fn is_shared_schema(entry: &Value) -> bool {
+    entry.pointer("/inputSchema/properties/folder").is_some()
+}
+
+/// SHARED.5 (`tools/list` only): a cold caller's first listing of a backend
+/// with per-user sessions only shows the caller's own schema, from one fill of
+/// its own slot, and never the shared slot's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cold_callers_first_tools_list_shows_its_own_schema_http() {
+    let fx = fixture().await;
+    assert!(
+        !listed_schema_has_folder(&fx, 1).await,
+        "a cold caller was shown the shared schema"
+    );
+    assert_eq!(
+        fx.gateway.lists_to(BACKEND),
+        1,
+        "one fill of the caller's own slot"
+    );
+}
+
+/// SHARED.5 (overlap): two overlapping listings of one cold caller never show
+/// the shared schema, and the caller's slot is filled once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn overlapping_listings_of_a_cold_caller_fill_once_http() {
+    let fx = fixture().await;
+    let (a, b) = tokio::join!(
+        rpc(&fx, 1, "tools/list", json!({})),
+        rpc(&fx, 2, "tools/list", json!({}))
+    );
+    for answer in [&a, &b] {
+        assert!(
+            !surfaced_on(answer, BACKEND)
+                .into_iter()
+                .any(is_shared_schema),
+            "a listing showed the shared schema: {answer}"
+        );
+    }
+    assert_eq!(
+        fx.gateway.lists_to(BACKEND),
+        1,
+        "the overlapping listings filled twice"
+    );
+}
+
+/// The router over both managed backends, [`TOOL`] surfaced on each.
+async fn fixture_two() -> Fx {
+    let auth = sole_operator();
+    let gateway = DirectAccountGateway::with_second(
+        auth.clone(),
+        &Binding::Connected,
+        Second::PersonalAccount,
+    );
+    fixture_on(gateway, &auth, &[BACKEND, PERSONAL_BACKEND], |_| {}).await
+}
+
+/// SHARED.5 (deadline): two cold backends, one slow past the listing's
+/// deadline. The listing returns by the deadline with the fast backend's own
+/// tool and without the slow one's; the slow fill finishes on its own lease,
+/// and the next listing shows it with no further fill.
+#[tokio::test(start_paused = true)]
+async fn a_slow_backend_is_withheld_by_the_deadline_then_listed_http() {
+    let fx = fixture_two().await;
+    let deadline = fx
+        .gateway
+        .backends()
+        .get(PERSONAL_BACKEND)
+        .expect("the second backend")
+        .tools_fill_bound();
+    fx.gateway.delay_lists_on(PERSONAL_BACKEND, deadline * 2);
+    let started = tokio::time::Instant::now();
+    let first = rpc(&fx, 1, "tools/list", json!({})).await;
+    assert!(
+        started.elapsed() <= deadline + std::time::Duration::from_secs(1),
+        "the listing waited past its deadline: {:?}",
+        started.elapsed()
+    );
+    assert!(
+        surfaced_on(&first, BACKEND)
+            .iter()
+            .any(|t| !is_shared_schema(t)),
+        "the fast backend's own tool was not listed: {first}"
+    );
+    assert!(
+        surfaced_on(&first, PERSONAL_BACKEND).is_empty(),
+        "the slow backend was listed before its own fill finished: {first}"
+    );
+    tokio::time::sleep(deadline * 2).await;
+    let fills = fx.gateway.lists_to(PERSONAL_BACKEND);
+    let second = rpc(&fx, 2, "tools/list", json!({})).await;
+    assert!(
+        surfaced_on(&second, PERSONAL_BACKEND)
+            .iter()
+            .any(|t| !is_shared_schema(t)),
+        "the slow fill did not finish on its own lease: {second}"
+    );
+    assert_eq!(
+        fx.gateway.lists_to(PERSONAL_BACKEND),
+        fills,
+        "listed from a new fill, not the one the first listing started"
+    );
+}
+
+/// SHARED.5 (transient): a busy custody during a listing's revalidation
+/// leaves a running cold lease standing, and that lease's fill publishes.
+#[tokio::test(start_paused = true)]
+async fn a_busy_custody_leaves_a_running_cold_lease_http() {
+    let fx = fixture().await;
+    let bound = fx
+        .gateway
+        .backends()
+        .get(BACKEND)
+        .expect("the backend")
+        .tools_fill_bound();
+    fx.gateway.delay_lists_on(BACKEND, bound * 2);
+    // Claims the lease and starts the fill, which outlives this listing.
+    let _ = rpc(&fx, 1, "tools/list", json!({})).await;
+    fx.gateway.fail_custody_for_test(true);
+    let _ = rpc(&fx, 2, "tools/list", json!({})).await;
+    fx.gateway.fail_custody_for_test(false);
+    tokio::time::sleep(bound * 2).await;
+    let fills = fx.gateway.lists_to(BACKEND);
+    let after = rpc(&fx, 3, "tools/list", json!({})).await;
+    assert!(
+        surfaced_on(&after, BACKEND)
+            .iter()
+            .any(|t| !is_shared_schema(t)),
+        "the running lease's fill did not publish: {after}"
+    );
+    assert_eq!(
+        fx.gateway.lists_to(BACKEND),
+        fills,
+        "a busy custody forced a second fill"
     );
 }

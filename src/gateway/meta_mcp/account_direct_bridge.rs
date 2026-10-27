@@ -252,6 +252,15 @@ impl DirectAccountGateway {
             .count()
     }
 
+    /// The `tools/list` requests sent to `backend`: one per fill of a slot.
+    pub(crate) fn lists_to(&self, backend: &str) -> usize {
+        self.dispatches
+            .all()
+            .iter()
+            .filter(|call| call.server == backend && call.method == "tools/list")
+            .count()
+    }
+
     /// Fail the next non-`tools/list` request with the HTTP `status` the
     /// transport would report, with every account left live (MIK-8406 P8i).
     pub(crate) fn fail_next(&self, status: u16) {
@@ -261,6 +270,12 @@ impl DirectAccountGateway {
     /// Answer the next non-`tools/list` request with `result`.
     pub(crate) fn answer_next(&self, result: serde_json::Value) {
         self.dispatches.script(&[Answer::Result(result)]);
+    }
+
+    /// Make `backend` wait `delay` (tokio time) before it answers a
+    /// `tools/list` (MIK-8962).
+    pub(crate) fn delay_lists_on(&self, backend: &str, delay: std::time::Duration) {
+        self.dispatches.delay_lists_on(backend, delay);
     }
 
     /// Answer the next requests, `tools/list` included, with these HTTP
