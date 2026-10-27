@@ -3,14 +3,17 @@
 //! The shared byte writer: gateway.yaml's exact bytes under the config lock
 //! pair, then one reload, and the old file back whenever that reload refuses.
 
-use std::{path::Path, path::PathBuf, sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
+
+#[cfg(unix)] // only the symlink tests read it
+use std::path::PathBuf;
 
 use super::reload_context::replace::{
     Expected, FileRevision, Replace, ReplaceError, Replaced, replace_detached,
 };
-use super::replace_test_support::{
-    NEXT, START, WAIT, context, names, read, running_has_b, setup, to,
-};
+#[cfg(unix)]
+use super::replace_test_support::context;
+use super::replace_test_support::{NEXT, START, WAIT, names, read, running_has_b, setup, to};
 use super::*;
 use crate::config::Config;
 use crate::fs_lock::ExclusiveFileLock;
