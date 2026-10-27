@@ -328,7 +328,11 @@ impl StdioTasks {
         match method {
             // Boxed, as the `tools/call` dispatch is: only a `tasks/get`
             // request pays for this arm's future state (MIK-8392).
-            "tasks/get" => Box::pin(self.dispatch_get(id, params, caller, session_id)).await,
+            "tasks/get" => {
+                // A task read serves a stored answer: not this request's.
+                crate::gateway::delivery_facts::unvouched();
+                Box::pin(self.dispatch_get(id, params, caller, session_id)).await
+            }
             "tasks/update" => {
                 // THIS update request's caller resumes the round; a resumed
                 // result is never response-cached, so no revision is carried.

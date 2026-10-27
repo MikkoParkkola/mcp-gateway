@@ -4,6 +4,16 @@
 
 use super::{DeliveryCredential, ResponseCorrelation};
 
+/// Whether a delivery record states what the gateway did to the answer.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum Facts {
+    /// An answer: its cell's facts, and whether the delivered frame is the
+    /// gateway's own refusal.
+    Answer { frame_refused: bool },
+    /// A notification: never an answer's facts.
+    Omit,
+}
+
 impl super::super::MetaMcp {
     /// Record the delivery attempt of the finalized `response`, with `read`
     /// (the answer's `tenant_read` fields) in the same record. With auth on, a
@@ -76,7 +86,12 @@ impl super::super::MetaMcp {
             .map_or(AuditOutcome::Ok, |e| AuditOutcome::Error(e.code));
         self.record_delivery_attempt(
             || serde_json::to_value(response),
-            outcome,
+            (
+                outcome,
+                Facts::Answer {
+                    frame_refused: response.delivery_refusal,
+                },
+            ),
             "transport_finalized",
             correlation,
             credential,
@@ -95,7 +110,7 @@ impl super::super::MetaMcp {
     ) -> bool {
         self.record_delivery_attempt(
             || Ok(frame.clone()),
-            crate::security::audit::AuditOutcome::Ok,
+            (crate::security::audit::AuditOutcome::Ok, Facts::Omit),
             "notification_delivered",
             correlation,
             credential,
@@ -107,7 +122,7 @@ impl super::super::MetaMcp {
     pub(super) async fn record_delivery_attempt(
         &self,
         value: impl FnOnce() -> serde_json::Result<serde_json::Value>,
-        outcome: crate::security::audit::AuditOutcome,
+        (outcome, facts): (crate::security::audit::AuditOutcome, Facts),
         stage: &str,
         correlation: &ResponseCorrelation<'_>,
         credential: DeliveryCredential,
@@ -116,7 +131,7 @@ impl super::super::MetaMcp {
         append_delivery_attempt(
             self.transparency_logger.as_ref(),
             value,
-            outcome,
+            (outcome, facts),
             stage,
             correlation,
             credential,
@@ -139,10 +154,17 @@ pub(in crate::gateway) async fn record_answer_delivery(
     credential: DeliveryCredential,
     read: Option<serde_json::Map<String, serde_json::Value>>,
 ) -> bool {
+    // The direct route raises its refusals into the cell where it builds
+    // them: its frame is already rendered, so no marker survives to here.
     append_delivery_attempt(
         logger,
         || answer,
-        outcome,
+        (
+            outcome,
+            Facts::Answer {
+                frame_refused: false,
+            },
+        ),
         "transport_finalized",
         correlation,
         credential,
@@ -157,7 +179,7 @@ pub(in crate::gateway) async fn record_answer_delivery(
 async fn append_delivery_attempt(
     logger: Option<&std::sync::Arc<crate::security::TransparencyLogger>>,
     value: impl FnOnce() -> serde_json::Result<serde_json::Value>,
-    outcome: crate::security::audit::AuditOutcome,
+    (outcome, facts): (crate::security::audit::AuditOutcome, Facts),
     stage: &str,
     correlation: &ResponseCorrelation<'_>,
     credential: DeliveryCredential,
@@ -202,6 +224,16 @@ async fn append_delivery_attempt(
                 fields.entry(name).or_insert(value);
             }
         }
+    }
+    // What the gateway did to the answer, from the delivery's cell.
+    if let Facts::Answer { frame_refused } = facts {
+        let facts = crate::gateway::delivery_facts::snapshot();
+        crate::gateway::delivery_facts::record_fields(
+            facts.as_ref(),
+            frame_refused,
+            false,
+            &mut fields,
+        );
     }
     // Named as the invocation record names the same call (MIK-7938): a
     // certificate or agent caller is the client `anonymous` or `public`, so

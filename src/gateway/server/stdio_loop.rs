@@ -506,65 +506,68 @@ impl Gateway {
                 let hold = Arc::clone(&self.test_seams.stdio_dispatch_hold);
                 // MIK-8176: this request's slots are owned by its task, from
                 // dispatch through the writer queue.
-                Box::pin(crate::gateway::meta_mcp::sealed_hold::scoped(async move {
-                    #[cfg(test)]
-                    hold.pause().await;
-                    let ((response, staged), hidden) = Self::dispatch_streaming_notifications(
-                        Box::pin(Self::dispatch_single_staged(
-                            &meta_mcp,
-                            &tool_policy,
-                            &mtls_policy,
-                            request,
-                            StdioClient {
-                                session_id,
-                                channel: &*channel,
-                                handshake_capabilities,
-                                tasks: tasks.as_deref(),
-                                serving,
-                                discover: super::stdio_single::DiscoverListing::Configured,
-                                sanitize,
-                            },
-                        )),
-                        &writer,
-                        &reads,
-                        Some(meta_mcp.notification_screen("stdio", session_id)),
-                    )
-                    .await;
-                    #[cfg(test)]
-                    if let Some(gate) = gate {
-                        drop(gate.acquire().await);
-                    }
-                    // Room first, then the cancel check and the enqueue under
-                    // one lock: no frame for the id is queued after its cancel
-                    // was processed, however long the queue was full.
-                    let params = params.flatten();
-                    let response = match response {
-                        Some(value) => Some(
-                            Self::judge_and_commit(
+                // One delivery's facts: dispatch, judge and record.
+                Box::pin(crate::gateway::delivery_facts::scope(
+                    crate::gateway::meta_mcp::sealed_hold::scoped(async move {
+                        #[cfg(test)]
+                        hold.pause().await;
+                        let ((response, staged), hidden) = Self::dispatch_streaming_notifications(
+                            Box::pin(Self::dispatch_single_staged(
                                 &meta_mcp,
-                                &reads,
-                                session_id,
-                                (value, params.as_ref(), hidden.as_ref()),
-                                staged,
-                            )
-                            .await,
-                        ),
-                        None => None,
-                    };
-                    // MIK-8176 C1-stdio: the settled answer, before the
-                    // cancel check and the enqueue.
-                    #[cfg(test)]
-                    super::stdio_seams::after_commit().await;
-                    #[cfg(test)]
-                    if response.is_some() && writer.capacity() == 0 {
-                        super::stdio_seams::answer_found_queue_full();
-                    }
-                    if let Some(response) = response
-                        && let Ok(permit) = writer.reserve().await
-                    {
-                        cancelled.send_unless_cancelled(answers.as_ref(), permit, response);
-                    }
-                }))
+                                &tool_policy,
+                                &mtls_policy,
+                                request,
+                                StdioClient {
+                                    session_id,
+                                    channel: &*channel,
+                                    handshake_capabilities,
+                                    tasks: tasks.as_deref(),
+                                    serving,
+                                    discover: super::stdio_single::DiscoverListing::Configured,
+                                    sanitize,
+                                },
+                            )),
+                            &writer,
+                            &reads,
+                            Some(meta_mcp.notification_screen("stdio", session_id)),
+                        )
+                        .await;
+                        #[cfg(test)]
+                        if let Some(gate) = gate {
+                            drop(gate.acquire().await);
+                        }
+                        // Room first, then the cancel check and the enqueue under
+                        // one lock: no frame for the id is queued after its cancel
+                        // was processed, however long the queue was full.
+                        let params = params.flatten();
+                        let response = match response {
+                            Some(value) => Some(
+                                Self::judge_and_commit(
+                                    &meta_mcp,
+                                    &reads,
+                                    session_id,
+                                    (value, params.as_ref(), hidden.as_ref()),
+                                    staged,
+                                )
+                                .await,
+                            ),
+                            None => None,
+                        };
+                        // MIK-8176 C1-stdio: the settled answer, before the
+                        // cancel check and the enqueue.
+                        #[cfg(test)]
+                        super::stdio_seams::after_commit().await;
+                        #[cfg(test)]
+                        if response.is_some() && writer.capacity() == 0 {
+                            super::stdio_seams::answer_found_queue_full();
+                        }
+                        if let Some(response) = response
+                            && let Ok(permit) = writer.reserve().await
+                        {
+                            cancelled.send_unless_cancelled(answers.as_ref(), permit, response);
+                        }
+                    }),
+                ))
             };
             if spawned {
                 let slot = slot.expect("a spawned request holds the slot it was admitted on");
