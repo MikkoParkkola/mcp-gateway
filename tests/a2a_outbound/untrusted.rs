@@ -58,6 +58,9 @@ fn blocking_firewall() -> Firewall {
             action: FirewallAction::Block,
             scan: vec![],
             reason: Some("MIK-8112 row".into()),
+            servers: None,
+            keys: None,
+            except: None,
         }],
         ..FirewallConfig::default()
     };

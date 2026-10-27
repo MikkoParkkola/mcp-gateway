@@ -9,8 +9,8 @@ use super::{Finding, FindingLocation, Firewall, FirewallAction, FirewallVerdict,
 use crate::protocol::continuation::Keyring;
 use crate::security::Severity;
 use crate::security::response_policy::{
-    InvalidResponseTargets, ResponseArtifactKind, ResponseCorrelation, ResponseMutationPolicy,
-    ResponsePolicyTarget,
+    InvalidResponseTargets, KeyOf, ResponseArtifactKind, ResponseCorrelation,
+    ResponseMutationPolicy, ResponsePolicyTarget, RuleTarget, ServerOf,
 };
 
 impl Firewall {
@@ -43,7 +43,17 @@ impl Firewall {
         let mut action = targets
             .iter()
             .fold(FirewallAction::Allow, |combined, target| {
-                strongest_action(combined, self.resolve_action(&target.tool, &findings))
+                strongest_action(
+                    combined,
+                    self.resolve_action(
+                        RuleTarget {
+                            server: ServerOf::Backend(&target.server),
+                            tool: &target.tool,
+                            key: KeyOf::NotKnown,
+                        },
+                        &findings,
+                    ),
+                )
             });
         if let Some(original) = original
             && protected_value_changed(&original, response, mutation)

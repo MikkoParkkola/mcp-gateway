@@ -251,6 +251,9 @@ async fn a_dispatched_round_refused_by_the_firewall_settles_the_key_as_a_refusal
                     action: FirewallAction::Block,
                     scan: vec![],
                     reason: None,
+                    servers: None,
+                    keys: None,
+                    except: None,
                 }],
                 ..FirewallConfig::default()
             },

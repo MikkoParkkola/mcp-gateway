@@ -6,6 +6,7 @@
 use super::{CompiledRule, Finding, FirewallAction, FirewallRule, FirewallVerdict, ScanType};
 use crate::error::rpc_codes::INVALID_REQUEST;
 use crate::security::Severity;
+use crate::security::response_policy::{KeyOf, RuleTarget, ServerOf};
 
 impl FirewallVerdict {
     /// Construct an unconditional allow verdict (used when scanning is disabled).
@@ -99,31 +100,126 @@ pub(super) fn compile_rule(rule: &FirewallRule) -> CompiledRule {
     // tool. That backstop fails safe for an `allow` rule and open for a `block`
     // rule, which is acceptable only because the load refusal comes first.
     let pattern = glob::Pattern::new(&rule.tool_match).ok();
+    let globs = |list: &[String]| list.iter().map(|g| glob::Pattern::new(g).ok()).collect();
     CompiledRule {
         pattern,
         action: rule.action,
         scans: rule.scan.clone(),
+        servers: rule.servers.as_deref().map(globs),
+        keys: rule.keys.clone(),
+        except: rule
+            .except
+            .iter()
+            .flatten()
+            .map(|entry| CompiledException {
+                server: entry.server.as_deref().map(|g| glob::Pattern::new(g).ok()),
+                tool: entry.tool.as_deref().map(|g| glob::Pattern::new(g).ok()),
+                key: entry.key.clone(),
+            })
+            .collect(),
         reason: rule.reason.clone(),
     }
 }
 
-pub(super) fn rule_matches(rule: &CompiledRule, tool: &str) -> bool {
-    rule.pattern.as_ref().is_some_and(|p| p.matches(tool))
+/// One compiled `except` entry. A field that is `Some(None)` held a glob that
+/// did not parse (refused at load) and matches nothing.
+#[derive(Debug, Clone)]
+pub(super) struct CompiledException {
+    server: Option<Option<glob::Pattern>>,
+    tool: Option<Option<glob::Pattern>>,
+    key: Option<String>,
 }
 
-/// The first rule whose glob covers `tool` and whose `scan` list holds
-/// `scan_type`; an empty list holds every type.
+/// Whether `rule`'s `match` glob covers `tool`, ignoring its scopes.
+pub(super) fn rule_matches(rule: &CompiledRule, tool: &str) -> bool {
+    glob_covers(rule.pattern.as_ref(), tool)
+}
+
+fn glob_covers(glob: Option<&glob::Pattern>, name: &str) -> bool {
+    glob.is_some_and(|p| p.matches(name))
+}
+
+fn server_covered(globs: &[Option<glob::Pattern>], server: ServerOf<'_>) -> bool {
+    match server {
+        ServerOf::Backend(name) => globs.iter().any(|g| glob_covers(g.as_ref(), name)),
+        ServerOf::NoBackend => false,
+    }
+}
+
+impl CompiledException {
+    /// Every field the entry sets matches the call. `key` is the one concrete
+    /// key being resolved (`None`: no key).
+    fn matches(&self, target: RuleTarget<'_>, key: Option<&str>) -> bool {
+        self.server
+            .as_ref()
+            .is_none_or(|g| server_covered(std::slice::from_ref(g), target.server))
+            && self
+                .tool
+                .as_ref()
+                .is_none_or(|g| glob_covers(g.as_ref(), target.tool))
+            && self.key.as_deref().is_none_or(|k| key == Some(k))
+    }
+}
+
+/// Whether `rule` applies to `target`, resolving with the one concrete `key`.
+pub(super) fn rule_applies(rule: &CompiledRule, target: RuleTarget<'_>, key: Option<&str>) -> bool {
+    glob_covers(rule.pattern.as_ref(), target.tool)
+        && rule
+            .servers
+            .as_deref()
+            .is_none_or(|globs| server_covered(globs, target.server))
+        && rule
+            .keys
+            .as_deref()
+            .is_none_or(|keys| key.is_some_and(|k| keys.iter().any(|named| named == k)))
+        && !rule.except.iter().any(|entry| entry.matches(target, key))
+}
+
+/// The first rule that applies to `target` (with the concrete `key`) and
+/// whose `scan` list holds `scan_type`; an empty list holds every type.
 pub(super) fn first_matching_rule_action(
     rules: &[CompiledRule],
-    tool: &str,
+    target: RuleTarget<'_>,
+    key: Option<&str>,
     scan_type: ScanType,
 ) -> Option<FirewallAction> {
     rules
         .iter()
         .find(|rule| {
-            rule_matches(rule, tool) && (rule.scans.is_empty() || rule.scans.contains(&scan_type))
+            rule_applies(rule, target, key)
+                && (rule.scans.is_empty() || rule.scans.contains(&scan_type))
         })
         .map(|rule| rule.action)
+}
+
+/// The concrete keys `target` is resolved under: its own, none, or for a key
+/// that is not known, every key a rule names plus none (the strongest of
+/// those outcomes is taken).
+pub(super) fn candidate_keys<'a>(
+    rules: &'a [CompiledRule],
+    target: RuleTarget<'a>,
+) -> Vec<Option<&'a str>> {
+    match target.key {
+        KeyOf::Key(k) => vec![Some(k)],
+        KeyOf::NoKey => vec![None],
+        KeyOf::NotKnown => {
+            let mut named: Vec<Option<&str>> = rules
+                .iter()
+                .flat_map(|rule| {
+                    rule.keys
+                        .iter()
+                        .flatten()
+                        .map(String::as_str)
+                        .chain(rule.except.iter().filter_map(|e| e.key.as_deref()))
+                })
+                .map(Some)
+                .collect();
+            named.push(None);
+            named.sort_unstable();
+            named.dedup();
+            named
+        }
+    }
 }
 
 pub(super) const fn default_action_for_severity(severity: Severity) -> FirewallAction {

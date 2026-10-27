@@ -13,6 +13,36 @@ pub(crate) struct ResponsePolicyTarget {
     pub tool: String,
 }
 
+/// The API key a call was authenticated with, for a firewall rule's `keys`
+/// scope. `NotKnown` is a surface that carries no key: a rule there resolves to
+/// the strongest outcome over every key it could have been.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeyOf<'a> {
+    /// Authenticated with this API key.
+    Key(&'a str),
+    /// Known to carry no API key (stdio, an anonymous or non-key caller).
+    NoKey,
+    /// The key is not carried here.
+    NotKnown,
+}
+
+/// The backend a firewall rule's `servers` scope is judged against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ServerOf<'a> {
+    /// The backend's registry name.
+    Backend(&'a str),
+    /// No backend: matches no `servers` glob.
+    NoBackend,
+}
+
+/// What a firewall rule is matched against.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RuleTarget<'a> {
+    pub(crate) server: ServerOf<'a>,
+    pub(crate) tool: &'a str,
+    pub(crate) key: KeyOf<'a>,
+}
+
 /// Internal response admission requires at least one server-bound policy target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(feature = "firewall"), allow(dead_code))]

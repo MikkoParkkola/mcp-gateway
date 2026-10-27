@@ -17,6 +17,9 @@ fn allow_rule(tool_match: &str) -> FirewallRule {
         action: FirewallAction::Allow,
         reason: None,
         scan: vec![],
+        servers: None,
+        keys: None,
+        except: None,
     }
 }
 

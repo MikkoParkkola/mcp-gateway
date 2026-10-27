@@ -193,6 +193,9 @@ fn exec_rule_elevates_sql_injection_to_block() {
             action: FirewallAction::Block,
             reason: Some("All exec tools blocked".to_string()),
             scan: vec![],
+            servers: None,
+            keys: None,
+            except: None,
         }],
         ..FirewallConfig::default()
     };

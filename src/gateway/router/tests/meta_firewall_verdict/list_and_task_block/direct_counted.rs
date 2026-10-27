@@ -28,6 +28,9 @@ fn rule(tool_match: &str, action: FirewallAction) -> FirewallRule {
         action,
         reason: Some("direct counted fixture".to_string()),
         scan: Vec::new(),
+        servers: None,
+        keys: None,
+        except: None,
     }
 }
 

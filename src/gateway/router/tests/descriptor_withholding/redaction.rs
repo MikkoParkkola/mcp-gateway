@@ -112,6 +112,9 @@ async fn t10b_a_pinned_tool_survives_redaction_on_the_direct_route() {
                     action: crate::security::firewall::FirewallAction::Warn,
                     reason: None,
                     scan: Vec::new(),
+                    servers: None,
+                    keys: None,
+                    except: None,
                 }],
                 ..FirewallConfig::default()
             },

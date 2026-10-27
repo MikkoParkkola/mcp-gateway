@@ -352,6 +352,9 @@ fn collecting_then_refused() -> (MetaMcp, Arc<AtomicUsize>) {
         action: FirewallAction::Block,
         reason: None,
         scan: Vec::new(),
+        servers: None,
+        keys: None,
+        except: None,
     };
     let config = FirewallConfig {
         rules: vec![rule],

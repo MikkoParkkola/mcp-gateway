@@ -141,6 +141,9 @@ fn rule_overrides_default_action_to_block() {
             action: FirewallAction::Block,
             reason: Some("Shell execution blocked".to_string()),
             scan: vec![],
+            servers: None,
+            keys: None,
+            except: None,
         }],
         ..FirewallConfig::default()
     };
@@ -160,6 +163,9 @@ fn rule_overrides_default_action_to_warn() {
             action: FirewallAction::Warn,
             reason: None,
             scan: vec![],
+            servers: None,
+            keys: None,
+            except: None,
         }],
         ..FirewallConfig::default()
     };
@@ -179,6 +185,9 @@ fn glob_rule_matches_prefix() {
             action: FirewallAction::Block,
             reason: None,
             scan: vec![],
+            servers: None,
+            keys: None,
+            except: None,
         }],
         ..FirewallConfig::default()
     };
@@ -196,6 +205,9 @@ fn wildcard_rule_matches_all_tools() {
             action: FirewallAction::Allow,
             reason: None,
             scan: vec![],
+            servers: None,
+            keys: None,
+            except: None,
         }],
         ..FirewallConfig::default()
     };
@@ -216,12 +228,18 @@ fn first_matching_rule_wins() {
                 action: FirewallAction::Warn,
                 reason: Some("Catch-all warning".to_string()),
                 scan: vec![],
+                servers: None,
+                keys: None,
+                except: None,
             },
             FirewallRule {
                 tool_match: "exec_*".to_string(),
                 action: FirewallAction::Block,
                 reason: Some("Specific block".to_string()),
                 scan: vec![],
+                servers: None,
+                keys: None,
+                except: None,
             },
         ],
         ..FirewallConfig::default()
@@ -241,6 +259,9 @@ fn clean_args_ignore_matching_rules() {
             action: FirewallAction::Block,
             reason: Some("Only applies when a finding exists".to_string()),
             scan: vec![],
+            servers: None,
+            keys: None,
+            except: None,
         }],
         ..FirewallConfig::default()
     };
@@ -327,6 +348,9 @@ fn an_unscoreable_call_cannot_be_downgraded_by_a_rule() {
             action: FirewallAction::Allow,
             reason: Some("allow everything".to_string()),
             scan: Vec::new(),
+            servers: None,
+            keys: None,
+            except: None,
         }],
         ..FirewallConfig::default()
     };
@@ -788,6 +812,9 @@ fn ac_control_2_a_budget_refusal_cannot_be_downgraded_by_a_rule() {
             action: FirewallAction::Allow,
             reason: Some("allow everything".to_string()),
             scan: Vec::new(),
+            servers: None,
+            keys: None,
+            except: None,
         }],
         ..FirewallConfig::default()
     };

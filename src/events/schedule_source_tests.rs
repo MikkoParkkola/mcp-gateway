@@ -440,6 +440,9 @@ async fn a_blocked_label_is_dead_lettered() {
             action: FirewallAction::Block,
             reason: None,
             scan: Vec::new(),
+            servers: None,
+            keys: None,
+            except: None,
         }],
         ..FirewallConfig::default()
     };

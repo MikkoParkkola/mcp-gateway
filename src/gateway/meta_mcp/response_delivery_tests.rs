@@ -130,6 +130,9 @@ fn rule(tool: &str, action: FirewallAction) -> FirewallRule {
         action,
         scan: vec![],
         reason: None,
+        servers: None,
+        keys: None,
+        except: None,
     }
 }
 

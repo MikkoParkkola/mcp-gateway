@@ -667,6 +667,9 @@ async fn fixture_inner(
                         action,
                         reason: None,
                         scan: Vec::new(),
+                        servers: None,
+                        keys: None,
+                        except: None,
                     })
                     .to_vec()
             });

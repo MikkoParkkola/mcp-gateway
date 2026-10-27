@@ -56,6 +56,9 @@ async fn plan_state_with(
                     action: FirewallAction::Allow,
                     reason: None,
                     scan: Vec::new(),
+                    servers: None,
+                    keys: None,
+                    except: None,
                 }],
                 ..FirewallConfig::default()
             },

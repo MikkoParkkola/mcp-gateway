@@ -300,6 +300,9 @@ async fn link_out_covers_firewall_redaction_stdio() {
                     action: FirewallAction::Allow,
                     scan: vec![],
                     reason: None,
+                    servers: None,
+                    keys: None,
+                    except: None,
                 }],
                 ..FirewallConfig::default()
             },

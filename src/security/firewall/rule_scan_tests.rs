@@ -19,6 +19,9 @@ fn rule(tool_match: &str, scan: &[ScanType], action: FirewallAction) -> Firewall
         action,
         reason: None,
         scan: scan.to_vec(),
+        servers: None,
+        keys: None,
+        except: None,
     }
 }
 
@@ -47,7 +50,12 @@ const SHELL: (ScanType, Severity) = (ScanType::ShellInjection, Severity::High);
 
 fn resolve(fw: &Firewall, tool: &str, found: &[(ScanType, Severity)]) -> FirewallAction {
     let findings: Vec<Finding> = found.iter().map(|&(t, s)| finding(t, s)).collect();
-    fw.resolve_action(tool, &findings)
+    let target = crate::security::response_policy::RuleTarget {
+        server: crate::security::response_policy::ServerOf::Backend("s"),
+        tool,
+        key: crate::security::response_policy::KeyOf::NoKey,
+    };
+    fw.resolve_action(target, &findings)
 }
 
 /// The fail-open this fixes: a credentials `allow` must not carry a shell

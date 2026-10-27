@@ -376,9 +376,16 @@ impl MetaMcp {
                 message: "inputResponses must be an object".to_owned(),
             });
         }
-        let mut verdict = firewall.rescan(tool, outbound.arguments);
+        // The key is threaded to this check with the request side's (POLICY.2
+        // section 3); until then it resolves as not known, which only fails closed.
+        let target = crate::security::response_policy::RuleTarget {
+            server: crate::security::response_policy::ServerOf::Backend(server),
+            tool,
+            key: crate::security::response_policy::KeyOf::NotKnown,
+        };
+        let mut verdict = firewall.rescan(target, outbound.arguments);
         if let Some(answers) = outbound.answers {
-            let answered = firewall.rescan(tool, answers);
+            let answered = firewall.rescan(target, answers);
             if rank(answered.action) > rank(verdict.action) {
                 verdict.action = answered.action;
             }
