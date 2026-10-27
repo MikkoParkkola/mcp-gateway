@@ -17,6 +17,7 @@ pub(crate) mod adopt;
 mod client_entry;
 pub mod config_scanner;
 mod jsonc;
+#[cfg(feature = "webui")]
 pub(crate) mod listing;
 pub mod process_scanner;
 mod secret_map;
@@ -67,6 +68,10 @@ pub struct DiscoveredServer {
     /// Internal only; the discovery route shows a keyed hash of it. Empty for
     /// a find not read from a client config file.
     #[serde(skip)]
+    #[cfg_attr(
+        not(feature = "webui"),
+        expect(dead_code, reason = "read by the web UI's discovery listing")
+    )]
     pub(crate) entry_digest: String,
 }
 

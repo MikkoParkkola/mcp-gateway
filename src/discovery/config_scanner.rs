@@ -672,6 +672,7 @@ impl ConfigScanner {
     }
 }
 
+#[cfg(feature = "webui")]
 #[path = "config_scanner_client_scan.rs"]
 pub(crate) mod client_scan;
 
