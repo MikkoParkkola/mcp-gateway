@@ -9,10 +9,10 @@ src/config_reload/mod.rs	apply_patch	statement	Lifecycle	getx1
 src/config_reload/mod.rs	apply_patch	statement	Lifecycle	registerx1
 src/config_reload/mod.rs	apply_patch	statement	Lifecycle	registerx1
 src/config_reload/mod.rs	apply_patch	statement	Lifecycle	removex1
-src/config_reload/reload_context.rs	load_off_worker	statement	Lifecycle	reload_read_slotx1
-src/config_reload/reload_context.rs	lock_reload_within	statement	Lifecycle	lock_reloadx1
 src/config_reload/reload_context.rs	new	statement	Lifecycle	enforce_destinationsx1
 src/config_reload/reload_context.rs	reload_outcome	statement	Lifecycle	lock_reloadx1
+src/config_reload/reload_context_lock.rs	load_off_worker	statement	Lifecycle	reload_read_slotx1
+src/config_reload/reload_context_lock.rs	lock_reload_within	statement	Lifecycle	lock_reloadx1
 src/config_reload/reload_warm_hook.rs	report_registered	statement	Lifecycle	resolve_unwarmedx1
 src/config_reload/watcher.rs	start_with_hook	statement	Lifecycle	enforce_destinationsx1
 src/events/fanout.rs	reconcile_catalogue_after	statement	Background	with_membershipx1
