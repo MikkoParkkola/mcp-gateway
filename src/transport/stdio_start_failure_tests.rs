@@ -6,8 +6,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::super::early_exit::{ReaderHold, STDERR_READER_HOLD};
+use super::super::early_exit::{ReaderHold, STDERR_READER_HOLD, StderrTail};
 use super::StdioTransport;
+use super::joined;
 
 // A child that answers nothing and dies with a reason on stderr: the shape a
 // package manager produces when its install tree is unusable.
@@ -15,35 +16,25 @@ const DYING_CHILD: &str = r#"printf 'Error: Cannot find module %s\n' "'/root/.np
 exit 3
 "#;
 
-fn dying_transport() -> Arc<StdioTransport> {
-    StdioTransport::new(
+/// The dying child in a directory of its own: rows run in parallel, and a
+/// script another row is rewriting reads as empty.
+fn dying_transport() -> (tempfile::TempDir, Arc<StdioTransport>) {
+    let dir = tempfile::tempdir().expect("scratch");
+    std::fs::write(dir.path().join("dying.sh"), DYING_CHILD).expect("write the dying child");
+    let transport = StdioTransport::new(
         "sh dying.sh",
         HashMap::new(),
-        Some(
-            std::env::temp_dir()
-                .join(format!("stdio-tail-{}", std::process::id()))
-                .to_string_lossy()
-                .into_owned(),
-        ),
+        Some(dir.path().to_string_lossy().into_owned()),
         std::time::Duration::from_secs(5),
         None,
-    )
-}
-
-/// Writes the dying child where `dying_transport` runs it.
-fn write_dying_child() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("stdio-tail-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create the scratch directory");
-    let script = dir.join("dying.sh");
-    std::fs::write(&script, DYING_CHILD).expect("write the dying child");
-    script
+    );
+    (dir, transport)
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn a_failed_start_keeps_the_childs_stderr_for_classifying_it() {
-    write_dying_child();
-    let transport = dying_transport();
+    let (_dir, transport) = dying_transport();
 
     transport
         .start()
@@ -61,8 +52,7 @@ async fn a_failed_start_keeps_the_childs_stderr_for_classifying_it() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_failed_start_records_how_the_child_exited() {
-    write_dying_child();
-    let transport = dying_transport();
+    let (_dir, transport) = dying_transport();
 
     transport
         .start()
@@ -82,8 +72,7 @@ async fn a_failed_start_records_how_the_child_exited() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_start_drops_what_the_previous_attempt_said() {
-    write_dying_child();
-    let transport = dying_transport();
+    let (_dir, transport) = dying_transport();
 
     transport.start().await.expect_err("the child dies");
     assert!(
@@ -204,12 +193,25 @@ async fn a_retried_start_sends_the_new_child_exactly_one_initialize() {
         .expect("close");
 }
 
-/// How long the held-back rows keep the stderr reader from its first read:
-/// past both drain windows, as a loaded host can.
+/// How long the held rows keep the reader task from the read loop: past
+/// both drain windows, as a loaded host can.
 const READER_HOLD: std::time::Duration = std::time::Duration::from_millis(1500);
 
-/// A failed start of `script`'s child whose stderr reader is held at `hold`.
-async fn start_with_held_reader(script: &str, hold: ReaderHold) -> Arc<StdioTransport> {
+/// The drain window a held row runs with.
+#[derive(Clone, Copy, Debug)]
+enum Window {
+    /// The production window of the path the start takes.
+    Real,
+    /// No time at all: only a drain that reads before its clock can pass.
+    Zero,
+}
+
+/// A failed start of `script`'s child, its reader task held at `hold`.
+async fn start_with_held_reader(
+    script: &str,
+    hold: ReaderHold,
+    window: Window,
+) -> Arc<StdioTransport> {
     let dir = tempfile::tempdir().expect("scratch");
     std::fs::write(dir.path().join("child.sh"), script).expect("write the child");
     let transport = StdioTransport::new(
@@ -219,6 +221,9 @@ async fn start_with_held_reader(script: &str, hold: ReaderHold) -> Arc<StdioTran
         std::time::Duration::from_secs(5),
         None,
     );
+    if matches!(window, Window::Zero) {
+        *transport.stderr_bound.lock() = Some(std::time::Duration::ZERO);
+    }
     STDERR_READER_HOLD.with(|cell| cell.set(Some(hold)));
     let outcome = transport.start().await;
     STDERR_READER_HOLD.with(|cell| cell.set(None));
@@ -226,18 +231,24 @@ async fn start_with_held_reader(script: &str, hold: ReaderHold) -> Arc<StdioTran
     transport
 }
 
-/// The early path: a reader that runs late still reads to the child's EOF.
+/// The early path: a reader task that runs late loses nothing the child wrote.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_late_stderr_reader_still_leaves_the_tail_of_an_early_exit() {
-    let transport =
-        start_with_held_reader(DYING_CHILD, ReaderHold::BeforeFirstRead(READER_HOLD)).await;
-    assert!(
-        transport.stderr_tail().contains("Cannot find module"),
-        "the child's stderr was closed with its words in the pipe, so a reader held back by load \
-         must still read them: {:?}",
-        transport.stderr_tail()
-    );
+    for window in [Window::Real, Window::Zero] {
+        let transport = start_with_held_reader(
+            DYING_CHILD,
+            ReaderHold::BeforeFirstRead(READER_HOLD),
+            window,
+        )
+        .await;
+        assert!(
+            transport.stderr_tail().contains("Cannot find module"),
+            "the child's stderr was closed with its words in the pipe, so a reader held back by \
+             load must still read them ({window:?}): {:?}",
+            transport.stderr_tail()
+        );
+    }
 }
 
 /// The late path: the child the failure killed said why on stderr first.
@@ -245,27 +256,157 @@ async fn a_late_stderr_reader_still_leaves_the_tail_of_an_early_exit() {
 #[tokio::test]
 async fn a_late_stderr_reader_still_leaves_the_tail_of_a_late_failure() {
     let script = format!("echo 'EACCES: permission denied' >&2\n{REFUSING_CHILD}");
-    let transport = start_with_held_reader(&script, ReaderHold::BeforeFirstRead(READER_HOLD)).await;
+    for window in [Window::Real, Window::Zero] {
+        let transport =
+            start_with_held_reader(&script, ReaderHold::BeforeFirstRead(READER_HOLD), window).await;
+        assert!(
+            transport.stderr_tail().contains("EACCES"),
+            "the killed child's stderr ends at its death, so a reader held back by load must \
+             still read it ({window:?}): {:?}",
+            transport.stderr_tail()
+        );
+    }
+}
+
+/// A reader task that ran once and then starved: the clock must not have
+/// started at that first poll, or the line after it is lost the same way.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_stderr_reader_starved_after_its_first_line_still_reads_the_rest() {
+    // The pause lets the loop store the first line and wait before the second.
+    let script = "printf 'starting\\n' >&2\nsleep 0.3\nprintf 'Error: Cannot find module zod\\n' >&2\nexit 3\n";
+    for window in [Window::Real, Window::Zero] {
+        let transport =
+            start_with_held_reader(script, ReaderHold::AfterFirstLine(READER_HOLD), window).await;
+        assert!(
+            transport.stderr_tail().contains("Cannot find module"),
+            "the reader had run, but the needle was its second line; a clock started at its \
+             first poll still loses it ({window:?}): {:?}",
+            transport.stderr_tail()
+        );
+    }
+}
+
+/// A last line with no newline is the child's explanation as often as not.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_late_reader_keeps_an_unterminated_last_line() {
+    let script = "printf 'EACCES: permission denied' >&2\nexit 3\n";
+    let transport = start_with_held_reader(
+        script,
+        ReaderHold::BeforeFirstRead(READER_HOLD),
+        Window::Zero,
+    )
+    .await;
     assert!(
         transport.stderr_tail().contains("EACCES"),
-        "the killed child's stderr ends at its death, so a reader held back by load must still \
-         read it: {:?}",
+        "{:?}",
         transport.stderr_tail()
     );
 }
 
-/// A reader that ran once and then starved: the clock must not have started
-/// at that first poll, or the line after it is lost the same way.
+/// More lines than tokio's per-poll budget of reads, all queued by a child
+/// that has exited: a dead child's pipe (64 KiB at most) fits in one budget,
+/// so a drain with no time left still reads to the last line.
 #[cfg(unix)]
 #[tokio::test]
-async fn a_stderr_reader_starved_after_its_first_line_still_reads_the_rest() {
-    let script =
-        "printf 'starting\\n' >&2\nprintf 'Error: Cannot find module zod\\n' >&2\nexit 3\n";
-    let transport = start_with_held_reader(script, ReaderHold::AfterFirstLine(READER_HOLD)).await;
+async fn a_late_reader_reads_a_dead_childs_whole_pipe() {
+    let script = "i=1; while [ $i -le 200 ]; do echo \"line $i\" >&2; i=$((i+1)); done\nexit 3\n";
+    let transport = start_with_held_reader(
+        script,
+        ReaderHold::BeforeFirstRead(READER_HOLD),
+        Window::Zero,
+    )
+    .await;
+    let tail = transport.stderr_tail();
     assert!(
-        transport.stderr_tail().contains("Cannot find module"),
-        "the reader had run, but the needle was its second line; a clock started at its first \
-         poll still loses it: {:?}",
-        transport.stderr_tail()
+        tail.ends_with("line 200") && tail.contains("line 181"),
+        "{tail:?}"
     );
+}
+
+/// A key block opened past an overlong line's limit still masks what follows
+/// when the drain, not the task, reads it: the loop's state is never lost.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_late_reader_still_masks_a_key_block_opened_in_an_overlong_line() {
+    let script = "printf '%04100d-----BEGIN KEY-----\\nplainbodytext\\n' 0 >&2\nexit 3\n";
+    let transport = start_with_held_reader(
+        script,
+        ReaderHold::BeforeFirstRead(READER_HOLD),
+        Window::Zero,
+    )
+    .await;
+    let tail = transport.stderr_tail();
+    assert!(!tail.contains("plainbodytext"), "{tail:?}");
+    assert!(tail.contains("[masked]"), "{tail:?}");
+}
+
+/// A child whose stderr outlives it: `holder` runs outside its process group
+/// (perl's `setsid`, as macOS ships no `setsid` command) with stderr inherited.
+fn child_with_held_stderr(holder: &str) -> tokio::process::Child {
+    let script = format!(
+        "echo 'EACCES: permission denied' >&2\nperl -MPOSIX -e 'setsid; exec @ARGV' sh -c '{holder}' &\nexit 3\n"
+    );
+    tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg(script)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn the child")
+}
+
+/// Drains a held pipe with a short window: returns how long the drain took
+/// and whether the reader task was gone soon after.
+async fn drain_held(holder: &str) -> (StderrTail, std::time::Duration, bool) {
+    let mut child = child_with_held_stderr(holder);
+    let reader = super::super::early_exit::spawn_stderr_tail(
+        child.stderr.take().expect("piped stderr"),
+        "held".to_string(),
+    );
+    let _ = child.wait().await;
+    let tail = Arc::clone(&reader.tail);
+    let started = std::time::Instant::now();
+    let task = reader.drain(std::time::Duration::from_millis(200)).await;
+    let took = started.elapsed();
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(2), task)
+        .await
+        .is_ok();
+    (tail, took, ended)
+}
+
+/// A quiet holder: the drain returns at its window with what was read, and
+/// the reader task is aborted rather than left reading for the holder's life.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_held_pipe_ends_the_drain_and_the_reader_task() {
+    let (tail, took, ended) = drain_held("sleep 5").await;
+    assert!(
+        joined(&tail.lock()).contains("EACCES"),
+        "the line before the hold is kept"
+    );
+    assert!(
+        took < std::time::Duration::from_secs(2),
+        "the drain took {took:?}"
+    );
+    assert!(ended, "the reader task still runs after the drain");
+}
+
+/// A chatty holder never leaves the pipe empty for long: the window still
+/// bounds the drain.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_chatty_held_pipe_still_ends_the_drain_at_its_window() {
+    let (tail, took, ended) =
+        drain_held("i=0; while [ $i -lt 500 ]; do echo tick >&2; sleep 0.01; i=$((i+1)); done")
+            .await;
+    assert!(!tail.lock().is_empty());
+    assert!(
+        took < std::time::Duration::from_secs(2),
+        "the drain took {took:?}"
+    );
+    assert!(ended, "the reader task still runs after the drain");
 }
