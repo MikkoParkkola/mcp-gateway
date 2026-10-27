@@ -238,8 +238,8 @@ pub(crate) fn refused_sign_in(navigation: Navigation, refusal: Response) -> Resp
 /// place, so the paths that share it cannot drift apart.
 fn clock_refusal() -> Response {
     bearer_unauthorized_response(
-        "The host clock reads before 1970, so a sign-in cannot be dated. Set the clock; if \
-         this was the live link, it still works afterwards.",
+        "The host clock reads before 1970, so a sign-in cannot be dated. Set the clock; a \
+         live link is kept and works afterwards.",
     )
 }
 

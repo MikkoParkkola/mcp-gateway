@@ -37,7 +37,7 @@ fn redeem_body(
     (status, String::from_utf8_lossy(&body).into_owned())
 }
 
-/// T5d (inverted by MIK-8875 UI1.23): the refusal no longer says whether the
+/// T5d (inverted): the refusal no longer says whether the
 /// link was used up. Saying so told a caller from elsewhere that their guess
 /// was the live value; the operator still sees `spent` in the log.
 #[test]

@@ -214,12 +214,11 @@ impl DashboardBootstrap {
     /// outstanding cannot be timed.
     fn take_matching(&self, candidate: &str) -> Option<(Secret, Option<SystemTime>)> {
         let mut guard = self.value.lock().ok()?;
-        let matches = match guard.as_ref() {
-            Some((expected, _)) => expected.matches(candidate),
-            None => {
-                let _ = secret_eq(&EMPTY_SLOT_DUMMY, candidate);
-                false
-            }
+        let matches = if let Some((expected, _)) = guard.as_ref() {
+            expected.matches(candidate)
+        } else {
+            let _ = secret_eq(&EMPTY_SLOT_DUMMY, candidate);
+            false
         };
         if matches { guard.take() } else { None }
     }

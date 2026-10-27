@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8875 UI1.23: a browser whose sign-in link or code is refused lands
+//! A browser whose sign-in link or code is refused lands
 //! back in the shell, at one fixed address with one fixed hint word, so it
 //! sees the refusal in plain words. Anything that is not a browser
 //! navigation keeps today's 401.
@@ -62,13 +62,15 @@ async fn r1_a_refused_link_sends_a_browser_to_the_shell() {
     assert_eq!(location(&out), Some(TARGET));
     assert!(out.set_cookie().is_empty(), "{}", out.set_cookie());
     assert_eq!(
-        out.headers.get(header::CACHE_CONTROL).map(|v| v.as_bytes()),
+        out.headers
+            .get(header::CACHE_CONTROL)
+            .map(axum::http::HeaderValue::as_bytes),
         Some(&b"no-store"[..])
     );
     assert_eq!(
         out.headers
             .get(header::REFERRER_POLICY)
-            .map(|v| v.as_bytes()),
+            .map(axum::http::HeaderValue::as_bytes),
         Some(&b"no-referrer"[..])
     );
 }
