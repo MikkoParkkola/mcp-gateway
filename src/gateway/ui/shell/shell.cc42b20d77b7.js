@@ -79,8 +79,8 @@ const STATE_COPY = {
 /** A page state (loading, empty, error, forbidden, stale, not-built). */
 export function state(kind, { title, body, action } = {}) {
   const [defTitle, defBody] = STATE_COPY[kind] ?? STATE_COPY.error;
-  const role = kind === 'loading' || kind === 'stale' ? 'status' : kind === 'error' || kind === 'forbidden' ? 'alert' : null;
-  const node = el('section', { class: 'state', 'data-state': kind, role }, el('h2', {}, title ?? defTitle));
+  // No role: the one live region says transitions (UI1.18); a state is plain content.
+  const node = el('section', { class: 'state', 'data-state': kind }, el('h2', {}, title ?? defTitle));
   const text = body ?? defBody;
   if (text) node.append(el('p', { class: 'muted' }, text));
   if (kind === 'not-built') node.append(el('p', {}, el('a', { class: 'lnk', href: '/ui/classic' }, 'Open the classic page')));
@@ -132,6 +132,72 @@ export async function api(path, init = {}) {
     if (err?.name === 'AbortError') throw err; // the caller cancelled the read
     throw new ApiError(reply.status, path, { unreadable: true });
   }
+}
+
+// ---------------------------------------------------------------- announcer
+
+/** The pause between writes, so a screen reader takes each entry on its own. */
+const DWELL_MS = 500;
+/** How long an entry stays in the region; removing it is not announced. */
+const ENTRY_MS = 10_000;
+/** Messages waiting for the next write, in arrival order. */
+const pending = [];
+let pumpTimer = null;
+let lastWrite = 0;
+const idleWaiters = [];
+
+/**
+ * Say `text` through the one live region (UI1.18). For state transitions only,
+ * never a counter or a chart. A `count` message keeps only its latest value;
+ * every other message is said, in order. A message about a page (`page`, or a
+ * screen's own) is dropped once the user moves to another page, and every
+ * message once the signed-in identity changes.
+ */
+export function announce(text, { subject = 'page' } = {}) {
+  const pageBound = subject === 'page' || subject.startsWith('screen:');
+  const guard = { epoch: authEpoch, seq: pageBound ? renderSeq : null };
+  if (subject === 'count') {
+    const i = pending.findIndex((m) => m.subject === 'count');
+    if (i >= 0) pending.splice(i, 1);
+  }
+  pending.push({ text, subject, guard });
+  if (!pumpTimer) pumpTimer = setTimeout(pump, Math.max(0, lastWrite + DWELL_MS - Date.now()));
+}
+
+/** Append everything still current as one entry; queue the rest for the next dwell. */
+function pump() {
+  pumpTimer = null;
+  const current = pending.splice(0).filter(({ guard }) =>
+    guard.epoch === authEpoch && (guard.seq === null || guard.seq === renderSeq));
+  if (current.length) {
+    const entry = el('p', {}, current.map((m) => sentence(m.text)).join(' '));
+    document.getElementById('announcer').append(entry);
+    setTimeout(() => entry.remove(), ENTRY_MS);
+    lastWrite = Date.now();
+  }
+  if (pending.length) pumpTimer = setTimeout(pump, DWELL_MS);
+  else for (const done of idleWaiters.splice(0)) done();
+}
+
+/** `text` ending as a sentence, so a batch reads as separate sentences. */
+const sentence = (text) => (/[.!?…]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
+
+/**
+ * Move the live region to `parent` empty: a region re-parented with an entry
+ * in it may be read again.
+ */
+function moveAnnouncer(parent) {
+  const region = document.getElementById('announcer');
+  region.replaceChildren();
+  parent.append(region);
+}
+
+/** Resolves once everything queued has been written. */
+export function announcerIdle() {
+  return new Promise((done) => {
+    if (!pending.length && !pumpTimer) done();
+    else idleWaiters.push(done);
+  });
 }
 
 /** What a page error says it was: the cause, its banner copy, and for a server answer its code. */
@@ -236,6 +302,7 @@ export function openPalette() {
     }
   });
   paletteEl.addEventListener('close', () => {
+    moveAnnouncer(document.body); // before the dialog goes
     paletteEl.remove();
     paletteEl = null;
     search?.setAttribute('aria-expanded', 'false');
@@ -247,6 +314,8 @@ export function openPalette() {
   draw();
   search?.setAttribute('aria-expanded', 'true');
   paletteEl.showModal();
+  // A modal makes the rest of the page inert, the live region with it: it rides along.
+  moveAnnouncer(paletteEl);
   input.focus();
 }
 
@@ -369,7 +438,7 @@ function failure(err, key, onRetry) {
   const retry = el('button', { type: 'button', class: 'btn' }, 'Retry');
   retry.addEventListener('click', () => onRetry(retry));
   const text = last ? `${body} The data below is from ${stamp(last.at)}, before the error.` : body;
-  const banner = state('error', { title, body: text, action: retry });
+  const banner = bannerState('error', { title, body: text, action: retry });
   banner.dataset.cause = cause;
   const node = el('div', { class: 'failure' }, banner);
   if (last) {
@@ -379,8 +448,47 @@ function failure(err, key, onRetry) {
 }
 
 /** Run a page's tab into `into`; a fault thrown synchronously becomes a rejection. */
-const runTab = (spec, route, into) =>
-  Promise.resolve().then(() => spec.tabs[route.tab](into, { object: route.object, tab: route.tab, api, state }));
+const runTab = (spec, route, into) => Promise.resolve().then(() => spec.tabs[route.tab](into, {
+  object: route.object, tab: route.tab, api, state,
+  show: screenBanner(into, route.page),
+  refreshCounts,
+  announce: (text) => announce(text, { subject: `screen:${route.page}` }),
+}));
+
+/**
+ * A banner state (error, forbidden, stale) for showBanner() or failure() only:
+ * every banner is inserted through showBanner(), which says it.
+ */
+function bannerState(kind, opts) {
+  return state(kind, opts);
+}
+
+/** Put a banner node in `container`, and say its heading for the page shown now. */
+function showBanner(container, node) {
+  container.replaceChildren(mark(node));
+  announce(node.querySelector('.state h2, h2').textContent, { subject: 'page' });
+}
+
+/**
+ * A screen's banner: show(kind, opts) puts one at the top of its content and
+ * says its title; show(null) takes it away, saying "Updates resumed." when it
+ * was stale.
+ */
+function screenBanner(into, page) {
+  return (kind, opts = {}) => {
+    const old = into.querySelector(':scope > .state[data-banner]');
+    old?.remove();
+    const subject = `screen:${page}`;
+    if (!kind) {
+      if (old?.dataset.state === 'stale') announce('Updates resumed.', { subject });
+      return;
+    }
+    const node = bannerState(kind, opts);
+    node.dataset.banner = '';
+    into.prepend(node);
+    announce(node.querySelector('h2').textContent, { subject });
+  };
+}
 
 /** Render the current address. */
 export function render() {
@@ -434,8 +542,8 @@ export function render() {
     if (status === 401) return; // the sign-in view is showing; it re-renders after sign-in
     if (status === 403) {
       snapshotsNow().delete(key); // this identity may no longer see it
-      content.replaceChildren(mark(state('forbidden')));
-    } else content.replaceChildren(mark(failure(err, key, retry)));
+      showBanner(content, bannerState('forbidden'));
+    } else showBanner(content, failure(err, key, retry));
   };
 
   // Retry runs the tab again into a staging container laid out under the banner, so the
@@ -498,22 +606,49 @@ function drawNav(current) {
   let badge = decide.querySelector('.count');
   const n = DECISIONS.count;
   if (Number.isInteger(n) && n > 0) {
-    if (!badge) decide.append(badge = el('span', { class: 'count' }));
+    if (!badge) decide.append(badge = el('span', { class: 'count' }), el('span', { class: 'sr-only count-words' }));
     badge.textContent = String(n);
-    badge.setAttribute('aria-label', `${n} to decide`);
+    // The link's name comes from its text: the words sit beside the number, unseen.
+    decide.querySelector('.count-words').textContent = ' to decide';
   } else {
     badge?.remove();
+    decide.querySelector('.count-words')?.remove();
   }
 }
 
-async function loadCounts() {
+/** The last count this identity saw, kept through stretches where none is known. */
+const COUNT_SEEN = { epoch: -1, value: null };
+/** Orders count requests: an answer to an older one is dropped. */
+let countSeq = 0;
+
+/**
+ * Read the To do count and draw it; say it when a value this identity already
+ * knew changes (UI1.18). Its callers: start-up, sign-in, and, through the
+ * render context, the screens and the live stream that change it.
+ */
+export async function refreshCounts() {
+  const epoch = authEpoch;
+  const seq = ++countSeq;
+  let next = null;
   try {
     const { count } = await api('/ui/api/decisions/count');
-    DECISIONS.count = Number.isInteger(count) ? count : null;
+    next = Number.isInteger(count) ? count : null;
   } catch {
-    DECISIONS.count = null; // the count route ships with the To do queue; until then no badge
+    next = null; // the count route ships with the To do queue; until then no badge
   }
+  if (epoch !== authEpoch || seq !== countSeq) return; // a newer read, or another identity, owns the badge now
+  DECISIONS.count = next;
   drawNav(parse(location.pathname).page);
+  if (COUNT_SEEN.epoch !== epoch) {
+    COUNT_SEEN.epoch = epoch; // a new identity's first count is not news
+    COUNT_SEEN.value = next;
+    return;
+  }
+  if (next === null) return;
+  if (COUNT_SEEN.value !== null && COUNT_SEEN.value !== next) {
+    announce(next === 0 ? 'Nothing to decide.' : `${next} to decide.`, { subject: 'count' });
+  }
+  COUNT_SEEN.value = next;
 }
 
 /** Read who is signed in; when auth is on and nobody is, ask for sign-in. */
@@ -555,6 +690,29 @@ function showWho(auth) {
  * not answer within the key check's deadline, says this browser may still be
  * signed in. An answer arriving after a newer sign-in changes nothing.
  */
+/**
+ * Show a sign-in message and say it through the one live region. Only a key
+ * the gateway refused marks the key field invalid; any other outcome clears it.
+ */
+function signinMessage(node, text, { subject, refusedKey = false }) {
+  node.textContent = text;
+  node.hidden = false;
+  announce(text, { subject });
+  if (node.classList.contains('signin-error')) markKey(refusedKey);
+}
+
+/** Tie the key field to the error line while a refused key shows, and only then. */
+function markKey(refused) {
+  const input = document.getElementById('signin-key');
+  if (refused) {
+    input.setAttribute('aria-invalid', 'true');
+    input.setAttribute('aria-describedby', 'signin-error');
+  } else {
+    input.removeAttribute('aria-invalid');
+    input.removeAttribute('aria-describedby');
+  }
+}
+
 async function signOut() {
   bearer = null;
   const epoch = ++authEpoch;
@@ -563,8 +721,7 @@ async function signOut() {
   // the logout is pending must not hide this, nor this overwrite its answer.
   const notice = document.querySelector('.signin-notice');
   showSignIn();
-  notice.textContent = 'Ending the session on the gateway…';
-  notice.hidden = false;
+  signinMessage(notice, 'Ending the session on the gateway…', { subject: 'signin-session' });
   let ended = false;
   try {
     const reply = await fetch('/dashboard/logout', {
@@ -582,7 +739,9 @@ async function signOut() {
   if (ended) {
     notice.hidden = true;
     notice.textContent = '';
-  } else notice.textContent = "Signed out here, but the gateway did not confirm the session ended, so this browser may still be signed in. Reload and sign out again, or clear this site's cookies.";
+  } else {
+    signinMessage(notice, "Signed out here, but the gateway did not confirm the session ended, so this browser may still be signed in. Reload and sign out again, or clear this site's cookies.", { subject: 'signin-session' });
+  }
 }
 
 /**
@@ -632,9 +791,9 @@ async function signIn(ev) {
   const button = document.querySelector('#signin button[type="submit"]');
   const key = input.value.trim();
   error.hidden = true;
+  markKey(false);
   if (!key) {
-    error.textContent = 'Paste an API key, or use the sign-in link.';
-    error.hidden = false;
+    signinMessage(error, 'Paste an API key, or use the sign-in link.', { subject: 'signin-key', refusedKey: true });
     return;
   }
   const form = document.getElementById('signin-form');
@@ -644,6 +803,7 @@ async function signIn(ev) {
   form.setAttribute('aria-busy', 'true');
   let auth = null;
   let message = '';
+  let refused = false;
   try {
     // A gateway that takes the connection but never answers must not leave
     // the button disabled: give up after the check's own deadline.
@@ -656,6 +816,8 @@ async function signIn(ev) {
     else if (reply.status === 403) message = 'That key is valid, but it is not allowed into the web UI. Ask an admin for access.';
     else if (reply.status === 429) message = rateLimited(reply.headers.get('retry-after'));
     else if (reply.status !== 401) message = 'Could not reach the gateway. Try again.';
+    // The gateway judged the key itself (a network failure or a rate limit did not).
+    refused = reply.ok || reply.status === 401 || reply.status === 403;
   } catch {
     message = 'Could not reach the gateway. Try again.';
   } finally {
@@ -665,11 +827,11 @@ async function signIn(ev) {
     form.removeAttribute('aria-busy');
   }
   if (!auth?.signed_in) {
-    error.textContent = message || 'That key was not accepted.';
-    error.hidden = false;
+    signinMessage(error, message || 'That key was not accepted.', { subject: 'signin-key', refusedKey: refused });
     input.select();
     return;
   }
+  markKey(false);
   bearer = key;
   // A newer sign-in supersedes a pending or unconfirmed sign-out's notice.
   const notice = document.querySelector('.signin-notice');
@@ -681,7 +843,7 @@ async function signIn(ev) {
   document.body.classList.remove('signed-out');
   showWho(auth);
   render();
-  loadCounts();
+  refreshCounts();
   document.getElementById('content').focus({ preventScroll: true });
 }
 
@@ -753,15 +915,14 @@ function boot() {
     document.getElementById('content').focus();
   });
   render();
-  loadCounts();
+  refreshCounts();
   loadWho().then(() => {
     // Only a browser still signed out is told; one with a session has nothing to fix.
     // A key check the user has started owns the error line; a late startup
     // answer must not write over it.
     if (!linkRefused || keyCheckStarted || !document.body.classList.contains('signed-out')) return;
     const error = document.querySelector('.signin-error');
-    error.textContent = 'That sign-in link or code did not work. It may be wrong, already used or expired. Run `mcp-gateway dashboard-link` on the gateway’s machine for a new one.';
-    error.hidden = false;
+    signinMessage(error, 'That sign-in link or code did not work. It may be wrong, already used or expired. Run `mcp-gateway dashboard-link` on the gateway’s machine for a new one.', { subject: 'signin-link' });
   });
 }
 

@@ -718,6 +718,9 @@ table.t { width: 100%; border-collapse: collapse; }
 @media (prefers-reduced-motion: reduce) { .skel::after { animation: none; } }
 .state { display: grid; justify-items: start; gap: var(--space-2); padding: var(--space-4) 0; }
 /* A page error over the route's last good data: readable, muted, not operable. */
+/* Read by screen readers, not shown: the live region and the To do badge's words. */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
 .failure { display: grid; gap: var(--space-3); }
 .failure [data-dimmed] { padding: var(--space-3); border: var(--size-rule) dashed var(--color-border-subtle); border-radius: var(--radius-sm);
   color: var(--color-text-secondary); pointer-events: none; }
