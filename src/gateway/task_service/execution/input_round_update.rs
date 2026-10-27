@@ -4,9 +4,8 @@
 //! write and the resume spawn.
 
 use super::{
-    Acceptance, Arc, Handoff, InputOutcome, InputRequired, Map, OwnedCallerContext,
-    PRODUCE_SEAM_WAIT, ProvideOutcome, Resume, TaskExecutor, TaskStatus, Value, input_outcome_of,
-    resume,
+    Acceptance, Arc, Handoff, InputOutcome, Map, OwnedCallerContext, PRODUCE_SEAM_WAIT,
+    ProvideOutcome, Resume, TaskExecutor, TaskStatus, Value, input_outcome_of, resume,
 };
 
 impl TaskExecutor {

@@ -133,6 +133,7 @@ fn t8_no_control_primitive_runs_outside_the_shared_stages() {
         ("direct_dispatch.rs", DIRECT_ROUTE[3]),
         ("direct_audit.rs", DIRECT_ROUTE[4]),
         ("direct_list.rs", DIRECT_ROUTE[5]),
+        ("direct_dispatch/forward.rs", DIRECT_ROUTE[6]),
         ("direct_guards.rs", guards),
     ];
     let mut found = Vec::new();
