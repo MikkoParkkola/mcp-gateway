@@ -51,16 +51,18 @@ async fn every_shared_start_of_a_per_user_backend_is_refused() {
     assert!(!backend.is_running());
 }
 
-/// SHARED.1: refusals are not failures. Repeated refusals leave the shared
-/// slot's breaker closed with no failure counted and its health untouched,
-/// so nothing escalates or trips.
+/// SHARED.1: refusals are not failures. Repeated refusals, fills included,
+/// leave the shared slot's breaker closed with no failure counted, no fill
+/// admitted and its health untouched, so nothing escalates or trips.
 #[tokio::test]
 async fn a_refused_shared_start_counts_nothing() {
     let backend = per_user_backend();
     for _ in 0..5 {
         let _ = backend.ensure_started().await;
         let _ = backend.force_restart().await;
+        let _ = backend.warm_tools().await;
     }
+    assert_eq!(backend.list_fills(), 0, "a refused fill was admitted");
     let breaker = backend.circuit_breaker_stats();
     assert_eq!(breaker.state, crate::failsafe::CircuitState::Closed);
     assert_eq!(

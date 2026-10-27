@@ -475,22 +475,7 @@ impl Backend {
         entry: &PooledEntry,
         era: EraResolution,
     ) -> Result<Arc<dyn Transport>> {
-        // A backend with per-user sessions only is never reached
-        // through a shared session, so its Shared slot never starts, whoever
-        // asks. Refused before anything is built or counted: no transport, no
-        // start in flight, no breaker or budget sees it. The isolation refusal's
-        // code and a denial, so it is not retried.
-        if matches!(key, PoolKey::Shared) && self.shared_slot_refused() {
-            debug!(backend = %self.name, "Not starting the shared slot: per-user sessions only");
-            return Err(Error::Forbidden {
-                code: -32001,
-                status: 403,
-                message: format!(
-                    "backend '{}' takes per-user sessions only; the gateway opens no shared session to it",
-                    self.name
-                ),
-            });
-        }
+        self.refuse_shared_start(key)?;
         let started = self.start_entry_inner(key, entry, era).await;
         match &started {
             Ok(_) => {
@@ -502,6 +487,27 @@ impl Backend {
             Err(_) => entry.start_failed.store(true, Ordering::Relaxed),
         }
         started
+    }
+
+    /// A backend with per-user sessions only is never reached through a
+    /// shared session, so its Shared slot never starts or fills, whoever
+    /// asks. Refused before anything is built, charged or counted: no
+    /// transport, no start in flight, no breaker, budget or fill admission
+    /// sees it. The isolation refusal's code and a denial, so it is not
+    /// retried.
+    pub(super) fn refuse_shared_start(&self, key: &PoolKey) -> Result<()> {
+        if matches!(key, PoolKey::Shared) && self.shared_slot_refused() {
+            debug!(backend = %self.name, "Not starting the shared slot: per-user sessions only");
+            return Err(Error::Forbidden {
+                code: -32001,
+                status: 403,
+                message: format!(
+                    "backend '{}' takes per-user sessions only; the gateway opens no shared session to it",
+                    self.name
+                ),
+            });
+        }
+        Ok(())
     }
 
     async fn start_entry_inner(
