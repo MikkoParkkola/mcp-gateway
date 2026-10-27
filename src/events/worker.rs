@@ -321,53 +321,6 @@ impl EventsHub {
         self.settle_at(services, record, outcome, now).await;
     }
 
-    /// Settle a record that cannot go out after the waits before its send:
-    /// past its lease it is unsent; past its bounds it is dead and unsent; on
-    /// a clock that cannot be read it is neither sent nor buried (MIK-8202). The record just written says
-    /// how that attempt ended. `true` when settled here.
-    async fn settled_unsendable<'a>(
-        &self,
-        services: &Services,
-        record: &OutboxRecord,
-        current: &super::records::Subscription,
-        ended: &(impl Fn(&'static str) -> Attempt<'a> + Sync),
-    ) -> bool {
-        #[cfg(test)]
-        self.before_window.pause().await;
-        // One reading judges the lease and the retry window (MIK-8202).
-        let Ok(now) = crate::clock::utc_now() else {
-            services.audit_outcome(&ended(CLOCK_UNREADABLE)).await;
-            self.settle(services, record, clock_unsent(record)).await;
-            return true;
-        };
-        // An expired row kept for its burials still signs but is not sent
-        // to: unsent, and the next expiry pass settles it (MIK-8061).
-        if !current.live(now) {
-            services.audit_outcome(&ended("subscription_expired")).await;
-            self.settle_with(services, record, |now| {
-                unsent_now("subscription_expired", record, now)
-            })
-            .await;
-            return true;
-        }
-        // After every wait, the row must still be observed as
-        // it was at fan-out (same grant, identity config and lease); nothing
-        // awaits between this and the send. A shared row compares `None`.
-        if self.observed_now(current, &services.live.get()) != Ok(record.observed.clone()) {
-            services.audit_outcome(&ended("observation_changed")).await;
-            self.settle(services, record, quiet_dead(DeadReason::Observation))
-                .await;
-            return true;
-        }
-        if !self.overdue(record, now) {
-            return false;
-        }
-        services.audit_outcome(&ended("exhausted")).await;
-        self.settle(services, record, quiet_dead(DeadReason::Exhausted))
-            .await;
-        true
-    }
-
     /// MIN.2 E1: the delivery is a read by the subscription's caller, on the
     /// history its answers share. A blocked one is audited and dead-lettered
     /// `tenant` here; `None` then.
