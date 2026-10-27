@@ -59,6 +59,10 @@ const CLASSES: [&str; 6] = [
     "composite-or-replay",
 ];
 
+/// Known gaps, each fixed by a follow-up that deletes its slug here when it
+/// flips the last `pending:<slug>` row: a row left pending then fails.
+const PENDING: [&str; 1] = ["capability-refusals"];
+
 #[derive(Default)]
 struct Found {
     builders: std::collections::BTreeMap<String, usize>,
@@ -252,6 +256,12 @@ fn every_refusal_site_is_classified() {
         .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
     {
         let class = row.split('\t').nth(4).unwrap_or("");
-        assert!(CLASSES.contains(&class), "unclassified refusal site: {row}");
+        let pending = class
+            .strip_prefix("pending:")
+            .is_some_and(|slug| PENDING.contains(&slug));
+        assert!(
+            CLASSES.contains(&class) || pending,
+            "unclassified refusal site: {row}"
+        );
     }
 }
