@@ -443,7 +443,7 @@ fn continues_a_skipped_line(file: &std::fs::File, end: u64, len: u64) -> StoreRe
         return Ok(false);
     }
     let last = crate::security::transparency_log::pager::read_window_in(file, end - 1, 1)?;
-    Ok(last != [b'\n'])
+    Ok(last != *b"\n")
 }
 
 /// `body` without the bytes after its last newline: the head of a line the

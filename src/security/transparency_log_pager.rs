@@ -6,16 +6,16 @@
 //! does with a line.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::rotation::MAX_RECORD_BYTES;
 use super::segments::{active_segment_seq, list_segments, sealed_path, segment_seq_in};
 
-/// Where a page starts reading: bytes below `end` in `file` are unread.
+/// Where a page starts reading: bytes below `end` in `segment` are unread.
+/// The segment's file is opened with [`open_segment`].
 pub(crate) struct Position {
-    pub(crate) file: PathBuf,
     pub(crate) end: u64,
-    /// The segment `file` is, the active file included; `None` never occurs
+    /// The segment, the active file included; `None` never occurs
     /// for a resolved position but stays in the cursor shape callers keep.
     pub(crate) segment: Option<u64>,
     /// The cursor no longer named a position, so reading restarts at the
@@ -39,7 +39,6 @@ pub(crate) fn position(log: &Path, cursor: Option<(u64, Option<u64>)>) -> io::Re
     };
     let newest = |reset| -> io::Result<Position> {
         Ok(Position {
-            file: log.to_path_buf(),
             end: len_of(log)?,
             segment: Some(active_seq),
             reset,
@@ -48,7 +47,6 @@ pub(crate) fn position(log: &Path, cursor: Option<(u64, Option<u64>)>) -> io::Re
     match cursor {
         None => newest(false),
         Some((offset, None)) if sealed.is_empty() => Ok(Position {
-            file: log.to_path_buf(),
             end: offset.min(len_of(log)?),
             segment: Some(0),
             reset: false,
@@ -67,7 +65,6 @@ pub(crate) fn position(log: &Path, cursor: Option<(u64, Option<u64>)>) -> io::Re
             };
             let end = offset.min(len_of(&file)?);
             Ok(Position {
-                file,
                 end,
                 segment: Some(seq),
                 reset: false,
@@ -89,7 +86,8 @@ pub(crate) fn older_segment(log: &Path, segment: Option<u64>) -> io::Result<Opti
 
 /// Read `len` bytes starting at `start`. A log file that was never created
 /// reads as empty, matching a view with no events yet.
-pub(crate) fn read_window(path: &Path, start: u64, len: u64) -> io::Result<Vec<u8>> {
+#[cfg(feature = "webui")]
+fn read_window(path: &Path, start: u64, len: u64) -> io::Result<Vec<u8>> {
     if len == 0 {
         return Ok(Vec::new());
     }
@@ -150,8 +148,9 @@ fn active_seq_of(file: &std::fs::File, log: &Path) -> io::Result<u64> {
     segment_seq_in(file, after)
 }
 
-/// [`read_window`] on a file already open. A reader that holds the handle
-/// keeps reading the same bytes when rotation renames the file under it.
+/// Read `len` bytes starting at `start` of a file already open. A reader
+/// that holds the handle keeps reading the same bytes when rotation renames
+/// the file under it.
 pub(crate) fn read_window_in(file: &std::fs::File, start: u64, len: u64) -> io::Result<Vec<u8>> {
     use std::io::{Read, Seek, SeekFrom};
 
@@ -185,9 +184,12 @@ impl Tail {
     }
 }
 
-/// Read the tail window below `end` in `file`. A window that starts mid-line
-/// drops that partial head; the line it belongs to is read by the page that
-/// covers the bytes below. Returns the window and the bytes it spans.
+/// Read the tail window below `end` in the file at `file`, without line
+/// assembly: the Overview's recent-actions view, which reads by path. A
+/// window that starts mid-line drops that partial head; the line it belongs to
+/// is read by the page that covers the bytes below. Returns the window and the
+/// bytes it spans.
+#[cfg(feature = "webui")]
 pub(crate) fn tail_window(file: &Path, end: u64, max: u64) -> io::Result<(Tail, u64)> {
     let window_len = end.min(max);
     let window = read_window(file, end - window_len, window_len)?;
@@ -200,7 +202,10 @@ pub(crate) fn tail_window(file: &Path, end: u64, max: u64) -> io::Result<(Tail, 
 /// byte more than the cap holds both.
 pub(crate) const ASSEMBLY_WINDOW: u64 = MAX_RECORD_BYTES as u64 + 1;
 
-/// [`tail_window`] on an open file, with line assembly: when no line starts
+/// The tail window of at most `max` bytes below `end` in an open file, with
+/// line assembly. A window that starts mid-line drops that partial head; the
+/// line it belongs to is read by the page that covers the bytes below. When
+/// no line starts
 /// inside `max`, the window is read again at [`ASSEMBLY_WINDOW`], so a line
 /// up to the record cap is returned whole. [`Tail::LineTooLong`] then means a
 /// line over the cap, which the logger never writes, wherever it sits: a
@@ -300,7 +305,6 @@ mod tests {
         assert_eq!(position(&log, None).unwrap().segment, Some(7));
         // A cursor into that segment resolves to the active file.
         let at = position(&log, Some((3, Some(7)))).unwrap();
-        assert_eq!(at.file, log);
         assert!(!at.reset);
     }
 
