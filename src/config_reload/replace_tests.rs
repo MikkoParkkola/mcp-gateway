@@ -8,67 +8,13 @@ use std::{path::Path, path::PathBuf, sync::Arc, time::Duration};
 use super::reload_context::replace::{
     Expected, FileRevision, Replace, ReplaceError, Replaced, replace_detached,
 };
+use super::replace_test_support::{
+    NEXT, START, WAIT, context, names, read, running_has_b, setup, to,
+};
 use super::*;
 use crate::config::Config;
 use crate::fs_lock::ExclusiveFileLock;
 use crate::gateway::test_helpers::write_owner_only;
-
-const WAIT: Duration = Duration::from_secs(5);
-
-/// A commented config, so the bytes test sees comments survive.
-const START: &str =
-    "# operator's note\nbackends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\" # first\n";
-/// The same file with backend `b` added and every comment kept.
-const NEXT: &str = "# operator's note\nbackends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\" # first\n  b:\n    http_url: \"http://127.0.0.1:9/mcp\"\n";
-
-fn setup() -> (tempfile::TempDir, PathBuf, Arc<ReloadContext>) {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("gateway.yaml");
-    write_owner_only(&path, START).expect("write config");
-    let ctx = context(&path);
-    (dir, path, ctx)
-}
-
-fn context(path: &Path) -> Arc<ReloadContext> {
-    let running = Config::load(Some(path)).expect("config loads");
-    Arc::new(
-        ReloadContext::new(
-            path.to_path_buf(),
-            Arc::new(LiveConfig::new(running)),
-            Arc::new(crate::backend::BackendRegistry::new()),
-            crate::config::FailsafeConfig::default(),
-            Duration::from_secs(60),
-        )
-        .expect("the registry pairs with the config"),
-    )
-}
-
-/// Replace gateway.yaml with `bytes`.
-fn to(expected: Expected, bytes: &'static str, replaced: Replaced) -> Replace {
-    Replace {
-        expected,
-        compute: Box::new(move |_| Ok(bytes.as_bytes().to_vec())),
-        replaced,
-    }
-}
-
-fn running_has_b(ctx: &ReloadContext) -> bool {
-    ctx.live_config.get().backends.contains_key("b")
-}
-
-fn read(path: &Path) -> String {
-    std::fs::read_to_string(path).expect("read")
-}
-
-/// Every name in `dir`, for "nothing staged beside it" assertions.
-fn names(dir: &Path) -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(dir)
-        .expect("list")
-        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
-        .collect();
-    names.sort();
-    names
-}
 
 /// T1: the file holds exactly the given bytes, comments included, and the
 /// running config is reloaded from them; nothing is left beside it.
@@ -115,9 +61,8 @@ async fn a_stale_revision_is_refused_with_the_current_one() {
 async fn a_refused_compute_writes_and_stages_nothing() {
     let (dir, path, ctx) = setup();
     let refuse = Replace {
-        expected: Expected::Any,
-        compute: Box::new(|_| Err("the splice cannot be proven".to_string())),
-        replaced: Replaced::KeepBeside,
+        compute: Box::new(|_, _| Err("the splice cannot be proven".to_string())),
+        ..to(Expected::Any, START, Replaced::KeepBeside)
     };
 
     let failure = replace_detached(ctx, refuse, WAIT)
@@ -134,9 +79,8 @@ async fn a_refused_compute_writes_and_stages_nothing() {
 async fn non_utf8_config_bytes_are_refused() {
     let (_dir, path, ctx) = setup();
     let bad = Replace {
-        expected: Expected::Any,
-        compute: Box::new(|_| Ok(vec![0xff, 0xfe, b'\n'])),
-        replaced: Replaced::Discard,
+        compute: Box::new(|_, _| Ok(vec![0xff, 0xfe, b'\n'])),
+        ..to(Expected::Any, START, Replaced::Discard)
     };
 
     let failure = replace_detached(ctx, bad, WAIT)
