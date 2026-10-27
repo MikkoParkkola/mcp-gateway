@@ -54,14 +54,15 @@ impl StderrReader {
     /// Read the child's stderr to its end, within `window`. Past it, something
     /// still holds the pipe: the task is aborted and what was read is kept.
     ///
-    /// Returns the task, ended or aborted, for a caller that must see it gone.
-    pub(super) async fn drain(self, window: std::time::Duration) -> tokio::task::JoinHandle<()> {
+    /// Returns only once the task is gone, so no line lands in the tail after
+    /// the caller reads it, even from a poll in flight on another worker.
+    pub(super) async fn drain(self, window: std::time::Duration) {
         // `timeout` polls the read loop before its clock, so the clock wins
         // only once a read has found the pipe empty.
         if tokio::time::timeout(window, self.read_loop).await.is_err() {
             self.task.abort();
+            let _ = self.task.await;
         }
-        self.task
     }
 }
 
@@ -385,17 +386,18 @@ impl StdioTransport {
         DRAIN
     }
 
-    /// How long a failed start reads the child's last stderr bytes:
-    /// [`DRAIN`], or the test-only stderr bound. Separate from
-    /// [`Self::exit_window`] so a row can keep this window real (a grandchild
-    /// holding the pipe) while the exit wait stays long (MIK-8360).
+    /// How long a failed start reads the child's last stderr bytes: `path`'s
+    /// window ([`DRAIN`] here, a shorter one on the late path), or the
+    /// test-only stderr bound. Separate from [`Self::exit_window`] so a row
+    /// can keep this window real (a grandchild holding the pipe) while the
+    /// exit wait stays long (MIK-8360).
     #[cfg_attr(not(test), allow(clippy::unused_self))]
-    fn stderr_window(&self) -> std::time::Duration {
+    pub(super) fn stderr_window(&self, path: std::time::Duration) -> std::time::Duration {
         #[cfg(test)]
         if let Some(bound) = *self.stderr_bound.lock() {
             return bound;
         }
-        DRAIN
+        path
     }
 
     /// Turn an early exit into its report: the exit status, class and needle,
@@ -417,7 +419,7 @@ impl StdioTransport {
         // Kept for classifying the failure (#1759).
         self.failure.record_exit(status);
         let tail = std::sync::Arc::clone(&stderr.tail);
-        drop(stderr.drain(self.stderr_window()).await);
+        stderr.drain(self.stderr_window(DRAIN)).await;
         let (class, needle) = {
             let tail = tail.lock();
             *self.start.shown_stderr.lock() = sanitize::sanitize(&tail);

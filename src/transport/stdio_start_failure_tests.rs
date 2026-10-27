@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::super::early_exit::{ReaderHold, STDERR_READER_HOLD, StderrTail};
+use super::super::early_exit::{ReaderHold, STDERR_READER_HOLD};
 use super::StdioTransport;
 use super::joined;
 
@@ -359,9 +359,10 @@ fn child_with_held_stderr(holder: &str) -> tokio::process::Child {
         .expect("spawn the child")
 }
 
-/// Drains a held pipe with a short window: returns how long the drain took
-/// and whether the reader task was gone soon after.
-async fn drain_held(holder: &str) -> (StderrTail, std::time::Duration, bool) {
+/// Drains a held pipe with a short window, under a hang guard. Returns the
+/// tail and how long the drain took, and checks that nothing is read into the
+/// tail once the drain has returned.
+async fn drain_held(holder: &str) -> (String, std::time::Duration) {
     let mut child = child_with_held_stderr(holder);
     let reader = super::super::early_exit::spawn_stderr_tail(
         child.stderr.take().expect("piped stderr"),
@@ -370,43 +371,49 @@ async fn drain_held(holder: &str) -> (StderrTail, std::time::Duration, bool) {
     let _ = child.wait().await;
     let tail = Arc::clone(&reader.tail);
     let started = std::time::Instant::now();
-    let task = reader.drain(std::time::Duration::from_millis(200)).await;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        reader.drain(std::time::Duration::from_millis(200)),
+    )
+    .await
+    .expect("the drain hung on a held pipe");
     let took = started.elapsed();
-    let ended = tokio::time::timeout(std::time::Duration::from_secs(2), task)
-        .await
-        .is_ok();
-    (tail, took, ended)
+    let drained = joined(&tail.lock());
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        joined(&tail.lock()),
+        drained,
+        "the reader kept reading the held pipe after the drain returned"
+    );
+    (drained, took)
 }
 
-/// A quiet holder: the drain returns at its window with what was read, and
-/// the reader task is aborted rather than left reading for the holder's life.
+/// A quiet holder: the drain returns at its window with what was read.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_held_pipe_ends_the_drain_and_the_reader_task() {
-    let (tail, took, ended) = drain_held("sleep 5").await;
+    let (tail, took) = drain_held("sleep 5").await;
     assert!(
-        joined(&tail.lock()).contains("EACCES"),
-        "the line before the hold is kept"
+        tail.contains("EACCES"),
+        "the line before the hold is kept: {tail:?}"
     );
     assert!(
         took < std::time::Duration::from_secs(2),
         "the drain took {took:?}"
     );
-    assert!(ended, "the reader task still runs after the drain");
 }
 
 /// A chatty holder never leaves the pipe empty for long: the window still
-/// bounds the drain.
+/// bounds the drain, and the reader stops with it.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_chatty_held_pipe_still_ends_the_drain_at_its_window() {
-    let (tail, took, ended) =
-        drain_held("i=0; while [ $i -lt 500 ]; do echo tick >&2; sleep 0.01; i=$((i+1)); done")
+    let (tail, took) =
+        drain_held("i=0; while [ $i -lt 500 ]; do echo tick $i >&2; sleep 0.01; i=$((i+1)); done")
             .await;
-    assert!(!tail.lock().is_empty());
+    assert!(tail.contains("tick"), "{tail:?}");
     assert!(
         took < std::time::Duration::from_secs(2),
         "the drain took {took:?}"
     );
-    assert!(ended, "the reader task still runs after the drain");
 }

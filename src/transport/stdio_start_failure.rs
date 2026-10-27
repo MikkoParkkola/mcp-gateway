@@ -179,17 +179,7 @@ impl StdioTransport {
     /// [`StderrReader::drain`]. The child is gone, so the pipe closes as soon
     /// as nothing is left to read, unless something else still holds it.
     pub(super) async fn settle_stderr_tail(&self, stderr: StderrReader) {
-        drop(stderr.drain(self.stderr_grace()).await);
-    }
-
-    /// [`STDERR_DRAIN_GRACE`], or the test-only stderr bound.
-    #[cfg_attr(not(test), allow(clippy::unused_self))]
-    fn stderr_grace(&self) -> std::time::Duration {
-        #[cfg(test)]
-        if let Some(bound) = *self.stderr_bound.lock() {
-            return bound;
-        }
-        STDERR_DRAIN_GRACE
+        stderr.drain(self.stderr_window(STDERR_DRAIN_GRACE)).await;
     }
 }
 
