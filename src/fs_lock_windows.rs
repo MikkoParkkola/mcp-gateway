@@ -230,7 +230,14 @@ enum Sidecar {
 }
 
 fn sidecar(path: &Path) -> io::Result<Sidecar> {
-    match create_file_private(path, Share::LockSidecar) {
+    // PLANTED MUTANT (red-first proof, reverted next commit): a plain create
+    // takes the folder's inherited list.
+    match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
         Ok(file) => return Ok(Sidecar::Private(file)),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
         Err(error) if error.raw_os_error() == Some(SHARING_VIOLATION) => return Ok(Sidecar::Held),
