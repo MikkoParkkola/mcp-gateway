@@ -358,3 +358,27 @@ fn a_slot_named_for_another_field_is_refused() {
         Err(ComputeRefusal::SlotMismatch)
     );
 }
+
+/// A value that is only a comment is a null field, not a scalar: editing it
+/// would delete the comment.
+#[test]
+fn a_comment_only_value_is_unprovable() {
+    assert_unprovable("a:\n  t: # keep\n", &[set_int("a.t", 2)]);
+}
+
+/// A slot whose placeholder sits under another field: `fill` re-reads its
+/// output and refuses a reference that did not land under its own path.
+#[test]
+fn fill_refuses_a_reference_not_under_its_own_field() {
+    let text = "a: \"__mcpgw_slot_b__\"\nb: \"__mcpgw_slot_a__\"\n";
+    let template = Template::checked(
+        text.into(),
+        vec![(SlotId("b".into()), 3..21), (SlotId("a".into()), 25..43)],
+    )
+    .expect("each range holds its own id's placeholder");
+    let refs = BTreeMap::from([
+        (SlotId("a".into()), "keychain:for-a".to_owned()),
+        (SlotId("b".into()), "keychain:for-b".to_owned()),
+    ]);
+    assert_eq!(template.fill(&refs), Err(ComputeRefusal::SlotMismatch));
+}
