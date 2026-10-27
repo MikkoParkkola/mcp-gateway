@@ -474,8 +474,17 @@ async fn the_other_scopes_cannot_widen_the_selection() {
         "the key still reaches a selected tool: {read}"
     );
     let invoked = meta_invoke(&fixture.router, OPEN_KEY, "write_b").await;
+    // The meta route wraps the backend's absent-tool answer in its own
+    // isError result; it carries the same words, never the tool's output.
     assert_eq!(
-        invoked["error"]["code"], -32601,
+        invoked["result"]["isError"], true,
+        "meta gateway_invoke: {invoked}"
+    );
+    let wrapped = invoked["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        wrapped.contains("the backend does not list a tool named `write_b`"),
         "meta gateway_invoke: {invoked}"
     );
     assert_eq!(
