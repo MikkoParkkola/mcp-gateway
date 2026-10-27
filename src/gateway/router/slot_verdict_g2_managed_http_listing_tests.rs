@@ -520,3 +520,50 @@ async fn a_listing_waiting_on_a_lookup_that_fails_is_woken_at_once_http() {
     );
     assert_eq!(fx.gateway.releases(), 0, "premise: the lookup failed");
 }
+
+/// A listing waiting on another listing's running claim is woken when that
+/// claim's request is cancelled mid-lookup (its attempt dropped, not
+/// failed), and the claim's lease still stands as the retry backoff.
+#[tokio::test(start_paused = true)]
+async fn a_listing_waiting_on_a_cancelled_claim_is_woken_at_once_http() {
+    let fx = Arc::new(fixture().await);
+    let bound = fill_bound(&fx, BACKEND);
+    let floor = std::time::Duration::from_secs(1);
+    assert!(bound > floor * 2, "premise: a fill bound worth waiting on");
+    let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
+    let (reached, _held) = backend.cold_winner.arm();
+    let first = tokio::spawn({
+        let fx = Arc::clone(&fx);
+        async move { rpc(&fx, 1, "tools/list", json!({})).await }
+    });
+    reached.notified().await;
+    let second = tokio::spawn({
+        let fx = Arc::clone(&fx);
+        async move { rpc(&fx, 2, "tools/list", json!({})).await }
+    });
+    tokio::time::sleep(floor / 10).await;
+    assert!(!second.is_finished(), "premise: the second listing waits");
+    let cancelled_at = tokio::time::Instant::now();
+    first.abort();
+    let _ = first.await;
+    let second = second.await.expect("the second listing");
+    let woke_after = cancelled_at.elapsed();
+    assert!(
+        woke_after < floor,
+        "a waiter slept {woke_after:?} past a cancelled claim, against a {bound:?} fill bound"
+    );
+    assert!(
+        surfaced_on(&second, BACKEND).is_empty(),
+        "no view was filled: {second}"
+    );
+    let id = crate::personal_accounts::identity::Principal::SoleOperator.stable_actor_id();
+    assert!(
+        backend.cold_lease_remaining(&id).is_some(),
+        "the cancelled claim's lease still stands as the backoff"
+    );
+    assert_eq!(
+        fx.gateway.lists_to(BACKEND),
+        0,
+        "nothing fetched in the backoff"
+    );
+}
