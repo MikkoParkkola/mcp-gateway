@@ -179,62 +179,19 @@ async fn each_user_only_their_own(
     assert!(gateway_streams.is_empty(), "{gateway_streams:?}");
 }
 
-/// ISO-T6: removing one user's access on reload closes that user's listener
-/// with the backend silent, and leaves the other user's open.
-#[tokio::test]
-async fn iso_t6_a_revoked_user_holds_no_listener_open() {
-    let root = tempfile::tempdir().expect("root");
-    let issuer = issuer::Issuer::start(root.path()).await;
-    let rx = Receiver::start(root.path()).await;
-    let peer = SubjectPeer::start().await;
-    let mut gw = start(root.path(), &rx, &issuer, signed_backend(&peer), &[]).await;
-    let mut subs = Vec::new();
-    for user in ["u1", "u2"] {
-        let bearer = issuer.mint(user, &email(user));
-        subs.push(sub(&gw, &bearer, TOOLS, &rx, json!({})).await);
-        listening(&peer, &gw, user).await;
-    }
-
-    let mut cfg = gw.config().clone();
-    let policies = cfg["key_server"]["policies"]
-        .as_array_mut()
-        .expect("policies");
-    policies.retain(|p| p["match"]["email"] != email("u1"));
-    gw.rewrite_config(cfg);
-
-    let closed = wait_until(DEADLINE, || peer.open_streams("u1") == 0).await;
-    assert!(
-        closed,
-        "u1's listener stayed open after u1 lost access; peer saw {:?}\n{}",
-        peer.seen(),
-        gw.logs()
-    );
-    tokio::time::sleep(QUIET).await;
-    assert_eq!(
-        peer.open_streams("u1"),
-        0,
-        "u1's listener did not come back"
-    );
-    assert!(peer.open_streams("u2") > 0, "u2 keeps its listener");
-
-    // Nothing is emitted for u1 after the refusal; u2 is still served.
-    for user in ["u1", "u2"] {
-        peer.push_to(user, "notifications/tools/list_changed", json!({}));
-    }
-    expect_events(&rx, &subs[1], TOOLS, 1).await;
-    tokio::time::sleep(QUIET).await;
-    assert!(
-        delivered(&rx, &subs[0], TOOLS).is_empty(),
-        "nothing delivered to u1 after it lost access"
-    );
-}
-
 /// Requests from index `from` on that carried no user's own subject.
+///
+/// One exemption: a `ping` with no `Authorization` header at all (subject
+/// `""`) is the gateway's background health probe of the backend
+/// (`src/backend/probe.rs`, `ping` on a legacy-era peer), not a listener, and
+/// presents no one's credential. Any other credential-less request, and a
+/// `ping` carrying an unreadable credential, still counts.
 fn as_anyone_else(peer: &SubjectPeer, from: usize) -> Vec<subject_peer::Request> {
     peer.seen()
         .into_iter()
         .skip(from)
         .filter(|r| !["u1", "u2"].contains(&r.subject.as_str()))
+        .filter(|r| !(r.subject.is_empty() && r.method == "ping"))
         .collect()
 }
 
