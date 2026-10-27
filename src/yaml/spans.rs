@@ -7,7 +7,7 @@
 
 use std::ops::Range;
 
-use granit_parser::{Event, Marker, Parser, ScalarStyle, Span, StructureStyle};
+use granit_parser::{Event, Marker, Parser, ScalarStyle, StructureStyle};
 
 use super::Error;
 
@@ -64,14 +64,8 @@ pub(crate) fn mapping_values(text: &str) -> Result<Vec<ValueSpan>, Error> {
                 };
                 let refused = if !top.addressable || !plain_key {
                     Some("a key on the path is not a plain key of a block mapping")
-                } else if span.start.index() == span.end.index() {
-                    Some("the value is empty")
-                } else if matches!(style, ScalarStyle::Literal | ScalarStyle::Folded) {
-                    Some("the value is a block scalar")
                 } else if anchor != 0 || tagged {
                     Some("the value carries an anchor or a tag")
-                } else if !one_line(&span) {
-                    Some("the value spans more than one line")
                 } else {
                     None
                 };
@@ -104,10 +98,7 @@ pub(crate) fn mapping_values(text: &str) -> Result<Vec<ValueSpan>, Error> {
                 }
             }
             Event::MappingStart(style, anchor, tag) => {
-                let own = style == StructureStyle::Block
-                    && anchor == 0
-                    && tag.is_none()
-                    && span.tag_start.is_none();
+                let own = style == StructureStyle::Block && anchor == 0 && tag.is_none();
                 let frame = open(&mut frames, true, own);
                 frames.push(frame);
             }
@@ -155,10 +146,6 @@ fn open(frames: &mut [Frame], mapping: bool, own: bool) -> Frame {
         addressable: addressable && mapping,
         key: None,
     }
-}
-
-fn one_line(span: &Span) -> bool {
-    span.start.line() == span.end.line()
 }
 
 /// Byte positions of the parser's markers: its own byte offset when it gives

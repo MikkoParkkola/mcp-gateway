@@ -507,3 +507,10 @@ fn a_field_after_a_sequence_or_a_collection_key_is_editable() {
     let keyed = "? [k]\n: v\nb: 3\n";
     assert_eq!(edited(keyed, &[set_int("b", 4)]), "? [k]\n: v\nb: 4\n");
 }
+
+/// An anchor nothing refers to: value equality cannot see it dropped, so
+/// only the anchor check keeps the operator's text.
+#[test]
+fn an_unused_anchor_on_the_value_is_unprovable() {
+    assert_unprovable("a: &x 5\n", &[set_int("a", 6)]);
+}
