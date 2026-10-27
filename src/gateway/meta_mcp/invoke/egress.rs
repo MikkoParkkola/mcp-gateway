@@ -595,3 +595,7 @@ impl MetaMcp {
         self.content_refuses(&at, value)
     }
 }
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "egress_scope_tests.rs"]
+mod scope_tests;
