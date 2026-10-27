@@ -108,12 +108,6 @@ tokio::task_local! {
     static NOTES: RefCell<DispatchNotes>;
 }
 
-/// Run `f` with this call's notes suspended: a copy that is never
-/// delivered adds no audit class to the call's record.
-pub(super) fn suspended<T>(f: impl FnOnce() -> T) -> T {
-    NOTES.sync_scope(RefCell::new(DispatchNotes::default()), f)
-}
-
 /// Outside [`with_dispatch_scope`] (upstream task recovery) this does nothing.
 fn note(f: impl FnOnce(&mut DispatchNotes)) {
     let _ = NOTES.try_with(|notes| f(&mut notes.borrow_mut()));

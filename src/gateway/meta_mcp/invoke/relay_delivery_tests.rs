@@ -422,10 +422,11 @@ fn enforcing(
     })
 }
 
-/// The receipt copy is never delivered, so classifying it touches nothing
-/// of the delivery it runs in: a verdict attached in monitor mode notes no
-/// write and raises no `annotated`, an enforced malformed round raises no
-/// `refused`, and neither adds an audit class to the call.
+/// The receipt copy is never delivered, so classifying it leaves the
+/// delivery's effect alone: a verdict attached in monitor mode raises no
+/// `annotated` and notes no write, and an enforced malformed round raises no
+/// `refused`. Its audit classes are still noted: they describe the text the
+/// client receives (RELAY.5).
 #[tokio::test]
 async fn a_recorded_prompt_leaves_the_open_delivery_unchanged() {
     use crate::context_integrity::ContextIntegrityDecisionKind;
@@ -464,7 +465,7 @@ async fn a_recorded_prompt_leaves_the_open_delivery_unchanged() {
         assert_eq!(effect, "delivered", "{prompt}");
         assert!(writes.is_empty(), "{prompt}: noted {writes:?}");
         assert!(
-            format!("{notes:?}").contains("data_classes: {}"),
+            format!("{notes:?}").contains("personal_data"),
             "{prompt}: {notes:?}"
         );
     }

@@ -93,9 +93,6 @@ impl WriteRecord {
     }
 }
 
-/// The context-integrity verdict the gateway attaches to a judged answer.
-pub(super) const CONTEXT_INTEGRITY: &[&str] = &["_context_integrity"];
-
 /// The response-contract verdict the gateway writes on a violating answer.
 pub(super) const CONTRACT_VIOLATION: &[&str] = &["_contract_violation"];
 

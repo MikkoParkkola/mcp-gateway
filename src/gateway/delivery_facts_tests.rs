@@ -282,8 +282,8 @@ enum TransformUse {
     Inside,
     /// The result is the answer delivered: its raises and notes count.
     Delivering,
-    /// The result is a copy never delivered: it runs with the facts cell,
-    /// the gateway-write notes and the audit-class notes suspended.
+    /// The result is a copy never delivered: it runs with the facts cell and
+    /// the gateway-write notes suspended.
     Suspended,
 }
 
@@ -323,7 +323,7 @@ const TRANSFORM_CALLS: &[(&str, &str, usize, TransformUse)] = &[
 
 /// The scan row (lead ruling): a new caller of the transform would raise
 /// and note into whatever delivery is open. It cannot land unclassified,
-/// and a suspended caller must hold all three suspensions.
+/// and a suspended caller must hold both suspensions.
 #[test]
 fn every_context_integrity_caller_is_classified() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -357,11 +357,7 @@ fn every_context_integrity_caller_is_classified() {
     for (_, file, _, class) in TRANSFORM_CALLS {
         if *class == TransformUse::Suspended {
             let text = std::fs::read_to_string(root.join(file)).expect("reads");
-            for guard in [
-                "delivery_facts::suspended(",
-                "gateway_writes::suspended(",
-                "audit::suspended(",
-            ] {
+            for guard in ["delivery_facts::suspended(", "gateway_writes::suspended("] {
                 assert!(text.contains(guard), "{file} lacks {guard}");
             }
         }

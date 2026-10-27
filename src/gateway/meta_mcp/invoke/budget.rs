@@ -5,7 +5,6 @@
 use serde_json::{Value, json};
 use tracing::{debug, warn};
 
-use super::gateway_writes::{CONTEXT_INTEGRITY, Layer, insert_noted, note};
 use super::{audit, withheld_evidence};
 use crate::context_integrity::{
     ContextActionRisk, ContextIntegrityDecisionKind, ContextIntegrityEvaluation,
@@ -315,19 +314,20 @@ impl MetaMcp {
             "audit": &evaluation.audit,
         });
 
-        if result.is_object() {
-            insert_noted(Layer::Value, CONTEXT_INTEGRITY, &mut result, metadata);
+        // A counted member written outside `note`: noting it would strip the
+        // verdict from the staged receipt copy, which relay detection reads.
+        if let Some(obj) = result.as_object_mut() {
+            obj.insert("_context_integrity".to_string(), metadata);
+            crate::gateway::delivery_facts::raise(ResponseEffect::Annotated);
             result
         } else {
             // A scalar has no member to carry the verdict: the gateway wraps
             // it, which changes the bytes delivered.
             crate::gateway::delivery_facts::raise(ResponseEffect::Rewritten);
-            let wrapped = json!({
+            json!({
                 "structuredContent": result,
                 "_context_integrity": metadata
-            });
-            note(Layer::Value, CONTEXT_INTEGRITY, &wrapped);
-            wrapped
+            })
         }
     }
 }

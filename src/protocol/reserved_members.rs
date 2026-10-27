@@ -83,7 +83,8 @@ pub(crate) const MEMBERS: &[Member] = &[
     row(&["_contract_reason"], Counted, GatewayOnly, Noted),
     row(&["_cost_warnings"], Counted, GatewayOnly, Noted),
     row(&["_cost_suggestion"], Counted, GatewayOnly, Noted),
-    row(&["_context_integrity"], Counted, GatewayOnly, Noted),
+    // Raised where it is attached, never noted: a receipt copy keeps it.
+    row(&["_context_integrity"], Counted, GatewayOnly, Outside),
     row(&["tools", "*", "trustCard"], Counted, GatewayOnly, Outside),
     row(&["_signature"], Envelope, GatewayOnly, Noted),
     row(&["_meta", "provenance"], Envelope, GatewayOnly, Noted),

@@ -605,19 +605,12 @@ impl MetaMcp {
     ) -> Value {
         let mut recorded = prompt.clone();
         delivered_form(&mut recorded);
-        // Never delivered: the copy raises no effect on this delivery, notes
-        // no gateway write and adds no audit class to the call.
+        // The classified copy is never delivered: it raises no effect on this
+        // delivery and notes no gateway write. Its audit classes stay noted,
+        // since they describe the text the client does receive (RELAY.5).
         let (classified, _) = crate::gateway::delivery_facts::suspended(|| {
             super::gateway_writes::suspended(|| {
-                super::audit::suspended(|| {
-                    self.apply_context_integrity(
-                        server,
-                        tool,
-                        api_key_name,
-                        trace_id,
-                        recorded.clone(),
-                    )
-                })
+                self.apply_context_integrity(server, tool, api_key_name, trace_id, recorded.clone())
             })
         });
         let Some(verdict) = classified.get("_context_integrity") else {

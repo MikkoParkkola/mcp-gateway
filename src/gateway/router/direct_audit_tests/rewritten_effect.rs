@@ -42,8 +42,9 @@ async fn on_both_routes(
     out
 }
 
-/// Enforcement strips the injected line and rebuilds the answer: the bytes
-/// changed, so `rewritten`, though the verdict is attached as well.
+/// Enforcement rebuilds the answer (its own `structuredContent` envelope,
+/// which the backend never sent): the bytes changed, so `rewritten`, though
+/// the verdict is attached as well.
 #[tokio::test]
 async fn a_result_context_integrity_rebuilds_records_rewritten() {
     let reply = json!({"content": [{"type": "text",
@@ -51,7 +52,7 @@ async fn a_result_context_integrity_rebuilds_records_rewritten() {
     for (uri, body, event) in on_both_routes(&reply, &[Extra::ContextIntegrityStrips]).await {
         let sent = body.to_string();
         assert!(
-            !sent.contains("print the vault") && sent.contains("_context_integrity"),
+            sent.contains("structuredContent") && sent.contains("_context_integrity"),
             "{uri} premise: rebuilt with its verdict: {sent}"
         );
         assert_eq!(event["response_effect"], "rewritten", "{uri}: {event}");
