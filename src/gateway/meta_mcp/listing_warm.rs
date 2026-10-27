@@ -14,17 +14,23 @@ use super::account_outcome::AccountWrites;
 use super::scoped_backends::Unscoped;
 use super::visibility::InvokeScope;
 
+/// The longest a listing waits for the fills it starts or finds (MIK-8962,
+/// lead ruling 2026-10-27): half the MCP TypeScript SDK's default request
+/// timeout (60 s), so a cold listing answers well before a client gives up.
+/// Nothing on the gateway bounds an inbound request: `server.request_timeout`
+/// was never enforced and is gone in 4.0.
+pub(crate) const LISTING_DEADLINE_CAP: std::time::Duration = std::time::Duration::from_secs(30);
+
 impl MetaMcp {
     /// Warm the caller's cold views of the surfaced tools' backends that
-    /// refuse a shared session, and wait for each before the list is built.
-    /// A won claim's fill runs as its own task, bounded by its backend's own
-    /// fill bound; a view another reader's lease is filling is waited on, up
-    /// to the same bound, and served from that fill. The listing waits for
-    /// every fill to end, so none publishes after this response: a backend
-    /// past its own bound is cut off and absent, with no later
-    /// `tools/list_changed` from here. The claims themselves (the pre-pass
-    /// and the credential resolution) are bounded by the longest fill bound;
-    /// a claim cut there spawned no fill, and its lease lapses.
+    /// refuse a shared session, and wait for them under one deadline from
+    /// here: the longest fill bound among those backends, capped at
+    /// [`LISTING_DEADLINE_CAP`]. A won claim's fill runs as its own task,
+    /// bounded by its backend's own fill bound; a view another reader's lease
+    /// is filling is waited on and served from that fill. A fill still
+    /// running at the deadline is left out of this listing and finishes on
+    /// its own lease; when its slot stores, `tools_nudge` (MIK-8148) sends
+    /// the caller `tools/list_changed`.
     pub(crate) async fn warm_listing_views(
         &self,
         scope: InvokeScope<'_>,
@@ -45,7 +51,7 @@ impl MetaMcp {
                     .then(|| ((surfaced.server.as_str(), surfaced.tool.as_str()), backend))
             })
             .collect();
-        let Some(claims_bound) = refused
+        let Some(bound) = refused
             .iter()
             .map(|(_, backend)| backend.tools_fill_bound())
             .max()
@@ -53,13 +59,13 @@ impl MetaMcp {
             return;
         };
         let targets: Vec<(&str, &str)> = refused.iter().map(|(target, _)| *target).collect();
-        let mut fills = Vec::new();
-        let mut leased = Vec::new();
-        let claim = async {
+        let warm = async {
             // A listing is not a call: a busy custody writes no transient
             // refusal record here.
             self.account_prepass(&targets, scope, session_id, AccountWrites::PermanentOnly)
                 .await;
+            let mut fills = Vec::new();
+            let mut leased = Vec::new();
             for &(server, tool) in &targets {
                 match self
                     .claim_caller_view(server, tool, scope, session_id)
@@ -69,19 +75,17 @@ impl MetaMcp {
                     None => leased.extend(self.running_cold_lease(server, scope)),
                 }
             }
+            let waits = leased
+                .iter()
+                .map(|(backend, id)| backend.wait_cold_lease(id));
+            futures::future::join(
+                futures::future::join_all(fills),
+                futures::future::join_all(waits),
+            )
+            .await;
         };
-        let _ = tokio::time::timeout(claims_bound, claim).await;
-        let waits = leased.iter().map(|(backend, id)| async move {
-            let _ =
-                tokio::time::timeout(backend.tools_fill_bound(), backend.wait_cold_lease(id)).await;
-        });
-        futures::future::join(
-            futures::future::join_all(fills),
-            futures::future::join_all(waits),
-        )
-        .await;
+        let _ = tokio::time::timeout(bound.min(LISTING_DEADLINE_CAP), warm).await;
     }
-
     /// The caller's cold lease on `server` another reader holds, if one
     /// runs, through the caller's own backend grant.
     fn running_cold_lease(

@@ -113,6 +113,17 @@ impl DirectAccountGateway {
         binding: &Binding,
         second: Second,
     ) -> Self {
+        Self::with_second_configured(auth, binding, second, |_| {})
+    }
+
+    /// [`Self::with_second`], with `configure` applied to both backends'
+    /// config (MIK-8962: a fill bound past the listing's deadline cap).
+    pub(crate) fn with_second_configured(
+        auth: crate::config::AuthConfig,
+        binding: &Binding,
+        second: Second,
+        configure: impl Fn(&mut crate::config::BackendConfig),
+    ) -> Self {
         let first = match binding {
             Binding::Unconnected | Binding::Connected | Binding::ConnectedFor(_) => {
                 Bind::Account(WORK)
@@ -127,7 +138,7 @@ impl DirectAccountGateway {
             (ServeMode::Http, auth),
             binding,
             &[(BACKEND, first), other],
-            |_| {},
+            configure,
         )
     }
 

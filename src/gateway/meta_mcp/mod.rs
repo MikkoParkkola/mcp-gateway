@@ -101,6 +101,7 @@ mod interim_promotion;
 mod interim_promotion_tests;
 pub(crate) mod invoke;
 mod listing_warm;
+pub(crate) use listing_warm::LISTING_DEADLINE_CAP;
 mod prompt_cache;
 mod protocol;
 pub(crate) mod refund_witness;

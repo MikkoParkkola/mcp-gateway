@@ -710,15 +710,6 @@ fn fill_bound(fx: &Fx, server: &str) -> std::time::Duration {
         .tools_fill_bound()
 }
 
-/// The per-user slots of `server` that hold a stored list.
-fn stored_slots(fx: &Fx, server: &str) -> Vec<String> {
-    fx.gateway
-        .backends()
-        .get(server)
-        .expect("the backend")
-        .populated_per_user_bindings_for_test()
-}
-
 /// SHARED.5 (deadline, inside the bound): two cold backends, one slow but
 /// inside its own fill bound. The listing waits for it: both backends' own
 /// tools are in the same response, each from one fill.
@@ -739,21 +730,51 @@ async fn a_slow_backend_inside_its_bound_is_in_the_same_response_http() {
     }
 }
 
-/// SHARED.5 (deadline, past the bound): a backend slower than its own fill
-/// bound is cut off. The listing returns with the fast backend's own tool
-/// and without the slow one's, and nothing stores into the slow backend's
-/// slot afterwards, so no `tools/list_changed` follows (a per-user store is
-/// what sends one, MIK-8148).
+/// Whether `rx` holds a change nudge for `server`, draining it.
+fn nudged(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::backend::tools_nudge::ToolsNudge>,
+    server: &str,
+) -> bool {
+    let mut seen = false;
+    while let Ok(nudge) = rx.try_recv() {
+        if let crate::backend::tools_nudge::ToolsNudge::Backend { name, .. } = nudge {
+            seen |= name == server;
+        }
+    }
+    seen
+}
+
+/// SHARED.5 (deadline, past the cap): both backends' fill bound is past the
+/// listing's 30 s cap, and the slow one answers at 40 s. The first listing
+/// returns at the cap with the fast backend's own tool and without the slow
+/// one's. The slow fill finishes on its own lease and stores into the
+/// caller's slot, which sends the change nudge the drain announces as
+/// `tools/list_changed` (MIK-8148); the next listing shows it with no
+/// further fill.
 #[tokio::test(start_paused = true)]
-async fn a_backend_past_its_bound_is_cut_off_with_no_later_store_http() {
-    let fx = fixture_two().await;
-    let bound = fill_bound(&fx, PERSONAL_BACKEND);
-    fx.gateway.delay_lists_on(PERSONAL_BACKEND, bound * 2);
+async fn a_backend_past_the_cap_is_listed_after_its_late_fill_http() {
+    let auth = sole_operator();
+    let gateway = DirectAccountGateway::with_second_configured(
+        auth.clone(),
+        &Binding::Connected,
+        Second::PersonalAccount,
+        |config| config.timeout = std::time::Duration::from_secs(60),
+    );
+    let fx = fixture_on(gateway, &auth, &[BACKEND, PERSONAL_BACKEND], |_| {}).await;
+    let cap = crate::gateway::meta_mcp::LISTING_DEADLINE_CAP;
+    assert!(
+        fill_bound(&fx, PERSONAL_BACKEND) > cap,
+        "premise: the fill bound is past the cap"
+    );
+    let (feed, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    fx.gateway.backends().set_change_feed(feed);
+    fx.gateway
+        .delay_lists_on(PERSONAL_BACKEND, std::time::Duration::from_secs(40));
     let started = tokio::time::Instant::now();
     let first = rpc(&fx, 1, "tools/list", json!({})).await;
     assert!(
-        started.elapsed() < bound * 2,
-        "the listing waited for the slow backend's answer: {:?}",
+        started.elapsed() <= cap + std::time::Duration::from_secs(1),
+        "the listing waited past the cap: {:?}",
         started.elapsed()
     );
     assert!(
@@ -764,13 +785,29 @@ async fn a_backend_past_its_bound_is_cut_off_with_no_later_store_http() {
     );
     assert!(
         surfaced_on(&first, PERSONAL_BACKEND).is_empty(),
-        "the slow backend was listed past its own bound: {first}"
+        "the slow backend was listed before its own fill finished: {first}"
     );
-    tokio::time::sleep(bound * 3).await;
+    assert!(
+        !nudged(&mut rx, PERSONAL_BACKEND),
+        "premise: no store of the slow backend before its answer"
+    );
+    tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+    assert!(
+        nudged(&mut rx, PERSONAL_BACKEND),
+        "the late fill's store sent no change nudge"
+    );
+    let fills = fx.gateway.lists_to(PERSONAL_BACKEND);
+    let second = rpc(&fx, 2, "tools/list", json!({})).await;
+    assert!(
+        surfaced_on(&second, PERSONAL_BACKEND)
+            .iter()
+            .any(|t| !is_shared_schema(t)),
+        "the late fill was not listed: {second}"
+    );
     assert_eq!(
-        stored_slots(&fx, PERSONAL_BACKEND),
-        Vec::<String>::new(),
-        "the cut-off fill stored after the response"
+        fx.gateway.lists_to(PERSONAL_BACKEND),
+        fills,
+        "listed from a new fill, not the one the first listing started"
     );
 }
 
@@ -812,10 +849,11 @@ async fn a_listing_waits_on_a_running_lease_through_a_busy_custody_http() {
 }
 
 /// The lease covers the fill (MIK-8962): a backend whose fill bound is past
-/// the 60 s cold backoff fills for 90 s. A second listing at 70 s does not
-/// claim the view again, and the first fill's publish lands. RED with a lease
-/// of the backoff alone: the second listing wins a fresh claim, fills again,
-/// and the first fill's publish is dropped.
+/// the 60 s cold backoff fills for 90 s. The first listing returns at the
+/// 30 s cap without it. A second listing at 70 s does not claim the view
+/// again: it waits on the running lease and lists the 90 s fill, and the
+/// backend saw one fill. RED with a lease of the backoff alone: the second
+/// listing wins a fresh claim and fills again.
 #[tokio::test(start_paused = true)]
 async fn a_fill_past_the_cold_backoff_still_publishes_http() {
     let auth = sole_operator();
@@ -834,15 +872,13 @@ async fn a_fill_past_the_cold_backoff_still_publishes_http() {
     });
     tokio::time::sleep(std::time::Duration::from_secs(70)).await;
     let second = rpc(&fx, 2, "tools/list", json!({})).await;
-    let first = first.await.expect("the first listing");
-    for answer in [&first, &second] {
-        assert!(
-            surfaced_on(answer, BACKEND)
-                .iter()
-                .any(|t| !is_shared_schema(t)),
-            "a listing did not show the 90 s fill: {answer}"
-        );
-    }
+    first.await.expect("the first listing");
+    assert!(
+        surfaced_on(&second, BACKEND)
+            .iter()
+            .any(|t| !is_shared_schema(t)),
+        "the second listing did not show the 90 s fill: {second}"
+    );
     assert_eq!(
         fx.gateway.lists_to(BACKEND),
         1,
