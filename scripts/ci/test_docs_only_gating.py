@@ -118,15 +118,32 @@ def train_errors(jobs: dict) -> list[str]:
     cases = {
         "code train": (as_train(ctx("pull_request", "success", "false")), True),
         "scope failed on a train": (as_train(ctx("pull_request", "failure", None)), True),
+        "scope failed after emitting docs-only": (as_train(ctx("pull_request", "failure", "true")), True),
+        "scope gave no output on a train": (as_train(ctx("pull_request", "success", None)), True),
         "docs-only train": (as_train(ctx("pull_request", "success", "true")), False),
         "code PR": (ctx("pull_request", "success", "false"), False),
         "train branch from a fork": (as_train(ctx("pull_request", "success", "false"), repo="fork/x"), False),
         "a branch merely containing train/": (as_train(ctx("pull_request", "success", "false"), head="x/train/y"), False),
         "release-line push": (dict(ctx("push", "success", "false")), False),
+        "a train into another base": (as_train(ctx("pull_request", "success", "false")), False),
     }
+    cases["a train into another base"][0]["github"]["base_ref"] = "main"
     cases["release-line push"][0]["github"].update(POST_MERGE_PUSH)
     errors = [f"TRAIN_ONLY names a job ci.yml lacks: {j}" for j in sorted(TRAIN_ONLY - set(jobs))]
     for job in sorted(TRAIN_ONLY & set(jobs)):
+        # The routing below is evaluated on an injected scope result, so the
+        # dependency and the status function it relies on are asserted here.
+        needs = jobs[job].get("needs") or []
+        if "scope" not in ([needs] if isinstance(needs, str) else needs):
+            errors.append(f"{job}: does not need scope")
+        if not re.search(r"\b(cancelled|always)\s*\(", str(jobs[job].get("if", ""))):
+            errors.append(f"{job}: its if has no status function, so a skipped scope skips it")
+        target = str(jobs[job].get("uses", ""))
+        called = ROOT / target.removeprefix("./")
+        doc = yaml.safe_load(called.read_text()) if target.startswith("./") and called.is_file() else {}
+        on = doc.get(True) or doc.get("on") or {}
+        if "workflow_call" not in ({on} if isinstance(on, str) else set(on)):
+            errors.append(f"{job}: calls {target!r}, which declares no workflow_call")
         for label, (c, want) in cases.items():
             if runs(jobs[job], c) != want:
                 errors.append(f"{job}: {label} {'skips' if want else 'runs'}")

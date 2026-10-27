@@ -516,6 +516,8 @@ jobs:
   # the other build jobs.
   feature-combos-train:
     needs: scope
+    permissions:
+      contents: read
     if: ${{ !cancelled() && github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') }}
     uses: ./.github/workflows/feature-combos.yml
 
