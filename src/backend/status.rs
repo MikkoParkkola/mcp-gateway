@@ -207,6 +207,7 @@ impl Backend {
     /// Read from the canonical Shared slot only, the same scope as
     /// [`Self::status`]: a per-user slot's sign-in is one user's, not the
     /// server's.
+    #[cfg(feature = "webui")]
     pub(crate) fn server_state(
         &self,
         now: std::time::SystemTime,
@@ -220,6 +221,7 @@ impl Backend {
         crate::config::Config::cleartext_override_in_effect(&self.name, &self.config)
     }
 
+    #[cfg(feature = "webui")]
     fn state_inputs(&self) -> super::server_state::StateInputs {
         let entry = self.shared_entry();
         let health = entry.failsafe.health_metrics();

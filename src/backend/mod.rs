@@ -48,6 +48,8 @@ mod registry;
 mod repin;
 mod restart;
 mod runtime_launch;
+// The web UI's status rows are its only reader.
+#[cfg(feature = "webui")]
 pub(crate) mod server_state;
 mod status;
 mod stdio_start;
