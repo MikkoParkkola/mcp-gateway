@@ -152,7 +152,7 @@ impl MetaMcp {
     /// becomes `NoView` even over a stored read's running cold lease
     /// (MIK-8392 d1 F9): intended, the revocation is the newer fact. A busy
     /// custody is not a revocation: it leaves a running cold lease standing,
-    /// so that lease's winner still publishes (MIK-8962).
+    /// so that lease's winner still publishes.
     pub(crate) async fn revalidate_caller_slots(&self, caller: CallerProof<'_>) {
         for backend in self
             .backends

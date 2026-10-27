@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8962 SHARED.4: which compiled backends refuse a shared session, judged
+//! SHARED.4: which compiled backends refuse a shared session, judged
 //! through the real load path and the account compiler, for every binding
 //! syntax. A required binding with per-user sessions refuses it; a backend
 //! that may share keeps it.

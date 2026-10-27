@@ -533,7 +533,7 @@ impl Backend {
     }
 
     /// The longest one fill for a check may take: the backend's call timeout
-    /// and the list wait's grace (MIK-7982 C3/C4).
+    /// and the list wait's grace.
     pub(crate) fn tools_fill_bound(&self) -> std::time::Duration {
         self.config.timeout + super::fill_check::LIST_FILL_WAIT_GRACE
     }

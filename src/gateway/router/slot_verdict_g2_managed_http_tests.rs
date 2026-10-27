@@ -233,7 +233,7 @@ async fn listed_schema_has_folder(fx: &Fx, id: u64) -> bool {
 /// the shared slot holds schema B. After the grant rotates the old slot is
 /// still warm and indexed, but `tools/list` must not serve it: the now-cold
 /// caller's view is re-established under the current grant, a fresh fill on a
-/// slot of its own, and never the shared view B (MIK-8962). RED without the
+/// slot of its own, and never the shared view B. RED without the
 /// recheck.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tools_list_never_serves_a_rotated_grants_slot_http() {
@@ -766,7 +766,7 @@ fn nudged(
 /// returns at the cap with the fast backend's own tool and without the slow
 /// one's. The slow fill finishes on its own lease and stores into the
 /// caller's slot, which sends the change nudge the drain announces as
-/// `tools/list_changed` (MIK-8148); the next listing shows it with no
+/// `tools/list_changed`; the next listing shows it with no
 /// further fill.
 #[tokio::test(start_paused = true)]
 async fn a_backend_past_the_cap_is_listed_after_its_late_fill_http() {
@@ -865,7 +865,7 @@ async fn a_listing_waits_on_a_running_lease_through_a_busy_custody_http() {
     );
 }
 
-/// The lease covers the fill (MIK-8962): a backend whose fill bound is past
+/// The lease covers the fill: a backend whose fill bound is past
 /// the 60 s cold backoff fills for 90 s. The first listing returns at the
 /// 30 s cap without it. A second listing at 70 s does not claim the view
 /// again: it waits on the running lease and lists the 90 s fill, and the

@@ -251,7 +251,7 @@ async fn a_failed_backend_reports_unhealthy_even_if_it_opted_into_stopping() {
 #[tokio::test]
 async fn a_never_started_backend_is_not_dormant() {
     // A backend that may share: one with per-user sessions only reads
-    // `PerUser` instead (MIK-8962). No stop_when_idle_for, no transport.
+    // `PerUser` instead. No stop_when_idle_for, no transport.
     let backend = per_user_backend_with(false, crate::identity_propagation::SessionMode::PerUser);
     assert_eq!(
         backend.lifecycle(),

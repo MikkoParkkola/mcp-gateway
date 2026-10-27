@@ -33,7 +33,7 @@ pub enum BackendLifecycle {
     /// Never started. The gateway starts backends lazily, so this is the normal
     /// state for a configured backend nothing has used yet.
     NotStarted,
-    /// Per-user sessions only (MIK-8962): there is no shared session to be up
+    /// Per-user sessions only: there is no shared session to be up
     /// or down, the health loop never probes it, and each user's own session
     /// starts on that user's first call. [`PER_USER_SESSIONS`] says so.
     #[serde(rename = "per_user")]

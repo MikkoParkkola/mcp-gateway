@@ -611,7 +611,7 @@ async fn warm_start_until_cached(
     mode: WarmStartMode,
     instance: &Weak<Backend>,
 ) {
-    // MIK-8962: a backend with per-user sessions only has no shared session
+    // A backend with per-user sessions only has no shared session
     // to warm; each user's own slot starts on that user's first call.
     #[allow(
         clippy::disallowed_methods,

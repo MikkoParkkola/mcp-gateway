@@ -618,9 +618,9 @@ pub(super) struct Dispatches {
     /// between a bridged exchange's rounds).
     on_call: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// How long each named backend waits, in tokio time, before it answers a
-    /// `tools/list` (MIK-8962: a slow backend against a listing's deadline).
+    /// `tools/list` (a slow backend against a listing's deadline).
     list_delays: Mutex<std::collections::BTreeMap<String, std::time::Duration>>,
-    /// The tool each named backend lists instead of `read` (MIK-8962: two
+    /// The tool each named backend lists instead of `read` (two
     /// backends surfacing one name would collide, and the second is skipped).
     list_tool_names: Mutex<std::collections::BTreeMap<String, String>>,
 }

@@ -10,7 +10,7 @@
 //! warm slot for this caller the backend's tools are withheld, except where
 //! SLOTVIS.6 keeps the shared view (the surfaced list in plain `tools/list`).
 //! A backend with per-user sessions only has no shared view: its cold
-//! caller's own view is warmed before `tools/list` is built (MIK-8962).
+//! caller's own view is warmed before `tools/list` is built.
 
 use std::sync::Arc;
 
@@ -48,7 +48,7 @@ pub(crate) enum ColdRule {
     /// Keep the shared view (the surfaced list in plain `tools/list`,
     /// SLOTVIS.6), except on a backend with per-user sessions only, which has
     /// none: there the caller's own view is warmed before the list is built
-    /// (MIK-8962) and withheld until it is.
+    /// and withheld until it is.
     SharedView,
 }
 
@@ -181,8 +181,7 @@ impl MetaMcp {
 
     /// The surfaced tool as this caller's listing shows it: the caller's own
     /// entry on a per-user backend with a warm slot, else the shared one, and
-    /// none on a backend with per-user sessions only, which has no shared one
-    /// (MIK-8962).
+    /// none on a backend with per-user sessions only, which has no shared one.
     pub(crate) fn listing_tool(
         &self,
         backend: &Backend,

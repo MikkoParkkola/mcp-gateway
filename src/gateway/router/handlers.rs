@@ -330,7 +330,7 @@ async fn meta_mcp_dispatch(
             pending_view = state
                 .begin_listing(session_id, &intake.view_subject(), invoke_scope.caller)
                 .await;
-            // MIK-8962: a backend with no shared session lists only the
+            // A backend with no shared session lists only the
             // caller's own view, re-established here under the caller's grant.
             state
                 .meta_mcp

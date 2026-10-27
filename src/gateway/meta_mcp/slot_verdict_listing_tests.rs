@@ -595,7 +595,7 @@ async fn l3b_multi_user_keeps_the_isolated_backend_out_of_spec_preview() {
 
 /// L6c (SLOTVIS.6 third clause): a cold caller's surfaced list in plain
 /// `tools/list` no longer keeps the shared view of a backend with per-user
-/// sessions only: that backend has no shared session (MIK-8962), so its
+/// sessions only: that backend has no shared session, so its
 /// shared entry would describe a catalogue no caller can reach. alpha's slot
 /// is cold, and the entry is withheld until alpha's own fill lands.
 #[tokio::test]

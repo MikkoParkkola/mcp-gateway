@@ -349,7 +349,7 @@ impl MetaMcp {
         // MIK-8356: judged by the caller's own slot on a per-user backend; a
         // cold caller keeps the shared view (SLOTVIS.6), except where there is
         // none: a backend with per-user sessions only lists the caller's own
-        // view, warmed before this list was built (MIK-8962).
+        // view, warmed before this list was built.
         if !self.listing_names(
             &surfaced.server,
             &surfaced.tool,
@@ -492,7 +492,7 @@ impl MetaMcp {
             // backend's state, so an operator reading one server reads one row.
             if let Some(fields) = entry.as_object_mut() {
                 if b.shared_slot_refused() {
-                    // MIK-8962: no shared session, so no shared era or health
+                    // No shared session, so no shared era or health
                     // to show; say why, rather than an era that never resolves.
                     fields.insert(
                         "sessions".to_string(),

@@ -267,7 +267,7 @@ impl MetaMcp {
         }
         // The lease outlives the fill it covers: a fill may run for the
         // backend's whole fill bound, and its publish lands only while its
-        // own lease stands (MIK-8962).
+        // own lease stands.
         let lease = COLD_RETRY_BACKOFF.max(backend.tools_fill_bound());
         let crate::backend::ColdClaim::Won(generation) =
             backend.claim_cold_view(&id, lease, account_live)

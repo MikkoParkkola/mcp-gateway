@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A backend with per-user sessions only never opens a shared session
-//! (MIK-8962): every path to its Shared slot is refused before anything is
+//! A backend with per-user sessions only never opens a shared session:
+//! every path to its Shared slot is refused before anything is
 //! built or counted, and a backend that may share keeps sharing.
 
 use super::*;

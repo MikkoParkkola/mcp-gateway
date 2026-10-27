@@ -228,7 +228,7 @@ impl Stdio {
 /// (schema A); the shared slot holds B. After rotation `tools/list` must not
 /// serve the old slot, nor the shared view B: the backend has per-user
 /// sessions only, so the now-cold caller's view is a fresh fill on the
-/// current grant's own slot (MIK-8962).
+/// current grant's own slot.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tools_list_never_serves_a_rotated_grants_slot_stdio() {
     let mut gateway =

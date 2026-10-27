@@ -117,7 +117,7 @@ impl DirectAccountGateway {
     }
 
     /// [`Self::with_second`], with `configure` applied to both backends'
-    /// config (MIK-8962: a fill bound past the listing's deadline cap).
+    /// config (a fill bound past the listing's deadline cap).
     pub(crate) fn with_second_configured(
         auth: crate::config::AuthConfig,
         binding: &Binding,
@@ -284,13 +284,13 @@ impl DirectAccountGateway {
     }
 
     /// Make `backend` wait `delay` (tokio time) before it answers a
-    /// `tools/list` (MIK-8962).
+    /// `tools/list`.
     pub(crate) fn delay_lists_on(&self, backend: &str, delay: std::time::Duration) {
         self.dispatches.delay_lists_on(backend, delay);
     }
 
     /// Make `backend` list a tool named `name` instead of `read`
-    /// (MIK-8962: two surfaced backends need distinct tool names).
+    /// (two surfaced backends need distinct tool names).
     pub(crate) fn name_list_tool_on(&self, backend: &str, name: &str) {
         self.dispatches.name_list_tool_on(backend, name);
     }

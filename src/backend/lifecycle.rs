@@ -475,7 +475,7 @@ impl Backend {
         entry: &PooledEntry,
         era: EraResolution,
     ) -> Result<Arc<dyn Transport>> {
-        // MIK-8962: a backend with per-user sessions only is never reached
+        // A backend with per-user sessions only is never reached
         // through a shared session, so its Shared slot never starts, whoever
         // asks. Refused before anything is built or counted: no transport, no
         // start in flight, no breaker or budget sees it. The isolation refusal's

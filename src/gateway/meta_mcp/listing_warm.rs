@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A listing's warm of a caller's cold per-user views (MIK-8962 SHARED.5).
+//! A listing's warm of a caller's cold per-user views (SHARED.5).
 //!
 //! A backend that never opens a shared session has no shared catalogue to
 //! show a caller whose own view is cold. Before `tools/list` is built, that
@@ -14,9 +14,9 @@ use super::account_outcome::AccountWrites;
 use super::scoped_backends::Unscoped;
 use super::visibility::InvokeScope;
 
-/// The longest a listing waits for the fills it starts or finds (MIK-8962,
-/// lead ruling 2026-10-27): half the MCP TypeScript SDK's default request
-/// timeout (60 s), so a cold listing answers well before a client gives up.
+/// The longest a listing waits for the fills it starts or finds: half the
+/// MCP TypeScript SDK's default request timeout (60 s), so a cold listing
+/// answers well before a client gives up.
 /// Nothing on the gateway bounds an inbound request: `server.request_timeout`
 /// was never enforced and is gone in 4.0.
 pub(crate) const LISTING_DEADLINE_CAP: std::time::Duration = std::time::Duration::from_secs(30);
@@ -29,7 +29,7 @@ impl MetaMcp {
     /// bounded by its backend's own fill bound; a view another reader's lease
     /// is filling is waited on and served from that fill. A fill still
     /// running at the deadline is left out of this listing and finishes on
-    /// its own lease; when its slot stores, `tools_nudge` (MIK-8148) sends
+    /// its own lease; when its slot stores, `tools_nudge` sends
     /// the caller `tools/list_changed`.
     pub(crate) async fn warm_listing_views(
         &self,
