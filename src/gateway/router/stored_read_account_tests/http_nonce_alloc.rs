@@ -410,7 +410,15 @@ fn test_path(name: &str) -> String {
 /// body. Measured 46,792 B at both 1 and 3 MiB after the fix (it was
 /// 3,216,360 B at 1 MiB, the `_meta` merge's copy of the arguments).
 /// Lead-ruled 2026-10-20: 64 KiB fixed, tightened only on new evidence.
-const OVER_PARSE: u64 = 64 * 1024;
+///
+/// Raised to 96 KiB (lead ruling 2026-10-27): a refused `/mcp` call now
+/// writes its delivery record. Measured 87,369 B at both 1 and 3 MiB, so the
+/// cost stays fixed. The record write alone is 28,631 B across 237 calls,
+/// none of 2 KiB or more (serializing and hashing the answer is 1,531 B of
+/// it): many small allocations, no one buffer to shrink. Trimming that path
+/// is MIK-8985. Margin: about 11 KB (98,304 B cap over 87,369 B measured); a
+/// further raise needs its own breakdown.
+const OVER_PARSE: u64 = 96 * 1024;
 /// How much that excess may grow from 1 to 3 MiB: no payload term (measured
 /// 0 B).
 const OVER_PARSE_GROWTH: u64 = 1024;
