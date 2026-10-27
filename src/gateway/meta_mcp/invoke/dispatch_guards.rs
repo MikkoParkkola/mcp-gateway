@@ -208,7 +208,7 @@ impl MetaMcp {
             trace_id,
             caller_key: None,
         })
-        .map_err(|refusal| self.profile_refusal_as_undefined((server, tool), session_id, refusal))
+        .map_err(|refusal| self.withheld_as_undefined((server, tool), session_id, refusal))
     }
 
     /// The refusal of [`Self::admit_target`] that says nothing about whether

@@ -89,6 +89,11 @@ impl Gateway {
             } else {
                 (method.clone(), Vec::new())
             };
+            // Set before the signing preflight, which can answer a withheld
+            // name as absent ahead of the route stage.
+            if backend_targets.len() == 1 {
+                crate::gateway::delivery_facts::lone_target();
+            }
             let response_targets = super::super::meta_mcp::response_security::meta_response_targets(
                 &external_tool,
                 &backend_targets,

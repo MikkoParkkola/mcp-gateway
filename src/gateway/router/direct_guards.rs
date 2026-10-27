@@ -29,9 +29,19 @@ impl DirectRouteGuards {
     /// G7 applies where the signed envelope is `gateway_invoke`-only. Under
     /// `hardened` this route signs its own results (GH1942.HARDEN.1 row 7).
     pub(crate) fn run(meta: &MetaMcp, call: &BackendCall<'_>, scope: SigningScope) -> Result<()> {
-        meta.admit_target(call)?;
+        // The session profile's refusal (the only `Protocol` error here) and
+        // the G7 signing refusal are gateway refusals with no seal: raised
+        // here, where the direct route delivers them. The kill switch and the
+        // capability disable are sealed and raise where they are framed.
+        meta.admit_target(call).map_err(|e| match e {
+            Error::Protocol(_) => crate::gateway::delivery_facts::refused(e),
+            other => other,
+        })?;
         if meta.signing_enabled() && scope == SigningScope::InvokeOnly {
-            return Err(Error::json_rpc(-32001, SIGNING_REFUSAL));
+            return Err(crate::gateway::delivery_facts::refused(Error::json_rpc(
+                -32001,
+                SIGNING_REFUSAL,
+            )));
         }
         Ok(())
     }
@@ -180,6 +190,13 @@ impl DirectRouteGuards {
         if let Some(result) = response.result.take() {
             match meta.gate_payload(call, result) {
                 Ok((mut result, effect)) => {
+                    if effect == crate::gateway::meta_mcp::response_security::GateEffect::Withheld {
+                        // The direct route answers one call: its whole result
+                        // was withheld, a refusal.
+                        crate::gateway::delivery_facts::raise(
+                            crate::gateway::delivery_facts::ResponseEffect::Refused,
+                        );
+                    }
                     if !warnings.is_empty()
                         && let Some(obj) = result.as_object_mut()
                     {

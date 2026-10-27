@@ -71,6 +71,11 @@ impl<'a> Refused<'a> {
         message: String,
         status: StatusCode,
     ) -> axum::response::Response {
+        // Every caller answers the whole request with this refusal: the
+        // route authorization, the request firewall, a refused step.
+        crate::gateway::delivery_facts::raise(
+            crate::gateway::delivery_facts::ResponseEffect::Refused,
+        );
         // MIK-7116.MIN.1: the tenants the refused request named; nothing was
         // fetched, so there is no response side and no data class.
         let tenants = state.meta_mcp.request_tenants(target.arguments);

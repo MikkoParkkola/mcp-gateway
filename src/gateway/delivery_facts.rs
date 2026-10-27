@@ -10,6 +10,12 @@
 //! replay) clears `vouched`. The effect is the strongest one raised, so the
 //! order the sites run in cannot lower it.
 //!
+//! A tools/call naming one target sets `lone_target` where the target is
+//! parsed; an answer re-worded as an absent name then raises `Refused` through
+//! `withheld`, which does so only for such a call while the cell is still
+//! vouched, so a composite step answered absent never marks a plan that still
+//! delivers.
+//!
 //! A delivery the gateway cannot vouch for omits both fields; it never claims
 //! `delivered` or an empty finding list for something no scan of this request
 //! saw. Outside a cell every setter is a no-op and the recorder omits both.
@@ -82,6 +88,7 @@ pub(crate) struct DeliveryFacts {
     scanned: bool,
     findings: BTreeSet<Finding>,
     vouched: bool,
+    lone_target: bool,
 }
 
 impl Default for DeliveryFacts {
@@ -91,6 +98,7 @@ impl Default for DeliveryFacts {
             scanned: false,
             findings: BTreeSet::new(),
             vouched: true,
+            lone_target: false,
         }
     }
 }
@@ -144,6 +152,32 @@ pub(crate) fn outlet(error: &crate::Error) {
     if matches!(error, crate::Error::GatewayRefused { .. }) {
         raise(ResponseEffect::Refused);
     }
+}
+
+/// This delivery answers a tools/call that names exactly one target.
+pub(crate) fn lone_target() {
+    with(|facts| facts.lone_target = true);
+}
+
+/// The call was answered as an absent name for a policy reason: refused, but
+/// only for a one-target call this request still vouches for. A composite is
+/// unvouched before any step runs, so a step answered absent raises nothing.
+pub(crate) fn withheld() {
+    with(|facts| {
+        if facts.lone_target && facts.vouched {
+            facts.effect = facts.effect.max(ResponseEffect::Refused);
+        }
+    });
+}
+
+/// The gateway refused this delivery's answer at a site that also runs per
+/// step in a composite: raised only while the cell is still vouched.
+pub(crate) fn refused_while_vouched() {
+    with(|facts| {
+        if facts.vouched {
+            facts.effect = facts.effect.max(ResponseEffect::Refused);
+        }
+    });
 }
 
 /// A scanner returned a verdict on a non-empty `part` of this delivery.

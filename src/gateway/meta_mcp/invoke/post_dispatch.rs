@@ -513,6 +513,11 @@ impl MetaMcp {
             caller_key: None,
         };
         let (gated, effect) = self.gate_payload(&call, result)?;
+        if effect == super::super::response_security::GateEffect::Withheld {
+            // Per step in a composite: refused only while this request still
+            // vouches for the delivery, so a plan that goes on is not marked.
+            crate::gateway::delivery_facts::refused_while_vouched();
+        }
         // The gates have run on the payload; the worker takes it, unminted.
         if let Some(withheld) = withheld
             && worker_clock::hand_to_worker(withheld, gated.clone())

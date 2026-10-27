@@ -487,8 +487,12 @@ impl super::MetaMcp {
 pub(crate) enum GateEffect {
     /// The backend's answer, unchanged by the gates.
     PassedThrough,
-    /// Context integrity withheld, refused or transformed the result.
+    /// Context integrity refused or transformed the result.
     Enforced,
+    /// Context integrity kept nothing: the whole result was withheld. Every
+    /// reader of `Enforced` treats it alike; only the delivering sites read
+    /// the difference, to record the gateway's refusal.
+    Withheld,
 }
 
 impl super::MetaMcp {
@@ -594,7 +598,7 @@ pub(crate) fn chain_after_gates(
 ) {
     match effect {
         GateEffect::PassedThrough => (source, upstream),
-        GateEffect::Enforced => (ChainSource::NotEligible, None),
+        GateEffect::Enforced | GateEffect::Withheld => (ChainSource::NotEligible, None),
     }
 }
 

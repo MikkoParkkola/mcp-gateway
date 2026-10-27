@@ -158,6 +158,9 @@ pub(super) async fn tools_call(
         )
         .await
     {
+        crate::gateway::delivery_facts::raise(
+            crate::gateway::delivery_facts::ResponseEffect::Refused,
+        );
         return Err(build_error_response(
             Some(id),
             e.code,
@@ -192,6 +195,9 @@ pub(super) async fn tools_call(
     // is unchanged, and are authorized and scanned before any step runs
     // (MIK-8362).
     let request_targets = backend_targets.len();
+    if request_targets == 1 {
+        crate::gateway::delivery_facts::lone_target();
+    }
     backend_targets.extend(state.meta_mcp.playbook_step_targets(tool_name, &arguments));
     // Authorize every target before scanning any, so a refused later target
     // charges no earlier one's budget.
@@ -287,6 +293,13 @@ pub(super) async fn tools_call(
             // Any other refusal (an unwritable grant record) is answered as
             // the meta layer answers it.
             Err(other) => {
+                // A requested target the session profile withholds ends the
+                // whole request: refused, whatever the target count.
+                if matches!(other, crate::Error::ToolNotFound(_)) {
+                    crate::gateway::delivery_facts::raise(
+                        crate::gateway::delivery_facts::ResponseEffect::Refused,
+                    );
+                }
                 return Ok(error_response_preserving_status(id, &other));
             }
         }

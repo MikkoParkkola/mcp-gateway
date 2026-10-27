@@ -58,9 +58,7 @@ impl MetaMcp {
         } else {
             self.admit_target(&call)
         }
-        .map_err(|refusal| {
-            self.profile_refusal_as_undefined((server, tool), session_id, refusal)
-        })?;
+        .map_err(|refusal| self.withheld_as_undefined((server, tool), session_id, refusal))?;
         // #2445: a withheld tool is refused here, ahead of every replay layer.
         let backend = self
             .scoped(caller.scope().authorizer.backend_grant())
@@ -422,7 +420,7 @@ impl MetaMcp {
         let delivered = self.apply_context_integrity(server, tool, api_key_name, trace_id, result);
         // MIN.2: past every gate, so this dispatch's raw reading counts.
         crate::security::tenant_reads::note_attribution(raw_read);
-        if round && delivered.1 == super::super::response_security::GateEffect::Enforced {
+        if round && delivered.1 != super::super::response_security::GateEffect::PassedThrough {
             return Err(Error::ResponseFirewallRefused);
         }
         Ok(delivered)

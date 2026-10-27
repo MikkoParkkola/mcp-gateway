@@ -200,7 +200,12 @@ impl MetaMcp {
 
         let (delivered, effect) = if evaluation.policy.enforcement_applied {
             let delivered = Self::context_integrity_delivered_result(&evaluation, &result);
-            (delivered, GateEffect::Enforced)
+            let effect = if evaluation.transformed.delivered.is_none() {
+                GateEffect::Withheld
+            } else {
+                GateEffect::Enforced
+            };
+            (delivered, effect)
         } else {
             (result, GateEffect::PassedThrough)
         };
