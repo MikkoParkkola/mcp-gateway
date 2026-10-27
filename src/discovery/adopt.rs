@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Whether a server found in a client config can become a gateway backend
-//! without losing or leaking anything: the one rule the shadow radar, the
-//! discovery route and `discover --write` share, so none of them offers an
-//! adoption another refuses.
+//! without losing or leaking anything. The shadow radar applies it today;
+//! the discovery route and `discover --write` are to call it as well, so
+//! none of them offers an adoption another refuses.
 //!
 //! A find is adoptable when the gateway would run it exactly as the client
 //! does. Its `env` and `headers` values then fall in two kinds: a template
@@ -45,7 +45,7 @@ const CREDENTIAL_QUERY_NAMES: &[&str] = &[
 ];
 
 /// Every reason `server` is not adoptable, each with the client field it
-/// names (`env.API_KEY`, `args[2]`, `url`), in a stable order. Empty when it
+/// names (`env.API_KEY`, `args[2]`, `url`), sorted by field. Empty when it
 /// is adoptable.
 pub(crate) fn refusals(server: &DiscoveredServer) -> Vec<(AdoptRefusal, String)> {
     let mut refused: Vec<(AdoptRefusal, String)> = server
@@ -73,6 +73,8 @@ pub(crate) fn refusals(server: &DiscoveredServer) -> Vec<(AdoptRefusal, String)>
     if url(&server.transport).is_some_and(carries_credential) {
         refused.push((AdoptRefusal::CredentialInUrl, "url".to_string()));
     }
+    // By field name: a client file's key order is not one to depend on.
+    refused.sort_by(|a, b| a.1.cmp(&b.1));
     refused
 }
 

@@ -61,6 +61,50 @@ fn client_expands(text: &str) -> bool {
     text.contains("${")
 }
 
+/// Entry keys that describe the entry to its client and change nothing about
+/// how the server runs or what it may reach, so leaving them behind loses
+/// nothing. Any other key a branch does not carry (a client's sandbox,
+/// `envFile`, `oauth`, extension `settings`, ...) is recorded as uncarried:
+/// a key not listed here makes the find not adoptable.
+const DESCRIPTIVE_KEYS: &[&str] = &[
+    "type",
+    "name",
+    "description",
+    "title",
+    "disabled",
+    "enabled",
+    "timeout",
+    "autoApprove",
+    "alwaysAllow",
+    "source",
+];
+
+/// Records every key of `config` neither in `carried` nor descriptive, and
+/// every carried key whose value fails its shape check.
+fn record_dropped_keys(
+    config: &Value,
+    carried: &[(&str, fn(&Value) -> bool)],
+    uncarried: &mut Vec<String>,
+) {
+    let Some(object) = config.as_object() else {
+        return;
+    };
+    for (key, value) in object {
+        match carried.iter().find(|(name, _)| *name == key.as_str()) {
+            Some((_, shape_ok)) if !shape_ok(value) => uncarried.push(key.clone()),
+            Some(_) => {}
+            None if DESCRIPTIVE_KEYS.contains(&key.as_str()) => {}
+            None => uncarried.push(key.clone()),
+        }
+    }
+}
+
+/// The URL schemes a gateway backend connects to; a client's `unix://` or
+/// `pipe://` endpoint is not one.
+fn gateway_scheme(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https" | "ws" | "wss"))
+}
+
 /// A client `env`/header value in gateway syntax: `${env:NAME}` becomes
 /// `${NAME}`; `None` when a client-only variable (`${input:…}`,
 /// `${workspaceFolder}`, …) is left that a gateway load would refuse.
@@ -134,6 +178,16 @@ pub(super) fn parse(
             },
         );
         server.env = string_map(source, name, config, "env", &mut uncarried);
+        record_dropped_keys(
+            config,
+            &[
+                ("command", Value::is_string),
+                ("args", Value::is_array),
+                ("env", Value::is_object),
+                ("cwd", Value::is_string),
+            ],
+            &mut uncarried,
+        );
         server.uncarried = uncarried;
         return Some(server);
     }
@@ -152,7 +206,7 @@ pub(super) fn parse(
                 working_dir: None,
             },
         );
-        if client_expands(url) {
+        if client_expands(url) || !gateway_scheme(url) {
             server.uncarried.push("url".to_string());
         }
         server.headers = string_map(source, name, config, "headers", &mut server.uncarried);
@@ -164,6 +218,11 @@ pub(super) fn parse(
                 .map(|(key, _)| key.clone())
                 .collect();
         }
+        record_dropped_keys(
+            config,
+            &[("url", Value::is_string), ("headers", Value::is_object)],
+            &mut server.uncarried,
+        );
         return Some(server);
     }
 

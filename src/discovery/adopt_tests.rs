@@ -155,6 +155,73 @@ fn a_reference_shaped_literal_is_adoptable_as_bytes() {
 }
 
 #[test]
+fn a_client_setting_the_gateway_does_not_carry_refuses() {
+    // A sandbox, an env file and client-held OAuth all change what the
+    // server runs with; left behind, the adopted server would differ.
+    let entry = json!({
+        "type": "stdio",
+        "command": "srv",
+        "sandboxEnabled": true,
+        "envFile": "${workspaceFolder}/.env",
+    });
+    assert_eq!(
+        refused(&entry),
+        vec![
+            (AdoptRefusal::NeedsClientOnlySecret, "envFile".to_string()),
+            (
+                AdoptRefusal::NeedsClientOnlySecret,
+                "sandboxEnabled".to_string()
+            ),
+        ]
+    );
+    let entry = json!({"url": "https://mcp.example.test/mcp", "oauth": {"clientId": "c"}});
+    assert_eq!(
+        refused(&entry),
+        one(AdoptRefusal::NeedsClientOnlySecret, "oauth")
+    );
+}
+
+#[test]
+fn a_field_of_the_wrong_shape_refuses_rather_than_vanishing() {
+    assert_eq!(
+        refused(&json!({"command": "srv", "cwd": 7})),
+        one(AdoptRefusal::NeedsClientOnlySecret, "cwd")
+    );
+    assert_eq!(
+        refused(&json!({"command": "srv", "env": "K=v"})),
+        one(AdoptRefusal::NeedsClientOnlySecret, "env")
+    );
+    assert_eq!(
+        refused(&json!({"command": "srv", "headers": {"K": "v"}})),
+        one(AdoptRefusal::NeedsClientOnlySecret, "headers")
+    );
+}
+
+#[test]
+fn a_socket_endpoint_refuses() {
+    for url in ["unix:///tmp/mcp.sock", "pipe:///mcp"] {
+        assert_eq!(
+            refused(&json!({"url": url})),
+            one(AdoptRefusal::NeedsClientOnlySecret, "url"),
+            "{url}"
+        );
+    }
+}
+
+#[test]
+fn descriptive_client_keys_do_not_refuse() {
+    let entry = json!({
+        "type": "stdio",
+        "command": "srv",
+        "description": "d",
+        "disabled": false,
+        "timeout": 30,
+        "autoApprove": ["read"],
+    });
+    assert_eq!(refused(&entry), vec![]);
+}
+
+#[test]
 fn a_credential_in_a_url_refuses_naming_url() {
     for url in [
         "https://user:pass@mcp.example.test/mcp",
