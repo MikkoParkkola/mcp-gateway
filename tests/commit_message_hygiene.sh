@@ -55,6 +55,36 @@ run_case names_tool fail 'fix(router): reject a credential-bearing URL
 
 - Apply the fix Claude Code suggested'
 
+# An info marker is not the pronoun; a parenthesised aside in first person is.
+run_case info_marker_is_not_a_pronoun pass 'feat(ui): tooltip trigger
+
+- The (i) trigger is a button named after its title'
+
+run_case first_person_in_parentheses fail 'fix(router): drop the retry
+
+- Remove the second attempt (I checked every caller)'
+
+run_case capital_pronoun_in_parentheses fail 'fix(router): drop the retry
+
+- (I) checked every caller before removing it'
+
+# A pagination cursor is a code noun; the editor of that name is a tool.
+run_case pagination_cursor_is_not_a_tool pass 'feat(api): page through the event list
+
+- Return the next page cursor with each response'
+
+run_case cursor_editor_names_tool fail 'fix(router): reject a credential-bearing URL
+
+- Apply the fix Cursor suggested'
+
+run_case lowercase_cursor_attribution fail 'fix(router): reject a credential-bearing URL
+
+- Apply cursor'"'"'s suggested fix'
+
+run_case lowercase_cursor_ide fail 'fix(router): reject a credential-bearing URL
+
+- Generated in the cursor IDE'
+
 run_case session_narration fail 'fix(router): reject a credential-bearing URL
 
 - Restore the guard dropped earlier in this session'

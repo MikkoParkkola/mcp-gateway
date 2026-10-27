@@ -357,10 +357,11 @@ async fn a7_a_reload_from_mcp_to_a2a_keeps_only_tools_changed() {
     expect_events(&receiver, &id, TOOLS, base + 1).await;
 }
 
-/// A10 (design B3'): `x` is an A2A agent reached with the caller's identity,
-/// so its `tools_changed` subscription is held with no listener. A reload
-/// drops the identity propagation: the held subscription revives, its card
-/// is polled, and a change is delivered.
+/// A10: `x` is an A2A agent reached with the caller's identity. Its
+/// `tools_changed` is refused per subscriber (a per-user listener has no read
+/// of its own to poll the card with), and nothing polls it. A reload drops the
+/// identity propagation: the agent is then shared, a subscription is
+/// accepted, its card is polled, and a change is delivered.
 #[tokio::test]
 async fn a10_a_reload_to_a_shared_a2a_backend_revives_tools_changed() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -374,7 +375,17 @@ async fn a10_a_reload_to_a_shared_a2a_backend_revives_tools_changed() {
     );
     cfg["meta_mcp"]["cache_ttl"] = json!("1s");
     let mut gw = start_cfg(dir.path(), &receiver, cfg).await;
-    let id = sub(&gw, ALICE, TOOLS, &receiver, json!({})).await;
+    let refused = gw
+        .rpc(
+            Some(ALICE),
+            "events/subscribe",
+            sub_params(TOOLS, &receiver.localhost_url(), &whsec(32), json!({})),
+        )
+        .await;
+    assert!(
+        error(&refused)["code"].is_i64(),
+        "an identity-bound agent's tools_changed is refused: {refused}"
+    );
     let held = agent.fetches();
     // timing: absence
     tokio::time::sleep(INTERVALS).await;
@@ -387,6 +398,25 @@ async fn a10_a_reload_to_a_shared_a2a_backend_revives_tools_changed() {
     let mut next = gw.config().clone();
     next["backends"]["x"] = json!({"a2a_url": agent.url});
     gw.rewrite_config(next);
+    // The reload lands asynchronously: subscribe once it has.
+    let deadline = tokio::time::Instant::now() + DEADLINE;
+    let id = loop {
+        let answer = gw
+            .rpc(
+                Some(ALICE),
+                "events/subscribe",
+                sub_params(TOOLS, &receiver.localhost_url(), &whsec(32), json!({})),
+            )
+            .await;
+        if let Some(id) = answer["result"]["id"].as_str() {
+            break id.to_owned();
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the shared agent accepts the subscription: {answer}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
     let base = first_fill(&agent, &receiver, &id).await;
     agent.set(|card| card["name"] = json!("Shared Agent"));
     expect_events(&receiver, &id, TOOLS, base + 1).await;

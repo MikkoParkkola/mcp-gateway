@@ -268,6 +268,8 @@ impl LiveConfig {
             );
         }
         drop(gate);
+        // An API key or identity provider may have gone with it.
+        crate::events::credentials_changed();
         // A large config is freed after the gate opens, never while a send
         // waits on it.
         drop(old);
@@ -493,6 +495,9 @@ mod reload_pause;
 mod webhook_base_path_reload_tests;
 #[cfg(test)]
 mod writer_lock_tests;
+
+#[cfg(test)]
+mod replace_tests;
 
 #[cfg(test)]
 mod grant_change_trigger_tests;
