@@ -103,10 +103,10 @@ fn r14_an_empty_slot_still_runs_the_compare() {
         StatusCode::SEE_OTHER,
         "spends the live value"
     );
-    let before = crate::gateway::auth_dashboard::ct_compares_for_test();
+    let before = crate::gateway::auth::dashboard::ct_compares_for_test();
     let _ = observe(&state, &GUESS, LOCAL);
     assert!(
-        crate::gateway::auth_dashboard::ct_compares_for_test() > before,
+        crate::gateway::auth::dashboard::ct_compares_for_test() > before,
         "the empty slot skipped the compare"
     );
 }
@@ -117,7 +117,7 @@ fn r14_an_empty_slot_still_runs_the_compare() {
 #[test]
 fn r14_an_empty_code_slot_still_runs_the_compare() {
     let (state, _) = bootstrap_state(Some("bearer"), vec![]);
-    let before = crate::gateway::auth_dashboard::ct_compares_for_test();
+    let before = crate::gateway::auth::dashboard::ct_compares_for_test();
     assert!(
         state
             .dashboard_bootstrap
@@ -125,7 +125,7 @@ fn r14_an_empty_code_slot_still_runs_the_compare() {
             .is_none()
     );
     assert!(
-        crate::gateway::auth_dashboard::ct_compares_for_test() > before,
+        crate::gateway::auth::dashboard::ct_compares_for_test() > before,
         "the empty code slot skipped the compare"
     );
 }
