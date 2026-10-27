@@ -221,6 +221,23 @@ async fn an_inspection_finding_is_recorded_beside_a_clean_firewall_scan() {
     }
 }
 
+/// A tool error on `/mcp` goes out with the gateway's `recovery` hint and
+/// nothing else added: the hint is noted, and noting a counted member raises
+/// `annotated`. (The direct route adds no hint.)
+#[tokio::test]
+async fn a_recovery_hint_records_annotated() {
+    let recorded = firewalled_recorded_call(HttpRoute::Mcp, Answer::IsError, None).await;
+    let body = recorded.body.to_string();
+    assert!(
+        body.contains("recovery")
+            && !body.contains("_context_integrity")
+            && !body.contains("_security_findings"),
+        "premise: the hint is the only addition: {body}"
+    );
+    let row = only_delivery(HttpRoute::Mcp, &recorded.rows);
+    assert_eq!(row["response_effect"], "annotated", "{row}");
+}
+
 /// The same answer goes out with the gateway's `_security_findings` added
 /// and its text unchanged: the record says `annotated`, never `delivered`.
 #[tokio::test]
