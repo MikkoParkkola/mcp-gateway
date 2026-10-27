@@ -279,6 +279,46 @@ fn a_relative_working_directory_refuses() {
 }
 
 #[test]
+fn a_variable_in_a_name_refuses() {
+    assert_eq!(
+        refused(&json!({"command": "srv", "env": {"${PREFIX}_KEY": "v"}})),
+        one(AdoptRefusal::NeedsClientOnlySecret, "env.${PREFIX}_KEY")
+    );
+}
+
+#[test]
+fn a_null_optional_field_is_left_out() {
+    assert_eq!(
+        refused(&json!({"command": "srv", "args": null, "env": null, "cwd": null})),
+        vec![]
+    );
+}
+
+/// An environment find skips the client config scanner; the rule checks
+/// its URL itself.
+#[test]
+fn an_unusable_url_refuses_whatever_scanned_it() {
+    for url in ["unix:///tmp/mcp.sock", "https://${HOST}/mcp", "not a url"] {
+        let server = DiscoveredServer::new(
+            "env-srv".to_string(),
+            String::new(),
+            DiscoverySource::Environment,
+            TransportConfig::Http {
+                http_url: url.to_string(),
+                streamable_http: None,
+                protocol_version: None,
+            },
+            crate::discovery::ServerMetadata::default(),
+        );
+        assert_eq!(
+            refusals(&server),
+            one(AdoptRefusal::NeedsClientOnlySecret, "url"),
+            "{url}"
+        );
+    }
+}
+
+#[test]
 fn a_socket_endpoint_refuses() {
     for url in ["unix:///tmp/mcp.sock", "pipe:///mcp"] {
         assert_eq!(

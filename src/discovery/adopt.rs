@@ -98,6 +98,11 @@ pub(crate) fn refusals(server: &DiscoveredServer) -> Vec<(AdoptRefusal, String)>
         .iter()
         .map(|(k, v)| ("headers", k, v));
     for (map, key, value) in env.chain(headers) {
+        if key.contains("${") {
+            // The client expands a name the gateway would send literally.
+            refused.push((AdoptRefusal::NeedsClientOnlySecret, format!("{map}.{key}")));
+            continue;
+        }
         if !value.contains("${") {
             continue;
         }
@@ -110,8 +115,26 @@ pub(crate) fn refusals(server: &DiscoveredServer) -> Vec<(AdoptRefusal, String)>
             refused.push((AdoptRefusal::LiteralInTemplate, format!("{map}.{key}")));
         }
     }
-    // A URL that does not parse is already uncarried by the scanner.
-    if let Some(parsed) = url(&server.transport).and_then(|raw| url::Url::parse(raw).ok()) {
+    // Checked here, not only by the client config scanner: an environment
+    // find never passes through it.
+    let parsed = match url(&server.transport) {
+        None => None,
+        Some(raw) => match url::Url::parse(raw) {
+            Ok(parsed)
+                if !raw.contains("${")
+                    && matches!(parsed.scheme(), "http" | "https" | "ws" | "wss") =>
+            {
+                Some(parsed)
+            }
+            _ => {
+                if !server.uncarried.iter().any(|field| field == "url") {
+                    refused.push((AdoptRefusal::NeedsClientOnlySecret, "url".to_string()));
+                }
+                None
+            }
+        },
+    };
+    if let Some(parsed) = parsed {
         if carries_credential(&parsed) {
             refused.push((AdoptRefusal::CredentialInUrl, "url".to_string()));
         } else if Config::reject_cleartext_credentials(

@@ -101,7 +101,10 @@ fn record_dropped_keys(
             continue;
         }
         match carried.iter().find(|(name, _)| *name == key.as_str()) {
-            Some((_, shape_ok)) if !shape_ok(value) => uncarried.push(key.clone()),
+            // `null` for an optional field is the field left out.
+            Some((_, shape_ok)) if !value.is_null() && !shape_ok(value) => {
+                uncarried.push(key.clone());
+            }
             Some(_) => {}
             None if DESCRIPTIVE_KEYS.contains(&key.as_str()) => {}
             None => uncarried.push(key.clone()),
