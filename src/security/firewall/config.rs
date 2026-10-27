@@ -144,7 +144,8 @@ pub struct FirewallRule {
     /// Optional human-readable reason for the rule (logged in audit entries).
     #[serde(default)]
     pub reason: Option<String>,
-    /// Which scan types to apply to matching tools. Empty = all scans.
+    /// The finding types this rule decides; empty means every type. A finding
+    /// of another type falls to a later rule or to its severity default.
     #[serde(default)]
     pub scan: Vec<ScanType>,
 }

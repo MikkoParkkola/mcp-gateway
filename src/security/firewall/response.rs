@@ -140,7 +140,7 @@ fn is_own_continuation(keyring: &Keyring, value: &str) -> bool {
 /// Audit text for an injection finding while credential redaction is off.
 const QUOTE_WITHHELD: &str = "[quote withheld: credential redaction is off]";
 
-fn strongest_action(left: FirewallAction, right: FirewallAction) -> FirewallAction {
+pub(super) fn strongest_action(left: FirewallAction, right: FirewallAction) -> FirewallAction {
     match (left, right) {
         (FirewallAction::Block, _) | (_, FirewallAction::Block) => FirewallAction::Block,
         (FirewallAction::Warn, _) | (_, FirewallAction::Warn) => FirewallAction::Warn,

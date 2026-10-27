@@ -25,6 +25,12 @@ pub(super) fn start_due_refill(state: &mut State<'_>, backend: &Arc<Backend>) ->
     if !state.take_due_refill() {
         return None;
     }
+    // A per-user listener never refills the gateway's shared list with the
+    // gateway's credential: the change is announced, and the subscriber's
+    // own re-read fetches theirs.
+    if state.shared.key.obs.is_some() {
+        return Some(Box::pin(std::future::ready(true)));
+    }
     if state.refill_announces {
         backend.invalidate_tools();
     }

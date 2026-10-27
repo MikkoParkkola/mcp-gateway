@@ -21,8 +21,19 @@ fn shared() -> Arc<Shared> {
 }
 
 fn shared_with(ineligible: crate::events::backend_source::Ineligible) -> Arc<Shared> {
+    shared_keyed(
+        crate::events::upstream_listener::ListenerKey::shared("b"),
+        ineligible,
+    )
+}
+
+pub(super) fn shared_keyed(
+    key: crate::events::upstream_listener::ListenerKey,
+    ineligible: crate::events::backend_source::Ineligible,
+) -> Arc<Shared> {
     Arc::new(Shared {
         name: "b".to_owned(),
+        key,
         need: Mutex::new(Need::default()),
         ledger: Mutex::new(Arc::default()),
         resolve: Box::new(|| None),
@@ -101,8 +112,10 @@ struct Reload {
 impl Reload {
     fn new(dir: &std::path::Path) -> Self {
         let path = dir.join("gateway.yaml");
+        // Started multi-user (a restart-only posture), so a personal login
+        // added by a reload is refused.
         let live = Arc::new(crate::config_reload::LiveConfig::new(
-            crate::config::Config::default(),
+            crate::yaml::from_str("auth:\n  enabled: true\n").expect("config"),
         ));
         let registry = Arc::new(BackendRegistry::new());
         let ctx = crate::config_reload::ReloadContext::new(
@@ -122,14 +135,14 @@ impl Reload {
     }
 
     /// Rewrite the file with backend `b`, then reload: eligible (Streamable
-    /// HTTP), or ineligible through identity propagation. (The ineligible
-    /// form was `streamable_http: false` until MIK-8835 made SSE eligible.)
+    /// HTTP), or ineligible through a personal OAuth login on the multi-user
+    /// gateway. (Identity-propagated backends are now observed per
+    /// subscriber, so they no longer serve as the ineligible case.)
     async fn to(&self, eligible: bool) {
         let refused = if eligible {
             ""
         } else {
-            "    identity_propagation:\n      strategy: passthrough\n      \
-             audience: https://a\n      session_mode: per_user\n"
+            "    oauth:\n      enabled: true\n"
         };
         crate::gateway::test_helpers::write_owner_only(
             &self.path,
@@ -412,7 +425,7 @@ async fn a_real_reload_making_the_backend_ineligible_stops_its_listener() {
             .is_ok()
     );
 
-    // Reload 2: the file adds identity propagation, so `b` is ineligible.
+    // Reload 2: the file adds a personal login, so `b` is ineligible.
     reload.to(false).await;
     assert!(
         ineligible().contains("b"),

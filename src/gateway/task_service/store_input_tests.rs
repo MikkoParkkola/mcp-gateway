@@ -49,6 +49,7 @@ fn parked() -> (Task, Record) {
         arguments: json!({}),
         accepted_inputs: serde_json::Map::new(),
         continuation_deadline: None,
+        surfaced_server: None,
     });
     (task, record)
 }
