@@ -219,6 +219,14 @@ pub(super) async fn tools_call(
                         crate::Error::Forbidden { code, .. } => *code,
                         other => other.to_rpc_code(),
                     };
+                    // A lone target answered as absent is the gateway's
+                    // refusal; a withheld step in a call that still delivers
+                    // is not.
+                    if backend_targets.len() == 1 {
+                        crate::gateway::delivery_facts::raise(
+                            crate::gateway::delivery_facts::ResponseEffect::Refused,
+                        );
+                    }
                     // One record per call: an invoked target's answer writes
                     // it, as a missing target's does; a surfaced name's
                     // missing twin writes none, so the route records it.

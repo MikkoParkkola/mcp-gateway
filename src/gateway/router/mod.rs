@@ -180,6 +180,9 @@ mod u17_ui_shell_tests;
 // MIK-8697: the credential canary over the router's request paths.
 #[cfg(test)]
 mod canary_tests;
+/// A delivery record says what the gateway did to the answer.
+#[cfg(all(test, feature = "firewall"))]
+mod delivery_effect_tests;
 /// A delivery record joins its invocation by trace, on both routes.
 #[cfg(all(test, feature = "firewall"))]
 mod delivery_trace_join_tests;
