@@ -237,7 +237,8 @@ pub(super) fn spawn_health_loop(
                             // `health_probe` bypasses the breaker, resets it on
                             // success, and rebuilds the transport on failure —
                             // the automatic equivalent of gateway_revive_server.
-                            if let Err(e) = backend.health_probe(probe_timeout).await {
+                            // Boxed: the probe's future sits at the large_futures limit on Windows.
+                            if let Err(e) = Box::pin(backend.health_probe(probe_timeout)).await {
                                 // A start in flight (perhaps a login), or a
                                 // busy credential lock, is a skipped tick, not
                                 // a failed check (MIK-7982, MIK-8619).

@@ -162,6 +162,7 @@ async fn r5_a_resume_refuses_a_dirty_meta_key_it_stored() {
     let call = crate::gateway::task_service::TaskCall {
         tool: "gateway_invoke".to_owned(),
         arguments: json!({"ser\u{7}ver": "alpha", "tool": "read", "arguments": {}}),
+        surfaced_server: None,
     };
     let caller = crate::gateway::meta_mcp::anonymous_caller();
     let refused = match host.readmit(&call, &caller, None).await {
@@ -193,6 +194,7 @@ async fn r6_a_resume_still_exempt_refuses_a_dirty_meta_key() {
         tool: "gateway_invoke".to_owned(),
         arguments: json!({"server": "alpha-pt", "tool": "read", "arguments": {},
             "_me\u{7}ta": {}}),
+        surfaced_server: None,
     };
     let caller = crate::gateway::meta_mcp::anonymous_caller();
     let refused = match host.readmit(&call, &caller, None).await {

@@ -236,6 +236,7 @@ impl Gateway {
         capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
         shutdown_tx: &tokio::sync::broadcast::Sender<()>,
         warmer: &WarmerGuard,
+        surfaced: crate::config_reload::SurfacedHook,
     ) -> Option<ConfigWatcher> {
         if let Some(path) = self.reload_path() {
             match ConfigWatcher::start_with_hook(
@@ -248,6 +249,7 @@ impl Gateway {
                 capabilities,
                 shutdown_tx.subscribe(),
                 Some(warmer.hook()),
+                Some(surfaced),
             ) {
                 Ok(w) => {
                     info!(path = %path.display(), "Config hot-reload enabled");

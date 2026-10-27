@@ -204,7 +204,7 @@ async fn audited_call_judged(
     let guard = super::super::helpers::read_guard(&state);
     // One memo spans the guard and the record, so a withheld call's one
     // record names its refusal (MIK-8361).
-    let ((status, Json(body)), hidden) =
+    let (((status, Json(body)), hidden), trace) =
         crate::gateway::meta_mcp::visible::memo::with_visibility_memo(async {
             let inner = Box::pin(crate::gateway::outbound::read_scoped(
                 guard.clone(),
@@ -218,11 +218,8 @@ async fn audited_call_judged(
             ));
             let ((answer, hidden), notes) =
                 crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(inner).await;
-            let answer = match call.take() {
-                Some(call) => record(&state, &name, call, answer, notes).await,
-                None => answer,
-            };
-            (answer, hidden)
+            let (answer, trace) = record_traced(&state, &name, call.take(), answer, notes).await;
+            ((answer, hidden), trace)
         })
         .await;
     if status == StatusCode::ACCEPTED {
@@ -249,6 +246,7 @@ async fn audited_call_judged(
         external_server: &name,
         external_tool: &reads.tool,
         subject: reads.subject.as_ref(),
+        trace_id: trace.as_deref(),
     };
     // No log, nothing to record: the answer is not copied to be hashed.
     let document = state
@@ -298,11 +296,32 @@ async fn audited_call_judged(
     reply
 }
 
-/// Write the record for `call` and hand `answer` on, or withhold it when the
-/// write fails under [`AuditFailurePolicy::FailClosed`] (D1-f, D2-g).
-pub(super) async fn record(
+/// [`record`] for `call`, when the inner handler made one, under a trace
+/// decided here: the answer, and the trace its delivery record names.
+async fn record_traced(
     state: &AppState,
     server: &str,
+    call: Option<DirectCall>,
+    answer: Answer,
+    notes: DispatchNotes,
+) -> (Answer, Option<String>) {
+    let Some(call) = call else {
+        return (answer, None);
+    };
+    // D2-f: the caller's W3C trace id, else a trace id; no session rung.
+    let id = crate::gateway::trace::current().unwrap_or_else(crate::gateway::trace::generate);
+    (
+        record(state, (server, &id), call, answer, notes).await,
+        Some(id),
+    )
+}
+
+/// Write the record for `call`, traced `trace_id`, and hand `answer` on, or
+/// withhold it when the write fails under [`AuditFailurePolicy::FailClosed`]
+/// (D1-f, D2-g).
+pub(super) async fn record(
+    state: &AppState,
+    (server, trace_id): (&str, &str),
     call: DirectCall,
     answer: Answer,
     notes: DispatchNotes,
@@ -332,8 +351,7 @@ pub(super) async fn record(
     // MIK-7116.MIN.1: what the gates saw, or the delivered value on a replay.
     let tenants = state.meta_mcp.request_tenants(&call.arguments);
     let attribution = notes.attribution(&state.meta_mcp, tenants, body.get("result"));
-    // D2-f: the caller's W3C trace id, else a trace id; no session rung.
-    let trace_id = crate::gateway::trace::current().unwrap_or_else(crate::gateway::trace::generate);
+    let trace_id = trace_id.to_owned();
     let envelope = AuditEnvelope {
         trace_id: Some(trace_id.clone()),
         otel_trace_id: call.otel_trace_id.clone(),

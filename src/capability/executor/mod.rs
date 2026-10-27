@@ -32,6 +32,9 @@ pub mod rest;
 mod save_file;
 pub(crate) use cli_argv::check_cli_templates;
 pub(crate) use cli_run::ProcessNote;
+// The Linux command preview resolves its program the way the executor does.
+#[cfg(target_os = "linux")]
+pub(crate) use cli_run::resolve_command;
 pub use save_file::SaveFileSpec;
 mod xml;
 
