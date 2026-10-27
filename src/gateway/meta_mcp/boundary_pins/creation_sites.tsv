@@ -1,0 +1,89 @@
+# file	function	kind	count	class	reason
+src/backend/package_cache.rs	retire_now	helper:create_new_private	1	helper	calls the crate's create_new_private
+src/capability/executor/cli_run.rs	create	helper:create_dir_private	1	helper	calls the crate's create_dir_private
+src/capability/executor/save_file.rs	create_new	open-create	1	no-secret	user-fetched content, saved where the user directs; inherits that folder's access like any file the user saves; not a gateway credential
+src/capability/file_writer.rs	write	helper:write_atomic	1	helper	calls the crate's write_atomic
+src/capability/openapi/generated.rs	write_to_file	fs-write	1	no-secret	generated capability YAML; public
+src/capability/pin_file.rs	pin_file_until	helper:write_atomic	1	helper	calls the crate's write_atomic
+src/chains/checkpoint.rs	append	open-create	1	no-secret	chain checkpoints; not a trust decision
+src/commands/mod.rs	write_init_files	fs-write	1	no-secret	starter sample capability files; public (the config goes through the config writer)
+src/commands/protocol_import.rs	apply_plan_to_directory	helper:write_atomic	2	helper	calls the crate's write_atomic
+src/commands/protocol_import.rs	write_atomic	helper:write_atomic	1	helper	calls the crate's write_atomic
+src/commands/trust.rs	write_cards_json	fs-write	1	no-secret	trust report output
+src/commands/trust/baseline.rs	write_lab_baseline	fs-write	1	no-secret	TrustLab baseline
+src/commands/trust/baseline.rs	write_lab_registry_manifest	fs-write	1	no-secret	TrustLab registry manifest
+src/commands/upgrade.rs	write_stamp	helper:write_atomic	1	helper	calls the crate's write_atomic
+src/commands/upgrade_webhook_notice.rs	mark	fs-write	1	no-secret	empty marker file
+src/config/record_key.rs	publish_new_key	helper:create_new_private	1	helper	calls the crate's create_new_private
+src/config_persistence.rs	create_new_private	helper:create_file_private	1	helper	calls the crate's create_file_private
+src/config_persistence.rs	create_new_private	open-create	1	helper	the private create itself (0600 on unix)
+src/config_persistence.rs	create_private_replacing	helper:create_new_private	1	helper	calls the crate's create_new_private
+src/config_persistence.rs	create_private_replacing	open-create	1	helper	the private create itself (0600 on unix)
+src/config_persistence_atomic.rs	finish_kept	open-create	1	helper	the atomic writer's create on a volume without access lists, where there is no list to keep
+src/config_persistence_atomic.rs	finish_kept	helper:create_like	1	helper	calls the writer's create_like (the target's owner, the folder's inherited list)
+src/config_persistence_atomic.rs	create_scratch	helper:create_new_private	1	helper	calls the crate's create_new_private
+src/config_persistence_atomic.rs	create_scratch	open-create	1	helper	the atomic writer's scratch create
+src/config_persistence_atomic_windows.rs	create_like	helper:create_file_like	1	helper	calls the crate's create_file_like
+src/config_persistence_atomic_windows.rs	prepare_from	helper:create_like	1	helper	calls the writer's create_like
+src/control_plane/export.rs	deliver	open-create	1	no-secret	SIEM export file sink; audit records, append-only
+src/control_plane/export.rs	persist_cursor	helper:write_atomic	1	helper	calls the crate's write_atomic
+src/control_plane/store/file.rs	store_cas	helper:write_atomic	1	helper	calls the crate's write_atomic
+src/control_plane/store/file_io.rs	write_atomic	helper:create_private_replacing	1	helper	calls the crate's create_private_replacing
+src/cost_accounting/persistence.rs	save	helper:write_atomic	1	helper	calls the crate's write_atomic
+src/events/records.rs	create_private_dir	helper:create_dir_private	1	helper	calls the crate's create_dir_private
+src/events/records.rs	write_record	helper:create_new_private	1	helper	calls the crate's create_new_private
+src/events/store_key_binding.rs	write_key_id	helper:create_new_private	1	helper	calls the crate's create_new_private
+src/fs_lock.rs	acquire	open-create	1	helper	lock sidecar: 0600 on unix, private create on Windows
+src/fs_lock.rs	try_acquire	helper:create_file_private	1	helper	calls the crate's create_file_private
+src/fs_lock.rs	try_acquire	open-create	1	helper	lock sidecar: 0600 on unix, private create on Windows
+src/fs_lock.rs	try_lease	open-create	1	helper	lock sidecar: 0600 on unix, private create on Windows
+src/gateway/mod.rs	write_owner_only	fs-write	1	test-only	test_helpers fixture writer for integration tests (doc: "Writes a fixture owner-only"); not product code
+src/gateway/mod.rs	write_owner_only	helper:create_file_private	1	test-only	test_helpers fixture writer for integration tests; not product code
+src/gateway/server/control_plane_store.rs	probe_writable	open-create	1	no-secret	writability probe, removed at once
+src/gateway/task_service/execution/pause_hook.rs	reached	fs-write	1	test-only	debug-build test hook writing a task id marker; compiled out of release
+src/gateway/task_service/store_unix.rs	open_new_private	open-create	1	helper	unix private create (0600)
+src/gateway/task_service/store_windows.rs	create_private_dir	helper:create_dir_private	1	helper	calls the crate's create_dir_private
+src/gateway/task_service/store_windows.rs	open_new_private	helper:create_file_private	1	helper	calls the crate's create_file_private
+src/identity_grants/journal.rs	append_line	open-create	1	helper	grant journal: private create
+src/identity_grants/journal.rs	open_journal_windows	helper:create_file_private	1	helper	calls the crate's create_file_private
+src/mtls/cert_manager.rs	write_private_file	helper:write_atomic	1	helper	calls the crate's write_atomic
+src/mtls/cert_manager.rs	write_to_dir	fs-write	1	no-secret	public certificate on unix; the key goes through the private writer
+src/oauth/storage.rs	create_secret_tmp	helper:create_new_private	1	helper	calls the crate's create_new_private
+src/oauth/storage.rs	save	helper:write_atomic	1	helper	calls the crate's write_atomic
+src/oauth/storage.rs	save_refresh_state	helper:write_atomic	1	helper	calls the crate's write_atomic
+src/personal_accounts/commit.rs	open_private	helper:create_file_private	1	helper	calls the crate's create_file_private
+src/personal_accounts/commit.rs	open_private	open-create	1	helper	account store: private create
+src/personal_accounts/storage_windows.rs	create_directory	helper:create_dir_private	1	helper	calls the crate's create_dir_private
+src/private_fs.rs	create_dir_private	helper:create_dir_private	1	helper	calls the crate's create_dir_private
+src/private_fs.rs	create_file_private	helper:create_file_private	1	helper	calls the crate's create_file_private
+src/protocol_revision_telemetry/durable.rs	write_json_atomic	helper:create_private_replacing	1	helper	calls the crate's create_private_replacing
+src/ranking/ranker.rs	save	fs-write	1	no-secret	tool usage counts
+src/registry/mod.rs	install_from_github	fs-write	1	no-secret	installs public capability YAML
+src/secret_store/files.rs	create	helper:create_new_private	1	helper	calls the crate's create_new_private
+src/secret_store/index.rs	append	helper:create_new_private	1	helper	calls the crate's create_new_private
+src/security/firewall/audit.rs	new	open-create	1	no-secret	append-only firewall audit log
+src/security/transparency_log_rotation.rs	open_after_seal	open-create	1	no-secret	audit log segment
+src/security/transparency_log_segments.rs	ensure_reserve	file-create	1	no-secret	audit log reserve file
+src/security/transparency_log_segments.rs	write_hwm	open-create	1	no-secret	audit log high-water mark
+src/skills/installer.rs	copy_dir_recursive	fs-copy	1	no-secret	skill files; public
+src/skills/installer.rs	install_bundle	fs-write	3	no-secret	skill files; public
+src/skills/registry.rs	save	helper:write_atomic	1	helper	calls the crate's write_atomic
+src/tool_profiles/persistence.rs	save	fs-write	1	no-secret	tool usage profiles
+src/transition.rs	save	fs-write	1	no-secret	transition state
+src/trust/claim_capture.rs	open	open-create	1	no-secret	append-only claim log
+src/validator/cli_handler.rs	run_validate_command	fs-write	1	no-secret	validation report output
+src/commands/upgrade.rs	backup_config	helper:copy_keeping_access	1	helper	config backup keeps the config's access
+src/commands/config_export/mod.rs	create_backup	helper:copy_keeping_access	1	helper	config backup keeps the config's access
+src/config_persistence_atomic.rs	copy_keeping_access	fs-copy	1	helper	unix branch of the backup helper; fs::copy keeps the mode
+src/config_persistence_journal.rs	begin	helper:create_new_private	1	helper	calls the crate's create_new_private
+src/config_persistence_journal.rs	mark_all_renamed	helper:write_atomic	1	helper	calls the crate's write_atomic
+src/config_persistence_journal.rs	recover	helper:write_atomic	1	helper	calls the crate's write_atomic
+src/config_persistence_journal.rs	stage_original	helper:create_new_private	1	helper	calls the crate's create_new_private
+src/config_persistence_lock.rs	no_writer_possible	helper:create_new_private	1	helper	calls the crate's create_new_private
+src/config_reload/replace.rs	commit	helper:write_atomic	1	helper	calls the crate's write_atomic
+src/counters/persist.rs	write	helper:write_atomic	1	helper	calls the crate's write_atomic
+src/fs_lock_windows.rs	sidecar	helper:create_file_private	2	helper	calls the crate's create_file_private
+src/preview_sandbox/linux/mounts.rs	bind_device	fs-write	1	no-secret	empty mount-point file inside the preview sandbox's own root; Linux only; holds no content
+src/preview_sandbox/linux/mounts.rs	bind_read_only	fs-write	1	no-secret	empty mount-point file inside the preview sandbox's own root; Linux only; holds no content
+src/preview_sandbox/linux/mounts.rs	build_root	fs-write	1	no-secret	empty placeholder file inside the preview sandbox's own root; Linux only; holds no content
+src/transport/stdio_cache.rs	writable	open-create	1	no-secret	one-byte write probe in a runner cache directory, removed at once

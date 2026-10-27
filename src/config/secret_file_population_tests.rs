@@ -115,6 +115,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "the shared atomic writer: creates its own private scratch; opens the target only to probe its ACL, never reads it",
     ),
     (
+        "src/config_persistence_atomic_windows.rs",
+        "the atomic writer's Windows half: opens the save target with READ_CONTROL only, to read its access list; never reads its bytes",
+    ),
+    (
         "src/config_persistence_journal.rs",
         "the replace journal (paths, SHA-256 revisions and a state; no secret) and the staged \
          original of gateway.yaml, both created owner-only by create_new_private; the original is \
@@ -188,6 +192,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/gateway/meta_mcp/boundary_pins/shipped_reads.rs",
         "cfg(test) source scanner reading Cargo.toml and the crate's own sources for the MIK-8481 unshipped-read guard; no secret",
+    ),
+    (
+        "src/gateway/meta_mcp/boundary_pins/creation_sites.rs",
+        "cfg(test) scanner for the file-creation inventory, reading the crate's own sources; its fs::write calls are quoted syntax in a scanner test, never run; no secret",
     ),
     (
         "src/gateway/meta_mcp/boundary_pins/scan.rs",
