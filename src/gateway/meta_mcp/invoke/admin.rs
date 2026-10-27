@@ -43,10 +43,12 @@ impl MetaMcp {
         // narrowing the report: a caller that asked for every session and got
         // one has no way to tell that it was scoped rather than empty.
         if (include_all_sessions || include_all_keys) && !caller.is_admin {
-            return Err(crate::Error::Config(
-                "include_all_sessions and include_all_keys are admin views and require an \
+            return Err(crate::gateway::delivery_facts::refused(
+                crate::Error::Config(
+                    "include_all_sessions and include_all_keys are admin views and require an \
                  admin credential"
-                    .to_string(),
+                        .to_string(),
+                ),
             ));
         }
 
@@ -58,10 +60,12 @@ impl MetaMcp {
             && !caller.is_admin
             && Some(requested) != session_id
         {
-            return Err(crate::Error::Config(
-                "reporting on another session is an admin view and requires an admin \
+            return Err(crate::gateway::delivery_facts::refused(
+                crate::Error::Config(
+                    "reporting on another session is an admin view and requires an admin \
                  credential"
-                    .to_string(),
+                        .to_string(),
+                ),
             ));
         }
         let target_session_id = requested.or(session_id);

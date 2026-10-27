@@ -775,10 +775,7 @@ mod call_level_tests;
 /// caller may not invoke it, or its schema or description failed a check) is
 /// the gateway's refusal; a name a caller's own catalogue lacks is not.
 fn withheld_for(reason: Withholding) {
-    if matches!(
-        reason,
-        Withholding::Refused | Withholding::Schema | Withholding::Descriptor
-    ) {
+    if reason.is_policy() {
         crate::gateway::delivery_facts::withheld();
     }
 }

@@ -13,8 +13,9 @@
 //! A tools/call naming one target sets `lone_target` where the target is
 //! parsed; an answer re-worded as an absent name then raises `Refused` through
 //! `withheld`, which does so only for such a call while the cell is still
-//! vouched, so a composite step answered absent never marks a plan that still
-//! delivers.
+//! vouched. A composite step's own cell names one target too; its refusal
+//! marks the composite only when the composite ends on that step, so a plan
+//! that still delivers is never marked.
 //!
 //! A delivery the gateway cannot vouch for omits both fields; it never claims
 //! `delivered` or an empty finding list for something no scan of this request
@@ -132,10 +133,16 @@ pub(crate) async fn scope<F: std::future::Future>(future: F) -> F::Output {
 
 /// Run one composite step in a cell of its own, as [`scope`] does, and note
 /// on the composite's cell whether this step ended in a gateway refusal.
-/// Only the latest step's note is kept: a later step replaces it.
+/// Only the latest step's note is kept: a later step replaces it. A step
+/// names one target, so a step answered absent for a policy reason is
+/// refused ([`withheld`]).
 pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
+    let cell = DeliveryFacts {
+        lone_target: true,
+        ..DeliveryFacts::default()
+    };
     let (output, refused) = FACTS
-        .scope(RefCell::new(DeliveryFacts::default()), async {
+        .scope(RefCell::new(cell), async {
             let output = future.await;
             let refused = FACTS.with(|cell| cell.borrow().effect == ResponseEffect::Refused);
             (output, refused)
@@ -151,6 +158,13 @@ pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
     output
 }
 
+/// The composite's next step was refused before it could run (a playbook's
+/// refusal of a step's arguments, a resumed chain's pending step): the
+/// composite now ends on that refusal unless it carries on past it.
+pub(crate) fn refused_before_step() {
+    with(|facts| facts.last_step = LastStep::Refused);
+}
+
 /// The composite carried on past its latest step's failure (a playbook's
 /// `continue`, or its `retry` once attempts run out): that step's refusal is
 /// no longer what the composite can end on.
@@ -158,12 +172,12 @@ pub(crate) fn step_absorbed() {
     with(|facts| facts.last_step = LastStep::Settled);
 }
 
-/// The composite ends with `error` (`None`: it succeeded). It records
-/// `refused` when it ends with an error while its latest step's refusal still
+/// The composite ends, in an error or a tool error result when `failed`. It
+/// records `refused` when it fails while its latest step's refusal still
 /// stands: the step it ends on was refused.
-pub(crate) fn composite_ended(error: Option<&crate::Error>) {
+pub(crate) fn composite_ended(failed: bool) {
     with(|facts| {
-        if error.is_some() && facts.last_step == LastStep::Refused {
+        if failed && facts.last_step == LastStep::Refused {
             facts.effect = facts.effect.max(ResponseEffect::Refused);
         }
     });

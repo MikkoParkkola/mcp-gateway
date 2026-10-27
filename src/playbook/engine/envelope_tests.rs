@@ -416,7 +416,7 @@ async fn a_step_refused_for_the_envelope_ends_an_abort_playbook_refused() {
         delivery_facts::unvouched();
         let ran = engine.execute("carry", json!({}), &invoker).await;
         assert!(ran.is_err(), "premise: the playbook ended on it: {ran:?}");
-        delivery_facts::composite_ended(ran.as_ref().err());
+        delivery_facts::composite_ended(ran.is_err());
         delivery_facts::record_fields(
             delivery_facts::snapshot().as_ref(),
             false,

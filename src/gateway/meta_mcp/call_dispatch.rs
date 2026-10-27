@@ -441,7 +441,13 @@ impl MetaMcp {
             Some(MetaArm::Execute) => {
                 crate::gateway::delivery_facts::unvouched();
                 let result = self.code_mode_execute(&arguments, session_id, caller).await;
-                crate::gateway::delivery_facts::composite_ended(result.as_ref().err());
+                // A single-tool execute hands its step's tool error result on
+                // as it came: that is an ending in failure too.
+                let failed = result.is_err()
+                    || result
+                        .as_ref()
+                        .is_ok_and(|answer| answer["isError"] == true);
+                crate::gateway::delivery_facts::composite_ended(failed);
                 result
             }
             Some(MetaArm::ListServers) => {
@@ -472,7 +478,7 @@ impl MetaMcp {
             Some(MetaArm::RunPlaybook) => {
                 crate::gateway::delivery_facts::unvouched();
                 let result = self.run_playbook(&arguments, caller).await;
-                crate::gateway::delivery_facts::composite_ended(result.as_ref().err());
+                crate::gateway::delivery_facts::composite_ended(result.is_err());
                 result
             }
             Some(MetaArm::KillServer) => self.kill_server(&arguments),

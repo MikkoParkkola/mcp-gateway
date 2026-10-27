@@ -287,7 +287,11 @@ impl MetaMcp {
         }
 
         let Some(principal) = principal else {
-            return refuse("the request carries no verified end-user identity".to_string()).await;
+            // The one refusal here that is a decision about the caller; the
+            // others are configuration the operator has not finished.
+            return refuse("the request carries no verified end-user identity".to_string())
+                .await
+                .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched());
         };
         // An explicit account reference requires its own installed strategy.
         // A missing or stale install must never borrow an unrelated global

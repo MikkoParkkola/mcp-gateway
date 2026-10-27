@@ -137,6 +137,7 @@ impl PlaybookEngine {
         // Refused whole, before any step runs: the playbook was written to
         // hand the gateway's envelope to a backend (MIK-8323).
         if let Some((step, reference)) = definition.sealed_state_references().into_iter().next() {
+            crate::gateway::delivery_facts::refused_before_step();
             return Err(crate::Error::Forbidden {
                 code: -32003,
                 status: 403,
@@ -203,6 +204,7 @@ impl PlaybookEngine {
                 }
                 Err(refusal) => {
                     warn!(step = %step.name, error = %refusal, refused = true, "Step failed");
+                    crate::gateway::delivery_facts::refused_before_step();
                     Err(refusal)
                 }
             };

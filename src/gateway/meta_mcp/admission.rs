@@ -626,7 +626,7 @@ impl MetaMcp {
         if let Some(dispatched) = ran
             && let Some(refusal) = stored::refusal_to_meet(dispatched.as_deref(), withheld)
         {
-            return Err(refusal);
+            return Err(crate::gateway::delivery_facts::refused(refusal));
         }
         let mut admission = admission?;
         if let SyncAdmission::Owned(lease) = &mut admission {

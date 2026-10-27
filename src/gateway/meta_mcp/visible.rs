@@ -33,6 +33,16 @@ pub(crate) enum Withholding {
     Absent,
 }
 
+impl Withholding {
+    /// Whether the gateway withholds for a policy reason (the caller may not
+    /// invoke it, or its schema or description failed a check): answered
+    /// absent, it is the gateway's refusal. A name the caller's catalogue
+    /// lacks, or a backend it cannot reach, is not.
+    pub(in crate::gateway::meta_mcp) fn is_policy(self) -> bool {
+        matches!(self, Self::Refused | Self::Schema | Self::Descriptor)
+    }
+}
+
 /// Whether a caller may be shown a tool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Visibility {
@@ -504,6 +514,30 @@ pub(crate) mod seams {
     pub(crate) fn route_stage_done() {
         if let Some(hook) = AFTER_ROUTE_STAGE.with(|slot| slot.borrow_mut().take()) {
             hook();
+        }
+    }
+}
+
+#[cfg(test)]
+mod withholding_tests {
+    use super::Withholding;
+
+    /// Every reason is classified: a new variant fails to compile here until
+    /// it is named policy or not.
+    #[test]
+    fn every_withholding_says_whether_it_is_policy() {
+        for reason in [
+            Withholding::Refused,
+            Withholding::Schema,
+            Withholding::Descriptor,
+            Withholding::Lacked,
+            Withholding::Absent,
+        ] {
+            let policy = match reason {
+                Withholding::Refused | Withholding::Schema | Withholding::Descriptor => true,
+                Withholding::Lacked | Withholding::Absent => false,
+            };
+            assert_eq!(reason.is_policy(), policy, "{reason:?}");
         }
     }
 }
