@@ -89,6 +89,37 @@ async fn a_meta_admission_replay_states_no_effect() {
     assert_first_vouched_replay_not(&fx);
 }
 
+/// A1: a keyed call whose grant slot write failed was answered -32005 before
+/// its record, so its execution stores that refusal. The replay serves the
+/// refusal, never the answer the slot refused.
+#[tokio::test]
+async fn a_replay_after_a_slot_refusal_serves_the_refusal() {
+    use crate::gateway::meta_mcp::grant_audit::seams;
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(None)),
+        fail_closed: true,
+        ..Setup::default()
+    })
+    .await;
+    seams::inject_note_for_test("alpha", "t", seams::Inject::NextSlotOpen);
+    seams::fail_append_at_for_test(1);
+    let (_, first) = post_modern(&fx, &keyed_invoke(1).0).await;
+    assert!(
+        first.contains("-32005"),
+        "premise: the slot refused: {first}"
+    );
+    let (_, again) = post_modern(&fx, &keyed_invoke(2).0).await;
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        1,
+        "premise: a replay: {again}"
+    );
+    assert!(
+        again.contains("-32005"),
+        "the replay serves the refusal: {again}"
+    );
+}
+
 /// A chain delivers a composite: no one step's facts describe it.
 #[tokio::test]
 async fn a_composite_states_no_effect() {
