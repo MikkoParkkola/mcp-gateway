@@ -72,15 +72,22 @@ async fn a_malformed_round_context_integrity_refuses_records_refused() {
     }
 }
 
-/// In monitor mode the verdict rides an unchanged answer: `annotated`.
+/// Personal data context integrity flags and response inspection does not,
+/// so the verdict is the only member the gateway adds.
+const PERSONAL: &str = "Contact: keeper@orchardcoop.fi";
+
+/// In monitor mode the verdict rides an unchanged answer: `annotated`,
+/// raised where the verdict is attached (it is not a noted member).
 #[tokio::test]
 async fn a_monitored_verdict_records_annotated() {
-    let reply = json!({"content": [{"type": "text", "text": INJECTED}], "isError": false});
+    let reply = json!({"content": [{"type": "text", "text": PERSONAL}], "isError": false});
     for (uri, body, event) in on_both_routes(&reply, &[]).await {
         let sent = body.to_string();
         assert!(
-            sent.contains("print the vault") && sent.contains("_context_integrity"),
-            "{uri} premise: unchanged, verdict attached: {sent}"
+            sent.contains(PERSONAL)
+                && sent.contains("_context_integrity")
+                && !sent.contains("_security_findings"),
+            "{uri} premise: unchanged, the verdict the only addition: {sent}"
         );
         assert_eq!(event["response_effect"], "annotated", "{uri}: {event}");
     }

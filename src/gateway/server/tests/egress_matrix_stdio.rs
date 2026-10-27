@@ -423,6 +423,21 @@ async fn a_stdio_annotated_answer_records_annotated() {
     assert_eq!(row["response_effect"], "annotated", "{row}");
 }
 
+/// On stdio, a context-integrity verdict attached to an unchanged answer,
+/// the only member the gateway adds, records `annotated`.
+#[tokio::test]
+async fn a_stdio_verdict_records_annotated() {
+    let text = "Contact: keeper@orchardcoop.fi".to_owned();
+    let (body, row) = recorded_delivery(Setup::FirewallOff, Part::ResultText, text.clone()).await;
+    assert!(
+        body.contains(&text)
+            && body.contains("_context_integrity")
+            && !body.contains("_security_findings"),
+        "premise: unchanged, the verdict the only addition: {body}"
+    );
+    assert_eq!(row["response_effect"], "annotated", "{row}");
+}
+
 /// A firewall with response scanning off reads nothing, so it states no
 /// finding of its own: a credential is listed by response inspection only,
 /// which always reads the answer, never as a firewall finding.
