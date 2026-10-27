@@ -399,10 +399,11 @@ fn a_quoted_value_continued_on_the_next_line_is_unprovable() {
     assert_unprovable("a:\n  t: \"p1\n    #rest\"\n", &[set_str("a.t", "new")]);
 }
 
-/// Text right after a closing quote is not a comment the parser confirms:
-/// refuse rather than replace it with the value.
+/// Text right after a closing quote is not valid YAML: the parser refuses
+/// the config, so nothing is written (a red run on the pre-fix code shows
+/// the parser, not a check of ours, refuses it).
 #[test]
-fn text_touching_a_quoted_value_is_unprovable() {
+fn text_touching_a_quoted_value_is_refused_by_the_parser() {
     assert_unprovable("a:\n  t: \"old\"# keep\n", &[set_str("a.t", "new")]);
 }
 
