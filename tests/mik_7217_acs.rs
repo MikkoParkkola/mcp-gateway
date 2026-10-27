@@ -392,7 +392,7 @@ mod http {
             control_plane_store: None,
             control_plane_base: None,
             live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new(
-                flags_off::flags_off(&Config::default()),
+                crate::flags_off::flags_off(&Config::default()),
             )),
             export_status: None,
             transparency_log: None,
