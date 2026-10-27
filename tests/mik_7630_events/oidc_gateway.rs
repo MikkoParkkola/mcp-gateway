@@ -28,16 +28,22 @@ pub async fn start(
     extra_trust: &[&Path],
 ) -> Gateway {
     let mut cfg = upstream_config(root, backend, &[]);
+    let policies: Vec<Value> = ["u1", "u2"]
+        .iter()
+        .map(|user| {
+            json!({
+                "match": {"issuer": issuer.url, "email": email(user)},
+                "scopes": {"backends": ["x"], "tools": ["*"]},
+            })
+        })
+        .collect();
     cfg["key_server"] = json!({
         "enabled": true,
         "delegated_bearer": true,
         "max_oidc_token_age_secs": 3600,
         "oidc": [{"issuer": issuer.url, "auto_discover": true,
                   "audiences": [issuer::AUDIENCE]}],
-        "policies": ["u1", "u2"].map(|user| json!({
-            "match": {"issuer": issuer.url, "email": email(user)},
-            "scopes": {"backends": ["x"], "tools": ["*"]},
-        })),
+        "policies": policies,
     });
     let both = root.join("trust-both.pem");
     let mut pem = std::fs::read_to_string(&rx.ca_file).expect("receiver CA");
