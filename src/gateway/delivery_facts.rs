@@ -172,12 +172,39 @@ pub(crate) fn step_absorbed() {
     with(|facts| facts.last_step = LastStep::Settled);
 }
 
-/// The composite ends, in an error or a tool error result when `failed`. It
-/// records `refused` when it fails while its latest step's refusal still
-/// stands: the step it ends on was refused.
-pub(crate) fn composite_ended(failed: bool) {
+/// How a composite ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompositeEnd {
+    Succeeded,
+    /// In an error, or a tool error result.
+    Failed,
+}
+
+impl CompositeEnd {
+    /// `Failed` for an error or a tool error result (`isError: true`).
+    pub(crate) fn of(result: &crate::Result<Value>) -> Self {
+        match result {
+            Ok(answer) if answer["isError"] != true => Self::Succeeded,
+            _ => Self::Failed,
+        }
+    }
+
+    /// `Failed` for an error: a composite whose output is not a tool result.
+    #[cfg(test)]
+    pub(crate) fn of_outcome<T>(result: &crate::Result<T>) -> Self {
+        if result.is_err() {
+            Self::Failed
+        } else {
+            Self::Succeeded
+        }
+    }
+}
+
+/// The composite ends as `end`. It records `refused` when it fails while its
+/// latest step's refusal still stands: the step it ends on was refused.
+pub(crate) fn composite_ended(end: CompositeEnd) {
     with(|facts| {
-        if failed && facts.last_step == LastStep::Refused {
+        if end == CompositeEnd::Failed && facts.last_step == LastStep::Refused {
             facts.effect = facts.effect.max(ResponseEffect::Refused);
         }
     });
