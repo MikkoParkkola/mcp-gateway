@@ -9,6 +9,9 @@ use super::{
     build_http_response, finish_response, give_back_nonce, park_if_interim, redeem_retry, refusal,
     rw, settle_parked, spend_witness,
 };
+use crate::gateway::router::backend_handlers::{
+    direct_idempotency, direct_list, direct_permit, direct_send, dispatch_armed,
+};
 
 /// The sanitized arm: the gate returned params, so those are what the backend
 /// is sent.
@@ -55,29 +58,24 @@ pub(super) async fn forward_sanitized(
         rw::retry_effect(preflight.retry.request_state.is_some()),
     );
     // After redeem, on the exact bytes sent: the answers are in the params now.
-    let permit = match crate::gateway::router::backend_handlers::direct_permit::mint_permit(
-        scope,
-        Some(&sanitized_params),
-    ) {
+    let permit = match direct_permit::mint_permit(scope, Some(&sanitized_params)) {
         Ok(permit) => permit,
         Err(e) => {
             let answer = (&mut admitted, Some(admission));
-            return crate::gateway::router::backend_handlers::direct_permit::refused_send(
-                state, answer, id, &e,
-            );
+            return direct_permit::refused_send(state, answer, id, &e);
         }
     };
     // Forward the sanitized params to the backend
     spend_witness(&mut admitted);
     #[cfg(test)]
-    crate::gateway::router::backend_handlers::direct_idempotency::seams::before_mark().await;
-    crate::gateway::router::backend_handlers::direct_idempotency::mark(admitted.lease.as_ref());
+    direct_idempotency::seams::before_mark().await;
+    direct_idempotency::mark(admitted.lease.as_ref());
     let cancel_on = admitted.cancel_on.take();
-    let forward = Box::pin(crate::gateway::router::backend_handlers::dispatch_armed(
+    let forward = Box::pin(dispatch_armed(
         admitted.idem_reservation.as_mut(),
         crate::gateway::router::inflight_calls::explicitly_cancellable(
             cancel_on,
-            crate::gateway::router::backend_handlers::direct_send::dispatch_tool_call(
+            direct_send::dispatch_tool_call(
                 permit,
                 &route.backend,
                 id,
@@ -150,7 +148,7 @@ pub(super) async fn forward_plain(
         let (headers, key) = (&propagation.headers, propagation.identity_key.as_deref());
         // Success is recorded after the firewall pass: a listing it refuses is
         // not a client success.
-        let drain = crate::gateway::router::backend_handlers::direct_list::drain(
+        let drain = direct_list::drain(
             &route.backend,
             id,
             envelope.params.as_ref(),
@@ -183,12 +181,7 @@ pub(super) async fn forward_plain(
     } else {
         Admission::default()
     };
-    let dispatch = match crate::gateway::router::backend_handlers::direct_permit::plain_send(
-        scope,
-        envelope,
-        propagation,
-        admitted,
-    ) {
+    let dispatch = match direct_permit::plain_send(scope, envelope, propagation, admitted) {
         Ok(dispatch) => dispatch,
         Err(refused) => {
             // Not dispatched: the spend admission is given back on drop.
@@ -198,10 +191,10 @@ pub(super) async fn forward_plain(
     };
     spend_witness(admitted);
     #[cfg(test)]
-    crate::gateway::router::backend_handlers::direct_idempotency::seams::before_mark().await;
-    crate::gateway::router::backend_handlers::direct_idempotency::mark(admitted.lease.as_ref());
+    direct_idempotency::seams::before_mark().await;
+    direct_idempotency::mark(admitted.lease.as_ref());
     let cancel_on = admitted.cancel_on.take();
-    let forward = Box::pin(crate::gateway::router::backend_handlers::dispatch_armed(
+    let forward = Box::pin(dispatch_armed(
         admitted.idem_reservation.as_mut(),
         crate::gateway::router::inflight_calls::explicitly_cancellable(cancel_on, dispatch),
     ))
