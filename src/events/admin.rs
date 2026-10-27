@@ -202,17 +202,7 @@ impl EventsHub {
             // No verdict on the access: the clock cannot be read (MIK-8202).
             super::services::AccessVerdict::Undated => return Err(ReplayRefusal::Unavailable),
         }
-        // The send path's own observation check, on the row as it is after
-        // the admission await (a re-grant may have landed meanwhile): a
-        // record it would bury again is refused here, by name, and nothing is
-        // queued. A row changed between this and `revive` is still buried at
-        // send.
-        let current = (self.store.subscriptions().into_iter())
-            .find(|s| s.id == sub.id && s.live(now))
-            .ok_or(ReplayRefusal::SubscriptionGone)?;
-        if self.observed_now(&current, &services.live.get()) != Ok(dead.record.observed.clone()) {
-            return Err(ReplayRefusal::ObservationChanged);
-        }
+        self.still_observed(&sub.id, &dead.record, services, now)?;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&dead.record.body_b64)
             .map_err(|_| ReplayRefusal::Unavailable)?;
@@ -285,6 +275,27 @@ impl EventsHub {
             Some(Revived::AlreadyPending) => Err(ReplayRefusal::AlreadyPending),
             Some(Revived::Missing) => Err(ReplayRefusal::NotFound),
             Some(Revived::Undated) | None => Err(ReplayRefusal::Unavailable),
+        }
+    }
+
+    /// The send path's own observation check, on the row as it is after the
+    /// admission await (a re-grant may have landed meanwhile): a record it
+    /// would bury again is refused here, by name, and nothing is queued. A
+    /// row changed between this and `revive` is still buried at send.
+    fn still_observed(
+        &self,
+        subscription_id: &str,
+        record: &OutboxRecord,
+        services: &super::Services,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), ReplayRefusal> {
+        let current = (self.store.subscriptions().into_iter())
+            .find(|s| s.id == subscription_id && s.live(now))
+            .ok_or(ReplayRefusal::SubscriptionGone)?;
+        if self.observed_now(&current, &services.live.get()) == Ok(record.observed.clone()) {
+            Ok(())
+        } else {
+            Err(ReplayRefusal::ObservationChanged)
         }
     }
 
