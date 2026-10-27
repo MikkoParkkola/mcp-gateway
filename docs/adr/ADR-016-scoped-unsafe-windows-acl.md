@@ -161,7 +161,12 @@ Every `unsafe` block carries a `// SAFETY:` comment naming which of these it rel
   existing read changes, and the bytes passed are still exactly what
   `GetKernelObjectSecurity` returned. Before this, an elevated gateway refused to save or back
   up a file it had created owner-only itself, because a new file's default owner on an
-  elevated token is the Administrators group, not the user.
+  elevated token is the Administrators group, not the user. Reviewed answers: reading the
+  owner needs only `READ_CONTROL`, which the handle already carries, on every volume
+  (FAT and exFAT take the no-list path before any read); only 1307 is mapped, since other
+  providers (an SMB server, a filter driver) may refuse an owner with another code, which
+  then fails as itself; a non-elevated token, whose default owner is already the user,
+  keeps the same owner, list and bytes as before.
 
 ## Consequences
 

@@ -216,11 +216,44 @@ fn a_user_owned_file_with_an_inherited_list_keeps_its_owner() {
     let user = crate::private_fs::test_support::user_sid();
     plant_owner(row, &path, &user, OwnerPlant::AsToken);
     let before = parse_sddl(&read_sddl(row, &path));
+    assert_eq!(before.owner, user, "{row}: owner not planted");
     assert!(!before.protected, "{row}: the list is not inherited");
     save(&path);
     let after = parse_sddl(&read_sddl(row, &path));
     assert_eq!(after.owner, user, "{row}: owner changed");
     assert_eq!(after, before, "{row}: list changed");
+    assert_eq!(std::fs::read(&path).unwrap(), b"new");
+}
+
+/// A9e: a file with an inherited list whose owner this token may not assign
+/// is refused on the default-create path too, and is unchanged.
+#[test]
+fn an_inherited_list_file_with_another_owner_is_refused() {
+    let row = "WINACL-A9e";
+    let dir = everyone_full_dir(row);
+    let path = dir.path().join("stamp");
+    std::fs::write(&path, b"old").unwrap();
+    let planted = parse_sddl(&plant_owner(
+        row,
+        &path,
+        SYSTEM,
+        OwnerPlant::WithRestorePrivilege,
+    ));
+    assert_eq!(planted.owner, SYSTEM, "{row}: owner not planted");
+    assert!(!planted.protected, "{row}: the list is not inherited");
+    let err = write_atomic(&path, b"new", FileMode::Inherit, Symlink::Replace)
+        .expect_err("WINACL-A9e: the save was not refused");
+    let text = err.to_string();
+    assert!(
+        text.contains("foreign-owner") && text.contains(SYSTEM),
+        "{row}: {text}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"old");
+    assert_eq!(
+        std::fs::read_dir(dir.path()).unwrap().count(),
+        1,
+        "{row}: a scratch was left behind"
+    );
 }
 
 /// A9b: a file owned by the owner a new file gets here (BUILTIN\Administrators
