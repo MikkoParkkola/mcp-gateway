@@ -61,7 +61,7 @@ impl<'a> ServerOf<'a> {
 }
 
 /// What a firewall rule is matched against.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RuleTarget<'a> {
     pub(crate) server: ServerOf<'a>,
     pub(crate) tool: &'a str,
