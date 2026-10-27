@@ -22,6 +22,7 @@ mod history;
 pub mod import;
 mod overview;
 mod preview;
+mod preview_identity;
 mod refusals;
 pub(crate) mod session;
 mod shell;
@@ -493,7 +494,7 @@ async fn tools(
 
         // get_tools() returns from cache if populated (no network I/O).
         // If cache is empty, it will connect + fetch — acceptable for the tools tab.
-        if let Ok(tools) = backend.get_tools_shared().await {
+        if let Ok((tools, declared)) = backend.shared_tools_with_declared_hints().await {
             for tool in tools.iter() {
                 // Search filter
                 if !query_lower.is_empty() {
@@ -509,11 +510,15 @@ async fn tools(
                     }
                 }
 
+                let (class, class_source) =
+                    preview::tool_class(tool, declared.contains(&tool.name));
                 entries.push(json!({
                     "name": tool.name,
                     "server": name,
                     "description": tool.description,
                     "schema": tool.input_schema,
+                    "class": class,
+                    "class_source": class_source,
                 }));
             }
         }
