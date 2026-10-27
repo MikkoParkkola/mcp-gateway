@@ -37,6 +37,7 @@ src/config/strict_keys.rs	refuse_unrecognised_keys	refusal	1	no-record	config lo
 src/config/strict_keys.rs	refuse_unrecognised_keys	removed_refusal	1	no-record	config load
 src/config_reload/env_poll.rs	report_failure	is_posture_refusal	1	not-delivered	predicate (env-file reload)
 src/config_reload/grant_reload.rs	reload_identity_grants	report_grants_refusal	1	no-record	identity grants file reload
+src/config_reload/refusals.rs	classify	is_posture_refusal	1	not-delivered	predicate (a reload refusal's classification)
 src/config_reload/reload_context.rs	reload_transaction	reload_binding_refusal	1	feeds	a reload refusal gateway_reload_config answers; not a posture refusal, so recorded as no policy decision
 src/config_reload/reload_context.rs	reload_transaction	reload_posture_refusal	1	feeds	the posture refusal reload_config raises refused for
 src/config_reload/reload_context.rs	reload_transaction	reload_refusal	1	feeds	a reload refusal gateway_reload_config answers; reload_config raises only for the posture refusal
@@ -44,6 +45,9 @@ src/config_reload/reload_context.rs	with_pending_restart	next_start_refusal	1	no
 src/events/rpc_held.rs	cap_refusal_for	cap_refusal	1	no-record	an events subscription cap, not a call delivery
 src/events/worker.rs	retry_unsent	retry_after_refusal	1	no-record	event delivery
 src/events/worker.rs	unsent_later	retry_after_refusal	1	no-record	event delivery
+src/fs_lock_windows.rs	lock_dir	directory_refusal	1	no-record	a state-directory file lock, not a call delivery
+src/fs_lock_windows.rs	lock_directory_finding	directory_refusal	1	no-record	a state-directory file lock, not a call delivery
+src/fs_lock_windows.rs	sidecar	held_refusal	2	no-record	a state-directory file lock, not a call delivery
 src/gateway/auth_resolved.rs	try_from_config_keyed	refuse_shared_digests	1	no-record	config load: two credentials sharing a secret
 src/gateway/auth_resolved.rs	try_from_config_keyed	refuse_shared_principals	1	no-record	config load: two credentials sharing a principal
 src/gateway/authz.rs	authorize_backend	backend_refusal	1	feeds	the authorization error; meta and stdio route stages raise it, the direct 403 is classed Denied
@@ -82,6 +86,7 @@ src/gateway/meta_mcp/invoke/dispatch_guards.rs	firewall_refusal_body	Error::Resp
 src/gateway/meta_mcp/invoke/egress.rs	inspect_discovery_value	Error::ResponseFirewallRefused	1	recorded	the frame is marked delivery_refusal at the outlet
 src/gateway/meta_mcp/invoke/gate.rs	absent_answer	seal_key_refusal	1	recorded	withheld answer; withheld raised in this fn for an out-of-scope name
 src/gateway/meta_mcp/invoke/gate.rs	as_undefined_capability	capability_rule_refusal	1	not-delivered	predicate comparing the rule's text
+src/gateway/meta_mcp/invoke/gate.rs	backstop	is_authorization_refusal	1	not-delivered	predicate: which dispatch-time refusal the playbook step records
 src/gateway/meta_mcp/invoke/gate.rs	check_call_level_policy	Error::Forbidden{}	1	not-a-decision	a malformed tool name
 src/gateway/meta_mcp/invoke/gate.rs	check_call_level_policy	audit_refusal	1	not-delivered	audit row
 src/gateway/meta_mcp/invoke/gate.rs	named_gate_answer	capability_rule_refusal	1	not-delivered	predicate
@@ -252,8 +257,8 @@ src/personal_accounts/vault.rs	after_upstream_401	refusal	1	not-a-decision	an ac
 src/personal_accounts/vault.rs	mint_refusal	refusal	2	not-a-decision	an account credential failure
 src/personal_accounts/vault.rs	prepare_classified	mint_refusal	2	not-a-decision	an account credential failure
 src/personal_accounts/vault.rs	prepare_classified	refusal	1	not-a-decision	an account credential failure
+src/personal_accounts/vault.rs	read_binding	refusal	2	not-a-decision	an account credential failure
 src/personal_accounts/vault.rs	recheck	refusal	2	not-a-decision	an account credential failure
-src/personal_accounts/vault.rs	view_binding_classified	refusal	2	not-a-decision	an account credential failure
 src/playbook/engine/mod.rs	checked_arguments	Error::Forbidden{}	1	recorded	a playbook step refused before invoke_tool; noted for the composite, raised if it ends the playbook
 src/playbook/engine/mod.rs	execute_definition	Error::Forbidden{}	1	recorded	a playbook refused whole before any step; noted for the composite, raised when it ends the playbook
 src/protocol/modern_refusal.rs	modern_method_refusal	removed_method_refusal	1	not-a-decision	client-protocol rejection

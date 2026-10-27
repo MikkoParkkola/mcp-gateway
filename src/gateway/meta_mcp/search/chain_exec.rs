@@ -210,7 +210,9 @@ impl MetaMcp {
         };
         // The pending step is judged in a step's own cell, as a live step
         // is: a refusal here is the step the resumed chain ends on.
-        crate::gateway::delivery_facts::step(async {
+        // Boxed: the checks hold a credential resolution and a record write,
+        // and inline they would make every caller's future large.
+        crate::gateway::delivery_facts::step(Box::pin(async {
             // MIK-8387 S6: a scoped key's pending step whose backend is absent,
             // by this request's record first, is refused with the backend miss
             // and its one invocation record, before anything resolves for it.
@@ -242,7 +244,7 @@ impl MetaMcp {
                 caller,
             )?;
             self.step_fingerprint(caller, (server, tool)).await
-        })
+        }))
         .await
     }
 }

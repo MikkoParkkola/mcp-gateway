@@ -204,7 +204,6 @@ impl PlaybookEngine {
                 }
                 Err(refusal) => {
                     warn!(step = %step.name, error = %refusal, refused = true, "Step failed");
-                    crate::gateway::delivery_facts::refused_before_step();
                     Err(refusal)
                 }
             };
@@ -293,6 +292,9 @@ fn checked_arguments(
             }
             Err(ProbeRefusal::ClockUnreadable) => "cannot be checked while the clock is unreadable",
         };
+        // Refused before the step runs: the composite ends on it unless it
+        // carries on past it.
+        crate::gateway::delivery_facts::refused_before_step();
         return Err(crate::Error::Forbidden {
             code: -32003,
             status: 403,

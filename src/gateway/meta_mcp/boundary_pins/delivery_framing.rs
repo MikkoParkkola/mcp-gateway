@@ -195,7 +195,7 @@ impl Sink for Found {
             }
             (Some("Error"), "json_rpc") => note_builder(&mut self.builders, "Error::json_rpc"),
             (_, builder) if BUILDERS.contains(&builder) => {
-                note_builder(&mut self.builders, builder)
+                note_builder(&mut self.builders, builder);
             }
             (Some("Refused"), "of") => note(&mut self.refusals, "Refused::of"),
             (_, refusal) if is_refusal_name(refusal) => note(&mut self.refusals, refusal),
