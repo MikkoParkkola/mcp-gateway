@@ -1,0 +1,5 @@
+src/gateway/server/events_wiring.rs	fence_binding	1	standard	a	ListenerMint::fence_binding	Forwards the events fence read to the gateway; a stopped gateway answers busy, so a record is deferred, never read as unchanged.
+src/personal_accounts/vault.rs	fence_binding	1	critical	c	VaultStrategy::fence_binding	The events fence: the mint-free read of the stable grant binding that a delivery compares and a listener run is fixed on; no view fences closed.
+src/personal_accounts/vault.rs	read_binding	1	critical	c	VaultStrategy::read_binding	The one mint-free custody read behind the view and fence bindings: refuses a revoked or reconnect-required grant and one stored under another descriptor revision.
+src/personal_accounts/vault.rs	fence_binding	2	critical	c	ManagedLease::fence_binding	The fence binding of the lease a listener mint released, encoded as custody's read is, so a run's stamp and a delivery's read compare like with like.
+src/personal_accounts/vault.rs	fence_key	1	critical	c	fence_key	Encodes the stable grant fields without the token revision, length-prefixed; a field left out would let a rotation pass the fence.
