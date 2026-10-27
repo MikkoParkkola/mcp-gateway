@@ -79,3 +79,19 @@ fn a_refusal_that_noted_no_check_fails_the_guard() {
     let denied = crate::security::audit::AuditOutcome::Denied(-32001);
     let _ = recorded(&super::Noted::default(), denied);
 }
+
+/// The call and route scopes move a `Noted` in and out on every poll of the
+/// call: it stays one pointer wide, and an allowed call that notes nothing
+/// never boxes.
+#[test]
+fn noted_is_one_pointer_and_unboxed_until_a_note() {
+    assert_eq!(
+        std::mem::size_of::<super::Noted>(),
+        std::mem::size_of::<usize>()
+    );
+    assert!(super::Noted::default().0.is_none());
+    let mut noted = super::Noted::default();
+    noted.refused(DecisionKind::Firewall, None);
+    noted.refused(DecisionKind::Grant, None);
+    assert_eq!(noted.refusal_kind(), Some(DecisionKind::Firewall));
+}

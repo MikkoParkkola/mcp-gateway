@@ -116,8 +116,15 @@ impl Refused {
 
 /// Which check decided one call, as its gates noted it: the first refusal,
 /// else the earliest explicit allow.
+///
+/// One pointer wide, boxed only once a gate notes something: it rides in the
+/// task-local call and route scopes, which move it in and out on every poll,
+/// and a call that is simply allowed notes nothing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct Noted {
+pub(crate) struct Noted(Option<Box<NotedChecks>>);
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct NotedChecks {
     refusal: Option<(DecisionKind, Option<String>)>,
     allow: Option<(DecisionKind, Option<String>)>,
 }
@@ -130,30 +137,38 @@ impl Noted {
         noted
     }
 
+    fn refusal(&self) -> Option<&(DecisionKind, Option<String>)> {
+        self.0.as_ref()?.refusal.as_ref()
+    }
+
+    fn checks(&mut self) -> &mut NotedChecks {
+        self.0.get_or_insert_with(Box::default)
+    }
+
     /// Whether a gate refused.
-    pub(crate) const fn has_refusal(&self) -> bool {
-        self.refusal.is_some()
+    pub(crate) fn has_refusal(&self) -> bool {
+        self.refusal().is_some()
     }
 
     /// The check that refused, if one did.
     pub(crate) fn refusal_kind(&self) -> Option<DecisionKind> {
-        self.refusal.as_ref().map(|(kind, _)| *kind)
+        self.refusal().map(|(kind, _)| *kind)
     }
 
     /// The check a request's memo kept for this target: it names the refusal
     /// the record's outcome code came from, so it wins over any later note.
     pub(crate) fn refused_by_memo(&mut self, kind: DecisionKind) {
-        self.refusal = Some((kind, None));
+        self.checks().refusal = Some((kind, None));
     }
 
     /// The gate that refused; only the first one counts.
     pub(crate) fn refused(&mut self, kind: DecisionKind, rule_id: Option<String>) {
-        self.refusal.get_or_insert((kind, rule_id));
+        self.checks().refusal.get_or_insert((kind, rule_id));
     }
 
     /// An explicit allow; only the earliest in check order counts.
     pub(crate) fn allowed(&mut self, kind: DecisionKind, rule_id: Option<String>) {
-        self.allow.get_or_insert((kind, rule_id));
+        self.checks().allow.get_or_insert((kind, rule_id));
     }
 
     /// The decision object for this call under the published config `live`.
@@ -167,17 +182,18 @@ impl Noted {
         refused: Refused,
         live: Option<&crate::config_reload::LiveConfig>,
     ) -> Decision {
-        let (kind, rule_id) = match (&self.refusal, refused) {
+        let (kind, rule_id) = match (self.refusal(), refused) {
             (Some(refusal), _) => refusal.clone(),
             (None, Refused::No) => self
-                .allow
-                .clone()
+                .0
+                .as_ref()
+                .and_then(|checks| checks.allow.clone())
                 .unwrap_or((DecisionKind::DefaultAllow, None)),
             (None, Refused::Yes(outcome)) => {
                 // Every debug build, integration tests included; never a
                 // release build, which records `unrecorded` instead.
                 debug_assert!(
-                    self.refusal.is_some(),
+                    self.has_refusal(),
                     "a refused call ({outcome:?}) noted no check (MIK-8914.API2A.7)"
                 );
                 (DecisionKind::Unrecorded, None)
