@@ -392,6 +392,20 @@ fn millis(elapsed: Duration) -> u64 {
     u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
 }
 
+/// A normalised tool's `class` and `class_source`, as the preview and
+/// `GET /ui/api/tools` both show them: `read` only on `readOnlyHint: true`,
+/// and `declared` when the server set that hint itself.
+pub(super) fn tool_class(
+    tool: &crate::protocol::Tool,
+    declared: bool,
+) -> (&'static str, &'static str) {
+    let read = tool.annotations.as_ref().and_then(|a| a.read_only_hint) == Some(true);
+    (
+        if read { "read" } else { "write" },
+        if declared { "declared" } else { "inferred" },
+    )
+}
+
 /// The 200 body: each tool with its class and where the class came from.
 fn listed_body(listing: &PreviewListing, mut preview: Value, elapsed: Duration) -> Value {
     let tools: Vec<Value> = listing
@@ -399,12 +413,13 @@ fn listed_body(listing: &PreviewListing, mut preview: Value, elapsed: Duration) 
         .iter()
         .map(|tool| {
             let hints = tool.annotations.as_ref();
-            let read = hints.and_then(|a| a.read_only_hint) == Some(true);
+            let (class, class_source) =
+                tool_class(tool, listing.hint_declared.contains(&tool.name));
             json!({
                 "name": tool.name,
                 "description": tool.description,
-                "class": if read { "read" } else { "write" },
-                "class_source": if listing.hint_declared.contains(&tool.name) { "declared" } else { "inferred" },
+                "class": class,
+                "class_source": class_source,
                 "destructive": hints.and_then(|a| a.destructive_hint) == Some(true),
             })
         })

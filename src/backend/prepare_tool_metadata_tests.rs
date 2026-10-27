@@ -203,3 +203,28 @@ fn prepare_tool_metadata_admits_to_the_cache_only_a_declared_read() {
         .collect();
     assert_eq!(admitted, ["read_true"]);
 }
+
+/// The set the UI reads `class_source` from: an explicit `readOnlyHint`
+/// either way is declared, an omitted one is not, and it is read before the
+/// inference fills the omitted ones. A name with one declaring occurrence
+/// counts as declared, as the preview counts it.
+#[test]
+fn prepare_tool_metadata_records_which_read_hints_were_declared() {
+    let mut tools = vec![
+        sample_tool("get_status"),
+        annotated("read_true", Some(true), None),
+        annotated("read_false", Some(false), None),
+        annotated("idempotent_only", None, Some(true)),
+        sample_tool("twice"),
+        annotated("twice", Some(true), None),
+    ];
+    let prepared = prepare_tool_metadata(
+        "beeper",
+        &std::collections::BTreeMap::new(),
+        crate::backend::Judging::Judge,
+        &mut tools,
+    );
+    let mut declared: Vec<&str> = prepared.hint_declared.iter().map(String::as_str).collect();
+    declared.sort_unstable();
+    assert_eq!(declared, ["read_false", "read_true", "twice"]);
+}
