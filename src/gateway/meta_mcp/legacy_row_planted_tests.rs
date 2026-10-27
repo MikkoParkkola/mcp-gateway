@@ -56,3 +56,90 @@ async fn a_pre_binding_row_with_a_planted_member_is_refused_when_served() {
     assert!(!body.contains("FORGED-"), "{body}");
     assert!(refusal.result.is_none(), "{body}");
 }
+
+/// The source files, outside test code, whose text contains `needle`, as
+/// `src/...` paths. A path naming `test` anywhere is test code.
+fn files_containing(needle: &str) -> Vec<String> {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("src reads").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                out.push(path);
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    walk(&root.join("src"), &mut files);
+    let mut hits: Vec<String> = files
+        .iter()
+        .filter_map(|path| {
+            let relative = path
+                .strip_prefix(root)
+                .ok()?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let text = std::fs::read_to_string(path).ok()?;
+            (!relative.contains("test") && text.contains(needle)).then_some(relative)
+        })
+        .collect();
+    hits.sort();
+    hits
+}
+
+/// The row above proves the judge refuses an old row; this proves every
+/// route still asks it. The files that serve a stored task (through
+/// `TaskRoute` or a repeated call's `BeginOutcome::Existing`) are a closed
+/// set, each calling the judge. A new serving file changes a set and fails
+/// here until its judge call is wired and listed.
+#[test]
+fn every_stored_read_route_asks_the_judge() {
+    assert_eq!(
+        files_containing("TaskRoute"),
+        [
+            "src/gateway/router/handlers/tasks.rs",
+            "src/gateway/server/stdio_tasks.rs",
+            "src/gateway/task_route.rs",
+        ],
+        "a new file serves tasks/get: wire refuse_stored_delivery and list it"
+    );
+    assert_eq!(
+        files_containing("BeginOutcome::Existing"),
+        [
+            "src/gateway/meta_mcp/call_dispatch/task_intake.rs",
+            "src/gateway/meta_mcp/task_replay.rs",
+            "src/gateway/task_service/execution/worker.rs",
+        ],
+        "a new file serves a repeated task call: wire refuse_stored_repeat and list it"
+    );
+    let source = |path: &str| {
+        std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path))
+            .expect("reads")
+    };
+    // HTTP: `tasks/get` and the notification frame; stdio: `tasks/get`.
+    for (path, judge, calls) in [
+        (
+            "src/gateway/router/handlers/tasks.rs",
+            "refuse_stored_delivery(",
+            2,
+        ),
+        (
+            "src/gateway/server/stdio_tasks.rs",
+            "refuse_stored_delivery(",
+            1,
+        ),
+        (
+            "src/gateway/meta_mcp/call_dispatch/task_intake.rs",
+            "refuse_stored_repeat(",
+            1,
+        ),
+    ] {
+        assert_eq!(
+            source(path).matches(judge).count(),
+            calls,
+            "{path} no longer calls {judge} at each serve site"
+        );
+    }
+}
