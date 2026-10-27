@@ -160,6 +160,7 @@ impl ConfigWatcher {
             shutdown_rx,
             None,
             None,
+            super::refusals::ReloadReporting::default(),
         )
     }
 
@@ -178,6 +179,7 @@ impl ConfigWatcher {
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
         on_registered: Option<super::OnRegistered>,
         surfaced: Option<super::SurfacedHook>,
+        reporting: super::refusals::ReloadReporting,
     ) -> Result<Self> {
         // Pair first, so a refusal is returned before any watcher or task
         // exists; the reload task's own context then pairs as a no-op.
@@ -232,6 +234,7 @@ impl ConfigWatcher {
             event_rx,
             shutdown_rx,
             Arc::clone(&env_reloads),
+            reporting,
         );
 
         Ok(Self {
@@ -302,6 +305,7 @@ impl ConfigWatcher {
         mut event_rx: tokio::sync::mpsc::Receiver<ReloadTrigger>,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
         env_reloads: Arc<env_poll::EnvReloadCounts>,
+        reporting: super::refusals::ReloadReporting,
     ) {
         use env_poll::{DEBOUNCE, RELOAD_TICK};
         tokio::spawn(async move {
@@ -327,6 +331,7 @@ impl ConfigWatcher {
             ) {
                 Ok(ctx) => {
                     let ctx = ctx
+                        .with_reporting(reporting)
                         .with_env(env)
                         .with_identity_grant_sink_opt(identity_grants)
                         .with_capabilities(capabilities);

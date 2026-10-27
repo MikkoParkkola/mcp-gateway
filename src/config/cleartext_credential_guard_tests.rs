@@ -310,3 +310,68 @@ fn a2a_url_userinfo_is_a_credential_on_the_same_terms() {
     assert!(validate(a2a(&format!("https://{userinfo}@{REMOTE}"))).is_ok());
     assert!(validate(a2a(&format!("http://{userinfo}@127.0.0.1:9"))).is_ok());
 }
+
+/// MIK-8857.API4.4: `cleartext_override_in_effect` is the guard asked a second
+/// time, so it must agree with it on every carrier and every kind of address:
+/// in effect exactly when the flag is set and the guard refuses without it.
+#[test]
+fn the_override_is_in_effect_exactly_where_the_guard_would_refuse() {
+    type Carrier = (&'static str, fn(BackendConfig) -> BackendConfig);
+    let carriers: [Carrier; 7] = [
+        ("oauth", with_oauth),
+        ("identity_propagation", |mut b| {
+            b.identity_propagation = Some(IdentityPropagationConfig {
+                strategy: PropagationStrategyKind::SignedAssertion,
+                audience: "https://backend.invalid".to_string(),
+                required: false,
+                session_mode: SessionMode::Stateless,
+                token_exchange_endpoint: None,
+                token_exchange_scope: None,
+            });
+            b
+        }),
+        ("secrets", |mut b| {
+            b.secrets = vec![crate::secret_injection::CredentialRule {
+                name: "api_key".to_string(),
+                credential_type: crate::secret_injection::CredentialType::ApiKey,
+                value: "env:SOME_KEY".to_string(),
+                inject_as: crate::secret_injection::InjectTarget::Header,
+                inject_key: "Authorization".to_string(),
+                tools: vec!["*".to_string()],
+            }];
+            b
+        }),
+        ("headers", |mut b| {
+            b.headers.insert("X-Custom-Token".into(), "t".into());
+            b
+        }),
+        ("query", |b| b),
+        ("userinfo", |b| b),
+        ("password", |b| b),
+    ];
+    let address = |carrier: &str, base: &str| match carrier {
+        "query" => format!("{base}/mcp?token=t"),
+        "userinfo" => base.replacen("://", "://user@", 1),
+        "password" => base.replacen("://", "://user:pw@", 1),
+        _ => format!("{base}/mcp"),
+    };
+    for (carrier, add) in carriers {
+        for (base, enabled) in [
+            (format!("http://{REMOTE}"), true),
+            (format!("https://{REMOTE}"), true),
+            ("http://127.0.0.1:9".to_string(), true),
+            (format!("http://{REMOTE}"), false),
+        ] {
+            let mut backend = add(http_backend(&address(carrier, &base)));
+            backend.enabled = enabled;
+            let refused_without = validate(backend.clone())
+                .is_err_and(|e| e.to_string().contains(crate::config::CLEARTEXT_REFUSAL));
+            backend.allow_cleartext_credentials = true;
+            assert_eq!(
+                Config::cleartext_override_in_effect("b", &backend),
+                refused_without,
+                "{carrier} on {base} (enabled {enabled})"
+            );
+        }
+    }
+}
