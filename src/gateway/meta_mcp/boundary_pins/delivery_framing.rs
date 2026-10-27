@@ -62,6 +62,13 @@ struct Found {
     refusals: std::collections::BTreeMap<String, usize>,
 }
 
+/// Whether `path` names `Error::<variant>` (by its last two segments).
+fn is_error_variant(path: &syn::Path, variant: &str) -> bool {
+    let mut segments = path.segments.iter().rev();
+    segments.next().is_some_and(|s| s.ident == variant)
+        && segments.next().is_some_and(|s| s.ident == "Error")
+}
+
 fn callee(expr: &syn::Expr) -> Option<(Option<String>, String)> {
     match expr {
         syn::Expr::MethodCall(call) => Some((None, call.method.to_string())),
@@ -102,6 +109,18 @@ impl Sink for Found {
                 .is_some_and(|s| s.ident == "JsonRpc")
         {
             note(&mut self.builders, "Error::JsonRpc{}");
+        }
+        // The gateway's own refusal variants, built without a `*refusal`
+        // function (a firewall or authorization refusal at a chokepoint).
+        if let syn::Expr::Struct(literal) = expr
+            && is_error_variant(&literal.path, "Forbidden")
+        {
+            note(&mut self.refusals, "Error::Forbidden{}");
+        }
+        if let syn::Expr::Path(path) = expr
+            && is_error_variant(&path.path, "ResponseFirewallRefused")
+        {
+            note(&mut self.refusals, "Error::ResponseFirewallRefused");
         }
         let Some((owner, name)) = callee(expr) else {
             return;
