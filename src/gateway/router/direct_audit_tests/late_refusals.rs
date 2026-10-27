@@ -99,21 +99,31 @@ async fn a_relay_block_on_meta_records_refused() {
 }
 
 /// Site 7: under `require`, the gateway refuses the backend's unchained
-/// answer after the call was sent.
+/// answer after the call was sent, on both routes.
 #[tokio::test]
-async fn an_unchained_answer_refused_on_meta_records_refused() {
-    let fx = fixture(Setup {
-        chain: crate::config::ChainMode::Require,
-        ..Setup::default()
-    })
-    .await;
-    let (status, body) = post_to(&fx, "/mcp", &invoke(5, &json!({})), &Caller::Anonymous).await;
-    assert!(
-        body.get("error").is_some(),
-        "premise: refused: {status} {body}"
-    );
-    assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "premise: sent once");
-    assert_last_refused(&fx);
+async fn an_unchained_answer_refused_records_refused_on_both_routes() {
+    for route in ["meta", "direct"] {
+        let fx = fixture(Setup {
+            chain: crate::config::ChainMode::Require,
+            ..Setup::default()
+        })
+        .await;
+        let (status, body) = if route == "meta" {
+            post_to(&fx, "/mcp", &invoke(5, &json!({})), &Caller::Anonymous).await
+        } else {
+            post(&fx, "alpha", &tools_call("t"), &Caller::Anonymous).await
+        };
+        assert!(
+            body.get("error").is_some(),
+            "{route} premise: refused: {status} {body}"
+        );
+        assert_eq!(
+            fx.calls.load(Ordering::SeqCst),
+            1,
+            "{route} premise: sent once"
+        );
+        assert_last_refused(&fx);
+    }
 }
 
 /// Sites 8 and 10: the backend asks a question the caller never declared it
