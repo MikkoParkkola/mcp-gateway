@@ -29,7 +29,7 @@ use crate::protocol::JsonRpcResponse;
 mod cacheable_field_tests;
 mod dispatch_intake;
 mod dispatch_tools_call;
-mod events;
+pub(in crate::gateway::router) mod events;
 mod health;
 mod meta_handler;
 #[cfg(feature = "metrics")]
@@ -260,6 +260,7 @@ async fn meta_mcp_dispatch(
             };
             let caller = crate::events::Caller {
                 principal: events::principal(events_owner, state.auth_config.enabled),
+                identity: verified_identity.clone(),
                 read_key: read_key.clone(),
                 credential,
                 visible_backends: hub
