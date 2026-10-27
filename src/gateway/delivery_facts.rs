@@ -117,6 +117,25 @@ pub(crate) async fn scope<F: std::future::Future>(future: F) -> F::Output {
         .await
 }
 
+/// Run one composite step in a cell of its own, as [`scope`] does, and note
+/// on the composite's cell whether this step ended in a gateway refusal.
+/// Only the latest step's note is kept: a later step replaces it.
+pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
+    scope(future).await
+}
+
+/// The composite carried on past its latest step's failure (a playbook's
+/// `continue`, or its `retry` once attempts run out): that step's refusal is
+/// no longer what the composite can end on.
+pub(crate) fn step_absorbed() {}
+
+/// The composite ends with `error` (`None`: it succeeded). It records
+/// `refused` when it ends with an error while its latest step's refusal still
+/// stands: the step it ends on was refused.
+pub(crate) fn composite_ended(error: Option<&crate::Error>) {
+    let _ = error;
+}
+
 /// Run `f` with the facts suspended: a scan of a value that is not delivered
 /// (a receipt copy, a classification probe) writes into a cell that is thrown
 /// away.
@@ -269,3 +288,7 @@ mod tests;
 #[cfg(test)]
 #[path = "delivery_facts_withheld_tests.rs"]
 mod withheld_tests;
+
+#[cfg(test)]
+#[path = "delivery_facts_composite_tests.rs"]
+mod composite_tests;

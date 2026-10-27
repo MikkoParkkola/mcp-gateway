@@ -28,6 +28,7 @@ mod extras;
 use extras::{Extra, arm_extras, backend_config, harden};
 mod anon_key;
 mod backend_oracle;
+mod composite_refusals;
 mod delivery;
 mod delivery_who;
 mod empty_grant;
