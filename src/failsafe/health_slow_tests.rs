@@ -8,11 +8,11 @@ use std::time::Duration;
 
 use super::{HealthTracker, Slow};
 
-fn seen(recent_ms: u64, usual_ms: u64) -> Option<Slow> {
-    Some(Slow {
+fn seen(recent_ms: u64, usual_ms: u64) -> Slow {
+    Slow {
         recent_ms,
         usual_ms,
-    })
+    }
 }
 
 fn feed(tracker: &HealthTracker, calls: usize, ms: u64) {
@@ -52,7 +52,7 @@ fn api4_2_slow_is_strictly_over_three_times_the_usual() {
 
     let over = warm_at(100);
     feed(&over, 99, 301);
-    assert_eq!(over.slow(), seen(301, 100));
+    assert_eq!(over.slow(), Some(seen(301, 100)));
 }
 
 #[test]
@@ -63,7 +63,7 @@ fn api4_2_a_fast_server_under_the_floor_is_never_slow() {
 
     let at_floor = warm_at(2);
     feed(&at_floor, 99, 50);
-    assert_eq!(at_floor.slow(), seen(50, 2));
+    assert_eq!(at_floor.slow(), Some(seen(50, 2)));
 }
 
 #[test]
@@ -121,13 +121,13 @@ fn api4_2_small_steps_still_move_the_usual() {
     let up = warm_at(100);
     feed(&up, 2000, 110);
     feed(&up, 99, 2000);
-    assert_eq!(up.slow(), seen(2000, 102));
+    assert_eq!(up.slow(), Some(seen(2000, 102)));
 
     // And down: twenty batches at 100 ms from a 400 ms usual.
     let down = warm_at(400);
     feed(&down, 2000, 100);
     feed(&down, 99, 2000);
-    assert_eq!(down.slow(), seen(2000, 319));
+    assert_eq!(down.slow(), Some(seen(2000, 319)));
 }
 
 #[test]
@@ -136,7 +136,7 @@ fn api4_2_the_window_p95_is_its_ninety_sixth_value() {
     let five = warm_at(100);
     feed(&five, 94, 100);
     feed(&five, 5, 1000);
-    assert_eq!(five.slow(), seen(1000, 100));
+    assert_eq!(five.slow(), Some(seen(1000, 100)));
 
     let four = warm_at(100);
     feed(&four, 95, 100);
@@ -180,7 +180,7 @@ fn api4_2_reading_metrics_between_calls_changes_nothing() {
     }
     assert_eq!(
         tracker.slow(),
-        seen(301, 100),
+        Some(seen(301, 100)),
         "the window keeps call order"
     );
 }
@@ -189,7 +189,7 @@ fn api4_2_reading_metrics_between_calls_changes_nothing() {
 fn api4_2_a_spike_leaves_the_window() {
     let tracker = warm_at(100);
     feed(&tracker, 99, 1000);
-    assert_eq!(tracker.slow(), seen(1000, 100));
+    assert_eq!(tracker.slow(), Some(seen(1000, 100)));
     feed(&tracker, 100, 100);
     assert_eq!(tracker.slow(), None, "a hundred usual calls push it out");
 }
