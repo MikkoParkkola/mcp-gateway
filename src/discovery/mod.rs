@@ -61,6 +61,12 @@ pub struct DiscoveredServer {
     /// nothing. Such a find is not adoptable (`adopt::refusals`).
     #[serde(skip)]
     pub(crate) uncarried: Vec<String>,
+    /// SHA-256 of the client file path, the server name and the raw client
+    /// entry, values included: what a later adopt checks it still reads.
+    /// Internal only; the discovery route shows a keyed hash of it. Empty for
+    /// a find not read from a client config file.
+    #[serde(skip)]
+    pub(crate) entry_digest: String,
 }
 
 /// Source of discovery
@@ -125,6 +131,7 @@ impl DiscoveredServer {
             headers: SecretMap::default(),
             unresolved_header_names: Vec::new(),
             uncarried: Vec::new(),
+            entry_digest: String::new(),
         }
     }
 

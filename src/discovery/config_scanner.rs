@@ -672,6 +672,9 @@ impl ConfigScanner {
     }
 }
 
+#[path = "config_scanner_client_scan.rs"]
+pub(crate) mod client_scan;
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
