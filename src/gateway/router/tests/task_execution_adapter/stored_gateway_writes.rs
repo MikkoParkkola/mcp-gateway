@@ -97,8 +97,9 @@ async fn a_task_row_records_the_trace_id_the_gateway_wrote() {
     assert_eq!(entries[0]["dest"], json!(["trace_id"]), "{row}");
 }
 
-/// STORE.2: a member the backend sent under a name the gateway also writes
-/// elsewhere is the backend's, so the row does not record it.
+/// STORE.2: a member the backend sent under a name only the gateway writes
+/// is never the gateway's. Ingress removes it, so the row neither stores it
+/// nor records it as a gateway write.
 #[tokio::test]
 async fn a_task_row_never_records_a_backend_member_as_the_gateways() {
     let mut answer = text("the backend's answer");
@@ -111,8 +112,8 @@ async fn a_task_row_never_records_a_backend_member_as_the_gateways() {
     assert_eq!(status_of(&settled), "completed", "premise: {settled}");
     let row = row(&store, &task);
     assert!(
-        row.to_string().contains("written by the backend"),
-        "premise: the backend's member is stored: {row}"
+        !row.to_string().contains("written by the backend"),
+        "the backend's copy of a gateway member was stored: {row}"
     );
     assert!(
         written(&row, &["_cost_warnings"]).is_empty(),

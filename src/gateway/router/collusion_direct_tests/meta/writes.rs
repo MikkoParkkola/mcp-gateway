@@ -187,8 +187,9 @@ fn cost_suggestion(body: &str) -> Value {
 /// MIK-7991 (R4): a plan step's cache entry holds only that step's writes.
 /// Step A (`send`, unlike the first send so not a cache hit) gets the
 /// gateway's suggestion; step B (`read`) answers
-/// with a backend member equal to it. A later hit on B's entry keeps that
-/// backend member in the receipt, so relaying it is refused.
+/// with a backend member equal to it. That member is a gateway-only name, so
+/// ingress removes the backend's copy: B's entry never holds it, a later hit
+/// on B's entry delivers none of it, and relaying its text is not refused.
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn meta_chain_step_entry_holds_only_its_own_writes() {
@@ -216,7 +217,10 @@ async fn meta_chain_step_entry_holds_only_its_own_writes() {
         reads,
         "base: the read is a hit on B's entry: {hit}"
     );
-    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), CATEGORY).await, 2);
+    // The read's `_cost_suggestion` was the backend's copy of a gateway
+    // member: ingress removed it, so its text was never delivered and is in
+    // no receipt.
+    assert_meta_sent(&fx, &meta_send(&fx, Some("b"), CATEGORY).await, 3);
 }
 
 /// MIK-7991 r4 (R10): a surfaced tool is called by its own name, so its
