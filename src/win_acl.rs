@@ -515,7 +515,7 @@ fn sacl_ace_count(buf: &mut [u64]) -> io::Result<usize> {
 /// one of the descriptors `model` was read with: owner, DACL and
 /// access-enforcing SACL entries for a protected list, or the owner alone for
 /// an inherited one, whose entries the folder supplies. The kernel sets the
-/// model's owner or fails the create (ERROR_INVALID_OWNER) when this token may
+/// model's owner or fails the create (`ERROR_INVALID_OWNER`) when this token may
 /// not assign it. The caller compares the result with the model before
 /// trusting it.
 pub(crate) fn create_file_like(

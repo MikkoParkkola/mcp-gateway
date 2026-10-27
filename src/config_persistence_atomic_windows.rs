@@ -19,7 +19,7 @@ use crate::win_acl::{self, Ace, CopySource, CopyWith, Inspection};
 const ERROR_INVALID_OWNER: i32 = 1307;
 
 /// Create the scratch at `scratch` with `source`'s owner and, for
-/// [`CopyWith::OwnerAndList`], its list. Exactly ERROR_INVALID_OWNER becomes
+/// [`CopyWith::OwnerAndList`], its list. Exactly `ERROR_INVALID_OWNER` becomes
 /// the `foreign-owner` refusal; every other failure is returned as itself.
 pub(super) fn create_like(
     scratch: &Path,

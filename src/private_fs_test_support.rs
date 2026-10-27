@@ -219,7 +219,7 @@ pub(crate) fn plant_any(row: &str, path: &Path, sddl: &str) -> String {
 pub(crate) enum OwnerPlant {
     /// As the test's own token may: its user, or a group it may own by.
     AsToken,
-    /// With SeRestorePrivilege enabled in the planting process only, so any
+    /// With `SeRestorePrivilege` enabled in the planting process only, so any
     /// owner can be set; the process under test never holds it enabled. Needs
     /// an elevated runner, as CI's is; elsewhere the plant fails loudly.
     WithRestorePrivilege,
