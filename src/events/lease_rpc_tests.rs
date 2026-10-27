@@ -564,26 +564,38 @@ async fn a_rotation_regrant_or_config_change_moves_the_observation() {
             .lease(Some("p"), "pt", Some(&params), Some(token(Some(exp))))
     };
     lease(in_an_hour()).await.expect("leased");
-    let stamp = f.hub.observed_now(&row(), &f.config).expect("observable");
+    let stamp = f
+        .hub
+        .observed_now(&row(), &f.config, None)
+        .expect("observable");
     assert!(stamp.as_ref().and_then(|s| s.lease.as_ref()).is_some());
-    assert_eq!(f.hub.observed_now(&row(), &f.config), Ok(stamp.clone()));
+    assert_eq!(
+        f.hub.observed_now(&row(), &f.config, None),
+        Ok(stamp.clone())
+    );
     lease(in_an_hour() + 60).await.expect("replaced");
     assert_ne!(
-        f.hub.observed_now(&row(), &f.config),
+        f.hub.observed_now(&row(), &f.config, None),
         Ok(stamp.clone()),
         "a rotated lease"
     );
     let mut regranted = row();
     regranted.incarnation += 1;
-    assert_ne!(f.hub.observed_now(&regranted, &f.config), Ok(stamp.clone()));
+    assert_ne!(
+        f.hub.observed_now(&regranted, &f.config, None),
+        Ok(stamp.clone())
+    );
     let moved: crate::config::Config = crate::yaml::from_str(
         &CONFIG.replace("audience: https://pt\n", "audience: https://pt-v2\n"),
     )
     .expect("config");
-    assert!(f.hub.observed_now(&row(), &moved).is_err(), "unobservable");
+    assert!(
+        f.hub.observed_now(&row(), &moved, None).is_err(),
+        "unobservable"
+    );
     let mut shared = row();
     shared.obs_basis = None;
-    assert_eq!(f.hub.observed_now(&shared, &f.config), Ok(None));
+    assert_eq!(f.hub.observed_now(&shared, &f.config, None), Ok(None));
 }
 
 /// C8 fallback: a per-user row whose subscriber no longer passes admission

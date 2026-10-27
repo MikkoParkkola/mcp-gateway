@@ -227,6 +227,7 @@ fn event(upstream_id: &str) -> SourceEvent {
         occurred_at: chrono::Utc::now(),
         data: json!({}),
         lifecycle_key: None,
+        fence: None,
     }
 }
 

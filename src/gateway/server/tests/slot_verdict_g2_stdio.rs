@@ -328,11 +328,14 @@ impl Stdio {
             &crate::config::EnvOverlay::default(),
             &self.meta,
             &policy,
-            &std::sync::Arc::new(
-                crate::gateway::record_principal::RecordPrincipalKey::from_text(
-                    crate::gateway::record_principal::TEST_RECORD_KEY,
-                )
-                .expect("test key"),
+            (
+                &std::sync::Arc::new(
+                    crate::gateway::record_principal::RecordPrincipalKey::from_text(
+                        crate::gateway::record_principal::TEST_RECORD_KEY,
+                    )
+                    .expect("test key"),
+                ),
+                &std::sync::Arc::new(crate::config_reload::LiveConfig::new(config.clone())),
             ),
         )
         .await

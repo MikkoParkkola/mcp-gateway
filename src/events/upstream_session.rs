@@ -26,6 +26,10 @@ const TICK: Duration = Duration::from_millis(250);
 /// A modern listen must be acknowledged within this (§3).
 /// Opening a channel may not outlast this.
 const OPEN_LIMIT: Duration = Duration::from_secs(30);
+/// A minted run reads its grant's fence this often, so a quiet stream that
+/// sends no request still ends when the grant moves; the events worker's
+/// sweep period.
+const FENCE_EVERY: Duration = Duration::from_secs(30);
 /// The legacy unsubscribe walk on stop may not outlast this (D5).
 const RELEASE_LIMIT: Duration = Duration::from_secs(5);
 /// A modern listen must be acknowledged within this (§3).
@@ -70,6 +74,8 @@ pub(super) struct ToolsDebt {
     retrying: bool,
     /// A notice the hub has not heard of yet.
     unannounced: bool,
+    /// The fence binding of the run that heard the notice.
+    pub(super) fence: Option<String>,
 }
 
 enum Outcome {
@@ -296,6 +302,7 @@ async fn session(
     let started = Instant::now();
     let modern = run.era == PeerEra::Modern;
     let mut state = State::new(shared, run.era);
+    state.fence.clone_from(&run.fence);
     // The first catalogue read doubles as the legacy HTTP session's first
     // request on the shared bucket (§3).
     state.read_snapshot(backend, hub, false).await;
@@ -357,6 +364,11 @@ async fn session(
             }
             Ev::Wake | Ev::Tick => {}
         }
+        if grant_moved(shared, run.fence.as_deref(), &mut state).await {
+            // Nothing observed under the old grant is announced: the
+            // session's notices and refill go with it.
+            return state.ended(started);
+        }
         if refill.is_none() {
             refill = start_due_refill(&mut state, backend);
         }
@@ -391,6 +403,36 @@ async fn session(
             return Outcome::Stopped;
         }
     }
+}
+
+/// Whether a minted run's grant moved: a refused mint says so at once, and
+/// the run reads its fence every [`FENCE_EVERY`] so a quiet stream notices
+/// too. A moved run's pending tools debounce goes with it. A per-user key
+/// has no snapshot or confirm clock to drop: it never reads the catalogue
+/// (`read_snapshot`, `authorize_uri`).
+async fn grant_moved(
+    shared: &Shared,
+    fence: Option<&crate::events::listener_credential::RunFence>,
+    state: &mut State<'_>,
+) -> bool {
+    let Some(fence) = fence else {
+        return false;
+    };
+    // Once the run's first request fixed its grant, before any refill: a
+    // tools notice another run left pending was heard under that grant.
+    if fence.is_fixed() {
+        run::forget_foreign_debt(&mut shared.tools.lock(), fence.binding().as_deref());
+    }
+    if Instant::now() >= state.fence_due {
+        state.fence_due = Instant::now() + FENCE_EVERY;
+        fence.recheck().await;
+    }
+    if !fence.ended() {
+        return false;
+    }
+    debug!(backend = %shared.name, "upstream listener: the grant moved; ending the run");
+    *shared.tools.lock() = ToolsDebt::default();
+    true
 }
 
 /// What a tick does about the backend's live transport (MIK-7969 H2).
@@ -505,6 +547,10 @@ struct State<'a> {
     handle: Option<Weak<dyn UpstreamListen>>,
     /// The last URI a legacy pass reached; the next resumes after it.
     legacy_cursor: Option<String>,
+    /// A minted run's fence, whose binding stamps every occurrence emitted.
+    fence: Option<Arc<crate::events::listener_credential::RunFence>>,
+    /// When the run next reads its fence.
+    fence_due: Instant,
 }
 
 impl<'a> State<'a> {
@@ -534,6 +580,8 @@ impl<'a> State<'a> {
             open_failures: 0,
             handle: None,
             legacy_cursor: None,
+            fence: None,
+            fence_due: now + FENCE_EVERY,
         }
     }
 

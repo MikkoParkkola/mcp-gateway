@@ -749,3 +749,7 @@ pub(crate) fn cooldown_refusal(server: &str, tool: &str) -> String {
 
 #[path = "account_direct_bridge_traffic.rs"]
 mod traffic;
+
+#[cfg(test)]
+#[path = "account_direct_bridge_fence_tests.rs"]
+mod fence_tests;
