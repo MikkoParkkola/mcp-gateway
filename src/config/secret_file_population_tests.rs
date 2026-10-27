@@ -40,6 +40,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ("src/cli/invoke.rs", "reads stdin, not a file"),
     ("src/commands/cap.rs", "capability YAML pinning; public"),
     (
+        "src/commands/doctor/lease_custody.rs",
+        "doctor reads /proc/swaps and /sys/block/dm-*/dm/uuid; kernel tables, no secret",
+    ),
+    (
         "src/commands/config_export/mod.rs",
         "third-party MCP client config JSON edited to add the gateway entry; no gateway secret",
     ),

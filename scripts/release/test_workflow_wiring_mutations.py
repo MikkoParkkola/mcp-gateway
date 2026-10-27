@@ -50,7 +50,7 @@ PUSH_STEP = (
     "        if: github.event_name != 'pull_request'"
     " && !startsWith(github.ref, 'refs/tags/v')\n"
     "        uses: actions/upload-artifact"
-    "@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n"
+    "@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2\n"
     "        with:\n"
     "          name: image-digest-${{ matrix.arch }}\n"
     "          path: digests/${{ matrix.arch }}\n"
@@ -1556,18 +1556,18 @@ CASES += [
 # Every installed cosign stays past the verification advisories.
 CASES += [
     ("cosign-pin-downgraded", "ci.yml",
-     "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
-     "          cosign-release: v2.6.4\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
+     "          cosign-release: v2.6.4\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
      CAUGHT),
     ("cosign-pin-quoted-and-downgraded", "ci.yml",
-     "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
-     "          cosign-release: 'v2.5.2'\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+     "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
+     "          cosign-release: 'v2.5.2'\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n", CAUGHT),
     ("cosign-pin-left-to-the-installer-default", "ci.yml",
-     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
-     "      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
+     "      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n", CAUGHT),
     ("cosign-pin-quoted-at-the-floor", "ci.yml",
-     "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
-     "          cosign-release: \"v2.6.5\"\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", TOLERATED),
+     "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
+     "          cosign-release: \"v2.6.5\"\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n", TOLERATED),
     # Any workflow file counts, not only the ones that install cosign today.
     ("cosign-installed-unpinned-in-another-workflow", "mrtr7b-full-burst.yml",
      "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n      - name: Run the full-burst ledger\n",
@@ -1581,8 +1581,8 @@ CASES += [
      "      - uses: \"sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6\" # v4.1.2\n"
      "      - name: Run the full-burst ledger\n", CAUGHT),
     ("cosign-pin-below-the-floor-behind-a-single-quoted-uses", "ci.yml",
-     "        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
-     "        uses: 'sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6' # v4.1.2\n        with:\n          cosign-release: v2.6.4\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+     "        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
+     "        uses: 'sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6' # v4.1.2\n        with:\n          cosign-release: v2.6.4\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n", CAUGHT),
     # The push-guard inventory must still see a quoted installer: a second,
     # unnamed one with no tag guard is found only by what it uses.
     ("cosign-installer-quoted-and-unguarded", "ci.yml",
@@ -1633,8 +1633,8 @@ CASES += [
      "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: Sigstore/Cosign-Installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n", TOLERATED),
     # A pin inside another input's block scalar is text the action never reads.
     ("cosign-pin-hidden-in-another-inputs-block-scalar", "ci.yml",
-     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
-     "        with:\n          ignored-input: |\n            cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
+     "        with:\n          ignored-input: |\n            cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n", CAUGHT),
     # A shell redirection or a comment is not a YAML anchor.
     ("shell-redirection-and-a-comment-are-not-anchors", "mrtr7b-full-burst.yml",
      "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n      - name: Run the full-burst ledger\n",
@@ -1661,11 +1661,11 @@ CASES += [
     # PyYAML keeps the last of two keys and flattens `<<`; the strict
     # loader refuses both.
     ("cosign-pin-given-twice", "ci.yml",
-     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
-     "        with:\n          cosign-release: v2.5.2\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
+     "        with:\n          cosign-release: v2.5.2\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n", CAUGHT),
     ("cosign-pin-through-a-merge-key", "ci.yml",
-     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
-     "        with:\n          <<: { cosign-release: v2.6.5 }\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
+     "        with:\n          <<: { cosign-release: v2.6.5 }\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n", CAUGHT),
     ("release-runs-the-floor-without-its-parser", "release.yml",
      "      - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)\n        run: python3 -c 'import sys, yaml; sys.exit(yaml.__version__ != \"6.0.2\")' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'\n",
      "", CAUGHT),
@@ -1675,24 +1675,24 @@ CASES += [
      "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: 'sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6' # v4.1.2\n", TOLERATED),
     # Under env: the input never reaches the action, which installs its default.
     ("cosign-pin-moved-under-env", "ci.yml",
-     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
-     "        env:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
+     "        env:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n", CAUGHT),
     ("cosign-pin-moved-up-a-major", "ci.yml",
-     "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
-     "          cosign-release: v3.1.3\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2\n      - name: Validate supply-chain smoke script\n",
+     "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
+     "          cosign-release: v3.1.3\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
      CAUGHT),
 ]
 
 # Release jobs restore no cache: one case per way one comes back.
 CASES += [
     ("release-verify-restores-the-rust-cache", "release.yml",
-     '      # No build cache: a restored cache is input nobody reviewed at the tag.\n', '      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n', CAUGHT),
+     '      # No build cache: a restored cache is input nobody reviewed at the tag.\n', '      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3\n', CAUGHT),
     ("release-verify-restores-a-cache-quoted", "release.yml",
      '      # No build cache: a restored cache is input nobody reviewed at the tag.\n', '      - "uses": \'actions/cache/restore@v4\'\n        with:\n          path: target\n          key: release\n', CAUGHT),
     ("called-recovery-restores-the-rust-cache", "task-sdk-recovery.yml",
-     '      # No build cache: the release calls this too, and a restored cache is\n      # input nobody reviewed at the tag.\n', '      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n', CAUGHT),
+     '      # No build cache: the release calls this too, and a restored cache is\n      # input nobody reviewed at the tag.\n', '      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3\n', CAUGHT),
     ("called-packaged-suite-restores-the-rust-cache", "packaged-suite.yml",
-     "      # No build cache: the release calls this, and a restored cache is input\n      # nobody reviewed at the tag.\n", "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n", CAUGHT),
+     "      # No build cache: the release calls this, and a restored cache is input\n      # nobody reviewed at the tag.\n", "      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3\n", CAUGHT),
     ("release-setup-node-caches-again", "release.yml",
      "          registry-url: 'https://registry.npmjs.org'\n          package-manager-cache: false\n", "          registry-url: 'https://registry.npmjs.org'\n", CAUGHT),
     # Equivalent spellings are not a cache: a quoted callee is still scanned,
@@ -1706,7 +1706,7 @@ CASES += [
      "          registry-url: 'https://registry.npmjs.org'\n          package-manager-cache: false\n", "          registry-url: 'https://registry.npmjs.org'\n          package-manager-cache: false\n          cache: npm\n", CAUGHT),
     ("called-full-burst-restores-the-rust-cache", "mrtr7b-full-burst.yml",
      "      - name: Run the full-burst ledger\n",
-     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n      - name: Run the full-burst ledger\n", CAUGHT),
+     "      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3\n      - name: Run the full-burst ledger\n", CAUGHT),
 ]
 
 # The full burst every per-PR job skips gates the release (MIK-7534).
@@ -1815,7 +1815,7 @@ CASES += [
      '          exit "$fail"\n      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n'
      "      # Restore only: saving from throwaway runs would evict the entries the\n"
      "      # merge-evidence jobs rely on from the shared 10 GB repository cache.\n"
-     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n"
+     "      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3\n"
      "        with:\n          save-if: false\n"
      "      # Each skip names the job that runs the test in full, and its ticket:\n"
      "      #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.\n"
@@ -1826,7 +1826,7 @@ CASES += [
      '          exit 0\n      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n'
      "      # Restore only: saving from throwaway runs would evict the entries the\n"
      "      # merge-evidence jobs rely on from the shared 10 GB repository cache.\n"
-     "      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2\n"
+     "      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3\n"
      "        with:\n          save-if: false\n"
      "      # Each skip names the job that runs the test in full, and its ticket:\n"
      "      #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.\n"

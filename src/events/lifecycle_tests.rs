@@ -94,6 +94,7 @@ fn caller(principal: &str) -> Caller {
         },
         visible_backends: std::collections::HashSet::new(),
         admin: false,
+        identity: None,
         read_key: None,
     }
 }
