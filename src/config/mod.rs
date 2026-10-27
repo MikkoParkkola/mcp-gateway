@@ -35,7 +35,7 @@ mod pattern_grammar;
 mod record_key;
 mod remote_provenance_posture;
 mod secret_file;
-mod secret_ref;
+pub(crate) mod secret_ref;
 mod server_config;
 mod strict_keys;
 mod validation;
@@ -66,10 +66,7 @@ use env_overlay::{SecretFileDigests, SecretRefsRead, digest};
 pub use input_schema::InputSchemaEnforcement;
 pub(crate) use record_key::resolve_record_key_text;
 use secret_ref::SecretRef;
-pub(crate) use secret_ref::{
-    has_literal_default, is_keychain_name, is_reference, is_template_syntax,
-    literal_outside_templates,
-};
+pub(crate) use secret_ref::{is_keychain_name, is_reference, is_template_syntax};
 
 // New items (F18): the one mode-checked read for files outside `config`.
 #[cfg(windows)]

@@ -13,9 +13,8 @@
 //! beside a template refuses: it may be a secret, and only the whole value
 //! can move to the store.
 
-use crate::config::{
-    Config, TransportConfig, has_literal_default, is_reference, literal_outside_templates,
-};
+use crate::config::secret_ref::{has_literal_default, literal_outside_templates};
+use crate::config::{Config, TransportConfig, is_reference};
 
 use super::DiscoveredServer;
 
