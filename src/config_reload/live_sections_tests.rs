@@ -63,6 +63,7 @@ fn r2_any_other_security_field_stays_restart_pending() {
             "provenance_stamping",
             Box::new(|c| c.security.provenance_stamping = !c.security.provenance_stamping),
         ),
+        #[cfg(feature = "firewall")]
         (
             "collusion.sources",
             Box::new(|c| {

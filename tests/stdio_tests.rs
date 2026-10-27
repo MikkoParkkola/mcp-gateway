@@ -13,6 +13,8 @@
 mod record_key;
 use record_key::RECORD_KEY as KEY;
 
+#[path = "common/flags_off.rs"]
+mod flags_off;
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
 
@@ -138,14 +140,9 @@ async fn test_stdio_initialize_produces_valid_response() {
         agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::new({
-            // Flags off, as this fixture set them on `AppState` before they
-            // moved into the published config (ADR-023).
-            let mut config = mcp_gateway::config::Config::default();
-            config.security.sanitize_input = false;
-            config.security.ssrf_protection = false;
-            config
-        })),
+        live_config: std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::new(
+            flags_off::flags_off(&Config::default()),
+        )),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),

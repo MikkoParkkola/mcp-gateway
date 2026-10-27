@@ -190,7 +190,7 @@ mod live_flags_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod live_pin_tests;
 /// ADR-023: the UI view reads the flags and environment name on each response.
-#[cfg(test)]
+#[cfg(all(test, feature = "webui"))]
 mod live_ui_view_tests;
 /// MIK-8154 PR 2 rows: sanitize parity and passthrough on every route.
 #[cfg(all(test, feature = "firewall"))]
