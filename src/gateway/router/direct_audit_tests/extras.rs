@@ -36,6 +36,9 @@ pub(super) enum Extra {
     /// Tool `t` is listed with an input schema that is not an object, so the
     /// catalogue withholds it.
     InvalidSchema,
+    /// Context integrity enforces and denies every finding, so an answer
+    /// carrying an injected instruction is withheld whole.
+    ContextIntegrityDenies,
     /// The meta layer's own request firewall, as the gateway arms it beside
     /// the router's: the dispatch chokepoint rescans with it.
     #[cfg(feature = "firewall")]
@@ -102,6 +105,9 @@ fn signed(meta: &mut MetaMcp, posture: crate::security::SecurityPosture) {
 /// `meta` with the meta-layer switches in `extras` turned on: attestation,
 /// then signing scoped by the posture [`Extra::Hardened`] selects.
 pub(super) fn arm_extras(mut meta: MetaMcp, extras: &[Extra]) -> MetaMcp {
+    if extras.contains(&Extra::ContextIntegrityDenies) {
+        meta = meta.with_context_integrity_kernel(denying_kernel());
+    }
     if extras.contains(&Extra::Attestation) {
         meta = attested(meta);
     }
@@ -176,4 +182,24 @@ pub(super) fn audit_log(
         .with_failure_policy(policy),
     );
     (audit, path, log)
+}
+
+/// A context-integrity kernel that enforces and denies every finding kind.
+fn denying_kernel() -> crate::context_integrity::ContextIntegrityKernel {
+    use crate::context_integrity::{
+        ContextIntegrityDecisionKind, ContextIntegrityKernel, ContextIntegrityPolicy,
+        ContextIntegrityPolicyMode,
+    };
+    let deny = ContextIntegrityDecisionKind::Deny;
+    ContextIntegrityKernel::new(ContextIntegrityPolicy {
+        mode: ContextIntegrityPolicyMode::Enforce,
+        untrusted_instruction_decision: deny,
+        guarded_material_decision: deny,
+        personal_data_decision: deny,
+        destructive_instruction_decision: deny,
+        tool_poisoning_decision: deny,
+        high_risk_action_decision: deny,
+        allow_benign_read_only: true,
+        non_bypassable: false,
+    })
 }
