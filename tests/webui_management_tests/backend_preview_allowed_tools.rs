@@ -264,6 +264,18 @@ async fn a_preview_offers_no_invalid_name_for_selection() {
     }
 }
 
+/// The first `allowed_tools` value anywhere in an audit record, wherever
+/// its envelope nests the fields.
+fn find(value: &Value) -> Option<&Value> {
+    match value {
+        Value::Object(map) => map
+            .get("allowed_tools")
+            .or_else(|| map.values().find_map(selection_in)),
+        Value::Array(items) => items.iter().find_map(selection_in),
+        _ => None,
+    }
+}
+
 /// Every change of a selection, on add and on PATCH (a list and a clear),
 /// is on that request's `admin_action` record with the list before and
 /// after; request bodies are otherwise never logged.
@@ -319,17 +331,7 @@ async fn a_selection_change_is_on_its_audit_record() {
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .collect();
-    // Wherever the record's envelope nests the fields.
-    fn find(value: &Value) -> Option<&Value> {
-        match value {
-            Value::Object(map) => map
-                .get("allowed_tools")
-                .or_else(|| map.values().find_map(find)),
-            Value::Array(items) => items.iter().find_map(find),
-            _ => None,
-        }
-    }
-    let changes: Vec<Value> = records.iter().filter_map(find).cloned().collect();
+    let changes: Vec<Value> = records.iter().filter_map(selection_in).cloned().collect();
     assert_eq!(
         changes,
         [
