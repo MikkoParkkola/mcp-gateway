@@ -211,7 +211,12 @@ const STORED_READS: &[(&str, &str, usize, &str)] = &[
 fn test_only(path: &std::path::Path) -> bool {
     path.components().any(|part| {
         let part = part.as_os_str().to_string_lossy();
-        part.contains("test") || part.contains("fixture")
+        let stem = part.strip_suffix(".rs").unwrap_or(&part);
+        stem == "tests"
+            || stem.ends_with("_tests")
+            || stem.starts_with("test_")
+            || stem.ends_with("_test")
+            || stem.contains("fixture")
     })
 }
 

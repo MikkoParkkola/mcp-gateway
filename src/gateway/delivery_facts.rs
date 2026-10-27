@@ -118,13 +118,7 @@ pub(crate) fn snapshot() -> Option<DeliveryFacts> {
 }
 
 fn with(update: impl FnOnce(&mut DeliveryFacts)) {
-    if FACTS
-        .try_with(|cell| update(&mut cell.borrow_mut()))
-        .is_err()
-    {
-        #[cfg(test)]
-        seams::out_of_cell();
-    }
+    let _ = FACTS.try_with(|cell| update(&mut cell.borrow_mut()));
 }
 
 /// The gateway did `effect` to this delivery's answer; the strongest one wins.
@@ -216,24 +210,6 @@ pub(crate) fn record_fields(
             "response_findings_total".into(),
             facts.findings.len().into(),
         );
-    }
-}
-
-#[cfg(test)]
-pub(crate) mod seams {
-    use std::cell::Cell;
-
-    thread_local! {
-        static OUT_OF_CELL: Cell<usize> = const { Cell::new(0) };
-    }
-
-    pub(super) fn out_of_cell() {
-        OUT_OF_CELL.with(|count| count.set(count.get() + 1));
-    }
-
-    /// Setter calls made on this thread with no cell open.
-    pub(crate) fn out_of_cell_calls() -> usize {
-        OUT_OF_CELL.with(Cell::get)
     }
 }
 

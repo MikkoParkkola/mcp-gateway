@@ -635,9 +635,12 @@ impl super::MetaMcp {
         // as no one step's facts describe what the composite delivers.
         crate::gateway::delivery_facts::unvouched();
         let trace_id = crate::gateway::trace::generate();
-        let sourced = self
-            .invoke_tool_with_source(args, session_id, caller, trace_id)
-            .await;
+        // Each step's facts stay in a cell of its own: a step refusal the
+        // composite carries on past never marks what the composite delivers.
+        let sourced = crate::gateway::delivery_facts::scope(
+            self.invoke_tool_with_source(args, session_id, caller, trace_id),
+        )
+        .await;
         match sourced {
             Ok(super::invoke::SourcedOutcome::Live((value, _, _))) => Ok(value),
             // A nested invocation's key never matches a deferred entry

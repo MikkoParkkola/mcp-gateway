@@ -70,7 +70,8 @@ fn assert_served(row: &str, (status, answer): &(axum::http::StatusCode, Value)) 
 }
 
 /// What the last delivery record in the fixture's log (`dirs.0`) states as
-/// its effect: a refused replay states `refused`, never `delivered`.
+/// its effect: a refused replay states `refused`, never `delivered`, and no
+/// findings (`Absent` when it names none).
 fn last_effect(dirs: &(tempfile::TempDir, tempfile::TempDir)) -> Value {
     std::fs::read_to_string(dirs.0.path().join("audit.jsonl"))
         .unwrap_or_default()
@@ -78,7 +79,12 @@ fn last_effect(dirs: &(tempfile::TempDir, tempfile::TempDir)) -> Value {
         .rev()
         .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
         .find(|entry| entry["event"] == "response_delivery_attempt")
-        .map_or(Value::Null, |entry| entry["response_effect"].clone())
+        .map_or(Value::Null, |entry| {
+            let findings = entry
+                .get("response_findings")
+                .map_or("Absent".into(), Value::to_string);
+            json!([entry["response_effect"], findings])
+        })
 }
 
 /// Past the cached exchange token's one-hour TTL; the stored result (one
@@ -120,7 +126,11 @@ async fn d_opt_an_unminted_direct_retry_is_not_served_the_stored_result() {
         "D-opt: the unproven retry was sent again: {again}"
     );
     assert_unproven("D-opt", &again);
-    assert_eq!(last_effect(&dirs), "refused", "D-opt: the refusal's record");
+    assert_eq!(
+        last_effect(&dirs),
+        json!(["refused", "Absent"]),
+        "D-opt: the refusal's record"
+    );
     assert_eq!(
         exchanges.load(Ordering::SeqCst),
         minted,
@@ -497,7 +507,11 @@ async fn pt_b_a_retry_under_another_forwarded_credential_is_refused() {
             "{row}: not the binding refusal: {other}"
         );
         assert_eq!(sends.load(Ordering::SeqCst), 1, "{row}: sent: {other}");
-        assert_eq!(last_effect(&dirs), "refused", "{row}: the refusal's record");
+        assert_eq!(
+            last_effect(&dirs),
+            json!(["refused", "Absent"]),
+            "{row}: the refusal's record"
+        );
     }
     let again = r6m_token_exchange::send_direct_as(
         &router,

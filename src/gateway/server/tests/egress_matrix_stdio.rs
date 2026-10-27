@@ -26,6 +26,10 @@ enum Setup {
     Warn,
     /// No firewall; response inspection in action mode is the only screen.
     InspectionOnly,
+    /// The firewall present with response scanning off.
+    ScanOff,
+    /// The firewall present and disabled.
+    FirewallOff,
 }
 
 /// The stdio gateway over one planted backend, `alpha`, and its firewall.
@@ -58,8 +62,8 @@ async fn stdio_on(backend: Arc<Planted>, setup: Setup) -> (Arc<MetaMcp>, Option<
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {
-                enabled: true,
-                scan_responses: true,
+                enabled: !matches!(setup, Setup::FirewallOff),
+                scan_responses: !matches!(setup, Setup::ScanOff),
                 scan_requests: false,
                 credential_redaction: true,
                 rules,
@@ -383,6 +387,18 @@ async fn a_clean_stdio_delivery_records_delivered() {
     assert!(!refused(&body), "premise: delivered: {body}");
     assert_eq!(row["response_effect"], "delivered", "{row}");
     assert_eq!(row["response_findings"], json!([]), "{row}");
+}
+
+/// A firewall with response scanning off reads nothing: the answer is
+/// delivered and its findings are null, never an empty (scanned clean) list.
+#[tokio::test]
+async fn a_scan_off_delivery_records_null_findings() {
+    for setup in [Setup::ScanOff, Setup::FirewallOff] {
+        let (body, row) = recorded_delivery(setup, Part::ResultText, "plain".into()).await;
+        assert!(!refused(&body), "premise: delivered: {body}");
+        assert_eq!(row["response_effect"], "delivered", "{row}");
+        assert_eq!(row["response_findings"], Value::Null, "{row}");
+    }
 }
 
 /// A credential redacted under a Warn rule on stdio: rewritten, with its

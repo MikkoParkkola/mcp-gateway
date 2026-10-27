@@ -19,6 +19,12 @@ impl Firewall {
         self.config.credential_redaction
     }
 
+    /// Whether [`Self::check_response_artifact`] scans at all: off, it allows
+    /// every artifact unread, which is no scan for a delivery to state.
+    pub(crate) const fn scans_responses(&self) -> bool {
+        self.config.enabled && self.config.scan_responses
+    }
+
     /// Inspect one artifact and evaluate every authenticated routing target.
     /// Immutable questions may be refused, but are never silently rewritten.
     pub(crate) fn check_response_artifact(

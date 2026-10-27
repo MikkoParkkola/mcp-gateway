@@ -120,6 +120,64 @@ async fn a_replay_after_a_slot_refusal_serves_the_refusal() {
     );
 }
 
+/// The playbook `yaml` registered on `fx`, run on `/mcp`: its answer.
+async fn run_playbook(fx: &Fixture, yaml: &str, name: &str) -> (StatusCode, Value) {
+    let mut engine = crate::playbook::PlaybookEngine::new();
+    engine.register(crate::yaml::from_str(yaml).expect("the playbook parses"));
+    fx.state.meta_mcp.set_playbook_engine(engine);
+    let call = json!({"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {
+        "name": "gateway_run_playbook", "arguments": {"name": name, "arguments": {}}}});
+    post_to(fx, "/mcp", &call.to_string(), &Caller::Anonymous).await
+}
+
+/// The last delivery record states neither an effect nor findings.
+fn assert_last_states_nothing(fx: &Fixture) {
+    let rows = deliveries(fx);
+    let row = rows.last().expect("the composite's delivery record");
+    for field in ["response_effect", "response_findings"] {
+        assert!(row.get(field).is_none(), "{field}: {row}");
+    }
+}
+
+/// A playbook carrying on past a step the gateway refused still delivers
+/// its report: the step's refusal stays in the step's own cell and never
+/// marks the composite `refused`.
+#[tokio::test]
+async fn a_playbook_past_a_refused_step_states_no_effect() {
+    let fx = fixture(Setup {
+        meta_mode: MetaMode::ContractRefuses,
+        ..Setup::default()
+    })
+    .await;
+    let yaml = "name: onward\ndescription: one refused step\non_error: continue\n\
+         steps:\n  - name: read\n    server: alpha\n    tool: t\n    arguments: {}\n";
+    let (status, answer) = run_playbook(&fx, yaml, "onward").await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert!(
+        answer.to_string().contains("steps_failed"),
+        "premise: the playbook delivered its report: {answer}"
+    );
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "premise: the step ran");
+    assert_last_states_nothing(&fx);
+}
+
+/// A playbook whose only step its condition skips runs no step, and still
+/// states nothing: a composite is unvouched at its arm.
+#[tokio::test]
+async fn a_playbook_that_runs_no_step_states_no_effect() {
+    let fx = fixture(Setup::default()).await;
+    let yaml = "name: idle\ndescription: a skipped step\n\
+         steps:\n  - name: read\n    server: alpha\n    tool: t\n    condition: $inputs.go\n    arguments: {}\n";
+    let (status, answer) = run_playbook(&fx, yaml, "idle").await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        0,
+        "premise: no step ran: {answer}"
+    );
+    assert_last_states_nothing(&fx);
+}
+
 /// A chain delivers a composite: no one step's facts describe it.
 #[tokio::test]
 async fn a_composite_states_no_effect() {

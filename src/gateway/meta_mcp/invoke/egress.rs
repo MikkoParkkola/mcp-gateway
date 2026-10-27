@@ -150,7 +150,7 @@ impl MetaMcp {
                 ResponseArtifactKind::FinalResponse,
                 ResponseMutationPolicy::Redact,
             );
-            note_verdict(&verdict, Part::Error);
+            note_verdict(firewall, &verdict, Part::Error);
             // Rewritten only when the redactor changed a field: a finding it
             // let through untouched leaves the backend's error as sent.
             if firewall_outcome(verdict) == EgressOutcome::Refused {
@@ -209,7 +209,7 @@ pub(crate) fn firewall_result(result: &mut Value, at: &Egress<'_>) -> EgressOutc
             ResponseArtifactKind::FinalResponse,
             ResponseMutationPolicy::for_result(result),
         );
-        note_verdict(&verdict, Part::Result);
+        note_verdict(firewall, &verdict, Part::Result);
         let outcome = firewall_outcome(verdict);
         if outcome == EgressOutcome::Rewritten && before.is_some_and(|before| before != *result) {
             crate::gateway::delivery_facts::raise(ResponseEffect::Rewritten);
@@ -222,9 +222,11 @@ pub(crate) fn firewall_result(result: &mut Value, at: &Egress<'_>) -> EgressOutc
 }
 
 /// A firewall verdict's scan and findings, for the delivery's record: each
-/// finding by its scan type and severity in `part`, never its text.
+/// finding by its scan type and severity in `part`, never its text. A
+/// firewall with response scanning off read nothing, so it notes nothing.
 #[cfg(feature = "firewall")]
 fn note_verdict(
+    firewall: &crate::security::firewall::Firewall,
     verdict: &Result<
         crate::security::firewall::FirewallVerdict,
         crate::security::response_policy::InvalidResponseTargets,
@@ -234,6 +236,9 @@ fn note_verdict(
     let Ok(verdict) = verdict else {
         return;
     };
+    if !firewall.scans_responses() {
+        return;
+    }
     crate::gateway::delivery_facts::scanned();
     for finding in &verdict.findings {
         let kind = serde_json::to_value(finding.scan_type)
