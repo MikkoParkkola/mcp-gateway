@@ -120,6 +120,11 @@ fn write_atomic_observed(
     Ok(())
 }
 
+// Windows `Inherit` keeps the target's access list.
+#[cfg(windows)]
+#[path = "config_persistence_atomic_windows.rs"]
+mod windows;
+
 /// How a scratch file is created.
 #[derive(Clone, Copy)]
 enum ScratchCreate {
@@ -128,6 +133,10 @@ enum ScratchCreate {
     /// Default creation: the umask mode on unix, the directory's inherited
     /// ACL on Windows.
     Default,
+    /// Windows `Inherit` over an existing target: the target's access list,
+    /// checked before any byte is written.
+    #[cfg(windows)]
+    KeepTarget,
 }
 
 /// How the scratch for a (`mode`, `target`) write is created: private
@@ -135,10 +144,12 @@ enum ScratchCreate {
 fn scratch_create_for(mode: FileMode, target: Option<&std::fs::Metadata>) -> ScratchCreate {
     match mode {
         FileMode::Private => ScratchCreate::Private,
-        // Unix only: the mode step narrows the scratch after the sync, so the
-        // bytes sit in a private file until then. A Windows `Inherit` takes
-        // the directory's ACL from creation instead, with or without a target.
+        // Unix: the mode step narrows the scratch after the sync, so the bytes
+        // sit in a private file until then. Windows: the scratch is created
+        // with the target's access list and checked before the write.
         FileMode::Inherit if target.is_some() && cfg!(unix) => ScratchCreate::Private,
+        #[cfg(windows)]
+        FileMode::Inherit if target.is_some() => ScratchCreate::KeepTarget,
         FileMode::Inherit => ScratchCreate::Default,
     }
 }
@@ -162,6 +173,8 @@ fn create_scratch(
             .write(true)
             .create_new(true)
             .open(candidate),
+        #[cfg(windows)]
+        ScratchCreate::KeepTarget => create_kept(path, candidate),
     })
     .map_err(|e| match e {
         super::ScratchClaimError::AllTaken => std::io::Error::other(format!(
@@ -171,6 +184,100 @@ fn create_scratch(
         )),
         super::ScratchClaimError::Io(e) => e,
     })
+}
+
+/// The Windows `KeepTarget` scratch: the target's list when it is protected,
+/// else a default create checked against the target. Refused before any byte
+/// is written, with no scratch left.
+#[cfg(windows)]
+fn create_kept(target: &Path, candidate: &Path) -> std::io::Result<std::fs::File> {
+    finish_kept(windows::prepare(target, candidate)?, target, candidate)
+}
+
+/// Turn the Windows decision into the scratch file: the kept one, or a
+/// default create, checked when the volume keeps lists.
+#[cfg(windows)]
+fn finish_kept(
+    decision: windows::KeptScratch,
+    target: &Path,
+    candidate: &Path,
+) -> std::io::Result<std::fs::File> {
+    use windows::KeptScratch;
+    match decision {
+        KeptScratch::Kept(file) => Ok(file),
+        KeptScratch::NoAcls => std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(candidate),
+        KeptScratch::Default(source) => {
+            // The owner alone: the folder supplies the inherited list, and
+            // the target's owner is kept (or the create is refused).
+            let file = windows::create_like(
+                candidate,
+                &source,
+                crate::win_acl::CopyWith::OwnerOnly,
+                target,
+            )?;
+            if let Err(e) = windows::verify(&file, &source, target) {
+                drop(file);
+                let _ = std::fs::remove_file(candidate);
+                return Err(e);
+            }
+            Ok(file)
+        }
+    }
+}
+
+/// Copy `src` to `dst` (a backup), keeping `src`'s access: on unix
+/// `std::fs::copy`, which keeps the mode; on Windows, where a copy takes the
+/// folder's list instead, the bytes are written to a scratch created with
+/// `src`'s list (checked as an `Inherit` save is) and renamed over `dst`.
+///
+/// # Errors
+///
+/// Returns the copy's I/O error, or on Windows a refusal when `src`'s list
+/// cannot be copied exactly; `dst` is then left as it was.
+pub fn copy_keeping_access(src: &Path, dst: &Path) -> std::io::Result<()> {
+    #[cfg(not(windows))]
+    {
+        std::fs::copy(src, dst).map(|_| ())
+    }
+    #[cfg(windows)]
+    {
+        use std::io::Read as _;
+        // One handle, following links, for both the bytes and the access
+        // list: nothing swapped in by name between the two reads can pair
+        // these bytes with another file's list. Plain read access carries
+        // READ_CONTROL.
+        let mut source = std::fs::File::open(src)?;
+        let mut bytes = Vec::new();
+        source.read_to_end(&mut bytes)?;
+        let (mut file, scratch) =
+            super::claim_scratch(dst, super::next_scratch_seed(), |candidate| {
+                finish_kept(
+                    windows::prepare_from(&source, src, candidate)?,
+                    src,
+                    candidate,
+                )
+            })
+            .map_err(|e| match e {
+                super::ScratchClaimError::AllTaken => std::io::Error::other(format!(
+                    "{} scratch names next to {} were all in use",
+                    super::SCRATCH_ATTEMPTS,
+                    dst.display()
+                )),
+                super::ScratchClaimError::Io(e) => e,
+            })?;
+        if let Err(e) = file.write_all(&bytes).and_then(|()| file.sync_all()) {
+            drop(file);
+            let _ = std::fs::remove_file(&scratch);
+            return Err(e);
+        }
+        drop(file);
+        super::rename_with_retry(&scratch, dst).inspect_err(|_| {
+            let _ = std::fs::remove_file(&scratch);
+        })
+    }
 }
 
 /// Whether the scratch ended up in the target's group.
@@ -293,3 +400,13 @@ mod atomic_tests;
 #[cfg(all(test, any(target_os = "linux", target_os = "android")))]
 #[path = "config_persistence_acl_tests.rs"]
 mod acl_tests;
+
+// Windows: an `Inherit` save keeps the target's access list on Windows.
+#[cfg(all(test, windows))]
+#[path = "config_persistence_winacl_tests.rs"]
+mod winacl_tests;
+
+// The same, through each runtime state caller.
+#[cfg(all(test, windows))]
+#[path = "config_persistence_winacl_callers_tests.rs"]
+mod winacl_callers_tests;

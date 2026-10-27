@@ -20,6 +20,27 @@ impl Backend {
             .contains(tool)
     }
 
+    /// The shared catalogue with the names whose `readOnlyHint` the server
+    /// declared, read under the cache's guard, so both come from one fill:
+    /// every writer of the set runs under that guard's write side.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot start or the tools request fails.
+    #[cfg(feature = "webui")]
+    pub(crate) async fn shared_tools_with_declared_hints(
+        &self,
+    ) -> crate::Result<(Arc<Vec<crate::protocol::Tool>>, HashSet<String>)> {
+        let fetched = self.get_tools_shared().await?;
+        let slot = self.tools_slot(None);
+        Ok(slot.tools_cache.with_cached(|cached| match cached {
+            Some(tools) => (Arc::clone(tools), slot.hint_declared.read().clone()),
+            // ponytail: cleared since the fetch, and its labels with it; this
+            // answer reads every hint as inferred until the next fill.
+            None => (fetched, HashSet::new()),
+        }))
+    }
+
     /// An accepted fill's own derived state: its resend and read-only sets,
     /// and its descriptor verdicts. Written only from the store callback, so
     /// a fill voided by a mid-fill invalidation writes none of it (F13,
@@ -33,6 +54,7 @@ impl Backend {
     ) {
         *entry.resend_permitted.write() = prepared.resend_permitted;
         *entry.read_only_declared.write() = prepared.read_only_declared;
+        *entry.hint_declared.write() = prepared.hint_declared;
         let listing = if truncated {
             crate::backend::Listing::Truncated
         } else {
