@@ -123,3 +123,37 @@ async fn a_non_interactive_start_refused_in_discovery_records_no_refusal() {
         Some("delivered".into())
     );
 }
+
+/// A non-interactive token step (the health probe, an upstream task query,
+/// a close) reads its token in the caller's task, and every such caller turns
+/// a refused refresh into an answer of its own: it records no refusal.
+#[tokio::test]
+async fn a_non_interactive_refused_refresh_records_no_refusal() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = client_with_refused_refresh(dir.path()).await;
+    let transport = crate::transport::HttpTransport::new_with_oauth(
+        "http://127.0.0.1:1/mcp",
+        std::collections::HashMap::new(),
+        Duration::from_secs(5),
+        true,
+        Some(client),
+        None,
+    )
+    .unwrap();
+    let facts = delivery_facts::scope(crate::oauth::login_gate::non_interactive(async {
+        let outcome = tokio::time::timeout(Duration::from_secs(10), transport.get_oauth_token())
+            .await
+            .expect("answered promptly");
+        let error = outcome.expect_err("a refused refresh must surface");
+        assert!(is_ssrf_refusal(&error), "{error}");
+        delivery_facts::snapshot()
+    }))
+    .await;
+    let mut fields = serde_json::Map::new();
+    delivery_facts::record_fields(facts.as_ref(), false, false, &mut fields);
+    assert_eq!(
+        fields.get("response_effect"),
+        Some(&"delivered".into()),
+        "{fields:?}"
+    );
+}
