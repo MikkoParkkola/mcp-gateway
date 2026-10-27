@@ -34,6 +34,14 @@ const DRAIN: std::time::Duration = std::time::Duration::from_secs(1);
 /// finishes (a grandchild holding the pipe) can still be read after abort.
 pub(super) type StderrTail = std::sync::Arc<parking_lot::Mutex<VecDeque<Vec<u8>>>>;
 
+#[cfg(test)]
+thread_local! {
+    /// Test-only: how long a stderr reader spawned on this thread is held on
+    /// an OS thread before its first read, as a loaded host can hold it.
+    pub(super) static STDERR_READER_HOLD: std::cell::Cell<Option<std::time::Duration>> =
+        const { std::cell::Cell::new(None) };
+}
+
 /// Read stderr to its end into a bounded tail.
 ///
 /// `read_until`, not `lines()`: a child killed mid-write leaves a last line
@@ -44,7 +52,13 @@ pub(super) fn spawn_stderr_tail(
 ) -> (tokio::task::JoinHandle<()>, StderrTail) {
     let tail = StderrTail::default();
     let shared = std::sync::Arc::clone(&tail);
+    #[cfg(test)]
+    let hold = STDERR_READER_HOLD.with(std::cell::Cell::get);
     let task = tokio::spawn(async move {
+        #[cfg(test)]
+        if let Some(hold) = hold {
+            let _ = tokio::task::spawn_blocking(move || std::thread::sleep(hold)).await;
+        }
         let mut reader = BufReader::new(stderr);
         let mut buf = Vec::with_capacity(RAW_LINE_BYTES);
         let mut in_block = false;

@@ -202,3 +202,52 @@ async fn a_retried_start_sends_the_new_child_exactly_one_initialize() {
         .await
         .expect("close");
 }
+
+/// How long the held-back rows keep the stderr reader from its first read:
+/// past both drain windows, as a loaded host can.
+const READER_HOLD: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// A failed start whose stderr reader is held back on `script`'s child.
+async fn start_with_held_reader(script: &str) -> Arc<StdioTransport> {
+    let dir = tempfile::tempdir().expect("scratch");
+    std::fs::write(dir.path().join("child.sh"), script).expect("write the child");
+    let transport = StdioTransport::new(
+        "sh child.sh",
+        HashMap::new(),
+        Some(dir.path().to_string_lossy().into_owned()),
+        std::time::Duration::from_secs(5),
+        None,
+    );
+    super::super::early_exit::STDERR_READER_HOLD.with(|hold| hold.set(Some(READER_HOLD)));
+    let outcome = transport.start().await;
+    super::super::early_exit::STDERR_READER_HOLD.with(|hold| hold.set(None));
+    outcome.expect_err("the child cannot start");
+    transport
+}
+
+/// The early path: a reader that runs late still reads to the child's EOF.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_late_stderr_reader_still_leaves_the_tail_of_an_early_exit() {
+    let transport = start_with_held_reader(DYING_CHILD).await;
+    assert!(
+        transport.stderr_tail().contains("Cannot find module"),
+        "the child's stderr was closed with its words in the pipe, so a reader held back by load \
+         must still read them: {:?}",
+        transport.stderr_tail()
+    );
+}
+
+/// The late path: the child the failure killed said why on stderr first.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_late_stderr_reader_still_leaves_the_tail_of_a_late_failure() {
+    let script = format!("echo 'EACCES: permission denied' >&2\n{REFUSING_CHILD}");
+    let transport = start_with_held_reader(&script).await;
+    assert!(
+        transport.stderr_tail().contains("EACCES"),
+        "the killed child's stderr ends at its death, so a reader held back by load must still \
+         read it: {:?}",
+        transport.stderr_tail()
+    );
+}
