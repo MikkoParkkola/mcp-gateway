@@ -1359,7 +1359,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 
 | Item | Class | Reason | Migration | Defined at |
 |---|---|---|---|---|
-| `MCP_GATEWAY_<SECTION>__<KEY>` | KEEP | env form of any KEEP config key (container deployments); follows the key's class | - | src/config/mod.rs:193 |
+| `MCP_GATEWAY_<SECTION>__<KEY>` | KEEP | env form of any KEEP config key (container deployments); follows the key's class | - | src/config/env_provider.rs:63 |
 | `MCP_GATEWAY_AUTH__ENABLED` | KEEP | documented overlay spelling of `auth.enabled` (Helm chart) | - | deploy/helm/mcp-gateway/templates/_helpers.tpl:170 |
 | `MCP_GATEWAY_CAPABILITIES` | AUTO | env form of `-C/--capabilities`; derive from the config's `capabilities.directories` | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`flag_and_env_override_the_config`)); see upgrading.d/8044-4.md | src/cli/mod.rs:637 |
 | `MCP_GATEWAY_CA_CERT` | KEEP | credentials for `dashboard-link` and `events dead-letters` against a remote gateway | - | src/cli/dashboard_link.rs:31 |
