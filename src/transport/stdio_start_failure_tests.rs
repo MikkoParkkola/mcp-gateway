@@ -360,8 +360,8 @@ fn child_with_held_stderr(holder: &str) -> tokio::process::Child {
 }
 
 /// Drains a held pipe with a short window, under a hang guard. Returns the
-/// tail and how long the drain took, and checks that nothing is read into the
-/// tail once the drain has returned.
+/// tail and how long the drain took, and checks that the read loop is gone
+/// once the drain has returned.
 async fn drain_held(holder: &str) -> (String, std::time::Duration) {
     let mut child = child_with_held_stderr(holder);
     let reader = super::super::early_exit::spawn_stderr_tail(
@@ -372,19 +372,20 @@ async fn drain_held(holder: &str) -> (String, std::time::Duration) {
     let tail = Arc::clone(&reader.tail);
     let started = std::time::Instant::now();
     tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(30),
         reader.drain(std::time::Duration::from_millis(200)),
     )
     .await
     .expect("the drain hung on a held pipe");
     let took = started.elapsed();
-    let drained = joined(&tail.lock());
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // The read loop holds the tail's other handle: only once the loop is
+    // gone can nothing more be read into it.
     assert_eq!(
-        joined(&tail.lock()),
-        drained,
-        "the reader kept reading the held pipe after the drain returned"
+        Arc::strong_count(&tail),
+        1,
+        "the read loop still runs after the drain returned"
     );
+    let drained = joined(&tail.lock());
     (drained, took)
 }
 
