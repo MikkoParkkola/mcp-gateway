@@ -282,11 +282,35 @@ test('S15 sign-out drops the key, ends the cookie session and shows sign-in at t
   await expect(page).toHaveURL('/ui/servers/status');
   expect(logouts).toEqual(['POST']);
   await expect(page.locator('.top .who')).toHaveText('');
-  // The key is gone: the next status read carries no bearer.
+  await expect(page.locator('#signin-key')).toBeFocused();
+  // The key is gone without a reload: the next read from this page carries no bearer.
   const before = seen.length;
-  await page.reload();
-  await expect(page.locator('#signin')).toBeVisible();
+  await page.evaluate(async () => (await import(document.querySelector('script[type="module"][src^="/ui/assets/"]').src)).api('/ui/api/status').catch(() => null));
+  expect(seen.length).toBeGreaterThan(before);
   expect(seen.slice(before)).not.toContain(`Bearer ${KEY}`);
+});
+
+test('S18 a sign-out the gateway does not confirm says the session may still be open', async ({ page }) => {
+  await gate(page);
+  await page.route('**/dashboard/logout', (route) => route.fulfill({ status: 500, json: {} }));
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#signin')).toBeHidden();
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.locator('#signin')).toBeVisible();
+  await expect(page.locator('.signin-error')).toHaveText('Signed out here, but the gateway did not confirm the browser session ended. Close the browser to end it.');
+});
+
+test('S18 an unreachable gateway at sign-out says the same', async ({ page }) => {
+  await gate(page);
+  await page.route('**/dashboard/logout', (route) => route.abort('failed'));
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#signin')).toBeHidden();
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.locator('.signin-error')).toHaveText('Signed out here, but the gateway did not confirm the browser session ended. Close the browser to end it.');
 });
 
 test('S16 sign-out is offered only to a signed-in session', async ({ page }) => {
@@ -319,8 +343,26 @@ test.describe('sign-out on a phone', () => {
     await expect(inMenu).toBeVisible();
     await inMenu.click();
     await expect(page.locator('#signin')).toBeVisible();
+    await expect(page.locator('#signin-key')).toBeFocused();
   });
 });
+
+for (const [width, inTopBar] of [[640, false], [641, true]]) {
+  test.describe(`sign-out at ${width} px`, () => {
+    test.use({ viewport: { width, height: 900 } });
+    test(`S17 at ${width} px sign-out is ${inTopBar ? 'in the top bar' : 'in the menu'}`, async ({ page }) => {
+      await signedIn(page);
+      if (inTopBar) {
+        await expect(page.locator('.top .signout')).toBeVisible();
+        await expect(page.locator('#pages .signout')).toBeHidden();
+      } else {
+        await expect(page.locator('.top .signout')).toBeHidden();
+        await page.locator('button.menu').click();
+        await expect(page.locator('#pages .signout')).toBeVisible();
+      }
+    });
+  });
+}
 
 test.describe('sign-out on a desktop', () => {
   test.use({ viewport: { width: 1440, height: 900 } });
