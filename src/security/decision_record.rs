@@ -85,13 +85,18 @@ pub(crate) struct Decision {
     pub rule_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grant_id: Option<String>,
-    /// `None`: the request check did not run. `Some(empty)`: it ran clean.
+    /// What the request check raised about the request itself. `None`: it did
+    /// not run. `Some(empty)`: it ran clean. What reached the caller is the
+    /// delivery record's (`response_findings`), never this object's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub findings: Option<Vec<DecisionFinding>>,
+    pub request_findings: Option<Vec<DecisionFinding>>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub findings_truncated: bool,
+    pub request_findings_truncated: bool,
+    /// What the tool declares the call could change, as the deciding check
+    /// read it. What the gateway did to the answer is the delivery record's
+    /// (`response_effect`), never this object's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effect: Option<Effect>,
+    pub declared_effect: Option<Effect>,
     pub decided: Decided,
 }
 
@@ -215,9 +220,9 @@ impl Noted {
             kind,
             rule_id,
             grant_id: None,
-            findings: None,
-            findings_truncated: false,
-            effect: None,
+            request_findings: None,
+            request_findings_truncated: false,
+            declared_effect: None,
             decided,
         }
     }

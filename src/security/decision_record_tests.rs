@@ -13,9 +13,9 @@ fn decision(kind: DecisionKind, rule_id: Option<&str>) -> Decision {
         kind,
         rule_id: rule_id.map(str::to_owned),
         grant_id: None,
-        findings: Some(Vec::new()),
-        findings_truncated: false,
-        effect: Some(Effect::Undeclared),
+        request_findings: Some(Vec::new()),
+        request_findings_truncated: false,
+        declared_effect: Some(Effect::Undeclared),
         decided: Decided::Fresh,
     }
 }
@@ -24,12 +24,19 @@ fn decision(kind: DecisionKind, rule_id: Option<&str>) -> Decision {
 fn the_wire_names_are_the_agreed_ones() {
     let mut d = decision(DecisionKind::NotRedecided, None);
     d.decided = Decided::CacheHitNotRedecided;
-    d.effect = Some(Effect::MayWrite);
+    d.declared_effect = Some(Effect::MayWrite);
     let v = serde_json::to_value(&d).unwrap();
     assert_eq!(v["v"], 1);
     assert_eq!(v["kind"], "not_redecided");
     assert_eq!(v["decided"], "cache_hit_not_redecided");
-    assert_eq!(v["effect"], "may_write");
+    assert_eq!(v["declared_effect"], "may_write");
+    // One fact, one owner: what reached the caller is the delivery record's.
+    for delivery_field in ["effect", "findings", "response_effect", "response_findings"] {
+        assert!(
+            v.get(delivery_field).is_none(),
+            "{delivery_field} is not this object's"
+        );
+    }
     assert!(v.get("rule_id").is_none(), "absent, not null");
     assert!(v.get("audit_required").is_none() && v.get("rollback_applies").is_none());
 }
