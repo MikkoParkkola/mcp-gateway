@@ -40,6 +40,8 @@ for (const [id, label] of PAGES) {
       actions: tab('actions'),
       settings: id === 'tools' ? null : tab('settings'),
     },
-    entries: [{ label: `${label} limits`, path: `/ui/${id}/${id === 'tools' ? 'actions' : 'settings'}#limits` }],
+    entries: [id === 'tools'
+      ? { label: `Try a ${label.toLowerCase()} call`, path: `/ui/${id}/actions#try`, kind: 'action' }
+      : { label: `${label} limits`, path: `/ui/${id}/settings#limits`, kind: 'setting' }],
   });
 }
