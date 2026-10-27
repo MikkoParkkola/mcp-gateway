@@ -1154,7 +1154,8 @@ function onRegSearch(q) {
 }
 
 function selectRegServer(s) {
-  regSelected = s;
+  // A copy, as before: editing the form never changes the listed entry.
+  regSelected = JSON.parse(JSON.stringify(s));
   document.getElementById('reg-search-input').value = regSelected.name;
   document.getElementById('reg-dropdown').style.display = 'none';
   document.getElementById('reg-selected-info').style.display = '';
