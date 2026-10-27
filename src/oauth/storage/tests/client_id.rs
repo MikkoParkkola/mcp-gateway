@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Client-id storage: save, load, delete, first-writer-wins and self-heal.
 
+#[cfg(windows)]
+use super::TokenInfo;
 use super::{PathBuf, TokenStorage, fs};
 
 #[test]
