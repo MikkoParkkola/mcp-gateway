@@ -57,6 +57,8 @@ pub(crate) struct DispatchNotes {
     data_classes: BTreeSet<String>,
     /// Served from a cache: no gate ran, so the delivered value is attributed.
     cached: bool,
+    /// What the web UI's counters need from the gates.
+    counting: counting::CountNotes,
     /// MIN.1: the response held text over the attribution parse bound, so its
     /// tenants were not read.
     uninspected: bool,
@@ -88,6 +90,9 @@ pub(crate) fn note_process(process: ProcessNote) {
         }
     });
 }
+
+#[path = "audit_counting.rs"]
+pub(crate) mod counting;
 
 #[cfg(test)]
 #[path = "audit_settlement_tests.rs"]
@@ -479,6 +484,7 @@ impl MetaMcp {
     ) -> Result<Value> {
         // D4: counted before the log check, so auth off still counts.
         let withheld = super::gate::count_meta_denial(args, &result);
+        self.count_invocation(args, caller, &result, &notes, withheld);
         let Some(log) = self.transparency_logger.as_ref() else {
             return result;
         };

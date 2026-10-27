@@ -181,6 +181,8 @@ pub struct ReloadContext {
     pub(super) capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
     /// Told which backends each applied reload registered (`MIK-8054`).
     pub(super) on_registered: Option<super::reload_warm_hook::OnRegistered>,
+    /// Where an applied reload marks the web UI's charts.
+    pub(super) markers: Option<Arc<crate::counters::CounterStore>>,
     /// Set when lock recovery put an earlier gateway.yaml back on disk: the
     /// running config is then on bytes that are gone, so the next holder of
     /// the reload lock reloads before its own work. Cleared only by an
@@ -276,8 +278,19 @@ impl ReloadContext {
             stop: tokio_util::sync::CancellationToken::new(),
             capabilities: None,
             on_registered: None,
+            markers: None,
             surfaced_hook: parking_lot::Mutex::new(None),
         })
+    }
+
+    /// Mark every applied reload on `markers`.
+    #[must_use]
+    pub(crate) fn with_markers(
+        mut self,
+        markers: Option<Arc<crate::counters::CounterStore>>,
+    ) -> Self {
+        self.markers = markers;
+        self
     }
 
     /// Install the hook that applies `surfaced_tools` on every applied
@@ -419,7 +432,14 @@ impl ReloadContext {
             guard = lock => guard,
         };
         let mut outcome = match self.reload_outcome_locked().await {
-            Ok(outcome) => outcome,
+            Ok(outcome) => {
+                // An applied reload marks the charts; a refused one
+                // returns below and marks nothing.
+                if let Some(markers) = &self.markers {
+                    markers.mark_now(crate::counters::MarkerKind::ConfigReload, None);
+                }
+                outcome
+            }
             // Both steps render on every path: a config refusal read alone
             // hides whether the revocation landed. Appended, so every consumer
             // keying on the refusal's prefix still matches.
