@@ -34,6 +34,7 @@ src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_credential	get_fo
 src/gateway/meta_mcp/invoke/step_fingerprint.rs	step_fingerprint	scoped_get	scoped
 src/gateway/meta_mcp/listing_view.rs	listing_names	get_for	Visibility
 src/gateway/meta_mcp/listing_view.rs	promoted_tools_for_caller	get_for	Visibility
+src/gateway/meta_mcp/listing_warm.rs	warm_listing_views	get_for	Visibility
 src/gateway/meta_mcp/passthrough.rs	passthrough_instance	scoped_get	scoped
 src/gateway/meta_mcp/protocol.rs	handle_logging_set_level	all_for	Background
 src/gateway/meta_mcp/protocol.rs	handle_prompts_get	scoped_get	scoped
@@ -54,7 +55,7 @@ src/gateway/meta_mcp/surfaced.rs	surfaced_schema_withheld	get_for	Visibility
 src/gateway/meta_mcp/surfaced.rs	surfaced_kind	get_for	Visibility
 src/gateway/meta_mcp/task_confirmation.rs	classify_surfaced	get_for	Visibility
 src/gateway/meta_mcp/task_replay.rs	cold_lease_remaining	scoped_get	scoped
-src/gateway/meta_mcp/task_replay.rs	settle_caller_view	scoped_get	scoped
+src/gateway/meta_mcp/task_replay.rs	claim_caller_view	scoped_get	scoped
 src/gateway/meta_mcp/task_replay.rs	settle_shared_view	scoped_get	scoped
 src/gateway/meta_mcp/task_replay.rs	target_refused_without_catalogue	scoped_get	scoped
 src/gateway/meta_mcp/task_replay/judging.rs	unknown_server_refusal	scoped_get	scoped
