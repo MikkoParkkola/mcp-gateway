@@ -380,6 +380,13 @@ async fn a_selection_change_is_on_its_audit_record() {
         json!({"allowed_tools": ["read_a", "write_b"]}),
     )
     .await;
+    // The same list again changes nothing, so it writes no selection detail.
+    send(
+        Method::PATCH,
+        "/ui/api/backends/sel",
+        json!({"allowed_tools": ["read_a", "write_b"]}),
+    )
+    .await;
     send(
         Method::PATCH,
         "/ui/api/backends/sel",
