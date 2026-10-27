@@ -208,6 +208,28 @@ impl Backend {
         }
     }
 
+    /// Extend `principal_id`'s lease of claim `generation` to `bound` from
+    /// now, as its fill starts: the claim's lease covered the credential
+    /// lookup, this covers the fill, so a slow lookup cannot leave the fill
+    /// publishing over a lease already gone. Only the claim's own lease, and
+    /// never shortened.
+    pub(crate) fn extend_cold_lease(
+        &self,
+        principal_id: &str,
+        generation: u64,
+        bound: std::time::Duration,
+    ) {
+        if let Some(mut slot) = self.caller_slots.get_mut(principal_id)
+            && let CallerSlot::ColdTried {
+                until,
+                generation: own,
+            } = &mut *slot
+            && *own == generation
+        {
+            *until = (*until).max(tokio::time::Instant::now() + bound);
+        }
+    }
+
     /// Wait while `principal_id`'s cold lease runs: until its winner (or any
     /// fill of the caller's own slot) stores, or the lease ends.
     pub(crate) async fn wait_cold_lease(&self, principal_id: &str) {

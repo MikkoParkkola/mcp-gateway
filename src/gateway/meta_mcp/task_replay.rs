@@ -265,12 +265,11 @@ impl MetaMcp {
         if self.refused_without_catalogue(&backend, (server, tool), scope, session_id) {
             return None;
         }
-        // The lease outlives the fill it covers: a fill may run for the
-        // backend's whole fill bound, and its publish lands only while its
-        // own lease stands.
-        let lease = COLD_RETRY_BACKOFF.max(backend.tools_fill_bound());
+        // The claim's lease covers the credential lookup; the fill extends it
+        // to the backend's fill bound as it starts (`ColdFill::run`), so its
+        // publish lands while its own lease stands.
         let crate::backend::ColdClaim::Won(generation) =
-            backend.claim_cold_view(&id, lease, account_live)
+            backend.claim_cold_view(&id, COLD_RETRY_BACKOFF, account_live)
         else {
             return None;
         };

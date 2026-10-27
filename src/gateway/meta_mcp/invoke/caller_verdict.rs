@@ -585,6 +585,11 @@ pub(in crate::gateway::meta_mcp) struct ColdFill {
 }
 
 impl ColdFill {
+    /// The fill bound of the backend this fill runs on.
+    pub(in crate::gateway::meta_mcp) fn backend_bound(&self) -> std::time::Duration {
+        self.backend.tools_fill_bound()
+    }
+
     /// Fill the caller's own slot, within the backend's own fetch bound, then
     /// publish it over the claim's lease. The credential headers are dropped
     /// as soon as the fetch returns, so a hung backend holds none past it.
@@ -596,6 +601,7 @@ impl ColdFill {
             principal_id,
             generation,
         } = self;
+        backend.extend_cold_lease(&principal_id, generation, backend.tools_fill_bound());
         let filled = backend
             .tools_for_check(Some(&binding), &headers, false)
             .await;
