@@ -126,11 +126,11 @@ fn person(subject: &str) -> VerifiedIdentity {
 /// carol's own upstream declares the tool, so her repeat is a hit.
 #[tokio::test]
 async fn the_cache_asks_the_callers_own_slot() {
-    // The audit log, first so it drops after the gateway that writes to it.
-    let audit = crate::security::transparency_log::temp::TempLog::new();
     use crate::backend::{Backend, BackendRegistry, PoolKey};
     use crate::config::{BackendConfig, FailsafeConfig, InputSchemaEnforcement};
 
+    // The audit log, first so it drops after the gateway that writes to it.
+    let audit = crate::security::transparency_log::temp::TempLog::new();
     let calls = Arc::new(AtomicUsize::new(0));
     let backend = Arc::new(Backend::new(
         "ledger",
