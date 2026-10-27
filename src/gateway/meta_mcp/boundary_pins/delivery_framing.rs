@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Where an error becomes a delivered frame, or a gateway refusal is built,
-//! in `src/gateway` production code (refusals in `src/playbook` too). A gateway refusal records `refused` only
+//! in `src/gateway` production code (refusals anywhere in `src/`). A gateway refusal records `refused` only
 //! where it is delivered (sealed errors at the outlets, the rest per site),
 //! so a new framing site or a new refusal must be looked at, not slipped in.
 //!
@@ -126,11 +126,12 @@ fn callee(expr: &syn::Expr) -> Option<(Option<String>, String)> {
 
 impl Sink for Found {
     fn expr(&mut self, at: &Place, expr: &syn::Expr) {
-        // The playbook engine answers composite refusals the gateway
-        // delivers, so its refusals are classified too; its error builders
-        // are not delivery framing and stay out of the inventory.
+        // A refusal built anywhere in the crate can reach a delivered answer
+        // (the playbook engine, the firewall, the transports), so every
+        // refusal in `src/` is classified. Only `src/gateway` frames answers,
+        // so the builder inventory stays there.
         let framing = at.file.starts_with("src/gateway/");
-        if !framing && !at.file.starts_with("src/playbook") {
+        if !at.file.starts_with("src/") {
             return;
         }
         let func = at.func.clone().unwrap_or_else(|| "<module>".to_string());
