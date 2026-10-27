@@ -379,6 +379,19 @@ impl Backend {
         self.gate_saturated() || self.is_withheld_name(tool)
     }
 
+    /// Whether any slot's catalogue lists `name`, under the same withheld-name
+    /// rule. The call history's test that a name came from this backend, not
+    /// the caller, whichever caller's slot holds it. It reads every slot; the
+    /// pool's slot cap bounds that.
+    pub(crate) fn lists_tool_in_any_slot(&self, name: &str) -> bool {
+        !self.is_blocked_tool(name)
+            && self.pool.iter().any(|slot| {
+                slot.value().tools_cache.with_cached(|tools| {
+                    tools.is_some_and(|tools| tools.iter().any(|t| t.name == name))
+                })
+            })
+    }
+
     /// Whether `tool` is in the blocked-name map. The map is keyed by digest;
     /// an empty map (the usual state) answers without hashing the name, which
     /// every `tools/call` asks several times (NFR.WORKLOAD.1).

@@ -8,6 +8,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+#[cfg(any(test, feature = "webui"))]
+use super::rotation::MAX_RECORD_BYTES;
 use super::segments::{active_segment_seq, list_segments, sealed_path};
 
 /// Where a page starts reading: bytes below `end` in `file` are unread.
@@ -89,16 +91,22 @@ pub(crate) fn older_segment(log: &Path, segment: Option<u64>) -> io::Result<Opti
 /// Read `len` bytes starting at `start`. A log file that was never created
 /// reads as empty, matching a view with no events yet.
 pub(crate) fn read_window(path: &Path, start: u64, len: u64) -> io::Result<Vec<u8>> {
-    use std::io::{Read, Seek, SeekFrom};
-
     if len == 0 {
         return Ok(Vec::new());
     }
-    let mut file = match std::fs::File::open(path) {
-        Ok(f) => f,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(e),
-    };
+    match std::fs::File::open(path) {
+        Ok(file) => read_window_in(&file, start, len),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(e),
+    }
+}
+
+/// [`read_window`] on a file already open. A reader that holds the handle
+/// keeps reading the same bytes when rotation renames the file under it.
+pub(crate) fn read_window_in(file: &std::fs::File, start: u64, len: u64) -> io::Result<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = file;
     file.seek(SeekFrom::Start(start))?;
     let mut buf = vec![0u8; usize::try_from(len).unwrap_or(usize::MAX)];
     file.read_exact(&mut buf)?;
@@ -133,8 +141,43 @@ impl Tail {
 /// covers the bytes below. Returns the window and the bytes it spans.
 pub(crate) fn tail_window(file: &Path, end: u64, max: u64) -> io::Result<(Tail, u64)> {
     let window_len = end.min(max);
+    let window = read_window(file, end - window_len, window_len)?;
+    Ok(split_tail(window, end))
+}
+
+/// The longest window line assembly reads: one record at the logger's cap,
+/// its newline, and the newline ending the line before it.
+#[cfg(any(test, feature = "webui"))]
+pub(crate) const ASSEMBLY_WINDOW: u64 = MAX_RECORD_BYTES as u64 + 2;
+
+/// [`tail_window`] on an open file, with line assembly: when no line starts
+/// inside `max`, the window is read again at [`ASSEMBLY_WINDOW`], so a line
+/// up to the record cap is returned whole. [`Tail::LineTooLong`] then means a
+/// line over the cap, which the logger never writes. The bytes returned count
+/// both reads.
+#[cfg(any(test, feature = "webui"))]
+pub(crate) fn tail_window_assembled(
+    file: &std::fs::File,
+    end: u64,
+    max: u64,
+) -> io::Result<(Tail, u64)> {
+    let read = |len: u64| -> io::Result<(Tail, u64)> {
+        let len = end.min(len);
+        Ok(split_tail(read_window_in(file, end - len, len)?, end))
+    };
+    match read(max)? {
+        (Tail::LineTooLong, first) if max < ASSEMBLY_WINDOW => {
+            let (tail, second) = read(ASSEMBLY_WINDOW)?;
+            Ok((tail, first + second))
+        }
+        done => Ok(done),
+    }
+}
+
+/// Trim `window`, the bytes ending at `end`, to whole lines.
+fn split_tail(window: Vec<u8>, end: u64) -> (Tail, u64) {
+    let window_len = u64::try_from(window.len()).unwrap_or(u64::MAX);
     let window_start = end - window_len;
-    let window = read_window(file, window_start, window_len)?;
     let from = if window_start == 0 {
         0
     } else {
@@ -144,17 +187,17 @@ pub(crate) fn tail_window(file: &Path, end: u64, max: u64) -> io::Result<(Tail, 
         }
     };
     if window_start > 0 && from == window.len() {
-        return Ok((Tail::LineTooLong, window_len));
+        return (Tail::LineTooLong, window_len);
     }
     let start = window_start + u64::try_from(from).unwrap_or(u64::MAX);
-    Ok((
+    (
         Tail::Lines {
             start,
             window,
             from,
         },
         window_len,
-    ))
+    )
 }
 
 /// The lines of `body`, which starts on a line boundary at byte `body_start`,
