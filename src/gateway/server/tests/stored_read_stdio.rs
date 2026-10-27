@@ -33,8 +33,16 @@ async fn spawn_backend() -> String {
                 "tools/list" => json!({"tools": [{
                     "name": TOOL, "description": "reads rows", "inputSchema": {"type": "object"},
                 }]}),
+                // `cmd: "leak"` answers a credential the firewall redacts.
                 "tools/call" => {
-                    json!({"content": [{"type": "text", "text": OUTPUT}], "isError": false})
+                    let leak = request.pointer("/params/arguments/cmd") == Some(&json!("leak"));
+                    let text = if leak {
+                        // The egress fixture's credential, which is firewall-gated.
+                        format!("ghp_{}", "abcdefghijklmnopqrstuvwxyz1234567890")
+                    } else {
+                        OUTPUT.to_owned()
+                    };
+                    json!({"content": [{"type": "text", "text": text}], "isError": false})
                 }
                 _ => json!({}),
             };
@@ -54,7 +62,7 @@ struct Session {
     lines: tokio::io::Lines<BufReader<tokio::io::DuplexStream>>,
     backends: Arc<crate::backend::BackendRegistry>,
     task: tokio::task::JoinHandle<()>,
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
 }
 
 impl Drop for Session {
@@ -65,13 +73,20 @@ impl Drop for Session {
 
 impl Session {
     async fn open(backend_url: &str) -> Self {
+        Self::open_with(backend_url, "").await
+    }
+
+    /// [`Self::open`] with `extra` appended to the gateway's config, `{DIR}`
+    /// in it standing for the session's own directory.
+    async fn open_with(backend_url: &str, extra: &str) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
+        let extra = extra.replace("{DIR}", &dir.path().display().to_string());
         let path = dir.path().join("gateway.yaml");
         let store = serde_json::to_string(&dir.path().join("tasks").display().to_string())
             .expect("a JSON string");
         let yaml = format!(
             "backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\n\
-             tasks:\n  store_dir: {store}\n"
+             tasks:\n  store_dir: {store}\n{extra}"
         );
         crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
         let config = Config::load(Some(&path)).expect("config loads");
@@ -90,7 +105,7 @@ impl Session {
             lines: BufReader::new(reader).lines(),
             backends,
             task,
-            _dir: dir,
+            dir,
         };
         let init = json!({
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -129,13 +144,18 @@ fn modern_meta() -> Value {
     })
 }
 
-/// T2: red on the release line, where stdio tasks/get delivers the output.
-#[tokio::test]
-async fn t2_stdio_tasks_get_answers_absent_once_the_listing_withholds_the_tool() {
-    let backend_url = spawn_backend().await;
-    let mut session = Session::open(&backend_url).await;
+/// A modern `tasks/get` of `task_id`.
+fn get(task_id: &str, id: i64) -> Value {
+    json!({"jsonrpc": "2.0", "id": id, "method": "tasks/get",
+        "params": {"taskId": task_id, "_meta": modern_meta()}})
+}
+
+/// A task of `gateway_invoke` under idempotency `key`, read with `tasks/get`
+/// until its stored output is served: the task id, the last read, and the
+/// next free request id.
+async fn stored_task(session: &mut Session, key: &str) -> (String, Value, i64) {
     let mut meta = modern_meta();
-    meta["io.mcp-gateway/idempotency-key"] = json!("s1-t2");
+    meta["io.mcp-gateway/idempotency-key"] = json!(key);
     let call = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
         "name": "gateway_invoke",
         "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {}},
@@ -146,20 +166,24 @@ async fn t2_stdio_tasks_get_answers_absent_once_the_listing_withholds_the_tool()
         .and_then(Value::as_str)
         .unwrap_or_else(|| panic!("premise: a task was made: {created}"))
         .to_owned();
-    let get = |id: i64| {
-        json!({"jsonrpc": "2.0", "id": id, "method": "tasks/get",
-            "params": {"taskId": task_id, "_meta": modern_meta()}})
-    };
     let bound = std::time::Instant::now() + Duration::from_secs(10);
     let mut next = 10;
-    let control = loop {
-        let got = session.ask(&get(next), next).await;
+    loop {
+        let got = session.ask(&get(&task_id, next), next).await;
         next += 1;
         if got.to_string().contains(OUTPUT) || std::time::Instant::now() >= bound {
-            break got;
+            return (task_id, got, next);
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
-    };
+    }
+}
+
+/// T2: red on the release line, where stdio tasks/get delivers the output.
+#[tokio::test]
+async fn t2_stdio_tasks_get_answers_absent_once_the_listing_withholds_the_tool() {
+    let backend_url = spawn_backend().await;
+    let mut session = Session::open(&backend_url).await;
+    let (task_id, control, next) = stored_task(&mut session, "s1-t2").await;
     assert!(
         control.to_string().contains(OUTPUT),
         "control: while visible the stored output is served: {control}"
@@ -173,7 +197,7 @@ async fn t2_stdio_tasks_get_answers_absent_once_the_listing_withholds_the_tool()
         .get(BACKEND)
         .expect("the backend is registered")
         .store_shared_tools_for_test(vec![invalid]);
-    let read = session.ask(&get(next), next).await;
+    let read = session.ask(&get(&task_id, next), next).await;
     assert_eq!(
         read.pointer("/error/code"),
         Some(&json!(-32601)),
@@ -202,4 +226,115 @@ async fn t2_stdio_tasks_get_answers_absent_once_the_listing_withholds_the_tool()
         twin.get("error"),
         "T2: a blocked stored read answers exactly as an absent name on stdio"
     );
+}
+
+/// A session whose gateway writes a transparency log in its own directory,
+/// and the log's path.
+async fn logged_session() -> (Session, std::path::PathBuf) {
+    logged_session_with("").await
+}
+
+/// [`logged_session`] with `security` appended under its `security:` key.
+async fn logged_session_with(security: &str) -> (Session, std::path::PathBuf) {
+    let backend_url = spawn_backend().await;
+    let extra = format!(
+        "security:\n  transparency_log:\n    enabled: true\n    path: \"{{DIR}}/audit.jsonl\"\n{security}"
+    );
+    let session = Session::open_with(&backend_url, &extra).await;
+    let log = session.dir.path().join("audit.jsonl");
+    (session, log)
+}
+
+/// The delivery records of `gateway_invoke` calls in the log at `path`.
+fn invoke_deliveries(path: &std::path::Path) -> Vec<Value> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|row| {
+            row["event"] == "response_delivery_attempt" && row["tool"] == "gateway_invoke"
+        })
+        .collect()
+}
+
+fn invoke(id: i64) -> Value {
+    invoke_cmd(id, "read")
+}
+
+fn invoke_cmd(id: i64, cmd: &str) -> Value {
+    json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {
+        "name": "gateway_invoke",
+        "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"cmd": cmd}},
+    }})
+}
+
+/// The real serve loop opens one delivery's facts per message: a call
+/// through it records what the gateway did to the answer.
+#[tokio::test]
+async fn the_serve_loop_records_a_delivery_effect() {
+    let (mut session, log) = logged_session().await;
+    let answer = session.ask(&invoke(2), 2).await;
+    assert!(answer.get("error").is_none(), "premise: answered: {answer}");
+    let rows = invoke_deliveries(&log);
+    let [row] = rows.as_slice() else {
+        panic!("one delivery record: {rows:?}");
+    };
+    assert_eq!(row["response_effect"], "delivered", "{row}");
+}
+
+/// Each batch item through the real serve loop gets its own delivery's facts
+/// (A14): of a redacted item and a clean one, one records `rewritten` and the
+/// other `delivered`, never one cell's effect for both.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_batch_item_records_a_delivery_effect() {
+    let warn = "  firewall:\n    enabled: true\n    rules:\n      - match: \"rows\"\n        action: warn\n";
+    let (mut session, log) = logged_session_with(warn).await;
+    let batch = json!([invoke_cmd(3, "leak"), invoke_cmd(4, "plain")]);
+    session
+        .client
+        .write_all(format!("{batch}\n").as_bytes())
+        .await
+        .expect("stdin");
+    let answer = loop {
+        let line = tokio::time::timeout(Duration::from_secs(10), session.lines.next_line())
+            .await
+            .expect("an answer within the bound")
+            .expect("stdout readable")
+            .expect("stdout open");
+        let frame: Value = serde_json::from_str(&line).expect("one JSON frame per line");
+        if frame.is_array() {
+            break frame;
+        }
+    };
+    let text = answer.to_string();
+    assert!(
+        text.contains("[REDACTED") && text.contains(OUTPUT) && !text.contains("\"error\""),
+        "premise: one redacted, one clean, both answered: {answer}"
+    );
+    let mut effects: Vec<Value> = invoke_deliveries(&log)
+        .iter()
+        .map(|row| row["response_effect"].clone())
+        .collect();
+    effects.sort_by_key(Value::to_string);
+    assert_eq!(effects, [json!("delivered"), json!("rewritten")]);
+}
+
+/// A task read serves the stored answer, not one this request produced: its
+/// delivery states no effect and no findings.
+#[tokio::test]
+async fn a_stdio_task_read_states_no_effect() {
+    let (mut session, log) = logged_session().await;
+    let (_, read, _) = stored_task(&mut session, "unvouched-read").await;
+    assert!(read.to_string().contains(OUTPUT), "premise: served: {read}");
+    let rows: Vec<Value> = std::fs::read_to_string(&log)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|row| row["event"] == "response_delivery_attempt")
+        .collect();
+    let row = rows.last().expect("the read's delivery record");
+    for field in ["response_effect", "response_findings"] {
+        assert!(row.get(field).is_none(), "{field}: {row}");
+    }
 }

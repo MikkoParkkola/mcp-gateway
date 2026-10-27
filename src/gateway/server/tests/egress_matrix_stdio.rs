@@ -26,6 +26,10 @@ enum Setup {
     Warn,
     /// No firewall; response inspection in action mode is the only screen.
     InspectionOnly,
+    /// The firewall present with response scanning off.
+    ScanOff,
+    /// The firewall present and disabled.
+    FirewallOff,
 }
 
 /// The stdio gateway over one planted backend, `alpha`, and its firewall.
@@ -58,8 +62,8 @@ async fn stdio_on(backend: Arc<Planted>, setup: Setup) -> (Arc<MetaMcp>, Option<
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {
-                enabled: true,
-                scan_responses: true,
+                enabled: !matches!(setup, Setup::FirewallOff),
+                scan_responses: !matches!(setup, Setup::ScanOff),
                 scan_requests: false,
                 credential_redaction: true,
                 rules,
@@ -356,4 +360,87 @@ async fn a_refused_stdio_answer_joins_its_invocation() {
         panic!("one delivery and one invocation: {deliveries:?} {invocations:?}");
     };
     assert_eq!(delivery["trace_id"], invocation["trace_id"], "{delivery}");
+}
+
+/// One stdio `tools/call` of `part` carrying `text` under `setup`, with a
+/// transparency log on: what the client got, and the one delivery record.
+async fn recorded_delivery(setup: Setup, part: Part, text: String) -> (String, Value) {
+    use crate::gateway::router::route_matrix_driver_tests::response::{delivery_rows, temp_log};
+    let backend = Arc::new(Planted::with_text("tools/call", part, text));
+    let (mut meta, _firewall) = stdio_on(backend, setup).await;
+    let (_dir, log) = temp_log(None);
+    Arc::get_mut(&mut meta)
+        .expect("the only handle")
+        .enable_transparency_log(Arc::clone(&log));
+    let body = send(&meta, "tools/call", part).await;
+    let rows = delivery_rows(&log).await;
+    let [row] = rows.as_slice() else {
+        panic!("one delivery record: {rows:?}");
+    };
+    (body, row.clone())
+}
+
+/// A clean stdio answer under a scanning firewall: delivered, scanned clean.
+#[tokio::test]
+async fn a_clean_stdio_delivery_records_delivered() {
+    let (body, row) = recorded_delivery(Setup::Default, Part::ResultText, "plain".into()).await;
+    assert!(!refused(&body), "premise: delivered: {body}");
+    assert_eq!(row["response_effect"], "delivered", "{row}");
+    assert_eq!(row["response_findings"], json!([]), "{row}");
+}
+
+/// A firewall with response scanning off reads nothing: the answer is
+/// delivered and its findings are null, never an empty (scanned clean) list.
+#[tokio::test]
+async fn a_scan_off_delivery_records_null_findings() {
+    for setup in [Setup::ScanOff, Setup::FirewallOff] {
+        let (body, row) = recorded_delivery(setup, Part::ResultText, "plain".into()).await;
+        assert!(!refused(&body), "premise: delivered: {body}");
+        assert_eq!(row["response_effect"], "delivered", "{row}");
+        assert_eq!(row["response_findings"], Value::Null, "{row}");
+    }
+}
+
+/// A credential redacted under a Warn rule on stdio: rewritten, with its
+/// finding by kind and never its text.
+#[tokio::test]
+async fn a_redacted_stdio_delivery_records_rewritten() {
+    let leak = secret();
+    let (body, row) = recorded_delivery(Setup::Warn, Part::ResultText, leak.clone()).await;
+    assert!(
+        rewritten(&body) && !body.contains(&leak),
+        "premise: redacted: {body}"
+    );
+    assert_eq!(row["response_effect"], "rewritten", "{row}");
+    assert!(!row.to_string().contains(&leak), "no content: {row}");
+    let findings = row["response_findings"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        findings.iter().any(|f| f["kind"]
+            .as_str()
+            .is_some_and(|k| k.starts_with("firewall:"))),
+        "{row}"
+    );
+}
+
+/// An interim question carrying a credential on stdio: refused whole.
+#[tokio::test]
+async fn a_refused_stdio_delivery_records_refused() {
+    let (body, row) = recorded_delivery(Setup::Default, Part::InterimQuestion, secret()).await;
+    assert!(refused(&body), "premise: refused whole: {body}");
+    assert_eq!(row["response_effect"], "refused", "{row}");
+}
+
+/// A progress notification carrying a credential is screened and withheld
+/// mid-call; the answer after it is another artifact, and its delivery
+/// records only its own scan: delivered, clean (A4).
+#[tokio::test]
+async fn a_screened_notification_leaves_the_answers_facts_alone() {
+    let leak = secret();
+    let (body, row) = recorded_delivery(Setup::Default, Part::Progress, leak.clone()).await;
+    assert!(!body.contains(&leak), "premise: withheld: {body}");
+    assert_eq!(row["response_effect"], "delivered", "{row}");
+    assert_eq!(row["response_findings"], json!([]), "{row}");
 }

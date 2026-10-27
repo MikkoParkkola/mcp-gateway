@@ -225,6 +225,9 @@ async fn guard_tool_call(
     if !withheld {
         return Ok(None);
     }
+    // Answered as absent, so neither the frame nor its outcome marks it: the
+    // gateway refused this call, and the record says so.
+    crate::gateway::delivery_facts::raise(crate::gateway::delivery_facts::ResponseEffect::Refused);
     let lens = crate::backend::Lens::Withheld;
     let answered = key_check::key_refusal(backend, ((None, &[]), failed), params, (id, lens));
     // A withheld name is always answered (`Some`); were it not, it is still

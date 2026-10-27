@@ -42,10 +42,12 @@ const DECISION_KIND: &str = "identity_grant_decision";
 
 /// An open slot: its notes, the request id an HTTP answer is refused
 /// under when their write fails (MIK-7663.GH2409.3), and the log they go to.
+/// `sealed` once the answer's delivery record has flushed it ([`seal`]).
 struct Slot {
     notes: Mutex<Vec<GrantNote>>,
     answer_id: std::sync::OnceLock<RequestId>,
     logger: Arc<TransparencyLogger>,
+    sealed: std::sync::atomic::AtomicBool,
 }
 
 tokio::task_local! {
@@ -365,6 +367,7 @@ pub(super) async fn with_grant_slot<F: Future>(
             notes: Mutex::default(),
             answer_id: std::sync::OnceLock::new(),
             logger: Arc::clone(logger),
+            sealed: std::sync::atomic::AtomicBool::new(false),
         }),
         logger: Arc::clone(logger),
     };
@@ -494,16 +497,10 @@ pub(super) fn note_grant_decision(
         .ok();
     #[cfg(test)]
     BOOKKEEPING.with(|b| b.borrow_mut().notes_taken += 1);
-    let unslotted = GRANT_SLOT
-        .try_with(|slot| {
-            slot.notes
-                .lock()
-                .expect("grant slot lock")
-                .push(note.clone());
-        })
-        .is_err();
-    if !unslotted {
-        return Ok(());
+    match GRANT_SLOT.try_with(|slot| seal::note_unless_sealed(slot, &note)) {
+        Ok(true) => return Ok(()),
+        Ok(false) => return seal::refuse_late(logger, (server, tool), note),
+        Err(_) => {}
     }
     #[cfg(test)]
     assert!(
@@ -634,11 +631,16 @@ impl super::MetaMcp {
         caller: &super::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
         // Plans and code mode deliver through their own arm: their delivery
-        // record names no invocation trace.
+        // record names no invocation trace, and states no effect or findings,
+        // as no one step's facts describe what the composite delivers.
+        crate::gateway::delivery_facts::unvouched();
         let trace_id = crate::gateway::trace::generate();
-        let sourced = self
-            .invoke_tool_with_source(args, session_id, caller, trace_id)
-            .await;
+        // Each step's facts stay in a cell of its own: a step refusal the
+        // composite carries on past never marks what the composite delivers.
+        let sourced = crate::gateway::delivery_facts::scope(
+            self.invoke_tool_with_source(args, session_id, caller, trace_id),
+        )
+        .await;
         match sourced {
             Ok(super::invoke::SourcedOutcome::Live((value, _, _))) => Ok(value),
             // A nested invocation's key never matches a deferred entry
@@ -779,6 +781,10 @@ pub(super) struct GrantBookkeeping {
 pub(super) fn grant_bookkeeping_for_test() -> GrantBookkeeping {
     BOOKKEEPING.with(|b| *b.borrow())
 }
+
+#[path = "grant_audit_seal.rs"]
+mod seal;
+pub(crate) use seal::seal_open_slot;
 
 #[cfg(test)]
 #[path = "grant_audit_seams.rs"]
