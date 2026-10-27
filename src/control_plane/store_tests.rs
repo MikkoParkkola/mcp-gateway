@@ -52,6 +52,8 @@ fn governance_logger(dir: &Path) -> Arc<TransparencyLogger> {
 
 #[path = "store_lock_tests.rs"]
 mod lock_tests;
+#[path = "store_record_cap_tests.rs"]
+mod record_cap_tests;
 #[path = "store_timed_tests.rs"]
 mod timed_tests;
 
