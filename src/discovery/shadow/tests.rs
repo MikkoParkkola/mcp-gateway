@@ -407,6 +407,46 @@ fn executable_name_keeps_raw_process_text_literal() {
     );
 }
 
+/// A command with no program name to take never falls back to its own
+/// text: the radar's asset id and evidence would carry the whole path.
+#[test]
+fn executable_name_never_returns_a_path() {
+    for command in [
+        "/home/zqpriv/..",
+        "/home/zqpriv/.",
+        "/home/zqpriv/",
+        r"C:\Users\zqpriv\srv.exe --flag",
+        "..",
+    ] {
+        let name = executable_name(command);
+        assert!(
+            name.as_deref()
+                .is_none_or(|n| !n.contains("zqpriv") && !n.contains(['/', '\\'])),
+            "{command} gave {name:?}"
+        );
+    }
+    assert_eq!(
+        executable_name(r"C:\Users\zqpriv\srv.exe --flag").as_deref(),
+        Some("srv.exe")
+    );
+}
+
+#[test]
+fn a_pathlike_command_leaves_no_path_in_the_radar() {
+    let server = stdio_server(
+        "srv",
+        "d",
+        "/home/zqpriv/..",
+        DiscoverySource::ClaudeDesktop,
+        None,
+        None,
+        None,
+    );
+    let report = report(&[server], &[]);
+    let json = serde_json::to_string(&report).expect("serializes");
+    assert!(!json.contains("zqpriv"), "{json}");
+}
+
 /// MIK-7716: a remote server whose client config sends an auth header is not
 /// reported or quarantined as unauthenticated. The header is judged by key
 /// name only; its value never reaches the report.
