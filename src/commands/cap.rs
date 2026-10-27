@@ -10,8 +10,7 @@ use super::config_write::CommentLoss;
 use mcp_gateway::{
     capability::{
         AuthTemplate, CapabilityExecutor, CapabilityLoader, IssueSeverity, OpenApiConverter,
-        compute_capability_hash, parse_capability_file, rewrite_with_pin, validate_capability,
-        validate_capability_definition,
+        parse_capability_file, validate_capability, validate_capability_definition,
     },
     cli::CapCommand,
     discovery::{
@@ -143,31 +142,27 @@ async fn cap_validate(file: std::path::PathBuf) -> ExitCode {
 /// warning (`src/capability/loader.rs`, `src/capability/watcher.rs`), so a
 /// poisoned file reads as a missing tool rather than a startup failure.
 async fn cap_pin(file: std::path::PathBuf) -> ExitCode {
-    let content = match tokio::fs::read_to_string(&file).await {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("❌ Failed to read {}: {e}", file.display());
-            return ExitCode::FAILURE;
-        }
+    // Under the capability directory's lock, written atomically: the same
+    // lock the web editor takes, so a pin never lands between its checks.
+    let pinned = {
+        let file = file.clone();
+        tokio::task::spawn_blocking(move || mcp_gateway::capability::pin_file(&file)).await
     };
-
-    // Sanity-check: the file must parse as a capability before we pin it.
-    if let Err(e) = crate::yaml::from_str::<crate::yaml::Value>(&content) {
-        eprintln!("❌ Not a valid YAML file ({}): {e}", file.display());
-        return ExitCode::FAILURE;
+    match pinned {
+        Ok(Ok(hash)) => {
+            println!("✅ Pinned {}", file.display());
+            println!("   sha256: {hash}");
+            ExitCode::SUCCESS
+        }
+        Ok(Err(error)) => {
+            eprintln!("❌ {error}");
+            ExitCode::FAILURE
+        }
+        Err(join) => {
+            eprintln!("❌ Pinning {} stopped: {join}", file.display());
+            ExitCode::FAILURE
+        }
     }
-
-    let hash = compute_capability_hash(&content);
-    let pinned = rewrite_with_pin(&content, &hash);
-
-    if let Err(e) = tokio::fs::write(&file, &pinned).await {
-        eprintln!("❌ Failed to write pinned file {}: {e}", file.display());
-        return ExitCode::FAILURE;
-    }
-
-    println!("✅ Pinned {}", file.display());
-    println!("   sha256: {hash}");
-    ExitCode::SUCCESS
 }
 
 /// The executor `cap list` asks "is this one served?" with: the environment
