@@ -1,9 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-use std::{
-    collections::{BTreeMap, HashMap},
-    path::Path,
-};
+use std::collections::{BTreeMap, HashMap};
 
 use crate::config::TransportConfig;
 
@@ -125,8 +122,8 @@ pub(super) fn classify_remediation(
         };
     }
 
-    // Adoption would drop a header only the client can resolve.
-    let lossless = server.unresolved_header_names.is_empty();
+    // Adoption would lose or leak something: the rule adopt itself applies.
+    let lossless = crate::discovery::adopt::refusals(server).is_empty();
     if lossless
         && (matches!(
             ownership,
@@ -206,6 +203,13 @@ pub(super) fn risk_reasons(
     }
     if has_stale_binary_reference(server) {
         reasons.push("stale_binary".to_string());
+    }
+    // Why adoption is not offered, once per reason.
+    for (refusal, _) in crate::discovery::adopt::refusals(server) {
+        let code = refusal.code().to_string();
+        if !reasons.contains(&code) {
+            reasons.push(code);
+        }
     }
     reasons
 }
@@ -365,11 +369,11 @@ pub(super) fn executable_name(command: &str) -> Option<String> {
         Some(argv) => argv.first()?.as_str(),
         None => command.split_whitespace().next()?,
     };
-    let name = Path::new(first)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(first);
-    Some(name.to_string())
+    // The last segment after either separator, whatever the platform: a
+    // client file may name a Windows path. No program name (`dir/..`,
+    // `dir/`) is `None`, never the text itself, which is a private path.
+    let name = first.rsplit(['/', '\\']).next()?;
+    (!matches!(name, "" | "." | "..")).then(|| name.to_string())
 }
 
 fn slug(value: &str) -> String {

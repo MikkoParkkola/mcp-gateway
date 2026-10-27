@@ -160,6 +160,13 @@ pub(crate) struct PooledEntry {
     /// A mutex, held across each record and its flag change, so a warm-up's
     /// check-then-reset cannot interleave with a request failure.
     pub(crate) request_failed_since_close: parking_lot::Mutex<bool>,
+    /// The last dispatch or fill waited on a sign-in and nothing has succeeded
+    /// since (`Error::is_authorization_wait`); read as `needs_sign_in`.
+    pub(crate) auth_wait: AtomicBool,
+    /// This slot has had a transport published at least once.
+    pub(crate) ever_started: AtomicBool,
+    /// The last start failed (not on a sign-in) and none has succeeded since.
+    pub(crate) start_failed: AtomicBool,
     pub(crate) resources_cache: CachedMetadata<Vec<crate::protocol::Resource>>,
     /// The events listener's weak handle on the transport (I5 §4).
     pub(crate) listen: RwLock<Option<super::listen::ListenHandle>>,
@@ -255,6 +262,9 @@ impl PooledEntry {
             tools_fill_failed_at: parking_lot::Mutex::new(None),
             tools_refresh_failed_at: parking_lot::Mutex::new(None),
             request_failed_since_close: parking_lot::Mutex::new(false),
+            auth_wait: AtomicBool::new(false),
+            ever_started: AtomicBool::new(false),
+            start_failed: AtomicBool::new(false),
 
             resources_cache: CachedMetadata::new(),
             listen: RwLock::new(None),

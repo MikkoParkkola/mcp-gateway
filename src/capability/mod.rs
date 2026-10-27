@@ -44,6 +44,8 @@ pub mod definition;
 pub mod discovery;
 mod execution_context;
 mod executor;
+#[cfg(feature = "webui")]
+pub(crate) mod file_writer;
 pub mod hash;
 #[cfg(test)]
 mod linear_get_issue_tests;
@@ -52,6 +54,7 @@ mod linear_write_tests;
 mod loader;
 mod openapi;
 mod parser;
+mod pin_file;
 mod read_only_call;
 #[cfg(test)]
 mod schema_shape_load_tests;
@@ -77,13 +80,18 @@ pub use executor::CapabilityExecutor;
 pub(crate) use executor::ProcessNote;
 pub use executor::graphql::GraphqlExecutor;
 pub use executor::jsonrpc::JsonRpcExecutor;
+#[cfg(target_os = "linux")]
+pub(crate) use executor::resolve_command;
 pub use executor::rest::{ExecutionContext, ProtocolExecutor};
 pub use hash::{compute_capability_hash, rewrite_with_pin, strip_sha256_line};
 pub use loader::CapabilityLoader;
+#[cfg(feature = "webui")]
+pub(crate) use loader::unloadable_issues;
 pub(crate) use loader::{IssueLog, refuse_unloadable};
 pub use openapi::{AuthTemplate, CacheTemplate, GeneratedCapability, OpenApiConverter};
 pub(crate) use parser::validate_cli_templates;
 pub use parser::{parse_capability, parse_capability_file, validate_capability};
+pub use pin_file::pin_file;
 pub(crate) use read_only_call::{read_only_call_as, served_over_rest};
 pub(crate) use schema_validator::undeclared_key_refusal;
 pub use schema_validator::{

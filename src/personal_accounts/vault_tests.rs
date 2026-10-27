@@ -744,6 +744,9 @@ mod custody_order;
 #[path = "vault_propagation_tests.rs"]
 mod propagation;
 
+#[path = "vault_fence_tests.rs"]
+mod fence;
+
 /// A vault listener observes by account and audience, so a lease
 /// rotation keeps its route while the call binding moves.
 #[test]

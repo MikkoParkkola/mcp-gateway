@@ -240,18 +240,30 @@ impl MetaMcp {
 
     /// [`Self::invoke_tool`] plus the result's chain eligibility (A3) and its
     /// upstream chain outcome (inc3 D4), or the lift's already-shaped stored
-    /// answer, delivered unchanged (MIK-8392 STORED.2 D8).
+    /// answer, delivered unchanged (MIK-8392 STORED.2 D8). The invocation
+    /// runs under `trace_id`, which the caller keeps for the answer's
+    /// delivery record.
     pub(in crate::gateway::meta_mcp) async fn invoke_tool_sourced(
         &self,
         args: &Value,
         session_id: Option<&str>,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+        trace_id: String,
     ) -> Result<super::SourcedOutcome> {
         // D1-f: a degraded audit log refuses before dispatch, after one probe.
-        if let Some(log) = &self.transparency_logger {
-            log.admit().await?;
+        if let Some(log) = &self.transparency_logger
+            && let Err(refused) = log.admit().await
+        {
+            self.count_call(
+                args.get("server")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                args.get("tool").and_then(Value::as_str),
+                &crate::security::audit::AuditWho::from_caller(caller),
+                crate::counters::Outcome::AdmissionRefused,
+            );
+            return Err(refused);
         }
-        let trace_id = trace::generate();
         let trace_id_clone = trace_id.clone();
         // An in-process call has no request memo of its own: one per call, so
         // a refusal's code reaches its one record (MIK-8361). A request's
@@ -315,6 +327,12 @@ impl MetaMcp {
         if let Some(log) = &self.transparency_logger
             && let Err(refused) = log.admit().await
         {
+            self.count_call(
+                server,
+                Some(tool),
+                &crate::security::audit::AuditWho::from_caller(caller),
+                crate::counters::Outcome::AdmissionRefused,
+            );
             return refused;
         }
         let args = serde_json::json!({"server": server, "tool": tool, "arguments": arguments});
@@ -381,7 +399,8 @@ impl MetaMcp {
     ) -> Result<(Value, super::super::response_security::GateEffect)> {
         crate::security::signature_chain::strip_chain(&mut result);
         let (mut result, raw_read) = audit::noted_response(self, result);
-        self.apply_response_contract_gate(server, tool, trace_id, &mut result)?;
+        self.apply_response_contract_gate(server, tool, trace_id, &mut result)
+            .map_err(crate::gateway::delivery_facts::refused)?;
 
         // === POST-INVOKE: Response content inspection (issue #133, D2) ===
         //
@@ -393,7 +412,9 @@ impl MetaMcp {
         // Action mode (`action_mode = true`): blocks any response with a
         // HIGH/CRITICAL finding, returning a security error to the caller.
         let text = crate::security::response_inspect::extract_text_from_result(&result);
-        let findings = self.inspect_backend_text((server, tool, trace_id), &text)?;
+        let findings = self
+            .inspect_backend_text((server, tool, trace_id), &text)
+            .map_err(crate::gateway::delivery_facts::refused)?;
         if !findings.is_empty() {
             if let Some(obj) = result.as_object_mut() {
                 obj.insert(

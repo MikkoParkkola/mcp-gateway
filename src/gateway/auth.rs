@@ -40,12 +40,14 @@ pub(crate) use api_key::{PreviousDigest, refuse_shared_digests};
 #[path = "auth_dashboard.rs"]
 mod dashboard;
 pub use dashboard::DashboardBootstrap;
-pub(crate) use dashboard::{Now, Redemption, SessionCheck, SessionLimits, Touch};
+pub(crate) use dashboard::{Now, Redeem, Redemption, SessionCheck, SessionLimits, Touch};
 #[path = "auth_bootstrap.rs"]
 mod bootstrap;
 #[path = "auth_handoff.rs"]
 mod handoff;
 use crate::security::security_metrics::{AuthFailureKind, auth_failure};
+#[cfg(feature = "webui")]
+pub(crate) use bootstrap::Navigation;
 use bootstrap::{bootstrap_param, try_dashboard_bootstrap};
 #[cfg(feature = "webui")]
 pub(crate) use handoff::{handoff_form, private as handoff_private, redeem_handoff};

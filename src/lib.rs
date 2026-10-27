@@ -38,6 +38,8 @@ pub mod capability;
 pub mod chains;
 #[doc(hidden)]
 pub mod cli;
+#[doc(hidden)]
+pub mod cli_support;
 mod clock;
 #[doc(hidden)]
 pub mod config;
@@ -53,6 +55,7 @@ pub mod context_integrity;
 pub mod control_plane;
 #[doc(hidden)]
 pub mod cost_accounting;
+mod counters;
 mod debug_trust_roots;
 #[doc(hidden)]
 pub mod discovery;
@@ -63,6 +66,8 @@ mod events;
 #[doc(hidden)]
 pub mod failsafe;
 mod fs_lock;
+#[doc(hidden)]
+pub use fs_lock::lock_directory_finding;
 #[doc(hidden)]
 pub mod gateway;
 mod hashing;
@@ -95,6 +100,8 @@ mod open_nonblocking;
 pub(crate) mod personal_accounts;
 #[doc(hidden)]
 pub mod playbook;
+#[doc(hidden)]
+pub mod preview_sandbox;
 #[doc(hidden)]
 pub mod projection;
 #[doc(hidden)]

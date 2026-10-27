@@ -27,6 +27,13 @@ use crate::security::audit::{AuditEnvelope, AuditOutcome, AuditWho};
 #[derive(Clone)]
 pub(super) struct AuditDetail(pub(super) serde_json::Map<String, serde_json::Value>);
 
+/// Routes that only read, whatever their method, so the layer neither
+/// admits nor records them: keyed by the matched route template, never by a
+/// handler, so a handler bug cannot make a write skip the audit.
+/// `POST .../validate` writes nothing by construction (its handler has no
+/// writer).
+const UNRECORDED_ROUTES: &[&str] = &[crate::gateway::routes::UI_CAPABILITY_VALIDATE];
+
 /// [`super::api_router`] with the layer on every route in it (E1-f).
 pub fn audited_api_router(state: &Arc<AppState>) -> Router<Arc<AppState>> {
     super::api_router().route_layer(axum::middleware::from_fn_with_state(
@@ -65,7 +72,11 @@ async fn admin_action_layer(
     let Some(log) = state.transparency_log.clone() else {
         return run(request).await;
     };
-    if matches!(*request.method(), Method::GET | Method::HEAD) {
+    let unrecorded = request
+        .extensions()
+        .get::<MatchedPath>()
+        .is_some_and(|p| UNRECORDED_ROUTES.contains(&p.as_str()));
+    if unrecorded || matches!(*request.method(), Method::GET | Method::HEAD) {
         return run(request).await;
     }
     // A degraded log refuses before the handler runs (D1-f).
@@ -106,6 +117,31 @@ async fn admin_action_layer(
         Ok(()) => response,
         Err(error) => withheld(&error),
     }
+}
+
+/// Append one `admin_action` for `surface` naming the caller, the way the
+/// layer does: the capability editor's record of what a save changed (D5).
+/// With no audit log configured there is nothing to append.
+///
+/// `Some` is the layer's 503 "withheld" answer, when the append failed.
+pub(super) fn record_admin_action(
+    state: &AppState,
+    surface: &'static str,
+    client: Option<&AuthenticatedClient>,
+    identity: Option<&VerifiedIdentity>,
+    fields: serde_json::Map<String, serde_json::Value>,
+) -> Option<Response> {
+    let log = state.transparency_log.as_ref()?;
+    let subject =
+        identity.and_then(|id| GrantSubject::checked(id.issuer.clone(), id.subject.clone(), None));
+    let envelope = AuditEnvelope::ok(AuditWho::from_request(
+        client,
+        subject.as_ref(),
+        state.auth_config.record_key(),
+    ));
+    log.append_admin_action(surface, fields, &envelope)
+        .err()
+        .map(|error| withheld(&error))
 }
 
 /// The `AuditUnavailable` answer: the action may have run, its result is

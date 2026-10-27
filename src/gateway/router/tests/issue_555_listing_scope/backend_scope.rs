@@ -51,6 +51,7 @@ async fn agent_auth_without_identity_admits_no_backend() {
     let f = with_agent_auth(Arc::new(crate::gateway::oauth::AgentRegistry::new())).await;
     let authorizer = RouterAuthorizer {
         state: f.state.as_ref(),
+        generation: &f.state.live_config.generation(),
         client: None,
         oauth_agent_identity: None,
         cert_identity: None,

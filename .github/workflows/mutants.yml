@@ -75,7 +75,7 @@ jobs:
         run: python3 "$RUNNER_TEMP/run_mutants.py" run --platform linux --out mutants-out
       - name: Upload the per-mutant results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mutants-${{ github.run_id }}-linux
           path: mutants-out/
@@ -106,7 +106,7 @@ jobs:
         run: python3 "$RUNNER_TEMP/run_mutants.py" run --platform linux --out mutants-out
       - name: Upload the per-mutant results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mutants-${{ github.run_id }}-linux
           path: mutants-out/
@@ -148,7 +148,7 @@ jobs:
         run: python "$env:RUNNER_TEMP/run_mutants.py" run --platform windows --out mutants-out
       - name: Upload the per-mutant results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mutants-${{ github.run_id }}-windows
           path: mutants-out/

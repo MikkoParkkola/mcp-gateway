@@ -23,6 +23,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use super::refusals::WriteTicket;
 use super::{
     backend_ops::{
         BackendUpdate, UNRESOLVED_SECRETS, add_backend as add_backend_config,
@@ -34,6 +35,7 @@ use super::{
 };
 use crate::config::TransportConfig;
 use crate::config_persistence::CommentLoss;
+use crate::config_reload::refusals::RefusalKind;
 use crate::config_reload::{
     ConfigMutation, ConfigWriteError, MutateError, mutate_config_and_reload_detached,
 };
@@ -190,12 +192,15 @@ async fn add_backend(
     let name = req.name.clone();
     let allowed_tools = req.allowed_tools;
     let selected = allowed_tools.clone();
+    let ticket = WriteTicket::new(&state);
+    let in_lock = ticket.clone();
     let mutation = mutate_config_and_reload_detached(
         config_path.clone(),
         state.meta_mcp.reload_context(),
         CommentLoss::Refuse,
         move |config| {
             add_backend_config(config, &name, resolved)
+                .inspect(|_| in_lock.note(RefusalKind::Add, &name, config))
                 .map(|notes| {
                     if let Some(backend) = config.backends.get_mut(&name) {
                         backend.allowed_tools = allowed_tools;
@@ -211,7 +216,10 @@ async fn add_backend(
     .await;
 
     let ((notes, enabled), reload) = match mutation {
-        Ok(ConfigMutation::Applied(added, reload)) => (added, reload),
+        Ok(ConfigMutation::Applied(added, reload)) => {
+            ticket.committed(&req.name);
+            (added, reload)
+        }
         Ok(ConfigMutation::Rejected((code, message))) => {
             return flat_error(code, message).into_response();
         }
@@ -262,6 +270,8 @@ async fn remove_backend(
     // runs detached (MIK-8120), so the note comes back as its value.
     let removed = name.clone();
     let path = config_path.clone();
+    let ticket = WriteTicket::new(&state);
+    let in_lock = ticket.clone();
     let mutation = mutate_config_and_reload_detached(
         config_path.clone(),
         state.meta_mcp.reload_context(),
@@ -273,6 +283,9 @@ async fn remove_backend(
                     format!("Backend '{removed}' not found"),
                 )
             })?;
+            // Gone: once the write commits, its earlier add and edit
+            // refusals no longer apply.
+            in_lock.reserve();
             Ok::<Vec<String>, (StatusCode, String)>(
                 crate::config_persistence::comments_a_write_drops(&path, config),
             )
@@ -281,7 +294,10 @@ async fn remove_backend(
     .await;
 
     let gone = match mutation {
-        Ok(ConfigMutation::Applied(gone, _)) => gone,
+        Ok(ConfigMutation::Applied(gone, _)) => {
+            ticket.committed(&name);
+            gone
+        }
         Ok(ConfigMutation::Rejected((code, message))) => {
             return flat_error(code, message).into_response();
         }
@@ -406,6 +422,8 @@ async fn update_backend(
     // inside one lock. Splitting the read from the write is what lets one edit
     // overwrite another.
     let updated = name.clone();
+    let ticket = WriteTicket::new(&state);
+    let in_lock = ticket.clone();
     let mutation = mutate_config_and_reload_detached(
         config_path.clone(),
         state.meta_mcp.reload_context(),
@@ -447,6 +465,7 @@ async fn update_backend(
                     stop_when_idle_for,
                 },
             )
+            .inspect(|()| in_lock.note(RefusalKind::Edit, &name, config))
             .map(|()| {
                 let backend = config.backends.get_mut(&name)?;
                 let after = allowed_tools?;
@@ -457,14 +476,18 @@ async fn update_backend(
                 // Surface the refusal verbatim. An operator setting "stop when idle" on a
                 // backend the gateway does not start needs to be told why, not silently
                 // ignored - being silently ignored is what this whole change corrects.
-                (update_refusal_status(&message), message)
+                let code = in_lock.refused_edit(&name, &message, update_refusal_status(&message));
+                (code, message)
             })
         },
     )
     .await;
 
     let reload = match mutation {
-        Ok(ConfigMutation::Applied(selection, reload)) => (selection, reload),
+        Ok(ConfigMutation::Applied(selection, reload)) => {
+            ticket.committed(&updated);
+            (selection, reload)
+        }
         Ok(ConfigMutation::Rejected((code, message))) => {
             return flat_error(code, message).into_response();
         }

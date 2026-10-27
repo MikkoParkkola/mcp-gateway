@@ -12,7 +12,6 @@ use crate::capability::ProcessNote;
 use crate::context_integrity::ContextIntegrityEvaluation;
 use crate::gateway::meta_mcp::{MetaMcp, MetaMcpCallerContext};
 use crate::protocol::JsonRpcResponse;
-use crate::protocol::tasks::TaskTransition;
 use crate::security::audit::{
     AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho, InvocationTarget,
 };
@@ -57,6 +56,8 @@ pub(crate) struct DispatchNotes {
     data_classes: BTreeSet<String>,
     /// Served from a cache: no gate ran, so the delivered value is attributed.
     cached: bool,
+    /// What the web UI's counters need from the gates.
+    counting: counting::CountNotes,
     /// MIN.1: the response held text over the attribution parse bound, so its
     /// tenants were not read.
     uninspected: bool,
@@ -89,6 +90,9 @@ pub(crate) fn note_process(process: ProcessNote) {
     });
 }
 
+#[path = "audit_counting.rs"]
+pub(crate) mod counting;
+
 #[cfg(test)]
 #[path = "audit_settlement_tests.rs"]
 mod settlement_tests;
@@ -96,6 +100,8 @@ mod settlement_tests;
 #[cfg(all(test, feature = "firewall"))]
 #[path = "audit_delivered_value_tests.rs"]
 mod delivered_value_tests;
+
+mod settlement;
 
 tokio::task_local! {
     /// The notes of the call running in this scope, for this call only.
@@ -176,9 +182,11 @@ pub(crate) fn note_refusal(result: &Result<Value>) {
     }
 }
 
-/// MIK-7116.MIN.1: this call is answered from a cache, past every gate.
+/// MIK-7116.MIN.1: this call is answered from a cache, past every gate. The
+/// answer is not this request's, so its delivery states no effect or findings.
 pub(crate) fn note_cached() {
     note(|notes| notes.cached = true);
+    crate::gateway::delivery_facts::unvouched();
 }
 
 /// MIK-7636: the member a stored failure carries when its call was noted
@@ -230,28 +238,6 @@ impl DispatchNotes {
     pub(crate) fn outcome(&self, outcome: AuditOutcome) -> AuditOutcome {
         match (outcome, self.failure) {
             (AuditOutcome::ToolError, Some(code)) => AuditOutcome::Error(code),
-            (outcome, _) => outcome,
-        }
-    }
-
-    /// MIN.1 gap 1: a settlement's outcome. A gate refusal keeps the class a
-    /// live call's record gives it, with the code the task commits. The
-    /// settlement result is built from a committed code alone, so a bare
-    /// `-32001`/`-32004` reads as `denied` in `from_result`: without a refusal
-    /// a gate noted it is the peer's own answer, an `error` (MIK-7735). The
-    /// same holds for a bare `-32602`, which `from_result` reads as `invalid`
-    /// (MIK-7960).
-    fn settled_outcome(&self, outcome: AuditOutcome) -> AuditOutcome {
-        match (self.outcome(outcome), self.refusal) {
-            (AuditOutcome::Denied(code) | AuditOutcome::Invalid(code), None) => {
-                AuditOutcome::Error(code)
-            }
-            (AuditOutcome::Error(code), Some(AuditOutcome::Denied(_))) => {
-                AuditOutcome::Denied(code)
-            }
-            (AuditOutcome::Error(code), Some(AuditOutcome::Invalid(_))) => {
-                AuditOutcome::Invalid(code)
-            }
             (outcome, _) => outcome,
         }
     }
@@ -479,6 +465,7 @@ impl MetaMcp {
     ) -> Result<Value> {
         // D4: counted before the log check, so auth off still counts.
         let withheld = super::gate::count_meta_denial(args, &result);
+        self.count_invocation(args, caller, &result, &notes, withheld);
         let Some(log) = self.transparency_logger.as_ref() else {
             return result;
         };
@@ -580,107 +567,6 @@ impl MetaMcp {
         }
     }
 
-    /// The tests' shorthand: the transition to commit alone.
-    #[cfg(test)]
-    pub(crate) async fn audit_settlement(
-        &self,
-        task: SettledTask<'_>,
-        proposed: TaskTransition,
-        notes: &DispatchNotes,
-        principal: &str,
-    ) -> TaskTransition {
-        self.audit_settlement_kept(task, proposed, notes, principal)
-            .await
-            .0
-    }
-
-    /// MIN.1 gap 1: write the settlement record of a recovered upstream task,
-    /// before `proposed` is committed, and return the transition to commit.
-    ///
-    /// `proposed` and `notes` come from `recover_task_result` or
-    /// `recover_task_error` run in [`with_dispatch_scope`]; the outcome and
-    /// hash mapping is `audit_invocation`'s. `who` is the principal the task
-    /// was admitted under and nothing more. A failed write under
-    /// [`AuditFailurePolicy::FailClosed`] commits `-32005` instead, with no
-    /// backend content, as a live call withholds its result (D1-f).
-    ///
-    /// Also says whether the transition it returns is the one proposed
-    /// (`true`) or that fail-closed replacement (`false`), so a caller never
-    /// infers it from the outcome (MIK-7887.RECEIPT.1).
-    pub(crate) async fn audit_settlement_kept(
-        &self,
-        task: SettledTask<'_>,
-        proposed: TaskTransition,
-        notes: &DispatchNotes,
-        principal: &str,
-    ) -> (TaskTransition, bool) {
-        let Some(log) = self.transparency_logger.as_ref() else {
-            return (proposed, true);
-        };
-        let result = match &proposed {
-            TaskTransition::Complete(value) => Ok(value.clone()),
-            TaskTransition::Fail(error) => Err(Error::json_rpc(error.code, error.message.clone())),
-            _ => return (proposed, true),
-        };
-        // Total here: only `Error::AuditUnavailable` maps to `None`, and the
-        // mapping above builds `Ok` or `Error::JsonRpc` alone.
-        let Some(outcome) = AuditOutcome::from_result(&result) else {
-            return (proposed, true);
-        };
-        let attribution = notes.attribution(self, BTreeSet::new(), result.as_ref().ok());
-        let envelope = AuditEnvelope {
-            trace_id: Some(task.id.to_string()),
-            otel_trace_id: None,
-            outcome: notes.settled_outcome(outcome),
-            // The task owner, keyed for the record when it is credential-derived;
-            // the task lookup keeps the owner (MIK-8697 §16.12).
-            who: AuditWho::from_actor_id(&crate::gateway::record_principal::record_owner(
-                principal,
-                self.record_key(),
-            )),
-        };
-        let response_hash = result.as_ref().ok().map(sha256_of);
-        let request_hash = sha256_of(&serde_json::json!({ "task_id": task.id }));
-        let (id, server, tool) = (
-            task.id.to_owned(),
-            task.server.to_owned(),
-            task.tool.to_owned(),
-        );
-        let written = log
-            .append_bounded(move |log| {
-                log.log_task_settlement(
-                    &id,
-                    &envelope,
-                    &server,
-                    &tool,
-                    &request_hash,
-                    response_hash.as_deref(),
-                    attribution,
-                )
-            })
-            .await;
-        let (server, tool, task_id) = (task.server, task.tool, task.id);
-        match written {
-            Ok(()) => (proposed, true),
-            Err(error) if log.failure_policy() == AuditFailurePolicy::FailClosed => {
-                tracing::error!(server, tool, task_id, %error, "settlement audit write failed; result withheld");
-                let withheld = Error::AuditUnavailable;
-                let replaced = TaskTransition::Fail(crate::protocol::JsonRpcError {
-                    code: withheld.to_rpc_code(),
-                    message: withheld.to_string(),
-                    data: None,
-                });
-                (replaced, false)
-            }
-            Err(error) => {
-                tracing::warn!(server, tool, task_id, %error, "settlement audit write failed (non-fatal)");
-                telemetry_metrics::counter!("mcp_audit_settlement_write_failures_total")
-                    .increment(1);
-                (proposed, true)
-            }
-        }
-    }
-
     /// #2472: record a replay of a completed execution, which is a delivered
     /// call like any other (D1-d). Only an invocation is recorded, over the
     /// envelope its first execution hashed, and with that execution's
@@ -697,6 +583,8 @@ impl MetaMcp {
         replay: JsonRpcResponse,
         facts: super::super::admission::ReplayFacts,
     ) -> JsonRpcResponse {
+        // A replay delivers a first run's answer: not this request's to state.
+        crate::gateway::delivery_facts::unvouched();
         let server = facts.server.as_deref();
         self.stage_replay((tool_name, server), arguments, session_id, caller, &replay);
         let Some(log) = self.transparency_logger.as_ref() else {
@@ -762,7 +650,8 @@ impl MetaMcp {
             )
             .await
         {
-            Ok(()) => replay,
+            // The replay's delivery joins this record.
+            Ok(()) => replay.with_invocation_trace(trace_id.as_str().into()),
             Err(error) => replay.id.clone().map_or_else(
                 || JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string()),
                 |id| super::super::error_response_preserving_status(id, &error),

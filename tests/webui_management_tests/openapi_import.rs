@@ -198,6 +198,13 @@ async fn the_spec_preview_has_the_preview_block_and_a_class_per_tool() {
         body["preview"]["publisher"],
         json!({"verified": false, "source": null})
     );
+    // No server to ask, so no reported identity; the key is there all the same.
+    assert!(
+        body["preview"]
+            .as_object()
+            .is_some_and(|p| p.get("package") == Some(&Value::Null)),
+        "{body}"
+    );
     let tools = body["tools"].as_array().expect("tools");
     let by_method = |method: &str| {
         tools
@@ -227,10 +234,11 @@ async fn the_spec_preview_echoes_the_url_without_its_query() {
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
-    let (mut state, _store) = make_app_state(None, None).await;
-    Arc::get_mut(&mut state)
-        .expect("test AppState should be uniquely owned")
-        .ssrf_protection = false;
+    let (state, _store) = make_app_state(None, None).await;
+    // The flag applies from the published config (ADR-023).
+    let mut config = (*state.live_config.get()).clone();
+    config.security.ssrf_protection = false;
+    state.live_config.set(config);
     let router = create_router(state);
     let url = format!("http://{address}/spec.yaml?api_key=s3cr3t-value");
     let (status, body) = send_json(
@@ -259,10 +267,11 @@ async fn a_spec_over_its_budget_is_a_502_naming_the_budget() {
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
-    let (mut state, _store) = make_app_state(None, None).await;
-    Arc::get_mut(&mut state)
-        .expect("test AppState should be uniquely owned")
-        .ssrf_protection = false;
+    let (state, _store) = make_app_state(None, None).await;
+    // The flag applies from the published config (ADR-023).
+    let mut config = (*state.live_config.get()).clone();
+    config.security.ssrf_protection = false;
+    state.live_config.set(config);
     let router = create_router(state);
     for route in ["/ui/api/import/openapi/preview", "/ui/api/import/openapi"] {
         let (status, body) = send_json(

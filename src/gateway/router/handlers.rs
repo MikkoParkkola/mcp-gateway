@@ -118,6 +118,7 @@ async fn meta_mcp_dispatch(
     // network path.
     let router_authorizer = RouterAuthorizer {
         state: state.as_ref(),
+        generation: &intake.generation,
         client: client.as_ref(),
         oauth_agent_identity: oauth_agent_identity.as_ref(),
         cert_identity: cert_identity.as_ref(),
@@ -221,6 +222,7 @@ async fn meta_mcp_dispatch(
             // reader's credential as it is resolved at that moment.
             let task_frames = (!request.task_ids().is_empty()).then(|| {
                 let reader = tasks::RecoveryCaller {
+                    generation: &intake.generation,
                     client: client.as_ref(),
                     oauth_agent_identity: oauth_agent_identity.as_ref(),
                     cert_identity: cert_identity.as_ref(),
@@ -517,6 +519,7 @@ async fn meta_mcp_dispatch(
         // completes an input round resumes the call as it.
         "tasks/get" | "tasks/update" => {
             let caller = tasks::RecoveryCaller {
+                generation: &intake.generation,
                 client: client.as_ref(),
                 oauth_agent_identity: oauth_agent_identity.as_ref(),
                 cert_identity: cert_identity.as_ref(),
@@ -532,6 +535,8 @@ async fn meta_mcp_dispatch(
                 session_id: Some(session_id.as_str()),
             };
             if method == "tasks/get" {
+                // A task read serves a stored answer: not this request's.
+                crate::gateway::delivery_facts::unvouched();
                 // Boxed: the stored-read pre-pass (MIK-8392 / #3892) grew this
                 // future past the large-future cap, as stdio `tasks/get` is.
                 Box::pin(tasks::tasks_get(&state, owner, id.clone(), params, &caller)).await
@@ -556,6 +561,8 @@ async fn meta_mcp_dispatch(
     let caller = client
         .as_ref()
         .map_or("anonymous", |client| client.name.as_str());
+    // Taken before finalizing, which may replace the answer.
+    let invocation_trace = response.invocation_trace.clone();
     let delivery = crate::gateway::meta_mcp::response_security::ResponseDeliveryContext {
         method,
         targets: &response_targets,
@@ -565,6 +572,7 @@ async fn meta_mcp_dispatch(
             external_server: "gateway",
             external_tool,
             subject: grant_subject.as_ref(),
+            trace_id: invocation_trace.as_deref(),
         },
         signing: signing_context.as_ref(),
         chain_source: response.chain_source,

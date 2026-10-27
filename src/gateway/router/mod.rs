@@ -172,12 +172,29 @@ mod meta_fingerprint_tests;
 /// MIK-8154.LEASE.1 rows: the direct route takes the shared execution lease.
 #[cfg(test)]
 mod mik8154_lease_rows_tests;
+#[cfg(all(test, feature = "webui"))]
+mod overview_tests;
 /// U17: the UI shell at deep links, hashed assets, /ui/classic (MIK-8870).
 #[cfg(all(test, feature = "webui"))]
 mod u17_ui_shell_tests;
 // MIK-8697: the credential canary over the router's request paths.
 #[cfg(test)]
 mod canary_tests;
+/// A delivery record says what the gateway did to the answer.
+#[cfg(all(test, feature = "firewall"))]
+mod delivery_effect_tests;
+/// A delivery record joins its invocation by trace, on both routes.
+#[cfg(all(test, feature = "firewall"))]
+mod delivery_trace_join_tests;
+/// ADR-023: the security flags apply on reload.
+#[cfg(all(test, feature = "firewall"))]
+mod live_flags_tests;
+/// ADR-023: a request keeps the generation it arrived with.
+#[cfg(all(test, feature = "firewall"))]
+mod live_pin_tests;
+/// ADR-023: the UI view reads the flags and environment name on each response.
+#[cfg(all(test, feature = "webui"))]
+mod live_ui_view_tests;
 /// MIK-8154 PR 2 rows: sanitize parity and passthrough on every route.
 #[cfg(all(test, feature = "firewall"))]
 mod mik8154_rows_tests;
@@ -341,10 +358,6 @@ pub struct AppState {
     pub tool_policy: Arc<ToolPolicy>,
     /// Certificate-based mTLS tool access policy
     pub mtls_policy: Arc<MtlsPolicy>,
-    /// Whether input sanitization is enabled
-    pub sanitize_input: bool,
-    /// Whether SSRF protection is enabled for outbound URLs
-    pub ssrf_protection: bool,
     /// Whether URLs declared in `backends:` config are pre-authorised
     /// (skip runtime SSRF check at proxy time). MIK-3529.
     pub trust_configured_backends: bool,
@@ -583,6 +596,7 @@ pub(crate) fn create_router_with_accounts(
     let bind_origin =
         well_known::bind_fallback_origin(&startup_config.server.host, startup_config.server.port);
     let origin_policy = Arc::new(origin_guard::OriginPolicy::from_live(&state.live_config));
+    let pin_source = Arc::clone(&state.live_config);
     let protected_resource_route =
         Router::new()
             .route(
@@ -710,8 +724,38 @@ pub(crate) fn create_router_with_accounts(
     //
     // Non-browser callers are unaffected: they send no `Origin`, and Prometheus
     // and health probes reach `/metrics` and `/health` as before.
-    app.layer(middleware::from_fn_with_state(
+    let app = app.layer(middleware::from_fn_with_state(
         origin_policy,
         origin_guard::origin_guard_middleware,
-    ))
+    ));
+
+    // Added last so it runs first, on every route merged above and the
+    // fallback, whether or not the route authenticates (ADR-023).
+    app.layer(middleware::from_fn_with_state(pin_source, pin_generation))
+}
+
+/// Pin the published generation on a request before anything else runs. Every
+/// later judgement on the request reads this one, so a reload that publishes
+/// mid-request never mixes two configurations into one answer.
+async fn pin_generation(
+    axum::extract::State(live): axum::extract::State<Arc<crate::config_reload::LiveConfig>>,
+    mut request: axum::extract::Request,
+    next: middleware::Next,
+) -> axum::response::Response {
+    request.extensions_mut().insert(live.generation());
+    next.run(request).await
+}
+
+/// The refusal for a request that reached a reader without a pinned
+/// generation. Fail closed: a reader never falls back to the current one.
+pub(crate) const UNPINNED: &str = "Internal error: no configuration generation on this request";
+
+/// The generation [`pin_generation`] put on this request; `None` only for a
+/// request that never passed the router's outer layer.
+pub(crate) fn pinned_generation(
+    extensions: &axum::http::Extensions,
+) -> Option<Arc<crate::config_reload::Generation>> {
+    extensions
+        .get::<Arc<crate::config_reload::Generation>>()
+        .cloned()
 }

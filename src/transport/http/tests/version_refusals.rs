@@ -133,3 +133,38 @@ async fn a_negotiated_version_the_backend_still_rejects_is_refused() {
     );
     assert!(!connected, "connected after a refused retry");
 }
+
+/// The identity the server reports is the one from the `initialize` answer
+/// that was accepted, after a negotiation retry too; a refused attempt
+/// leaves none behind.
+#[tokio::test]
+async fn the_accepted_initialize_answer_names_the_server() {
+    let (url, server) = peer(Arc::new(|n, body| match n {
+        0 => (400, version_error(&body["id"], "2024-11-05")),
+        _ => (200, initialized(&body["id"])),
+    }))
+    .await;
+    let transport = make_transport(&url);
+    transport
+        .initialize()
+        .await
+        .expect("a shared version connects");
+    assert_eq!(
+        transport.reported_server_info(),
+        Some(json!({"name": "mock", "version": "0"}))
+    );
+    server.abort();
+
+    let (url, server) = peer(Arc::new(|_, body| {
+        (400, version_error(&body["id"], FOREIGN))
+    }))
+    .await;
+    let transport = make_transport(&url);
+    let _ = transport.initialize().await;
+    assert_eq!(
+        transport.reported_server_info(),
+        None,
+        "a refused handshake names nobody"
+    );
+    server.abort();
+}

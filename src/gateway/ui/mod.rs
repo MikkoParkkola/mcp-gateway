@@ -9,6 +9,7 @@
 //!
 //! All UI code is gated behind the `webui` feature flag.
 
+mod activity;
 pub mod admin_audit;
 pub mod backend_ops;
 pub mod backends;
@@ -17,8 +18,12 @@ pub mod control_plane;
 mod dashboard;
 mod errors;
 mod events;
+mod history;
 pub mod import;
+mod overview;
 mod preview;
+mod preview_identity;
+mod refusals;
 pub(crate) mod session;
 mod shell;
 
@@ -66,17 +71,21 @@ fn is_admin(client: Option<&AuthenticatedClient>) -> bool {
 pub fn api_router() -> Router<Arc<AppState>> {
     let router = Router::new()
         .route(routes::UI_STATUS, get(status))
+        .route(routes::UI_OVERVIEW, get(overview::overview))
         .route(routes::UI_TOOLS, get(tools))
+        .route(routes::UI_REFUSALS, get(refusals::refusals))
         .route(routes::UI_CONFIG, get(config))
         .route(routes::UI_RELOAD, post(reload))
         .route(routes::UI_DASHBOARD_LINK, post(session::dashboard_link))
         .route(routes::DASHBOARD, get(dashboard_handler))
         .route(routes::UI_PREVIEWS, post(preview::preview_backend))
+        .merge(activity::activity_router())
         .merge(capabilities::capabilities_router())
         .merge(control_plane::control_plane_router())
         .merge(backends::backends_router())
         .merge(events::events_router())
-        .merge(import::import_router());
+        .merge(import::import_router())
+        .merge(history::history_router());
 
     #[cfg(feature = "cost-governance")]
     let router = router.route(routes::UI_COSTS, get(costs));
@@ -400,6 +409,7 @@ async fn status(
     let mut cb_open: usize = 0;
     let mut cb_half_open: usize = 0;
 
+    let now = crate::clock::system_time_or_before_epoch();
     for backend in &backends {
         let bs = backend.status();
         let cb = backend.circuit_breaker_stats();
@@ -413,7 +423,14 @@ async fn status(
             crate::failsafe::CircuitState::HalfOpen => cb_half_open += 1,
         }
 
+        let view = backend.server_state(now);
         servers.push(ServerStatus {
+            state: view.state,
+            reason: view.reason,
+            next_retry_at: view
+                .next_retry_at
+                .and_then(crate::config_reload::refusals::rfc3339),
+            cleartext_credentials_accepted: backend.cleartext_override_in_effect(),
             name: bs.name,
             running: bs.running,
             transport: bs.transport,
@@ -513,9 +530,11 @@ async fn tools(
     Json(json!({ "tools": entries, "total": entries.len() })).into_response()
 }
 
-/// `GET /ui/api/config` — sanitized configuration (secrets masked).
+/// `GET /ui/api/config` — sanitized configuration (secrets masked). One
+/// generation per response: the one pinned on this request (ADR-023).
 async fn config(
     State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
     client: Option<Extension<AuthenticatedClient>>,
 ) -> impl IntoResponse {
     let client = client.map(|Extension(c)| c);
@@ -565,8 +584,9 @@ async fn config(
         "version": env!("CARGO_PKG_VERSION"),
         "meta_mcp_enabled": state.meta_mcp_enabled,
         "streaming_enabled": state.streaming_config.enabled,
-        "sanitize_input": state.sanitize_input,
-        "ssrf_protection": state.ssrf_protection,
+        "sanitize_input": generation.sanitize_input(),
+        "ssrf_protection": generation.ssrf_protection(),
+        "environment": generation.environment(),
         "servers": servers,
         "secret_references": secret_references,
     }))
@@ -717,6 +737,13 @@ struct ServerStatus {
     latency_p50_ms: Option<u64>,
     latency_p95_ms: Option<u64>,
     latency_p99_ms: Option<u64>,
+    /// The operator's one-word state, with why and when it retries.
+    state: crate::backend::server_state::ServerState,
+    reason: String,
+    next_retry_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Loads only because `allow_cleartext_credentials` accepts sending its
+    /// credentials in cleartext.
+    cleartext_credentials_accepted: bool,
 }
 
 // ── Tests ────────────────────────────────────────────────────────────

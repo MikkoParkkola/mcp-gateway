@@ -44,6 +44,12 @@ struct VisibilityMemo {
     /// carried to that target's dispatch so it answers without resolving
     /// (and auditing) a second time in one request.
     resolution_error: Keyed<TargetKey, crate::Error>,
+    /// The surfaced state this request reads, taken at its first
+    /// surfaced read, so a reload mid-request cannot split it across two maps.
+    surfaced: parking_lot::Mutex<Option<std::sync::Arc<super::SurfacedState>>>,
+    /// A task's recorded server for its surfaced name, which
+    /// wins over the snapshot, so its dispatch runs where it was admitted.
+    surfaced_pins: parking_lot::Mutex<std::collections::HashMap<String, &'static str>>,
 }
 
 /// A memo map's key for one `(server, tool)` target.
@@ -215,6 +221,73 @@ fn in_memo<R>(read: impl FnOnce(&VisibilityMemo) -> R) -> Option<R> {
     VISIBILITY_MEMO.try_with(read).ok()
 }
 
+/// This request's surfaced snapshot, taken from `live` at the first read;
+/// `None` outside a memo.
+pub(crate) fn surfaced_snapshot(
+    live: impl FnOnce() -> std::sync::Arc<super::SurfacedState>,
+) -> Option<std::sync::Arc<super::SurfacedState>> {
+    in_memo(|memo| std::sync::Arc::clone(memo.surfaced.lock().get_or_insert_with(live)))
+}
+
+/// The server a task pinned for its surfaced name in this request, if any.
+pub(crate) fn surfaced_pin(tool_name: &str) -> Option<&'static str> {
+    in_memo(|memo| memo.surfaced_pins.lock().get(tool_name).copied()).flatten()
+}
+
+/// A pin on one surfaced name; dropping it restores the name's earlier pin,
+/// or its absence. A resume reuses its answering request's memo, so a pin
+/// left behind would keep routing the rest of that request to the recorded
+/// server after a reload moved the name.
+#[must_use = "the pin is lifted when this is dropped"]
+pub(crate) struct SurfacedPin {
+    tool_name: String,
+    prior: Option<&'static str>,
+}
+
+impl Drop for SurfacedPin {
+    fn drop(&mut self) {
+        in_memo(|memo| {
+            let mut pins = memo.surfaced_pins.lock();
+            match self.prior {
+                Some(prior) => pins.insert(std::mem::take(&mut self.tool_name), prior),
+                None => pins.remove(&self.tool_name),
+            };
+        });
+    }
+}
+
+/// Pin `tool_name` to `server` in the active memo until the returned guard
+/// drops. A resume runs inside its answering request's memo, and a nested
+/// scope would reuse that one, so the pin is recorded into whichever memo is
+/// active. `None` when no memo is: the caller opens one first.
+pub(crate) fn pin_surfaced(tool_name: &str, server: &'static str) -> Option<SurfacedPin> {
+    in_memo(|memo| SurfacedPin {
+        tool_name: tool_name.to_owned(),
+        prior: memo
+            .surfaced_pins
+            .lock()
+            .insert(tool_name.to_owned(), server),
+    })
+}
+
+/// Run `read` with `tool_name` pinned to `server`, in the active memo or in
+/// one opened for the call. For the synchronous readers after a surfaced
+/// task's dispatch (the settled result's inspection), which run once the
+/// dispatch's own memo has ended.
+pub(crate) fn with_surfaced_pin_sync<R>(
+    tool_name: &str,
+    server: &'static str,
+    read: impl FnOnce() -> R,
+) -> R {
+    if let Some(_pin) = pin_surfaced(tool_name, server) {
+        return read();
+    }
+    VISIBILITY_MEMO.sync_scope(VisibilityMemo::default(), || {
+        let _pin = pin_surfaced(tool_name, server);
+        read()
+    })
+}
+
 /// The account a target's dispatch would use (MIK-8392): a managed
 /// descriptor's id, from an identity-propagation backend's `account` or a
 /// capability's `auth.account`.
@@ -289,6 +362,14 @@ pub(crate) struct Carried {
 pub(crate) struct Judged {
     playbook: Option<String>,
     instances: Vec<(String, std::sync::Weak<crate::backend::Backend>)>,
+}
+
+impl Judged {
+    /// Nothing was judged: intake found no exemption, which it only looks
+    /// for while sanitising is on.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.playbook.is_none() && self.instances.is_empty()
+    }
 }
 
 impl VisibilityMemo {

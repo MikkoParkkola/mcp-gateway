@@ -418,7 +418,11 @@ impl Backend {
         exchange: &'static str,
     ) {
         if error.is_authorization_wait() {
-            return; // MIK-7982: the backend was never asked.
+            // The backend was never asked: someone must sign in.
+            entry
+                .auth_wait
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            return;
         }
         // A busy credential lock is not a backend failure either: the token
         // step never reached the wire, so it takes no breaker sample.

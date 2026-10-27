@@ -13,6 +13,7 @@ use tracing::debug;
 use crate::Result;
 use crate::config::{BackendConfig, TransportConfig};
 
+pub(crate) mod adopt;
 mod client_entry;
 pub mod config_scanner;
 mod jsonc;
@@ -54,6 +55,12 @@ pub struct DiscoveredServer {
     /// the shadow scan's auth-header check (MIK-7716).
     #[serde(skip)]
     pub(crate) unresolved_header_names: Vec<String>,
+    /// Client fields the gateway would not reproduce, by name (`env.K`,
+    /// `headers.K`, `args[2]`, `cwd`, `url`): a value only the client
+    /// resolves, a non-string value, or a `${` where the gateway expands
+    /// nothing. Such a find is not adoptable (`adopt::refusals`).
+    #[serde(skip)]
+    pub(crate) uncarried: Vec<String>,
 }
 
 /// Source of discovery
@@ -117,6 +124,7 @@ impl DiscoveredServer {
             env: SecretMap::default(),
             headers: SecretMap::default(),
             unresolved_header_names: Vec::new(),
+            uncarried: Vec::new(),
         }
     }
 

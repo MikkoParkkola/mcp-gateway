@@ -127,7 +127,10 @@ pub(crate) fn observe_row(
 impl super::EventsHub {
     /// `sub`'s observation now, under `config`: what a record stamps at
     /// fan-out and must still equal when it is sent (A2). `Ok(None)` for a
-    /// shared row.
+    /// shared row. A vault row is also observed under `fence`, the grant's
+    /// fence binding: the producing listener run's at fan-out, a fresh read
+    /// at delivery, so a record observed under a grant that moved never
+    /// matches.
     ///
     /// # Errors
     /// A per-user row whose observation cannot be had now: fan-out sends it
@@ -136,6 +139,7 @@ impl super::EventsHub {
         &self,
         sub: &super::records::Subscription,
         config: &Config,
+        fence: Option<&str>,
     ) -> Result<Option<super::outbox::ObservedUnder>, ObsRefusal> {
         let Some(basis) = sub.obs_basis.clone() else {
             return Ok(None);
@@ -143,15 +147,18 @@ impl super::EventsHub {
         let (backend, _) =
             super::upstream::parse_name(&sub.name).ok_or(ObsRefusal::BasisChanged)?;
         let obs = observe_row(config, backend, sub)?.ok_or(ObsRefusal::BasisChanged)?;
-        let lease = (basis.strategy == PropagationStrategyKind::Passthrough)
-            .then(|| {
-                self.leases.held_generation(&super::lease::LeaseKey {
+        let lease = match basis.strategy {
+            PropagationStrategyKind::Passthrough => self
+                .leases
+                .held_generation(&super::lease::LeaseKey {
                     backend: backend.to_owned(),
                     obs,
                 })
-            })
-            .flatten()
-            .map(|g| format!("{g:032x}"));
+                .map(|g| format!("{g:032x}")),
+            // Prefixed so it never equals a passthrough generation.
+            PropagationStrategyKind::Vault => fence.map(|binding| format!("vault:{binding}")),
+            _ => None,
+        };
         Ok(Some(super::outbox::ObservedUnder {
             incarnation: sub.incarnation,
             obs_basis: basis,
