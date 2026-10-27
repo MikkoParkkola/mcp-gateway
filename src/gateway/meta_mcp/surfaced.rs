@@ -8,12 +8,14 @@
 //! the same backend registry as the surfaced-tool resolver.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use serde_json::{Value, json};
 use tracing::{debug, warn};
 
 use crate::capability::validator::input_schema_is_structurally_valid;
 use crate::config::SurfacedToolConfig;
+use crate::gateway::task_service::{SurfacedKind, SurfacedTarget};
 use crate::{Result, protocol::Tool};
 
 use super::MetaMcp;
@@ -84,31 +86,8 @@ impl MetaMcp {
     /// Validation failures are logged as warnings rather than panics so the
     /// gateway always starts — misconfigured surfaced tools are simply dropped.
     #[must_use]
-    pub fn with_surfaced_tools(mut self, tools: Vec<SurfacedToolConfig>) -> Self {
-        let mut map: HashMap<String, String> = HashMap::new();
-        let mut validated: Vec<SurfacedToolConfig> = Vec::with_capacity(tools.len());
-
-        for cfg in tools {
-            if args_policy(&cfg.tool) != ArgsPolicy::BackendWhole {
-                warn!(
-                    tool = %cfg.tool,
-                    "Surfaced tool name collides with a meta-tool — skipping"
-                );
-                continue;
-            }
-            if map.contains_key(&cfg.tool) {
-                warn!(
-                    tool = %cfg.tool,
-                    "Duplicate surfaced tool name — skipping second occurrence"
-                );
-                continue;
-            }
-            map.insert(cfg.tool.clone(), cfg.server.clone());
-            validated.push(cfg);
-        }
-
-        self.surfaced_tools = validated;
-        self.surfaced_tools_map = super::visible::SurfacedMap::new(map);
+    pub fn with_surfaced_tools(self, tools: Vec<SurfacedToolConfig>) -> Self {
+        *self.surfaced.write() = Arc::new(validate_surfaced(tools));
         self
     }
 
@@ -116,9 +95,201 @@ impl MetaMcp {
     /// reload of `surfaced_tools` would, so a row can move it between a
     /// replay's admission and its record.
     #[cfg(test)]
-    pub(crate) fn resurface_for_test(&mut self, tool: &str, server: &str) {
-        let map = HashMap::from([(tool.to_owned(), server.to_owned())]);
-        self.surfaced_tools_map = super::visible::SurfacedMap::new(map);
+    pub(crate) fn resurface_for_test(&self, tool: &str, server: &str) {
+        let tools = vec![SurfacedToolConfig {
+            server: server.to_owned(),
+            tool: tool.to_owned(),
+        }];
+        *self.surfaced.write() = Arc::new(validate_surfaced(tools));
+    }
+
+    /// Apply `tools` as a reload of `surfaced_tools` does, nudge
+    /// included, without a config file. Returns whether anything changed.
+    #[cfg(test)]
+    pub(crate) fn reload_surfaced_for_test(&self, tools: Vec<SurfacedToolConfig>) -> bool {
+        let mut config = crate::config::Config::default();
+        config.meta_mcp.surfaced_tools = tools;
+        apply_surfaced_reload(&self.surfaced, &self.backends, &config)
+    }
+
+    /// Withdraw every surfaced name, as a reload to an empty list
+    /// would.
+    #[cfg(test)]
+    pub(crate) fn clear_surfaced_for_test(&self) {
+        *self.surfaced.write() = Arc::default();
+    }
+}
+
+impl MetaMcp {
+    /// Where a surfaced `tool` resolves for a task admitted now: its server in
+    /// this request's snapshot, and what serves it there. `None` for a
+    /// non-surfaced name.
+    pub(crate) fn surfaced_target_at_intake(&self, tool: &str) -> Option<SurfacedTarget> {
+        let server = self.surfaced_server_unscoped(tool)?;
+        Some(SurfacedTarget {
+            server: server.to_owned(),
+            kind: self.surfaced_kind(server),
+        })
+    }
+
+    /// What kind of target serves `server` right now: a registered backend of
+    /// that name, else the capability fallback. The hold then also requires
+    /// the capability set to be named `server` and to hold the tool, the
+    /// invoke gate's own test.
+    fn surfaced_kind(&self, server: &str) -> SurfacedKind {
+        if self
+            .backends
+            .get_for(super::scoped_backends::Unscoped::Visibility, server)
+            .is_some()
+        {
+            SurfacedKind::Backend
+        } else {
+            SurfacedKind::Capability
+        }
+    }
+
+    /// Whether a task's recorded surfaced target still holds,
+    /// read memo-blind so a request snapshot cannot hide a reload: the live
+    /// map still surfaces `tool` from the recorded server, and the same kind
+    /// of target still serves it there: the registered backend, or the
+    /// capability set named after that server holding `tool`. A backend
+    /// swapped for a same-named capability, or the reverse, is a changed
+    /// target. `None` (no recorded target) always holds and resolves live.
+    pub(crate) fn surfaced_target_holds(
+        &self,
+        tool: &str,
+        recorded: Option<&SurfacedTarget>,
+    ) -> bool {
+        let Some(recorded) = recorded else {
+            return true;
+        };
+        let server = recorded.server.as_str();
+        self.surfaced_state_live().map.unscoped(tool) == Some(server)
+            && self.surfaced_kind(server) == recorded.kind
+            && (recorded.kind == SurfacedKind::Backend
+                || self
+                    .get_capabilities()
+                    .is_some_and(|cap| cap.name == server && cap.has_capability(tool)))
+    }
+
+    /// Run `dispatch` with `tool` pinned to its recorded server in the active
+    /// memo, opening one when none is. The pin closes the gap
+    /// between [`Self::surfaced_target_holds`] and the dispatch, where a reload
+    /// could land; it is not redundant with that check.
+    pub(crate) async fn with_surfaced_pin<F: std::future::Future>(
+        &self,
+        tool: &str,
+        recorded: Option<&SurfacedTarget>,
+        dispatch: F,
+    ) -> F::Output {
+        let Some(server) = recorded.map(|target| super::visible::intern(&target.server)) else {
+            return dispatch.await;
+        };
+        super::visible::memo::with_visibility_memo(async move {
+            let _pin = super::visible::memo::pin_surfaced(tool, server);
+            dispatch.await
+        })
+        .await
+    }
+}
+
+impl MetaMcp {
+    /// [`Self::with_surfaced_pin`] for a synchronous read. A surfaced task's
+    /// settled result is inspected under the targets of the server that
+    /// produced it, even when a reload moved the name during the call.
+    pub(crate) fn with_surfaced_pin_sync<R>(
+        tool: &str,
+        recorded: Option<&SurfacedTarget>,
+        read: impl FnOnce() -> R,
+    ) -> R {
+        match recorded.map(|target| super::visible::intern(&target.server)) {
+            Some(server) => super::visible::memo::with_surfaced_pin_sync(tool, server, read),
+            None => read(),
+        }
+    }
+}
+
+/// Apply a reloaded config's `surfaced_tools` (under
+/// `lock_reload`). The new list is validated as at startup; when the ordered
+/// `(tool, server)` list differs from the running one (a reorder changes every
+/// served list), the state is swapped and one `tools/list_changed` nudge is
+/// sent. An identical list changes and announces nothing. Returns whether
+/// anything changed.
+pub(super) fn apply_surfaced_reload(
+    slot: &parking_lot::RwLock<Arc<super::visible::SurfacedState>>,
+    backends: &super::scoped_backends::Registry,
+    config: &crate::config::Config,
+) -> bool {
+    let next = validate_surfaced(config.meta_mcp.surfaced_tools.clone());
+    let pairs = |state: &super::visible::SurfacedState| {
+        state
+            .tools
+            .iter()
+            .map(|t| (t.tool.clone(), t.server.clone()))
+            .collect::<Vec<_>>()
+    };
+    if pairs(&slot.read()) == pairs(&next) {
+        return false;
+    }
+    for surfaced in &next.tools {
+        if backends
+            .get_for(
+                super::scoped_backends::Unscoped::Visibility,
+                &surfaced.server,
+            )
+            .is_none()
+        {
+            warn!(
+                tool = %surfaced.tool,
+                server = %surfaced.server,
+                "Surfaced tool names a backend that is not configured"
+            );
+        }
+        // T2.6, as at startup (run.rs): repeated only when the set changed.
+        if !config.meta_mcp.warm_start.contains(&surfaced.server) {
+            warn!(
+                tool = %surfaced.tool,
+                server = %surfaced.server,
+                "Surfaced tool's backend is not in meta_mcp.warm_start — \
+                 schema may be absent until the backend is first used"
+            );
+        }
+    }
+    *slot.write() = Arc::new(next);
+    backends.nudge_surfaced();
+    true
+}
+
+/// Validate a surfaced-tools list as startup and every reload do: a name
+/// colliding with a meta tool, and a second occurrence of
+/// a name, are dropped with a warning. Never fails, so an invalid entry
+/// never aborts a reload.
+pub(crate) fn validate_surfaced(tools: Vec<SurfacedToolConfig>) -> super::visible::SurfacedState {
+    let mut map: HashMap<String, String> = HashMap::new();
+    let mut validated: Vec<SurfacedToolConfig> = Vec::with_capacity(tools.len());
+
+    for cfg in tools {
+        if args_policy(&cfg.tool) != ArgsPolicy::BackendWhole {
+            warn!(
+                tool = %cfg.tool,
+                "Surfaced tool name collides with a meta-tool — skipping"
+            );
+            continue;
+        }
+        if map.contains_key(&cfg.tool) {
+            warn!(
+                tool = %cfg.tool,
+                "Duplicate surfaced tool name — skipping second occurrence"
+            );
+            continue;
+        }
+        map.insert(cfg.tool.clone(), cfg.server.clone());
+        validated.push(cfg);
+    }
+
+    super::visible::SurfacedState {
+        tools: validated,
+        map: super::visible::SurfacedMap::new(map),
     }
 }
 
@@ -347,3 +518,7 @@ impl MetaMcp {
         Ok(json!({ "servers": servers }))
     }
 }
+
+#[cfg(test)]
+#[path = "surfaced_reload_tests.rs"]
+mod reload_tests;

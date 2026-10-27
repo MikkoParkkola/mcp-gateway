@@ -21,6 +21,7 @@ mod control_plane_store;
 mod cost_restart_tests;
 #[cfg(all(test, feature = "cost-governance"))]
 mod cost_save_stamp_tests;
+mod counter_wiring;
 mod events_wiring;
 #[cfg(test)]
 pub(crate) use events_wiring::listener_mint_for_test;

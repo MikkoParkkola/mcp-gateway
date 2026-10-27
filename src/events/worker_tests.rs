@@ -479,3 +479,6 @@ mod clock;
 
 #[path = "worker_fixtures_tests.rs"]
 mod fixtures;
+
+#[path = "worker_obs_tests.rs"]
+mod obs;

@@ -23,7 +23,24 @@ pub(super) fn install(
     webhooks: &Arc<parking_lot::RwLock<WebhookRegistry>>,
     live_config: &Arc<crate::config_reload::LiveConfig>,
     credentials: crate::events::LiveCredentials,
+    counters: &Arc<crate::counters::CounterStore>,
 ) -> Result<()> {
+    // The kill switch and breakers mark the charts in every events
+    // configuration. Their observer slots are set once: when the operational
+    // source is installed below it carries the markers, otherwise this does.
+    // A mark keeps a server name only when it is configured, by the same
+    // test the counters use. Weak: the kill switch the observer sits in is
+    // the gateway's own.
+    let markers = crate::events::Markers {
+        store: Arc::clone(counters),
+        known: {
+            let meta = Arc::downgrade(meta_mcp);
+            Arc::new(move |name: &str| meta.upgrade().is_some_and(|m| m.configured_server(name)))
+        },
+    };
+    if !(config.events.enabled && config.events.sources.operational) {
+        crate::events::install_marker_observers(&meta_mcp.kill_switch(), registry, markers.clone());
+    }
     if config.webhooks.enabled {
         meta_mcp.set_webhook_registry(Arc::clone(webhooks));
     }
@@ -62,7 +79,8 @@ pub(super) fn install(
         );
     }
     if config.events.sources.operational {
-        let source = hub.install_operational_source(&meta_mcp.kill_switch(), registry);
+        let source =
+            hub.install_operational_source(&meta_mcp.kill_switch(), registry, Some(markers));
         #[cfg(feature = "cost-governance")]
         if let Some(budget) = &meta_mcp.budget_enforcer {
             source.report_budgets(budget);
@@ -115,3 +133,7 @@ impl crate::events::ListenerMint for ListenerMint {
         meta.listener_fence_binding(backend, identity).await
     }
 }
+
+#[cfg(test)]
+#[path = "events_wiring_tests.rs"]
+mod tests;

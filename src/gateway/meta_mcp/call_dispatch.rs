@@ -131,11 +131,15 @@ impl MetaMcp {
         let (tool_name, caller) = (target.tool_name, target.caller);
         let invoke_args =
             admission::named_tool_envelope(server_name, tool_name, &target.arguments, caller);
+        let trace_id = crate::gateway::trace::generate();
+        let trace = Arc::<str>::from(trace_id.as_str());
         let sourced = self
-            .invoke_tool_with_source(&invoke_args, target.session_id, caller)
+            .invoke_tool_with_source(&invoke_args, target.session_id, caller, trace_id)
             .await;
         let (result, chain) = match live_or_stored(sourced) {
             ControlFlow::Continue(live) => live,
+            // A stored answer carries its replay's trace, stamped where
+            // `audit_replay` recorded it; a refused lift recorded nothing.
             ControlFlow::Break(stored) => return stored,
         };
         // Native: the envelope verbatim. The dispatch's chain source rides on
@@ -149,6 +153,7 @@ impl MetaMcp {
             declared,
             chain,
         )
+        .with_invocation_trace(trace)
     }
 
     /// Handle `tools/call` — dispatch to the appropriate handler.
@@ -423,6 +428,8 @@ impl MetaMcp {
 
         // Only gateway_invoke can be chain-eligible; composites stay NotEligible.
         let (mut source, mut upstream) = (ChainSource::NotEligible, None);
+        // Only `gateway_invoke` answers for one invocation.
+        let mut trace = None;
         let result = match MetaArm::parse(tool_name) {
             Some(MetaArm::Search) => self.code_mode_search(&arguments, session_id, caller).await,
             Some(MetaArm::Execute) => self.code_mode_execute(&arguments, session_id, caller).await,
@@ -433,14 +440,18 @@ impl MetaMcp {
             Some(MetaArm::ListTools) => self.list_tools(&arguments, session_id, caller).await,
             Some(MetaArm::SearchTools) => self.search_tools(&arguments, session_id, caller).await,
             Some(MetaArm::Invoke) => {
+                let trace_id = crate::gateway::trace::generate();
+                let invocation = Arc::<str>::from(trace_id.as_str());
                 let sourced = self
-                    .invoke_tool_sourced(&arguments, session_id, caller)
+                    .invoke_tool_sourced(&arguments, session_id, caller, trace_id)
                     .await;
                 match live_or_stored(sourced) {
                     ControlFlow::Continue((result, chain)) => {
                         (source, upstream) = chain;
+                        trace = Some(invocation);
                         result
                     }
+                    // Traced by `audit_replay`, as on the named-tool path.
                     ControlFlow::Break(stored) => return stored,
                 }
             }
@@ -477,6 +488,7 @@ impl MetaMcp {
         let mut response =
             response_security::shape_meta_result(id, tool_name, result, shape, declared, chain);
         response.egress_scanned = inspected;
+        response.invocation_trace = trace;
         response
     }
 }

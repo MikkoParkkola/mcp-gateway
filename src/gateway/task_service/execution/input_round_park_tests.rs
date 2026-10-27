@@ -132,6 +132,7 @@ fn call(tool: &str, arguments: Value) -> TaskCall {
     TaskCall {
         tool: tool.to_owned(),
         arguments,
+        surfaced_server: None,
     }
 }
 

@@ -9,14 +9,14 @@ src/config_reload/mod.rs	apply_patch	statement	Lifecycle	getx1
 src/config_reload/mod.rs	apply_patch	statement	Lifecycle	registerx1
 src/config_reload/mod.rs	apply_patch	statement	Lifecycle	registerx1
 src/config_reload/mod.rs	apply_patch	statement	Lifecycle	removex1
-src/config_reload/reload_context.rs	load_off_worker	statement	Lifecycle	reload_read_slotx1
-src/config_reload/reload_context.rs	lock_reload_within	statement	Lifecycle	lock_reloadx1
 src/config_reload/reload_context.rs	new	statement	Lifecycle	enforce_destinationsx1
 src/config_reload/reload_context.rs	reload_outcome	statement	Lifecycle	lock_reloadx1
+src/config_reload/reload_context_lock.rs	load_off_worker	statement	Lifecycle	reload_read_slotx1
+src/config_reload/reload_context_lock.rs	lock_reload_within	statement	Lifecycle	lock_reloadx1
 src/config_reload/reload_warm_hook.rs	report_registered	statement	Lifecycle	resolve_unwarmedx1
 src/config_reload/watcher.rs	start_with_hook	statement	Lifecycle	enforce_destinationsx1
 src/events/fanout.rs	reconcile_catalogue_after	statement	Background	with_membershipx1
-src/events/operational_source.rs	install_operational_source	statement	Background	observe_breakersx1
+src/events/operational_source.rs	observe	statement	Background	observe_breakersx1
 src/events/rpc.rs	judged_backends	statement	Discovery	getx1
 src/events/rpc.rs	resolve_upstream	statement	Discovery	getx1
 src/events/upstream.rs	detected_in	statement	Background	getx1
@@ -33,6 +33,7 @@ src/gateway/meta_mcp/scoped_backends.rs	all_for	statement	Lifecycle	allx1
 src/gateway/meta_mcp/scoped_backends.rs	get_for	statement	Lifecycle	getx1
 src/gateway/meta_mcp/scoped_backends.rs	membership_for	statement	Lifecycle	with_membershipx1
 src/gateway/meta_mcp/scoped_backends.rs	nudge_catalogue_for	statement	Lifecycle	nudge_cataloguex1
+src/gateway/meta_mcp/scoped_backends.rs	nudge_surfaced	statement	Lifecycle	nudge_surfacedx1
 src/gateway/meta_mcp/scoped_backends.rs	scoped_get	statement	Visibility	getx1
 src/gateway/meta_mcp/scoped_backends.rs	statuses_for	statement	Lifecycle	statusesx1
 src/gateway/meta_mcp/scoped_backends.rs	subscribe_started_for	statement	Lifecycle	subscribe_startedx1
@@ -68,3 +69,4 @@ src/home_dir.rs	-	item	the one place the platform lookups are called
 src/home_dir.rs	-	item	the one place the platform lookups are called	
 src/home_dir.rs	-	item	the one place the platform lookups are called	
 src/home_dir.rs	-	item	the one place the platform lookups are called	
+src/gateway/ui/overview.rs	kpi_and_servers	statement	Admin	allx1
