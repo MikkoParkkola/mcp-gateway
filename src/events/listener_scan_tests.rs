@@ -4,18 +4,25 @@
 //!
 //! - **Keys.** Every backend notification a listener path emits takes its
 //!   `lifecycle_key` from `key_of` or `backend_key`, the functions that put a
-//!   per-user listener's observation key into it. A literal `None`, or a key
+//!   per-user listener's observation key into it. A literal `None`, a
+//!   `backend_key(None, ..)` outside the gateway's own shared view, or a key
 //!   from anywhere else, would let fan-out treat a per-user occurrence as the
 //!   backend's shared one.
 //! - **Credential.** In the listener transports, a request is sent only inside
 //!   a `send` helper, and each such helper goes through `with_credential`, so
 //!   no listener request leaves without the subscriber's credential seam.
 //!
-//! Both rules count what they find, so a scan that matches nothing fails, and
-//! each is shown failing on a fixture that breaks it. Both fail closed on
-//! files: an emit or a listener transport outside the scanned files fails.
+//! The rules read the parsed source (`syn`), so layout, field order and line
+//! breaks cannot hide an emit or a send. Both count what they find, so a scan
+//! that matches nothing fails, and each is shown failing on a fixture that
+//! breaks it. Both fail closed on files: an emit, or a transport that takes
+//! the credential seam, outside the scanned files fails. A file that does not
+//! parse fails. Stated limit: a `send` helper is judged by reaching
+//! `with_credential`, not by the shape of its branches.
 
 use std::path::Path;
+
+use syn::visit::Visit;
 
 /// Files whose backend notifications are emitted by a listener path, relative
 /// to `src/events`.
@@ -25,134 +32,251 @@ const EMITS: usize = 3;
 /// The one file that also emits the gateway's own shared view, keyed with no
 /// observation (`backend_key(None, ..)`); a listener path never may.
 const SHARED_VIEW_FILE: &str = "backend_source.rs";
-/// The listener transports, relative to `src/transport/http`.
-const SEND_FILES: &[&str] = &["listen.rs", "sse_listen.rs", "streamable_listen.rs"];
+/// The listener transports a per-user listener runs on, relative to
+/// `src/transport`.
+const SEND_FILES: &[&str] = &[
+    "http/listen.rs",
+    "http/sse_listen.rs",
+    "http/streamable_listen.rs",
+];
 /// `send` helpers those files hold today.
 const SEND_HELPERS: usize = 2;
+/// Listener-side transport files the credential rule does not scan, and why.
+const NOT_PER_USER: &[(&str, &str)] = &[
+    ("upstream_tap.rs", "defines CredentialSource; sends nothing"),
+    (
+        "stdio_listen.rs",
+        "identity_propagation requires an http transport (src/config/validation.rs)",
+    ),
+    (
+        "websocket_listen.rs",
+        "identity_propagation requires an http transport (src/config/validation.rs)",
+    ),
+];
 
-/// The text before the first inline test module: product code only.
-fn product(text: &str) -> &str {
-    text.find("#[cfg(test)]\nmod ")
-        .map_or(text, |at| &text[..at])
-}
-
-/// The struct literal enclosing line `at`: its opening line and type name.
-/// A field order or spacing change cannot hide an emit from the count.
-fn opener<'a>(lines: &[&'a str], at: usize) -> Option<(usize, &'a str)> {
-    (at.saturating_sub(20)..at).rev().find_map(|n| {
-        let head = lines[n].trim_end().strip_suffix(" {")?;
-        let name_at = head
-            .rfind(|c: char| !(c.is_alphanumeric() || c == '_'))
-            .map_or(0, |i| i + 1);
-        let name = &head[name_at..];
-        name.starts_with(char::is_uppercase).then_some((n, name))
+/// `#[cfg(test)]` (and not `#[cfg(not(test))]`).
+fn is_cfg_test(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        let syn::Meta::List(list) = &attr.meta else {
+            return false;
+        };
+        let tokens = list.tokens.to_string();
+        attr.path().is_ident("cfg") && tokens.contains("test") && !tokens.contains("not")
     })
 }
 
-/// The value of the `lifecycle_key` field in the struct literal that starts at
-/// line `from`, or `None` when the literal has no such field.
-fn key_field(lines: &[&str], from: usize) -> Option<String> {
-    lines.iter().skip(from).take(30).find_map(|line| {
-        let rest = line.trim_start().strip_prefix("lifecycle_key")?;
-        let rest = rest.trim_end().trim_end_matches(',');
-        Some(match rest.strip_prefix(':') {
-            Some(value) => value.trim().to_owned(),
-            None => "lifecycle_key".to_owned(),
-        })
+fn last_ident(path: &syn::Path) -> String {
+    path.segments
+        .last()
+        .map(|s| s.ident.to_string())
+        .unwrap_or_default()
+}
+
+fn parse(file: &str, text: &str) -> syn::File {
+    syn::parse_file(text).unwrap_or_else(|e| panic!("parse {file}: {e}"))
+}
+
+fn field<'a>(s: &'a syn::ExprStruct, name: &str) -> Option<&'a syn::Expr> {
+    s.fields.iter().find_map(|f| match &f.member {
+        syn::Member::Named(ident) if ident == name => Some(&f.expr),
+        _ => None,
     })
 }
 
-/// Every backend-notification emit in `text` whose key is not bound from
-/// `key_of` or `backend_key` in the lines above it, and how many emits there
-/// were.
-fn bad_emits(file: &str, text: &str) -> (Vec<String>, usize) {
-    let lines: Vec<&str> = product(text).lines().collect();
-    let mut bad = Vec::new();
-    let mut emits = 0;
-    for (at, line) in lines.iter().enumerate() {
-        if !line.contains("kind: SourceKind::BackendNotification") {
-            continue;
-        }
-        let Some((start, "SourceEvent")) = opener(&lines, at) else {
-            continue;
-        };
-        emits += 1;
-        let place = format!("{file}:{}", at + 1);
-        let Some(value) = key_field(&lines, start) else {
-            bad.push(format!("{place}: no lifecycle_key"));
-            continue;
-        };
-        let binding = format!("let {value} = ");
-        let Some(bound) = lines[at.saturating_sub(30)..at].iter().find(|above| {
-            above.contains(&binding)
-                && (above.contains("key_of(") || above.contains("backend_key("))
-        }) else {
-            bad.push(format!(
-                "{place}: lifecycle_key {value} is not from key_of or backend_key"
-            ));
-            continue;
-        };
-        if bound.contains("backend_key(None") && file != SHARED_VIEW_FILE {
-            bad.push(format!(
-                "{place}: lifecycle_key {value} is keyed as the gateway (backend_key(None, ..))"
-            ));
-        }
-    }
-    (bad, emits)
+/// The key rule over one file: emits counted, breaches named.
+struct Emits<'f> {
+    file: &'f str,
+    count: usize,
+    bad: Vec<String>,
+    /// `let` bindings seen so far in the current fn, newest last.
+    bindings: Vec<(String, syn::Expr)>,
 }
 
-/// The function a line opens, if it opens one.
-fn opens_fn(line: &str) -> Option<&str> {
-    let rest = line.trim_start();
-    let at = rest.find("fn ")?;
-    let head = &rest[..at];
-    if !head
-        .split_whitespace()
-        .all(|w| w.starts_with("pub") || w == "async")
-    {
-        return None;
-    }
-    let name = &rest[at + 3..];
-    let end = name.find(|c: char| !(c.is_alphanumeric() || c == '_'))?;
-    Some(&name[..end])
-}
-
-/// Every raw `.send()` in `text` outside a `send` helper, every `send` helper
-/// that never reaches `with_credential`, and how many helpers there were.
-fn bad_sends(file: &str, text: &str) -> (Vec<String>, usize) {
-    let mut bad = Vec::new();
-    let mut helpers = 0;
-    let mut current: Option<(&str, usize, bool)> = None;
-    let close = |current: Option<(&str, usize, bool)>, bad: &mut Vec<String>| {
-        if let Some(("send", line, false)) = current {
-            bad.push(format!(
-                "{file}:{line}: send helper never reaches with_credential"
-            ));
-        }
-    };
-    for (at, line) in product(text).lines().enumerate() {
-        if let Some(name) = opens_fn(line) {
-            close(current.take(), &mut bad);
-            if name == "send" {
-                helpers += 1;
+impl Emits<'_> {
+    /// Why a key expression breaks the rule, if it does. A name resolves to
+    /// its nearest earlier binding in the same fn.
+    fn judge_key(&self, expr: &syn::Expr, depth: u8) -> Option<String> {
+        match expr {
+            syn::Expr::Paren(e) => self.judge_key(&e.expr, depth),
+            syn::Expr::Group(e) => self.judge_key(&e.expr, depth),
+            syn::Expr::MethodCall(m) if m.method == "key_of" => None,
+            syn::Expr::Call(c) => match &*c.func {
+                syn::Expr::Path(p) if last_ident(&p.path) == "backend_key" => {
+                    let gateway = matches!(c.args.first(),
+                        Some(syn::Expr::Path(a)) if last_ident(&a.path) == "None");
+                    (gateway && self.file != SHARED_VIEW_FILE)
+                        .then(|| "is keyed as the gateway (backend_key(None, ..))".to_owned())
+                }
+                _ => Some("is not from key_of or backend_key".to_owned()),
+            },
+            syn::Expr::Path(p) if depth < 4 => {
+                let Some(name) = p.path.get_ident().map(ToString::to_string) else {
+                    return Some("is not from key_of or backend_key".to_owned());
+                };
+                match self.bindings.iter().rev().find(|(n, _)| *n == name) {
+                    Some((_, init)) => self.judge_key(init, depth + 1),
+                    None => Some(format!("{name} is not bound from key_of or backend_key")),
+                }
             }
-            current = Some((name, at + 1, false));
+            _ => Some("is not from key_of or backend_key".to_owned()),
         }
-        if line.contains("with_credential")
-            && let Some(open) = current.as_mut()
-        {
-            open.2 = true;
+    }
+
+    fn in_fn(&mut self, visit: impl FnOnce(&mut Self)) {
+        let outer = std::mem::take(&mut self.bindings);
+        visit(self);
+        self.bindings = outer;
+    }
+}
+
+impl<'ast> Visit<'ast> for Emits<'_> {
+    fn visit_item_mod(&mut self, m: &'ast syn::ItemMod) {
+        if !is_cfg_test(&m.attrs) {
+            syn::visit::visit_item_mod(self, m);
         }
-        let sends = line.contains(".send()");
-        if sends && current.map(|(name, ..)| name) != Some("send") {
-            bad.push(format!(
-                "{file}:{}: request sent outside a send helper",
-                at + 1
+    }
+
+    fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
+        if !is_cfg_test(&f.attrs) {
+            self.in_fn(|me| syn::visit::visit_item_fn(me, f));
+        }
+    }
+
+    fn visit_impl_item_fn(&mut self, f: &'ast syn::ImplItemFn) {
+        if !is_cfg_test(&f.attrs) {
+            self.in_fn(|me| syn::visit::visit_impl_item_fn(me, f));
+        }
+    }
+
+    fn visit_block(&mut self, block: &'ast syn::Block) {
+        // A binding ends with its block.
+        let outer = self.bindings.len();
+        syn::visit::visit_block(self, block);
+        self.bindings.truncate(outer);
+    }
+
+    fn visit_local(&mut self, local: &'ast syn::Local) {
+        syn::visit::visit_local(self, local);
+        let pat = match &local.pat {
+            syn::Pat::Type(t) => &*t.pat,
+            other => other,
+        };
+        if let (syn::Pat::Ident(p), Some(init)) = (pat, &local.init) {
+            self.bindings
+                .push((p.ident.to_string(), (*init.expr).clone()));
+        }
+    }
+
+    fn visit_expr_struct(&mut self, s: &'ast syn::ExprStruct) {
+        let notification = matches!(field(s, "kind"),
+            Some(syn::Expr::Path(p)) if last_ident(&p.path) == "BackendNotification");
+        if notification {
+            match last_ident(&s.path).as_str() {
+                "SourceEvent" => {
+                    self.count += 1;
+                    let place = format!("{}: emit {}", self.file, self.count);
+                    match field(s, "lifecycle_key") {
+                        None => self.bad.push(format!("{place}: no lifecycle_key")),
+                        Some(key) => {
+                            if let Some(why) = self.judge_key(key, 0) {
+                                self.bad.push(format!("{place}: lifecycle_key {why}"));
+                            }
+                        }
+                    }
+                }
+                "EventDescriptor" => {}
+                other => self.bad.push(format!(
+                    "{}: a {other} of kind BackendNotification is neither an emit nor a descriptor",
+                    self.file
+                )),
+            }
+        }
+        syn::visit::visit_expr_struct(self, s);
+    }
+}
+
+/// Every breach of the key rule in `text`, and how many emits there were.
+fn bad_emits(file: &str, text: &str) -> (Vec<String>, usize) {
+    let mut emits = Emits {
+        file,
+        count: 0,
+        bad: Vec::new(),
+        bindings: Vec::new(),
+    };
+    emits.visit_file(&parse(file, text));
+    (emits.bad, emits.count)
+}
+
+/// The credential rule over one file: `send` helpers counted, breaches named.
+struct Sends<'f> {
+    file: &'f str,
+    helpers: usize,
+    bad: Vec<String>,
+    /// Per enclosing fn: whether it is a `send` helper, and whether it has
+    /// reached `with_credential`.
+    frames: Vec<(bool, bool)>,
+}
+
+impl Sends<'_> {
+    fn in_fn(&mut self, name: &syn::Ident, visit: impl FnOnce(&mut Self)) {
+        let helper = name == "send";
+        self.helpers += usize::from(helper);
+        self.frames.push((helper, false));
+        visit(self);
+        if let Some((true, false)) = self.frames.pop() {
+            self.bad.push(format!(
+                "{}: send helper never reaches with_credential",
+                self.file
             ));
         }
     }
-    close(current, &mut bad);
-    (bad, helpers)
+}
+
+impl<'ast> Visit<'ast> for Sends<'_> {
+    fn visit_item_mod(&mut self, m: &'ast syn::ItemMod) {
+        if !is_cfg_test(&m.attrs) {
+            syn::visit::visit_item_mod(self, m);
+        }
+    }
+
+    fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
+        if !is_cfg_test(&f.attrs) {
+            self.in_fn(&f.sig.ident, |me| syn::visit::visit_item_fn(me, f));
+        }
+    }
+
+    fn visit_impl_item_fn(&mut self, f: &'ast syn::ImplItemFn) {
+        if !is_cfg_test(&f.attrs) {
+            self.in_fn(&f.sig.ident, |me| syn::visit::visit_impl_item_fn(me, f));
+        }
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if call.method == "with_credential"
+            && let Some(frame) = self.frames.last_mut()
+        {
+            frame.1 = true;
+        }
+        let in_helper = self.frames.last().is_some_and(|(helper, _)| *helper);
+        if call.method == "send" && call.args.is_empty() && !in_helper {
+            self.bad
+                .push(format!("{}: request sent outside a send helper", self.file));
+        }
+        syn::visit::visit_expr_method_call(self, call);
+    }
+}
+
+/// Every breach of the credential rule in `text`, and how many helpers there
+/// were.
+fn bad_sends(file: &str, text: &str) -> (Vec<String>, usize) {
+    let mut sends = Sends {
+        file,
+        helpers: 0,
+        bad: Vec::new(),
+        frames: Vec::new(),
+    };
+    sends.visit_file(&parse(file, text));
+    (sends.bad, sends.helpers)
 }
 
 fn read(dir: &str, file: &str) -> String {
@@ -160,40 +284,80 @@ fn read(dir: &str, file: &str) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
-/// The product `.rs` files directly in `dir` (test files excluded).
+/// The product `.rs` files under `dir`, at any depth, relative to it (test
+/// files and `tests` directories excluded).
 fn product_files(dir: &str) -> Vec<String> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
-    let mut files: Vec<String> = std::fs::read_dir(&path)
-        .unwrap_or_else(|e| panic!("list {}: {e}", path.display()))
-        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
-        .filter(|name| name.ends_with(".rs") && !name.ends_with("_tests.rs"))
-        .collect();
+    fn walk(root: &Path, rel: &Path, out: &mut Vec<String>) {
+        let here = root.join(rel);
+        let entries =
+            std::fs::read_dir(&here).unwrap_or_else(|e| panic!("list {}: {e}", here.display()));
+        for entry in entries {
+            let entry = entry.expect("dir entry");
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let path = rel.join(&name);
+            if entry.file_type().expect("file type").is_dir() {
+                if name != "tests" {
+                    walk(root, &path, out);
+                }
+            } else if name.ends_with(".rs") && !name.ends_with("_tests.rs") {
+                out.push(path.to_string_lossy().into_owned());
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join(dir),
+        Path::new(""),
+        &mut files,
+    );
     files.sort();
     files
 }
 
-/// Fail closed on files: no backend-notification emit, and no listener
-/// transport, outside the files the two rules scan.
+/// Whether product code (not a comment) in `text` names `word`.
+fn names_in_code(text: &str, word: &str) -> bool {
+    text.lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .any(|line| line.contains(word))
+}
+
+/// Fail closed on files: no backend-notification emit outside the emit files,
+/// and no transport taking the credential seam outside the scanned or
+/// classified files.
 #[test]
 fn iso_t5_no_listener_emit_or_transport_escapes_the_scan() {
     let unscanned: Vec<String> = product_files("src/events")
         .into_iter()
         .filter(|file| !EMIT_FILES.contains(&file.as_str()))
-        .filter(|file| bad_emits(file, &read("src/events", file)).1 > 0)
+        .filter(|file| {
+            let text = read("src/events", file);
+            // Only a file naming the kind can emit it; only those are parsed.
+            names_in_code(&text, "BackendNotification") && {
+                let (bad, emits) = bad_emits(file, &text);
+                emits > 0 || !bad.is_empty()
+            }
+        })
         .collect();
     assert!(
         unscanned.is_empty(),
         "emits outside EMIT_FILES: {unscanned:?}"
     );
-    let transports: Vec<String> = product_files("src/transport/http")
+    let listeners: Vec<String> = product_files("src/transport")
         .into_iter()
-        .filter(|file| file.contains("listen"))
+        .filter(|file| {
+            file.contains("listen")
+                || names_in_code(&read("src/transport", file), "CredentialSource")
+        })
         .collect();
-    let mut scanned: Vec<String> = SEND_FILES.iter().map(|f| (*f).to_owned()).collect();
-    scanned.sort();
+    let mut known: Vec<String> = SEND_FILES
+        .iter()
+        .chain(NOT_PER_USER.iter().map(|(file, _)| file))
+        .map(|f| (*f).to_owned())
+        .collect();
+    known.sort();
     assert_eq!(
-        transports, scanned,
-        "a listener transport is not in SEND_FILES"
+        listeners, known,
+        "a listener transport is neither in SEND_FILES nor classified in NOT_PER_USER"
     );
 }
 
@@ -218,7 +382,7 @@ fn iso_t5_every_listener_request_goes_through_the_credential_seam() {
     let mut bad = Vec::new();
     let mut helpers = 0;
     for file in SEND_FILES {
-        let (found, count) = bad_sends(file, &read("src/transport/http", file));
+        let (found, count) = bad_sends(file, &read("src/transport", file));
         bad.extend(found);
         helpers += count;
     }
@@ -229,48 +393,69 @@ fn iso_t5_every_listener_request_goes_through_the_credential_seam() {
     );
 }
 
-/// The key rule fails on a `None` key, on a key bound from anything else, and
-/// on an emit with no key at all; it passes the shapes the product uses.
-#[test]
-fn iso_t5_the_key_rule_fails_on_a_broken_emit() {
-    let good = "let lifecycle_key = self.key_of(&name, &data);\nhub.emit(SourceEvent {\n    kind: SourceKind::BackendNotification,\n    lifecycle_key,\n});\nlet key = backend_key(None, &n, &json!({}));\nhub.emit(SourceEvent {\n    kind: SourceKind::BackendNotification,\n    lifecycle_key: key,\n});\n";
-    assert_eq!(bad_emits(SHARED_VIEW_FILE, good), (vec![], 2));
-    // The gateway's own key, on a listener path, is a per-user leak.
-    assert_eq!(bad_emits("upstream_session_notes.rs", good).0.len(), 1);
-    let none = "hub.emit(SourceEvent {\n    kind: SourceKind::BackendNotification,\n    lifecycle_key: None,\n});\n";
-    assert_eq!(bad_emits("none.rs", none).0.len(), 1);
-    let elsewhere = "let lifecycle_key = Some(name.clone());\nhub.emit(SourceEvent {\n    kind: SourceKind::BackendNotification,\n    lifecycle_key,\n});\n";
-    assert_eq!(bad_emits("elsewhere.rs", elsewhere).0.len(), 1);
-    let missing = "hub.emit(SourceEvent {\n    kind: SourceKind::BackendNotification,\n});\n";
-    assert_eq!(bad_emits("missing.rs", missing).0.len(), 1);
-    // Fields in another order are still an emit, and still judged.
-    let reordered = "let lifecycle_key = Some(name.clone());\nhub.emit(SourceEvent {\n    lifecycle_key,\n    name,\n    backend,\n    data,\n    kind: SourceKind::BackendNotification,\n});\n";
-    assert_eq!(
-        bad_emits("reordered.rs", reordered),
-        (
-            vec![
-                "reordered.rs:7: lifecycle_key lifecycle_key is not from key_of or backend_key"
-                    .to_owned()
-            ],
-            1
-        )
-    );
-    // A descriptor names the kind too, and is not an emit.
-    let descriptor =
-        "out.push(EventDescriptor {\n    name,\n    kind: SourceKind::BackendNotification,\n});\n";
-    assert_eq!(bad_emits("descriptor.rs", descriptor), (vec![], 0));
+/// An emit inside a fn, as the scan reads it.
+fn emit_fn(body: &str) -> String {
+    format!("fn f() {{\n{body}\n}}\n")
 }
 
-/// The credential rule fails on a request sent outside the helper and on a
-/// helper that skips `with_credential`; it passes the product's shape.
+/// The key rule passes the shapes the product uses and fails every way a key
+/// can stop being the listener's: none, the gateway's, from elsewhere,
+/// shadowed, split across lines, or behind another literal.
+#[test]
+fn iso_t5_the_key_rule_fails_on_a_broken_emit() {
+    let event = |key: &str| {
+        format!("hub.emit(SourceEvent {{ name, kind: SourceKind::BackendNotification, {key} }});")
+    };
+    let keyed = emit_fn(&format!(
+        "let lifecycle_key = self.key_of(&name, &data);\n{}",
+        event("lifecycle_key")
+    ));
+    assert_eq!(bad_emits("upstream_session_notes.rs", &keyed), (vec![], 1));
+    let gateway = emit_fn(&format!(
+        "let key = backend_key(\n    None,\n    &n,\n    &json!({{}}),\n);\n{}",
+        event("lifecycle_key: key")
+    ));
+    assert_eq!(bad_emits(SHARED_VIEW_FILE, &gateway), (vec![], 1));
+    // The gateway's key, line breaks and all, on a listener path.
+    assert_eq!(bad_emits("upstream_session_notes.rs", &gateway).0.len(), 1);
+    let shadowed = emit_fn(&format!(
+        "let key = self.key_of(&name, &data);\nlet key = backend_key(None, &n, &d);\n{}",
+        event("lifecycle_key: key")
+    ));
+    assert_eq!(bad_emits("upstream_session_notes.rs", &shadowed).0.len(), 1);
+    let none = emit_fn(&event("lifecycle_key: None"));
+    assert_eq!(bad_emits("none.rs", &none).0.len(), 1);
+    let elsewhere = emit_fn(&format!(
+        "let lifecycle_key = Some(name.clone());\n{}",
+        event("lifecycle_key")
+    ));
+    assert_eq!(bad_emits("elsewhere.rs", &elsewhere).0.len(), 1);
+    let missing = emit_fn("hub.emit(SourceEvent { kind: SourceKind::BackendNotification });");
+    assert_eq!(bad_emits("missing.rs", &missing).0.len(), 1);
+    // Field order and a nested literal do not hide an emit from the count.
+    let nested = emit_fn(
+        "let lifecycle_key = Some(n);\nhub.emit(SourceEvent {\n    lifecycle_key,\n    data: Payload { a: 1 },\n    kind: SourceKind::BackendNotification,\n});\n",
+    );
+    assert_eq!(bad_emits("nested.rs", &nested).1, 1);
+    assert_eq!(bad_emits("nested.rs", &nested).0.len(), 1);
+    let descriptor =
+        emit_fn("out.push(EventDescriptor { name, kind: SourceKind::BackendNotification });");
+    assert_eq!(bad_emits("descriptor.rs", &descriptor), (vec![], 0));
+    let stranger = emit_fn("out.push(Other { kind: SourceKind::BackendNotification });");
+    assert_eq!(bad_emits("other.rs", &stranger).0.len(), 1);
+}
+
+/// The credential rule passes the product's shape and fails a request sent
+/// outside the helper, from a stored builder or across lines, and a helper
+/// that skips `with_credential`.
 #[test]
 fn iso_t5_the_credential_rule_fails_on_a_broken_send() {
-    let good = "async fn send(&self) {\n    source.with_credential(|h| build(h).send())\n}\nasync fn notify(&self) {\n    self.send(headers, |h| t.client.post(url).headers(h))\n}\n";
+    let good = "impl T {\n    async fn send(&self) {\n        source.with_credential(|h| build(h).send())\n    }\n    async fn notify(&self) {\n        self.send(headers, |h| t.client.post(url).headers(h))\n    }\n}\n";
     assert_eq!(bad_sends("good.rs", good), (vec![], 1));
-    let raw = "async fn notify(&self) {\n    t.client.post(url).headers(h).send().await\n}\n";
+    let raw = "async fn notify(&self) {\n    t.client\n        .post(url)\n        .headers(h)\n        .send()\n        .await\n}\n";
     assert_eq!(bad_sends("raw.rs", raw).0.len(), 1);
-    let bypass = "async fn send(&self) {\n    build(headers).send().await\n}\n";
-    assert_eq!(bad_sends("bypass.rs", bypass).0.len(), 1);
     let stored = "async fn notify(&self) {\n    let request = t.client.post(url);\n    request.send().await\n}\n";
     assert_eq!(bad_sends("stored.rs", stored).0.len(), 1);
+    let bypass = "async fn send(&self) {\n    build(headers).send().await\n}\n";
+    assert_eq!(bad_sends("bypass.rs", bypass).0.len(), 1);
 }
