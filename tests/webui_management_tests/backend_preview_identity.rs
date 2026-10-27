@@ -101,7 +101,7 @@ async fn nothing_usable_is_a_null_package() {
     assert_eq!(
         package_from(|r| legacy(
             r,
-            json!({"name": "\u{202e}\u{200b}\n", "version": "\u{2028}"})
+            &json!({"name": "\u{202e}\u{200b}\n", "version": "\u{2028}"})
         ))
         .await,
         Value::Null
