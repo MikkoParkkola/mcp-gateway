@@ -112,6 +112,30 @@ pub(crate) struct InputRound {
     /// TTL alone bounds the round.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) continuation_deadline: Option<u64>,
+    /// The parked task's recorded surfaced target, so its resume
+    /// dispatches where it was admitted. Absent for a non-surfaced round and
+    /// in a record from before the field (decodes as `None`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) surfaced_server: Option<SurfacedTarget>,
+}
+
+/// Where a surfaced name resolved when its task was admitted: the server, and
+/// whether that server was a registered backend or the capability set. A task
+/// runs only while both still hold, so a backend replaced by a capability of
+/// the same name (or the reverse) is a changed target.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SurfacedTarget {
+    pub(crate) server: String,
+    pub(crate) kind: SurfacedKind,
+}
+
+/// What served a surfaced name; see [`SurfacedTarget`].
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum SurfacedKind {
+    Backend,
+    Capability,
 }
 
 /// Upper bound on a durable upstream handle, in bytes.

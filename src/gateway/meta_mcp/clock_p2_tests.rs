@@ -97,6 +97,7 @@ async fn deliver(
                 external_server: "gateway",
                 external_tool: "gateway_invoke",
                 subject: None,
+                trace_id: None,
             },
             signing: None,
             chain_source: ChainSource::Backend,

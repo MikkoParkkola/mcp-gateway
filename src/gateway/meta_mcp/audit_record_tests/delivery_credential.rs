@@ -49,6 +49,7 @@ async fn record_delivery_for(
         external_server: "alpha",
         external_tool: "gateway_invoke",
         subject: who.grant.as_ref(),
+        trace_id: None,
     };
     assert!(
         meta.record_delivery_of(
