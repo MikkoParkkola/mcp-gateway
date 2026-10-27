@@ -42,13 +42,39 @@ async fn a_task_queued_before_a_deselect_is_refused_at_its_dispatch() {
         register_selected(&reloaded, BACKEND, &narrowed_mock, &["some_other_tool"]);
     });
     let created = post(&state, "key-a", task_invoke(1, "sel-deselect", json!({}))).await;
-    let settled = poll_until_terminal(&state, "key-a", &task_id(&created)).await;
-    std::assert!(
-        !settled.to_string().contains("mock-backend-answered"),
-        "the deselected tool answered: {settled}"
+    let task = task_id(&created);
+    // The committed record is the oracle: once the tool is out of the
+    // selection, `tasks/get` judges the stored target as absent and never
+    // shows the record.
+    let owner = admission_principal();
+    let committed = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Ok(committed) = state.tasks.get(&owner, &task) {
+                use crate::protocol::tasks::TaskStatus;
+                if matches!(
+                    committed.task.status(),
+                    TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+                ) {
+                    return committed;
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("the task never settled"));
+    std::assert_eq!(
+        committed.task.status(),
+        crate::protocol::tasks::TaskStatus::Failed,
+        "the worker refused the deselected tool"
     );
-    std::assert_eq!(mock.calls(), 0, "the backend was called: {settled}");
-    std::assert_eq!(status_of(&settled), "failed", "{settled}");
+    std::assert_eq!(mock.calls(), 0, "the backend was called");
+    let read = get_task(&state, "key-a", &task).await;
+    std::assert_eq!(
+        read.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "the stored read answers the deselected tool as absent: {read}"
+    );
 }
 
 /// Control: the same reload that keeps [`TOOL`] selected lets the task run.
