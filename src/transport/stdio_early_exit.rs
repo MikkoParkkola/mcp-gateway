@@ -43,7 +43,7 @@ type ReadLoop = futures::future::Shared<futures::future::BoxFuture<'static, ()>>
 /// A failed start does not wait for the task: a loaded host may not run it in
 /// time. It polls the same read loop itself, so whatever the child wrote is
 /// read before the window can close. The loop is never cancelled mid-read,
-/// so a partial line and the key-block state stay inside it (MIK-9005).
+/// so a partial line and the key-block state stay inside it.
 pub(super) struct StderrReader {
     task: tokio::task::JoinHandle<()>,
     read_loop: ReadLoop,
