@@ -347,7 +347,9 @@ impl MetaMcp {
         // List = invoke (A3), one predicate for every listing (MIK-8340): a
         // tool withheld from this caller is not shown.
         // MIK-8356: judged by the caller's own slot on a per-user backend; a
-        // cold caller keeps today's shared view (SLOTVIS.6's stated residual).
+        // cold caller keeps the shared view (SLOTVIS.6), except where there is
+        // none: a backend with per-user sessions only lists the caller's own
+        // view, warmed before this list was built (MIK-8962).
         if !self.listing_names(
             &surfaced.server,
             &surfaced.tool,
