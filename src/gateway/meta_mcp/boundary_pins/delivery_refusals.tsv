@@ -27,7 +27,7 @@ src/gateway/meta_mcp/invoke/gate.rs	withheld_invoke_target	blocked_tool_refusal	
 src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	Error::ResponseFirewallRefused	1	recorded	the frame is marked delivery_refusal at the outlet
 src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	bridge_refusal	1	recorded	bridged undeclared last round; raised while vouched
 src/gateway/meta_mcp/invoke/policy.rs	apply_response_gates_effect	Error::ResponseFirewallRefused	1	recorded	the frame is marked delivery_refusal at the outlet
-src/gateway/meta_mcp/invoke/policy.rs	authorize_invocation	Error::Forbidden{}	1	composite-or-replay	backstop: a lone call is refused first by the route stage (raised); reached by composite steps, and by a lone call only if a grant is revoked between the route stage and this check (a stated residual)
+src/gateway/meta_mcp/invoke/policy.rs	authorize_invocation	Error::Forbidden{}	1	composite-or-replay	backstop for composite steps. Stated residual (LOW): a lone gateway_invoke is refused first at the route stage (raised); only a grant revoked after the route-stage grant check (dispatch_tools_call.rs and stdio_route_stage.rs authorize_targets) and before this check at the invoke entry (policy.rs check_invocation_policy) is answered here unrecorded
 src/gateway/meta_mcp/invoke/policy.rs	authorize_invocation	audit_refusal	1	not-delivered	audit row
 src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	blocked_tool_refusal	1	recorded	Protocol refusal; the route stage withholds it first (PR-2a raise)
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	admit_idempotency_key	Error::ResponseFirewallRefused	1	composite-or-replay	an idempotent replay of a stored firewall refusal; its frame is marked
@@ -119,10 +119,10 @@ src/gateway/router/hardened_elicitation.rs	direct_refusal	request_check_refusal	
 src/gateway/router/hardened_elicitation.rs	refuse	refusal	1	no-record	session admission
 src/gateway/router/judged_answer.rs	record_delivery	audit_unavailable_refusal	2	not-a-decision	the audit sink failed
 src/gateway/router/view_judge.rs	admit_listener	dead_attach_refusal	1	no-record	listener attach
-src/gateway/server/cleartext.rs	reload_posture_refusal	serve_refusal	2	not-a-decision	a reload outcome: gateway_reload_config ran and reports the file refused; also start-up advice
-src/gateway/server/cleartext.rs	reload_posture_refusal	start_refusal	1	not-a-decision	a reload outcome: gateway_reload_config ran and reports the file refused; also start-up advice
-src/gateway/server/cleartext.rs	serve_refusal	cleartext_credential_refusal	1	not-a-decision	the start-up and reload posture check behind a reload outcome
-src/gateway/server/cleartext.rs	serve_refusal	network_bind_refusal	1	not-a-decision	the start-up and reload posture check behind a reload outcome
+src/gateway/server/cleartext.rs	reload_posture_refusal	serve_refusal	2	feeds	the posture refusal gateway_reload_config answers; reload_config raises refused for it (start-up advice otherwise)
+src/gateway/server/cleartext.rs	reload_posture_refusal	start_refusal	1	feeds	the restart advice inside the posture refusal reload_config raises refused for
+src/gateway/server/cleartext.rs	serve_refusal	cleartext_credential_refusal	1	feeds	the posture check behind start-up and the reload posture refusal (raised in reload_config)
+src/gateway/server/cleartext.rs	serve_refusal	network_bind_refusal	1	feeds	the posture check behind start-up and the reload posture refusal (raised in reload_config)
 src/gateway/server/run_wiring.rs	refuse_or_warn_before_bind	start_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/server/stdio_dispatch.rs	parse_and_observe	modern_method_refusal	1	not-a-decision	client-protocol rejection
 src/gateway/server/stdio_dispatch.rs	parse_and_observe	removed_method_refusal	1	not-a-decision	client-protocol rejection

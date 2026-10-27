@@ -296,7 +296,12 @@ impl MetaMcp {
             // admin API's 409 says (MIK-8058); anything else stays -32603.
             Err(e) => Err(Error::json_rpc(
                 match crate::config_reload::reload_failure(&e) {
-                    crate::config_reload::ReloadFailure::PostureRefused => INVALID_REQUEST,
+                    crate::config_reload::ReloadFailure::PostureRefused => {
+                        // The posture policy refusing the operator's request is
+                        // a gateway refusal; a file that fails to load is not.
+                        crate::gateway::delivery_facts::refused_while_vouched();
+                        INVALID_REQUEST
+                    }
                     _ => INTERNAL_ERROR,
                 },
                 e,
