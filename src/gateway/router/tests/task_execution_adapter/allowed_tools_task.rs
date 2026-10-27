@@ -63,21 +63,24 @@ async fn a_task_queued_before_a_deselect_is_refused_at_its_dispatch() {
     })
     .await
     .unwrap_or_else(|_| panic!("the task never settled"));
-    // A worker refusal settles as the gateway's own answer: completed, with
-    // an isError result that was not executed (worker.rs's
-    // settle_descriptor_refused uses the same vocabulary). The row keeps its
-    // planned target, so the backend's count is the oracle for "not called".
+    // The worker's dispatch answers a name outside the selection as it
+    // answers any withheld name: as a lacked one (src/backend/input_keys.rs
+    // "A withheld name answers as a lacked one", and meta_mcp/invoke/gate.rs
+    // absent_answer), an isError result with the catalogue's miss text. The
+    // task stores that answer; the backend's count is the oracle for "not
+    // called".
     std::assert_eq!(mock.calls(), 0, "the backend was called");
     std::assert_eq!(
         committed.task.status(),
         crate::protocol::tasks::TaskStatus::Completed
     );
-    let result = committed.task.result().cloned().unwrap_or(Value::Null);
-    std::assert_eq!(result.pointer("/isError"), Some(&json!(true)), "{result}");
     std::assert_eq!(
-        result.pointer("/_meta/io.mcp-gateway~1executionOutcome"),
-        Some(&json!("not_executed")),
-        "{result}"
+        committed.task.result().cloned().unwrap_or(Value::Null),
+        json!({
+            "content": [{"type": "text", "text": crate::backend::text_absent(TOOL)}],
+            "isError": true,
+        }),
+        "the stored answer is the withheld name's absent answer"
     );
     let read = get_task(&state, "key-a", &task).await;
     std::assert_eq!(
