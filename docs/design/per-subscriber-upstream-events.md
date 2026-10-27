@@ -154,9 +154,12 @@ a rotation yet.
 - A same-id re-grant has a new incarnation, so it never inherits the previous
   grant's queue, even with an unchanged `obs`.
 - Dead-letter replay applies the same check before re-queuing and refuses an
-  incompatible record with a reason in the admin answer. *Required, not yet
-  implemented; delivered by the dead-letter replay check fix:* replay re-queues today, and the send-time check buries the record
-  again, so nothing is delivered, but the admin answer gives no refusal.
+  incompatible record with a reason in the admin answer. *Implemented:*
+  `replay_dead` runs the send path's `observed_now` comparison on the row as it
+  is after the access re-check, and refuses a mismatch as `observation_changed`
+  (HTTP 409 from the admin route; `replay all` lists the reason per record).
+  Nothing is re-queued for a refused record. A row that changes between this
+  check and the re-queue is still buried at send.
 - Records written before this change have no `ObservedUnder`. They are valid only
   for rows without an `obs`, which was every row, since identity-bound
   subscriptions were refused until now.
@@ -388,10 +391,12 @@ only when a test exists that fails on its mutant.
   delivery. Once with `signed_assertion` and once with `token_exchange`.
 - **ISO-T2.** *Required, not yet implemented.* The same with managed accounts on a multi-user gateway, plus a lease
   rotation mid-test: nothing observed under the old lease is delivered after it.
-- **ISO-T3.** *Required, not yet implemented; delivered with its row by the
-  dead-letter replay check fix.* Durable path: U1's occurrence is queued, then U1's row is re-granted or
-  its lease rotates. The queued record is buried as `observation_changed`, and
-  dead-letter replay refuses it.
+- **ISO-T3.** *Partly covered: the replay refusal is pinned, the send-time burial is not.* Durable path: U1's
+  occurrence is queued, then U1's row is re-granted or its lease rotates. The queued record is buried as
+  `observation_changed`, and dead-letter replay refuses it. Pinned by
+  `events::admin::replay_obs_tests::a_replay_after_a_regrant_is_refused_as_observation_changed` and
+  `a_replay_after_a_lease_rotation_is_refused_by_name` (src/events/admin_replay_obs_tests.rs), which bury
+  the record directly and assert the refusal. The worker's burial on send has no row yet.
 - **ISO-T4.** *Required, not yet implemented for the cross-user revoke row.* U1's complete catalogue read never revokes U2's `resource_updated`
   rows. One row per shared-state class, each with the mutation that shares it:
   - **ISO-T4a** *(partly covered)* overlapping tools notices across keys, against a shared debounce;
