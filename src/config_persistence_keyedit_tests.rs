@@ -382,3 +382,11 @@ fn fill_refuses_a_reference_not_under_its_own_field() {
     ]);
     assert_eq!(template.fill(&refs), Err(ComputeRefusal::SlotMismatch));
 }
+
+/// YAML whitespace is a space or a tab only: a non-breaking space before a
+/// comment belongs to the value, and the comment after it must survive.
+#[test]
+fn a_comment_after_a_non_breaking_space_survives() {
+    let got = edited("a: old\u{a0} # keep\n", &[set_str("a", "new")]);
+    assert_eq!(got, "a: \"new\" # keep\n");
+}
