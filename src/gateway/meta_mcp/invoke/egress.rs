@@ -219,7 +219,9 @@ impl MetaMcp {
     ) -> Vec<ResponsePolicyTarget> {
         let mut out = targets.to_vec();
         if targets.iter().any(|t| t.no_backend) {
-            // Visibility: deciding what reaches the caller, over every backend.
+            // Names only: no backend is contacted or dispatched to and no
+            // credential resolved; the class row in
+            // `boundary_pins/scoped_backends_classes.tsv` pins this one caller.
             let names: Vec<String> = self
                 .backends
                 .all_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility)
