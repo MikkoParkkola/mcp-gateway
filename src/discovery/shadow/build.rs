@@ -311,6 +311,25 @@ fn risk_detail(code: &str) -> &'static str {
         "personal_access_reference" => "Passive evidence referenced personal access material.",
         "stale_binary" => "Passive evidence suggests legacy, deprecated, or stale binary use.",
         "duplicate_port" => "Multiple unmanaged assets reported the same local port.",
+        "needs_client_only_secret" => {
+            "Not adoptable: the client config holds a setting the gateway would not reproduce. \
+             Move it into a gateway setting or remove it, then rescan."
+        }
+        "literal_default" => {
+            "Not adoptable: a variable default would be written into gateway.yaml as text. \
+             Move the whole value into a variable or secret, then rescan."
+        }
+        "literal_in_template" => {
+            "Not adoptable: literal text sits beside a variable and would reach gateway.yaml \
+             as text. Move the whole value into a variable or secret, then rescan."
+        }
+        "credential_in_url" => {
+            "Not adoptable: the URL carries a credential. Move it into a header, then rescan."
+        }
+        "cleartext_credential" => {
+            "Not adoptable: credentials go in cleartext to a host off this machine. Use TLS, \
+             then rescan."
+        }
         _ => "Unmanaged MCP asset risk signal.",
     }
 }

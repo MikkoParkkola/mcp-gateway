@@ -124,6 +124,52 @@ fn a_mixed_template_is_carried_as_written() {
 }
 
 #[test]
+fn literal_text_beside_a_template_refuses() {
+    for (map, key, value) in [
+        ("headers", "Authorization", "Bearer sk-x${S:-}"),
+        ("env", "API_KEY", "sk-${A}"),
+    ] {
+        let mut entry = if map == "env" {
+            json!({"command": "srv"})
+        } else {
+            json!({"url": "https://mcp.example.test/mcp"})
+        };
+        entry[map][key] = json!(value);
+        assert_eq!(
+            refused(&entry),
+            one(AdoptRefusal::LiteralInTemplate, &format!("{map}.{key}")),
+            "{value}"
+        );
+    }
+}
+
+/// A harmless value refuses too, and the radar says what to change.
+#[test]
+fn a_harmless_mixed_value_refuses_with_the_remedy() {
+    let server = find(&json!({"command": "srv", "env": {"PATH": "${HOME}/bin"}}));
+    assert_eq!(
+        refusals(&server),
+        one(AdoptRefusal::LiteralInTemplate, "env.PATH")
+    );
+    let report = ShadowScanReport::from_discovered(
+        &[server],
+        &HashSet::new(),
+        Some(Path::new("gateway.yaml")),
+    );
+    let risk = report.assets[0]
+        .risks
+        .iter()
+        .find(|risk| risk.code == "literal_in_template")
+        .expect("the radar names the reason");
+    assert!(
+        risk.detail
+            .contains("Move the whole value into a variable or secret, then rescan"),
+        "{}",
+        risk.detail
+    );
+}
+
+#[test]
 fn a_client_env_variable_is_the_gateway_template() {
     let server = find(&json!({"command": "srv", "env": {"TOKEN": "${env:API_TOKEN}"}}));
     assert_eq!(refusals(&server), vec![]);

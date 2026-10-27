@@ -216,6 +216,11 @@ pub(crate) fn is_template_syntax(text: &str) -> bool {
     refuse_stray(&text[end..]).is_ok()
 }
 
+/// The text of `text` outside its `${NAME}` references, in order.
+pub(crate) fn literal_outside_templates(text: &str) -> String {
+    TEMPLATE.replace_all(text, "").into_owned()
+}
+
 /// Whether a `${NAME:-default}` in `text` has a non-empty default: text that
 /// a load writes in place of an unset variable. `${NAME:-}` has none.
 pub(crate) fn has_literal_default(text: &str) -> bool {

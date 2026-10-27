@@ -67,6 +67,7 @@ pub(crate) use record_key::resolve_record_key_text;
 use secret_ref::SecretRef;
 pub(crate) use secret_ref::{
     has_literal_default, is_keychain_name, is_reference, is_template_syntax,
+    literal_outside_templates,
 };
 
 // New items (F18): the one mode-checked read for files outside `config`.

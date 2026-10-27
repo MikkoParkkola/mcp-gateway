@@ -7,11 +7,15 @@
 //!
 //! A find is adoptable when the gateway would run it exactly as the client
 //! does. Its `env` and `headers` values then fall in two kinds: a template
-//! (`${NAME}`, anywhere in the value), copied as written and expanded by the
-//! gateway as before, and a literal (no `${`), which goes to the secret
-//! store, never into gateway.yaml.
+//! (`${NAME}`, alone or after one auth scheme word such as `Bearer `), copied
+//! as written and expanded by the gateway as before, and a literal (no `${`),
+//! which goes to the secret store, never into gateway.yaml. Literal text
+//! beside a template refuses: it may be a secret, and only the whole value
+//! can move to the store.
 
-use crate::config::{Config, TransportConfig, has_literal_default, is_reference};
+use crate::config::{
+    Config, TransportConfig, has_literal_default, is_reference, literal_outside_templates,
+};
 
 use super::DiscoveredServer;
 
@@ -31,6 +35,34 @@ pub(crate) enum AdoptRefusal {
     /// Credentials the client sends in cleartext to a host off this machine,
     /// which a gateway load refuses for an enabled backend.
     CleartextCredential,
+    /// Literal text beside a template (`sk-${SUFFIX}`): it would reach
+    /// gateway.yaml as text, and it may be a secret.
+    LiteralInTemplate,
+}
+
+impl AdoptRefusal {
+    /// The stable reason code.
+    pub(crate) const fn code(self) -> &'static str {
+        match self {
+            Self::NeedsClientOnlySecret => "needs_client_only_secret",
+            Self::LiteralDefault => "literal_default",
+            Self::CredentialInUrl => "credential_in_url",
+            Self::CleartextCredential => "cleartext_credential",
+            Self::LiteralInTemplate => "literal_in_template",
+        }
+    }
+}
+
+/// The literal text a template value may carry: one auth scheme word and a
+/// space, before the template.
+const SCHEME_PREFIXES: &[&str] = &["Bearer ", "Basic ", "Token ", "Bot "];
+
+/// Whether the text of `value` outside its templates is nothing, or one
+/// scheme prefix in front of them.
+fn only_scheme_beside_templates(value: &str) -> bool {
+    let outside = literal_outside_templates(value);
+    outside.is_empty()
+        || (SCHEME_PREFIXES.contains(&outside.as_str()) && value.starts_with(&outside))
 }
 
 /// Query parameter names, matched case-insensitively as substrings, that
@@ -74,6 +106,8 @@ pub(crate) fn refusals(server: &DiscoveredServer) -> Vec<(AdoptRefusal, String)>
         } else if is_reference(value) {
             // A load reads `file:${HOME}/t` as a file reference first.
             refused.push((AdoptRefusal::NeedsClientOnlySecret, format!("{map}.{key}")));
+        } else if !only_scheme_beside_templates(value) {
+            refused.push((AdoptRefusal::LiteralInTemplate, format!("{map}.{key}")));
         }
     }
     // A URL that does not parse is already uncarried by the scanner.

@@ -207,6 +207,13 @@ pub(super) fn risk_reasons(
     if has_stale_binary_reference(server) {
         reasons.push("stale_binary".to_string());
     }
+    // Why adoption is not offered, once per reason.
+    for (refusal, _) in crate::discovery::adopt::refusals(server) {
+        let code = refusal.code().to_string();
+        if !reasons.contains(&code) {
+            reasons.push(code);
+        }
+    }
     reasons
 }
 
