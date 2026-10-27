@@ -68,10 +68,6 @@ pub struct DiscoveredServer {
     /// Internal only; the discovery route shows a keyed hash of it. Empty for
     /// a find not read from a client config file.
     #[serde(skip)]
-    #[cfg_attr(
-        not(feature = "webui"),
-        expect(dead_code, reason = "read by the web UI's discovery listing")
-    )]
     pub(crate) entry_digest: String,
 }
 
