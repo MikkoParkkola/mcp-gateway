@@ -97,7 +97,35 @@ public static class MgwSd {
   [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
   static extern bool GetFileSecurityW(string path, uint info, byte[] sd, uint len, out uint need);
   [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr p);
+  [StructLayout(LayoutKind.Sequential, Pack=4)] struct Luid { public uint Low; public int High; }
+  [StructLayout(LayoutKind.Sequential, Pack=4)] struct OnePrivilege { public uint Count; public Luid Id; public uint Attributes; }
+  [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+  [DllImport("advapi32.dll", SetLastError=true)]
+  static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+  [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+  static extern bool LookupPrivilegeValueW(string system, string name, out Luid id);
+  [DllImport("advapi32.dll", SetLastError=true)]
+  static extern bool AdjustTokenPrivileges(IntPtr token, bool disableAll, ref OnePrivilege state, uint len, IntPtr prev, IntPtr prevLen);
   const uint OWNER = 1, DACL = 4, PROT = 0x80000000, UNPROT = 0x20000000;
+  // Enable SeRestorePrivilege in THIS PowerShell process only, so it can
+  // plant an owner the test process itself could never assign.
+  static void EnableRestore() {
+    IntPtr token;
+    if (!OpenProcessToken(GetCurrentProcess(), 0x28, out token)) throw new System.ComponentModel.Win32Exception();
+    OnePrivilege p = new OnePrivilege(); p.Count = 1; p.Attributes = 2;
+    if (!LookupPrivilegeValueW(null, "SeRestorePrivilege", out p.Id)) throw new System.ComponentModel.Win32Exception();
+    if (!AdjustTokenPrivileges(token, false, ref p, 0, IntPtr.Zero, IntPtr.Zero)) throw new System.ComponentModel.Win32Exception();
+    int last = Marshal.GetLastWin32Error();
+    if (last != 0) throw new System.ComponentModel.Win32Exception(last);
+  }
+  // The owner alone; the DACL, inherited or not, is left as it is.
+  public static void SetOwner(string path, string sid, bool restore) {
+    if (restore) EnableRestore();
+    IntPtr sd; uint n;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW("O:" + sid, 1, out sd, out n)) throw new System.ComponentModel.Win32Exception();
+    try { if (!SetFileSecurityW(path, OWNER, sd)) throw new System.ComponentModel.Win32Exception(); }
+    finally { LocalFree(sd); }
+  }
   public static void Set(string path, string sddl, bool protect) {
     IntPtr sd; uint n;
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, out sd, out n)) throw new System.ComponentModel.Win32Exception();
@@ -183,6 +211,32 @@ pub(crate) fn plant_owner_only(row: &str, path: &Path) {
 /// Set a descriptor whose read-back Windows may normalise; returns it.
 pub(crate) fn plant_any(row: &str, path: &Path, sddl: &str) -> String {
     native_set(row, path, sddl);
+    read_sddl(row, path)
+}
+
+/// How [`plant_owner`] sets an owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OwnerPlant {
+    /// As the test's own token may: its user, or a group it may own by.
+    AsToken,
+    /// With SeRestorePrivilege enabled in the planting process only, so any
+    /// owner can be set; the process under test never holds it enabled. Needs
+    /// an elevated runner, as CI's is; elsewhere the plant fails loudly.
+    WithRestorePrivilege,
+}
+
+/// Set `path`'s owner to `sid`, leaving its DACL (inherited or not) as it is;
+/// returns the descriptor read back.
+pub(crate) fn plant_owner(row: &str, path: &Path, sid: &str, how: OwnerPlant) -> String {
+    let restore = match how {
+        OwnerPlant::AsToken => "$false",
+        OwnerPlant::WithRestorePrivilege => "$true",
+    };
+    powershell(&format!(
+        "{NATIVE}\n[MgwSd]::SetOwner({}, '{sid}', {restore})",
+        quoted(path)
+    ))
+    .unwrap_or_else(|e| fixture_fail(row, &format!("planting owner {sid} failed: {e}")));
     read_sddl(row, path)
 }
 

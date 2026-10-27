@@ -21,7 +21,7 @@ use super::scan::{Place, Sink, expr_attrs, item_attrs, test_only, walk};
 const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.rs"];
 
 /// The crate's own writers: a call to one is a `helper` site.
-const HELPERS: [&str; 7] = [
+const HELPERS: [&str; 8] = [
     "write_atomic",
     "copy_keeping_access",
     "create_new_private",
@@ -29,6 +29,7 @@ const HELPERS: [&str; 7] = [
     "create_file_private",
     "create_dir_private",
     "create_file_like",
+    "create_like",
 ];
 
 /// (file, function, kind) -> calls.

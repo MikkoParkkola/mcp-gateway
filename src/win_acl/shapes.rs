@@ -100,12 +100,25 @@ pub(crate) struct Inspection {
 /// What `inspect_for_copy` read: the owner and DACL as `inspect` reads them,
 /// how many access-enforcing SACL entries the descriptor carries (integrity
 /// label, scoped policy, resource attribute, trust label, access filter), and
-/// the self-relative descriptor itself, to create a sibling with.
+/// two self-relative descriptors to create a sibling with: the owner, DACL and
+/// those SACL entries, and the owner alone.
 pub(crate) struct CopySource {
     pub(crate) inspection: Inspection,
     pub(crate) enforcing_sacl_aces: usize,
     /// u64 words keep the descriptor aligned for its SIDs and ACLs.
     pub(super) descriptor: Vec<u64>,
+    /// The owner alone: no DACL, so a create with it takes the folder's
+    /// inheritable entries, as a plain create does.
+    pub(super) owner_only: Vec<u64>,
+}
+
+/// Which of a [`CopySource`]'s descriptors `create_file_like` creates with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CopyWith {
+    /// Owner, DACL and access-enforcing SACL entries: a protected list.
+    OwnerAndList,
+    /// The owner alone: an inherited list, which the folder supplies.
+    OwnerOnly,
 }
 
 /// UTF-16, NUL-terminated; refuses an interior NUL (ADR-016 contract 5).

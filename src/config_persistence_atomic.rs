@@ -210,12 +210,14 @@ fn finish_kept(
             .create_new(true)
             .open(candidate),
         KeptScratch::Default(source) => {
-            // Read as well as write, so the check below can read the list.
-            let file = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create_new(true)
-                .open(candidate)?;
+            // The owner alone: the folder supplies the inherited list, and
+            // the target's owner is kept (or the create is refused).
+            let file = windows::create_like(
+                candidate,
+                &source,
+                crate::win_acl::CopyWith::OwnerOnly,
+                target,
+            )?;
             if let Err(e) = windows::verify(&file, &source, target) {
                 drop(file);
                 let _ = std::fs::remove_file(candidate);

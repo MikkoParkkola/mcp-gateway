@@ -10,8 +10,8 @@ use std::path::Path;
 
 use super::{FileMode, Symlink, write_atomic};
 use crate::private_fs::test_support::{
-    assert_owner_only, everyone_full_dir, icacls, parse_sddl, plant_any, plant_file_with,
-    plant_owner_only, read_sddl,
+    OwnerPlant, assert_owner_only, everyone_full_dir, icacls, parse_sddl, plant_any,
+    plant_file_with, plant_owner, plant_owner_only, read_sddl,
 };
 
 fn save(path: &Path) {
@@ -150,9 +150,9 @@ fn fresh_owner(row: &str, dir: &Path) -> String {
     owner
 }
 
-/// A9: a file whose owner differs from the owner a new file gets here is
-/// refused, and the message names the owner found and the owner expected.
-/// The rule is relative to this token, never a fixed list of owners.
+/// A9: a file whose owner this token may not assign (NT AUTHORITY\SYSTEM,
+/// planted with the restore privilege from another process) is refused,
+/// naming that owner and the account the gateway runs as, and is unchanged.
 #[test]
 fn a_file_with_another_owner_is_refused_naming_both_owners() {
     let row = "WINACL-A9";
@@ -160,22 +160,67 @@ fn a_file_with_another_owner_is_refused_naming_both_owners() {
     let path = dir.path().join("gateway.yaml");
     std::fs::write(&path, b"old").unwrap();
     let user = crate::private_fs::test_support::user_sid();
-    let expected = fresh_owner(row, dir.path());
-    let other = if expected == "S-1-5-32-544" {
-        user.clone()
-    } else {
-        "S-1-5-32-544".to_owned()
-    };
-    plant_any(row, &path, &format!("O:{other}D:P(A;;FA;;;{user})"));
+    plant_any(row, &path, &format!("O:{user}D:P(A;;FA;;;{user})"));
+    let planted = plant_owner(row, &path, SYSTEM, OwnerPlant::WithRestorePrivilege);
+    assert_eq!(
+        parse_sddl(&planted).owner,
+        SYSTEM,
+        "{row}: owner not planted"
+    );
     let err = write_atomic(&path, b"new", FileMode::Inherit, Symlink::Replace)
         .expect_err("WINACL-A9: the save was not refused");
     let text = err.to_string();
     assert!(text.contains("foreign-owner"), "{row}: {text}");
     assert!(
-        text.contains(&other) && text.contains(&expected),
+        text.contains(SYSTEM) && text.contains(&user),
         "{row}: {text}"
     );
     assert_eq!(std::fs::read(&path).unwrap(), b"old");
+    assert_eq!(
+        std::fs::read_dir(dir.path()).unwrap().count(),
+        1,
+        "{row}: a scratch was left behind"
+    );
+}
+
+/// NT AUTHORITY\SYSTEM: an owner no test or gateway token may assign
+/// without a privilege.
+const SYSTEM: &str = "S-1-5-18";
+
+/// A9c: a file owned by the token's own user saves and keeps that owner,
+/// whatever owner a new file would get here (BUILTIN\Administrators on an
+/// elevated token, as on CI).
+#[test]
+fn a_file_the_user_owns_keeps_its_owner_after_a_save() {
+    let row = "WINACL-A9c";
+    let dir = everyone_full_dir(row);
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(&path, b"old").unwrap();
+    plant_owner_only(row, &path);
+    let before = parse_sddl(&read_sddl(row, &path));
+    save(&path);
+    let after = parse_sddl(&read_sddl(row, &path));
+    assert_eq!(after.owner, before.owner, "{row}: owner changed");
+    assert_eq!(after, before, "{row}: list changed");
+    assert_eq!(std::fs::read(&path).unwrap(), b"new");
+}
+
+/// A9d: the same for a file whose list is inherited (the default-create
+/// path): the user owner is kept and the folder's inherited entries apply.
+#[test]
+fn a_user_owned_file_with_an_inherited_list_keeps_its_owner() {
+    let row = "WINACL-A9d";
+    let dir = everyone_full_dir(row);
+    let path = dir.path().join("stamp");
+    std::fs::write(&path, b"old").unwrap();
+    let user = crate::private_fs::test_support::user_sid();
+    plant_owner(row, &path, &user, OwnerPlant::AsToken);
+    let before = parse_sddl(&read_sddl(row, &path));
+    assert!(!before.protected, "{row}: the list is not inherited");
+    save(&path);
+    let after = parse_sddl(&read_sddl(row, &path));
+    assert_eq!(after.owner, user, "{row}: owner changed");
+    assert_eq!(after, before, "{row}: list changed");
 }
 
 /// A9b: a file owned by the owner a new file gets here (BUILTIN\Administrators

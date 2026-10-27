@@ -455,20 +455,25 @@ const ENFORCING_SACL_INFO: u32 = LABEL_SECURITY_INFORMATION
     | ACCESS_FILTER_SECURITY_INFORMATION;
 
 /// Owner, DACL and every access-enforcing SACL entry of an open handle that
-/// carries `READ_CONTROL`, with the descriptor kept for `create_file_like`
+/// carries `READ_CONTROL`, with the descriptors kept for `create_file_like`.
 /// A query that fails is an error, never an empty answer.
 pub(crate) fn inspect_for_copy(file: &File) -> io::Result<CopySource> {
-    // What the copy is created with carries no owner: setting another
-    // account's owner needs a privilege, so the creator's owner applies and the
-    // caller compares owners instead. The owner is read on its own.
-    let mut descriptor = read_descriptor(file, DACL_SECURITY_INFORMATION | ENFORCING_SACL_INFO)?;
-    let mut inspection = decode(&mut descriptor)?;
-    inspection.owner = decode(&mut read_descriptor(file, OWNER_SECURITY_INFORMATION)?)?.owner;
+    // The copy is created with the owner in its descriptor (ADR-016
+    // amendment 3): the kernel assigns the token user's own SID, or a group
+    // the token may own by, without a privilege, and fails any other owner
+    // with ERROR_INVALID_OWNER, so no owner is ever replaced silently.
+    let mut descriptor = read_descriptor(
+        file,
+        OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION | ENFORCING_SACL_INFO,
+    )?;
+    let inspection = decode(&mut descriptor)?;
     let enforcing_sacl_aces = sacl_ace_count(&mut descriptor)?;
+    let owner_only = read_descriptor(file, OWNER_SECURITY_INFORMATION)?;
     Ok(CopySource {
         inspection,
         enforcing_sacl_aces,
         descriptor,
+        owner_only,
     })
 }
 
@@ -507,12 +512,21 @@ fn sacl_ace_count(buf: &mut [u64]) -> io::Result<usize> {
 }
 
 /// Create `path` (`CREATE_NEW`, unshared, reparse points not followed) with
-/// the owner-less descriptor `model` was read with, so the new file carries
-/// the model's DACL and access-enforcing SACL entries; the owner is the
-/// creator's, as for every other scratch. The caller compares the result
-/// with the model before trusting it.
-pub(crate) fn create_file_like(path: &Path, model: &CopySource) -> io::Result<File> {
-    let mut descriptor = model.descriptor.clone();
+/// one of the descriptors `model` was read with: owner, DACL and
+/// access-enforcing SACL entries for a protected list, or the owner alone for
+/// an inherited one, whose entries the folder supplies. The kernel sets the
+/// model's owner or fails the create (ERROR_INVALID_OWNER) when this token may
+/// not assign it. The caller compares the result with the model before
+/// trusting it.
+pub(crate) fn create_file_like(
+    path: &Path,
+    model: &CopySource,
+    with: CopyWith,
+) -> io::Result<File> {
+    let mut descriptor = match with {
+        CopyWith::OwnerAndList => model.descriptor.clone(),
+        CopyWith::OwnerOnly => model.owner_only.clone(),
+    };
     let w = wide(path)?;
     let attrs = SECURITY_ATTRIBUTES {
         nLength: u32::try_from(std::mem::size_of::<SECURITY_ATTRIBUTES>()).unwrap_or(u32::MAX),
@@ -749,7 +763,7 @@ pub(crate) fn file_identity(file: &File) -> io::Result<(u64, u128)> {
 }
 
 mod shapes;
-pub(crate) use shapes::{Ace, CopySource, Inspection, ObjectKind, Share, Sid};
+pub(crate) use shapes::{Ace, CopySource, CopyWith, Inspection, ObjectKind, Share, Sid};
 use shapes::{aligned, wide};
 
 #[cfg(test)]

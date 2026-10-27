@@ -12,7 +12,38 @@ use std::path::Path;
 
 use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, READ_CONTROL};
 
-use crate::win_acl::{self, Ace, CopySource, Inspection};
+use crate::win_acl::{self, Ace, CopySource, CopyWith, Inspection};
+
+/// The create was refused because this token may not give the new file the
+/// owner its descriptor names.
+const ERROR_INVALID_OWNER: i32 = 1307;
+
+/// Create the scratch at `scratch` with `source`'s owner and, for
+/// [`CopyWith::OwnerAndList`], its list. Exactly ERROR_INVALID_OWNER becomes
+/// the `foreign-owner` refusal; every other failure is returned as itself.
+pub(super) fn create_like(
+    scratch: &Path,
+    source: &CopySource,
+    with: CopyWith,
+    target: &Path,
+) -> io::Result<File> {
+    win_acl::create_file_like(scratch, source, with).map_err(|e| {
+        if e.raw_os_error() != Some(ERROR_INVALID_OWNER) {
+            return e;
+        }
+        let runs_as = win_acl::current_user_sid()
+            .map_or_else(|_| "this account".to_owned(), |sid| sid.to_sddl());
+        refused(
+            "foreign-owner",
+            target,
+            &format!(
+                "its owner is {}, which the gateway, running as {runs_as}, cannot give a new \
+                 file; give the file that owner, or run the gateway as its owner",
+                owner_name(&source.inspection)
+            ),
+        )
+    })
+}
 
 /// What the Windows `Inherit` step decided for one save.
 pub(super) enum KeptScratch {
@@ -81,7 +112,7 @@ pub(super) fn prepare_from(model: &File, target: &Path, scratch: &Path) -> io::R
         // The check after the create still refuses anything wider.
         return Ok(KeptScratch::Default(source));
     }
-    let file = win_acl::create_file_like(scratch, &source)?;
+    let file = create_like(scratch, &source, CopyWith::OwnerAndList, target)?;
     match verify(&file, &source, target) {
         Ok(()) => Ok(KeptScratch::Kept(file)),
         Err(e) => {

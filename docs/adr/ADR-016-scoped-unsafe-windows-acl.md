@@ -129,12 +129,13 @@ Every `unsafe` block carries a `// SAFETY:` comment naming which of these it rel
 - `file_identity`: one `FILE_ID_INFO` on the stack, its exact size passed, written by the call.
 - `volume_is_local` / `final_path`: output buffers sized from the first call, lengths
   checked against the buffer before the `&[u16]` slice is formed.
-- `inspect_for_copy` (amendment, lead-ratified 2026-10-26): two reads through the same
-  `read_descriptor` loop `inspect` uses (`GetKernelObjectSecurity`, the handle borrowed
-  for the whole call): one for the DACL plus the five access-enforcing SACL classes
-  (label, scope, attribute, process trust label, access filter; never
-  `SACL_SECURITY_INFORMATION`, which needs `ACCESS_SYSTEM_SECURITY`), one for the owner.
-  Owner and DACL are decoded exactly as `inspect` decodes them.
+- `inspect_for_copy` (amendment, lead-ratified 2026-10-26; owner added by amendment 3):
+  two reads through the same `read_descriptor` loop `inspect` uses
+  (`GetKernelObjectSecurity`, the handle borrowed for the whole call): one for the owner,
+  the DACL and the five access-enforcing SACL classes (label, scope, attribute, process
+  trust label, access filter; never `SACL_SECURITY_INFORMATION`, which needs
+  `ACCESS_SYSTEM_SECURITY`), one for the owner alone. Owner and DACL are decoded exactly
+  as `inspect` decodes them. `READ_CONTROL` covers the owner, so no new access is needed.
 - SACL count (amendment, lead-ratified 2026-10-26): `GetSecurityDescriptorSacl` on the
   descriptor `read_descriptor` returned, the twin of the `GetSecurityDescriptorDacl`
   call. The SACL pointer is read only while the buffer lives, must lie inside the
@@ -142,12 +143,25 @@ Every `unsafe` block carries a `// SAFETY:` comment naming which of these it rel
   same per-ACE bounds; only their number is used.
 - `create_file_like` (amendment, lead-ratified 2026-10-26): `CreateFileW` with
   `CREATE_NEW`, no sharing and `FILE_FLAG_OPEN_REPARSE_POINT`, whose
-  `SECURITY_ATTRIBUTES` points at a copy of the self-relative descriptor
-  `inspect_for_copy` read (the form `lpSecurityDescriptor` accepts; it carries no
-  owner, so the creator's owner applies). The copy, the wide path and the attributes
+  `SECURITY_ATTRIBUTES` points at a copy of one of the two self-relative descriptors
+  `inspect_for_copy` read (the form `lpSecurityDescriptor` accepts): the full one for a
+  protected list, the owner-only one for an inherited list, which the folder then supplies
+  as for a plain create. The copy, the wide path and the attributes
   live on the caller's frame until the call returns; the result is checked against
   `INVALID_HANDLE_VALUE` and owned exactly once. The caller compares the new file's
   owner, DACL and SACL count with the model before any byte is written.
+- Owner kept (amendment 3, pending ratification): the owner now travels in the
+  descriptor `create_file_like` passes, so the copy keeps the original's owner. The kernel
+  assigns the token user's own SID, or a group the token may own by (BUILTIN\Administrators
+  on an elevated token), without a privilege, and fails any other owner with
+  `ERROR_INVALID_OWNER`; the caller reports exactly that code as `foreign-owner` and returns
+  every other failure as itself. The create is the only write of the owner (no later
+  `SetSecurityInfo`), so a refused or failed create leaves no scratch and the original
+  untouched. No new Win32 function and no new `unsafe` block: the information mask of the
+  existing read changes, and the bytes passed are still exactly what
+  `GetKernelObjectSecurity` returned. Before this, an elevated gateway refused to save or back
+  up a file it had created owner-only itself, because a new file's default owner on an
+  elevated token is the Administrators group, not the user.
 
 ## Consequences
 
