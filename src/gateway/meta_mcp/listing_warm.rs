@@ -48,7 +48,7 @@ impl MetaMcp {
                     .get_for(Unscoped::Visibility, &surfaced.server)?;
                 backend
                     .shared_slot_refused()
-                    .then(|| ((surfaced.server.as_str(), surfaced.tool.as_str()), backend))
+                    .then_some(((surfaced.server.as_str(), surfaced.tool.as_str()), backend))
             })
             .collect();
         let Some(bound) = refused

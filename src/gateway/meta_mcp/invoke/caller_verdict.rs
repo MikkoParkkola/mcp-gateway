@@ -71,31 +71,10 @@ pub(super) enum SlotJudgement {
 }
 
 impl MetaMcp {
-    /// Re-establish `caller`'s cold per-user view of `server` for a stored
-    /// read that won the claim `generation` (MIK-8392 B', d1): resolve the
-    /// caller's credential, fill the caller's own slot through the fill that
-    /// reports its real failure (never the stale-cache fallback), and only
-    /// then publish the slot, and only over this claim's own lease. One
-    /// resolution per claimed attempt; a failure leaves the lease to expire.
-    pub(in crate::gateway::meta_mcp) async fn warm_cold_view(
-        &self,
-        target: (&str, &str),
-        backend: &std::sync::Arc<Backend>,
-        caller: CallerProof<'_>,
-        generation: u64,
-    ) {
-        if let Some(fill) = self
-            .resolve_cold_view(target, backend, caller, generation)
-            .await
-        {
-            fill.run().await;
-        }
-    }
-
-    /// The request half of [`Self::warm_cold_view`]: resolve the caller's own
-    /// credential and binding for the claim `generation`, so the fill can run
-    /// inline or as its own task. `None` when nothing resolves: the lease
-    /// expires and the view stays cold.
+    /// The request half of re-establishing a cold view (MIK-8392 B', d1):
+    /// resolve the caller's own credential and binding for the claim
+    /// `generation`, so the fill can run inline or as its own task. `None`
+    /// when nothing resolves: the lease expires and the view stays cold.
     pub(in crate::gateway::meta_mcp) async fn resolve_cold_view(
         &self,
         (server, tool): (&str, &str),

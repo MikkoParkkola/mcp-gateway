@@ -55,10 +55,12 @@ fn propagated(strategy: &str, required: bool, session_mode: &str) -> String {
 /// `descriptors`, and check each compiled backend.
 fn check(port: u16, descriptors: &str, rows: &[(&str, String, bool)]) {
     let root = tempfile::TempDir::new().unwrap();
-    let mut backends = String::from("backends:\n");
-    for (name, body, _) in rows {
-        backends.push_str(&format!("  {name}:\n{body}"));
-    }
+    let backends: String = std::iter::once("backends:\n".to_string())
+        .chain(
+            rows.iter()
+                .map(|(name, body, _)| format!("  {name}:\n{body}")),
+        )
+        .collect();
     let compiled = effective(root.path(), port, descriptors, &backends);
     for (name, _, refused) in rows {
         let config = compiled

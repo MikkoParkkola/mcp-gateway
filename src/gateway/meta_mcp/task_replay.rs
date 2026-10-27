@@ -205,12 +205,9 @@ impl MetaMcp {
         session_id: Option<&str>,
     ) -> Option<super::invoke::ColdFill> {
         let caller = scope.caller;
-        let Some(backend) = self
+        let backend = self
             .scoped(scope.authorizer.backend_grant())
-            .scoped_get(server)
-        else {
-            return None;
-        };
+            .scoped_get(server)?;
         if !backend.keeps_per_user_catalogues() {
             return None;
         }
@@ -225,10 +222,7 @@ impl MetaMcp {
         }) {
             return None;
         }
-        let Some(principal) = self.principal_for(&backend, caller) else {
-            return None;
-        };
-        let id = principal.stable_actor_id();
+        let id = self.principal_for(&backend, caller)?.stable_actor_id();
         if let Some(held) = backend.caller_slot_held(&id) {
             // d0 warm: revalidate against the binding the pre-pass's own
             // view read gave (no second vault read). A mismatch (a rotated
@@ -240,7 +234,7 @@ impl MetaMcp {
             if current.is_none_or(|current| current == held.binding()) {
                 // MIK-8392 F2: a held catalogue past its TTL is stale, by
                 // the same rule the live fill uses. Treat the view as cold:
-                // forget, claim the lease and refresh through `warm_cold_view`
+                // forget, claim the lease and refresh through `resolve_cold_view`
                 // (one resolution per lease window), retryable meanwhile,
                 // exactly as a cold view. A fresh catalogue touches and
                 // stays warm: no extra resolution (C1, K1).
