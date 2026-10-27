@@ -143,20 +143,20 @@ async fn list_discovery(
             .into_response();
         }
     };
-    let Ok((listing, stale)) = cache.listing().await else {
+    let Ok((listing, outdated)) = cache.listing().await else {
         return flat_error(StatusCode::SERVICE_UNAVAILABLE, "discovery scan timed out")
             .into_response();
     };
 
     (
         [(header::CACHE_CONTROL, "no-store")],
-        axum::Json(body(&gateway, &listing, stale)),
+        axum::Json(body(&gateway, &listing, outdated)),
     )
         .into_response()
 }
 
 /// The response for one read of gateway.yaml and one cached listing.
-fn body(gateway: &Gateway, listing: &Listing, stale: bool) -> serde_json::Value {
+fn body(gateway: &Gateway, listing: &Listing, outdated: bool) -> serde_json::Value {
     let servers: Vec<serde_json::Value> = listing
         .finds
         .iter()
@@ -183,7 +183,7 @@ fn body(gateway: &Gateway, listing: &Listing, stale: bool) -> serde_json::Value 
         .collect();
     json!({
         "revision": revision,
-        "stale": stale,
+        "stale": outdated,
         "servers": servers,
         "unreadable_files": unreadable,
         "radar": {"counts": counts, "findings": findings},

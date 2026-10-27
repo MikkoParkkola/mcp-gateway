@@ -140,13 +140,13 @@ async fn concurrent_cold_reads_share_one_scan() {
 async fn a_scan_that_times_out_serves_the_last_listing_as_stale() {
     let dir = tempfile::tempdir().expect("tempdir");
     let fake = Arc::new(Fake::new(Vec::new(), &dir.path().join("w.json")));
-    let cache = cache(&fake);
-    let (_, stale) = cache.listing().await.expect("listing");
+    let warm = cache(&fake);
+    let (_, stale) = warm.listing().await.expect("listing");
     assert!(!stale);
 
     fake.hang.store(true, Ordering::SeqCst);
     fake.advance(CACHE_WINDOW);
-    let (_, stale) = cache.listing().await.expect("the last listing");
+    let (_, stale) = warm.listing().await.expect("the last listing");
     assert!(stale, "served stale after the timeout");
 
     let cold = Arc::new(Fake::new(Vec::new(), &dir.path().join("w.json")));

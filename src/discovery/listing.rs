@@ -107,7 +107,7 @@ pub(crate) struct DiscoveryCache {
 impl DiscoveryCache {
     /// A cache over `source`, with a fresh process key.
     pub(crate) fn new(source: Arc<dyn ScanSource>) -> Self {
-        use rand::Rng as _;
+        use rand::RngExt as _;
         Self::with_key(source, rand::rng().random())
     }
 
