@@ -257,7 +257,7 @@ impl MetaMode {
                     action_mode: true,
                     fail_closed: true,
                     ..Default::default()
-                })
+                });
             }
             Self::InvokeHidden => {
                 return meta.with_exposed_meta_tools(&["gateway_list_servers".to_string()]);

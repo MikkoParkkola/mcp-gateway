@@ -62,7 +62,7 @@ struct Session {
     lines: tokio::io::Lines<BufReader<tokio::io::DuplexStream>>,
     backends: Arc<crate::backend::BackendRegistry>,
     task: tokio::task::JoinHandle<()>,
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
 }
 
 impl Drop for Session {
@@ -105,7 +105,7 @@ impl Session {
             lines: BufReader::new(reader).lines(),
             backends,
             task,
-            _dir: dir,
+            dir,
         };
         let init = json!({
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -241,7 +241,7 @@ async fn logged_session_with(security: &str) -> (Session, std::path::PathBuf) {
         "security:\n  transparency_log:\n    enabled: true\n    path: \"{{DIR}}/audit.jsonl\"\n{security}"
     );
     let session = Session::open_with(&backend_url, &extra).await;
-    let log = session._dir.path().join("audit.jsonl");
+    let log = session.dir.path().join("audit.jsonl");
     (session, log)
 }
 

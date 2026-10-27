@@ -9,6 +9,7 @@ use axum::{Json, http::StatusCode};
 use serde_json::Value;
 
 use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::delivery_facts;
 use crate::gateway::meta_mcp::invoke::audit::DispatchNotes;
 use crate::gateway::meta_mcp::response_security::DeliveryCredential;
 use crate::identity_grants::GrantSubject;
@@ -265,12 +266,9 @@ async fn audited_call_judged(
             // 429 refusal carries the body `{}` and no error code (L1254).
             let body = document.as_ref().unwrap_or(&Value::Null);
             let outcome = direct_outcome(status, body);
-            // A gateway refusal, classed as the invocation record classes it:
-            // the rendered frame carries no refusal marker to read.
+            // A gateway refusal, classed as the invocation record classes it.
             if matches!(outcome, AuditOutcome::Denied(_)) {
-                crate::gateway::delivery_facts::raise(
-                    crate::gateway::delivery_facts::ResponseEffect::Refused,
-                );
+                delivery_facts::raise(delivery_facts::ResponseEffect::Refused);
             }
             crate::gateway::meta_mcp::response_security::record_answer_delivery(
                 state.transparency_log.as_ref(),
