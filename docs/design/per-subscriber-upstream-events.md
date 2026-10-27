@@ -398,10 +398,16 @@ only when a test exists that fails on its mutant.
 - **ISO-T6.** *Required; partly covered.* A revoked U1 has no connection open once the revocation runs (at once
   on a pushed revocation, at the latest on the next 30-second sweep), even
   with a silent backend, and nothing is emitted for U1 after it; stop on the last subscriber is covered too.
+  Unit level only: key-server policy changes take effect on restart, not on a
+  reload, so no reload path exists for an end-to-end row to remove one user's
+  access. Whether that is acceptable as a revocation path is an open question.
 - **ISO-T7.** A required backend never connects as the gateway for an `obs` key. The
   fixture records the presented credential on every request, and the test asserts
   the minted subject on each, including cold start, era probe, SSE handshake and a
-  forced session recovery.
+  forced session recovery. One request is exempt: the gateway's background
+  health probe sends `ping` on the backend's shared transport with no
+  `Authorization` header. It is not a listener and presents no credential;
+  whether a required backend should be probed at all is an open question.
 
 Also: restart with an unchanged key for a stored OIDC identity and a key-server
 identity; a concurrent slot-boundary row (a call slot promoted into a listener pin
