@@ -34,6 +34,22 @@ pub(super) struct AuditDetail(pub(super) serde_json::Map<String, serde_json::Val
 /// writer).
 const UNRECORDED_ROUTES: &[&str] = &[crate::gateway::routes::UI_CAPABILITY_VALIDATE];
 
+/// Record a change of `name`'s `allowed_tools` on its `admin_action` record:
+/// the backend and the list before and after (`null`: every tool).
+pub(super) fn attach_selection(
+    response: &mut Response,
+    name: &str,
+    before: Option<&[String]>,
+    after: Option<&[String]>,
+) {
+    let mut detail = serde_json::Map::new();
+    detail.insert(
+        "allowed_tools".into(),
+        serde_json::json!({"backend": name, "before": before, "after": after}),
+    );
+    response.extensions_mut().insert(AuditDetail(detail));
+}
+
 /// [`super::api_router`] with the layer on every route in it (E1-f).
 pub fn audited_api_router(state: &Arc<AppState>) -> Router<Arc<AppState>> {
     super::api_router().route_layer(axum::middleware::from_fn_with_state(

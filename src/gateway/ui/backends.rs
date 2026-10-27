@@ -23,6 +23,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use super::admin_audit::attach_selection;
 use super::refusals::WriteTicket;
 use super::{
     backend_ops::{
@@ -500,24 +501,6 @@ async fn update_backend(
         attach_selection(&mut response, &updated, before.as_deref(), after.as_deref());
     }
     response
-}
-
-/// Record a change of `name`'s `allowed_tools` on its `admin_action` record:
-/// the backend and the list before and after (`null`: every tool).
-fn attach_selection(
-    response: &mut axum::response::Response,
-    name: &str,
-    before: Option<&[String]>,
-    after: Option<&[String]>,
-) {
-    let mut detail = serde_json::Map::new();
-    detail.insert(
-        "allowed_tools".into(),
-        json!({"backend": name, "before": before, "after": after}),
-    );
-    response
-        .extensions_mut()
-        .insert(super::admin_audit::AuditDetail(detail));
 }
 
 /// An add that `add_backend` refused: 422 for a secret reference that does
