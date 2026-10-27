@@ -400,3 +400,39 @@ async fn a_rotated_grant_publishing_inside_the_claim_window_is_not_served_http()
         "the old grant's schema was served through the claim window: {second}"
     );
 }
+
+/// The deadline cuts the account pre-pass short while the old grant's fill
+/// publishes: the listing never read the current grant, so it fails closed
+/// and withholds the tool rather than serve the old grant's schema.
+#[tokio::test(start_paused = true)]
+async fn a_listing_whose_account_check_is_cut_short_withholds_http() {
+    let fx = Arc::new(fixture().await);
+    let bound = fill_bound(&fx, BACKEND);
+    fx.gateway.delay_lists_on(BACKEND, bound / 2);
+    let first = tokio::spawn({
+        let fx = Arc::clone(&fx);
+        async move { rpc(&fx, 1, "tools/list", json!({})).await }
+    });
+    tokio::time::sleep(bound / 4).await;
+    assert_eq!(
+        fx.gateway.lists_to(BACKEND),
+        1,
+        "premise: the old grant's fill is running"
+    );
+    fx.gateway.rotate_operator_grant().await;
+    let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
+    // Armed and never released: the second listing's pre-pass never runs,
+    // and its deadline ends the step.
+    let (reached, _held) = backend.before_listing_prepass.arm();
+    let second = tokio::spawn({
+        let fx = Arc::clone(&fx);
+        async move { rpc(&fx, 2, "tools/list", json!({})).await }
+    });
+    reached.notified().await;
+    first.await.expect("the first listing");
+    let second = second.await.expect("the second listing");
+    assert!(
+        surfaced_on(&second, BACKEND).is_empty(),
+        "an unchecked listing served the old grant's schema: {second}"
+    );
+}

@@ -138,6 +138,10 @@ pub struct Backend {
     /// it looks for the running lease, so a publish can land in between.
     #[cfg(test)]
     pub(crate) before_lease_lookup: crate::test_pause::Slot,
+    /// Test-only: a listing's claims pause before its account pre-pass, so a
+    /// row can let the step's deadline cut the pre-pass short.
+    #[cfg(test)]
+    pub(crate) before_listing_prepass: crate::test_pause::Slot,
     /// Test-only: a stored read that won a cold claim pauses before it
     /// resolves (MIK-8392 C3, C4, L1, L1b).
     #[cfg(test)]

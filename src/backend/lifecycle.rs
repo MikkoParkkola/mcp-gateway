@@ -92,6 +92,8 @@ impl Backend {
             #[cfg(test)]
             before_lease_lookup: crate::test_pause::Slot::default(),
             #[cfg(test)]
+            before_listing_prepass: crate::test_pause::Slot::default(),
+            #[cfg(test)]
             cold_winner: crate::test_pause::Slot::default(),
             #[cfg(test)]
             after_warm_capture: crate::test_pause::Slot::default(),

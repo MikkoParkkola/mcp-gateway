@@ -70,6 +70,10 @@ impl MetaMcp {
         // by it.
         let ceiling = started + ceiling.min(LISTING_DEADLINE_CAP);
         let claims = async {
+            #[cfg(test)]
+            for (_, backend) in &refused {
+                backend.before_listing_prepass.pause().await;
+            }
             // A listing is not a call: a busy custody writes no transient
             // refusal record here.
             self.account_prepass(&targets, scope, session_id, AccountWrites::PermanentOnly)
@@ -94,6 +98,16 @@ impl MetaMcp {
             .await
         };
         let Ok(pending) = tokio::time::timeout_at(ceiling, claims).await else {
+            // Cut short, the pre-pass may not have read a target's account:
+            // fail closed, so no held view of it is shown unchecked.
+            for (_, backend) in &refused {
+                if let Some(account) = backend.account_descriptor_id() {
+                    super::visible::memo::record_account_unchecked(
+                        &backend.name,
+                        &super::visible::memo::DescriptorId(account.to_owned()),
+                    );
+                }
+            }
             return;
         };
         let pending: Vec<Pending> = pending.into_iter().flatten().collect();
