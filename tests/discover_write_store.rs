@@ -76,7 +76,11 @@ fn d16_a_literal_is_stored_and_a_client_only_server_is_skipped() {
     let path = reference
         .strip_prefix("file:")
         .unwrap_or_else(|| panic!("not a files reference: {reference}"));
-    assert_eq!(std::fs::read_to_string(path).expect("secret file"), SECRET);
+    // The files store pads one `\n`, which the gateway's reader drops.
+    assert_eq!(
+        std::fs::read_to_string(path).expect("secret file"),
+        format!("{SECRET}\n")
+    );
     assert!(!written.contains("client-only"), "{written}");
     assert!(
         stderr.contains("\"client-only\": needs_client_only_secret (env.TOKEN)"),

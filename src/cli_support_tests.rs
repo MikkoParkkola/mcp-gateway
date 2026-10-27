@@ -56,9 +56,12 @@ fn entries(dir: &Path) -> usize {
     .len()
 }
 
+/// The value the gateway reads for `reference`, through its own reader.
 fn read_reference(reference: &str) -> String {
-    let path = reference.strip_prefix("file:").expect("a files reference");
-    std::fs::read_to_string(path).expect("the secret file")
+    assert!(reference.starts_with("file:"), "{reference}");
+    crate::config::secret_ref::SecretRef::parse(reference)
+        .resolve("test", &Config::default().env_overlay())
+        .expect("the reference resolves")
 }
 
 #[test]
