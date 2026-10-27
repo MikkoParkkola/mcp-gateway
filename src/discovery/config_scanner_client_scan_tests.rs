@@ -80,6 +80,30 @@ async fn an_unreadable_file_is_named_and_the_others_still_scan() {
 }
 
 #[tokio::test]
+async fn a_huge_file_or_a_directory_never_reaches_a_parser() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let huge = dir.path().join("huge.json");
+    let folder = dir.path().join("folder.json");
+    // Valid JSON, just over the cap.
+    let filler = "x".repeat(usize::try_from(MAX_CLIENT_FILE).expect("fits"));
+    write(&huge, &entry(&filler));
+    std::fs::create_dir(&folder).expect("dir");
+
+    let scan = ConfigScanner::new()
+        .scan_candidates(&[claude(&huge), claude(&folder)])
+        .await;
+
+    assert!(scan.finds.is_empty(), "{:?}", scan.finds);
+    assert_eq!(
+        scan.unreadable,
+        vec![
+            (DiscoverySource::ClaudeDesktop, "huge.json".to_string()),
+            (DiscoverySource::ClaudeDesktop, "folder.json".to_string()),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn an_entry_digest_follows_every_value_and_nothing_else() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("claude.json");

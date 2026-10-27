@@ -35,42 +35,42 @@ pub(crate) struct Candidate {
     pub(crate) format: Format,
 }
 
-/// What a file looked like when it was stamped; `None` when it was absent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Stamp {
-    len: u64,
-    modified: Option<SystemTime>,
-    /// The inode on Unix, so a same-size replacement in the same second is
-    /// still seen; 0 elsewhere.
-    inode: u64,
-}
+/// A client file larger than this is not parsed: no MCP client config is
+/// this big, and a scan holds the discovery cache while it reads.
+const MAX_CLIENT_FILE: u64 = 1024 * 1024;
 
-/// Every candidate path with its stamp: equal fingerprints mean no client
-/// file was created, deleted or changed between them.
+/// A hash over every candidate path with its size, modified time and (on
+/// Unix) inode, absent ones included: equal fingerprints mean no client file
+/// was created, deleted or changed between them. Only the hash is kept, so a
+/// cached listing holds no path.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Fingerprint(Vec<(PathBuf, Option<Stamp>)>);
+pub(crate) struct Fingerprint(String);
 
 /// One scan of the client config files.
 #[derive(Debug)]
 pub(crate) struct ClientScan {
     pub(crate) finds: Vec<DiscoveredServer>,
-    /// Taken after the reads, from the same candidate list.
+    /// Taken before the reads, from the same candidate list.
     pub(crate) fingerprint: Fingerprint,
     /// Files that exist but did not read or parse: their app and file name.
     pub(crate) unreadable: Vec<(DiscoverySource, String)>,
 }
 
-fn stamp(path: &std::path::Path) -> Option<Stamp> {
-    let meta = std::fs::metadata(path).ok()?;
+/// One line per candidate: its path, then its stamp or `absent`.
+fn stamp_line(path: &std::path::Path) -> String {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return format!("{}\0absent\n", path.display());
+    };
     #[cfg(unix)]
     let inode = std::os::unix::fs::MetadataExt::ino(&meta);
     #[cfg(not(unix))]
     let inode = 0;
-    Some(Stamp {
-        len: meta.len(),
-        modified: meta.modified().ok(),
-        inode,
-    })
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos());
+    format!("{}\0{}\0{modified}\0{inode}\n", path.display(), meta.len())
 }
 
 impl ConfigScanner {
@@ -150,12 +150,8 @@ impl ConfigScanner {
 
     /// Stat every candidate: no read, no parse.
     pub(crate) fn fingerprint(candidates: &[Candidate]) -> Fingerprint {
-        Fingerprint(
-            candidates
-                .iter()
-                .map(|c| (c.path.clone(), stamp(&c.path)))
-                .collect(),
-        )
+        let lines: String = candidates.iter().map(|c| stamp_line(&c.path)).collect();
+        Fingerprint(crate::hashing::sha256_hex(lines.as_bytes()))
     }
 
     /// Read every client config file once, through its own parser.
@@ -166,6 +162,9 @@ impl ConfigScanner {
     /// Read `candidates` in order. An absent file adds nothing; one that
     /// exists but does not read or parse is named in `unreadable`.
     pub(crate) async fn scan_candidates(&self, candidates: &[Candidate]) -> ClientScan {
+        // Taken before the reads: a file edited during the scan then differs
+        // from it, and the next read rescans.
+        let fingerprint = Self::fingerprint(candidates);
         let mut finds = Vec::new();
         let mut unreadable = Vec::new();
         for candidate in candidates {
@@ -174,6 +173,18 @@ impl ConfigScanner {
             }
             debug!("Scanning client config at {}", candidate.path.display());
             let path = &candidate.path;
+            let file_name = || {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            };
+            // A FIFO, a device or a huge file never reaches a parser.
+            let readable = std::fs::metadata(path)
+                .is_ok_and(|meta| meta.is_file() && meta.len() <= MAX_CLIENT_FILE);
+            if !readable {
+                unreadable.push((candidate.source.clone(), file_name()));
+                continue;
+            }
             let read = match candidate.format {
                 Format::Claude => {
                     self.parse_claude_config(path, candidate.source.clone())
@@ -188,17 +199,12 @@ impl ConfigScanner {
             };
             match read {
                 Ok(mut servers) => finds.append(&mut servers),
-                Err(_) => unreadable.push((
-                    candidate.source.clone(),
-                    path.file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_default(),
-                )),
+                Err(_) => unreadable.push((candidate.source.clone(), file_name())),
             }
         }
         ClientScan {
             finds,
-            fingerprint: Self::fingerprint(candidates),
+            fingerprint,
             unreadable,
         }
     }

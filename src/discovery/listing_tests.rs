@@ -148,6 +148,18 @@ async fn a_scan_that_times_out_serves_the_last_listing_as_stale() {
     fake.advance(CACHE_WINDOW);
     let (_, stale) = warm.listing().await.expect("the last listing");
     assert!(stale, "served stale after the timeout");
+    let scans = fake.scans();
+
+    // Within one timeout of the last, a read does not wait out another scan.
+    let (_, stale) = warm.listing().await.expect("the last listing");
+    assert!(stale);
+    assert_eq!(fake.scans(), scans, "no scan while backing off");
+
+    fake.hang.store(false, Ordering::SeqCst);
+    fake.advance(SCAN_TIMEOUT);
+    let (_, stale) = warm.listing().await.expect("a fresh listing");
+    assert!(!stale, "a scan that finishes clears the back-off");
+    assert_eq!(fake.scans(), scans + 1);
 
     let cold = Arc::new(Fake::new(Vec::new(), &dir.path().join("w.json")));
     cold.hang.store(true, Ordering::SeqCst);

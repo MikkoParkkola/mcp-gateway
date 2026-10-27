@@ -101,7 +101,16 @@ pub(crate) struct DiscoveryCache {
     key: [u8; 32],
     /// One scan at a time: a GET that misses holds this across its scan, and
     /// one waiting behind it then finds the fresh result.
-    current: tokio::sync::Mutex<Option<Arc<Listing>>>,
+    current: tokio::sync::Mutex<Cached>,
+}
+
+/// The last listing, and when the last scan timed out.
+#[derive(Default)]
+struct Cached {
+    listing: Option<Arc<Listing>>,
+    /// For one `SCAN_TIMEOUT` after a timed-out scan, reads answer from what
+    /// is cached instead of each waiting out another scan.
+    timed_out_at: Option<Instant>,
 }
 
 impl DiscoveryCache {
@@ -116,7 +125,7 @@ impl DiscoveryCache {
         Self {
             source,
             key,
-            current: tokio::sync::Mutex::new(None),
+            current: tokio::sync::Mutex::new(Cached::default()),
         }
     }
 
@@ -129,22 +138,39 @@ impl DiscoveryCache {
     /// [`ScanTimedOut`] when the scan timed out and nothing was cached.
     pub(crate) async fn listing(&self) -> Result<(Arc<Listing>, bool), ScanTimedOut> {
         let mut current = self.current.lock().await;
-        if let Some(listing) = current.as_ref()
-            && self.source.now().duration_since(listing.taken) < CACHE_WINDOW
+        let now = self.source.now();
+        if let Some(listing) = current.listing.as_ref()
+            && now.duration_since(listing.taken) < CACHE_WINDOW
             && self.source.fingerprint() == listing.fingerprint
         {
             return Ok((Arc::clone(listing), false));
         }
+        let stale = |cached: &Cached| {
+            cached
+                .listing
+                .as_ref()
+                .map(|listing| (Arc::clone(listing), true))
+                .ok_or(ScanTimedOut)
+        };
+        if current
+            .timed_out_at
+            .is_some_and(|at| now.duration_since(at) < SCAN_TIMEOUT)
+        {
+            return stale(&current);
+        }
         match tokio::time::timeout(SCAN_TIMEOUT, self.source.scan()).await {
             Ok(scan) => {
                 let listing = Arc::new(self.project(scan));
-                *current = Some(Arc::clone(&listing));
+                *current = Cached {
+                    listing: Some(Arc::clone(&listing)),
+                    timed_out_at: None,
+                };
                 Ok((listing, false))
             }
-            Err(_) => current
-                .as_ref()
-                .map(|listing| (Arc::clone(listing), true))
-                .ok_or(ScanTimedOut),
+            Err(_) => {
+                current.timed_out_at = Some(self.source.now());
+                stale(&current)
+            }
         }
     }
 

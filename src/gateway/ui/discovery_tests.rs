@@ -84,12 +84,12 @@ fn the_config_file_is_read_once_and_judged_by_kind() {
     // A directory exists but does not read as a file.
     assert_eq!(
         read_gateway(Some(dir.path())).err(),
-        Some("gateway.yaml could not be read")
+        Some("gateway.yaml could not be loaded")
     );
     let broken = gateway_file(dir.path(), "backends: [\n");
     assert_eq!(
         read_gateway(Some(&broken)).err(),
-        Some("gateway.yaml does not parse")
+        Some("gateway.yaml could not be loaded")
     );
 
     let path = gateway_file(dir.path(), GATEWAY);

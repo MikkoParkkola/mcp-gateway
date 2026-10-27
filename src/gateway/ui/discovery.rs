@@ -32,10 +32,6 @@ use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
 use crate::gateway::routes;
 
-/// Reads of gateway.yaml before a request gives up on a file that keeps
-/// changing between its read and its load.
-const CONSISTENT_READ_TRIES: usize = 3;
-
 /// The discovery routes over this host's client config files.
 pub(super) fn discovery_router() -> Router<Arc<AppState>> {
     discovery_router_with(Arc::new(DiscoveryCache::new(Arc::new(ClientFiles(
@@ -61,28 +57,29 @@ enum Gateway {
     },
 }
 
-/// One consistent read: the revision of the bytes, and the config those same
-/// bytes load as. A file changed between the two is read again.
+/// One read: the config and the exact text it was loaded from, so the
+/// revision and the managed set always describe the same bytes. A missing
+/// file is no config; any other failure is logged with its cause (never the
+/// file's contents) and answered without one.
 fn read_gateway(path: Option<&Path>) -> Result<Gateway, &'static str> {
     let Some(path) = path else {
         return Ok(Gateway::None);
     };
-    for _ in 0..CONSISTENT_READ_TRIES {
-        let before = match std::fs::read(path) {
-            Ok(bytes) => FileRevision::of(&bytes),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Gateway::None),
-            Err(_) => return Err("gateway.yaml could not be read"),
-        };
-        let config = Config::load_literal(Some(path)).map_err(|_| "gateway.yaml does not parse")?;
-        let after = std::fs::read(path).map(|bytes| FileRevision::of(&bytes));
-        if after.as_ref().ok() == Some(&before) {
-            return Ok(Gateway::File {
-                revision: before,
-                config: Box::new(config),
-            });
+    if let Err(e) = std::fs::symlink_metadata(path)
+        && e.kind() == std::io::ErrorKind::NotFound
+    {
+        return Ok(Gateway::None);
+    }
+    match Config::load_literal_with_text(path) {
+        Ok((config, text)) => Ok(Gateway::File {
+            revision: FileRevision::of(text.as_bytes()),
+            config: Box::new(config),
+        }),
+        Err(error) => {
+            tracing::warn!(%error, path = %path.display(), "discovery: gateway.yaml could not be loaded");
+            Err("gateway.yaml could not be loaded")
         }
     }
-    Err("gateway.yaml is changing; try again")
 }
 
 /// Why `find` cannot be adopted under this gateway.yaml, beyond the adopt
@@ -138,7 +135,7 @@ async fn list_discovery(
         Err(_) => {
             return flat_error(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "gateway.yaml could not be read",
+                "gateway.yaml could not be loaded",
             )
             .into_response();
         }
