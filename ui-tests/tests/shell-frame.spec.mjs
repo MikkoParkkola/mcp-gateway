@@ -379,7 +379,7 @@ test.describe('touch targets', () => {
 });
 
 test.describe('page states and safety', () => {
-  test('F13 state() renders every kind with its heading and role', async ({ page }) => {
+  test('F13 state() renders every kind with its heading, and none is itself live', async ({ page }) => {
     await page.goto('/ui/overview/status');
     await shellReady(page);
     const url = await shellModuleUrl(page);
@@ -394,9 +394,8 @@ test.describe('page states and safety', () => {
       expect(k.data, k.kind).toBe(k.kind);
       expect(k.heading, k.kind).not.toBe('');
     }
-    expect(kinds.find((k) => k.kind === 'loading').role).toBe('status');
-    expect(kinds.find((k) => k.kind === 'error').role).toBe('alert');
-    expect(kinds.find((k) => k.kind === 'forbidden').role).toBe('alert');
+    // One live region announces transitions (UI1.18); no state is itself live.
+    for (const k of kinds) expect(k.role, k.kind).toBeNull();
   });
 
   test('F13b a 403 from an API renders the forbidden state in place', async ({ page }) => {

@@ -44,6 +44,11 @@ const probed = {
     // A render that has written part of the page and then faults.
     if (fault) null.call();
   },
+  // L7 (shell-live.spec.mjs): a screen announces through its render context.
+  gateway: (el, ctx) => {
+    el.textContent = 'gateway - status';
+    ctx.announce('Gateway status read.');
+  },
   costs: async (el) => {
     const reply = await api('/ui/api/fault-probe');
     reply.missing.call();
