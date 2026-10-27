@@ -90,6 +90,23 @@ async fn listening(peer: &SubjectPeer, gw: &Gateway, subject: &str) {
     );
 }
 
+/// Wait until `subject`'s `resources/subscribe` reached `peer`, so a resource
+/// update pushed next is not dropped for want of a subscription.
+async fn subscribed(peer: &SubjectPeer, gw: &Gateway, subject: &str) {
+    let done = wait_until(DEADLINE, || {
+        peer.seen()
+            .iter()
+            .any(|r| r.subject == subject && r.method == "resources/subscribe")
+    })
+    .await;
+    assert!(
+        done,
+        "no resources/subscribe as {subject}; peer saw {:?}\n{}",
+        peer.seen(),
+        gw.logs()
+    );
+}
+
 /// ISO-T1, signed_assertion: each user's change reaches that user only, and
 /// each user is served.
 #[tokio::test]
@@ -142,6 +159,7 @@ async fn each_user_only_their_own(
     }
     for user in users {
         listening(peer, gw, user).await;
+        subscribed(peer, gw, user).await;
     }
 
     for (n, (user, tools, updated)) in subs.iter().enumerate() {
@@ -196,6 +214,16 @@ fn as_anyone_else(peer: &SubjectPeer, from: usize) -> Vec<subject_peer::Request>
         .collect()
 }
 
+/// Requests from index `from` on whose session is another subject's: each
+/// listener's requests carry the subject its own session was issued to.
+fn in_anothers_session(peer: &SubjectPeer, from: usize) -> Vec<subject_peer::Request> {
+    peer.seen()
+        .into_iter()
+        .skip(from)
+        .filter(|r| !r.session.is_empty() && r.session != format!("session-{}", r.subject))
+        .collect()
+}
+
 /// ISO-T7: a required backend is never reached as the gateway for a per-user
 /// listener. Every request after the users subscribe carries a user's own
 /// subject: the listener's cold start, its stream, and the re-initialization
@@ -229,8 +257,10 @@ async fn iso_t7_token_exchange_listener_only_presents_its_users_credential() {
     only_its_users_credential(&peer, &gw, &rx, &issuer).await;
 }
 
-/// Every request after the users subscribe carries a user's own subject:
-/// cold start, stream, and re-initialization after a dropped session.
+/// Every request after the users subscribe carries a user's own subject, and
+/// the subject its session was issued to: cold start, stream, the resource
+/// subscription, and re-initialization after a dropped session (the refused
+/// request that triggers it included).
 async fn only_its_users_credential(
     peer: &SubjectPeer,
     gw: &Gateway,
@@ -241,20 +271,28 @@ async fn only_its_users_credential(
     for user in ["u1", "u2"] {
         let bearer = issuer.mint(user, &email(user));
         sub(gw, &bearer, TOOLS, rx, json!({})).await;
+        sub(gw, &bearer, UPDATED, rx, json!({"uri": resource_of(user)})).await;
         listening(peer, gw, user).await;
+        subscribed(peer, gw, user).await;
     }
     let cold: Vec<_> = peer.seen().into_iter().skip(from).collect();
     for user in ["u1", "u2"] {
-        assert!(
-            cold.iter()
-                .any(|r| r.subject == user && r.method == "initialize"),
-            "{user}'s listener initialized as {user}: {cold:?}"
-        );
+        for method in ["initialize", "resources/subscribe"] {
+            assert!(
+                cold.iter().any(|r| r.subject == user && r.method == method),
+                "{user}'s listener sent {method} as {user}: {cold:?}"
+            );
+        }
     }
     assert!(
         as_anyone_else(peer, from).is_empty(),
         "cold start: {:?}",
         as_anyone_else(peer, from)
+    );
+    assert!(
+        in_anothers_session(peer, from).is_empty(),
+        "cold start: {:?}",
+        in_anothers_session(peer, from)
     );
 
     let before = peer.seen().len();
@@ -278,5 +316,10 @@ async fn only_its_users_credential(
         as_anyone_else(peer, from).is_empty(),
         "after recovery: {:?}",
         as_anyone_else(peer, from)
+    );
+    assert!(
+        in_anothers_session(peer, from).is_empty(),
+        "after recovery: {:?}",
+        in_anothers_session(peer, from)
     );
 }
