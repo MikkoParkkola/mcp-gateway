@@ -236,10 +236,22 @@ fn queued_with(
         observed: None,
     };
     edit(&mut sub, &mut record);
+    let id = sub.id.clone();
     hub.store
         .admit(sub, true, caps, chrono::Duration::zero(), now, tail)
         .expect("io")
         .expect("admitted");
+    // Admission hands the row its incarnation; fan-out stamps the stored row,
+    // so a stamp taken before admission is brought up to it.
+    if let Some(observed) = record.observed.as_mut() {
+        observed.incarnation = hub
+            .store
+            .subscriptions()
+            .into_iter()
+            .find(|row| row.id == id)
+            .expect("stored")
+            .incarnation;
+    }
     let caps = OutboxCaps {
         global: 10,
         per_subscription: 10,
