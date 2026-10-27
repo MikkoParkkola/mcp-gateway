@@ -97,7 +97,7 @@ pub fn import_router() -> Router<Arc<AppState>> {
 /// existing [`OpenApiConverter`], and returns the list of would-be tools.
 /// No files are written.
 async fn preview_handler(
-    State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
     client: Option<Extension<AuthenticatedClient>>,
     Json(body): Json<ImportRequest>,
 ) -> impl IntoResponse {
@@ -106,7 +106,7 @@ async fn preview_handler(
         return admin_auth_required().into_response();
     }
 
-    let spec_content = match resolve_spec(&state, &body).await {
+    let spec_content = match resolve_spec(&generation, &body).await {
         Ok(s) => s,
         Err((status, msg)) => {
             return flat_error(status, msg).into_response();
@@ -144,6 +144,7 @@ async fn preview_handler(
 /// was imported, skipped, and any errors.
 async fn import_handler(
     State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
     client: Option<Extension<AuthenticatedClient>>,
     Json(body): Json<ImportRequest>,
 ) -> impl IntoResponse {
@@ -159,7 +160,7 @@ async fn import_handler(
         .cloned()
         .unwrap_or_else(|| "capabilities".to_string());
 
-    let spec_content = match resolve_spec(&state, &body).await {
+    let spec_content = match resolve_spec(&generation, &body).await {
         Ok(s) => s,
         Err((status, msg)) => {
             return flat_error(status, msg).into_response();
@@ -217,11 +218,11 @@ async fn import_handler(
 
 /// Resolve the raw spec content from either a URL (fetch) or an inline string.
 async fn resolve_spec(
-    state: &AppState,
+    generation: &crate::config_reload::Generation,
     body: &ImportRequest,
 ) -> Result<String, (StatusCode, String)> {
     match (&body.url, &body.spec) {
-        (Some(url), None) => fetch_spec(url, state.ssrf_protection).await,
+        (Some(url), None) => fetch_spec(url, generation.ssrf_protection()).await,
         (None, Some(spec)) => {
             if spec.trim().is_empty() {
                 Err((
