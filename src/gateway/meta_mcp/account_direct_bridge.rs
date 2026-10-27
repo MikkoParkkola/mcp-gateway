@@ -289,6 +289,12 @@ impl DirectAccountGateway {
         self.dispatches.delay_lists_on(backend, delay);
     }
 
+    /// Make `backend` list a tool named `name` instead of `read`
+    /// (MIK-8962: two surfaced backends need distinct tool names).
+    pub(crate) fn name_list_tool_on(&self, backend: &str, name: &str) {
+        self.dispatches.name_list_tool_on(backend, name);
+    }
+
     /// Answer the next requests, `tools/list` included, with these HTTP
     /// statuses (MIK-8356 C9: a cold slot's first list gets a 401).
     pub(crate) fn answer_lists_with(&self, statuses: &[u16]) {

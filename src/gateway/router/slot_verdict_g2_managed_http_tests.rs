@@ -90,7 +90,7 @@ async fn fixture_for(
     arm: impl FnOnce(&mut crate::gateway::meta_mcp::MetaMcp),
 ) -> Fx {
     let gateway = DirectAccountGateway::new(auth.clone(), binding);
-    fixture_on(gateway, &auth, &[BACKEND], arm).await
+    fixture_on(gateway, &auth, &[(BACKEND, TOOL)], arm).await
 }
 
 /// The router over `gateway`, [`TOOL`] surfaced on each of `surfaced`, each
@@ -98,7 +98,7 @@ async fn fixture_for(
 async fn fixture_on(
     mut gateway: DirectAccountGateway,
     auth: &AuthConfig,
-    surfaced: &[&str],
+    surfaced: &[(&str, &str)],
     arm: impl FnOnce(&mut crate::gateway::meta_mcp::MetaMcp),
 ) -> Fx {
     let audit = tempfile::tempdir().unwrap();
@@ -121,9 +121,9 @@ async fn fixture_on(
     let mut meta = gateway.take_meta().with_surfaced_tools(
         surfaced
             .iter()
-            .map(|server| SurfacedToolConfig {
+            .map(|(server, tool)| SurfacedToolConfig {
                 server: (*server).to_string(),
-                tool: TOOL.to_string(),
+                tool: (*tool).to_string(),
             })
             .collect(),
     );
@@ -132,16 +132,16 @@ async fn fixture_on(
     let meta = Arc::new(meta);
     state_mut.meta_mcp = Arc::clone(&meta);
     state_mut.transparency_log = Some(log);
-    let tool: crate::protocol::Tool = serde_json::from_value(json!({
-        "name": TOOL, "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}}
-    }))
-    .expect("a tool");
-    for server in surfaced {
+    for (server, tool) in surfaced {
+        let tool: crate::protocol::Tool = serde_json::from_value(json!({
+            "name": tool, "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}}
+        }))
+        .expect("a tool");
         gateway
             .backends()
             .get(server)
             .expect("the backend")
-            .store_shared_tools_for_test(vec![tool.clone()]);
+            .store_shared_tools_for_test(vec![tool]);
     }
     Fx {
         router: create_router(Arc::clone(&state)),
@@ -640,7 +640,7 @@ fn surfaced_on<'a>(answer: &'a Value, server: &str) -> Vec<&'a Value> {
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter(|t| t["name"] == TOOL && t.to_string().contains(server))
+        .filter(|t| t.pointer("/trustCard/serverId") == Some(&json!(format!("backend:{server}"))))
         .collect()
 }
 
@@ -698,7 +698,24 @@ async fn fixture_two() -> Fx {
         &Binding::Connected,
         Second::PersonalAccount,
     );
-    fixture_on(gateway, &auth, &[BACKEND, PERSONAL_BACKEND], |_| {}).await
+    two_surfaced(gateway, &auth).await
+}
+
+/// The second backend lists [`PERSONAL_TOOL`]: a second surfaced `read`
+/// would collide with the first and be skipped.
+const PERSONAL_TOOL: &str = "note";
+
+/// The router over [`BACKEND`] and [`PERSONAL_BACKEND`], each with its own
+/// surfaced tool.
+async fn two_surfaced(gateway: DirectAccountGateway, auth: &AuthConfig) -> Fx {
+    gateway.name_list_tool_on(PERSONAL_BACKEND, PERSONAL_TOOL);
+    fixture_on(
+        gateway,
+        auth,
+        &[(BACKEND, TOOL), (PERSONAL_BACKEND, PERSONAL_TOOL)],
+        |_| {},
+    )
+    .await
 }
 
 /// The fill bound of `server`.
@@ -760,7 +777,7 @@ async fn a_backend_past_the_cap_is_listed_after_its_late_fill_http() {
         Second::PersonalAccount,
         |config| config.timeout = std::time::Duration::from_secs(60),
     );
-    let fx = fixture_on(gateway, &auth, &[BACKEND, PERSONAL_BACKEND], |_| {}).await;
+    let fx = two_surfaced(gateway, &auth).await;
     let cap = crate::gateway::meta_mcp::LISTING_DEADLINE_CAP;
     assert!(
         fill_bound(&fx, PERSONAL_BACKEND) > cap,
@@ -863,7 +880,7 @@ async fn a_fill_past_the_cold_backoff_still_publishes_http() {
         &Binding::Connected,
         |config| config.timeout = std::time::Duration::from_secs(120),
     );
-    let fx = Arc::new(fixture_on(gateway, &auth, &[BACKEND], |_| {}).await);
+    let fx = Arc::new(fixture_on(gateway, &auth, &[(BACKEND, TOOL)], |_| {}).await);
     fx.gateway
         .delay_lists_on(BACKEND, std::time::Duration::from_secs(90));
     let first = tokio::spawn({

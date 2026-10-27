@@ -620,6 +620,9 @@ pub(super) struct Dispatches {
     /// How long each named backend waits, in tokio time, before it answers a
     /// `tools/list` (MIK-8962: a slow backend against a listing's deadline).
     list_delays: Mutex<std::collections::BTreeMap<String, std::time::Duration>>,
+    /// The tool each named backend lists instead of `read` (MIK-8962: two
+    /// backends surfacing one name would collide, and the second is skipped).
+    list_tool_names: Mutex<std::collections::BTreeMap<String, String>>,
 }
 
 /// One scripted backend answer (A11 cells).
@@ -654,6 +657,13 @@ impl Dispatches {
     /// Make `server` wait `delay` before it answers a `tools/list`.
     pub(super) fn delay_lists_on(&self, server: &str, delay: std::time::Duration) {
         self.list_delays.lock().insert(server.to_string(), delay);
+    }
+
+    /// Make `server` list `name` instead of `read`.
+    pub(super) fn name_list_tool_on(&self, server: &str, name: &str) {
+        self.list_tool_names
+            .lock()
+            .insert(server.to_string(), name.to_string());
     }
 
     /// Let the script answer `tools/list` as well as `tools/call`.
@@ -786,6 +796,14 @@ impl crate::transport::Transport for CapturingTransport {
                 }
                 None => {}
             }
+        }
+        if method == "tools/list"
+            && let Some(name) = self.dispatches.list_tool_names.lock().get(&self.server)
+        {
+            return Ok(crate::protocol::JsonRpcResponse::success(
+                crate::protocol::RequestId::Number(1),
+                json!({"tools": [{"name": name, "inputSchema": {"type": "object"}}]}),
+            ));
         }
         Ok(answer(method))
     }

@@ -34,6 +34,7 @@ src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_credential	get_fo
 src/gateway/meta_mcp/invoke/step_fingerprint.rs	step_fingerprint	scoped_get	scoped
 src/gateway/meta_mcp/listing_view.rs	listing_names	get_for	Visibility
 src/gateway/meta_mcp/listing_view.rs	promoted_tools_for_caller	get_for	Visibility
+src/gateway/meta_mcp/listing_warm.rs	running_cold_lease	scoped_get	scoped
 src/gateway/meta_mcp/listing_warm.rs	warm_listing_views	get_for	Visibility
 src/gateway/meta_mcp/passthrough.rs	passthrough_instance	scoped_get	scoped
 src/gateway/meta_mcp/protocol.rs	handle_logging_set_level	all_for	Background
