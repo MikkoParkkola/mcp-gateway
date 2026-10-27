@@ -46,7 +46,14 @@ fn raw_cfg(strategy: PropagationStrategyKind, required: bool) -> IdentityPropaga
 /// capturing transport (seeded on the shared slot; each test opens the caller's
 /// slot onto it), one durable transparency log, one
 /// process-wide signed-assertion strategy. `compile` is deliberately not called.
-fn raw_gateway(idp: IdentityPropagationConfig) -> (MetaMcp, Arc<Dispatches>) {
+/// The audit log comes first, so a caller's `let (_log, ..)` drops it last.
+fn raw_gateway(
+    idp: IdentityPropagationConfig,
+) -> (
+    crate::security::transparency_log::temp::TempLog,
+    MetaMcp,
+    Arc<Dispatches>,
+) {
     let config = fixture_config(&[(RAW_BACKEND, Bind::Propagation(idp))], &[]);
     let declared = config.backends[RAW_BACKEND].clone();
 
@@ -64,13 +71,14 @@ fn raw_gateway(idp: IdentityPropagationConfig) -> (MetaMcp, Arc<Dispatches>) {
     }) as Arc<dyn crate::transport::Transport>);
     assert!(registry.register(backend), "fixture registry must accept");
 
+    let log = crate::security::transparency_log::temp::TempLog::new();
     let mut meta = MetaMcp::new(registry);
-    meta.enable_transparency_log(leaked_transparency_logger());
+    meta.enable_transparency_log(transparency_logger_in(&log));
     let gateway_key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
     meta.set_identity_propagation(Arc::new(
         crate::identity_propagation::SignedAssertionStrategy::new(gateway_key, ASSERTION_TTL_SECS),
     ));
-    (meta, dispatches)
+    (log, meta, dispatches)
 }
 
 /// CONTRACT: a registered backend asking for `vault` with no account reference
@@ -87,7 +95,8 @@ async fn raw_vault_backend_must_not_borrow_the_global_signed_assertion_strategy(
     // POSITIVE CONTROL FIRST, same assembly, same audience, same session mode:
     // a matched `signed_assertion` backend REACHES the transport and carries a
     // minted assertion — not the backend's static header.
-    let (meta, dispatches) = raw_gateway(raw_cfg(PropagationStrategyKind::SignedAssertion, true));
+    let (_log, meta, dispatches) =
+        raw_gateway(raw_cfg(PropagationStrategyKind::SignedAssertion, true));
     meta.seed_caller_slot_for_test(RAW_BACKEND, &alice).await;
     Box::pin(execute(&meta, RAW_BACKEND, Some(&alice)))
         .await
@@ -103,7 +112,8 @@ async fn raw_vault_backend_must_not_borrow_the_global_signed_assertion_strategy(
     );
 
     for required in [true, false] {
-        let (meta, dispatches) = raw_gateway(raw_cfg(PropagationStrategyKind::Vault, required));
+        let (_log, meta, dispatches) =
+            raw_gateway(raw_cfg(PropagationStrategyKind::Vault, required));
         meta.seed_caller_slot_for_test(RAW_BACKEND, &alice).await;
         let error = Box::pin(execute(&meta, RAW_BACKEND, Some(&alice)))
             .await
