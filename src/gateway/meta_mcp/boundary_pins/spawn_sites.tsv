@@ -54,7 +54,7 @@ src/gateway/server/warmstart.rs	spawn	spawn	1	outside-calls	warm-start task that
 src/gateway/server/window_saver.rs	start_window_saver	spawn	1	outside-calls	protocol-revision window checkpoint timer
 src/gateway/streaming.rs	spawn_reaper_on	spawn	1	outside-calls	SSE session reaper loop
 src/gateway/task_service/execution/expiry.rs	start_expiry	spawn	1	outside-calls	task expiry sweep loop
-src/gateway/task_service/execution/operations.rs	spawn_now	spawn	1	review	runs a task worker (a task-augmented tool call) detached with no delivery_facts::scope; unclear whether a refusal it hits (e.g. egress) must reach the tasks/result delivery
+src/gateway/task_service/execution/operations.rs	spawn_now	spawn	1	review	runs a task worker (a task-augmented tool call) detached with no delivery_facts::scope; unclear whether a refusal it hits (e.g. egress) must reach the tasks/result delivery; decided under MIK-9011.TASKREF.1
 src/gateway/task_service/execution/pending_cancel.rs	claim_and_send	spawn	1	no-refusal-inside	sends a claimed upstream cancel and re-checks the row; the claim is answered in the caller
 src/gateway/task_service/execution/pending_cancel.rs	flush	spawn	1	outside-calls	spawns cancel senders for pending upstream cancels that are due
 src/gateway/task_service/execution/pending_cancel.rs	listen_for_starts	spawn	1	outside-calls	listens for backend starts to resend pending cancels
@@ -83,7 +83,7 @@ src/identity_grants/journal.rs	apply_change_with	spawn-blocking	2	outside-calls	
 src/identity_grants/journal.rs	read_locked	spawn-blocking	2	outside-calls	locked grant-file and journal reads at start-up and config reload
 src/key_server/store.rs	spawn_reaper	spawn	1	outside-calls	expired temporary token reaper loop
 src/oauth/callback.rs	start_callback_server	spawn	2	outside-calls	OAuth callback HTTP listeners (IPv4 and IPv6) for a login
-src/oauth/client/refresh_flight.rs	spawn	spawn	1	review	token-endpoint refresh exchange can return an SSRF refusal through the JoinHandle; only detach_token_step records it, unclear for get_token callers
+src/oauth/client/refresh_flight.rs	spawn	spawn	1	review	token-endpoint refresh exchange can return an SSRF refusal through the JoinHandle; only detach_token_step records it, unclear for get_token callers; MIK-8991.REFUSE.7
 src/oauth/client/renewal.rs	spawn_refresh_task	spawn	1	outside-calls	background OAuth token renewal loop
 src/personal_accounts/mod.rs	start_custody_with_http	spawn-blocking	1	outside-calls	opens personal-account custody at start-up
 src/personal_accounts/worker.rs	offload	spawn-blocking	1	raised-at-join	personal-account store operation on the blocking pool; a refusal (e.g. scope broadening) returns as AccountServiceError through the join
@@ -96,7 +96,7 @@ src/transport/http/listen.rs	open_listen_as	spawn	1	no-refusal-inside	reads a ba
 src/transport/http/listen.rs	open_session_stream_as	spawn	1	no-refusal-inside	reads a backend's session SSE stream into a channel of admitted notifications
 src/transport/http/requests.rs	detach_token_step	spawn	1	raised-at-join	detached OAuth token step; the caller records an SSRF destination refusal after task.await
 src/transport/http/sse_channel.rs	open	spawn	1	no-refusal-inside	reads a backend SSE response and routes frames or errors to waiting requests over channels
-src/transport/http/startup.rs	connect	spawn	1	review	OAuth discovery and authorize run in a spawned task; an SSRF destination refusal comes back via join but connect propagates it with ?? without delivery_facts::refused, unlike detach_token_step
+src/transport/http/startup.rs	connect	spawn	1	review	OAuth discovery and authorize run in a spawned task; an SSRF destination refusal comes back via join but connect propagates it with ?? without delivery_facts::refused, unlike detach_token_step; MIK-8991.REFUSE.8
 src/transport/stdio.rs	start	spawn	1	no-refusal-inside	backend stdout reader routing response frames to pending requests
 src/transport/stdio_early_exit.rs	spawn_stderr_tail	spawn	1	no-refusal-inside	drains the backend's stderr into the log and a tail buffer
 src/transport/stdio_tree.rs	finish_whole	spawn	1	no-refusal-inside	finishes a stdin write to the backend process; transport error returned through the join
