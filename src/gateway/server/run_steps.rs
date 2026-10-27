@@ -229,6 +229,10 @@ impl Gateway {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the watcher's parts, each owned by a different start step; forwarded as one"
+    )]
     pub(super) fn start_config_watcher(
         &self,
         live_config: &Arc<LiveConfig>,
