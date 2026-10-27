@@ -80,7 +80,15 @@ pub(super) async fn key_refusal(
             .meta_mcp
             .remember_caller_slot(backend, proof, identity_key);
         match verdict {
-            Ok(CatalogueVerdict::Withholds | CatalogueVerdict::Lacks) => return Some(absent()),
+            // A withheld entry (descriptor, schema) is the gateway refusing the
+            // call, as the meta gate records it; a lacked name is not.
+            Ok(CatalogueVerdict::Withholds) => {
+                crate::gateway::delivery_facts::raise(
+                    crate::gateway::delivery_facts::ResponseEffect::Refused,
+                );
+                return Some(absent());
+            }
+            Ok(CatalogueVerdict::Lacks) => return Some(absent()),
             Ok(CatalogueVerdict::Offers | CatalogueVerdict::Unknown) => {}
             Err(e) => return Some(failed.clone().answer((None, None), e, &call).await),
         }
@@ -98,7 +106,13 @@ pub(super) async fn key_refusal(
                 Ok(backend.held_verdict(identity_key, tool))
             };
             match verdict {
-                Ok(CatalogueVerdict::Withholds) => ((identity_key, headers), Lens::Withheld),
+                Ok(CatalogueVerdict::Withholds) => {
+                    // As above: the withheld entry is refused, answered absent.
+                    crate::gateway::delivery_facts::raise(
+                        crate::gateway::delivery_facts::ResponseEffect::Refused,
+                    );
+                    ((identity_key, headers), Lens::Withheld)
+                }
                 _ => ((identity_key, headers), Lens::Catalogue),
             }
         }

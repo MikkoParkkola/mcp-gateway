@@ -313,6 +313,10 @@ impl MetaMcp {
             if let Err(error) =
                 self.refuse_chained_task(tool_name, &arguments, (caller.scope(), session_id))
             {
+                // The delivered refusal of the task submission.
+                crate::gateway::delivery_facts::raise(
+                    crate::gateway::delivery_facts::ResponseEffect::Refused,
+                );
                 return invoke::refused_submit_answer(&caller, id, &error);
             }
             return self

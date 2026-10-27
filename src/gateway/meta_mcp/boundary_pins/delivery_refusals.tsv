@@ -1,7 +1,7 @@
 # file	fn	callee	count	class	note (classes: see delivery_framing.rs)
 src/gateway/authz.rs	authorize_backend	backend_refusal	1	feeds	the authorization error; meta and stdio route stages raise it, the direct 403 is classed Denied
 src/gateway/meta_mcp/account_outcome.rs	judge_account	audit_transient_refusal	1	not-delivered	audit row
-src/gateway/meta_mcp/caller_forward.rs	scope_refusal	Error::Forbidden{}	1	no-record	prompts/get scope refusal, not a tools/call delivery
+src/gateway/meta_mcp/caller_forward.rs	scope_refusal	Error::Forbidden{}	1	feeds	the prompts/get scope refusal handle_prompts_get raises
 src/gateway/meta_mcp/caller_forward.rs	scope_refusal	audit_refusal	1	not-delivered	audit row
 src/gateway/meta_mcp/chain_receipt.rs	chain_receive	refusal	1	recorded	chain-receipt refusal of the backend answer; raised at its delivering callers (meta and direct)
 src/gateway/meta_mcp/chain_receipt.rs	receive	refusal	4	feeds	chain-receipt refusal, delivered through chain_receive
@@ -27,7 +27,7 @@ src/gateway/meta_mcp/invoke/gate.rs	withheld_invoke_target	blocked_tool_refusal	
 src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	Error::ResponseFirewallRefused	1	recorded	the frame is marked delivery_refusal at the outlet
 src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	bridge_refusal	1	recorded	bridged undeclared last round; raised while vouched
 src/gateway/meta_mcp/invoke/policy.rs	apply_response_gates_effect	Error::ResponseFirewallRefused	1	recorded	the frame is marked delivery_refusal at the outlet
-src/gateway/meta_mcp/invoke/policy.rs	authorize_invocation	Error::Forbidden{}	1	composite-or-replay	backstop: a lone call is refused first by the route stage (raised); reached by composite steps
+src/gateway/meta_mcp/invoke/policy.rs	authorize_invocation	Error::Forbidden{}	1	composite-or-replay	backstop: a lone call is refused first by the route stage (raised); reached by composite steps, and by a lone call only if a grant is revoked between the route stage and this check (a stated residual)
 src/gateway/meta_mcp/invoke/policy.rs	authorize_invocation	audit_refusal	1	not-delivered	audit row
 src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	blocked_tool_refusal	1	recorded	Protocol refusal; the route stage withholds it first (PR-2a raise)
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	admit_idempotency_key	Error::ResponseFirewallRefused	1	composite-or-replay	an idempotent replay of a stored firewall refusal; its frame is marked
@@ -35,8 +35,8 @@ src/gateway/meta_mcp/invoke/pre_dispatch.rs	admit_idempotency_key	is_firewall_re
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	answer_undeclared_key	seal_key_refusal	1	recorded	dispatch-time undeclared key; raised while vouched before the seal
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	answer_undeclared_key	undeclared_key_refusal	1	feeds	builds the refusal sealed beside it
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	seal_key_refusal	Error::ResponseFirewallRefused	1	recorded	the frame is marked delivery_refusal at the outlet
-src/gateway/meta_mcp/invoke/propagation.rs	resolve_caller_credential_as	transient_mint_refusal	1	not-delivered	a credential mint failure, not a policy decision
-src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_credential_attempted_for	unminted_refusal	1	not-delivered	a credential mint failure, not a policy decision
+src/gateway/meta_mcp/invoke/propagation.rs	resolve_caller_credential_as	transient_mint_refusal	1	not-a-decision	a delivered credential mint failure, not a policy decision
+src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_credential_attempted_for	unminted_refusal	1	composite-or-replay	the unminted proof a stored replay is refused with
 src/gateway/meta_mcp/invoke/r2_check.rs	undeclared_key_refusal_through	catalogue_refusal	1	feeds	builds the key refusal its callers seal
 src/gateway/meta_mcp/invoke/relay.rs	refuse_relay	relay_refusal	1	recorded	pre-send relay block on the meta route; raised while vouched
 src/gateway/meta_mcp/invoke/relay.rs	refuse_relaying_round	relay_refusal	1	recorded	pre-send relay block on a bridged round; raised while vouched
@@ -49,7 +49,7 @@ src/gateway/meta_mcp/invoke/stored_proof.rs	refuse_unproven	unminted_refusal	1	c
 src/gateway/meta_mcp/invoke/undeclared_gate.rs	bridge_refusal	refusal	1	feeds	builds the bridged undeclared refusal
 src/gateway/meta_mcp/invoke/undeclared_gate.rs	refuse_undeclared	refusal	1	recorded	meta undeclared question, after dispatch; raised while vouched at its caller
 src/gateway/meta_mcp/playbook_invoker.rs	step_not_permitted	Error::Forbidden{}	1	feeds	the neutral step refusal its callers deliver
-src/gateway/meta_mcp/protocol.rs	handle_prompts_get	scope_refusal	2	no-record	prompts/get, not a tools/call delivery
+src/gateway/meta_mcp/protocol.rs	handle_prompts_get	scope_refusal	2	recorded	prompts/get scope refusal and out-of-scope absent answer; raised in this fn
 src/gateway/meta_mcp/response_security.rs	enforce_firewall_challenge	Error::ResponseFirewallRefused	2	recorded	the frame is marked delivery_refusal at the outlet
 src/gateway/meta_mcp/response_security.rs	inspect_task_result	Error::ResponseFirewallRefused	1	composite-or-replay	a task result, settled for a later tasks/get
 src/gateway/meta_mcp/search/chain_exec.rs	step_failure	Error::Forbidden{}	1	composite-or-replay	a chain step's refusal, rebuilt for the chain
@@ -119,10 +119,10 @@ src/gateway/router/hardened_elicitation.rs	direct_refusal	request_check_refusal	
 src/gateway/router/hardened_elicitation.rs	refuse	refusal	1	no-record	session admission
 src/gateway/router/judged_answer.rs	record_delivery	audit_unavailable_refusal	2	not-a-decision	the audit sink failed
 src/gateway/router/view_judge.rs	admit_listener	dead_attach_refusal	1	no-record	listener attach
-src/gateway/server/cleartext.rs	reload_posture_refusal	serve_refusal	2	no-record	accounts, SSE, start-up or admin UI: no call delivery
-src/gateway/server/cleartext.rs	reload_posture_refusal	start_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
-src/gateway/server/cleartext.rs	serve_refusal	cleartext_credential_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
-src/gateway/server/cleartext.rs	serve_refusal	network_bind_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
+src/gateway/server/cleartext.rs	reload_posture_refusal	serve_refusal	2	not-a-decision	a reload outcome: gateway_reload_config ran and reports the file refused; also start-up advice
+src/gateway/server/cleartext.rs	reload_posture_refusal	start_refusal	1	not-a-decision	a reload outcome: gateway_reload_config ran and reports the file refused; also start-up advice
+src/gateway/server/cleartext.rs	serve_refusal	cleartext_credential_refusal	1	not-a-decision	the start-up and reload posture check behind a reload outcome
+src/gateway/server/cleartext.rs	serve_refusal	network_bind_refusal	1	not-a-decision	the start-up and reload posture check behind a reload outcome
 src/gateway/server/run_wiring.rs	refuse_or_warn_before_bind	start_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/server/stdio_dispatch.rs	parse_and_observe	modern_method_refusal	1	not-a-decision	client-protocol rejection
 src/gateway/server/stdio_dispatch.rs	parse_and_observe	removed_method_refusal	1	not-a-decision	client-protocol rejection
