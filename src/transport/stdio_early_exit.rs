@@ -34,12 +34,28 @@ const DRAIN: std::time::Duration = std::time::Duration::from_secs(1);
 /// finishes (a grandchild holding the pipe) can still be read after abort.
 pub(super) type StderrTail = std::sync::Arc<parking_lot::Mutex<VecDeque<Vec<u8>>>>;
 
+/// Test-only: where a stderr reader is held on an OS thread, and for how
+/// long, as a loaded host can hold it.
+#[cfg(test)]
+#[derive(Clone, Copy)]
+pub(super) enum ReaderHold {
+    /// Before its first read: it has never run.
+    BeforeFirstRead(std::time::Duration),
+    /// After storing its first line: it ran once, then starved.
+    AfterFirstLine(std::time::Duration),
+}
+
 #[cfg(test)]
 thread_local! {
-    /// Test-only: how long a stderr reader spawned on this thread is held on
-    /// an OS thread before its first read, as a loaded host can hold it.
-    pub(super) static STDERR_READER_HOLD: std::cell::Cell<Option<std::time::Duration>> =
+    /// The hold for a stderr reader spawned on this thread.
+    pub(super) static STDERR_READER_HOLD: std::cell::Cell<Option<ReaderHold>> =
         const { std::cell::Cell::new(None) };
+}
+
+/// Holds the reader on an OS thread, so its runtime keeps running.
+#[cfg(test)]
+async fn hold_reader(hold: std::time::Duration) {
+    let _ = tokio::task::spawn_blocking(move || std::thread::sleep(hold)).await;
 }
 
 /// Read stderr to its end into a bounded tail.
@@ -56,9 +72,14 @@ pub(super) fn spawn_stderr_tail(
     let hold = STDERR_READER_HOLD.with(std::cell::Cell::get);
     let task = tokio::spawn(async move {
         #[cfg(test)]
-        if let Some(hold) = hold {
-            let _ = tokio::task::spawn_blocking(move || std::thread::sleep(hold)).await;
-        }
+        let mut after_first_line = match hold {
+            Some(ReaderHold::BeforeFirstRead(hold)) => {
+                hold_reader(hold).await;
+                None
+            }
+            Some(ReaderHold::AfterFirstLine(hold)) => Some(hold),
+            None => None,
+        };
         let mut reader = BufReader::new(stderr);
         let mut buf = Vec::with_capacity(RAW_LINE_BYTES);
         let mut in_block = false;
@@ -75,6 +96,10 @@ pub(super) fn spawn_stderr_tail(
                             tail.pop_front();
                         }
                         tail.push_back(sanitize::captured_line(&mut in_block, &buf));
+                    }
+                    #[cfg(test)]
+                    if let Some(hold) = after_first_line.take() {
+                        hold_reader(hold).await;
                     }
                     // Published first, so a held pipe cannot lose the prefix.
                     if n == RAW_LINE_BYTES && !buf.ends_with(b"\n") {

@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use super::super::early_exit::{ReaderHold, STDERR_READER_HOLD};
 use super::StdioTransport;
 
 // A child that answers nothing and dies with a reason on stderr: the shape a
@@ -207,8 +208,8 @@ async fn a_retried_start_sends_the_new_child_exactly_one_initialize() {
 /// past both drain windows, as a loaded host can.
 const READER_HOLD: std::time::Duration = std::time::Duration::from_millis(1500);
 
-/// A failed start whose stderr reader is held back on `script`'s child.
-async fn start_with_held_reader(script: &str) -> Arc<StdioTransport> {
+/// A failed start of `script`'s child whose stderr reader is held at `hold`.
+async fn start_with_held_reader(script: &str, hold: ReaderHold) -> Arc<StdioTransport> {
     let dir = tempfile::tempdir().expect("scratch");
     std::fs::write(dir.path().join("child.sh"), script).expect("write the child");
     let transport = StdioTransport::new(
@@ -218,9 +219,9 @@ async fn start_with_held_reader(script: &str) -> Arc<StdioTransport> {
         std::time::Duration::from_secs(5),
         None,
     );
-    super::super::early_exit::STDERR_READER_HOLD.with(|hold| hold.set(Some(READER_HOLD)));
+    STDERR_READER_HOLD.with(|cell| cell.set(Some(hold)));
     let outcome = transport.start().await;
-    super::super::early_exit::STDERR_READER_HOLD.with(|hold| hold.set(None));
+    STDERR_READER_HOLD.with(|cell| cell.set(None));
     outcome.expect_err("the child cannot start");
     transport
 }
@@ -229,7 +230,8 @@ async fn start_with_held_reader(script: &str) -> Arc<StdioTransport> {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_late_stderr_reader_still_leaves_the_tail_of_an_early_exit() {
-    let transport = start_with_held_reader(DYING_CHILD).await;
+    let transport =
+        start_with_held_reader(DYING_CHILD, ReaderHold::BeforeFirstRead(READER_HOLD)).await;
     assert!(
         transport.stderr_tail().contains("Cannot find module"),
         "the child's stderr was closed with its words in the pipe, so a reader held back by load \
@@ -243,11 +245,27 @@ async fn a_late_stderr_reader_still_leaves_the_tail_of_an_early_exit() {
 #[tokio::test]
 async fn a_late_stderr_reader_still_leaves_the_tail_of_a_late_failure() {
     let script = format!("echo 'EACCES: permission denied' >&2\n{REFUSING_CHILD}");
-    let transport = start_with_held_reader(&script).await;
+    let transport = start_with_held_reader(&script, ReaderHold::BeforeFirstRead(READER_HOLD)).await;
     assert!(
         transport.stderr_tail().contains("EACCES"),
         "the killed child's stderr ends at its death, so a reader held back by load must still \
          read it: {:?}",
+        transport.stderr_tail()
+    );
+}
+
+/// A reader that ran once and then starved: the clock must not have started
+/// at that first poll, or the line after it is lost the same way.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_stderr_reader_starved_after_its_first_line_still_reads_the_rest() {
+    let script =
+        "printf 'starting\\n' >&2\nprintf 'Error: Cannot find module zod\\n' >&2\nexit 3\n";
+    let transport = start_with_held_reader(script, ReaderHold::AfterFirstLine(READER_HOLD)).await;
+    assert!(
+        transport.stderr_tail().contains("Cannot find module"),
+        "the reader had run, but the needle was its second line; a clock started at its first \
+         poll still loses it: {:?}",
         transport.stderr_tail()
     );
 }
