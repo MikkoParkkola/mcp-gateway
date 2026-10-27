@@ -478,3 +478,45 @@ async fn a_listing_after_a_failed_credential_lookup_answers_at_once_http() {
         "nothing fetched in the backoff"
     );
 }
+
+/// A listing waiting on another listing's running claim is woken as that
+/// claim's credential lookup fails: it answers within the floor of the
+/// failure, not at the backend's fill bound.
+#[tokio::test(start_paused = true)]
+async fn a_listing_waiting_on_a_lookup_that_fails_is_woken_at_once_http() {
+    let fx = Arc::new(fixture().await);
+    let bound = fill_bound(&fx, BACKEND);
+    let floor = std::time::Duration::from_secs(1);
+    assert!(bound > floor * 2, "premise: a fill bound worth waiting on");
+    fx.gateway.fail_release_for_test();
+    let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
+    // The first listing wins the claim and is held before its lookup.
+    let (reached, release) = backend.cold_winner.arm();
+    let first = tokio::spawn({
+        let fx = Arc::clone(&fx);
+        async move { rpc(&fx, 1, "tools/list", json!({})).await }
+    });
+    reached.notified().await;
+    let second = tokio::spawn({
+        let fx = Arc::clone(&fx);
+        async move { rpc(&fx, 2, "tools/list", json!({})).await }
+    });
+    // The clock only moves once every task is idle: the second listing is
+    // parked on the first one's running lease by then.
+    tokio::time::sleep(floor / 10).await;
+    assert!(!second.is_finished(), "premise: the second listing waits");
+    let failed_at = tokio::time::Instant::now();
+    release.notify_one();
+    let second = second.await.expect("the second listing");
+    let woke_after = failed_at.elapsed();
+    first.await.expect("the first listing");
+    assert!(
+        woke_after < floor,
+        "a waiter slept {woke_after:?} past a failed lookup, against a {bound:?} fill bound"
+    );
+    assert!(
+        surfaced_on(&second, BACKEND).is_empty(),
+        "no view was filled: {second}"
+    );
+    assert_eq!(fx.gateway.releases(), 0, "premise: the lookup failed");
+}
