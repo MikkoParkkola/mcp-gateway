@@ -149,6 +149,8 @@ async fn l11_a_surfaced_task_left_in_place_runs_on_its_server() {
 
 /// L10d (N14): the name moves after the worker's check and before its
 /// dispatch. The pin holds the recorded server: alpha is called, beta never.
+/// Firewall builds only: the `before_task_dispatch` seam exists only there.
+#[cfg(feature = "firewall")]
 #[tokio::test]
 async fn l10d_a_move_between_the_check_and_the_dispatch_still_runs_on_alpha() {
     let alpha = MockBackend::answering(Answer::ok());

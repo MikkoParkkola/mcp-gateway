@@ -74,6 +74,8 @@ mod backend_mutation;
 mod backend_preview;
 #[path = "webui_management_tests/capabilities.rs"]
 mod capabilities;
+#[path = "webui_management_tests/capability_editor.rs"]
+mod capability_editor;
 #[path = "webui_management_tests/internal_routes.rs"]
 mod internal_routes;
 #[path = "webui_management_tests/openapi_import.rs"]
