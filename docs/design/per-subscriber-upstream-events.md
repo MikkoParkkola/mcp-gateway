@@ -106,16 +106,18 @@ and this document disagree, one of them is a bug.
 
 ### 2.5 Vault leases: stable route, fenced state
 
-*Required, not yet implemented; delivered by the vault lease fence fix.* Today a
-vault listener mints a fresh credential
-on every request, so new requests use the current lease, but nothing below fences
-a rotation yet.
+*Required; delivered by the vault lease fence fix (in review).* Until it lands, a
+vault listener mints a fresh credential on every request, so new requests use the
+current lease, but nothing below fences a rotation.
 
-- The route key carries no lease fields. Each `(backend, obs)` listener records the
-  lease binding it last authenticated with.
-- On any lease change, the listener closes its session and discards its snapshot,
-  coalescer debt, pending tools debounce and confirm clock, then reopens under the
-  current lease before emitting anything.
+- The route key carries no lease fields. A listener run is fixed on the binding its
+  first mint released and never changes it, so no later request can relabel an
+  older stream.
+- Three things end the run before any request goes out under a new grant: a mint
+  under another binding, a refused mint whose grant reads as no view, and the
+  run's own 30-second fence read finding a moved grant. The run's notices, refill
+  and tools debounce end with it; carried tools debt is tagged with the run that
+  heard it and dropped by a run on another grant.
 - Vault rotation uses the same generation registry as passthrough leases (§3.5).
 
 ### 2.6 Personal OAuth
@@ -140,9 +142,15 @@ a rotation yet.
 
 - An outbox record carries `ObservedUnder { incarnation, obs_basis, lease }`: the
   row incarnation, the observation basis and, for vault and passthrough, the lease
-  binding or generation (the vault lease binding is *required, not yet
-  implemented*, delivered by the vault lease fence fix; today only the passthrough
-  generation is stamped). It carries no identity digest and never the token.
+  binding or generation (the vault lease binding is *required*, delivered by the
+  vault lease fence fix, in review; today only the passthrough generation is
+  stamped). It carries no identity digest and never the token.
+- For vault, the stamp is the run's binding, prefixed `vault:` so it never equals
+  a passthrough generation. Delivery reads the grant afresh after every wait and
+  before the signing row: custody that cannot answer in time defers the record
+  unsent within its retry window (`fence_unavailable`), a grant with no view
+  buries it (`grant_no_view`), and one 10-second deadline runs from that read to
+  the request's end (`fence_stale`).
 - Fan-out writes it from the occurrence.
 - A send attempt checks it twice: when the attempt is claimed, and again after the
   authorization and audit waits, against the row re-read for signing. It requires
@@ -412,14 +420,18 @@ only when a test exists that fails on its mutant.
   with a silent backend, and nothing is emitted for U1 after it; stop on the last subscriber is covered too.
   Unit level only: key-server policy changes take effect on restart, not on a
   reload, so no reload path exists for an end-to-end row to remove one user's
-  access. Whether that is acceptable as a revocation path is an open question.
+  access. That is deliberate (a reload reports "restart required"); the guidance
+  that offers revoking a key-server token as removing a person is corrected by the
+  revocation guidance fix.
 - **ISO-T7.** A required backend never connects as the gateway for an `obs` key. The
   fixture records the presented credential on every request, and the test asserts
   the minted subject on each, including cold start, era probe, SSE handshake and a
-  forced session recovery. One request is exempt: the gateway's background
-  health probe sends `ping` on the backend's shared transport with no
-  `Authorization` header. It is not a listener and presents no credential;
-  whether a required backend should be probed at all is an open question.
+  forced session recovery. Until the shared-slot fix lands, the gateway's own
+  warm-start and health probe reach the backend on its shared session with no
+  credential, against ADR-007 IDP.7: the row opens its window after the
+  warm-start was seen and exempts the probe's `ping` with no `Authorization`
+  header. With the fix, no request without a subscriber credential reaches the
+  backend, and both go.
 
 Also: restart with an unchanged key for a stored OIDC identity and a key-server
 identity; a concurrent slot-boundary row (a call slot promoted into a listener pin
