@@ -121,3 +121,20 @@ async fn a_killed_direct_call_records_refused() {
     };
     assert_eq!(event["response_effect"], "refused", "{event}");
 }
+
+/// The `/mcp` refusal's delivery record joins the invocation record of the
+/// same call by `trace_id`, as every other `/mcp` delivery does.
+#[tokio::test]
+async fn a_killed_meta_call_record_joins_its_invocation() {
+    let fx = killed_alpha().await;
+    let (status, body) = post_to(&fx, "/mcp", &invoke_alpha_t(), &Caller::Anonymous).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "premise: {body}");
+    let (deliveries, calls) = (attempts(&fx), invocations(&fx));
+    let ([delivery], [invocation]) = (deliveries.as_slice(), calls.as_slice()) else {
+        panic!("one delivery and one invocation: {deliveries:?} {calls:?}");
+    };
+    assert_eq!(
+        delivery["trace_id"], invocation["trace_id"],
+        "{delivery} {invocation}"
+    );
+}
