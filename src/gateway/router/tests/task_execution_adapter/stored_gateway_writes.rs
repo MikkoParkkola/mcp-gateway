@@ -110,9 +110,13 @@ async fn a_task_row_never_records_a_backend_member_as_the_gateways() {
     let task = task_id(&created);
     let settled = poll_until_terminal(&state, "key-a", &task).await;
     assert_eq!(status_of(&settled), "completed", "premise: {settled}");
+    assert!(
+        !settled.to_string().contains("_cost_warnings"),
+        "the client got the backend's copy of a gateway member: {settled}"
+    );
     let row = row(&store, &task);
     assert!(
-        !row.to_string().contains("written by the backend"),
+        !row.to_string().contains("_cost_warnings"),
         "the backend's copy of a gateway member was stored: {row}"
     );
     assert!(
