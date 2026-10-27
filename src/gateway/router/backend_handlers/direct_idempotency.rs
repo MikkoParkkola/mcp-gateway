@@ -195,6 +195,8 @@ pub(super) fn deliver_replay(
     if replay.is_some()
         && let Some(e) = propagation.unproven.as_ref()
     {
+        // Refused, not delivered: the stored answer never leaves (A6).
+        let e = crate::gateway::delivery_facts::refused(e);
         let refused = super::super::direct_guards::refusal(Some(id.clone()), e);
         return Err(build_http_response(
             &Egressed::gateway_own(refused),
@@ -212,7 +214,8 @@ pub(super) fn deliver_replay(
             if let Err(e) = crate::gateway::meta_mcp::stored_binding::judge(&bindings, |_, _| {
                 current.map(str::to_owned)
             }) {
-                let refused = super::super::direct_guards::refusal(Some(id.clone()), &e);
+                let e = crate::gateway::delivery_facts::refused(&e);
+                let refused = super::super::direct_guards::refusal(Some(id.clone()), e);
                 return Err(build_http_response(
                     &Egressed::gateway_own(refused),
                     StatusCode::OK,
