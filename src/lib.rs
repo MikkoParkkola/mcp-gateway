@@ -38,6 +38,8 @@ pub mod capability;
 pub mod chains;
 #[doc(hidden)]
 pub mod cli;
+#[doc(hidden)]
+pub mod cli_support;
 mod clock;
 #[doc(hidden)]
 pub mod config;

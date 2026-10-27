@@ -5,7 +5,7 @@
 
 use serde_json::{Value, json};
 
-use crate::security::sanitize::is_format_char;
+use crate::cli_support::is_format_char;
 
 /// Characters kept of a reported name or version. Counted in characters, so
 /// a multibyte name is never cut inside one.
