@@ -39,7 +39,7 @@ async fn a_denied_direct_delivery_records_refused() {
 }
 
 /// Response inspection in action mode refuses a planted key, on both routes,
-/// and the refusal keeps the finding that blocked it (MIK-8993.INSPECT.2).
+/// and the refusal keeps the finding that blocked it.
 #[cfg(feature = "firewall")]
 #[tokio::test]
 async fn an_inspection_refusal_records_refused() {

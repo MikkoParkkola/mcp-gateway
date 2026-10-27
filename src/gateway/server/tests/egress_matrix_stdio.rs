@@ -389,7 +389,7 @@ async fn a_clean_stdio_delivery_records_delivered() {
     assert_eq!(row["response_findings"], json!([]), "{row}");
 }
 
-/// MIK-8993.INSPECT.1 on stdio: response inspection's finding is recorded
+/// On stdio, response inspection's finding is recorded
 /// beside a firewall scan that found nothing.
 #[tokio::test]
 async fn a_stdio_inspection_finding_is_recorded() {
@@ -411,7 +411,7 @@ async fn a_stdio_inspection_finding_is_recorded() {
 
 /// A firewall with response scanning off reads nothing, so it states no
 /// finding of its own: a credential is listed by response inspection only,
-/// which always reads the answer (MIK-8993), never as a firewall finding.
+/// which always reads the answer, never as a firewall finding.
 #[tokio::test]
 async fn a_scan_off_firewall_states_no_finding() {
     for setup in [Setup::ScanOff, Setup::FirewallOff] {

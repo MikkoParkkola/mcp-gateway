@@ -349,7 +349,7 @@ fn only_invoke_delivery(log: &std::path::Path) -> Value {
     row.clone()
 }
 
-/// MIK-8993: response inspection read this clean answer and found nothing,
+/// Response inspection read this clean answer and found nothing,
 /// so with no firewall the record says scanned clean (`[]`), not unscanned.
 #[tokio::test]
 async fn an_inspected_clean_answer_records_no_findings() {
@@ -361,9 +361,9 @@ async fn an_inspected_clean_answer_records_no_findings() {
     assert_eq!(row["response_effect"], "delivered", "{row}");
 }
 
-/// KNOWN GAP, MIK-8997 (inspection-ignores-enabled): with response
+/// KNOWN GAP (inspection-ignores-enabled): with response
 /// inspection disabled, inspection still runs, so the record still says
-/// scanned clean. MIK-8997's fix stops the inspector and flips this row to
+/// scanned clean. Its fix stops the inspector and flips this row to
 /// `null` (no scan of this request read the answer).
 #[tokio::test]
 async fn a_disabled_inspection_still_scans_known_gap() {

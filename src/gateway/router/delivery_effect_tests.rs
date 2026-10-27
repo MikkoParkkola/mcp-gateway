@@ -179,7 +179,7 @@ fn inspection_only_text() -> &'static str {
     Box::leak(format!("base64: {}", "A".repeat(120)).into_boxed_str())
 }
 
-/// MIK-8993.INSPECT.1, INSPECT.4: response inspection's findings are this
+/// Response inspection's findings are this
 /// delivery's findings, by kind, severity and part, never the matched text.
 #[tokio::test]
 async fn an_inspection_finding_is_recorded_beside_a_clean_firewall_scan() {
