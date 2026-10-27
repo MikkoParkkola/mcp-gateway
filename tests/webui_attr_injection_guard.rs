@@ -43,3 +43,37 @@ fn esc_escapes_both_quote_characters() {
         "esc() must escape \" and ': {body}"
     );
 }
+
+/// Every `${...}` inside a double-quoted attribute value is `esc(...)`, the
+/// row index `i`, or a choice between two string literals: anything else can
+/// carry a quote out of the attribute.
+#[test]
+fn every_attribute_interpolation_is_escaped() {
+    let attribute = regex::Regex::new(r#"\s[a-z][a-z-]*="([^"]*)""#).expect("pattern");
+    let expression = regex::Regex::new(r"\$\{([^}]*)\}").expect("pattern");
+    let choice = regex::Regex::new(r"^\w+ \? '[^']*' : '[^']*'$").expect("pattern");
+    let found: Vec<String> = INDEX
+        .lines()
+        .enumerate()
+        .flat_map(|(n, line)| {
+            attribute
+                .captures_iter(line)
+                .filter_map(|c| c.get(1))
+                .flat_map(|value| {
+                    expression
+                        .captures_iter(value.as_str())
+                        .filter_map(|c| c.get(1))
+                        .map(|e| e.as_str().to_owned())
+                        .collect::<Vec<_>>()
+                })
+                .filter(|e| !(e.starts_with("esc(") || e == "i" || choice.is_match(e)))
+                .map(|e| format!("{}: {e}", n + 1))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(
+        found.is_empty(),
+        "attribute values interpolated without esc():\n{}",
+        found.join("\n")
+    );
+}
