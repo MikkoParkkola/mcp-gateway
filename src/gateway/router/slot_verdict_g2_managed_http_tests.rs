@@ -29,6 +29,11 @@ const OPERATOR_KEY: &str = "sole-operator-key";
 const TOOL: &str = "read";
 
 fn sole_operator() -> AuthConfig {
+    operator_granted(&["*"])
+}
+
+/// The sole operator, whose key grants only `backends`.
+fn operator_granted(backends: &[&str]) -> AuthConfig {
     AuthConfig {
         enabled: true,
         api_keys: vec![ApiKeyConfig {
@@ -37,7 +42,7 @@ fn sole_operator() -> AuthConfig {
             expires_at: None,
             name: "operator".to_string(),
             rate_limit: 0,
-            backends: vec!["*".to_string()],
+            backends: backends.iter().map(|b| (*b).to_string()).collect(),
             allowed_tools: None,
             denied_tools: None,
             admin: false,
@@ -75,6 +80,15 @@ async fn fixture_armed(
     binding: &Binding,
     arm: impl FnOnce(&mut crate::gateway::meta_mcp::MetaMcp),
 ) -> Fx {
+    fixture_for(sole_operator(), binding, arm).await
+}
+
+/// [`fixture_armed`] for the operator `auth` describes.
+async fn fixture_for(
+    auth: AuthConfig,
+    binding: &Binding,
+    arm: impl FnOnce(&mut crate::gateway::meta_mcp::MetaMcp),
+) -> Fx {
     let audit = tempfile::tempdir().unwrap();
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
@@ -89,7 +103,6 @@ async fn fixture_armed(
         }))
         .expect("open log"),
     );
-    let auth = sole_operator();
     let mut gateway = DirectAccountGateway::new(auth.clone(), binding);
     let (mut state, store) = super::tests::test_router_app_state_with_auth(&auth).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
@@ -551,3 +564,27 @@ async fn no_grant_operator_direct_call_is_the_same_for_a_withheld_name() {
 
 #[path = "slot_verdict_g2_managed_http_noview_cooldown_tests.rs"]
 mod noview_cooldown;
+
+/// The listing's warm of a caller's cold view is scoped by the caller's own
+/// grant: a backend the key does not grant is never reached for that caller,
+/// even when one of its tools is surfaced and the caller's view of it is cold.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tools_list_never_warms_a_backend_the_grant_excludes_http() {
+    let fx = fixture_for(
+        operator_granted(&["elsewhere"]),
+        &Binding::Connected,
+        |_| {},
+    )
+    .await;
+    let before = fx.gateway.requests().len();
+    let answer = rpc(&fx, 1, "tools/list", json!({})).await;
+    assert!(
+        answer.get("result").is_some(),
+        "premise: tools/list answered: {answer}"
+    );
+    let reached: Vec<_> = fx.gateway.requests().into_iter().skip(before).collect();
+    assert!(
+        reached.is_empty(),
+        "tools/list reached a backend the caller's grant excludes: {reached:?}"
+    );
+}
