@@ -61,6 +61,10 @@ KEPT = {
 NOT_ON_PRS = {"test-throwaway-hosted", "test-trusted", "docker-build", "docker-manifest", "publish-mcp-registry",
               "packaged-suite-rehearsal", "binary-signing-rehearsal", "binary-sbom-rehearsal",
               "helm-chart-publish"}  # dispatch-only, or a tag
+# Runs only on a merge train: a pull request into the release line from a
+# `train/` branch in this repository, and not when it is docs-only. Checked by
+# its own cases below, so it is in neither SKIPPED nor KEPT.
+TRAIN_ONLY = {"feature-combos-train"}
 BINARY_STEPS = ("Build the shipped binary", "Verify pins with cap validate (real files accepted, tampered copy refused)")
 
 # Skipped on a push to the release line (MIK-8163, merge skew); every other job
@@ -103,6 +107,30 @@ def simulate(jobs: dict, c: dict) -> set[str]:
             progressed = True
         assert progressed, f"needs cycle among {sorted(pending)}"
     return {k for k, v in results.items() if v == "success"}
+
+
+def train_errors(jobs: dict) -> list[str]:
+    """Each TRAIN_ONLY job runs on a code train and on nothing else."""
+    def as_train(c: dict, head: str = "train/20261027-1", repo: str = REPO) -> dict:
+        c["github"]["head_ref"] = head
+        c["github"]["event"] = {"pull_request": {"head": {"repo": {"full_name": repo}}}}
+        return c
+    cases = {
+        "code train": (as_train(ctx("pull_request", "success", "false")), True),
+        "scope failed on a train": (as_train(ctx("pull_request", "failure", None)), True),
+        "docs-only train": (as_train(ctx("pull_request", "success", "true")), False),
+        "code PR": (ctx("pull_request", "success", "false"), False),
+        "train branch from a fork": (as_train(ctx("pull_request", "success", "false"), repo="fork/x"), False),
+        "a branch merely containing train/": (as_train(ctx("pull_request", "success", "false"), head="x/train/y"), False),
+        "release-line push": (dict(ctx("push", "success", "false")), False),
+    }
+    cases["release-line push"][0]["github"].update(POST_MERGE_PUSH)
+    errors = [f"TRAIN_ONLY names a job ci.yml lacks: {j}" for j in sorted(TRAIN_ONLY - set(jobs))]
+    for job in sorted(TRAIN_ONLY & set(jobs)):
+        for label, (c, want) in cases.items():
+            if runs(jobs[job], c) != want:
+                errors.append(f"{job}: {label} {'skips' if want else 'runs'}")
+    return errors
 
 
 def post_merge_errors(jobs: dict) -> list[str]:
@@ -152,7 +180,7 @@ def runs(job: dict, c: dict) -> bool:
 def main() -> int:
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
     errors = []
-    unclassified = set(jobs) - SKIPPED - KEPT - NOT_ON_PRS
+    unclassified = set(jobs) - SKIPPED - KEPT - NOT_ON_PRS - TRAIN_ONLY
     if unclassified:
         errors.append(f"jobs not classified for docs-only gating: {sorted(unclassified)}")
     for wf in PUSH_ONLY_WORKFLOWS:
@@ -187,7 +215,7 @@ def main() -> int:
     if {"test", "test-shards"} & set(shard_needs):
         errors.append("windows-shards needs the Linux suite: it must start in parallel with it")
     for name, c in cases.items():
-        ran = {k for k, j in jobs.items() if k not in NOT_ON_PRS and runs(j, c)}
+        ran = {k for k, j in jobs.items() if k not in NOT_ON_PRS | TRAIN_ONLY and runs(j, c)}
         want = (SKIPPED | KEPT) - (SKIPPED if name == "docs-only PR" else set())
         if ran != want:
             errors.append(f"{name}: unexpected runs {sorted(ran - want)}, unexpected skips {sorted(want - ran)}")
@@ -197,6 +225,7 @@ def main() -> int:
             active = cond is None or evaluate(str(cond), c)
             if active == (name == "docs-only PR"):
                 errors.append(f"{name}: capability-pins step '{step}' {'runs' if active else 'skips'}")
+    errors += train_errors(jobs)
     errors += post_merge_errors(jobs)
     # The post-merge check must be able to fail (MIK-8163): each mutation is caught.
     import copy

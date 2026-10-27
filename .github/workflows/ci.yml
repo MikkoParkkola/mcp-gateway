@@ -509,7 +509,15 @@ jobs:
       - name: CodeQL paths-ignore hides no product file (MIK-8490)
         run: python3 scripts/ci/check-codeql-ignore.py
 
-  # Feature combinations run post-merge only: see feature-combos.yml.
+  # Feature combinations run on every release-line push (feature-combos.yml)
+  # and, before it lands, on a merge train: a pull request into the release line
+  # from a `train/` branch in this repository. No other pull request runs them,
+  # which keeps it to about one run per train. A docs-only train skips them like
+  # the other build jobs.
+  feature-combos-train:
+    needs: scope
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') }}
+    uses: ./.github/workflows/feature-combos.yml
 
   # The Windows suite as shards (MIK-8482): `windows-check` below is the
   # aggregate that keeps the required name. Starts alongside the Linux suite,
