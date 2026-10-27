@@ -22,7 +22,7 @@ use std::ops::Range;
 use crate::yaml::Value;
 
 use super::eol::{Line, render};
-use super::splice::content;
+use super::splice::{BLANKS, content, depth};
 
 /// The field a secret slot belongs to: its dotted path, the same text as the
 /// secret's `NewSecretOwned::field`.
@@ -247,10 +247,6 @@ fn bytes_hold(original: &str, edited: &str, edits: &[Located]) -> bool {
         )
 }
 
-fn indent(line: &str) -> usize {
-    line.len() - line.trim_start_matches(' ').len()
-}
-
 /// A segment this module can address: letters, digits, `_` and `-`, read by
 /// YAML as that same string (not a number, a bool or null).
 fn plain_key(segment: &str) -> bool {
@@ -270,12 +266,12 @@ fn locate(lines: &[&str], path: &FieldPath) -> Result<Located, ComputeRefusal> {
     for (depth, segment) in path.0.iter().enumerate() {
         let want = (start..end)
             .find(|&i| content(lines[i]))
-            .map_or(0, |i| indent(lines[i]));
+            .map_or(0, |i| depth(lines[i]));
         let head = format!("{segment}:");
         let found: Vec<usize> = (start..end)
             .filter(|&i| {
                 let line = lines[i];
-                indent(line) == want
+                depth(line) == want
                     && line[want..].starts_with(&head)
                     && line[want + head.len()..]
                         .chars()
@@ -289,7 +285,7 @@ fn locate(lines: &[&str], path: &FieldPath) -> Result<Located, ComputeRefusal> {
             ));
         };
         let child_end = (at + 1..end)
-            .find(|&i| content(lines[i]) && indent(lines[i]) <= want)
+            .find(|&i| content(lines[i]) && depth(lines[i]) <= want)
             .unwrap_or(end);
         let value = value_span(lines, at, want + head.len())?;
         let last = depth + 1 == path.0.len();
@@ -310,22 +306,19 @@ fn locate(lines: &[&str], path: &FieldPath) -> Result<Located, ComputeRefusal> {
 /// collection, a block scalar, and an anchor, alias or tag outside quotes.
 fn value_span(lines: &[&str], at: usize, after: usize) -> Result<Range<usize>, ComputeRefusal> {
     let line = lines[at];
-    // YAML whitespace is a space or a tab only: never trim other Unicode
-    // spaces, which belong to the value.
-    let blank = [' ', '\t'];
-    let start = after + (line[after..].len() - line[after..].trim_start_matches(blank).len());
+    let start = after + (line[after..].len() - line[after..].trim_start_matches(BLANKS).len());
     // `key: # note` is a null field with a comment, not a scalar.
     if line[start..].starts_with('#') {
         return Ok(start..start);
     }
-    let mut end = line.trim_end_matches(blank).len().max(start);
+    let mut end = line.trim_end_matches(BLANKS).len().max(start);
     let bytes = line.as_bytes();
     for (p, _) in line[start..].match_indices('#') {
         let p = start + p;
         if p == start || !matches!(bytes[p - 1], b' ' | b'\t') {
             continue;
         }
-        let ws = line[..p].trim_end_matches(blank).len();
+        let ws = line[..p].trim_end_matches(BLANKS).len();
         if super::splice::parsed_as_comment(lines, at, &line[ws..]) {
             end = ws;
             break;
