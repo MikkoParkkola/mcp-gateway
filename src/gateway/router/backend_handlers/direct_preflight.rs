@@ -18,6 +18,52 @@ use super::super::helpers::{build_http_error_response, build_http_response};
 use super::direct_caller::{Caller, Envelope, Rejection, Route};
 use crate::protocol::RequestId;
 
+/// Whether the caller may see this direct-route target: the refusal code of
+/// the authorizer or the routing profile, and whether a description block
+/// withholds it too. Each notes the check that decided it.
+pub(super) fn withheld_verdict(
+    state: &AppState,
+    auth: super::BackendAuthContext<'_>,
+    target: super::super::authorization::ToolTarget<'_>,
+    (backend, session_id): (&crate::backend::Backend, Option<&str>),
+) -> (Option<i32>, bool) {
+    use crate::gateway::meta_mcp::invoke::audit::note_refused_by;
+    use crate::security::decision_record::DecisionKind;
+    let (backend_name, tool_name) = (target.server, target.tool);
+    let withheld_code = super::super::authorization::authorize_tool_target(
+        state,
+        auth.generation,
+        auth.client,
+        auth.oauth_agent_identity,
+        auth.cert_identity,
+        target,
+    )
+    .err()
+    .map(|refusal| {
+        note_refused_by(refusal.kind, None);
+        refusal.code
+    })
+    .or_else(|| {
+        state
+            .meta_mcp
+            .profile_refusal(backend_name, tool_name, session_id)
+            .map(|refusal| {
+                note_refused_by(DecisionKind::RoutingProfile, None);
+                refusal.to_rpc_code()
+            })
+    });
+    // A name its description withholds is the gate's too, judged here before
+    // any credential (the caller verdict leaves it to the gate).
+    let withheld = withheld_code.is_some() || {
+        let blocked = backend.blocked_tool_refusal(None, tool_name).is_some();
+        if blocked {
+            note_refused_by(DecisionKind::DescriptorBlock, None);
+        }
+        blocked
+    };
+    (withheld_code, withheld)
+}
+
 /// What stage 4 decided for this request.
 pub(super) struct Preflight {
     pub(super) retry: crate::protocol::mrtr::RetryFields,

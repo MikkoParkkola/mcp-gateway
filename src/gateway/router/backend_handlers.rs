@@ -14,7 +14,7 @@ use serde_json::Value;
 use tracing::warn;
 
 use super::AppState;
-use super::authorization::{ToolTarget, authorize_tool_target};
+use super::authorization::ToolTarget;
 use super::direct_guards::refusal;
 use super::helpers::{bodiless_accepted, build_http_error_response};
 use crate::gateway::auth::AuthenticatedClient;
@@ -151,7 +151,8 @@ async fn guard_tool_call(
         tool: tool_name,
         arguments,
     };
-    let (withheld_code, withheld) = withheld_verdict(state, auth, target, (backend, session_id));
+    let (withheld_code, withheld) =
+        direct_preflight::withheld_verdict(state, auth, target, (backend, session_id));
     if let Some(code) = withheld_code {
         // The call's one record names it (MIK-8361).
         crate::gateway::meta_mcp::visible::memo::note_denial_code(
@@ -238,52 +239,6 @@ async fn guard_tool_call(
             .await
             .unwrap_or(key_check::absent_response(id, tool_name)),
     ))
-}
-
-/// Whether the caller may see this direct-route target: the refusal code of
-/// the authorizer or the routing profile, and whether a description block
-/// withholds it too. Each notes the check that decided it.
-fn withheld_verdict(
-    state: &AppState,
-    auth: BackendAuthContext<'_>,
-    target: ToolTarget<'_>,
-    (backend, session_id): (&crate::backend::Backend, Option<&str>),
-) -> (Option<i32>, bool) {
-    use crate::gateway::meta_mcp::invoke::audit::note_refused_by;
-    use crate::security::decision_record::DecisionKind;
-    let (backend_name, tool_name) = (target.server, target.tool);
-    let withheld_code = authorize_tool_target(
-        state,
-        auth.generation,
-        auth.client,
-        auth.oauth_agent_identity,
-        auth.cert_identity,
-        target,
-    )
-    .err()
-    .map(|refusal| {
-        note_refused_by(refusal.kind, None);
-        refusal.code
-    })
-    .or_else(|| {
-        state
-            .meta_mcp
-            .profile_refusal(backend_name, tool_name, session_id)
-            .map(|refusal| {
-                note_refused_by(DecisionKind::RoutingProfile, None);
-                refusal.to_rpc_code()
-            })
-    });
-    // A name its description withholds is the gate's too, judged here before
-    // any credential (the caller verdict leaves it to the gate).
-    let withheld = withheld_code.is_some() || {
-        let blocked = backend.blocked_tool_refusal(None, tool_name).is_some();
-        if blocked {
-            note_refused_by(DecisionKind::DescriptorBlock, None);
-        }
-        blocked
-    };
-    (withheld_code, withheld)
 }
 
 /// What a direct-route call's token must grant (MIK-7570.ATTEST.1 part 3).
