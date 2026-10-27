@@ -251,7 +251,10 @@ fn api4_2_a_running_server_far_over_its_usual_reads_slow() {
         &StateInputs {
             running: true,
             ever_started: true,
-            slow: Some((400, 100)),
+            slow: Some(crate::failsafe::Slow {
+                recent_ms: 400,
+                usual_ms: 100,
+            }),
             ..fresh()
         },
         now(),
@@ -267,7 +270,10 @@ fn api4_2_a_running_server_far_over_its_usual_reads_slow() {
 
 #[test]
 fn api4_2_worse_states_win_over_slow() {
-    let slow = Some((400, 100));
+    let slow = Some(crate::failsafe::Slow {
+        recent_ms: 400,
+        usual_ms: 100,
+    });
     let paused = StateInputs {
         running: true,
         ever_started: true,

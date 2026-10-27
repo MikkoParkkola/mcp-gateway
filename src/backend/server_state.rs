@@ -71,7 +71,7 @@ pub(crate) struct StateInputs {
     pub start_failed: bool,
     /// Its recent p95 and its usual (baseline) p95 in ms, when the recent
     /// one is far over the usual; `None` while the baseline is still warming.
-    pub slow: Option<(u64, u64)>,
+    pub slow: Option<crate::failsafe::Slow>,
 }
 
 /// [`decide`]'s answer.
@@ -147,11 +147,12 @@ pub(crate) fn decide(inputs: &StateInputs, now: SystemTime) -> StateView {
     // A connected transport serves even when a rebuild beside it failed:
     // the failed start only matters once nothing is connected.
     if inputs.running {
-        if let Some((recent, usual)) = inputs.slow {
+        if let Some(slow) = inputs.slow {
             return view(
                 ServerState::Slow,
                 format!(
-                    "Answering, but its slowest calls take {recent} ms, over three times its usual {usual} ms."
+                    "Answering, but its recent p95 is {} ms, over three times its usual {} ms.",
+                    slow.recent_ms, slow.usual_ms
                 ),
                 None,
             );

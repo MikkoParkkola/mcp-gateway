@@ -11,6 +11,8 @@ pub(crate) use circuit_breaker::HealthChange;
 pub use circuit_breaker::{
     CircuitBreaker, CircuitBreakerStats, CircuitState, build_circuit_breaker_error,
 };
+#[cfg(any(test, feature = "webui"))]
+pub(crate) use health::Slow;
 pub use health::{HealthMetrics, HealthTracker};
 pub use rate_limiter::RateLimiter;
 pub use retry::{RetryPolicy, with_retry};
@@ -129,7 +131,7 @@ impl Failsafe {
             latency_ms = latency.as_millis(),
             "Rate-limited response excluded from failure accounting"
         );
-        self.health_tracker.record_success(latency);
+        self.health_tracker.record_throttled(latency);
     }
 
     /// Record a dispatch failure, excluding rate-limited responses from failure

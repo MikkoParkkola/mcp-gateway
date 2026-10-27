@@ -37,6 +37,22 @@ const SLOW_FLOOR_MS: u64 = 50;
 /// held times `SLOW_DECAY` so steps under `SLOW_DECAY` ms still move it.
 const SLOW_DECAY: u64 = 64;
 
+/// Whether a reply counts toward the Slow window. A throttled reply proves
+/// the server answered, not how fast it serves a call.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reply {
+    Answered,
+    Throttled,
+}
+
+/// A running server's recent p95 against its usual one, both in ms.
+#[cfg(any(test, feature = "webui"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Slow {
+    pub recent_ms: u64,
+    pub usual_ms: u64,
+}
+
 /// Backend health tracker
 pub struct HealthTracker {
     /// Backend name
@@ -76,6 +92,16 @@ impl HealthTracker {
     /// Record a successful request. On a clock before 1970 the success
     /// still counts, but the last-success time is left unchanged (MIK-8202).
     pub fn record_success(&self, latency: Duration) {
+        self.record_reply(latency, Reply::Answered);
+    }
+
+    /// Record a throttled reply: counted as [`Self::record_success`] counts
+    /// one, and kept out of the Slow window.
+    pub(crate) fn record_throttled(&self, latency: Duration) {
+        self.record_reply(latency, Reply::Throttled);
+    }
+
+    fn record_reply(&self, latency: Duration, reply: Reply) {
         self.success_count.fetch_add(1, Ordering::Relaxed);
         self.consecutive_failures.store(0, Ordering::Relaxed);
         if let Ok(now_ms) = crate::clock::unix_millis() {
@@ -83,7 +109,7 @@ impl HealthTracker {
         }
 
         // Record latency
-        self.latencies.write().record(latency);
+        self.latencies.write().record(latency, reply);
 
         // Mark as healthy after success
         if !self.healthy.load(Ordering::Relaxed) {
@@ -142,7 +168,7 @@ impl HealthTracker {
     /// three times the usual and at least 50 ms; `None` until 500 successful
     /// calls have warmed the usual one.
     #[cfg(any(test, feature = "webui"))]
-    pub(crate) fn slow(&self) -> Option<(u64, u64)> {
+    pub(crate) fn slow(&self) -> Option<Slow> {
         self.latencies.read().slow()
     }
 
@@ -197,7 +223,10 @@ struct LatencyHistogram {
     baseline_x64: u64,
     /// Complete batches folded into the baseline.
     batches: u32,
-    /// Samples recorded since the last complete batch.
+    /// The last `SLOW_BATCH` answered calls, oldest first: the Slow window,
+    /// apart from `samples`, which throttled replies also feed.
+    window: std::collections::VecDeque<u64>,
+    /// Answered calls since the last complete batch.
     in_batch: usize,
 }
 
@@ -210,13 +239,14 @@ impl LatencyHistogram {
             sorted: true,
             baseline_x64: 0,
             batches: 0,
+            window: std::collections::VecDeque::with_capacity(SLOW_BATCH),
             in_batch: 0,
         }
     }
 
     /// Record a latency sample
     #[allow(clippy::cast_possible_truncation)] // latency millis fits u64
-    fn record(&mut self, latency: Duration) {
+    fn record(&mut self, latency: Duration, reply: Reply) {
         let millis = latency.as_millis() as u64;
 
         if self.samples.len() >= self.capacity {
@@ -227,6 +257,13 @@ impl LatencyHistogram {
         self.samples.push(millis);
         self.sorted = false;
 
+        if reply == Reply::Throttled {
+            return;
+        }
+        if self.window.len() == SLOW_BATCH {
+            self.window.pop_front();
+        }
+        self.window.push_back(millis);
         // Every full batch folds its p95 into the baseline; the first seeds it.
         self.in_batch += 1;
         if self.in_batch == SLOW_BATCH {
@@ -271,16 +308,15 @@ impl LatencyHistogram {
         Some(Duration::from_millis(self.samples[index]))
     }
 
-    /// The p95 of the last `SLOW_BATCH` samples (fewer, before that many),
-    /// by the same index rule as [`Self::percentile`].
+    /// The p95 of the Slow window (the last `SLOW_BATCH` answered calls, or
+    /// fewer before that many), by the same index rule as [`Self::percentile`].
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         clippy::cast_precision_loss
     )]
     fn recent_p95(&self) -> u64 {
-        let from = self.samples.len().saturating_sub(SLOW_BATCH);
-        let mut recent = self.samples[from..].to_vec();
+        let mut recent: Vec<u64> = self.window.iter().copied().collect();
         recent.sort_unstable();
         let index = ((recent.len() as f64) * 0.95).floor() as usize;
         recent
@@ -292,14 +328,18 @@ impl LatencyHistogram {
     /// The recent p95 and the baseline, when the baseline is warm and the
     /// recent one is over `SLOW_FACTOR` times it and at least `SLOW_FLOOR_MS`.
     #[cfg(any(test, feature = "webui"))]
-    fn slow(&self) -> Option<(u64, u64)> {
+    fn slow(&self) -> Option<Slow> {
         if self.batches < SLOW_WARM_BATCHES {
             return None;
         }
-        let recent = self.recent_p95();
-        let usual = self.baseline_x64 / SLOW_DECAY;
-        (recent >= SLOW_FLOOR_MS && recent > SLOW_FACTOR.saturating_mul(usual))
-            .then_some((recent, usual))
+        let recent_ms = self.recent_p95();
+        let usual_ms = self.baseline_x64 / SLOW_DECAY;
+        (recent_ms >= SLOW_FLOOR_MS && recent_ms > SLOW_FACTOR.saturating_mul(usual_ms)).then_some(
+            Slow {
+                recent_ms,
+                usual_ms,
+            },
+        )
     }
 
     /// Clear all samples, and the baseline with them: a reset warms up again.
@@ -308,6 +348,7 @@ impl LatencyHistogram {
         self.sorted = true;
         self.baseline_x64 = 0;
         self.batches = 0;
+        self.window.clear();
         self.in_batch = 0;
     }
 }
