@@ -12,7 +12,8 @@
 //! `own-cell` (the task serves deliveries itself and opens a cell for each),
 //! `no-refusal-inside` (nothing the task runs refuses a call), and
 //! `outside-calls` (it runs at start-up or in the background, and no call's
-//! answer waits on it). Syntax scan, per function body; a spawn reached
+//! answer waits on it). `review` marks a site whose class is not yet
+//! decided; its note says what is open. Syntax scan, per function body; a spawn reached
 //! through a method (`JoinSet::spawn`) or passed by path is missed, as in the
 //! other pins.
 
@@ -124,11 +125,12 @@ impl Sink for Sites {
 
 /// The reviewed list: file, function, kind, count, class, reason.
 const LISTED: &str = include_str!("spawn_sites.tsv");
-const CLASSES: [&str; 4] = [
+const CLASSES: [&str; 5] = [
     "raised-at-join",
     "own-cell",
     "no-refusal-inside",
     "outside-calls",
+    "review",
 ];
 
 /// The listed counts, and the rows that are malformed or carry no class.
