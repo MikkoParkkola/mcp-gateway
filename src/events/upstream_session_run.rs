@@ -113,10 +113,6 @@ async fn begin_per_user_run(
         debug!(backend = %shared.name, "upstream listener: an identity credential has no session of its own");
         return None;
     };
-    // Its session's first mint has fixed the run's grant by now.
-    if let Some(run) = &fence {
-        forget_foreign_debt(&mut shared.tools.lock(), run.binding());
-    }
     Some(Run {
         _lease: None,
         transport: None,
@@ -132,7 +128,7 @@ async fn begin_per_user_run(
 
 /// A tools notice an earlier run left pending was heard under that run's
 /// grant: a run fixed on another grant (`binding`) never announces it.
-fn forget_foreign_debt(debt: &mut ToolsDebt, binding: Option<String>) {
+pub(super) fn forget_foreign_debt(debt: &mut ToolsDebt, binding: Option<String>) {
     if debt.fence != binding {
         *debt = ToolsDebt::default();
     }
@@ -177,7 +173,3 @@ pub(super) fn pick_session(
         None => Some((None, transport.clone())),
     }
 }
-
-#[cfg(test)]
-#[path = "upstream_session_run_tests.rs"]
-mod tests;

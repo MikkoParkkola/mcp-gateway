@@ -20,6 +20,7 @@ fn a_failed_refill_is_retried_once_after_the_cooldown() {
         due: Some(Instant::now()),
         retrying: false,
         unannounced: true,
+        fence: None,
     };
     assert!(state.take_due_refill(), "the notice's refill is due");
     // Read before the failure is recorded: the retry is due a full cooldown
@@ -79,6 +80,7 @@ async fn a_silent_retry_keeps_a_readers_fill() {
             due: Some(Instant::now()),
             retrying: true,
             unannounced,
+            fence: None,
         };
         // Left unpolled: only the start's own effect on the cache is seen.
         assert!(start_due_refill(&mut state, &backend).is_some(), "due");
@@ -155,6 +157,7 @@ async fn a_due_refill_waits_for_the_last_change_to_be_announced() {
         due: Some(Instant::now()),
         retrying: false,
         unannounced: true,
+        fence: None,
     };
     state.tools_pending = true;
     assert!(
@@ -172,4 +175,56 @@ async fn a_due_refill_waits_for_the_last_change_to_be_announced() {
     state.tools_pending = false;
     assert!(start_due_refill(&mut state, &backend).is_some(), "then due");
     assert!(!backend.has_cached_tools(), "the notice's refill drops it");
+}
+
+/// Tools debt a run heard under one grant, due and unannounced.
+fn debt_under(binding: Option<&str>) -> ToolsDebt {
+    ToolsDebt {
+        due: Some(Instant::now()),
+        retrying: false,
+        unannounced: true,
+        fence: binding.map(str::to_owned),
+    }
+}
+
+/// A run fixed on another grant drops a carried tools notice whole: it is
+/// neither refilled nor announced under the new grant.
+#[test]
+fn a_run_on_another_grant_drops_the_carried_tools_notice() {
+    let mut debt = debt_under(Some("acct:fence:v1:u1:1"));
+    crate::events::upstream_session_run::forget_foreign_debt(
+        &mut debt,
+        Some("acct:fence:v1:u1:1:rotated".to_owned()),
+    );
+    assert_eq!(
+        (debt.due, debt.unannounced, debt.fence),
+        (None, false, None)
+    );
+}
+
+/// A notice heard before any grant was fixed is not announced under one.
+#[test]
+fn an_untagged_notice_is_not_announced_under_a_grant() {
+    let mut debt = debt_under(None);
+    crate::events::upstream_session_run::forget_foreign_debt(
+        &mut debt,
+        Some("acct:fence:v1:u1:1".to_owned()),
+    );
+    assert_eq!(
+        (debt.due, debt.unannounced, debt.fence),
+        (None, false, None)
+    );
+}
+
+/// The same grant keeps the notice, due and unannounced.
+#[test]
+fn a_run_on_the_same_grant_keeps_the_carried_tools_notice() {
+    let mut debt = debt_under(Some("acct:fence:v1:u1:1"));
+    let due = debt.due;
+    crate::events::upstream_session_run::forget_foreign_debt(
+        &mut debt,
+        Some("acct:fence:v1:u1:1".to_owned()),
+    );
+    assert_eq!(debt.due, due);
+    assert!(debt.unannounced);
 }
