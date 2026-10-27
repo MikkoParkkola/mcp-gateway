@@ -149,3 +149,39 @@ fn r10_an_https_front_without_a_handoff_answers_every_value_as_a_wrong_one() {
         "nothing was spent"
     );
 }
+
+/// R7 (B): with no admin credential configured, even a browser navigation
+/// keeps today's 401 and its words. The router fixtures always configure a
+/// credential, so this is pinned at the function that decides the refusal.
+#[test]
+fn r7b_no_admin_credential_keeps_its_401_for_a_browser() {
+    let (state, printed) = bootstrap_state(None, vec![]);
+    let request = Request::builder()
+        .uri(format!("/dashboard?bootstrap={printed}"))
+        .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+            LOCAL, 12345,
+        ))))
+        .header("sec-fetch-mode", "navigate")
+        .header("sec-fetch-dest", "document")
+        .body(Body::empty())
+        .expect("request builds");
+    let response = try_dashboard_bootstrap(&state, &request).expect("answered");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        response
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .is_none()
+    );
+    let body = futures::executor::block_on(axum::body::to_bytes(response.into_body(), usize::MAX))
+        .expect("body");
+    assert!(
+        String::from_utf8_lossy(&body).contains("No admin credential is configured."),
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    assert!(
+        state.dashboard_bootstrap.peek().is_some(),
+        "nothing was spent"
+    );
+}
