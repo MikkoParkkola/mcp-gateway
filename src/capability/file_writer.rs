@@ -14,7 +14,7 @@ use super::execution_context::validate_capability_account_binding;
 use super::{compute_capability_hash, unloadable_issues};
 use crate::capability::parser::parse_capability_text;
 use crate::config_persistence::lock::{NotLocked, lock_config};
-use crate::config_persistence::{FileMode, Symlink, write_atomic};
+use crate::config_persistence::{FileMode, Symlink};
 use crate::identity_propagation::AccountStrategyRegistry;
 
 /// What the editor loaded: no file, or the SHA-256 (lowercase hex) of its bytes.
@@ -663,7 +663,7 @@ fn write(
     mode: FileMode,
     _observe: impl FnOnce(&Path),
 ) -> std::io::Result<()> {
-    write_atomic(path, bytes.as_bytes(), mode, Symlink::Replace)
+    crate::config_persistence::write_atomic(path, bytes.as_bytes(), mode, Symlink::Replace)
 }
 
 #[cfg(test)]
