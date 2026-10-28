@@ -340,6 +340,7 @@ const METHODS: &[&str] = &["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPT
 /// a body or query is parsed.
 fn shapes(method: &str, path: &str) -> Vec<&'static str> {
     match method {
+        "POST" if valid_body(path).is_some() => vec!["json", "valid", "bad-type", "bad-json"],
         "POST" | "PUT" | "PATCH" => vec!["json", "bad-type", "bad-json"],
         "GET" if path == routes::UI_ACTIVITY_RECEIPT => vec!["plain", "bad-query", "other-receipt"],
         "GET" => vec!["plain", "bad-query"],
@@ -384,6 +385,10 @@ fn request(
             builder = builder.header(header::CONTENT_TYPE, "application/json");
             Body::from("{}")
         }
+        "valid" => {
+            builder = builder.header(header::CONTENT_TYPE, "application/json");
+            Body::from(valid_body(path).expect("a valid body").to_string())
+        }
         "bad-type" => {
             builder = builder.header(header::CONTENT_TYPE, "text/plain");
             Body::from("x")
@@ -395,6 +400,46 @@ fn request(
         _ => Body::empty(),
     };
     builder.body(body).expect("request builds")
+}
+
+/// A body that parses for routes whose handler parses before its guard, so
+/// the guard itself is reached: `{}` is refused by the parser first there.
+/// Each still changes nothing: an empty name fails validation, and this
+/// build refuses control-plane writes after their role check.
+fn valid_body(path: &str) -> Option<Value> {
+    let rollback = json!({"summary": "none", "step": "none"});
+    Some(match path {
+        p if p == routes::UI_BACKENDS || p == routes::UI_PREVIEWS => json!({"name": ""}),
+        p if p == routes::UI_CONTROL_PLANE_GRANTS => json!({
+            "grant": {"grant_id": "g-matrix", "subject_id": "s", "server_id": "srv",
+                      "tool_id": null, "status": "requested"},
+            "reason": "matrix", "rollback": rollback,
+        }),
+        p if p == routes::UI_CONTROL_PLANE_POLICIES => json!({
+            "policy": {"policy_id": "p-matrix", "name": "matrix", "enforced": false},
+            "reason": "matrix", "rollback": rollback,
+        }),
+        p if p == routes::UI_CONTROL_PLANE_DECISIONS => json!({
+            "target_kind": "grant", "target_id": "g-matrix", "decision": "approve",
+            "reason": "matrix", "rollback": rollback,
+        }),
+        _ => return None,
+    })
+}
+
+/// What a write would change: the published config, the backends and the
+/// control-plane store's rows.
+fn fingerprint(state: &AppState) -> String {
+    let config = serde_json::to_string(&*state.live_config.get()).expect("config serialises");
+    let mut backends: Vec<String> = state.backends.statuses().into_keys().collect();
+    backends.sort_unstable();
+    let store = state.control_plane_store.as_ref().map(|store| {
+        (
+            store.list_grants().map(|g| g.len()).ok(),
+            store.list_policies().map(|p| p.len()).ok(),
+        )
+    });
+    format!("{}|{backends:?}|{store:?}", hash12(config.as_bytes()))
 }
 
 /// Keys whose values differ between two identical requests (clocks, ids).
@@ -502,8 +547,19 @@ async fn compute() -> Matrix {
                     for &method in METHODS {
                         for shape in shapes(method, path) {
                             let req = (method, path, shape);
+                            let before = (shape == "valid").then(|| fingerprint(&fx.state));
                             let (status, body) =
                                 send(&router, request(caller, req, &fx, Some(&cookie))).await;
+                            // A body that parses reaches the guard; whatever
+                            // answers, it must not have written anything.
+                            if let Some(before) = before {
+                                assert_eq!(
+                                    before,
+                                    fingerprint(&fx.state),
+                                    "{path} {method} {shape} {caller:?} answered {status} and \
+                                     changed the gateway's state"
+                                );
+                            }
                             let value = cell(path, status, &body);
                             if SCOPED.contains(&path) && status.is_success() {
                                 let (again, body2) =
@@ -648,4 +704,26 @@ fn the_expectation_holds_known_answers() {
         get(routes::UI_ACTIVITY, "plain", "OidcDeveloper"),
         "200:tool_0"
     );
+    // A body that parses reaches the guards of the writes that parse first:
+    // a non-admin is refused there, and a control-plane write with a store
+    // reaches its role check (this build then refuses the write itself).
+    let post = |path: &str, shape: &str, caller: &str| {
+        expected
+            .get(&format!("{path}\tPOST\t{shape}\t{caller}"))
+            .unwrap_or_else(|| panic!("no cell for POST {path} {shape} {caller}"))
+            .clone()
+    };
+    for path in [routes::UI_BACKENDS, routes::UI_PREVIEWS] {
+        assert!(
+            post(path, "valid", "StandardKey").starts_with("403"),
+            "{path}"
+        );
+    }
+    for path in STORE_WRITES {
+        assert!(
+            post(path, "valid+store", "OidcAuditor").starts_with("403"),
+            "{path}"
+        );
+        assert_eq!(post(path, "valid+store", "AdminKey"), "409", "{path}");
+    }
 }
