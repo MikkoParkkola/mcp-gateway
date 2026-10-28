@@ -153,20 +153,22 @@ struct Escaped {
 impl Escaped {
     /// Built from the innermost source outwards, without recursion.
     fn chain(error: &(dyn std::error::Error + 'static)) -> Self {
-        let mut texts = Vec::new();
-        let mut next = Some(error);
+        let mut sources = Vec::new();
+        let mut next = error.source();
         while let Some(e) = next {
-            texts.push(escaped(&e.to_string()).into_owned());
+            sources.push(escaped(&e.to_string()).into_owned());
             next = e.source();
         }
-        let mut chain = None;
-        while let Some(text) = texts.pop() {
-            chain = Some(Self {
+        let source = sources.into_iter().rev().fold(None, |inner, text| {
+            Some(Box::new(Self {
                 text,
-                source: chain.map(Box::new),
-            });
+                source: inner,
+            }))
+        });
+        Self {
+            text: escaped(&error.to_string()).into_owned(),
+            source,
         }
-        chain.expect("an error has at least itself")
     }
 }
 
