@@ -118,10 +118,10 @@ async fn mcp_route_401_with_live_grant_says_retry() {
         "{result}"
     );
     assert_eq!(
-        result["recovery"]["error_code"], "UPSTREAM_AUTH_REJECTED",
+        result["_recovery"]["error_code"], "UPSTREAM_AUTH_REJECTED",
         "{result}"
     );
-    assert_eq!(result["recovery"]["retry"], true, "{result}");
+    assert_eq!(result["_recovery"]["retry"], true, "{result}");
     assert_eq!(custody.refreshes(), 1);
     assert_eq!(
         dispatches.calls().len(),
@@ -222,10 +222,10 @@ async fn bridged_continuation_401_with_live_grant_says_retry() {
         "{result}"
     );
     assert_eq!(
-        result["recovery"]["error_code"], "UPSTREAM_AUTH_REJECTED",
+        result["_recovery"]["error_code"], "UPSTREAM_AUTH_REJECTED",
         "{result}"
     );
-    assert_eq!(result["recovery"]["retry"], true, "{result}");
+    assert_eq!(result["_recovery"]["retry"], true, "{result}");
     assert_eq!(custody.refreshes(), 1);
     assert_eq!(dispatches.calls().len(), 2);
 }

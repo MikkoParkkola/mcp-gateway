@@ -181,3 +181,48 @@ async fn a_plain_401_saying_the_session_expired_keeps_session_recovery() {
         "a plain-text expiry must re-initialize the session, got: {err:?}"
     );
 }
+
+/// A refused redirect is a refusal, not a transport fault: a backend that
+/// redirects to another origin, or to a loopback literal, is asked exactly
+/// once through the retry wrapper, and the call fails with `-32600`.
+#[tokio::test]
+async fn a_refused_backend_redirect_is_sent_once() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    for location in ["https://elsewhere.example/mcp", "http://127.1:9/mcp"] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let counted = Arc::clone(&hits);
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                counted.fetch_add(1, Ordering::Relaxed);
+                let mut buf = [0u8; 8192];
+                let _ = stream.read(&mut buf).await;
+                let reply = format!(
+                    "HTTP/1.1 307 Temporary Redirect\r\nLocation: {location}\r\n\
+                     Content-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                let _ = stream.write_all(reply.as_bytes()).await;
+            }
+        });
+        let transport = make_transport(&format!("http://{addr}/mcp"));
+        *transport.message_url.write() = Some(format!("http://{addr}/mcp"));
+
+        let err = request_through_retry(&transport, "tools/call")
+            .await
+            .expect_err("a refused redirect must not report success");
+
+        assert!(
+            matches!(err, Error::Protocol(_)),
+            "{location}: not a refusal: {err:?}"
+        );
+        assert_eq!(err.to_rpc_code(), -32600, "{location}: {err}");
+        assert_eq!(
+            hits.load(Ordering::Relaxed),
+            1,
+            "{location}: a refused redirect was retried"
+        );
+        server.abort();
+    }
+}

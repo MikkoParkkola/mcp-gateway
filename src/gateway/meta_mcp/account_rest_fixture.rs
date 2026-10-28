@@ -176,6 +176,19 @@ pub(super) async fn capture_endpoint_answering(statuses: &[u16]) -> (u16, Arc<Ca
     (port, captured)
 }
 
+/// As [`capture_endpoint`], served over https at the fixture host: the
+/// endpoint a CACHING case's credential is sent to (see [`cacheable_base_url`]).
+pub(super) async fn tls_capture_endpoint() -> (u16, Arc<Captured>) {
+    let captured = Arc::new(Captured::default());
+    let router = axum::Router::new()
+        .route("/read", axum::routing::get(capture_handler))
+        .with_state(Arc::clone(&captured));
+    (
+        crate::test_fixture_host::serve_https(router).await,
+        captured,
+    )
+}
+
 // ── Configuration and installation ───────────────────────────────────────────
 
 /// A durable audit sink. A managed descriptor compiles to `required: true`, and
@@ -436,21 +449,14 @@ pub(super) fn cacheable_capability(
 ///
 /// `allow_loopback_egress` is what lets the other cases reach an IP literal —
 /// and it also disables the response cache by design, so a warm-cache test
-/// cannot use it. `localhost` is a NAME, so it clears the SSRF guard on its own
-/// and the enforcing (uncached-flag-free) context applies. Only DNS pinning is
-/// then in the way, which is why these cases swap the client below.
+/// cannot use it. The fixture host is a non-loopback NAME, so it clears the
+/// SSRF guard on its own and the enforcing (uncached-flag-free) context
+/// applies. Only DNS is then in the way, which is why these cases swap in a
+/// client that resolves that name to the listener. A credential goes in
+/// cleartext only to a loopback host, so the endpoint is
+/// [`tls_capture_endpoint`]'s https one.
 pub(super) fn cacheable_base_url(port: u16) -> String {
-    format!("http://localhost:{port}")
-}
-
-/// Finite-timeout client for the swapped-client caching fixtures, mirroring
-/// `capability::executor::tests::cache_partitioning::finite_http_client`: a bare client has no
-/// request timeout and a hung listener would stall the suite.
-fn finite_http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .expect("the fixture HTTP client must build")
+    crate::test_fixture_host::fixture_https_url(port)
 }
 
 /// An executor whose response cache is LIVE for these dispatches.
@@ -488,7 +494,9 @@ pub(super) fn caching_executor(
     };
     executor
         .with_account_strategies(Arc::clone(registry))
-        .with_test_http_client(finite_http_client())
+        .with_test_http_client(crate::test_fixture_host::fixture_client(
+            std::time::Duration::from_secs(5),
+        ))
 }
 
 /// A CACHING capability backend that declares itself MULTI-USER, exactly as

@@ -171,10 +171,11 @@ async fn a_worker_task_with_a_public_scope_is_sealed_as_delivered() {
     std::assert_eq!(status_of(&settled), "completed", "{settled}");
     std::assert_eq!(mock.calls(), 1, "one dispatch ran the task");
     let delivered = delivered_result(&settled);
+    // A `tools/call` answer may not carry `cacheScope`: ingress removed it.
     std::assert_eq!(
-        delivered.get("cacheScope").and_then(Value::as_str),
-        Some("private"),
-        "the wire clamp delivers private: {delivered}"
+        delivered.get("cacheScope"),
+        None,
+        "ingress removed the backend's scope: {delivered}"
     );
     assert_sealed_bound(&delivered);
 }

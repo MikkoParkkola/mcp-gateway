@@ -80,14 +80,14 @@ async fn run(state: &Arc<AppState>, principal: &str, id: i64, server: &str) -> V
     poll_until_terminal(state, principal, &task).await
 }
 
-/// The `predicted_next` hints anywhere in a body, as text; JSON carried in a
+/// The `_predicted_next` hints anywhere in a body, as text; JSON carried in a
 /// string leaf is parsed too.
 fn hints(body: &Value) -> String {
     match body {
         Value::Object(map) => map
             .iter()
             .map(|(k, v)| {
-                if k == "predicted_next" {
+                if k == "_predicted_next" {
                     v.to_string()
                 } else {
                     hints(v)

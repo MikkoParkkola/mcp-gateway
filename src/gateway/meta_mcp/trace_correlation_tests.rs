@@ -194,7 +194,7 @@ async fn ac_control_3a_minted_trace_id_is_the_key_when_nothing_else_is() {
     // The same minted id is stamped into the response by `augment_with_trace`,
     // which is what lets an operator join a response to its log entry at all.
     let minted = result
-        .get("trace_id")
+        .get("_trace_id")
         .and_then(|v| v.as_str())
         .expect("the invoke path stamps its minted trace id into the response")
         .to_string();
@@ -225,7 +225,7 @@ async fn ac_control_3a_empty_modern_session_is_not_a_correlation_key() {
         .expect("invoke ok");
 
     let minted = result
-        .get("trace_id")
+        .get("_trace_id")
         .and_then(|v| v.as_str())
         .expect("the invoke path stamps its minted trace id into the response")
         .to_string();

@@ -86,17 +86,17 @@ async fn a_task_row_records_the_trace_id_the_gateway_wrote() {
     assert_eq!(status_of(&settled), "completed", "premise: {settled}");
     let row = row(&store, &task);
     assert!(
-        row.to_string().contains("trace_id"),
+        row.to_string().contains("_trace_id"),
         "premise: the stored result carries the gateway's trace_id: {row}"
     );
-    let entries = written(&row, &["trace_id"]);
+    let entries = written(&row, &["_trace_id"]);
     assert_eq!(
         entries.len(),
         1,
         "the row records the trace_id the gateway wrote: {row}"
     );
     assert_eq!(entries[0]["layer"], "value", "{row}");
-    assert_eq!(entries[0]["dest"], json!(["trace_id"]), "{row}");
+    assert_eq!(entries[0]["dest"], json!(["_trace_id"]), "{row}");
 }
 
 /// STORE.2: a member the backend sent under a name only the gateway writes
@@ -152,11 +152,11 @@ async fn a_chain_task_row_records_each_steps_gateway_writes_under_the_step() {
     let settled = poll_until_terminal(&state, "key-a", &task).await;
     assert_eq!(status_of(&settled), "completed", "premise: {settled}");
     let row = row(&store, &task);
-    let entries = written(&row, &["trace_id"]);
+    let entries = written(&row, &["_trace_id"]);
     let dests: Vec<&Value> = entries.iter().map(|entry| &entry["dest"]).collect();
     for step in ["0", "1"] {
         assert!(
-            dests.contains(&&json!(["results", step, "result", "trace_id"])),
+            dests.contains(&&json!(["results", step, "result", "_trace_id"])),
             "step {step}'s trace_id is recorded under its step: {dests:?}; row: {row}"
         );
     }
@@ -187,7 +187,7 @@ async fn a_state_only_rounds_notes_are_not_recorded() {
         "a resumed round's continuation was recorded: {row}"
     );
     assert_eq!(
-        written(&row, &["trace_id"]).len(),
+        written(&row, &["_trace_id"]).len(),
         1,
         "only the final round's trace_id: {row}"
     );
