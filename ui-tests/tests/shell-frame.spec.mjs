@@ -527,6 +527,18 @@ test('F20 a screen sets its header through its context, and a kept one changes n
   expect(await page.title()).toBe('Tools · MCP Gateway');
 });
 
+test('F20b a setter kept from a failed attempt changes nothing after a Retry succeeds', async ({ page }) => {
+  await page.addInitScript(() => { window.__failOnce = true; });
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/overview/status');
+  await page.locator('#content').getByRole('button', { name: /Retry/ }).click();
+  await expect(page.locator('#content')).toContainText('overview - status');
+  await page.evaluate(() => window.overviewHeader({ title: 'Second' }));
+  await page.evaluate(() => window.failedHeader({ title: 'First', subtitle: 'first' }));
+  await expect(page.locator('.head .plate')).toHaveText('Second');
+  await expect(page.locator('.head .sub')).toHaveText('24 of 28 servers ready.');
+});
+
 test('F19 the shell reads fixtures only', async ({ page, offsite }) => {
   await page.goto('/ui/overview/status');
   await shellReady(page);
