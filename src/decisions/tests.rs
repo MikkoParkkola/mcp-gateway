@@ -701,3 +701,30 @@ fn held_notes_are_bounded_and_a_lost_one_forces_another_replay() {
     assert!(set.replay_done(Source::Access));
     assert_eq!(set.list()[0]["scope"].as_array().map(Vec::len), Some(over));
 }
+
+#[test]
+fn a_lost_note_affects_only_its_own_log() {
+    let mut set = booting();
+    // A UI decision held for the control-plane log.
+    set.live(
+        pos(Source::ControlPlane, 1),
+        Fold::Decided(decision("stripe.charges", 9)),
+    );
+    for n in 0..=super::HELD_CAP {
+        let capability = format!("cap.{n}");
+        set.live(
+            pos(Source::Access, n as u64),
+            Fold::Denial(missing(&capability, 1)),
+        );
+    }
+    assert!(
+        !set.replay_done(Source::Access),
+        "the access log lost a note"
+    );
+    assert!(
+        set.held
+            .iter()
+            .any(|(pos, _)| pos.log == Source::ControlPlane),
+        "the other log's held event is kept"
+    );
+}

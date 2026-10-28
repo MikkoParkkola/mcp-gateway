@@ -160,9 +160,9 @@ pub(crate) struct DecisionSet {
     now: Option<DateTime<Utc>>,
     edge: Option<DateTime<Utc>>,
     held: Vec<(LogPos, Fold)>,
-    /// A live event was dropped because `held` was full: the replay must run
-    /// again before the source can be ready.
-    held_lost: bool,
+    /// Each log a live event was dropped from because `held` was full: that
+    /// log's replay must run again before its source can be ready.
+    held_lost: std::collections::BTreeSet<Source>,
     changes: BTreeMap<(String, String), CapabilityChange>,
     first_seen: BTreeMap<String, DateTime<Utc>>,
     items: Vec<Value>,
@@ -180,7 +180,7 @@ impl DecisionSet {
             now: None,
             edge: None,
             held: Vec::new(),
-            held_lost: false,
+            held_lost: std::collections::BTreeSet::new(),
             changes: BTreeMap::new(),
             first_seen: BTreeMap::new(),
             items: Vec::new(),
@@ -206,7 +206,7 @@ impl DecisionSet {
                 self.held.push((pos, event));
             } else {
                 // The log keeps it: the next replay reads it back.
-                self.held_lost = true;
+                self.held_lost.insert(pos.log);
             }
         } else {
             self.fold(pos, event);
@@ -219,8 +219,10 @@ impl DecisionSet {
     /// dropped meanwhile, the source stays `Unavailable` and this answers
     /// `false`: the replay must run again to read it back from the log.
     pub(crate) fn replay_done(&mut self, source: Source) -> bool {
-        if std::mem::take(&mut self.held_lost) {
-            self.held.clear();
+        if self.held_lost.remove(&source) {
+            // This log's held events are re-read by its next replay; another
+            // log's stay held for its own.
+            self.held.retain(|(pos, _)| pos.log != source);
             self.health.insert(source, Health::Unavailable);
             self.refresh();
             return false;
