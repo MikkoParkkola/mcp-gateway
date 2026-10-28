@@ -353,7 +353,7 @@ async fn run_dispatched(
         .await;
     } else {
         drop(key_hold);
-        let response = inspect_settled(&state, &call, &id, response);
+        let response = inspect_and_record(&state, &call, (&*principal, &*id), response).await;
         Settling::new(
             &executor,
             &state,
@@ -442,55 +442,64 @@ async fn follow_handle(
     // same implementation, in the dispatch scope so the gates' attribution
     // notes travel with the transition (MIN.1 gap 1). The write record from
     // here on is what that processing wrote into the result (MIK-7993).
-    let writes_mark = crate::gateway::gateway_writes::mark();
-    let processed = crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(async {
-        match answer {
-            Terminal::Completed(result) => (
-                match state
-                    .meta_mcp()
-                    .recover_task_result(&job.server, &job.tool, None, id, result)
-                {
-                    Ok(processed) => {
-                        let processed = backend_output(processed);
-                        let target = (job.server.as_str(), job.tool.as_str());
-                        stage_followed_result(state, relay, target, &processed);
-                        TaskTransition::Complete(processed)
-                    }
-                    Err(error) => TaskTransition::Fail(
-                        crate::gateway::meta_mcp::response_security::recovered_result_error(&error),
-                    ),
-                },
-                ErrorAuthor::Gateway,
-            ),
-            // The failure half of that same processing: the peer's message and
-            // nested data are screened before this settles, keeping the code.
-            Terminal::Failed(error) => screened_peer_failure(state, job, id, error),
-            // The gateway's own words, never the peer's (MIK-7887.RECEIPT.1).
-            Terminal::Substituted(error) => (
-                TaskTransition::Fail(strip_http_status(error)),
-                ErrorAuthor::Gateway,
-            ),
-        }
+    // One cell for this settlement: the recovery's gates and its record.
+    crate::gateway::delivery_facts::scope(async {
+        let writes_mark = crate::gateway::gateway_writes::mark();
+        let processed = crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(async {
+            match answer {
+                Terminal::Completed(result) => (
+                    match state.meta_mcp().recover_task_result(
+                        &job.server,
+                        &job.tool,
+                        None,
+                        id,
+                        result,
+                    ) {
+                        Ok(processed) => {
+                            let processed = backend_output(processed);
+                            let target = (job.server.as_str(), job.tool.as_str());
+                            stage_followed_result(state, relay, target, &processed);
+                            TaskTransition::Complete(processed)
+                        }
+                        Err(error) => TaskTransition::Fail(
+                            crate::gateway::meta_mcp::response_security::recovered_result_error(
+                                &error,
+                            ),
+                        ),
+                    },
+                    ErrorAuthor::Gateway,
+                ),
+                // The failure half of that same processing: the peer's message and
+                // nested data are screened before this settles, keeping the code.
+                Terminal::Failed(error) => screened_peer_failure(state, job, id, error),
+                // The gateway's own words, never the peer's (MIK-7887.RECEIPT.1).
+                Terminal::Substituted(error) => (
+                    TaskTransition::Fail(strip_http_status(error)),
+                    ErrorAuthor::Gateway,
+                ),
+            }
+        })
+        .await;
+        let (outcome, notes) = processed;
+        let followed = FollowedJob {
+            job,
+            relay,
+            id,
+            principal,
+            revision,
+            bindings,
+        };
+        let writes = crate::gateway::gateway_writes::snapshot_since(writes_mark);
+        settle_followed(
+            executor,
+            state,
+            &followed,
+            (outcome, writes),
+            &notes,
+            cancel_rx,
+        )
+        .await;
     })
-    .await;
-    let (outcome, notes) = processed;
-    let followed = FollowedJob {
-        job,
-        relay,
-        id,
-        principal,
-        revision,
-        bindings,
-    };
-    let writes = crate::gateway::gateway_writes::snapshot_since(writes_mark);
-    settle_followed(
-        executor,
-        state,
-        &followed,
-        (outcome, writes),
-        &notes,
-        cancel_rx,
-    )
     .await;
     lease.release(executor, id).await;
 }
@@ -643,12 +652,12 @@ pub(super) async fn settle_surfaced_refused(
 
 /// The response firewall on a native task result, under the targets the
 /// synchronous call would use (#2351): a refusal is what the task settles on.
-pub(super) fn inspect_settled(
+fn inspect_settled(
     state: &crate::gateway::task_service::host::LiveHost,
     call: &TaskCall,
     id: &str,
     response: crate::protocol::JsonRpcResponse,
-) -> crate::protocol::JsonRpcResponse {
+) -> (crate::protocol::JsonRpcResponse, Option<Decided>) {
     // A surfaced task's result is inspected as the recorded server's answer:
     // a reload that moved the name during the call must not lend it the new
     // server's targets.
@@ -659,17 +668,78 @@ pub(super) fn inspect_settled(
     )
 }
 
+/// What a settlement's inspection decided about the answer, when it refused
+/// or rewrote it, and the target it was inspected as.
+struct Decided {
+    refused: bool,
+    server: String,
+    tool: String,
+}
+
+/// The settlement inspection with its record. A terminal answer the inspection
+/// refused or rewrote writes the task's settlement record before it commits,
+/// in a cell of its own; the record's trace is the dispatch's invocation
+/// trace, taken before a refusal replaces the response. Under fail-closed a
+/// failed write withholds the answer (`-32005`, no content).
+pub(super) async fn inspect_and_record(
+    state: &crate::gateway::task_service::host::LiveHost,
+    call: &TaskCall,
+    (principal, id): (&str, &str),
+    response: crate::protocol::JsonRpcResponse,
+) -> crate::protocol::JsonRpcResponse {
+    crate::gateway::delivery_facts::scope(async move {
+        let trace = response.invocation_trace.clone();
+        let interim = response.result.as_ref().is_some_and(|result| {
+            crate::protocol::mrtr::InputRequired::claims_input_required(result)
+        });
+        let (settled, decided) = inspect_settled(state, call, id, response);
+        let Some(decided) = decided.filter(|_| !interim) else {
+            return settled;
+        };
+        if !decided.refused {
+            crate::gateway::delivery_facts::raise(
+                crate::gateway::delivery_facts::ResponseEffect::Rewritten,
+            );
+        }
+        let task = crate::gateway::meta_mcp::invoke::audit::SettledTask {
+            server: &decided.server,
+            tool: &decided.tool,
+            id,
+        };
+        let trace_id = trace.as_deref().unwrap_or(id);
+        let kept = state
+            .meta_mcp()
+            .record_task_settlement(
+                task,
+                (trace_id, principal),
+                decided.refused,
+                settled.result.as_ref(),
+            )
+            .await;
+        if kept {
+            return settled;
+        }
+        let withheld = crate::Error::AuditUnavailable;
+        crate::protocol::JsonRpcResponse::error(
+            settled.id,
+            withheld.to_rpc_code(),
+            withheld.to_string(),
+        )
+    })
+    .await
+}
+
 fn inspect_settled_pinned(
     state: &crate::gateway::task_service::host::LiveHost,
     call: &TaskCall,
     id: &str,
     mut response: crate::protocol::JsonRpcResponse,
-) -> crate::protocol::JsonRpcResponse {
+) -> (crate::protocol::JsonRpcResponse, Option<Decided>) {
     if response.error.is_some() || response.egress_scanned {
-        return response;
+        return (response, None);
     }
     let Some(result) = response.result.as_mut() else {
-        return response;
+        return (response, None);
     };
     let backend = crate::gateway::router::backend_tool_targets_for_call(
         state.meta_mcp(),
@@ -684,10 +754,24 @@ fn inspect_settled_pinned(
     let targets =
         crate::gateway::meta_mcp::response_security::meta_response_targets(&call.tool, &backend);
     let snapshot = state.meta_mcp().relay_snapshot(result);
+    // Compared after the inspection, so a redaction is seen whether or not a
+    // relay snapshot was taken.
+    let before = result.clone();
     let refused = state
         .meta_mcp()
         .inspect_task_result(&targets, id, result)
         .is_err();
+    let rewritten = !refused && *result != before;
+    let decided = (refused || rewritten).then(|| Decided {
+        refused,
+        server: targets
+            .first()
+            .map(|t| t.server.clone())
+            .unwrap_or_default(),
+        tool: targets
+            .first()
+            .map_or_else(|| call.tool.clone(), |t| t.tool.clone()),
+    });
     // A redaction changed what the task will deliver: its receipt is rebuilt
     // from it. A task holds the backend's native result, never a wrapper.
     state
@@ -707,7 +791,7 @@ fn inspect_settled_pinned(
             "Response blocked by security firewall",
         );
     }
-    response
+    (response, decided)
 }
 
 impl TaskExecutor {

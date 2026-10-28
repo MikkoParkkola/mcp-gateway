@@ -18,7 +18,7 @@ use super::observe::{Acceptance, Handoff};
 use super::settlement::{
     DispatchSettlement, abandoned_input_round, classify_dispatch, interrupted_before_dispatch,
 };
-use super::worker::{inspect_settled, settle_surfaced_refused};
+use super::worker::{inspect_and_record, settle_surfaced_refused};
 use super::{CommitStage, OwnedCallerContext, TaskCall, TaskExecutor};
 use crate::gateway::task_service::host::LiveHost;
 use crate::gateway::task_service::record::{CONTINUATION_DEADLINE_MARGIN_SECS, InputRound};
@@ -162,7 +162,8 @@ impl<'a> Settling<'a> {
             else {
                 return;
             };
-            response = inspect_settled(self.state, self.call, self.id, next);
+            response =
+                inspect_and_record(self.state, self.call, (self.principal, self.id), next).await;
         }
     }
 
@@ -655,7 +656,7 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
     executor
         .proceed_unless_late(ids, deadline, expired, at)
         .await?;
-    let response = inspect_settled(&state, &call, &id, response);
+    let response = inspect_and_record(&state, &call, (&*principal, &*id), response).await;
     Settling::new(&executor, &state, &owned, &call, &principal, &id, revision)
         .settle_or_ask(response, &mut cancel_rx)
         .await;
