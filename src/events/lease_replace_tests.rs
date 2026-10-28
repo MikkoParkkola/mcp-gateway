@@ -327,11 +327,23 @@ async fn a_passthrough_stamp_comes_only_from_a_leased_runs_fence() {
         Some(stamp_now(&f)),
         "no fence: the lease held now"
     );
+    let stamp = "0123456789abcdef0123456789abcdef";
     assert_eq!(
-        lease_of(Some("lease:00ab")),
-        Some("00ab".to_owned()),
+        lease_of(Some(format!("lease:{stamp}").as_str())),
+        Some(stamp.to_owned()),
         "a leased run's own generation"
     );
+    for malformed in [
+        "lease:00ab",
+        "lease:0123456789ABCDEF0123456789ABCDEF",
+        "lease:",
+    ] {
+        assert_eq!(
+            lease_of(Some(malformed)),
+            None,
+            "{malformed}: not a generation"
+        );
+    }
     assert_eq!(
         lease_of(Some("binding-7")),
         None,
