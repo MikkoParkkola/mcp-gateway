@@ -50,7 +50,8 @@ jobs:
       # Asset names carry their bytes' hash, and a screen imports the shell by
       # that name: the rehash script must hash a file after what it imports.
       - name: Check the asset rehash script hashes in import order
-        run: python3 -I ../scripts/dev/test_rehash_ui_assets.py
+        working-directory: .
+        run: python3 -I scripts/dev/test_rehash_ui_assets.py
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
