@@ -14,6 +14,7 @@ use tokio::time::{Instant, MissedTickBehavior, interval_at};
 use super::guard::{Guard, Snapshot};
 use super::id::StreamId;
 use super::sent::Sent;
+use super::watcher;
 use crate::gateway::auth::AuthState;
 use crate::gateway::auth::live::{HeldCredential, current_caller};
 use crate::gateway::router::AppState;
@@ -142,6 +143,7 @@ async fn drive(
     rx: &mut tokio::sync::watch::Receiver<Snapshot>,
 ) -> Result<End, End> {
     let mut sent = Sent::new(boot);
+    let hub = conn.state.dashboard_bootstrap.stream_hub();
     let fresh = rx.wait_for(|s| s.fresh);
     let first = tokio::select! {
         r = fresh => r.map(|s| s.clone()).map_err(|_| End::ClientGone)?,
@@ -160,6 +162,7 @@ async fn drive(
             () = tokio::time::sleep_until(deadline) => return Ok(End::Lifetime),
             _ = recheck.tick() => {
                 if let Err(end) = conn.require_entitled().await { return Ok(end); }
+                hub.ensure_watcher(|old| watcher::spawn(&conn.state, old));
             }
             _ = keep.tick() => conn.send(Bytes::from_static(b": keep-alive\n\n")).await?,
             changed = rx.changed() => {
