@@ -135,9 +135,7 @@ fn start_with(
                 }),
             );
             let path = log.path();
-            let replaying = Arc::clone(&shared);
-            let first = path.clone();
-            tokio::task::spawn_blocking(move || replay_grant_decisions(&first, &replaying));
+            tokio::spawn(replay_until_ready(path.clone(), Arc::clone(&shared)));
             tokio::spawn(apply_live(receiver, dropped, path, Arc::clone(&shared)));
         }
     }
@@ -174,16 +172,37 @@ async fn apply_live(
                 "decisions: notes arrived faster than they were applied; replaying the log"
             );
             shared.update(|set| set.set_health(Source::Access, Health::Unavailable));
-            let (path, shared) = (path.clone(), Arc::clone(&shared));
-            let _ =
-                tokio::task::spawn_blocking(move || replay_grant_decisions(&path, &shared)).await;
+            replay_until_ready(path.clone(), Arc::clone(&shared)).await;
         }
     }
 }
 
+/// The longest wait between two replays of a log that could not be read.
+const REPLAY_RETRY_MAX: Duration = Duration::from_secs(60);
+
+/// Replay until the source is ready: a read that fails, or a replay that
+/// lost a held note, runs again after a wait that doubles up to
+/// [`REPLAY_RETRY_MAX`]. The source reads unavailable until then. Async, so
+/// shutdown drops it between attempts.
+async fn replay_until_ready(path: std::path::PathBuf, shared: Arc<Shared>) {
+    let mut wait = Duration::from_secs(1);
+    loop {
+        let (attempt, set) = (path.clone(), Arc::clone(&shared));
+        let ready = tokio::task::spawn_blocking(move || replay_grant_decisions(&attempt, &set))
+            .await
+            .unwrap_or(false);
+        if ready {
+            return;
+        }
+        tokio::time::sleep(wait).await;
+        wait = (wait * 2).min(REPLAY_RETRY_MAX);
+    }
+}
+
 /// Read every kept grant-decision record into the set, then mark the
-/// source ready, which applies the notes held meanwhile.
-fn replay_grant_decisions(path: &Path, shared: &Shared) {
+/// source ready, which applies the notes held meanwhile. Whether it became
+/// ready: not if the read failed or a held note was dropped meanwhile.
+fn replay_grant_decisions(path: &Path, shared: &Shared) -> bool {
     let started = std::time::Instant::now();
     let read = replay::records(path, GRANT_DECISION_KIND, |record, hash| {
         if let Some(event) = denial_from_record(record) {
@@ -198,11 +217,12 @@ fn replay_grant_decisions(path: &Path, shared: &Shared) {
                 elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 "decisions: grant-decision replay finished"
             );
-            shared.update(|set| set.replay_done(Source::Access));
+            shared.update(|set| set.replay_done(Source::Access))
         }
         Err(error) => {
             tracing::warn!(%error, "decisions: the grant-decision log could not be replayed");
             shared.update(|set| set.set_health(Source::Access, Health::Unavailable));
+            false
         }
     }
 }

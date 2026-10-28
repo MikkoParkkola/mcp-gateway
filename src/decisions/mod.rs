@@ -145,6 +145,10 @@ impl Requested {
     }
 }
 
+/// Live events held while a replay runs: past this, one is dropped and the
+/// replay runs again, so a replay that cannot finish never grows memory.
+const HELD_CAP: usize = 4096;
+
 /// The decision set: open items, a revision that rises on any visible change,
 /// and each source's health.
 pub(crate) struct DecisionSet {
@@ -156,6 +160,9 @@ pub(crate) struct DecisionSet {
     now: Option<DateTime<Utc>>,
     edge: Option<DateTime<Utc>>,
     held: Vec<(LogPos, Fold)>,
+    /// A live event was dropped because `held` was full: the replay must run
+    /// again before the source can be ready.
+    held_lost: bool,
     changes: BTreeMap<(String, String), CapabilityChange>,
     first_seen: BTreeMap<String, DateTime<Utc>>,
     items: Vec<Value>,
@@ -173,6 +180,7 @@ impl DecisionSet {
             now: None,
             edge: None,
             held: Vec::new(),
+            held_lost: false,
             changes: BTreeMap::new(),
             first_seen: BTreeMap::new(),
             items: Vec::new(),
@@ -194,7 +202,12 @@ impl DecisionSet {
     /// Fold one live event; held while any replay runs, applied after.
     pub(crate) fn live(&mut self, pos: LogPos, event: Fold) {
         if self.replaying() {
-            self.held.push((pos, event));
+            if self.held.len() < HELD_CAP {
+                self.held.push((pos, event));
+            } else {
+                // The log keeps it: the next replay reads it back.
+                self.held_lost = true;
+            }
         } else {
             self.fold(pos, event);
             self.refresh();
@@ -202,8 +215,16 @@ impl DecisionSet {
     }
 
     /// Mark `source`'s replay finished: once every replay has, the held live
-    /// events are applied and the source is `Ready`.
-    pub(crate) fn replay_done(&mut self, source: Source) {
+    /// events are applied and the source is `Ready`. If a held event was
+    /// dropped meanwhile, the source stays `Unavailable` and this answers
+    /// `false`: the replay must run again to read it back from the log.
+    pub(crate) fn replay_done(&mut self, source: Source) -> bool {
+        if std::mem::take(&mut self.held_lost) {
+            self.held.clear();
+            self.health.insert(source, Health::Unavailable);
+            self.refresh();
+            return false;
+        }
         self.health.insert(source, Health::Ready);
         if !self.replaying() {
             for (pos, event) in std::mem::take(&mut self.held) {
@@ -211,6 +232,7 @@ impl DecisionSet {
             }
         }
         self.refresh();
+        true
     }
 
     /// Replace one backend's capability changes; the source is `Ready` once
@@ -439,8 +461,8 @@ impl Shared {
     }
 
     /// Apply `change` under the write lock.
-    pub(crate) fn update(&self, change: impl FnOnce(&mut DecisionSet)) {
-        change(&mut self.0.write());
+    pub(crate) fn update<T>(&self, change: impl FnOnce(&mut DecisionSet) -> T) -> T {
+        change(&mut self.0.write())
     }
 
     /// [`DecisionSet::snapshot`] under the read lock.

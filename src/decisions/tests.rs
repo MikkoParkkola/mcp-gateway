@@ -671,3 +671,33 @@ fn an_empty_subject_is_never_covered_by_a_grant() {
     set.set_grants(vec![row], at(2));
     assert!(!set.covered(&nobody, "stripe.charges", &requested));
 }
+
+#[test]
+fn held_notes_are_bounded_and_a_lost_one_forces_another_replay() {
+    let mut set = booting();
+    set.replay_done(Source::ControlPlane);
+    let over = super::HELD_CAP + 3;
+    for n in 0..over {
+        let capability = format!("cap.{n}");
+        set.live(
+            pos(Source::Access, n as u64),
+            Fold::Denial(missing(&capability, 1)),
+        );
+    }
+    assert_eq!(set.held.len(), super::HELD_CAP, "memory stays bounded");
+
+    // The replay that was running did not see the dropped notes.
+    assert!(!set.replay_done(Source::Access), "a lost note is not ready");
+    assert_eq!(set.snapshot(true), None, "never a count missing notes");
+
+    // The next replay reads every note back from the log.
+    for n in 0..over {
+        let capability = format!("cap.{n}");
+        set.replayed(
+            pos(Source::Access, n as u64),
+            Fold::Denial(missing(&capability, 1)),
+        );
+    }
+    assert!(set.replay_done(Source::Access));
+    assert_eq!(set.list()[0]["scope"].as_array().map(Vec::len), Some(over));
+}
