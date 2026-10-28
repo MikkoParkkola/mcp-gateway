@@ -13,23 +13,23 @@ fn augment_with_trace_inserts_trace_id_field() {
     let trace_id = "gw-abc123";
     // WHEN: augmenting with the trace ID
     let augmented = support::augment_with_trace(result, trace_id);
-    // THEN: trace_id field is present with the correct value
-    assert_eq!(augmented["trace_id"], "gw-abc123");
+    // THEN: _trace_id field is present with the correct value
+    assert_eq!(augmented["_trace_id"], "gw-abc123");
 }
 
 #[test]
 fn augment_with_trace_preserves_existing_fields() {
-    // GIVEN: a result with content and predicted_next
+    // GIVEN: a result with content and _predicted_next
     let result = json!({
         "content": [{"type": "text", "text": "ok"}],
-        "predicted_next": [{"tool": "foo", "confidence": 0.8}]
+        "_predicted_next": [{"tool": "foo", "confidence": 0.8}]
     });
     // WHEN: augmenting with a trace ID
     let augmented = support::augment_with_trace(result, "gw-xyz");
     // THEN: existing fields are preserved
     assert!(augmented.get("content").is_some());
-    assert!(augmented.get("predicted_next").is_some());
-    assert_eq!(augmented["trace_id"], "gw-xyz");
+    assert!(augmented.get("_predicted_next").is_some());
+    assert_eq!(augmented["_trace_id"], "gw-xyz");
 }
 
 #[test]
@@ -84,8 +84,8 @@ fn augment_with_predictions_inserts_predicted_next() {
     let predictions = vec![json!({"tool": "foo:bar", "confidence": 0.9})];
     // WHEN: augmenting
     let augmented = support::augment_with_predictions(result, predictions);
-    // THEN: predicted_next field is present
-    let preds = augmented["predicted_next"].as_array().unwrap();
+    // THEN: _predicted_next field is present
+    let preds = augmented["_predicted_next"].as_array().unwrap();
     assert_eq!(preds.len(), 1);
     assert_eq!(preds[0]["tool"], "foo:bar");
 }
