@@ -196,33 +196,71 @@ pub(crate) fn count(records: &[serde_json::Value], level: &str, text: &str) -> u
         .count()
 }
 
-/// The guard's rule for one file's text: it installs a scoped subscriber
-/// but never reaches the keeper. Matched on code only: each line is cut at
-/// its first `//` that does not follow a `:`, so a line, doc or inner-doc
-/// comment can neither satisfy nor trigger it, while a URL's `scheme://` is
-/// kept as code. Lexical limits: another `//` inside a string literal still
-/// cuts the line, hiding whatever follows on it (a keeper there flags the
-/// file; an install there escapes it), and block comments and string
-/// contents are searched as code. Move such a call to its own line.
+/// The guard's rule for one file's text: it installs a scoped subscriber but
+/// never reaches the keeper. Read from the parsed file, not its text, so only
+/// code counts: a path `…subscriber::with_default` or `…subscriber::set_default`
+/// is an install, and a path or import naming `keep_interest_open`,
+/// `test_log_capture` or `error_capture` is a keeper. Comments, doc comments,
+/// block comments, string literals and URLs are not paths, so none of them can
+/// satisfy or trigger the guard. A macro whose body is comma-separated
+/// expressions (`assert!`, `vec!`, `format!`) is visited the same way; any
+/// other macro is read from its tokens, which hold no comments.
 fn misses_keeper(text: &str) -> bool {
-    let code: Vec<&str> = text.lines().map(code_part).collect();
-    let has = |needle: &&str| code.iter().any(|line| line.contains(needle));
-    let installs = ["subscriber::with_default(", "subscriber::set_default("];
-    let keeps = ["keep_interest_open", "test_log_capture", "error_capture"];
-    installs.iter().any(has) && !keeps.iter().any(has)
+    parsed_misses_keeper(text).unwrap_or_else(|e| panic!("does not parse: {e}"))
 }
 
-/// `line` up to its first comment marker: a `//` not preceded by `:`.
-fn code_part(line: &str) -> &str {
-    let mut from = 0;
-    while let Some(found) = line[from..].find("//") {
-        let at = from + found;
-        if !line[..at].ends_with(':') {
-            return &line[..at];
-        }
-        from = at + 2;
+/// [`misses_keeper`], with a parse failure returned, so the tree guard can
+/// name the file.
+fn parsed_misses_keeper(text: &str) -> syn::Result<bool> {
+    let file = syn::parse_file(text)?;
+    let mut seen = Seen::default();
+    syn::visit::Visit::visit_file(&mut seen, &file);
+    Ok(seen.install && !seen.keeper)
+}
+
+const KEEPERS: [&str; 3] = ["keep_interest_open", "test_log_capture", "error_capture"];
+
+#[derive(Default)]
+struct Seen {
+    install: bool,
+    keeper: bool,
+}
+
+impl<'ast> syn::visit::Visit<'ast> for Seen {
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        let idents: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+        self.keeper |= idents.iter().any(|i| KEEPERS.contains(&i.as_str()));
+        self.install |= idents.windows(2).any(|pair| {
+            pair[0] == "subscriber" && matches!(pair[1].as_str(), "with_default" | "set_default")
+        });
+        syn::visit::visit_path(self, path);
     }
-    line
+
+    /// An import of a keeper counts; an import installs nothing.
+    fn visit_use_tree(&mut self, tree: &'ast syn::UseTree) {
+        let ident = match tree {
+            syn::UseTree::Path(p) => Some(&p.ident),
+            syn::UseTree::Name(n) => Some(&n.ident),
+            syn::UseTree::Rename(r) => Some(&r.ident),
+            syn::UseTree::Glob(_) | syn::UseTree::Group(_) => None,
+        };
+        self.keeper |= ident.is_some_and(|i| KEEPERS.iter().any(|k| i == k));
+        syn::visit::visit_use_tree(self, tree);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        let parser = syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated;
+        if let Ok(args) = mac.parse_body_with(parser) {
+            args.iter().for_each(|arg| self.visit_expr(arg));
+        } else {
+            let tokens = mac.tokens.to_string();
+            self.keeper |= KEEPERS.iter().any(|k| tokens.contains(k));
+            self.install |= ["subscriber :: with_default", "subscriber :: set_default"]
+                .iter()
+                .any(|needle| tokens.contains(needle));
+        }
+        syn::visit::visit_macro(self, mac);
+    }
 }
 
 /// A keeper named only in a line or doc comment does not count: the file is
@@ -329,12 +367,14 @@ fn every_scoped_log_capture_keeps_interest_open() {
         .iter()
         .filter_map(|path| {
             let text = std::fs::read_to_string(path).ok()?;
-            misses_keeper(&text).then(|| {
-                path.strip_prefix(root)
-                    .unwrap_or(path)
-                    .display()
-                    .to_string()
-            })
+            let rel = path
+                .strip_prefix(root)
+                .unwrap_or(path)
+                .display()
+                .to_string();
+            parsed_misses_keeper(&text)
+                .unwrap_or_else(|e| panic!("{rel} does not parse: {e}"))
+                .then_some(rel)
         })
         .collect();
     missing.sort();
