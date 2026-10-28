@@ -30,7 +30,7 @@ impl State<'_> {
         self.fence
             .as_ref()
             .and_then(|run| run.binding())
-            .or_else(|| self.lease.map(crate::events::lease::run_fence))
+            .or_else(|| self.lease.map(crate::events::observation::run_fence))
     }
 
     /// Route one projected frame. `true` when the stream is over.

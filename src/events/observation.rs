@@ -15,6 +15,21 @@ use crate::identity_propagation::{
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::personal_accounts::identity::{AccountKeyDescriptor, Principal, account_key};
 
+/// How a record stamps the lease generation it was observed under. Here,
+/// not beside the lease, whose code may format nothing (LEASE-T6).
+pub(crate) fn lease_stamp(generation: u128) -> String {
+    format!("{generation:032x}")
+}
+
+/// What a leased listener run puts in an occurrence's `fence`: its own
+/// generation, marked so a vault binding can never read as one.
+pub(crate) fn run_fence(generation: u128) -> String {
+    format!("{RUN_FENCE_PREFIX}{}", lease_stamp(generation))
+}
+
+/// The marker on a leased run's fence (see [`run_fence`]).
+pub(crate) const RUN_FENCE_PREFIX: &str = "lease:";
+
 /// The operator config besides the identity that defines `obs` (B3). Plain
 /// config, so it is stored as written and compared exactly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -156,21 +171,19 @@ impl super::EventsHub {
             PropagationStrategyKind::Passthrough => match fence {
                 // A fence not marked as a leased run's names no lease: no
                 // stamp, so it never matches a lease held now.
-                Some(fence) => fence
-                    .strip_prefix(super::lease::RUN_FENCE_PREFIX)
-                    .map(str::to_owned),
+                Some(fence) => fence.strip_prefix(RUN_FENCE_PREFIX).map(str::to_owned),
                 None => self
                     .leases
                     .held_generation(&super::lease::LeaseKey {
                         backend: backend.to_owned(),
                         obs,
                     })
-                    .map(super::lease::stamp),
+                    .map(lease_stamp),
             },
             // Prefixed so it never equals a passthrough generation; a leased
             // run's marked fence is never read as a vault binding.
             PropagationStrategyKind::Vault => fence
-                .filter(|f| !f.starts_with(super::lease::RUN_FENCE_PREFIX))
+                .filter(|f| !f.starts_with(RUN_FENCE_PREFIX))
                 .map(|binding| format!("vault:{binding}")),
             _ => None,
         };

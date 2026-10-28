@@ -229,7 +229,7 @@ fn a_leased_run_drops_tools_debt_heard_under_another_lease() {
         due: Some(Instant::now()),
         retrying: false,
         unannounced: true,
-        fence: Some(crate::events::lease::run_fence(lease)),
+        fence: Some(crate::events::observation::run_fence(lease)),
     };
     let shared = shared();
     let mut state = State::new(&shared, PeerEra::Legacy);

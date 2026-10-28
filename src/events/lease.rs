@@ -58,20 +58,6 @@ impl LeaseRefusal {
     }
 }
 
-/// How a record stamps the lease generation it was observed under.
-pub(crate) fn stamp(generation: u128) -> String {
-    format!("{generation:032x}")
-}
-
-/// What a leased listener run puts in an occurrence's `fence`: its own
-/// generation, marked so a vault binding can never read as one.
-pub(crate) fn run_fence(generation: u128) -> String {
-    format!("{RUN_FENCE_PREFIX}{}", stamp(generation))
-}
-
-/// The marker on a leased run's fence (see [`run_fence`]).
-pub(crate) const RUN_FENCE_PREFIX: &str = "lease:";
-
 /// Why a lease was wiped (L4); the rows' visible state follows from it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WipeReason {
