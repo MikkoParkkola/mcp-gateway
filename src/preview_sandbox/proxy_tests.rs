@@ -15,6 +15,7 @@ use async_trait::async_trait;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream, UnixStream};
 
+use super::deny_vectors::{DENIED, ip};
 use super::{AllowlistProxy, Connect, Credential, Interfaces, Resolve};
 
 /// A globally routable address no deny rule covers.
@@ -95,8 +96,8 @@ impl Connect for FakeConnect {
 struct FakeInterfaces(Mutex<Vec<IpAddr>>);
 
 impl Interfaces for FakeInterfaces {
-    fn addresses(&self) -> Vec<IpAddr> {
-        self.0.lock().expect("lock").clone()
+    fn addresses(&self) -> io::Result<Vec<IpAddr>> {
+        Ok(self.0.lock().expect("lock").clone())
     }
 }
 
@@ -151,6 +152,25 @@ async fn rig() -> Rig {
         connect,
         interfaces,
     }
+}
+
+fn begin(rig: &Rig) -> Credential {
+    rig.proxy.begin_fetch().expect("credential")
+}
+
+/// The OS random source failing refuses this preview with an error; the
+/// proxy, and so the gateway, keeps serving.
+#[tokio::test]
+async fn c8_a_failed_random_source_refuses_and_the_proxy_lives() {
+    let mut rig = rig().await;
+    rig.proxy.random = |_| Err(io::Error::other("no entropy"));
+    let refused = rig.proxy.begin_fetch();
+    assert!(matches!(
+        refused,
+        Err(crate::preview_sandbox::Refusal::Step(_))
+    ));
+    let st = status(&send(&rig, Entry::Tcp, &connect_bytes("pypi.org:443", None)).await);
+    assert_eq!(st, 407, "the proxy stopped answering");
 }
 
 /// Raw CONNECT bytes for `authority`, with an optional auth header value.
@@ -243,7 +263,7 @@ async fn tunnel_echoes<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
 #[tokio::test]
 async fn c1_outside_a_fetch_nothing_is_admitted_and_the_port_stays_bound() {
     let rig = rig().await;
-    let cred = rig.proxy.begin_fetch();
+    let cred = begin(&rig);
     rig.proxy.expire(&cred);
     for entry in ENTRIES {
         let st = connect_status(&rig, entry, "registry.npmjs.org:443", &cred).await;
@@ -259,7 +279,7 @@ async fn c1_outside_a_fetch_nothing_is_admitted_and_the_port_stays_bound() {
 #[tokio::test]
 async fn c2_only_the_three_registries_on_443_are_admitted() {
     let rig = rig().await;
-    let cred = rig.proxy.begin_fetch();
+    let cred = begin(&rig);
     for host in ["registry.npmjs.org", "pypi.org", "files.pythonhosted.org"] {
         for entry in ENTRIES {
             let bytes = connect_bytes(&format!("{host}:443"), Some(&cred.basic()));
@@ -295,7 +315,7 @@ async fn c2_near_miss_hosts_and_ports_are_refused_with_403() {
     ] {
         rig.resolve.set(host, vec![GLOBAL]);
     }
-    let cred = rig.proxy.begin_fetch();
+    let cred = begin(&rig);
     for authority in [
         "evilregistry.npmjs.org:443",
         "registry.npmjs.org.evil.test:443",
@@ -320,9 +340,9 @@ async fn c2_near_miss_hosts_and_ports_are_refused_with_403() {
 #[tokio::test]
 async fn c3_missing_wrong_or_expired_credential_gets_407() {
     let rig = rig().await;
-    let old = rig.proxy.begin_fetch();
+    let old = begin(&rig);
     rig.proxy.expire(&old);
-    let live = rig.proxy.begin_fetch();
+    let live = begin(&rig);
     let wrong = format!("Basic {}", base64_of("not-the-secret:"));
     for entry in ENTRIES {
         let missing = connect_bytes("registry.npmjs.org:443", None);
@@ -343,7 +363,7 @@ async fn c3_missing_wrong_or_expired_credential_gets_407() {
 #[tokio::test]
 async fn r2_the_unix_socket_requires_the_credential() {
     let rig = rig().await;
-    let live = rig.proxy.begin_fetch();
+    let live = begin(&rig);
     let missing = connect_bytes("pypi.org:443", None);
     assert_eq!(status(&send(&rig, Entry::Unix, &missing).await), 407);
     assert_eq!(
@@ -357,7 +377,7 @@ async fn r2_the_unix_socket_requires_the_credential() {
 #[tokio::test]
 async fn c11_duplicate_non_basic_and_malformed_auth_get_407() {
     let rig = rig().await;
-    let cred = rig.proxy.begin_fetch();
+    let cred = begin(&rig);
     let good = cred.basic();
     let duplicate = format!(
         "CONNECT pypi.org:443 HTTP/1.1\r\nHost: pypi.org:443\r\n\
@@ -390,18 +410,12 @@ fn connect_text(authority: &str, auth: &str) -> String {
     String::from_utf8(connect_bytes(authority, Some(auth))).expect("ascii")
 }
 
-use super::deny_vectors::DENIED;
-
-fn ip(s: &str) -> IpAddr {
-    s.parse().unwrap_or_else(|_| panic!("bad address {s}"))
-}
-
 /// C4, kills "a range deleted": every denied address, alone, refuses the
 /// CONNECT with 403 and nothing is dialled.
 #[tokio::test]
 async fn c4_every_denied_address_refuses_the_connect() {
     let rig = rig().await;
-    let cred = rig.proxy.begin_fetch();
+    let cred = begin(&rig);
     for denied in DENIED {
         rig.resolve.set(NPM, vec![ip(denied)]);
         let st = connect_status(&rig, Entry::Tcp, "registry.npmjs.org:443", &cred).await;
@@ -414,7 +428,7 @@ async fn c4_every_denied_address_refuses_the_connect() {
 #[tokio::test]
 async fn c4_denied_addresses_are_refused_through_the_unix_socket() {
     let rig = rig().await;
-    let cred = rig.proxy.begin_fetch();
+    let cred = begin(&rig);
     for denied in [
         "127.0.0.1",
         "10.0.0.1",
@@ -434,7 +448,7 @@ async fn c4_denied_addresses_are_refused_through_the_unix_socket() {
 #[tokio::test]
 async fn c4_a_mixed_answer_refuses_the_whole_connect() {
     let rig = rig().await;
-    let cred = rig.proxy.begin_fetch();
+    let cred = begin(&rig);
     let global6 = ip("2606:4700::1111");
     for bad in ["127.0.0.1", "10.0.0.1", "::1", "fe80::1", "::ffff:10.0.0.1"] {
         let bad = ip(bad);
@@ -458,7 +472,7 @@ async fn c4_a_mixed_answer_refuses_the_whole_connect() {
 #[tokio::test]
 async fn c4i_a_host_interface_address_is_refused_in_every_form() {
     let rig = rig().await;
-    let cred = rig.proxy.begin_fetch();
+    let cred = begin(&rig);
     *rig.interfaces.0.lock().expect("lock") = vec![GLOBAL];
     // 93.184.216.34 = 5db8:d822
     for form in ["93.184.216.34", "::ffff:5db8:d822", "::5db8:d822"] {
@@ -473,7 +487,7 @@ async fn c4i_a_host_interface_address_is_refused_in_every_form() {
 #[tokio::test]
 async fn c4i_the_interface_set_is_read_at_each_connect() {
     let rig = rig().await;
-    let cred = rig.proxy.begin_fetch();
+    let cred = begin(&rig);
     let host = "registry.npmjs.org:443";
     assert_eq!(connect_status(&rig, Entry::Tcp, host, &cred).await, 200);
     *rig.interfaces.0.lock().expect("lock") = vec![GLOBAL];
@@ -516,7 +530,7 @@ async fn open_tunnel(rig: &Rig, entry: Entry, cred: &Credential) -> Opened {
 #[tokio::test]
 async fn c5_expiry_closes_tunnels_already_open() {
     let rig = rig().await;
-    let cred = rig.proxy.begin_fetch();
+    let cred = begin(&rig);
     let mut t = open_tunnel(&rig, Entry::Tcp, &cred).await;
     rig.proxy.expire(&cred);
     assert!(t.closed().await, "tunnel survived expiry");
@@ -526,7 +540,7 @@ async fn c5_expiry_closes_tunnels_already_open() {
 #[tokio::test]
 async fn r3_expiry_closes_tunnels_opened_through_the_unix_socket() {
     let rig = rig().await;
-    let cred = rig.proxy.begin_fetch();
+    let cred = begin(&rig);
     let mut t = open_tunnel(&rig, Entry::Unix, &cred).await;
     rig.proxy.expire(&cred);
     assert!(t.closed().await, "tunnel survived expiry");
@@ -536,7 +550,7 @@ async fn r3_expiry_closes_tunnels_opened_through_the_unix_socket() {
 #[tokio::test]
 async fn c6_git_hosts_are_refused() {
     let rig = rig().await;
-    let cred = rig.proxy.begin_fetch();
+    let cred = begin(&rig);
     for host in [
         "github.com",
         "gitlab.com",
@@ -558,7 +572,7 @@ async fn c6_git_hosts_are_refused() {
 #[tokio::test]
 async fn c7_non_connect_methods_are_refused() {
     let rig = rig().await;
-    let cred = rig.proxy.begin_fetch();
+    let cred = begin(&rig);
     let auth = cred.basic();
     for method in [
         "GET", "POST", "PUT", "HEAD", "OPTIONS", "DELETE", "TRACE", "get", "CONNECTX",
@@ -578,7 +592,7 @@ async fn c7_non_connect_methods_are_refused() {
 #[tokio::test]
 async fn c7_non_canonical_authorities_are_refused() {
     let rig = rig().await;
-    let cred = rig.proxy.begin_fetch();
+    let cred = begin(&rig);
     for authority in [
         "93.184.216.34:443",
         "[2606:4700::1111]:443",
@@ -609,7 +623,7 @@ async fn c7_non_canonical_authorities_are_refused() {
 #[tokio::test]
 async fn c7_a_disagreeing_host_header_is_refused() {
     let rig = rig().await;
-    let cred = rig.proxy.begin_fetch();
+    let cred = begin(&rig);
     let req = format!(
         "CONNECT registry.npmjs.org:443 HTTP/1.1\r\nHost: github.com:443\r\n\
          Proxy-Authorization: {}\r\n\r\n",
@@ -628,7 +642,7 @@ async fn c8_credentials_are_random_per_fetch_and_the_old_one_is_dead() {
     let rig = rig().await;
     let mut seen = std::collections::HashSet::new();
     for _ in 0..16 {
-        let c = rig.proxy.begin_fetch();
+        let c = begin(&rig);
         rig.proxy.expire(&c);
         assert!(seen.insert(c.secret().to_owned()), "repeated credential");
         let s = c.secret();
@@ -638,9 +652,9 @@ async fn c8_credentials_are_random_per_fetch_and_the_old_one_is_dead() {
                 .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
         );
     }
-    let first = rig.proxy.begin_fetch();
+    let first = begin(&rig);
     rig.proxy.expire(&first);
-    let second = rig.proxy.begin_fetch();
+    let second = begin(&rig);
     assert_ne!(first.secret(), second.secret());
     let host = "registry.npmjs.org:443";
     assert_eq!(connect_status(&rig, Entry::Tcp, host, &first).await, 407);
@@ -677,7 +691,7 @@ async fn c9_the_credential_never_reaches_a_log_line_or_a_refusal() {
     let _guard = tracing::subscriber::set_default(subscriber);
 
     let rig = rig().await;
-    let cred = rig.proxy.begin_fetch();
+    let cred = begin(&rig);
     let mut texts = Vec::new();
     // Refusals that carry the live credential: bad host, bad port, denied
     // address, disagreeing Host, non-CONNECT, duplicate header.
@@ -743,7 +757,7 @@ async fn c9_the_credential_never_reaches_a_log_line_or_a_refusal() {
 #[tokio::test]
 async fn c10_expiry_during_resolution_leaves_no_usable_tunnel() {
     let rig = rig().await;
-    let cred = rig.proxy.begin_fetch();
+    let cred = begin(&rig);
     rig.resolve.gate.close();
     let port = rig.proxy.port();
     let bytes = connect_bytes("registry.npmjs.org:443", Some(&cred.basic()));
@@ -766,7 +780,7 @@ async fn c10_expiry_during_resolution_leaves_no_usable_tunnel() {
 #[tokio::test]
 async fn c10_expiry_during_dialling_leaves_no_usable_tunnel() {
     let rig = rig().await;
-    let cred = rig.proxy.begin_fetch();
+    let cred = begin(&rig);
     rig.connect.gate.close();
     let port = rig.proxy.port();
     let bytes = connect_bytes("registry.npmjs.org:443", Some(&cred.basic()));

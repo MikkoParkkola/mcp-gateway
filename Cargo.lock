@@ -1946,6 +1946,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "mimalloc",
+ "nix",
  "notify",
  "parking_lot 0.13.0",
  "pin-project-lite",

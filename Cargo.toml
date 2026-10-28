@@ -278,6 +278,10 @@ security-framework = { version = "3.7", default-features = false }
 # errno constants are used.
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { version = "1.1", features = ["fs", "process", "mount", "thread"] }
+# The fetch proxy reads the host's own addresses at each CONNECT through
+# nix's safe getifaddrs; nix 0.31 is already in the lock file (process-wrap),
+# so this adds only its `net` feature.
+nix = { version = "0.31", default-features = false, features = ["net"] }
 seccompiler = "=0.5.0"
 libc = "0.2"
 

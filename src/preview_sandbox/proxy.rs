@@ -27,9 +27,21 @@ pub(crate) trait Connect: Send + Sync {
     async fn connect(&self, addr: SocketAddr) -> io::Result<TcpStream>;
 }
 
-/// The host's own interface addresses, read on every call (never cached).
+/// The host's own interface addresses, read on every call (never cached). A
+/// failed read refuses the CONNECT: an empty list would admit the host.
 pub(crate) trait Interfaces: Send + Sync {
-    fn addresses(&self) -> Vec<IpAddr>;
+    fn addresses(&self) -> io::Result<Vec<IpAddr>>;
+}
+
+/// Fills a buffer from the OS random source; injectable so a row can make it
+/// fail.
+type Random = fn(&mut [u8]) -> io::Result<()>;
+
+fn os_random(bytes: &mut [u8]) -> io::Result<()> {
+    use ring::rand::SecureRandom as _;
+    ring::rand::SystemRandom::new()
+        .fill(bytes)
+        .map_err(|_| io::Error::other("the OS random source failed"))
 }
 
 /// One fetch's proxy credential. No `Debug`: it carries the secret.
@@ -41,17 +53,13 @@ pub(crate) struct Credential {
 impl Credential {
     /// 32 bytes from the OS random source, URL-safe base64 without padding,
     /// so it sits in a proxy URL's user part with no escaping.
-    fn fresh() -> Self {
+    fn fresh(random: Random) -> io::Result<Self> {
         use base64::Engine as _;
-        use ring::rand::SecureRandom as _;
         let mut bytes = [0u8; 32];
-        // The OS random source failing leaves no safe credential to issue.
-        ring::rand::SystemRandom::new()
-            .fill(&mut bytes)
-            .unwrap_or_else(|_| panic!("the OS random source failed"));
-        Self {
+        random(&mut bytes)?;
+        Ok(Self {
             secret: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes),
-        }
+        })
     }
 
     /// The random token, URL-safe base64 without padding.
@@ -92,6 +100,7 @@ pub(crate) struct AllowlistProxy {
     unix_path: PathBuf,
     shared: Arc<Shared>,
     tasks: Vec<JoinHandle<()>>,
+    random: Random,
 }
 
 impl AllowlistProxy {
@@ -133,6 +142,7 @@ impl AllowlistProxy {
             unix_path,
             shared,
             tasks,
+            random: os_random,
         })
     }
 
@@ -145,17 +155,20 @@ impl AllowlistProxy {
     }
 
     /// Start a fetch: a fresh credential, valid until [`Self::expire`]. Any
-    /// earlier fetch's credential and tunnels end here too.
-    pub(crate) fn begin_fetch(&self) -> Credential {
-        let credential = Credential::fresh();
-        let old = lock(&self.shared.live).replace(Live {
+    /// earlier fetch's credential and tunnels end here too. A failed random
+    /// source refuses this preview only; the gateway carries on.
+    pub(crate) fn begin_fetch(&self) -> Result<Credential, super::Refusal> {
+        let mut live = lock(&self.shared.live);
+        if let Some(old) = live.take() {
+            old.closed.cancel();
+        }
+        let credential = Credential::fresh(self.random)
+            .map_err(|e| super::Refusal::Step(format!("generating the fetch credential ({e})")))?;
+        *live = Some(Live {
             credential: credential.clone(),
             closed: CancellationToken::new(),
         });
-        if let Some(old) = old {
-            old.closed.cancel();
-        }
-        credential
+        Ok(credential)
     }
 
     /// End a fetch: the credential stops working and its tunnels close.
@@ -307,7 +320,10 @@ where
     }
     // One denied address refuses the whole answer, so a mixed answer cannot
     // fall through to its bad half on a retry.
-    let own = shared.interfaces.addresses();
+    let own = shared
+        .interfaces
+        .addresses()
+        .map_err(|_| Status::Forbidden)?;
     if addrs.is_empty() || addrs.iter().any(|a| denied(*a, &own)) {
         return Err(Status::Forbidden);
     }
@@ -375,6 +391,47 @@ async fn read_head<S: AsyncRead + Unpin>(client: &mut S) -> Option<String> {
         .ok()??;
     head.truncate(head.len() - 4);
     String::from_utf8(head).ok()
+}
+
+/// The production parts on Linux: the system resolver (the proxy applies the
+/// SSRF deny list to its answer itself and dials only what it checked), a
+/// plain dial, and the host's interfaces through nix's safe `getifaddrs`.
+#[cfg(target_os = "linux")]
+pub(crate) struct System;
+
+#[cfg(target_os = "linux")]
+#[async_trait]
+impl Resolve for System {
+    async fn resolve(&self, host: &str) -> io::Result<Vec<IpAddr>> {
+        use crate::security::ssrf::HostResolver as _;
+        crate::security::ssrf::SystemResolver
+            .lookup(host)
+            .await
+            .map_err(|e| io::Error::other(e.to_string()))
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[async_trait]
+impl Connect for System {
+    async fn connect(&self, addr: SocketAddr) -> io::Result<TcpStream> {
+        TcpStream::connect(addr).await
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Interfaces for System {
+    fn addresses(&self) -> io::Result<Vec<IpAddr>> {
+        let all = nix::ifaddrs::getifaddrs().map_err(io::Error::from)?;
+        Ok(all
+            .filter_map(|i| {
+                let a = i.address?;
+                a.as_sockaddr_in()
+                    .map(|v4| IpAddr::V4(v4.ip()))
+                    .or_else(|| a.as_sockaddr_in6().map(|v6| IpAddr::V6(v6.ip())))
+            })
+            .collect())
+    }
 }
 
 #[cfg(test)]
