@@ -372,11 +372,13 @@ test('C23: a mouse move that does not move the pointer keeps the keyboard choice
   await addServerForm(page);
   await search(page);
   const second = list(page).getByRole('option').nth(1);
-  await second.hover();
   const at = await second.evaluate((el) => {
     const r = el.getBoundingClientRect();
     return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
   });
+  // A real move onto the second option, at whole-pixel coordinates.
+  await page.mouse.move(at.x - 3, at.y);
+  await page.mouse.move(at.x, at.y);
   for (let i = 0; i < 20; i++) await page.keyboard.press('ArrowDown');
   const want = await box(page).getAttribute('aria-activedescendant');
   // After a scroll, Chrome sends a mouse move at the same point, now over a
@@ -388,10 +390,12 @@ test('C23: a mouse move that does not move the pointer keeps the keyboard choice
   await expect(box(page)).toHaveAttribute('aria-activedescendant', want);
 });
 
-test('C24: each option is named by its server name alone', async ({ page }) => {
+test('C24: each option is named starting with its server name, and the box is not spellchecked', async ({ page }) => {
   await addServerForm(page);
   await search(page);
-  await expect(list(page).getByRole('option', { name: 'server-15', exact: true })).toHaveCount(1);
+  // The whole visible text is the name (WCAG 2.5.3, label in name), and the
+  // server name comes first.
+  await expect(list(page).getByRole('option', { name: /^server-15 / })).toHaveCount(1);
   await expect(box(page)).toHaveAttribute('spellcheck', 'false');
 });
 

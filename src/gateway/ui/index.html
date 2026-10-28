@@ -363,7 +363,7 @@ tr:hover td { background: var(--bg3); }
             <label for="reg-search-input">Search Registry</label>
             <div class="reg-search-wrap">
               <input type="text" id="reg-search-input" placeholder="Search 48+ built-in servers..."
-                role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="reg-dropdown"
+                role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="reg-dropdown" spellcheck="false"
                 autocomplete="off" oninput="onRegSearch(this.value)" onfocus="onRegSearch(this.value)">
               <div id="reg-dropdown" class="reg-dropdown" role="listbox" aria-label="Registry servers" style="display:none"></div>
             </div>
@@ -1158,6 +1158,7 @@ function setRegistryListOpen(open) {
 // Make option `i` the active one and keep it in view; -1 (or an index with
 // no option) clears it.
 function setRegistryActive(i) {
+  if (i >= 0 && i === regActive) return;
   const prev = document.querySelector('#reg-dropdown [aria-selected="true"]');
   if (prev) prev.setAttribute('aria-selected', 'false');
   const opt = i >= 0 ? document.getElementById('reg-opt-' + i) : null;
@@ -1272,7 +1273,12 @@ document.getElementById('reg-dropdown').addEventListener('mousedown', (e) => {
 // The option the pointer moves onto is the active one, so Enter and a click
 // agree. Movement only: a list rebuilt under a resting pointer keeps the
 // keyboard's choice.
+// A browser also sends a mouse move after a scroll, at the same point: that
+// is not movement.
+let regPointer = null;
 document.getElementById('reg-dropdown').addEventListener('mousemove', (e) => {
+  if (regPointer && regPointer.x === e.clientX && regPointer.y === e.clientY) return;
+  regPointer = { x: e.clientX, y: e.clientY };
   const opt = e.target.closest('.reg-opt');
   if (opt && Number(opt.dataset.value) !== regActive) setRegistryActive(Number(opt.dataset.value));
 });
