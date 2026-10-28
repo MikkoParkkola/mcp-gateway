@@ -159,10 +159,10 @@ pub struct CapabilityBackend {
     /// Capability names currently quarantined by a rug-pull detection event.
     ///
     /// Populated by the file watcher when an on-disk YAML's `sha256:` pin no
-    /// longer matches its content. Quarantined names are removed from the
-    /// active tool set and will NOT be automatically re-loaded by `reload()`
-    /// until the operator clears the state (e.g. by re-running
-    /// `mcp-gateway cap pin` after reviewing the diff).
+    /// longer matches its content. A quarantined capability is removed from
+    /// the active tool set. This map does not keep it out: `reload()` never
+    /// reads it, and the loader's own pin check is what skips the file until
+    /// its pin matches again (e.g. after `mcp-gateway cap pin`).
     rug_pull_state: RwLock<HashMap<String, RugPullRecord>>,
     /// Declares whether the owning gateway serves more than one principal
     /// (ADR-008 INV-2 parity, MIK-6751). Mirrors `MetaMcp::multi_user`;
