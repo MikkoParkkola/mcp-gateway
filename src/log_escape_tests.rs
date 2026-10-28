@@ -201,9 +201,25 @@ where
     buf.text()
 }
 
+/// A clean error with a source.
+#[derive(Debug)]
+struct Refused(std::io::Error);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("upstream refused \"read\" (code 7)")
+    }
+}
+
+impl std::error::Error for Refused {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
 /// A normal event: every field kind, an error with a source, a span field.
 fn normal_event() {
-    let e = Chained(std::io::Error::other("connection reset"));
+    let e = Refused(std::io::Error::other("connection reset"));
     let span = tracing::info_span!("call", server = "alpha", attempt = 2_u32);
     span.in_scope(|| {
         tracing::warn!(
