@@ -600,3 +600,20 @@ async fn a_bridged_retry_refused_before_dispatch_frees_the_idempotency_key() {
 
 #[cfg(test)]
 mod resolution;
+
+/// The real mint attaches the per-send check, and the credential it lends
+/// carries it: a required per-user slot refuses a loan without one, so a mint
+/// that stopped attaching it would leave every per-user send refused. The
+/// check passes for a freshly minted credential.
+#[tokio::test]
+async fn the_mint_attaches_the_send_check_to_what_it_lends() {
+    let m = meta_with_strategy();
+    let cred = m
+        .resolve_caller_credential("memory", &idp_cfg(true), Some(&identity()))
+        .await
+        .expect("mint ok");
+    assert!(!cred.headers.is_empty(), "premise: a credential was minted");
+    let lent = cred.lent();
+    let check = lent.check.expect("the mint attaches a send check");
+    assert_eq!(check().await, Ok(()), "a fresh credential passes its check");
+}
