@@ -566,22 +566,17 @@ test('F20c a Retry that sets its header and then fails leaves the header as it w
   await expect(page.locator('.head .plate')).toHaveText('Shown');
 });
 
-test('F20d a setter kept across a sign-in as another identity changes nothing', async ({ page }) => {
-  const KEY = 'mcpg_fixture_key_0123456789';
-  await page.route('**/ui/api/status', (route) => {
-    const auth = route.request().headers().authorization ?? '';
-    return route.fulfill({ json: { auth: { enabled: true, signed_in: auth === `Bearer ${KEY}`, admin: false } } });
-  });
+test('F20d a setter kept past a sign-out changes nothing (the identity changes with no re-render)', async ({ page }) => {
+  await page.route('**/ui/api/status', (route) => route.fulfill({ json: { auth: { enabled: true, signed_in: true, admin: true } } }));
+  await page.route('**/dashboard/logout', (route) => route.fulfill({ status: 204 }));
   await withFixturePages(page, { probes: true });
   await page.goto('/ui/overview/status');
   await expect(page.locator('#content')).toContainText('overview - status');
-  await page.evaluate(() => { window.keptSetter = window.overviewHeader; window.keptBody = document.querySelector('#content > .body'); });
-  await page.locator('#signin-key').fill(KEY);
-  await page.keyboard.press('Enter');
-  await expect(page.locator('#signin')).toBeHidden();
-  await page.waitForFunction(() => window.overviewHeader !== window.keptSetter);
-  // Put the old container back in the page, so only the setter's own guard can refuse it.
-  await page.evaluate(() => { document.getElementById('content').append(window.keptBody); });
+  await page.evaluate(() => { window.keptSetter = window.overviewHeader; });
+  // Sign-out moves to another identity (none) without drawing the page again: only the epoch tells.
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.locator('#signin')).toBeVisible();
+  expect(await page.evaluate(() => window.overviewHeader === window.keptSetter), 'no re-render happened').toBe(true);
   await page.evaluate(() => window.keptSetter({ title: 'Stale', subtitle: 'stale' }));
   await expect(page.locator('.head .plate')).toHaveText('Overview');
   await expect(page.locator('.head .sub')).toHaveText('24 of 28 servers ready.');
