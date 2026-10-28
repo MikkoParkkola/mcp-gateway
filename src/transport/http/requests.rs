@@ -12,6 +12,7 @@ use serde_json::Value;
 use tracing::{debug, info};
 use url::Url;
 
+use super::super::lender::send_refused;
 use super::super::sanitize_url_for_diagnostics;
 use super::cancel_guard::CancelOnDrop;
 use super::extra_headers::merge_extra_headers;
@@ -220,16 +221,12 @@ impl HttpTransport {
         }
     }
 
-    /// The headers a lent-only slot's send carries: the loan the call's own
-    /// credential headers select, after every loan matching them passes its
-    /// check. A call with no credential headers (a start the slot runs for
-    /// its dispatch) sends as the starter's loan. Snapshots are owned, so no
-    /// lock is held across a check.
+    /// The headers a lent-only slot's send carries, from the slot's lender
+    /// ([`Lender::lent_for`](crate::transport::Lender::lent_for)).
     ///
     /// # Errors
     ///
-    /// A refusal when no loan matches, a matching loan has no check or was
-    /// refused, or a check refuses now. One refusal refuses the send.
+    /// A refusal when the slot has no lender or the lender refuses the call.
     pub(super) async fn lent_for(
         &self,
         call: &[(String, String)],
@@ -237,32 +234,7 @@ impl HttpTransport {
         let Some(lender) = self.lender.get() else {
             return Err(send_refused("this slot has no lender"));
         };
-        let has_credential = call.iter().any(|(name, _)| !is_param_header(name));
-        let loans = if has_credential {
-            lender.matching_all(call)
-        } else {
-            lender.starter().into_iter().collect()
-        };
-        let Some(first) = loans.first() else {
-            return Err(send_refused(if has_credential {
-                "the call's credential is not lent on this slot"
-            } else {
-                "no calling subscriber's credential is lent"
-            }));
-        };
-        for loan in &loans {
-            if loan.refused.is_some() {
-                return Err(send_refused("this credential was refused"));
-            }
-            let Some(check) = loan.check.as_ref() else {
-                return Err(send_refused("no recheck is attached to this credential"));
-            };
-            if let Err(refusal) = check().await {
-                lender.refuse(loan.id, refusal);
-                return Err(send_refused("this credential's recheck refused it"));
-            }
-        }
-        Ok(first.headers.to_vec())
+        lender.lent_for(call).await
     }
 
     /// Get OAuth access token if OAuth is configured
@@ -787,15 +759,6 @@ async fn detach_token_step(
     }));
     task.await
         .map_err(|e| Error::OAuth(format!("the detached token step failed: {e}")))?
-}
-
-/// The refusal of a lent-only send: nothing reached the wire.
-fn send_refused(why: &str) -> Error {
-    Error::Forbidden {
-        code: -32001,
-        status: 403,
-        message: format!("per-user send refused: {why}"),
-    }
 }
 
 /// Whose credential a request's headers carry.

@@ -16,6 +16,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use futures::future::BoxFuture;
 use zeroize::Zeroizing;
 
+use crate::Error;
+use crate::Result;
+use crate::protocol::param_headers::is_param_header;
+
 /// Why a lent credential's per-send check refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Refusal {
@@ -189,6 +193,49 @@ impl Lender {
             .map(Self::snapshot)
     }
 
+    /// The headers a lent-only send carries: the loan the call's own
+    /// credential headers select, after every loan matching them passes its
+    /// check. A call with no credential headers (a start the slot runs for its
+    /// dispatch) sends as the starter's loan. Snapshots are owned, so no lock
+    /// is held across a check. Every transport that sends on a lent-only slot
+    /// picks its loan here.
+    ///
+    /// # Errors
+    ///
+    /// A refusal when no loan matches, a matching loan has no check or was
+    /// refused, or a check refuses now. One refusal refuses the send.
+    pub(crate) async fn lent_for(
+        &self,
+        call: &[(String, String)],
+    ) -> Result<Vec<(String, String)>> {
+        let has_credential = call.iter().any(|(name, _)| !is_param_header(name));
+        let loans = if has_credential {
+            self.matching_all(call)
+        } else {
+            self.starter().into_iter().collect()
+        };
+        let Some(first) = loans.first() else {
+            return Err(send_refused(if has_credential {
+                "the call's credential is not lent on this slot"
+            } else {
+                "no calling subscriber's credential is lent"
+            }));
+        };
+        for loan in &loans {
+            if loan.refused.is_some() {
+                return Err(send_refused("this credential was refused"));
+            }
+            let Some(check) = loan.check.as_ref() else {
+                return Err(send_refused("no recheck is attached to this credential"));
+            };
+            if let Err(refusal) = check().await {
+                self.refuse(loan.id, refusal);
+                return Err(send_refused("this credential's recheck refused it"));
+            }
+        }
+        Ok(first.headers.to_vec())
+    }
+
     fn snapshot(lent: &Lent) -> Snapshot {
         Snapshot {
             id: lent.id,
@@ -223,6 +270,15 @@ impl Lender {
     /// Set what a definitive refusal runs: the owning slot's eviction.
     pub(crate) fn on_definitive_refusal(&self, evict: Box<dyn Fn() + Send + Sync>) {
         *self.evict.lock() = Some(evict);
+    }
+}
+
+/// The refusal of a lent-only send: nothing reached the wire.
+pub(crate) fn send_refused(why: &str) -> Error {
+    Error::Forbidden {
+        code: -32001,
+        status: 403,
+        message: format!("per-user send refused: {why}"),
     }
 }
 
