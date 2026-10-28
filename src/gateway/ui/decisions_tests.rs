@@ -199,10 +199,12 @@ async fn a_request_whose_refusals_left_the_log_is_closed() {
         ),
     );
 
+    // Both are open (the hand-off is asynchronous) before the edge is read.
+    served_when(&state, |body| scope_len(body) == 2).await;
     let decisions = state.meta_mcp.decisions().expect("attached");
     tick(&state.meta_mcp, decisions, true);
 
-    let body = served_when(&state, |_| true).await;
+    let body = served_when(&state, |body| scope_len(body) == 1).await;
     let scope = body["decisions"][0]["scope"]
         .as_array()
         .cloned()
