@@ -118,6 +118,8 @@ mod direct_guards_tests;
 #[cfg(test)]
 mod direct_list_scope_tests;
 #[cfg(test)]
+mod direct_log_escape_tests;
+#[cfg(test)]
 mod direct_modern_shape_tests;
 #[cfg(test)]
 mod direct_nonce_witness_tests;
