@@ -9,11 +9,10 @@
 use serde_json::Value;
 
 use crate::gateway::router::route_matrix_driver_tests::response::{
-    BackendAnswer, CHAIN_NONCE, DELIVERED_PROSE, HttpRoute, LEAKED_LINE, STUFFED_SIGNATURE,
-    chained_public_read, node_verifies, planted_credential, read_then_relay,
-    read_then_relay_rebuilt, read_then_relay_signature_stuffed, signed_call,
-    signed_legacy_then_modern_replay, signed_recorded_call, signed_redacted_call, signed_replay,
-    trust_set,
+    BackendAnswer, CHAIN_NONCE, DELIVERED_PROSE, HttpRoute, LEAKED_LINE, chained_public_read,
+    node_verifies, planted_credential, read_then_relay, read_then_relay_own_signature,
+    read_then_relay_rebuilt, signed_call, signed_legacy_then_modern_replay, signed_recorded_call,
+    signed_redacted_call, signed_replay, trust_set,
 };
 use crate::protocol::meta::Era;
 use crate::trust::provenance_public::{VerifyRefusal, VerifyStatus, verify_public};
@@ -245,23 +244,22 @@ async fn r_rebuild_relay_receipt_reflects_the_delivered_bytes() {
     }
 }
 
-/// R-SIGNREBUILD `sign_precedes_relay_rebuild` (`Sign` < `RelayRebuild`;
-/// `Mcp`, `Direct` × `Fresh` × `Modern`). The backend's answer carries its own
-/// `_signature` prose, which the gateway's message signature overwrites.
-/// Signing notes `_signature` as a gateway write by the digest of the value it
-/// wrote (`meta_mcp/signing.rs:772`), and the rebuild strips only that, so a
-/// rebuild after signing digests the delivered answer: relaying the delivered
-/// prose is refused and relaying the overwritten stuffing runs. A rebuild
-/// before signing has nothing noted, keeps the backend's `_signature` text,
-/// and would refuse the stuffing the client never received.
+/// R-OWNSIG (`Mcp`, `Direct` × `Fresh` × `Modern`): the relay receipt leaves
+/// out the gateway's own message signature. Signing notes `_signature` as a
+/// gateway write (`meta_mcp/signing.rs`, the note after the signature), and
+/// the rebuild strips what was noted: relaying the delivered prose is refused,
+/// and relaying the signature's `sig`, which the backend never wrote, runs.
+/// Without the note, the receipt would hold the gateway's own `sig`. The
+/// `Sign` < `RelayRebuild` order is invisible by outcome
+/// (`IngressStripsBackendSignature`).
 #[tokio::test]
-async fn r_signrebuild_sign_precedes_relay_rebuild() {
+async fn r_ownsig_the_gateway_signature_is_not_receipted() {
     for route in [HttpRoute::Mcp, HttpRoute::Direct] {
-        let row = format!("R-SIGNREBUILD {route:?}");
-        let seen = read_then_relay_signature_stuffed(route).await;
+        let row = format!("R-OWNSIG {route:?}");
+        let seen = read_then_relay_own_signature(route).await;
         let read = seen.read.to_string();
         assert!(
-            read.contains(DELIVERED_PROSE) && !read.contains(STUFFED_SIGNATURE),
+            read.contains(DELIVERED_PROSE) && read.contains("\"_signature\""),
             "{row}: the read delivers the prose under the gateway's own signature: {read}"
         );
         assert_eq!(
@@ -271,7 +269,7 @@ async fn r_signrebuild_sign_precedes_relay_rebuild() {
         );
         assert!(
             seen.stuffing.get("error").is_none(),
-            "{row}: the overwritten _signature text is not receipted, so its send runs: {}",
+            "{row}: the gateway's own signature is not receipted, so its send runs: {}",
             seen.stuffing
         );
     }

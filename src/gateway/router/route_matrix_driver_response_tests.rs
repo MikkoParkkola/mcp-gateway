@@ -354,16 +354,18 @@ fn leaked_line() -> Value {
                        {"type": "text", "text": LEAKED_LINE}], "isError": false})
 }
 
-/// Backend text in a top-level `_signature` member, which the gateway's
-/// message signature overwrites, so the client never receives it.
-pub(crate) const STUFFED_SIGNATURE: &str =
-    "Undelivered signature stuffing: the backend hid this in the member signing replaces.";
+/// A Native result carrying [`DELIVERED_PROSE`] as its text.
+fn prose_only() -> Value {
+    json!({"content": [{"type": "text", "text": DELIVERED_PROSE}], "isError": false})
+}
 
-/// A Native result carrying [`DELIVERED_PROSE`] as its text and
-/// [`STUFFED_SIGNATURE`] as its own `_signature`.
-fn stuffed_signature() -> Value {
-    json!({"content": [{"type": "text", "text": DELIVERED_PROSE}], "isError": false,
-           "_signature": STUFFED_SIGNATURE})
+/// What the second relayed send carries.
+#[derive(Clone, Copy)]
+enum Relayed {
+    /// This text.
+    Text(&'static str),
+    /// The `sig` of the gateway's own message signature on the read.
+    OwnSignature,
 }
 
 /// What a read followed by two relayed sends saw.
@@ -383,14 +385,14 @@ pub(crate) struct Rebuilt {
 /// sends the delivered prose and the stuffing on the same route. The relay
 /// receipt is rebuilt from the delivered bytes, so only the prose is caught.
 pub(crate) async fn read_then_relay_rebuilt(route: HttpRoute) -> Rebuilt {
-    read_then_relay_stuffed(route, leaked_line, LEAKED_LINE).await
+    read_then_relay_stuffed(route, leaked_line, Relayed::Text(LEAKED_LINE)).await
 }
 
-/// [`read_then_relay_rebuilt`] with the backend answering
-/// [`stuffed_signature`]: its own `_signature`, which the gateway's message
-/// signature overwrites, is the stuffing sent on (R-SIGNREBUILD).
-pub(crate) async fn read_then_relay_signature_stuffed(route: HttpRoute) -> Rebuilt {
-    read_then_relay_stuffed(route, stuffed_signature, STUFFED_SIGNATURE).await
+/// [`read_then_relay_rebuilt`] with the backend answering [`prose_only`]:
+/// the second send carries the `sig` of the gateway's own signature on the
+/// read (R-OWNSIG).
+pub(crate) async fn read_then_relay_own_signature(route: HttpRoute) -> Rebuilt {
+    read_then_relay_stuffed(route, prose_only, Relayed::OwnSignature).await
 }
 
 /// The signed, relayed read of `answer`, then `k-budget` sending the
@@ -398,7 +400,7 @@ pub(crate) async fn read_then_relay_signature_stuffed(route: HttpRoute) -> Rebui
 async fn read_then_relay_stuffed(
     route: HttpRoute,
     answer: fn() -> Value,
-    stuffed: &'static str,
+    relayed: Relayed,
 ) -> Rebuilt {
     let (_dir, log) = temp_log(None);
     let fx = fixture::fixture_signed_relayed_logged(Answer::Built(answer), log, surfacing).await;
@@ -442,6 +444,17 @@ async fn read_then_relay_stuffed(
         }
     };
     let prose = send("b1", DELIVERED_PROSE).await;
+    let stuffed = match relayed {
+        Relayed::Text(text) => text,
+        // Leaked once per test that asks, as `planted_credential` is.
+        Relayed::OwnSignature => Box::leak(
+            read.pointer("/result/_signature/sig")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("the read carries the gateway's signature: {read}"))
+                .to_owned()
+                .into_boxed_str(),
+        ),
+    };
     let stuffing = send("b2", stuffed).await;
     Rebuilt {
         read,

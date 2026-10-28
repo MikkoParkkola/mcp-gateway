@@ -128,6 +128,12 @@ pub(crate) enum Invisible {
     /// too. So a replay's clamp changes nothing before the fresh link it mints (the stored link
     /// is stripped: "a replay mints its own", `meta_mcp/admission.rs:147`).
     StoredBytesAlreadyClamped,
+    /// Ingress removes a backend's own `_signature` (a gateway-only member),
+    /// so the message signature overwrites nothing a receipt could hold, and
+    /// a rebuild before or after signing digests the same backend text. The
+    /// rebuild still leaves out the gateway's own signature, which signing
+    /// notes: `rows::r_ownsig_the_gateway_signature_is_not_receipted`.
+    IngressStripsBackendSignature,
 }
 
 /// Why a cell cannot occur.
@@ -302,8 +308,8 @@ pub(crate) const fn expect(
     pair: RespPair,
 ) -> RespExpect {
     use Invisible::{
-        JudgeOnlyReplaces, JudgeReadsNothingSigningAdds, SealWritesOnlyExcludedMeta,
-        StampIgnoresShapedMembers, StoredBytesAlreadyClamped,
+        IngressStripsBackendSignature, JudgeOnlyReplaces, JudgeReadsNothingSigningAdds,
+        SealWritesOnlyExcludedMeta, StampIgnoresShapedMembers, StoredBytesAlreadyClamped,
     };
     use RespCase::{CacheHit, Fresh, IdempotentReplay, Task as TaskCase};
     use RespExpect::{ExpectedGap, NotApplicable, OrderInvisibleByOutcome, Ordered};
@@ -359,12 +365,13 @@ pub(crate) const fn expect(
         (_, _, _, StampShape) => OrderInvisibleByOutcome(StampIgnoresShapedMembers),
         (_, _, _, LinkSeal) => OrderInvisibleByOutcome(SealWritesOnlyExcludedMeta),
         (_, _, _, SignJudge) => OrderInvisibleByOutcome(JudgeReadsNothingSigningAdds),
+        (_, _, _, SignRebuild) => OrderInvisibleByOutcome(IngressStripsBackendSignature),
         (
             _,
             _,
             _,
             ShapeSeal | FirewallSeal | StampSeal | SealSign | SignRecord | JudgeRecord
-            | RecordCommit | JudgeCommit | SignRebuild | FirewallStamp,
+            | RecordCommit | JudgeCommit | FirewallStamp,
         ) => Ordered,
     }
 }

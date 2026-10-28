@@ -88,7 +88,7 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
     use RespCase::{CacheHit, Fresh, IdempotentReplay, Task as TaskCase};
     use RespPair::{
         FirewallSeal, FirewallStamp, JudgeCommit, JudgeRecord, RecordCommit, SealSign, ShapeSeal,
-        SignRebuild, SignRecord, StampSeal,
+        SignRecord, StampSeal,
     };
     use RespRoute::{Direct, Mcp, Stdio, Task};
     if !stated(expect(route, case, era, pair)) {
@@ -133,9 +133,6 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
         (Mcp | Direct, Fresh, Era::Modern, SealSign) => {
             Driven::Row("rows::r_sign_seal_precedes_sign")
         }
-        (Mcp | Direct, Fresh, Era::Modern, SignRebuild) => {
-            Driven::Row("rows::r_signrebuild_sign_precedes_relay_rebuild")
-        }
         (Mcp, Fresh, Era::Modern, RecordCommit) => {
             Driven::Row("rows::r_commit_delivery_record_precedes_relay_commit")
         }
@@ -162,8 +159,8 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
 /// rows of its own.
 const fn stdio_fresh_row(era: Era, pair: RespPair) -> Option<Driven> {
     use RespPair::{
-        FirewallSeal, JudgeCommit, JudgeRecord, RecordCommit, SealSign, ShapeSeal, SignRebuild,
-        SignRecord, StampSeal,
+        FirewallSeal, JudgeCommit, JudgeRecord, RecordCommit, SealSign, ShapeSeal, SignRecord,
+        StampSeal,
     };
     Some(match (era, pair) {
         (Era::Modern, ShapeSeal) => Driven::Row("rows::stdio::r_shape_stdio_shape_precedes_seal"),
@@ -189,15 +186,6 @@ const fn stdio_fresh_row(era: Era, pair: RespPair) -> Option<Driven> {
         (Era::Legacy, RecordCommit) => Driven::Row(
             "server::signing_allocation_tests::collusion_stdio::stdio_audit_withheld_read_records_no_receipt",
         ),
-        // Stdio signs inside finalize_content and rebuilds after it, through
-        // the same rebuild the HTTP row drives.
-        (Era::Legacy, SignRebuild) => Driven::Shared {
-            pin: "response::source_order::stdio_rebuilds_after_finalize_content",
-            rows: &[
-                "response::source_order::stdio_finalizes_through_finalize_routed",
-                "rows::r_signrebuild_sign_precedes_relay_rebuild",
-            ],
-        },
         _ => return None,
     })
 }
@@ -220,6 +208,9 @@ const fn invisible_pins(reason: Invisible) -> &'static [&'static str] {
     match reason {
         Invisible::StoredBytesAlreadyClamped => {
             &["protocol::cacheable::clamp_tests::every_non_private_scope_is_delivered_as_private"]
+        }
+        Invisible::IngressStripsBackendSignature => {
+            &["rows::r_ownsig_the_gateway_signature_is_not_receipted"]
         }
         Invisible::JudgeOnlyReplaces
         | Invisible::StampIgnoresShapedMembers
