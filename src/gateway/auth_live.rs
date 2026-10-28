@@ -57,6 +57,7 @@ impl HeldCredential {
     /// A digest of only the credential that decides the request: the bearer
     /// when an `Authorization` header is present, else the session. A cookie
     /// the middleware ignores beside a bearer never changes it.
+    #[cfg(feature = "webui")]
     pub(crate) fn deciding_digest(&self) -> String {
         let deciding = if self.authorization_present {
             self.bearer.as_ref()

@@ -171,7 +171,9 @@ async fn collect(merge: &mut LogMerge<Fake>, want: usize) -> Vec<Out> {
         let batch = tokio::time::timeout(std::time::Duration::from_secs(30), merge.next())
             .await
             .unwrap_or_default();
-        batch.iter().for_each(|out| merge.ack(out));
+        for out in &batch {
+            merge.ack(out);
+        }
         all.extend(batch);
     }
     all
