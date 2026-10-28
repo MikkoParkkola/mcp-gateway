@@ -29,6 +29,7 @@ impl Drop for OnClose {
 /// and lets a test push a frame down the open stream of either token.
 struct TwoTokenPeer {
     url: String,
+    wire: Wire,
     streams: tokio::sync::mpsc::UnboundedReceiver<Stream>,
     pushes: Arc<std::sync::Mutex<[Option<tokio::sync::mpsc::UnboundedSender<String>>; 2]>>,
 }
@@ -53,12 +54,58 @@ impl TwoTokenPeer {
     }
 }
 
+/// How a two-token peer talks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Wire {
+    /// Legacy Streamable HTTP: `initialize`, then a session `GET` stream.
+    Legacy,
+    /// Modern Streamable HTTP: `server/discover`, then a
+    /// `subscriptions/listen` stream.
+    Modern,
+    /// The HTTP+SSE handshake: a `GET` stream that names where to post, and
+    /// carries every answer.
+    SseHandshake,
+}
+
 async fn two_token_peer(tokens: [String; 2]) -> TwoTokenPeer {
+    two_token_peer_in(Wire::Legacy, tokens).await
+}
+
+/// The peer's half of an open stream for token `index`: registers its push
+/// sender, reports it opened, and reports it closed once the body drops.
+/// `first` is written before any pushed frame.
+fn open_stream(
+    report: &tokio::sync::mpsc::UnboundedSender<Stream>,
+    pushes: &std::sync::Mutex<[Option<tokio::sync::mpsc::UnboundedSender<String>>; 2]>,
+    index: usize,
+    first: String,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let (push, mut frames) = tokio::sync::mpsc::unbounded_channel::<String>();
+    pushes.lock().expect("pushes")[index] = Some(push);
+    let _ = report.send(Stream::Opened(index));
+    let closed = OnClose(report.clone(), index);
+    let body = async_stream::stream! {
+        let _closed = closed;
+        yield Ok::<_, std::io::Error>(first);
+        while let Some(frame) = frames.recv().await {
+            yield Ok(frame);
+        }
+    };
+    (
+        [("content-type", "text/event-stream")],
+        axum::body::Body::from_stream(body),
+    )
+        .into_response()
+}
+
+async fn two_token_peer_in(wire: Wire, tokens: [String; 2]) -> TwoTokenPeer {
     use axum::http::{HeaderMap, StatusCode};
     use axum::response::IntoResponse;
     let (report, streams) = tokio::sync::mpsc::unbounded_channel();
     let pushes: TwoTokenPeer = TwoTokenPeer {
         url: String::new(),
+        wire,
         streams,
         pushes: Arc::default(),
     };
@@ -68,45 +115,61 @@ async fn two_token_peer(tokens: [String; 2]) -> TwoTokenPeer {
         tokens.iter().position(|t| Some(t.as_str()) == presented)
     };
     let get_which = which.clone();
-    let get_pushes = Arc::clone(&pushes.pushes);
+    let (get_report, get_pushes) = (report.clone(), Arc::clone(&pushes.pushes));
+    let post_pushes = Arc::clone(&pushes.pushes);
     let app = axum::Router::new().route(
         "/mcp",
         axum::routing::get(move |headers: HeaderMap| async move {
             let Some(index) = get_which(&headers) else {
                 return StatusCode::UNAUTHORIZED.into_response();
             };
-            let (push, mut frames) = tokio::sync::mpsc::unbounded_channel::<String>();
-            get_pushes.lock().expect("pushes")[index] = Some(push);
-            let _ = report.send(Stream::Opened(index));
-            let closed = OnClose(report.clone(), index);
-            let body = async_stream::stream! {
-                let _closed = closed;
-                yield Ok::<_, std::io::Error>(": open\n\n".to_owned());
-                while let Some(frame) = frames.recv().await {
-                    yield Ok(frame);
-                }
+            let first = if wire == Wire::SseHandshake {
+                "event: endpoint\ndata: /mcp\n\n"
+            } else {
+                ": open\n\n"
             };
-            (
-                [("content-type", "text/event-stream")],
-                axum::body::Body::from_stream(body),
-            )
-                .into_response()
+            open_stream(&get_report, &get_pushes, index, first.to_owned())
         })
         .post(
             move |headers: HeaderMap, axum::Json(frame): axum::Json<serde_json::Value>| async move {
-                if which(&headers).is_none() {
+                let Some(index) = which(&headers) else {
                     return StatusCode::UNAUTHORIZED.into_response();
-                }
+                };
                 let method = frame["method"].as_str().unwrap_or_default().to_owned();
                 let Some(id) = frame.get("id") else {
                     return StatusCode::ACCEPTED.into_response();
                 };
-                let answer = if method == "server/discover" {
-                    json!({"jsonrpc": "2.0", "id": id,
-                        "error": {"code": -32601, "message": "not found"}})
-                } else {
-                    json!({"jsonrpc": "2.0", "id": id, "result": {}})
+                let answer = match (wire, method.as_str()) {
+                    (Wire::Modern, "server/discover") => json!({"jsonrpc": "2.0", "id": id,
+                        "result": {"resultType": "complete",
+                            "supportedVersions": ["2026-07-28"],
+                            "capabilities": {"tools": {"listChanged": true}},
+                            "serverInfo": {"name": "peer", "version": "0"}}}),
+                    (Wire::Modern, "subscriptions/listen") => {
+                        let ack = json!({"jsonrpc": "2.0",
+                            "method": "notifications/subscriptions/acknowledged",
+                            "params": {"notifications": frame["params"]["notifications"],
+                                "_meta": {"io.modelcontextprotocol/subscriptionId": id}}});
+                        let first = format!("event: message\ndata: {ack}\n\n");
+                        return open_stream(&report, &post_pushes, index, first);
+                    }
+                    (_, "server/discover") => json!({"jsonrpc": "2.0", "id": id,
+                        "error": {"code": -32601, "message": "not found"}}),
+                    _ => json!({"jsonrpc": "2.0", "id": id, "result": {}}),
                 };
+                if wire == Wire::SseHandshake {
+                    // Answered on the token's handshake stream, never inline.
+                    let frame = format!("event: message\ndata: {answer}\n\n");
+                    let sent = post_pushes.lock().expect("pushes")[index]
+                        .as_ref()
+                        .is_some_and(|push| push.send(frame).is_ok());
+                    return if sent {
+                        StatusCode::ACCEPTED
+                    } else {
+                        StatusCode::NOT_FOUND
+                    }
+                    .into_response();
+                }
                 ([("mcp-session-id", "s-1")], axum::Json(answer)).into_response()
             },
         ),
@@ -181,10 +244,11 @@ async fn leased_listener(
     first: Zeroizing<String>,
 ) -> (Fixture, String, ListenersAndBackend) {
     let f = fixture_with(&format!(
-        "backends:\n  pt:\n    http_url: {}\n    streamable_http: true\n    \
+        "backends:\n  pt:\n    http_url: {}\n    streamable_http: {}\n    \
          identity_propagation:\n      \
          strategy: passthrough\n      audience: https://pt\n      session_mode: per_user\n",
-        peer.url
+        peer.url,
+        peer.wire != Wire::SseHandshake,
     ));
     let handle = subscribe(&f, "p", "pt", "p");
     let listening = parked_listener(&f).await;
@@ -215,9 +279,15 @@ async fn lease_as(f: &Fixture, handle: &str, token: Zeroizing<String>) {
 /// session, so they go with the old one.
 #[tokio::test]
 async fn lease_t2b_a_replace_reopens_the_session_under_the_new_token() {
+    a_replace_reopens_under_the_new_token_on(Wire::Legacy).await;
+}
+
+/// The replace on a peer that talks `wire`: the old token's stream closes
+/// and one opens under the new token.
+async fn a_replace_reopens_under_the_new_token_on(wire: Wire) {
     let (first, second) = (token(Some(in_an_hour())), token(Some(in_an_hour() + 60)));
     assert_ne!(*first, *second, "premise: two different tokens");
-    let mut peer = two_token_peer([first.to_string(), second.to_string()]).await;
+    let mut peer = two_token_peer_in(wire, [first.to_string(), second.to_string()]).await;
     let (f, handle, _listening) = leased_listener(&mut peer, first).await;
     lease_as(&f, &handle, second).await;
     // Two connections, so the peer may see the close and the open in either
@@ -227,8 +297,20 @@ async fn lease_t2b_a_replace_reopens_the_session_under_the_new_token() {
     assert_eq!(
         after,
         [Some(Stream::Closed(0)), Some(Stream::Opened(1))],
-        "the replace closes the old session and reopens under the new token"
+        "{wire:?}: the replace closes the old session and reopens under the new token"
     );
+}
+
+/// The same replace on modern Streamable HTTP and on the HTTP+SSE
+/// handshake, the other two ways a listener reaches its backend.
+#[tokio::test]
+async fn a_replace_reopens_a_modern_listen_stream_under_the_new_token() {
+    a_replace_reopens_under_the_new_token_on(Wire::Modern).await;
+}
+
+#[tokio::test]
+async fn a_replace_reopens_an_sse_handshake_under_the_new_token() {
+    a_replace_reopens_under_the_new_token_on(Wire::SseHandshake).await;
 }
 
 /// LEASE-T2b, scope: a replace may narrow what the subscriber granted (a
