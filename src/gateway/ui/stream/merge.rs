@@ -92,8 +92,11 @@ pub(super) struct LagWindow {
 impl LagWindow {
     /// Record a recovery; `true` when it is more than [`MAX_LAG_RECOVERIES`]
     /// inside [`LAG_WINDOW`].
-    pub(super) fn record(&mut self, _now: Instant) -> bool {
-        false
+    pub(super) fn record(&mut self, now: Instant) -> bool {
+        self.at
+            .retain(|t| now.saturating_duration_since(*t) < LAG_WINDOW);
+        self.at.push(now);
+        self.at.len() > MAX_LAG_RECOVERIES
     }
 }
 
@@ -104,23 +107,31 @@ pub(super) struct LogMerge<S: LogSource> {
     rx: broadcast::Receiver<Appended>,
     delivered: LogCursor,
     lag_recoveries: usize,
-    started: bool,
-    resume: Option<LogCursor>,
+    /// `Some` while paging: where the next page starts. Never cut short.
+    scan: Option<LogCursor>,
 }
 
 impl<S: LogSource> LogMerge<S> {
-    /// Subscribe now. `resume` is the cursor a reconnect carried; `None` is a
-    /// fresh connect, which starts at the head.
-    pub(super) fn new(source: Arc<S>, access: S::Access, resume: Option<LogCursor>) -> Self {
+    /// Subscribe, then (for a fresh connect) read the head, so a row appended
+    /// after this returns is delivered. `resume` is the position a reconnect
+    /// carried; `None` is a fresh connect, which starts at the head.
+    pub(super) async fn connect(
+        source: Arc<S>,
+        access: S::Access,
+        resume: Option<LogCursor>,
+    ) -> Self {
         let rx = source.subscribe();
+        let delivered = match &resume {
+            Some(from) => from.clone(),
+            None => source.head(&access).await,
+        };
         Self {
             source,
             access,
             rx,
-            delivered: LogCursor::default(),
+            delivered,
             lag_recoveries: 0,
-            started: false,
-            resume,
+            scan: resume,
         }
     }
 
@@ -134,16 +145,77 @@ impl<S: LogSource> LogMerge<S> {
         self.lag_recoveries
     }
 
-    /// The next batch, in order: the catch-up on the first call, then live
-    /// rows. Empty only when the source is closed.
+    /// The next batch, in order: catch-up pages first, then live rows. Empty
+    /// only when the source is closed.
     pub(super) async fn next(&mut self) -> Vec<Out> {
-        let _ = (
-            &self.source,
-            &self.access,
-            &self.rx,
-            self.started,
-            &self.resume,
+        loop {
+            if let Some(from) = self.scan.clone() {
+                let out = self.page(&from).await;
+                if !out.is_empty() {
+                    return out;
+                }
+                continue;
+            }
+            match self.rx.recv().await {
+                Ok(appended) => {
+                    if let Some(row) = self.live(&appended) {
+                        return vec![Out::Row(row)];
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(missed)) => {
+                    self.lag_recoveries += 1;
+                    tracing::debug!(
+                        missed,
+                        "ui stream: lagged, catching up from its own position"
+                    );
+                    self.scan = Some(self.delivered.clone());
+                }
+                Err(broadcast::error::RecvError::Closed) => return Vec::new(),
+            }
+        }
+    }
+
+    /// One catch-up page from `from`, after yielding to the runtime.
+    async fn page(&mut self, from: &LogCursor) -> Vec<Out> {
+        tokio::task::yield_now().await;
+        let page = self.source.rows_after(from, &self.access, PAGE).await;
+        let mut out = Vec::with_capacity(page.rows.len() + 1);
+        if page.reset {
+            tracing::debug!("ui stream: the position's row is gone, resetting");
+            self.delivered = LogCursor::default();
+            out.push(Out::Reset);
+        }
+        for row in page.rows {
+            if self.advance(&row) {
+                out.push(Out::Row(row));
+            }
+        }
+        tracing::debug!(
+            rows = out.len(),
+            more = page.more,
+            "ui stream: catch-up page"
         );
-        Vec::new()
+        self.scan = page.more.then_some(page.next);
+        out
+    }
+
+    /// A live row for the caller, unless already delivered.
+    fn live(&mut self, appended: &Appended) -> Option<Row> {
+        let row = self.source.frame(&self.access, appended)?;
+        self.advance(&row).then_some(row)
+    }
+
+    /// Move the delivered position to `row`; `false` when it is at or below
+    /// what was already delivered.
+    fn advance(&mut self, row: &Row) -> bool {
+        let slot = match row.log {
+            LogName::Invocation => &mut self.delivered.inv,
+            LogName::Governance => &mut self.delivered.gov,
+        };
+        if slot.as_ref().is_some_and(|d| row.part.n <= d.n) {
+            return false;
+        }
+        *slot = Some(row.part.clone());
+        true
     }
 }

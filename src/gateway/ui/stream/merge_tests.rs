@@ -147,7 +147,7 @@ fn from(n: u64) -> Option<LogCursor> {
 #[tokio::test]
 async fn resume_across_the_subscribe_then_read_race_has_no_gap_or_duplicate() {
     let fake = Fake::new(5, 64);
-    let mut merge = LogMerge::new(Arc::clone(&fake), (), from(2));
+    let mut merge = LogMerge::connect(Arc::clone(&fake), (), from(2)).await;
     fake.append(false); // lands after subscribe, before the catch-up reads
     let out = collect(&mut merge, 4).await;
     assert_eq!(ids(&out), vec![3, 4, 5, 6]);
@@ -158,7 +158,7 @@ async fn resume_across_the_subscribe_then_read_race_has_no_gap_or_duplicate() {
 #[tokio::test]
 async fn a_fresh_connect_starts_at_the_head() {
     let fake = Fake::new(5, 64);
-    let mut merge = LogMerge::new(Arc::clone(&fake), (), None);
+    let mut merge = LogMerge::connect(Arc::clone(&fake), (), None).await;
     fake.append(false);
     assert_eq!(ids(&collect(&mut merge, 1).await), vec![6]);
 }
@@ -173,7 +173,7 @@ async fn a_cursor_whose_row_is_gone_resets_then_replays_from_the_oldest() {
         }),
         gov: None,
     };
-    let mut merge = LogMerge::new(Arc::clone(&fake), (), Some(stale));
+    let mut merge = LogMerge::connect(Arc::clone(&fake), (), Some(stale)).await;
     let out = collect(&mut merge, 3).await;
     assert_eq!(out.first(), Some(&Out::Reset));
     assert_eq!(ids(&out), vec![1, 2, 3]);
@@ -182,7 +182,7 @@ async fn a_cursor_whose_row_is_gone_resets_then_replays_from_the_oldest() {
 #[tokio::test]
 async fn a_long_backlog_pages_through_in_chunks_and_loses_nothing() {
     let fake = Fake::new(2_450, 64);
-    let mut merge = LogMerge::new(Arc::clone(&fake), (), Some(LogCursor::default()));
+    let mut merge = LogMerge::connect(Arc::clone(&fake), (), Some(LogCursor::default())).await;
     let out = collect(&mut merge, 2_450).await;
     assert_eq!(ids(&out), (1..=2_450).collect::<Vec<_>>());
     assert!(
@@ -195,12 +195,14 @@ async fn a_long_backlog_pages_through_in_chunks_and_loses_nothing() {
 #[tokio::test]
 async fn a_lagged_receiver_catches_up_from_its_own_cursor() {
     let fake = Fake::new(0, 4);
-    let mut merge = LogMerge::new(Arc::clone(&fake), (), Some(LogCursor::default()));
+    let mut merge = LogMerge::connect(Arc::clone(&fake), (), Some(LogCursor::default())).await;
     for _ in 0..20 {
         fake.append(false);
     }
     let out = collect(&mut merge, 20).await;
     assert_eq!(ids(&out), (1..=20).collect::<Vec<_>>());
+    fake.append(false);
+    assert_eq!(ids(&collect(&mut merge, 1).await), vec![21]);
     assert!(merge.lag_recoveries() >= 1);
 }
 
@@ -211,7 +213,7 @@ async fn a_page_of_only_invisible_rows_moves_forward_and_ends() {
         fake.append(true);
     }
     fake.append(false);
-    let mut merge = LogMerge::new(Arc::clone(&fake), (), Some(LogCursor::default()));
+    let mut merge = LogMerge::connect(Arc::clone(&fake), (), Some(LogCursor::default())).await;
     assert_eq!(ids(&collect(&mut merge, 1).await), vec![451]);
 }
 
@@ -221,7 +223,7 @@ async fn a_slow_client_closed_and_resumed_over_cycles_loses_no_row() {
     let mut cursor = Some(LogCursor::default());
     let (mut produced, mut delivered) = (0usize, Vec::new());
     for cycle in 0..6 {
-        let mut merge = LogMerge::new(Arc::clone(&fake), (), cursor.clone());
+        let mut merge = LogMerge::connect(Arc::clone(&fake), (), cursor.clone()).await;
         for _ in 0..(37 + cycle * 11) {
             fake.append(false);
             produced += 1;
@@ -231,7 +233,7 @@ async fn a_slow_client_closed_and_resumed_over_cycles_loses_no_row() {
         delivered.extend(ids(&out));
         cursor = Some(merge.delivered().clone());
     }
-    let mut merge = LogMerge::new(Arc::clone(&fake), (), cursor);
+    let mut merge = LogMerge::connect(Arc::clone(&fake), (), cursor).await;
     delivered.extend(ids(&collect(&mut merge, produced - delivered.len()).await));
     assert_eq!(delivered.len(), produced);
     assert_eq!(delivered, (1..=produced as u64).collect::<Vec<_>>());

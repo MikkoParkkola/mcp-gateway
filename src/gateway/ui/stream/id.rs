@@ -42,12 +42,81 @@ pub(super) struct StreamId {
 
 impl StreamId {
     /// Read an id; any malformed or out-of-order part is an error.
-    pub(super) fn parse(_text: &str) -> Result<Self, IdError> {
-        Err(IdError)
+    pub(super) fn parse(text: &str) -> Result<Self, IdError> {
+        let mut id = Self::default();
+        if text.is_empty() {
+            return Ok(id);
+        }
+        let mut last = 0u8;
+        for token in text.split('.') {
+            let mut chars = token.chars();
+            let tag = chars.next().ok_or(IdError)?;
+            let rest = chars.as_str();
+            let order = "bsrqig".find(tag).ok_or(IdError)? as u8 + 1;
+            if order <= last {
+                return Err(IdError);
+            }
+            last = order;
+            match tag {
+                'b' => id.boot = Some(parse_boot(rest)?),
+                's' => id.status = Some(parse_num(rest)?),
+                'r' => id.reload = Some(parse_num(rest)?),
+                'q' => id.queue = Some(parse_num(rest)?),
+                'i' => id.cursor.inv = Some(parse_log(rest)?),
+                _ => id.cursor.gov = Some(parse_log(rest)?),
+            }
+        }
+        Ok(id)
     }
 
     /// Print the id; `parse(render(x)) == x`.
     pub(super) fn render(&self) -> String {
-        String::new()
+        let mut parts = Vec::new();
+        parts.extend(self.boot.map(|b| format!("b{b:016x}")));
+        parts.extend(self.status.map(|n| format!("s{n}")));
+        parts.extend(self.reload.map(|n| format!("r{n}")));
+        parts.extend(self.queue.map(|n| format!("q{n}")));
+        parts.extend(
+            self.cursor
+                .inv
+                .as_ref()
+                .map(|p| format!("i{}-{}", p.n, p.hash)),
+        );
+        parts.extend(
+            self.cursor
+                .gov
+                .as_ref()
+                .map(|p| format!("g{}-{}", p.n, p.hash)),
+        );
+        parts.join(".")
     }
+}
+
+fn parse_num(text: &str) -> Result<u64, IdError> {
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(IdError);
+    }
+    text.parse().map_err(|_| IdError)
+}
+
+fn is_hash(text: &str) -> bool {
+    text.len() == 16 && text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+fn parse_boot(text: &str) -> Result<u64, IdError> {
+    if !is_hash(text) {
+        return Err(IdError);
+    }
+    u64::from_str_radix(text, 16).map_err(|_| IdError)
+}
+
+fn parse_log(text: &str) -> Result<LogPart, IdError> {
+    let (n, hash) = text.split_once('-').ok_or(IdError)?;
+    if !is_hash(hash) {
+        return Err(IdError);
+    }
+    Ok(LogPart {
+        n: parse_num(n)?,
+        hash: hash.to_owned(),
+    })
 }

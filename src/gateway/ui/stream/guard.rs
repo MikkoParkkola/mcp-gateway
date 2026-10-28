@@ -33,6 +33,9 @@ pub(super) struct Snapshot {
     pub(super) reload_gen: u64,
     pub(super) full: Value,
     pub(super) counts: Value,
+    /// Observed by the running watcher; false from a (re)start until its
+    /// first tick, so a new stream never sends what was left from before.
+    pub(super) fresh: bool,
 }
 
 #[derive(Default)]
@@ -75,9 +78,10 @@ pub(super) struct Guard {
 impl StreamHub {
     /// A hub with a random boot id.
     pub(crate) fn new() -> Self {
+        use rand::RngExt;
         Self {
             shared: Arc::new(Shared {
-                boot: 0,
+                boot: rand::rng().random(),
                 inner: Mutex::new(Inner::default()),
                 snapshot: watch::channel(Snapshot::default()).0,
             }),
@@ -90,14 +94,15 @@ impl StreamHub {
     }
 
     /// Streams open now.
+    #[cfg(test)]
     pub(crate) fn open_streams(&self) -> usize {
-        let _ = &self.shared.inner;
-        0
+        self.shared.lock().streams
     }
 
     /// Whether the watcher task is running.
+    #[cfg(test)]
     pub(crate) fn watcher_running(&self) -> bool {
-        false
+        self.shared.lock().watcher.is_some()
     }
 
     /// Take a slot for `credential`, starting the watcher with `start` if
@@ -105,8 +110,27 @@ impl StreamHub {
     pub(super) fn admit(
         &self,
         credential: &str,
-        _start: impl FnOnce() -> AbortHandle,
+        start: impl FnOnce() -> AbortHandle,
     ) -> Result<Guard, Refusal> {
+        let mut inner = self.shared.lock();
+        if inner.streams >= MAX_UI_STREAMS {
+            return Err(Refusal::Global);
+        }
+        let held = inner
+            .per_credential
+            .entry(credential.to_owned())
+            .or_insert(0);
+        if *held >= MAX_PER_CREDENTIAL {
+            return Err(Refusal::Credential);
+        }
+        *held += 1;
+        inner.streams += 1;
+        if inner.watcher.is_none() {
+            self.shared
+                .snapshot
+                .send_if_modified(|s| std::mem::replace(&mut s.fresh, false));
+            inner.watcher = Some(start());
+        }
         Ok(Guard {
             hub: Arc::clone(&self.shared),
             credential: credential.to_owned(),
@@ -120,11 +144,54 @@ impl StreamHub {
 
     /// Publish what the watcher saw this tick. Generations rise only on a
     /// change; `uptime_secs` never counts as one.
-    pub(super) fn observe(&self, _full: Value, _counts: Value, _reloaded: bool) {}
+    pub(super) fn observe(&self, full: Value, counts: Value, reloaded: bool) {
+        self.shared.snapshot.send_if_modified(|s| {
+            let changed = !same_ignoring_uptime(&s.full, &full) || s.counts != counts;
+            s.status_gen += u64::from(changed);
+            s.reload_gen += u64::from(reloaded);
+            s.full = full;
+            s.counts = counts;
+            let was_fresh = std::mem::replace(&mut s.fresh, true);
+            changed || reloaded || !was_fresh
+        });
+    }
+}
+
+impl Shared {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// Two status payloads are the same when only `uptime_secs` differs.
+pub(super) fn same_ignoring_uptime(a: &Value, b: &Value) -> bool {
+    let (Some(x), Some(y)) = (a.as_object(), b.as_object()) else {
+        return a == b;
+    };
+    let kept =
+        |m: &serde_json::Map<String, Value>| m.keys().filter(|k| *k != "uptime_secs").count();
+    kept(x) == kept(y)
+        && x.iter()
+            .filter(|(k, _)| *k != "uptime_secs")
+            .all(|(k, v)| y.get(k) == Some(v))
 }
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        let _ = (&self.hub, &self.credential);
+        let mut inner = self.hub.lock();
+        inner.streams = inner.streams.saturating_sub(1);
+        if let Some(held) = inner.per_credential.get_mut(&self.credential) {
+            *held = held.saturating_sub(1);
+            if *held == 0 {
+                inner.per_credential.remove(&self.credential);
+            }
+        }
+        if inner.streams == 0
+            && let Some(watcher) = inner.watcher.take()
+        {
+            watcher.abort();
+        }
     }
 }

@@ -63,7 +63,9 @@ async fn a_client_that_stops_reading_is_closed_and_its_slot_comes_back() {
     let stalled = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
     assert!(yield_until(|| hub(&state).open_streams() == 1).await);
     // Never read: the transport buffer fills and the 30 s write limit expires.
-    tokio::time::advance(Duration::from_secs(120)).await;
+    // The paused clock steps from timer to timer while the runtime is idle,
+    // so the blocked write's 30 s limit fires whenever it was registered.
+    tokio::time::sleep(Duration::from_secs(120)).await;
     assert!(yield_until(|| hub(&state).open_streams() == 0).await);
     assert!(!hub(&state).watcher_running());
     drop(stalled);
