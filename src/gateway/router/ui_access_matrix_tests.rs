@@ -12,6 +12,7 @@
 //! the whole computed table between markers.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -87,17 +88,17 @@ const CALLERS: &[Caller] = &[
 /// Which gateway a caller is sent to.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Gateway {
-    AuthOn,
-    AuthOnPublicStatus,
-    AuthOff,
+    On,
+    OnPublicStatus,
+    Off,
 }
 
 impl Caller {
     fn gateway(self) -> Gateway {
         match self {
-            Self::NoKeyPublicStatus => Gateway::AuthOnPublicStatus,
-            Self::AuthOff => Gateway::AuthOff,
-            _ => Gateway::AuthOn,
+            Self::NoKeyPublicStatus => Gateway::OnPublicStatus,
+            Self::AuthOff => Gateway::Off,
+            _ => Gateway::On,
         }
     }
 
@@ -180,12 +181,12 @@ struct Fixture {
 
 async fn fixture(kind: Gateway, store: bool) -> Fixture {
     let auth = match kind {
-        Gateway::AuthOff => AuthConfig::default(),
-        Gateway::AuthOn | Gateway::AuthOnPublicStatus => AuthConfig {
+        Gateway::Off => AuthConfig::default(),
+        Gateway::On | Gateway::OnPublicStatus => AuthConfig {
             enabled: true,
             bearer_token: Some(BEARER.to_string()),
             api_keys: vec![api_key(ADMIN_KEY, true), api_key(STANDARD_KEY, false)],
-            public_paths: if kind == Gateway::AuthOnPublicStatus {
+            public_paths: if kind == Gateway::OnPublicStatus {
                 vec!["/health".to_string(), routes::UI_STATUS.to_string()]
             } else {
                 vec!["/health".to_string()]
@@ -466,7 +467,10 @@ fn strip(value: &mut Value) {
 
 fn hash12(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
-    digest.iter().take(6).map(|b| format!("{b:02x}")).collect()
+    digest.iter().take(6).fold(String::new(), |mut hex, b| {
+        let _ = write!(hex, "{b:02x}");
+        hex
+    })
 }
 
 /// What a cell records for one answer.
@@ -492,19 +496,16 @@ fn cell(path: &str, status: StatusCode, body: &[u8]) -> String {
         return format!("{code}:{}", seen.join(","));
     }
     if status.is_success() && SCOPED.contains(&path) && !body.is_empty() {
-        let canonical = match serde_json::from_slice::<Value>(body) {
-            Ok(mut v) => {
-                strip(&mut v);
-                v.to_string()
-            }
-            Err(_) => {
-                let mut lines: Vec<&str> = std::str::from_utf8(body)
-                    .unwrap_or_default()
-                    .lines()
-                    .collect();
-                lines.sort_unstable();
-                lines.join("\n")
-            }
+        let canonical = if let Ok(mut v) = serde_json::from_slice::<Value>(body) {
+            strip(&mut v);
+            v.to_string()
+        } else {
+            let mut lines: Vec<&str> = std::str::from_utf8(body)
+                .unwrap_or_default()
+                .lines()
+                .collect();
+            lines.sort_unstable();
+            lines.join("\n")
         };
         return format!("{code}:{}", hash12(canonical.as_bytes()));
     }
@@ -535,11 +536,7 @@ async fn compute() -> Matrix {
             &[false]
         };
         for &store in stores {
-            for gateway in [
-                Gateway::AuthOn,
-                Gateway::AuthOnPublicStatus,
-                Gateway::AuthOff,
-            ] {
+            for gateway in [Gateway::On, Gateway::OnPublicStatus, Gateway::Off] {
                 let fx = fixture(gateway, store).await;
                 let router = create_router(Arc::clone(&fx.state));
                 let cookie = session(&fx.state);
@@ -624,10 +621,10 @@ async fn ui_api_access_matrix_is_preserved() {
                 .map(|k| format!("{k}: expected, not computed")),
         )
         .collect();
-    let table: String = computed
-        .iter()
-        .map(|(k, v)| format!("{k}\t{v}\n"))
-        .collect();
+    let table = computed.iter().fold(String::new(), |mut table, (k, v)| {
+        let _ = writeln!(table, "{k}\t{v}");
+        table
+    });
     panic!(
         "{} cells moved; first 40:\n{}\n---- BEGIN MATRIX ----\n{table}---- END MATRIX ----",
         moved.len(),
