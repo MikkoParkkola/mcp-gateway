@@ -38,13 +38,13 @@ async fn a_lent_only_slot_sends_nothing_with_nothing_lent() {
         HeaderMode::Sse,
     ] {
         assert!(
-            t.build_mcp_headers(mode, None).await.is_err(),
+            t.build_mcp_headers(mode, None, &[]).await.is_err(),
             "built headers with nothing lent"
         );
     }
     let empty = lender.lend(&[]);
     assert!(
-        t.build_mcp_headers(HeaderMode::Request { method: "m" }, None)
+        t.build_mcp_headers(HeaderMode::Request { method: "m" }, None, &[])
             .await
             .is_err(),
         "an empty loan is no credential"
@@ -63,13 +63,15 @@ async fn a_lent_only_slot_sends_the_loan_and_no_static_header() {
         HeaderMode::Notify,
         HeaderMode::Sse,
     ] {
-        let map = t.build_mcp_headers(mode, None).await.unwrap();
+        let map = t.build_mcp_headers(mode, None, &[]).await.unwrap();
         assert_eq!(map[header::AUTHORIZATION], "Bearer subscriber");
         assert!(!map.contains_key("x-static-credential"), "{map:?}");
     }
     drop(loan);
     assert!(
-        t.build_mcp_headers(HeaderMode::Notify, None).await.is_err(),
+        t.build_mcp_headers(HeaderMode::Notify, None, &[])
+            .await
+            .is_err(),
         "the loan ended with its dispatch"
     );
 }
@@ -80,7 +82,7 @@ async fn a_lent_only_slot_sends_the_loan_and_no_static_header() {
 async fn a_configured_slot_keeps_its_static_headers() {
     let (t, _lender) = slot("http://localhost", SlotCredential::Configured);
     let map = t
-        .build_mcp_headers(HeaderMode::Request { method: "m" }, None)
+        .build_mcp_headers(HeaderMode::Request { method: "m" }, None, &[])
         .await
         .unwrap();
     assert_eq!(map["x-static-credential"], "gateway-owned");
@@ -156,7 +158,7 @@ async fn only_a_lent_only_slot_rides_its_starts_session() {
         set_default_session(&t, "the-starts-session");
         let _loan = lender.lend(&subscriber());
         let map = t
-            .build_mcp_headers(HeaderMode::Request { method: "m" }, Some("subscriber"))
+            .build_mcp_headers(HeaderMode::Request { method: "m" }, Some("subscriber"), &[])
             .await
             .unwrap();
         let carried = map
@@ -189,7 +191,7 @@ async fn a_lent_only_slot_never_sends_a_live_gateway_token() {
         HeaderMode::Notify,
         HeaderMode::Sse,
     ] {
-        let map = t.build_mcp_headers(mode, None).await.unwrap();
+        let map = t.build_mcp_headers(mode, None, &[]).await.unwrap();
         assert_eq!(map["x-api-key"], "subscriber-key");
         assert!(
             map.values()
@@ -199,7 +201,9 @@ async fn a_lent_only_slot_never_sends_a_live_gateway_token() {
     }
     drop(loan);
     assert!(
-        t.build_mcp_headers(HeaderMode::Notify, None).await.is_err(),
+        t.build_mcp_headers(HeaderMode::Notify, None, &[])
+            .await
+            .is_err(),
         "with nothing lent the token is no fallback"
     );
 }

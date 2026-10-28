@@ -169,7 +169,7 @@ async fn no_stream_before_the_first_handshake_means_body_mode() {
         .expect("transport");
     assert!(
         transport
-            .live_sse_channel()
+            .live_sse_channel(&[])
             .await
             .expect("no error")
             .is_none()
@@ -192,15 +192,15 @@ async fn a_caller_that_waited_uses_the_replacement_made_meanwhile() {
     let held = transport.reinit_lock.lock().await;
     let waiting = {
         let transport = Arc::clone(&transport);
-        tokio::spawn(async move { transport.live_sse_channel().await })
+        tokio::spawn(async move { transport.live_sse_channel(&[]).await })
     };
     // Let the caller reach the lock this row holds.
     // timing: precondition
     tokio::time::sleep(Duration::from_millis(200)).await;
     // The replacement the other caller would make, under the held lock.
-    transport.connect_sse().await.expect("new stream");
+    transport.connect_sse(&[]).await.expect("new stream");
     transport
-        .legacy_handshake()
+        .legacy_handshake(&[])
         .await
         .expect("handshake on session 2");
     drop(held);

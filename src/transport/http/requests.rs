@@ -45,8 +45,9 @@ impl HttpTransport {
         &self,
         mode: HeaderMode<'_>,
         identity_key: Option<&str>,
+        call: &[(String, String)],
     ) -> Result<header::HeaderMap> {
-        self.build_headers(mode, identity_key, CredentialOrigin::Gateway)
+        self.build_headers(mode, identity_key, CredentialOrigin::Gateway, call)
             .await
     }
 
@@ -60,7 +61,7 @@ impl HttpTransport {
         mode: HeaderMode<'_>,
         identity_key: Option<&str>,
     ) -> Result<header::HeaderMap> {
-        self.build_headers(mode, identity_key, CredentialOrigin::Lent)
+        self.build_headers(mode, identity_key, CredentialOrigin::Lent, &[])
             .await
     }
 
@@ -69,6 +70,7 @@ impl HttpTransport {
         mode: HeaderMode<'_>,
         identity_key: Option<&str>,
         origin: CredentialOrigin,
+        _call: &[(String, String)],
     ) -> Result<header::HeaderMap> {
         // A lent-only per-user slot sends nothing of the gateway's: no static
         // header and no gateway token, only what the dispatch in flight lends,
@@ -268,10 +270,20 @@ impl HttpTransport {
 
     /// Send a raw request to the message endpoint
     pub(super) async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
+        self.send_request_as(request, &[]).await
+    }
+
+    /// [`Self::send_request`] inside a call: `call` is that call's headers, so
+    /// a lent-only slot picks the loan the call carries.
+    pub(super) async fn send_request_as(
+        &self,
+        request: &JsonRpcRequest,
+        call: &[(String, String)],
+    ) -> Result<JsonRpcResponse> {
         // `None`, not `self.outbound_era()`: this is the handshake, and a
         // modern-shaped `initialize` is a message the peer we are still
         // introducing ourselves to may be unable to parse.
-        self.send_request_with_headers(request, &[], None, None)
+        self.send_request_with_headers(request, call, None, None)
             .await
     }
 
@@ -294,7 +306,7 @@ impl HttpTransport {
     ) -> Result<JsonRpcResponse> {
         // SSE mode: the request takes its place on the live stream before its
         // POST, and is sent to that stream's own endpoint (design B16, B18).
-        let mut channel = self.live_sse_channel().await?;
+        let mut channel = self.live_sse_channel(extra_headers).await?;
         let mut waiting = channel
             .as_ref()
             .map(|c| c.register(&request.id))
@@ -306,7 +318,7 @@ impl HttpTransport {
         if channel.as_ref().is_some_and(|c| c.is_closed()) {
             // Closed between the check and the registration: replace it, once.
             drop(waiting);
-            channel = self.live_sse_channel().await?;
+            channel = self.live_sse_channel(extra_headers).await?;
             waiting = channel
                 .as_ref()
                 .map(|c| c.register(&request.id))
@@ -322,6 +334,7 @@ impl HttpTransport {
                     method: &request.method,
                 },
                 identity_key,
+                extra_headers,
             )
             .await?;
         merge_extra_headers(&mut headers, extra_headers);
@@ -649,7 +662,7 @@ impl HttpTransport {
         };
 
         let mut headers = self
-            .build_mcp_headers(HeaderMode::Notify, identity_key)
+            .build_mcp_headers(HeaderMode::Notify, identity_key, extra_headers)
             .await?;
         // The caller's credential, as on a request (#2292).
         merge_extra_headers(&mut headers, extra_headers);

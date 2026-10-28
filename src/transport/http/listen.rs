@@ -515,7 +515,7 @@ impl OpenAs<'_> {
         mode: HeaderMode<'_>,
     ) -> Result<header::HeaderMap> {
         match self {
-            Self::Gateway => t.build_mcp_headers(mode, None).await,
+            Self::Gateway => t.build_mcp_headers(mode, None, &[]).await,
             Self::Lent { bucket, .. } => t.build_lent_headers(mode, Some(bucket)).await,
         }
     }

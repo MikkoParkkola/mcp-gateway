@@ -65,7 +65,7 @@ fn json_result_with_session(session: &'static [u8]) -> impl Fn(&Method) -> Respo
 async fn handshake(status: StatusCode, body: String) -> crate::Result<String> {
     let (base, _) = peer(move |_| reply(status, "text/event-stream", body.clone())).await;
     make_transport_sse(&format!("{base}/sse"))
-        .establish_sse_connection()
+        .establish_sse_connection(&[])
         .await
 }
 
@@ -117,7 +117,7 @@ async fn the_endpoint_event_is_found_past_other_events_and_its_session_kept() {
     let (base, _) = peer(move |_| reply(StatusCode::OK, "text/event-stream", body.clone())).await;
     let t = make_transport_sse(&format!("{base}/sse"));
 
-    let endpoint = t.establish_sse_connection().await.unwrap();
+    let endpoint = t.establish_sse_connection(&[]).await.unwrap();
 
     assert_eq!(endpoint, "/messages?session_id=abc");
     assert_eq!(default_session(&t).as_deref(), Some("abc"));
@@ -143,7 +143,7 @@ async fn an_endpoint_that_does_not_parse_is_returned_without_a_session() {
     let t = make_transport_sse(&format!("{base}/sse"));
 
     assert_eq!(
-        t.establish_sse_connection().await.unwrap(),
+        t.establish_sse_connection(&[]).await.unwrap(),
         ":x?session_id=abc"
     );
     assert_eq!(default_session(&t), None);
@@ -278,7 +278,7 @@ async fn a_live_oauth_token_is_sent_as_a_bearer_on_requests_and_the_sse_stream()
         .install_live_token_for_test(&token);
 
     t.request("tools/call", None).await.unwrap();
-    t.establish_sse_connection().await.unwrap();
+    t.establish_sse_connection(&[]).await.unwrap();
 
     let seen = seen.lock().unwrap();
     assert_eq!(seen.len(), 2);
