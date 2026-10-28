@@ -73,7 +73,8 @@ pub(crate) fn behind_admin_layer_for_test(
 }
 
 /// The layer. With no audit log configured it passes every request through.
-/// A refusal is counted on every path (D4), from the handler's own answer.
+/// A refusal is counted on every path (D4), from the handler's own answer, in
+/// the request's own task: a recorder scoped to it sees the count.
 async fn admin_action_layer(
     State(state): State<Arc<AppState>>,
     request: Request,
@@ -84,21 +85,25 @@ async fn admin_action_layer(
         .extensions()
         .get::<MatchedPath>()
         .is_some_and(|p| p.as_str().starts_with("/ui/api/control-plane"));
-    let run = move |request| async move {
-        let response = next.run(request).await;
-        if matches!(
-            response.status(),
-            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
-        ) {
-            use crate::security::security_metrics::{DenialReason, DenialRoute, denied};
-            if control_plane {
-                denied(DenialRoute::ControlPlane, DenialReason::Rbac);
-            } else {
-                denied(DenialRoute::Ui, DenialReason::AdminRequired);
-            }
+    let response = recorded(state, request, next).await;
+    if matches!(
+        response.status(),
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+    ) {
+        use crate::security::security_metrics::{DenialReason, DenialRoute, denied};
+        if control_plane {
+            denied(DenialRoute::ControlPlane, DenialReason::Rbac);
+        } else {
+            denied(DenialRoute::Ui, DenialReason::AdminRequired);
         }
-        response
-    };
+    }
+    response
+}
+
+/// The handler's answer, recorded as an `admin_action` when the request is one
+/// the layer records.
+async fn recorded(state: Arc<AppState>, request: Request, next: Next) -> Response {
+    let run = move |request| next.run(request);
     let Some(log) = state.transparency_log.clone() else {
         return run(request).await;
     };
