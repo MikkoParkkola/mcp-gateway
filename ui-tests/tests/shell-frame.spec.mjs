@@ -5,7 +5,7 @@
 // not-built pages, themes, skip link, hit areas, page states and the
 // accessibility and budget checks. Rows F1-F19 of the shell test plan.
 import { test, expect, WIDTHS, blockingViolations } from './base.mjs';
-import { PAGES, TABS, HIDDEN, shellModuleUrl, withFixturePages, shellReady } from './shell.mjs';
+import { PAGES, TABS, HIDDEN, BUILT, shellModuleUrl, withFixturePages, shellReady } from './shell.mjs';
 
 const TODO = PAGES[1][0];
 
@@ -65,7 +65,7 @@ test.describe('sidebar and tabs', () => {
 });
 
 test.describe('not-built pages', () => {
-  for (const [id] of PAGES) {
+  for (const [id] of PAGES.filter(([p]) => !BUILT.includes(p))) {
     test(`F4 /ui/${id}/* renders the not-built state at that address`, async ({ page }) => {
       for (const tab of TABS) {
         await page.goto(`/ui/${id}/${tab}`);

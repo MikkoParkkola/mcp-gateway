@@ -20,6 +20,9 @@ export const PAGES = [
 
 export const TABS = ['status', 'actions', 'settings'];
 
+/** Sidebar pages whose screen is built; every other page shows the not-built state. */
+export const BUILT = ['tools'];
+
 /** The fixture page that hides a tab, and the tab it hides. */
 export const HIDDEN = { page: 'tools', tab: 'settings' };
 

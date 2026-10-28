@@ -1,0 +1,33 @@
+/* SPDX-FileCopyrightText: 2026 Mikko Parkkola */
+/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* The Tools screen's layout. Colour, space and type are the shell's design
+   tokens only; components (.tk, table.t, .input, .btn) come from the shell. */
+
+.tools-bar { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; margin-bottom: var(--space-4); }
+.tools-bar #tools-search { flex: 1 1 calc(var(--space-16) * 5); max-width: calc(var(--space-16) * 10); }
+.tools-bar #tools-server { flex: 0 0 auto; width: auto; }
+
+.tools-card-head { display: flex; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-2); }
+.tools-card-head h2 { margin: 0; }
+.tools-meta { margin-left: auto; font: var(--type-small); }
+.tools-table td { vertical-align: top; padding-top: var(--space-2); padding-bottom: var(--space-2); height: auto; }
+.tools-none { display: grid; justify-items: start; gap: var(--space-2); padding: var(--space-4) 0; }
+
+/* The tool name opens its detail: a real button, the width of its cell. */
+.tool-toggle { background: none; border: 0; padding: 0; width: 100%; min-height: var(--size-row); color: var(--color-text-primary);
+  font: inherit; font-family: var(--font-family-mono); text-align: left; cursor: pointer; }
+/* The open marker is its own hidden span: generated content would join the button's name. */
+.tool-toggle .mark { color: var(--color-text-secondary); }
+.tool-detail td { background: var(--color-bg-raised); }
+.tool-detail p { margin: 0 0 var(--space-2); }
+
+/* The schema scrolls inside itself, from the keyboard too; the shell's
+   :focus-visible ring marks it. */
+.tool-schema { margin: 0 0 var(--space-2); max-height: calc(var(--space-16) * 5); overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font: var(--type-small); font-family: var(--font-family-mono); color: var(--color-text-secondary); }
+
+.tool-page { display: grid; gap: var(--space-3); margin-bottom: var(--space-4); }
+.tool-page h2 { margin: 0; }
+.tool-page-name { font: var(--type-title); font-family: var(--font-family-mono); letter-spacing: 0; overflow-wrap: anywhere; }
+.tool-facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-2) var(--space-4); margin: 0; }
+.tool-facts dd { margin: 0; }

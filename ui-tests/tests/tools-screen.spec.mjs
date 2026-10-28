@@ -32,12 +32,17 @@ const TOOLS = SERVERS.flatMap((server, s) => Array.from({ length: 10 }, (_, i) =
 })));
 const HOSTILE = '<img src=x onerror="window.__pwned=1">';
 TOOLS[0].description = HOSTILE;
+TOOLS[1].schema = { type: 'object', description: HOSTILE, properties: { q: { type: 'string', description: HOSTILE } } };
+TOOLS[2].description = null;
 
-async function toolsScreen(page, { tools = TOOLS, status = 200 } = {}) {
+async function toolsScreen(page, { tools = TOOLS, status = 200, hold } = {}) {
   await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: true, admin: true } } }));
-  await page.route('**/ui/api/tools**', (r) => (status === 200
-    ? r.fulfill({ json: { tools, total: tools.length } })
-    : r.fulfill({ status, json: { error: 'refused' } })));
+  await page.route('**/ui/api/tools**', async (r) => {
+    if (hold) await hold;
+    return status === 200
+      ? r.fulfill({ json: { tools, total: tools.length } })
+      : r.fulfill({ status, json: { error: 'refused' } });
+  });
 }
 
 const sorted = [...TOOLS].sort((a, b) => a.name.localeCompare(b.name) || a.server.localeCompare(b.server));
@@ -59,7 +64,8 @@ test('T2: every tool is listed A to Z with its server and description', async ({
   await page.goto('/ui/tools/status');
   await expect(rows(page)).toHaveCount(40);
   const names = await rows(page).locator('td:nth-child(1)').allTextContents();
-  expect(names.map((n) => n.trim())).toEqual(sorted.map((t) => t.name));
+  // The open marker is a hidden span ahead of the name.
+  expect(names.map((n) => n.replace(/^[▸▾]\s*/, '').trim())).toEqual(sorted.map((t) => t.name));
   await expect(rows(page).first().locator('td:nth-child(2)')).toHaveText(sorted[0].server);
   await expect(page.locator('#content')).toContainText('40 tools · A to Z');
 });
@@ -108,7 +114,8 @@ test('T5: Open goes to the tool page, and an unknown tool says so', async ({ pag
   await page.getByRole('button', { name: t.name, exact: true }).click();
   await page.getByRole('link', { name: `Open ${t.name}` }).click();
   await expect(page).toHaveURL(`/ui/tools/${encodeURIComponent(`${t.server}:${t.name}`)}/status`);
-  await expect(page.locator('.head .plate')).toHaveText(t.name);
+  await expect(page.locator('.head .plate')).toHaveText('Tools');
+  await expect(page.getByRole('heading', { name: t.name, exact: true })).toBeVisible();
   await expect(page.locator('#content')).toContainText(t.server);
   await expect(page.locator('#content')).toContainText(t.description);
   await expect(page.getByRole('region', { name: `Input schema of ${t.name}` })).toBeVisible();
@@ -124,7 +131,91 @@ test('T6: markup in a tool description renders as text', async ({ page }) => {
   await expect(rows(page)).toHaveCount(40);
   await expect(page.locator('#content img')).toHaveCount(0);
   await expect(page.locator('#content')).toContainText(HOSTILE);
+  // Inside a schema too, and a null description reads as none.
+  const withSchema = TOOLS[1];
+  await page.getByRole('button', { name: withSchema.name, exact: true }).click();
+  // The schema shows as JSON, so the markup's own quotes come out escaped.
+  await expect(page.getByRole('region', { name: `Input schema of ${withSchema.name}` })).toContainText('<img src=x onerror=');
+  await expect(page.locator('#content img')).toHaveCount(0);
   expect(await page.evaluate(() => window.__pwned)).toBeUndefined();
+  await page.getByRole('button', { name: TOOLS[2].name, exact: true }).click();
+  await expect(page.locator('#content')).toContainText('No description.');
+  await expect(page.locator('#content')).not.toContainText('null');
+});
+
+test('T11: Enter and Space each toggle a tool once', async ({ page }) => {
+  await toolsScreen(page);
+  await page.goto('/ui/tools/status');
+  const toggle = page.getByRole('button', { name: sorted[0].name, exact: true });
+  await toggle.focus();
+  for (const [key, open] of [['Enter', true], ['Space', false], ['Space', true], ['Enter', false]]) {
+    await page.keyboard.press(key);
+    await expect(toggle, key).toHaveAttribute('aria-expanded', String(open));
+  }
+});
+
+test('T12: the same tool name on two servers opens the right one', async ({ page }) => {
+  const twins = [
+    { name: 'search', server: 'web', description: 'Search the web', schema: {}, class: 'read', class_source: 'declared' },
+    { name: 'search', server: 'docs', description: 'Search the docs', schema: {}, class: 'read', class_source: 'declared' },
+  ];
+  await toolsScreen(page, { tools: twins });
+  await page.goto('/ui/tools/status');
+  await expect(rows(page)).toHaveCount(2);
+  await expect(rows(page).nth(0).locator('td:nth-child(2)')).toHaveText('docs');
+  await page.getByRole('button', { name: 'search', exact: true }).nth(1).click();
+  // Only the open row's link is visible.
+  await page.getByRole('link', { name: 'Open search' }).click();
+  await expect(page).toHaveURL(`/ui/tools/${encodeURIComponent('web:search')}/status`);
+  await expect(page.locator('#content')).toContainText('Search the web');
+});
+
+test('T13: a tool page loads directly from its address', async ({ page }) => {
+  await toolsScreen(page);
+  const t = sorted[7];
+  await page.goto(`/ui/tools/${encodeURIComponent(`${t.server}:${t.name}`)}/status`);
+  await shellReady(page);
+  await expect(page.getByRole('heading', { name: t.name, exact: true })).toBeVisible();
+  await expect(page.locator('#content')).toContainText(t.description);
+});
+
+test('T14: a late answer after leaving the page changes nothing', async ({ page }) => {
+  let release;
+  const hold = new Promise((r) => { release = r; });
+  await toolsScreen(page, { hold });
+  await page.goto('/ui/tools/status');
+  await page.locator('nav.route-nav a[data-page="servers"]').click();
+  await expect(page).toHaveURL(/\/ui\/servers/);
+  const sub = await page.locator('.head .sub').textContent();
+  release();
+  await page.waitForTimeout(300);
+  await expect(page.locator('.head .plate')).toHaveText('Servers');
+  expect(await page.locator('.head .sub').textContent()).toBe(sub);
+  await expect(rows(page)).toHaveCount(0);
+});
+
+test('T15: about 1,300 tools render and filter within budget', async ({ page }) => {
+  const many = Array.from({ length: 1300 }, (_, i) => ({
+    name: `tool_${String(i).padStart(4, '0')}`,
+    server: `server_${i % 28}`,
+    description: `Does thing number ${i} with a description of ordinary length`,
+    schema: { type: 'object', properties: Object.fromEntries(Array.from({ length: 6 }, (_, k) => [`p${k}`, { type: 'string', description: `Parameter ${k}` }])) },
+    class: i % 2 ? 'write' : 'read',
+    class_source: 'inferred',
+  }));
+  await toolsScreen(page, { tools: many });
+  const start = Date.now();
+  await page.goto('/ui/tools/status');
+  await expect(rows(page)).toHaveCount(1300);
+  const rendered = Date.now() - start;
+  const t0 = Date.now();
+  await search(page).fill('tool_1299');
+  await expect(rows(page)).toHaveCount(1);
+  const filtered = Date.now() - t0;
+  console.log(`T15: 1,300 tools rendered in ${rendered} ms, filtered in ${filtered} ms`);
+  // Generous ceilings for a loaded CI runner; the printed numbers go in the PR.
+  expect(rendered).toBeLessThan(4000);
+  expect(filtered).toBeLessThan(1000);
 });
 
 test('T8: an empty gateway, and a key without access', async ({ page }) => {
@@ -146,10 +237,12 @@ test('T10: the journey from the sidebar to a tool and back', async ({ page }) =>
   await search(page).fill('j_charlie');
   await page.getByRole('button', { name: 'j_charlie_tool', exact: true }).click();
   await page.getByRole('link', { name: 'Open j_charlie_tool' }).click();
-  await expect(page.locator('.head .plate')).toHaveText('j_charlie_tool');
+  await expect(page.getByRole('heading', { name: 'j_charlie_tool', exact: true })).toBeVisible();
   await page.goBack();
   await expect(page).toHaveURL('/ui/tools/status');
-  await expect(rows(page).first()).toBeVisible();
+  // The search survives the visit, as it did on the classic tab.
+  await expect(search(page)).toHaveValue('j_charlie');
+  await expect(rows(page)).toHaveCount(1);
 });
 
 for (const width of WIDTHS) {
@@ -162,7 +255,7 @@ for (const width of WIDTHS) {
     await page.getByRole('button', { name: sorted[0].name, exact: true }).click();
     expect(await blockingViolations(page)).toEqual([]);
     await page.goto(`/ui/tools/${encodeURIComponent(`${sorted[0].server}:${sorted[0].name}`)}/status`);
-    await expect(page.locator('.head .plate')).toHaveText(sorted[0].name);
+    await expect(page.getByRole('heading', { name: sorted[0].name, exact: true })).toBeVisible();
     expect(await blockingViolations(page)).toEqual([]);
   });
 }
