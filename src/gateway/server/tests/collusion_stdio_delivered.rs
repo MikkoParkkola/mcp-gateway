@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-7887.RECEIPT.4 over stdio: a surfaced tool's answer has its
-//! `cacheScope` clamped on the way out, so backend text stuffed there never
-//! reaches the operator. The receipt is built from the answer delivered.
+//! `cacheScope` removed at ingress (a `tools/call` answer may not carry it),
+//! so backend text stuffed there never reaches the operator. The receipt is
+//! built from the answer delivered.
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -139,9 +140,9 @@ async fn a_stdio_answer_is_receipted_as_delivered() {
         read.get("error").is_none(),
         "base: the read is delivered: {read}"
     );
-    assert_eq!(
-        read["result"]["cacheScope"], "private",
-        "base: the scope is clamped: {read}"
+    assert!(
+        read["result"].get("cacheScope").is_none(),
+        "base: ingress removed the scope: {read}"
     );
 
     assert!(
