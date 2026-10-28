@@ -227,7 +227,6 @@ fn decided_fields(frame_refused: bool, fields: &mut serde_json::Map<String, serd
     crate::gateway::delivery_facts::record_fields(
         crate::gateway::delivery_facts::snapshot().as_ref(),
         frame_refused,
-        false,
         &mut decided,
     );
     if matches!(
