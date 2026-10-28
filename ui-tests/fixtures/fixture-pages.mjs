@@ -6,7 +6,7 @@
 // fixture-pages=1. It registers the way a real screen does: a module that
 // runs before DOMContentLoaded, so the shell's cold start sees it. The
 // server replaces __SHELL__ with the shell module's hashed name.
-import { register, api } from '__SHELL__';
+import { register, api, serverBanner } from '__SHELL__';
 
 const PAGES = [
   ['overview', 'Overview'],
@@ -59,8 +59,16 @@ const probed = {
     table.className = 't';
     table.innerHTML = '<tbody><tr><td class="n">7</td></tr></tbody>';
     el.replaceChildren('tools - status ', n, table);
-    ctx.show('stale', { since: new Date(2026, 9, 28, 14, 2) });
+    const since = new Date();
+    since.setHours(14, 2, 0, 0); // today, so the title shows the time only
+    ctx.show('stale', { since });
     window.toolsShow = ctx.show;
+  },
+  // T11: a screen shows a server's banner through its context, and takes it away.
+  servers: (el, ctx) => {
+    el.textContent = 'servers - status';
+    ctx.show(serverBanner({ name: 'github', state: 'refused', reason: 'Refused by the runtime policy: shell_exec.' }));
+    window.serversShow = ctx.show;
   },
   // L13: a screen marks its data stale, then clears it.
   activity: (el, ctx) => {

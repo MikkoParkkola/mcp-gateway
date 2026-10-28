@@ -52,12 +52,14 @@ const ROWS = [
   { server: { state: 'paused', circuit_state: 'open', next_retry_at: null }, tone: 'neutral', glyph: '⏸',
     banner: 'Calls to github are held back after failures. The gateway lets calls try it again after a short wait.', next: 'To retry now, use the Actions tab.' },
   { server: { state: 'paused', circuit_state: 'half_open', next_retry_at: null }, tone: 'neutral', glyph: '⏸',
-    banner: 'The gateway is letting a few calls through to github to see if it has recovered.', next: null },
+    banner: 'The gateway is letting calls through to github to see if it has recovered.', next: null },
+  { server: { state: 'paused', circuit_state: 'open', next_retry_at: 'not a time' }, tone: 'neutral', glyph: '⏸',
+    banner: 'Calls to github are held back after failures. The gateway lets calls try it again after a short wait.', next: 'To retry now, use the Actions tab.' },
   { server: { state: 'dormant', running: false }, tone: 'neutral', glyph: 'ⓘ', banner: null, next: null },
   { server: { state: 'unhealthy', running: true }, tone: 'warning', glyph: '⚠',
     banner: 'github is failing; calls still go through.', next: 'Open Activity and filter by this server.' },
   { server: { state: 'unhealthy', running: false }, tone: 'warning', glyph: '⚠',
-    banner: 'github is failing; the next call starts it again.', next: 'Open Activity and filter by this server.' },
+    banner: 'github is failing; the next call tries to start it again.', next: 'Open Activity and filter by this server.' },
   { server: { state: 'refused', reason: 'Refused by the runtime policy: shell_exec, net_egress.' }, tone: 'danger', glyph: '⊘',
     banner: 'The gateway cannot start github with its current runtime configuration.', next: "Check this server's runtime profile and the runtime policy." },
   { server: { state: 'needs_sign_in' }, tone: 'warning', glyph: '⚠',
@@ -103,17 +105,17 @@ test('T2 every state and condition gets its exact badge, banner and next step', 
         next: null,
         html: '',
       };
-      badge.remove();
-      plain.remove();
       const node = m.serverBanner(s);
       if (node) {
         out.banner = node.querySelector('h2')?.textContent ?? null;
         out.next = node.querySelector('p')?.textContent ?? null;
-        // The whole page with the banner in it, not only the node.
         document.getElementById('content').append(node);
-        out.html = document.documentElement.outerHTML;
-        node.remove();
       }
+      // The whole page with this row's badge (and banner, if any) in it.
+      out.html = document.documentElement.outerHTML;
+      node?.remove();
+      badge.remove();
+      plain.remove();
       out.banner = out.banner?.replace(hhmm, 'HHMM') ?? null;
       return out;
     });
@@ -142,7 +144,11 @@ test('T6 stale data reads its time and dims the numbers until it clears', async 
   await page.goto('/ui/tools/status');
   const stale = page.locator('#content [data-state="stale"]');
   await expect(stale).toBeVisible();
-  const hhmm = await page.evaluate(() => new Date(2026, 9, 28, 14, 2).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+  const hhmm = await page.evaluate(() => {
+    const at = new Date();
+    at.setHours(14, 2, 0, 0);
+    return at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  });
   await expect(stale.locator('h2')).toHaveText(`Updates stopped at ${hhmm} · reconnecting`);
   const colour = () => page.locator('#content .num').evaluate((n) => getComputedStyle(n).color);
   const muted = await page.evaluate(() => {
@@ -221,4 +227,26 @@ test('T7b a negative count reads "?"', async ({ page }) => {
   await page.route(COUNT, (r) => r.fulfill({ json: { count: -1 } }));
   await open(page);
   await expect(page.locator('nav.route-nav a[data-page="to' + 'do"] .count')).toHaveText('?');
+});
+
+test('T11 a server banner shown through the page context is said once and taken away by show(null)', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__writes = [];
+    addEventListener('DOMContentLoaded', () => {
+      const region = document.getElementById('announcer');
+      new MutationObserver((records) => {
+        for (const r of records) for (const n of r.addedNodes) window.__writes.push((n.textContent ?? '').trim());
+      }).observe(region, { childList: true });
+    });
+  });
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/servers/status');
+  const banner = page.locator('#content .banner[data-banner]');
+  await expect(banner).toContainText('The gateway cannot start github with its current runtime configuration.');
+  await expect(page.locator('#content')).not.toContainText('shell_exec');
+  await inShell(page, (m) => m.announcerIdle());
+  const said = await page.evaluate(() => window.__writes);
+  expect(said.filter((t) => t.includes('cannot start github'))).toHaveLength(1);
+  await page.evaluate(() => window.serversShow(null));
+  await expect(banner).toHaveCount(0);
 });

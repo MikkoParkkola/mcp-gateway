@@ -110,8 +110,8 @@ export const SERVER_STATES = {
     tone: 'neutral',
     // Only what the fields establish: when calls may try again, not that a retry is under way.
     banner: (s) => (s.circuit_state === 'half_open'
-      ? `The gateway is letting a few calls through to ${s.name} to see if it has recovered.`
-      : `Calls to ${s.name} are held back after failures. ${s.next_retry_at
+      ? `The gateway is letting calls through to ${s.name} to see if it has recovered.`
+      : `Calls to ${s.name} are held back after failures. ${validDate(s.next_retry_at)
         ? `The gateway lets calls try it again from ${stamp(new Date(s.next_retry_at))}.`
         : 'The gateway lets calls try it again after a short wait.'}`),
     next: (s) => (s.circuit_state === 'half_open' ? null : 'To retry now, use the Actions tab.'),
@@ -120,7 +120,7 @@ export const SERVER_STATES = {
   unhealthy: {
     glyph: '⚠',
     tone: 'warning',
-    banner: (s) => (s.running ? `${s.name} is failing; calls still go through.` : `${s.name} is failing; the next call starts it again.`),
+    banner: (s) => (s.running ? `${s.name} is failing; calls still go through.` : `${s.name} is failing; the next call tries to start it again.`),
     next: () => 'Open Activity and filter by this server.',
   },
   refused: {
@@ -151,6 +151,9 @@ const UNLISTED_STATE = {
   banner: (s) => `${s.name} is in a state this page does not recognise.`,
   next: () => 'Open Activity and filter by this server.',
 };
+
+/** A time the API sent that reads as a real date. */
+const validDate = (value) => typeof value === 'string' && !Number.isNaN(new Date(value).getTime());
 
 const stateRow = (state) => (typeof state === 'string' && Object.hasOwn(SERVER_STATES, state) ? SERVER_STATES[state] : UNLISTED_STATE);
 
@@ -608,9 +611,21 @@ function showBanner(container, node) {
  * was stale.
  */
 function screenBanner(into, page, guard) {
+  // show(kind, opts) for a page state, show(node) for a built banner such as
+  // serverBanner()'s, show(null) to take it away. Either way the shell owns its
+  // insertion, its announcement and its removal.
   return (kind, opts = {}) => {
     if (!guardHolds(guard)) return; // a screen the user has left
     const old = into.querySelector(':scope > .state[data-banner]');
+    if (kind instanceof Node) {
+      kind.dataset.banner = '';
+      if (old?.isEqualNode(kind)) return; // the same banner again is no transition
+      old?.remove();
+      into.removeAttribute('data-stale');
+      into.prepend(kind);
+      announce(kind.querySelector('h2').textContent, { subject: `screen:${page}`, guard });
+      return;
+    }
     // The same banner again is no transition: leave it, say nothing.
     if (kind && old?.dataset.state === kind && !opts.title) return;
     old?.remove();
