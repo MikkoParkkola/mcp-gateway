@@ -153,7 +153,7 @@ impl MetaMcp {
     ) -> std::result::Result<StoredVisibility, (Error, StoredEffect)> {
         let scope = caller.scope();
         let mut cold: Option<Option<std::time::Duration>> = None;
-        let mut caller_catalogue: Option<Error> = None;
+        let mut caller_catalogue: Option<(Error, StoredEffect)> = None;
         for target in &stored.targets {
             let (server, tool) = (target.server.as_str(), target.tool.as_str());
             let Some(judged) = self.stored_target_view(server, tool, scope, session) else {
