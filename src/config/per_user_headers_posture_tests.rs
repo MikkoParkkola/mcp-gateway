@@ -65,3 +65,38 @@ fn each_backend_gets_its_own_warning_in_name_order() {
     assert!(warnings[0].starts_with("backend 'alpha'"), "{warnings:?}");
     assert!(warnings[1].starts_with("backend 'zeta'"), "{warnings:?}");
 }
+
+/// A backend bound to a `personal_managed` account runs with the required
+/// binding that account compiles to, so its static headers are named too,
+/// though its own config sets no `identity_propagation`.
+#[test]
+fn a_managed_account_backend_names_its_static_headers() {
+    let config: Config = crate::yaml::from_str(
+        "accounts:\n  descriptors:\n    work:\n      mode: personal_managed\n      \
+         provider: gmail\n      resource: https://api.example.invalid/\n      \
+         issuer: https://issuer.example.invalid\n      \
+         authorization_endpoint: https://issuer.example.invalid/authorize\n      \
+         token_endpoint: https://issuer.example.invalid/token\n      \
+         client_id: synthetic-client-id\n      \
+         redirect_uri: https://gateway.example.invalid/callback\n      \
+         scopes:\n        - https://api.example.invalid/scope.read\n      \
+         send_resource_parameter: true\n\
+         backends:\n  mail:\n    http_url: https://mail.example.test/mcp\n    \
+         account: work\n    headers:\n      X-Api-Key: placeholder\n",
+    )
+    .expect("test config parses");
+    let bound = crate::config::account_bindings::compile(&config).expect("the binding compiles");
+    assert!(
+        bound["mail"]
+            .propagation
+            .as_ref()
+            .is_some_and(|binding| binding.required),
+        "premise: a personal_managed account compiles to a required binding"
+    );
+    let warnings = config.per_user_dropped_header_warnings();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].contains("'mail'") && warnings[0].contains("X-Api-Key"),
+        "{warnings:?}"
+    );
+}
