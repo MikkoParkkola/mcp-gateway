@@ -155,6 +155,8 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
     // One receiver for the task's life (T35): a revival sent at any point
     // after the registry check below is seen by the park that follows it.
     let mut wake = shared.wake.subscribe();
+    // The lease the last run sent under; a wake that moved it cuts the backoff.
+    let mut ran_under: Option<u128> = None;
     loop {
         if shared.stop.is_cancelled() {
             return;
@@ -191,7 +193,7 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
         let outcome = if backend.is_a2a() {
             poll::poll(&shared, &backend, &hub, &registry).await
         } else {
-            session(&shared, &backend, &hub, &registry).await
+            session(&shared, &backend, &hub, &registry, &mut ran_under).await
         };
         let delay = match outcome {
             Outcome::Stopped => return,
@@ -214,7 +216,7 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
         shared.before_backoff.pause().await;
         // A revival cuts the wait; a filter change does not, so churn on the
         // subscriptions cannot reconnect a failing backend early (T35).
-        let deadline = tokio::time::Instant::now() + delay;
+        let mut deadline = tokio::time::Instant::now() + delay;
         #[cfg(test)]
         shared.waits.begin();
         loop {
@@ -230,6 +232,10 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
                         #[cfg(test)]
                         shared.waits.ended(WaitEnd::Revival);
                         break;
+                    }
+                    // Soon, but at most once a `BACKOFF_FIRST` however often.
+                    if run::lease_moved(&shared, &hub, ran_under) {
+                        deadline = deadline.min(tokio::time::Instant::now() + BACKOFF_FIRST);
                     }
                 }
             }
@@ -295,14 +301,19 @@ async fn session(
     backend: &Arc<Backend>,
     hub: &Weak<EventsHub>,
     registry: &BackendRegistry,
+    ran_under: &mut Option<u128>,
 ) -> Outcome {
     let Some(run) = begin_run(shared, backend, hub).await else {
         return failed();
     };
+    *ran_under = run.lease;
     let started = Instant::now();
     let modern = run.era == PeerEra::Modern;
     let mut state = State::new(shared, run.era);
     state.fence.clone_from(&run.fence);
+    state.lease = run.lease;
+    // Tools debt an earlier run left under another lease is not this run's.
+    run::forget_lease_debt(shared, &state);
     // The first catalogue read doubles as the legacy HTTP session's first
     // request on the shared bucket (§3).
     state.read_snapshot(backend, hub, false).await;
@@ -364,9 +375,11 @@ async fn session(
             }
             Ev::Wake | Ev::Tick => {}
         }
-        if grant_moved(shared, run.fence.as_deref(), &mut state).await {
-            // Nothing observed under the old grant is announced: the
-            // session's notices and refill go with it.
+        // Nothing observed under a moved grant or lease is announced: the session's
+        // notices and refill go with it, and the next run opens under what is held.
+        if grant_moved(shared, run.fence.as_deref(), &mut state).await
+            || run::lease_moved(shared, hub, run.lease)
+        {
             return state.ended(started);
         }
         if refill.is_none() {
@@ -551,6 +564,8 @@ struct State<'a> {
     fence: Option<Arc<crate::events::listener_credential::RunFence>>,
     /// When the run next reads its fence.
     fence_due: Instant,
+    /// A leased run's generation, stamped on every occurrence emitted.
+    lease: Option<u128>,
 }
 
 impl<'a> State<'a> {
@@ -582,6 +597,7 @@ impl<'a> State<'a> {
             legacy_cursor: None,
             fence: None,
             fence_due: now + FENCE_EVERY,
+            lease: None,
         }
     }
 

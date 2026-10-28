@@ -240,6 +240,7 @@ src/gateway/meta_mcp/invoke/gate.rs	shared_verdict	http_invoke_tiny	on the HTTP 
 src/gateway/meta_mcp/invoke/gate.rs	withheld_gate	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)
 src/gateway/meta_mcp/invoke/gate.rs	withheld_invoke_target	-	on-path, untimed: signing-enabled gateway_invoke only; the harness does not configure signing
 src/gateway/meta_mcp/invoke/gateway_writes.rs	built_task_envelope	-	on-path, untimed: task-envelope answers under relay detection only; the timed rows carry no task member
+src/gateway/meta_mcp/invoke/gateway_writes.rs	claims	-	on-path, untimed: only when a stored task is delivered (tasks/get, a repeat, a notification); a plain timed invoke stores nothing
 src/gateway/meta_mcp/invoke/gateway_writes.rs	decode_entry	-	on-path, untimed: only when a stored write record is read back (task rows, admission entries); a plain timed invoke keeps its record in memory
 src/gateway/meta_mcp/invoke/gateway_writes.rs	deserialize	-	on-path, untimed: only when a stored write record is read back (task rows, admission entries); a plain timed invoke keeps its record in memory
 src/gateway/meta_mcp/invoke/gateway_writes.rs	digest	http_invoke_tiny	on the HTTP gateway_invoke path (every gateway-written member note)
@@ -260,6 +261,7 @@ src/gateway/meta_mcp/invoke/gateway_writes.rs	rebased	-	gateway_execute and play
 src/gateway/meta_mcp/invoke/gateway_writes.rs	rebind	-	on-path, untimed: answers a final check rewrote in place, under relay detection only
 src/gateway/meta_mcp/invoke/gateway_writes.rs	recorded	stdio_invoke_tiny	read when every stdio answer is finalized
 src/gateway/meta_mcp/invoke/gateway_writes.rs	remove_owned	-	on-path, untimed: relay-receipt, cache-hit and task-row stripping of gateway members only
+src/gateway/meta_mcp/invoke/gateway_writes.rs	renamed	-	on-path, untimed: only when a stored write record is read back (task rows, admission entries); a plain timed invoke keeps its record in memory
 src/gateway/meta_mcp/invoke/gateway_writes.rs	restore	-	on-path, untimed: cache hits and composite steps only; the timed rows dispatch fresh
 src/gateway/meta_mcp/invoke/gateway_writes.rs	scope	http_invoke_tiny	wraps every HTTP delivery in a write record
 src/gateway/meta_mcp/invoke/gateway_writes.rs	segments	-	on-path, untimed: only when a stored write record is read back (task rows, admission entries)

@@ -318,7 +318,7 @@ async fn row8_withheld_call_parks_no_idempotency_key() {
     // A trace id is minted per call; nothing else may differ.
     let untraced = |mut body: Value| {
         if let Some(result) = body["result"].as_object_mut() {
-            result.remove("trace_id");
+            result.remove("_trace_id");
         }
         body
     };
@@ -343,7 +343,7 @@ async fn nonce_reuse_after(first: &str) -> Option<String> {
     // A trace id is minted per call, and the signature covers it.
     let untraced = |mut body: Value| {
         if let Some(result) = body["result"].as_object_mut() {
-            result.remove("trace_id");
+            result.remove("_trace_id");
         }
         if let Some(signature) = body["result"]["_signature"].as_object_mut() {
             signature.remove("sig");

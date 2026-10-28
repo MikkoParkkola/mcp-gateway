@@ -59,7 +59,7 @@ async fn code_mode_hints_name_gateway_search() {
     )
     .await;
     assert!(
-        text.contains("recovery"),
+        text.contains("_recovery"),
         "a recovery hint is expected: {text}"
     );
     assert!(
@@ -80,7 +80,7 @@ async fn standard_mode_hints_name_gateway_list_tools() {
     )
     .await;
     assert!(
-        text.contains("recovery"),
+        text.contains("_recovery"),
         "a recovery hint is expected: {text}"
     );
     assert!(text.contains("gateway_list_tools"), "{text}");
@@ -94,7 +94,7 @@ async fn a_hidden_discovery_tool_is_not_named() {
     )
     .await;
     assert!(
-        text.contains("recovery"),
+        text.contains("_recovery"),
         "a recovery hint is expected: {text}"
     );
     assert!(
