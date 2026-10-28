@@ -92,7 +92,10 @@ impl LiveHost {
         }
         let request = serde_json::json!({"jsonrpc": "2.0", "method": "tools/call",
             "params": {"name": call.tool, "arguments": call.arguments}});
+        // A refusal here is the gateway's, raised into the worker's dispatch
+        // cell so the settlement ties it to the task (no-op outside a cell).
         let refused = |e: crate::Error| {
+            let e = crate::gateway::delivery_facts::refused(e);
             Box::new(JsonRpcResponse::error(
                 Some(RequestId::Number(0)),
                 e.to_rpc_code(),
