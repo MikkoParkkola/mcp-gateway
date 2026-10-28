@@ -110,6 +110,9 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
 #[tokio::test]
 async fn a_changed_name_cannot_forge_a_log_line() {
     use tracing_subscriber::layer::SubscriberExt as _;
+    // Without a second dispatcher a callsite first hit by a parallel test on
+    // a thread with no subscriber is cached off, and this capture misses it.
+    crate::test_log_capture::keep_interest_open();
 
     let (_dir, backend, path, pinned) = loaded().await;
     let forged = "name: \"evil\\n2026-10-28T12:00:00Z  WARN forged line\\u001b[2K\"";
