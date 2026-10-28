@@ -216,3 +216,23 @@ fn a_token_past_its_durable_expiry_is_definitive() {
         );
     });
 }
+
+/// A lease retired while its account stays connected (a refreshed token, a
+/// moved generation) refuses this loan only: the slot is not evicted, and the
+/// user's next dispatch mints the new lease.
+#[test]
+fn a_retired_lease_on_a_connected_account_refuses_this_loan_only() {
+    block_on(async {
+        let leased = lease_alice().await;
+        *leased.script.mode.lock() = Release::Fail(|| {
+            CustodyError::Account(
+                crate::personal_accounts::service::AccountServiceError::LeaseRetired,
+            )
+        });
+        assert_eq!(
+            leased.held.recheck_send(&leased.vault).await,
+            Err(Refusal::ThisLoan),
+            "the account is still connected: one refused send, no eviction"
+        );
+    });
+}

@@ -209,3 +209,23 @@ async fn a_refusal_from_a_replaced_entry_does_not_evict_its_replacement() {
         "the replacement stays"
     );
 }
+
+/// A routine refresh costs one refused send, never a stuck user: after a
+/// this-loan refusal, the same user's next dispatch, under its fresh
+/// credential, is served by the slot.
+#[tokio::test]
+async fn the_next_dispatch_after_a_this_loan_refusal_is_served() {
+    let (backend, binding, _upstream) = checked_slot("send_check_next").await;
+    let stale = checked(&binding, passes_then(0, Refusal::ThisLoan));
+    ping(&backend, &binding, &stale)
+        .await
+        .expect_err("the stale lease is refused");
+
+    let fresh = LentCredential {
+        headers: vec![("Authorization".to_owned(), "Bearer refreshed".to_owned())],
+        check: Some(passes_then(1, Refusal::Definitive)),
+    };
+    ping(&backend, &binding, &fresh)
+        .await
+        .expect("the next dispatch is served under its fresh credential");
+}
