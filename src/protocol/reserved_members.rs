@@ -306,6 +306,12 @@ mod tests;
 pub(crate) mod test_support {
     use serde_json::{Value, json};
 
+    /// Whether `path`, dotted with array elements as `*`, is a row of the
+    /// member table.
+    pub(crate) fn classified(path: &str) -> bool {
+        super::MEMBERS.iter().any(|m| m.path.join(".") == path)
+    }
+
     /// A backend answer planting every gateway-only member of
     /// `reserved_members::MEMBERS`, and one member of its own.
     pub(crate) fn planted() -> Value {

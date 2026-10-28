@@ -301,3 +301,95 @@ impl crate::transport::Transport for Planted {
         Ok(())
     }
 }
+
+/// The answer frame in a client's `body`: the one JSON-RPC frame with an id,
+/// whether the body is plain JSON or a stream of `data:` lines.
+pub(crate) fn answer_frame(body: &str) -> Option<Value> {
+    let frames = body
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .chain(std::iter::once(body))
+        .filter_map(|text| serde_json::from_str::<Value>(text.trim()).ok());
+    frames
+        .into_iter()
+        .find(|frame| frame.get("id").is_some_and(|id| !id.is_null()))
+}
+
+/// The members `delivered` has that `raw` does not, as dotted paths with
+/// array elements as `*`. A `_meta` the gateway added is listed key by key,
+/// as the member table lists `_meta` members.
+pub(crate) fn added_members(raw: &Value, delivered: &Value) -> Vec<String> {
+    fn walk(raw: &Value, delivered: &Value, at: &mut Vec<String>, out: &mut Vec<String>) {
+        match (raw, delivered) {
+            (Value::Object(raw), Value::Object(delivered)) => {
+                for (key, value) in delivered {
+                    at.push(key.clone());
+                    match raw.get(key) {
+                        Some(sent) => walk(sent, value, at, out),
+                        None if key == "_meta" => walk(&json!({}), value, at, out),
+                        None => out.push(at.join(".")),
+                    }
+                    at.pop();
+                }
+            }
+            (Value::Array(raw), Value::Array(delivered)) => {
+                for (sent, value) in raw.iter().zip(delivered) {
+                    at.push("*".to_owned());
+                    walk(sent, value, at, out);
+                    at.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(raw, delivered, &mut Vec::new(), &mut out);
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// What the client received for `method` with `text` planted at `part`,
+/// diffed against what the backend sent: every member the gateway added
+/// that has no row in the member table. `wrapped` is a `gateway_invoke`
+/// answer, the tool's value carried as text inside the gateway's wrapper.
+pub(crate) fn unclassified_additions(
+    (method, part, text): (&str, Part, &str),
+    wrapped: bool,
+    body: &str,
+) -> Vec<String> {
+    let Some(frame) = answer_frame(body) else {
+        return vec![format!("no answer frame in {body}")];
+    };
+    // The tool-result shape a wrapper or a gateway-built result must have;
+    // every other member of it is one the gateway chose to add.
+    let wrapper = json!({"content": [], "isError": false});
+    let mut added = Vec::new();
+    if let Some(result) = frame.get("result") {
+        if wrapped || part != Part::ResultText {
+            added.extend(added_members(&wrapper, result));
+        }
+        let value = if wrapped {
+            result
+                .pointer("/content/0/text")
+                .and_then(Value::as_str)
+                .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        } else {
+            Some(result.clone())
+        };
+        if part == Part::ResultText
+            && let Some(value) = value
+        {
+            added.extend(added_members(&shaped(method, text), &value));
+        }
+    }
+    if let Some(error) = frame.get("error") {
+        let mut raw = json!({"code": 0, "message": ""});
+        if part == Part::ErrorData {
+            raw["data"] = json!({"detail": text});
+        }
+        added.extend(added_members(&raw, error));
+    }
+    added.retain(|path| !crate::protocol::reserved_members::test_support::classified(path));
+    added
+}

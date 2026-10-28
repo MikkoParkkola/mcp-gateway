@@ -13,7 +13,9 @@ use serde_json::{Value, json};
 
 use crate::backend::{Backend, BackendRegistry};
 use crate::config::{BackendConfig, FailsafeConfig};
-use crate::gateway::egress_fixture::{BACKEND_METHODS, NAME, Part, Planted, URI, secret};
+use crate::gateway::egress_fixture::{
+    BACKEND_METHODS, NAME, Part, Planted, URI, secret, unclassified_additions,
+};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::security::firewall::{Firewall, FirewallAction, FirewallConfig, FirewallRule};
 
@@ -26,6 +28,8 @@ enum Setup {
     Warn,
     /// No firewall; response inspection in action mode is the only screen.
     InspectionOnly,
+    /// No firewall; response inspection in observe mode, which annotates.
+    ObserveOnly,
     /// The firewall present with response scanning off.
     ScanOff,
     /// The firewall present and disabled.
@@ -57,6 +61,9 @@ async fn stdio_on(backend: Arc<Planted>, setup: Setup) -> (Arc<MetaMcp>, Option<
     let mut meta = MetaMcp::new(registry);
     if matches!(setup, Setup::InspectionOnly) {
         meta.enable_response_inspection_action_mode();
+        return (Arc::new(meta), None);
+    }
+    if matches!(setup, Setup::ObserveOnly) {
         return (Arc::new(meta), None);
     }
     let firewall = Arc::new(
@@ -443,4 +450,29 @@ async fn a_screened_notification_leaves_the_answers_facts_alone() {
     assert!(!body.contains(&leak), "premise: withheld: {body}");
     assert_eq!(row["response_effect"], "delivered", "{row}");
     assert_eq!(row["response_findings"], json!([]), "{row}");
+}
+
+/// The stdio twin of the HTTP row: every member the gateway adds to a
+/// backend's answer is a row of the member table. `tools/list` is left out:
+/// stdio reaches a backend's tools through `gateway_list_tools`, the
+/// gateway's own catalogue.
+#[tokio::test]
+async fn every_member_the_gateway_adds_on_stdio_is_in_the_member_table() {
+    let mut failures = Vec::new();
+    for setup in [Setup::ObserveOnly, Setup::InspectionOnly] {
+        for method in BACKEND_METHODS.into_iter().filter(|m| *m != "tools/list") {
+            for part in [Part::ResultText, Part::ErrorData] {
+                for text in ["harmless".to_owned(), secret()] {
+                    let seen = cell(setup, method, part, text.clone()).await;
+                    let wrapped = method == "tools/call";
+                    for path in unclassified_additions((method, part, &text), wrapped, &seen.body) {
+                        failures.push(format!(
+                            "{setup:?} stdio {method} {part:?}: `{path}` added outside the member table"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    report(&failures);
 }

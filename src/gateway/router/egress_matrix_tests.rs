@@ -14,9 +14,12 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use super::direct_guards_fixture::{
-    Fx, fixture_audited_on, fixture_firewalled_on, fixture_inspecting_on, meta_firewall,
+    Fx, fixture_audited_on, fixture_firewalled_on, fixture_inspecting_on, fixture_observing_on,
+    meta_firewall,
 };
-use crate::gateway::egress_fixture::{BACKEND_METHODS, NAME, Part, Planted, URI, secret};
+use crate::gateway::egress_fixture::{
+    BACKEND_METHODS, NAME, Part, Planted, URI, secret, unclassified_additions,
+};
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 use crate::security::firewall::FirewallAction;
 
@@ -128,6 +131,8 @@ enum Setup {
     Warn,
     /// No firewall; response inspection in action mode is the only screen.
     InspectionOnly,
+    /// No firewall; response inspection in observe mode, which annotates.
+    ObserveOnly,
 }
 
 /// What one cell observed.
@@ -146,6 +151,7 @@ async fn cell(setup: Setup, route: Route, method: &'static str, part: Part, text
         Setup::Default => fixture_firewalled_on(backend, None).await,
         Setup::Warn => fixture_firewalled_on(backend, Some(FirewallAction::Warn)).await,
         Setup::InspectionOnly => fixture_inspecting_on(backend).await,
+        Setup::ObserveOnly => fixture_observing_on(backend).await,
     };
     let firewalls = [fx.state.firewall.clone(), meta_firewall()];
     let count = || -> usize {
@@ -550,3 +556,38 @@ async fn egress_a_stolen_envelope_frees_no_other_slot() {
 /// The continuation-slot release matrix (MIK-8176 family).
 #[path = "egress_matrix_tests/slot_release.rs"]
 mod slot_release;
+
+/// Every member the gateway adds to a backend's answer is a row of the member
+/// table, so the delivery record counts it and ingress strips a backend's
+/// copy. Each backend method, result and error, on both routes, with response
+/// inspection observing (findings written onto the answer) and enforcing,
+/// over harmless text and a credential the inspection flags. `/mcp`'s tool
+/// listing is left out: `gateway_list_tools` answers the gateway's own
+/// catalogue, not a backend's answer.
+#[tokio::test]
+async fn every_member_the_gateway_adds_is_in_the_member_table() {
+    let mut failures = Vec::new();
+    for setup in [Setup::ObserveOnly, Setup::InspectionOnly] {
+        for method in BACKEND_METHODS {
+            for route in ROUTES {
+                if route == Route::Meta && method == "tools/list" {
+                    continue;
+                }
+                for part in [Part::ResultText, Part::ErrorData] {
+                    for text in ["harmless".to_owned(), secret()] {
+                        let seen = cell(setup, route, method, part, text.clone()).await;
+                        let wrapped = route == Route::Meta && method == "tools/call";
+                        for path in
+                            unclassified_additions((method, part, &text), wrapped, &seen.body)
+                        {
+                            failures.push(format!(
+                                "{setup:?} {route:?} {method} {part:?}: `{path}` added outside the member table"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    report(&failures);
+}
