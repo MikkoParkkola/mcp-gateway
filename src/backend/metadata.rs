@@ -335,7 +335,7 @@ impl Backend {
         let lease = self.begin_internal_activity_for(&key)?;
         let entry = Arc::clone(lease.entry());
         // A lent-only slot's fill, its start included, sends as this caller.
-        let _loan = self.lend_to_slot(&key, &entry, fetch_headers)?;
+        let loan = self.lend_to_slot(&key, &entry, fetch_headers)?;
         // MIK-8399: what a tools fill read, for the permit's abandon hook.
         let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let tools = family.truncated_flag.is_some();
@@ -372,10 +372,15 @@ impl Backend {
                     let drained = run_bounded(&entry, &self.name, bound, async {
                         // A cold fill on the dispatch path has sent no tools/call
                         // yet, so a failed start is a pre-send refusal (MIK-7979).
-                        let transport = self
-                            .ensure_entry_started(&key)
-                            .await
-                            .map_err(|e| super::lifecycle::pre_send_start_error(&self.name, e))?;
+                        // The start sends no call's headers: a lent-only slot
+                        // sends it as this fill's loan.
+                        let transport = {
+                            let _starting =
+                                loan.as_ref().map(|held| entry.lender.starting(held.id()));
+                            self.ensure_entry_started(&key).await.map_err(|e| {
+                                super::lifecycle::pre_send_start_error(&self.name, e)
+                            })?
+                        };
                         Provenance::mark_started();
                         let (merged, truncated) = drain_list_pages(
                             transport.as_ref(),

@@ -356,10 +356,14 @@ impl Backend {
         let entry = std::sync::Arc::clone(activity.entry());
         // This dispatch's credential is what a lent-only slot sends as, its
         // start included, for as long as the dispatch runs.
-        let _loan = self.lend_to_slot(&key, &entry, credential)?;
+        let loan = self.lend_to_slot(&key, &entry, credential)?;
 
-        // Ensure this slot's transport is live.
-        let transport = self.start_judged(&key, &entry, start_time, method).await?;
+        // Ensure this slot's transport is live. The start sends no call's
+        // headers, so a lent-only slot sends it as this dispatch's loan.
+        let transport = {
+            let _starting = loan.as_ref().map(|held| entry.lender.starting(held.id()));
+            self.start_judged(&key, &entry, start_time, method).await?
+        };
 
         // Execute with retry
         let name = self.name.clone();
@@ -630,9 +634,12 @@ impl Backend {
         let activity = self.begin_activity(&key)?;
         // As in `request_attempted`: record on the claimed entry (#2261).
         let entry = std::sync::Arc::clone(activity.entry());
-        let _loan = self.lend_to_slot(&key, &entry, extra_headers)?;
+        let loan = self.lend_to_slot(&key, &entry, extra_headers)?;
 
-        let transport = self.start_recorded(&key, &entry, start_time).await?;
+        let transport = {
+            let _starting = loan.as_ref().map(|held| entry.lender.starting(held.id()));
+            self.start_recorded(&key, &entry, start_time).await?
+        };
 
         let result = transport
             .notify_with_headers(method, params, extra_headers, identity_key)
