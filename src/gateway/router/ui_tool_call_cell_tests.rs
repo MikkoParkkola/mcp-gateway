@@ -66,6 +66,12 @@ async fn t22_a_call_for_another_target_is_refused() {
     assert_eq!(sent(&fx), 1, "the foreign target was never sent");
 }
 
+/// A client that declares the tasks extension, so a task request is not
+/// refused for want of it.
+fn tasks() -> Value {
+    json!({"extensions": {"io.modelcontextprotocol/tasks": {}}})
+}
+
 /// T18: a task-augmented call under a UI call is refused before any task
 /// exists: its worker would run outside the UI call.
 /// Mutant: the task refusal removed.
@@ -79,7 +85,9 @@ async fn t18_a_ui_call_never_runs_as_a_task() {
     );
     let mut params = invoke("read");
     params["task"] = json!({});
-    params["_meta"] = json!({(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): "t18"});
+    params["_meta"] = json!({
+        "io.modelcontextprotocol/clientCapabilities": tasks(),
+        (crate::protocol::mrtr::IDEMPOTENCY_KEY_META): "t18"});
     let body = post_mcp(&fx, ADMIN, params, Some(call)).await;
     let body: Value = serde_json::from_slice(&body).expect("json");
     assert!(body.get("error").is_some(), "{body}");
@@ -89,7 +97,9 @@ async fn t18_a_ui_call_never_runs_as_a_task() {
     // Control: the same request with no UI call in scope makes a task.
     let mut params = invoke("read");
     params["task"] = json!({});
-    params["_meta"] = json!({(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): "t18-control"});
+    params["_meta"] = json!({
+        "io.modelcontextprotocol/clientCapabilities": tasks(),
+        (crate::protocol::mrtr::IDEMPOTENCY_KEY_META): "t18-control"});
     let body = post_mcp(&fx, ADMIN, params, None).await;
     let body: Value = serde_json::from_slice(&body).expect("json");
     assert!(

@@ -525,7 +525,12 @@ pub(super) async fn post_mcp(
     let revision = crate::protocol::meta::FIRST_STATELESS_VERSION;
     let mut params = params;
     params["_meta"]["io.modelcontextprotocol/protocolVersion"] = json!(revision);
-    params["_meta"]["io.modelcontextprotocol/clientCapabilities"] = json!({});
+    if params["_meta"]
+        .get("io.modelcontextprotocol/clientCapabilities")
+        .is_none()
+    {
+        params["_meta"]["io.modelcontextprotocol/clientCapabilities"] = json!({});
+    }
     let name = params["name"].as_str().unwrap_or_default().to_owned();
     let request = Request::builder()
         .method("POST")
