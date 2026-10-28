@@ -306,6 +306,19 @@ mod tests;
 pub(crate) mod test_support {
     use serde_json::{Value, json};
 
+    /// Whether `path`, dotted with array elements as `*`, is a member of the
+    /// table: a row's path, or a path inside a row's member (the gateway
+    /// filling a tool's missing annotation hints writes that member).
+    pub(crate) fn classified(path: &str) -> bool {
+        super::MEMBERS.iter().any(|m| {
+            let row = m.path.join(".");
+            path == row
+                || path
+                    .strip_prefix(&row)
+                    .is_some_and(|rest| rest.starts_with('.'))
+        })
+    }
+
     /// A backend answer planting every gateway-only member of
     /// `reserved_members::MEMBERS`, and one member of its own.
     pub(crate) fn planted() -> Value {
