@@ -10,6 +10,8 @@
   --bg: #0d1117; --bg2: #161b22; --bg3: #21262d; --fg: #e6edf3;
   --fg2: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149;
   --yellow: #d29922; --border: #30363d; --radius: 6px;
+  /* Red text on a red tint: AA on every background (--red there is 3.84:1). */
+  --red-text: #ff7b72;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -43,7 +45,7 @@ tr:hover td { background: var(--bg3); }
 /* Badges */
 .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 10px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; }
 .badge-closed, .badge-healthy { background: rgba(63,185,80,0.15); color: var(--green); }
-.badge-open, .badge-down { background: rgba(248,81,73,0.15); color: var(--red); }
+.badge-open, .badge-down { background: rgba(248,81,73,0.15); color: var(--red-text); }
 .badge-halfopen { background: rgba(210,153,34,0.15); color: var(--yellow); }
 .badge-running { background: rgba(88,166,255,0.15); color: var(--accent); }
 
@@ -57,7 +59,7 @@ tr:hover td { background: var(--bg3); }
 .search-bar input::placeholder { color: var(--fg2); }
 
 /* Buttons */
-.btn { background: var(--accent); color: #fff; border: none; border-radius: var(--radius); padding: 0.5rem 1rem; font-size: 0.875rem; cursor: pointer; font-weight: 600; }
+.btn { background: var(--accent); color: var(--bg); border: none; border-radius: var(--radius); padding: 0.5rem 1rem; font-size: 0.875rem; cursor: pointer; font-weight: 600; }
 .btn:hover { opacity: 0.9; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-danger { background: var(--red); }
@@ -110,7 +112,7 @@ tr:hover td { background: var(--bg3); }
 .form-msg.err { color: var(--red); }
 .mode-toggle { display: flex; gap: 0; margin-bottom: 1rem; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; width: fit-content; }
 .mode-toggle button { background: var(--bg3); color: var(--fg2); border: none; padding: 0.4rem 1rem; font-size: 0.8rem; cursor: pointer; }
-.mode-toggle button.active { background: var(--accent); color: #fff; font-weight: 600; }
+.mode-toggle button.active { background: var(--accent); color: var(--bg); font-weight: 600; }
 .env-rows { display: flex; flex-direction: column; gap: 0.4rem; }
 .env-row { display: flex; gap: 0.5rem; align-items: center; }
 .env-row input { flex: 1; }
@@ -140,6 +142,10 @@ tr:hover td { background: var(--bg3); }
 /* Control plane */
 .split-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
 .table-scroll { overflow-x: auto; margin-bottom: 1.5rem; }
+/* Focusable so a keyboard can scroll a pane that overflows. */
+.table-scroll:focus-visible, .tool-schema:focus-visible, .modal-preview:focus-visible,
+.config-block:focus-visible, .tool-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tool-toggle { background: none; border: 0; padding: 0; width: 100%; min-height: 24px; color: inherit; font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
 .muted { color: var(--fg2); }
 .mono { font-family: "SFMono-Regular", Consolas, monospace; font-size: 0.8rem; }
 .tag-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.5rem; }
@@ -155,7 +161,8 @@ tr:hover td { background: var(--bg3); }
 .reg-dropdown { position: absolute; top: 100%; left: 0; right: 0; z-index: 50; background: var(--bg2); border: 1px solid var(--border); border-radius: 0 0 var(--radius) var(--radius); max-height: 220px; overflow-y: auto; }
 .reg-dropdown .reg-opt { padding: 0.5rem 0.75rem; font-size: 0.875rem; cursor: pointer; border-bottom: 1px solid var(--border); }
 .reg-dropdown .reg-opt:last-child { border-bottom: none; }
-.reg-dropdown .reg-opt:hover { background: var(--bg3); }
+/* An outline, not a shadow: forced-colors mode keeps outlines and drops shadows. */
+.reg-dropdown .reg-opt[aria-selected="true"] { background: var(--bg3); outline: 2px solid var(--accent); outline-offset: -2px; }
 .reg-dropdown .reg-opt .reg-desc { font-size: 0.75rem; color: var(--fg2); }
 
 /* Responsive */
@@ -324,8 +331,8 @@ tr:hover td { background: var(--bg3); }
     <div id="page-tools" class="page">
       <h1>Tools</h1>
       <div class="search-bar">
-        <input type="text" id="tool-search" placeholder="Search tools..." autocomplete="off">
-        <select id="tool-server-filter"><option value="">All servers</option></select>
+        <input type="text" id="tool-search" placeholder="Search tools..." aria-label="Search tools" autocomplete="off">
+        <select id="tool-server-filter" aria-label="Filter by server"><option value="">All servers</option></select>
       </div>
       <div id="tools-table-wrap">
         <table>
@@ -353,16 +360,17 @@ tr:hover td { background: var(--bg3); }
         <!-- Registry mode -->
         <div id="server-registry-fields">
           <div class="form-group" style="margin-bottom:0.75rem">
-            <label>Search Registry</label>
+            <label for="reg-search-input">Search Registry</label>
             <div class="reg-search-wrap">
               <input type="text" id="reg-search-input" placeholder="Search 48+ built-in servers..."
+                role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="reg-dropdown" spellcheck="false"
                 autocomplete="off" oninput="onRegSearch(this.value)" onfocus="onRegSearch(this.value)">
-              <div id="reg-dropdown" class="reg-dropdown" style="display:none"></div>
+              <div id="reg-dropdown" class="reg-dropdown" role="listbox" aria-label="Registry servers" style="display:none"></div>
             </div>
           </div>
           <div id="reg-selected-info" style="display:none;margin-bottom:0.75rem">
             <div class="form-group">
-              <label>Override Name (optional)</label>
+              <label for="reg-name-override">Override Name (optional)</label>
               <input type="text" id="reg-name-override" placeholder="Leave blank to use registry name">
             </div>
           </div>
@@ -372,11 +380,11 @@ tr:hover td { background: var(--bg3); }
         <div id="server-custom-fields" style="display:none">
           <div class="form-row">
             <div class="form-group">
-              <label>Name <span style="color:var(--red)">*</span></label>
+              <label for="custom-name">Name <span style="color:var(--red)">*</span></label>
               <input type="text" id="custom-name" placeholder="my-server">
             </div>
             <div class="form-group">
-              <label>Transport</label>
+              <label for="custom-transport">Transport</label>
               <select id="custom-transport" onchange="onTransportChange()">
                 <option value="stdio">stdio (command)</option>
                 <option value="http">HTTP/SSE or WebSocket (URL)</option>
@@ -385,13 +393,13 @@ tr:hover td { background: var(--bg3); }
           </div>
           <div class="form-row" id="custom-command-row">
             <div class="form-group" style="flex:2">
-              <label>Command</label>
+              <label for="custom-command">Command</label>
               <input type="text" id="custom-command" placeholder="npx -y @modelcontextprotocol/server-foo">
             </div>
           </div>
           <div class="form-row" id="custom-url-row" style="display:none">
             <div class="form-group" style="flex:2">
-              <label>URL</label>
+              <label for="custom-url">URL</label>
               <input type="text" id="custom-url" placeholder="http://localhost:8080/sse">
             </div>
           </div>
@@ -441,8 +449,8 @@ tr:hover td { background: var(--bg3); }
 
       <div class="split-grid">
         <div>
-          <h2>Server Inventory</h2>
-          <div class="table-scroll">
+          <h2 id="cp-h-inventory">Server Inventory</h2>
+          <div class="table-scroll" tabindex="0" role="region" aria-labelledby="cp-h-inventory">
             <table>
               <thead><tr><th>Name</th><th>Status</th><th>Owner</th></tr></thead>
               <tbody id="cp-servers-tbody"><tr><td colspan="3" class="muted">Loading...</td></tr></tbody>
@@ -450,8 +458,8 @@ tr:hover td { background: var(--bg3); }
           </div>
         </div>
         <div>
-          <h2>Runtime Health</h2>
-          <div class="table-scroll">
+          <h2 id="cp-h-runtime">Runtime Health</h2>
+          <div class="table-scroll" tabindex="0" role="region" aria-labelledby="cp-h-runtime">
             <table>
               <thead><tr><th>Server</th><th>Provider</th><th>Health</th></tr></thead>
               <tbody id="cp-runtime-tbody"><tr><td colspan="3" class="muted">Loading...</td></tr></tbody>
@@ -460,24 +468,24 @@ tr:hover td { background: var(--bg3); }
         </div>
       </div>
 
-      <h2>TrustCards</h2>
-      <div class="table-scroll">
+      <h2 id="cp-h-trustcards">TrustCards</h2>
+      <div class="table-scroll" tabindex="0" role="region" aria-labelledby="cp-h-trustcards">
         <table>
           <thead><tr><th>Server</th><th>Digest</th><th>Schema</th></tr></thead>
           <tbody id="cp-trustcards-tbody"><tr><td colspan="3" class="muted">Loading...</td></tr></tbody>
         </table>
       </div>
 
-      <h2>ShadowRadar</h2>
-      <div class="table-scroll">
+      <h2 id="cp-h-shadow">ShadowRadar</h2>
+      <div class="table-scroll" tabindex="0" role="region" aria-labelledby="cp-h-shadow">
         <table>
           <thead><tr><th>Asset</th><th>Transport</th><th>Severity</th><th>Action</th><th>Review</th></tr></thead>
           <tbody id="cp-shadow-tbody"><tr><td colspan="5" class="muted">Loading...</td></tr></tbody>
         </table>
       </div>
 
-      <h2>Decision Queue</h2>
-      <div class="table-scroll">
+      <h2 id="cp-h-decisions">Decision Queue</h2>
+      <div class="table-scroll" tabindex="0" role="region" aria-labelledby="cp-h-decisions">
         <table>
           <thead><tr><th>Decision</th><th>Target</th><th>Required</th><th>Tier</th><th>Actor</th></tr></thead>
           <tbody id="cp-decisions-tbody"><tr><td colspan="5" class="muted">Loading...</td></tr></tbody>
@@ -486,8 +494,8 @@ tr:hover td { background: var(--bg3); }
 
       <div class="split-grid">
         <div>
-          <h2>Feature Boundary</h2>
-          <div class="table-scroll">
+          <h2 id="cp-h-features">Feature Boundary</h2>
+          <div class="table-scroll" tabindex="0" role="region" aria-labelledby="cp-h-features">
             <table>
               <thead><tr><th>Feature</th><th>Tier</th><th>This Route</th></tr></thead>
               <tbody id="cp-features-tbody"><tr><td colspan="3" class="muted">Loading...</td></tr></tbody>
@@ -495,8 +503,8 @@ tr:hover td { background: var(--bg3); }
           </div>
         </div>
         <div>
-          <h2>RBAC</h2>
-          <div class="table-scroll">
+          <h2 id="cp-h-rbac">RBAC</h2>
+          <div class="table-scroll" tabindex="0" role="region" aria-labelledby="cp-h-rbac">
             <table>
               <thead><tr><th>Action</th><th>Access</th><th>Evidence</th></tr></thead>
               <tbody id="cp-rbac-tbody"><tr><td colspan="3" class="muted">Loading...</td></tr></tbody>
@@ -531,7 +539,7 @@ tr:hover td { background: var(--bg3); }
         <button class="btn" id="reload-btn" onclick="doReload()">Hot Reload</button>
         <span id="reload-status" style="margin-left:0.75rem;font-size:0.85rem;color:var(--fg2)"></span>
       </div>
-      <div class="config-block" id="config-content">Loading...</div>
+      <div class="config-block" id="config-content" tabindex="0" role="region" aria-label="Current configuration">Loading...</div>
     </div>
 
     <!-- Costs -->
@@ -566,10 +574,10 @@ tr:hover td { background: var(--bg3); }
       <button class="modal-close" onclick="closeImportModal()" aria-label="Close">&times;</button>
     </div>
     <div class="modal-url-row">
-      <input type="url" id="import-url" placeholder="https://petstore3.swagger.io/api/v3/openapi.json" autocomplete="off">
+      <input type="url" id="import-url" aria-label="OpenAPI spec URL" placeholder="https://petstore3.swagger.io/api/v3/openapi.json" autocomplete="off">
       <button class="btn btn-sm" id="preview-btn" onclick="previewOpenAPI()">Preview</button>
     </div>
-    <div class="modal-preview" id="import-preview">
+    <div class="modal-preview" id="import-preview" tabindex="0" role="region" aria-label="Operations in the spec">
       <span class="preview-hint">Enter a URL and click Preview to see available tools.</span>
     </div>
     <div class="modal-select-row" id="import-select-row" style="display:none">
@@ -1091,7 +1099,7 @@ function resetAddServerForm() {
   document.getElementById('server-registry-fields').style.display = '';
   document.getElementById('server-custom-fields').style.display = 'none';
   document.getElementById('reg-search-input').value = '';
-  document.getElementById('reg-dropdown').style.display = 'none';
+  setRegistryListOpen(false);
   document.getElementById('reg-selected-info').style.display = 'none';
   document.getElementById('reg-name-override').value = '';
   document.getElementById('custom-name').value = '';
@@ -1133,7 +1141,47 @@ async function loadRegistry() {
   }
 }
 
+// The registry search is a WAI-ARIA APG combobox with a listbox popup. Focus
+// stays in the box; `regActive` is the index of the active option, -1 for
+// none, and `aria-activedescendant` names it.
+let regActive = -1;
+
+function regBox() { return document.getElementById('reg-search-input'); }
+
+// Open or close the list. Closing also clears the active option.
+function setRegistryListOpen(open) {
+  document.getElementById('reg-dropdown').style.display = open ? 'block' : 'none';
+  regBox().setAttribute('aria-expanded', String(open));
+  if (!open) setRegistryActive(-1);
+}
+
+// Make option `i` the active one and keep it in view; -1 (or an index with
+// no option) clears it.
+function setRegistryActive(i) {
+  if (i >= 0 && i === regActive) return;
+  const prev = document.querySelector('#reg-dropdown [aria-selected="true"]');
+  if (prev) prev.setAttribute('aria-selected', 'false');
+  const opt = i >= 0 ? document.getElementById('reg-opt-' + i) : null;
+  regActive = opt ? i : -1;
+  if (!opt) { regBox().removeAttribute('aria-activedescendant'); return; }
+  opt.setAttribute('aria-selected', 'true');
+  regBox().setAttribute('aria-activedescendant', opt.id);
+  // Scroll the list itself, never the page (scrollIntoView would move both).
+  const dd = document.getElementById('reg-dropdown');
+  if (opt.offsetTop < dd.scrollTop) dd.scrollTop = opt.offsetTop;
+  else if (opt.offsetTop + opt.offsetHeight > dd.scrollTop + dd.clientHeight) {
+    dd.scrollTop = opt.offsetTop + opt.offsetHeight - dd.clientHeight;
+  }
+}
+
 function onRegSearch(q) {
+  // An edit after a pick drops the pick, so Add never adds an entry the box
+  // no longer names.
+  if (regSelected && q !== regSelected.name) {
+    regSelected = null;
+    document.getElementById('reg-selected-info').style.display = 'none';
+    document.getElementById('reg-name-override').value = '';
+  }
   const dd = document.getElementById('reg-dropdown');
   const lower = q.toLowerCase();
   const matches = q.length === 0
@@ -1143,40 +1191,111 @@ function onRegSearch(q) {
         (s.description || '').toLowerCase().includes(lower)
       ).slice(0, 30);
 
-  if (matches.length === 0) { dd.style.display = 'none'; return; }
   regMatches = matches;
+  // No match leaves no options behind to activate or pick.
+  if (matches.length === 0) { dd.innerHTML = ''; setRegistryListOpen(false); return; }
   dd.innerHTML = matches.map((s, i) => `
-    <div class="reg-opt" data-action="select-reg" data-value="${i}">
+    <div class="reg-opt" role="option" id="reg-opt-${i}" aria-selected="false" data-action="select-reg" data-value="${i}">
       <div>${esc(s.name)}</div>
       <div class="reg-desc">${esc(truncate(s.description || '', 80))}</div>
       <div class="reg-desc">login: ${esc(s.login || 'none')}${s.reach_reason ? ' - added disabled: can reach any address' : ''}${s.setup ? ' - needs ' + esc(s.setup) : ''}</div>
     </div>`).join('');
-  dd.style.display = 'block';
+  // A new list starts at its top with no option active.
+  dd.scrollTop = 0;
+  setRegistryListOpen(true);
+  setRegistryActive(-1);
 }
 
-function selectRegServer(s) {
+// Pick option `i`, from Enter or a click.
+function pickRegistryEntry(i) {
+  const s = regMatches[i];
+  if (!s) return;
   // A copy, as before: editing the form never changes the listed entry.
   regSelected = JSON.parse(JSON.stringify(s));
-  document.getElementById('reg-search-input').value = regSelected.name;
-  document.getElementById('reg-dropdown').style.display = 'none';
+  regBox().value = regSelected.name;
+  setRegistryListOpen(false);
   document.getElementById('reg-selected-info').style.display = '';
 }
 
-// Hide registry dropdown when clicking outside
-document.addEventListener('click', e => {
-  if (!e.target.closest('.reg-search-wrap')) {
-    document.getElementById('reg-dropdown').style.display = 'none';
+regBox().addEventListener('keydown', (e) => {
+  // Keys that belong to an input method composition are the IME's.
+  if (e.isComposing || e.keyCode === 229) return;
+  const open = document.getElementById('reg-dropdown').style.display !== 'none';
+  // Shift, Ctrl and Meta with an arrow are editing chords (select, jump to an
+  // end): the browser keeps them, and the active option no longer applies.
+  if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && (e.shiftKey || e.ctrlKey || e.metaKey)) {
+    if (regActive >= 0) setRegistryActive(-1);
+    return;
   }
+  switch (e.key) {
+    case 'ArrowDown':
+    case 'ArrowUp': {
+      e.preventDefault();
+      const down = e.key === 'ArrowDown';
+      if (!open) {
+        onRegSearch(regBox().value);
+        // Alt+ArrowDown only opens the list.
+        if (!e.altKey) setRegistryActive(down ? 0 : regMatches.length - 1);
+        return;
+      }
+      if (e.altKey) return;
+      const last = regMatches.length - 1;
+      if (down) setRegistryActive(regActive < 0 || regActive >= last ? 0 : regActive + 1);
+      else setRegistryActive(regActive <= 0 ? last : regActive - 1);
+      return;
+    }
+    case 'Enter':
+      if (open && regActive >= 0) { e.preventDefault(); pickRegistryEntry(regActive); }
+      return;
+    case 'Escape':
+      if (open) { e.preventDefault(); setRegistryListOpen(false); }
+      return;
+    case 'Tab':
+      // Never cancelled: focus moves on, and the list closes behind it.
+      if (open) setRegistryListOpen(false);
+      return;
+    case 'ArrowLeft':
+    case 'ArrowRight':
+    case 'Home':
+    case 'End':
+      // The caret moves as usual; the active option no longer applies.
+      if (regActive >= 0) setRegistryActive(-1);
+      return;
+  }
+});
+
+// A press on an option must not take focus from the box: the box's focus
+// handler would reopen the list after the pick. A press on the list itself
+// (its scrollbar) keeps its default, so the scrollbar still drags.
+document.getElementById('reg-dropdown').addEventListener('mousedown', (e) => {
+  if (e.target.closest('.reg-opt')) e.preventDefault();
+});
+// The option the pointer moves onto is the active one, so Enter and a click
+// agree. Movement only: a list rebuilt under a resting pointer keeps the
+// keyboard's choice.
+// A browser also sends a mouse move after a scroll, at the same point: that
+// is not movement.
+let regPointer = null;
+document.getElementById('reg-dropdown').addEventListener('mousemove', (e) => {
+  if (regPointer && regPointer.x === e.clientX && regPointer.y === e.clientY) return;
+  regPointer = { x: e.clientX, y: e.clientY };
+  const opt = e.target.closest('.reg-opt');
+  if (opt && Number(opt.dataset.value) !== regActive) setRegistryActive(Number(opt.dataset.value));
+});
+
+// Close the list on a click outside the search.
+document.addEventListener('click', e => {
+  if (!e.target.closest('.reg-search-wrap')) setRegistryListOpen(false);
 });
 
 function addEnvRow(k = '', v = '') {
   const row = document.createElement('div');
   row.className = 'env-row';
   row.innerHTML = `
-    <input type="text" placeholder="KEY" value="${esc(k)}" style="flex:1;min-width:100px">
+    <input type="text" placeholder="KEY" aria-label="Variable name" value="${esc(k)}" style="flex:1;min-width:100px">
     <span style="color:var(--fg2);font-size:0.85rem">=</span>
-    <input type="text" placeholder="value" value="${esc(v)}" style="flex:2">
-    <button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">x</button>`;
+    <input type="text" placeholder="value" aria-label="Variable value" value="${esc(v)}" style="flex:2">
+    <button class="btn btn-sm btn-danger" aria-label="Remove variable" onclick="this.parentElement.remove()">x</button>`;
   document.getElementById('env-rows').appendChild(row);
 }
 
@@ -1289,15 +1408,17 @@ function filterAndRenderTools() {
     tbody.innerHTML = '<tr><td colspan="3" style="color:var(--fg2)">No tools found</td></tr>';
     return;
   }
+  // The name is a button so the detail opens from the keyboard too; its click
+  // reaches the row's handler.
   tbody.innerHTML = filtered.map((t, i) => `<tr class="tool-row" data-idx="${i}" onclick="toggleToolDetail(this)">
-    <td><strong>${esc(t.name)}</strong></td>
+    <td><button type="button" class="tool-toggle" aria-expanded="false" aria-controls="td-${i}">${esc(t.name)}</button></td>
     <td>${esc(t.server)}</td>
     <td>${esc(truncate(t.description, 80))}</td>
   </tr>
   <tr class="tool-detail-row" id="td-${i}" style="display:none"><td colspan="3">
     <div class="tool-detail open">
       <div class="tool-desc">${esc(t.description || 'No description')}</div>
-      ${t.schema ? '<div class="tool-schema">' + esc(JSON.stringify(t.schema, null, 2)) + '</div>' : ''}
+      ${t.schema ? `<div class="tool-schema" tabindex="0" role="region" aria-label="Input schema of ${esc(t.name)}">${esc(JSON.stringify(t.schema, null, 2))}</div>` : ''}
     </div>
   </td></tr>`).join('');
 }
@@ -1306,6 +1427,8 @@ function toggleToolDetail(row) {
   const idx = row.dataset.idx;
   const detail = document.getElementById('td-' + idx);
   detail.style.display = detail.style.display === 'none' ? '' : 'none';
+  const toggle = row.querySelector('.tool-toggle');
+  if (toggle) toggle.setAttribute('aria-expanded', String(detail.style.display !== 'none'));
 }
 
 document.getElementById('tool-search').addEventListener('input', filterAndRenderTools);
@@ -1421,7 +1544,7 @@ function renderCapabilities() {
         <span class="cap-meta" id="cap-chevron-${esc(name)}">&#9660;</span>
       </div>
       <div class="cap-body" id="cap-body-${esc(name)}">
-        <textarea id="cap-editor-${esc(name)}" spellcheck="false" placeholder="Loading YAML..."
+        <textarea id="cap-editor-${esc(name)}" spellcheck="false" aria-label="YAML for ${esc(name)}" placeholder="Loading YAML..."
           onkeydown="capTabIndent(event)"></textarea>
         <div class="cap-body-actions">
           <button class="btn btn-sm" data-action="save-cap" data-value="${esc(name)}">Save</button>
@@ -1574,115 +1697,6 @@ function capTabIndent(e) {
   ta.selectionStart = ta.selectionEnd = start + 2;
 }
 
-// ── OpenAPI import modal ──
-function showImportModal() {
-  const modal = document.getElementById('import-modal');
-  if (modal) { modal.classList.add('open'); }
-  const urlInput = document.getElementById('import-url');
-  if (urlInput) urlInput.focus();
-}
-
-function closeImportModal() {
-  const modal = document.getElementById('import-modal');
-  if (modal) modal.classList.remove('open');
-  const preview = document.getElementById('import-preview');
-  if (preview) preview.innerHTML = '<span style="color:var(--fg2)">Enter a URL and click Preview to see available tools.</span>';
-  const msg = document.getElementById('import-msg');
-  if (msg) { msg.textContent = ''; msg.className = 'modal-msg'; }
-  const btn = document.getElementById('import-btn');
-  if (btn) btn.disabled = true;
-  const selectRow = document.getElementById('import-select-row');
-  if (selectRow) selectRow.style.display = 'none';
-}
-
-document.addEventListener('click', (e) => {
-  const modal = document.getElementById('import-modal');
-  if (e.target === modal) closeImportModal();
-});
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    const modal = document.getElementById('import-modal');
-    if (modal && modal.classList.contains('open')) closeImportModal();
-  }
-});
-
-async function previewOpenAPI() {
-  const url = document.getElementById('import-url').value.trim();
-  const preview = document.getElementById('import-preview');
-  const btn = document.getElementById('preview-btn');
-  const importBtn = document.getElementById('import-btn');
-  const selectRow = document.getElementById('import-select-row');
-  const msgEl = document.getElementById('import-msg');
-  if (!url) { msgEl.textContent = 'Please enter a URL.'; return; }
-  msgEl.textContent = '';
-  btn.disabled = true;
-  preview.innerHTML = '<span style="color:var(--fg2)">Loading...</span>';
-  importBtn.disabled = true;
-  selectRow.style.display = 'none';
-  try {
-    const r = await uiFetch('/ui/api/import/openapi/preview', {
-      method: 'POST',
-      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url })
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || r.statusText);
-    const tools = data.tools || [];
-    if (tools.length === 0) {
-      preview.innerHTML = '<span style="color:var(--fg2)">No tools found in this spec.</span>';
-    } else {
-      preview.innerHTML = tools.map(t => `<div style="display:flex;gap:0.5rem;align-items:flex-start;padding:0.25rem 0">
-        <input type="checkbox" class="import-check" value="${esc(t.name)}" checked>
-        <div><strong>${esc(t.name)}</strong><br><span style="font-size:0.85rem;color:var(--fg2)">${esc(t.description || '')}</span></div>
-      </div>`).join('');
-      importBtn.disabled = false;
-      selectRow.style.display = 'flex';
-      updateImportCount();
-      preview.querySelectorAll('.import-check').forEach(cb => cb.addEventListener('change', updateImportCount));
-    }
-  } catch (e) {
-    preview.innerHTML = '';
-    msgEl.textContent = 'Preview failed: ' + e.message;
-  }
-  btn.disabled = false;
-}
-
-function updateImportCount() {
-  const all = document.querySelectorAll('.import-check');
-  const checked = document.querySelectorAll('.import-check:checked');
-  const el = document.getElementById('import-count');
-  if (el) el.textContent = checked.length + ' / ' + all.length + ' selected';
-}
-
-function setAllChecks(val) {
-  document.querySelectorAll('.import-check').forEach(cb => { cb.checked = val; });
-  updateImportCount();
-}
-
-async function doImport() {
-  const url = document.getElementById('import-url').value.trim();
-  const checked = [...document.querySelectorAll('.import-check:checked')].map(cb => cb.value);
-  const importBtn = document.getElementById('import-btn');
-  const msgEl = document.getElementById('import-msg');
-  if (!checked.length) { msgEl.textContent = 'Select at least one tool.'; return; }
-  importBtn.disabled = true;
-  msgEl.textContent = 'Importing...';
-  try {
-    const r = await uiFetch('/ui/api/import/openapi', {
-      method: 'POST',
-      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, selected_tools: checked })
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || r.statusText);
-    closeImportModal();
-    refreshCapabilities();
-  } catch (e) {
-    msgEl.textContent = 'Import failed: ' + e.message;
-    importBtn.disabled = false;
-  }
-}
-
 // ── YAML editor: line numbers + Tab key ──
 function initYamlEditor(ta) {
   updateLineNumbers(ta);
@@ -1802,7 +1816,7 @@ async function previewOpenAPI() {
       preview.innerHTML = '<span class="preview-hint">No tools found in this spec.</span>';
     } else {
       preview.innerHTML = tools.map(t => `<div class="tool-check-item">
-        <input type="checkbox" class="import-check" value="${esc(t.name)}" checked>
+        <input type="checkbox" class="import-check" value="${esc(t.name)}" aria-label="${esc(t.name)}" checked>
         <div>
           <div class="tool-check-name">${esc(t.name)}</div>
           <div class="tool-check-desc">${esc(t.description || '')}</div>
@@ -1890,7 +1904,7 @@ document.addEventListener('click', e => {
   const value = el.dataset.value;
   switch (el.dataset.action) {
     case 'remove-server': removeServer(value); break;
-    case 'select-reg': selectRegServer(regMatches[Number(value)]); break;
+    case 'select-reg': pickRegistryEntry(Number(value)); break;
     case 'toggle-cap': toggleCap(value); break;
     case 'save-cap': saveCap(value); break;
     case 'revert-cap': revertCap(value); break;
