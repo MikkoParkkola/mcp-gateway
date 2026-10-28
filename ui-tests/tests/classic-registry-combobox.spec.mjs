@@ -368,6 +368,33 @@ test('C22: a rebuilt list starts scrolled to its top', async ({ page }) => {
   expect(await list(page).evaluate((el) => el.scrollTop)).toBe(0);
 });
 
+test('C23: a mouse move that does not move the pointer keeps the keyboard choice', async ({ page }) => {
+  await addServerForm(page);
+  await search(page);
+  const second = list(page).getByRole('option').nth(1);
+  await second.hover();
+  const at = await second.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+  });
+  for (let i = 0; i < 20; i++) await page.keyboard.press('ArrowDown');
+  const want = await box(page).getAttribute('aria-activedescendant');
+  // After a scroll, Chrome sends a mouse move at the same point, now over a
+  // different option. It is not movement and must not take the choice.
+  await page.evaluate(({ x, y }) => {
+    const under = document.elementFromPoint(x, y);
+    under.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: y }));
+  }, at);
+  await expect(box(page)).toHaveAttribute('aria-activedescendant', want);
+});
+
+test('C24: each option is named by its server name alone', async ({ page }) => {
+  await addServerForm(page);
+  await search(page);
+  await expect(list(page).getByRole('option', { name: 'server-15', exact: true })).toHaveCount(1);
+  await expect(box(page)).toHaveAttribute('spellcheck', 'false');
+});
+
 for (const width of WIDTHS) {
   test(`C7: axe finds no blocking violation with the list open and an option active at ${width} px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
