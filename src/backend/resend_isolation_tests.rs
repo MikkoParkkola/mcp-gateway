@@ -210,7 +210,10 @@ async fn a_per_identity_fill_never_reaches_the_shared_resend_set() {
     let backend = per_user_backend();
 
     backend
-        .get_tools_for_binding(Some("alpha"), &[])
+        .get_tools_for_binding(
+            Some("alpha"),
+            &[("Authorization".to_owned(), "Bearer alpha".to_owned())],
+        )
         .await
         .expect("alpha catalogue fill");
 

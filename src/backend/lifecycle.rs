@@ -561,20 +561,10 @@ impl Backend {
                 built_under = self.destination();
                 #[cfg(test)]
                 self.hold_in_mark_window().await;
-                // A required binding's per-user slot carries nothing of the
-                // gateway's: no static header and no OAuth client,
-                // as the per-user listener's transport is built.
                 let slot =
                     matches!(key, PoolKey::PerUser { .. }).then(|| self.per_user_slot_credential());
-                let lent_only = slot == Some(crate::transport::SlotCredential::LentOnly);
-                let (statics, oauth_client) = if lent_only {
-                    (std::collections::HashMap::new(), None)
-                } else {
-                    (
-                        self.config.headers.clone(),
-                        self.create_oauth_client(http_url, built_under)?,
-                    )
-                };
+                let (statics, oauth_client) =
+                    self.slot_gateway_credentials(slot, http_url, built_under)?;
                 let transport = HttpTransport::with_destination(
                     http_url,
                     statics,

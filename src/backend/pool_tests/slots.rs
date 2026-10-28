@@ -4,6 +4,12 @@
 
 use super::*;
 
+/// The credential a required binding's caller carries: its slot sends only
+/// what a dispatch lends, and a dispatch with none is refused.
+fn cred(user: &str) -> Vec<(String, String)> {
+    vec![("Authorization".to_owned(), format!("Bearer {user}"))]
+}
+
 // POOL.4 (headline isolation guarantee): two callers on a per_user backend
 // are served by distinct transport instances and distinct sessions, and a
 // caller reusing its identity reuses its one slot — userA traffic never
@@ -24,11 +30,11 @@ async fn per_user_requests_route_to_isolated_transport_slots() {
     );
 
     let resp_a = backend
-        .request_with_headers("tools/list", None, &[], Some("userA"))
+        .request_with_headers("tools/list", None, &cred("userA"), Some("userA"))
         .await
         .unwrap();
     let resp_b = backend
-        .request_with_headers("tools/list", None, &[], Some("userB"))
+        .request_with_headers("tools/list", None, &cred("userB"), Some("userB"))
         .await
         .unwrap();
     assert_eq!(resp_a.result.unwrap()["session"], json!("A"));
@@ -47,7 +53,7 @@ async fn per_user_requests_route_to_isolated_transport_slots() {
 
     // Same identity reuses the one slot; userB is untouched by userA traffic.
     backend
-        .request_with_headers("tools/list", None, &[], Some("userA"))
+        .request_with_headers("tools/list", None, &cred("userA"), Some("userA"))
         .await
         .unwrap();
     assert_eq!(
@@ -81,7 +87,7 @@ async fn cross_tenant_circuit_breaker_trip_does_not_reject_other_identity() {
     backend.trip_circuit_breaker_for_test_key(&per_user_key("userA"));
 
     let err = backend
-        .request_with_headers("tools/list", None, &[], Some("userA"))
+        .request_with_headers("tools/list", None, &cred("userA"), Some("userA"))
         .await
         .expect_err("userA's own tripped slot must reject its traffic");
     assert!(
@@ -91,7 +97,7 @@ async fn cross_tenant_circuit_breaker_trip_does_not_reject_other_identity() {
 
     // userB's slot was never tripped and must be entirely unaffected.
     let resp_b = backend
-        .request_with_headers("tools/list", None, &[], Some("userB"))
+        .request_with_headers("tools/list", None, &cred("userB"), Some("userB"))
         .await
         .expect("userB's untripped slot must still serve requests");
     assert_eq!(resp_b.result.unwrap()["session"], json!("B"));
@@ -122,7 +128,12 @@ async fn notify_with_headers_routes_to_the_callers_own_pool_slot() {
     backend.set_pooled_transport_for_test(&per_user_key("userB"), mock_b.clone());
 
     backend
-        .notify_with_headers("notifications/cancelled", None, &[], Some("userA"))
+        .notify_with_headers(
+            "notifications/cancelled",
+            None,
+            &cred("userA"),
+            Some("userA"),
+        )
         .await
         .expect("userA's notification must succeed");
 
@@ -200,7 +211,7 @@ async fn evict_idle_per_user_entries_reaps_idle_users_but_spares_shared() {
     // A fresh request re-creates the slot lazily with a new transport.
     backend.set_pooled_transport_for_test(&per_user_key("userA"), Arc::new(SessionMock::new("A2")));
     let resp = backend
-        .request_with_headers("tools/list", None, &[], Some("userA"))
+        .request_with_headers("tools/list", None, &cred("userA"), Some("userA"))
         .await
         .unwrap();
     assert_eq!(resp.result.unwrap()["session"], json!("A2"));
@@ -220,7 +231,7 @@ async fn shared_and_per_user_slots_are_separate_on_one_backend() {
         .await
         .unwrap();
     let user = backend
-        .request_with_headers("tools/list", None, &[], Some("userA"))
+        .request_with_headers("tools/list", None, &cred("userA"), Some("userA"))
         .await
         .unwrap();
     assert_eq!(shared.result.unwrap()["session"], json!("shared"));

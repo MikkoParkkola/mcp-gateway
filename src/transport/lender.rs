@@ -15,10 +15,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use zeroize::Zeroizing;
 
+/// Each loan's id and its zeroed-on-drop copy of the lent headers.
+type Loans = Vec<(u64, Zeroizing<Vec<(String, String)>>)>;
+
 /// The loans of one slot, newest last.
 #[derive(Default)]
 pub(crate) struct Lender {
-    loans: parking_lot::Mutex<Vec<(u64, Zeroizing<Vec<(String, String)>>)>>,
+    loans: parking_lot::Mutex<Loans>,
     next: AtomicU64,
 }
 
