@@ -7,7 +7,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from './base.mjs';
-import { withFixturePages, shellReady, shellModuleUrl } from './shell.mjs';
+import { withFixturePages, shellReady, shellModuleUrl, serverStates } from './shell.mjs';
 
 const PROBE = '**/ui/api/page-probe*';
 const loading = (page) => page.locator('#content [data-state="loading"]');
@@ -127,34 +127,6 @@ test('G5 a slow Retry shows the loading state under the banner, and the banner s
   await expect(page.locator('#content')).toContainText('value 1');
   await expect(loading(page)).toHaveCount(0);
 });
-
-/** The ServerState variants, read from the gateway's own source, in snake_case. */
-function serverStates() {
-  const file = fileURLToPath(new URL('../../src/backend/server_state.rs', import.meta.url));
-  const source = readFileSync(file, 'utf8');
-  const head = source.slice(0, source.indexOf('pub enum ServerState {'));
-  // The wire names are the variants in snake_case only while nothing renames them.
-  expect(head.slice(head.lastIndexOf('#[derive')), 'ServerState keeps rename_all = "snake_case"').toContain('rename_all = "snake_case"');
-  const body = source.slice(source.indexOf('pub enum ServerState {'));
-  const block = body.slice(body.indexOf('{') + 1, body.indexOf('\n}'));
-  expect(block, 'no ServerState variant is renamed one by one').not.toMatch(/\b(rename|alias)\b/);
-  // Every line must be a unit variant, a comment, an attribute or blank: a form this
-  // reader does not know fails here instead of being skipped.
-  const variants = [];
-  let inAttr = 0;
-  for (const raw of block.split('\n')) {
-    const line = raw.trim();
-    if (inAttr > 0 || line.startsWith('#[')) {
-      inAttr += (line.match(/[[(]/g) ?? []).length - (line.match(/[\])]/g) ?? []).length;
-      continue;
-    }
-    if (line === '' || line.startsWith('//')) continue;
-    const unit = line.match(/^([A-Z][A-Za-z]+),$/);
-    expect(unit, `a ServerState line this test cannot read: ${line}`).not.toBeNull();
-    variants.push(unit[1]);
-  }
-  return variants.map((v) => v.replace(/[A-Z]/g, (c, i) => (i ? '_' : '') + c.toLowerCase()));
-}
 
 test('W1 the glossary has one word for each ServerState, and no word twice', async ({ page }) => {
   await page.goto('/ui/overview/status');

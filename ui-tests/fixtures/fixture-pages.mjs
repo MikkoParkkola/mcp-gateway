@@ -50,6 +50,15 @@ const probed = {
     ctx.announce('Gateway status read.');
     window.gatewayAnnounce = ctx.announce; // L15: kept past navigation
   },
+  // T6 (shell-states.spec.mjs): stale data with its time, and a number to dim.
+  tools: (el, ctx) => {
+    const n = document.createElement('span');
+    n.className = 'num';
+    n.textContent = '42';
+    el.replaceChildren('tools - status ', n);
+    ctx.show('stale', { since: new Date(2026, 9, 28, 14, 2) });
+    window.toolsShow = ctx.show;
+  },
   // L13: a screen marks its data stale, then clears it.
   activity: (el, ctx) => {
     el.textContent = 'activity - status';
