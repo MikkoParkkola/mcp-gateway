@@ -138,7 +138,7 @@ test('P4b: removing an env row after a preview refuses Add', async ({ page }) =>
   await row.locator('input').nth(0).fill('REGION');
   await row.locator('input').nth(1).fill('eu');
   await preview(page);
-  await row.getByRole('button', { name: 'x' }).click();
+  await row.getByRole('button', { name: 'Remove variable' }).click();
   await add(page);
   await expect(msg(page)).toContainText('The form changed since the preview');
   expect(seen.adds).toEqual([]);
