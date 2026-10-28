@@ -134,7 +134,9 @@ pub(crate) struct LeaseStore {
     /// Each held key's current generation, readable without awaiting: the
     /// listener map asks under its own lock (E7), and a delivery's last check
     /// before its send (A2) has no await between it and the POST.
-    live: std::sync::Mutex<HashMap<LeaseKey, u128>>,
+    /// With its deadline: past it the generation no longer reads as held,
+    /// before any sweep runs.
+    live: std::sync::Mutex<HashMap<LeaseKey, (u128, u64)>>,
     guard: fn() -> DumpGuard,
 }
 
@@ -236,7 +238,7 @@ impl LeaseStore {
                 expires_at,
             },
         );
-        self.set_live(&key, Some(generation));
+        self.set_live(&key, Some((generation, expires_at)));
         self.park(&key, None);
         Ok(generation)
     }
@@ -357,16 +359,23 @@ impl LeaseStore {
         self.held_generation(key).is_some()
     }
 
-    /// The generation `key` holds now, without awaiting.
+    /// The generation `key` holds now, without awaiting. A lease past its
+    /// deadline, or judged on a clock that cannot be read, holds none: its
+    /// token is already zeroized, so delivery and its listener stop at once,
+    /// not at the next expiry sweep.
     pub(crate) fn held_generation(&self, key: &LeaseKey) -> Option<u128> {
-        self.live
+        let (generation, expires_at) = self
+            .live
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(key)
-            .copied()
+            .copied()?;
+        crate::clock::unix_secs()
+            .is_ok_and(|now| now < expires_at)
+            .then_some(generation)
     }
 
-    fn set_live(&self, key: &LeaseKey, generation: Option<u128>) {
+    fn set_live(&self, key: &LeaseKey, generation: Option<(u128, u64)>) {
         let mut live = self
             .live
             .lock()

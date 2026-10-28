@@ -473,3 +473,27 @@ async fn an_unused_lease_is_zeroized_at_its_deadline() {
     assert_eq!(s.generation(&key("p")).await, None);
     assert!(!s.is_held(&key("p")));
 }
+
+/// LEASE-T3 at the deadline: a lease past it holds no generation at once,
+/// before any expiry sweep, so delivery refuses its records and its
+/// listener's session ends at its next check.
+#[tokio::test]
+async fn an_expired_lease_holds_no_generation_before_the_sweep() {
+    let s = store();
+    let exp = now() + 3600;
+    let g = s.install(key("p"), token_until(exp), FAR, 0).await.unwrap();
+    {
+        let _clock = crate::clock::test_clock::at_secs(exp - 1);
+        assert_eq!(s.held_generation(&key("p")), Some(g), "a second before");
+    }
+    let _clock = crate::clock::test_clock::at_secs(exp);
+    assert_eq!(
+        s.held_generation(&key("p")),
+        None,
+        "at the deadline, before any sweep"
+    );
+    assert!(
+        s.held.lock().await.contains_key(&key("p")),
+        "premise: no sweep ran"
+    );
+}
