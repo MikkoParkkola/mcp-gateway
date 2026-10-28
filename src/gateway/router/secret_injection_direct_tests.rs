@@ -172,10 +172,12 @@ async fn the_secret_is_sent_and_nothing_answered_or_kept_holds_it() {
         answers.push(body);
     }
     // A task is a modern call that declares the tasks extension.
-    let modern = json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28"});
+    let modern = json!({
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities":
+            {"extensions": {"io.modelcontextprotocol/tasks": {}}},
+    });
     let mut meta = modern.clone();
-    meta["io.modelcontextprotocol/clientCapabilities"] =
-        json!({"extensions": {"io.modelcontextprotocol/tasks": {}}});
     meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!("idem-secret-task");
     let task = json!({"name": "gateway_invoke", "task": {}, "_meta": meta,
         "arguments": {"server": "alpha", "tool": "read", "arguments": {}}});
