@@ -34,7 +34,7 @@ fn cached_stripping() -> MetaMcp {
     backend.set_transport_for_test(Arc::new(ToolCallTestTransport {
         result: json!({ "content": [{ "type": "text", "text": INJECTED }], "isError": false }),
     }));
-    // Only a declared read is cached (MIK-8393).
+    // Only a declared read is cached.
     backend.set_read_only_declared_for_test(&["search"]);
     let _ = registry.register(backend);
     let meta = MetaMcp::with_features(
