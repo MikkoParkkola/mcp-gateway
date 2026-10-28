@@ -496,7 +496,12 @@ function classify(err, spec) {
     return { kind: 'refusal', retry: true, reason: `The gateway is busy (HTTP ${s}).`, next: 'Try again in a moment.' };
   }
   if (!REFUSALS.has(s)) return { kind: 'unconfirmed' };
-  const own = spec.failed?.(err) ?? null;
+  let own = null;
+  try {
+    own = spec.failed?.(err) ?? null;
+  } catch (fault) {
+    console.error(fault); // the screen's own words failed; the default words still say what happened
+  }
   const words = own ?? {
     403: { reason: `This key may not ${spec.verb.toLowerCase()} ${object}.`, next: 'Ask an admin, or sign in with a key that may.' },
     404: { reason: `${object} is no longer there.`, next: 'Reload the page to see what is.' },
@@ -547,7 +552,7 @@ function placeConfirm(dialogEl, opener, room) {
   const band = o ? o.height + 2 * margin : 0;
   const cap = Math.max(v.height - 2 * band, 0);
   if (cap >= smallest || !o) {
-    dialogEl.style.maxHeight = `${Math.max(cap, smallest)}px`;
+    dialogEl.style.maxHeight = `${Math.min(Math.max(cap, smallest), v.height - 2 * margin)}px`;
     const h = dialogEl.offsetHeight;
     const top = v.top + (v.height - h) / 2;
     if (o && overlaps(box(top, h), o)) {
@@ -557,13 +562,21 @@ function placeConfirm(dialogEl, opener, room) {
       scrollPage(room, o.top - want);
       o = at();
     }
-    dialogEl.style.top = `${top}px`;
-    return;
+    // Checked again after the scroll: an opener that could not move docks the dialog instead.
+    if (!o || !overlaps(box(top, h), o)) {
+      dialogEl.style.top = `${top}px`;
+      return;
+    }
   }
-  // Docked: the opener goes to the top band, the dialog takes the rest.
+  // Docked: the opener goes to the top band if the page can scroll it there, and the
+  // dialog takes the larger free part beside it, measured after the scroll.
   scrollPage(room, o.top - (v.top + margin));
-  dialogEl.style.maxHeight = `${v.height - band - margin}px`;
-  dialogEl.style.top = `${v.top + band}px`;
+  o = at() ?? o;
+  const above = o.top - margin - v.top;
+  const below = v.top + v.height - (o.bottom + margin);
+  const space = Math.max(above, below) - margin;
+  dialogEl.style.maxHeight = `${Math.max(space, 0)}px`;
+  dialogEl.style.top = `${above >= below ? v.top + margin : o.bottom + margin}px`;
 }
 
 /**
@@ -591,6 +604,8 @@ export function confirmAction(spec) {
   for (const field of ['opener', 'key', 'verb', 'object', 'progress', 'consequences', 'run']) {
     if (spec?.[field] === undefined || spec[field] === null) throw new TypeError(`confirm: ${field} is required`);
   }
+  if (typeof spec.run !== 'function') throw new TypeError('confirm: run must be a function');
+  if (!Array.isArray(spec.consequences)) throw new TypeError('confirm: consequences must be a list');
   if (confirmEl || lock || unconfirmedKeys().has(spec.key) || paletteEl) {
     console.warn(confirmEl || lock ? 'confirm: another action is still open or running'
       : paletteEl ? 'confirm: the palette is open' : 'confirm: the last outcome for this subject is not confirmed; reload first');
@@ -624,6 +639,8 @@ export function confirmAction(spec) {
 
   let phase = 'confirm';
   let routed = false;
+  let stopClocks = () => {};
+  let saidAfterClose = '';
   let settle;
   const result = new Promise((resolve) => { settle = resolve; });
   let outcome = { outcome: 'kept' };
@@ -646,8 +663,16 @@ export function confirmAction(spec) {
     outcome = result;
     if (dialogEl.open) dialogEl.close();
   };
-  dialogEl.addEventListener('cancel', (ev) => { if (phase === 'sending') ev.preventDefault(); });
+  dialogEl.addEventListener('cancel', (ev) => {
+    ev.preventDefault();
+    if (phase === 'sending') return;
+    // Esc is Close: after a sent request it reports what happened to it.
+    if (phase === 'refusal') finish({ outcome: 'failed', error: lastError });
+    else if (phase === 'unconfirmed') finish({ outcome: 'unconfirmed', ...(lastError ? { error: lastError } : {}) });
+    else finish({ outcome: 'kept' });
+  });
   dialogEl.addEventListener('close', () => {
+    stopClocks();
     removeEventListener('resize', place);
     vv?.removeEventListener('resize', place);
     vv?.removeEventListener('scroll', place);
@@ -655,6 +680,8 @@ export function confirmAction(spec) {
     dialogEl.remove();
     document.body.style.minHeight = '';
     if (confirmEl === dialogEl) { confirmEl = null; onSignIn = null; }
+    // Said once the announcer is back in the page, so the entry is not emptied with the move.
+    if (saidAfterClose) announce(saidAfterClose, { subject: 'page' });
     if (!routed) {
       window.scrollTo({ top: before, behavior: 'instant' });
       const back = opener?.isConnected ? opener : document.getElementById('content');
@@ -705,13 +732,15 @@ export function confirmAction(spec) {
     const say = setTimeout(() => announce(progress, { subject: 'confirm', guard: { epoch, seq: null } }), CONFIRM_SAY_MS);
     const wait = setTimeout(() => { line.textContent = `${progress} Still waiting for the gateway.`; }, CONFIRM_WAIT_MS);
     const cutoff = setTimeout(() => {
+      if (!dialogEl.open) return;
       open = false;
       clearTimeout(say);
       unconfirmedKeys().add(key);
       setTimeout(() => releaseLock(token), LOCK_GRACE_MS);
       showUnconfirmed();
     }, CONFIRM_CUTOFF_MS);
-    const ended = () => { clearTimeout(say); clearTimeout(wait); clearTimeout(cutoff); releaseLock(token); };
+    stopClocks = () => { clearTimeout(say); clearTimeout(wait); clearTimeout(cutoff); };
+    const ended = () => { stopClocks(); releaseLock(token); };
     Promise.resolve().then(() => spec.run()).then((value) => {
       ended();
       if (!open || epoch !== authEpoch || !dialogEl.open) return; // stopped waiting, or someone else signed in
@@ -757,7 +786,7 @@ export function confirmAction(spec) {
     finish(outcome);
     go(target.path);
     heading.focus({ preventScroll: true });
-    announce(target.notice ?? '', { subject: 'page' });
+    saidAfterClose = target.notice ?? '';
   };
 
   act.addEventListener('click', start);
