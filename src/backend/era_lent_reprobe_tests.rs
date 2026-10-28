@@ -22,10 +22,23 @@ use crate::protocol::era::PeerEra;
 
 const USER: &str = "u:alpha";
 
+/// How the peer answers the re-probe, its third `server/discover`.
+#[derive(Clone, Copy)]
+enum Reprobe {
+    Answers,
+    /// Never answers: the peer stalls the probe.
+    Stalls,
+}
+
 /// A peer that answers its first `server/discover` as a 2026 server and every
 /// later one `method not found`, recording each request's method and
 /// `Authorization` header.
 async fn peer_that_turns_legacy() -> (String, Arc<Mutex<Vec<(String, String)>>>) {
+    peer(Reprobe::Answers).await
+}
+
+/// [`peer_that_turns_legacy`], answering the re-probe as `reprobe` says.
+async fn peer(reprobe: Reprobe) -> (String, Arc<Mutex<Vec<(String, String)>>>) {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let discovers = Arc::new(AtomicUsize::new(0));
     let app = axum::Router::new().fallback({
@@ -42,8 +55,16 @@ async fn peer_that_turns_legacy() -> (String, Arc<Mutex<Vec<(String, String)>>>)
                     .to_string();
                 seen.lock().unwrap().push((method.clone(), auth));
                 let id = message.get("id").cloned().unwrap_or(Value::Null);
+                let nth = if method == "server/discover" {
+                    discovers.fetch_add(1, Ordering::SeqCst)
+                } else {
+                    usize::MAX
+                };
+                if nth == 2 && matches!(reprobe, Reprobe::Stalls) {
+                    std::future::pending::<()>().await;
+                }
                 let body = match method.as_str() {
-                    "server/discover" if discovers.fetch_add(1, Ordering::SeqCst) == 0 => {
+                    "server/discover" if nth == 0 => {
                         json!({ "jsonrpc": "2.0", "id": id, "result": {
                             "supportedVersions": [crate::protocol::meta::MODERN_VERSIONS[0]],
                             "capabilities": {}
@@ -72,6 +93,11 @@ async fn peer_that_turns_legacy() -> (String, Arc<Mutex<Vec<(String, String)>>>)
 /// An HTTP backend at `url` whose identity binding is required, so each
 /// per-user slot is lent-only.
 fn required_backend_at(url: String) -> Arc<Backend> {
+    required_backend_with_timeout(url, Duration::from_secs(10))
+}
+
+/// [`required_backend_at`] with request timeout `timeout`.
+fn required_backend_with_timeout(url: String, timeout: Duration) -> Arc<Backend> {
     Arc::new(Backend::new(
         "era-lent-reprobe",
         BackendConfig {
@@ -80,7 +106,7 @@ fn required_backend_at(url: String) -> Arc<Backend> {
                 streamable_http: Some(true),
                 protocol_version: None,
             },
-            timeout: Duration::from_secs(10),
+            timeout,
             identity_propagation: Some(IdentityPropagationConfig {
                 strategy: PropagationStrategyKind::SignedAssertion,
                 audience: AUDIENCE.to_string(),
@@ -160,4 +186,46 @@ async fn reprobe_carries_the_bearer(credential: Vec<(String, String)>) {
         .era
         .cached_now();
     assert_eq!(era, Some(PeerEra::Legacy), "the re-probe decided the era");
+}
+
+/// The inline re-probe holds its caller only as long as the probe's cap,
+/// never the backend's own request timeout: a peer that stalls the re-probe
+/// releases the subscriber's call once the cap passes. The backend timeout
+/// here is 30 s and the cap 2 s, so a call back within 10 s was bounded by
+/// the cap.
+#[tokio::test(flavor = "current_thread")]
+async fn a_stalled_reprobe_holds_the_caller_no_longer_than_the_probe_cap() {
+    let (url, seen) = peer(Reprobe::Stalls).await;
+    let backend = required_backend_with_timeout(url, Duration::from_secs(30));
+    let started = tokio::time::Instant::now();
+
+    let _ = crate::test_pause::within(
+        "the subscriber's call",
+        backend.request_with_headers_lent(
+            "server/discover",
+            None,
+            crate::transport::LentCredential {
+                headers: subscriber_credential(USER),
+                check: Some(std::sync::Arc::new(|| Box::pin(async { Ok(()) }))),
+            },
+            Some(USER),
+        ),
+    )
+    .await;
+
+    let discovers = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(method, _)| method == "server/discover")
+        .count();
+    assert_eq!(
+        discovers, 3,
+        "premise: the re-probe reached the stalling peer"
+    );
+    let held = started.elapsed();
+    assert!(
+        held < Duration::from_secs(10),
+        "the stalled re-probe held the caller {held:?}, past the probe cap"
+    );
 }
