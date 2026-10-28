@@ -118,7 +118,7 @@ fn start_with(
         None => shared.update(|set| set.set_health(Source::Access, Health::Absent)),
         Some(log) => {
             let (sender, receiver) = tokio::sync::mpsc::channel(queue.max(1));
-            let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let dropped = Arc::new(Dropped::default());
             // Subscribed before the replay starts: a note written meanwhile
             // is held until the replay ends, and one the replay also reads
             // is the same record by its entry hash. The reader runs under
@@ -130,7 +130,7 @@ fn start_with(
                     if let Some(event) = denial_from_record(record)
                         && sender.try_send((hash.to_string(), event)).is_err()
                     {
-                        full.store(true, std::sync::atomic::Ordering::Release);
+                        full.mark();
                     }
                 }),
             );
@@ -156,18 +156,41 @@ fn start_with(
     })
 }
 
+/// That a handed-off note was dropped on a full queue, and a wake for the
+/// consumer: it may be waiting on an empty queue when the drop happens.
+#[derive(Default)]
+struct Dropped {
+    any: std::sync::atomic::AtomicBool,
+    wake: tokio::sync::Notify,
+}
+
+impl Dropped {
+    /// Called by the reader under the log's lock: neither call waits.
+    fn mark(&self) {
+        self.any.store(true, std::sync::atomic::Ordering::Release);
+        // A permit is kept if no one waits yet, so the wake is never lost.
+        self.wake.notify_one();
+    }
+}
+
 /// Apply handed-off notes to the set. A note dropped on a full queue would
 /// make the count wrong, so the source reads unavailable (the snapshot
 /// answers `None`) until a replay has read the log again.
 async fn apply_live(
     mut receiver: tokio::sync::mpsc::Receiver<(String, IdentityGrantAuditEvent)>,
-    dropped: Arc<std::sync::atomic::AtomicBool>,
+    dropped: Arc<Dropped>,
     path: std::path::PathBuf,
     shared: Arc<Shared>,
 ) {
-    while let Some((hash, event)) = receiver.recv().await {
-        shared.update(|set| set.live(grant_pos(&hash), Fold::Denial(event)));
-        if dropped.swap(false, std::sync::atomic::Ordering::AcqRel) {
+    loop {
+        tokio::select! {
+            note = receiver.recv() => {
+                let Some((hash, event)) = note else { return };
+                shared.update(|set| set.live(grant_pos(&hash), Fold::Denial(event)));
+            }
+            () = dropped.wake.notified() => {}
+        }
+        if dropped.any.swap(false, std::sync::atomic::Ordering::AcqRel) {
             tracing::warn!(
                 "decisions: notes arrived faster than they were applied; replaying the log"
             );
