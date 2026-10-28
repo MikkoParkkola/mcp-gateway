@@ -1,0 +1,1 @@
+src/gateway/task_service/execution/worker_inspect.rs	dispatch_target	1	Names the server and tool a task's dispatch-refusal record is written under (the first dispatched target, else the surfaced server and tool); decides nothing about the call.
