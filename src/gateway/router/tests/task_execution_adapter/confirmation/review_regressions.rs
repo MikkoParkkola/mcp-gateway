@@ -415,8 +415,11 @@ async fn c2_a_cancel_behind_a_non_terminal_move_is_retried_at_the_current_revisi
 
 /// Moves the record again at the instant a lost cancel is about to retry, so
 /// the retry itself conflicts: the one race `cancel_lost_the_revision` bounds.
+/// It holds the state weakly: the executor keeps its observer, so a strong
+/// share would keep the state, its task store and the store's test directory
+/// alive past the test.
 struct MoveOnRetry {
-    state: Arc<AppState>,
+    state: std::sync::Weak<AppState>,
     owner: String,
     event: parking_lot::Mutex<Option<crate::gateway::task_service::TaskTransition>>,
 }
@@ -431,8 +434,9 @@ impl crate::gateway::task_service::CommitObserver for MoveOnRetry {
         let Some(event) = self.event.lock().take() else {
             return;
         };
-        let current = self.state.tasks.get(&self.owner, id).unwrap();
-        self.state
+        let state = self.state.upgrade().expect("the test holds the state");
+        let current = state.tasks.get(&self.owner, id).unwrap();
+        state
             .task_executor
             .commit_transition(TransitionWrite::Settle {
                 principal: &self.owner,
@@ -487,7 +491,7 @@ async fn cancel_that_loses_twice(
         .await
         .unwrap_or_else(|_| panic!("a status message commits on the working row"));
     state.task_executor.observe_commits(Arc::new(MoveOnRetry {
-        state: Arc::clone(&state),
+        state: Arc::downgrade(&state),
         owner: owner.clone(),
         event: parking_lot::Mutex::new(Some(second_move)),
     })

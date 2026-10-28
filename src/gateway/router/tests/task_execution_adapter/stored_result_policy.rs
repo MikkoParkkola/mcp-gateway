@@ -367,13 +367,15 @@ async fn a_plan_step_refused_before_dispatch_is_recorded_and_reauthorized() {
     let mock = MockBackend::answering(Answer::ok());
     let (state, _store) = state_with(&mock).await;
     install_playbook(&state, TOOL);
-    let held = Arc::clone(&state);
+    // Weak: the executor keeps the barrier, so a strong share would keep the
+    // state, its task store and the store's test directory alive past the test.
+    let held = Arc::downgrade(&state);
     let withheld = std::sync::atomic::AtomicBool::new(false);
     state
         .task_executor
         .barrier_on_publication(Arc::new(move || {
             if !withheld.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                withhold(&held, TOOL);
+                withhold(&held.upgrade().expect("the test holds the state"), TOOL);
             }
         }))
         .await;
