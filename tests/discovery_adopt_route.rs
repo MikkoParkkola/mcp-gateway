@@ -10,6 +10,9 @@
 
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
+#[path = "common/mcp_http_servers.rs"]
+#[allow(dead_code, reason = "shared fixtures; each binary uses a subset")]
+mod mcp_http_servers;
 
 use std::path::Path;
 use std::process::Stdio;
@@ -327,5 +330,132 @@ async fn a_value_the_store_cannot_hold_is_refused_by_field() {
         std::fs::read(&config).expect("config"),
         before,
         "nothing written"
+    );
+}
+
+/// A key allowed every backend (`backends: ["*"]`) but no admin.
+const CALLER: &str = "discovery-adopt-caller-key";
+
+/// One `gateway_invoke` of `ping` on `server` as `CALLER`, in its own session.
+async fn invoke_as_caller(gateway: &Gateway, server: &str) -> Value {
+    call_as_caller(
+        gateway,
+        "gateway_invoke",
+        json!({"server": server, "tool": "ping", "arguments": {}}),
+    )
+    .await
+}
+
+/// One `tools/call` of `name` with `arguments` by the CALLER key, in a
+/// fresh session.
+async fn call_as_caller(gateway: &Gateway, name: &str, arguments: Value) -> Value {
+    let http = reqwest::Client::new();
+    let post = |sid: Option<String>, body: Value| {
+        let mut request = http
+            .post(gateway.url("/mcp"))
+            .bearer_auth(CALLER)
+            .header("accept", "application/json")
+            .json(&body);
+        if let Some(sid) = sid {
+            request = request.header("mcp-session-id", sid);
+        }
+        request.send()
+    };
+    let init = post(
+        None,
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-06-18", "capabilities": {},
+            "clientInfo": {"name": "adopt-grant", "version": "1"}}}),
+    )
+    .await
+    .expect("initialize");
+    let sid = init
+        .headers()
+        .get("mcp-session-id")
+        .map(|v| v.to_str().expect("ASCII").to_owned());
+    post(
+        sid.clone(),
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+    )
+    .await
+    .expect("initialized");
+    post(
+        sid,
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": name,
+            "arguments": arguments}}),
+    )
+    .await
+    .expect("tools/call")
+    .json()
+    .await
+    .expect("a JSON answer")
+}
+
+/// API7.3 under the grant rule: an adopted server is off for every key,
+/// one allowed every backend included, until an admin enables it; then the
+/// same key reaches it.
+#[tokio::test]
+async fn an_adopted_server_is_off_for_keys_until_an_admin_enables_it() {
+    let home = tempfile::tempdir().expect("home");
+    let home = home.path();
+    let hits: mcp_http_servers::Hits = std::sync::Arc::default();
+    let base = mcp_http_servers::streamable_server(&hits).await;
+    // `streamable_server` answers at the URL it returns, `/mcp` included.
+    client_file(home, &json!({"remote": {"url": base}}));
+    let config = home.join("gateway.yaml");
+    write_owner_only(
+        &config,
+        &format!(
+            "server:\n  host: \"127.0.0.1\"\n  port: {ANY_PORT}\n\
+             auth:\n  enabled: true\n  bearer_token: \"{BEARER}\"\n\
+             \x20 api_keys:\n    - name: caller\n      key_sha256: \"{}\"\n\
+             \x20     backends: [\"*\"]\n\
+             secrets:\n  store: files\nbackends: {{}}\n",
+            mcp_gateway::config::api_key_digest_spec(CALLER.as_bytes())
+        ),
+    );
+    let gateway = Gateway::spawn(home, &config).await;
+    let listing = gateway.list().await;
+    let body = json!({"find_id": find_id(&listing, "remote"), "revision": listing["revision"]});
+    let (status, answer) = gateway.adopt(&body).await;
+    assert_eq!(status, 201, "{answer}\n{}", gateway.logs());
+
+    let refused = invoke_as_caller(&gateway, "remote").await;
+    assert!(
+        !refused.to_string().contains("pong-"),
+        "a disabled adopted server answered a key: {refused}"
+    );
+
+    let enabled = reqwest::Client::new()
+        .patch(gateway.url("/ui/api/backends/remote"))
+        .bearer_auth(BEARER)
+        .json(&json!({"enabled": true}))
+        .send()
+        .await
+        .expect("PATCH");
+    assert_eq!(enabled.status().as_u16(), 200, "{}", gateway.logs());
+
+    // Wait for the reload to register the backend by listing servers, which
+    // calls no tool: a call polled before then fails, and enough failures
+    // switch the tool off for the error budget's cooldown.
+    let deadline = Instant::now() + STARTUP;
+    loop {
+        let servers = call_as_caller(&gateway, "gateway_list_servers", json!({})).await;
+        if servers.to_string().contains("remote") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the enabled server was never registered: {servers}\n{}",
+            gateway.logs()
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let answer = invoke_as_caller(&gateway, "remote").await;
+    assert!(
+        answer.to_string().contains("pong-"),
+        "the enabled server did not answer the key: {answer}\n{}",
+        gateway.logs()
     );
 }

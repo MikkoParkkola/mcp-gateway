@@ -108,6 +108,9 @@ pub(crate) use destination::DestinationPolicy;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod loopback_name_tests;
+
 use ranges::{is_private_ipv4, is_private_ipv6};
 
 use crate::{Error, Result};
@@ -128,7 +131,7 @@ pub(crate) fn is_ssrf_refusal(error: &Error) -> bool {
     matches!(error, Error::Protocol(message) if message.starts_with(SSRF_BLOCKED))
 }
 pub(crate) use redirect::{
-    RedirectDecision, hop_budget_spent, redirect_decision, ssrf_redirect_policy,
+    RedirectDecision, hop_budget_spent, redirect_decision, refuse_hop, ssrf_redirect_policy,
 };
 
 /// How a refusal names a denied address the caller already knows (a literal
@@ -239,6 +242,56 @@ fn check_host_not_ssrf(host: &str) -> Result<()> {
     }
 
     // Domain names: pass through — DNS resolution happens downstream.
+    Ok(())
+}
+
+/// Whether `host` names the loopback interface by name: `localhost` or a name
+/// under it (RFC 6761 §6.3), in any case, with any trailing dots.
+///
+/// Wider than the router's `is_loopback_host` on purpose: that one decides
+/// where an `http` OAuth origin is RFC-legal, where only `localhost` itself
+/// counts; this one refuses a destination, where every spelling must.
+pub(crate) fn is_loopback_name(host: &str) -> bool {
+    const SUFFIX: &str = ".localhost";
+    let host = host.trim_end_matches('.');
+    host.eq_ignore_ascii_case("localhost")
+        || (host.len() > SUFFIX.len()
+            && host
+                .get(host.len() - SUFFIX.len()..)
+                .is_some_and(|tail| tail.eq_ignore_ascii_case(SUFFIX)))
+}
+
+/// Refuse a capability destination that names the loopback interface by
+/// name. The literal forms are refused by
+/// [`validate_url_not_ssrf`]; a name is otherwise only refused where the
+/// pinning resolver sees it, and with `capabilities.egress_proxy` set the
+/// client sends loopback past the proxy unpinned. Refusing the name before
+/// any DNS lookup holds on both routes.
+///
+/// # Errors
+///
+/// Returns the SSRF refusal when the host is a loopback name, or a NAME that
+/// is a private or reserved address once its trailing dots are trimmed
+/// (`127.0.0.1..` stays a name to the URL parser). A host the parser already
+/// made an IP literal is left to [`validate_url_not_ssrf`], so the isolated
+/// runtime's loopback-literal allowance still applies. An unparsable URL is
+/// left to the other checks.
+pub(crate) fn refuse_loopback_name(url_str: &str) -> Result<()> {
+    let named_loopback = url::Url::parse(url_str).is_ok_and(|url| match url.host() {
+        Some(url::Host::Domain(host)) => {
+            is_loopback_name(host)
+                || host
+                    .trim_end_matches('.')
+                    .parse::<IpAddr>()
+                    .is_ok_and(is_private_or_reserved)
+        }
+        _ => false,
+    });
+    if named_loopback {
+        return Err(Error::Protocol(format!(
+            "{SSRF_BLOCKED}: host names the loopback interface"
+        )));
+    }
     Ok(())
 }
 
