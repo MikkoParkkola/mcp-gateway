@@ -75,6 +75,80 @@ fn read_audit_pages_across_rotation() {
     assert_eq!(seen, want, "every entry once, newest first");
 }
 
+/// Every `e{i}` event read by paging from `filter` to the start of the log,
+/// newest first. Other events are not counted.
+fn drain_events(store: &FileControlPlaneStore, mut filter: AuditFilter) -> Vec<String> {
+    let mut seen = Vec::new();
+    loop {
+        let page = store.read_audit(&filter).unwrap();
+        seen.extend(
+            page.events
+                .into_iter()
+                .map(|e| e.event_id)
+                .filter(|id| id.starts_with('e')),
+        );
+        match page.next_cursor {
+            Some(c) => filter = filter.resume(c),
+            None => return seen,
+        }
+        assert!(seen.len() < 10_000, "paging never ends");
+    }
+}
+
+/// The log rotates after resolving a page has named the active segment and
+/// before it reads anything of it. Writes go on until the rotation, so
+/// `r{i}` events fill the segment past the `e{i}` events.
+fn rotate_inside_resolve(store: &Arc<FileControlPlaneStore>, dir: &Path) {
+    let writer = Arc::clone(store);
+    let dir = dir.to_path_buf();
+    let before = sealed_count(&dir);
+    crate::security::transparency_log::pager::seam::after_active_seq(move || {
+        let mut i = 0;
+        while sealed_count(&dir) == before {
+            writer.append_audit(&audit_event(&format!("r{i}"))).unwrap();
+            i += 1;
+            assert!(i < 1_000, "no rotation happened");
+        }
+    });
+}
+
+/// The newest page resolved while the log rotates reads its segment from that
+/// segment's own end: no event is skipped and none repeated.
+#[test]
+fn a_rotation_while_resolving_the_newest_page_skips_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(rotating_store(dir.path()));
+    for i in 0..4 {
+        store.append_audit(&audit_event(&format!("e{i}"))).unwrap();
+    }
+    rotate_inside_resolve(&store, dir.path());
+
+    let seen = drain_events(&store, AuditFilter::new(3));
+
+    let want: Vec<String> = (0..4).rev().map(|i| format!("e{i}")).collect();
+    assert_eq!(seen, want, "every event once, newest first");
+}
+
+/// The same race for a cursor into the active segment: the page starts at
+/// the cursor, not at the new active file's shorter length.
+#[test]
+fn a_rotation_while_resolving_an_active_cursor_skips_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(rotating_store(dir.path()));
+    for i in 0..4 {
+        store.append_audit(&audit_event(&format!("e{i}"))).unwrap();
+    }
+    let first = store.read_audit(&AuditFilter::new(1)).unwrap();
+    assert_eq!(first.events[0].event_id, "e3");
+    let cursor = first.next_cursor.expect("older events remain");
+    rotate_inside_resolve(&store, dir.path());
+
+    let seen = drain_events(&store, AuditFilter::new(1).resume(cursor));
+
+    let want: Vec<String> = (0..3).rev().map(|i| format!("e{i}")).collect();
+    assert_eq!(seen, want, "every event below the cursor once");
+}
+
 #[test]
 fn legacy_read_audit_cursor_after_rotation_resets() {
     let dir = tempfile::tempdir().unwrap();

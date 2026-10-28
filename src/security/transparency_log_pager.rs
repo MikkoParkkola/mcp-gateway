@@ -32,6 +32,8 @@ pub(crate) fn position(log: &Path, cursor: Option<(u64, Option<u64>)>) -> io::Re
     // The active file's own open record names its number: retention or the
     // disk-full path can leave no sealed sibling to count from.
     let active_seq = active_segment_seq(log, sealed.last().map_or(0, |s| s.seq + 1));
+    #[cfg(test)]
+    seam::fire();
     let len_of = |p: &Path| match std::fs::metadata(p) {
         Ok(m) => Ok(m.len()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(0),
@@ -69,6 +71,30 @@ pub(crate) fn position(log: &Path, cursor: Option<(u64, Option<u64>)>) -> io::Re
                 segment: Some(seq),
                 reset: false,
             })
+        }
+    }
+}
+
+/// A test's seam inside [`position`], once the active segment's number is
+/// read: rotation there is the window between naming a segment and reading
+/// anything of it.
+#[cfg(test)]
+pub(crate) mod seam {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static AFTER_ACTIVE_SEQ: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    /// Run `hook` once, the next time this thread's [`super::position`] has
+    /// read the active segment's number.
+    pub(crate) fn after_active_seq(hook: impl FnOnce() + 'static) {
+        AFTER_ACTIVE_SEQ.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    pub(super) fn fire() {
+        if let Some(hook) = AFTER_ACTIVE_SEQ.with(|h| h.borrow_mut().take()) {
+            hook();
         }
     }
 }
