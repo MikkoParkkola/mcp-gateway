@@ -533,7 +533,7 @@ fn update_refusal_status(message: &str) -> StatusCode {
 /// The answer to a backend write that did not happen.
 fn unwritten(e: MutateError) -> axum::response::Response {
     let code = match &e {
-        // Nothing was written, and saving it would drop the operator's comments.
+        // Nothing was written: the edit cannot be made in place in the file.
         MutateError::CommentLoss(_) => StatusCode::CONFLICT,
         // A busy gateway has written nothing, so this is a retry-me, not a
         // failure. 500 would tell the operator their edit broke something.
