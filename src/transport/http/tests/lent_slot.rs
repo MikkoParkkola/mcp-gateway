@@ -141,3 +141,27 @@ async fn a_source_lent_stream_opens_with_nothing_on_loan() {
         assert!(!map.contains_key(header::AUTHORIZATION), "{map:?}");
     }
 }
+
+/// START.9: an optional binding's per-user slot keeps today's sessions: its
+/// start runs as the gateway, so a subscriber's call rides the subscriber's
+/// own session bucket, never the one that start opened. A lent-only slot's
+/// start runs as its one subscriber, so its calls ride that start's session.
+#[tokio::test]
+async fn only_a_lent_only_slot_rides_its_starts_session() {
+    for (credential, rides) in [
+        (SlotCredential::Configured, false),
+        (SlotCredential::LentOnly, true),
+    ] {
+        let (t, lender) = slot("http://localhost", credential);
+        set_default_session(&t, "the-starts-session");
+        let _loan = lender.lend(&subscriber());
+        let map = t
+            .build_mcp_headers(HeaderMode::Request { method: "m" }, Some("subscriber"))
+            .await
+            .unwrap();
+        let carried = map
+            .get("mcp-session-id")
+            .is_some_and(|v| v == "the-starts-session");
+        assert_eq!(carried, rides, "{credential:?}: {map:?}");
+    }
+}
