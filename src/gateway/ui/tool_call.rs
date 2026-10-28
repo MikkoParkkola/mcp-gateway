@@ -390,7 +390,12 @@ fn internal_request(parts: &axum::http::request::Parts, ask: &CallRequest) -> Re
         "params": {
             "name": "gateway_invoke",
             "arguments": {"server": ask.server, "tool": ask.tool, "arguments": ask.arguments},
-            "_meta": {"io.modelcontextprotocol/protocolVersion": revision},
+            // A stateless call declares what its client can answer: the web UI
+            // answers no backend question, so it declares nothing.
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": revision,
+                "io.modelcontextprotocol/clientCapabilities": {},
+            },
         },
     });
     let mut request = Request::new(Body::from(body.to_string()));

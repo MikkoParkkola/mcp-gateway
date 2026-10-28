@@ -180,7 +180,10 @@ async fn t16_a_proxied_subject_reaches_the_invocation() {
                 json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
                     "name": "gateway_invoke",
                     "arguments": {"server": "alpha", "tool": "read", "arguments": {}},
-                    "_meta": {"io.modelcontextprotocol/protocolVersion": revision},
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": revision,
+                        "io.modelcontextprotocol/clientCapabilities": {},
+                    },
                 }})
                 .to_string(),
             ))
