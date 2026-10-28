@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Egress-proxy routing and blocked-redirect transport behaviour (MIK-8660).
+//! Egress-proxy routing, and a blocked redirect as the SSRF refusal.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -65,8 +65,12 @@ async fn a_capability_request_goes_through_its_egress_proxy() {
     );
 }
 
+/// A blocked hop is the SSRF refusal, as on the spec-fetch, backend and
+/// OAuth clients, and three in a row leave the capability healthy: a policy
+/// refusal is not a sick upstream. Each refusal still reaches the refusal log
+/// and the audit record of its call.
 #[tokio::test]
-async fn a_blocked_redirect_is_a_transport_failure_with_a_health_mark() {
+async fn a_blocked_redirect_is_the_ssrf_refusal_and_leaves_health_alone() {
     let app = axum::Router::new().route(
         "/",
         axum::routing::get(|| async {
@@ -99,14 +103,14 @@ async fn a_blocked_redirect_is_a_transport_failure_with_a_health_mark() {
         .await
         .expect("bounded");
         let err = outcome.expect_err("a blocked redirect fails");
-        assert_ne!(
-            err.to_rpc_code(),
-            -32600,
-            "a blocked redirect is transport, not policy: {err}"
+        assert!(
+            crate::security::ssrf::is_ssrf_refusal(&err),
+            "a blocked redirect is the SSRF refusal: {err}"
         );
+        assert_eq!(err.to_rpc_code(), -32600, "{err}");
     }
     assert!(
-        !health.is_healthy(),
-        "three transport failures mark the backend"
+        health.is_healthy(),
+        "three refused redirects marked the capability unhealthy"
     );
 }

@@ -43,8 +43,11 @@ pub(super) fn evaluate_redirect_for(
     if crate::security::ssrf::hop_budget_spent(previous_hops) {
         return RedirectDecision::Stop;
     }
-    if let Err(e) = destination.check_configured_url(target.as_str()) {
-        return RedirectDecision::Reject(e.to_string());
+    match destination.check_configured_url(target.as_str()) {
+        // The bare message, so the refusal still reads `SSRF blocked`.
+        Err(crate::Error::Protocol(m)) => return RedirectDecision::Reject(m),
+        Err(e) => return RedirectDecision::Reject(e.to_string()),
+        Ok(()) => {}
     }
     if !same_origin(base, target) {
         return RedirectDecision::Reject(format!(
