@@ -129,6 +129,7 @@ src/gateway/meta_mcp/invoke/budget.rs	context_integrity_outcome	http_invoke_tiny
 src/gateway/meta_mcp/invoke/budget.rs	grant_subject_from_api_key	-	on-path, untimed: capability-backend identity-grant checks only; the timed rows dispatch to an MCP backend
 src/gateway/meta_mcp/invoke/budget.rs	record_and_predict	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/budget.rs	record_error_budget	http_invoke_tiny	recorded at every accounted dispatch (account_dispatch)
+src/gateway/meta_mcp/invoke/budget.rs	withheld_by	-	on-path, untimed: only when context integrity enforces on a result; the timed result is clean and passes through
 src/gateway/meta_mcp/invoke/cache_reads.rs	dispatch_reading	-	on-path, untimed: only when a result is stored (a read-only cache write or an idempotency completion); the timed rows store neither
 src/gateway/meta_mcp/invoke/cache_reads.rs	note_delivered_reading	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/cache_reads.rs	reading	-	on-path, untimed: only when a result is stored (a read-only cache write or an idempotency completion); the timed rows store neither
