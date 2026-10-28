@@ -451,46 +451,58 @@ async fn a_screened_notification_leaves_the_answers_facts_alone() {
     assert_eq!(row["response_findings"], json!([]), "{row}");
 }
 
-/// `security.response_inspection.enabled: false` over stdio: an answer
-/// carrying a pattern inspection finds is not inspected at all (no
-/// `_security_findings`, no "Response inspection finding" log, no inspection
-/// run), while the same text under action-mode inspection in the same
-/// process is still inspected and screened.
+/// `security.response_inspection.enabled: false` over stdio: for a tool
+/// result, a backend error and another method's answer, a text carrying a
+/// pattern inspection finds is delivered and not inspected at all (no
+/// refusal, no `_security_findings`, no "Response inspection finding" log, no
+/// inspection run), while the same text under action-mode inspection in the
+/// same process is still inspected and screened.
 #[test]
 fn inspection_off_inspects_nothing_on_stdio() {
     use crate::test_classification_count::{MARKER, runs};
-    let marker = format!("{MARKER}inspection-off-stdio");
-    let text = format!("{} {marker}", secret());
+    let cells = [
+        ("tools/call", Part::ResultText),
+        ("tools/call", Part::ErrorMessage),
+        ("prompts/get", Part::ResultText),
+    ];
     let mut failures = Vec::new();
-    for setup in [Setup::InspectionOff, Setup::InspectionOnly] {
-        let before = runs("d2_inspection", &marker);
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
-        let (seen, warnings) = crate::test_log_capture::capture_warnings(|| {
-            runtime.block_on(cell(setup, "tools/call", Part::ResultText, text.clone()))
-        });
-        let inspected = runs("d2_inspection", &marker) - before;
-        if seen.calls == 0 {
-            failures.push(format!("{setup:?}: never reached the backend"));
-        }
-        if matches!(setup, Setup::InspectionOff) {
-            if inspected != 0 {
-                failures.push(format!("{setup:?}: inspected {inspected} times"));
+    for (n, (method, part)) in cells.into_iter().enumerate() {
+        let marker = format!("{MARKER}inspection-off-stdio-{n}");
+        let text = format!("{} {marker}", secret());
+        for setup in [Setup::InspectionOff, Setup::InspectionOnly] {
+            let at = format!("{method} {part:?} {setup:?}");
+            let before = runs("d2_inspection", &marker);
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime");
+            let (seen, warnings) = crate::test_log_capture::capture_warnings(|| {
+                runtime.block_on(cell(setup, method, part, text.clone()))
+            });
+            let inspected = runs("d2_inspection", &marker) - before;
+            if seen.calls == 0 {
+                failures.push(format!("{at}: never reached the backend"));
             }
-            if seen.body.contains("_security_findings") {
-                failures.push(format!("{setup:?}: annotated: {}", seen.body));
-            }
-            if warnings.contains("Response inspection finding") {
-                failures.push(format!("{setup:?}: logged a finding: {warnings}"));
-            }
-        } else {
-            if inspected == 0 {
-                failures.push(format!("{setup:?}: premise: never inspected"));
-            }
-            if seen.body.contains(&secret()) {
-                failures.push(format!("{setup:?}: premise: not screened: {}", seen.body));
+            if matches!(setup, Setup::InspectionOff) {
+                if inspected != 0 {
+                    failures.push(format!("{at}: inspected {inspected} times"));
+                }
+                if refused(&seen.body) || !seen.body.contains(&marker) {
+                    failures.push(format!("{at}: not delivered: {}", seen.body));
+                }
+                if seen.body.contains("_security_findings") {
+                    failures.push(format!("{at}: annotated: {}", seen.body));
+                }
+                if warnings.contains("Response inspection finding") {
+                    failures.push(format!("{at}: logged a finding: {warnings}"));
+                }
+            } else {
+                if inspected == 0 {
+                    failures.push(format!("{at}: premise: never inspected"));
+                }
+                if seen.body.contains(&secret()) {
+                    failures.push(format!("{at}: premise: not screened: {}", seen.body));
+                }
             }
         }
     }

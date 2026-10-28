@@ -555,62 +555,60 @@ async fn egress_a_stolen_envelope_frees_no_other_slot() {
 #[path = "egress_matrix_tests/slot_release.rs"]
 mod slot_release;
 
-/// `security.response_inspection.enabled: false`: on every route an answer
-/// carrying a pattern inspection finds is not inspected at all: no
-/// `_security_findings` annotation, no "Response inspection finding" log and
-/// no inspection run. The same text under action-mode inspection, in the
-/// same process (whose inspection memo is shared), is still inspected and
-/// screened: the pattern is one inspection finds, and Off leaves another
-/// gateway's mode alone.
+/// `security.response_inspection.enabled: false`: on every route, for a
+/// tool result, a backend error and another method's answer, a text carrying
+/// a pattern inspection finds is delivered and not inspected at all: no
+/// refusal, no `_security_findings` annotation, no "Response inspection
+/// finding" log and no inspection run. The same text under action-mode
+/// inspection, in the same process (whose inspection memo is shared), is
+/// still inspected and screened: the pattern is one inspection finds, and Off
+/// leaves another gateway's mode alone.
 #[test]
 fn inspection_off_inspects_nothing_on_any_route() {
     use crate::test_classification_count::{MARKER, runs};
+    let cells = [
+        ("tools/call", Part::ResultText),
+        ("tools/call", Part::ErrorMessage),
+        ("prompts/get", Part::ResultText),
+    ];
     let mut failures = Vec::new();
     for route in ROUTES {
-        let marker = format!("{MARKER}inspection-off-{route:?}");
-        let text = format!("{} {marker}", secret());
-        let at = |setup| format!("{route:?} {setup:?}");
-        for setup in [Setup::InspectionOff, Setup::InspectionOnly] {
-            let before = runs("d2_inspection", &marker);
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("runtime");
-            let (seen, warnings) = crate::test_log_capture::capture_warnings(|| {
-                runtime.block_on(cell(
-                    setup,
-                    route,
-                    "tools/call",
-                    Part::ResultText,
-                    text.clone(),
-                ))
-            });
-            let inspected = runs("d2_inspection", &marker) - before;
-            if seen.calls == 0 {
-                failures.push(format!("{}: never reached the backend", at(setup)));
-            }
-            match setup {
-                Setup::InspectionOff => {
+        for (n, (method, part)) in cells.into_iter().enumerate() {
+            let marker = format!("{MARKER}inspection-off-{route:?}-{n}");
+            let text = format!("{} {marker}", secret());
+            for setup in [Setup::InspectionOff, Setup::InspectionOnly] {
+                let at = format!("{route:?} {method} {part:?} {setup:?}");
+                let before = runs("d2_inspection", &marker);
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime");
+                let (seen, warnings) = crate::test_log_capture::capture_warnings(|| {
+                    runtime.block_on(cell(setup, route, method, part, text.clone()))
+                });
+                let inspected = runs("d2_inspection", &marker) - before;
+                if seen.calls == 0 {
+                    failures.push(format!("{at}: never reached the backend"));
+                }
+                if matches!(setup, Setup::InspectionOff) {
                     if inspected != 0 {
-                        failures.push(format!("{}: inspected {inspected} times", at(setup)));
+                        failures.push(format!("{at}: inspected {inspected} times"));
+                    }
+                    if refused(&seen.body) || !seen.body.contains(&marker) {
+                        failures.push(format!("{at}: not delivered: {}", seen.body));
                     }
                     if seen.body.contains("_security_findings") {
-                        failures.push(format!("{}: annotated: {}", at(setup), seen.body));
+                        failures.push(format!("{at}: annotated: {}", seen.body));
                     }
                     if warnings.contains("Response inspection finding") {
-                        failures.push(format!("{}: logged a finding: {warnings}", at(setup)));
+                        failures.push(format!("{at}: logged a finding: {warnings}"));
                     }
-                }
-                _ => {
+                } else {
                     if inspected == 0 {
-                        failures.push(format!("{}: premise: never inspected", at(setup)));
+                        failures.push(format!("{at}: premise: never inspected"));
                     }
                     if seen.body.contains(&secret()) {
-                        failures.push(format!(
-                            "{}: premise: not screened: {}",
-                            at(setup),
-                            seen.body
-                        ));
+                        failures.push(format!("{at}: premise: not screened: {}", seen.body));
                     }
                 }
             }

@@ -411,15 +411,13 @@ impl Gateway {
         // ── Response inspection action mode (issue #133, D2) ──────────────────
         // `enabled: false` turns it off whatever `action_mode` says.
         let inspection = &self.config.security.response_inspection;
+        // invariant: the builder still holds the only Arc; nothing is shared until it returns.
+        let meta = Arc::get_mut(&mut meta_mcp).expect("no other Arc references at this point");
         if !inspection.enabled {
-            Arc::get_mut(&mut meta_mcp)
-                .expect("no other Arc references at this point")
-                .disable_response_inspection();
+            meta.disable_response_inspection();
             info!("Response inspection disabled");
         } else if inspection.action_mode {
-            Arc::get_mut(&mut meta_mcp)
-                .expect("no other Arc references at this point")
-                .enable_response_inspection_action_mode();
+            meta.enable_response_inspection_action_mode();
             info!("Response inspection action mode enabled — HIGH/CRITICAL findings will block");
         } else {
             info!("Response inspection enabled in observe mode");
