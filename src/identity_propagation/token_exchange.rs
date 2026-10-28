@@ -468,3 +468,7 @@ mod tests;
 #[cfg(test)]
 #[path = "token_exchange_refusal_tests.rs"]
 mod refusal_tests;
+
+#[cfg(test)]
+#[path = "token_exchange_expiry_tests.rs"]
+mod expiry_tests;
