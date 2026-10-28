@@ -105,6 +105,16 @@ class RehashOrder(unittest.TestCase):
         self.assertNotEqual(run.returncode, 0)
         self.assertIn("cycle", run.stderr)
 
+    def test_a_self_reference_is_refused_before_anything_moves(self):
+        t = self.tree({
+            "index.html": "",
+            "a.js": "import '/ui/assets/a.js';\n",
+        })
+        run = t.run()
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn("cycle", run.stderr)
+        self.assertTrue((t.shell / "a.js").exists(), "nothing renamed before the refusal")
+
     def test_a_second_run_changes_nothing(self):
         t = self.tree({
             "index.html": '<script type="module" src="/ui/assets/shell.js"></script>\n',

@@ -69,6 +69,8 @@ test('T2: every tool is listed A to Z with its server and description', async ({
   expect(names.map((n) => n.replace(/^[▸▾]\s*/, '').trim())).toEqual(sorted.map((t) => t.name));
   await expect(rows(page).first().locator('td:nth-child(2)')).toHaveText(sorted[0].server);
   await expect(page.locator('#content')).toContainText('40 · A to Z · name, server, description');
+  // The no-match panel is hidden whenever tools match.
+  await expect(page.getByText('No tool matches')).toBeHidden();
 });
 
 test('T3: search and the server filter narrow the list, together and apart', async ({ page }) => {
@@ -101,6 +103,10 @@ test('T4: a tool name opens its detail, and the schema scrolls from the keyboard
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   const schema = page.getByRole('region', { name: `Input schema of ${sorted[0].name}` });
   await expect(schema).toBeVisible();
+  // The open row names the tool's class and where it came from.
+  const want = { read: { declared: 'read (declared)', inferred: 'read (guessed from the name)' },
+    write: { declared: 'write (declared)', inferred: 'write (guessed from the name)' } }[sorted[0].class][sorted[0].class_source];
+  await expect(page.locator(`#${await toggle.getAttribute('aria-controls')}`)).toContainText(want);
   await scrollsFromKeyboard(page, { from: toggle, region: schema, key: 'ArrowDown', axis: 'y' });
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
@@ -214,6 +220,15 @@ test('T15: about 1,300 tools render and filter within budget', async ({ page }) 
   await search(page).fill('tool_1299');
   await expect(rows(page)).toHaveCount(1);
   const filtered = Date.now() - t0;
+  // A broad query, then clearing it: the full list is drawn again.
+  const t1 = Date.now();
+  await search(page).fill('tool_');
+  await expect(rows(page)).toHaveCount(1300);
+  await search(page).fill('');
+  await expect(rows(page)).toHaveCount(1300);
+  const redrawn = Date.now() - t1;
+  console.log(`T15: broad query and clear redrawn in ${redrawn} ms`);
+  expect(redrawn).toBeLessThan(3000);
   console.log(`T15: 1,300 tools rendered in ${rendered} ms, filtered in ${filtered} ms`);
   // Generous ceilings for a loaded CI runner; the printed numbers go in the PR.
   expect(rendered).toBeLessThan(4000);
@@ -246,6 +261,27 @@ test('T10: the journey from the sidebar to a tool and back', async ({ page }) =>
   await expect(search(page)).toHaveValue('j_charlie');
   await expect(rows(page)).toHaveCount(1);
 });
+
+test('T16: on a phone the page never scrolls sideways; the table scrolls in its own region', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await toolsScreen(page);
+  await page.goto('/ui/tools/status');
+  await expect(rows(page)).toHaveCount(40);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  const region = page.getByRole('region', { name: 'All tools' });
+  await expect(region).toHaveAttribute('tabindex', '0');
+});
+
+for (const scheme of ['light', 'dark']) {
+  test(`T17: axe finds no blocking violation in the ${scheme} theme`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: scheme });
+    await toolsScreen(page);
+    await page.goto('/ui/tools/status');
+    await expect(rows(page)).toHaveCount(40);
+    await page.getByRole('button', { name: sorted[0].name, exact: true }).click();
+    expect(await blockingViolations(page)).toEqual([]);
+  });
+}
 
 for (const width of WIDTHS) {
   test(`T7: axe finds no blocking violation on the list, an open row and a tool page at ${width} px`, async ({ page }) => {
