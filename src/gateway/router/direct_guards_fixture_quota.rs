@@ -87,14 +87,25 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// [`super::fixture`] whose two backends each carry `rules`.
+/// [`super::fixture`] whose two backends each carry `rules`, answering over
+/// `transport` when one is given.
 pub(crate) async fn fixture_with_secrets(
     rules: Vec<crate::secret_injection::CredentialRule>,
+    transport: Option<Arc<dyn crate::transport::Transport>>,
 ) -> Fx {
     SECRETS.with(|s| *s.borrow_mut() = rules);
-    let fx = super::fixture_built(Answer::Ok, |meta| meta).await;
+    let fixture = Box::pin(super::fixture_built(Answer::Ok, |meta| meta));
+    let fx = match transport {
+        Some(transport) => super::with_transport(transport, fixture).await,
+        None => fixture.await,
+    };
     SECRETS.with(|s| s.borrow_mut().clear());
     fx
+}
+
+/// The directory the fixture's gateway writes its stores under.
+pub(crate) fn store_path(fx: &Fx) -> &std::path::Path {
+    fx._store.path()
 }
 
 /// One fixture backend's config: pass-through or not, and, for a propagating

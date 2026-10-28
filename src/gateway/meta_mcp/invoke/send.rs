@@ -84,6 +84,22 @@ pub(super) struct Dispatched {
     pub(super) cost_warnings: Vec<String>,
 }
 
+/// What the relay check reads of `call`'s egress, the backend it was judged
+/// on included: that backend's rules say which keys the send overwrites.
+fn relay_egress<'e>(
+    call: &'e Call<'_, '_>,
+    prompt_cache_key: Option<&'e str>,
+    retry: &'e OutboundRetry,
+) -> relay::Egress<'e> {
+    relay::Egress {
+        arguments: call.arguments,
+        backend: call.backend.as_ref(),
+        inbound_meta: call.args.get("_meta"),
+        prompt_cache_key,
+        retry,
+    }
+}
+
 impl MetaMcp {
     /// S6, the send admission: the use counters and the invocation log, the
     /// spend admission, the retry's redemption, the relay refusal and the
@@ -175,13 +191,7 @@ impl MetaMcp {
         // state the backend issued with it.
         witness.carry(rw::retry_effect(caller.retry.request_state.is_some()));
 
-        let egress = relay::Egress {
-            arguments,
-            backend: call.backend.as_ref(),
-            inbound_meta: args.get("_meta"),
-            prompt_cache_key: prompt_cache_key.as_deref(),
-            retry: &outbound_retry,
-        };
+        let egress = relay_egress(call, prompt_cache_key.as_deref(), &outbound_retry);
         let reservation = idem_reservation.as_mut();
         if let Err(error) =
             self.refuse_relay(caller, session_id, (server, tool), &egress, reservation)

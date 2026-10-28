@@ -194,3 +194,7 @@ impl Backend {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "secret_send_tests.rs"]
+mod tests;
