@@ -226,42 +226,47 @@ async fn a_cross_origin_card_endpoint_is_refused_before_any_send() {
     );
 }
 
-/// A dispatch abandoned while its task works sends no `CancelTask` once it
-/// has ended: the slot has no credential left to send as.
+/// A dispatch abandoned while its task works queues no `CancelTask` once it
+/// has ended: the slot has no credential left to send as. The cancel is
+/// decided when the abandoned call drops, so the row reads that decision
+/// rather than waiting out a window.
 #[tokio::test]
 async fn a_deferred_cancel_after_the_dispatch_ended_sends_nothing() {
     let (base, log) = agent(Script::Works, None).await;
     let backend = required_a2a_backend(&base);
+    let methods = || -> Vec<String> {
+        log.lock()
+            .unwrap()
+            .iter()
+            .map(|s| s.method.clone())
+            .collect()
+    };
 
-    let abandoned = tokio::time::timeout(
-        Duration::from_millis(900),
-        backend.request_with_headers_lent(
-            "tools/call",
-            delegate_params(),
-            checked(&subscriber_credential(USER)),
-            Some(USER),
-        ),
-    )
-    .await;
-    tokio::time::sleep(Duration::from_millis(600)).await;
+    let mut call = Box::pin(backend.request_with_headers_lent(
+        "tools/call",
+        delegate_params(),
+        checked(&subscriber_credential(USER)),
+        Some(USER),
+    ));
+    let created = async {
+        while !methods().iter().any(|m| m == "SendMessage") {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::select! {
+        result = &mut call => panic!("premise: the dispatch was still running: {result:?}"),
+        () = created => {}
+    }
+    let ((), warnings) = crate::test_log_capture::capture_warnings(|| drop(call));
 
     assert!(
-        abandoned.is_err(),
-        "premise: the dispatch was still running"
+        warnings.contains("a deferred A2A cancel on a per-user slot was refused"),
+        "the abandoned dispatch's cancel was not refused: {warnings:?}"
     );
-    let methods: Vec<String> = log
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|s| s.method.clone())
-        .collect();
+    let sent = methods();
     assert!(
-        methods.iter().any(|m| m == "SendMessage"),
-        "premise: the task was created: {methods:?}"
-    );
-    assert!(
-        !methods.iter().any(|m| m == "CancelTask"),
-        "a cancel was sent after its dispatch ended: {methods:?}"
+        !sent.iter().any(|m| m == "CancelTask"),
+        "a cancel was sent after its dispatch ended: {sent:?}"
     );
 }
 
