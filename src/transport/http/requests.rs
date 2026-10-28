@@ -73,8 +73,10 @@ impl HttpTransport {
         // A lent-only per-user slot sends nothing of the gateway's: no static
         // header and no gateway token, only what the dispatch in flight lends,
         // merged last. With nothing lent there is no subscriber to send as,
-        // so nothing is sent.
-        let lent = if self.is_lent_only() {
+        // so nothing is sent. A send whose credential a source lends (an
+        // event listener's stream) already carries nothing of the gateway's,
+        // and its source is its lender.
+        let lent = if self.is_lent_only() && origin == CredentialOrigin::Gateway {
             let lent = self.lent_now().filter(|headers| !headers.is_empty());
             Some(lent.ok_or_else(|| {
                 Error::Transport(
