@@ -131,6 +131,7 @@ fn backend_for(url: &str) -> Arc<Backend> {
         signature_chain: mcp_gateway::config::ChainMode::default(),
         chain_origins: Vec::new(),
         chain_signer: None,
+        ..BackendConfig::default()
     };
     Arc::new(Backend::new(
         BACKEND,

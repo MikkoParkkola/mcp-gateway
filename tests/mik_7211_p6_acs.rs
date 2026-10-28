@@ -185,6 +185,12 @@ mod source_checks {
             // (`stuffed_scope`), which the clamp must overwrite; the rows
             // read the delivered result.
             "src/gateway/router/route_matrix_driver_response_tests.rs",
+            // The member table names the key to classify it (a member a
+            // backend may send, so never stripped), and its tests put the key
+            // in a planted answer to show it survives the strip; neither
+            // writes it into a delivered answer.
+            "src/protocol/reserved_members.rs",
+            "src/protocol/reserved_members_tests.rs",
         ];
         let mut offenders = Vec::new();
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));

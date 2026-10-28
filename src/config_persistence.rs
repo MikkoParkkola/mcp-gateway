@@ -61,6 +61,8 @@ pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
     })
 }
 
+#[path = "config_persistence_keyedit.rs"]
+pub(crate) mod keyedit;
 #[path = "config_persistence_splice.rs"]
 mod splice;
 #[path = "config_persistence_url.rs"]
@@ -85,7 +87,7 @@ pub(crate) mod comments;
 mod atomic;
 #[cfg(all(test, feature = "webui"))]
 pub(crate) use atomic::write_atomic_observed_for_test;
-pub use atomic::{FileMode, Symlink, write_atomic};
+pub use atomic::{FileMode, Symlink, copy_keeping_access, write_atomic};
 
 /// Recover a byte write a crash left behind, before a serving gateway first
 /// loads `config` (ADR-024). Exists for the bundled binary's two serve paths;

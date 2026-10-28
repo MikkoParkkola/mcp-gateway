@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use parking_lot::RwLock;
 use tokio::sync::Mutex;
 
-use super::early_exit::{self, StderrTail};
+use super::early_exit::{self, StderrReader, StderrTail};
 use super::{DEFAULT_MAX_FRAME_BYTES, StdioTransport, cache::CACHE_ENV};
 
 /// How long a failed start waits for a child that is still dying.
@@ -29,7 +29,7 @@ use super::{DEFAULT_MAX_FRAME_BYTES, StdioTransport, cache::CACHE_ENV};
 /// to be told about anyway, and it is killed on the failure path either way.
 const EXIT_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 
-/// How long a failed start waits for the child's stderr to be drained.
+/// How long a failed start reads the killed child's last stderr bytes.
 const STDERR_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// The last start's stderr tail and exit status, once a failure saw them.
@@ -175,21 +175,11 @@ impl StdioTransport {
         }
     }
 
-    /// Waits, briefly, for the stderr reader to finish.
-    ///
-    /// The reader is its own task, so a child that dies mid-handshake is
-    /// visible to the failure path before the last thing it said has been
-    /// read. A child that has exited closes the pipe, so this returns as soon
-    /// as there is nothing left to read.
-    pub(super) async fn settle_stderr_tail(reader: tokio::task::JoinHandle<()>) {
-        let abort = reader.abort_handle();
-        if tokio::time::timeout(STDERR_DRAIN_GRACE, reader)
-            .await
-            .is_err()
-        {
-            // Something still holds the pipe; keep what was read so far.
-            abort.abort();
-        }
+    /// Reads the last of the killed child's stderr, briefly: see
+    /// [`StderrReader::drain`]. The child is gone, so the pipe closes as soon
+    /// as nothing is left to read, unless something else still holds it.
+    pub(super) async fn settle_stderr_tail(&self, stderr: StderrReader) {
+        stderr.drain(self.stderr_window(STDERR_DRAIN_GRACE)).await;
     }
 }
 

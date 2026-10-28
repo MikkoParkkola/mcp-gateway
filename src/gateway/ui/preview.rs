@@ -239,6 +239,8 @@ pub(super) async fn preview_backend(
         "url": url,
         "withheld": withheld,
         "publisher": {"verified": false, "source": null},
+        // Known only once the server answers; the key keeps one shape.
+        "package": null,
     });
     let digest = crate::hashing::sha256_hex(
         &serde_json::to_vec(&json!({"name": add.name, "backend": backend})).unwrap_or_default(),
@@ -346,8 +348,10 @@ async fn run_confirmed(
     };
     transport.set_body_budget(RESPONSE_BUDGET, PREVIEW_BUDGET);
     let outcome = tokio::time::timeout(PREVIEW_CAP, async {
-        crate::backend::start_detached_http(&transport, name, REQUEST_TIMEOUT).await?;
-        crate::backend::list_tools_for_preview(name, transport.as_ref()).await
+        let reported =
+            crate::backend::start_detached_http(&transport, name, REQUEST_TIMEOUT).await?;
+        let listing = crate::backend::list_tools_for_preview(name, transport.as_ref()).await?;
+        Ok::<_, crate::Error>((reported, listing))
     })
     .await;
     // Teardown before any answer, the 504 and 502 included.
@@ -365,8 +369,9 @@ async fn run_confirmed(
         )
         .into_response(),
         Ok(Err(error)) => failed(&error),
-        Ok(Ok(listing)) => {
+        Ok(Ok((reported, listing))) => {
             let mut body = listed_body(&listing, described, started.elapsed());
+            body["preview"]["package"] = super::preview_identity::package(reported.as_ref());
             body["preview"]["teardown"] = json!({"ms": millis(teardown)});
             Json(body).into_response()
         }
@@ -388,6 +393,20 @@ fn millis(elapsed: Duration) -> u64 {
     u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
 }
 
+/// A normalised tool's `class` and `class_source`, as the preview and
+/// `GET /ui/api/tools` both show them: `read` only on `readOnlyHint: true`,
+/// and `declared` when the server set that hint itself.
+pub(super) fn tool_class(
+    tool: &crate::protocol::Tool,
+    declared: bool,
+) -> (&'static str, &'static str) {
+    let read = tool.annotations.as_ref().and_then(|a| a.read_only_hint) == Some(true);
+    (
+        if read { "read" } else { "write" },
+        if declared { "declared" } else { "inferred" },
+    )
+}
+
 /// The 200 body: each tool with its class and where the class came from.
 fn listed_body(listing: &PreviewListing, mut preview: Value, elapsed: Duration) -> Value {
     let tools: Vec<Value> = listing
@@ -395,13 +414,17 @@ fn listed_body(listing: &PreviewListing, mut preview: Value, elapsed: Duration) 
         .iter()
         .map(|tool| {
             let hints = tool.annotations.as_ref();
-            let read = hints.and_then(|a| a.read_only_hint) == Some(true);
+            let (class, class_source) =
+                tool_class(tool, listing.hint_declared.contains(&tool.name));
             json!({
                 "name": tool.name,
                 "description": tool.description,
-                "class": if read { "read" } else { "write" },
-                "class_source": if listing.hint_declared.contains(&tool.name) { "declared" } else { "inferred" },
+                "class": class,
+                "class_source": class_source,
                 "destructive": hints.and_then(|a| a.destructive_hint) == Some(true),
+                // A name the gateway would never call cannot be ticked: copied
+                // into `allowed_tools`, a trailing `*` would read as a pattern.
+                "selectable": crate::security::validate_tool_name(&tool.name).is_ok(),
             })
         })
         .collect();

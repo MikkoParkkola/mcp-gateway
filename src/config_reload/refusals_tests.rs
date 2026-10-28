@@ -255,3 +255,55 @@ fn api4_3_an_older_write_success_does_not_resolve_a_newer_refusal() {
     assert!(list[0].active, "the newer refusal stays active: {list:?}");
     assert!(!list[1].active, "the older one is resolved: {list:?}");
 }
+
+/// A load that refuses, standing in for a reload that rejects the file.
+fn refused_load(
+    _: &std::path::Path,
+    _: &Arc<LiveConfig>,
+    _: &LiveEnv,
+) -> std::result::Result<crate::config_reload::reload_context::EvaluatedReload, String> {
+    Err("the reload refuses this file".to_owned())
+}
+
+/// A write whose config is valid but whose reload is refused records the
+/// reload's refusal exactly once: one entry, not merged with a second record
+/// as a repeat. The written config still lands on disk. (The admin UI records
+/// its own entry only for a config that fails validation, before any reload;
+/// that path is pinned by the web UI's refused-add test.)
+#[tokio::test]
+async fn api4_3_a_write_whose_reload_is_refused_is_one_reload_entry() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    write_owner_only(
+        &path,
+        "backends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n",
+    )
+    .expect("write config");
+    let running = Config::load(Some(&path)).expect("config loads");
+    let ctx = crate::config_reload::ReloadContext::new(
+        path.clone(),
+        Arc::new(LiveConfig::new(running)),
+        Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    )
+    .expect("the registry pairs with the config")
+    .with_load(refused_load);
+    let mut edited = Config::load_literal(Some(&path)).expect("loads");
+    let backend = edited.backends["a"].clone();
+    edited.backends.insert("b".to_owned(), backend);
+
+    let written = ctx.write_and_reload_outcome(&path, &edited).await;
+
+    let failed = written.expect_err("the refused reload fails the write");
+    assert!(
+        format!("{failed:?}").contains("the reload refuses this file"),
+        "failed by the injected refusal, not another: {failed:?}"
+    );
+    let on_disk = Config::load_literal(Some(&path)).expect("loads");
+    assert!(on_disk.backends.contains_key("b"), "the write lands first");
+    let list = ctx.refusals().list();
+    assert_eq!(list.len(), 1, "one refusal, not zero or two: {list:?}");
+    assert_eq!(list[0].kind, RefusalKind::Reload);
+    assert_eq!(list[0].repeats, 1, "recorded once, not twice: {list:?}");
+}

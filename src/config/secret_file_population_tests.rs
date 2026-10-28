@@ -115,6 +115,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "the shared atomic writer: creates its own private scratch; opens the target only to probe its ACL, never reads it",
     ),
     (
+        "src/config_persistence_atomic_windows.rs",
+        "the atomic writer's Windows half: opens the save target with READ_CONTROL only, to read its access list; never reads its bytes",
+    ),
+    (
         "src/config_persistence_journal.rs",
         "the replace journal (paths, SHA-256 revisions and a state; no secret) and the staged \
          original of gateway.yaml, both created owner-only by create_new_private; the original is \
@@ -190,6 +194,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "cfg(test) source scanner reading Cargo.toml and the crate's own sources for the MIK-8481 unshipped-read guard; no secret",
     ),
     (
+        "src/gateway/meta_mcp/boundary_pins/creation_sites.rs",
+        "cfg(test) scanner for the file-creation inventory, reading the crate's own sources; its fs::write calls are quoted syntax in a scanner test, never run; no secret",
+    ),
+    (
         "src/gateway/meta_mcp/boundary_pins/scan.rs",
         "cfg(test) source scanner reading the crate's own source for the MIK-8387 boundary pins; no secret",
     ),
@@ -208,10 +216,6 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/gateway/task_service/execution/pause_hook.rs",
         "debug-build test hook writing a task id marker (#2298); compiled out of release",
-    ),
-    (
-        "src/gateway/ui/activity/reader.rs",
-        "reads audit log segments for the Activity list; hash-only, no secret",
     ),
     (
         "src/gateway/ui/activity/seek.rs",
@@ -337,7 +341,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "reads an Activity export bundle given to audit verify; no secret",
     ),
     (
-        "src/trust/provenance_public.rs",
+        "src/trust/provenance_public_cli.rs",
         "`provenance verify` CLI: the operator-named public-key trust set, receipt and result; public data, read once by an offline command the running gateway never consults",
     ),
     (
