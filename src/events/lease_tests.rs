@@ -261,6 +261,46 @@ async fn d1_a_wipe_cancels_and_drains_an_in_flight_send() {
     assert_eq!(s.generation(&key("p")).await, None);
 }
 
+/// LEASE-T7, bump order (design §3.5): a replace bumps the generation before
+/// it drains the old lease's sends, so while they drain a record observed
+/// under the old generation no longer reads as live, and no new delivery
+/// handoff for it can begin. The drain is held open by holding the old
+/// token's read guard, as an in-flight send not yet polled since its cancel.
+#[tokio::test]
+async fn lease_t7_a_replace_bumps_the_generation_before_it_drains() {
+    let s = Arc::new(store());
+    let old = s
+        .install(key("p"), token_until(now() + 3600), FAR, 0)
+        .await
+        .unwrap();
+    let (token, old_cancel) = {
+        let held = s.held.lock().await;
+        let h = held.get(&key("p")).expect("held");
+        (Arc::clone(&h.token), h.cancel.clone())
+    };
+    let in_flight = token.read_owned().await;
+    let replace = {
+        let s = s.clone();
+        tokio::spawn(async move { s.install(key("p"), token_until(now() + 7200), FAR, 0).await })
+    };
+    // The replace has fired the old cancel and now waits on the drain.
+    let mut turns = 0;
+    while !old_cancel.is_cancelled() {
+        assert!(turns < 10_000, "the replace never reached the drain");
+        turns += 1;
+        tokio::task::yield_now().await;
+    }
+    assert!(!replace.is_finished(), "premise: the drain is held open");
+    assert_ne!(
+        s.held_generation(&key("p")),
+        Some(old),
+        "while the old lease drains, its generation no longer reads as live"
+    );
+    drop(in_flight);
+    let new = replace.await.unwrap().unwrap();
+    assert_eq!(s.held_generation(&key("p")), Some(new));
+}
+
 #[test]
 fn the_store_debug_shows_no_lease() {
     let rendered = format!("{:?}", store());
