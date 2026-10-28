@@ -16,12 +16,14 @@ pub mod backends;
 pub mod capabilities;
 pub mod control_plane;
 mod dashboard;
+mod discovery;
 mod errors;
 mod events;
 mod history;
 pub mod import;
 mod overview;
 mod preview;
+mod preview_identity;
 mod refusals;
 pub(crate) mod session;
 mod shell;
@@ -84,6 +86,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .merge(backends::backends_router())
         .merge(events::events_router())
         .merge(import::import_router())
+        .merge(discovery::discovery_router())
         .merge(history::history_router());
 
     #[cfg(feature = "cost-governance")]
@@ -493,7 +496,7 @@ async fn tools(
 
         // get_tools() returns from cache if populated (no network I/O).
         // If cache is empty, it will connect + fetch — acceptable for the tools tab.
-        if let Ok(tools) = backend.get_tools_shared().await {
+        if let Ok((tools, declared)) = backend.shared_tools_with_declared_hints().await {
             for tool in tools.iter() {
                 // Search filter
                 if !query_lower.is_empty() {
@@ -509,11 +512,18 @@ async fn tools(
                     }
                 }
 
+                let (class, class_source) =
+                    preview::tool_class(tool, declared.contains(&tool.name));
                 entries.push(json!({
                     "name": tool.name,
                     "server": name,
                     "description": tool.description,
                     "schema": tool.input_schema,
+                    "class": class,
+                    "class_source": class_source,
+                    // The admin view lists every cached tool, so one left out
+                    // of `allowed_tools` can be ticked again.
+                    "selected": !backend.is_unselected(&tool.name),
                 }));
             }
         }
@@ -549,6 +559,8 @@ async fn config(
                 "name": s.name,
                 "transport": s.transport,
                 "running": s.running,
+                // As written, so a pattern that matches no current tool shows.
+                "allowed_tools": b.allowed_tools(),
             })
         })
         .collect();

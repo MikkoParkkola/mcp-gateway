@@ -220,11 +220,13 @@ async fn a_direct_signature_stays_out_of_the_receipt() {
     assert!(sent.get("error").is_none(), "{sent}");
 }
 
-/// `MIK-8011.DIRECT.3` control: a backend's own `_cost_warnings` member, on an
-/// answer the gateway gave no warning, is backend text and stays receipted.
+/// Reverses the earlier rule that this member stays: `_cost_warnings` is the
+/// gateway's member, so a backend's copy, on an answer the gateway gave no
+/// warning, is a forged gateway warning. Ingress removes it: it is never
+/// delivered, so it is in no receipt and sending its text is not a relay.
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
-async fn a_backend_cost_warnings_member_stays_in_the_receipt() {
+async fn a_backend_cost_warnings_member_is_never_delivered() {
     let fx = fixture(Setup::default()).await;
     fx.answer_read(Read::Raw(json!({
         "content": [{"type": "text", "text": "ok"}],
@@ -233,10 +235,10 @@ async fn a_backend_cost_warnings_member_stays_in_the_receipt() {
     })));
     let body = fx.read(Some("a")).await;
     assert!(
-        body.contains("orchard"),
-        "base: the member is delivered: {body}"
+        !body.contains("orchard"),
+        "the backend's warning was delivered: {body}"
     );
-    assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 0);
+    assert_sent(&fx, &fx.send(Some("b"), PROSE).await, 1);
 }
 
 /// `read` costs 9000 against the credential-named key's 10000 budget, so its

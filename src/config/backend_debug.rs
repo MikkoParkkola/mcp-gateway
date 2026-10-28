@@ -32,6 +32,7 @@ impl std::fmt::Debug for BackendConfig {
             .field("passthrough", &self.passthrough)
             .field("input_schema_enforcement", &self.input_schema_enforcement)
             .field("allow_flagged_tools", &self.allow_flagged_tools)
+            .field("allowed_tools", &self.allowed_tools)
             .field(
                 "allow_cleartext_credentials",
                 &self.allow_cleartext_credentials,

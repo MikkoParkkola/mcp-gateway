@@ -851,7 +851,7 @@ def run_self_test() -> int:
     cur, _, _ = collect_current(ROOT, orphan.test_only_files(), orphan)
     rels = {rel for rel, _ in cur.keys()}
     check("round trip tip contains secrets.rs", "src/secrets.rs" in rels, repr(sorted(rels)[:5]))
-    check("round trip tip contains config/mod.rs", "src/config/mod.rs" in rels)
+    check("round trip tip contains config/secret_ref.rs", "src/config/secret_ref.rs" in rels)
     base = {k: len(v) for k, v in cur.items()}
     check("round trip tip baseline gives zero findings", find_new_sites(cur, base) == [])
 

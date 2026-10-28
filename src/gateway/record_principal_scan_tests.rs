@@ -366,7 +366,7 @@ const CENSUS_TEST_ONLY: &[&str] = &[
 /// line itself (§16.15). The credential canary tests catch what a row misses.
 #[rustfmt::skip]
 const CENSUS: &[(&str, &str, usize, Class, &str)] = &[
-    ("src/events/rpc.rs", "credential_principal: Some(caller.credential.principal.clone())", 1, Store, "subscription row field: the store's owner binding"),
+    ("src/events/rpc/subscribe.rs", "credential_principal: Some(caller.credential.principal.clone())", 1, Store, "subscription row field: the store's owner binding"),
     ("src/events/rpc_held.rs", "credential_principal: Some(caller.credential.principal.clone())", 1, Store, "held subscription row field: the store's owner binding"),
     ("src/events/operational_source.rs", "k.principal_for(&digest).storage_form() == principal", 1, Store, "compares a configured key's principal (explicit or digest-derived, ADR-022) to a stored principal"),
     ("src/events/fanout.rs", "row.credential_principal == snapshot.credential_principal", 1, Store, "store row identity comparison"),
