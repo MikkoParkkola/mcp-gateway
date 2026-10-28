@@ -222,6 +222,14 @@ pub(crate) async fn auth_off<T, F: std::future::Future<Output = T>>(build: F) ->
     fx
 }
 
+/// Any fixture builder, run with the admin key `k-admin` added.
+pub(crate) async fn with_admin<T, F: std::future::Future<Output = T>>(build: F) -> T {
+    WITH_ADMIN.with(|s| s.set(true));
+    let fx = build.await;
+    WITH_ADMIN.with(|s| s.set(false));
+    fx
+}
+
 /// Any fixture builder, run with `security.sanitize_input` = `on` (MIK-8154
 /// rows: the firewalled and code-mode fixtures under sanitization).
 pub(crate) async fn sanitizing<T, F: std::future::Future<Output = T>>(on: bool, build: F) -> T {
@@ -534,6 +542,9 @@ pub(crate) async fn fixture_firewalled_anomaly(answer: Answer) -> Fx {
 thread_local! {
     static HARDENED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static WITH_BEARER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Add the admin key `k-admin` (the web UI's tool route runs only for an
+    /// admin); off by default, so no other row's key set changes.
+    static WITH_ADMIN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static MODERN_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static KEY_SERVER: std::cell::RefCell<Option<Arc<crate::key_server::KeyServer>>> =
         const { std::cell::RefCell::new(None) };
@@ -592,11 +603,6 @@ fn fixture_auth() -> AuthConfig {
         api_keys: vec![
             key("k-std"),
             key("k-other"),
-            // The web UI's tool route (U12) runs only for an admin.
-            ApiKeyConfig {
-                admin: true,
-                ..key("k-admin")
-            },
             key("k-budget"),
             ApiKeyConfig {
                 rate_limit: 1,
@@ -630,6 +636,12 @@ fn fixture_auth() -> AuthConfig {
         ],
         ..Default::default()
     };
+    if WITH_ADMIN.with(std::cell::Cell::get) {
+        auth.api_keys.push(ApiKeyConfig {
+            admin: true,
+            ..key("k-admin")
+        });
+    }
     if WITH_BEARER.with(std::cell::Cell::get) {
         auth.bearer_token = Some(BEARER_SECRET.to_string());
         auth.api_keys.push(key("bearer"));
