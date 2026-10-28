@@ -255,8 +255,14 @@ async fn lease_t2b_a_notice_read_under_the_old_token_is_never_stamped_with_the_n
     );
     // Whatever the old stream still yields must not carry the narrow token's
     // generation. A replace that closed it leaves nothing to read.
+    // Either the replace closed the old stream (a push to it fails, as its
+    // body is gone), or it is still open and what it yields must be read and
+    // checked: a push that reached nothing would make this row prove nothing.
     if peer.push_tools_changed(0) {
-        fan_out_next(&f, &mut intake).await;
+        assert!(
+            fan_out_next(&f, &mut intake).await,
+            "the old stream took the notice but nothing was read from it"
+        );
     }
     let stamps = outbox_stamps(&f);
     assert!(
