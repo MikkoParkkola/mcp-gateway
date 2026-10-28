@@ -28,7 +28,12 @@ type holding more than one TempDir (tuple pairs such as `(log_dir, store)`, thre
 four-element returns, tuple type aliases); a struct declared in another file; and the
 reverse case, a plain `tempdir()` assigned where FixtureDir is now expected (wrap it in
 `Arc::new`).
+It also refuses, rather than guesses: a return whose value ends an if/else branch rather
+than the function body, a tuple value whose element is not a plain top-level match, and any
+mismatch that is not expected-TempDir/found-Arc<TempDir>.
 """
+
+import importlib.util
 import json
 import re
 import sys
@@ -39,6 +44,19 @@ root, report = sys.argv[1], sys.argv[2]
 ALIAS = "crate::gateway::router::tests::FixtureDir"
 TD = re.compile(r"(?:tempfile::)?TempDir\b")
 
+# The surface inventory's bracket-aware splitter (it already skips `->`).
+_spec = importlib.util.spec_from_file_location(
+    "check_surface_inventory", f"{root}/scripts/release/check_surface_inventory.py"
+)
+_inventory = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = _inventory  # its dataclasses look the module up
+_spec.loader.exec_module(_inventory)
+
+
+def split_top(text):
+    return [piece for _, piece in _inventory.split_top(text, text)]
+
+
 files = {}
 
 
@@ -48,32 +66,30 @@ def lines_of(name):
     return files[name]
 
 
-def top_level_parts(text):
-    """Split a parenthesised tuple's inside at top-level commas."""
-    depth, parts, cur = 0, [], ""
-    for ch in text:
-        if ch in "(<[":
-            depth += 1
-        elif ch in ")>]":
-            depth -= 1
-        if ch == "," and depth == 0:
-            parts.append(cur)
-            cur = ""
-        else:
-            cur += ch
-    parts.append(cur)
-    return parts
-
-
-def replace_nth_temp(text, index):
-    """Replace the TempDir in the `index`th element of the outermost tuple in `text`."""
-    open_at = text.index("(")
-    close_at = text.rindex(")")
-    parts = top_level_parts(text[open_at + 1 : close_at])
-    if index >= len(parts) or not TD.search(parts[index]) or "FixtureDir" in parts[index]:
+def tuple_inside(text):
+    """The inside of `text` when it is exactly one parenthesised tuple, else None."""
+    text = text.strip()
+    if not (text.startswith("(") and text.endswith(")")):
         return None
-    parts[index] = TD.sub(ALIAS, parts[index], count=1)
-    return text[: open_at + 1] + ",".join(parts) + text[close_at:]
+    depth = 0
+    for i, ch in enumerate(text):
+        depth += ch == "("
+        depth -= ch == ")"
+        if depth == 0 and i != len(text) - 1:
+            return None
+    return text[1:-1]
+
+
+def replace_element(decl_line, index):
+    """Rewrite the TempDir of the `index`th element of the one tuple on `decl_line`."""
+    open_at, close_at = decl_line.find("("), decl_line.rfind(")")
+    if open_at < 0 or close_at < open_at:
+        return None
+    parts = split_top(decl_line[open_at + 1 : close_at])
+    if index >= len(parts) or len(TD.findall(parts[index])) != 1:
+        return None
+    parts[index] = TD.sub(ALIAS, parts[index])
+    return decl_line[: open_at + 1] + ",".join(parts) + decl_line[close_at:]
 
 
 def fix_field(name, lineno, value):
@@ -87,38 +103,62 @@ def fix_field(name, lineno, value):
     if len(hits) != 1:
         return False
     i = hits[0]
-    if init.startswith("("):
-        index = [p.strip() for p in top_level_parts(init.strip("()"))].index(value) if value in init else -1
-        if index < 0:
+    inside = tuple_inside(init)
+    if inside is not None:
+        values = [v.strip() for v in split_top(inside)]
+        if values.count(value) != 1:
             return False
-        new = replace_nth_temp(lines[i], index)
+        new = replace_element(lines[i], values.index(value))
         if new is None:
             return False
         lines[i] = new
-    else:
-        lines[i] = TD.sub(ALIAS, lines[i], count=1)
+        return True
+    # A plain initialiser: only a declaration naming exactly one TempDir.
+    if len(TD.findall(lines[i])) != 1:
+        return False
+    lines[i] = TD.sub(ALIAS, lines[i])
     return True
 
 
-def fix_return(name, lineno):
+def is_tail(lines, fn_line, span):
+    """Whether `span` ends the function body opened at `fn_line`: the next code line
+    after it is the closing brace at the function's own indentation."""
+    indent = len(lines[fn_line]) - len(lines[fn_line].lstrip())
+    k = span["line_end"]
+    while k < len(lines) and not lines[k].strip():
+        k += 1
+    return k < len(lines) and lines[k] == " " * indent + "}"
+
+
+def fix_return(name, span):
     lines = lines_of(name)
-    i = lineno - 1
-    while i >= 0 and not re.match(r"\s*(?:pub(?:\([\w:]+\))?\s+)?(?:async\s+)?fn\s", lines[i]):
+    i = span["line_start"] - 1
+    fn = re.compile(r"\s*(?:pub(?:\([\w:]+\))?\s+)?(?:async\s+)?fn\s")
+    while i >= 0 and not fn.match(lines[i]):
         i -= 1
-    if i < 0:
+    if i < 0 or not is_tail(lines, i, span):
         return False
     j = i
     while j < len(lines) and "{" not in lines[j]:
         j += 1
-    sig = list(range(i, j + 1))
+    sig = range(i, j + 1)
     arrow = [k for k in sig if "->" in lines[k]]
     if not arrow:
         return False
     targets = [k for k in sig if k >= arrow[0] and TD.search(lines[k]) and "FixtureDir" not in lines[k]]
     if len(targets) != 1 or len(TD.findall(lines[targets[0]])) != 1:
         return False
-    lines[targets[0]] = TD.sub(ALIAS, lines[targets[0]], count=1)
+    lines[targets[0]] = TD.sub(ALIAS, lines[targets[0]])
     return True
+
+
+def forward(notes):
+    """The mismatch this script fixes: a TempDir expected, an Arc<TempDir> found."""
+    m = re.search(r"expected (.*?)\n\s*found (.*)", notes, re.S)
+    if not m:
+        return False
+    expected, found = m.group(1), m.group(2)
+    return "TempDir" in expected and "Arc<TempDir>" not in expected and "Arc<TempDir>" in found
 
 
 unplaced = []
@@ -132,19 +172,21 @@ for raw in open(report):
     m = msg["message"]
     if m["level"] != "error" or (m.get("code") or {}).get("code") != "E0308":
         continue
-    notes = " ".join(c["message"] for c in m["children"])
-    if "Arc<TempDir>" not in notes:
+    notes = "\n".join(c["message"] for c in m["children"])
+    if "TempDir" not in notes:
         continue
     span = next(s for s in m["spans"] if s["is_primary"])
     text = span["text"][0]
     value = text["text"][text["highlight_start"] - 1 : text["highlight_end"] - 1].strip()
-    name, lineno = span["file_name"], span["line_start"]
-    done = fix_field(name, lineno, value) or fix_return(name, lineno)
-    if not done:
-        unplaced.append(f"{name}:{lineno}: {text['text'].strip()[:90]}")
+    where = f"{span['file_name']}:{span['line_start']}: {text['text'].strip()[:90]}"
+    if not forward(notes):
+        unplaced.append(where + "  (not expected-TempDir/found-Arc)")
+        continue
+    if not (fix_field(span["file_name"], span["line_start"], value) or fix_return(span["file_name"], span)):
+        unplaced.append(where)
 
 for name, lines in files.items():
     open(f"{root}/{name}", "w").write("\n".join(lines))
-print(f"files touched: {len(files)}")
+print(f"files read: {len(files)}")
 for item in unplaced:
     print("UNPLACED", item)
