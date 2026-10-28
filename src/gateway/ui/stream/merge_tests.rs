@@ -34,6 +34,8 @@ struct Fake {
     rows: Mutex<Vec<Row>>,
     tx: broadcast::Sender<Appended>,
     biggest_page: Mutex<usize>,
+    reads: Mutex<usize>,
+    append_on_read: Mutex<bool>,
 }
 
 impl Fake {
@@ -43,7 +45,23 @@ impl Fake {
             rows: Mutex::new((1..=existing).map(|n| row(n, false)).collect()),
             tx,
             biggest_page: Mutex::new(0),
+            reads: Mutex::new(0),
+            append_on_read: Mutex::new(false),
         })
+    }
+
+    /// Swap the whole log for `count` rows carrying `hash`.
+    fn replace(&self, count: u64, hash: &str) {
+        let swapped = (1..=count)
+            .map(|n| Row {
+                part: LogPart {
+                    n,
+                    hash: hash.to_owned(),
+                },
+                ..row(n, false)
+            })
+            .collect();
+        *self.rows.lock().unwrap() = swapped;
     }
 
     fn append(&self, hidden: bool) -> u64 {
@@ -91,6 +109,16 @@ impl LogSource for Fake {
 
 impl Fake {
     fn page(&self, cursor: &LogCursor, limit: usize) -> Page {
+        *self.reads.lock().unwrap() += 1;
+        let grow = *self.append_on_read.lock().unwrap();
+        let page = self.read_page(cursor, limit);
+        if grow {
+            self.append(false);
+        }
+        page
+    }
+
+    fn read_page(&self, cursor: &LogCursor, limit: usize) -> Page {
         let rows = self.rows.lock().unwrap();
         let mut b = self.biggest_page.lock().unwrap();
         *b = (*b).max(limit);
@@ -270,4 +298,57 @@ fn recoveries_older_than_the_window_do_not_count() {
         assert!(!w.record(t0 + std::time::Duration::from_secs(i)));
     }
     assert!(!w.record(t0 + LAG_WINDOW + std::time::Duration::from_secs(5)));
+}
+
+#[tokio::test]
+async fn a_disconnect_partway_through_a_page_loses_and_repeats_no_row() {
+    let fake = Fake::new(450, 64);
+    let mut merge = LogMerge::connect(Arc::clone(&fake), (), Some(LogCursor::default())).await;
+    let page = merge.next().await;
+    assert!(page.len() > 3, "the first page holds many rows");
+    for out in &page[..3] {
+        merge.ack(out);
+    }
+    let cursor = merge.delivered().clone();
+    assert_eq!(cursor, from(3), "only written rows move the position");
+    let mut resumed = LogMerge::connect(Arc::clone(&fake), (), Some(cursor)).await;
+    let rest = collect(&mut resumed, 447).await;
+    assert_eq!(ids(&rest), (4..=450).collect::<Vec<_>>());
+}
+
+#[tokio::test]
+async fn a_replaced_log_under_a_live_stream_resets_then_sends_the_new_rows() {
+    let fake = Fake::new(5, 64);
+    let mut merge = LogMerge::connect(Arc::clone(&fake), (), None).await;
+    fake.replace(8, "fedcba9876543210");
+    fake.append(false);
+    let out = collect(&mut merge, 9).await;
+    assert_eq!(out.first(), Some(&Out::Reset));
+    assert_eq!(ids(&out), (1..=9).collect::<Vec<_>>());
+}
+
+#[tokio::test]
+async fn catch_up_stops_at_the_head_captured_when_it_began() {
+    let fake = Fake::new(400, 1_024);
+    *fake.append_on_read.lock().unwrap() = true;
+    let mut merge = LogMerge::connect(Arc::clone(&fake), (), Some(LogCursor::default())).await;
+    let out = collect(&mut merge, 400).await;
+    assert_eq!(*fake.reads.lock().unwrap(), 2, "two pages reach the head");
+    assert_eq!(ids(&out), (1..=400).collect::<Vec<_>>());
+    assert_eq!(ids(&collect(&mut merge, 2).await), vec![401, 402]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_fourth_lag_recovery_inside_a_minute_closes_the_view() {
+    let fake = Fake::new(0, 2);
+    let mut merge = LogMerge::connect(Arc::clone(&fake), (), Some(LogCursor::default())).await;
+    for round in 0..4 {
+        for _ in 0..6 {
+            fake.append(false);
+        }
+        let out = merge.next().await;
+        assert_eq!(out.is_empty(), round == 3, "round {round}");
+    }
+    assert!(merge.is_too_slow());
+    assert_eq!(merge.lag_recoveries(), 4);
 }

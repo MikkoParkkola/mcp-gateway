@@ -140,6 +140,15 @@ impl<S: LogSource> LogMerge<S> {
         &self.delivered
     }
 
+    /// Record that `out` was written to the client: only now does the
+    /// delivered position move.
+    pub(super) fn ack(&mut self, _out: &Out) {}
+
+    /// Whether the slow-consumer rule has closed this view.
+    pub(super) fn is_too_slow(&self) -> bool {
+        false
+    }
+
     /// `Lagged` recoveries so far.
     pub(super) fn lag_recoveries(&self) -> usize {
         self.lag_recoveries
