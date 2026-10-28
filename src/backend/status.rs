@@ -111,6 +111,9 @@ impl Backend {
     /// regardless — a real failure is never disguised as a nap.
     #[must_use]
     pub fn lifecycle(&self) -> BackendLifecycle {
+        if self.shared_slot_refused() {
+            return BackendLifecycle::PerUser;
+        }
         if self.is_running() {
             return BackendLifecycle::Running;
         }
