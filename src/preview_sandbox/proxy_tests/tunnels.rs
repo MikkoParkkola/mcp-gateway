@@ -12,27 +12,6 @@ use std::time::Duration;
 use tokio::io::AsyncWriteExt as _;
 use tokio::net::TcpStream;
 
-impl Opened {
-    async fn head(&mut self) -> String {
-        match self {
-            Self::Tcp(s) => read_head(s).await,
-            Self::Unix(s) => read_head(s).await,
-        }
-    }
-
-    async fn echoes(&mut self) -> bool {
-        match self {
-            Self::Tcp(s) => tunnel_echoes(s).await,
-            Self::Unix(s) => tunnel_echoes(s).await,
-        }
-    }
-
-    /// True when the stream is dead: a write or read fails or hits EOF.
-    async fn closed(&mut self) -> bool {
-        !self.echoes().await
-    }
-}
-
 /// An open, working tunnel through `entry` under `cred`.
 async fn open_tunnel(rig: &Rig, entry: Entry, cred: &Credential) -> Opened {
     let bytes = connect_bytes("registry.npmjs.org:443", Some(&cred.basic()));

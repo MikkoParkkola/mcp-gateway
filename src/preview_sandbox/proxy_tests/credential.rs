@@ -4,7 +4,7 @@
 //! is random, dies on expiry, and never reaches a log line or a refusal.
 
 use super::{
-    ENTRIES, Entry, GLOBAL, NPM, begin, connect_bytes, connect_status, ip, rig, send, status,
+    ENTRIES, Entry, GLOBAL, NPM, begin, connect_bytes, connect_status, ip, open, rig, send, status,
 };
 use std::io;
 use std::net::Ipv4Addr;
@@ -26,18 +26,32 @@ async fn c8_a_failed_random_source_refuses_and_the_proxy_lives() {
     assert_eq!(st, 407, "the proxy stopped answering");
 }
 
-/// C1/R1, kills "port open outside a fetch": with no live credential neither
-/// entry admits anything, nothing is dialled, and the port stays bound.
+/// C1/R1, kills "port open outside a fetch": during a fetch both entries
+/// carry a tunnel; with no live credential neither admits anything, nothing
+/// more is dialled, and the port stays bound.
 #[tokio::test]
 async fn c1_outside_a_fetch_nothing_is_admitted_and_the_port_stays_bound() {
     let rig = rig().await;
     let cred = begin(&rig);
+    // During the fetch, each entry opens a tunnel that carries bytes, so a
+    // proxy that refuses everything cannot pass this row.
+    let bytes = connect_bytes("registry.npmjs.org:443", Some(&cred.basic()));
+    for entry in ENTRIES {
+        let mut t = open(&rig, entry, &bytes).await.expect("connect");
+        assert_eq!(status(&t.head().await), 200, "refused during the fetch");
+        assert!(t.echoes().await, "the tunnel carried no bytes");
+    }
+    let dialled = rig.connect.dials().len();
     rig.proxy.expire(&cred);
     for entry in ENTRIES {
         let st = connect_status(&rig, entry, "registry.npmjs.org:443", &cred).await;
         assert_ne!(st, 200, "a tunnel opened outside a fetch");
     }
-    assert!(rig.connect.dials().is_empty());
+    assert_eq!(
+        rig.connect.dials().len(),
+        dialled,
+        "dialled outside a fetch"
+    );
     let rebind = TcpListener::bind((Ipv4Addr::LOCALHOST, rig.proxy.port())).await;
     assert!(rebind.is_err(), "the port was released");
 }

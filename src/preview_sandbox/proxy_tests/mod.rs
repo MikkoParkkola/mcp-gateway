@@ -211,6 +211,27 @@ enum Opened {
     Unix(UnixStream),
 }
 
+impl Opened {
+    async fn head(&mut self) -> String {
+        match self {
+            Self::Tcp(s) => read_head(s).await,
+            Self::Unix(s) => read_head(s).await,
+        }
+    }
+
+    async fn echoes(&mut self) -> bool {
+        match self {
+            Self::Tcp(s) => tunnel_echoes(s).await,
+            Self::Unix(s) => tunnel_echoes(s).await,
+        }
+    }
+
+    /// True when the stream is dead: a write or read fails or hits EOF.
+    async fn closed(&mut self) -> bool {
+        !self.echoes().await
+    }
+}
+
 /// Connect through `entry` and write `bytes`; `None` when the connection
 /// itself is refused.
 async fn open(rig: &Rig, entry: Entry, bytes: &[u8]) -> Option<Opened> {
