@@ -8,7 +8,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { test, expect, WIDTHS, blockingViolations } from './base.mjs';
+import { test, expect, WIDTHS, blockingViolations, scrollsFromKeyboard } from './base.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const INDEX = readFileSync(join(HERE, '..', '..', 'src', 'gateway', 'ui', 'index.html'), 'utf8');
@@ -43,15 +43,6 @@ async function classicPage(page) {
   await expect(page.locator('#d-version')).toHaveText('vtest');
 }
 
-/** Focus `region`, press `key`, and expect it to scroll along `axis`. */
-async function scrollsFromKeyboard(page, region, key, axis) {
-  expect(await region.evaluate((el, a) => (a === 'x' ? el.scrollWidth > el.clientWidth : el.scrollHeight > el.clientHeight), axis)).toBe(true);
-  await region.focus();
-  await expect(region).toBeFocused();
-  await page.keyboard.press(key);
-  await expect.poll(() => region.evaluate((el, a) => (a === 'x' ? el.scrollLeft : el.scrollTop), axis)).toBeGreaterThan(0);
-}
-
 for (const width of WIDTHS) {
   test.describe(`at ${width} px`, () => {
     test.beforeEach(async ({ page }) => {
@@ -68,7 +59,7 @@ for (const width of WIDTHS) {
       await expect(toggle).toHaveAttribute('aria-expanded', 'true');
       const schema = page.getByRole('region', { name: 'Input schema of wide_tool' });
       await expect(schema).toBeVisible();
-      await scrollsFromKeyboard(page, schema, 'ArrowDown', 'y');
+      await scrollsFromKeyboard(page, { from: toggle, region: schema, key: 'ArrowDown', axis: 'y' });
       expect(await blockingViolations(page)).toEqual([]);
     });
 
@@ -97,7 +88,7 @@ for (const width of WIDTHS) {
       await page.locator('#import-url').fill('https://specs.example.test/openapi.json');
       await page.locator('#preview-btn').click();
       await expect(page.locator('.import-check')).toHaveCount(OPERATIONS.length);
-      await scrollsFromKeyboard(page, page.getByRole('region', { name: 'Operations in the spec' }), 'ArrowDown', 'y');
+      await scrollsFromKeyboard(page, { from: page.locator('#preview-btn'), region: page.getByRole('region', { name: 'Operations in the spec' }), key: 'ArrowDown', axis: 'y' });
       expect(await blockingViolations(page)).toEqual([]);
     });
 
@@ -105,7 +96,7 @@ for (const width of WIDTHS) {
       await page.evaluate(() => { location.hash = 'config'; });
       const view = page.getByRole('region', { name: 'Current configuration' });
       await expect(view).toContainText('alpha.example.test');
-      await scrollsFromKeyboard(page, view, 'ArrowRight', 'x');
+      await scrollsFromKeyboard(page, { from: page.locator('#reload-btn'), region: view, key: 'ArrowRight', axis: 'x' });
       expect(await blockingViolations(page)).toEqual([]);
     });
   });

@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { test, expect, WIDTHS, blockingViolations } from './base.mjs';
+import { test, expect, WIDTHS, blockingViolations, scrollsFromKeyboard } from './base.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const INDEX = readFileSync(join(HERE, '..', '..', 'src', 'gateway', 'ui', 'index.html'), 'utf8');
@@ -58,10 +58,8 @@ for (const width of WIDTHS) {
       await page.evaluate(() => { location.hash = 'control-plane'; });
       const region = page.getByRole('region', { name: 'TrustCards' });
       await expect(region).toContainText('a'.repeat(64));
-      expect(await region.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
-      await region.focus();
-      await page.keyboard.press('ArrowRight');
-      await expect.poll(() => region.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+      // The Runtime Health region comes just before it in tab order.
+      await scrollsFromKeyboard(page, { from: page.getByRole('region', { name: 'Runtime Health' }), region, key: 'ArrowRight', axis: 'x' });
     });
 
     for (const tab of TABS) {
