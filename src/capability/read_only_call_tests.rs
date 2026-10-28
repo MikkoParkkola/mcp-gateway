@@ -102,10 +102,10 @@ async fn a_read_only_refusal_records_refused() {
     backend
         .register_capability(capability(false))
         .expect("registered");
-    let (outcome, facts) = delivery_facts::scope(async {
+    let (outcome, facts) = Box::pin(delivery_facts::scope(async {
         let outcome = read_only_call_as(false, backend.call_tool("probe", json!({}))).await;
         (outcome, delivery_facts::snapshot())
-    })
+    }))
     .await;
     let error = outcome.expect_err("refused");
     assert!(error.to_string().contains("not read-only"), "{error}");
