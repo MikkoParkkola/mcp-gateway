@@ -93,6 +93,7 @@ mod direct_route;
 mod discovery_fetch;
 pub(crate) mod dispatch_log;
 mod dispatch_names;
+pub(crate) use dispatch_names::is_composite_meta_tool;
 mod effects;
 mod events_hook;
 pub(crate) mod grant_audit;

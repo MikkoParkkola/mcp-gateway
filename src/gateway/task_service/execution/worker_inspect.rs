@@ -34,16 +34,43 @@ struct Decided {
     tool: String,
 }
 
-/// The settlement inspection with its record. A terminal answer the inspection
-/// refused or rewrote writes the task's settlement record before it commits,
-/// in a cell of its own; the record's trace is the dispatch's invocation
-/// trace, taken before a refusal replaces the response. Under fail-closed a
-/// failed write withholds the answer (`-32005`, no content).
+/// A worker dispatch run in a cell of its own: its response, and whether a
+/// gateway refusal was raised inside it (see [`dispatch_refusal`]). Each
+/// dispatch gets a fresh cell, so a discarded attempt's flag goes with it.
+/// The dispatch is boxed before the cell's future is built: inline, its state
+/// machine deepens every worker path's stack by a whole dispatch.
+pub(in crate::gateway::task_service::execution) fn dispatched_in_cell<T>(
+    dispatch: impl std::future::Future<Output = T>,
+) -> impl std::future::Future<Output = (T, Option<bool>)> {
+    let dispatch = Box::pin(dispatch);
+    crate::gateway::delivery_facts::scope(async move {
+        let dispatched = dispatch.await;
+        let facts = crate::gateway::delivery_facts::snapshot();
+        (dispatched, dispatch_refusal(facts.as_ref()))
+    })
+}
+
+/// Whether the dispatch cell holds a gateway refusal. `None` with no cell to
+/// read: the settlement then records nothing, never a false not-refused.
+pub(in crate::gateway::task_service::execution) fn dispatch_refusal(
+    facts: Option<&crate::gateway::delivery_facts::DeliveryFacts>,
+) -> Option<bool> {
+    facts.map(crate::gateway::delivery_facts::DeliveryFacts::refused)
+}
+
+/// The settlement inspection with its record. One record per settlement: the
+/// inspection's own decision when it refused or rewrote the answer, else a
+/// gateway refusal raised inside the dispatch (`dispatch_refused`), for a
+/// single-target task. A composite's steps run in cells of their own and are
+/// not recorded here. The record is written before the transition commits,
+/// in a cell of its own; its trace is the dispatch's invocation trace, taken
+/// before a refusal replaces the response. Under fail-closed a failed write
+/// withholds the answer (`-32005`, no content).
 pub(in crate::gateway::task_service::execution) async fn inspect_and_record(
     state: &crate::gateway::task_service::host::LiveHost,
     call: &TaskCall,
     (principal, id): (&str, &str),
-    response: crate::protocol::JsonRpcResponse,
+    (response, dispatch_refused): (crate::protocol::JsonRpcResponse, Option<bool>),
 ) -> crate::protocol::JsonRpcResponse {
     crate::gateway::delivery_facts::scope(async move {
         let trace = response.invocation_trace.clone();
@@ -53,14 +80,29 @@ pub(in crate::gateway::task_service::execution) async fn inspect_and_record(
         let interim = settled.result.as_ref().is_some_and(|result| {
             crate::protocol::mrtr::InputRequired::claims_input_required(result)
         });
-        let Some(decided) = decided.filter(|_| !interim) else {
+        let firewall = crate::Error::ResponseFirewallRefused.to_rpc_code();
+        let recorded = match decided.filter(|_| !interim) {
+            // A redaction raised `rewritten` in this cell already, where the
+            // firewall decided it (`egress::firewall_result`); it is not raised twice.
+            Some(decided) => Some((
+                decided.server,
+                decided.tool,
+                decided.refused.then_some(firewall),
+            )),
+            None if !interim && !crate::gateway::meta_mcp::is_composite_meta_tool(&call.tool) => {
+                dispatch_refusal_code(dispatch_refused, &settled).map(|code| {
+                    let (server, tool) = dispatch_target(state, call);
+                    (server, tool, Some(code))
+                })
+            }
+            None => None,
+        };
+        let Some((server, tool, refused)) = recorded else {
             return settled;
         };
-        // A redaction raised `rewritten` in this cell already, where the
-        // firewall decided it (`egress::firewall_result`); it is not raised twice.
         let task = crate::gateway::meta_mcp::invoke::audit::SettledTask {
-            server: &decided.server,
-            tool: &decided.tool,
+            server: &server,
+            tool: &tool,
             id,
         };
         let trace_id = trace.as_deref().unwrap_or(id);
@@ -69,7 +111,7 @@ pub(in crate::gateway::task_service::execution) async fn inspect_and_record(
             .record_task_settlement(
                 task,
                 (trace_id, principal),
-                decided.refused,
+                refused,
                 settled.result.as_ref(),
             )
             .await;
@@ -84,6 +126,66 @@ pub(in crate::gateway::task_service::execution) async fn inspect_and_record(
         )
     })
     .await
+}
+
+/// The code a dispatch refusal is recorded with, or `None` when the cell
+/// holds no refusal (or there was no cell). It is the code the task settles
+/// with; a refusal delivered as a withheld (`isError`) result carries the
+/// firewall's, as the inspection's does. Never read from the code alone: a
+/// backend's own error with a refusal's code is not a refusal. A dispatch
+/// that still delivered a clean answer is not recorded as refused.
+fn dispatch_refusal_code(
+    dispatch_refused: Option<bool>,
+    settled: &crate::protocol::JsonRpcResponse,
+) -> Option<i32> {
+    if dispatch_refused != Some(true) {
+        return None;
+    }
+    if let Some(error) = &settled.error {
+        return Some(error.code);
+    }
+    let withheld = settled
+        .result
+        .as_ref()
+        .and_then(|result| result.get("isError"));
+    (withheld == Some(&serde_json::Value::Bool(true)))
+        .then(|| crate::Error::ResponseFirewallRefused.to_rpc_code())
+}
+
+/// The target a dispatch refusal is recorded under: the call's first
+/// dispatched target, as the settlement inspection records its own, read
+/// under the recorded surfaced name.
+fn dispatch_target(
+    state: &crate::gateway::task_service::host::LiveHost,
+    call: &TaskCall,
+) -> (String, String) {
+    crate::gateway::meta_mcp::MetaMcp::with_surfaced_pin_sync(
+        &call.tool,
+        call.surfaced_server.as_ref(),
+        || {
+            let backend = crate::gateway::router::backend_tool_targets_for_call(
+                state.meta_mcp(),
+                &call.tool,
+                &call.arguments,
+                crate::gateway::meta_mcp::visible::TargetView::Dispatched,
+            );
+            let targets = crate::gateway::meta_mcp::response_security::meta_response_targets(
+                &call.tool, &backend,
+            );
+            // With no target resolved (a readmission refused before any),
+            // the call's own surfaced server and tool name it.
+            targets.first().map_or_else(
+                || {
+                    let server = call
+                        .surfaced_server
+                        .as_ref()
+                        .map_or_else(|| "gateway".to_owned(), |target| target.server.clone());
+                    (server, call.tool.clone())
+                },
+                |t| (t.server.clone(), t.tool.clone()),
+            )
+        },
+    )
 }
 
 fn inspect_settled_pinned(
