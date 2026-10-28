@@ -294,7 +294,7 @@ async fn code_mode_lists_two_tools_searches_executes_and_reports_errors() {
     assert_eq!(text_of(&ran), MARKER, "{ran}\n{}", gateway.logs());
     assert_ne!(ran["isError"], true, "{ran}");
     assert!(
-        ran["trace_id"].as_str().is_some_and(|t| !t.is_empty()),
+        ran["_trace_id"].as_str().is_some_and(|t| !t.is_empty()),
         "{ran}"
     );
 
@@ -336,7 +336,7 @@ async fn assert_error_answers(mcp: &mut Session) {
     assert_eq!(nowhere["isError"], true, "{nowhere}");
     assert!(
         text_of(&nowhere).contains("Backend not found: nosuch")
-            && nowhere["recovery"]["error_code"] == "TOOL_NOT_FOUND",
+            && nowhere["_recovery"]["error_code"] == "TOOL_NOT_FOUND",
         "{nowhere}"
     );
 
@@ -362,8 +362,8 @@ async fn assert_error_answers(mcp: &mut Session) {
         text_of(&down).contains("exited before initialize"),
         "{down}"
     );
-    assert_eq!(down["recovery"]["error_code"], "BACKEND_ERROR", "{down}");
-    assert_eq!(down["recovery"]["retry"], true, "{down}");
+    assert_eq!(down["_recovery"]["error_code"], "BACKEND_ERROR", "{down}");
+    assert_eq!(down["_recovery"]["retry"], true, "{down}");
 }
 
 /// A JSON-RPC error or a tool result flagged as an error.
