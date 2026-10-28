@@ -129,8 +129,10 @@ fn every_shadow_field_is_escaped() {
         ),
         (
             "endpoint",
-            http("tool", &format!("https://example.test/mcp{PAYLOAD}")),
-            http("tool", "https://example.test/mcp"),
+            // Unparseable, so redaction's fallback echoes it: the row can
+            // go red.
+            http("tool", &format!("{PAYLOAD}not-a-url")),
+            http("tool", "not-a-url"),
         ),
     ];
     for (field, hostile, plain) in rows {
