@@ -20,7 +20,9 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::super::errors::{admin_auth_required, config_path_unavailable, flat_error};
+use super::super::errors::{
+    admin_auth_required, config_path_unavailable, flat_error, structured_error,
+};
 use super::super::is_admin;
 use super::{Gateway, name_refusal, read_gateway};
 use crate::config::SecretStoreChoice;
@@ -35,8 +37,11 @@ use crate::discovery::listing::{DiscoveryCache, ScanTimedOut};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
 use crate::secret_store::{
-    NewSecretOwned, SaveError, SecretStore, StoreError, Vault, choose_store,
+    Chosen, NewSecretOwned, SaveError, SecretStore, StoreError, Vault, choose_store,
 };
+
+/// A secret store the writer can save into.
+type Store = Arc<dyn SecretStore + Send + Sync>;
 
 /// The compute's refusal when the name is already a backend in the bytes
 /// it was handed.
@@ -180,35 +185,52 @@ pub(super) fn compute(
     }
 }
 
-/// The store a find's literal values go to, with a `value_too_large` reason
-/// added for each value it cannot hold. `None` when there is no literal; an
-/// `Err` is the answer when no store can be chosen.
-fn store_for(
-    adoption: &Adoption,
+/// The store the configured choice resolves to, or the answer when none can
+/// take the values: 422 when the choice cannot be met on this host, 500
+/// otherwise. The store's own message is never returned.
+pub(super) fn chosen(choice: Result<Chosen, StoreError>) -> Result<Store, Box<Response>> {
+    match choice {
+        Ok(chosen) => Ok(chosen.store),
+        Err(StoreError::Unavailable(_)) => Err(Box::new(fixed(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            STORE_UNAVAILABLE,
+        ))),
+        Err(_) => Err(Box::new(fixed(StatusCode::INTERNAL_SERVER_ERROR, FAILED))),
+    }
+}
+
+/// The store choice and the vault beside gateway.yaml, opened off the async
+/// workers: `auto` probes the OS keychain (Secret Service over D-Bus, the
+/// macOS keychain, Credential Manager), a blocking call that may stall on a
+/// locked or slow keychain. Bounded by the writer's own wait; a keychain that
+/// does not answer by then is a 503, and its thread finishes on its own.
+async fn open_store(
     configured: SecretStoreChoice,
-    dir: &std::path::Path,
-    reasons: &mut Vec<(&'static str, String)>,
-) -> Result<Option<Arc<dyn SecretStore + Send + Sync>>, Box<Response>> {
-    if adoption.literals.is_empty() {
-        return Ok(None);
+    dir: std::path::PathBuf,
+) -> Result<(Store, Result<Vault, StoreError>), Box<Response>> {
+    let open = tokio::task::spawn_blocking(move || {
+        (choose_store(configured, &dir), Vault::for_config_dir(&dir))
+    });
+    match tokio::time::timeout(RELOAD_LOCK_WAIT, open).await {
+        Ok(Ok((choice, vault))) => Ok((chosen(choice)?, vault)),
+        Ok(Err(_)) => Err(Box::new(fixed(StatusCode::INTERNAL_SERVER_ERROR, FAILED))),
+        Err(_) => Err(Box::new(fixed(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the secret store did not answer; retry",
+        ))),
     }
-    let chosen = match choose_store(configured, dir) {
-        Ok(chosen) => chosen,
-        Err(StoreError::Unavailable(_)) => {
-            return Err(Box::new(fixed(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                STORE_UNAVAILABLE,
-            )));
-        }
-        Err(_) => return Err(Box::new(fixed(StatusCode::INTERNAL_SERVER_ERROR, FAILED))),
-    };
-    let limit = chosen.store.limit();
-    for literal in &adoption.literals {
-        if literal.value.as_bytes().len() > limit {
-            reasons.push(("value_too_large", literal.field()));
-        }
-    }
-    Ok(Some(chosen.store))
+}
+
+/// A `value_too_large` reason, by client field, for each literal `store`
+/// cannot hold.
+fn over_limit(adoption: &Adoption, store: &Store) -> Vec<(&'static str, String)> {
+    let limit = store.limit();
+    adoption
+        .literals
+        .iter()
+        .filter(|literal| literal.value.as_bytes().len() > limit)
+        .map(|literal| ("value_too_large", literal.field()))
+        .collect()
 }
 
 /// The writer's secret step: each literal saved under its backend field.
@@ -217,7 +239,7 @@ fn store_for(
 pub(super) fn secret_step(
     name: &str,
     literals: Vec<Literal>,
-    store: Arc<dyn SecretStore + Send + Sync>,
+    store: Store,
     vault: Result<Vault, StoreError>,
 ) -> Result<SecretStep, Box<Response>> {
     let Ok(vault) = vault else {
@@ -268,10 +290,12 @@ pub(super) async fn adopt_discovery(
     // Every rejection gets the same fixed text: axum's own would quote the
     // body back.
     let Ok(Json(body)) = body else {
-        return fixed(
+        return structured_error(
             StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_body",
             "the body must be {\"find_id\", \"revision\"} and nothing else",
-        );
+        )
+        .into_response();
     };
     let Some(path) = state.config_path.clone() else {
         return config_path_unavailable().into_response();
@@ -314,18 +338,30 @@ pub(super) async fn adopt_discovery(
     if let Some(code) = name_refusal(&gateway, &server.name) {
         reasons.push((code, "name".to_owned()));
     }
+    // Judged before any store is touched: a refused find never probes the
+    // keychain, and a store failure never hides why the find was refused.
+    if !reasons.is_empty() {
+        reasons.sort_by(|a, b| a.1.cmp(&b.1));
+        return not_adoptable(&reasons);
+    }
     let adoption = adoption(&server);
     let dir = path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
         .to_path_buf();
-    let store = match store_for(&adoption, config.secrets.store, &dir, &mut reasons) {
-        Ok(store) => store,
-        Err(refused) => return *refused,
+    let opened = if adoption.literals.is_empty() {
+        None
+    } else {
+        match open_store(config.secrets.store, dir).await {
+            Ok(opened) => Some(opened),
+            Err(refused) => return *refused,
+        }
     };
-    if !reasons.is_empty() {
-        reasons.sort_by(|a, b| a.1.cmp(&b.1));
-        return not_adoptable(&reasons);
+    if let Some((store, _)) = &opened {
+        let over = over_limit(&adoption, store);
+        if !over.is_empty() {
+            return not_adoptable(&over);
+        }
     }
 
     let name = server.name.clone();
@@ -334,15 +370,12 @@ pub(super) async fn adopt_discovery(
         .iter()
         .map(|literal| (literal.header, literal.key.clone()))
         .collect();
-    let secrets = match store {
+    let secrets = match opened {
         None => None,
-        Some(store) => {
-            let vault = Vault::for_config_dir(&dir);
-            match secret_step(&name, adoption.literals, store, vault) {
-                Ok(step) => Some(step),
-                Err(refused) => return *refused,
-            }
-        }
+        Some((store, vault)) => match secret_step(&name, adoption.literals, store, vault) {
+            Ok(step) => Some(step),
+            Err(refused) => return *refused,
+        },
     };
     let replace = Replace {
         expected: Expected::Revision(revision.clone()),
@@ -359,3 +392,7 @@ pub(super) async fn adopt_discovery(
 #[cfg(test)]
 #[path = "discovery_adopt_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "discovery_adopt_route_tests.rs"]
+mod route_tests;

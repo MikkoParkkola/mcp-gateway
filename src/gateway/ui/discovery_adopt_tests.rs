@@ -285,3 +285,25 @@ fn a_timed_out_scan_and_a_missing_vault_have_fixed_answers() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
     assert!(!json.to_string().contains(CANARY), "{json}");
 }
+
+/// The store choice's answer: a choice this host cannot meet is the
+/// caller's config (422), any other failure a 500; neither repeats the
+/// store's message.
+#[test]
+fn a_store_that_cannot_be_chosen_has_a_fixed_answer() {
+    for (error, status) in [
+        (
+            StoreError::Unavailable(CANARY.to_owned()),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            StoreError::Failed(CANARY.to_owned()),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    ] {
+        let refused = *chosen(Err(error)).err().expect("refused");
+        let (got, json) = futures::executor::block_on(body_of(refused));
+        assert_eq!(got, status, "{json}");
+        assert!(!json.to_string().contains(CANARY), "{json}");
+    }
+}

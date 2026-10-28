@@ -33,7 +33,7 @@ fn write_owner_only(path: &Path, text: &str) {
 }
 
 struct Gateway {
-    _child: Child,
+    child: Child,
     port: u16,
     log: std::path::PathBuf,
 }
@@ -60,7 +60,7 @@ impl Gateway {
         .spawn()
         .expect("the built mcp-gateway binary spawns");
         let mut gateway = Self {
-            _child: child,
+            child,
             port: ANY_PORT,
             log,
         };
@@ -82,6 +82,12 @@ impl Gateway {
             assert!(Instant::now() < deadline, "no /livez:\n{}", gateway.logs());
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
+    }
+
+    /// Stops the child and waits for it to exit, so a second gateway can
+    /// take its audit log.
+    async fn stop(mut self) {
+        self.child.kill().await.expect("the gateway stops");
     }
 
     fn logs(&self) -> String {
@@ -207,11 +213,42 @@ async fn an_adopted_find_is_a_disabled_backend_with_its_secret_in_the_store() {
     assert_eq!(written.matches("enabled: false").count(), 2, "{written}");
     assert_eq!(stored_at(&written, "X-Key:"), HEADER_SECRET);
     assert_eq!(stored_at(&written, "API_KEY:"), SECRET);
+    // Arguments are copied as the client wrote them.
+    assert!(written.contains("local-server"), "{written}");
 
     let again = json!({"find_id": find_id(&listing, "tool"), "revision": revision});
     let (status, refused) = gateway.adopt(&again).await;
     assert_eq!(status, 409, "{refused}");
     assert!(refused.contains("\"managed\""), "{refused}");
+
+    // Each adopt is an admin action in the audit log, which holds no value.
+    let audit = std::fs::read_to_string(home.join(".mcp-gateway/transparency/transparency.jsonl"))
+        .expect("the audit log reads");
+    let adopts = audit
+        .lines()
+        .filter(|line| line.contains("admin_action") && line.contains("/ui/api/discovery/adopt"))
+        .count();
+    assert!(adopts >= 2, "adopts not audited: {audit}");
+    for leak in [SECRET, HEADER_SECRET] {
+        assert!(!audit.contains(leak), "{leak} in the audit log");
+    }
+    assert!(!gateway.logs().contains(SECRET), "a value reached the log");
+
+    // A restart from the written file keeps both backends disabled.
+    gateway.stop().await;
+    let gateway = Gateway::spawn(home, &config).await;
+    let loaded = mcp_gateway::config::Config::load_literal(Some(&config)).expect("loads");
+    for name in ["tool", "local"] {
+        assert!(!loaded.backends[name].enabled, "{name} came back enabled");
+    }
+    let listing = gateway.list().await;
+    let tool = listing["servers"]
+        .as_array()
+        .expect("servers")
+        .iter()
+        .find(|s| s["name"] == "tool")
+        .expect("tool still listed");
+    assert_eq!(tool["managed"], true, "{listing}");
 }
 
 /// d11, d18 and the body canaries: a stale revision, a client entry changed
@@ -254,6 +291,7 @@ async fn stale_changed_and_malformed_requests_are_refused_without_echo() {
     ] {
         let (status, answer) = gateway.adopt(&body).await;
         assert_eq!(status, 422, "{body} answered {answer}");
+        assert!(answer.contains("\"invalid_body\""), "{answer}");
         assert!(!answer.contains("zq-canary"), "{answer}");
     }
     assert_eq!(
