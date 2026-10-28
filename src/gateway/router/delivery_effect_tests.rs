@@ -243,6 +243,7 @@ async fn a_recovery_hint_records_annotated() {
 /// scan, it records `annotated`. (`_security_findings` cannot stand alone:
 /// the context-integrity kernel runs the same inspection and attaches its
 /// verdict, `src/context_integrity/kernel.rs:235`.)
+#[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn a_direct_cost_warning_records_annotated() {
     use crate::cost_accounting::config::CostGovernanceConfig;
