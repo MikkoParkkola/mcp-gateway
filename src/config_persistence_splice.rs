@@ -536,6 +536,36 @@ pub(super) fn comment_loss(path: &std::path::Path, text: &str) -> String {
     )
 }
 
+/// [`edit_text`]'s refusal when the edit cannot be made as a splice: the file
+/// would have to be re-serialised, which loses its layout (ADR-024).
+#[cfg(feature = "webui")]
+pub(crate) const NOT_IN_PLACE: &str = "the change cannot be made in place";
+/// [`edit_text`]'s refusal when `text` does not parse as a config.
+#[cfg(feature = "webui")]
+const UNREADABLE: &str = "the config does not parse";
+/// [`edit_text`]'s refusal when the edited config does not validate.
+#[cfg(feature = "webui")]
+const INVALID: &str = "the edited config is not valid";
+
+/// `text` with `edit` applied to the one backend it changes, as a splice
+/// that keeps every other byte, or a refusal: never a re-serialisation, so
+/// a comment-free file is refused rather than rewritten (ADR-024). `edit`'s
+/// own error comes back as it is; every other refusal is a fixed string
+/// that quotes nothing from the file.
+#[cfg(feature = "webui")]
+pub(crate) fn edit_text(
+    text: &str,
+    edit: impl FnOnce(&mut Config) -> Result<(), &'static str>,
+) -> Result<String, &'static str> {
+    let before = Config::from_file_text(text).map_err(|_| UNREADABLE)?;
+    let mut after = before.clone();
+    edit(&mut after)?;
+    after
+        .validate_with_env(&after.env_overlay())
+        .map_err(|_| INVALID)?;
+    with_backends_edited(text, &before, &after, super::Splice::One).ok_or(NOT_IN_PLACE)
+}
+
 #[cfg(test)]
 #[path = "config_persistence_splice_tests.rs"]
 mod tests;
