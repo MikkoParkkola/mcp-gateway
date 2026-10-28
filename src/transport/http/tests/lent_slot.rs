@@ -124,3 +124,20 @@ async fn closing_a_lent_only_slot_sends_no_delete() {
     }
     server.abort();
 }
+
+/// A stream that lends its own credential through a credential source (an
+/// event listener's) is not refused on a lent-only slot when no dispatch is
+/// in flight: its source is its lender. It still carries no static header;
+/// the source's credential is merged after these headers are built.
+#[tokio::test]
+async fn a_source_lent_stream_opens_with_nothing_on_loan() {
+    let (t, _lender) = slot("http://localhost", SlotCredential::LentOnly);
+    for mode in [HeaderMode::Request { method: "m" }, HeaderMode::Sse] {
+        let map = t
+            .build_lent_headers(mode, Some("subscriber"))
+            .await
+            .expect("a source-lent stream is refused with nothing on loan");
+        assert!(!map.contains_key("x-static-credential"), "{map:?}");
+        assert!(!map.contains_key(header::AUTHORIZATION), "{map:?}");
+    }
+}
