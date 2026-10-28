@@ -314,6 +314,8 @@ pr_body_case word_containing_a_name pass 'The amused operator ran glmark and gpt
 pr_body_case chatgpt fail 'ChatGPT agreed.'
 pr_body_case compact_version fail 'GPT5 found one issue.'
 pr_body_case footer_naming_another_tool pass '🤖 Generated with [Codex](https://openai.com/codex)'
+pr_body_case footer_with_a_reviewer_appended fail '🤖 Generated with [Claude Code](https://claude.com/claude-code), reviewed by GPT5'
+pr_body_case compact_version_with_suffix fail 'GPT4o found one issue.'
 
 # The refusal names the matched word, never the rest of the line.
 pr_body_echo_case() {
