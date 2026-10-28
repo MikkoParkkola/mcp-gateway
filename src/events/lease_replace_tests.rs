@@ -123,7 +123,7 @@ async fn two_token_peer(tokens: [String; 2]) -> TwoTokenPeer {
 
 /// The lease stamp of every record in `f`'s outbox.
 fn outbox_stamps(f: &Fixture) -> Vec<Option<String>> {
-    std::fs::read_dir(f._dir.path().join("outbox"))
+    std::fs::read_dir(f.dir.path().join("outbox"))
         .map(|entries| {
             entries
                 .flatten()

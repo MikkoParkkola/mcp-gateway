@@ -54,7 +54,7 @@ fn in_an_hour() -> u64 {
 struct Fixture {
     hub: Arc<EventsHub>,
     config: Arc<crate::config::Config>,
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
 }
 
 fn fixture() -> Fixture {
@@ -80,11 +80,7 @@ fn fixture_with(yaml: &str) -> Fixture {
         credentials: LiveCredentials::default(),
         record_key: Some(crate::gateway::record_principal::test_key_arc()),
     }));
-    Fixture {
-        hub,
-        config,
-        _dir: dir,
-    }
+    Fixture { hub, config, dir }
 }
 
 /// Commit `principal`'s row on `backend`, observed as `subject`; its handle.
