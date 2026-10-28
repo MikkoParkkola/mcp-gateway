@@ -214,11 +214,17 @@ async fn open_store(
     match tokio::time::timeout(RELOAD_LOCK_WAIT, open).await {
         Ok(Ok((choice, vault))) => Ok((chosen(choice)?, vault)),
         Ok(Err(_)) => Err(Box::new(fixed(StatusCode::INTERNAL_SERVER_ERROR, FAILED))),
-        Err(_) => Err(Box::new(fixed(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the secret store did not answer; retry",
-        ))),
+        Err(_) => Err(Box::new(store_timed_out())),
     }
+}
+
+/// The answer when the store choice or the vault did not answer within the
+/// writer's wait: retryable, and naming no store.
+pub(super) fn store_timed_out() -> Response {
+    fixed(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the secret store did not answer; retry",
+    )
 }
 
 /// A `value_too_large` reason, by client field, for each literal `store`
@@ -338,8 +344,9 @@ pub(super) async fn adopt_discovery(
     if let Some(code) = name_refusal(&gateway, &server.name) {
         reasons.push((code, "name".to_owned()));
     }
-    // Judged before any store is touched: a refused find never probes the
-    // keychain, and a store failure never hides why the find was refused.
+    // Judged before any store is touched: a find the adopt rule or its name
+    // refuses never probes the keychain, and a store failure never hides why
+    // it was refused. Only `value_too_large` needs the store, for its limit.
     if !reasons.is_empty() {
         reasons.sort_by(|a, b| a.1.cmp(&b.1));
         return not_adoptable(&reasons);

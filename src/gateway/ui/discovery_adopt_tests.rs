@@ -254,6 +254,14 @@ fn adoption_takes_out_literals_in_a_fixed_order() {
     assert_eq!(backend.headers["X-Plain"], "${H}");
 }
 
+/// A store that does not answer in time is a retryable 503 naming no store.
+#[test]
+fn a_store_that_does_not_answer_is_a_retryable_503() {
+    let (status, json) = futures::executor::block_on(body_of(store_timed_out()));
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{json}");
+    assert!(json.to_string().contains("retry"), "{json}");
+}
+
 /// The two answers the end-to-end test has no cheap
 /// fixture for, pinned where the typed error becomes a status. A scan that
 /// timed out is a 503, a changed find a 409, and a vault that cannot be

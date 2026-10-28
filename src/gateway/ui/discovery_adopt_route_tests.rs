@@ -209,6 +209,11 @@ async fn a_config_change_during_the_adopt_is_refused_as_stale() {
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["error"], "stale", "{body}");
     assert_eq!(
+        body["current"],
+        FileRevision::of(changed.as_bytes()).as_str(),
+        "the stale answer names the file as it now is"
+    );
+    assert_eq!(
         route.bytes(),
         changed.as_bytes(),
         "the other change was overwritten"
@@ -235,7 +240,9 @@ async fn a_caller_who_is_not_an_admin_is_refused() {
 // Multi-thread: the answer is awaited inside the synchronous log capture.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_refused_find_is_named_by_field_and_never_echoed() {
-    let mut url = stdio("remote", "npx", &[]);
+    // A literal on the refused find: a refusal must not echo or log it, and
+    // must create no store entry for it.
+    let mut url = stdio("remote", "npx", &[("API_KEY", CANARY)]);
     url.transport = TransportConfig::Http {
         http_url: format!("https://tool.example.test/mcp?token={CANARY}-url"),
         streamable_http: None,
@@ -268,7 +275,7 @@ async fn a_refused_find_is_named_by_field_and_never_echoed() {
         assert_eq!(body["error"], "not_adoptable", "{body}");
         assert!(body.to_string().contains(reason), "{name}: {body}");
         assert!(!body.to_string().contains("zq-"), "{name} echoed: {body}");
-        assert!(!logs.contains(CANARY), "{name} logged: {logs}");
+        assert!(!logs.contains("zq-"), "{name} logged: {logs}");
     }
     assert_eq!(route.bytes(), EMPTY.as_bytes());
     assert_eq!(route.entries(), 0);

@@ -213,8 +213,8 @@ async fn an_adopted_find_is_a_disabled_backend_with_its_secret_in_the_store() {
     assert_eq!(written.matches("enabled: false").count(), 2, "{written}");
     assert_eq!(stored_at(&written, "X-Key:"), HEADER_SECRET);
     assert_eq!(stored_at(&written, "API_KEY:"), SECRET);
-    // Arguments are copied as the client wrote them.
-    assert!(written.contains("local-server"), "{written}");
+    // Arguments are copied as the client wrote them, in order.
+    assert!(written.contains("npx -y local-server"), "{written}");
 
     let again = json!({"find_id": find_id(&listing, "tool"), "revision": revision});
     let (status, refused) = gateway.adopt(&again).await;
@@ -228,7 +228,8 @@ async fn an_adopted_find_is_a_disabled_backend_with_its_secret_in_the_store() {
         .lines()
         .filter(|line| line.contains("admin_action") && line.contains("/ui/api/discovery/adopt"))
         .count();
-    assert!(adopts >= 2, "adopts not audited: {audit}");
+    // Two adopts and the managed refusal: every admin POST is recorded.
+    assert_eq!(adopts, 3, "adopts not audited one by one: {audit}");
     for leak in [SECRET, HEADER_SECRET] {
         assert!(!audit.contains(leak), "{leak} in the audit log");
     }
