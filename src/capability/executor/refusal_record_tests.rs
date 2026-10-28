@@ -24,7 +24,7 @@ async fn recorded<T: std::fmt::Debug>(
     })
     .await;
     let mut fields = serde_json::Map::new();
-    delivery_facts::record_fields(facts.as_ref(), false, false, &mut fields);
+    delivery_facts::record_fields(facts.as_ref(), false, &mut fields);
     let error = outcome.expect_err("the call is refused").to_string();
     (error, fields.get("response_effect").cloned())
 }
@@ -174,7 +174,7 @@ async fn a_refused_step_of_a_composite_records_no_refusal() {
     let error = outcome.expect_err("the step is refused").to_string();
     assert!(error.contains("SSRF blocked"), "{error}");
     let mut fields = serde_json::Map::new();
-    delivery_facts::record_fields(facts.as_ref(), false, false, &mut fields);
+    delivery_facts::record_fields(facts.as_ref(), false, &mut fields);
     assert_eq!(fields.get("response_effect"), None, "{fields:?}");
 }
 

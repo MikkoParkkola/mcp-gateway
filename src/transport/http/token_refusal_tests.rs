@@ -45,7 +45,7 @@ async fn a_refused_detached_refresh_records_refused_on_the_call() {
     assert!(is_ssrf_refusal(&error), "{error}");
     // Read as the delivery record renders it.
     let mut fields = serde_json::Map::new();
-    delivery_facts::record_fields(facts.as_ref(), false, false, &mut fields);
+    delivery_facts::record_fields(facts.as_ref(), false, &mut fields);
     assert_eq!(
         fields.get("response_effect"),
         Some(&"refused".into()),
@@ -96,7 +96,7 @@ async fn effect_of_connect(
         delivery_facts::scope(crate::oauth::login_gate::non_interactive(connect)).await
     };
     let mut fields = serde_json::Map::new();
-    delivery_facts::record_fields(facts.as_ref(), false, false, &mut fields);
+    delivery_facts::record_fields(facts.as_ref(), false, &mut fields);
     fields.get("response_effect").cloned()
 }
 
@@ -150,7 +150,7 @@ async fn a_non_interactive_refused_refresh_records_no_refusal() {
     }))
     .await;
     let mut fields = serde_json::Map::new();
-    delivery_facts::record_fields(facts.as_ref(), false, false, &mut fields);
+    delivery_facts::record_fields(facts.as_ref(), false, &mut fields);
     assert_eq!(
         fields.get("response_effect"),
         Some(&"delivered".into()),

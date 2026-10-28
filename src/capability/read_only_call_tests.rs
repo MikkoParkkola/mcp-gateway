@@ -110,7 +110,7 @@ async fn a_read_only_refusal_records_refused() {
     let error = outcome.expect_err("refused");
     assert!(error.to_string().contains("not read-only"), "{error}");
     let mut fields = serde_json::Map::new();
-    delivery_facts::record_fields(facts.as_ref(), false, false, &mut fields);
+    delivery_facts::record_fields(facts.as_ref(), false, &mut fields);
     assert_eq!(
         fields.get("response_effect"),
         Some(&"refused".into()),

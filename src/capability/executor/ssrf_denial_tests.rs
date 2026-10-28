@@ -107,7 +107,7 @@ async fn capability_ssrf_denial_records_refused() {
     let error = outcome.expect_err("a private destination is refused");
     assert!(error.to_string().contains("SSRF blocked"), "{error}");
     let mut fields = serde_json::Map::new();
-    delivery_facts::record_fields(facts.as_ref(), false, false, &mut fields);
+    delivery_facts::record_fields(facts.as_ref(), false, &mut fields);
     assert_eq!(
         fields.get("response_effect"),
         Some(&"refused".into()),
@@ -138,7 +138,7 @@ async fn a_single_attempt_ssrf_denial_records_refused() {
     let error = outcome.expect_err("a private destination is refused");
     assert!(error.to_string().contains("SSRF blocked"), "{error}");
     let mut fields = serde_json::Map::new();
-    delivery_facts::record_fields(facts.as_ref(), false, false, &mut fields);
+    delivery_facts::record_fields(facts.as_ref(), false, &mut fields);
     assert_eq!(
         fields.get("response_effect"),
         Some(&"refused".into()),

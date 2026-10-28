@@ -330,7 +330,7 @@ async fn a_refresh_refused_in_the_flight_records_refused_on_the_call() {
     // Refused inside the flight, not by the static check before it.
     assert!(error.to_string().contains("SSRF blocked"), "{error}");
     let mut fields = serde_json::Map::new();
-    delivery_facts::record_fields(facts.as_ref(), false, false, &mut fields);
+    delivery_facts::record_fields(facts.as_ref(), false, &mut fields);
     assert_eq!(
         fields.get("response_effect"),
         Some(&"refused".into()),
