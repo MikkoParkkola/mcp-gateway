@@ -14,6 +14,7 @@ use axum::extract::{MatchedPath, Request, State};
 use axum::http::{Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use tracing::Instrument as _;
 
 use super::errors::flat_error;
 use super::{AppState, AuthenticatedClient};
@@ -70,7 +71,7 @@ async fn admin_action_layer(
         .extensions()
         .get::<MatchedPath>()
         .is_some_and(|p| p.as_str().starts_with("/ui/api/control-plane"));
-    let run = |request| async move {
+    let run = move |request| async move {
         let response = next.run(request).await;
         if matches!(
             response.status(),
@@ -114,24 +115,40 @@ async fn admin_action_layer(
         .get::<VerifiedIdentity>()
         .and_then(|id| GrantSubject::checked(id.issuer.clone(), id.subject.clone(), None));
 
-    let response = run(request).await;
-
-    let status = response.status();
-    fields.insert("http_status".into(), status.as_u16().into());
-    if let Some(AuditDetail(detail)) = response.extensions().get::<AuditDetail>() {
-        fields.extend(detail.clone());
-    }
-    let envelope = AuditEnvelope {
-        outcome: AuditOutcome::from_http_status(status, None),
-        ..AuditEnvelope::ok(AuditWho::from_request(
-            client.as_ref(),
-            subject.as_ref(),
-            state.auth_config.record_key(),
-        ))
-    };
-    match log.append_admin_action("admin_ui", fields, &envelope) {
-        Ok(()) => response,
-        Err(error) => withheld(&error),
+    // The handler and its record run on a task of their own: a client that
+    // disconnects drops only this wait, so a write that commits after it left
+    // (the detached config writers) is still recorded, naming its caller.
+    // ponytail: graceful shutdown does not wait for this task; a process exit
+    // mid-handler can still lose the record, as it can a detached write's reload.
+    let task = tokio::spawn(
+        async move {
+            let response = run(request).await;
+            let status = response.status();
+            fields.insert("http_status".into(), status.as_u16().into());
+            if let Some(AuditDetail(detail)) = response.extensions().get::<AuditDetail>() {
+                fields.extend(detail.clone());
+            }
+            let envelope = AuditEnvelope {
+                outcome: AuditOutcome::from_http_status(status, None),
+                ..AuditEnvelope::ok(AuditWho::from_request(
+                    client.as_ref(),
+                    subject.as_ref(),
+                    state.auth_config.record_key(),
+                ))
+            };
+            match log.append_admin_action("admin_ui", fields, &envelope) {
+                Ok(()) => response,
+                Err(error) => withheld(&error),
+            }
+        }
+        .in_current_span(),
+    );
+    match task.await {
+        Ok(response) => response,
+        // A handler that panics still panics out of the layer (test and dev
+        // builds; release builds abort on panic).
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        Err(_) => withheld(&crate::Error::AuditUnavailable),
     }
 }
 
