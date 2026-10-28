@@ -259,6 +259,13 @@ async fn run_dispatched(
             Ok(readmitted) => readmitted,
             Err(refused) => return *refused,
         };
+        // The test seam a reload lands in between a re-admission's judgement
+        // and the run (the C2e6 row). A task whose intake judged something
+        // was not re-admitted, so it does not fire.
+        #[cfg(test)]
+        if intent.owned.judged().is_empty() {
+            crate::gateway::meta_mcp::visible::seams::readmitted();
+        }
         crate::gateway::meta_mcp::visible::memo::with_judged(
             judged,
             meta.dispatch_below_gate_native_result(

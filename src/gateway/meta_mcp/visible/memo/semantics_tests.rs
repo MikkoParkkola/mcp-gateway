@@ -306,3 +306,42 @@ async fn recorded_in_scope_tells_no_memo_from_an_empty_one() {
     })
     .await;
 }
+
+/// An empty inner `with_judged` keeps the enclosing judgement instead of
+/// clearing it: the outer backend instance and playbook digest still answer.
+/// The inner wrapper is built before the outer scope exists and awaited
+/// inside it, so the enclosing judgement is read when it runs.
+#[tokio::test]
+async fn an_empty_inner_judgement_keeps_the_outer_backend_guard() {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig};
+    let instance = || {
+        std::sync::Arc::new(Backend::new(
+            "b",
+            BackendConfig::default(),
+            &FailsafeConfig::default(),
+            std::time::Duration::from_secs(300),
+        ))
+    };
+    let (a, b) = (instance(), instance());
+    let outer = with_visibility_memo(async {
+        super::record_judged_playbook("outer".to_owned());
+        super::record_exempt_instances(&[std::sync::Arc::clone(&b)]);
+        super::judged()
+    })
+    .await;
+    let probe = std::sync::Arc::clone(&a);
+    let inner = super::with_judged(super::Judged::default(), async move {
+        (super::changed_instance(&probe), super::judged_playbook())
+    });
+    let (changed, playbook) = super::with_judged(outer, inner).await;
+    assert!(
+        changed.is_some(),
+        "the inner empty judgement cleared the outer backend guard"
+    );
+    assert_eq!(
+        playbook.as_deref(),
+        Some("outer"),
+        "the inner empty judgement cleared the outer playbook digest"
+    );
+}
