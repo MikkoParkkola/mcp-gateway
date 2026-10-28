@@ -375,7 +375,7 @@ async fn p3c_unsurfaced_continuation_retry_while_live_is_served_the_retained_res
         "P3c: not served: {again}"
     );
     assert_eq!(
-        again["result"]["trace_id"], first["result"]["trace_id"],
+        again["result"]["_trace_id"], first["result"]["_trace_id"],
         "P3c: not the retained result"
     );
     assert_eq!(fx.gateway.tool_calls().len(), sent, "P3c: re-sent");

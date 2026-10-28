@@ -51,7 +51,7 @@ pub(super) fn dispatch_error_result(
     if let Ok(hint) = serde_json::to_value(hint) {
         super::gateway_writes::insert_noted(
             super::gateway_writes::Layer::Value,
-            &["recovery"],
+            &["_recovery"],
             &mut answer,
             hint,
         );
