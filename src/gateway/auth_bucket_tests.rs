@@ -11,7 +11,7 @@ use std::time::Duration;
 use governor::clock::FakeRelativeClock;
 use governor::{Quota, RateLimiter};
 
-use super::{ClientBucket, interval};
+use super::{AuthRuntime, ClientBucket, interval};
 
 const MINUTE: u64 = 60_000_000_000;
 
@@ -118,16 +118,68 @@ fn a_rate_loosened_keeps_the_usage() {
 /// The same rate changes nothing: the bucket decides as one never re-priced.
 #[test]
 fn the_same_rate_changes_nothing() {
-    let schedule = [0, 0, 1, 5_000_000_000, 20_000_000_000, 20_000_000_001];
-    let plain = ClientBucket::new(rate(2));
-    let repriced = ClientBucket::new(rate(2));
-    for at in schedule {
+    // 2/min: 30 s a request, a burst of two. Two at 0 fill it; the next fits
+    // at exactly 30 s, not a nanosecond before.
+    let bucket = ClientBucket::new(rate(2));
+    let decisions: Vec<bool> = [0, 0, 1, 29_999_999_999, 30_000_000_000]
+        .into_iter()
+        .map(|at| bucket.check_at(rate(2), at))
+        .collect();
+    assert_eq!(decisions, [true, true, false, false, true]);
+}
+
+/// The theoretical arrival time a bucket holds.
+fn tat(bucket: &ClientBucket) -> Option<u64> {
+    bucket.state.lock().tat
+}
+
+/// Re-priced mid-interval and back. 3/min with two spent at 0 owes 40 s.
+/// At 7 s, 5/min re-prices the 33 s owed to 19.8 s and admits one more
+/// (owed 31.8 s, so the arrival time is 38.8 s). At 10 s, 3/min re-prices the
+/// 28.8 s owed to 48 s, past the 40 s tolerance: denied until 18 s.
+#[test]
+fn a_rate_changed_mid_interval_and_back_reprices_what_is_owed() {
+    let bucket = ClientBucket::new(rate(3));
+    assert!(bucket.check_at(rate(3), 0) && bucket.check_at(rate(3), 0));
+    assert_eq!(tat(&bucket), Some(40_000_000_000));
+    assert!(bucket.check_at(rate(5), 7_000_000_000));
+    assert_eq!(tat(&bucket), Some(38_800_000_000));
+    assert!(!bucket.check_at(rate(3), 10_000_000_000));
+    assert_eq!(tat(&bucket), Some(58_000_000_000));
+    assert!(!bucket.check_at(rate(3), 17_999_999_999));
+    assert!(bucket.check_at(rate(3), 18_000_000_000));
+}
+
+/// Re-priced after idle time: 3/min with three spent at 0 owes 60 s; by 50 s
+/// it owes 10 s, half a request; tightened to 1/min that is 30 s, so the next
+/// request waits until 80 s.
+#[test]
+fn a_rate_tightened_after_idle_reprices_only_what_is_still_owed() {
+    let bucket = ClientBucket::new(rate(3));
+    assert!((0..3).all(|_| bucket.check_at(rate(3), 0)));
+    assert!(
+        !bucket.check_at(rate(1), 50_000_000_000),
+        "half a request still owed"
+    );
+    assert_eq!(tat(&bucket), Some(80_000_000_000));
+    assert!(!bucket.check_at(rate(1), 79_999_999_999));
+    assert!(bucket.check_at(rate(1), 80_000_000_000));
+}
+
+/// The largest rates: the interval truncates to 13 ns at `u32::MAX`, the
+/// tolerance does not overflow, and a burst matches `governor`.
+#[test]
+fn the_largest_rates_match_governor_and_do_not_overflow() {
+    for n in [u32::MAX, u32::MAX - 1, 1_000_000_000] {
         assert_eq!(
-            repriced.check_at(rate(2), at),
-            plain.check_at(rate(2), at),
-            "at {at}"
+            Duration::from_nanos(interval(rate(n))),
+            Quota::per_minute(rate(n)).replenish_interval(),
+            "rate {n}"
         );
+        let (theirs, ours) = both(n, &[0; 1000]);
+        assert_eq!(ours, theirs, "rate {n}");
     }
+    assert_eq!(interval(rate(u32::MAX)), 13);
 }
 
 /// Many callers at once never exceed the bucket.
@@ -200,8 +252,23 @@ fn cost_against_governor() {
     });
     let bucket_shared = ns_per(start.elapsed());
 
+    // The request path as it runs: the store lookup by a freshly built key,
+    // at a rate that admits everything and at one that denies nearly all.
+    let runtime = AuthRuntime::default();
+    let start = std::time::Instant::now();
+    (0..CHECKS).for_each(|_| {
+        let _ = runtime.admit("a-client-state-key".to_owned(), max);
+    });
+    let admit_allowed = ns_per(start.elapsed());
+    let start = std::time::Instant::now();
+    (0..CHECKS).for_each(|_| {
+        let _ = runtime.admit("a-limited-client".to_owned(), rate(60));
+    });
+    let admit_denied = ns_per(start.elapsed());
+
     println!(
         "ns per check: governor {governor_alone} alone, {governor_shared} from {THREADS} threads; \
-         bucket {bucket_alone} alone, {bucket_shared} from {THREADS} threads"
+         bucket {bucket_alone} alone, {bucket_shared} from {THREADS} threads; \
+         AuthRuntime::admit {admit_allowed} allowed, {admit_denied} mostly denied"
     );
 }

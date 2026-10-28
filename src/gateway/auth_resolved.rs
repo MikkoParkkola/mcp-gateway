@@ -434,11 +434,8 @@ impl ResolvedAuthConfig {
         config: &CircuitBreakerConfig,
     ) -> Arc<CircuitBreaker> {
         // The label is for logs only; the store key is the credential.
-        self.runtime.breaker(
-            client_state_key(client),
-            &format!("client:{}", client.name),
-            config,
-        )
+        self.runtime
+            .breaker(client_state_key(client), &client.name, config)
     }
 }
 

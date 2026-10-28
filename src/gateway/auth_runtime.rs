@@ -45,17 +45,18 @@ impl AuthRuntime {
         bucket.check_at(rate, now_ns())
     }
 
-    /// `key`'s breaker, made under `config` on first use. A breaker keeps the
-    /// policy it was made with: `client_circuit_breaker` is restart-only.
+    /// `key`'s breaker, made under `config` on first use and labelled for logs
+    /// with the client's `name`. A breaker keeps the policy it was made with:
+    /// `client_circuit_breaker` is restart-only.
     pub(crate) fn breaker(
         &self,
         key: String,
-        label: &str,
+        name: &str,
         config: &CircuitBreakerConfig,
     ) -> Arc<CircuitBreaker> {
         self.breakers
             .entry(key)
-            .or_insert_with(|| Arc::new(CircuitBreaker::new(label, config)))
+            .or_insert_with(|| Arc::new(CircuitBreaker::new(&format!("client:{name}"), config)))
             .clone()
     }
 
@@ -75,6 +76,9 @@ pub(crate) struct ClientBucket {
 #[derive(Debug)]
 struct BucketState {
     rate: NonZeroU32,
+    /// One request's cost and the burst tolerance at `rate`, in nanoseconds,
+    /// computed when the rate is set rather than on every check.
+    pricing: Pricing,
     /// The theoretical arrival time of the next request, in nanoseconds on
     /// [`now_ns`]'s clock; `None` until the first request.
     tat: Option<u64>,
@@ -83,7 +87,11 @@ struct BucketState {
 impl ClientBucket {
     pub(crate) fn new(rate: NonZeroU32) -> Self {
         Self {
-            state: parking_lot::Mutex::new(BucketState { rate, tat: None }),
+            state: parking_lot::Mutex::new(BucketState {
+                rate,
+                pricing: Pricing::of(rate),
+                tat: None,
+            }),
         }
     }
 
@@ -93,21 +101,40 @@ impl ClientBucket {
     pub(crate) fn check_at(&self, rate: NonZeroU32, t0: u64) -> bool {
         let mut state = self.state.lock();
         if state.rate != rate {
+            let pricing = Pricing::of(rate);
             if let Some(tat) = state.tat.filter(|&tat| tat > t0) {
-                let owed = u128::from(tat - t0) * u128::from(interval(rate))
-                    / u128::from(interval(state.rate));
+                let owed =
+                    u128::from(tat - t0) * u128::from(pricing.t) / u128::from(state.pricing.t);
                 state.tat = Some(t0.saturating_add(u64::try_from(owed).unwrap_or(u64::MAX)));
             }
             state.rate = rate;
+            state.pricing = pricing;
         }
-        let t = interval(rate);
-        let tau = t * (u64::from(rate.get()) - 1);
+        let Pricing { t, tau } = state.pricing;
         let tat = state.tat.unwrap_or(t0);
         if t0 < tat.saturating_sub(tau) {
             return false;
         }
         state.tat = Some(tat.max(t0).saturating_add(t));
         true
+    }
+}
+
+/// One request's cost (`t`) and the burst tolerance (`tau`, the cost of
+/// `rate - 1` requests) at a rate, in nanoseconds.
+#[derive(Debug, Clone, Copy)]
+struct Pricing {
+    t: u64,
+    tau: u64,
+}
+
+impl Pricing {
+    fn of(rate: NonZeroU32) -> Self {
+        let t = interval(rate);
+        Self {
+            t,
+            tau: t.saturating_mul(u64::from(rate.get()) - 1),
+        }
     }
 }
 
