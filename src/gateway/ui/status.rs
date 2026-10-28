@@ -51,22 +51,7 @@ pub(super) async fn status(
     let total = backends.len();
 
     if !is_admin(client.as_ref()) {
-        // Redacted view: counts only, no names/details
-        let healthy = backends
-            .iter()
-            .filter(|b| b.status().circuit_state != crate::failsafe::CircuitState::Open)
-            .count();
-        return with_access(
-            json!({
-            "server_count": total,
-            "healthy_count": healthy,
-            "degraded_count": total - healthy,
-            "uptime_secs": uptime_secs(),
-            "version": env!("CARGO_PKG_VERSION"),
-            "auth": auth,
-            }),
-            access,
-        );
+        return with_access(redacted(&backends, auth), access);
     }
 
     // Full admin view
@@ -144,6 +129,23 @@ pub(super) async fn status(
         }),
         access,
     )
+}
+
+/// The view for a caller who is not an admin: counts only, no names or details.
+fn redacted(backends: &[Arc<crate::backend::Backend>], auth: Value) -> Value {
+    let total = backends.len();
+    let healthy = backends
+        .iter()
+        .filter(|b| b.status().circuit_state != crate::failsafe::CircuitState::Open)
+        .count();
+    json!({
+        "server_count": total,
+        "healthy_count": healthy,
+        "degraded_count": total - healthy,
+        "uptime_secs": uptime_secs(),
+        "version": env!("CARGO_PKG_VERSION"),
+        "auth": auth,
+    })
 }
 
 /// `answer` with the caller's `access` report, when it has one: an auth-on
