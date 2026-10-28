@@ -7,25 +7,22 @@
 use serde_json::json;
 
 use super::direct_continuation_tests::call;
-use super::direct_guards_fixture::{Answer, fixture_built};
-use crate::secret_injection::{CredentialRule, CredentialType, InjectTarget, SecretInjector};
+use super::direct_guards_fixture::fixture_with_secrets;
+use crate::secret_injection::{CredentialRule, CredentialType, InjectTarget};
 
 /// The secret the rule injects: a literal, so no environment is read.
 const SECRET: &str = "direct-route-secret-4c1e";
 
-/// One `argument` rule on `backend`, injecting [`SECRET`] as `api_key`.
-fn injector(backend: &str) -> SecretInjector {
-    SecretInjector::new(std::collections::HashMap::from([(
-        backend.to_string(),
-        vec![CredentialRule {
-            name: "api".to_string(),
-            credential_type: CredentialType::ApiKey,
-            value: SECRET.to_string(),
-            inject_as: InjectTarget::Argument,
-            inject_key: "api_key".to_string(),
-            tools: vec!["*".to_string()],
-        }],
-    )]))
+/// One `argument` rule injecting [`SECRET`] as `api_key`.
+fn argument_rule() -> CredentialRule {
+    CredentialRule {
+        name: "api".to_string(),
+        credential_type: CredentialType::ApiKey,
+        value: SECRET.to_string(),
+        inject_as: InjectTarget::Argument,
+        inject_key: "api_key".to_string(),
+        tools: vec!["*".to_string()],
+    }
 }
 
 /// The direct route applies an `argument` rule, on a gated and a passthrough
@@ -33,10 +30,7 @@ fn injector(backend: &str) -> SecretInjector {
 #[tokio::test]
 async fn the_direct_route_applies_an_argument_rule() {
     for backend in ["alpha", "alpha-pt"] {
-        let fx = fixture_built(Answer::Ok, |meta| {
-            meta.with_secret_injector(injector(backend))
-        })
-        .await;
+        let fx = fixture_with_secrets(vec![argument_rule()]).await;
         let (_, body) = call(&fx, backend, None, json!({})).await;
         assert!(body.get("error").is_none(), "{backend}: premise: {body}");
         let seen = fx.seen.lock().expect("recorder").clone();

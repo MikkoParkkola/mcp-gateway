@@ -81,11 +81,28 @@ pub(crate) async fn fixture_propagating_budgeted(
     fx
 }
 
+thread_local! {
+    /// The `secrets:` rules every fixture backend carries; empty for none.
+    static SECRETS: std::cell::RefCell<Vec<crate::secret_injection::CredentialRule>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// [`super::fixture`] whose two backends each carry `rules`.
+pub(crate) async fn fixture_with_secrets(
+    rules: Vec<crate::secret_injection::CredentialRule>,
+) -> Fx {
+    SECRETS.with(|s| *s.borrow_mut() = rules);
+    let fx = super::fixture_built(Answer::Ok, |meta| meta).await;
+    SECRETS.with(|s| s.borrow_mut().clear());
+    fx
+}
+
 /// One fixture backend's config: pass-through or not, and, for a propagating
 /// fixture, a required propagation to `aud-<name>` over an HTTP base URL.
 pub(super) fn fixture_backend_config(name: &str, passthrough: bool) -> BackendConfig {
     BackendConfig {
         passthrough,
+        secrets: SECRETS.with(|s| s.borrow().clone()),
         // A propagating backend validates an HTTP base URL before it
         // reaches the scripted transport.
         transport: if super::PROPAGATING.with(std::cell::Cell::get) {

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A backend's secret-injection rules deliver the secret where `inject_as`
 //! says: a `header` rule as that header on the tool call, and a `query` rule
-//! nowhere in the tool call's arguments.
+//! nowhere in the tool call's arguments. A config reload's rules apply on the
+//! next call.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -13,7 +14,7 @@ use crate::backend::{Backend, BackendRegistry};
 use crate::config::{BackendConfig, FailsafeConfig};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::protocol::{JsonRpcResponse, RequestId};
-use crate::secret_injection::{CredentialRule, CredentialType, InjectTarget, SecretInjector};
+use crate::secret_injection::{CredentialRule, CredentialType, InjectTarget};
 use crate::transport::ResendPermission;
 
 /// The secret every rule here injects: a literal, so no environment is read.
@@ -70,19 +71,20 @@ impl crate::transport::Transport for Recording {
     }
 }
 
-/// `gateway_invoke read` on `alpha` over stdio, with one rule injecting
-/// [`SECRET`] as `inject_as` under `key`; what the backend received.
-async fn invoke_with(inject_as: InjectTarget, key: &str) -> Received {
+/// A registry as the gateway builds one: every backend it registers resolves
+/// its rules' values with the one shared resolver.
+fn gateway_registry() -> Arc<BackendRegistry> {
+    Arc::new(BackendRegistry::with_secret_resolver(Arc::new(
+        crate::secrets::SecretResolver::new(),
+    )))
+}
+
+/// `gateway_invoke read` on `alpha` over stdio, `alpha` holding one rule that
+/// injects [`SECRET`] as `inject_as` under `key`: the answer, and what the
+/// backend received.
+async fn invoke_with(inject_as: InjectTarget, key: &str) -> (Value, Received) {
     let received = Arc::new(Mutex::new(Received::default()));
-    let registry = Arc::new(BackendRegistry::new());
-    let backend = Arc::new(Backend::new(
-        "alpha",
-        BackendConfig::default(),
-        &FailsafeConfig::default(),
-        Duration::from_secs(300),
-    ));
-    backend.set_transport_for_test(Arc::new(Recording(Arc::clone(&received))));
-    assert!(registry.register(backend));
+    let registry = gateway_registry();
     let rule = CredentialRule {
         name: "api".to_string(),
         credential_type: CredentialType::ApiKey,
@@ -91,18 +93,27 @@ async fn invoke_with(inject_as: InjectTarget, key: &str) -> Received {
         inject_key: key.to_string(),
         tools: vec!["*".to_string()],
     };
-    let injector = SecretInjector::new(std::collections::HashMap::from([(
-        "alpha".to_string(),
-        vec![rule],
-    )]));
-    let meta = Arc::new(MetaMcp::new(registry).with_secret_injector(injector));
-    invoke_read(&meta).await;
+    let config = BackendConfig {
+        secrets: vec![rule],
+        ..BackendConfig::default()
+    };
+    let backend = Arc::new(Backend::new(
+        "alpha",
+        config,
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    backend.set_transport_for_test(Arc::new(Recording(Arc::clone(&received))));
+    assert!(registry.register(backend));
+    let meta = Arc::new(MetaMcp::new(registry));
+    let answer = invoke_read(&meta).await;
     // The registry still holds the backend and its recorder: take the record.
-    std::mem::take(&mut *received.lock().expect("recorder"))
+    let seen = std::mem::take(&mut *received.lock().expect("recorder"));
+    (answer, seen)
 }
 
-/// `gateway_invoke read` on `alpha` over stdio; the call must succeed.
-async fn invoke_read(meta: &Arc<MetaMcp>) {
+/// `gateway_invoke read` on `alpha` over stdio: the answer.
+async fn invoke_read(meta: &Arc<MetaMcp>) -> Value {
     let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
@@ -114,8 +125,13 @@ async fn invoke_read(meta: &Arc<MetaMcp>) {
         super::super::Gateway::dispatch_single(meta, &policy, &mtls, &request, "stdio-inject")
             .await
             .expect("a request is answered");
+    answer
+}
+
+/// The call answered without an error.
+fn assert_succeeded(answer: &Value) {
     assert!(
-        answer.get("error").is_none(),
+        answer.get("error").is_none() && answer.pointer("/result/isError") != Some(&json!(true)),
         "premise: the call succeeds: {answer}"
     );
 }
@@ -123,7 +139,8 @@ async fn invoke_read(meta: &Arc<MetaMcp>) {
 /// A `header` rule's secret reaches the backend as that header.
 #[tokio::test]
 async fn a_header_rule_delivers_the_secret_as_that_header() {
-    let seen = invoke_with(InjectTarget::Header, "X-Api-Key").await;
+    let (answer, seen) = invoke_with(InjectTarget::Header, "X-Api-Key").await;
+    assert_succeeded(&answer);
     assert!(
         seen.headers
             .iter()
@@ -133,15 +150,18 @@ async fn a_header_rule_delivers_the_secret_as_that_header() {
     );
 }
 
-/// A `query` rule's secret never travels in the tool call's arguments.
+/// A `query` rule's secret never travels in the tool call's arguments. Config
+/// load refuses the rule; a backend built in code refuses the call, so nothing
+/// carrying the secret is sent.
 #[tokio::test]
 async fn a_query_rule_never_puts_the_secret_in_the_arguments() {
-    let seen = invoke_with(InjectTarget::Query, "api_key").await;
-    let params = seen.params.expect("the backend received the call");
-    assert!(
-        !params.to_string().contains(SECRET),
-        "the secret reached the backend in the call: {params}"
-    );
+    let (_, seen) = invoke_with(InjectTarget::Query, "api_key").await;
+    if let Some(params) = seen.params {
+        assert!(
+            !params.to_string().contains(SECRET),
+            "the secret reached the backend in the call: {params}"
+        );
+    }
 }
 
 /// The secret a backend's rule held before a reload.
@@ -171,21 +191,18 @@ async fn after_reload(
     boot: Vec<(&str, BackendConfig)>,
     patch: crate::config_reload::ConfigPatch,
 ) -> Received {
-    let registry = Arc::new(BackendRegistry::new());
-    let mut configs = std::collections::HashMap::new();
+    let registry = gateway_registry();
     for (name, config) in boot {
         let backend = Arc::new(Backend::new(
             name,
-            config.clone(),
+            config,
             &FailsafeConfig::default(),
             Duration::from_secs(300),
         ));
         backend.set_transport_for_test(Arc::new(Recording(Arc::default())));
         assert!(registry.register(backend));
-        configs.insert(name.to_string(), config);
     }
-    let injector = SecretInjector::from_backend_configs(&configs);
-    let meta = Arc::new(MetaMcp::new(Arc::clone(&registry)).with_secret_injector(injector));
+    let meta = Arc::new(MetaMcp::new(Arc::clone(&registry)));
     let applied = crate::config_reload::apply_patch(
         &patch,
         &registry,
@@ -200,7 +217,7 @@ async fn after_reload(
         .get("alpha")
         .expect("premise: the reload left alpha registered")
         .set_transport_for_test(Arc::new(Recording(Arc::clone(&received))));
-    invoke_read(&meta).await;
+    assert_succeeded(&invoke_read(&meta).await);
     std::mem::take(&mut *received.lock().expect("recorder"))
 }
 

@@ -149,14 +149,11 @@ impl Gateway {
             "Loaded transition tracking data",
         );
 
-        // ── Routing profiles + secret injector ──────────────────────────────
+        // ── Routing profiles ────────────────────────────────────────────────
         let profile_registry = ProfileRegistry::from_config(
             &self.config.routing_profiles,
             &self.config.default_routing_profile,
         );
-        let secret_injector =
-            crate::secret_injection::SecretInjector::from_backend_configs(&self.config.backends)
-                .with_env(Arc::clone(&self.env));
 
         // ── Cost governance (feature-gated) ──────────────────────────────────
         #[cfg(feature = "cost-governance")]
@@ -197,7 +194,6 @@ impl Gateway {
         .with_profile_registry(profile_registry)
         .with_code_mode(self.config.code_mode.enabled)
         .with_projection_mode(self.config.meta_mcp.projection_mode)
-        .with_secret_injector(secret_injector)
         .with_surfaced_tools(self.config.meta_mcp.surfaced_tools.clone())
         .with_exposed_meta_tools(&self.config.meta_mcp.exposed_meta_tools)
         .with_expose_stats_tool(self.config.meta_mcp.expose_stats_tool)

@@ -279,13 +279,22 @@ impl Backend {
         // would leave the sibling route forwarding the caller's token.
         let params = substitute_progress_token(params);
 
+        // This backend's `secrets:` rules, here for the same reason as the
+        // mirror below: every route's tools/call passes through. The keys the
+        // rules own are dropped before the mirror reads the arguments, and
+        // the values are added after it, so neither a caller's value for such
+        // a key nor the secret is mirrored into a header. Resolved before the
+        // call is admitted, so a value that does not resolve holds no permit.
+        let secrets = self.prepare_secrets(method, params)?;
+
         // SEP-2243 (MIK-7214.HEADER.5): mirror the arguments a tool's schema
         // declares onto `Mcp-Param-*` headers. This sits here, not in each
         // dispatcher, because every tools/call — the MCP provider, meta-MCP
         // invoke, the router's direct backend route — funnels through this one
         // function, so a per-caller mirror would leave the siblings unmirrored.
         let extra_headers =
-            self.param_header_set(method, params.as_ref(), extra_headers, identity_key);
+            self.param_header_set(method, secrets.params.as_ref(), extra_headers, identity_key);
+        let (params, extra_headers) = secrets.apply(extra_headers);
 
         // Derive the per-identity pool slot FIRST (MIK-6735 fix 1, adversarial
         // review of commit bfd62b91). Each slot owns its own circuit breaker +

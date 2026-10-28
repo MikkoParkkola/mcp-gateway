@@ -16,6 +16,7 @@ mod backend_transport;
 mod config_file;
 mod env_overlay;
 mod env_provider;
+pub(crate) mod secret_rules;
 use env_provider::{EnvFileConfig, Expansion, OverlayEnv, Tolerance};
 mod features;
 pub(crate) mod load_error;

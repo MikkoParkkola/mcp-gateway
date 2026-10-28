@@ -177,6 +177,7 @@ impl MetaMcp {
 
         let egress = relay::Egress {
             arguments,
+            backend: call.backend.as_ref(),
             inbound_meta: args.get("_meta"),
             prompt_cache_key: prompt_cache_key.as_deref(),
             retry: &outbound_retry,

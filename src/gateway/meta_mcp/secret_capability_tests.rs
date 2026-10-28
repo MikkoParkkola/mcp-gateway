@@ -12,7 +12,7 @@
 use std::sync::Mutex;
 
 use super::*;
-use crate::secret_injection::{CredentialRule, CredentialType, InjectTarget, SecretInjector};
+use crate::secret_injection::{CredentialRule, CredentialType, InjectTarget};
 
 /// The backend's secret: a literal, so no environment is read.
 const SECRET: &str = "backend-only-secret-91d2";
@@ -70,6 +70,36 @@ async fn recording_capability(meta: &MetaMcp) -> Seen {
     seen
 }
 
+/// The backend sharing the capabilities source's name: lists nothing and
+/// counts every `tools/call` it is sent.
+struct Shadowed(Arc<AtomicUsize>);
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for Shadowed {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<serde_json::Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        if method == "tools/call" {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(crate::protocol::JsonRpcResponse::success_serialized(
+            RequestId::Number(1),
+            json!({"tools": []}),
+        ))
+    }
+    async fn notify(&self, _method: &str, _params: Option<serde_json::Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
 /// A backend named `capabilities` with an `argument` rule for every tool: the
 /// capability of that name sends no trace of the secret, in its target,
 /// headers or body.
@@ -83,11 +113,23 @@ async fn a_capability_sharing_a_backend_name_gets_none_of_its_secrets() {
         inject_key: "api_key".to_string(),
         tools: vec!["*".to_string()],
     };
-    let injector = SecretInjector::new(std::collections::HashMap::from([(
-        "capabilities".to_string(),
-        vec![rule],
-    )]));
-    let meta = MetaMcp::new(Arc::new(BackendRegistry::new())).with_secret_injector(injector);
+    let registry = Arc::new(BackendRegistry::with_secret_resolver(Arc::new(
+        crate::secrets::SecretResolver::new(),
+    )));
+    let config = crate::config::BackendConfig {
+        secrets: vec![rule],
+        ..crate::config::BackendConfig::default()
+    };
+    let backend = Arc::new(crate::backend::Backend::new(
+        "capabilities",
+        config,
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let backend_calls = Arc::new(AtomicUsize::new(0));
+    backend.set_transport_for_test(Arc::new(Shadowed(Arc::clone(&backend_calls))));
+    assert!(registry.register(backend));
+    let meta = MetaMcp::new(registry);
     let seen = recording_capability(&meta).await;
     let answer = meta
         .invoke_tool(
@@ -99,6 +141,11 @@ async fn a_capability_sharing_a_backend_name_gets_none_of_its_secrets() {
     assert!(answer.is_ok(), "premise: the call succeeds: {answer:?}");
     let seen = seen.lock().expect("recorder").clone();
     assert_eq!(seen.len(), 1, "premise: the capability was called once");
+    assert_eq!(
+        backend_calls.load(Ordering::SeqCst),
+        0,
+        "premise: the capability, not the backend, served the call"
+    );
     assert!(
         !seen[0].contains(SECRET),
         "the backend's secret reached the capability's endpoint: {}",
