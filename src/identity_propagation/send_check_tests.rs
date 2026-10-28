@@ -110,3 +110,22 @@ async fn a_synthetic_expiry_refuses_this_loan_and_never_evicts() {
         "a default expiry passing is not the issuer's word: no eviction"
     );
 }
+
+/// The bearer scheme is matched case-insensitively, with any run of spaces
+/// after it, so an expired JWT under `BEARER` is still read.
+#[tokio::test]
+async fn any_spelling_of_the_bearer_scheme_is_read() {
+    let expired = jwt(r#"{"alg":"RS256"}"#, &format!(r#"{{"exp":{}}}"#, NOW - 1));
+    for header in [
+        format!("BEARER {expired}"),
+        format!("bEaReR {expired}"),
+        format!("Bearer   {expired}"),
+    ] {
+        let headers = vec![("Authorization".to_owned(), header.clone())];
+        assert_eq!(
+            run(expiry_check(Expiry::Unpublished, &headers, || Some(NOW))).await,
+            Err(Refusal::ThisLoan),
+            "an expired JWT went unread under {header:?}"
+        );
+    }
+}

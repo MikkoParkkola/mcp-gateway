@@ -80,10 +80,12 @@ pub(crate) fn expiry_check(
     let jwt_exp = headers
         .iter()
         .filter_map(|(_, value)| {
+            // The auth scheme is case-insensitive (RFC 9110 11.1), and one or
+            // more spaces may follow it.
             let token = value
-                .strip_prefix("Bearer ")
-                .or_else(|| value.strip_prefix("bearer "))
-                .unwrap_or(value);
+                .split_once(' ')
+                .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
+                .map_or(value, |(_, rest)| rest.trim_start_matches(' '));
             unverified_jwt_exp(token)
         })
         .min();
