@@ -142,8 +142,10 @@ tr:hover td { background: var(--bg3); }
 /* Control plane */
 .split-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
 .table-scroll { overflow-x: auto; margin-bottom: 1.5rem; }
-/* Focusable so a keyboard can scroll a table wider than the screen. */
-.table-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Focusable so a keyboard can scroll a pane that overflows. */
+.table-scroll:focus-visible, .tool-schema:focus-visible, .modal-preview:focus-visible,
+.config-block:focus-visible, .tool-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tool-toggle { background: none; border: 0; padding: 0; color: inherit; font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
 .muted { color: var(--fg2); }
 .mono { font-family: "SFMono-Regular", Consolas, monospace; font-size: 0.8rem; }
 .tag-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.5rem; }
@@ -535,7 +537,7 @@ tr:hover td { background: var(--bg3); }
         <button class="btn" id="reload-btn" onclick="doReload()">Hot Reload</button>
         <span id="reload-status" style="margin-left:0.75rem;font-size:0.85rem;color:var(--fg2)"></span>
       </div>
-      <div class="config-block" id="config-content">Loading...</div>
+      <div class="config-block" id="config-content" tabindex="0" role="region" aria-label="Current configuration">Loading...</div>
     </div>
 
     <!-- Costs -->
@@ -573,7 +575,7 @@ tr:hover td { background: var(--bg3); }
       <input type="url" id="import-url" aria-label="OpenAPI spec URL" placeholder="https://petstore3.swagger.io/api/v3/openapi.json" autocomplete="off">
       <button class="btn btn-sm" id="preview-btn" onclick="previewOpenAPI()">Preview</button>
     </div>
-    <div class="modal-preview" id="import-preview">
+    <div class="modal-preview" id="import-preview" tabindex="0" role="region" aria-label="Operations in the spec">
       <span class="preview-hint">Enter a URL and click Preview to see available tools.</span>
     </div>
     <div class="modal-select-row" id="import-select-row" style="display:none">
@@ -1293,15 +1295,17 @@ function filterAndRenderTools() {
     tbody.innerHTML = '<tr><td colspan="3" style="color:var(--fg2)">No tools found</td></tr>';
     return;
   }
+  // The name is a button so the detail opens from the keyboard too; its click
+  // reaches the row's handler.
   tbody.innerHTML = filtered.map((t, i) => `<tr class="tool-row" data-idx="${i}" onclick="toggleToolDetail(this)">
-    <td><strong>${esc(t.name)}</strong></td>
+    <td><button type="button" class="tool-toggle" aria-expanded="false" aria-controls="td-${i}">${esc(t.name)}</button></td>
     <td>${esc(t.server)}</td>
     <td>${esc(truncate(t.description, 80))}</td>
   </tr>
   <tr class="tool-detail-row" id="td-${i}" style="display:none"><td colspan="3">
     <div class="tool-detail open">
       <div class="tool-desc">${esc(t.description || 'No description')}</div>
-      ${t.schema ? '<div class="tool-schema">' + esc(JSON.stringify(t.schema, null, 2)) + '</div>' : ''}
+      ${t.schema ? `<div class="tool-schema" tabindex="0" role="region" aria-label="Input schema of ${esc(t.name)}">${esc(JSON.stringify(t.schema, null, 2))}</div>` : ''}
     </div>
   </td></tr>`).join('');
 }
@@ -1310,6 +1314,8 @@ function toggleToolDetail(row) {
   const idx = row.dataset.idx;
   const detail = document.getElementById('td-' + idx);
   detail.style.display = detail.style.display === 'none' ? '' : 'none';
+  const toggle = row.querySelector('.tool-toggle');
+  if (toggle) toggle.setAttribute('aria-expanded', String(detail.style.display !== 'none'));
 }
 
 document.getElementById('tool-search').addEventListener('input', filterAndRenderTools);
