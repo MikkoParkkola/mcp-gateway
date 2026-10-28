@@ -154,3 +154,23 @@ fn shadow_command_empty_format_defaults_to_grep() {
     let code = run_doctor_shadow_command("");
     assert_eq!(code, ExitCode::SUCCESS);
 }
+
+/// A finding's label, detail and hint reach the terminal escaped, with the
+/// result's own two lines and no more; a Windows path keeps its backslashes.
+#[test]
+fn a_result_prints_client_text_escaped() {
+    let result = CheckResult::warn(
+        "ShadowRadar srv\u{1b}[31m",
+        "tool\u{202e}x is unmanaged via stdio\u{2028}forged",
+    )
+    .with_hint("see C:\\Users\\me\\gw.yaml\u{1b}[0m");
+    let lines = human_lines("[WARN]", &result);
+    for raw in ['\u{1b}', '\u{202e}', '\u{2028}'] {
+        assert!(!lines.contains(raw), "{raw:?} in {lines:?}");
+    }
+    assert_eq!(lines.lines().count(), 2, "{lines:?}");
+    assert!(
+        lines.contains("C:\\Users\\me\\gw.yaml\\u{1b}[0m"),
+        "{lines}"
+    );
+}

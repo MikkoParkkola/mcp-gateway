@@ -51,7 +51,17 @@ fn display_text(raw: &str) -> Option<(String, bool)> {
 mod tests {
     use serde_json::{Value, json};
 
-    use super::package;
+    use super::{display_text, package};
+
+    /// The shared hidden-character check drops what can hide or break
+    /// text, and nothing else: a backslash is kept.
+    #[test]
+    fn display_text_keeps_backslashes_and_drops_hidden_characters() {
+        assert_eq!(
+            display_text("a\\b\u{202e}c\u{2028}d"),
+            Some(("a\\bcd".to_string(), false))
+        );
+    }
 
     fn name_of(raw: &str) -> Value {
         package(Some(&json!({"name": raw, "version": "1"})))

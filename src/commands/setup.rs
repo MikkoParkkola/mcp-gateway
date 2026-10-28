@@ -237,20 +237,25 @@ fn transport_label(transport: &TransportConfig) -> String {
 /// Prints each server with its index, then reads a comma-separated list of
 /// numbers (or "all" / blank for everything).  Returns only the selected
 /// entries.  This replaces the `dialoguer::MultiSelect` dependency with a
+/// One server of the selection prompt: name, client and transport, the
+/// client's text escaped for the terminal.
+fn select_label(server: &DiscoveredServer) -> String {
+    format!(
+        "{} [{}] ({})",
+        shown(&server.name),
+        source_label(&server.source),
+        shown(&transport_label(&server.transport))
+    )
+}
+
+/// A server's name in single quotes, escaped for the terminal.
+fn quoted_name(name: &str) -> String {
+    format!("'{}'", shown(name))
+}
+
 /// simple stdin-based prompt that works in any terminal.
 fn interactive_select(servers: &[DiscoveredServer]) -> Result<Vec<&DiscoveredServer>, io::Error> {
-    let labels: Vec<String> = servers
-        .iter()
-        .map(|s| {
-            let transport = transport_label(&s.transport);
-            format!(
-                "{} [{}] ({})",
-                shown(&s.name),
-                source_label(&s.source),
-                shown(&transport)
-            )
-        })
-        .collect();
+    let labels: Vec<String> = servers.iter().map(select_label).collect();
 
     println!("Select servers to import (default: all):");
     for (i, label) in labels.iter().enumerate() {
@@ -310,7 +315,9 @@ fn import_servers(
         Ok(())
     })
     .map_err(|e| {
-        eprintln!("Error: {e}");
+        // The message can name a client's server and keys: escaped once,
+        // here, where it is printed.
+        eprintln!("Error: {}", shown(&e));
         ExitCode::FAILURE
     })?;
     Ok(added)
@@ -343,20 +350,23 @@ fn merge_servers_into_config(
             .map_err(|refused| {
                 format!(
                     "'{}' has secret references that do not resolve: {}",
-                    shown(&server.name),
-                    shown(&refused.join("; "))
+                    server.name,
+                    refused.join("; ")
                 )
             })?;
     }
     let mut added = 0usize;
     for server in selected {
         if config.backends.contains_key(&server.name) {
-            println!("  Skipping '{}' (already in config)", shown(&server.name));
+            println!(
+                "  Skipping {} (already in config)",
+                quoted_name(&server.name)
+            );
             continue;
         }
         let backend = server.to_backend_config();
         config.backends.insert(server.name.clone(), backend);
-        println!("  Added '{}'", shown(&server.name));
+        println!("  Added {}", quoted_name(&server.name));
         added += 1;
     }
     Ok(added)
@@ -378,6 +388,29 @@ fn print_next_steps(config_path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The selection prompt and the import lines show a client's server
+    /// name, and a stdio command's first word, escaped.
+    #[test]
+    fn setup_shows_a_client_name_escaped() {
+        let server = DiscoveredServer::new(
+            "srv\u{1b}[31m\u{202e}x".to_string(),
+            String::new(),
+            DiscoverySource::ClaudeDesktop,
+            TransportConfig::Stdio {
+                command: "np\u{2028}x tool".to_string(),
+                cwd: None,
+                protocol_version: None,
+            },
+            mcp_gateway::discovery::ServerMetadata::default(),
+        );
+        for text in [select_label(&server), quoted_name(&server.name)] {
+            for raw in ['\u{1b}', '\u{202e}', '\u{2028}'] {
+                assert!(!text.contains(raw), "{raw:?} in {text:?}");
+            }
+            assert!(text.contains("\\u{1b}"), "{text}");
+        }
+    }
 
     #[test]
     fn transport_label_hides_url_credentials() {

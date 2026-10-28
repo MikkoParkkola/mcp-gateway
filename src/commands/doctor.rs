@@ -625,24 +625,35 @@ fn print_results(results: &[CheckResult], format: OutputFormat) {
     }
 }
 
+/// One result's terminal lines. Its label, detail and hint can carry a
+/// discovered server's name or a configured backend's: JSON keeps them raw,
+/// the terminal gets them escaped, once, here.
+fn human_lines(badge: &str, result: &CheckResult) -> String {
+    use std::fmt::Write as _;
+
+    let mut lines = String::new();
+    let _ = writeln!(
+        lines,
+        "{badge} {}: {}",
+        shown(&result.label),
+        shown(&result.detail)
+    );
+    if let Some(hint) = &result.hint {
+        let _ = writeln!(lines, "       Hint: {}", shown(hint));
+    }
+    lines
+}
+
 fn print_results_human(results: &[CheckResult]) {
     use std::fmt::Write as _;
 
     let use_color = std::env::var("NO_COLOR").is_err();
 
     for result in results {
-        let badge = format_badge(&result.status, use_color);
-        // A finding's label and detail can carry a discovered server's
-        // name; the JSON output keeps them raw, the terminal gets them
-        // escaped, once, here.
-        println!(
-            "{badge} {}: {}",
-            shown(&result.label),
-            shown(&result.detail)
+        print!(
+            "{}",
+            human_lines(&format_badge(&result.status, use_color), result)
         );
-        if let Some(ref hint) = result.hint {
-            println!("       Hint: {hint}");
-        }
     }
 
     println!();

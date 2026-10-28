@@ -264,3 +264,7 @@ pub(super) fn parse(
     warn!("Unsupported server config format for {}", shown(name));
     None
 }
+
+#[cfg(test)]
+#[path = "client_entry_tests.rs"]
+mod tests;

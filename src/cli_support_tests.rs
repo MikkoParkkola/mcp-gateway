@@ -363,3 +363,34 @@ fn a_skipped_field_is_escaped_for_the_terminal() {
     assert!(!shown.contains('\u{202e}'), "{shown}");
     assert!(!shown.contains('\u{1b}'), "{shown}");
 }
+
+/// `shown` escapes exactly the characters that can hide, reorder or break
+/// terminal text, and keeps everything else, a Windows path included.
+#[test]
+fn shown_escapes_hidden_characters_and_keeps_the_rest() {
+    let rows = [
+        ("plain-name_1.0", "plain-name_1.0"),
+        ("C:\\Users\\me\\mcp.json", "C:\\Users\\me\\mcp.json"),
+        ("ünïcødé 名前", "ünïcødé 名前"),
+        ("a\u{1b}[31mb", "a\\u{1b}[31mb"),
+        ("a\u{202e}b", "a\\u{202e}b"),
+        ("a\u{200b}b", "a\\u{200b}b"),
+        ("a\nb\rc\td", "a\\u{a}b\\u{d}c\\u{9}d"),
+        ("a\u{2028}b\u{2029}c", "a\\u{2028}b\\u{2029}c"),
+        ("a\u{7f}b\u{85}c", "a\\u{7f}b\\u{85}c"),
+    ];
+    for (raw, expected) in rows {
+        assert_eq!(shown(raw).to_string(), expected, "{raw:?}");
+        assert_eq!(shows_unchanged(raw), raw == expected, "{raw:?}");
+    }
+}
+
+/// The skip warning keeps its quotes around an escaped name.
+#[test]
+fn a_skip_warning_quotes_the_escaped_name() {
+    let shown_skip = describe_skipped(&[Outcome::Skipped {
+        name: "a\u{1b}b".to_string(),
+        reasons: vec![("invalid_name", "name".to_string())],
+    }]);
+    assert_eq!(shown_skip, "\"a\\u{1b}b\": invalid_name (name)");
+}
