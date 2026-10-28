@@ -56,6 +56,10 @@ test('G1 a slow page shows the loading state after about 300 ms, says so once, a
   await page.route(PROBE, probe.answer);
   await withFixturePages(page, { probes: true });
   await page.goto('/ui/policies/status');
+  await page.waitForSelector('#content [data-rendered]', { state: 'attached' }); // an empty body has no size
+  // Not before about 300 ms: at 150 ms the page still shows nothing.
+  await page.evaluate(() => new Promise((done) => setTimeout(done, 150)));
+  await expect(loading(page)).toHaveCount(0);
   await expect(loading(page)).toBeVisible();
   await shellCall(page, 'announcerIdle');
   expect((await page.evaluate(() => window.__writes)).filter((t) => t.startsWith('Loading'))).toEqual(['Loading Policies.']);
@@ -115,6 +119,10 @@ test('G5 a slow Retry shows the loading state under the banner, and the banner s
   await banner.getByRole('button', { name: /Retry/ }).click();
   await expect(loading(page)).toBeVisible();
   await expect(banner).toBeVisible();
+  // Banner, then the loading state, then the Retry's stage, in that order.
+  const order = await page.evaluate(() => [...document.getElementById('content').children]
+    .map((n) => (n.matches('[data-state="loading"]') ? 'loading' : n.classList.contains('staging') ? 'stage' : n.querySelector('[data-state="error"]') ? 'banner' : n.className)));
+  expect(order).toEqual(['banner', 'loading', 'stage']);
   probe.release();
   await expect(page.locator('#content')).toContainText('value 1');
   await expect(loading(page)).toHaveCount(0);
@@ -129,8 +137,23 @@ function serverStates() {
   expect(head.slice(head.lastIndexOf('#[derive')), 'ServerState keeps rename_all = "snake_case"').toContain('rename_all = "snake_case"');
   const body = source.slice(source.indexOf('pub enum ServerState {'));
   const block = body.slice(body.indexOf('{') + 1, body.indexOf('\n}'));
-  expect(block, 'no ServerState variant is renamed one by one').not.toMatch(/serde\(\s*(rename|alias)/);
-  return [...block.matchAll(/^\s{4}([A-Z][A-Za-z]+),/gm)].map(([, v]) => v.replace(/[A-Z]/g, (c, i) => (i ? '_' : '') + c.toLowerCase()));
+  expect(block, 'no ServerState variant is renamed one by one').not.toMatch(/\b(rename|alias)\b/);
+  // Every line must be a unit variant, a comment, an attribute or blank: a form this
+  // reader does not know fails here instead of being skipped.
+  const variants = [];
+  let inAttr = 0;
+  for (const raw of block.split('\n')) {
+    const line = raw.trim();
+    if (inAttr > 0 || line.startsWith('#[')) {
+      inAttr += (line.match(/[[(]/g) ?? []).length - (line.match(/[\])]/g) ?? []).length;
+      continue;
+    }
+    if (line === '' || line.startsWith('//')) continue;
+    const unit = line.match(/^([A-Z][A-Za-z]+),$/);
+    expect(unit, `a ServerState line this test cannot read: ${line}`).not.toBeNull();
+    variants.push(unit[1]);
+  }
+  return variants.map((v) => v.replace(/[A-Z]/g, (c, i) => (i ? '_' : '') + c.toLowerCase()));
 }
 
 test('W1 the glossary has one word for each ServerState, and no word twice', async ({ page }) => {
@@ -170,6 +193,13 @@ test('W3 a dropped stream reads Updates stopped, and no state word is spelled ou
   const glossary = source.slice(source.indexOf('export const GLOSSARY'), source.indexOf('\n};', source.indexOf('export const GLOSSARY')));
   const rest = source.replace(glossary, '');
   expect(rest.match(/'Paused'|"Paused"|\banswering\b|\bANSWERED\b|'[Rr]eady'/g) ?? []).toEqual([]);
+  // No string literal outside the glossary is itself a state word, in any case or quote style.
+  const words = await page.evaluate(async (u) => {
+    const { GLOSSARY } = await import(u);
+    return [...Object.values(GLOSSARY.server), ...Object.values(GLOSSARY.stream)].map((w) => w.toLowerCase());
+  }, url);
+  const literals = [...rest.matchAll(/(['"`])((?:\\.|(?!\1)[^\\])*)\1/g)].map(([, , text]) => text.trim().toLowerCase());
+  expect(literals.filter((text) => words.includes(text))).toEqual([]);
 });
 
 test('G1b a render that settles while the loading message waits its turn is never said', async ({ page }) => {
@@ -178,12 +208,18 @@ test('G1b a render that settles while the loading message waits its turn is neve
   await page.route(PROBE, probe.answer);
   await withFixturePages(page, { probes: true });
   await page.goto('/ui/policies/status');
-  // Something said just before 300 ms keeps the region in its pause when the loading message queues.
-  await page.evaluate(() => new Promise((done) => setTimeout(done, 250)));
-  await shellCall(page, 'announce', 'Earlier news.');
+  // Something said at once, with a long pause after it, keeps the loading message
+  // queued however late this host runs it.
+  const url = await shellModuleUrl(page);
+  await page.evaluate(async (u) => {
+    const m = await import(u);
+    m.announcerTiming.dwellMs = 5000;
+    m.announce('Earlier news.');
+  }, url);
   await expect(loading(page)).toBeVisible();
   probe.release();
   await expect(page.locator('#content')).toContainText('value 1');
+  await page.evaluate(async (u) => { (await import(u)).announcerTiming.dwellMs = 500; }, url);
   await shellCall(page, 'announcerIdle');
   expect((await page.evaluate(() => window.__writes)).filter((t) => t.startsWith('Loading'))).toEqual([]);
 });
@@ -217,3 +253,31 @@ for (const [status, ending] of [[500, 'error'], [403, 'forbidden'], [401, 'sign-
     await expect(loading(page)).toHaveCount(0);
   });
 }
+
+test('G7 an error just after the loading state appears waits out its minimum, then shows, said once', async ({ page }) => {
+  await recordAnnouncements(page);
+  // When the loading state and the error banner each enter the page, by the page's own clock.
+  await page.addInitScript(() => {
+    window.__times = {};
+    addEventListener('DOMContentLoaded', () => {
+      new MutationObserver(() => {
+        const now = performance.now();
+        if (!window.__times.loading && document.querySelector('#content [data-state="loading"]')) window.__times.loading = now;
+        if (!window.__times.error && document.querySelector('#content [data-state="error"]')) window.__times.error = now;
+      }).observe(document.getElementById('content'), { childList: true, subtree: true });
+    });
+  });
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  await page.route(PROBE, async (r) => { await gate; return r.fulfill({ status: 500, json: {} }); });
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/policies/status');
+  await expect(loading(page)).toBeVisible();
+  release();
+  await expect(page.locator('#content [data-state="error"]')).toBeVisible();
+  await expect(loading(page)).toHaveCount(0);
+  const times = await page.evaluate(() => window.__times);
+  expect(times.error - times.loading, 'the error waited out the loading state\'s minimum').toBeGreaterThanOrEqual(395);
+  await shellCall(page, 'announcerIdle');
+  expect((await page.evaluate(() => window.__writes)).filter((t) => t.includes('The gateway answered with an error'))).toHaveLength(1);
+});

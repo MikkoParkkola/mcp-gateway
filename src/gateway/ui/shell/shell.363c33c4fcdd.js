@@ -166,8 +166,12 @@ export async function api(path, init = {}) {
 
 // ---------------------------------------------------------------- announcer
 
-/** The pause between writes, so a screen reader takes each entry on its own. */
-const DWELL_MS = 500;
+/**
+ * dwellMs: the pause between writes, so a screen reader takes each entry on its
+ * own. Exported so a test can lengthen it and pin a race regardless of the
+ * host's load.
+ */
+export const announcerTiming = { dwellMs: 500 };
 /** How long an entry stays in the region; removing it is not announced. */
 const ENTRY_MS = 10_000;
 /** Messages waiting for the next write, in arrival order. */
@@ -193,7 +197,7 @@ export function announce(text, { subject = 'page', guard: given = null } = {}) {
   }
   const item = { text, subject, guard };
   pending.push(item);
-  if (!pumpTimer) pumpTimer = setTimeout(pump, Math.max(0, lastWrite + DWELL_MS - Date.now()));
+  if (!pumpTimer) pumpTimer = setTimeout(pump, Math.max(0, lastWrite + announcerTiming.dwellMs - Date.now()));
   // Withdraw it, if it has not been written yet.
   return () => {
     const i = pending.indexOf(item);
@@ -214,7 +218,7 @@ function pump() {
     setTimeout(() => entry.remove(), ENTRY_MS);
     lastWrite = Date.now();
   }
-  if (pending.length) pumpTimer = setTimeout(pump, DWELL_MS);
+  if (pending.length) pumpTimer = setTimeout(pump, announcerTiming.dwellMs);
   else for (const done of idleWaiters.splice(0)) done();
 }
 
@@ -606,34 +610,40 @@ export function render() {
     content.setAttribute('aria-busy', 'true');
     const stage = el('div', { class: 'body staging' });
     content.append(stage);
-    const loaded = watchLoading(content, stage, label, current);
+    const loading = watchLoading(content, stage, label, current);
+    const teardown = () => {
+      if (stage.classList.contains('staging')) stage.remove();
+      if (current()) content.removeAttribute('aria-busy');
+    };
     runTab(spec, route, stage)
-      .then(() => {
-        if (!current()) return;
-        stage.classList.remove('staging');
-        content.replaceChildren(mark(stage));
-        saveSnapshot(key, stage);
-        content.focus({ preventScroll: true });
-      })
-      .catch((err) => {
-        if (!current()) return;
-        settle(err);
-        const again = content.querySelector('[data-state="error"] button');
-        if (again) again.focus();
-        else content.focus({ preventScroll: true });
-      })
-      .finally(() => {
-        loaded();
-        if (stage.classList.contains('staging')) stage.remove();
-        if (current()) content.removeAttribute('aria-busy');
-      });
+      .then(() => loading.after(() => {
+        if (current()) {
+          stage.classList.remove('staging');
+          content.replaceChildren(mark(stage));
+          saveSnapshot(key, stage);
+          content.focus({ preventScroll: true });
+        }
+        teardown();
+      }))
+      .catch((err) => loading.after(() => {
+        if (current()) {
+          settle(err);
+          const again = content.querySelector('[data-state="error"] button');
+          if (again) again.focus();
+          else content.focus({ preventScroll: true });
+        }
+        teardown();
+      }));
   };
 
-  const loaded = watchLoading(content, body, label, current);
+  const loading = watchLoading(content, body, label, current);
   runTab(spec, route, body)
-    .then(() => { if (current()) saveSnapshot(key, body); })
-    .catch((err) => { if (current()) settle(err); })
-    .finally(loaded);
+    .then(() => {
+      // The data is already in the body, under the loading state: let it go after its minimum.
+      loading.release();
+      if (current()) saveSnapshot(key, body);
+    })
+    .catch((err) => loading.after(() => { if (current()) settle(err); }));
 }
 
 /** How long a page may wait for its data before the shell says it is loading (UI1.17). */
@@ -643,28 +653,49 @@ const LOADING_MIN_MS = 400;
 
 /**
  * Show the loading state above `body`, and say it once, if this attempt has
- * nothing to show after LOADING_MS. Returns the function that ends it: it
- * withdraws an unsaid message and takes the state away (after its minimum).
+ * nothing to show after LOADING_MS. When the attempt settles:
+ * - after(swap) waits out the rest of LOADING_MIN_MS if the state is up, takes
+ *   it away, then runs `swap` (an error, a 403, a Retry's result), so a state
+ *   shown at 300 ms is never replaced 10 ms later;
+ * - release() is for data already drawn under it: it goes after its minimum.
+ * Either withdraws a loading message not yet said.
  */
 function watchLoading(content, body, label, current) {
   let node = null;
   let shownAt = 0;
   let withdraw = null;
+  const guard = { epoch: authEpoch, seq: renderSeq };
   const timer = setTimeout(() => {
     // A screen that drew anything, even its own loading state, has said enough.
     if (!current() || body.hasChildNodes() || !body.isConnected) return;
     node = state('loading');
     content.insertBefore(node, body);
     shownAt = Date.now();
-    withdraw = announce(`Loading ${label}`, { subject: 'page' });
+    withdraw = announce(`Loading ${label}`, { subject: 'page', guard });
   }, LOADING_MS);
-  return () => {
+  const stop = () => {
     clearTimeout(timer);
     withdraw?.();
-    if (!node) return;
-    const left = LOADING_MIN_MS - (Date.now() - shownAt);
-    if (left > 0) setTimeout(() => node.remove(), left);
-    else node.remove();
+  };
+  const left = () => (node ? Math.max(0, LOADING_MIN_MS - (Date.now() - shownAt)) : 0);
+  return {
+    after(swap) {
+      stop();
+      const finish = () => {
+        node?.remove();
+        swap();
+      };
+      const wait = left();
+      if (wait > 0) setTimeout(finish, wait);
+      else finish();
+    },
+    release() {
+      stop();
+      const wait = left();
+      if (!node) return;
+      if (wait > 0) setTimeout(() => node.remove(), wait);
+      else node.remove();
+    },
   };
 }
 

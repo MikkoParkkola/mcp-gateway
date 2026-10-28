@@ -41,8 +41,8 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/shell.dec487933891.css"),
     ),
     (
-        "shell.672dbc877f97.js",
-        include_bytes!("shell/shell.672dbc877f97.js"),
+        "shell.363c33c4fcdd.js",
+        include_bytes!("shell/shell.363c33c4fcdd.js"),
     ),
 ];
 
