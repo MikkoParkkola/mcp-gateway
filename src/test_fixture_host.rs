@@ -68,6 +68,7 @@ pub(crate) async fn serve_https(router: axum::Router) -> u16 {
     )
     .await
     .expect("the fixture leaf matches its key");
+    // port-check: the listener serves on in the spawned TLS server.
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback listener binds");
     listener
         .set_nonblocking(true)
