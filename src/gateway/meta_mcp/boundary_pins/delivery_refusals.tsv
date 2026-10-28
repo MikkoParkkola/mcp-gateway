@@ -19,7 +19,6 @@ src/gateway/meta_mcp/chain_receipt.rs	receive	refusal	4	feeds	chain-receipt refu
 src/gateway/meta_mcp/grant_audit.rs	check_or_stamp	refuse_withheld	1	composite-or-replay	the gated gateway_invoke path re-meeting a name the route stage withheld first (raised)
 src/gateway/meta_mcp/grant_audit.rs	note_grant_decision	refuse_late	1	not-a-decision	an audit-integrity refusal: a grant decision after the answer's record
 src/gateway/meta_mcp/invoke/admin.rs	run_playbook	refuse_unattested_plan	1	recorded	sealed refusal, recorded at the outlet
-src/gateway/meta_mcp/invoke/audit/settlement.rs	record_task_settlement	Error::ResponseFirewallRefused	1	not-delivered	the worker's task settlement record, not a delivery
 src/gateway/meta_mcp/invoke/bridge_dispatch.rs	invoke	refuse_if_killed	2	recorded	the bridged kill switch, raised while vouched
 src/gateway/meta_mcp/invoke/bridge_dispatch.rs	invoke	refuse_relaying_round	1	recorded	bridged relay block, raised while vouched inside it
 src/gateway/meta_mcp/invoke/bridge_dispatch.rs	invoke	undeclared_key_refusal	1	recorded	bridged round undeclared key; raised while vouched where it ends the exchange
@@ -179,11 +178,15 @@ src/gateway/server/stdio_dispatch.rs	prepare_signing	refuse_malformed_nonce_earl
 src/gateway/server/stdio_tasks.rs	dispatch_get	refuse_stored_delivery	1	recorded	stdio tasks/get: StoredAnswer::deliver raises only a policy refusal
 src/gateway/server/support.rs	start_refusal	replica_state_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/server/support.rs	start_refusal	serve_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
+src/gateway/task_service/execution/worker_inspect.rs	dispatch_refusal_code	Error::ResponseFirewallRefused	1	not-delivered	the settlement record's code for a withheld dispatch refusal, not a delivery
+src/gateway/task_service/execution/worker_inspect.rs	dispatched_in_cell	dispatch_refusal	1	not-delivered	reads the dispatch cell's refusal flag for the worker's settlement record, not a delivery
+src/gateway/task_service/execution/worker_inspect.rs	inspect_and_record	Error::ResponseFirewallRefused	1	not-delivered	the worker's task settlement record (the inspection's refusal code), not a delivery
 src/gateway/ui/backend_ops.rs	add_backend	refuse_unresolved_secrets	1	no-record	admin UI
 src/gateway/ui/backend_ops.rs	update_backend	refuse_unresolved_secrets	1	no-record	admin UI
 src/gateway/ui/backends.rs	add_backend	add_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/ui/discovery.rs	body	name_refusal	1	no-record	admin UI discovery listing: drops managed finds from the radar count, no call delivery
 src/gateway/ui/discovery.rs	listed	name_refusal	1	no-record	admin UI discovery listing: labels a find's adopt refusals, no call delivery
+src/gateway/ui/discovery_adopt.rs	adopt_discovery	name_refusal	1	no-record	admin UI adopt route: labels a discovered server, no call delivery
 src/gateway/ui/events.rs	replay_one	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/ui/import.rs	fetch_error_message	ssrf_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/ui/preview.rs	preview_backend	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
