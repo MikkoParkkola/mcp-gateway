@@ -9,7 +9,7 @@
 use serde_json::Value;
 
 use crate::gateway::router::route_matrix_driver_tests::response::{
-    BackendAnswer, DELIVERED_PROSE, HttpRoute, LEAKED_LINE, direct_public_read, node_verifies,
+    BackendAnswer, DELIVERED_PROSE, HttpRoute, STUFFED_INFO, direct_public_read, node_verifies,
     planted_credential, read_then_relay, read_then_relay_own_signature, read_then_relay_rebuilt,
     signed_call, signed_legacy_then_modern_replay, signed_recorded_call, signed_redacted_call,
     signed_replay, trust_set,
@@ -211,14 +211,13 @@ async fn r_commit_delivery_record_precedes_relay_commit() {
 }
 
 /// R-REBUILD `relay_receipt_reflects_the_delivered_bytes` (`Mcp`, `Direct` ×
-/// `Fresh` × `Modern`): the relay receipt is rebuilt from the delivered,
-/// redacted bytes. It is not the `Sign` < `RelayRebuild` row (that is
-/// R-SIGNREBUILD; red check f7, run 1, survived here).
-/// Beside the prose it delivers, the backend sends a line around a
-/// credential, which the egress firewall redacts after ingress. The relay
-/// receipt is rebuilt from the delivered bytes: relaying the delivered prose
-/// is refused, and relaying the backend's line runs. A receipt taken from the
-/// backend's own answer would catch the line too.
+/// `Fresh` × `Modern`): the relay receipt is rebuilt from the delivered
+/// bytes. Beside the prose it delivers, the backend stuffs prose into its own
+/// `_meta` `serverInfo`, which the shaper overwrites with the gateway's after
+/// the receipt is first staged. The relay receipt is rebuilt from the
+/// delivered bytes: relaying the delivered prose is refused, and relaying the
+/// stuffing runs. A receipt taken from the backend's own answer would catch
+/// the stuffing too.
 #[tokio::test]
 async fn r_rebuild_relay_receipt_reflects_the_delivered_bytes() {
     for route in [HttpRoute::Mcp, HttpRoute::Direct] {
@@ -226,10 +225,8 @@ async fn r_rebuild_relay_receipt_reflects_the_delivered_bytes() {
         let seen = read_then_relay_rebuilt(route).await;
         let read = seen.read.to_string();
         assert!(
-            read.contains(DELIVERED_PROSE)
-                && !read.contains(LEAKED_LINE)
-                && read.contains("[REDACTED:credential]"),
-            "{row}: the read delivers the prose and the firewall redacted the line: {read}"
+            read.contains(DELIVERED_PROSE) && !read.contains(STUFFED_INFO),
+            "{row}: the read delivers the prose under the gateway's serverInfo: {read}"
         );
         assert_eq!(
             seen.prose["error"]["code"], -32002,

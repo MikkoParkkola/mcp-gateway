@@ -182,8 +182,7 @@ mod source_checks {
             "src/gateway/route_check_matrix_tests/response_rows.rs",
             // MIK-8689 HTTP driver (/mcp and Direct): its one write is a
             // backend fixture's key: a public `resources/read` for the
-            // read clamp row, and stuffed prose that ingress removes
-            // from a `tools/call` answer; the rows read the delivered result.
+            // read clamp row; the row reads the delivered result.
             "src/gateway/router/route_matrix_driver_response_tests.rs",
             // The member table names the key to classify it (a member a
             // backend may send, so never stripped), and its tests put the key

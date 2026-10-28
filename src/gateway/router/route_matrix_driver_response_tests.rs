@@ -337,21 +337,17 @@ pub(crate) async fn read_then_relay(text: &'static str, record_fails: bool) -> R
 pub(crate) const DELIVERED_PROSE: &str =
     "Harbour dues for the winter quarter rise by four percent across every berth class.";
 
-/// Backend text around a credential, under 48 characters (the relay
-/// detector's window) on each side, so every window it fingerprints holds
-/// part of the credential the egress firewall redacts: the client never
-/// receives it as sent.
-pub(crate) const LEAKED_LINE: &str = concat!(
-    "Ledger key for the depot: ghp_",
-    "abcdefghijklmnopqrstuvwxyz1234567890",
-    " - filed in March."
-);
+/// Backend text in its own `_meta` `serverInfo`, which the shaper overwrites
+/// with the gateway's on a modern answer after the receipt is first staged,
+/// so the client never receives it.
+pub(crate) const STUFFED_INFO: &str =
+    "Undelivered stuffing: the backend hid this sentence in the serverInfo the gateway stamps.";
 
-/// A Native result carrying [`DELIVERED_PROSE`] and [`LEAKED_LINE`] as its
-/// two texts.
-fn leaked_line() -> Value {
-    json!({"content": [{"type": "text", "text": DELIVERED_PROSE},
-                       {"type": "text", "text": LEAKED_LINE}], "isError": false})
+/// A Native result carrying [`DELIVERED_PROSE`] as its text and
+/// [`STUFFED_INFO`] as its own `serverInfo` name.
+fn stuffed_info() -> Value {
+    json!({"content": [{"type": "text", "text": DELIVERED_PROSE}], "isError": false,
+           "_meta": {"io.modelcontextprotocol/serverInfo": {"name": STUFFED_INFO}}})
 }
 
 /// A Native result carrying [`DELIVERED_PROSE`] as its text.
@@ -379,13 +375,13 @@ pub(crate) struct Rebuilt {
 }
 
 /// On the signed, relayed fixture with `alpha`'s `read` surfaced, the backend
-/// answering [`leaked_line`]: `k-std` reads on `route` (a modern call, as
+/// answering [`stuffed_info`]: `k-std` reads on `route` (a modern call, as
 /// the hardened posture requires; on `/mcp` by the surfaced name, so the
 /// backend envelope is the result), then `k-budget`
 /// sends the delivered prose and the stuffing on the same route. The relay
 /// receipt is rebuilt from the delivered bytes, so only the prose is caught.
 pub(crate) async fn read_then_relay_rebuilt(route: HttpRoute) -> Rebuilt {
-    read_then_relay_stuffed(route, leaked_line, Relayed::Text(LEAKED_LINE)).await
+    read_then_relay_stuffed(route, stuffed_info, Relayed::Text(STUFFED_INFO)).await
 }
 
 /// [`read_then_relay_rebuilt`] with the backend answering [`prose_only`]:
