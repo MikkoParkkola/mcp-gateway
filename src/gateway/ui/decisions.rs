@@ -223,6 +223,11 @@ async fn replay_until_ready(replays: Arc<Replays>) {
     // One replay at a time: two folding at once would let the first to end
     // mark the source ready while the other is still reading.
     let _one = replays.one_at_a_time.lock().await;
+    // A replay that ended while this one waited may have marked the source
+    // ready without what this one is here to read back: unavailable again.
+    replays
+        .shared
+        .update(|set| set.set_health(Source::Access, Health::Unavailable));
     let mut wait = Duration::from_secs(1);
     loop {
         let (attempt, set) = (replays.path.clone(), Arc::clone(&replays.shared));

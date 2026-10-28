@@ -375,3 +375,37 @@ async fn a_replay_waits_for_the_one_already_running() {
         "ready after the replay it waited for"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_waiting_replay_unmarks_a_ready_it_did_not_read() {
+    let dir = tempfile::tempdir().expect("dir");
+    let shared = Arc::new(Shared::with_key([7; 32]));
+    // A directory is no log: this replay cannot read, so it never marks ready.
+    let replays = Arc::new(Replays {
+        path: dir.path().to_path_buf(),
+        shared: Arc::clone(&shared),
+        one_at_a_time: tokio::sync::Mutex::new(()),
+    });
+    let running = replays.one_at_a_time.lock().await;
+    let waiting = tokio::spawn(replay_until_ready(Arc::clone(&replays)));
+
+    // The running replay ends and marks the source ready.
+    shared.update(|set| {
+        set.set_health(Source::ControlPlane, Health::Ready);
+        set.set_health(Source::Capability, Health::Absent);
+        set.set_health(Source::Access, Health::Ready);
+    });
+    assert!(shared.view().is_ok());
+    drop(running);
+
+    // The waiting replay takes the lock and has read nothing: not ready.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while shared.view().is_ok() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the waiting replay left a ready it had not read"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    waiting.abort();
+}
