@@ -51,7 +51,7 @@ pub(crate) fn build(
                 attempt.previous().len(),
             ) {
                 RedirectDecision::Stop => attempt.stop(),
-                RedirectDecision::Reject(msg) => attempt.error(msg),
+                RedirectDecision::Reject(msg) => crate::security::ssrf::refuse_hop(attempt, msg),
                 RedirectDecision::Follow => {
                     redirects_followed.fetch_add(1, Ordering::SeqCst);
                     attempt.follow()

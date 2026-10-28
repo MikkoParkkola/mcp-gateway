@@ -157,6 +157,8 @@ pub mod stats;
 #[cfg(all(test, feature = "cost-governance"))]
 pub(crate) mod test_day;
 #[cfg(test)]
+pub(crate) mod test_fixture_host;
+#[cfg(test)]
 mod test_pause;
 #[cfg(test)]
 mod test_ports;

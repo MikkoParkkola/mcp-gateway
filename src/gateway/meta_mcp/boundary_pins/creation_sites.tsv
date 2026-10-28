@@ -82,6 +82,7 @@ src/config_persistence_journal.rs	stage_original	helper:create_new_private	1	hel
 src/config_persistence_lock.rs	no_writer_possible	helper:create_new_private	1	helper	calls the crate's create_new_private
 src/config_reload/replace.rs	commit	helper:write_atomic	1	helper	calls the crate's write_atomic
 src/counters/persist.rs	write	helper:write_atomic	1	helper	calls the crate's write_atomic
+src/fs_lock_windows.rs	denied_create	helper:create_file_private	1	helper	calls the crate's create_file_private
 src/fs_lock_windows.rs	sidecar	helper:create_file_private	2	helper	calls the crate's create_file_private
 src/preview_sandbox/linux/mounts.rs	bind_device	fs-write	1	no-secret	empty mount-point file inside the preview sandbox's own root; Linux only; holds no content
 src/preview_sandbox/linux/mounts.rs	bind_read_only	fs-write	1	no-secret	empty mount-point file inside the preview sandbox's own root; Linux only; holds no content

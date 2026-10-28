@@ -42,6 +42,9 @@ pub(super) struct Run {
     /// A minted per-user run's fence: its binding stamps what it emits, and a
     /// moved grant ends it. `None` for a shared or leased run.
     pub(super) fence: Option<Arc<crate::events::listener_credential::RunFence>>,
+    /// A leased run's generation, read at its start: it stamps what the run
+    /// reads, and a lease that moves ends the run. `None` otherwise.
+    pub(super) lease: Option<u128>,
 }
 
 /// Start a run: reach the backend and choose its session. A shared key
@@ -84,6 +87,7 @@ pub(super) async fn begin_run(
         _own: own,
         _own_transport: None,
         fence: None,
+        lease: None,
     })
 }
 
@@ -97,7 +101,11 @@ async fn begin_per_user_run(
     backend: &Backend,
     hub: &Weak<crate::events::EventsHub>,
 ) -> Option<Run> {
-    let Some((credential, fence)) = crate::events::listener_credential::for_key(&shared.key, hub)
+    let Some(crate::events::listener_credential::RunCredential {
+        credential,
+        fence,
+        lease,
+    }) = crate::events::listener_credential::for_key(&shared.key, hub)
     else {
         debug!(backend = %shared.name, "upstream listener: no credential for a per-user key");
         return None;
@@ -123,6 +131,7 @@ async fn begin_per_user_run(
         _own: Some(own),
         _own_transport: Some(transport),
         fence,
+        lease,
     })
 }
 
@@ -138,6 +147,34 @@ pub(super) fn forget_foreign_debt(debt: &mut ToolsDebt, binding: Option<&str>) {
 /// is the legacy SSE handshake whatever the slot's cached era (design B12).
 pub(super) fn runs_modern(own_session: bool, era: PeerEra) -> bool {
     !own_session && era == PeerEra::Modern
+}
+
+/// Whether a leased run's lease (`ran_under`) is no longer the one held for
+/// its key: a replace or a wipe moved it. `false` for a run that is not
+/// leased.
+pub(super) fn lease_moved(
+    shared: &Shared,
+    hub: &Weak<crate::events::EventsHub>,
+    ran_under: Option<u128>,
+) -> bool {
+    let (Some(generation), Some(obs), Some(hub)) =
+        (ran_under, shared.key.obs.as_ref(), hub.upgrade())
+    else {
+        return false;
+    };
+    let key = crate::events::lease::LeaseKey {
+        backend: shared.key.backend.clone(),
+        obs: obs.clone(),
+    };
+    hub.leases.held_generation(&key) != Some(generation)
+}
+
+/// A leased run drops tools debt heard under another lease before its first
+/// refill: the notice was heard under a token it no longer holds.
+pub(super) fn forget_lease_debt(shared: &Shared, state: &super::State<'_>) {
+    if state.leased() {
+        forget_foreign_debt(&mut shared.tools.lock(), state.binding().as_deref());
+    }
 }
 
 /// Retires the run's ledger holder when an own session's run ends.

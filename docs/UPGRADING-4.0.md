@@ -2502,6 +2502,10 @@ capabilities:
   Private-range enforcement for names becomes the proxy's job; IP-literal destinations are
   still refused. A plain `http://` destination sends its URL and headers, credentials
   included, to the proxy.
+- A destination, OAuth token endpoint or redirect hop whose host is `localhost` or
+  `*.localhost` (any case, trailing dots included) is refused before any lookup, with or
+  without a proxy. Any other name goes to the proxy, including a public-looking name whose
+  DNS points at loopback: configure the proxy to refuse loopback and private ranges.
 - The value must be an `http://` or `https://` URL with a host; anything else fails the
   config load. It applies at restart. Startup logs a warning naming the proxy (without
   credentials).

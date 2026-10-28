@@ -126,6 +126,7 @@ async fn an_array_root_is_published_under_items_through_dispatch() {
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move { axum::serve(listener, app).await });
 
+    let base_url = crate::test_fixture_host::fixture_url(port);
     let definition = parse_capability(&format!(
         "name: name_list\n\
          description: List two names\n\
@@ -138,14 +139,18 @@ async fn an_array_root_is_published_under_items_through_dispatch() {
          \x20 primary:\n\
          \x20   service: rest\n\
          \x20   config:\n\
-         \x20     base_url: http://localhost:{port}\n\
+         \x20     base_url: {base_url}\n\
          \x20     path: /names\n\
          \x20     method: GET\n"
     ))
     .expect("the capability parses");
     let executor = Arc::new(
-        CapabilityExecutor::new()
-            .with_test_http_client(reqwest::Client::builder().no_proxy().build().unwrap()),
+        CapabilityExecutor::new().with_test_http_client(
+            crate::test_fixture_host::fixture_client_builder()
+                .no_proxy()
+                .build()
+                .unwrap(),
+        ),
     );
     let backend = Arc::new(CapabilityBackend::new("caps", executor));
     backend.register_capability(definition).expect("registers");
