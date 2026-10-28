@@ -509,3 +509,75 @@ test.describe('fold check', () => {
     expect(errors.some((e) => e.includes('screen done bug'))).toBe(true);
   });
 });
+
+test.describe('code review round 1', () => {
+  test('D17 Esc after a refusal resolves failed, and after an unconfirmed outcome resolves unconfirmed, never kept', async ({ page }) => {
+    let status = 409;
+    await page.route(PROBE, (r) => r.fulfill({ status, json: {} }));
+    await open(page);
+    await page.click('#remove-probe');
+    await action(page).click();
+    await expect(message(page)).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(dialog(page)).toHaveCount(0);
+    status = 500;
+    await page.evaluate(() => { window.__confirm = () => ({ key: 'probe:two' }); });
+    await page.click('#remove-probe');
+    await action(page).click();
+    await expect(message(page)).toContainText('did not confirm');
+    await page.keyboard.press('Escape');
+    await expect(dialog(page)).toHaveCount(0);
+    await expect.poll(async () => (await outcomes(page)).map((o) => o.outcome)).toEqual(['failed', 'unconfirmed']);
+  });
+
+  test('D18 a failed() that throws falls back to the default words and the dialog still settles', async ({ page }) => {
+    const errors = [];
+    page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+    await page.route(PROBE, (r) => r.fulfill({ status: 403, json: {} }));
+    await open(page, "{ failed: () => { throw new Error('screen failed bug'); } }");
+    await page.click('#remove-probe');
+    await action(page).click();
+    await expect(message(page)).toContainText('This key may not remove probe.');
+    await dialog(page).getByRole('button', { name: 'Close' }).click();
+    await expect.poll(async () => (await outcomes(page))[0]?.outcome).toBe('failed');
+    expect(errors.some((e) => e.includes('screen failed bug'))).toBe(true);
+  });
+
+  test('D19 sign-in taking over while a request is out stops the dialog clocks: nothing is said or shown at 30 s', async ({ page }) => {
+    await recordAnnouncements(page);
+    await page.clock.install();
+    const h = held();
+    await page.route(PROBE, h.answer);
+    await page.route('**/ui/api/forbidden-probe', (r) => r.fulfill({ status: 401, json: {} }));
+    await open(page);
+    await page.click('#remove-probe');
+    await action(page).click();
+    // Another request answers 401: sign-in takes over and closes the dialog.
+    await page.evaluate(async () => { const m = await import(document.querySelector('script[type="module"][src*="/shell."]').src); try { await m.api('/ui/api/forbidden-probe'); } catch {} });
+    await expect(page.locator('#signin')).toBeVisible();
+    await expect(dialog(page)).toHaveCount(0);
+    await page.clock.runFor(40_000);
+    expect(await page.evaluate(() => window.__writes.filter((t) => t.includes('did not confirm') || t.includes('Removing probe')))).toEqual([]);
+    await expect.poll(async () => (await outcomes(page))[0]?.outcome).toBe('unconfirmed');
+    h.release(204);
+  });
+
+  test('D20 a malformed spec throws before anything opens: run must be a function, consequences a list', async ({ page }) => {
+    await open(page);
+    const names = await page.evaluate(() => [{ run: 'x', consequences: [] }, { run: () => null, consequences: 'one' }].map((bad) => {
+      try { window.gatewayConfirm({ opener: document.body, key: 'k', verb: 'Remove', object: 'x', progress: 'Removing x…', ...bad }); return 'opened'; } catch (e) { return e.name; }
+    }));
+    expect(names).toEqual(['TypeError', 'TypeError']);
+    await expect(dialog(page)).toHaveCount(0);
+  });
+
+  test('D21 an opener too tall to avoid still gets a dialog no taller than the visible part', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 220 });
+    await page.addInitScript(() => addEventListener('DOMContentLoaded', () => { const s = document.createElement('style'); s.textContent = '#remove-probe { min-height: 200px; }'; document.head.append(s); }));
+    await open(page, "{ typeToConfirm: 'probe', consequences: ['One.', 'Two.', 'Three.', 'Four.', 'Five.', 'Six.', 'Seven.', 'Eight.'] }");
+    await page.click('#remove-probe');
+    const box = await dialog(page).boundingBox();
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(220);
+  });
+});
