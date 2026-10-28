@@ -308,6 +308,20 @@ pub(super) fn sent(fx: &Fx) -> usize {
     fx.calls.load(Ordering::SeqCst)
 }
 
+/// The internal dispatch's delivery records (the only records carrying a
+/// response effect) say the gateway refused the call, and there is one.
+pub(super) fn assert_refused_delivery(fx: &Fx) {
+    let records = records(fx);
+    let effects: Vec<&Value> = records
+        .iter()
+        .filter_map(|r| r.get("response_effect"))
+        .collect();
+    assert!(
+        !effects.is_empty() && effects.iter().all(|e| *e == "refused"),
+        "{records:#?}"
+    );
+}
+
 pub(super) fn records(fx: &Fx) -> Vec<Value> {
     std::fs::read_to_string(&fx.audit_path)
         .unwrap_or_default()
@@ -355,14 +369,7 @@ async fn t4_an_undeclared_tool_asks_for_confirm_write() {
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["disposition"], "not_run", "{body}");
     assert_eq!(sent(&fx), 0, "nothing reached the backend");
-    // The internal dispatch's delivery record says the gateway refused it.
-    assert!(
-        records(&fx)
-            .iter()
-            .any(|r| r["event"] != "admin_action" && r["response_effect"] == "refused"),
-        "{:#?}",
-        records(&fx)
-    );
+    assert_refused_delivery(&fx);
     let (status, body) = post(&fx, ADMIN, call("write", true)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(sent(&fx), 1);

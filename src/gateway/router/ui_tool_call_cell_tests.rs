@@ -8,7 +8,9 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::ui_tool_call_tests::{ADMIN, SERVER, fixture, invoke, post_mcp, sent};
+use super::ui_tool_call_tests::{
+    ADMIN, SERVER, assert_refused_delivery, fixture, invoke, post_mcp, sent,
+};
 
 /// `key`'s principal as the auth layer derives it from the secret.
 fn principal_of(key: &str) -> String {
@@ -94,6 +96,7 @@ async fn t18_a_ui_call_never_runs_as_a_task() {
     // No task was made, so no worker exists to send it later.
     assert!(body.pointer("/result/taskId").is_none(), "{body}");
     assert_eq!(sent(&fx), 0);
+    assert_refused_delivery(&fx);
     // Control: the same request with no UI call in scope makes a task.
     let mut params = invoke("read");
     params["task"] = json!({});
