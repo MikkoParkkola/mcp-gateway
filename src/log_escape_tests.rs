@@ -382,10 +382,10 @@ fn every_production_text_layer_goes_through_escaping() {
 /// the site logs.
 #[tokio::test]
 async fn a_changed_capability_name_cannot_forge_a_rug_pull_line() {
-    crate::test_log_capture::keep_interest_open();
     use crate::capability::{
         CapabilityBackend, CapabilityExecutor, compute_capability_hash, rewrite_with_pin,
     };
+    crate::test_log_capture::keep_interest_open();
 
     let body = "name: rugtest\ndescription: legit\nproviders:\n  primary:\n    service: rest\n    config:\n      base_url: https://caps.invalid\n      path: /v1\n";
     let pinned = rewrite_with_pin(body, &compute_capability_hash(body));
