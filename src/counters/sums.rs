@@ -29,10 +29,6 @@ pub(crate) struct WindowSums {
 }
 
 /// One caller x server pair's calls and blocks in the last 24 hours.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "a stub: the Overview reads it in the next commit")
-)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PairRow {
     pub caller: String,
@@ -42,10 +38,6 @@ pub(crate) struct PairRow {
 }
 
 /// What [`CounterStore::top_pairs`] read.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "a stub: the Overview reads it in the next commit")
-)]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct TopPairs {
     /// The top pairs by calls, ties by caller then server.
@@ -73,13 +65,47 @@ impl CounterStore {
     }
 
     /// The top `n` caller x server pairs by calls in the 24-hour window ending
-    /// at `now`, under one lock.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "a stub: the Overview reads it in the next commit")
-    )]
-    pub(crate) fn top_pairs<Tz: TimeZone>(&self, _now: u64, _zone: &Tz, _n: usize) -> TopPairs {
-        TopPairs::default()
+    /// at `now` (the same buckets as [`Self::window_sums`]), under one lock.
+    /// Only pairs with calls or blocks in the window rank or count toward
+    /// `more`. The pair overflow is a series of its own, so its calls in the
+    /// window are exact.
+    pub(crate) fn top_pairs<Tz: TimeZone>(&self, now: u64, zone: &Tz, n: usize) -> TopPairs {
+        let inner = self.read_lock();
+        let keys: Vec<u64> = window_slots(Window::Day, now, inner.since, zone)
+            .iter()
+            .map(|slot| slot.key)
+            .collect();
+        let sum = |series: &Series, metric: Metric| -> u64 {
+            keys.iter()
+                .filter_map(|&b| series.half.get(b))
+                .map(|counts| counts[metric.index()])
+                .sum()
+        };
+        let mut rows: Vec<PairRow> = inner
+            .caller_server
+            .labels
+            .iter()
+            .map(|((caller, server), series)| PairRow {
+                caller: caller.clone(),
+                server: server.clone(),
+                calls: sum(series, Metric::Calls),
+                blocks: sum(series, Metric::Blocks),
+            })
+            .filter(|row| row.calls > 0 || row.blocks > 0)
+            .collect();
+        rows.sort_by(|a, b| {
+            b.calls
+                .cmp(&a.calls)
+                .then_with(|| a.caller.cmp(&b.caller))
+                .then_with(|| a.server.cmp(&b.server))
+        });
+        let rest = rows.split_off(rows.len().min(n));
+        TopPairs {
+            more_count: rest.len(),
+            more_calls: rest.iter().map(|row| row.calls).sum(),
+            overflow_calls: sum(&inner.caller_server.overflow, Metric::Calls),
+            rows,
+        }
     }
 
     /// Calls in the 24-hour window ending at unix second `now` (the 48

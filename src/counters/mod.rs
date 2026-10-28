@@ -452,7 +452,7 @@ impl CounterStore {
     /// Markers at or after `from`, oldest first.
     #[cfg(any(test, feature = "webui"))]
     pub(crate) fn markers(&self, from: u64) -> Vec<Marker> {
-        let inner = self.inner.lock();
+        let inner = self.read_lock();
         inner
             .markers
             .iter()
