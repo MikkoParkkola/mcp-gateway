@@ -214,8 +214,9 @@ impl LeaseCut {
         self.decide(held_now(shared, hub), ran_under, deadline, now, floor)
     }
 
-    /// `deadline`, unless `held` is a generation newer than the run's
-    /// (`ran_under`) and not yet cut for: then `now + floor`.
+    /// `deadline`, unless `held` is a generation other than the run's
+    /// (`ran_under`; generations are random, not ordered) and not yet cut
+    /// for: then `now + floor`.
     pub(super) fn decide(
         &mut self,
         held: Option<u128>,

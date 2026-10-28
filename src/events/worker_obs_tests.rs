@@ -253,3 +253,32 @@ async fn a_record_read_under_an_expired_lease_is_buried_before_any_sweep() {
     assert_eq!(dead.reason, "observation_changed");
     assert_eq!(accepted.load(Ordering::SeqCst), 0, "nothing was sent");
 }
+
+/// Control for the two rows above: a record read under a lease that is
+/// still held and unexpired is sent, so their burials come from the replace
+/// and the deadline, not from leased records never being deliverable.
+#[tokio::test]
+async fn a_record_read_under_a_held_lease_is_sent() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig {
+        callback_allow_private: vec!["127.0.0.0/8".into()],
+        ..crate::config::EventsConfig::default()
+    };
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let services = services(dir.path());
+    let (port, accepted) = counting_callback().await;
+    offer(&hub, &[NAME]);
+    let now = crate::clock::unix_secs().expect("clock");
+    leased(&hub, &services, now + 3600).await;
+    queued_observed(&hub, &services, port, "evt_held");
+    hub.attempt(&services, "evt_held").await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while accepted.load(Ordering::SeqCst) == 0 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(accepted.load(Ordering::SeqCst) >= 1, "sent");
+    assert!(
+        hub.store.dead_letter_by_id("evt_held").is_none(),
+        "not buried"
+    );
+}

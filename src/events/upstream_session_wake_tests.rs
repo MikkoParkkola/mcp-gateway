@@ -250,7 +250,12 @@ async fn a_lease_move_cuts_the_backoff_once_per_generation() {
     assert_eq!(
         cut.decide(Some(3), Some(1), later, now, floor),
         now + floor,
-        "a newer one cuts again"
+        "another one cuts again"
+    );
+    assert_eq!(
+        run::LeaseCut::default().decide(Some(0), Some(1), later, now, floor),
+        now + floor,
+        "generations are random: a smaller value is a move too"
     );
     assert_eq!(
         run::LeaseCut::default().decide(Some(2), None, later, now, floor),
