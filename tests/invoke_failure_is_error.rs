@@ -62,12 +62,20 @@ async fn a_failed_invoke_is_reported_with_is_error_true() {
         Some(&Value::Bool(true)),
         "a failed invoke must say so in the outer result: {reply}"
     );
-    let text = result
+    // The invoke's answer is serialized into the text; its recovery hint is
+    // the gateway's own `_recovery` member there.
+    let inner: Value = result
         .pointer("/content/0/text")
         .and_then(Value::as_str)
-        .unwrap_or_default();
-    assert!(
-        text.contains("\"recovery\""),
-        "the structured recovery payload must survive: {text}"
+        .and_then(|text| serde_json::from_str(text).ok())
+        .unwrap_or_else(|| panic!("the invoke's answer is JSON text: {reply}"));
+    let recovery = inner
+        .get("_recovery")
+        .unwrap_or_else(|| panic!("the structured recovery payload must survive: {reply}"));
+    assert_eq!(
+        recovery.get("error_code").and_then(Value::as_str),
+        Some("BACKEND_ERROR"),
+        "{reply}"
     );
+    assert_eq!(recovery.get("retry"), Some(&Value::Bool(true)), "{reply}");
 }

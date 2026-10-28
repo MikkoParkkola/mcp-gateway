@@ -106,7 +106,7 @@ impl BeginOutcome {
                     }
                     _ => unreachable!("matched above"),
                 };
-                let mut value = serde_json::to_value(task.task.wire()).unwrap_or(Value::Null);
+                let mut value = task.delivered_wire();
                 if let Some(obj) = value.as_object_mut() {
                     obj.insert("resultType".into(), json!("task"));
                 }
