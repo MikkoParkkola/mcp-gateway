@@ -125,7 +125,7 @@ async fn a_replayed_accept_inside_the_active_window_is_in_flight_not_a_dead_gran
     // redemption spent by the call that is still committing, so this can only
     // be answered by the admission entry that call already owns.
     let replayed = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        crate::test_wait::HANG_BOUND,
         post(&state, "key-a", accepted.clone()),
     )
     .await
@@ -434,7 +434,10 @@ impl crate::gateway::task_service::CommitObserver for MoveOnRetry {
         let Some(event) = self.event.lock().take() else {
             return;
         };
-        let state = self.state.upgrade().expect("the test holds the state");
+        // Gone only after the test has finished, when the move is moot.
+        let Some(state) = self.state.upgrade() else {
+            return;
+        };
         let current = state.tasks.get(&self.owner, id).unwrap();
         state
             .task_executor

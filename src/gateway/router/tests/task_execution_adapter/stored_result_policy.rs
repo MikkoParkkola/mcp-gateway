@@ -374,8 +374,11 @@ async fn a_plan_step_refused_before_dispatch_is_recorded_and_reauthorized() {
     state
         .task_executor
         .barrier_on_publication(Arc::new(move || {
-            if !withheld.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                withhold(&held.upgrade().expect("the test holds the state"), TOOL);
+            // Gone only after the test has finished, when withholding is moot.
+            if let Some(held) = held.upgrade()
+                && !withheld.swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                withhold(&held, TOOL);
             }
         }))
         .await;
