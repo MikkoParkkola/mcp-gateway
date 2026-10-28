@@ -247,6 +247,18 @@ async fn a_subset_of_a_loans_credential_sends_nothing() {
     assert!(request_headers(&t, &bearer("subscriber")).await.is_err());
 }
 
+/// A call carrying a header its loan does not have is not that loan's call:
+/// nothing is sent, so the extra header never rides the loan's credential.
+#[tokio::test]
+async fn a_superset_of_a_loans_credential_sends_nothing() {
+    let (t, lender) = slot("http://localhost", SlotCredential::LentOnly);
+    let _loan = lender.lend(checked(bearer("subscriber")));
+    let mut extra = bearer("subscriber");
+    extra.push(("X-Api-Key".to_string(), "not-lent".to_string()));
+    let sent = request_headers(&t, &extra).await;
+    assert!(sent.is_err(), "a header beyond the loan was sent: {sent:?}");
+}
+
 /// Each send carries the credential of the call it belongs to, never the
 /// newest loan's.
 #[tokio::test]
