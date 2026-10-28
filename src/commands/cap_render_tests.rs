@@ -17,6 +17,17 @@ use super::{render_server_entry, render_shadow_report};
 
 /// Recolours, reverses and breaks a terminal line.
 const PAYLOAD: &str = "\u{1b}[31m\u{202e}\u{2028}";
+/// The same without the line separator, for a field cut at whitespace
+/// (U+2028 is whitespace), so the cut keeps it.
+const TOKEN: &str = "\u{1b}[31m\u{202e}";
+
+/// A stdio find whose command is also on record, as a process find's is:
+/// the shadow report's executable comes from it.
+fn with_command(name: &str, command: &str) -> DiscoveredServer {
+    let mut server = stdio(name, command);
+    server.metadata.command = Some(command.to_string());
+    server
+}
 
 fn stdio(name: &str, command: &str) -> DiscoveredServer {
     DiscoveredServer::new(
@@ -124,8 +135,8 @@ fn every_shadow_field_is_escaped() {
         ),
         (
             "executable",
-            stdio("tool", &format!("np{PAYLOAD}x tool")),
-            stdio("tool", "npx tool"),
+            with_command("tool", &format!("np{TOKEN}x tool")),
+            with_command("tool", "npx tool"),
         ),
         (
             "endpoint",
@@ -138,6 +149,10 @@ fn every_shadow_field_is_escaped() {
     for (field, hostile, plain) in rows {
         let text = render_shadow_report(&report(&[hostile], config));
         assert_clean(field, &text);
+        assert!(
+            text.contains("\\u{1b}"),
+            "{field}: the escape is not shown: {text}"
+        );
         assert_eq!(
             text.lines().count(),
             render_shadow_report(&report(&[plain], config))

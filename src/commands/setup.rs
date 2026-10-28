@@ -398,13 +398,21 @@ mod tests {
             String::new(),
             DiscoverySource::ClaudeDesktop,
             TransportConfig::Stdio {
-                command: "np\u{2028}x tool".to_string(),
+                command: "np\u{1b}\u{202e}x tool".to_string(),
                 cwd: None,
                 protocol_version: None,
             },
             mcp_gateway::discovery::ServerMetadata::default(),
         );
-        for text in [select_label(&server), quoted_name(&server.name)] {
+        let mut plain_name = server.clone();
+        plain_name.name = "srv".to_string();
+        for text in [
+            select_label(&server),
+            quoted_name(&server.name),
+            // The transport alone: the name is plain, so only the command's
+            // first word can carry the escape.
+            select_label(&plain_name),
+        ] {
             for raw in ['\u{1b}', '\u{202e}', '\u{2028}'] {
                 assert!(!text.contains(raw), "{raw:?} in {text:?}");
             }
