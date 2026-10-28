@@ -435,12 +435,11 @@ impl crate::gateway::task_service::CommitObserver for MoveOnRetry {
             return;
         };
         // Gone only after the test has finished, when the move is moot.
-        let Some(state) = self.state.upgrade() else {
+        let Some(app) = self.state.upgrade() else {
             return;
         };
-        let current = state.tasks.get(&self.owner, id).unwrap();
-        state
-            .task_executor
+        let current = app.tasks.get(&self.owner, id).unwrap();
+        app.task_executor
             .commit_transition(TransitionWrite::Settle {
                 principal: &self.owner,
                 id,
