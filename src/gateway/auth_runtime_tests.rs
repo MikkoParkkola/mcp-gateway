@@ -34,11 +34,22 @@ fn config(rate_limit: u32) -> AuthConfig {
 
 /// A resolved config over `runtime`, as a reload would build one.
 fn built_over(runtime: &Arc<AuthRuntime>) -> ResolvedAuthConfig {
+    built_with_rate(runtime, 1)
+}
+
+/// [`built_over`] with the key's `rate_limit` set to `rate`.
+fn built_with_rate(runtime: &Arc<AuthRuntime>, rate: u32) -> ResolvedAuthConfig {
     ResolvedAuthConfig::from_config(
-        &config(1),
+        &config(rate),
         crate::gateway::record_principal::TEST_RECORD_KEY,
     )
     .with_runtime(Arc::clone(runtime))
+}
+
+/// Whether the key's next request under `cfg` is admitted.
+fn admitted(cfg: &ResolvedAuthConfig) -> bool {
+    let client = cfg.validate_token(SECRET).expect("the key validates");
+    cfg.check_authenticated_client_rate_limit(&client)
 }
 
 /// The one request a 1-per-minute key allows, spent through the first config,

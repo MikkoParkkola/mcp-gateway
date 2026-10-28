@@ -17,7 +17,6 @@ use super::middleware::{
     bearer_unauthorized_response, circuit_open_response, rate_limited_response,
 };
 use crate::config::CircuitBreakerConfig;
-use crate::failsafe::CircuitBreaker;
 use crate::gateway::record_principal::InternalPrincipal;
 use crate::key_server::KeyServer;
 
