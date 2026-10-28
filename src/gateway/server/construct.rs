@@ -138,6 +138,9 @@ impl Gateway {
         if let Some(warning) = config.remote_provenance_warning() {
             warn!("{warning}");
         }
+        for warning in config.per_user_dropped_header_warnings() {
+            warn!("{warning}");
+        }
 
         Ok(Self {
             #[cfg(test)]

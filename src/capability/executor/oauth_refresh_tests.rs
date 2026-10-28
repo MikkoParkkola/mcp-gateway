@@ -285,3 +285,33 @@ async fn an_oauth_refresh_parse_error_drops_the_endpoint_credential() {
 
 #[path = "rest_refresh_flight_tests.rs"]
 mod flight;
+
+/// A token endpoint naming `localhost` is refused through the proxy: the
+/// refresh token reaches neither the proxy nor the loopback listener.
+#[tokio::test]
+async fn a_localhost_token_endpoint_is_refused_through_the_proxy() {
+    let (proxy, via_proxy) = recording_token_server().await;
+    let (server, seen) = recording_token_server().await;
+    let port = server.rsplit(':').next().unwrap();
+    let (storage, _dir) = expired_store("t9", "REFRESH_SECRET");
+    let err = through_proxy(&proxy)
+        .refresh_provider_token(
+            "t9",
+            &format!("http://localhost:{port}/token"),
+            &storage,
+            &CapabilityExecutionContext::default(),
+        )
+        .await
+        .expect_err("a loopback name is refused");
+    assert!(err.to_string().contains("SSRF"), "{err}");
+    assert_eq!(
+        via_proxy.load(Ordering::SeqCst),
+        0,
+        "the proxy got the refresh token"
+    );
+    assert_eq!(
+        seen.load(Ordering::SeqCst),
+        0,
+        "the endpoint got the refresh token"
+    );
+}

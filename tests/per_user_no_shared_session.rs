@@ -166,3 +166,125 @@ async fn a_binding_made_required_on_reload_ends_the_gateway_session() {
         "the gateway's shared stream stayed open"
     );
 }
+
+/// START.2: a subscriber's first call opens their own per-user slot, and that
+/// slot's start (connect, `server/discover`, a legacy `initialize`) carries
+/// the subscriber's credential like every call after it. The backend sees no
+/// request at all without a subscriber's credential.
+#[tokio::test]
+async fn a_per_user_slots_own_start_carries_the_subscribers_credential() {
+    let root = tempfile::tempdir().expect("root");
+    let issuer = issuer::Issuer::start(root.path()).await;
+    let rx = Receiver::start(root.path()).await;
+    let peer = SubjectPeer::start().await;
+    let backend = per_user_backend(&peer, true);
+    let gw = oidc_gateway::start(root.path(), &rx, &issuer, backend, &[]).await;
+    let bearer = issuer.mint("u1", &oidc_gateway::email("u1"));
+    // The call's catalogue check fills the subscriber's own slot, which
+    // starts it; the tool name does not matter.
+    gw.rpc(
+        Some(&bearer),
+        "tools/call",
+        json!({"name": "gateway_invoke", "arguments": {
+            "server": "x", "tool": "any", "arguments": {}
+        }}),
+    )
+    .await;
+    let seen = peer.seen();
+    assert!(
+        seen.iter().any(|r| r.subject == "u1"),
+        "premise: the subscriber's requests reached the backend: {seen:?}"
+    );
+    let others: Vec<_> = seen.iter().filter(|r| r.subject != "u1").collect();
+    assert!(
+        others.is_empty(),
+        "the per-user slot reached the backend other than as its subscriber: {others:?}\n{}",
+        gw.logs()
+    );
+}
+
+/// `gateway_invoke` of `user`'s own tool on `x` (the peer lists `tool_<user>`
+/// to each user): its first call opens the caller's own per-user slot and
+/// reaches the backend as a `tools/call`.
+async fn invoke_as(gw: &gateway::Gateway, bearer: &str, user: &str) {
+    gw.rpc(
+        Some(bearer),
+        "tools/call",
+        json!({"name": "gateway_invoke", "arguments": {
+            "server": "x", "tool": format!("tool_{user}"), "arguments": {}
+        }}),
+    )
+    .await;
+}
+
+/// START.6: two subscribers on one required per-user backend each reach it
+/// only as themselves, start included, each on their own session.
+#[tokio::test]
+async fn two_subscribers_each_reach_a_per_user_backend_only_as_themselves() {
+    let root = tempfile::tempdir().expect("root");
+    let issuer = issuer::Issuer::start(root.path()).await;
+    let rx = Receiver::start(root.path()).await;
+    let peer = SubjectPeer::start().await;
+    let gw = oidc_gateway::start(
+        root.path(),
+        &rx,
+        &issuer,
+        per_user_backend(&peer, true),
+        &[],
+    )
+    .await;
+    for user in ["u1", "u2"] {
+        invoke_as(&gw, &issuer.mint(user, &oidc_gateway::email(user)), user).await;
+    }
+    let seen = peer.seen();
+    for user in ["u1", "u2"] {
+        assert!(
+            seen.iter().any(|r| r.subject == user),
+            "premise: {user}'s requests reached the backend: {seen:?}"
+        );
+    }
+    let stray: Vec<_> = seen
+        .iter()
+        .filter(|r| !matches!(r.subject.as_str(), "u1" | "u2"))
+        .collect();
+    assert!(
+        stray.is_empty(),
+        "reached as no subscriber: {stray:?}\n{}",
+        gw.logs()
+    );
+    let crossed: Vec<_> = seen
+        .iter()
+        .filter(|r| !r.session.is_empty() && r.session != format!("session-{}", r.subject))
+        .collect();
+    assert!(
+        crossed.is_empty(),
+        "a request rode another's session: {crossed:?}"
+    );
+}
+
+/// START.7: a required per-user backend's static credential header reaches
+/// none of its per-user requests, its calls included.
+#[tokio::test]
+async fn a_static_header_never_reaches_a_per_user_send() {
+    let root = tempfile::tempdir().expect("root");
+    let issuer = issuer::Issuer::start(root.path()).await;
+    let rx = Receiver::start(root.path()).await;
+    let peer = SubjectPeer::start().await;
+    let mut backend = per_user_backend(&peer, true);
+    // A placeholder value, built at run time: the header is what is tested.
+    backend["headers"][subject_peer::STATIC_HEADER] = json!(format!("static-{}", "marker"));
+    let gw = oidc_gateway::start(root.path(), &rx, &issuer, backend, &[]).await;
+    invoke_as(&gw, &issuer.mint("u1", &oidc_gateway::email("u1")), "u1").await;
+    let seen = peer.seen();
+    assert!(
+        seen.iter()
+            .any(|r| r.subject == "u1" && r.method == "tools/call"),
+        "premise: the subscriber's call reached the backend: {seen:?}\n{}",
+        gw.logs()
+    );
+    let carried: Vec<_> = seen.iter().filter(|r| r.static_header).collect();
+    assert!(
+        carried.is_empty(),
+        "a per-user request carried the backend's static header: {carried:?}"
+    );
+}
