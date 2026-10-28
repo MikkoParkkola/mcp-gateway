@@ -711,7 +711,7 @@ mod cwe532_debug_redaction;
 #[path = "cleartext_credential_guard_tests.rs"]
 mod cleartext_credential_guard;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "a2a"))]
 #[path = "a2a_secrets_tests.rs"]
 mod a2a_secrets;
 

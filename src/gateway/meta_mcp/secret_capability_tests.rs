@@ -50,7 +50,7 @@ async fn recording_capability(meta: &MetaMcp) -> Seen {
     let definition = crate::capability::parse_capability(&format!(
         "name: probe\ndescription: the capability under test\n\
          providers:\n  primary:\n    service: rest\n    config:\n      \
-         base_url: http://localhost:{port}\n      path: /probe\n      method: POST\n"
+         base_url: http://127.0.0.1:{port}\n      path: /probe\n      method: POST\n"
     ))
     .expect("fixture capability");
     let client = reqwest::Client::builder()
@@ -145,6 +145,11 @@ async fn a_capability_sharing_a_backend_name_gets_none_of_its_secrets() {
         backend_calls.load(Ordering::SeqCst),
         0,
         "premise: the capability, not the backend, served the call"
+    );
+    assert!(
+        seen[0].contains(r#""q":"x""#),
+        "premise: the caller's own argument reached the endpoint: {}",
+        seen[0]
     );
     assert!(
         !seen[0].contains(SECRET),

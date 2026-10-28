@@ -20,7 +20,9 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use super::Backend;
-use crate::secret_injection::{CredentialRule, drop_owned, inject_rules, tool_matches_rule};
+use crate::secret_injection::{
+    CredentialRule, InjectTarget, drop_owned, inject_rules, tool_matches_rule,
+};
 use crate::secrets::SecretResolver;
 use crate::{Error, Result};
 
@@ -35,12 +37,21 @@ pub(super) struct Prepared {
     /// The arguments with the values added, and the headers to set; `None`
     /// when no rule applies to the call.
     injected: Option<(Value, Vec<(String, String)>)>,
+    /// Every header a matching rule owns, set or not: a rule whose value
+    /// resolves empty still keeps any header of its name off the call.
+    owned_headers: Vec<String>,
 }
 
 impl Prepared {
     /// The params and headers to send: the resolved values added, each
     /// header replacing any of the same name, compared case-insensitively.
     pub(super) fn apply(self, mut headers: Vec<(String, String)>) -> Outbound {
+        headers.retain(|(held, _)| {
+            !self
+                .owned_headers
+                .iter()
+                .any(|owned| held.eq_ignore_ascii_case(owned))
+        });
         let Some((arguments, injected)) = self.injected else {
             return (self.params, headers);
         };
@@ -48,10 +59,7 @@ impl Prepared {
         if let Some(Value::Object(map)) = params.as_mut() {
             map.insert("arguments".to_owned(), arguments);
         }
-        for (name, value) in injected {
-            headers.retain(|(held, _)| !held.eq_ignore_ascii_case(&name));
-            headers.push((name, value));
-        }
+        headers.extend(injected);
         (params, headers)
     }
 }
@@ -94,15 +102,17 @@ impl Backend {
     ///
     /// A configuration error naming the backend and the rule, never the
     /// value: no resolver was stamped, the transport cannot carry a rule, a
-    /// value does not resolve, or a header value is not a valid header value.
+    /// value does not resolve, an argument rule meets arguments that are not
+    /// an object, or a header value is not a valid header value.
     pub(super) fn prepare_secrets(&self, method: &str, params: Option<Value>) -> Result<Prepared> {
         let unchanged = |params| {
             Ok(Prepared {
                 params,
                 injected: None,
+                owned_headers: Vec::new(),
             })
         };
-        if method != "tools/call" {
+        if method != "tools/call" || self.config.secrets.is_empty() {
             return unchanged(params);
         }
         let Some(tool) = params
@@ -147,31 +157,21 @@ impl Backend {
             return unchanged(params);
         };
         let injection = inject_rules(&self.config.secrets, resolver, &self.name, &tool, owned)?;
-        let mut headers = Vec::with_capacity(injection.headers.len());
-        for (name, value) in injection.headers {
-            if reqwest::header::HeaderValue::from_str(&value).is_err() {
-                let rule = rules
-                    .iter()
-                    .find(|rule| rule.inject_key == name)
-                    .map_or("", |rule| rule.name.as_str());
-                return Err(Error::Config(format!(
-                    "backend '{}' secret rule '{rule}' resolved to a value that is not a \
-                     valid HTTP header value",
-                    self.name
-                )));
-            }
-            headers.push((name, value));
-        }
+        let owned_headers = rules
+            .iter()
+            .filter(|rule| matches!(rule.inject_as, InjectTarget::Header))
+            .map(|rule| rule.inject_key.clone())
+            .collect();
         Ok(Prepared {
             params,
-            injected: Some((injection.arguments, headers)),
+            injected: Some((injection.arguments, injection.headers.into_iter().collect())),
+            owned_headers,
         })
     }
 
     /// Refuses a rule this backend cannot deliver where it says. Config load
     /// refuses each of these first; this holds for a backend built in code.
     fn refuse_secret_target(&self, rule: &CredentialRule) -> Result<()> {
-        use crate::secret_injection::InjectTarget;
         let refusal = |why: &str| {
             Err(Error::Config(format!(
                 "backend '{}' secret rule '{}' {why}: the rule is not applied",

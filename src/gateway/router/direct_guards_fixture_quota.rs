@@ -88,13 +88,23 @@ thread_local! {
 }
 
 /// [`super::fixture`] whose two backends each carry `rules`, answering over
-/// `transport` when one is given.
+/// `transport` when one is given, and writing its firewall audit rows to
+/// `audit` when one is given.
 pub(crate) async fn fixture_with_secrets(
     rules: Vec<crate::secret_injection::CredentialRule>,
     transport: Option<Arc<dyn crate::transport::Transport>>,
+    audit: Option<std::path::PathBuf>,
 ) -> Fx {
     SECRETS.with(|s| *s.borrow_mut() = rules);
-    let fixture = Box::pin(super::fixture_built(Answer::Ok, |meta| meta));
+    let fixture = Box::pin(async move {
+        #[cfg(feature = "firewall")]
+        if let Some(audit) = audit {
+            return super::fixture_firewalled_audited(Answer::Ok, audit).await;
+        }
+        #[cfg(not(feature = "firewall"))]
+        let _ = audit;
+        super::fixture_built(Answer::Ok, |meta| meta).await
+    });
     let fx = match transport {
         Some(transport) => super::with_transport(transport, fixture).await,
         None => fixture.await,

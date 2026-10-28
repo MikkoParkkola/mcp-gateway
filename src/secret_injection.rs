@@ -12,11 +12,15 @@
 //! - Which tools it applies to (glob patterns, or `["*"]` for all)
 //! - The credential type (API key, bearer token, basic auth, custom header)
 //! - Where the credential value comes from (`{env.VAR}`, `{keychain.SERVICE}`, literal)
-//! - Where to inject: into the tool arguments, HTTP headers, or query parameters
+//! - Where to inject: into the tool arguments or HTTP headers (a query parameter is refused)
 //!
-//! At dispatch time, [`SecretInjector::inject`] resolves each matching rule and
-//! merges the credential into the outbound request. Header overwrites are enforced:
-//! injected values always replace agent-supplied values with the same key.
+//! A backend applies its own rules where its tool call is sent
+//! (`Backend::request_attempted`, which every route passes through): each
+//! matching rule is resolved by the gateway's shared resolver and merged into
+//! the copy of the call that is sent, through `inject_rules`.
+//! [`SecretInjector::inject`] applies the same function over a map of rules.
+//! Injected values always replace caller-supplied values with the same key. A
+//! `query` rule is refused: the gateway sends no secret in a URL.
 //!
 //! # Security properties
 //!
@@ -346,32 +350,42 @@ pub(crate) fn inject_rules(
             continue;
         }
 
+        // Each refusal names the backend and the rule, never the value.
+        let refusal = |why: &str| {
+            crate::Error::Config(format!(
+                "backend '{backend}' secret rule '{}' {why}: the rule is not applied",
+                rule.name
+            ))
+        };
         match rule.inject_as {
             InjectTarget::Argument => {
-                // Inject into the tool arguments JSON object
-                if let Some(obj) = args.as_object_mut() {
-                    // Overwrite protection: always set, never let agent override
-                    obj.insert(
-                        rule.inject_key.clone(),
-                        serde_json::Value::String(resolved_value),
-                    );
-                }
+                // Overwrite protection: always set, never let agent override.
+                // Arguments that are not an object cannot carry it, and are
+                // never sent without it.
+                let Some(obj) = args.as_object_mut() else {
+                    return Err(refusal(
+                        "injects an argument, but the call's arguments are not an object",
+                    ));
+                };
+                obj.insert(
+                    rule.inject_key.clone(),
+                    serde_json::Value::String(resolved_value),
+                );
             }
             InjectTarget::Header => {
-                // Inject as an HTTP header (overwrite any existing agent-supplied header)
+                // Checked before the audit line, so a refused call is never
+                // recorded as injected.
+                if reqwest::header::HeaderValue::from_str(&resolved_value).is_err() {
+                    return Err(refusal(
+                        "resolved to a value that is not a valid HTTP header value",
+                    ));
+                }
+                // Overwrites any header of the same name the call carries.
                 headers.insert(rule.inject_key.clone(), resolved_value);
             }
-            InjectTarget::Query => {
-                // Query parameters are injected as headers with a special prefix
-                // that the transport layer can recognize and append to the URL.
-                // For now, we inject as a special argument key.
-                if let Some(obj) = args.as_object_mut() {
-                    obj.insert(
-                        format!("__query_{}", rule.inject_key),
-                        serde_json::Value::String(resolved_value),
-                    );
-                }
-            }
+            // The gateway sends no secret in a URL, and none in the arguments
+            // in a URL parameter's place. Config load refuses the rule first.
+            InjectTarget::Query => return Err(refusal("injects into a URL query parameter")),
         }
 
         injected_names.push(rule.name.clone());

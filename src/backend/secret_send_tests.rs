@@ -327,3 +327,45 @@ fn a_call_no_rule_matches_is_sent_untouched() {
     let (sent, _) = send(&backend, params.clone(), Vec::new()).expect("sent");
     assert_eq!(sent, Some(params));
 }
+
+#[test]
+fn a_header_rule_that_resolves_empty_still_keeps_its_header_off_the_call() {
+    let backend = backend(
+        http(),
+        vec![rule(InjectTarget::Header, "X-Api-Key", "")],
+        true,
+    );
+    let held = vec![("x-api-key".to_string(), "caller-held".to_string())];
+    let (_, headers) =
+        send(&backend, json!({"name": "read", "arguments": {}}), held).expect("sent");
+    assert!(
+        !headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("X-Api-Key")),
+        "a header the rule owns went out: {headers:?}"
+    );
+}
+
+#[test]
+fn an_argument_rule_refuses_arguments_that_are_not_an_object() {
+    let backend = backend(
+        http(),
+        vec![rule(InjectTarget::Argument, "api_key", SECRET)],
+        true,
+    );
+    let error = send(
+        &backend,
+        json!({"name": "read", "arguments": [1]}),
+        Vec::new(),
+    )
+    .expect_err("the call is refused")
+    .to_string();
+    assert!(
+        error.contains("secret rule 'api'") && error.contains("not an object"),
+        "{error}"
+    );
+    assert!(
+        !error.contains(SECRET),
+        "the refusal echoed the value: {error}"
+    );
+}

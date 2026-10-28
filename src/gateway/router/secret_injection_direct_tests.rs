@@ -9,9 +9,9 @@
 use serde_json::json;
 
 use super::direct_continuation_tests::call;
-use super::direct_guards_fixture::{
-    fixture_with_secrets, initialize, post_meta_invoke, send_with_headers, store_path,
-};
+use super::direct_guards_fixture::fixture_with_secrets;
+#[cfg(feature = "firewall")]
+use super::direct_guards_fixture::{initialize, post_meta_invoke, send_with_headers, store_path};
 use crate::secret_injection::{CredentialRule, CredentialType, InjectTarget};
 
 /// The secret the rule injects: a literal, so no environment is read.
@@ -34,7 +34,7 @@ fn argument_rule() -> CredentialRule {
 #[tokio::test]
 async fn the_direct_route_applies_an_argument_rule() {
     for backend in ["alpha", "alpha-pt"] {
-        let fx = fixture_with_secrets(vec![argument_rule()], None).await;
+        let fx = fixture_with_secrets(vec![argument_rule()], None, None).await;
         let (_, body) = call(&fx, backend, None, json!({})).await;
         assert!(body.get("error").is_none(), "{backend}: premise: {body}");
         let seen = fx.seen.lock().expect("recorder").clone();
@@ -119,7 +119,7 @@ async fn the_direct_route_applies_a_header_rule() {
             ..argument_rule()
         };
         let transport = std::sync::Arc::new(Recorder(std::sync::Arc::clone(&sends)));
-        let fx = fixture_with_secrets(vec![rule], Some(transport)).await;
+        let fx = fixture_with_secrets(vec![rule], Some(transport), None).await;
         let (_, body) = call(&fx, backend, None, json!({})).await;
         assert!(body.get("error").is_none(), "{backend}: premise: {body}");
         let sends = sends.lock().expect("recorder").clone();
@@ -132,89 +132,119 @@ async fn the_direct_route_applies_a_header_rule() {
     }
 }
 
-/// Every file under `dir`, with its bytes.
+/// Every file under `dir`, with its bytes. A directory or file that cannot be
+/// read fails the row: an unread store must not pass as a clean one.
+#[cfg(feature = "firewall")]
 fn files_under(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
     let mut files = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for entry in std::fs::read_dir(dir).expect("the store directory reads") {
+        let path = entry.expect("a directory entry reads").path();
         if path.is_dir() {
             files.extend(files_under(&path));
-        } else if let Ok(bytes) = std::fs::read(&path) {
+        } else {
+            let bytes = std::fs::read(&path).expect("a stored file reads");
             files.push((path, bytes));
         }
     }
     files
 }
 
-/// `gateway_invoke read` on `alpha` as a task, polled until it leaves
-/// `working`: the creating answer and the finished `tasks/get` answer.
-async fn run_task(fx: &super::direct_guards_fixture::Fx) -> (serde_json::Value, serde_json::Value) {
-    // A task is a modern call that declares the tasks extension.
-    let modern = json!({
+/// Whether `bytes` holds `text`.
+#[cfg(feature = "firewall")]
+fn holds(bytes: &[u8], text: &str) -> bool {
+    bytes
+        .windows(text.len())
+        .any(|window| window == text.as_bytes())
+}
+
+/// The `_meta` of a modern call that declares the tasks extension.
+#[cfg(feature = "firewall")]
+fn task_meta() -> serde_json::Value {
+    json!({
         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
         "io.modelcontextprotocol/clientCapabilities":
             {"extensions": {"io.modelcontextprotocol/tasks": {}}},
-    });
-    let mut meta = modern.clone();
-    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!("idem-secret-task");
+    })
+}
+
+/// Submits `gateway_invoke read` on `alpha` as a task under idempotency key
+/// `key`: the task id and the creating answer.
+#[cfg(feature = "firewall")]
+async fn submit_task(
+    fx: &super::direct_guards_fixture::Fx,
+    key: &str,
+) -> (String, serde_json::Value) {
+    let mut meta = task_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
     let task = json!({"name": "gateway_invoke", "task": {}, "_meta": meta,
         "arguments": {"server": "alpha", "tool": "read", "arguments": {}}});
-    let call_headers = [
+    let headers = [
         ("mcp-protocol-version", "2026-07-28"),
         ("mcp-method", "tools/call"),
         ("mcp-name", "gateway_invoke"),
     ];
     let (_, made) =
-        send_with_headers(fx, "/mcp", "k-std", "tools/call", task, None, &call_headers).await;
+        send_with_headers(fx, "/mcp", "k-std", "tools/call", task, None, &headers).await;
     let id = made
         .pointer("/result/task/taskId")
         .or_else(|| made.pointer("/result/taskId"))
         .and_then(serde_json::Value::as_str)
         .unwrap_or_else(|| panic!("premise: a task was made: {made}"))
         .to_owned();
-    let bound = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let finished = loop {
-        let result_headers = [
-            ("mcp-protocol-version", "2026-07-28"),
-            ("mcp-method", "tasks/get"),
-            ("mcp-name", id.as_str()),
-        ];
-        let (_, got) = send_with_headers(
-            fx,
-            "/mcp",
-            "k-std",
-            "tasks/get",
-            json!({"taskId": id, "_meta": modern.clone()}),
-            None,
-            &result_headers,
-        )
-        .await;
-        if got.pointer("/result/status") != Some(&json!("working")) {
-            break got;
+    (id, made)
+}
+
+/// Polls task `id` until it leaves `working`; it must have completed.
+#[cfg(feature = "firewall")]
+async fn finished_task(fx: &super::direct_guards_fixture::Fx, id: &str) -> serde_json::Value {
+    let headers = [
+        ("mcp-protocol-version", "2026-07-28"),
+        ("mcp-method", "tasks/get"),
+        ("mcp-name", id),
+    ];
+    let poll = async {
+        loop {
+            let get = json!({"taskId": id, "_meta": task_meta()});
+            let (_, got) =
+                send_with_headers(fx, "/mcp", "k-std", "tasks/get", get, None, &headers).await;
+            if got.pointer("/result/status") != Some(&json!("working")) {
+                return got;
+            }
+            tokio::task::yield_now().await;
         }
-        assert!(
-            std::time::Instant::now() < bound,
-            "the task never finished: {got}"
-        );
-        tokio::task::yield_now().await;
     };
+    let finished = tokio::time::timeout(std::time::Duration::from_secs(30), poll)
+        .await
+        .expect("the task finished within the bound");
     assert_eq!(
         finished.pointer("/result/status"),
         Some(&json!("completed")),
         "premise: the task completed: {finished}"
     );
-    (made, finished)
+    finished
+}
+
+/// How many `tools/call`s reached the backend, and whether the last carried
+/// the secret.
+#[cfg(feature = "firewall")]
+fn sends(fx: &super::direct_guards_fixture::Fx) -> (usize, bool) {
+    let seen = fx.seen.lock().expect("recorder");
+    let last = seen
+        .last()
+        .is_some_and(|params| params.pointer("/arguments/api_key") == Some(&json!(SECRET)));
+    (seen.len(), last)
 }
 
 /// The secret goes into what is sent and into nothing the gateway answers or
 /// keeps: not the answer, not a repeat the idempotency cache serves, not a
-/// task's answer, and not the task store on disk.
+/// task's answer or a resubmitted task, not the task store on disk, and not
+/// the audit log. Each sink is first shown to have recorded the call.
+#[cfg(feature = "firewall")]
 #[tokio::test]
 async fn the_secret_is_sent_and_nothing_answered_or_kept_holds_it() {
-    let fx = fixture_with_secrets(vec![argument_rule()], None).await;
+    let audit_dir = tempfile::tempdir().expect("audit directory");
+    let audit = audit_dir.path().join("audit.jsonl");
+    let fx = fixture_with_secrets(vec![argument_rule()], None, Some(audit.clone())).await;
     let session = initialize(&fx, "k-std").await;
     let mut answers = Vec::new();
     for _ in 0..2 {
@@ -231,29 +261,46 @@ async fn the_secret_is_sent_and_nothing_answered_or_kept_holds_it() {
         assert!(body.get("error").is_none(), "premise: {body}");
         answers.push(body);
     }
-    let (made, finished) = run_task(&fx).await;
-    answers.push(made);
-    answers.push(finished);
-    let seen = fx.seen.lock().expect("recorder").clone();
-    assert!(
-        seen.iter()
-            .any(|params| params.pointer("/arguments/api_key") == Some(&json!(SECRET))),
-        "premise: the secret was sent: {seen:?}"
+    assert_eq!(
+        sends(&fx),
+        (1, true),
+        "premise: one send, the repeat served from the cache"
     );
+
+    let (id, made) = submit_task(&fx, "idem-secret-task").await;
+    let finished = finished_task(&fx, &id).await;
+    assert_eq!(
+        sends(&fx),
+        (2, true),
+        "premise: the task's own send carried the secret"
+    );
+    let (again, resubmitted) = submit_task(&fx, "idem-secret-task").await;
+    assert_eq!(again, id, "premise: the keyed resubmit names the same task");
+    assert_eq!(sends(&fx).0, 2, "premise: the resubmit dispatched nothing");
+    answers.extend([made, finished, resubmitted]);
     for answer in &answers {
         assert!(
             !answer.to_string().contains(SECRET),
             "an answer holds the secret: {answer}"
         );
     }
-    let kept: Vec<_> = files_under(store_path(&fx))
-        .into_iter()
-        .filter(|(_, bytes)| {
-            bytes
-                .windows(SECRET.len())
-                .any(|window| window == SECRET.as_bytes())
-        })
+
+    let stored = files_under(store_path(&fx));
+    assert!(
+        stored.iter().any(|(_, bytes)| holds(bytes, &id)),
+        "premise: a scanned file holds the stored task"
+    );
+    let kept: Vec<_> = stored
+        .iter()
+        .filter(|(_, bytes)| holds(bytes, SECRET))
         .map(|(path, _)| path)
         .collect();
     assert!(kept.is_empty(), "a stored file holds the secret: {kept:?}");
+
+    let audited = std::fs::read(&audit).expect("the audit log was written");
+    assert!(
+        holds(&audited, "alpha"),
+        "premise: the audit log recorded the call"
+    );
+    assert!(!holds(&audited, SECRET), "the audit log holds the secret");
 }
