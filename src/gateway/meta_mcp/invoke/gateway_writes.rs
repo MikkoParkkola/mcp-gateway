@@ -354,6 +354,12 @@ impl WriteRecord {
     }
 }
 
+/// Run `f` with this delivery's write record suspended: a member written
+/// into a copy that is never delivered is noted in a record thrown away.
+pub(super) fn suspended<T>(f: impl FnOnce() -> T) -> T {
+    GATEWAY_WRITES.sync_scope(RefCell::new(Writes::default()), f)
+}
+
 /// Run `delivery` with a write record, beside its receipt collector.
 ///
 /// Not an `async fn`: one would hold `delivery` twice (as its argument and
@@ -406,6 +412,16 @@ pub(crate) fn note(layer: Layer, path: &'static [&'static str], value: &Value) {
     let Some(digest) = member(value, path).and_then(digest) else {
         return;
     };
+    // A counted member is the gateway's word to the reader on this answer:
+    // the delivery is annotated, with or without a write record open.
+    if reserved_members::MEMBERS
+        .iter()
+        .any(|m| m.path == path && m.class == reserved_members::Class::Counted)
+    {
+        crate::gateway::delivery_facts::raise(
+            crate::gateway::delivery_facts::ResponseEffect::Annotated,
+        );
+    }
     let _ = GATEWAY_WRITES.try_with(|writes| {
         writes.borrow_mut().push(Written {
             layer,
@@ -418,11 +434,27 @@ pub(crate) fn note(layer: Layer, path: &'static [&'static str], value: &Value) {
     });
 }
 
-/// Note the response-contract annotations the gateway just wrote into
-/// `value` (MIK-7993 r4 M1): its own verdict, never the backend's text.
-pub(super) fn note_contract(value: &Value) {
-    note(Layer::Value, CONTRACT_VIOLATION, value);
-    note(Layer::Value, CONTRACT_REASON, value);
+/// Write the gateway's `member` at `path` (one top-level key) of `value`
+/// and note exactly that value, so a note never vouches for a member the
+/// gateway did not write. A no-op when `value` is not an object.
+pub(crate) fn insert_noted(
+    layer: Layer,
+    path: &'static [&'static str],
+    value: &mut Value,
+    member: Value,
+) {
+    debug_assert_eq!(path.len(), 1, "{path:?} is not a top-level key");
+    if let ([key], Some(map)) = (path, value.as_object_mut()) {
+        map.insert((*key).to_owned(), member);
+        note(layer, path, value);
+    }
+}
+
+/// Write the response-contract verdict and its `reason` into `value`
+/// (MIK-7993 r4 M1): the gateway's own verdict, never the backend's text.
+pub(super) fn write_contract(value: &mut Value, reason: String) {
+    insert_noted(Layer::Value, CONTRACT_VIOLATION, value, Value::Bool(true));
+    insert_noted(Layer::Value, CONTRACT_REASON, value, Value::String(reason));
 }
 
 /// The member a task envelope the gateway built is known by: the task id
