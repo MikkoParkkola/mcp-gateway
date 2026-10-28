@@ -54,6 +54,9 @@ PREFIXES = (
     "src/transport/http/",
     "src/gateway/router/",
     "src/transport/stdio.rs",
+    # Its start sequence, split out of stdio.rs: the same functions,
+    # inventoried where they now live.
+    "src/transport/stdio_start.rs",
     "src/transport/command_split.rs",
     "src/gateway/input_bridge.rs",
     # Its child modules (channel, debug, outcome), spelled apart for the same
