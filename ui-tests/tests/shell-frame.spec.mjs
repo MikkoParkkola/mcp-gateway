@@ -566,6 +566,42 @@ test('F20c a Retry that sets its header and then fails leaves the header as it w
   await expect(page.locator('.head .plate')).toHaveText('Shown');
 });
 
+test('F20d a setter kept across a sign-in as another identity changes nothing', async ({ page }) => {
+  const KEY = 'mcpg_fixture_key_0123456789';
+  await page.route('**/ui/api/status', (route) => {
+    const auth = route.request().headers().authorization ?? '';
+    return route.fulfill({ json: { auth: { enabled: true, signed_in: auth === `Bearer ${KEY}`, admin: false } } });
+  });
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/overview/status');
+  await expect(page.locator('#content')).toContainText('overview - status');
+  await page.evaluate(() => { window.keptSetter = window.overviewHeader; window.keptBody = document.querySelector('#content > .body'); });
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#signin')).toBeHidden();
+  await page.waitForFunction(() => window.overviewHeader !== window.keptSetter);
+  // Put the old container back in the page, so only the setter's own guard can refuse it.
+  await page.evaluate(() => { document.getElementById('content').append(window.keptBody); });
+  await page.evaluate(() => window.keptSetter({ title: 'Stale', subtitle: 'stale' }));
+  await expect(page.locator('.head .plate')).toHaveText('Overview');
+  await expect(page.locator('.head .sub')).toHaveText('24 of 28 servers ready.');
+});
+
+test('F20e a setter from the previous render of the same page changes nothing', async ({ page }) => {
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/overview/status');
+  await shellReady(page);
+  await page.evaluate(() => { window.keptSetter = window.overviewHeader; window.keptBody = document.querySelector('#content > .body'); });
+  const url = await shellModuleUrl(page);
+  await page.evaluate(async (u) => (await import(u)).render(), url);
+  await page.waitForFunction(() => window.overviewHeader !== window.keptSetter);
+  // Put the old container back in the page, so only the setter's own guard can refuse it.
+  await page.evaluate(() => { document.getElementById('content').append(window.keptBody); });
+  await page.evaluate(() => window.keptSetter({ title: 'Stale', subtitle: 'stale' }));
+  await expect(page.locator('.head .plate')).toHaveText('Overview');
+  await expect(page.locator('.head .sub')).toHaveText('24 of 28 servers ready.');
+});
+
 test('F19 the shell reads fixtures only', async ({ page, offsite }) => {
   await page.goto('/ui/overview/status');
   await shellReady(page);
