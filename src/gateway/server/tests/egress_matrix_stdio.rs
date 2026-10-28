@@ -30,6 +30,8 @@ enum Setup {
     InspectionOnly,
     /// No firewall; response inspection in observe mode, which annotates.
     ObserveOnly,
+    /// No firewall and response inspection turned off: no screen at all.
+    InspectionOff,
     /// The firewall present with response scanning off.
     ScanOff,
     /// The firewall present and disabled.
@@ -64,6 +66,10 @@ async fn stdio_on(backend: Arc<Planted>, setup: Setup) -> (Arc<MetaMcp>, Option<
         return (Arc::new(meta), None);
     }
     if matches!(setup, Setup::ObserveOnly) {
+        return (Arc::new(meta), None);
+    }
+    if matches!(setup, Setup::InspectionOff) {
+        meta.disable_response_inspection();
         return (Arc::new(meta), None);
     }
     let firewall = Arc::new(
@@ -592,6 +598,64 @@ async fn every_member_the_gateway_adds_on_stdio_is_in_the_member_table() {
                             "{setup:?} stdio {method} {part:?}: `{path}` added outside the member table"
                         ));
                     }
+                }
+            }
+        }
+    }
+    report(&failures);
+}
+
+/// `security.response_inspection.enabled: false` over stdio: for a tool
+/// result, a backend error and another method's answer, a text carrying a
+/// pattern inspection finds is delivered and not inspected at all (no
+/// refusal, no `_security_findings`, no "Response inspection finding" log, no
+/// inspection run), while the same text under action-mode inspection in the
+/// same process is still inspected and screened.
+#[test]
+fn inspection_off_inspects_nothing_on_stdio() {
+    use crate::test_classification_count::{MARKER, runs};
+    let cells = [
+        ("tools/call", Part::ResultText),
+        ("tools/call", Part::ErrorMessage),
+        ("prompts/get", Part::ResultText),
+    ];
+    let mut failures = Vec::new();
+    for (n, (method, part)) in cells.into_iter().enumerate() {
+        let marker = format!("{MARKER}inspection-off-stdio-{n}");
+        let text = format!("{} {marker}", secret());
+        for setup in [Setup::InspectionOff, Setup::InspectionOnly] {
+            let at = format!("{method} {part:?} {setup:?}");
+            let before = runs("d2_inspection", &marker);
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime");
+            let (seen, warnings) = crate::test_log_capture::capture_warnings(|| {
+                runtime.block_on(cell(setup, method, part, text.clone()))
+            });
+            let inspected = runs("d2_inspection", &marker) - before;
+            if seen.calls == 0 {
+                failures.push(format!("{at}: never reached the backend"));
+            }
+            if matches!(setup, Setup::InspectionOff) {
+                if inspected != 0 {
+                    failures.push(format!("{at}: inspected {inspected} times"));
+                }
+                if refused(&seen.body) || !seen.body.contains(&marker) {
+                    failures.push(format!("{at}: not delivered: {}", seen.body));
+                }
+                if seen.body.contains("_security_findings") {
+                    failures.push(format!("{at}: annotated: {}", seen.body));
+                }
+                if warnings.contains("Response inspection finding") {
+                    failures.push(format!("{at}: logged a finding: {warnings}"));
+                }
+            } else {
+                if inspected == 0 {
+                    failures.push(format!("{at}: premise: never inspected"));
+                }
+                if seen.body.contains(&secret()) {
+                    failures.push(format!("{at}: premise: not screened: {}", seen.body));
                 }
             }
         }

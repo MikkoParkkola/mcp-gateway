@@ -457,12 +457,17 @@ impl MetaMcp {
         text: &str,
         part: crate::gateway::delivery_facts::Part,
     ) -> Result<Vec<crate::security::response_inspect::Finding>> {
-        if text.is_empty() {
+        use crate::security::response_inspect::ResponseInspectionMode;
+        // Off (`enabled: false`): nothing inspected, logged, annotated or
+        // blocked here, whatever `action_mode` says.
+        if text.is_empty() || self.response_inspection == ResponseInspectionMode::Off {
             return Ok(Vec::new());
         }
+        #[cfg(test)]
+        crate::test_classification_count::note("d2_inspection", text);
         let inspection = crate::security::response_inspect::inspect_response(
             text,
-            self.response_inspection_action_mode,
+            self.response_inspection == ResponseInspectionMode::Action,
         );
         // This delivery's findings, written before the block decision so a
         // blocked answer keeps the finding that blocked it. The

@@ -58,6 +58,11 @@ impl CancelOnDrop {
         }))
     }
 
+    /// A guard that never sends: the exchange has no one to cancel for.
+    pub(super) fn unarmed() -> Self {
+        Self(None)
+    }
+
     /// The exchange finished, answered or failed: nothing to cancel.
     pub(super) fn disarm(mut self) {
         self.0 = None;

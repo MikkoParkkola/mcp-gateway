@@ -572,7 +572,7 @@ impl MetaMcp {
         let Some(result) = replay.result.as_ref() else {
             return;
         };
-        if matches!(tool_name, "gateway_execute" | "gateway_run_playbook") {
+        if crate::gateway::meta_mcp::is_composite_meta_tool(tool_name) {
             replay::stage_plan_replay(self, caller.relay_caller(session_id));
             return;
         }

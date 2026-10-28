@@ -640,6 +640,10 @@ mod era_start_own_probe_tests;
 #[path = "era_per_slot_tests.rs"]
 mod era_per_slot_tests;
 
+#[cfg(test)]
+#[path = "era_lent_reprobe_tests.rs"]
+mod era_lent_reprobe_tests;
+
 #[cfg(all(test, unix))]
 #[path = "frame_limit_start_tests.rs"]
 mod frame_limit_start_tests;

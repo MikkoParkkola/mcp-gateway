@@ -119,6 +119,13 @@ tokio::task_local! {
     static FACTS: RefCell<DeliveryFacts>;
 }
 
+impl DeliveryFacts {
+    /// Whether a gateway refusal was raised in this cell.
+    pub(crate) fn refused(&self) -> bool {
+        self.effect == ResponseEffect::Refused
+    }
+}
+
 /// Run `future` with a fresh cell open: one delivery.
 pub(crate) async fn scope<F: std::future::Future>(future: F) -> F::Output {
     FACTS
