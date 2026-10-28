@@ -8,6 +8,7 @@ use super::{
     tunnel_echoes,
 };
 use std::net::Ipv4Addr;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpStream;
 
@@ -76,7 +77,7 @@ async fn c10_expiry_during_resolution_leaves_no_usable_tunnel() {
         let ok = status(&read_head(&mut s).await) == 200 && tunnel_echoes(&mut s).await;
         Some(ok)
     });
-    rig.resolve.gate.entered.notified().await;
+    reached(&rig.resolve.gate, "resolution").await;
     rig.proxy.expire(&cred);
     rig.resolve.gate.release.notify_one();
     let usable = task.await.expect("task");
@@ -99,9 +100,17 @@ async fn c10_expiry_during_dialling_leaves_no_usable_tunnel() {
         let ok = status(&read_head(&mut s).await) == 200 && tunnel_echoes(&mut s).await;
         Some(ok)
     });
-    rig.connect.gate.entered.notified().await;
+    reached(&rig.connect.gate, "the dial").await;
     rig.proxy.expire(&cred);
     rig.connect.gate.release.notify_one();
     let usable = task.await.expect("task");
     assert_ne!(usable, Some(true), "a tunnel was usable after expiry");
+}
+
+/// Wait for the CONNECT to reach `gate`; a proxy that never gets there fails
+/// the row instead of hanging it.
+async fn reached(gate: &super::Gate, step: &str) {
+    tokio::time::timeout(Duration::from_secs(30), gate.entered.notified())
+        .await
+        .unwrap_or_else(|_| panic!("the CONNECT never reached {step}"));
 }
