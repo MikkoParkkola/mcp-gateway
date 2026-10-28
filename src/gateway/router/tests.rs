@@ -700,6 +700,7 @@ pub(crate) fn modern_meta() -> serde_json::Value {
 
 #[path = "history_route_tests.rs"]
 mod history_route_tests;
+#[cfg(feature = "webui")]
 #[path = "status_wire_values_tests.rs"]
 mod status_wire_values_tests;
 #[path = "tool_counts_route_tests.rs"]
