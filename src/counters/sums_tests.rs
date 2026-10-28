@@ -41,6 +41,20 @@ fn local<Tz: TimeZone>(zone: &Tz, (y, mo, d, h, mi): (i32, u32, u32, u32, u32)) 
     .unwrap()
 }
 
+/// T1c: at a fixed clock 10 minutes into a half hour, the current window
+/// holds only that half hour's elapsed part, while the previous period holds
+/// its whole twin, including a call at a wall time today has not reached.
+#[test]
+fn t1c_the_current_bucket_is_partial_and_its_twin_whole() {
+    let now = T0 + 7 * HOUR + 600;
+    let store = CounterStore::new(0);
+    record(&store, Label::Known("t"), now - 590);
+    record(&store, Label::Known("t"), now - 86_400 - 590);
+    record(&store, Label::Known("t"), now - 86_400 + 1_100);
+    let sums = store.window_sums(&[tool("t")], now, &UTC);
+    assert_eq!(sums.counts, vec![(Some(1), Some(2))]);
+}
+
 /// T7: one batch read takes the lock once, for 3 labels or 300.
 #[test]
 fn t7_one_lock_whatever_the_label_count() {

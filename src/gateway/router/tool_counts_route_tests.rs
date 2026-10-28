@@ -191,3 +191,33 @@ async fn t6_non_admins_get_no_counts() {
     assert!(!root.contains_key("counts_since"), "{body}");
     assert!(!body.to_string().contains("calls_24h"), "{body}");
 }
+
+/// T7 at the routes: one tool-list request with 300 tools, and one status
+/// request, each take the counter store's lock exactly once.
+#[tokio::test]
+async fn t7_each_route_reads_the_store_once() {
+    let (state, store, _dir) = state(true, &["alpha", "beta", "gamma"], 100, true).await;
+    let store = store.expect("a store");
+    let before = store.reads_for_test();
+    let (status, body) = get(&state, "/ui/api/tools", Some(SECRET)).await;
+    assert_eq!((status, &body["total"]), (StatusCode::OK, &json!(300)));
+    assert_eq!(store.reads_for_test() - before, 1, "tool list");
+    let before = store.reads_for_test();
+    let (status, _) = get(&state, "/ui/api/status", Some(SECRET)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(store.reads_for_test() - before, 1, "status");
+}
+
+/// T4 on the status route: no counter store, every server count present
+/// and `null`, `counts_since` `null`, the answer still 200.
+#[tokio::test]
+async fn t4_status_without_a_counter_store_reads_null() {
+    let (state, _, _dir) = state(true, &["alpha"], 1, false).await;
+    let (status, body) = get(&state, "/ui/api/status", Some(SECRET)).await;
+    assert_eq!(status, StatusCode::OK);
+    let alpha = body["servers"][0].as_object().expect("a server");
+    assert_eq!(alpha.get("calls_24h"), Some(&Value::Null));
+    assert_eq!(alpha.get("calls_prev_24h"), Some(&Value::Null));
+    let root = body.as_object().expect("an object");
+    assert_eq!(root.get("counts_since"), Some(&Value::Null));
+}
