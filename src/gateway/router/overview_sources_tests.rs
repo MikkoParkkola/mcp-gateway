@@ -182,6 +182,7 @@ async fn s3_edges_list_the_top_48_pairs() {
 
     let body = overview(&state).await;
 
+    assert!(body["edges"]["rows"].is_array(), "edges absent: {body}");
     let rows = body["edges"]["rows"].as_array().expect("edge rows");
     let shown: Vec<(String, String, u64, u64)> = rows
         .iter()
@@ -225,6 +226,7 @@ async fn s4_markers_are_the_newest_fifty_of_the_last_day() {
 
     let body = overview(&state).await;
 
+    assert!(body["markers"]["rows"].is_array(), "markers absent: {body}");
     let rows = body["markers"]["rows"].as_array().expect("marker rows");
     assert_eq!(rows.len(), 50, "{body}");
     assert_eq!(rows[0]["subject"], want.as_str(), "{body}");
@@ -340,6 +342,7 @@ async fn s8b_an_unreadable_clock_degrades_the_counter_fields() {
 
     let body: Value = serde_json::from_str(&raw).expect("a JSON body");
     assert!(body["kpi"].get("calls_24h").is_none(), "{body}");
+    assert!(body["degraded"].is_array(), "degraded absent: {body}");
     let mut degraded: Vec<&str> = body["degraded"]
         .as_array()
         .expect("a degraded list")
