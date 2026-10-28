@@ -374,6 +374,7 @@ let paletteEl = null;
 /** Open the palette. It finds pages, actions and settings and opens them on their tab; nothing runs from it. */
 export function openPalette() {
   if (paletteEl) return; // also while a closing palette's cleanup is pending
+  if (confirmEl) return; // one modal at a time
   if (document.body.classList.contains('signed-out')) return;
   const opener = document.activeElement;
   const input = el('input', { type: 'text', role: 'combobox', 'aria-expanded': 'true', 'aria-controls': 'palette-list', 'aria-autocomplete': 'list', 'aria-label': 'Go to anything', placeholder: 'Go to anything', autocomplete: 'off', spellcheck: 'false' });
@@ -458,6 +459,319 @@ export function openPalette() {
   moveAnnouncer(paletteEl);
   input.focus();
 }
+
+// ---------------------------------------------------------------- confirm
+
+/** In-progress said after this long; "still waiting" after the next; the dialog stops waiting after the last. */
+const CONFIRM_SAY_MS = 300;
+const CONFIRM_WAIT_MS = 10_000;
+const CONFIRM_CUTOFF_MS = 30_000;
+/** A request that never settles gives the lock up this long after the cutoff. */
+const LOCK_GRACE_MS = 120_000;
+/** Statuses that mean the gateway refused before acting; anything else may have acted. */
+const REFUSALS = new Set([400, 403, 404, 409, 422]);
+
+let confirmEl = null;
+/** The one operation in flight. Released only by its own token, so a late request cannot free a newer one's. */
+let lock = null;
+/** Subjects whose last outcome was not confirmed, for one render: a new render (a navigation or reload) shows their real state. */
+let unconfirmed = { seq: -1, keys: new Set() };
+/** The done notice, bound to the page it landed on and the identity that acted. */
+let doneNotice = null;
+
+const unconfirmedKeys = () => {
+  if (unconfirmed.seq !== renderSeq) unconfirmed = { seq: renderSeq, keys: new Set() };
+  return unconfirmed.keys;
+};
+
+const releaseLock = (token) => { if (lock?.token === token) lock = null; };
+
+/** What a failed run() means: a refusal the gateway made before acting, or an outcome nobody can confirm. */
+function classify(err, spec) {
+  const safe = spec.replay === 'safe';
+  if (!(err instanceof ApiError) || err.unreadable || err.status === 0) return { kind: 'unconfirmed' };
+  const s = err.status;
+  const object = spec.object;
+  if ((s === 429 || s === 503) && safe) {
+    return { kind: 'refusal', retry: true, reason: `The gateway is busy (HTTP ${s}).`, next: 'Try again in a moment.' };
+  }
+  if (!REFUSALS.has(s)) return { kind: 'unconfirmed' };
+  const own = spec.failed?.(err) ?? null;
+  const words = own ?? {
+    403: { reason: `This key may not ${spec.verb.toLowerCase()} ${object}.`, next: 'Ask an admin, or sign in with a key that may.' },
+    404: { reason: `${object} is no longer there.`, next: 'Reload the page to see what is.' },
+    409: { reason: `${object} changed since this page loaded.`, next: 'Reload the page and try again.' },
+  }[s] ?? { reason: `The gateway refused the request (HTTP ${s}).`, next: 'Check the details, then reload the page.' };
+  return { kind: 'refusal', retry: safe && own?.retry === true, reload: s === 409, reason: words.reason, next: words.next };
+}
+
+/** The page content, keeping the done notice at its top while it belongs to this page. */
+function setContent(container, ...nodes) {
+  if (doneNotice && (doneNotice.path !== location.pathname || doneNotice.epoch !== authEpoch)) doneNotice = null;
+  const keep = doneNotice && container.id === 'content' && doneNotice.path === location.pathname
+    && doneNotice.epoch === authEpoch ? [doneNotice.node] : [];
+  container.replaceChildren(...keep, ...nodes);
+}
+
+/** The part of the page the user can see: the visual viewport, so an on-screen keyboard or pinch zoom counts. */
+const visible = () => {
+  const vv = window.visualViewport;
+  return vv ? { top: vv.offsetTop, left: vv.offsetLeft, height: vv.height, width: vv.width }
+    : { top: 0, left: 0, height: innerHeight, width: innerWidth };
+};
+
+const overlaps = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+
+/**
+ * Centre the dialog in the visible part, never over its opener (UI1.25).
+ * Its height is capped so the bands above and below it each fit the opener;
+ * the opener is scrolled into the nearer band, with the page made taller when
+ * it cannot scroll that far. When even the smallest
+ * dialog (title and buttons) does not fit between two such bands, it docks in
+ * the band away from the opener: the one case where centring yields.
+ */
+function placeConfirm(dialogEl, opener, room) {
+  const v = visible();
+  const margin = 16;
+  const width = Math.min(480, v.width - 2 * margin);
+  Object.assign(dialogEl.style, { width: `${width}px`, left: `${v.left + (v.width - width) / 2}px`, maxHeight: 'none' });
+  const box = (top, height) => ({ top, bottom: top + height, left: v.left + (v.width - width) / 2, right: v.left + (v.width + width) / 2 });
+  const body = dialogEl.querySelector('.confirm-body');
+  const smallest = dialogEl.offsetHeight - body.clientHeight + 48;
+  // An opener taller than half the visible part cannot be kept clear of anything: centre as if it were gone.
+  const at = () => {
+    const r = opener?.isConnected ? opener.getBoundingClientRect() : null;
+    return r && r.height + 2 * margin < v.height / 2 ? r : null;
+  };
+  let o = at();
+  const band = o ? o.height + 2 * margin : 0;
+  const cap = Math.max(v.height - 2 * band, 0);
+  if (cap >= smallest || !o) {
+    dialogEl.style.maxHeight = `${Math.max(cap, smallest)}px`;
+    const h = dialogEl.offsetHeight;
+    const top = v.top + (v.height - h) / 2;
+    if (o && overlaps(box(top, h), o)) {
+      // Into the nearer band: top or bottom of the visible part.
+      const upper = o.top + o.height / 2 < v.top + v.height / 2;
+      const want = upper ? v.top + margin : v.top + v.height - margin - o.height;
+      scrollPage(room, o.top - want);
+      o = at();
+    }
+    dialogEl.style.top = `${top}px`;
+    return;
+  }
+  // Docked: the opener goes to the top band, the dialog takes the rest.
+  scrollPage(room, o.top - (v.top + margin));
+  dialogEl.style.maxHeight = `${v.height - band - margin}px`;
+  dialogEl.style.top = `${v.top + band}px`;
+}
+
+/**
+ * Scroll the page by `dy`. When it cannot scroll that far, the page is made
+ * taller first: the content fills the screen as a flex child, so only a taller
+ * body adds room. `room.extra` is undone when the dialog closes.
+ */
+function scrollPage(room, dy) {
+  const max = document.documentElement.scrollHeight - innerHeight;
+  const need = scrollY + dy - max;
+  if (need > 0) {
+    room.extra += need;
+    document.body.style.minHeight = `calc(100vh + ${room.extra}px)`;
+  }
+  window.scrollTo({ top: Math.max(0, scrollY + dy), behavior: 'instant' });
+}
+
+/**
+ * One pattern for every destructive or deciding action (UI1.19). The screen
+ * gives the words and the request; the shell owns the dialog and every state
+ * after it, and resolves once, when the dialog closes, with
+ * `{ outcome: 'done', value } | 'kept' | 'failed' | 'unconfirmed' | 'declined'`.
+ */
+export function confirmAction(spec) {
+  for (const field of ['opener', 'key', 'verb', 'object', 'progress', 'consequences', 'run']) {
+    if (spec?.[field] === undefined || spec[field] === null) throw new TypeError(`confirm: ${field} is required`);
+  }
+  if (confirmEl || lock || unconfirmedKeys().has(spec.key) || paletteEl) {
+    console.warn(confirmEl || lock ? 'confirm: another action is still open or running'
+      : paletteEl ? 'confirm: the palette is open' : 'confirm: the last outcome for this subject is not confirmed; reload first');
+    return Promise.resolve({ outcome: 'declined' });
+  }
+  const { opener, key, verb, object, progress } = spec;
+  const keepWord = spec.keep ?? 'Cancel';
+  const tone = spec.tone === 'decision' ? 'primary' : 'danger';
+  const titleId = 'confirm-title';
+  const listId = 'confirm-list';
+  const consequences = spec.consequences.length
+    ? el('ul', { id: listId }, ...spec.consequences.map((c) => el('li', {}, String(c))))
+    : el('ul', { id: listId }, el('li', {}, 'It does not say what it changes.'));
+  const typed = spec.typeToConfirm === undefined ? null
+    : el('input', { type: 'text', id: 'confirm-typed', autocomplete: 'off', spellcheck: 'false' });
+  const typedRow = typed && el('p', { class: 'confirm-typed' }, el('label', { for: 'confirm-typed' }, `Type ${spec.typeToConfirm} to confirm`), typed);
+  const line = el('p', { class: 'confirm-progress', tabindex: '-1' });
+  const note = el('div', { class: 'confirm-message', tabindex: '-1' });
+  const body = el('div', { class: 'confirm-body' }, consequences, ...(typedRow ? [typedRow] : []), line, note);
+  line.hidden = true;
+  note.hidden = true;
+  const keep = el('button', { type: 'button', class: 'btn' }, `${keepWord} ${object}`);
+  const act = el('button', { type: 'button', class: `btn ${tone}` }, `${verb} ${object}`);
+  const acts = el('div', { class: 'acts' }, keep, act);
+  const room = { extra: 0 };
+  confirmEl = el('dialog', { class: 'confirm', 'aria-labelledby': titleId, 'aria-describedby': listId },
+    el('h2', { id: titleId }, `${verb} ${object}?`), body, acts);
+  const dialogEl = confirmEl;
+  const before = scrollY;
+  document.body.append(dialogEl);
+
+  let phase = 'confirm';
+  let routed = false;
+  let settle;
+  const result = new Promise((resolve) => { settle = resolve; });
+  let outcome = { outcome: 'kept' };
+  const matches = () => !typed || typed.value === spec.typeToConfirm;
+  const arm = () => { act.disabled = !matches(); retry.disabled = !matches(); };
+  const retry = el('button', { type: 'button', class: `btn ${tone}` }, 'Try again');
+  const close = el('button', { type: 'button', class: 'btn' }, 'Close');
+  const reload = el('button', { type: 'button', class: 'btn' }, 'Reload page');
+  reload.addEventListener('click', () => location.reload());
+  typed?.addEventListener('input', arm);
+  arm();
+
+  const place = () => placeConfirm(dialogEl, opener, room);
+  const vv = window.visualViewport;
+  addEventListener('resize', place);
+  vv?.addEventListener('resize', place);
+  vv?.addEventListener('scroll', place);
+
+  const finish = (result) => {
+    outcome = result;
+    if (dialogEl.open) dialogEl.close();
+  };
+  dialogEl.addEventListener('cancel', (ev) => { if (phase === 'sending') ev.preventDefault(); });
+  dialogEl.addEventListener('close', () => {
+    removeEventListener('resize', place);
+    vv?.removeEventListener('resize', place);
+    vv?.removeEventListener('scroll', place);
+    moveAnnouncer(document.body); // before the dialog goes
+    dialogEl.remove();
+    document.body.style.minHeight = '';
+    if (confirmEl === dialogEl) { confirmEl = null; onSignIn = null; }
+    if (!routed) {
+      window.scrollTo({ top: before, behavior: 'instant' });
+      const back = opener?.isConnected ? opener : document.getElementById('content');
+      back.focus({ preventScroll: true });
+    }
+    settle(outcome);
+  });
+  // Sign-in takes over before a 401 reaches run()'s handler: a sent request's outcome is not known.
+  onSignIn = () => {
+    if (phase === 'sending') { unconfirmedKeys().add(key); finish({ outcome: 'unconfirmed' }); } else finish({ outcome: 'kept' });
+  };
+  keep.addEventListener('click', () => finish({ outcome: 'kept' }));
+  close.addEventListener('click', () => finish(phase === 'refusal' ? { outcome: 'failed', error: lastError } : { outcome: 'unconfirmed', ...(lastError ? { error: lastError } : {}) }));
+
+  let lastError = null;
+  const show = (kind, words) => {
+    phase = kind;
+    line.hidden = true;
+    note.hidden = false;
+    note.replaceChildren(el('p', {}, `⊘ ${words.reason}`), el('p', {}, words.next));
+    if (typed) typed.value = '';
+    arm();
+    const buttons = [close];
+    if (words.reload) buttons.push(reload);
+    if (words.retry) buttons.push(retry);
+    acts.replaceChildren(...buttons);
+    place();
+    note.focus();
+    announce(`${words.reason} ${words.next}`, { subject: 'confirm', guard: { epoch: authEpoch, seq: null } });
+  };
+
+  const start = () => {
+    if (phase === 'sending' || !matches()) return;
+    phase = 'sending';
+    const token = {};
+    lock = { token };
+    const epoch = authEpoch;
+    note.hidden = true;
+    line.hidden = false;
+    line.textContent = progress;
+    act.textContent = progress;
+    act.disabled = true;
+    act.setAttribute('aria-busy', 'true');
+    acts.replaceChildren(act);
+    place();
+    line.focus();
+    let open = true;
+    const say = setTimeout(() => announce(progress, { subject: 'confirm', guard: { epoch, seq: null } }), CONFIRM_SAY_MS);
+    const wait = setTimeout(() => { line.textContent = `${progress} Still waiting for the gateway.`; }, CONFIRM_WAIT_MS);
+    const cutoff = setTimeout(() => {
+      open = false;
+      clearTimeout(say);
+      unconfirmedKeys().add(key);
+      setTimeout(() => releaseLock(token), LOCK_GRACE_MS);
+      showUnconfirmed();
+    }, CONFIRM_CUTOFF_MS);
+    const ended = () => { clearTimeout(say); clearTimeout(wait); clearTimeout(cutoff); releaseLock(token); };
+    Promise.resolve().then(() => spec.run()).then((value) => {
+      ended();
+      if (!open || epoch !== authEpoch || !dialogEl.open) return; // stopped waiting, or someone else signed in
+      landDone(value);
+    }, (err) => {
+      ended();
+      if (!open || !dialogEl.open) return;
+      lastError = err;
+      if (err instanceof ApiError && err.status === 401) {
+        // Sign-in takes over; the request was sent, so its outcome is not known.
+        unconfirmedKeys().add(key);
+        finish({ outcome: 'unconfirmed', error: err });
+        return;
+      }
+      const c = classify(err, spec);
+      if (c.kind === 'refusal') show('refusal', c);
+      else { unconfirmedKeys().add(key); showUnconfirmed(); }
+    });
+  };
+  const showUnconfirmed = () => show('unconfirmed', {
+    reason: 'The gateway did not confirm the outcome.', next: `Reload to see whether ${object} changed.`, reload: true,
+  });
+
+  const landDone = (value) => {
+    let target = null;
+    try {
+      target = typeof spec.done === 'function' ? spec.done(value) : (spec.done ?? null);
+    } catch (err) {
+      console.error(err); // the gateway succeeded; only the screen's own words failed
+    }
+    outcome = { outcome: 'done', value };
+    if (!target?.path) {
+      finish(outcome);
+      return;
+    }
+    const heading = el('p', { class: 'done-title', tabindex: '-1' }, `✓ ${target.notice ?? ''}`);
+    const dismiss = el('button', { type: 'button', class: 'btn quiet' }, 'Dismiss');
+    const node = el('section', { class: 'done-notice', 'aria-label': 'Done' }, heading,
+      ...(target.action ? [el('a', { href: target.action.path }, target.action.label)] : []), dismiss);
+    doneNotice = { node, path: target.path.split(/[?#]/)[0], epoch: authEpoch };
+    dismiss.addEventListener('click', () => { node.remove(); doneNotice = null; });
+    routed = true;
+    finish(outcome);
+    go(target.path);
+    heading.focus({ preventScroll: true });
+    announce(target.notice ?? '', { subject: 'page' });
+  };
+
+  act.addEventListener('click', start);
+  retry.addEventListener('click', start);
+  dialogEl.showModal();
+  // A modal makes the rest of the page inert, the live region with it: it rides along.
+  moveAnnouncer(dialogEl);
+  place();
+  keep.focus();
+  return result;
+}
+
+/** Set while a confirmation is open: closes it when sign-in takes over. */
+let onSignIn = null;
 
 // ---------------------------------------------------------------- segmented
 
@@ -600,6 +914,7 @@ const runTab = (spec, route, into) => {
     header: (fields) => { if (guardHolds(guard) && into.isConnected) setHeader(fields); },
     refreshCounts,
     announce: (text) => announce(text, { subject: `screen:${route.page}`, guard }),
+    confirm: confirmAction,
   }));
 };
 
@@ -613,7 +928,7 @@ function bannerState(kind, opts) {
 
 /** Put a banner node in `container`, and say its heading for the page shown now. */
 function showBanner(container, node) {
-  container.replaceChildren(mark(node));
+  setContent(container, mark(node));
   announce(node.querySelector('.state h2, h2').textContent, { subject: 'page' });
 }
 
@@ -688,7 +1003,7 @@ export function render() {
   const tabNamed = route.tab === null || TABS.some(([t]) => t === route.tab);
   if (!label || !tabNamed) {
     setHeader({ title: 'Not found', subtitle: null });
-    content.replaceChildren(mark(state('empty', { title: 'No such page', body: 'Pick a page from the list.' })));
+    setContent(content, mark(state('empty', { title: 'No such page', body: 'Pick a page from the list.' })));
     return;
   }
   const spec = pages.get(route.page);
@@ -696,7 +1011,7 @@ export function render() {
   setHeader(ownHeader);
   const tabs = visibleTabs(route.page);
   if (tabs.length === 0) {
-    content.replaceChildren(mark(state('not-built')));
+    setContent(content, mark(state('not-built')));
     return;
   }
   if (!tabs.some(([t]) => t === route.tab)) {
@@ -708,7 +1023,7 @@ export function render() {
     tabsNav.append(el('a', { href, 'aria-current': t === route.tab ? 'page' : null }, tabLabel));
   }
   const body = el('div', { class: 'body' });
-  content.replaceChildren(mark(body));
+  setContent(content, mark(body));
   // Every effect of this render is dropped once the user navigates or signs in as someone else.
   const epoch = authEpoch;
   const current = () => seq === renderSeq && epoch === authEpoch;
@@ -743,7 +1058,7 @@ export function render() {
       .then(() => loading.after(() => {
         if (current()) {
           stage.classList.remove('staging');
-          content.replaceChildren(mark(stage));
+          setContent(content, mark(stage));
           saveSnapshot(key, stage);
           content.focus({ preventScroll: true });
         }
@@ -1000,6 +1315,7 @@ function showSignIn() {
   if (document.body.classList.contains('signed-out')) return;
   closeMenu();
   paletteEl?.close(); // a modal palette would keep the key field inert
+  onSignIn?.(); // and so would an open confirmation
   document.body.classList.add('signed-out');
   document.getElementById('signin').hidden = false;
   document.querySelector('.signin-host').textContent = location.host;

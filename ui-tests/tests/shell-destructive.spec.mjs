@@ -193,7 +193,7 @@ test.describe('unconfirmed', () => {
       await dialog(page).getByRole('button', { name: 'Close' }).click();
       await page.click('#remove-probe');
       await expect(dialog(page)).toHaveCount(0);
-      await expect.poll(async () => (await outcomes(page)).map((o) => o.outcome)).toEqual(['unconfirmed', 'refused']);
+      await expect.poll(async () => (await outcomes(page)).map((o) => o.outcome)).toEqual(['unconfirmed', 'declined']);
     });
   }
 
@@ -228,7 +228,7 @@ test.describe('unconfirmed', () => {
     await dialog(page).getByRole('button', { name: 'Close' }).click();
     // Locked: another confirm is refused while the request is still out.
     const refused = await page.evaluate(() => window.gatewayConfirm({ opener: document.body, key: 'other', verb: 'Remove', object: 'other', progress: 'Removing other…', consequences: [], run: () => null }));
-    expect(refused).toEqual({ outcome: 'refused' });
+    expect(refused).toEqual({ outcome: 'declined' });
     // A request that never answers cannot hold the lock forever: 120 s after the cutoff it goes.
     await page.clock.runFor(150_000);
     await page.evaluate(() => { window.gatewayConfirm({ opener: document.body, key: 'other', verb: 'Remove', object: 'other', progress: 'Removing other…', consequences: [], run: () => null }); });
@@ -254,8 +254,8 @@ test.describe('done', () => {
     await expect(notice.getByRole('link', { name: 'Add probe again' })).toHaveAttribute('href', '/ui/servers/settings');
     await expect(notice.locator('[tabindex="-1"]').first()).toBeFocused();
     await expect.poll(() => page.evaluate(() => window.__writes.filter((t) => t.includes('probe removed')).length)).toBe(1);
-    const outcome = (await outcomes(page))[0];
-    expect(outcome).toEqual({ outcome: 'done', value: { tools: 3 } });
+    // It resolves once routing has begun, so the outcome may land just after the new page.
+    await expect.poll(async () => (await outcomes(page))[0]).toEqual({ outcome: 'done', value: { tools: 3 } });
     await page.click('nav.route-nav a[data-page="tools"]');
     await expect(page.locator('#content .done-notice')).toHaveCount(0);
   });
@@ -315,6 +315,8 @@ test.describe('placement', () => {
     for (const size of [{ width: 820, height: 600 }, { width: 390, height: 568 }]) {
       await page.setViewportSize(size);
       await expect.poll(async () => intersects(await dialog(page).boundingBox(), await page.locator('#remove-probe').boundingBox())).toBe(false);
+      const buttons = await dialog(page).locator('.acts').boundingBox();
+      expect(buttons.y >= 0 && buttons.y + buttons.height <= size.height, 'the buttons stay in view').toBe(true);
     }
   });
 
@@ -331,6 +333,8 @@ test.describe('placement', () => {
     expect(box.y).toBeGreaterThanOrEqual(120);
     expect(box.y + box.height).toBeLessThanOrEqual(540);
     expect(intersects(box, await page.locator('#remove-probe').boundingBox())).toBe(false);
+    // Centred in the visible part, not the layout viewport.
+    expect(Math.abs(box.y + box.height / 2 - (120 + 210))).toBeLessThanOrEqual(1);
   });
 });
 
@@ -342,7 +346,7 @@ test.describe('one modal', () => {
     await page.keyboard.press('Control+k');
     await expect(page.locator('dialog.palette')).toHaveCount(0);
     const second = await page.evaluate(() => window.gatewayConfirm({ opener: document.body, key: 'other', verb: 'Remove', object: 'other', progress: 'Removing other…', consequences: [], run: () => null }));
-    expect(second).toEqual({ outcome: 'refused' });
+    expect(second).toEqual({ outcome: 'declined' });
     await expect(page.locator('[aria-live], [role="status"], [role="alert"]')).toHaveCount(1);
   });
 });
@@ -380,12 +384,21 @@ test.describe('fold check', () => {
     await dialog(page).getByRole('button', { name: 'Close' }).click();
     await page.clock.runFor(150_000); // the first lock is released by the clock
     // A second operation takes the lock and is still running.
-    await page.evaluate(() => { window.gatewayConfirm({ opener: document.body, key: 'two', verb: 'Remove', object: 'two', progress: 'Removing two…', consequences: [], run: () => fetch('/ui/api/destroy-probe', { method: 'DELETE' }) }); });
+    await page.evaluate(() => { window.gatewayConfirm({ opener: document.getElementById('remove-probe'), key: 'two', verb: 'Remove', object: 'two', progress: 'Removing two…', consequences: [], run: () => fetch('/ui/api/destroy-probe', { method: 'DELETE' }) }); });
     await page.locator('dialog.confirm').getByRole('button', { name: 'Remove two' }).click();
-    first.release(204); // the first request settles late
+    // It is cut off too and closed, so only its lock (not an open dialog) keeps a third out.
+    await page.clock.runFor(30_000);
+    await dialog(page).getByRole('button', { name: 'Close' }).click();
+    await expect(dialog(page)).toHaveCount(0);
+    first.release(204); // the first request settles late, while the second still holds the lock
     await page.clock.runFor(1_000);
-    const third = await page.evaluate(() => window.gatewayConfirm({ opener: document.body, key: 'three', verb: 'Remove', object: 'three', progress: 'Removing three…', consequences: [], run: () => null }));
-    expect(third).toEqual({ outcome: 'refused' });
+    await page.evaluate(() => {
+      window.__third = null;
+      window.gatewayConfirm({ opener: document.getElementById('remove-probe'), key: 'three', verb: 'Remove', object: 'three', progress: 'Removing three…', consequences: [], run: () => null })
+        .then((r) => { window.__third = r; });
+    });
+    await expect.poll(() => page.evaluate(() => window.__third)).toEqual({ outcome: 'declined' });
+    await expect(dialog(page)).toHaveCount(0);
     second.release(204);
   });
 
@@ -447,7 +460,9 @@ test.describe('fold check', () => {
     const box = await dialog(page).boundingBox();
     expect(intersects(box, await page.locator('#remove-probe').boundingBox())).toBe(false);
     await page.keyboard.press('Escape');
-    expect(await page.evaluate(() => [scrollY, document.getElementById('content').scrollHeight])).toEqual(before);
+    // Restored in the dialog's close event, which fires just after Esc.
+    await expect.poll(() => page.evaluate(() => [scrollY, document.getElementById('content').scrollHeight])).toEqual(before);
+    expect(await page.evaluate(() => document.body.style.minHeight)).toBe('');
   });
 
   test('D14 a pinch-panned visual viewport centres the dialog in the visible part, sideways too', async ({ page }) => {
