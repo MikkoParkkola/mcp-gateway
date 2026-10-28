@@ -575,8 +575,8 @@ mod tests {
         assert!(after.is_err(), "a start call with no waiter left was sent");
     }
 
-    /// A refusal mark only escalates: ThisLoan then Definitive evicts once, and
-    /// a ThisLoan after a Definitive leaves it Definitive.
+    /// A refusal mark only escalates: `ThisLoan` then `Definitive` evicts once,
+    /// and a `ThisLoan` after a `Definitive` leaves it `Definitive`.
     /// The first starter cancelled, the next dispatch waiting on the start
     /// becomes its starter: the start is never left with no loan to send as.
     #[test]
