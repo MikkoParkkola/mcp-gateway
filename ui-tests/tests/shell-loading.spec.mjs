@@ -55,12 +55,21 @@ test('G1 a slow page shows the loading state after about 300 ms, says so once, a
   const probe = heldProbe();
   await page.route(PROBE, probe.answer);
   await withFixturePages(page, { probes: true });
+  // When the tab's body and the loading state enter the page, by the page's own clock,
+  // so a loaded machine cannot make the test's timing disagree with the page's.
+  await page.addInitScript(() => {
+    // Watched from the start: the shell puts the body in before DOMContentLoaded listeners run.
+    window.__times = {};
+    new MutationObserver(() => {
+      const now = performance.now();
+      if (!window.__times.body && document.querySelector('#content > .body[data-rendered]')) window.__times.body = now;
+      if (!window.__times.loading && document.querySelector('#content [data-state="loading"]')) window.__times.loading = now;
+    }).observe(document, { childList: true, subtree: true });
+  });
   await page.goto('/ui/policies/status');
-  await page.waitForSelector('#content [data-rendered]', { state: 'attached' }); // an empty body has no size
-  // Not before about 300 ms: at 150 ms the page still shows nothing.
-  await page.evaluate(() => new Promise((done) => setTimeout(done, 150)));
-  await expect(loading(page)).toHaveCount(0);
   await expect(loading(page)).toBeVisible();
+  const times = await page.evaluate(() => window.__times);
+  expect(times.loading - times.body, 'not before about 300 ms').toBeGreaterThanOrEqual(295);
   await shellCall(page, 'announcerIdle');
   expect((await page.evaluate(() => window.__writes)).filter((t) => t.startsWith('Loading'))).toEqual(['Loading Policies.']);
   probe.release();
@@ -93,9 +102,19 @@ test('G4 a slow page left before 300 ms shows and says nothing on the next one',
   await watchLoading(page);
   const probe = heldProbe();
   await page.route(PROBE, probe.answer);
+  // Leave from inside the page in the same task that put the slow tab's body in, so
+  // the user has left long before 300 ms however loaded the machine is.
+  await page.addInitScript(() => {
+    const watch = new MutationObserver(() => {
+      if (location.pathname !== '/ui/policies/status' || !document.querySelector('#content > .body[data-rendered]')) return;
+      watch.disconnect();
+      history.pushState(null, '', '/ui/servers/status');
+      dispatchEvent(new PopStateEvent('popstate'));
+    });
+    watch.observe(document, { childList: true, subtree: true });
+  });
   await withFixturePages(page, { probes: true });
   await page.goto('/ui/policies/status');
-  await page.locator('nav.route-nav a[href="/ui/servers"]').click();
   await expect(page.locator('#content')).toContainText('servers - status');
   await page.evaluate(() => new Promise((done) => setTimeout(done, 450)));
   await shellCall(page, 'announcerIdle');
