@@ -45,6 +45,7 @@ impl Buf {
 
 /// What the production text layer writes for `emit`, colours on or off.
 fn text(ansi: bool, emit: impl FnOnce()) -> String {
+    crate::test_log_capture::keep_interest_open();
     let buf = Buf::default();
     let layer = escaping(
         tracing_subscriber::fmt::layer()
@@ -197,6 +198,7 @@ fn written<L>(layer: L, buf: &Buf, emit: impl FnOnce()) -> String
 where
     L: tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
 {
+    crate::test_log_capture::keep_interest_open();
     tracing::subscriber::with_default(tracing_subscriber::registry().with(layer), emit);
     buf.text()
 }
@@ -380,6 +382,7 @@ fn every_production_text_layer_goes_through_escaping() {
 /// the site logs.
 #[tokio::test]
 async fn a_changed_capability_name_cannot_forge_a_rug_pull_line() {
+    crate::test_log_capture::keep_interest_open();
     use crate::capability::{
         CapabilityBackend, CapabilityExecutor, compute_capability_hash, rewrite_with_pin,
     };

@@ -35,6 +35,7 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Buf {
 
 #[tokio::test]
 async fn a_refused_tool_name_cannot_forge_a_log_line() {
+    crate::test_log_capture::keep_interest_open();
     let fx = fixture(Answer::Ok, |_| {}).await;
     for ansi in [false, true] {
         let buf = Buf::default();
