@@ -10,13 +10,12 @@ use axum::extract::{Query as Params, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::{Extension, Json, Router};
+use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::errors::{admin_auth_required, auth_required};
+use super::guard::Guard;
 use crate::counters::{Dim, Filter, Metric, Query, Window};
-use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
 use crate::gateway::routes;
 
@@ -100,15 +99,6 @@ pub(super) fn parse(params: &SeriesParams) -> Result<Query<'_>, String> {
     })
 }
 
-/// The refusal for a caller who may not read history, if any.
-fn refused(client: Option<&AuthenticatedClient>) -> Option<Response> {
-    match client {
-        None => Some(auth_required(StatusCode::UNAUTHORIZED).into_response()),
-        Some(client) if !client.admin => Some(admin_auth_required().into_response()),
-        Some(_) => None,
-    }
-}
-
 fn unavailable(why: &str) -> Response {
     (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": why}))).into_response()
 }
@@ -129,11 +119,11 @@ fn zone() -> String {
 
 async fn series(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
     Params(params): Params<SeriesParams>,
 ) -> Response {
-    if let Some(refusal) = refused(client.as_ref().map(|Extension(c)| c)) {
-        return refusal;
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
     let query = match parse(&params) {
         Ok(query) => query,
@@ -173,11 +163,11 @@ struct MarkerParams {
 
 async fn markers(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
     Params(params): Params<MarkerParams>,
 ) -> Response {
-    if let Some(refusal) = refused(client.as_ref().map(|Extension(c)| c)) {
-        return refusal;
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
     let Some(store) = state.meta_mcp.counters() else {
         return unavailable("call counters are not running");

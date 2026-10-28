@@ -9,6 +9,8 @@
 //!
 //! All UI code is gated behind the `webui` feature flag.
 
+mod access_report;
+mod access_table;
 mod activity;
 pub mod admin_audit;
 pub mod backend_ops;
@@ -18,6 +20,7 @@ pub mod control_plane;
 mod dashboard;
 mod errors;
 mod events;
+mod guard;
 mod history;
 pub mod import;
 mod overview;
@@ -39,12 +42,13 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use self::errors::{admin_auth_required, auth_required, flat_error};
+use self::errors::flat_error;
+use self::guard::Guard;
 use super::auth::AuthenticatedClient;
 use super::router::AppState;
 use crate::stats::{StatsSnapshot, TopTool};
 
-pub use self::dashboard::dashboard_handler;
+use self::dashboard::dashboard_handler;
 
 /// Embedded HTML — compiled into the binary, zero filesystem dependency.
 const INDEX_HTML: &str = include_str!("index.html");
@@ -89,6 +93,10 @@ pub fn api_router() -> Router<Arc<AppState>> {
 
     #[cfg(feature = "cost-governance")]
     let router = router.route(routes::UI_COSTS, get(costs));
+    // Test builds: a guarded handler that answers without admitting its
+    // caller fails the test that sent the request.
+    #[cfg(test)]
+    let router = router.route_layer(axum::middleware::from_fn(guard::probe::layer));
     router
 }
 
@@ -375,9 +383,18 @@ fn auth_facts(state: &AppState, client: Option<&AuthenticatedClient>) -> Value {
 /// `GET /ui/api/status` — JSON snapshot of gateway health.
 async fn status(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
+    guard: Guard,
 ) -> Json<Value> {
-    let client = client.map(|Extension(c)| c);
+    // Open to every caller that reaches it; the answer is shaped by caller.
+    let _ = guard.admit();
+    let access = access_report::report(
+        &state,
+        &generation,
+        guard.client.as_ref(),
+        guard.identity.as_ref(),
+    );
+    let client = guard.client;
     let auth = auth_facts(&state, client.as_ref());
     #[allow(
         clippy::disallowed_methods,
@@ -392,14 +409,17 @@ async fn status(
             .iter()
             .filter(|b| b.status().circuit_state != crate::failsafe::CircuitState::Open)
             .count();
-        return Json(json!({
+        return with_access(
+            json!({
             "server_count": total,
             "healthy_count": healthy,
             "degraded_count": total - healthy,
             "uptime_secs": uptime_secs(),
             "version": env!("CARGO_PKG_VERSION"),
             "auth": auth,
-        }));
+            }),
+            access,
+        );
     }
 
     // Full admin view
@@ -448,7 +468,8 @@ async fn status(
         });
     }
 
-    Json(json!({
+    with_access(
+        json!({
         "server_count": total,
         "tool_count": tool_count,
         "uptime_secs": uptime_secs(),
@@ -460,19 +481,28 @@ async fn status(
         },
         "servers": servers,
         "auth": auth,
-    }))
+        }),
+        access,
+    )
+}
+
+/// `answer` with the caller's `access` report, when it has one: an auth-on
+/// caller with no credential gets no `access` member at all.
+fn with_access(mut answer: Value, access: Option<Value>) -> Json<Value> {
+    if let (Some(access), Some(object)) = (access, answer.as_object_mut()) {
+        object.insert("access".to_string(), access);
+    }
+    Json(answer)
 }
 
 /// `GET /ui/api/tools` — flat list of all cached tools across servers.
 async fn tools(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
     Query(params): Query<ToolsQuery>,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-
-    if !is_admin(client.as_ref()) {
-        return auth_required(StatusCode::FORBIDDEN).into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
 
     #[allow(
@@ -532,12 +562,10 @@ async fn tools(
 async fn config(
     State(state): State<Arc<AppState>>,
     Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-
-    if !is_admin(client.as_ref()) {
-        return auth_required(StatusCode::FORBIDDEN).into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
 
     // Build a sanitized config snapshot from AppState
@@ -589,14 +617,9 @@ async fn config(
 }
 
 /// `POST /ui/api/reload` — trigger an immediate config reload (admin only).
-async fn reload(
-    State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
-) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+async fn reload(State(state): State<Arc<AppState>>, guard: Guard) -> impl IntoResponse {
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
 
     let Some(reload_context) = state.meta_mcp.reload_context() else {
@@ -638,13 +661,9 @@ async fn reload(
 /// Returns aggregate totals, per-API-key breakdown, and per-session breakdown.
 /// Requires admin access (returns 401 for unauthenticated public requests).
 #[cfg(feature = "cost-governance")]
-async fn costs(
-    State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
-) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return auth_required(StatusCode::UNAUTHORIZED).into_response();
+async fn costs(State(state): State<Arc<AppState>>, guard: Guard) -> impl IntoResponse {
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
     let tracker = state.meta_mcp.cost_tracker();
     Json(serde_json::json!({

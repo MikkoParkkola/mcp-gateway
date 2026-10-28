@@ -10,13 +10,13 @@
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Extension, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde_json::json;
 
-use super::errors::auth_required;
-use super::{AppState, AuthenticatedClient, is_admin};
+use super::AppState;
+use super::guard::Guard;
 use crate::backend::BackendRuntimeState;
 use crate::config::Config;
 use crate::config_reload::refusals::{RefusalKind, RefusalLedger, startup_refusal};
@@ -24,11 +24,10 @@ use crate::config_reload::refusals::{RefusalKind, RefusalLedger, startup_refusal
 /// The handler.
 pub(super) async fn refusals(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return auth_required(StatusCode::FORBIDDEN).into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
     #[allow(
         clippy::disallowed_methods,

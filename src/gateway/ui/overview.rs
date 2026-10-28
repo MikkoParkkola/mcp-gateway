@@ -16,12 +16,12 @@ use std::io;
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Extension, State};
+use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use serde_json::{Map, Value, json};
 
-use super::{admin_auth_required, is_admin, uptime_secs};
-use crate::gateway::auth::AuthenticatedClient;
+use super::guard::Guard;
+use super::uptime_secs;
 use crate::gateway::router::AppState;
 use crate::security::transparency_log::pager::{Tail, lines_newest_first, tail_window};
 
@@ -52,13 +52,9 @@ fn clip_field(value: &Value) -> Value {
 
 /// `GET /ui/api/overview`. Admin only: an authenticated non-admin gets 403
 /// here, and an unauthenticated caller never reaches it (401 upstream).
-pub(super) async fn overview(
-    State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
-) -> Response {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+pub(super) async fn overview(State(state): State<Arc<AppState>>, guard: Guard) -> Response {
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
     let mut body = Map::new();
     let mut degraded = Vec::new();
