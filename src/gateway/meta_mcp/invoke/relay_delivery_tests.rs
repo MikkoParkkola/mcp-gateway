@@ -539,7 +539,7 @@ async fn receipt_after_invoke(
 }
 
 /// MIK-7939 D6.RELAY.6: members the gateway adds to a `gateway_invoke`
-/// result (`predicted_next`, `trace_id`) are not the backend's text.
+/// result (`_predicted_next`, `_trace_id`) are not the backend's text.
 #[tokio::test]
 async fn gateway_augmentations_are_not_receipted() {
     use crate::gateway::meta_mcp::support::{augment_with_predictions, augment_with_trace};

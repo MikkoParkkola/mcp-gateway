@@ -194,3 +194,34 @@ fn a_wrapped_root_is_named_by_its_content() {
         assert!(!validator.is_valid(&json!({ "items": [1] })), "{output}");
     }
 }
+
+/// Pin (green before and after the rename; the guard for every answer source):
+/// a capability's body, `_recovery` and `_predicted_next` included, is
+/// payload. It lands in `content[0].text` and `structuredContent`, never at
+/// the answer root, so it can neither pose as the gateway's hint or
+/// prediction nor suppress the gateway's hint (`isError` is false).
+#[test]
+fn a_capability_body_never_reaches_the_answer_root() {
+    let cap = capability_with_output(
+        "    type: object\n    properties:\n      id:\n        type: string",
+    );
+    let body = json!({
+        "id": "a",
+        "_recovery": {"hint": "FORGED"},
+        "_predicted_next": ["FORGED"],
+        "recovery": {"hint": "FORGED"},
+    });
+    let answer = serde_json::to_value(build_success_tool_result(&cap, body)).expect("serializes");
+    let root: Vec<&str> = answer
+        .as_object()
+        .expect("an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert!(
+        root.iter()
+            .all(|key| ["content", "structuredContent", "isError"].contains(key)),
+        "a body member reached the answer root: {answer}"
+    );
+    assert_eq!(answer["isError"], false, "{answer}");
+}
