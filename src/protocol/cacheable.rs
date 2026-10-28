@@ -41,6 +41,21 @@ impl CacheScope {
     }
 }
 
+/// The methods whose results carry `ttlMs` and `cacheScope`.
+///
+/// Five from the `CacheableResult` interface, and `server/discover`, which
+/// requires the fields too. The gateway's own discovery document already
+/// carries them (`discover_document`), and shaping leaves them as written; a
+/// discover relayed to a backend gains them here.
+pub(crate) const CACHEABLE_METHODS: &[&str] = &[
+    "tools/list",
+    "prompts/list",
+    "resources/list",
+    "resources/read",
+    "resources/templates/list",
+    "server/discover",
+];
+
 /// The methods this gateway has assessed, and what each one warrants.
 ///
 /// Every row is private and the default below is private too, so the table
@@ -287,6 +302,12 @@ pub fn is_final(result: &Value) -> bool {
 #[must_use]
 pub(crate) fn is_error(result: &Value) -> bool {
     result.get("isError").and_then(Value::as_bool) == Some(true)
+}
+
+/// Whether `result` may carry cache hints: a final answer that is not an
+/// error. The ingress scope and the gateway's own hints read this one rule.
+pub(crate) fn is_cacheable_answer(result: &Value) -> bool {
+    is_final(result) && !is_error(result)
 }
 
 #[cfg(test)]

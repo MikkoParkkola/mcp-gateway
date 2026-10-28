@@ -87,8 +87,8 @@ const fn twin(case: RespCase, era: Era) -> Driven {
 const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> Driven {
     use RespCase::{CacheHit, Fresh, IdempotentReplay, Task as TaskCase};
     use RespPair::{
-        ClampLink, ClampSeal, FirewallSeal, FirewallStamp, JudgeCommit, JudgeRecord, RecordCommit,
-        SealSign, ShapeSeal, SignRebuild, SignRecord, StampSeal,
+        FirewallSeal, FirewallStamp, JudgeCommit, JudgeRecord, RecordCommit, SealSign, ShapeSeal,
+        SignRecord, StampSeal,
     };
     use RespRoute::{Direct, Mcp, Stdio, Task};
     if !stated(expect(route, case, era, pair)) {
@@ -105,15 +105,6 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
         return row;
     }
     match (route, case, era, pair) {
-        // Phase C: a task's stored result is clamped, then sealed, at the
-        // worker (input_round.rs:109-110), whatever era submitted it; the rows
-        // drive a real task through `/mcp` (MIK-8398 R14, R19). The recovered
-        // task (upstream.rs:554) clamps and seals on its own site, driven by
-        // MIK-8398's `tasks_get_with_a_public_scope_is_sealed_as_delivered`.
-        (Task, TaskCase, _, ClampSeal) => Driven::Rows(&[
-            "router::tests::task_execution_adapter::provenance_seal::a_worker_task_with_a_public_scope_is_sealed_as_delivered",
-            RECOVERED_TASK_SEALED,
-        ]),
         (Task, TaskCase, _, StampSeal) => Driven::Rows(&[
             "router::tests::task_execution_adapter::provenance_seal::a_task_run_by_the_worker_stores_a_sealed_result",
             RECOVERED_TASK_SEALED,
@@ -121,8 +112,8 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
         (Mcp | Direct, Fresh, Era::Modern, ShapeSeal) => {
             Driven::Row("rows::r_shape_shape_precedes_seal")
         }
-        (Mcp | Direct, Fresh, _, ClampSeal | StampSeal) => {
-            Driven::Row("rows::r_clamp_scope_clamp_precedes_seal")
+        (Mcp | Direct, Fresh, _, StampSeal) => {
+            Driven::Row("rows::r_stamp_seal_binds_the_delivered_bytes")
         }
         (Mcp | Direct, Fresh, _, FirewallSeal) => {
             Driven::Row("rows::r_fwseal_firewall_precedes_seal")
@@ -139,14 +130,8 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
         (Direct, Fresh, _, FirewallStamp) => {
             Driven::Row("response::source_order::stamp_and_egress_scan_order_is_pinned_at_source")
         }
-        (Mcp | Direct, Fresh, Era::Legacy, ClampLink) => {
-            Driven::Row("rows::r_link_scope_clamp_precedes_origin_link")
-        }
         (Mcp | Direct, Fresh, Era::Modern, SealSign) => {
             Driven::Row("rows::r_sign_seal_precedes_sign")
-        }
-        (Mcp | Direct, Fresh, Era::Modern, SignRebuild) => {
-            Driven::Row("rows::r_signrebuild_sign_precedes_relay_rebuild")
         }
         (Mcp, Fresh, Era::Modern, RecordCommit) => {
             Driven::Row("rows::r_commit_delivery_record_precedes_relay_commit")
@@ -174,16 +159,14 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
 /// rows of its own.
 const fn stdio_fresh_row(era: Era, pair: RespPair) -> Option<Driven> {
     use RespPair::{
-        ClampLink, ClampSeal, FirewallSeal, JudgeCommit, JudgeRecord, RecordCommit, SealSign,
-        ShapeSeal, SignRebuild, SignRecord, StampSeal,
+        FirewallSeal, JudgeCommit, JudgeRecord, RecordCommit, SealSign, ShapeSeal, SignRecord,
+        StampSeal,
     };
     Some(match (era, pair) {
         (Era::Modern, ShapeSeal) => Driven::Row("rows::stdio::r_shape_stdio_shape_precedes_seal"),
         // A seal needs a receipt minted in this request, so every sealed,
         // Bound clamp row also shows the stamp ran before the seal.
-        (_, ClampSeal | StampSeal) => {
-            Driven::Row("rows::stdio::r_clamp_stdio_scope_clamp_precedes_seal")
-        }
+        (_, StampSeal) => Driven::Row("rows::stdio::r_stamp_stdio_seal_binds_the_delivered_bytes"),
         (_, FirewallSeal) => Driven::Row("rows::stdio::r_fwseal_stdio_firewall_precedes_seal"),
         (_, SealSign) => Driven::Shared {
             pin: "response::source_order::stdio_finalizes_through_finalize_routed",
@@ -203,18 +186,6 @@ const fn stdio_fresh_row(era: Era, pair: RespPair) -> Option<Driven> {
         (Era::Legacy, RecordCommit) => Driven::Row(
             "server::signing_allocation_tests::collusion_stdio::stdio_audit_withheld_read_records_no_receipt",
         ),
-        (Era::Legacy, ClampLink) => {
-            Driven::Row("rows::stdio::r_link_stdio_scope_clamp_precedes_origin_link")
-        }
-        // Stdio signs inside finalize_content and rebuilds after it, through
-        // the same rebuild the HTTP row drives.
-        (Era::Legacy, SignRebuild) => Driven::Shared {
-            pin: "response::source_order::stdio_rebuilds_after_finalize_content",
-            rows: &[
-                "response::source_order::stdio_finalizes_through_finalize_routed",
-                "rows::r_signrebuild_sign_precedes_relay_rebuild",
-            ],
-        },
         _ => return None,
     })
 }
@@ -238,6 +209,10 @@ const fn invisible_pins(reason: Invisible) -> &'static [&'static str] {
         Invisible::StoredBytesAlreadyClamped => {
             &["protocol::cacheable::clamp_tests::every_non_private_scope_is_delivered_as_private"]
         }
+        Invisible::IngressStripsBackendSignature => &[
+            "protocol::reserved_members::tests::a_full_strip_removes_every_gateway_only_member_and_nothing_else",
+            "rows::r_ownsig_the_gateway_signature_is_not_receipted",
+        ],
         Invisible::JudgeOnlyReplaces
         | Invisible::StampIgnoresShapedMembers
         | Invisible::SealWritesOnlyExcludedMeta
@@ -255,6 +230,12 @@ const fn na_pins(reason: RespNa) -> &'static [&'static str] {
             "rows::stdio::r_erareplay_stdio_cross_era_replay_is_refused",
         ],
         RespNa::ReplayMintsNoReceipt => &["rows::r_replayseal_direct_replay_seal_gap"],
+        RespNa::IngressRemovesToolCallScope => &[
+            "rows::r_stamp_seal_binds_the_delivered_bytes",
+            "rows::stdio::r_stamp_stdio_seal_binds_the_delivered_bytes",
+            "rows::r_clamp_read_delivers_private",
+            "router::tests::task_execution_adapter::provenance_seal::a_worker_task_with_a_public_scope_is_sealed_as_delivered",
+        ],
         RespNa::NoModernShapeOnLegacy
         | RespNa::NoCacheOnDirect
         | RespNa::TaskHasNoOriginLink

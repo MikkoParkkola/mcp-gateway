@@ -174,11 +174,10 @@ fn a_seal_with_no_scope_fails_closed() {
 /// R17 (MIK-8398 C1g): a live `gateway_invoke` whose backend answer carries
 /// `cacheScope: "public"` is sealed over the delivered bytes. The tool is
 /// called by its surfaced name, so the backend's own envelope is the outer
-/// result (Native) and its `cacheScope` sits at the top level the clamp
-/// rewrites; a `gateway_invoke` reply would bury it in `content[0].text`.
-/// The oracle is the serialized wire form, so any post-seal mutation fails,
-/// not only this clamp. A guard: the live route clamped before the seal at
-/// ecfd7a9b5 already (`response_security.rs` PARENT.6).
+/// result (Native). A `tools/call` answer may not carry `cacheScope`, so
+/// ingress removes it and the delivered bytes differ from the backend's.
+/// The oracle is the serialized wire form, so a seal over any other bytes,
+/// or any post-seal mutation, fails.
 #[tokio::test]
 async fn a_public_scope_is_sealed_as_delivered_on_the_meta_route() {
     with_minted_receipts(Box::pin(async {
@@ -208,10 +207,12 @@ async fn a_public_scope_is_sealed_as_delivered_on_the_meta_route() {
         let response = meta.finalize_routed(response, &delivery, None);
         let wire = serde_json::to_value(&response).expect("the wire form serializes");
         let delivered = &wire["result"];
+        // A `tools/call` answer may not carry `cacheScope`: ingress removed
+        // it, so the delivered bytes differ from the backend's.
         assert_eq!(
-            delivered.get("cacheScope").and_then(|v| v.as_str()),
-            Some("private"),
-            "the wire clamp delivers private: {wire}"
+            delivered.get("cacheScope"),
+            None,
+            "ingress removed the backend's scope: {wire}"
         );
         let prov = delivered
             .pointer("/_meta/provenance")
@@ -228,9 +229,10 @@ async fn a_public_scope_is_sealed_as_delivered_on_the_meta_route() {
 }
 
 /// R20 (MIK-8398 C1g): a chain step's bytes are unchanged by the seal. Step
-/// results sit inside `content[0].text`, which the wire never clamps, so a
-/// step's `cacheScope` is delivered as the backend sent it, and its seal
-/// verifies against those bytes. Mutant: a clamp at the step seal sites.
+/// results sit inside `content[0].text`, which the wire never clamps, and
+/// the step's seal verifies against those bytes. A `tools/call` step can no
+/// longer carry `cacheScope` (ingress removes it), so a clamp at the step
+/// seal sites has nothing to change there.
 #[tokio::test]
 async fn chain_step_bytes_are_unchanged_by_the_seal() {
     with_minted_receipts(Box::pin(async {
@@ -265,10 +267,12 @@ async fn chain_step_bytes_are_unchanged_by_the_seal() {
         let parsed: serde_json::Value =
             serde_json::from_str(text).expect("the text parses as JSON");
         let step_result = parsed.pointer("/results/0/result").expect("a step result");
+        // Ingress removed the backend's scope before the step was recorded,
+        // so there is no scope left for a step clamp to change.
         assert_eq!(
-            step_result.get("cacheScope").and_then(|v| v.as_str()),
-            Some("public"),
-            "no clamp at steps: {parsed}"
+            step_result.get("cacheScope"),
+            None,
+            "ingress removed the backend's scope: {parsed}"
         );
         let prov = step_result
             .pointer("/_meta/provenance")
