@@ -219,7 +219,7 @@ async fn the_secret_is_sent_and_nothing_answered_or_kept_holds_it() {
             &result_headers,
         )
         .await;
-        if got.pointer("/result/status") == Some(&json!("completed")) {
+        if got.pointer("/result/status") != Some(&json!("working")) {
             break got;
         }
         assert!(
@@ -228,6 +228,11 @@ async fn the_secret_is_sent_and_nothing_answered_or_kept_holds_it() {
         );
         tokio::task::yield_now().await;
     };
+    assert_eq!(
+        finished.pointer("/result/status"),
+        Some(&json!("completed")),
+        "premise: the task completed: {finished}"
+    );
     answers.push(made);
     answers.push(finished);
     let seen = fx.seen.lock().expect("recorder").clone();
