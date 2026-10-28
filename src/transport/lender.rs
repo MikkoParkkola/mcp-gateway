@@ -428,4 +428,39 @@ mod tests {
             "a this-loan refusal does not evict"
         );
     }
+
+    /// A refused recheck is counted by how it refused, and so is a call
+    /// whose credential is not lent.
+    #[cfg(feature = "metrics")]
+    #[test]
+    fn every_refused_send_is_counted_by_its_reason() {
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let lender = Arc::new(Lender::default());
+        let _loan = lender.lend(LentCredential {
+            headers: headers("one"),
+            check: Some(Arc::new(|| Box::pin(async { Err(Refusal::ThisLoan) }))),
+        });
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a runtime");
+
+        telemetry_metrics::with_local_recorder(&recorder, || {
+            runtime.block_on(async {
+                assert!(lender.lent_for(&headers("one")).await.is_err());
+                assert!(lender.lent_for(&headers("two")).await.is_err());
+            });
+        });
+
+        let rendered = handle.render();
+        for reason in ["recheck_this_loan", "unlent"] {
+            let series = format!("mcp_gateway_per_user_send_refused_total{{reason=\"{reason}\"}}");
+            assert!(
+                rendered
+                    .lines()
+                    .any(|line| line.starts_with(&series) && line.ends_with(" 1")),
+                "{series} not counted once:\n{rendered}"
+            );
+        }
+    }
 }

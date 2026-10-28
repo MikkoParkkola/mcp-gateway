@@ -226,29 +226,32 @@ async fn a_cross_origin_card_endpoint_is_refused_before_any_send() {
     );
 }
 
-/// A dispatch abandoned while its task works queues no `CancelTask` once it
-/// has ended: the slot has no credential left to send as. The cancel is
-/// decided when the abandoned call drops, so the row reads that decision
-/// rather than waiting out a window. The call is dropped once its first
-/// `GetTask` poll arrives: the cancel guard is armed before that poll.
-#[tokio::test]
-async fn a_deferred_cancel_after_the_dispatch_ended_sends_nothing() {
+/// A per-user call whose task works, driven until its cancel guard is armed
+/// (the first `GetTask` poll goes out after the arm), and not yet dropped:
+/// dropping the returned closure's capture abandons it. With the agent's log.
+async fn abandoned_while_armed() -> (Box<dyn FnOnce()>, Arc<Mutex<Vec<Seen>>>) {
     let (base, log) = agent(Script::Works, None).await;
     let backend = required_a2a_backend(&base);
-    let methods = || -> Vec<String> {
-        log.lock()
-            .unwrap()
-            .iter()
-            .map(|s| s.method.clone())
-            .collect()
+    let methods = {
+        let log = Arc::clone(&log);
+        move || -> Vec<String> {
+            log.lock()
+                .unwrap()
+                .iter()
+                .map(|s| s.method.clone())
+                .collect()
+        }
     };
-
-    let mut call = Box::pin(backend.request_with_headers_lent(
-        "tools/call",
-        Some(delegate_params()),
-        checked(&subscriber_credential(USER)),
-        Some(USER),
-    ));
+    let mut call = Box::pin(async move {
+        backend
+            .request_with_headers_lent(
+                "tools/call",
+                Some(delegate_params()),
+                checked(&subscriber_credential(USER)),
+                Some(USER),
+            )
+            .await
+    });
     let armed = async {
         while !methods().iter().any(|m| m == "GetTask") {
             tokio::task::yield_now().await;
@@ -258,16 +261,51 @@ async fn a_deferred_cancel_after_the_dispatch_ended_sends_nothing() {
         result = &mut call => panic!("premise: the dispatch was still running: {result:?}"),
         () = armed => {}
     }
-    let ((), warnings) = crate::test_log_capture::capture_warnings(|| drop(call));
+    (Box::new(move || drop(call)), log)
+}
+
+/// A dispatch abandoned while its task works queues no `CancelTask` once it
+/// has ended: the slot has no credential left to send as. The cancel is
+/// decided when the abandoned call drops, so the row reads that decision
+/// rather than waiting out a window.
+#[tokio::test]
+async fn a_deferred_cancel_after_the_dispatch_ended_sends_nothing() {
+    let (abandon, log) = abandoned_while_armed().await;
+
+    let ((), warnings) = crate::test_log_capture::capture_warnings(abandon);
 
     assert!(
         warnings.contains("a deferred A2A cancel on a per-user slot was refused"),
         "the abandoned dispatch's cancel was not refused: {warnings:?}"
     );
-    let sent = methods();
+    let sent: Vec<String> = log
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|s| s.method.clone())
+        .collect();
     assert!(
         !sent.iter().any(|m| m == "CancelTask"),
         "a cancel was sent after its dispatch ended: {sent:?}"
+    );
+}
+
+/// The refused deferred cancel is counted, by reason.
+#[cfg(feature = "metrics")]
+#[tokio::test]
+async fn a_refused_deferred_cancel_is_counted() {
+    let (abandon, _log) = abandoned_while_armed().await;
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let handle = recorder.handle();
+
+    telemetry_metrics::with_local_recorder(&recorder, abandon);
+
+    let rendered = handle.render();
+    assert!(
+        rendered.lines().any(|line| line.starts_with(
+            "mcp_gateway_per_user_send_refused_total{reason=\"a2a_deferred_cancel\"}"
+        ) && line.ends_with(" 1")),
+        "the refused cancel was not counted:\n{rendered}"
     );
 }
 
