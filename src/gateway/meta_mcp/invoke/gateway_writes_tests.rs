@@ -506,3 +506,27 @@ fn a_pre_rename_kind_decodes_as_its_renamed_row() {
         assert_eq!(again[0]["dest"], dest, "{old} written back: {again}");
     }
 }
+
+/// The raise reads the reserved-member table: noting a counted member raises
+/// `annotated`, noting an identity stamp leaves `delivered`, and neither
+/// needs a write record open.
+#[tokio::test]
+async fn noting_a_counted_member_raises_annotated() {
+    let value = json!({"_security_findings": ["f"], "_trace_id": "t-1"});
+    let counted: &'static [&'static str] = &["_security_findings"];
+    let stamp: &'static [&'static str] = &["_trace_id"];
+    for (path, expected) in [(counted, "annotated"), (stamp, "delivered")] {
+        let effect = crate::gateway::delivery_facts::scope(async {
+            note(Layer::Value, path, &value);
+            let mut fields = serde_json::Map::new();
+            crate::gateway::delivery_facts::record_fields(
+                crate::gateway::delivery_facts::snapshot().as_ref(),
+                false,
+                &mut fields,
+            );
+            fields["response_effect"].clone()
+        })
+        .await;
+        assert_eq!(effect, expected, "{path:?}");
+    }
+}

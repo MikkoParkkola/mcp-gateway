@@ -667,7 +667,7 @@ pub(crate) fn build_stats_response(snapshot: &StatsSnapshot, tools_known: bool) 
         "tools_discovered": snapshot.tools_discovered,
         "tools_available": snapshot.tools_available,
         "tools_known": tools_known,
-        "top_tools": snapshot.top_tools,
+        "top_tools": &snapshot.top_tools[..snapshot.top_tools.len().min(crate::stats::TOP_TOOLS)],
         "total_cached_tokens": snapshot.total_cached_tokens,
         "cached_tokens_by_server": snapshot.cached_tokens_by_server
     })
