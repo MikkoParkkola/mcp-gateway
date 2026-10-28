@@ -512,9 +512,8 @@ function classify(err, spec) {
 
 /** The page content, keeping the done notice at its top while it belongs to this page. */
 function setContent(container, ...nodes) {
-  if (doneNotice && (doneNotice.path !== location.pathname || doneNotice.epoch !== authEpoch)) doneNotice = null;
-  const keep = doneNotice && container.id === 'content' && doneNotice.path === location.pathname
-    && doneNotice.epoch === authEpoch ? [doneNotice.node] : [];
+  if (doneNotice && (doneNotice.seq !== renderSeq || doneNotice.epoch !== authEpoch)) doneNotice = null;
+  const keep = doneNotice && container.id === 'content' ? [doneNotice.node] : [];
   container.replaceChildren(...keep, ...nodes);
 }
 
@@ -582,14 +581,16 @@ function placeConfirm(dialogEl, opener, room) {
 /**
  * Scroll the page by `dy`. When it cannot scroll that far, the page is made
  * taller first: the content fills the screen as a flex child, so only a taller
- * body adds room. `room.extra` is undone when the dialog closes.
+ * body adds room. The body's min-height is reset when the dialog closes.
  */
 function scrollPage(room, dy) {
   const max = document.documentElement.scrollHeight - innerHeight;
   const need = scrollY + dy - max;
   if (need > 0) {
+    // From the page's own height: a page already taller than the screen gains nothing from 100vh.
+    room.base ??= document.documentElement.scrollHeight;
     room.extra += need;
-    document.body.style.minHeight = `calc(100vh + ${room.extra}px)`;
+    document.body.style.minHeight = `${room.base + room.extra}px`;
   }
   window.scrollTo({ top: Math.max(0, scrollY + dy), behavior: 'instant' });
 }
@@ -630,7 +631,7 @@ export function confirmAction(spec) {
   const keep = el('button', { type: 'button', class: 'btn' }, `${keepWord} ${object}`);
   const act = el('button', { type: 'button', class: `btn ${tone}` }, `${verb} ${object}`);
   const acts = el('div', { class: 'acts' }, keep, act);
-  const room = { extra: 0 };
+  const room = { base: null, extra: 0 };
   confirmEl = el('dialog', { class: 'confirm', 'aria-labelledby': titleId, 'aria-describedby': listId },
     el('h2', { id: titleId }, `${verb} ${object}?`), body, acts);
   const dialogEl = confirmEl;
@@ -780,11 +781,14 @@ export function confirmAction(spec) {
     const dismiss = el('button', { type: 'button', class: 'btn quiet' }, 'Dismiss');
     const node = el('section', { class: 'done-notice', 'aria-label': 'Done' }, heading,
       ...(target.action ? [el('a', { href: target.action.path }, target.action.label)] : []), dismiss);
-    doneNotice = { node, path: target.path.split(/[?#]/)[0], epoch: authEpoch };
     dismiss.addEventListener('click', () => { node.remove(); doneNotice = null; });
     routed = true;
     finish(outcome);
     go(target.path);
+    // Bound to the render go() ended on, after any default-tab redirect: any later
+    // navigation, even to the same address, is a new render and drops it.
+    doneNotice = { node, seq: renderSeq, epoch: authEpoch };
+    document.getElementById('content').prepend(node);
     heading.focus({ preventScroll: true });
     saidAfterClose = target.notice ?? '';
   };
