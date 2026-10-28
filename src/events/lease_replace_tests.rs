@@ -473,3 +473,34 @@ async fn lease_t4_a_401_from_the_backend_wipes_the_lease_and_shows_it_rejected()
         "no stream opened under it"
     );
 }
+
+/// LEASE-T2, held lease: another principal's lease call on P's row is
+/// refused and leaves P's held lease exactly as it was, the same generation.
+#[tokio::test]
+async fn lease_t2_another_principals_call_leaves_a_held_lease_untouched() {
+    let f = fixture();
+    let handle = subscribe(&f, "p", "pt", "p");
+    lease_as(&f, &handle, token(Some(in_an_hour()))).await;
+    let key = lease_key(&f, "p");
+    let before = f
+        .hub
+        .leases
+        .held_generation(&key)
+        .expect("premise: p holds a lease");
+    let refused = f
+        .hub
+        .lease(
+            Some("q"),
+            "pt",
+            Some(&json!({ "subscription": handle })),
+            Some(token(Some(in_an_hour() + 60))),
+        )
+        .await
+        .expect_err("not q's row");
+    assert_eq!(refused.code, -32012);
+    assert_eq!(
+        f.hub.leases.held_generation(&key),
+        Some(before),
+        "p's lease is untouched: same generation"
+    );
+}
