@@ -92,6 +92,11 @@ async fn a_cache_hit_of_a_rewritten_answer_records_no_rewrite() {
         "premise: the first call recorded its rewrite: {first}"
     );
     let (hit, hit_effect) = search(&meta).await;
-    assert_eq!(hit, first, "the hit serves the stored, rewritten answer");
+    // Per-call members (the trace and invocation ids) differ; the delivered
+    // content is the stored, rewritten answer.
+    assert_eq!(
+        hit["content"], first["content"],
+        "the hit serves the stored, rewritten answer"
+    );
     assert_ne!(hit_effect, Some("rewritten".into()), "{hit}");
 }
