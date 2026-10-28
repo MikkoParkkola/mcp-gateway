@@ -248,12 +248,21 @@ async fn settled_task_log(
     action: crate::security::firewall::FirewallAction,
     answer: Answer,
 ) -> (String, Value, Vec<Value>) {
+    settled_task_log_for(action, answer, task_invoke(2, "settle-task", json!({}))).await
+}
+
+/// [`settled_task_log`] for the task-augmented call `request`.
+async fn settled_task_log_for(
+    action: crate::security::firewall::FirewallAction,
+    answer: Answer,
+    request: Value,
+) -> (String, Value, Vec<Value>) {
     use crate::gateway::router::route_matrix_driver_tests::response::{delivery_rows, temp_log};
     let (_dir, log) = temp_log(None);
     let (state, _store) = ruled_state(action, Arc::clone(&log)).await;
     let mock = MockBackend::answering(answer);
     register(&state, BACKEND, &mock);
-    let created = post(&state, "key-a", task_invoke(2, "settle-task", json!({}))).await;
+    let created = post(&state, "key-a", request).await;
     let task = task_id(&created);
     let settled = poll_until_terminal(&state, "key-a", &task).await;
     assert!(mock.calls() > 0, "premise: the worker reached the backend");
@@ -390,6 +399,55 @@ async fn a_backend_failure_writes_no_settlement_record() {
     assert!(
         settlement_records(&entries, &task).is_empty(),
         "task {task}: a backend failure is recorded as the gateway's:\n{}",
+        dump(&entries)
+    );
+}
+
+/// An input request the settlement inspection refuses is replaced by an error
+/// that ends the task, so it is a terminal refusal and is recorded: whether an
+/// answer is interim is read after the inspection.
+#[tokio::test]
+async fn a_refused_input_request_is_recorded_as_a_terminal_refusal() {
+    use super::input_round::{STATE_1, ask, create};
+    use crate::security::firewall::FirewallAction;
+    let leak = secret();
+    let mut asked = ask("k1", STATE_1);
+    asked["content"] = json!([{"type": "text", "text": leak}]);
+
+    let (task, settled, entries) = settled_task_log_for(
+        FirewallAction::Block,
+        Answer::Result(asked),
+        create(2, "settle-task"),
+    )
+    .await;
+    assert!(
+        !settled.to_string().contains(&leak),
+        "premise: the task read carries no credential: {settled}"
+    );
+    let records = settlement_records(&entries, &task);
+    let [record] = records.as_slice() else {
+        panic!(
+            "task {task}: one task_settlement record:\n{}",
+            dump(&entries)
+        );
+    };
+    assert!(record["response_effect"] == "refused", "{record}");
+    assert!(record["outcome"] == "denied", "{record}");
+}
+
+/// A clean answer under the same rule writes no settlement record: only a
+/// refusal or a rewrite does.
+#[tokio::test]
+async fn a_clean_task_answer_writes_no_settlement_record() {
+    use crate::security::firewall::FirewallAction;
+    let (task, settled, entries) = settled_task_log(FirewallAction::Block, Answer::ok()).await;
+    assert!(
+        settled.get("error").is_none(),
+        "premise: the clean task completes: {settled}"
+    );
+    assert!(
+        settlement_records(&entries, &task).is_empty(),
+        "a clean settlement wrote a record:\n{}",
         dump(&entries)
     );
 }
