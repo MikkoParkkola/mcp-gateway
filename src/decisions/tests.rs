@@ -145,6 +145,7 @@ fn an_older_ui_decision_leaves_the_item_open() {
 fn a_covering_grant_closes_and_its_expiry_reopens() {
     let mut set = ready();
     deny(&mut set, 110, &missing("stripe.charges", 1));
+    assert_eq!(count(&set), 1, "open before the row");
     let mut row = grant("stripe.charges", GrantScope::Execute);
     row.expires_at = Some(at(10));
     set.set_grants(vec![row], at(2));
@@ -173,6 +174,7 @@ fn a_row_that_evaluate_would_not_match_leaves_the_item_open() {
         let mut note = missing("stripe.charges", 1);
         note.tool = Some("charge".to_string());
         deny(&mut set, 111, &note);
+        assert_eq!(count(&set), 1, "{why}: open before the row");
         set.set_grants(vec![row], at(2));
         assert_eq!(count(&set), 1, "{why}");
     }
@@ -195,6 +197,7 @@ fn every_row_evaluate_would_match_closes_the_item() {
         let mut note = missing("stripe.charges", 1);
         note.tool = Some("charge".to_string());
         deny(&mut set, 112, &note);
+        assert_eq!(count(&set), 1, "{why}: open before the row");
         set.set_grants(vec![row], at(2));
         assert_eq!(count(&set), 0, "{why}");
     }
@@ -309,6 +312,7 @@ fn an_admin_decline_does_not_come_back_after_a_restart() {
         let mut set = booting();
         replay_all(&mut set, first);
         let list = set.list();
+        assert_eq!(list.len(), 1, "{first:?}: refunds stays open: {list:?}");
         let scope = list[0]["scope"].as_array().expect("scope").clone();
         assert_eq!(scope.len(), 1, "{first:?}: {list:?}");
         assert_eq!(scope[0]["capability"], "stripe.refunds", "{first:?}");
@@ -321,6 +325,7 @@ fn an_event_seen_twice_is_applied_once() {
     let charge = missing("stripe.charges", 1);
     deny(&mut set, 1, &charge);
     deny(&mut set, 1, &charge);
+    assert_eq!(set.list().len(), 1, "one request");
     assert_eq!(set.list()[0]["refused_calls"], 1, "same position: one refusal");
     deny(&mut set, 2, &charge);
     assert_eq!(set.list()[0]["refused_calls"], 2, "a second position is a second refusal");
