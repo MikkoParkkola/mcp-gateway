@@ -477,7 +477,7 @@ fn signed(config: &mut crate::config::Config) {
 /// The answer without what each call mints: its trace id and signature.
 fn unminted(mut body: Value) -> Value {
     if let Some(result) = body["result"].as_object_mut() {
-        result.remove("trace_id");
+        result.remove("_trace_id");
     }
     if let Some(signature) = body["result"]["_signature"].as_object_mut() {
         signature.remove("sig");

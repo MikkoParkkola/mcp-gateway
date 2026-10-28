@@ -679,9 +679,14 @@ jobs:
         run: python3 scripts/ci/check_needs.py windows-shards windows-clippy
 
   # The macOS suite as shards (MIK-8482); `macos-check` is the aggregate.
+  # On a pull request it runs only for a merge train (a `train/` branch in
+  # this repository): the account's few macOS runners go to trains, and every
+  # other pull request keeps its Linux and Windows jobs instead of being
+  # cancelled whole to free them. A train still runs it, so a macOS break is
+  # caught before it merges.
   macos-shards:
     name: macOS shard ${{ matrix.shard }}
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
     runs-on: macos-latest
     timeout-minutes: 90
     strategy:
@@ -711,10 +716,13 @@ jobs:
       - name: Shard suite
         run: python3 scripts/ci/shard_tests.py run macos ${{ matrix.shard }}
 
+  # Gated like its shards: on a pull request that is not a train it is
+  # skipped, never red, and no required check needs it. On a train it runs
+  # with always(), so a failed or skipped shard fails it.
   macos-check:
     name: macOS check
     needs: [macos-shards]
-    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

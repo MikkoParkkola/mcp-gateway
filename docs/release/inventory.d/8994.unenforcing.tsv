@@ -1,0 +1,1 @@
+src/transport/http/cancel_guard.rs	unarmed	1	Builds a cancel guard that never sends; decides nothing: the request path chooses it for a lent-only slot, whose dispatch is gone when the guard drops
