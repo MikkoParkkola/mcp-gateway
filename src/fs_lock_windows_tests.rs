@@ -379,7 +379,7 @@ fn a_lock_directory_broad_local_groups_may_write_warns_and_proceeds() {
 
 /// A sidecar name left delete-pending (a healer's delete-on-close replace met
 /// another open handle, as an antivirus or indexer handle does on CI) refuses
-/// a new create with ERROR_ACCESS_DENIED. That is contention, not a refusal:
+/// a new create with `ERROR_ACCESS_DENIED`. That is contention, not a refusal:
 /// the probe answers `Held`, and the lock is taken once the name is free.
 #[test]
 fn a_delete_pending_sidecar_is_contention_not_an_error() {
