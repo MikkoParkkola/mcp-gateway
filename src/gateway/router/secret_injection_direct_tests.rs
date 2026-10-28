@@ -134,9 +134,10 @@ async fn the_direct_route_applies_a_header_rule() {
 
 /// Every file under `dir`, with its bytes. A directory or file that cannot be
 /// read fails the row: an unread store must not pass as a clean one. The one
-/// exception is an empty lock sidecar the live store holds: Windows refuses
-/// to read a file another handle has locked (`fs_lock::ExclusiveFileLock` is
-/// `LockFileEx` there), and an empty file holds nothing to scan.
+/// exception is a lock sidecar the live store holds: Windows refuses to read
+/// a file another handle has locked (`fs_lock::ExclusiveFileLock` is
+/// `LockFileEx` there). Every `fs_lock` sidecar in this crate is named
+/// `*.lock` and no store's data file is, so the skip is keyed on that name.
 #[cfg(feature = "firewall")]
 fn files_under(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
     let mut files = Vec::new();
@@ -148,19 +149,22 @@ fn files_under(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
         }
         match std::fs::read(&path) {
             Ok(bytes) => files.push((path, bytes)),
-            Err(error) if locked_and_empty(&path, &error) => {}
+            Err(error) if locked_sidecar(&path, &error) => {}
             Err(error) => panic!("a stored file reads: {}: {error}", path.display()),
         }
     }
     files
 }
 
-/// Whether `error` is Windows' lock violation (os error 33) on an empty file.
+/// Whether `error` is Windows' lock violation (os error 33) on a `*.lock`
+/// sidecar.
 #[cfg(feature = "firewall")]
-fn locked_and_empty(path: &std::path::Path, error: &std::io::Error) -> bool {
+fn locked_sidecar(path: &std::path::Path, error: &std::io::Error) -> bool {
     cfg!(windows)
         && error.raw_os_error() == Some(33)
-        && std::fs::metadata(path).is_ok_and(|meta| meta.len() == 0)
+        && path
+            .extension()
+            .is_some_and(|extension| extension == "lock")
 }
 
 /// Whether `bytes` holds `text`.
