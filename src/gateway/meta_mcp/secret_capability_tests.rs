@@ -47,16 +47,14 @@ async fn recording_capability(meta: &MetaMcp) -> Seen {
         );
         axum::serve(listener, app).await.expect("serve");
     });
+    let base_url = crate::test_fixture_host::fixture_url(port);
     let definition = crate::capability::parse_capability(&format!(
         "name: probe\ndescription: the capability under test\n\
          providers:\n  primary:\n    service: rest\n    config:\n      \
-         base_url: http://localhost:{port}\n      path: /probe\n      method: POST\n"
+         base_url: {base_url}\n      path: /probe\n      method: POST\n"
     ))
     .expect("fixture capability");
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .expect("client");
+    let client = crate::test_fixture_host::fixture_client(Duration::from_secs(5));
     let executor =
         Arc::new(crate::capability::CapabilityExecutor::new().with_test_http_client(client));
     let capabilities = Arc::new(crate::capability::CapabilityBackend::new(
