@@ -6,17 +6,16 @@
 //! does with a line.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-#[cfg(feature = "webui")]
 use super::rotation::MAX_RECORD_BYTES;
-use super::segments::{active_segment_seq, list_segments, sealed_path};
+use super::segments::{active_segment_seq, list_segments, sealed_path, segment_seq_in};
 
-/// Where a page starts reading: bytes below `end` in `file` are unread.
+/// Where a page starts reading: bytes below `end` in `segment` are unread.
+/// The segment's file is opened with [`open_segment`].
 pub(crate) struct Position {
-    pub(crate) file: PathBuf,
     pub(crate) end: u64,
-    /// The segment `file` is, the active file included; `None` never occurs
+    /// The segment, the active file included; `None` never occurs
     /// for a resolved position but stays in the cursor shape callers keep.
     pub(crate) segment: Option<u64>,
     /// The cursor no longer named a position, so reading restarts at the
@@ -40,7 +39,6 @@ pub(crate) fn position(log: &Path, cursor: Option<(u64, Option<u64>)>) -> io::Re
     };
     let newest = |reset| -> io::Result<Position> {
         Ok(Position {
-            file: log.to_path_buf(),
             end: len_of(log)?,
             segment: Some(active_seq),
             reset,
@@ -49,7 +47,6 @@ pub(crate) fn position(log: &Path, cursor: Option<(u64, Option<u64>)>) -> io::Re
     match cursor {
         None => newest(false),
         Some((offset, None)) if sealed.is_empty() => Ok(Position {
-            file: log.to_path_buf(),
             end: offset.min(len_of(log)?),
             segment: Some(0),
             reset: false,
@@ -68,7 +65,6 @@ pub(crate) fn position(log: &Path, cursor: Option<(u64, Option<u64>)>) -> io::Re
             };
             let end = offset.min(len_of(&file)?);
             Ok(Position {
-                file,
                 end,
                 segment: Some(seq),
                 reset: false,
@@ -90,7 +86,8 @@ pub(crate) fn older_segment(log: &Path, segment: Option<u64>) -> io::Result<Opti
 
 /// Read `len` bytes starting at `start`. A log file that was never created
 /// reads as empty, matching a view with no events yet.
-pub(crate) fn read_window(path: &Path, start: u64, len: u64) -> io::Result<Vec<u8>> {
+#[cfg(feature = "webui")]
+fn read_window(path: &Path, start: u64, len: u64) -> io::Result<Vec<u8>> {
     if len == 0 {
         return Ok(Vec::new());
     }
@@ -101,8 +98,59 @@ pub(crate) fn read_window(path: &Path, start: u64, len: u64) -> io::Result<Vec<u
     }
 }
 
-/// [`read_window`] on a file already open. A reader that holds the handle
-/// keeps reading the same bytes when rotation renames the file under it.
+/// Open segment `seq` of `log` for reading. The active file is opened by name
+/// and then checked: if rotation sealed it meanwhile, the sealed file holds
+/// its bytes, so that is the one read; in the gap where rotation has renamed
+/// the active file but not yet created the next, its bytes are under the
+/// sealed name too. `None` when neither exists. `before_open` runs just
+/// before the open: a test's seam to rotate in that window.
+pub(crate) fn open_segment(
+    log: &Path,
+    seq: u64,
+    before_open: impl FnOnce(),
+) -> io::Result<Option<std::fs::File>> {
+    let sealed_now =
+        || -> io::Result<bool> { Ok(list_segments(log)?.iter().any(|s| s.seq == seq)) };
+    let path = if sealed_now()? {
+        sealed_path(log, seq)
+    } else {
+        log.to_path_buf()
+    };
+    before_open();
+    let file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return if path == log && sealed_now()? {
+                std::fs::File::open(sealed_path(log, seq)).map(Some)
+            } else {
+                Ok(None)
+            };
+        }
+        Err(e) => return Err(e),
+    };
+    if path == log && sealed_now()? {
+        return std::fs::File::open(sealed_path(log, seq)).map(Some);
+    }
+    // Opened by the active name: it must hold `seq`. Retention can delete a
+    // sealed segment after a cursor into it was resolved, and the active file
+    // then holds a later segment, whose bytes are not the ones asked for.
+    if path == log && active_seq_of(&file, log)? != seq {
+        return Ok(None);
+    }
+    Ok(Some(file))
+}
+
+/// The segment the open active file holds, read from that descriptor by the
+/// same rule as [`active_segment_seq`]: its open record, or for a log written
+/// before open records, the newest sealed segment plus one.
+fn active_seq_of(file: &std::fs::File, log: &Path) -> io::Result<u64> {
+    let after = list_segments(log)?.last().map_or(0, |s| s.seq + 1);
+    segment_seq_in(file, after)
+}
+
+/// Read `len` bytes starting at `start` of a file already open. A reader
+/// that holds the handle keeps reading the same bytes when rotation renames
+/// the file under it.
 pub(crate) fn read_window_in(file: &std::fs::File, start: u64, len: u64) -> io::Result<Vec<u8>> {
     use std::io::{Read, Seek, SeekFrom};
 
@@ -136,26 +184,34 @@ impl Tail {
     }
 }
 
-/// Read the tail window below `end` in `file`. A window that starts mid-line
-/// drops that partial head; the line it belongs to is read by the page that
-/// covers the bytes below. Returns the window and the bytes it spans.
+/// Read the tail window below `end` in the file at `file`, without line
+/// assembly: the Overview's recent-actions view, which reads by path. A
+/// window that starts mid-line drops that partial head; the line it belongs to
+/// is read by the page that covers the bytes below. Returns the window and the
+/// bytes it spans.
+#[cfg(feature = "webui")]
 pub(crate) fn tail_window(file: &Path, end: u64, max: u64) -> io::Result<(Tail, u64)> {
     let window_len = end.min(max);
     let window = read_window(file, end - window_len, window_len)?;
     Ok(split_tail(window, end))
 }
 
-/// The longest window line assembly reads: one record at the logger's cap,
-/// its newline, and the newline ending the line before it.
-#[cfg(feature = "webui")]
-pub(crate) const ASSEMBLY_WINDOW: u64 = MAX_RECORD_BYTES as u64 + 2;
+/// The longest window line assembly reads: the newline ending the line
+/// before, and one record at the logger's cap. The cap counts the record's own
+/// newline (the logger refuses `line.len() + 1 > MAX_RECORD_BYTES`), so one
+/// byte more than the cap holds both.
+pub(crate) const ASSEMBLY_WINDOW: u64 = MAX_RECORD_BYTES as u64 + 1;
 
-/// [`tail_window`] on an open file, with line assembly: when no line starts
+/// The tail window of at most `max` bytes below `end` in an open file, with
+/// line assembly. A window that starts mid-line drops that partial head; the
+/// line it belongs to is read by the page that covers the bytes below. When
+/// no line starts
 /// inside `max`, the window is read again at [`ASSEMBLY_WINDOW`], so a line
 /// up to the record cap is returned whole. [`Tail::LineTooLong`] then means a
-/// line over the cap, which the logger never writes. The bytes returned count
+/// line over the cap, which the logger never writes, wherever it sits: a
+/// window that starts at byte 0 has no newline before its first line, so that
+/// line's length is checked against the cap too. The bytes returned count
 /// both reads.
-#[cfg(feature = "webui")]
 pub(crate) fn tail_window_assembled(
     file: &std::fs::File,
     end: u64,
@@ -168,9 +224,30 @@ pub(crate) fn tail_window_assembled(
     match read(max)? {
         (Tail::LineTooLong, first) if max < ASSEMBLY_WINDOW => {
             let (tail, second) = read(ASSEMBLY_WINDOW)?;
-            Ok((tail, first + second))
+            Ok((over_cap_at_start(tail), first + second))
         }
         done => Ok(done),
+    }
+}
+
+/// A window starting at byte 0 counts as starting on a line, so its first line
+/// is never `LineTooLong` by position; one longer than the record cap is.
+fn over_cap_at_start(tail: Tail) -> Tail {
+    match &tail {
+        Tail::Lines {
+            start: 0, window, ..
+        } => {
+            let first = window
+                .iter()
+                .position(|b| *b == b'\n')
+                .map_or(window.len(), |nl| nl + 1);
+            if first > MAX_RECORD_BYTES {
+                Tail::LineTooLong
+            } else {
+                tail
+            }
+        }
+        _ => tail,
     }
 }
 
@@ -215,7 +292,7 @@ pub(crate) fn lines_newest_first(body: &[u8], body_start: u64) -> Vec<(u64, &[u8
 
 #[cfg(test)]
 mod tests {
-    use super::position;
+    use super::{open_segment, position, sealed_path};
 
     /// Every sealed segment expired (retention or the disk-full path): the
     /// active file is numbered by its open record, not by counting siblings.
@@ -228,7 +305,30 @@ mod tests {
         assert_eq!(position(&log, None).unwrap().segment, Some(7));
         // A cursor into that segment resolves to the active file.
         let at = position(&log, Some((3, Some(7)))).unwrap();
-        assert_eq!(at.file, log);
         assert!(!at.reset);
+    }
+
+    /// Retention deletes a sealed segment after `position` resolved a cursor
+    /// into it. Opening that segment then finds it under neither name, and
+    /// must not hand back the active file, which is a different segment.
+    #[test]
+    fn a_segment_removed_after_resolving_is_not_replaced_by_the_active_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("audit.jsonl");
+        let sealed = sealed_path(&log, 3);
+        let opened =
+            |seq: u64| serde_json::json!({"event": "audit_segment_opened", "segment_seq": seq});
+        std::fs::write(&sealed, format!("{}\n{{\"a\":1}}\n", opened(3))).unwrap();
+        std::fs::write(&log, format!("{}\n", opened(4))).unwrap();
+        let at = position(&log, Some((10, Some(3)))).unwrap();
+        assert_eq!(at.segment, Some(3));
+        assert!(!at.reset);
+        // Retention, between resolving the cursor and opening its file.
+        std::fs::remove_file(&sealed).unwrap();
+        let file = open_segment(&log, 3, || {}).unwrap();
+        assert!(
+            file.is_none(),
+            "segment 3 is gone; the active file is segment 4"
+        );
     }
 }
