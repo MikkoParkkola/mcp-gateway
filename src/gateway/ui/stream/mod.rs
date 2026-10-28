@@ -111,8 +111,7 @@ async fn stream(
     let who = held
         .as_ref()
         .map_or_else(|| "anonymous".to_owned(), HeldCredential::deciding_digest);
-    let spawn_watcher = || tokio::spawn(watcher::run(Arc::clone(&state))).abort_handle();
-    let guard = match hub.admit(&who, spawn_watcher) {
+    let guard = match hub.admit(&who, |old| watcher::spawn(&state, old)) {
         Ok(guard) => guard,
         Err(refusal) => return too_many(refusal),
     };

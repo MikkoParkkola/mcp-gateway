@@ -7,12 +7,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::json;
-use tokio::task::AbortHandle;
+use tokio::task::JoinHandle;
 
 use super::guard::{Guard, MAX_PER_CREDENTIAL, MAX_UI_STREAMS, Refusal, StreamHub};
 
-fn idle_task() -> AbortHandle {
-    tokio::spawn(std::future::pending::<()>()).abort_handle()
+fn idle_task(_: Option<JoinHandle<()>>) -> JoinHandle<()> {
+    tokio::spawn(std::future::pending::<()>())
 }
 
 fn admit(hub: &StreamHub, who: &str) -> Result<Guard, Refusal> {

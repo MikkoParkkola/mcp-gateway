@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 use tokio::sync::watch;
-use tokio::task::AbortHandle;
+use tokio::task::{AbortHandle, JoinHandle};
 
 use crate::config_reload::Generation;
 
@@ -59,7 +59,10 @@ impl Snapshot {
 struct Inner {
     streams: usize,
     per_credential: HashMap<String, usize>,
-    watcher: Option<AbortHandle>,
+    watcher: Option<JoinHandle<()>>,
+    /// The watcher the last guard aborted; its successor waits for it to
+    /// finish before it publishes anything.
+    retiring: Option<JoinHandle<()>>,
     /// The last generation the watcher saw, kept across watcher restarts so
     /// a reload applied while no stream was open still counts.
     last_generation: Option<Arc<Generation>>,
@@ -134,7 +137,7 @@ impl StreamHub {
     /// The handle lets a test wait until the task has finished.
     #[cfg(test)]
     pub(crate) fn kill_watcher_for_test(&self) -> Option<AbortHandle> {
-        let watcher = self.shared.lock().watcher.clone()?;
+        let watcher = self.shared.lock().watcher.as_ref()?.abort_handle();
         watcher.abort();
         Some(watcher)
     }
@@ -159,7 +162,7 @@ impl StreamHub {
     pub(super) fn admit(
         &self,
         credential: &str,
-        start: impl FnOnce() -> AbortHandle,
+        start: impl FnOnce(Option<JoinHandle<()>>) -> JoinHandle<()>,
     ) -> Result<Guard, Refusal> {
         let mut inner = self.shared.lock();
         if inner.streams >= MAX_UI_STREAMS {
@@ -174,20 +177,37 @@ impl StreamHub {
         }
         *held += 1;
         inner.streams += 1;
-        let dead = inner.watcher.as_ref().is_some_and(AbortHandle::is_finished);
-        if dead {
-            tracing::warn!("ui stream: the watcher ended unexpectedly; starting a new one");
-        }
-        if dead || inner.watcher.is_none() {
-            self.shared
-                .snapshot
-                .send_if_modified(|s| std::mem::replace(&mut s.fresh, false));
-            inner.watcher = Some(start());
-        }
+        self.start_if_needed(&mut inner, start);
         Ok(Guard {
             hub: Arc::clone(&self.shared),
             credential: credential.to_owned(),
         })
+    }
+
+    /// Start the watcher if none is running, or if the last one ended on its
+    /// own while streams were open (logged at warn).
+    pub(super) fn ensure_watcher(
+        &self,
+        start: impl FnOnce(Option<JoinHandle<()>>) -> JoinHandle<()>,
+    ) {
+        self.start_if_needed(&mut self.shared.lock(), start);
+    }
+
+    fn start_if_needed(
+        &self,
+        inner: &mut Inner,
+        start: impl FnOnce(Option<JoinHandle<()>>) -> JoinHandle<()>,
+    ) {
+        if inner.watcher.as_ref().is_some_and(JoinHandle::is_finished) {
+            tracing::warn!("ui stream: the watcher ended unexpectedly; starting a new one");
+            inner.retiring = inner.watcher.take();
+        }
+        if inner.watcher.is_none() {
+            self.shared
+                .snapshot
+                .send_if_modified(|s| std::mem::replace(&mut s.fresh, false));
+            inner.watcher = Some(start(inner.retiring.take()));
+        }
     }
 
     /// Whether `now` replaced the generation seen last, counting reloads
@@ -255,6 +275,7 @@ impl Drop for Guard {
             && let Some(watcher) = inner.watcher.take()
         {
             watcher.abort();
+            inner.retiring = Some(watcher);
         }
     }
 }
