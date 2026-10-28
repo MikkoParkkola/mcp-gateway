@@ -443,16 +443,28 @@ impl A2aTransport {
     }
 
     /// The answer when the deadline passes. The caller's guard, still armed,
-    /// requests the task's cancellation as it drops.
+    /// requests the task's cancellation as it drops, except on a per-user
+    /// slot, which has no credential left to cancel with.
     fn timed_out(&self, id: RequestId) -> JsonRpcResponse {
         JsonRpcResponse::success(
             id,
             error_result(&format!(
-                "the A2A agent did not finish within the backend timeout ({}s); cancellation of \
-                 its task was requested",
-                self.timeout.as_secs()
+                "the A2A agent did not finish within the backend timeout ({}s); {}",
+                self.timeout.as_secs(),
+                self.cancel_outcome("cancellation of its task was requested")
             )),
         )
+    }
+
+    /// What became of an unfinished task's cancellation, for the caller:
+    /// `requested` on a slot that cancels, and on a per-user slot that the
+    /// task was left running.
+    fn cancel_outcome(&self, requested: &'static str) -> &'static str {
+        if self.client.is_lent_only() {
+            "its task was not cancelled and may still be running at the agent"
+        } else {
+            requested
+        }
     }
 
     /// The agent's question as an MCP input round. Its task is parked under an
@@ -487,7 +499,8 @@ impl A2aTransport {
                 return JsonRpcResponse::success(
                     id,
                     error_result(&format!(
-                        "{why}; cancellation of the agent's task was requested"
+                        "{why}; {}",
+                        self.cancel_outcome("cancellation of the agent's task was requested")
                     )),
                 );
             }
