@@ -267,3 +267,72 @@ async fn a_burst_past_the_queue_is_replayed_not_lost() {
     // Past the one-note queue, notes were dropped; the replay reads them back.
     served_when(&state, |body| scope_len(body) == 5).await;
 }
+
+/// The replay's cost over one full default segment (64 MiB, one record in
+/// twenty a grant decision): run by hand with `--ignored --nocapture`; the
+/// PR states its numbers. The reader parses lines only, so the segment is
+/// written directly rather than through the chained logger.
+#[test]
+#[ignore = "a measurement, run by hand"]
+fn measure_the_replay_of_a_full_segment() {
+    use std::io::Write as _;
+
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("transparency.jsonl");
+    let mut file = std::io::BufWriter::new(std::fs::File::create(&path).expect("file"));
+    let (mut bytes, mut notes) = (0_u64, 0_u64);
+    let at = crate::clock::utc_now()
+        .expect("a readable clock")
+        .to_rfc3339();
+    let mut n = 0_u64;
+    while bytes < 64 * 1024 * 1024 {
+        let line = if n % 20 == 0 {
+            notes += 1;
+            json!({
+                "kind": GRANT_DECISION_KIND, "timestamp": at, "reason": "missing_grant",
+                "capability": format!("cap.{}", n % 50), "scope": "execute",
+                "agent_id": "mtls:runner",
+                "subject": {"authority": "https://idp.example", "subject": format!("user-{}", n % 500)},
+                "counter": n, "entry_hash": format!("h{n}"),
+            })
+        } else {
+            json!({"kind": "invocation", "counter": n, "entry_hash": format!("h{n}"), "pad": "x".repeat(220)})
+        };
+        let text = line.to_string();
+        writeln!(file, "{text}").expect("write");
+        bytes += text.len() as u64 + 1;
+        n += 1;
+    }
+    file.flush().expect("flush");
+    drop(file);
+
+    // Resident memory on Linux, where the measurement is run.
+    let rss_kib = || {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|status| {
+                status
+                    .lines()
+                    .find(|line| line.starts_with("VmRSS:"))
+                    .and_then(|line| line.split_whitespace().nth(1)?.parse::<u64>().ok())
+            })
+            .unwrap_or_default()
+    };
+    let shared = Shared::with_key([7; 32]);
+    shared.update(|set| {
+        set.set_health(Source::ControlPlane, Health::Ready);
+        set.set_health(Source::Capability, Health::Absent);
+    });
+    let before = rss_kib();
+    let started = std::time::Instant::now();
+    replay_grant_decisions(&path, &shared);
+    let elapsed = started.elapsed();
+    let after = rss_kib();
+    let view = shared.view().expect("replayed");
+    println!(
+        "replay: {bytes} bytes, {n} records, {notes} grant notes, {} open requests, \
+         {elapsed:?}, rss {before} KiB -> {after} KiB",
+        view.decisions.len(),
+    );
+    assert_eq!(view.decisions.len(), 500, "one request per subject");
+}
