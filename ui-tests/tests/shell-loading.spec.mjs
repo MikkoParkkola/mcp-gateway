@@ -74,7 +74,7 @@ test('G2 a page that answers quickly never shows the loading state', async ({ pa
   expect(await page.evaluate(() => window.__sawLoading)).toBe(false);
 });
 
-test('G3 the frame paints while every API request is still open', async ({ page }) => {
+test('G3 the frame paints while every API request is still open (tooltip copy is pinned in its own ticket)', async ({ page }) => {
   await page.route('**/ui/api/**', () => {}); // never answered
   await withFixturePages(page, { probes: true });
   await page.goto('/ui/policies/status');
@@ -124,8 +124,12 @@ test('G5 a slow Retry shows the loading state under the banner, and the banner s
 function serverStates() {
   const file = fileURLToPath(new URL('../../src/backend/server_state.rs', import.meta.url));
   const source = readFileSync(file, 'utf8');
+  const head = source.slice(0, source.indexOf('pub enum ServerState {'));
+  // The wire names are the variants in snake_case only while nothing renames them.
+  expect(head.slice(head.lastIndexOf('#[derive')), 'ServerState keeps rename_all = "snake_case"').toContain('rename_all = "snake_case"');
   const body = source.slice(source.indexOf('pub enum ServerState {'));
   const block = body.slice(body.indexOf('{') + 1, body.indexOf('\n}'));
+  expect(block, 'no ServerState variant is renamed one by one').not.toMatch(/serde\(\s*(rename|alias)/);
   return [...block.matchAll(/^\s{4}([A-Z][A-Za-z]+),/gm)].map(([, v]) => v.replace(/[A-Z]/g, (c, i) => (i ? '_' : '') + c.toLowerCase()));
 }
 
@@ -139,12 +143,19 @@ test('W1 the glossary has one word for each ServerState, and no word twice', asy
   expect(new Set(words).size).toBe(words.length);
 });
 
-test('W2 a server state reads its glossary word, and an unlisted one never shows its code', async ({ page }) => {
+test('W2 every server state reads its glossary word, and an unlisted one never shows its code', async ({ page }) => {
   await page.goto('/ui/overview/status');
   await shellReady(page);
+  const url = await shellModuleUrl(page);
+  const glossary = await page.evaluate(async (u) => (await import(u)).GLOSSARY, url);
+  for (const [value, word] of Object.entries(glossary.server)) {
+    expect(await shellCall(page, 'stateWord', value), value).toBe(word);
+  }
   expect(await shellCall(page, 'stateWord', 'running')).toBe('Running');
   expect(await shellCall(page, 'stateWord', 'needs_sign_in')).toBe('Needs sign-in');
-  expect(await shellCall(page, 'stateWord', 'warming_up')).toBe('Unknown state');
+  for (const odd of ['warming_up', '', null]) {
+    expect(await shellCall(page, 'stateWord', odd), String(odd)).toBe('Unknown state');
+  }
 });
 
 test('W3 a dropped stream reads Updates stopped, and no state word is spelled outside the glossary', async ({ page }) => {
@@ -160,3 +171,49 @@ test('W3 a dropped stream reads Updates stopped, and no state word is spelled ou
   const rest = source.replace(glossary, '');
   expect(rest.match(/'Paused'|"Paused"|\banswering\b|\bANSWERED\b|'[Rr]eady'/g) ?? []).toEqual([]);
 });
+
+test('G1b a render that settles while the loading message waits its turn is never said', async ({ page }) => {
+  await recordAnnouncements(page);
+  const probe = heldProbe();
+  await page.route(PROBE, probe.answer);
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/policies/status');
+  // Something said just before 300 ms keeps the region in its pause when the loading message queues.
+  await page.evaluate(() => new Promise((done) => setTimeout(done, 250)));
+  await shellCall(page, 'announce', 'Earlier news.');
+  await expect(loading(page)).toBeVisible();
+  probe.release();
+  await expect(page.locator('#content')).toContainText('value 1');
+  await shellCall(page, 'announcerIdle');
+  expect((await page.evaluate(() => window.__writes)).filter((t) => t.startsWith('Loading'))).toEqual([]);
+});
+
+test('G4b leaving after the loading state shows takes it away, and says nothing more', async ({ page }) => {
+  await recordAnnouncements(page);
+  const probe = heldProbe();
+  await page.route(PROBE, probe.answer);
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/policies/status');
+  await expect(loading(page)).toBeVisible();
+  await page.locator('nav.route-nav a[href="/ui/servers"]').click();
+  await expect(page.locator('#content')).toContainText('servers - status');
+  await expect(loading(page)).toHaveCount(0);
+  probe.release();
+  await shellCall(page, 'announcerIdle');
+  expect((await page.evaluate(() => window.__writes)).filter((t) => t.startsWith('Loading')).length).toBeLessThanOrEqual(1);
+});
+
+for (const [status, ending] of [[500, 'error'], [403, 'forbidden'], [401, 'sign-in']]) {
+  test(`G6 a slow page that ends in ${status} leaves no loading state`, async ({ page }) => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    await page.route(PROBE, async (r) => { await gate; return r.fulfill({ status, json: {} }); });
+    await withFixturePages(page, { probes: true });
+    await page.goto('/ui/policies/status');
+    await expect(loading(page)).toBeVisible();
+    release();
+    if (ending === 'sign-in') await expect(page.locator('#signin')).toBeVisible();
+    else await expect(page.locator(`#content [data-state="${ending}"]`)).toBeVisible();
+    await expect(loading(page)).toHaveCount(0);
+  });
+}

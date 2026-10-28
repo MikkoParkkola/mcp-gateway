@@ -67,12 +67,42 @@ function el(tag, attrs = {}, ...children) {
   return node;
 }
 
+/**
+ * The one word for each state, used across every screen (UI1.24). Server
+ * states are keyed by the gateway's ServerState wire values. A dropped live
+ * stream has its own words below, never the paused server state's.
+ */
+export const GLOSSARY = {
+  server: {
+    running: 'Running',
+    paused: 'Paused',
+    dormant: 'Dormant',
+    unhealthy: 'Unhealthy',
+    refused: 'Refused',
+    needs_sign_in: 'Needs sign-in',
+    unmanaged: 'Unmanaged',
+  },
+  stream: { stopped: 'Updates stopped', resumed: 'Updates resumed' },
+};
+
+const unlistedStates = new Set();
+
+/** A server state's word; one the glossary lacks reads "Unknown state", never its code. */
+export function stateWord(value) {
+  if (typeof value === 'string' && Object.hasOwn(GLOSSARY.server, value)) return GLOSSARY.server[value];
+  if (!unlistedStates.has(value)) {
+    unlistedStates.add(value);
+    console.warn('No glossary word for server state', value);
+  }
+  return 'Unknown state';
+}
+
 const STATE_COPY = {
   loading: ['Loading', 'Reading the gateway.'],
   empty: ['Nothing here yet', ''],
   error: ['Something went wrong', 'Try again.'],
   forbidden: ['Not available to this key', 'Ask an admin for access.'],
-  stale: ['Updates stopped', 'Reconnecting.'],
+  stale: [GLOSSARY.stream.stopped, 'Reconnecting.'],
   'not-built': ['Not built yet', 'This page is not in the new UI yet.'],
 };
 
@@ -161,8 +191,14 @@ export function announce(text, { subject = 'page', guard: given = null } = {}) {
     const i = pending.findIndex((m) => m.subject === 'count');
     if (i >= 0) pending.splice(i, 1);
   }
-  pending.push({ text, subject, guard });
+  const item = { text, subject, guard };
+  pending.push(item);
   if (!pumpTimer) pumpTimer = setTimeout(pump, Math.max(0, lastWrite + DWELL_MS - Date.now()));
+  // Withdraw it, if it has not been written yet.
+  return () => {
+    const i = pending.indexOf(item);
+    if (i >= 0) pending.splice(i, 1);
+  };
 }
 
 /** Append everything still current as one entry; queue the rest for the next dwell. */
@@ -494,7 +530,7 @@ function screenBanner(into, page, guard) {
     old?.remove();
     const subject = `screen:${page}`;
     if (!kind) {
-      if (old?.dataset.state === 'stale') announce('Updates resumed.', { subject, guard });
+      if (old?.dataset.state === 'stale') announce(GLOSSARY.stream.resumed, { subject, guard });
       return;
     }
     const node = bannerState(kind, opts);
@@ -570,6 +606,7 @@ export function render() {
     content.setAttribute('aria-busy', 'true');
     const stage = el('div', { class: 'body staging' });
     content.append(stage);
+    const loaded = watchLoading(content, stage, label, current);
     runTab(spec, route, stage)
       .then(() => {
         if (!current()) return;
@@ -586,14 +623,49 @@ export function render() {
         else content.focus({ preventScroll: true });
       })
       .finally(() => {
+        loaded();
         if (stage.classList.contains('staging')) stage.remove();
         if (current()) content.removeAttribute('aria-busy');
       });
   };
 
+  const loaded = watchLoading(content, body, label, current);
   runTab(spec, route, body)
     .then(() => { if (current()) saveSnapshot(key, body); })
-    .catch((err) => { if (current()) settle(err); });
+    .catch((err) => { if (current()) settle(err); })
+    .finally(loaded);
+}
+
+/** How long a page may wait for its data before the shell says it is loading (UI1.17). */
+const LOADING_MS = 300;
+/** Once shown, the loading state stays this long, so it never flickers. */
+const LOADING_MIN_MS = 400;
+
+/**
+ * Show the loading state above `body`, and say it once, if this attempt has
+ * nothing to show after LOADING_MS. Returns the function that ends it: it
+ * withdraws an unsaid message and takes the state away (after its minimum).
+ */
+function watchLoading(content, body, label, current) {
+  let node = null;
+  let shownAt = 0;
+  let withdraw = null;
+  const timer = setTimeout(() => {
+    // A screen that drew anything, even its own loading state, has said enough.
+    if (!current() || body.hasChildNodes() || !body.isConnected) return;
+    node = state('loading');
+    content.insertBefore(node, body);
+    shownAt = Date.now();
+    withdraw = announce(`Loading ${label}`, { subject: 'page' });
+  }, LOADING_MS);
+  return () => {
+    clearTimeout(timer);
+    withdraw?.();
+    if (!node) return;
+    const left = LOADING_MIN_MS - (Date.now() - shownAt);
+    if (left > 0) setTimeout(() => node.remove(), left);
+    else node.remove();
+  };
 }
 
 /** Mark a node as the rendered content (tests and screens wait on it). */
