@@ -112,7 +112,8 @@ impl Lender {
     /// bearer value is one bearer: whoever holds the bytes holds the grant. So
     /// when several loans match, each one's check is a check on that same grant.
     pub(crate) fn matching_all(&self, call: &[(String, String)]) -> Vec<Snapshot> {
-        let wanted = canonical(&credential_part(call));
+        let credential = credential_part(call);
+        let wanted = canonical(&credential);
         if wanted.is_empty() {
             return Vec::new();
         }

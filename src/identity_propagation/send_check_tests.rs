@@ -4,9 +4,6 @@
 //! definitively once past; an unpublished one may be shortened by a JWT's own
 //! `exp`, read unverified, but never extended.
 
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-
 use super::*;
 
 const NOW: i64 = 1_800_000_000;
