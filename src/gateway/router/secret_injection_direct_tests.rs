@@ -10,7 +10,7 @@ use serde_json::json;
 
 use super::direct_continuation_tests::call;
 use super::direct_guards_fixture::{
-    fixture_with_secrets, initialize, post_meta_invoke, send, store_path,
+    fixture_with_secrets, initialize, post_meta_invoke, send_with_headers, store_path,
 };
 use crate::secret_injection::{CredentialRule, CredentialType, InjectTarget};
 
@@ -179,7 +179,21 @@ async fn the_secret_is_sent_and_nothing_answered_or_kept_holds_it() {
     meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!("idem-secret-task");
     let task = json!({"name": "gateway_invoke", "task": {}, "_meta": meta,
         "arguments": {"server": "alpha", "tool": "read", "arguments": {}}});
-    let (_, made) = send(&fx, "/mcp", "k-std", "tools/call", task, None).await;
+    let call_headers = [
+        ("mcp-protocol-version", "2026-07-28"),
+        ("mcp-method", "tools/call"),
+        ("mcp-name", "gateway_invoke"),
+    ];
+    let (_, made) = send_with_headers(
+        &fx,
+        "/mcp",
+        "k-std",
+        "tools/call",
+        task,
+        None,
+        &call_headers,
+    )
+    .await;
     let id = made
         .pointer("/result/task/taskId")
         .or_else(|| made.pointer("/result/taskId"))
@@ -188,13 +202,18 @@ async fn the_secret_is_sent_and_nothing_answered_or_kept_holds_it() {
         .to_owned();
     let bound = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let finished = loop {
-        let (_, got) = send(
+        let result_headers = [
+            ("mcp-protocol-version", "2026-07-28"),
+            ("mcp-method", "tasks/result"),
+        ];
+        let (_, got) = send_with_headers(
             &fx,
             "/mcp",
             "k-std",
             "tasks/result",
-            json!({"taskId": id, "_meta": modern}),
+            json!({"taskId": id, "_meta": modern.clone()}),
             None,
+            &result_headers,
         )
         .await;
         if got.get("result").is_some() {
