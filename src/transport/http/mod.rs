@@ -675,6 +675,9 @@ mod sse_channel;
 mod sse_decoder;
 mod sse_listen;
 #[cfg(test)]
+#[path = "sse_lent_reopen_tests.rs"]
+mod sse_lent_reopen_tests;
+#[cfg(test)]
 #[path = "sse_send_tests.rs"]
 mod sse_send_tests;
 mod startup;
