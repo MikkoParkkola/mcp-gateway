@@ -361,13 +361,15 @@ async fn an_inspected_clean_answer_records_no_findings() {
     assert_eq!(row["response_effect"], "delivered", "{row}");
 }
 
-/// KNOWN GAP (inspection-ignores-enabled): with response
-/// inspection disabled, inspection still runs, so the record still says
-/// scanned clean. Its fix stops the inspector and flips this row to
-/// `null` (no scan of this request read the answer).
+/// KNOWN GAP (inspection-ignores-enabled): with response inspection
+/// disabled and the firewall's response scan off, no scanner should read
+/// the answer, yet inspection still runs, so the record says scanned clean.
+/// Its fix stops the inspector and flips this row to `null`. (With the
+/// firewall's scan on, `[]` is correct either way: the firewall read it.)
 #[tokio::test]
 async fn a_disabled_inspection_still_scans_known_gap() {
-    let disabled = "  response_inspection:\n    enabled: false\n";
+    let disabled =
+        "  response_inspection:\n    enabled: false\n  firewall:\n    scan_responses: false\n";
     let (mut session, log) = logged_session_with(disabled).await;
     let answer = session.ask(&invoke(6), 6).await;
     assert!(answer.get("error").is_none(), "premise: answered: {answer}");
