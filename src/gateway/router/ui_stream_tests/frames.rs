@@ -115,7 +115,14 @@ async fn a_counts_only_stream_is_silent_for_admin_fields_and_speaks_for_counts()
 #[tokio::test]
 async fn hello_carries_a_jittered_retry_hint() {
     let (state, _dir) = fixture().await;
-    let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
-    let retry = s.until("hello").await.retry.expect("a retry line");
-    assert!((3000..=5000).contains(&retry), "{retry}");
+    let mut seen = Vec::new();
+    let mut held = Vec::new();
+    for _ in 0..8 {
+        let cookie = issue(&state);
+        let mut s = open(&state, request(STREAM, Who::Cookie(&cookie), None)).await;
+        seen.push(s.until("hello").await.retry.expect("a retry line"));
+        held.push(s);
+    }
+    assert!(seen.iter().all(|r| (3000..=5000).contains(r)), "{seen:?}");
+    assert!(seen.iter().any(|r| *r != seen[0]), "all equal: {seen:?}");
 }

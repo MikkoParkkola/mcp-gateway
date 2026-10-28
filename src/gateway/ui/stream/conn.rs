@@ -65,8 +65,8 @@ pub(super) fn frame(event: &str, id: Option<&StreamId>, data: &Value) -> Bytes {
 /// The `hello` frame with a `retry:` hint of 3 s plus up to 2 s of jitter, so
 /// the browsers of a restarted gateway do not all reconnect at one instant.
 fn hello_frame(data: &Value) -> Bytes {
-    use rand::RngExt;
-    let retry = 3000 + rand::rng().random_range(0..=2000_u64);
+    let jitter = crate::jitter::full_jitter(Duration::from_secs(2));
+    let retry = (Duration::from_secs(3) + jitter).as_millis();
     let body = frame("hello", None, data);
     Bytes::from([format!("retry: {retry}\n").as_bytes(), &body].concat())
 }
