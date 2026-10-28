@@ -72,6 +72,25 @@ for (const width of WIDTHS) {
       expect(await blockingViolations(page)).toEqual([]);
     });
 
+    test('each activation of a tool name toggles its detail exactly once', async ({ page }) => {
+      await page.evaluate(() => { location.hash = 'tools'; });
+      const toggle = page.getByRole('button', { name: 'wide_tool' });
+      const detail = page.locator('#td-0');
+      // Tab reaches it in page order: from the search box, past the filter.
+      await page.locator('#tool-search').focus();
+      await page.keyboard.press('Tab');
+      await page.keyboard.press('Tab');
+      await expect(toggle).toBeFocused();
+      for (const [how, open] of [['Space', true], ['Enter', false], ['click', true], ['click', false]]) {
+        if (how === 'click') await toggle.click(); else await page.keyboard.press(how);
+        await expect(toggle, how).toHaveAttribute('aria-expanded', String(open));
+        await expect(detail, how).toBeVisible({ visible: open });
+      }
+      // A click on the row outside the name still toggles, as before.
+      await page.locator('.tool-row td').nth(1).click();
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    });
+
     test('a long OpenAPI import list scrolls from the keyboard', async ({ page }) => {
       await page.evaluate(() => { location.hash = 'capabilities'; });
       await page.getByRole('button', { name: 'Import OpenAPI' }).click();
