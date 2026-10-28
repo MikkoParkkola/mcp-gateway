@@ -86,6 +86,7 @@ fn an_expired_cached_exchange_is_never_served() {
     let s = strategy();
     let now = SignedAssertionStrategy::now_secs().unwrap();
     let entry = |expires_at| CachedExchange {
+        synthetic_expiry: false,
         access_token: "t".to_owned(),
         expires_at,
         scopes: Vec::new(),
