@@ -67,6 +67,10 @@ async function ready(page) {
 }
 
 const tipOf = (page, id) => page.locator(`.has-tip[data-tip="${id}"] .tip`);
+// clock.install() leaves virtual time running with the wall clock, so a slow
+// step between hover() and runFor() can fire a timer early. Pausing makes
+// runFor() the only thing that moves time.
+const pauseClock = async (page) => page.clock.pauseAt(await page.evaluate(() => Date.now() + 1));
 
 test.describe('component', () => {
   test('T1 a text entry: a button named from the title, described by one tooltip', async ({ page }) => {
@@ -98,6 +102,7 @@ test.describe('component', () => {
     await serveCopy(page);
     await ready(page);
     await mount(page, ['fixture.status.paused']);
+    await pauseClock(page);
     const tip = tipOf(page, 'fixture.status.paused');
     await page.getByRole('button', { name: 'About Paused' }).hover();
     await page.clock.runFor(250);
@@ -287,6 +292,7 @@ test.describe('placement and motion', () => {
     await serveCopy(page);
     await ready(page);
     await mount(page, ['fixture.status.paused']);
+    await pauseClock(page);
     expect(await page.evaluate(() => document.documentElement.dataset.tips)).toBe('js');
     await page.getByRole('button', { name: 'About Paused' }).hover();
     await page.clock.runFor(50);
@@ -307,6 +313,7 @@ test.describe('placement and motion', () => {
     await ready(page);
     const shell = await shellModuleUrl(page);
     await mount(page, ['fixture.status.paused']);
+    await pauseClock(page);
     await page.getByRole('button', { name: 'About Paused' }).hover(); // nothing open: the 300 ms timer is armed
     await page.clock.runFor(100);
     await page.evaluate(async (url) => (await import(url)).go('/ui/servers/status'), shell);
@@ -550,6 +557,7 @@ test.describe('CSS fallback and the failure latch', () => {
     await serveCopy(page);
     await ready(page);
     await mount(page, ['fixture.status.paused']);
+    await pauseClock(page);
     await expect(page.locator('.tip.open')).toHaveCount(0);
     await page.getByRole('button', { name: 'About Paused' }).hover(); // nothing open, so the 300 ms timer is armed
     await page.clock.runFor(100);
@@ -594,6 +602,7 @@ test.describe('CSS fallback and the failure latch', () => {
     await serveCopy(page);
     await ready(page);
     await mount(page, ['fixture.status.paused']);
+    await pauseClock(page);
     await page.getByRole('button', { name: 'About Paused' }).hover();
     await page.evaluate(() => {
       window.__rect = Element.prototype.getBoundingClientRect;
@@ -706,6 +715,7 @@ test('T27 a tooltip opened by hover closes on Escape with the pointer still on i
   await serveCopy(page);
   await ready(page);
   await mount(page, ['fixture.status.paused']);
+  await pauseClock(page);
   const tip = tipOf(page, 'fixture.status.paused');
   await page.getByRole('button', { name: 'About Paused' }).hover();
   await page.clock.runFor(350);
@@ -770,6 +780,7 @@ test.describe('review round 1', () => {
     await serveCopy(page);
     await ready(page);
     await mount(page, ['fixture.status.calls'], { layout: 'top-right' });
+    await pauseClock(page);
     await page.getByRole('button', { name: 'About Calls today' }).focus();
     const tip = tipOf(page, 'fixture.status.calls');
     expect(await tip.evaluate((t) => t.style.left)).not.toBe('');
@@ -786,6 +797,7 @@ test.describe('review round 2', () => {
     await serveCopy(page);
     await ready(page);
     await mount(page, ['fixture.status.calls'], { layout: 'top-right' });
+    await pauseClock(page);
     const button = page.getByRole('button', { name: 'About Calls today' });
     const tip = tipOf(page, 'fixture.status.calls');
     await button.focus();
