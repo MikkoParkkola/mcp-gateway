@@ -284,3 +284,68 @@ test('G8 a slow first render is aria-busy while it loads, and not after it settl
   await expect(page.locator('#content')).toContainText('value 1');
   await expect(page.locator('#content')).not.toHaveAttribute('aria-busy', /.*/);
 });
+
+const retryButton = (page) => page.locator('#content [data-state="error"]').getByRole('button', { name: /Retry/ });
+
+test('G5b a Retry that is rejected again shows the error again, with aria-busy cleared', async ({ page }) => {
+  await page.route(PROBE, (r) => r.fulfill({ status: 500, json: {} }));
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/policies/status');
+  await retryButton(page).click();
+  await expect(page.locator('#content [data-state="error"]')).toBeVisible();
+  await expect(retryButton(page)).toBeEnabled();
+  await expect(page.locator('#content')).not.toHaveAttribute('aria-busy', /.*/);
+  await expect(loading(page)).toHaveCount(0);
+});
+
+test('G5c leaving during a Retry leaves no loading state or aria-busy on the new page', async ({ page }) => {
+  let calls = 0;
+  const probe = heldProbe();
+  await page.route(PROBE, (r) => {
+    calls += 1;
+    return calls === 1 ? r.fulfill({ status: 500, json: {} }) : probe.answer(r);
+  });
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/policies/status');
+  await retryButton(page).click();
+  await expect(loading(page)).toBeVisible();
+  await expect(page.locator('#content')).toHaveAttribute('aria-busy', 'true');
+  await page.evaluate(() => {
+    history.pushState(null, '', '/ui/servers/status');
+    dispatchEvent(new PopStateEvent('popstate'));
+  });
+  await expect(page.locator('#content')).toContainText('servers - status');
+  probe.release();
+  await page.evaluate(() => new Promise((done) => setTimeout(done, 600)));
+  await expect(loading(page)).toHaveCount(0);
+  await expect(page.locator('#content')).not.toHaveAttribute('aria-busy', /.*/);
+  await expect(page.locator('#content')).toContainText('servers - status');
+});
+
+test('G5d a slow Retry shows loading after the same onset as a first render, and keeps it the same minimum', async ({ page }) => {
+  let calls = 0;
+  const probe = heldProbe();
+  await page.route(PROBE, (r) => {
+    calls += 1;
+    return calls === 1 ? r.fulfill({ status: 500, json: {} }) : probe.answer(r);
+  });
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/policies/status');
+  // By the page's own clock: the click, then the loading state's arrival and removal.
+  await page.evaluate(() => {
+    window.__t = {};
+    document.addEventListener('click', () => { window.__t.click ??= performance.now(); }, true);
+    new MutationObserver(() => {
+      const there = !!document.querySelector('#content [data-state="loading"]');
+      if (there && !window.__t.shown) window.__t.shown = performance.now();
+      if (!there && window.__t.shown && !window.__t.gone) window.__t.gone = performance.now();
+    }).observe(document.getElementById('content'), { childList: true, subtree: true });
+  });
+  await retryButton(page).click();
+  await expect(loading(page)).toBeVisible();
+  probe.release(); // answered at once: the minimum, not the data, decides when it goes
+  await expect(loading(page)).toHaveCount(0);
+  const t = await page.evaluate(() => window.__t);
+  expect(t.shown - t.click, 'not before about 300 ms').toBeGreaterThanOrEqual(295);
+  expect(t.gone - t.shown, 'kept for about 400 ms').toBeGreaterThanOrEqual(395);
+});
