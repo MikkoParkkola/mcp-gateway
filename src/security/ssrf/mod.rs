@@ -108,6 +108,9 @@ pub(crate) use destination::DestinationPolicy;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod loopback_name_tests;
+
 use ranges::{is_private_ipv4, is_private_ipv6};
 
 use crate::{Error, Result};
@@ -239,6 +242,45 @@ fn check_host_not_ssrf(host: &str) -> Result<()> {
     }
 
     // Domain names: pass through — DNS resolution happens downstream.
+    Ok(())
+}
+
+/// Whether `host` names the loopback interface by name: `localhost` or a name
+/// under it (RFC 6761 §6.3), in any case, with or without one trailing dot.
+///
+/// Wider than the router's `is_loopback_host` on purpose: that one decides
+/// where an `http` OAuth origin is RFC-legal, where only `localhost` itself
+/// counts; this one refuses a destination, where every spelling must.
+pub(crate) fn is_loopback_name(host: &str) -> bool {
+    const SUFFIX: &str = ".localhost";
+    let host = host.strip_suffix('.').unwrap_or(host);
+    host.eq_ignore_ascii_case("localhost")
+        || (host.len() > SUFFIX.len()
+            && host
+                .get(host.len() - SUFFIX.len()..)
+                .is_some_and(|tail| tail.eq_ignore_ascii_case(SUFFIX)))
+}
+
+/// Refuse a capability destination that names the loopback interface by
+/// name (MIK-9038). The literal forms are refused by
+/// [`validate_url_not_ssrf`]; a name is otherwise only refused where the
+/// pinning resolver sees it, and with `capabilities.egress_proxy` set the
+/// client sends loopback past the proxy unpinned. Refusing the name before
+/// any DNS lookup holds on both routes.
+///
+/// # Errors
+///
+/// Returns the SSRF refusal when the host is a loopback name. An unparsable
+/// URL is left to the other checks.
+pub(crate) fn refuse_loopback_name(url_str: &str) -> Result<()> {
+    let named_loopback = url::Url::parse(url_str)
+        .ok()
+        .is_some_and(|url| url.host_str().is_some_and(is_loopback_name));
+    if named_loopback {
+        return Err(Error::Protocol(format!(
+            "{SSRF_BLOCKED}: host names the loopback interface"
+        )));
+    }
     Ok(())
 }
 
