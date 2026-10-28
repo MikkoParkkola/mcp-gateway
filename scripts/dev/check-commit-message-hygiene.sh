@@ -11,7 +11,7 @@
 #   * first person: i, i'm, i've, my, mine; we added/fixed/caught/found/
 #     decided/realised/realized
 #   * authoring process: sub-agent, agent session, scratchpad, worktree
-#   * the tool as an actor: any assistant or model name
+#   * the tool as an actor, or a reviewing model: any assistant or model name
 #   * session narration: this session, the session transcript, earlier turn,
 #     compaction, context window
 #   * internal shorthand: review seat, the operator, the reviewer said/asked/
@@ -49,7 +49,7 @@ checks=(
   "\\b(i|i'm|i've|my|mine)\\b::first person: state facts about the code, not about the author"
   "\\bwe (added|fixed|caught|found|decided|realised|realized)\\b::first person: describe the change, not the people who made it"
   "\\b(sub-?agent|agent session|scratchpad|worktree)\\b::authoring-process narration"
-  "\\b(claude|codex|kimi|chatgpt|gpt-[0-9]|grok|copilot)\\b::names the authoring tool as an actor"
+  "\\b(claude|codex|kimi|chatgpt|gpt|grok|copilot|muse|glm)\\b|\\breview models?\\b::names an AI tool or a reviewing model"
   "\\bcursor('s)? (suggest(ed|ion|s)?|ide)\\b::names the authoring tool as an actor"
   "\\b(this session|the session transcript|earlier turn|compaction|context window)\\b::session narration"
   "\\b(review seat|the operator|the reviewer (said|asked|caught)|per the ruling|ruling [0-9])\\b::internal process shorthand"
