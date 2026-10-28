@@ -224,12 +224,11 @@ impl Backend {
     /// when it does not. The Overview uses it to list denied servers without
     /// `status()`, which also sorts latency samples it never shows.
     #[cfg(feature = "webui")]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "a stub: the Overview reads it in the next commit")
-    )]
     pub(crate) fn startup_denial(&self) -> Option<&[crate::runtime::RuntimeDenyReason]> {
-        None
+        let plan = self.runtime_plan.as_ref()?;
+        // The planner fills `audit.denied_reasons` from `denied`, in order.
+        plan.is_denied()
+            .then_some(plan.audit.denied_reasons.as_slice())
     }
 
     /// How many times [`Self::server_state`] ran on this backend.
