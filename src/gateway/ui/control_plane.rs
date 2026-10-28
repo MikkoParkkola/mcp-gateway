@@ -129,12 +129,17 @@ async fn control_plane_snapshot(
 ) -> impl IntoResponse {
     // The read check is `read_only_view` below, after the clock check, where
     // it always stood; admission here derives the actor.
-    let actor = match guard.admit_control_plane(|client, identity, _| {
-        Ok(actor_from_client(
+    // A row that asks for anything but the read view is refused here, so a
+    // table edit cannot change this route without changing this handler.
+    let actor = match guard.admit_control_plane(|client, identity, check| match check {
+        CpCheck::Read => Ok(actor_from_client(
             client,
             identity,
             &generation.config().control_plane.role_mapping,
-        ))
+        )),
+        CpCheck::Action(_) | CpCheck::FromBody(_) => Err(Box::new(
+            super::guard::Refused::AdminRequired.into_response(),
+        )),
     }) {
         Ok(actor) => actor,
         Err(refused) => return *refused,

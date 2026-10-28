@@ -153,12 +153,16 @@ pub(super) async fn resolve_decision(
     guard: Guard,
     Json(req): Json<DecisionRequest>,
 ) -> axum::response::Response {
-    let actor = match guard.admit_control_plane(|client, identity, _| {
-        Ok(actor_from_client(
+    // Only a body-chosen row admits here; the action is checked below.
+    let actor = match guard.admit_control_plane(|client, identity, check| match check {
+        CpCheck::FromBody(_) => Ok(actor_from_client(
             client,
             identity,
             &state.live_config.get().control_plane.role_mapping,
-        ))
+        )),
+        CpCheck::Read | CpCheck::Action(_) => Err(Box::new(
+            super::super::guard::Refused::AdminRequired.into_response(),
+        )),
     }) {
         Ok(actor) => actor,
         Err(refused) => return *refused,

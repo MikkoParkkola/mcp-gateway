@@ -62,7 +62,7 @@ impl<S: Send + Sync> FromRequestParts<S> for Guard {
 /// Activity and control-plane needs are refused here; they admit through
 /// their own resolvers.
 pub(super) fn decide(need: Need, client: Option<&AuthenticatedClient>) -> Result<(), Refused> {
-    let admin = client.is_some_and(|c| c.admin);
+    let admin = super::is_admin(client);
     match need {
         Need::Open => Ok(()),
         Need::Admin(shape) => admin.then_some(()).ok_or(shape.into()),

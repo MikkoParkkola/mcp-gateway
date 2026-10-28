@@ -18,9 +18,12 @@ fn registered() -> BTreeSet<(String, Verb)> {
         .filter_map(|l| {
             let cells: Vec<&str> = l.split('\t').collect();
             let [path, method, _shape, caller, answer] = cells.as_slice() else {
-                return None;
+                panic!("a matrix line has five cells: {l:?}");
             };
-            let verb = Verb::of(&method.parse::<axum::http::Method>().ok()?)?;
+            let method = method
+                .parse::<axum::http::Method>()
+                .unwrap_or_else(|_| panic!("a matrix method parses: {l:?}"));
+            let verb = Verb::of(&method)?;
             (*caller == "AdminKey" && *answer != "405" && *method != "HEAD")
                 .then(|| (path.to_string(), verb))
         })

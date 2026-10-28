@@ -638,13 +638,19 @@ fn expected() -> Matrix {
     include_str!("ui_access_matrix.tsv")
         .lines()
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .filter_map(|l| l.rsplit_once('\t'))
+        .map(|l| {
+            l.rsplit_once('\t')
+                .unwrap_or_else(|| panic!("a matrix line has a key and an answer: {l:?}"))
+        })
         .filter(|(key, _)| {
             cfg!(feature = "cost-governance")
                 || !key.starts_with(&format!("{}\t", routes::UI_COSTS))
         })
-        .map(|(key, value)| (key.to_string(), value.to_string()))
-        .collect()
+        .fold(Matrix::new(), |mut matrix, (key, value)| {
+            let earlier = matrix.insert(key.to_string(), value.to_string());
+            assert!(earlier.is_none(), "a matrix cell is listed twice: {key}");
+            matrix
+        })
 }
 
 /// Every UI API answer a caller sees today, pinned before the
