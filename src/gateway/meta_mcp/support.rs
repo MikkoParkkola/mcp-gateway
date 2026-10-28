@@ -526,10 +526,12 @@ pub(super) fn augment_with_predictions(mut result: Value, predictions: Vec<Value
     if predictions.is_empty() {
         return result;
     }
-    if let Value::Object(ref mut map) = result {
-        map.insert("predicted_next".to_string(), Value::Array(predictions));
-    }
-    note_written(&["predicted_next"], &result);
+    super::invoke::gateway_writes::insert_noted(
+        super::invoke::gateway_writes::Layer::Value,
+        &["predicted_next"],
+        &mut result,
+        Value::Array(predictions),
+    );
     result
 }
 

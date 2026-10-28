@@ -51,7 +51,8 @@ function shellDocument(req) {
 }
 
 function send(res, status, headers, body) {
-  res.writeHead(status, headers);
+  // Names the worktree this server reads, so a run can prove it reached its own.
+  res.writeHead(status, { ...headers, 'x-fixture-root': HERE });
   res.end(body);
 }
 

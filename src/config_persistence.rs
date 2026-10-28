@@ -214,14 +214,15 @@ fn not_locked(path: &Path, e: lock::NotLocked) -> String {
     }
 }
 
-/// What a write does when it cannot keep the file's comments.
+/// What a write does when it cannot edit an existing file in place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommentLoss {
     /// Re-serialise the whole file (a CLI write given `--force`, and the
     /// reload module's public write API).
     Rewrite,
-    /// Write nothing and say what would be lost (web UI backend edits and
-    /// CLI writes), and skip a write that would change nothing.
+    /// Write an existing file only as a proven in-place edit; otherwise write
+    /// nothing and say why (web UI backend edits and CLI writes). A write that
+    /// would change nothing is skipped.
     Refuse,
 }
 
@@ -230,7 +231,9 @@ pub enum CommentLoss {
 pub(crate) enum Unwritten {
     /// Validation, serialisation or I/O failed; the message says which.
     Failed(String),
-    /// Refused under [`CommentLoss::Refuse`]; the message names the comments.
+    /// Refused under [`CommentLoss::Refuse`]: the edit could not be made in
+    /// place. The message names the comment lines a rewrite would drop, if
+    /// any, never their text.
     CommentLoss(String),
 }
 
@@ -294,8 +297,8 @@ pub(crate) fn comments_a_write_drops(path: &Path, config: &Config) -> Vec<String
 /// place when the result differs from it in `backends` alone (several
 /// backends added or edited, or one removed). Otherwise the file is
 /// rewritten in full under [`CommentLoss::Rewrite`], or, under
-/// [`CommentLoss::Refuse`], a file with comments is left as it is and the
-/// refusal names the comment lines. A result that is what the file already
+/// [`CommentLoss::Refuse`], left as it is, comments or not; the refusal names
+/// any comment lines. A result that is what the file already
 /// loads as writes nothing under [`CommentLoss::Refuse`]. A missing file is
 /// created.
 ///
@@ -496,8 +499,9 @@ fn write_spliced(
 /// The text a write of `config` over `text` (which loads as `before`, when
 /// it loads) should leave, and the comment lines it drops; `None` when
 /// nothing needs writing. The text is spliced when `config` differs from
-/// `before` in `backends` alone, within `scope`; otherwise it is rendered in
-/// full, which under [`CommentLoss::Refuse`] a file with comments refuses.
+/// `before` in `backends` alone, within `scope`. Otherwise a missing file is
+/// rendered in full, and an existing one is too under [`CommentLoss::Rewrite`];
+/// under [`CommentLoss::Refuse`] it is refused, comments or not (ADR-024).
 fn render(
     path: &Path,
     before: Option<&Config>,
@@ -519,12 +523,13 @@ fn render(
             return Ok(Some((edited, dropped)));
         }
     }
-    let commented = text.filter(|t| t.contains('#'));
     if mode == CommentLoss::Refuse
-        && let Some(text) = commented
+        && let Some(text) = text
     {
-        return Err(Unwritten::CommentLoss(splice::comment_loss(path, text)));
+        let why = splice::not_in_place(path, text);
+        return Err(Unwritten::CommentLoss(why));
     }
+    let commented = text.filter(|t| t.contains('#'));
     let yaml = url_spelling::render(config, text)?;
     let dropped = commented
         .map(|text| comments::dropped_comment_lines(text, &yaml))

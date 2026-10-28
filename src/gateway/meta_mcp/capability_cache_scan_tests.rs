@@ -130,7 +130,7 @@ async fn delivered(meta: &MetaMcp) -> (Value, Map<String, Value>) {
             },
         );
         let mut fields = Map::new();
-        record_fields(snapshot().as_ref(), false, false, &mut fields);
+        record_fields(snapshot().as_ref(), false, &mut fields);
         (serde_json::to_value(&response).expect("serialises"), fields)
     })
     .await
