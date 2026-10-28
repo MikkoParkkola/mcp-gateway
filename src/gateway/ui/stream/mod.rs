@@ -41,7 +41,7 @@ pub(crate) use self::guard::{MAX_PER_CREDENTIAL, MAX_UI_STREAMS};
 use self::id::StreamId;
 use super::errors::{auth_required, flat_error};
 use super::{auth_facts, is_admin};
-use crate::gateway::auth::live::{current_caller, held_credential};
+use crate::gateway::auth::live::{HeldCredential, current_caller, held_credential};
 use crate::gateway::auth::{AuthState, AuthenticatedClient};
 use crate::gateway::router::AppState;
 use crate::gateway::routes;
@@ -122,7 +122,7 @@ async fn stream(
     let hub = state.dashboard_bootstrap.stream_hub();
     let who = held
         .as_ref()
-        .map_or_else(|| "anonymous".to_owned(), |h| h.digest());
+        .map_or_else(|| "anonymous".to_owned(), HeldCredential::digest);
     let spawn_watcher = || tokio::spawn(watcher::run(Arc::clone(&state))).abort_handle();
     let guard = match hub.admit(&who, spawn_watcher) {
         Ok(guard) => guard,

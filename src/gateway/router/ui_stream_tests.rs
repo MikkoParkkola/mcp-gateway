@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8856 (U3): `GET /ui/api/stream` through `create_router`, so the real
+//! U3: `GET /ui/api/stream` through `create_router`, so the real
 //! auth layer decides every caller. Time is the runtime's own paused clock and
 //! session age is moved with `backdate`: no test sleeps.
 
@@ -160,7 +160,7 @@ fn parse(raw: &str) -> Frame {
     };
     for line in raw.lines() {
         if let Some(v) = line.strip_prefix("event:") {
-            f.event = v.trim().to_owned();
+            v.trim().clone_into(&mut f.event);
         } else if let Some(v) = line.strip_prefix("id:") {
             f.id = Some(v.trim().to_owned());
         } else if let Some(v) = line.strip_prefix("data:") {

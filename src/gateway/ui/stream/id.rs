@@ -47,12 +47,12 @@ impl StreamId {
         if text.is_empty() {
             return Ok(id);
         }
-        let mut last = 0u8;
+        let mut last = 0usize;
         for token in text.split('.') {
             let mut chars = token.chars();
             let tag = chars.next().ok_or(IdError)?;
             let rest = chars.as_str();
-            let order = "bsrqig".find(tag).ok_or(IdError)? as u8 + 1;
+            let order = "bsrqig".find(tag).ok_or(IdError)? + 1;
             if order <= last {
                 return Err(IdError);
             }

@@ -180,7 +180,7 @@ mod reserved_member_ingress_tests;
 /// U17: the UI shell at deep links, hashed assets, /ui/classic (MIK-8870).
 #[cfg(all(test, feature = "webui"))]
 mod u17_ui_shell_tests;
-/// U3: the UI live stream (MIK-8856).
+/// U3: the UI live stream.
 #[cfg(all(test, feature = "webui"))]
 mod ui_stream_tests;
 // MIK-8697: the credential canary over the router's request paths.

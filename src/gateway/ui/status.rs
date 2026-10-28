@@ -93,7 +93,7 @@ pub(super) fn status_body(state: &AppState, view: StatusView) -> Value {
         .iter()
         .map(|s| crate::counters::Filter::Server(&s.name))
         .collect();
-    let (windows, counts_since) = call_windows(&state, &labels);
+    let (windows, counts_since) = call_windows(state, &labels);
     for (server, (day, prev)) in servers.iter_mut().zip(windows) {
         server.calls_24h = day;
         server.calls_prev_24h = prev;

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The merge loop against a fake log source with the agreed signatures.
 
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
@@ -65,15 +66,31 @@ impl LogSource for Fake {
         self.tx.subscribe()
     }
 
-    async fn head(&self, _: &()) -> LogCursor {
+    fn head(&self, (): &()) -> impl Future<Output = LogCursor> + Send {
         let n = self.rows.lock().unwrap().len() as u64;
-        LogCursor {
+        std::future::ready(LogCursor {
             inv: (n > 0).then(|| part(n)),
             gov: None,
-        }
+        })
     }
 
-    async fn rows_after(&self, cursor: &LogCursor, _: &(), limit: usize) -> Page {
+    fn rows_after(
+        &self,
+        cursor: &LogCursor,
+        (): &(),
+        limit: usize,
+    ) -> impl Future<Output = Page> + Send {
+        std::future::ready(self.page(cursor, limit))
+    }
+
+    fn frame(&self, (): &(), a: &Appended) -> Option<Row> {
+        let n: u64 = a.entry["id"].as_str()?.split('-').next()?.parse().ok()?;
+        (a.entry["hidden"] == false).then(|| row(n, false))
+    }
+}
+
+impl Fake {
+    fn page(&self, cursor: &LogCursor, limit: usize) -> Page {
         let rows = self.rows.lock().unwrap();
         let mut b = self.biggest_page.lock().unwrap();
         *b = (*b).max(limit);
@@ -81,13 +98,13 @@ impl LogSource for Fake {
         let reset = known.is_some_and(|n| {
             n > 0
                 && rows
-                    .get(n as usize - 1)
+                    .get(usize::try_from(n).unwrap() - 1)
                     .is_none_or(|r| r.part != cursor.inv.clone().unwrap())
         });
         let start = if reset {
             0
         } else {
-            known.unwrap_or(0) as usize
+            usize::try_from(known.unwrap_or(0)).unwrap()
         };
         let end = (start + limit).min(rows.len());
         let slice = &rows[start..end];
@@ -104,11 +121,6 @@ impl LogSource for Fake {
             more: end < rows.len(),
             reset,
         }
-    }
-
-    fn frame(&self, _: &(), a: &Appended) -> Option<Row> {
-        let n: u64 = a.entry["id"].as_str()?.split('-').next()?.parse().ok()?;
-        (a.entry["hidden"] == false).then(|| row(n, false))
     }
 }
 
@@ -137,17 +149,17 @@ async fn collect(merge: &mut LogMerge<Fake>, want: usize) -> Vec<Out> {
     all
 }
 
-fn from(n: u64) -> Option<LogCursor> {
-    Some(LogCursor {
+fn from(n: u64) -> LogCursor {
+    LogCursor {
         inv: Some(part(n)),
         gov: None,
-    })
+    }
 }
 
 #[tokio::test]
 async fn resume_across_the_subscribe_then_read_race_has_no_gap_or_duplicate() {
     let fake = Fake::new(5, 64);
-    let mut merge = LogMerge::connect(Arc::clone(&fake), (), from(2)).await;
+    let mut merge = LogMerge::connect(Arc::clone(&fake), (), Some(from(2))).await;
     fake.append(false); // lands after subscribe, before the catch-up reads
     let out = collect(&mut merge, 4).await;
     assert_eq!(ids(&out), vec![3, 4, 5, 6]);
