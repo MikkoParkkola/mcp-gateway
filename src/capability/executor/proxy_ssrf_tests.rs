@@ -207,7 +207,8 @@ async fn every_loopback_literal_spelling_is_refused_as_a_target() {
 }
 
 /// A public name's answer redirecting to loopback, by name or by literal, is
-/// refused at the hop: the proxy answered once, the target never.
+/// refused at the hop: the proxy answered once, the target never. A literal
+/// with extra trailing dots stays a name, and is refused as one.
 #[tokio::test]
 async fn a_redirect_hop_to_loopback_is_refused() {
     let (port, target) = counting_listener().await;
@@ -222,6 +223,7 @@ async fn a_redirect_hop_to_loopback_is_refused() {
         "0.0.0.0",
         "[::1]",
         "[::ffff:127.0.0.1]",
+        "127.0.0.1..",
     ] {
         let (proxy, via_proxy) = answering_listener(format!(
             "HTTP/1.1 302 Found\r\nLocation: http://{host}:{port}/x\r\n\
