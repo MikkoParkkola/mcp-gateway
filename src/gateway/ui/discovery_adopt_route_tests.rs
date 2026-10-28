@@ -380,7 +380,12 @@ async fn a_cancelled_adopt_still_lands_and_records_its_caller() {
         .await
         .expect("the adopt reached its reload");
     sent.abort();
-    let _ = sent.await;
+    assert!(
+        sent.await
+            .expect_err("the request was dropped")
+            .is_cancelled(),
+        "the client's request was cancelled before the reload went on"
+    );
     pause.release.notify_one();
 
     let deadline = tokio::time::Instant::now() + crate::test_wait::HANG_BOUND;
@@ -394,6 +399,15 @@ async fn a_cancelled_adopt_still_lands_and_records_its_caller() {
     }
     let file = String::from_utf8(route.bytes()).expect("utf-8 config");
     assert!(file.contains("tool"), "the adopt did not land: {file}");
+    let context = route
+        .state
+        .meta_mcp
+        .reload_context()
+        .expect("a reload context");
+    assert!(
+        context.live_config.get().backends.contains_key("tool"),
+        "the reload after the cancel did not publish the adopted backend"
+    );
     let records = admin_actions();
     assert_eq!(records.len(), 1, "exactly one record: {records:#?}");
     let record = &records[0];
