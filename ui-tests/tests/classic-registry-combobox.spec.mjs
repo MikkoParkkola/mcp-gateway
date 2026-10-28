@@ -158,6 +158,88 @@ test('C8: Enter with no active option does nothing, and Alt+ArrowDown opens with
   expect(seen.adds).toEqual([]);
 });
 
+test('C9: Tab and Shift+Tab close the open list and move focus on', async ({ page }) => {
+  await addServerForm(page);
+  await search(page);
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Tab');
+  await expect(box(page)).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('#add-server-form').getByRole('button', { name: 'Add Server', exact: true })).toBeFocused();
+  await box(page).focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(list(page)).toBeVisible();
+  await page.keyboard.press('Shift+Tab');
+  await expect(box(page)).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('#mode-custom')).toBeFocused();
+});
+
+test('C10: keys that belong to an input method composition are left alone', async ({ page }) => {
+  await addServerForm(page);
+  await search(page);
+  const composing = (key) => box(page).evaluate((el, k) => el.dispatchEvent(new KeyboardEvent('keydown', {
+    key: k, isComposing: true, keyCode: 229, bubbles: true, cancelable: true,
+  })), key);
+  // dispatchEvent answers false when a handler cancelled the event.
+  expect(await composing('ArrowDown')).toBe(true);
+  await expect(box(page)).not.toHaveAttribute('aria-activedescendant', /./);
+  await page.keyboard.press('ArrowDown');
+  await expect(box(page)).toHaveAttribute('aria-activedescendant', /./);
+  expect(await composing('Enter')).toBe(true);
+  await expect(page.locator('#reg-name-override')).toBeHidden();
+});
+
+test('C11: after a mouse pick the box keeps focus and the list stays closed', async ({ page }) => {
+  await addServerForm(page);
+  await search(page);
+  await list(page).getByRole('option').nth(4).click();
+  await expect(box(page)).toBeFocused();
+  await expect(box(page)).toHaveValue('server-05');
+  await expect(list(page)).toBeHidden();
+  await expect(box(page)).toHaveAttribute('aria-expanded', 'false');
+});
+
+test('C12: the caret keys clear the active option and keep the list open', async ({ page }) => {
+  await addServerForm(page);
+  await search(page);
+  for (const key of ['ArrowLeft', 'ArrowRight', 'Home', 'End']) {
+    await page.keyboard.press('ArrowDown');
+    await expect(box(page), key).toHaveAttribute('aria-activedescendant', /./);
+    await page.keyboard.press(key);
+    await expect(box(page), key).not.toHaveAttribute('aria-activedescendant', /./);
+    await expect(list(page).locator('[aria-selected="true"]'), key).toHaveCount(0);
+    await expect(list(page), key).toBeVisible();
+  }
+});
+
+test('C13: filtering, no match, an outside click and a reopened form each leave a consistent state', async ({ page }) => {
+  await addServerForm(page);
+  await search(page);
+  for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowDown');
+  await page.keyboard.type('-1');
+  await expect(list(page).getByRole('option')).toHaveCount(10);
+  await expect(box(page)).not.toHaveAttribute('aria-activedescendant', /./);
+  await page.keyboard.press('ArrowDown');
+  const first = await list(page).getByRole('option').first().getAttribute('id');
+  await expect(box(page)).toHaveAttribute('aria-activedescendant', first);
+  await expect(page.locator(`#${first}`)).toHaveText(/server-10/);
+  await box(page).fill('no-such-server');
+  await expect(list(page)).toBeHidden();
+  await expect(box(page)).toHaveAttribute('aria-expanded', 'false');
+  await search(page);
+  await page.locator('#page-servers h1').click();
+  await expect(list(page)).toBeHidden();
+  await expect(box(page)).toHaveAttribute('aria-expanded', 'false');
+  await search(page);
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await page.locator('#add-server-form').getByRole('button', { name: 'Cancel' }).click();
+  await page.getByRole('button', { name: '+ Add Server' }).click();
+  await expect(box(page)).toHaveValue('');
+  await expect(box(page)).toHaveAttribute('aria-expanded', 'false');
+  await expect(box(page)).not.toHaveAttribute('aria-activedescendant', /./);
+  await expect(page.locator('#reg-name-override')).toBeHidden();
+});
+
 for (const width of WIDTHS) {
   test(`C7: axe finds no blocking violation with the list open and an option active at ${width} px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
