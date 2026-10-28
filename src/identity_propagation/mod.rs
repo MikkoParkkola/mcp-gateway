@@ -43,6 +43,7 @@ use crate::key_server::oidc::VerifiedIdentity;
 
 mod account_strategies;
 mod caller_proof;
+pub(crate) mod send_check;
 mod token_exchange;
 
 pub(crate) use account_strategies::{
