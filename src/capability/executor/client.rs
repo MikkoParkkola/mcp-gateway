@@ -193,13 +193,16 @@ pub(super) async fn send_with_retry(
                     health.record_success(started.elapsed());
                     Ok(resp)
                 }
-                Err(e) => Err(crate::security::http_diagnostics::ssrf_refusal(&e)
-                    .map(crate::gateway::delivery_facts::refused)
-                    .unwrap_or_else(|| {
-                        note_redirect_refusal(&e);
-                        health.record_failure();
-                        Error::Transport(format!("{label} failed: {}", redact_url(e)))
-                    })),
+                Err(e) => Err(
+                    crate::security::http_diagnostics::ssrf_refusal(&e).map_or_else(
+                        || {
+                            note_redirect_refusal(&e);
+                            health.record_failure();
+                            Error::Transport(format!("{label} failed: {}", redact_url(e)))
+                        },
+                        crate::gateway::delivery_facts::refused,
+                    ),
+                ),
             };
         };
         match attempt_req.send().await {

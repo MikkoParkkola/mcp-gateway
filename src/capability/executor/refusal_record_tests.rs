@@ -59,42 +59,43 @@ async fn call(service: &str, target: &str, auth_required: bool) -> (String, Opti
     let executor = CapabilityExecutor::new();
     let cap = definition(service, target, auth_required);
     let context = CapabilityExecutionContext::default();
-    match service {
-        "rest" => {
-            let provider = cap.providers.named.get("primary").expect("primary");
-            recorded(executor.execute_provider_with_context(&cap, provider, &json!({}), &context))
-                .await
-        }
-        _ => {
-            let config = cap.providers.named["primary"].protocol_config();
-            let ctx = ExecutionContext {
-                capability: &cap,
-                timeout_secs: 10,
-                context,
-            };
-            if service == "graphql" {
-                let graphql = super::GraphqlExecutor {
-                    executor: &executor,
-                };
-                recorded(graphql.execute(&config, json!({}), &ctx)).await
-            } else {
-                let jsonrpc = super::super::jsonrpc::JsonRpcExecutor {
-                    executor: &executor,
-                };
-                recorded(jsonrpc.execute(&config, json!({}), &ctx)).await
-            }
-        }
+    if service == "rest" {
+        let provider = cap.providers.named.get("primary").expect("primary");
+        return Box::pin(recorded(executor.execute_provider_with_context(
+            &cap,
+            provider,
+            &json!({}),
+            &context,
+        )))
+        .await;
+    }
+    let config = cap.providers.named["primary"].protocol_config();
+    let ctx = ExecutionContext {
+        capability: &cap,
+        timeout_secs: 10,
+        context,
+    };
+    if service == "graphql" {
+        let graphql = super::GraphqlExecutor {
+            executor: &executor,
+        };
+        Box::pin(recorded(graphql.execute(&config, json!({}), &ctx))).await
+    } else {
+        let jsonrpc = super::super::jsonrpc::JsonRpcExecutor {
+            executor: &executor,
+        };
+        Box::pin(recorded(jsonrpc.execute(&config, json!({}), &ctx))).await
     }
 }
 
 /// Notes a case whose error does not say `says` or whose delivery does not
 /// record `refused`. Each test asserts once over every case, so one run shows
 /// every site that fails, not only the first.
-fn check(fails: &mut Vec<String>, case: &str, error: &str, says: &str, effect: Option<Value>) {
+fn check(fails: &mut Vec<String>, case: &str, error: &str, says: &str, effect: Option<&Value>) {
     if !error.contains(says) {
         fails.push(format!("{case}: error does not say {says:?}: {error}"));
     }
-    if effect != Some("refused".into()) {
+    if effect != Some(&Value::from("refused")) {
         fails.push(format!("{case}: response_effect {effect:?}, not refused"));
     }
 }
@@ -108,8 +109,8 @@ async fn a_private_destination_records_refused_for_each_protocol() {
         ("graphql", "http://10.0.0.5/rpc"),
         ("jsonrpc", "http://10.0.0.5/rpc"),
     ] {
-        let (error, effect) = call(service, target, false).await;
-        check(&mut fails, service, &error, "SSRF blocked", effect);
+        let (error, effect) = Box::pin(call(service, target, false)).await;
+        check(&mut fails, service, &error, "SSRF blocked", effect.as_ref());
     }
     assert!(fails.is_empty(), "{fails:#?}");
 }
@@ -124,8 +125,8 @@ async fn a_cleartext_credential_records_refused_for_each_protocol() {
         ("graphql", "http://93.184.215.14/rpc"),
         ("jsonrpc", "http://93.184.215.14/rpc"),
     ] {
-        let (error, effect) = call(service, target, true).await;
-        check(&mut fails, service, &error, "cleartext", effect);
+        let (error, effect) = Box::pin(call(service, target, true)).await;
+        check(&mut fails, service, &error, "cleartext", effect.as_ref());
     }
     assert!(fails.is_empty(), "{fails:#?}");
 }
@@ -149,7 +150,7 @@ async fn a_refused_token_endpoint_records_refused() {
             &CapabilityExecutionContext::default(),
         ))
         .await;
-        check(&mut fails, endpoint, &error, says, effect);
+        check(&mut fails, endpoint, &error, says, effect.as_ref());
     }
     assert!(fails.is_empty(), "{fails:#?}");
 }
