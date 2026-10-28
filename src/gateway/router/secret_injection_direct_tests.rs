@@ -206,19 +206,19 @@ async fn the_secret_is_sent_and_nothing_answered_or_kept_holds_it() {
     let finished = loop {
         let result_headers = [
             ("mcp-protocol-version", "2026-07-28"),
-            ("mcp-method", "tasks/result"),
+            ("mcp-method", "tasks/get"),
         ];
         let (_, got) = send_with_headers(
             &fx,
             "/mcp",
             "k-std",
-            "tasks/result",
+            "tasks/get",
             json!({"taskId": id, "_meta": modern.clone()}),
             None,
             &result_headers,
         )
         .await;
-        if got.get("result").is_some() {
+        if got.pointer("/result/status") == Some(&json!("completed")) {
             break got;
         }
         assert!(
