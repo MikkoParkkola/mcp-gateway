@@ -114,3 +114,78 @@ async fn a_blocked_redirect_is_the_ssrf_refusal_and_leaves_health_alone() {
         "three refused redirects marked the capability unhealthy"
     );
 }
+
+/// One capability send to a loopback listener that redirects to `location`,
+/// in its own delivery cell: the error and the `response_effect` it records.
+async fn redirected(location: &'static str) -> (crate::Error, Option<serde_json::Value>) {
+    use crate::gateway::delivery_facts;
+    let app = axum::Router::new().route(
+        "/",
+        axum::routing::get(move || async move {
+            (
+                axum::http::StatusCode::FOUND,
+                [(axum::http::header::LOCATION, location.to_string())],
+            )
+        }),
+    );
+    let listener = tokio::time::timeout(
+        crate::test_wait::HANG_BOUND,
+        tokio::net::TcpListener::bind("127.0.0.1:0"),
+    )
+    .await
+    .expect("bounded")
+    .expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    let client = super::client::build(None);
+    let health = crate::failsafe::HealthTracker::new("test");
+    let url = format!("http://127.0.0.1:{port}/");
+    let (outcome, facts) = delivery_facts::scope(async {
+        let outcome = tokio::time::timeout(
+            crate::test_wait::HANG_BOUND,
+            super::send_with_retry(client.get(&url), "test", true, &health),
+        )
+        .await
+        .expect("bounded");
+        (outcome, delivery_facts::snapshot())
+    })
+    .await;
+    let mut fields = serde_json::Map::new();
+    delivery_facts::record_fields(facts.as_ref(), false, false, &mut fields);
+    let error = outcome.expect_err("the redirect is refused");
+    (error, fields.get("response_effect").cloned())
+}
+
+/// A hop the redirect decision rejects (a private address) is the gateway's
+/// refusal: the call's record says `refused`.
+#[tokio::test]
+async fn a_rejected_redirect_hop_records_refused() {
+    let (error, effect) = Box::pin(redirected("http://10.255.255.1/")).await;
+    assert_eq!(effect, Some("refused".into()), "{error}");
+}
+
+/// A request that began on loopback, redirected to cleartext off this
+/// machine, is refused, and its record says so.
+#[tokio::test]
+async fn a_redirect_to_cleartext_off_machine_records_refused() {
+    let (error, effect) = Box::pin(redirected("http://93.184.215.14/")).await;
+    assert_eq!(effect, Some("refused".into()), "{error}");
+}
+
+/// The answer the caller receives is unchanged by recording the refusal: the
+/// same transport error, word for word, for both refused hops.
+#[tokio::test]
+async fn a_refused_redirect_answers_the_same_transport_error() {
+    for location in ["http://10.255.255.1/", "http://93.184.215.14/"] {
+        let (error, _) = Box::pin(redirected(location)).await;
+        assert!(
+            matches!(error, crate::Error::Transport(_)),
+            "{location}: {error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            "Transport error: test failed: error following redirect",
+            "{location}"
+        );
+    }
+}
