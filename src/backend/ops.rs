@@ -71,7 +71,7 @@ impl Backend {
         )
     )]
     pub async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
-        self.request_with_headers(
+        self.request_with_headers_lent(
             method,
             params,
             crate::transport::LentCredential::default(),
@@ -235,13 +235,31 @@ impl Backend {
         &self,
         method: &str,
         params: Option<Value>,
-        extra_headers: impl Into<crate::transport::LentCredential>,
+        extra_headers: &[(String, String)],
+        identity_key: Option<&str>,
+    ) -> Result<JsonRpcResponse> {
+        self.request_with_headers_lent(
+            method,
+            params,
+            crate::transport::LentCredential::from(extra_headers),
+            identity_key,
+        )
+        .await
+    }
+
+    /// [`Self::request_with_headers`] for a credential the mint core produced, which may
+    /// carry the send check the plain-slice entry cannot express.
+    pub(crate) async fn request_with_headers_lent(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        extra_headers: crate::transport::LentCredential,
         identity_key: Option<&str>,
     ) -> Result<JsonRpcResponse> {
         self.request_attempted(
             method,
             params,
-            extra_headers.into(),
+            extra_headers,
             identity_key,
             Attempts::WithRetry,
         )
@@ -278,13 +296,31 @@ impl Backend {
         &self,
         method: &str,
         params: Option<Value>,
-        extra_headers: impl Into<crate::transport::LentCredential>,
+        extra_headers: &[(String, String)],
+        identity_key: Option<&str>,
+    ) -> Result<JsonRpcResponse> {
+        self.request_with_task_capability_lent(
+            method,
+            params,
+            crate::transport::LentCredential::from(extra_headers),
+            identity_key,
+        )
+        .await
+    }
+
+    /// [`Self::request_with_task_capability`] for a credential the mint core produced, which may
+    /// carry the send check the plain-slice entry cannot express.
+    pub(crate) async fn request_with_task_capability_lent(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        extra_headers: crate::transport::LentCredential,
         identity_key: Option<&str>,
     ) -> Result<JsonRpcResponse> {
         self.request_attempted(
             method,
             params,
-            extra_headers.into(),
+            extra_headers,
             identity_key,
             Attempts::TaskCapabilityOnce,
         )
@@ -572,7 +608,7 @@ impl Backend {
     /// Returns an error if the backend is unavailable, the concurrency limit
     /// is reached, or the notification cannot be sent.
     pub async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
-        self.notify_with_headers(
+        self.notify_with_headers_lent(
             method,
             params,
             crate::transport::LentCredential::default(),
@@ -604,6 +640,24 @@ impl Backend {
     ///
     /// Returns an error if the backend is unavailable, the concurrency limit
     /// is reached, or the notification cannot be sent.
+    pub async fn notify_with_headers(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        extra_headers: &[(String, String)],
+        identity_key: Option<&str>,
+    ) -> Result<()> {
+        self.notify_with_headers_lent(
+            method,
+            params,
+            crate::transport::LentCredential::from(extra_headers),
+            identity_key,
+        )
+        .await
+    }
+
+    /// [`Self::notify_with_headers`] for a credential the mint core produced,
+    /// which may carry the send check the plain-slice entry cannot express.
     // `identity_key` is the caller's pool binding, for an A2A caller an
     // unkeyed hash of its principal: never a span field (MIK-8697).
     #[tracing::instrument(
@@ -614,14 +668,13 @@ impl Backend {
             request_id = %uuid::Uuid::new_v4()
         )
     )]
-    pub async fn notify_with_headers(
+    pub(crate) async fn notify_with_headers_lent(
         &self,
         method: &str,
         params: Option<Value>,
-        extra_headers: impl Into<crate::transport::LentCredential>,
+        extra_headers: crate::transport::LentCredential,
         identity_key: Option<&str>,
     ) -> Result<()> {
-        let extra_headers = extra_headers.into();
         let start_time = std::time::Instant::now();
 
         // A tool call sent as a notification is refused as a request is: the

@@ -121,7 +121,7 @@ async fn reprobe_carries_the_bearer(credential: Vec<(String, String)>) {
     let bearer = credential[0].1.clone();
 
     let _ = backend
-        .request_with_headers(
+        .request_with_headers_lent(
             "server/discover",
             None,
             crate::transport::LentCredential {

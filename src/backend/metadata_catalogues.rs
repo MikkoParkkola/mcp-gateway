@@ -24,7 +24,7 @@ impl Backend {
     ///
     /// Returns an error if the backend cannot start or the resources request fails.
     pub async fn get_resources_shared(&self) -> Result<Arc<Vec<Resource>>> {
-        self.get_resources_for_binding(None, LentCredential::default())
+        self.get_resources_for_binding_lent(None, LentCredential::default())
             .await
     }
 
@@ -41,7 +41,18 @@ impl Backend {
     pub async fn get_resources_for_binding(
         &self,
         binding: Option<&str>,
-        extra_headers: impl Into<LentCredential>,
+        extra_headers: &[(String, String)],
+    ) -> Result<Arc<Vec<Resource>>> {
+        self.get_resources_for_binding_lent(binding, LentCredential::from(extra_headers))
+            .await
+    }
+
+    /// [`Self::get_resources_for_binding`] for a credential the mint core produced,
+    /// which may carry the send check the plain-slice entry cannot express.
+    pub(crate) async fn get_resources_for_binding_lent(
+        &self,
+        binding: Option<&str>,
+        extra_headers: LentCredential,
     ) -> Result<Arc<Vec<Resource>>> {
         self.get_cached_list_for(
             binding,
@@ -54,7 +65,7 @@ impl Backend {
                 cooldown: false,
                 stale_hit: false,
             },
-            extra_headers.into(),
+            extra_headers,
             FillBound::DrainBudget,
             |result| {
                 Ok((
@@ -83,7 +94,7 @@ impl Backend {
     ///
     /// Returns an error if the backend cannot start or the templates request fails.
     pub async fn get_resource_templates_shared(&self) -> Result<Arc<Vec<ResourceTemplate>>> {
-        self.get_resource_templates_for_binding(None, LentCredential::default())
+        self.get_resource_templates_for_binding_lent(None, LentCredential::default())
             .await
     }
 
@@ -95,7 +106,18 @@ impl Backend {
     pub async fn get_resource_templates_for_binding(
         &self,
         binding: Option<&str>,
-        extra_headers: impl Into<LentCredential>,
+        extra_headers: &[(String, String)],
+    ) -> Result<Arc<Vec<ResourceTemplate>>> {
+        self.get_resource_templates_for_binding_lent(binding, LentCredential::from(extra_headers))
+            .await
+    }
+
+    /// [`Self::get_resource_templates_for_binding`] for a credential the mint core produced,
+    /// which may carry the send check the plain-slice entry cannot express.
+    pub(crate) async fn get_resource_templates_for_binding_lent(
+        &self,
+        binding: Option<&str>,
+        extra_headers: LentCredential,
     ) -> Result<Arc<Vec<ResourceTemplate>>> {
         self.get_cached_list_for(
             binding,
@@ -108,7 +130,7 @@ impl Backend {
                 cooldown: false,
                 stale_hit: false,
             },
-            extra_headers.into(),
+            extra_headers,
             FillBound::DrainBudget,
             |result| {
                 let templates = serde_json::from_value::<ResourcesTemplatesListResult>(result)?;
@@ -135,7 +157,7 @@ impl Backend {
     ///
     /// Returns an error if the backend cannot start or the prompts request fails.
     pub async fn get_prompts_shared(&self) -> Result<Arc<Vec<Prompt>>> {
-        self.get_prompts_for_binding(None, LentCredential::default())
+        self.get_prompts_for_binding_lent(None, LentCredential::default())
             .await
     }
 
@@ -147,7 +169,18 @@ impl Backend {
     pub async fn get_prompts_for_binding(
         &self,
         binding: Option<&str>,
-        extra_headers: impl Into<LentCredential>,
+        extra_headers: &[(String, String)],
+    ) -> Result<Arc<Vec<Prompt>>> {
+        self.get_prompts_for_binding_lent(binding, LentCredential::from(extra_headers))
+            .await
+    }
+
+    /// [`Self::get_prompts_for_binding`] for a credential the mint core produced,
+    /// which may carry the send check the plain-slice entry cannot express.
+    pub(crate) async fn get_prompts_for_binding_lent(
+        &self,
+        binding: Option<&str>,
+        extra_headers: LentCredential,
     ) -> Result<Arc<Vec<Prompt>>> {
         self.get_cached_list_for(
             binding,
@@ -160,7 +193,7 @@ impl Backend {
                 cooldown: false,
                 stale_hit: false,
             },
-            extra_headers.into(),
+            extra_headers,
             FillBound::DrainBudget,
             |result| {
                 Ok((

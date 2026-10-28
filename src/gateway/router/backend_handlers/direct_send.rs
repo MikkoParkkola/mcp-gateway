@@ -89,7 +89,7 @@ async fn send_in_scope(
             backend.request(method, params).await
         } else {
             backend
-                .request_with_headers(method, params, credential, identity_key)
+                .request_with_headers_lent(method, params, credential, identity_key)
                 .await
         }
     })

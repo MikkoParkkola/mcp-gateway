@@ -130,7 +130,7 @@ impl MetaMcp {
     ) -> JsonRpcResponse {
         let (headers, binding) = credential;
         match backend
-            .request_with_headers(method, Some(params), &headers, binding.as_deref())
+            .request_with_headers_lent(method, Some(params), headers, binding.as_deref())
             .await
         {
             Ok(resp) => match resp.error {

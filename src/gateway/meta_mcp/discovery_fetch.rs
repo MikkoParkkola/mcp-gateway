@@ -288,7 +288,10 @@ impl MetaMcp {
         // A per-user slot fills on its owner's own credentialed read, never on a
         // background task's, so an empty one is always worth filling here.
         if allow_empty_cache_fetch || binding.is_some() {
-            return match backend.get_tools_for_binding(binding, headers).await {
+            return match backend
+                .get_tools_for_binding_lent(binding, headers.into())
+                .await
+            {
                 Ok(tools) if !tools.is_empty() => Some(tools),
                 Ok(_) => None,
                 Err(e) => {

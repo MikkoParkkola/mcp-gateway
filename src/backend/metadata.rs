@@ -451,7 +451,7 @@ impl Backend {
     ///
     /// Returns an error if the backend cannot start or the tools request fails.
     pub async fn get_tools_shared(&self) -> Result<Arc<Vec<Tool>>> {
-        self.get_tools_for_binding(None, LentCredential::default())
+        self.get_tools_for_binding_lent(None, LentCredential::default())
             .await
     }
 
@@ -494,10 +494,21 @@ impl Backend {
     pub async fn get_tools_for_binding(
         &self,
         binding: Option<&str>,
-        extra_headers: impl Into<LentCredential>,
+        extra_headers: &[(String, String)],
+    ) -> Result<Arc<Vec<Tool>>> {
+        self.get_tools_for_binding_lent(binding, LentCredential::from(extra_headers))
+            .await
+    }
+
+    /// [`Self::get_tools_for_binding`] for a credential the mint core produced,
+    /// which may carry the send check the plain-slice entry cannot express.
+    pub(crate) async fn get_tools_for_binding_lent(
+        &self,
+        binding: Option<&str>,
+        extra_headers: LentCredential,
     ) -> Result<Arc<Vec<Tool>>> {
         let tools = self
-            .tools_fill(binding, extra_headers.into(), FillBound::DrainBudget, false)
+            .tools_fill(binding, extra_headers, FillBound::DrainBudget, false)
             .await?;
         Ok(self.without_blocked(tools))
     }

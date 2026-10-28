@@ -190,7 +190,7 @@ impl NativeUpstreamTasks {
             // its own `tools/call` will, and `query`/`cancel` run this under
             // `non_interactive`. A non-interactive discovery is refused while a
             // start holds the backend, which would silently disarm recovery.
-            backend.request_with_headers(
+            backend.request_with_headers_lent(
                 "server/discover",
                 None,
                 crate::transport::LentCredential::default(),
@@ -246,7 +246,7 @@ impl UpstreamRecovery for NativeUpstreamTasks {
             // method, and nothing that writes upstream.
             match tokio::time::timeout(
                 deadline,
-                backend.request_with_task_capability(
+                backend.request_with_task_capability_lent(
                     "tasks/get",
                     Some(json!({ "taskId": handle.handle })),
                     crate::transport::LentCredential::default(),
@@ -303,7 +303,7 @@ impl UpstreamRecovery for NativeUpstreamTasks {
             // a JSON-RPC error included, means the peer received it.
             let sent = tokio::time::timeout(
                 deadline,
-                backend.request_with_task_capability(
+                backend.request_with_task_capability_lent(
                     "tasks/cancel",
                     Some(json!({ "taskId": handle.handle })),
                     crate::transport::LentCredential::default(),

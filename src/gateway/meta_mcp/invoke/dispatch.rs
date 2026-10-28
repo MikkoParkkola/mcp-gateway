@@ -417,10 +417,10 @@ impl MetaMcp {
         let response = match &submission {
             Some(_) => {
                 backend
-                    .request_with_task_capability(
+                    .request_with_task_capability_lent(
                         "tools/call",
                         Some(params),
-                        propagated_headers,
+                        propagated_headers.clone(),
                         identity_key,
                     )
                     .await?
@@ -430,10 +430,10 @@ impl MetaMcp {
             }
             None => {
                 backend
-                    .request_with_headers(
+                    .request_with_headers_lent(
                         "tools/call",
                         Some(params),
-                        propagated_headers,
+                        propagated_headers.clone(),
                         identity_key,
                     )
                     .await?

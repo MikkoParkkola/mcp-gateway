@@ -118,7 +118,7 @@ async fn checked_slot(name: &str) -> (Arc<Backend>, String, Arc<CheckingUpstream
 
 async fn ping(backend: &Backend, binding: &str, credential: &LentCredential) -> Result<()> {
     backend
-        .request_with_headers("ping", None, credential, Some(binding))
+        .request_with_headers_lent("ping", None, credential.clone(), Some(binding))
         .await
         .map(|_| ())
 }

@@ -555,7 +555,7 @@ impl MetaMcp {
         };
 
         let fetched = backend
-            .get_tools_for_binding(binding.as_deref(), &headers)
+            .get_tools_for_binding_lent(binding.as_deref(), headers.clone())
             .await?;
         self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
         let tools: Vec<_> = fetched
