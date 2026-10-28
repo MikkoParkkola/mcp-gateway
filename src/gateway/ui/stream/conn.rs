@@ -68,27 +68,33 @@ fn hello_frame(data: &Value) -> Bytes {
 
 impl Conn {
     /// Send one frame, giving up after [`WRITE_TIMEOUT`]. The credential is
-    /// checked just before the write and again every [`RECHECK`] while the
-    /// write is blocked, so a stalled client cannot outlive a revocation.
+    /// checked before waiting for room, every [`RECHECK`] while waiting, and
+    /// once more with room in hand, so a frame that waited never outlives a
+    /// revocation.
     pub(super) async fn send(&self, bytes: Bytes) -> Result<(), End> {
-        if !self.still_entitled().await {
-            return Err(End::CredentialChanged);
-        }
-        let write = tokio::time::timeout(WRITE_TIMEOUT, self.tx.send(Ok(bytes)));
-        tokio::pin!(write);
-        loop {
+        self.require_entitled().await?;
+        let room = tokio::time::timeout(WRITE_TIMEOUT, self.tx.reserve());
+        tokio::pin!(room);
+        let permit = loop {
             tokio::select! {
-                done = &mut write => return match done {
-                    Ok(Ok(())) => Ok(()),
-                    Ok(Err(_)) => Err(End::ClientGone),
-                    Err(_) => Err(End::WriteStalled),
+                done = &mut room => match done {
+                    Ok(Ok(permit)) => break permit,
+                    Ok(Err(_)) => return Err(End::ClientGone),
+                    Err(_) => return Err(End::WriteStalled),
                 },
-                () = tokio::time::sleep(RECHECK) => {
-                    if !self.still_entitled().await {
-                        return Err(End::CredentialChanged);
-                    }
-                }
+                () = tokio::time::sleep(RECHECK) => self.require_entitled().await?,
             }
+        };
+        self.require_entitled().await?;
+        permit.send(Ok(bytes));
+        Ok(())
+    }
+
+    async fn require_entitled(&self) -> Result<(), End> {
+        if self.still_entitled().await {
+            Ok(())
+        } else {
+            Err(End::CredentialChanged)
         }
     }
 
