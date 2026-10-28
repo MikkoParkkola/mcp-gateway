@@ -15,7 +15,7 @@ use super::{access_report, call_windows, is_admin, uptime_secs};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
 
-/// MIK-8786: the auth facts the page decides from, stated in both views of
+/// The auth facts the page decides from, stated in both views of
 /// `GET /ui/api/status`: whether authentication is on, and whether this caller
 /// is signed in and is an admin. Three booleans about the caller, none about
 /// backends; an anonymous caller already learns on/off from 401 versus 200.
