@@ -148,10 +148,12 @@ impl CredentialSource for Minted {
                     return Err(refused);
                 }
             };
-            // The mint's contract: nothing minted is a refusal. Held here too,
-            // because a per-user slot of a required binding takes this send's
-            // credential as the subscriber's own and adds none of its own.
-            if grant.headers.is_empty() {
+            // The mint's contract: nothing minted is a refusal, and an empty
+            // value among the headers is nothing minted too. Held here as
+            // well, because a per-user slot of a required binding takes this
+            // send's credential as the subscriber's own and adds none of its
+            // own.
+            if grant.headers.is_empty() || grant.headers.iter().any(|(_, value)| value.is_empty()) {
                 return Err(crate::Error::Transport(
                     "the listener's mint lent no credential".to_owned(),
                 ));
