@@ -666,6 +666,7 @@ impl io::Write for LogBuf {
 /// percent-encoded forms appear in no log line and no refusal text.
 #[tokio::test]
 async fn c9_the_credential_never_reaches_a_log_line_or_a_refusal() {
+    crate::test_log_capture::keep_interest_open();
     let logs = LogBuf::default();
     let sink = logs.clone();
     let subscriber = tracing_subscriber::fmt()
