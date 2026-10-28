@@ -250,6 +250,7 @@ impl Canceller {
         // loan left to send it as.
         if self.client.is_lent_only() {
             tracing::warn!("a deferred A2A cancel on a per-user slot was refused");
+            crate::transport::count_refusal("a2a_deferred_cancel");
             return;
         }
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {

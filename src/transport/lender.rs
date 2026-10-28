@@ -216,22 +216,38 @@ impl Lender {
             self.starter().into_iter().collect()
         };
         let Some(first) = loans.first() else {
-            return Err(send_refused(if has_credential {
-                "the call's credential is not lent on this slot"
-            } else {
-                "no calling subscriber's credential is lent"
-            }));
+            return Err(counted_refusal(
+                "unlent",
+                if has_credential {
+                    "the call's credential is not lent on this slot"
+                } else {
+                    "no calling subscriber's credential is lent"
+                },
+            ));
         };
         for loan in &loans {
             if loan.refused.is_some() {
-                return Err(send_refused("this credential was refused"));
+                return Err(counted_refusal("marked", "this credential was refused"));
             }
             let Some(check) = loan.check.as_ref() else {
-                return Err(send_refused("no recheck is attached to this credential"));
+                return Err(counted_refusal(
+                    "unchecked",
+                    "no recheck is attached to this credential",
+                ));
             };
             if let Err(refusal) = check().await {
                 self.refuse(loan.id, refusal);
-                return Err(send_refused("this credential's recheck refused it"));
+                // No credential and no backend text: the refusal kind only.
+                tracing::warn!(?refusal, "a per-user send's credential recheck refused it");
+                let reason = match refusal {
+                    Refusal::Definitive => "recheck_definitive",
+                    Refusal::ThisLoan => "recheck_this_loan",
+                    Refusal::Transient => "recheck_transient",
+                };
+                return Err(counted_refusal(
+                    reason,
+                    "this credential's recheck refused it",
+                ));
             }
         }
         Ok(first.headers.to_vec())
@@ -272,6 +288,23 @@ impl Lender {
     pub(crate) fn on_definitive_refusal(&self, evict: Box<dyn Fn() + Send + Sync>) {
         *self.evict.lock() = Some(evict);
     }
+}
+
+/// [`send_refused`], counted under `reason`: every lent-only send the
+/// gateway refuses is one increment of
+/// `mcp_gateway_per_user_send_refused_total`.
+pub(crate) fn counted_refusal(reason: &'static str, why: &str) -> Error {
+    count_refusal(reason);
+    send_refused(why)
+}
+
+/// One refused per-user send, or deferred send, under `reason`.
+pub(crate) fn count_refusal(reason: &'static str) {
+    telemetry_metrics::counter!(
+        "mcp_gateway_per_user_send_refused_total",
+        "reason" => reason
+    )
+    .increment(1);
 }
 
 /// The refusal of a lent-only send: nothing reached the wire.

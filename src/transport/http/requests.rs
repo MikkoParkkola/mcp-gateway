@@ -12,7 +12,7 @@ use serde_json::Value;
 use tracing::{debug, info};
 use url::Url;
 
-use super::super::lender::send_refused;
+use super::super::lender::counted_refusal;
 use super::super::sanitize_url_for_diagnostics;
 use super::cancel_guard::CancelOnDrop;
 use super::extra_headers::merge_extra_headers;
@@ -232,7 +232,7 @@ impl HttpTransport {
         call: &[(String, String)],
     ) -> Result<Vec<(String, String)>> {
         let Some(lender) = self.lender.get() else {
-            return Err(send_refused("this slot has no lender"));
+            return Err(counted_refusal("no_lender", "this slot has no lender"));
         };
         lender.lent_for(call).await
     }
