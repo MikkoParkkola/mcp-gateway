@@ -57,6 +57,15 @@ pub(super) fn frame(event: &str, id: Option<&StreamId>, data: &Value) -> Bytes {
     Bytes::from(format!("event: {event}\n{id}data: {data}\n\n"))
 }
 
+/// The `hello` frame with a `retry:` hint of 3 s plus up to 2 s of jitter, so
+/// the browsers of a restarted gateway do not all reconnect at one instant.
+fn hello_frame(data: &Value) -> Bytes {
+    use rand::RngExt;
+    let retry = 3000 + rand::rng().random_range(0..=2000_u64);
+    let body = frame("hello", None, data);
+    Bytes::from([format!("retry: {retry}\n").as_bytes(), &body].concat())
+}
+
 impl Conn {
     /// Send one frame, giving up after [`WRITE_TIMEOUT`]. The credential is
     /// checked just before the write and again every [`RECHECK`] while the
@@ -114,12 +123,8 @@ async fn drive(
         r = fresh => r.map(|s| s.clone()).map_err(|_| End::ClientGone)?,
         () = conn.tx.closed() => return Err(End::ClientGone),
     };
-    conn.send(frame(
-        "hello",
-        None,
-        &json!({"kinds": conn.kinds, "head": sent.head(&first, conn.admin)}),
-    ))
-    .await?;
+    let hello = json!({"kinds": conn.kinds, "head": sent.head(&first, conn.admin)});
+    conn.send(hello_frame(&hello)).await?;
     sent.deliver(conn, &first).await?;
     let start = Instant::now();
     let mut keep = interval_at(start + KEEP_ALIVE, KEEP_ALIVE);
