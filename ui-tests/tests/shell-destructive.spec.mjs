@@ -304,12 +304,10 @@ test.describe('placement', () => {
 
   test('D5b text at 200%, a tall opener, and a resize while open still leave the opener uncovered', async ({ page }) => {
     await page.setViewportSize({ width: 820, height: 600 });
-    await page.addInitScript(() => addEventListener('DOMContentLoaded', () => {
-      document.documentElement.style.fontSize = '200%';
-      const s = document.createElement('style');
-      s.textContent = '#remove-probe { min-height: 120px; }';
-      document.head.append(s);
-    }));
+    await page.addInitScript(() => {
+      window.__openerStyle = { minHeight: '120px' };
+      addEventListener('DOMContentLoaded', () => { document.documentElement.style.fontSize = '200%'; });
+    });
     await open(page, "{ typeToConfirm: 'probe' }");
     await page.click('#remove-probe');
     for (const size of [{ width: 820, height: 600 }, { width: 390, height: 568 }]) {
@@ -484,7 +482,7 @@ test.describe('fold check', () => {
       const vv = new EventTarget();
       Object.defineProperties(vv, { height: { get: () => 420 }, width: { get: () => 390 }, offsetTop: { get: () => 120 }, offsetLeft: { get: () => 0 }, scale: { get: () => 1 } });
       Object.defineProperty(window, 'visualViewport', { get: () => vv });
-      addEventListener('DOMContentLoaded', () => { const s = document.createElement('style'); s.textContent = '#remove-probe { min-height: 120px; }'; document.head.append(s); });
+      window.__openerStyle = { minHeight: '120px' };
     });
     await open(page);
     await page.click('#remove-probe');
@@ -583,11 +581,36 @@ test.describe('code review round 1', () => {
 
   test('D21 a visible part shorter than the dialog natural height still holds the whole dialog', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 120 });
-    await page.addInitScript(() => addEventListener('DOMContentLoaded', () => { const s = document.createElement('style'); s.textContent = '#remove-probe { min-height: 200px; }'; document.head.append(s); }));
+    await page.addInitScript(() => { window.__openerStyle = { minHeight: '200px' }; });
     await open(page, "{ typeToConfirm: 'probe', consequences: ['One.', 'Two.', 'Three.', 'Four.', 'Five.', 'Six.', 'Seven.', 'Eight.'] }");
     await page.click('#remove-probe');
     const box = await dialog(page).boundingBox();
     expect(box.y).toBeGreaterThanOrEqual(0);
     expect(box.y + box.height).toBeLessThanOrEqual(120);
+  });
+});
+
+test.describe('code review round 1, second seat', () => {
+  test('D22 the done notice survives a default-tab redirect and goes on any later navigation, even to the same address', async ({ page }) => {
+    await page.route(PROBE, (r) => r.fulfill({ status: 204 }));
+    await open(page, "{ done: { path: '/ui/servers', notice: 'probe removed' } }");
+    await page.click('#remove-probe');
+    await action(page).click();
+    await expect(page).toHaveURL(/\/ui\/servers\/status$/);
+    await expect(page.locator('#content .done-notice')).toContainText('probe removed');
+    await page.evaluate(() => { history.pushState(null, '', '/ui/servers/status'); dispatchEvent(new PopStateEvent('popstate')); });
+    await expect(page.locator('#content .done-notice')).toHaveCount(0);
+  });
+
+  test('D23 on a page already longer than the screen, an opener at its very end is still moved clear of the dialog', async ({ page }) => {
+    await page.setViewportSize({ width: 820, height: 600 });
+    await page.addInitScript(() => { window.__openerStyle = { marginTop: '1600px', marginBottom: '400px' }; });
+    await open(page, "{ consequences: ['One.', 'Two.', 'Three.', 'Four.', 'Five.', 'Six.', 'Seven.', 'Eight.', 'Nine.', 'Ten.'] }");
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await page.click('#remove-probe');
+    const box = await dialog(page).boundingBox();
+    expect(intersects(box, await page.locator('#remove-probe').boundingBox())).toBe(false);
+    // Room was added, so it stays centred rather than docking beside the opener.
+    expect(Math.abs(box.y + box.height / 2 - 300)).toBeLessThanOrEqual(1);
   });
 });

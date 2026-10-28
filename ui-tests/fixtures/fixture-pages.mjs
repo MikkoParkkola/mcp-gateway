@@ -106,6 +106,8 @@ const confirmRow = (el, ctx) => {
   opener.className = 'btn';
   opener.id = 'remove-probe';
   opener.textContent = 'Remove probe…';
+  // Through the CSS object model: the shell's CSP refuses injected style elements.
+  Object.assign(opener.style, window.__openerStyle ?? {});
   window.__outcomes = [];
   opener.addEventListener('click', () => {
     const extra = typeof window.__confirm === 'function' ? window.__confirm(opener) : (window.__confirm ?? {});
