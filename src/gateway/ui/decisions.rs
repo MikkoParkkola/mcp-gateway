@@ -135,8 +135,13 @@ fn start_with(
                 }),
             );
             let path = log.path();
-            tokio::spawn(replay_until_ready(path.clone(), Arc::clone(&shared)));
-            tokio::spawn(apply_live(receiver, dropped, path, Arc::clone(&shared)));
+            let replays = Arc::new(Replays {
+                path,
+                shared: Arc::clone(&shared),
+                one_at_a_time: tokio::sync::Mutex::new(()),
+            });
+            tokio::spawn(replay_until_ready(Arc::clone(&replays)));
+            tokio::spawn(apply_live(receiver, dropped, replays));
         }
     }
 
@@ -179,9 +184,9 @@ impl Dropped {
 async fn apply_live(
     mut receiver: tokio::sync::mpsc::Receiver<(String, IdentityGrantAuditEvent)>,
     dropped: Arc<Dropped>,
-    path: std::path::PathBuf,
-    shared: Arc<Shared>,
+    replays: Arc<Replays>,
 ) {
+    let shared = Arc::clone(&replays.shared);
     loop {
         tokio::select! {
             note = receiver.recv() => {
@@ -195,9 +200,16 @@ async fn apply_live(
                 "decisions: notes arrived faster than they were applied; replaying the log"
             );
             shared.update(|set| set.set_health(Source::Access, Health::Unavailable));
-            replay_until_ready(path.clone(), Arc::clone(&shared)).await;
+            replay_until_ready(Arc::clone(&replays)).await;
         }
     }
+}
+
+/// What a replay reads, and the lock that keeps replays one at a time.
+struct Replays {
+    path: std::path::PathBuf,
+    shared: Arc<Shared>,
+    one_at_a_time: tokio::sync::Mutex<()>,
 }
 
 /// The longest wait between two replays of a log that could not be read.
@@ -207,10 +219,13 @@ const REPLAY_RETRY_MAX: Duration = Duration::from_secs(60);
 /// lost a held note, runs again after a wait that doubles up to
 /// [`REPLAY_RETRY_MAX`]. The source reads unavailable until then. Async, so
 /// shutdown drops it between attempts.
-async fn replay_until_ready(path: std::path::PathBuf, shared: Arc<Shared>) {
+async fn replay_until_ready(replays: Arc<Replays>) {
+    // One replay at a time: two folding at once would let the first to end
+    // mark the source ready while the other is still reading.
+    let _one = replays.one_at_a_time.lock().await;
     let mut wait = Duration::from_secs(1);
     loop {
-        let (attempt, set) = (path.clone(), Arc::clone(&shared));
+        let (attempt, set) = (replays.path.clone(), Arc::clone(&replays.shared));
         let ready = tokio::task::spawn_blocking(move || replay_grant_decisions(&attempt, &set))
             .await
             .unwrap_or(false);

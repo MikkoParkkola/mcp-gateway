@@ -339,3 +339,38 @@ fn measure_the_replay_at_the_retention_cap() {
     );
     assert_eq!(view.decisions.len(), 500, "one request per subject");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_replay_waits_for_the_one_already_running() {
+    let dir = tempfile::tempdir().expect("dir");
+    let log = log_in(&dir, 1 << 20, 12);
+    let shared = Arc::new(Shared::with_key([7; 32]));
+    shared.update(|set| {
+        set.set_health(Source::ControlPlane, Health::Ready);
+        set.set_health(Source::Capability, Health::Absent);
+    });
+    let replays = Arc::new(Replays {
+        path: log.path(),
+        shared: Arc::clone(&shared),
+        one_at_a_time: tokio::sync::Mutex::new(()),
+    });
+
+    // Another replay is running: it holds the lock.
+    let running = replays.one_at_a_time.lock().await;
+    let waiting = tokio::spawn(replay_until_ready(Arc::clone(&replays)));
+    tokio::task::yield_now().await;
+    assert!(
+        shared.view().is_err(),
+        "no second replay marks the source ready"
+    );
+
+    drop(running);
+    tokio::time::timeout(Duration::from_secs(30), waiting)
+        .await
+        .expect("the waiting replay ran once the first ended")
+        .expect("the replay task finished");
+    assert!(
+        shared.view().is_ok(),
+        "ready after the replay it waited for"
+    );
+}
