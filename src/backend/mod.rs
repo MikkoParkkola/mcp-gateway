@@ -442,6 +442,8 @@ impl Backend {
     #[cfg(feature = "a2a")]
     async fn start_a2a(
         &self,
+        key: &pool::PoolKey,
+        entry: &pool::PooledEntry,
         destination: crate::security::ssrf::DestinationPolicy,
     ) -> crate::Result<Arc<crate::a2a::transport::A2aTransport>> {
         let crate::config::TransportConfig::A2a {
@@ -454,12 +456,18 @@ impl Backend {
                 self.name
             )));
         };
+        // A lent-only per-user slot sends only what its dispatches lend: the
+        // transport takes the slot's lender and no static header.
+        let lender = (matches!(key, pool::PoolKey::PerUser { .. })
+            && self.per_user_slot_credential() == crate::transport::SlotCredential::LentOnly)
+            .then(|| Arc::clone(&entry.lender));
         crate::a2a::transport::A2aTransport::start(
             a2a_url,
             a2a_agent_card_path.as_deref(),
             &self.config.headers,
             self.config.timeout,
             destination,
+            lender,
         )
         .await
     }

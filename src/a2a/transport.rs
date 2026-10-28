@@ -32,7 +32,7 @@ use super::translator::{
 use super::types::{AgentCard, Message, SendMessageResponse, Task, TaskState};
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::ssrf::DestinationPolicy;
-use crate::transport::Transport;
+use crate::transport::{Lender, Transport};
 use crate::{Error, Result};
 
 /// The MCP revision the synthetic `initialize` reports: the legacy one, since
@@ -73,6 +73,7 @@ impl A2aTransport {
         headers: &HashMap<String, String>,
         timeout: Duration,
         destination: DestinationPolicy,
+        lender: Option<Arc<Lender>>,
     ) -> Result<Arc<Self>> {
         let origin = url::Url::parse(a2a_url).map_err(|e| {
             Error::Config(format!(
@@ -87,12 +88,18 @@ impl A2aTransport {
             destination,
             Arc::new(AtomicU64::new(0)),
         )?;
-        let headers = headers
-            .iter()
-            .map(|(name, value)| (name.clone(), value.clone()))
-            .collect();
-        let client = A2aClient::new(a2a_url, card_path, headers, http)?;
-        let card = client.fetch_card().await?;
+        let client = match lender {
+            Some(lender) => A2aClient::new_lent_only(a2a_url, card_path, http, lender)?,
+            None => {
+                let headers = headers
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.clone()))
+                    .collect();
+                A2aClient::new(a2a_url, card_path, headers, http)?
+            }
+        };
+        // On a lent-only client this goes out as the start's own loan.
+        let card = client.fetch_card(&[]).await?;
         let endpoint = client.endpoint(&card)?;
         let canceller = Canceller::new(client.clone(), endpoint.clone());
         let transport = Arc::new(Self {
@@ -140,6 +147,26 @@ impl A2aTransport {
         self.canceller.spawn(pending.task_id, pending.headers);
     }
 
+    /// The headers a deferred cancel would carry. A lent-only slot sends no
+    /// deferred cancel, so it keeps none of the caller's credential.
+    fn cancel_headers(&self, extra_headers: &[(String, String)]) -> Vec<(String, String)> {
+        if self.client.is_lent_only() {
+            Vec::new()
+        } else {
+            extra_headers.to_vec()
+        }
+    }
+
+    /// The call's headers for a card read. Only a lent-only slot sends them,
+    /// as its loan; any other keeps its configured headers alone.
+    fn card_headers<'a>(&self, extra_headers: &'a [(String, String)]) -> &'a [(String, String)] {
+        if self.client.is_lent_only() {
+            extra_headers
+        } else {
+            &[]
+        }
+    }
+
     /// Run `call` unless the transport is, or becomes, closed.
     async fn unless_closed<T>(&self, call: impl Future<Output = Result<T>>) -> Result<T> {
         let mut closed = self.closed.subscribe();
@@ -173,11 +200,13 @@ impl A2aTransport {
                 }),
             )),
             "ping" => {
-                self.unless_closed(self.client.fetch_card()).await?;
+                self.unless_closed(self.client.fetch_card(&[])).await?;
                 Ok(JsonRpcResponse::success(id, json!({})))
             }
             "tools/list" => {
-                let card = self.unless_closed(self.client.fetch_card()).await?;
+                let card = self
+                    .unless_closed(self.client.fetch_card(self.card_headers(extra_headers)))
+                    .await?;
                 Ok(JsonRpcResponse::success(
                     id,
                     json!({"tools": [card_to_tool(&card)]}),
@@ -232,7 +261,8 @@ impl A2aTransport {
                 "`{TOOL_NAME}` requires a `message` string argument"
             ));
         };
-        let mut guard = CancelGuard::new(self.canceller.clone(), extra_headers.to_vec());
+        let mut guard =
+            CancelGuard::new(self.canceller.clone(), self.cancel_headers(extra_headers));
         self.delegate(
             id,
             Message::user_text(text),
@@ -270,7 +300,8 @@ impl A2aTransport {
         };
         // The map no longer owns the task; this guard does, from here on, so
         // a retry abandoned midway still cancels it.
-        let mut guard = CancelGuard::new(self.canceller.clone(), extra_headers.to_vec());
+        let mut guard =
+            CancelGuard::new(self.canceller.clone(), self.cancel_headers(extra_headers));
         guard.arm(&pending.task_id);
         let answer = params.and_then(|p| p.pointer(&format!("/inputResponses/{ASK_KEY}")));
         let accepted = answer
@@ -442,13 +473,14 @@ impl A2aTransport {
             task.id.clone(),
             task.context_id.clone(),
             identity,
-            extra_headers.to_vec(),
+            self.cancel_headers(extra_headers),
             std::time::Instant::now(),
             self.canceller.hold(),
         ) {
             Ok(token) => token,
             Err(refused) => {
-                self.canceller.spawn(task.id, extra_headers.to_vec());
+                self.canceller
+                    .spawn(task.id, self.cancel_headers(extra_headers));
                 let why = match refused {
                     ParkRefused::Full => "too many unanswered agent questions",
                     ParkRefused::Closed => "the A2A backend is closing",

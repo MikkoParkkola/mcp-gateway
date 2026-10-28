@@ -642,7 +642,7 @@ impl Backend {
                 built_under = self.mark_connecting();
                 self.begin_connecting(built_under)?;
                 listen = None;
-                self.start_a2a(built_under).await?
+                self.start_a2a(key, entry, built_under).await?
             }
         };
 
