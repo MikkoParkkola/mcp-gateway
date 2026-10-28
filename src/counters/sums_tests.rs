@@ -55,6 +55,19 @@ fn t1c_the_current_bucket_is_partial_and_its_twin_whole() {
     assert_eq!(sums.counts, vec![(Some(1), Some(2))]);
 }
 
+/// T2c: after the clock steps back, a series whose newest bucket is ahead of
+/// `now` has dropped the previous period's oldest buckets from its ring: the
+/// previous count reads `None`, while the current one stays exact.
+#[test]
+fn t2c_a_clock_step_back_loses_the_oldest_previous_buckets() {
+    let now = T0 + 7 * HOUR;
+    let store = CounterStore::new(0);
+    record(&store, Label::Known("t"), now - HOUR);
+    record(&store, Label::Known("t"), now + 10 * HOUR);
+    let sums = store.window_sums(&[tool("t")], now, &UTC);
+    assert_eq!(sums.counts, vec![(Some(1), None)]);
+}
+
 /// T7: one batch read takes the lock once, for 3 labels or 300.
 #[test]
 fn t7_one_lock_whatever_the_label_count() {
