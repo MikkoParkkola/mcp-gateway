@@ -1,0 +1,281 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! `POST /ui/api/discovery/adopt` end to end: the real binary, the real
+//! scanner, a client config file in the child's own home and the files
+//! secret store. An adopted server becomes a disabled backend whose literal
+//! values live in the store; the answers never carry a value.
+//!
+//! The child has its own home (`gateway_bin`), so neither the scan nor the
+//! store touches the test runner's home or keychain.
+
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
+use std::path::Path;
+use std::process::Stdio;
+use std::time::{Duration, Instant};
+
+use serde_json::{Value, json};
+use tokio::process::{Child, Command};
+
+use gateway_bin::{ANY_PORT, reported_port};
+
+const STARTUP: Duration = Duration::from_secs(60);
+const BEARER: &str = "discovery-adopt-admin-token";
+const SECRET: &str = "zq-adopt-env-secret";
+const HEADER_SECRET: &str = "zq-adopt-header-secret";
+
+fn write_owner_only(path: &Path, text: &str) {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).expect("dir");
+    }
+    mcp_gateway::gateway::test_helpers::write_owner_only(path, text).expect("write owner-only");
+}
+
+struct Gateway {
+    _child: Child,
+    port: u16,
+    log: std::path::PathBuf,
+}
+
+impl Gateway {
+    async fn spawn(home: &Path, config: &Path) -> Self {
+        let log = home.join("gateway.log");
+        let out = std::fs::File::create(&log).expect("log file");
+        let err = out.try_clone().expect("log handle");
+        let child = Command::from(gateway_bin::command(
+            home,
+            gateway_bin::Inherit::Environment,
+        ))
+        .current_dir(home)
+        .env("MCP_GATEWAY_CONFIG_DIR", home.join("state"))
+        .env("RUST_LOG", "info")
+        .kill_on_drop(true)
+        .arg("serve")
+        .arg("--config")
+        .arg(config)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(out))
+        .stderr(Stdio::from(err))
+        .spawn()
+        .expect("the built mcp-gateway binary spawns");
+        let mut gateway = Self {
+            _child: child,
+            port: ANY_PORT,
+            log,
+        };
+        let deadline = Instant::now() + STARTUP;
+        let probe = reqwest::Client::new();
+        loop {
+            if gateway.port == ANY_PORT {
+                gateway.port = reported_port(&gateway.logs()).unwrap_or(ANY_PORT);
+            }
+            if gateway.port != ANY_PORT
+                && let Ok(response) = probe
+                    .get(format!("http://127.0.0.1:{}/livez", gateway.port))
+                    .send()
+                    .await
+                && response.status().is_success()
+            {
+                return gateway;
+            }
+            assert!(Instant::now() < deadline, "no /livez:\n{}", gateway.logs());
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    fn logs(&self) -> String {
+        std::fs::read_to_string(&self.log).unwrap_or_default()
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("http://127.0.0.1:{}{path}", self.port)
+    }
+
+    async fn list(&self) -> Value {
+        reqwest::Client::new()
+            .get(self.url("/ui/api/discovery"))
+            .bearer_auth(BEARER)
+            .send()
+            .await
+            .expect("GET")
+            .json()
+            .await
+            .expect("json")
+    }
+
+    async fn adopt(&self, body: &Value) -> (u16, String) {
+        let response = reqwest::Client::new()
+            .post(self.url("/ui/api/discovery/adopt"))
+            .bearer_auth(BEARER)
+            .json(body)
+            .send()
+            .await
+            .expect("POST");
+        (
+            response.status().as_u16(),
+            response.text().await.expect("body"),
+        )
+    }
+}
+
+fn client_file(home: &Path, servers: &Value) {
+    write_owner_only(
+        &home.join(".cursor/mcp.json"),
+        &json!({ "mcpServers": servers }).to_string(),
+    );
+}
+
+fn gateway_config(home: &Path) -> std::path::PathBuf {
+    let config = home.join("gateway.yaml");
+    write_owner_only(
+        &config,
+        &format!(
+            "# operator note: keep\nserver:\n  host: \"127.0.0.1\"\n  port: {ANY_PORT}\n\
+             auth:\n  enabled: true\n  bearer_token: \"{BEARER}\"\n  single_user: true\n\
+             secrets:\n  store: files\nbackends: {{}}\n"
+        ),
+    );
+    config
+}
+
+fn find_id(listing: &Value, name: &str) -> String {
+    listing["servers"]
+        .as_array()
+        .expect("servers")
+        .iter()
+        .find(|s| s["name"] == name)
+        .unwrap_or_else(|| panic!("{name} not listed: {listing}"))["find_id"]
+        .as_str()
+        .expect("find_id")
+        .to_owned()
+}
+
+/// d4, d9, d19: an adopted find is a disabled backend; its literal header
+/// value is in the files store and only the reference is in gateway.yaml; a
+/// template header is copied as written; comments are kept. A second adopt
+/// is refused as managed.
+#[tokio::test]
+async fn an_adopted_find_is_a_disabled_backend_with_its_secret_in_the_store() {
+    let home = tempfile::tempdir().expect("home");
+    let home = home.path();
+    client_file(
+        home,
+        &json!({"tool": {"url": "https://tool.example.test/mcp",
+            "headers": {"Authorization": "Bearer ${TOOL_TOKEN}", "X-Key": HEADER_SECRET},
+            "env": {"API_KEY": SECRET}}}),
+    );
+    let config = gateway_config(home);
+    let gateway = Gateway::spawn(home, &config).await;
+    let listing = gateway.list().await;
+    let body = json!({"find_id": find_id(&listing, "tool"), "revision": listing["revision"]});
+
+    let (status, answer) = gateway.adopt(&body).await;
+    assert_eq!(status, 201, "{answer}\n{}", gateway.logs());
+    let answer: Value = serde_json::from_str(&answer).expect("json");
+    assert_eq!(answer["enabled"], false);
+    assert_eq!(answer["args_copied_verbatim"], true);
+
+    let written = std::fs::read_to_string(&config).expect("config");
+    assert!(written.starts_with("# operator note: keep\n"), "{written}");
+    for leak in [SECRET, HEADER_SECRET] {
+        assert!(!written.contains(leak), "{leak} in {written}");
+    }
+    assert!(written.contains("Bearer ${TOOL_TOKEN}"), "{written}");
+    assert!(written.contains("enabled: false"), "{written}");
+    let reference = written
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("X-Key:"))
+        .unwrap_or_else(|| panic!("no X-Key line: {written}"))
+        .trim()
+        .trim_matches(|c| c == '\'' || c == '"');
+    let stored = reference.strip_prefix("file:").expect("a files reference");
+    assert_eq!(
+        std::fs::read_to_string(stored)
+            .expect("secret file")
+            .trim_end(),
+        HEADER_SECRET
+    );
+
+    let again = json!({"find_id": body["find_id"], "revision": answer["revision"]});
+    let (status, refused) = gateway.adopt(&again).await;
+    assert_eq!(status, 409, "{refused}");
+    assert!(refused.contains("\"managed\""), "{refused}");
+}
+
+/// d11, d18 and the body canaries: a stale revision, a client entry changed
+/// since the listing, and bodies that do not parse are refused, and no
+/// answer repeats anything the caller sent.
+#[tokio::test]
+async fn stale_changed_and_malformed_requests_are_refused_without_echo() {
+    let home = tempfile::tempdir().expect("home");
+    let home = home.path();
+    client_file(
+        home,
+        &json!({"tool": {"command": "npx", "env": {"API_KEY": SECRET}}}),
+    );
+    let config = gateway_config(home);
+    let before = std::fs::read(&config).expect("config");
+    let gateway = Gateway::spawn(home, &config).await;
+    let listing = gateway.list().await;
+    let id = find_id(&listing, "tool");
+
+    let (status, answer) = gateway
+        .adopt(&json!({"find_id": id, "revision": "0".repeat(64)}))
+        .await;
+    assert_eq!(status, 409, "{answer}");
+    assert!(answer.contains("\"stale\""), "{answer}");
+
+    client_file(
+        home,
+        &json!({"tool": {"command": "npx", "env": {"API_KEY": "zq-changed"}}}),
+    );
+    let (status, answer) = gateway
+        .adopt(&json!({"find_id": id, "revision": listing["revision"]}))
+        .await;
+    assert_eq!(status, 409, "{answer}");
+    assert!(answer.contains("find_changed"), "{answer}");
+
+    for body in [
+        json!({"find_id": "zq-canary-id", "revision": listing["revision"], "command": "zq-canary-cmd"}),
+        json!({"find_id": 5, "revision": "zq-canary-rev"}),
+        json!({"zq-canary-key": 1}),
+    ] {
+        let (status, answer) = gateway.adopt(&body).await;
+        assert_eq!(status, 422, "{body} answered {answer}");
+        assert!(!answer.contains("zq-canary"), "{answer}");
+    }
+    assert_eq!(
+        std::fs::read(&config).expect("config"),
+        before,
+        "nothing written"
+    );
+}
+
+/// A literal larger than the store can hold refuses the adopt, naming its
+/// field and never its value, and writes nothing (muse PR4 r3 L2).
+#[tokio::test]
+async fn a_value_the_store_cannot_hold_is_refused_by_field() {
+    let home = tempfile::tempdir().expect("home");
+    let home = home.path();
+    let huge = format!("zq-huge-{}", "x".repeat(64 * 1024));
+    client_file(
+        home,
+        &json!({"tool": {"command": "npx", "env": {"API_KEY": huge}}}),
+    );
+    let config = gateway_config(home);
+    let before = std::fs::read(&config).expect("config");
+    let gateway = Gateway::spawn(home, &config).await;
+    let listing = gateway.list().await;
+    let body = json!({"find_id": find_id(&listing, "tool"), "revision": listing["revision"]});
+    let (status, answer) = gateway.adopt(&body).await;
+    assert_eq!(status, 422, "{answer}");
+    assert!(answer.contains("value_too_large"), "{answer}");
+    assert!(answer.contains("env.API_KEY"), "{answer}");
+    assert!(!answer.contains("zq-huge"), "the value was echoed");
+    assert_eq!(
+        std::fs::read(&config).expect("config"),
+        before,
+        "nothing written"
+    );
+}

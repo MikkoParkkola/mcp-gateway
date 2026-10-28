@@ -23,16 +23,19 @@ use serde_json::json;
 use super::super::errors::{admin_auth_required, config_path_unavailable, flat_error};
 use super::super::is_admin;
 use super::{Gateway, name_refusal, read_gateway};
+use crate::config::SecretStoreChoice;
 use crate::config_persistence::{NOT_IN_PLACE, edit_text};
 use crate::config_reload::{
     Expected, FileRevision, RELOAD_LOCK_WAIT, Replace, ReplaceError, ReplaceOutcome, Replaced,
     SecretStep, replace_detached,
 };
-use crate::discovery::adopt::{AdoptRefusal, adoption, refusals};
+use crate::discovery::adopt::{AdoptRefusal, Adoption, Literal, adoption, refusals};
 use crate::discovery::listing::DiscoveryCache;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
-use crate::secret_store::{NewSecretOwned, SaveError, StoreError, Vault, choose_store};
+use crate::secret_store::{
+    NewSecretOwned, SaveError, SecretStore, StoreError, Vault, choose_store,
+};
 
 /// The compute's refusal when the name is already a backend in the bytes
 /// it was handed.
@@ -176,6 +179,57 @@ pub(super) fn compute(
     }
 }
 
+/// The store a find's literal values go to, with a `value_too_large` reason
+/// added for each value it cannot hold. `None` when there is no literal; an
+/// `Err` is the answer when no store can be chosen.
+fn store_for(
+    adoption: &Adoption,
+    configured: SecretStoreChoice,
+    dir: &std::path::Path,
+    reasons: &mut Vec<(&'static str, String)>,
+) -> Result<Option<Arc<dyn SecretStore + Send + Sync>>, Response> {
+    if adoption.literals.is_empty() {
+        return Ok(None);
+    }
+    let chosen = match choose_store(configured, dir) {
+        Ok(chosen) => chosen,
+        Err(StoreError::Unavailable(_)) => {
+            return Err(fixed(StatusCode::UNPROCESSABLE_ENTITY, STORE_UNAVAILABLE));
+        }
+        Err(_) => return Err(fixed(StatusCode::INTERNAL_SERVER_ERROR, FAILED)),
+    };
+    let limit = chosen.store.limit();
+    for literal in &adoption.literals {
+        if literal.value.as_bytes().len() > limit {
+            reasons.push(("value_too_large", literal.field()));
+        }
+    }
+    Ok(Some(chosen.store))
+}
+
+/// The writer's secret step: each literal saved under its backend field.
+/// `None` when the vault beside gateway.yaml cannot be opened.
+fn secret_step(
+    name: &str,
+    literals: Vec<Literal>,
+    store: Arc<dyn SecretStore + Send + Sync>,
+    dir: &std::path::Path,
+) -> Option<SecretStep> {
+    let vault = Vault::for_config_dir(dir).ok()?;
+    let values = literals
+        .into_iter()
+        .map(|literal| NewSecretOwned {
+            field: format!("backends.{name}.{}", literal.field()),
+            value: literal.value,
+        })
+        .collect();
+    Some(SecretStep {
+        vault,
+        store,
+        values,
+    })
+}
+
 /// `POST /ui/api/discovery/adopt`.
 pub(super) async fn adopt_discovery(
     State(state): State<Arc<AppState>>,
@@ -246,23 +300,9 @@ pub(super) async fn adopt_discovery(
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
         .to_path_buf();
-    let store = if adoption.literals.is_empty() {
-        None
-    } else {
-        let chosen = match choose_store(config.secrets.store, &dir) {
-            Ok(chosen) => chosen,
-            Err(StoreError::Unavailable(_)) => {
-                return fixed(StatusCode::UNPROCESSABLE_ENTITY, STORE_UNAVAILABLE);
-            }
-            Err(_) => return fixed(StatusCode::INTERNAL_SERVER_ERROR, FAILED),
-        };
-        let limit = chosen.store.limit();
-        for literal in &adoption.literals {
-            if literal.value.as_bytes().len() > limit {
-                reasons.push(("value_too_large", literal.field()));
-            }
-        }
-        Some(chosen.store)
+    let store = match store_for(&adoption, config.secrets.store, &dir, &mut reasons) {
+        Ok(store) => store,
+        Err(refused) => return refused,
     };
     if !reasons.is_empty() {
         reasons.sort_by(|a, b| a.1.cmp(&b.1));
@@ -277,24 +317,10 @@ pub(super) async fn adopt_discovery(
         .collect();
     let secrets = match store {
         None => None,
-        Some(store) => {
-            let Ok(vault) = Vault::for_config_dir(&dir) else {
-                return fixed(StatusCode::INTERNAL_SERVER_ERROR, FAILED);
-            };
-            let values = adoption
-                .literals
-                .into_iter()
-                .map(|literal| NewSecretOwned {
-                    field: format!("backends.{name}.{}", literal.field()),
-                    value: literal.value,
-                })
-                .collect();
-            Some(SecretStep {
-                vault,
-                store,
-                values,
-            })
-        }
+        Some(store) => match secret_step(&name, adoption.literals, store, &dir) {
+            Some(step) => Some(step),
+            None => return fixed(StatusCode::INTERNAL_SERVER_ERROR, FAILED),
+        },
     };
     let replace = Replace {
         expected: Expected::Revision(revision.clone()),

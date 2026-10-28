@@ -19,11 +19,16 @@ async fn body_of(response: Response) -> (StatusCode, Value) {
     (status, serde_json::from_slice(&bytes).expect("json"))
 }
 
-/// Every writer outcome has one status, and no inner text leaves.
-#[test]
-fn every_writer_outcome_has_one_answer_and_quotes_nothing() {
+/// One row per writer outcome: the result, its status, and the `error` code
+/// when the answer names one. Every `Refused` and `Secrets` split has its own
+/// row, so the mapping test pins each branch (muse PR4 r3 M1).
+fn writer_outcomes() -> Vec<(
+    Result<ReplaceOutcome, ReplaceError>,
+    StatusCode,
+    &'static str,
+)> {
     let current = FileRevision::of(b"current");
-    let rows: Vec<(Result<ReplaceOutcome, ReplaceError>, StatusCode, &str)> = vec![
+    vec![
         (
             Err(ReplaceError::Stale { current }),
             StatusCode::CONFLICT,
@@ -123,8 +128,13 @@ fn every_writer_outcome_has_one_answer_and_quotes_nothing() {
             StatusCode::INTERNAL_SERVER_ERROR,
             "",
         ),
-    ];
-    for (written, status, error) in rows {
+    ]
+}
+
+/// Every writer outcome has one status, and no inner text leaves.
+#[test]
+fn every_writer_outcome_has_one_answer_and_quotes_nothing() {
+    for (written, status, error) in writer_outcomes() {
         let what = format!("{written:?}");
         let ((got, json), logs) = {
             let (response, logs) =
@@ -264,7 +274,11 @@ fn adoption_takes_out_literals_in_a_fixed_order() {
 
     let adopted = crate::discovery::adopt::adoption(&server);
 
-    let fields: Vec<String> = adopted.literals.iter().map(|l| l.field()).collect();
+    let fields: Vec<String> = adopted
+        .literals
+        .iter()
+        .map(crate::discovery::adopt::Literal::field)
+        .collect();
     assert_eq!(fields, ["env.A_KEY", "env.Z_KEY", "headers.Authorization"]);
     assert_eq!(
         adopted.literals[0].value.as_bytes(),

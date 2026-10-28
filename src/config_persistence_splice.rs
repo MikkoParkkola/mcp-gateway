@@ -527,10 +527,10 @@ pub(super) fn comment_loss(path: &std::path::Path, text: &str) -> String {
 pub(crate) const NOT_IN_PLACE: &str = "the change cannot be made in place";
 /// [`edit_text`]'s refusal when `text` does not parse as a config.
 #[cfg(feature = "webui")]
-pub(crate) const UNREADABLE: &str = "the config does not parse";
+const UNREADABLE: &str = "the config does not parse";
 /// [`edit_text`]'s refusal when the edited config does not validate.
 #[cfg(feature = "webui")]
-pub(crate) const INVALID: &str = "the edited config is not valid";
+const INVALID: &str = "the edited config is not valid";
 
 /// `text` with `edit` applied to the one backend it changes, as a splice
 /// that keeps every other byte, or a refusal: never a re-serialisation, so
