@@ -161,7 +161,6 @@ tr:hover td { background: var(--bg3); }
 .reg-dropdown { position: absolute; top: 100%; left: 0; right: 0; z-index: 50; background: var(--bg2); border: 1px solid var(--border); border-radius: 0 0 var(--radius) var(--radius); max-height: 220px; overflow-y: auto; }
 .reg-dropdown .reg-opt { padding: 0.5rem 0.75rem; font-size: 0.875rem; cursor: pointer; border-bottom: 1px solid var(--border); }
 .reg-dropdown .reg-opt:last-child { border-bottom: none; }
-.reg-dropdown .reg-opt:hover { background: var(--bg3); }
 .reg-dropdown .reg-opt[aria-selected="true"] { background: var(--bg3); box-shadow: inset 0 0 0 2px var(--accent); }
 .reg-dropdown .reg-opt .reg-desc { font-size: 0.75rem; color: var(--fg2); }
 
@@ -1165,7 +1164,12 @@ function setRegistryActive(i) {
   if (!opt) { regBox().removeAttribute('aria-activedescendant'); return; }
   opt.setAttribute('aria-selected', 'true');
   regBox().setAttribute('aria-activedescendant', opt.id);
-  opt.scrollIntoView({ block: 'nearest' });
+  // Scroll the list itself, never the page (scrollIntoView would move both).
+  const dd = document.getElementById('reg-dropdown');
+  if (opt.offsetTop < dd.scrollTop) dd.scrollTop = opt.offsetTop;
+  else if (opt.offsetTop + opt.offsetHeight > dd.scrollTop + dd.clientHeight) {
+    dd.scrollTop = opt.offsetTop + opt.offsetHeight - dd.clientHeight;
+  }
 }
 
 function onRegSearch(q) {
@@ -1174,6 +1178,7 @@ function onRegSearch(q) {
   if (regSelected && q !== regSelected.name) {
     regSelected = null;
     document.getElementById('reg-selected-info').style.display = 'none';
+    document.getElementById('reg-name-override').value = '';
   }
   const dd = document.getElementById('reg-dropdown');
   const lower = q.toLowerCase();
@@ -1185,7 +1190,8 @@ function onRegSearch(q) {
       ).slice(0, 30);
 
   regMatches = matches;
-  if (matches.length === 0) { setRegistryListOpen(false); return; }
+  // No match leaves no options behind to activate or pick.
+  if (matches.length === 0) { dd.innerHTML = ''; setRegistryListOpen(false); return; }
   dd.innerHTML = matches.map((s, i) => `
     <div class="reg-opt" role="option" id="reg-opt-${i}" aria-selected="false" data-action="select-reg" data-value="${i}">
       <div>${esc(s.name)}</div>
@@ -1252,6 +1258,11 @@ regBox().addEventListener('keydown', (e) => {
 // A click on an option must not take focus from the box: the box's focus
 // handler would reopen the list after the pick.
 document.getElementById('reg-dropdown').addEventListener('mousedown', (e) => e.preventDefault());
+// The option under the pointer is the active one, so Enter and a click agree.
+document.getElementById('reg-dropdown').addEventListener('mouseover', (e) => {
+  const opt = e.target.closest('.reg-opt');
+  if (opt) setRegistryActive(Number(opt.dataset.value));
+});
 
 // Close the list on a click outside the search.
 document.addEventListener('click', e => {
