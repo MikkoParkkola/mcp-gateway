@@ -225,3 +225,28 @@ async fn t31_a_non_json_body_is_refused() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(sent(&fx), 0);
 }
+
+/// T34 (code review): the route reads its body under the gateway's one
+/// configured limit (`server.max_body_size`, 10 MiB by default), so a larger
+/// body is refused with 413 before anything runs, as every route refuses it.
+/// Mutant: the body read without the extractor, uncapped.
+#[tokio::test]
+async fn t34_a_body_over_the_configured_limit_is_refused() {
+    let fx = fixture_with(Setup::Plain).await;
+    let pad = "x".repeat(10 * 1024 * 1024);
+    let request = Request::builder()
+        .method("POST")
+        .uri(ROUTE)
+        .header("authorization", "Bearer k-admin")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"server": "alpha", "tool": "read", "arguments": {"pad": pad}}).to_string(),
+        ))
+        .expect("request");
+    let response = super::create_router(Arc::clone(&fx.state))
+        .oneshot(request)
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(sent(&fx), 0);
+}
