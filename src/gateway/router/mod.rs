@@ -118,6 +118,8 @@ mod direct_guards_tests;
 #[cfg(test)]
 mod direct_list_scope_tests;
 #[cfg(test)]
+mod direct_log_escape_tests;
+#[cfg(test)]
 mod direct_modern_shape_tests;
 #[cfg(test)]
 mod direct_nonce_witness_tests;
@@ -174,6 +176,9 @@ mod meta_fingerprint_tests;
 mod mik8154_lease_rows_tests;
 #[cfg(all(test, feature = "webui"))]
 mod overview_tests;
+/// A backend's protocol directives reach the client only where allowed.
+#[cfg(test)]
+mod protocol_member_scope_tests;
 /// A backend's gateway-only members never reach the client.
 #[cfg(test)]
 mod reserved_member_ingress_tests;
