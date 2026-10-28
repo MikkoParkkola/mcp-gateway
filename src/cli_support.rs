@@ -43,8 +43,9 @@ pub fn is_hidden_char(c: char) -> bool {
 }
 
 /// Text from a client config, escaped for a terminal. Only [`shown`] makes
-/// one, and it can only be printed: it cannot be escaped twice, and a
-/// renderer that takes it cannot be handed raw text.
+/// one, and it can only be printed: `shown` takes text, not a `Shown`, so a
+/// value cannot be escaped twice through it, and a renderer whose line
+/// helper takes a `Shown` cannot be handed raw text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Shown(String);
 

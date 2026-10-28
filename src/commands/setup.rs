@@ -232,11 +232,6 @@ fn transport_label(transport: &TransportConfig) -> String {
     }
 }
 
-/// Prompt the user to select which servers to import via a numbered list.
-///
-/// Prints each server with its index, then reads a comma-separated list of
-/// numbers (or "all" / blank for everything).  Returns only the selected
-/// entries.  This replaces the `dialoguer::MultiSelect` dependency with a
 /// One server of the selection prompt: name, client and transport, the
 /// client's text escaped for the terminal.
 fn select_label(server: &DiscoveredServer) -> String {
@@ -253,6 +248,11 @@ fn quoted_name(name: &str) -> String {
     format!("'{}'", shown(name))
 }
 
+/// Prompt the user to select which servers to import via a numbered list.
+///
+/// Prints each server with its index, then reads a comma-separated list of
+/// numbers (or "all" / blank for everything).  Returns only the selected
+/// entries.  This replaces the `dialoguer::MultiSelect` dependency with a
 /// simple stdin-based prompt that works in any terminal.
 fn interactive_select(servers: &[DiscoveredServer]) -> Result<Vec<&DiscoveredServer>, io::Error> {
     let labels: Vec<String> = servers.iter().map(select_label).collect();
