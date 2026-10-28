@@ -24,11 +24,13 @@ impl CapabilityBackend {
             detect_rug_pulls_in_dir(Path::new(dir), &mut detected).await;
         }
 
-        // Before anything unloads: the name each file was trusted as is the
-        // loaded capability its still-declared pin verified, kept across a
-        // later change to the same file.
+        // The name each file was trusted as comes from its path, which the
+        // changed bytes cannot choose: never from the pin they still declare.
+        // A reload drops a refused file from the map, so a later change to
+        // it keeps the name its earlier record took from the same path.
         for record in &mut detected {
-            record.loaded_as = self.trusted_name(&record.expected).or_else(|| {
+            let loaded = self.loaded_from.read().get(&record.file).cloned();
+            record.loaded_as = loaded.or_else(|| {
                 let state = self.rug_pull_state.read();
                 state
                     .get(&record.file)
@@ -36,13 +38,13 @@ impl CapabilityBackend {
             });
         }
         for record in &detected {
-            // The changed bytes chose `capability` and `expected`: neither is
-            // logged raw. The trusted name passed the loader's name rule.
+            // The changed bytes chose `capability` and `expected`, so neither
+            // is logged. The trusted name passed the loader's name rule; the
+            // path is escaped; `actual` is the gateway's own hash.
             warn!(
                 backend = %self.name,
                 trusted = ?record.loaded_as,
                 file = ?record.file,
-                expected = ?record.expected,
                 actual = %record.actual,
                 "RUG-PULL DETECTED: capability YAML sha256 pin mismatch — unloading",
             );
@@ -67,17 +69,25 @@ impl CapabilityBackend {
         current
     }
 
-    /// The loaded capability whose own pin is `expected`.
-    fn trusted_name(&self, expected: &str) -> Option<String> {
-        let caps = self.capabilities.read();
-        caps.entries
-            .iter()
-            .find(|cap| {
-                cap.sha256
-                    .as_deref()
-                    .is_some_and(|pin| pin.eq_ignore_ascii_case(expected))
+    /// Record the name each loaded file holds, its pin having matched, and
+    /// hand the capabilities on. A full reload replaces the map; a single
+    /// directory or a partial reload only adds, keeping what it did not read.
+    pub(super) fn note_loaded(
+        &self,
+        loaded: Vec<(String, super::CapabilityDefinition)>,
+        replace: bool,
+    ) -> Vec<super::CapabilityDefinition> {
+        let mut names = self.loaded_from.write();
+        if replace {
+            names.clear();
+        }
+        loaded
+            .into_iter()
+            .map(|(path, capability)| {
+                names.insert(path, capability.name.clone());
+                capability
             })
-            .map(|cap| cap.name.clone())
+            .collect()
     }
 }
 

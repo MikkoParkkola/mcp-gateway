@@ -27,6 +27,22 @@ impl CapabilityLoader {
     ///
     /// Returns an error if the directory does not exist or is not a valid directory.
     pub async fn load_directory(path: &str) -> Result<Vec<CapabilityDefinition>> {
+        let loaded = Self::load_directory_with_paths(path).await?;
+        Ok(loaded
+            .into_iter()
+            .map(|(_, capability)| capability)
+            .collect())
+    }
+
+    /// [`Self::load_directory`], each capability beside the path it was
+    /// loaded from: what a later pin mismatch on that path names as trusted.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::load_directory`].
+    pub(crate) async fn load_directory_with_paths(
+        path: &str,
+    ) -> Result<Vec<(String, CapabilityDefinition)>> {
         let path = Path::new(path);
 
         if !path.exists() {
@@ -43,8 +59,10 @@ impl CapabilityLoader {
             )));
         }
 
-        let mut capabilities = Vec::new();
-        Self::load_directory_recursive(path, &mut capabilities).await?;
+        let mut loaded = Vec::new();
+        Self::load_directory_recursive(path, &mut loaded).await?;
+        let (paths, capabilities): (Vec<String>, Vec<CapabilityDefinition>) =
+            loaded.into_iter().unzip();
 
         let unpinned = count_unpinned(&capabilities);
         info!(
@@ -55,13 +73,13 @@ impl CapabilityLoader {
             capabilities.len(),
         );
 
-        Ok(capabilities)
+        Ok(paths.into_iter().zip(capabilities).collect())
     }
 
     /// Recursively load capabilities from a directory
     async fn load_directory_recursive(
         dir: &Path,
-        capabilities: &mut Vec<CapabilityDefinition>,
+        capabilities: &mut Vec<(String, CapabilityDefinition)>,
     ) -> Result<()> {
         let mut entries = tokio::fs::read_dir(dir).await.map_err(|e| {
             Error::Config(format!("Failed to read directory {}: {e}", dir.display()))
@@ -97,7 +115,7 @@ impl CapabilityLoader {
                 match Self::load_capability_file(&path).await {
                     Ok(cap) => {
                         debug!(name = %cap.name, path = %path.display(), "Loaded capability");
-                        capabilities.push(cap);
+                        capabilities.push((path.display().to_string(), cap));
                     }
                     Err(e) => {
                         warn!(error = %e, path = %path.display(), "Failed to load capability");

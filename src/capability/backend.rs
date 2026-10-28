@@ -164,6 +164,8 @@ pub struct CapabilityBackend {
     /// reads it, and the loader's own pin check is what skips the file until
     /// its pin matches again (e.g. after `mcp-gateway cap pin`).
     rug_pull_state: RwLock<HashMap<String, RugPullRecord>>,
+    /// The name each file was last loaded under, its pin having matched.
+    loaded_from: RwLock<HashMap<String, String>>,
     /// Declares whether the owning gateway serves more than one principal
     /// (ADR-008 INV-2 parity, MIK-6751). Mirrors `MetaMcp::multi_user`;
     /// `MetaMcp::set_multi_user`/`set_capabilities` keep the two in sync since
@@ -204,6 +206,7 @@ impl CapabilityBackend {
             capabilities: RwLock::new(IndexedCapabilities::default()),
             directories: RwLock::new(Vec::new()),
             rug_pull_state: RwLock::new(HashMap::new()),
+            loaded_from: RwLock::new(HashMap::new()),
             multi_user: std::sync::atomic::AtomicBool::new(false),
             initial_scan: std::sync::atomic::AtomicU8::new(1), // bits, see initial_scan.rs
             catalogue_generation: std::sync::atomic::AtomicU64::new(0),
@@ -336,7 +339,10 @@ impl CapabilityBackend {
     /// capability is not an error here — it is reported in
     /// [`DirectoryLoad::rejected`] so the caller decides.
     pub async fn load_from_directory_reporting(&self, path: &str) -> Result<DirectoryLoad> {
-        let loaded = CapabilityLoader::load_directory(path).await?;
+        let loaded = self.note_loaded(
+            CapabilityLoader::load_directory_with_paths(path).await?,
+            false,
+        );
         let mut report = DirectoryLoad {
             admitted: loaded.len(),
             rejected: Vec::new(),
@@ -390,17 +396,17 @@ impl CapabilityBackend {
             return Ok(0);
         }
 
-        let mut all_caps = Vec::new();
+        let mut paths = Vec::new();
         let mut total = 0;
         // A directory that could not be read leaves the catalogue partial:
         // its capabilities are missing from this load, not deleted (MIK-8028).
         let mut partial = false;
 
         for dir in &dirs {
-            match CapabilityLoader::load_directory(dir).await {
+            match CapabilityLoader::load_directory_with_paths(dir).await {
                 Ok(loaded) => {
                     total += loaded.len();
-                    all_caps.extend(loaded);
+                    paths.extend(loaded);
                 }
                 Err(e) => {
                     partial = true;
@@ -409,6 +415,7 @@ impl CapabilityBackend {
             }
         }
 
+        let all_caps = self.note_loaded(paths, !partial);
         // The same admission gate the initial load applies.
         let mut admitted = Vec::with_capacity(all_caps.len());
         let mut refused = std::collections::HashSet::new();
