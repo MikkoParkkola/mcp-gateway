@@ -32,6 +32,9 @@ struct TwoTokenPeer {
     wire: Wire,
     streams: tokio::sync::mpsc::UnboundedReceiver<Stream>,
     pushes: Arc<std::sync::Mutex<[Option<tokio::sync::mpsc::UnboundedSender<String>>; 2]>>,
+    /// A status the legacy `GET` stream of each token is refused with; `0`
+    /// serves it.
+    refuse_stream: Arc<[std::sync::atomic::AtomicU16; 2]>,
 }
 
 impl TwoTokenPeer {
@@ -108,6 +111,7 @@ async fn two_token_peer_in(wire: Wire, tokens: [String; 2]) -> TwoTokenPeer {
         wire,
         streams,
         pushes: Arc::default(),
+        refuse_stream: Arc::default(),
     };
     let tokens = Arc::new(tokens);
     let which = move |h: &HeaderMap| {
@@ -116,6 +120,7 @@ async fn two_token_peer_in(wire: Wire, tokens: [String; 2]) -> TwoTokenPeer {
     };
     let get_which = which.clone();
     let (get_report, get_pushes) = (report.clone(), Arc::clone(&pushes.pushes));
+    let get_refuse = Arc::clone(&pushes.refuse_stream);
     let post_pushes = Arc::clone(&pushes.pushes);
     let app = axum::Router::new().route(
         "/mcp",
@@ -123,6 +128,12 @@ async fn two_token_peer_in(wire: Wire, tokens: [String; 2]) -> TwoTokenPeer {
             let Some(index) = get_which(&headers) else {
                 return StatusCode::UNAUTHORIZED.into_response();
             };
+            let refused = get_refuse[index].load(std::sync::atomic::Ordering::SeqCst);
+            if refused != 0 {
+                return StatusCode::from_u16(refused)
+                    .expect("status")
+                    .into_response();
+            }
             let first = if wire == Wire::SseHandshake {
                 "event: endpoint\ndata: /mcp\n\n"
             } else {
@@ -243,13 +254,7 @@ async fn leased_listener(
     peer: &mut TwoTokenPeer,
     first: Zeroizing<String>,
 ) -> (Fixture, String, ListenersAndBackend) {
-    let f = fixture_with(&format!(
-        "backends:\n  pt:\n    http_url: {}\n    streamable_http: {}\n    \
-         identity_propagation:\n      \
-         strategy: passthrough\n      audience: https://pt\n      session_mode: per_user\n",
-        peer.url,
-        peer.wire != Wire::SseHandshake,
-    ));
+    let f = listener_fixture(peer);
     let handle = subscribe(&f, "p", "pt", "p");
     let listening = parked_listener(&f).await;
     lease_as(&f, &handle, first).await;
@@ -259,6 +264,17 @@ async fn leased_listener(
         "premise: the listener opened its stream under the first token"
     );
     (f, handle, listening)
+}
+
+/// A hub whose `pt` is a per-user passthrough backend at `peer`.
+fn listener_fixture(peer: &TwoTokenPeer) -> Fixture {
+    fixture_with(&format!(
+        "backends:\n  pt:\n    http_url: {}\n    streamable_http: {}\n    \
+         identity_propagation:\n      \
+         strategy: passthrough\n      audience: https://pt\n      session_mode: per_user\n",
+        peer.url,
+        peer.wire != Wire::SseHandshake,
+    ))
 }
 
 async fn lease_as(f: &Fixture, handle: &str, token: Zeroizing<String>) {
@@ -670,4 +686,47 @@ async fn iso_t6_a_revoked_subscribers_listener_closes_on_a_silent_backend() {
     assert!(!peer.push_tools_changed(0), "no stream is left to read on");
     assert!(intake.try_recv().is_err(), "nothing was read for p");
     assert!(outbox_rows(&f).is_empty(), "nothing queued for p");
+}
+
+/// A lease replaced while its listener backs off after the backend refused
+/// the stream with `status`: the run that follows presents the new token.
+/// The task is held at the start of its backoff while the lease moves, so
+/// the row does not depend on when the replace lands.
+async fn a_replace_during_backoff_reopens_under_the_new_token(status: u16) {
+    let (old, new) = (token(Some(in_an_hour())), token(Some(in_an_hour() + 60)));
+    let mut peer = two_token_peer([old.to_string(), new.to_string()]).await;
+    peer.refuse_stream[0].store(status, std::sync::atomic::Ordering::SeqCst);
+    let f = listener_fixture(&peer);
+    let handle = subscribe(&f, "p", "pt", "p");
+    let (listeners, _backend) = parked_listener(&f).await;
+    let shared = listeners
+        .entry_for(&crate::events::upstream_listener::ListenerKey {
+            backend: "pt".into(),
+            obs: Some(lease_key(&f, "p").obs),
+        })
+        .expect("p's listener entry");
+    let (reached, release) = shared.before_backoff.arm();
+    lease_as(&f, &handle, old).await;
+    crate::test_pause::within("the refused stream's backoff", reached.notified()).await;
+    lease_as(&f, &handle, new).await;
+    release.notify_one();
+    assert_eq!(
+        peer.next().await,
+        Some(Stream::Opened(1)),
+        "HTTP {status}: the next run opened under the new token"
+    );
+}
+
+/// A failed open, then a lease change.
+#[tokio::test]
+async fn a_replace_after_a_failed_open_reopens_under_the_new_token() {
+    a_replace_during_backoff_reopens_under_the_new_token(500).await;
+}
+
+/// A terminal exit (the backend offers no stream, so the task waits out the
+/// five-minute cap), then a lease change: the move cuts that wait, so the
+/// reopen lands inside the 30 s hang guard.
+#[tokio::test]
+async fn a_replace_after_a_terminal_exit_cuts_its_backoff() {
+    a_replace_during_backoff_reopens_under_the_new_token(405).await;
 }
