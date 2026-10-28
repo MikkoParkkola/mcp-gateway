@@ -561,16 +561,17 @@ mod slot_release;
 /// table, so the delivery record counts it and ingress strips a backend's
 /// copy. Each backend method, result and error, on both routes, with response
 /// inspection observing (findings written onto the answer) and enforcing,
-/// over harmless text and a credential the inspection flags. `/mcp`'s tool
-/// listing is left out: `gateway_list_tools` answers the gateway's own
-/// catalogue, not a backend's answer.
+/// over harmless text and a credential the inspection flags. `/mcp`'s
+/// listings are left out: each is the gateway's own catalogue (its own
+/// entries and every backend's, `gateway_list_tools` for tools), not one
+/// backend's answer. The direct route passes every listing through.
 #[tokio::test]
 async fn every_member_the_gateway_adds_is_in_the_member_table() {
     let mut failures = Vec::new();
     for setup in [Setup::ObserveOnly, Setup::InspectionOnly] {
         for method in BACKEND_METHODS {
             for route in ROUTES {
-                if route == Route::Meta && method == "tools/list" {
+                if route == Route::Meta && method.ends_with("/list") {
                     continue;
                 }
                 for part in [Part::ResultText, Part::ErrorData] {

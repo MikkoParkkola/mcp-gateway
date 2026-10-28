@@ -453,14 +453,17 @@ async fn a_screened_notification_leaves_the_answers_facts_alone() {
 }
 
 /// The stdio twin of the HTTP row: every member the gateway adds to a
-/// backend's answer is a row of the member table. `tools/list` is left out:
-/// stdio reaches a backend's tools through `gateway_list_tools`, the
-/// gateway's own catalogue.
+/// backend's answer is a row of the member table. The listings are left out:
+/// each is the gateway's own catalogue (its own entries and every backend's,
+/// `gateway_list_tools` for tools), not one backend's answer.
 #[tokio::test]
 async fn every_member_the_gateway_adds_on_stdio_is_in_the_member_table() {
     let mut failures = Vec::new();
     for setup in [Setup::ObserveOnly, Setup::InspectionOnly] {
-        for method in BACKEND_METHODS.into_iter().filter(|m| *m != "tools/list") {
+        for method in BACKEND_METHODS
+            .into_iter()
+            .filter(|m| !m.ends_with("/list"))
+        {
             for part in [Part::ResultText, Part::ErrorData] {
                 for text in ["harmless".to_owned(), secret()] {
                     let seen = cell(setup, method, part, text.clone()).await;
