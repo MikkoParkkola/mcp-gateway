@@ -639,7 +639,7 @@ async fn s9_the_full_body_stays_under_the_extended_ceiling() {
         body["needs_you"]["rows"].as_array().map(Vec::len),
         Some(NEEDS_YOU_ROWS)
     );
-    assert!(FIELD > LABEL, "a dynamic field is the larger class");
+    const { assert!(FIELD > LABEL, "a dynamic field is the larger class") };
     assert!(
         raw.len() <= ceiling,
         "{} bytes over the {ceiling}-byte ceiling",
