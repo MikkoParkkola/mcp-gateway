@@ -361,7 +361,7 @@ impl TokenExchangeStrategy {
 ///
 /// It follows no redirect: see [`token_exchange_redirect_policy`].
 fn default_http_client() -> reqwest::Client {
-    reqwest::Client::builder()
+    crate::debug_trust_roots::extra_roots(reqwest::Client::builder())
         .https_only(true)
         .timeout(std::time::Duration::from_secs(10))
         .redirect(token_exchange_redirect_policy())
