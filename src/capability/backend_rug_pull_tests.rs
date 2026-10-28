@@ -84,3 +84,48 @@ async fn a_record_is_cleared_only_while_its_hash_is_current() {
     assert!(backend.clear_rug_pull_if(&file, &second.actual));
     assert!(backend.rug_pull_records().is_empty());
 }
+
+/// Log text written while the guard lives, through the text layer the
+/// gateway runs with.
+#[derive(Clone, Default)]
+struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+    type Writer = Self;
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+#[tokio::test]
+async fn a_changed_name_cannot_forge_a_log_line() {
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    let (_dir, backend, path, pinned) = loaded().await;
+    let forged = "name: \"evil\\n2026-10-28T12:00:00Z  WARN forged line\\u001b[2K\"";
+    std::fs::write(&path, pinned.replace("name: rugtest", forged)).unwrap();
+    let logs = Captured::default();
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_ansi(false).with_writer(logs.clone()));
+    let guard = tracing::subscriber::set_default(subscriber);
+
+    let detected = backend.detect_rug_pulls().await;
+    drop(guard);
+
+    assert_eq!(detected.len(), 1, "the change is detected");
+    let text = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    assert!(text.contains("RUG-PULL DETECTED"), "{text}");
+    assert_eq!(text.lines().count(), 1, "one warning, one line: {text:?}");
+    assert!(!text.contains('\u{1b}'), "{text:?}");
+    assert!(text.contains("rugtest"), "the trusted name is logged: {text}");
+}
