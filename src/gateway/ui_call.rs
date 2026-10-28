@@ -230,9 +230,59 @@ fn confirmed(call: &UiCall, read_only: bool) -> crate::Result<()> {
 }
 
 fn refused(message: &str) -> crate::Error {
+    // A gateway refusal of the delivery this call answers: its record says so.
+    crate::gateway::delivery_facts::raise(crate::gateway::delivery_facts::ResponseEffect::Refused);
     crate::Error::Forbidden {
         code: crate::error::rpc_codes::INVALID_REQUEST,
         status: axum::http::StatusCode::FORBIDDEN.as_u16(),
         message: message.to_owned(),
+    }
+}
+
+/// Each refusal here answers the delivery of the internal dispatch, so that
+/// delivery's record says refused; an admitted call still reads delivered.
+#[cfg(test)]
+mod refusal_effect_tests {
+    use super::{Confirm, UiCall, admit_send, gate};
+    use crate::gateway::delivery_facts::{record_fields, scope, snapshot};
+
+    fn effect() -> serde_json::Value {
+        let mut fields = serde_json::Map::new();
+        record_fields(snapshot().as_ref(), false, &mut fields);
+        fields["response_effect"].clone()
+    }
+
+    async fn under(confirm: Confirm, steps: impl FnOnce()) -> serde_json::Value {
+        let call = UiCall::new("srv", "tool", "admin", confirm);
+        scope(call.scope(async {
+            steps();
+            effect()
+        }))
+        .await
+    }
+
+    #[tokio::test]
+    async fn each_refusal_records_refused_on_the_delivery() {
+        let other_call = under(Confirm::Confirmed, || {
+            assert!(gate(("srv", "other"), Some("admin"), true).is_err());
+        });
+        assert_eq!(other_call.await, "refused", "not the call the UI checked");
+        let unconfirmed = under(Confirm::DeclaredReadOnlyOnly, || {
+            assert!(gate(("srv", "tool"), Some("admin"), false).is_err());
+        });
+        assert_eq!(
+            unconfirmed.await,
+            "refused",
+            "a write without confirm_write"
+        );
+        let ungated = under(Confirm::Confirmed, || {
+            assert!(admit_send(("srv", "tool")).is_err());
+        });
+        assert_eq!(ungated.await, "refused", "a send the gate never admitted");
+        let admitted = under(Confirm::Confirmed, || {
+            gate(("srv", "tool"), Some("admin"), true).expect("the gate admits");
+            admit_send(("srv", "tool")).expect("the send is admitted");
+        });
+        assert_eq!(admitted.await, "delivered");
     }
 }
