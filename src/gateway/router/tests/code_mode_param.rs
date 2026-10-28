@@ -257,7 +257,7 @@ async fn a_codemode_param_caller_gets_code_mode_recovery_hints() {
             .as_str()
             .unwrap_or_else(|| panic!("no tool result in {answer}"));
         let inner: Value = serde_json::from_str(text).expect("the tool result is JSON");
-        inner["recovery"]["suggest"]
+        inner["_recovery"]["suggest"]
             .as_str()
             .unwrap_or_else(|| panic!("no recovery hint in {answer}"))
             .to_owned()
