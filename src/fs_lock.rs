@@ -137,7 +137,7 @@ impl ExclusiveFileLock {
     /// delete), so a contender can open it and meet the lock itself.
     #[cfg(windows)]
     pub(crate) fn try_acquire(lock_path: &Path) -> io::Result<Self> {
-        use crate::private_fs::judge_file;
+        use crate::private_fs::{Share, create_file_private, judge_file};
         use std::os::windows::fs::OpenOptionsExt as _;
         use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
         use windows_sys::Win32::Storage::FileSystem::{
@@ -146,14 +146,7 @@ impl ExclusiveFileLock {
 
         #[cfg(test)]
         count_attempt(lock_path);
-        // PLANTED MUTANT (red-first proof, reverted next commit): a plain
-        // create takes the folder's inherited list.
-        let file = match OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(lock_path)
-        {
+        let file = match create_file_private(lock_path, Share::LockSidecar) {
             // An existing sidecar is judged before it is trusted, exactly as a
             // unix sidecar with a foreign mode would be refused.
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
