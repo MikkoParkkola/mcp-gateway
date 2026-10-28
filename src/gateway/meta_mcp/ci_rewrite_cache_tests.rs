@@ -75,7 +75,9 @@ async fn a_cache_hit_of_a_rewritten_answer_records_no_rewrite() {
     let meta = cached_stripping();
     let (first, first_effect) = search(&meta).await;
     assert!(
-        !first.to_string().contains("Ignore previous instructions"),
+        !first["content"]
+            .to_string()
+            .contains("Ignore previous instructions"),
         "premise: the first call delivered the stripped answer: {first}"
     );
     assert_eq!(

@@ -36,6 +36,25 @@ fn malformed() -> Value {
     json!({ "content": [{ "type": "text", "text": INJECTED }], "resultType": 5 })
 }
 
+/// Every string the caller receives, without the gate's own verdict: its
+/// findings name the pattern they matched, which is not delivered content.
+/// The meta route carries the answer as JSON text, which is read through.
+fn delivered_text(value: &Value) -> String {
+    match value {
+        Value::Object(map) => map
+            .iter()
+            .filter(|(key, _)| key.as_str() != "_context_integrity")
+            .map(|(_, v)| delivered_text(v))
+            .collect(),
+        Value::Array(items) => items.iter().map(delivered_text).collect(),
+        Value::String(text) => match serde_json::from_str::<Value>(text) {
+            Ok(inner @ (Value::Object(_) | Value::Array(_))) => delivered_text(&inner),
+            _ => text.clone(),
+        },
+        _ => String::new(),
+    }
+}
+
 /// One `read` on `route`, its backend answering `text` under `policy`: the
 /// delivered body and the call's one delivery record.
 async fn recorded(
@@ -83,7 +102,7 @@ async fn an_enforced_context_integrity_rewrite_records_rewritten() {
             let (body, row) =
                 Box::pin(recorded(route, Answer::Text(INJECTED), rewriting(decision))).await;
             assert!(
-                body.get("error").is_none() && !body.to_string().contains(INSTRUCTION),
+                body.get("error").is_none() && !delivered_text(&body).contains(INSTRUCTION),
                 "{route:?} {decision:?}: premise: delivered without the instruction: {body}"
             );
             assert_eq!(
@@ -191,7 +210,7 @@ async fn an_idempotency_replay_of_a_rewritten_answer_records_no_rewrite() {
             panic!("{route:?}: two delivery records: {rows:?}");
         };
         assert!(
-            !first.to_string().contains(INSTRUCTION),
+            !delivered_text(&first).contains(INSTRUCTION),
             "{route:?}: premise: the first call was stripped: {first}"
         );
         assert_eq!(

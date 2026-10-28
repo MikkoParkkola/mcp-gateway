@@ -67,7 +67,7 @@ async fn a_relay_record_of_an_enforced_prompt_records_no_rewrite() {
     let (recorded, effect) =
         effect_of(|| meta.recorded_prompt(("alpha", "read"), None, "t", &answer(INJECTED))).await;
     assert!(
-        recorded
+        recorded["content"]
             .to_string()
             .contains("Ignore previous instructions"),
         "premise: the prompt's own text: {recorded}"
