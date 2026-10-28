@@ -270,19 +270,22 @@ pub(crate) fn is_loopback_name(host: &str) -> bool {
 ///
 /// # Errors
 ///
-/// Returns the SSRF refusal when the host is a loopback name, or a name that
+/// Returns the SSRF refusal when the host is a loopback name, or a NAME that
 /// is a private or reserved address once its trailing dots are trimmed
-/// (`127.0.0.1..` stays a name to the URL parser). An unparsable URL is left
-/// to the other checks.
+/// (`127.0.0.1..` stays a name to the URL parser). A host the parser already
+/// made an IP literal is left to [`validate_url_not_ssrf`], so the isolated
+/// runtime's loopback-literal allowance still applies. An unparsable URL is
+/// left to the other checks.
 pub(crate) fn refuse_loopback_name(url_str: &str) -> Result<()> {
-    let named_loopback = url::Url::parse(url_str).is_ok_and(|url| {
-        url.host_str().is_some_and(|host| {
+    let named_loopback = url::Url::parse(url_str).is_ok_and(|url| match url.host() {
+        Some(url::Host::Domain(host)) => {
             is_loopback_name(host)
                 || host
                     .trim_end_matches('.')
                     .parse::<IpAddr>()
                     .is_ok_and(is_private_or_reserved)
-        })
+        }
+        _ => false,
     });
     if named_loopback {
         return Err(Error::Protocol(format!(

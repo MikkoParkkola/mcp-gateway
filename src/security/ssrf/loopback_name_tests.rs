@@ -55,12 +55,15 @@ fn a_loopback_name_url_is_refused_as_ssrf() {
         "http://local%68ost:8080/x",
         "http://\u{ff4c}\u{ff4f}\u{ff43}\u{ff41}\u{ff4c}\u{ff48}\u{ff4f}\u{ff53}\u{ff54}:8080/x",
         "http://127.0.0.1..:8080/x",
-        "http://127.0.0.1/x",
     ] {
         let refused = refuse_loopback_name(url).expect_err(url);
         assert!(is_ssrf_refusal(&refused), "{url}: {refused}");
     }
     refuse_loopback_name("https://api.example.com/x").expect("a public name passes");
+    // A literal is the synchronous check's, where the isolated runtime's
+    // loopback-literal allowance applies.
+    refuse_loopback_name("http://127.0.0.1/x").expect("a literal is left to the other check");
+    refuse_loopback_name("http://[::1]/x").expect("a literal is left to the other check");
 }
 
 /// Each literal spelling parses to an IP, not a name, so the synchronous
