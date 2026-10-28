@@ -35,6 +35,7 @@ mod identity_slots;
 /// The identity-slot budget, which also bounds per-user event listeners.
 pub(crate) use identity_slots::{MAX_IDENTITY_SLOTS, MAX_SLOTS_PER_PRINCIPAL};
 mod input_keys;
+mod lend;
 mod lifecycle;
 mod list_drain;
 pub(crate) mod listen;
