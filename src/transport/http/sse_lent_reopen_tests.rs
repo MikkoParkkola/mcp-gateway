@@ -33,8 +33,23 @@ fn authorization(headers: &HeaderMap) -> String {
 /// `Authorization`: each GET is a new session; every POST is answered 202
 /// with its response on that session's stream.
 async fn recording_peer() -> (String, Seen, Streams) {
-    peer(Expiry::Never).await
+    let peer = peer(Expiry::Never).await;
+    (peer.url, peer.seen, peer.streams)
 }
+
+/// The recording peer and what it saw beyond [`Seen`]: each POST's session
+/// and method, in order, and whether any request carried the start marker
+/// header, which must never reach the wire.
+struct Peer {
+    url: String,
+    seen: Seen,
+    streams: Streams,
+    posts: Arc<Mutex<Vec<(u32, String)>>>,
+    marker_sent: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// The start call's marker header, which no request may carry.
+const START_MARKER: &str = "x-mcp-gateway-slot-start";
 
 /// Whether the peer expires the session under the first call.
 #[derive(Clone, Copy)]
@@ -45,8 +60,15 @@ enum Expiry {
 }
 
 /// [`recording_peer`], expiring the session as `expiry` says.
-async fn peer(expiry: Expiry) -> (String, Seen, Streams) {
+async fn peer(expiry: Expiry) -> Peer {
     let lists = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let posts: Arc<Mutex<Vec<(u32, String)>>> = Arc::default();
+    let marker_sent = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (get_marker, post_marker, post_log) = (
+        Arc::clone(&marker_sent),
+        Arc::clone(&marker_sent),
+        Arc::clone(&posts),
+    );
     let seen: Seen = Arc::default();
     let streams: Streams = Arc::default();
     let (get_streams, post_streams) = (streams.clone(), streams.clone());
@@ -56,6 +78,9 @@ async fn peer(expiry: Expiry) -> (String, Seen, Streams) {
             "/sse",
             axum::routing::get(move |headers: HeaderMap| {
                 let (streams, seen) = (get_streams.clone(), get_seen.clone());
+                if headers.contains_key(START_MARKER) {
+                    get_marker.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
                 async move {
                     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
                     let session = {
@@ -85,8 +110,16 @@ async fn peer(expiry: Expiry) -> (String, Seen, Streams) {
                       axum::Json(frame): axum::Json<Value>| {
                     let (streams, seen) = (post_streams.clone(), post_seen.clone());
                     let lists = Arc::clone(&lists);
+                    if headers.contains_key(START_MARKER) {
+                        post_marker.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    let post_log = Arc::clone(&post_log);
                     async move {
                         let session: u32 = q["session_id"].parse().expect("session");
+                        post_log.lock().expect("posts").push((
+                            session,
+                            frame["method"].as_str().unwrap_or_default().to_owned(),
+                        ));
                         seen.lock()
                             .expect("seen")
                             .push(("POST", session, authorization(&headers)));
@@ -119,7 +152,13 @@ async fn peer(expiry: Expiry) -> (String, Seen, Streams) {
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
-    (url, seen, streams)
+    Peer {
+        url,
+        seen,
+        streams,
+        posts,
+        marker_sent,
+    }
 }
 
 fn subscriber() -> Vec<(String, String)> {
@@ -202,17 +241,28 @@ async fn a_dropped_legacy_stream_reopens_as_the_next_caller_before_its_post() {
 /// credential, and the call is resent and answered.
 #[tokio::test]
 async fn a_session_expiry_reopens_the_legacy_stream_as_the_call() {
-    let (url, seen, _streams) = peer(Expiry::FirstList).await;
+    let Peer {
+        url,
+        seen,
+        posts,
+        marker_sent,
+        ..
+    } = peer(Expiry::FirstList).await;
     let transport = HttpTransport::new(&url, HashMap::new(), Duration::from_secs(10), false)
         .expect("transport");
     let lender = Arc::new(Lender::default());
     transport.mark_per_user_slot(SlotCredential::LentOnly, Arc::clone(&lender));
-    let _loan = lender.lend(checked());
+    let loan = lender.lend(checked());
 
-    transport
-        .initialize_as(&subscriber())
-        .await
-        .expect("start as the subscriber");
+    // The slot's own start, as a dispatch's start runs it: its sends carry
+    // the start marker, resolved to this loan at each send.
+    {
+        let _starting = lender.starting(loan.id());
+        transport
+            .initialize()
+            .await
+            .expect("start as the subscriber");
+    }
     let answered = transport
         .request_with_headers(
             "tools/list",
@@ -235,5 +285,19 @@ async fn a_session_expiry_reopens_the_legacy_stream_as_the_call() {
     assert!(
         seen.iter().all(|(_, _, auth)| auth == "Bearer subscriber"),
         "a request went out other than as the subscriber: {seen:?}"
+    );
+    let posts = posts.lock().expect("posts").clone();
+    let on_second: Vec<&str> = posts
+        .iter()
+        .filter(|(session, _)| *session == 2)
+        .map(|(_, method)| method.as_str())
+        .collect();
+    assert!(
+        on_second.first() == Some(&"initialize") && on_second.last() == Some(&"tools/list"),
+        "the call was not re-handshaken and resent on the new session: {posts:?}"
+    );
+    assert!(
+        !marker_sent.load(std::sync::atomic::Ordering::SeqCst),
+        "the start marker reached the wire"
     );
 }
