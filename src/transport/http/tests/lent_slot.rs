@@ -165,3 +165,41 @@ async fn only_a_lent_only_slot_rides_its_starts_session() {
         assert_eq!(carried, rides, "{credential:?}: {map:?}");
     }
 }
+
+/// START.13: a lent-only slot never sends the gateway's OAuth token, even
+/// when its transport holds a live one: today the slot is built with no
+/// OAuth client, and this row keeps that from being the only guard. The loan
+/// rides a header other than `Authorization`, so a token the slot added could
+/// not hide under the loan.
+#[tokio::test]
+async fn a_lent_only_slot_never_sends_a_live_gateway_token() {
+    let token = format!("{}-{}", "gateway", "token");
+    let t = transport_with_oauth("http://localhost/mcp").expect("transport");
+    t.oauth_client
+        .as_ref()
+        .expect("an OAuth client")
+        .lock()
+        .await
+        .install_live_token_for_test(&token);
+    let lender = Arc::new(Lender::default());
+    t.mark_per_user_slot(SlotCredential::LentOnly, Arc::clone(&lender));
+    let loan = lender.lend(&[("X-Api-Key".to_string(), "subscriber-key".to_string())]);
+    for mode in [
+        HeaderMode::Request { method: "m" },
+        HeaderMode::Notify,
+        HeaderMode::Sse,
+    ] {
+        let map = t.build_mcp_headers(mode, None).await.unwrap();
+        assert_eq!(map["x-api-key"], "subscriber-key");
+        assert!(
+            map.values()
+                .all(|v| !v.to_str().unwrap_or_default().contains(&token)),
+            "the gateway's token rode a lent-only send: {map:?}"
+        );
+    }
+    drop(loan);
+    assert!(
+        t.build_mcp_headers(HeaderMode::Notify, None).await.is_err(),
+        "with nothing lent the token is no fallback"
+    );
+}
