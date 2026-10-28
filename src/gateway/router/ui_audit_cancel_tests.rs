@@ -101,22 +101,18 @@ async fn fixture(policy: AuditFailurePolicy) -> Fixture {
     }
 }
 
-impl Fixture {
-    fn request(
-        &self,
-        method: &str,
-        uri: &str,
-        body: &Value,
-    ) -> axum::http::Request<axum::body::Body> {
-        axum::http::Request::builder()
-            .method(method)
-            .uri(uri)
-            .header("authorization", format!("Bearer {KEY}"))
-            .header("content-type", "application/json")
-            .body(axum::body::Body::from(body.to_string()))
-            .expect("a request")
-    }
+/// A request as the admin, with a JSON body.
+fn request(method: &str, uri: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
+    axum::http::Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .expect("a request")
+}
 
+impl Fixture {
     /// The request sent on a task of its own, so a row can abort it as a
     /// disconnecting client's request is dropped.
     fn spawn(
@@ -197,7 +193,7 @@ async fn cancel_after_writer_start(
 ) {
     let fx = fixture(AuditFailurePolicy::FailClosed).await;
     let pause = crate::config_reload::arm_reload_pause(&fx.path);
-    let request = fx.spawn(fx.request(method, uri, body));
+    let request = fx.spawn(request(method, uri, body));
     tokio::time::timeout(GUARD, pause.reached.notified())
         .await
         .expect("the write reached its reload");
@@ -272,7 +268,7 @@ async fn a_write_refused_before_its_handler_writes_and_records_nothing() {
     assert!(fx.log.probe().is_err(), "the priming append fails");
     assert!(fx.log.is_degraded(), "the logger is degraded");
 
-    let request = fx.request(
+    let request = request(
         "POST",
         "/ui/api/backends",
         &json!({"name": "b", "url": "http://127.0.0.1:9/b"}),
@@ -293,7 +289,7 @@ async fn a_write_refused_before_its_handler_writes_and_records_nothing() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_uncancelled_write_is_recorded_once() {
     let fx = fixture(AuditFailurePolicy::FailClosed).await;
-    let request = fx.request(
+    let request = request(
         "POST",
         "/ui/api/backends",
         &json!({"name": "b", "url": "http://127.0.0.1:9/b"}),
@@ -326,7 +322,7 @@ async fn a_request_cancelled_during_admission_writes_and_records_nothing() {
     let metrics = tokio::runtime::Handle::current().metrics();
     let baseline = metrics.num_alive_tasks();
 
-    let request = fx.spawn(fx.request(
+    let request = fx.spawn(request(
         "POST",
         "/ui/api/backends",
         &json!({"name": "b", "url": "http://127.0.0.1:9/b"}),
@@ -369,7 +365,7 @@ async fn a_handler_panic_still_panics_out_of_the_layer() {
         axum::Router::new().route("/ui/api/panics", axum::routing::post(panicking_handler));
     let router = crate::gateway::ui::admin_audit::behind_admin_layer_for_test(panics, &fx.state)
         .with_state(Arc::clone(&fx.state));
-    let request = fx.request("POST", "/ui/api/panics", &json!({}));
+    let request = request("POST", "/ui/api/panics", &json!({}));
     let joined = tokio::spawn(async move { router.oneshot(request).await }).await;
     let error = joined.expect_err("the layer panicked");
     assert!(error.is_panic(), "{error}");
@@ -432,14 +428,14 @@ async fn held_upstream() -> (
 async fn confirmed_preview(fx: &Fixture, url: &str) -> axum::http::Request<axum::body::Body> {
     let body = json!({"name": "p", "url": url});
     let (status, described) = fx
-        .send_json(fx.request("POST", "/ui/api/previews", &body))
+        .send_json(request("POST", "/ui/api/previews", &body))
         .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{described}");
     let confirm = described["confirm"]
         .as_str()
         .expect("a confirmation")
         .to_string();
-    fx.request(
+    request(
         "POST",
         "/ui/api/previews",
         &json!({"name": "p", "url": url, "confirm": confirm}),
