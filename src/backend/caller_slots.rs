@@ -39,6 +39,10 @@ pub(crate) enum CallerSlot {
         until: tokio::time::Instant,
         /// Which claim this is: only its own winner may publish over it.
         generation: u64,
+        /// Whether the claim's lookup or fill still runs. A settled attempt
+        /// (failed, or cut short) keeps `until` as the retry backoff, but no
+        /// listing waits on it: nothing will store before it ends.
+        running: bool,
     },
 }
 
@@ -223,6 +227,7 @@ impl Backend {
             && let CallerSlot::ColdTried {
                 until,
                 generation: own,
+                ..
             } = &mut *slot
             && *own == generation
         {
@@ -230,27 +235,64 @@ impl Backend {
         }
     }
 
-    /// Wait while `principal_id`'s cold lease runs: until its winner (or any
-    /// fill of the caller's own slot) stores, or the lease ends.
+    /// Settle `principal_id`'s claim `generation` as it ends without a
+    /// publish: its lease stays as the retry backoff, and the listings
+    /// waiting on it are woken. Only the claim's own lease: a newer claim, or
+    /// a view stored meanwhile, is left as it is.
+    pub(crate) fn settle_cold_attempt(&self, principal_id: &str, generation: u64) {
+        if let Some(mut slot) = self.caller_slots.get_mut(principal_id)
+            && let CallerSlot::ColdTried {
+                generation: own,
+                running,
+                ..
+            } = &mut *slot
+            && *own == generation
+            && *running
+        {
+            *running = false;
+            drop(slot);
+            self.caller_slot_stored.notify_waiters();
+        }
+    }
+
+    /// Wait while `principal_id`'s cold lease has a lookup or fill running:
+    /// until its winner (or any fill of the caller's own slot) stores, the
+    /// attempt settles, or the lease ends.
     pub(crate) async fn wait_cold_lease(&self, principal_id: &str) {
         loop {
             let stored = self.caller_slot_stored.notified();
             tokio::pin!(stored);
-            // Registered before the check, so a store between the check and
-            // the wait still wakes it.
+            // Registered before the check, so a store or a settle between the
+            // check and the wait still wakes it.
             stored.as_mut().enable();
-            let Some(remaining) = self.cold_lease_remaining(principal_id) else {
+            let Some(remaining) = self.cold_fill_remaining(principal_id) else {
                 return;
             };
             let _ = tokio::time::timeout(remaining, stored).await;
         }
     }
 
-    /// How long `principal_id`'s running cold lease still has, if one runs.
+    /// How long `principal_id`'s cold lease still has, if one stands: the
+    /// retry backoff, whether or not its attempt still runs.
     pub(crate) fn cold_lease_remaining(&self, principal_id: &str) -> Option<std::time::Duration> {
         let now = tokio::time::Instant::now();
         match *self.caller_slots.get(principal_id)? {
             CallerSlot::ColdTried { until, .. } if now < until => Some(until - now),
+            _ => None,
+        }
+    }
+
+    /// How long `principal_id`'s cold lease still has while its lookup or
+    /// fill runs: what a listing may wait on. A settled attempt has nothing
+    /// left to store.
+    pub(crate) fn cold_fill_remaining(&self, principal_id: &str) -> Option<std::time::Duration> {
+        let now = tokio::time::Instant::now();
+        match *self.caller_slots.get(principal_id)? {
+            CallerSlot::ColdTried {
+                until,
+                running: true,
+                ..
+            } if now < until => Some(until - now),
             _ => None,
         }
     }
@@ -271,6 +313,7 @@ impl Backend {
         let fresh = CallerSlot::ColdTried {
             until: now + lease,
             generation,
+            running: true,
         };
         match self.caller_slots.entry(principal_id.to_string()) {
             dashmap::mapref::entry::Entry::Vacant(vacant) => {

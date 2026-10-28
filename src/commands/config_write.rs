@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! How a CLI command writes gateway.yaml: through the comment-keeping splice,
-//! refusing a write that would drop comments unless `--force` is given
+//! How a CLI command writes gateway.yaml: through the in-place splice,
+//! refusing a write it cannot make in place unless `--force` is given
 //! (MIK-8017).
 
 use std::path::Path;
@@ -12,8 +12,8 @@ use mcp_gateway::config_persistence::{edit_config, edit_config_text};
 
 use super::backend_url_keys::{UrlRewrite, rewrite_url_aliases};
 
-/// `--force` rewrites a file whose comments cannot be kept; without it that
-/// write is refused and nothing is written.
+/// `--force` rewrites a file the change cannot be made in place in; without
+/// it that write is refused and nothing is written.
 pub fn comment_loss(force: bool) -> CommentLoss {
     if force {
         CommentLoss::Rewrite
@@ -27,9 +27,9 @@ pub fn comment_loss(force: bool) -> CommentLoss {
 /// config lock, so another writer's change is never overwritten.
 ///
 /// A write that keeps the file's comments but removes an entry names the
-/// comment lines that went with that entry. A write that cannot keep them
-/// is refused, naming the lines, or under `--force` rewrites the file in
-/// full and names the lines it dropped.
+/// comment lines that went with that entry. A write that cannot be made in
+/// place is refused, naming any comment lines, or under `--force` rewrites
+/// the file in full and names the lines it dropped.
 pub fn write<F>(path: &Path, mode: CommentLoss, edit: F) -> Result<(), String>
 where
     F: FnOnce(&mut Config) -> Result<(), String>,

@@ -273,7 +273,8 @@ impl MetaMcp {
         else {
             return None;
         };
-        self.resolve_cold_view((server, tool), &backend, caller, generation)
+        let attempt = super::invoke::ColdAttempt::new(backend, id, generation);
+        self.resolve_cold_view((server, tool), attempt, caller)
             .await
     }
 

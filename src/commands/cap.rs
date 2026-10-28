@@ -357,8 +357,11 @@ async fn cap_discover(
             if write_config {
                 say("\n📝 Writing discovered servers to config...");
                 match crate::write_discovered_to_config(&servers, config_path.as_deref(), mode) {
-                    Ok((path, _)) => {
-                        say(&format!("✅ Config written to {}", path.display()));
+                    Ok((path, written, skipped)) => {
+                        say(&format!(
+                            "✅ Wrote {written} server(s) to {}; skipped {skipped}",
+                            path.display()
+                        ));
                         say(&format!(
                             "\nTo use discovered servers, start gateway with: mcp-gateway -c {}",
                             path.display()
@@ -443,18 +446,19 @@ async fn cap_discover_shadow(
             .cloned()
             .collect();
         if adoptable_servers.is_empty() {
+            // Nothing written is a failure a script can see.
             eprintln!("No adoptable local shadow servers found; leaving gateway config unchanged.");
             eprintln!("Review the report actions before changing network or sensitive findings.");
-            return ExitCode::SUCCESS;
+            return ExitCode::FAILURE;
         }
 
         let apply_path = output_config_path.unwrap_or_else(|| compare_config_path.clone());
         match crate::write_discovered_to_config(&adoptable_servers, Some(&apply_path), mode) {
-            // The count is what the writer wrote, not what was offered: it
-            // skips a server named like `capabilities.name` (MIK-8358).
-            Ok((path, adopted)) => {
+            // The counts are what the writer wrote and skipped: it applies
+            // the shared adopt rule and skips `capabilities.name` (MIK-8358).
+            Ok((path, adopted, refused)) => {
                 eprintln!(
-                    "Adopted {adopted} local shadow server(s) into {}",
+                    "Adopted {adopted} local shadow server(s) into {}; skipped {refused}",
                     path.display()
                 );
                 let skipped = shadow_servers.len().saturating_sub(adoptable_servers.len());

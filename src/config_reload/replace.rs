@@ -35,22 +35,8 @@ use super::ReloadContext;
 /// history view was made from. Not `config_revision`, which also covers the
 /// process environment and `file:` secrets.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "first callers: the web UI settings save and the configuration-history restore"
-    )
-)]
 pub(crate) struct FileRevision(String);
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "first callers: the web UI settings save and the configuration-history restore"
-    )
-)]
 impl FileRevision {
     /// The revision of `bytes`.
     #[must_use]
@@ -60,6 +46,10 @@ impl FileRevision {
 
     /// The hex digest.
     #[must_use]
+    #[cfg_attr(
+        all(not(feature = "webui"), not(test)),
+        expect(dead_code, reason = "read by the web UI's discovery route")
+    )]
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
@@ -205,6 +195,11 @@ pub(crate) enum ReplaceError {
 /// Write `replace` in a task of its own: dropping the caller (a request
 /// handler whose client went away) drops only the wait, never a write
 /// between its rename and its reload.
+///
+/// Invariant (ADR-024): a save's compute closure produces its bytes through
+/// a refusing in-place editor (the key editor or `edit_text`), never through
+/// a `CommentLoss::Rewrite` render, so a refusal surfaces as
+/// [`ReplaceError::Refused`] and nothing is written.
 #[cfg_attr(
     not(test),
     expect(
