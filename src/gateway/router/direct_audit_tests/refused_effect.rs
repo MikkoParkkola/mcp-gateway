@@ -38,7 +38,8 @@ async fn a_denied_direct_delivery_records_refused() {
     assert_eq!(event["response_effect"], "refused", "{event}");
 }
 
-/// Response inspection in action mode refuses a planted key, on both routes.
+/// Response inspection in action mode refuses a planted key, on both routes,
+/// and the refusal keeps the finding that blocked it.
 #[cfg(feature = "firewall")]
 #[tokio::test]
 async fn an_inspection_refusal_records_refused() {
@@ -62,6 +63,20 @@ async fn an_inspection_refusal_records_refused() {
         );
         let event = only_attempt(&fx);
         assert_eq!(event["response_effect"], "refused", "{uri}: {event}");
+        let findings = event["response_findings"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            findings.iter().any(|f| f["kind"] == "inspect:secret"
+                && f["severity"] == "critical"
+                && f["where"] == "result"),
+            "{uri}: the blocking finding is kept: {event}"
+        );
+        assert!(
+            !event.to_string().contains(&key),
+            "{uri}: no content: {event}"
+        );
     }
 }
 

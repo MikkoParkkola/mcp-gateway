@@ -699,7 +699,6 @@ async fn an_undeclared_last_round_records_refused_only_while_vouched() {
             crate::gateway::delivery_facts::record_fields(
                 crate::gateway::delivery_facts::snapshot().as_ref(),
                 false,
-                false,
                 &mut fields,
             );
             fields

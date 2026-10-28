@@ -14,7 +14,7 @@ async fn recorded<F: std::future::Future<Output = ()>>(run: F) -> Map<String, se
         unvouched();
         run.await;
         let mut fields = Map::new();
-        record_fields(snapshot().as_ref(), false, false, &mut fields);
+        record_fields(snapshot().as_ref(), false, &mut fields);
         fields
     })
     .await

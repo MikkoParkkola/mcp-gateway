@@ -397,7 +397,6 @@ async fn a_prompts_get_isolation_denial_records_refused() {
             crate::gateway::delivery_facts::record_fields(
                 crate::gateway::delivery_facts::snapshot().as_ref(),
                 false,
-                false,
                 &mut fields,
             );
             (response, fields.get("response_effect").cloned())

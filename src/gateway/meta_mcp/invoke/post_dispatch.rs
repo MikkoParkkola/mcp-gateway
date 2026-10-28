@@ -23,9 +23,7 @@ use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::support::{
     CachePrincipal, augment_with_predictions, augment_with_trace, response_cache_key_for,
 };
-use crate::gateway::recovery::{
-    MetaSurface, RecoveryContext, attach_recovery, recovery_for_surface,
-};
+use crate::gateway::recovery::{MetaSurface, RecoveryContext, recovery_for_surface};
 use crate::idempotency::IdempotencyReservation;
 use crate::security::http_diagnostics::is_upstream_unauthorized;
 use crate::{Error, Result};
@@ -70,9 +68,16 @@ pub(super) fn attach_tool_error_recovery(
             },
             surface,
         );
-        let value = attach_recovery(value, hint);
         // MIK-7939: the hint is the gateway's text, never a receipt's.
-        super::gateway_writes::note(super::gateway_writes::Layer::Value, &["recovery"], &value);
+        let mut value = value;
+        if let Ok(hint) = serde_json::to_value(hint) {
+            super::gateway_writes::insert_noted(
+                super::gateway_writes::Layer::Value,
+                &["recovery"],
+                &mut value,
+                hint,
+            );
+        }
         value
     } else {
         value
@@ -172,17 +177,12 @@ impl MetaMcp {
         //
         // `_cost_warnings` — active at ≥80% budget consumption (Notify tier).
         // `_cost_suggestion` — present when a cheaper alternative exists.
-        if !cost_warnings.is_empty()
-            && let Some(obj) = result.as_object_mut()
-        {
-            obj.insert(
-                "_cost_warnings".to_string(),
-                serde_json::json!(cost_warnings),
-            );
-            super::gateway_writes::note(
+        if !cost_warnings.is_empty() {
+            super::gateway_writes::insert_noted(
                 super::gateway_writes::Layer::Value,
                 &["_cost_warnings"],
                 result,
+                serde_json::json!(cost_warnings),
             );
         }
 
@@ -195,21 +195,17 @@ impl MetaMcp {
                     suggestions::suggest_cheaper(tool, cost, &all_costs, alternatives)
                     // Never point a caller at a tool it could not call (A3).
                     && self.admits_tool_named(&suggestion.alternative, caller.scope(), session_id)
-                    && let Some(obj) = result.as_object_mut()
                 {
-                    obj.insert(
-                        "_cost_suggestion".to_string(),
+                    super::gateway_writes::insert_noted(
+                        super::gateway_writes::Layer::Value,
+                        &["_cost_suggestion"],
+                        result,
                         serde_json::json!({
                             "message": suggestion.reason,
                             "alternative": suggestion.alternative,
                             "savings_per_call": suggestion.savings_per_call,
                             "alternative_cost": suggestion.alternative_cost,
                         }),
-                    );
-                    super::gateway_writes::note(
-                        super::gateway_writes::Layer::Value,
-                        &["_cost_suggestion"],
-                        result,
                     );
                 }
             }

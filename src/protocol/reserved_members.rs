@@ -49,10 +49,6 @@ pub(crate) struct Member {
     /// Segments from the answer's root. `*` is every element of an array; a
     /// `_meta` key is one segment, reverse-DNS dots included.
     pub(crate) path: &'static [&'static str],
-    #[expect(
-        dead_code,
-        reason = "the delivery record's annotated raise reads it; that change follows this one"
-    )]
     pub(crate) class: Class,
     pub(crate) origin: Origin,
     pub(crate) writer: Writer,
@@ -83,7 +79,7 @@ pub(crate) const MEMBERS: &[Member] = &[
     row(&["_contract_reason"], Counted, GatewayOnly, Noted),
     row(&["_cost_warnings"], Counted, GatewayOnly, Noted),
     row(&["_cost_suggestion"], Counted, GatewayOnly, Noted),
-    // Outside until the delivery record notes it at its attach site.
+    // Raised where it is attached, never noted: a receipt copy keeps it.
     row(&["_context_integrity"], Counted, GatewayOnly, Outside),
     row(&["tools", "*", "trustCard"], Counted, GatewayOnly, Outside),
     row(&["_signature"], Envelope, GatewayOnly, Noted),

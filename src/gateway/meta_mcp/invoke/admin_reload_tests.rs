@@ -63,7 +63,6 @@ async fn reload_effect(
         crate::gateway::delivery_facts::record_fields(
             crate::gateway::delivery_facts::snapshot().as_ref(),
             false,
-            false,
             &mut fields,
         );
         (answer, fields.get("response_effect").cloned())
