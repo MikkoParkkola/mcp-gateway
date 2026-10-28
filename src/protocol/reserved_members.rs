@@ -325,6 +325,9 @@ pub(crate) mod test_support {
                 "io.mcp-gateway/reason": "FORGED-10",
             },
             "tools": [{"name": "t", "trustCard": {"verdict": "FORGED-11"}}],
+            "_recovery": {"hint": "FORGED-12"},
+            "_predicted_next": ["FORGED-13"],
+            "_trace_id": "FORGED-14",
             "backend_field": "KEPT-BY-BACKEND",
         })
     }

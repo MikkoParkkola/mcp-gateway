@@ -26,6 +26,7 @@ fn every_member() -> Value {
         },
         "tools": [{"name": "t", "trustCard": {"v": 1}, "annotations": {"readOnlyHint": true}}],
         "recovery": {"hint": "h"}, "predicted_next": [], "trace_id": "t-1",
+        "_recovery": {"hint": "FORGED"}, "_predicted_next": ["FORGED"], "_trace_id": "FORGED",
         "taskId": "x", "requestState": "s", "resultType": "complete",
         "cacheScope": "private", "ttlMs": 5, "structuredContent": {"a": 1},
         "backend_field": true,
@@ -90,6 +91,9 @@ fn ingress_withholds_what_a_chain_digest_covers() {
         "_cost_suggestion",
         "_context_integrity",
         "tools",
+        "_recovery",
+        "_predicted_next",
+        "_trace_id",
     ];
     want.sort_unstable();
     assert_eq!(got, want, "_meta and _signature are outside the digest");
@@ -222,6 +226,9 @@ fn the_gateway_only_set_is_pinned() {
         "_meta.provenance",
         "_meta.io.mcp-gateway/executionOutcome",
         "_meta.io.mcp-gateway/reason",
+        "_recovery",
+        "_predicted_next",
+        "_trace_id",
     ];
     assert_eq!(
         gateway_only(),

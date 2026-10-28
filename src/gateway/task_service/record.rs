@@ -527,6 +527,13 @@ impl CommittedTask {
             )
     }
 
+    /// The stored task as a delivery serves it (MIK-9002): every serve site
+    /// (`tasks/get`, a repeat, a notification) sends this, never
+    /// `task.wire()` alone.
+    pub(crate) fn delivered_wire(&self) -> serde_json::Value {
+        serde_json::to_value(self.task.wire()).unwrap_or(serde_json::Value::Null)
+    }
+
     /// The committed view of `record`, read in one piece so a caller that
     /// authorizes delivery checks the snapshot it returns.
     pub(super) fn of(task: Task, record: &Record) -> Self {
@@ -610,6 +617,10 @@ fn legacy_targets(task: &Task, record: &Record) -> Vec<Target> {
 #[cfg(test)]
 #[path = "record_legacy_tests.rs"]
 mod legacy_tests;
+
+#[cfg(test)]
+#[path = "record_delivery_tests.rs"]
+mod delivery_tests;
 
 /// `Target::pairs` keeps the recorded order, duplicates included, and the
 /// names exactly as recorded: every stored-result walk reads it (MIK-8498).
