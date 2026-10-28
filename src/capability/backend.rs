@@ -588,7 +588,9 @@ impl CapabilityBackend {
             .get_with_generation(name)
             .ok_or_else(|| crate::Error::Config(format!("Capability not found: {name}")))?;
         context.mcp_generation = Some(generation);
-        super::read_only_call::refuse_unless_read_only(&capability)?;
+        // The read-only refusal is the call's answer: its record says so.
+        super::read_only_call::refuse_unless_read_only(&capability)
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
         // U12: a web UI call is judged by the definition about to run, so a
         // reload after the dispatch gate cannot turn it into a write.
         #[cfg(feature = "webui")]
