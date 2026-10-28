@@ -88,10 +88,12 @@ fn is_interim(result: &Value) -> bool {
 ///   absent or fails a rule, named in the message, never the data.
 ///
 /// The chain is always removed from `result`; only this gateway re-emits it.
+/// `withheld` is what ingress removed from `result`: the digest is
+/// taken over the result the backend signed, which never reaches anyone.
 pub(crate) fn receive(
     identity: &ChainIdentity,
     policy: (ChainMode, &[String], Option<&str>),
-    result: &mut Value,
+    (result, withheld): (&mut Value, Option<&serde_json::Map<String, Value>>),
     nonce: &str,
     now: u64,
 ) -> crate::Result<Option<Arc<UpstreamChain>>> {
@@ -106,7 +108,8 @@ pub(crate) fn receive(
             _ => Ok(None),
         };
     }
-    let received = content_digest(result).map_err(|_| refusal("Unhashable"))?;
+    let as_sent = crate::protocol::reserved_members::chain_view(result, withheld);
+    let received = content_digest(&as_sent).map_err(|_| refusal("Unhashable"))?;
     let chain = result
         .get("_meta")
         .and_then(|meta| meta.get(CHAIN_META))
@@ -183,7 +186,7 @@ impl super::super::MetaMcp {
     pub(crate) fn chain_receive(
         &self,
         policy: (ChainMode, &[String], Option<&str>),
-        result: &mut Value,
+        (result, withheld): (&mut Value, Option<&serde_json::Map<String, Value>>),
         challenge: Option<&str>,
         slot: &ChainSlot,
     ) -> crate::Result<()> {
@@ -201,7 +204,7 @@ impl super::super::MetaMcp {
             note_chain_refused();
             return Err(refusal("challenge"));
         };
-        match now().and_then(|now| receive(identity, policy, result, challenge, now)) {
+        match now().and_then(|now| receive(identity, policy, (result, withheld), challenge, now)) {
             Ok(outcome) => {
                 *slot.lock() = ChainReceipt::Checked(outcome);
                 Ok(())
@@ -226,7 +229,7 @@ impl super::super::MetaMcp {
         &self,
         view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
         server: &str,
-        result: &mut Value,
+        result: (&mut Value, Option<&serde_json::Map<String, Value>>),
         challenge: Option<&str>,
         slot: &ChainSlot,
     ) -> crate::Result<()> {

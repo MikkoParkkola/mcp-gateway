@@ -100,6 +100,9 @@ mod interim_promotion;
 #[cfg(test)]
 mod interim_promotion_tests;
 pub(crate) mod invoke;
+mod listing_warm;
+#[cfg(test)]
+pub(crate) use listing_warm::LISTING_DEADLINE_CAP;
 mod prompt_cache;
 mod protocol;
 pub(crate) mod refund_witness;
@@ -714,6 +717,9 @@ mod grant_slot_wrap_tests;
 mod grant_withheld_parity_tests;
 #[cfg(test)]
 mod guide_alloc_tests;
+/// A published pre-release's task row is refused, never stripped, when served.
+#[cfg(test)]
+mod legacy_row_planted_tests;
 #[cfg(test)]
 mod oracle_audit_tests;
 #[cfg(test)]

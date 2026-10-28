@@ -26,6 +26,8 @@ pub(crate) enum Withholding {
     Schema,
     /// Its description failed the tool-poisoning check.
     Descriptor,
+    /// Its backend's `allowed_tools` leaves it out.
+    Unselected,
     /// The caller's own complete catalogue on a per-user backend does not
     /// list it (MIK-8356).
     Lacked,
@@ -38,12 +40,21 @@ impl Withholding {
     pub(crate) const fn kind(self) -> crate::security::decision_record::DecisionKind {
         match self {
             Self::Refused => crate::security::decision_record::DecisionKind::ToolPolicy,
-            Self::Schema | Self::Descriptor => {
+            // An unselected tool is refused at dispatch by the same backend
+            // gate as a blocked description, and recorded the same way.
+            Self::Schema | Self::Descriptor | Self::Unselected => {
                 crate::security::decision_record::DecisionKind::DescriptorBlock
             }
             Self::Lacked => crate::security::decision_record::DecisionKind::ClientToolScope,
             Self::Absent => crate::security::decision_record::DecisionKind::BackendScope,
         }
+    }
+
+    /// Withheld by the backend's own gate (its `allowed_tools`, or the
+    /// descriptor check): answered at once, whatever the caller's slot holds.
+    #[must_use]
+    pub(crate) fn is_backend_gate(self) -> bool {
+        matches!(self, Self::Descriptor | Self::Unselected)
     }
 }
 
@@ -88,8 +99,8 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
         session_id: Option<&str>,
     ) -> Visibility {
-        if self.descriptor_blocked(server, &tool.name) {
-            return Visibility::Withheld(Withholding::Descriptor);
+        if let Some(reason) = self.gate_withholding(server, &tool.name) {
+            return Visibility::Withheld(reason);
         }
         // The schema reason is a backend's: a capability is validated when it
         // loads, and a webhook-only one carries a null schema by design, so
@@ -150,8 +161,8 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
         session_id: Option<&str>,
     ) -> Visibility {
-        if self.descriptor_blocked(server, tool) {
-            return Visibility::Withheld(Withholding::Descriptor);
+        if let Some(reason) = self.gate_withholding(server, tool) {
+            return Visibility::Withheld(reason);
         }
         // The schema reason of a per-user backend is the caller's slot's
         // alone (MIK-8356 R5.4): the shared slot's schema never filters it.
@@ -180,8 +191,8 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
         session_id: Option<&str>,
     ) -> Option<Visibility> {
-        if self.descriptor_blocked(server, tool) {
-            return Some(Visibility::Withheld(Withholding::Descriptor));
+        if let Some(reason) = self.gate_withholding(server, tool) {
+            return Some(Visibility::Withheld(reason));
         }
         let Some(backend) = self.backends.get_for(Unscoped::Visibility, server) else {
             return Some(self.judge_name(server, tool, scope, session_id));
@@ -260,10 +271,17 @@ impl MetaMcp {
     }
 
     /// Descriptor blocking applies whether or not the cache is warm (A6).
-    fn descriptor_blocked(&self, server: &str, tool: &str) -> bool {
-        self.backends
-            .get_for(Unscoped::Visibility, server)
-            .is_some_and(|backend| backend.is_blocked_tool(tool))
+    /// The backend gate's reason to withhold `tool`: outside the backend's
+    /// `allowed_tools`, or blocked by the descriptor gate.
+    fn gate_withholding(&self, server: &str, tool: &str) -> Option<Withholding> {
+        let backend = self.backends.get_for(Unscoped::Visibility, server)?;
+        if backend.is_unselected(tool) {
+            Some(Withholding::Unselected)
+        } else {
+            backend
+                .is_blocked_tool(tool)
+                .then_some(Withholding::Descriptor)
+        }
     }
 
     fn invokable(

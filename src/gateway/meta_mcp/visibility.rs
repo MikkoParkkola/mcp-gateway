@@ -250,6 +250,7 @@ impl MetaMcp {
             }
             super::visible::Withholding::Schema
             | super::visible::Withholding::Descriptor
+            | super::visible::Withholding::Unselected
             | super::visible::Withholding::Lacked => {
                 // Its record names the check that withheld it, never an allow.
                 crate::gateway::meta_mcp::invoke::audit::note_refused_by(reason.kind(), None);

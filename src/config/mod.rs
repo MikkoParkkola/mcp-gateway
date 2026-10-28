@@ -61,6 +61,9 @@ use crate::security::{posture, verify_remote_server_provenance};
 use crate::{Error, Result};
 pub(crate) use backend_transport::transport_key_for;
 use config_file::ConfigFile;
+#[cfg(feature = "webui")]
+pub(crate) use pattern_grammar::check_backend_allowed_tools;
+pub(crate) use pattern_grammar::tool_pattern_matches;
 
 pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvFiles, SystemHome};
 use env_overlay::{SecretFileDigests, SecretRefsRead, digest};

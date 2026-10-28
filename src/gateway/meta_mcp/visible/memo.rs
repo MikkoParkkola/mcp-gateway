@@ -581,6 +581,16 @@ pub(crate) fn absent_if_withheld(judged: Option<Visibility>, tool: &str) -> crat
     }
 }
 
+/// Record that this request's account check of `(server, account)` did not
+/// complete, unless it did: an empty binding, which no held slot's binding
+/// equals, so a held view of that account reads as cold in this request.
+pub(crate) fn record_account_unchecked(server: &str, account: &DescriptorId) {
+    in_memo(|memo| {
+        memo.account_binding
+            .first(account_slot(server, account), String::new());
+    });
+}
+
 /// Keep the binding the pre-pass's view read gave `(server, account)`.
 pub(crate) fn record_account_binding(server: &str, account: &DescriptorId, binding: &str) {
     in_memo(|memo| {

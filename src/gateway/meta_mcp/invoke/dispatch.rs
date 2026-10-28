@@ -462,9 +462,20 @@ impl MetaMcp {
             });
         }
 
+        let withheld = response.ingress_withheld;
         let mut result = response.result.unwrap_or(json!(null));
         // Raw receipt (inc3 R1): verify before anything reads the reply.
-        self.chain_receive(chained, &mut result, challenge.as_deref(), chain)?;
+        self.chain_receive(
+            chained,
+            (
+                &mut result,
+                withheld
+                    .as_deref()
+                    .map(crate::protocol::reserved_members::Withheld::members),
+            ),
+            challenge.as_deref(),
+            chain,
+        )?;
         // The RAW reply, here and nowhere else: this value has not been through
         // projection, the contract gate or any shaping, so a `resultType:
         // "task"` in it is the peer's own envelope and never one this gateway
