@@ -54,6 +54,8 @@ pub(crate) struct LogPos {
     pub(crate) log: Source,
     /// The record's `entry_hash`, unique in its log's chain.
     pub(crate) entry: String,
+    /// The record's chain counter: its place in the log, across segments.
+    pub(crate) counter: u64,
 }
 
 /// A UI decision on one capability for a subject and agent: a decline, or a
@@ -136,12 +138,14 @@ struct Requested {
 }
 
 impl Requested {
-    /// The refusals newer than the last UI decision and not before `edge`.
-    fn pending(&self, edge: Option<DateTime<Utc>>) -> impl Iterator<Item = &DateTime<Utc>> {
+    /// The refusals newer than the last UI decision and still kept: at or
+    /// after the log's `edge` counter.
+    fn pending(&self, edge: Option<u64>) -> impl Iterator<Item = &DateTime<Utc>> {
         self.refused
-            .values()
+            .iter()
+            .filter(move |(pos, _)| edge.is_none_or(|edge| pos.counter >= edge))
+            .map(|(_, at)| at)
             .filter(move |at| self.decided.is_none_or(|decided| **at > decided))
-            .filter(move |at| edge.is_none_or(|edge| **at >= edge))
     }
 }
 
@@ -158,7 +162,7 @@ pub(crate) struct DecisionSet {
     requested: BTreeMap<(AccessKey, String), Requested>,
     grants: Vec<IdentityGrant>,
     now: Option<DateTime<Utc>>,
-    edge: Option<DateTime<Utc>>,
+    edge: Option<u64>,
     held: Vec<(LogPos, Fold)>,
     /// Each log a live event was dropped from because `held` was full: that
     /// log's replay must run again before its source can be ready.
@@ -267,12 +271,13 @@ impl DecisionSet {
         self.refresh();
     }
 
-    /// Close every access item whose newest denial is older than `edge`.
-    pub(crate) fn evict_before(&mut self, edge: DateTime<Utc>) {
+    /// Close every access item whose refusals all left the log: their records'
+    /// counters are below `edge`, the oldest kept record's.
+    pub(crate) fn evict_before(&mut self, edge: u64) {
         self.edge = Some(self.edge.map_or(edge, |old| old.max(edge)));
-        // Refusals past the edge can never count again: drop them.
+        // Refusals whose record left the log can never count again.
         self.requested.retain(|_, requested| {
-            requested.refused.retain(|_, at| *at >= edge);
+            requested.refused.retain(|pos, _| pos.counter >= edge);
             !requested.refused.is_empty() || requested.decided.is_some()
         });
         self.refresh();

@@ -26,10 +26,12 @@ fn a_reader_sees_each_written_record_of_its_kind_once() {
     let sink = Arc::clone(&seen);
     log.subscribe(
         "wanted",
-        Arc::new(move |fields: &Map<String, Value>, hash: &str| {
-            let n = fields.get("n").and_then(Value::as_u64).unwrap_or_default();
-            sink.lock().unwrap().push((n, hash.to_string()));
-        }),
+        Arc::new(
+            move |fields: &Map<String, Value>, hash: &str, _counter: u64| {
+                let n = fields.get("n").and_then(Value::as_u64).unwrap_or_default();
+                sink.lock().unwrap().push((n, hash.to_string()));
+            },
+        ),
     );
 
     let first = log

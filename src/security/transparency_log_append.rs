@@ -34,8 +34,9 @@ fn cut_back(file: &std::fs::File, path: &Path, good: u64) -> io::Result<()> {
 }
 
 /// A reader of appended records: the record's fields as the caller gave them
-/// (its envelope included, the chain fields not) and its `entry_hash`.
-pub(crate) type Subscriber = std::sync::Arc<dyn Fn(&Map<String, Value>, &str) + Send + Sync>;
+/// (its envelope included, the chain fields not), its `entry_hash`, and its
+/// chain `counter`, which orders records across segments.
+pub(crate) type Subscriber = std::sync::Arc<dyn Fn(&Map<String, Value>, &str, u64) + Send + Sync>;
 
 /// Readers told of each record of their `kind` once it is written. They run
 /// under the log's lock, which every audit write takes, so they see records
@@ -56,14 +57,14 @@ impl Subscribers {
             .is_ok_and(|readers| readers.iter().any(|(wanted, _)| wanted == kind))
     }
 
-    fn publish(&self, fields: &Map<String, Value>, entry_hash: &str) {
+    fn publish(&self, fields: &Map<String, Value>, entry_hash: &str, counter: u64) {
         let kind = fields.get("kind").and_then(Value::as_str);
         let Ok(readers) = self.0.read() else {
             return;
         };
         for (wanted, reader) in readers.iter() {
             if kind == Some(wanted.as_str()) {
-                reader(fields, entry_hash);
+                reader(fields, entry_hash, counter);
             }
         }
     }
@@ -163,7 +164,7 @@ impl TransparencyLogger {
             other => other,
         };
         if let (Ok(entry_hash), Some(fields)) = (&written, published) {
-            self.subscribers.publish(&fields, entry_hash);
+            self.subscribers.publish(&fields, entry_hash, inner.counter);
         }
         written
     }

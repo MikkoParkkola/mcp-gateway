@@ -18,7 +18,6 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use chrono::{DateTime, Utc};
 use rand::RngExt as _;
 use serde_json::{Map, Value, json};
 
@@ -82,10 +81,11 @@ fn unavailable(sources: &[(&'static str, &'static str)]) -> Response {
         .into_response()
 }
 
-fn grant_pos(entry_hash: &str) -> LogPos {
+fn grant_pos(entry_hash: &str, counter: u64) -> LogPos {
     LogPos {
         log: Source::Access,
         entry: entry_hash.to_string(),
+        counter,
     }
 }
 
@@ -126,13 +126,15 @@ fn start_with(
             let full = Arc::clone(&dropped);
             log.subscribe(
                 GRANT_DECISION_KIND,
-                Arc::new(move |record: &Map<String, Value>, hash: &str| {
-                    if let Some(event) = denial_from_record(record)
-                        && sender.try_send((hash.to_string(), event)).is_err()
-                    {
-                        full.mark();
-                    }
-                }),
+                Arc::new(
+                    move |record: &Map<String, Value>, hash: &str, counter: u64| {
+                        if let Some(event) = denial_from_record(record)
+                            && sender.try_send((grant_pos(hash, counter), event)).is_err()
+                        {
+                            full.mark();
+                        }
+                    },
+                ),
             );
             let path = log.path();
             let replays = Arc::new(Replays {
@@ -182,7 +184,7 @@ impl Dropped {
 /// make the count wrong, so the source reads unavailable (the snapshot
 /// answers `None`) until a replay has read the log again.
 async fn apply_live(
-    mut receiver: tokio::sync::mpsc::Receiver<(String, IdentityGrantAuditEvent)>,
+    mut receiver: tokio::sync::mpsc::Receiver<(LogPos, IdentityGrantAuditEvent)>,
     dropped: Arc<Dropped>,
     replays: Arc<Replays>,
 ) {
@@ -190,8 +192,8 @@ async fn apply_live(
     loop {
         tokio::select! {
             note = receiver.recv() => {
-                let Some((hash, event)) = note else { return };
-                shared.update(|set| set.live(grant_pos(&hash), Fold::Denial(event)));
+                let Some((pos, event)) = note else { return };
+                shared.update(|set| set.live(pos, Fold::Denial(event)));
             }
             () = dropped.wake.notified() => {}
         }
@@ -248,8 +250,12 @@ async fn replay_until_ready(replays: Arc<Replays>) {
 fn replay_grant_decisions(path: &Path, shared: &Shared) -> bool {
     let started = std::time::Instant::now();
     let read = replay::records(path, GRANT_DECISION_KIND, |record, hash| {
-        if let Some(event) = denial_from_record(record) {
-            shared.update(|set| set.replayed(grant_pos(hash), Fold::Denial(event)));
+        // Every chained record carries its counter; one without is skipped.
+        if let (Some(event), Some(counter)) = (
+            denial_from_record(record),
+            record.get("counter").and_then(Value::as_u64),
+        ) {
+            shared.update(|set| set.replayed(grant_pos(hash, counter), Fold::Denial(event)));
         }
     });
     match read {
@@ -324,27 +330,18 @@ fn capability_changes(backend: &CapabilityBackend) -> Option<Vec<CapabilityChang
     Some(changes)
 }
 
-/// A refusal is timed when it is evaluated and written a moment later, so
-/// one written just after a rotation can be timed before its segment opened.
-/// The edge allows for that with a margin far wider than any append wait:
-/// keeping an expired refusal a few minutes longer costs nothing, evicting a
-/// kept one loses a request.
-const EDGE_MARGIN_SECS: u64 = 600;
-
-/// When the oldest kept segment of the log at `path` was opened, less
-/// [`EDGE_MARGIN_SECS`]: no refusal timed before this is kept.
-fn retention_edge(path: &Path) -> Option<DateTime<Utc>> {
+/// The chain counter of the oldest record the log at `path` still keeps, if
+/// a segment has been sealed: a refusal whose record's counter is below it
+/// has left the log. Counters, not times: a refusal is timed when it is
+/// evaluated, which can be long before the append that places it.
+fn retention_edge(path: &Path) -> Option<u64> {
     use crate::security::transparency_log::segments::{list_segments, read_first_line};
     let oldest = list_segments(path)
         .ok()?
         .into_iter()
         .min_by_key(|s| s.seq)?;
     let first: Value = serde_json::from_str(&read_first_line(&oldest.path).ok()??).ok()?;
-    let opened = first.get("segment_opened_at")?.as_u64()?;
-    DateTime::from_timestamp(
-        i64::try_from(opened.saturating_sub(EDGE_MARGIN_SECS)).ok()?,
-        0,
-    )
+    first.get("counter")?.as_u64()
 }
 
 #[cfg(test)]

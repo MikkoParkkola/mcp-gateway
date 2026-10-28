@@ -78,6 +78,7 @@ fn pos(log: Source, offset: u64) -> LogPos {
     LogPos {
         log,
         entry: format!("hash-{offset}"),
+        counter: offset,
     }
 }
 
@@ -356,11 +357,12 @@ fn folding_is_order_free_and_a_repeat_changes_nothing() {
 }
 
 #[test]
-fn eviction_closes_a_request_whose_newest_denial_is_past_the_edge() {
+fn eviction_closes_a_request_whose_refusals_left_the_log() {
     let mut set = ready();
     deny(&mut set, 119, &missing("stripe.charges", 1));
-    deny(&mut set, 120, &missing("stripe.refunds", 5));
-    set.evict_before(at(3));
+    // Timed before the other, but written after it: its record is kept.
+    deny(&mut set, 120, &missing("stripe.refunds", 0));
+    set.evict_before(120);
     let list = set.list();
     assert_eq!(list.len(), 1);
     assert_eq!(list[0]["scope"].as_array().map(Vec::len), Some(1));

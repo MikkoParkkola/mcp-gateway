@@ -238,7 +238,9 @@ async fn a_suppressed_repeat_note_is_not_published() {
         .subscribe(
             "identity_grant_decision",
             Arc::new(
-                move |_fields: &serde_json::Map<String, serde_json::Value>, hash: &str| {
+                move |_fields: &serde_json::Map<String, serde_json::Value>,
+                      hash: &str,
+                      _counter: u64| {
                     sink.lock().unwrap().push(hash.to_string());
                 },
             ),
