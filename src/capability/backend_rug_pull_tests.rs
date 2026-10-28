@@ -280,3 +280,22 @@ async fn garbled_bytes_keep_the_record() {
         assert_eq!(backend.rug_pull_records().len(), 1, "{garbled:?}");
     }
 }
+
+/// A pin key spelled with a tag reads as no key, but names a pin: the
+/// record stays.
+#[tokio::test]
+async fn a_tagged_pin_key_keeps_the_record() {
+    let (_dir, backend, path, pinned) = loaded().await;
+    std::fs::write(&path, pinned.replace("Initially legit", "Changed")).unwrap();
+    assert_eq!(backend.detect_rug_pulls().await.len(), 1);
+    std::fs::write(
+        &path,
+        BODY.replace("name: rugtest", "name: rugtest\n!tag sha256: [1, 2]"),
+    )
+    .unwrap();
+
+    let mismatches = backend.current_mismatches();
+
+    assert!(mismatches.incomplete);
+    assert_eq!(backend.rug_pull_records().len(), 1);
+}

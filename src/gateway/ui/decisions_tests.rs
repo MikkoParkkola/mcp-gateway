@@ -408,3 +408,21 @@ async fn a_waiting_replay_unmarks_a_ready_it_did_not_read() {
     }
     waiting.abort();
 }
+
+#[test]
+fn a_log_with_no_sealed_segment_has_an_edge() {
+    let dir = tempfile::tempdir().expect("dir");
+    let log = log_in(&dir, 1 << 20, 12);
+    let now = crate::clock::utc_now().expect("a readable clock");
+    write(&log, note("stripe.charges", now));
+
+    let edge = retention_edge(&log.path()).expect("the active file's first record");
+    let last = std::fs::read_to_string(log.path())
+        .expect("the log")
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|record| record.get("counter").and_then(Value::as_u64))
+        .max()
+        .expect("a written record");
+    assert!(edge <= last, "the edge keeps the record just written");
+}

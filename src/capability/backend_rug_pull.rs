@@ -164,7 +164,10 @@ pub(crate) struct Mismatches {
 fn declared_pin(content: &str) -> Result<Option<String>, ()> {
     let parsed = crate::yaml::from_str::<crate::yaml::Value>(content).map_err(|_| ())?;
     match parsed.get("sha256") {
-        None => Ok(None),
+        // A pin spelled so the key reads differently (a tag, say) is not "no
+        // pin": none only when the text never names one.
+        None if !content.contains("sha256") => Ok(None),
+        None => Err(()),
         Some(pin) => pin.as_str().map(|pin| Some(pin.to_string())).ok_or(()),
     }
 }

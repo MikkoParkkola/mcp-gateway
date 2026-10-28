@@ -330,17 +330,19 @@ fn capability_changes(backend: &CapabilityBackend) -> Option<Vec<CapabilityChang
     Some(changes)
 }
 
-/// The chain counter of the oldest record the log at `path` still keeps, if
-/// a segment has been sealed: a refusal whose record's counter is below it
-/// has left the log. Counters, not times: a refusal is timed when it is
+/// The chain counter of the oldest record the log at `path` still keeps: a
+/// refusal whose record's counter is below it has left the log. Counters, not times: a refusal is timed when it is
 /// evaluated, which can be long before the append that places it.
 fn retention_edge(path: &Path) -> Option<u64> {
     use crate::security::transparency_log::segments::{list_segments, read_first_line};
+    // With every sealed segment expired (disk-full recovery does that), the
+    // active file holds the oldest kept record.
     let oldest = list_segments(path)
         .ok()?
         .into_iter()
-        .min_by_key(|s| s.seq)?;
-    let first: Value = serde_json::from_str(&read_first_line(&oldest.path).ok()??).ok()?;
+        .min_by_key(|s| s.seq)
+        .map_or_else(|| path.to_path_buf(), |s| s.path);
+    let first: Value = serde_json::from_str(&read_first_line(&oldest).ok()??).ok()?;
     first.get("counter")?.as_u64()
 }
 
