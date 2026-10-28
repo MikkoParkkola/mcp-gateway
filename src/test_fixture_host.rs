@@ -46,8 +46,8 @@ pub(crate) fn fixture_client(timeout: Duration) -> reqwest::Client {
 /// [`fixture_client`]'s builder, for a fixture that sets more options. Its
 /// only trust root is the fixture CA.
 pub(crate) fn fixture_client_builder() -> reqwest::ClientBuilder {
-    let ca = reqwest::Certificate::from_pem(fixture_pki().ca_pem.as_bytes())
-        .expect("the fixture CA is PEM");
+    let ca =
+        reqwest::Certificate::from_pem(fixture_pki().ca.as_bytes()).expect("the fixture CA is PEM");
     reqwest::Client::builder()
         .resolve(FIXTURE_HOST, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
         .tls_certs_only([ca])
@@ -58,8 +58,8 @@ pub(crate) fn fixture_client_builder() -> reqwest::ClientBuilder {
 pub(crate) async fn serve_https(router: axum::Router) -> u16 {
     let pki = fixture_pki();
     let tls = axum_server::tls_rustls::RustlsConfig::from_pem(
-        pki.leaf_pem.clone().into_bytes(),
-        pki.key_pem.clone().into_bytes(),
+        pki.leaf.clone().into_bytes(),
+        pki.key.clone().into_bytes(),
     )
     .await
     .expect("the fixture leaf matches its key");
@@ -116,11 +116,12 @@ pub(crate) fn test_pki(host: &str, ca_name: &str) -> TestPki {
     TestPki { ca, leaf, leaf_key }
 }
 
-/// The [`FIXTURE_HOST`] certificates as PEM, made once per test process.
+/// The [`FIXTURE_HOST`] CA, leaf and leaf key as PEM, made once per test
+/// process.
 struct FixturePki {
-    ca_pem: String,
-    leaf_pem: String,
-    key_pem: String,
+    ca: String,
+    leaf: String,
+    key: String,
 }
 
 fn fixture_pki() -> &'static FixturePki {
@@ -128,9 +129,9 @@ fn fixture_pki() -> &'static FixturePki {
     PKI.get_or_init(|| {
         let pki = test_pki(FIXTURE_HOST, "capability fixture CA");
         FixturePki {
-            ca_pem: pki.ca.pem(),
-            leaf_pem: pki.leaf.pem(),
-            key_pem: pki.leaf_key.serialize_pem(),
+            ca: pki.ca.pem(),
+            leaf: pki.leaf.pem(),
+            key: pki.leaf_key.serialize_pem(),
         }
     })
 }
