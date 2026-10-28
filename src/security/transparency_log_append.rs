@@ -38,8 +38,11 @@ fn cut_back(file: &std::fs::File, path: &Path, good: u64) -> io::Result<()> {
 pub(crate) type Subscriber = std::sync::Arc<dyn Fn(&Map<String, Value>, &str) + Send + Sync>;
 
 /// Readers told of each record of their `kind` once it is written. They run
-/// under the log's lock, so they see records in append order and never see
-/// one whose write failed; a reader must not append to this log.
+/// under the log's lock, which every audit write takes, so they see records
+/// in append order and never one whose write failed. A reader must only hand
+/// the record off without waiting (a `try_send` into a bounded queue, or an
+/// insert taking no other lock): one that blocks holds up every write. It
+/// must not append to this log.
 #[derive(Default)]
 pub(crate) struct Subscribers(std::sync::RwLock<Vec<(String, Subscriber)>>);
 

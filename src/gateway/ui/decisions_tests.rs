@@ -210,3 +210,60 @@ async fn a_request_whose_refusals_left_the_log_is_closed() {
     assert_eq!(scope.len(), 1, "{body}");
     assert_eq!(scope[0]["capability"], "stripe.refunds", "{body}");
 }
+
+/// Hold the set's write lock on another thread until `release` is sent: the
+/// state a slow consumer leaves the set in.
+async fn hold_the_set(decisions: Arc<Shared>) -> std::sync::mpsc::Sender<()> {
+    let (held, is_held) = tokio::sync::oneshot::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        decisions.update(|_| {
+            let _ = held.send(());
+            let _ = released.recv();
+        });
+    });
+    is_held.await.expect("the lock is taken");
+    release
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reader_that_cannot_take_the_set_does_not_hold_up_an_append() {
+    let dir = tempfile::tempdir().expect("dir");
+    let log = log_in(&dir, 1 << 20, 12);
+    let (state, _store) = state_with(&log).await;
+    let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
+    let _tick = start(&state.meta_mcp, shutdown);
+    served_when(&state, |_| true).await;
+
+    let release = hold_the_set(Arc::clone(state.meta_mcp.decisions().expect("attached"))).await;
+    let now = crate::clock::utc_now().expect("a readable clock");
+    let writer = Arc::clone(&log);
+    let append = tokio::task::spawn_blocking(move || write(&writer, note("stripe.charges", now)));
+    let finished = tokio::time::timeout(Duration::from_secs(30), append).await;
+    let _ = release.send(());
+    finished
+        .expect("the append finished while the set was held")
+        .expect("the append task ran");
+
+    served_when(&state, |body| scope_len(body) == 1).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_burst_past_the_queue_is_replayed_not_lost() {
+    let dir = tempfile::tempdir().expect("dir");
+    let log = log_in(&dir, 1 << 20, 12);
+    let (state, _store) = state_with(&log).await;
+    let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
+    let _tick = start_with(&state.meta_mcp, shutdown, 1);
+    served_when(&state, |_| true).await;
+
+    let release = hold_the_set(Arc::clone(state.meta_mcp.decisions().expect("attached"))).await;
+    let now = crate::clock::utc_now().expect("a readable clock");
+    for capability in ["a.one", "a.two", "a.three", "a.four", "a.five"] {
+        write(&log, note(capability, now));
+    }
+    let _ = release.send(());
+
+    // Past the one-note queue, notes were dropped; the replay reads them back.
+    served_when(&state, |body| scope_len(body) == 5).await;
+}

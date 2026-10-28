@@ -33,6 +33,7 @@ use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::router::AppState;
 use crate::gateway::routes;
+use crate::identity_grants::IdentityGrantAuditEvent;
 
 /// How often the tick re-checks grants, expiry and capability changes.
 const TICK: Duration = Duration::from_secs(2);
@@ -88,11 +89,24 @@ fn grant_pos(entry_hash: &str) -> LogPos {
     }
 }
 
+/// Notes handed from the log to the set and not yet applied. A burst past
+/// this is dropped and recovered by a replay; the log is never held up.
+const LIVE_QUEUE: usize = 4096;
+
 /// Build the decision set for `meta`, start its replay and its tick, and
 /// attach it. The tick ends on `shutdown`.
 pub(in crate::gateway) fn start(
     meta: &Arc<MetaMcp>,
+    shutdown: tokio::sync::broadcast::Receiver<()>,
+) -> tokio::task::JoinHandle<()> {
+    start_with(meta, shutdown, LIVE_QUEUE)
+}
+
+/// [`start`] with a hand-off queue of `queue` notes.
+fn start_with(
+    meta: &Arc<MetaMcp>,
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
+    queue: usize,
 ) -> tokio::task::JoinHandle<()> {
     let shared = Arc::new(Shared::with_key(rand::rng().random()));
     meta.set_decisions(Arc::clone(&shared));
@@ -103,21 +117,28 @@ pub(in crate::gateway) fn start(
     match meta.transparency_logger.as_ref() {
         None => shared.update(|set| set.set_health(Source::Access, Health::Absent)),
         Some(log) => {
+            let (sender, receiver) = tokio::sync::mpsc::channel(queue.max(1));
+            let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
             // Subscribed before the replay starts: a note written meanwhile
             // is held until the replay ends, and one the replay also reads
-            // is the same record by its entry hash.
-            let live = Arc::clone(&shared);
+            // is the same record by its entry hash. The reader runs under
+            // the log's lock, so it only hands off: no lock, no wait.
+            let full = Arc::clone(&dropped);
             log.subscribe(
                 GRANT_DECISION_KIND,
                 Arc::new(move |record: &Map<String, Value>, hash: &str| {
-                    if let Some(event) = denial_from_record(record) {
-                        live.update(|set| set.live(grant_pos(hash), Fold::Denial(event)));
+                    if let Some(event) = denial_from_record(record)
+                        && sender.try_send((hash.to_string(), event)).is_err()
+                    {
+                        full.store(true, std::sync::atomic::Ordering::Release);
                     }
                 }),
             );
             let path = log.path();
             let replaying = Arc::clone(&shared);
-            tokio::task::spawn_blocking(move || replay_grant_decisions(&path, &replaying));
+            let first = path.clone();
+            tokio::task::spawn_blocking(move || replay_grant_decisions(&first, &replaying));
+            tokio::spawn(apply_live(receiver, dropped, path, Arc::clone(&shared)));
         }
     }
 
@@ -135,6 +156,29 @@ pub(in crate::gateway) fn start(
             }
         }
     })
+}
+
+/// Apply handed-off notes to the set. A note dropped on a full queue would
+/// make the count wrong, so the source reads unavailable (the snapshot
+/// answers `None`) until a replay has read the log again.
+async fn apply_live(
+    mut receiver: tokio::sync::mpsc::Receiver<(String, IdentityGrantAuditEvent)>,
+    dropped: Arc<std::sync::atomic::AtomicBool>,
+    path: std::path::PathBuf,
+    shared: Arc<Shared>,
+) {
+    while let Some((hash, event)) = receiver.recv().await {
+        shared.update(|set| set.live(grant_pos(&hash), Fold::Denial(event)));
+        if dropped.swap(false, std::sync::atomic::Ordering::AcqRel) {
+            tracing::warn!(
+                "decisions: notes arrived faster than they were applied; replaying the log"
+            );
+            shared.update(|set| set.set_health(Source::Access, Health::Unavailable));
+            let (path, shared) = (path.clone(), Arc::clone(&shared));
+            let _ =
+                tokio::task::spawn_blocking(move || replay_grant_decisions(&path, &shared)).await;
+        }
+    }
 }
 
 /// Read every kept grant-decision record into the set, then mark the
