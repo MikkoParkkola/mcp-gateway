@@ -102,7 +102,7 @@ async fn logging_out_ends_the_stream_within_a_tick() {
         .oneshot(out)
         .await
         .unwrap();
-    assert!(s.ended().await);
+    assert!(s.ended_within(REVOKED_WITHIN).await);
 }
 
 #[tokio::test]

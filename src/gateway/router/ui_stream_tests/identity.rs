@@ -80,7 +80,10 @@ async fn a_role_mapping_that_stops_granting_admin_ends_an_admin_stream() {
     );
     s.until("status").await;
     set_mapping(&state, "rules: []");
-    assert!(s.ended().await, "the demoted caller's stream ended");
+    assert!(
+        s.ended_within(REVOKED_WITHIN).await,
+        "the demoted caller's stream ended"
+    );
     // The reconnect derives its kinds afresh: counts only, no `reload`.
     let mut again = open(&state, request(STREAM, Who::Bearer(&bearer), None)).await;
     assert_eq!(
@@ -97,7 +100,10 @@ async fn a_revoked_key_server_token_ends_its_stream_within_a_recheck() {
     let mut s = open(&state, request(STREAM, Who::Bearer(&bearer), None)).await;
     s.until("status").await;
     assert!(key_server.store.revoke_by_jti(&jti).await);
-    assert!(s.ended().await, "the revoked token's stream ended");
+    assert!(
+        s.ended_within(REVOKED_WITHIN).await,
+        "the revoked token's stream ended"
+    );
     let refused = open(&state, request(STREAM, Who::Bearer(&bearer), None)).await;
     assert_eq!(refused.status, StatusCode::UNAUTHORIZED);
 }

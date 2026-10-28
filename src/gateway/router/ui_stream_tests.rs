@@ -25,6 +25,8 @@ const KEY: &str = "u3-standard-key";
 const STREAM: &str = "/ui/api/stream";
 const STATUS: &str = "/ui/api/status";
 const GUARD: Duration = Duration::from_secs(30);
+/// A revocation must end a stream within a few 1 s re-check ticks.
+const REVOKED_WITHIN: Duration = Duration::from_secs(3);
 
 fn standard_key() -> ApiKeyConfig {
     ApiKeyConfig {
@@ -145,6 +147,12 @@ impl Open {
             }
         }
         panic!("no `{event}` frame");
+    }
+
+    /// Ended, and within `bound` on the runtime's clock.
+    async fn ended_within(&mut self, bound: Duration) -> bool {
+        let began = tokio::time::Instant::now();
+        self.ended().await && began.elapsed() <= bound
     }
 
     async fn ended(&mut self) -> bool {
