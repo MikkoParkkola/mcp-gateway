@@ -47,16 +47,17 @@ pub(super) fn build(proxy: Option<&url::Url>) -> Client {
                 .host_str()
                 .is_some_and(crate::security::ssrf::is_loopback_name)
             {
-                return attempt.error(crate::security::ssrf::SsrfDenied::new(format!(
-                    "{}: redirect to a host naming the loopback interface",
-                    crate::security::ssrf::SSRF_BLOCKED
-                )));
+                return crate::security::ssrf::refuse_hop(
+                    attempt,
+                    format!(
+                        "{}: redirect to a host naming the loopback interface",
+                        crate::security::ssrf::SSRF_BLOCKED
+                    ),
+                );
             }
             match redirect_decision(attempt.previous().len(), attempt.url().as_str()) {
                 RedirectDecision::Stop => attempt.stop(),
-                RedirectDecision::Reject(msg) => {
-                    attempt.error(crate::security::ssrf::SsrfDenied::new(msg))
-                }
+                RedirectDecision::Reject(msg) => crate::security::ssrf::refuse_hop(attempt, msg),
                 RedirectDecision::Follow
                     if started_secure && !crate::gateway::is_tls_or_loopback(attempt.url()) =>
                 {

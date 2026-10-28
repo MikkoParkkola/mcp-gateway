@@ -131,7 +131,7 @@ pub(crate) fn is_ssrf_refusal(error: &Error) -> bool {
     matches!(error, Error::Protocol(message) if message.starts_with(SSRF_BLOCKED))
 }
 pub(crate) use redirect::{
-    RedirectDecision, hop_budget_spent, redirect_decision, ssrf_redirect_policy,
+    RedirectDecision, hop_budget_spent, redirect_decision, refuse_hop, ssrf_redirect_policy,
 };
 
 /// How a refusal names a denied address the caller already knows (a literal
