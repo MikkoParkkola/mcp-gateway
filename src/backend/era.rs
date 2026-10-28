@@ -558,7 +558,7 @@ mod tests {
     }
 }
 
-/// How a start resolves its slot's era (MIK-8012).
+/// How a start resolves its slot's era.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum EraResolution {
     /// Discard and probe under the slot cache's lock: nothing else serves
