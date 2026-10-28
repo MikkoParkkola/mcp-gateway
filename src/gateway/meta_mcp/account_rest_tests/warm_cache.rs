@@ -81,7 +81,7 @@ async fn a_credential_to_the_fixture_host_over_plain_http_is_refused() {
     let (port, captured) = capture_endpoint().await;
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let executor = caching_executor(&registry, None);
     let capability = cacheable_capability(
         &crate::test_fixture_host::fixture_url(port),
