@@ -174,9 +174,7 @@ fn client(admin: bool) -> AuthenticatedClient {
         allowed_tools: None,
         denied_tools: None,
         admin,
-        principal: crate::gateway::record_principal::InternalPrincipal::new(
-            "0123456789ab".to_owned(),
-        ),
+        principal: crate::gateway::auth::principal_of("adopt-route-secret"),
         quota_principal: None,
         authenticated: true,
         credential_kind: crate::security::audit::CredentialKind::ApiKey,
