@@ -332,8 +332,9 @@ async fn t29_the_send_point_admits_only_the_gated_call() {
 
 /// T32 (code review): when the route's deadline claims a call before its
 /// send does, nothing is ever sent and the route says so: 504, not run.
-/// A zero deadline on the test's single-thread runtime fires before the
-/// spawned call is first polled.
+/// The backend's catalogue is cold and its list waits on a gate the test
+/// releases only after the route answered, so the call cannot reach its send
+/// before the deadline: the deadline wins every time.
 /// Mutant: the deadline never claims the call (it answers "may have run").
 #[tokio::test]
 async fn t32_a_deadline_that_wins_the_race_sends_nothing() {
@@ -341,14 +342,30 @@ async fn t32_a_deadline_that_wins_the_race_sends_nothing() {
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
     let fx = fixture().await;
-    crate::gateway::ui::DEADLINE_FOR_TEST.with(|d| d.set(Some(std::time::Duration::ZERO)));
+    // Replace `alpha` with one whose cold catalogue lists only when released.
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let backend = Arc::new(crate::backend::Backend::new(
+        SERVER,
+        crate::config::BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    ));
+    backend.set_transport_for_test(Arc::new(super::ui_tool_call_tests::Stub {
+        calls: Arc::clone(&fx.calls),
+        declares_read: true,
+        list_gate: Some(Arc::clone(&gate)),
+    }));
+    assert!(fx.state.backends.register(backend), "registration");
+    crate::gateway::ui::DEADLINE_FOR_TEST
+        .with(|d| d.set(Some(std::time::Duration::from_millis(50))));
     let request = Request::builder()
         .method("POST")
         .uri("/ui/api/tools/call")
         .header("authorization", format!("Bearer {ADMIN}"))
         .header("content-type", "application/json")
         .body(Body::from(
-            json!({"server": SERVER, "tool": "read", "arguments": {}}).to_string(),
+            json!({"server": SERVER, "tool": "read", "arguments": {}, "confirm_write": true})
+                .to_string(),
         ))
         .expect("request");
     let response = super::create_router(Arc::clone(&fx.state))
@@ -363,9 +380,11 @@ async fn t32_a_deadline_that_wins_the_race_sends_nothing() {
     let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{body}");
     assert_eq!(body["disposition"], "not_run", "{body}");
-    // Let anything still scheduled run; a call that escaped would send now.
+    assert_eq!(sent(&fx), 0, "the claimed call was never sent");
+    // Release the list: a call that escaped the claim would now be sent.
+    gate.notify_waiters();
     for _ in 0..64 {
         tokio::task::yield_now().await;
     }
-    assert_eq!(sent(&fx), 0, "the cancelled call was never sent");
+    assert_eq!(sent(&fx), 0, "nothing was sent after the release either");
 }
