@@ -39,9 +39,16 @@ async fn busy_slot_probing(
     entry.in_flight.fetch_add(1, Ordering::SeqCst);
 
     peer.hold.store(true, Ordering::SeqCst);
-    backend
-        .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND, &transport)
-        .await;
+    // Called from its own task, as a dispatch calls it: a lent-only slot (this
+    // backend's binding is required) runs its re-probe inside that call, so
+    // the held probe would otherwise hold this test too.
+    let reprobing = Arc::clone(backend);
+    let probed = Arc::clone(&transport);
+    tokio::spawn(async move {
+        reprobing
+            .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND, &probed)
+            .await;
+    });
     tokio::time::timeout(WAIT, &mut handles.started)
         .await
         .expect("the re-probe reached the peer in time")
