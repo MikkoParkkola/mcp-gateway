@@ -12,6 +12,8 @@ use super::*;
 enum Stream {
     Opened(usize),
     Closed(usize),
+    /// A stream the peer refused, per [`TwoTokenPeer::refuse_stream`].
+    Refused(usize),
 }
 
 /// Reports its stream closed when the peer drops the response body, which it
@@ -130,6 +132,7 @@ async fn two_token_peer_in(wire: Wire, tokens: [String; 2]) -> TwoTokenPeer {
             };
             let refused = get_refuse[index].load(std::sync::atomic::Ordering::SeqCst);
             if refused != 0 {
+                let _ = get_report.send(Stream::Refused(index));
                 return StatusCode::from_u16(refused)
                     .expect("status")
                     .into_response();
@@ -688,39 +691,39 @@ async fn iso_t6_a_revoked_subscribers_listener_closes_on_a_silent_backend() {
     assert!(outbox_rows(&f).is_empty(), "nothing queued for p");
 }
 
-/// A lease replaced while its listener backs off after the backend refused
-/// the stream with `status`: the run that follows presents the new token.
-/// The task is held at the start of its backoff while the lease moves, so
-/// the row does not depend on when the replace lands.
-async fn a_replace_during_backoff_reopens_under_the_new_token(status: u16) {
+/// A lease replaced after the backend refused the old token's stream with
+/// `status`: the next stream opens under the new token. The rows go by the
+/// peer's reports, not by timing: the replace follows the refusal, and
+/// refusals of the old token that arrive in between are skipped.
+async fn a_replace_after_a_refused_stream_reopens_under_the_new_token(status: u16) {
     let (old, new) = (token(Some(in_an_hour())), token(Some(in_an_hour() + 60)));
     let mut peer = two_token_peer([old.to_string(), new.to_string()]).await;
     peer.refuse_stream[0].store(status, std::sync::atomic::Ordering::SeqCst);
     let f = listener_fixture(&peer);
     let handle = subscribe(&f, "p", "pt", "p");
-    let (listeners, _backend) = parked_listener(&f).await;
-    let shared = listeners
-        .entry_for(&crate::events::upstream_listener::ListenerKey {
-            backend: "pt".into(),
-            obs: Some(lease_key(&f, "p").obs),
-        })
-        .expect("p's listener entry");
-    let (reached, release) = shared.before_backoff.arm();
+    let _listening = parked_listener(&f).await;
     lease_as(&f, &handle, old).await;
-    crate::test_pause::within("the refused stream's backoff", reached.notified()).await;
-    lease_as(&f, &handle, new).await;
-    release.notify_one();
     assert_eq!(
         peer.next().await,
+        Some(Stream::Refused(0)),
+        "premise: HTTP {status} refused the old token's stream"
+    );
+    lease_as(&f, &handle, new).await;
+    let mut next = peer.next().await;
+    while next == Some(Stream::Refused(0)) {
+        next = peer.next().await;
+    }
+    assert_eq!(
+        next,
         Some(Stream::Opened(1)),
-        "HTTP {status}: the next run opened under the new token"
+        "HTTP {status}: the next stream opened under the new token"
     );
 }
 
 /// A failed open, then a lease change.
 #[tokio::test]
 async fn a_replace_after_a_failed_open_reopens_under_the_new_token() {
-    a_replace_during_backoff_reopens_under_the_new_token(500).await;
+    a_replace_after_a_refused_stream_reopens_under_the_new_token(500).await;
 }
 
 /// A terminal exit (the backend offers no stream, so the task waits out the
@@ -728,5 +731,5 @@ async fn a_replace_after_a_failed_open_reopens_under_the_new_token() {
 /// reopen lands inside the 30 s hang guard.
 #[tokio::test]
 async fn a_replace_after_a_terminal_exit_cuts_its_backoff() {
-    a_replace_during_backoff_reopens_under_the_new_token(405).await;
+    a_replace_after_a_refused_stream_reopens_under_the_new_token(405).await;
 }

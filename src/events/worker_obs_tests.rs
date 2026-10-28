@@ -271,6 +271,14 @@ async fn a_record_read_under_a_held_lease_is_sent() {
     let now = crate::clock::unix_secs().expect("clock");
     leased(&hub, &services, now + 3600).await;
     queued_observed(&hub, &services, port, "evt_held");
+    let row = hub.store.subscriptions().pop().expect("row");
+    let stamped = hub
+        .observed_now(&row, &services.live.get(), None)
+        .expect("observable");
+    assert!(
+        stamped.is_some_and(|o| o.lease.is_some()),
+        "premise: the record is stamped with the held lease, not unleased"
+    );
     hub.attempt(&services, "evt_held").await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     while accepted.load(Ordering::SeqCst) == 0 && tokio::time::Instant::now() < deadline {
