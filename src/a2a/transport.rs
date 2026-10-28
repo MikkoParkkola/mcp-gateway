@@ -98,7 +98,7 @@ impl A2aTransport {
             A2aClient::new(a2a_url, card_path, headers, http)?
         };
         // On a lent-only client this goes out as the start's own loan.
-        let card = client.fetch_card(&[]).await?;
+        let card = client.fetch_card(&client.start_call()).await?;
         let endpoint = client.endpoint(&card)?;
         let canceller = Canceller::new(client.clone(), endpoint.clone());
         let transport = Arc::new(Self {

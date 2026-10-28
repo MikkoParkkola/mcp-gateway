@@ -46,7 +46,7 @@ impl HttpTransport {
     /// Returns an error if OAuth authorization fails, SSE handshake fails,
     /// or protocol version negotiation is unsuccessful.
     pub async fn initialize(&self) -> Result<()> {
-        self.initialize_as(&[]).await
+        self.initialize_as(&self.start_call()).await
     }
 
     /// [`Self::initialize`] inside a call: `call` is that call's headers, so
@@ -56,7 +56,7 @@ impl HttpTransport {
     ///
     /// As [`Self::initialize`].
     pub(crate) async fn initialize_as(&self, call: &[(String, String)]) -> Result<()> {
-        self.connect().await?;
+        self.connect_as(call).await?;
         self.handshake(call).await
     }
 
@@ -74,6 +74,17 @@ impl HttpTransport {
     ///
     /// Returns an error if OAuth authorization or the SSE handshake fails.
     pub(crate) async fn connect(&self) -> Result<()> {
+        self.connect_as(&self.start_call()).await
+    }
+
+    /// [`Self::connect`] inside a call: a legacy SSE connect opens its stream
+    /// as `call`'s credential, so a session-expiry re-handshake on a lent-only
+    /// slot sends as the call that met the expiry.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::connect`].
+    async fn connect_as(&self, call: &[(String, String)]) -> Result<()> {
         // Initialize OAuth client if configured
         if let Some(ref oauth_arc) = self.oauth_client {
             // MIK-4486: Detach the OAuth handshake from the calling request future. The interactive
@@ -168,7 +179,7 @@ impl HttpTransport {
 
         self.switched.store(false, Ordering::Relaxed);
         if *self.streamable_http.read() == Some(false) {
-            let Err(sse_error) = self.connect_sse(&[]).await else {
+            let Err(sse_error) = self.connect_sse(call).await else {
                 return Ok(());
             };
             // Configs written before detection existed say `false` for
@@ -275,7 +286,7 @@ impl HttpTransport {
                 );
                 Ok(())
             }
-            PeerEra::Legacy => self.handshake(&[]).await,
+            PeerEra::Legacy => self.handshake(&self.start_call()).await,
         }
     }
 

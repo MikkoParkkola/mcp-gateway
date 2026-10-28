@@ -185,6 +185,16 @@ impl Lender {
         self.loan(id)
     }
 
+    /// The credential headers of the dispatch whose slot start is running,
+    /// for that start's own sends (connect, era probe, handshake, the A2A
+    /// card fetch) to carry explicitly; empty when no start runs. Only a
+    /// lent-only slot lends, so any other slot's start gets none.
+    pub(crate) fn starter_headers(&self) -> Vec<(String, String)> {
+        self.starter()
+            .map(|starter| starter.headers.to_vec())
+            .unwrap_or_default()
+    }
+
     /// The live loan `id`, if its dispatch still runs.
     pub(crate) fn loan(&self, id: u64) -> Option<Snapshot> {
         self.loans
@@ -196,9 +206,10 @@ impl Lender {
 
     /// The headers a lent-only send carries: the loan the call's own
     /// credential headers select, after every loan matching them passes its
-    /// check. A call with no credential headers (a start the slot runs for its
-    /// dispatch) sends as the starter's loan. Snapshots are owned, so no lock
-    /// is held across a check. Every transport that sends on a lent-only slot
+    /// check. A call with no credential headers is refused: a slot start's own
+    /// sends carry [`Self::starter_headers`] explicitly, so no other send can
+    /// borrow the starting dispatch's loan. Snapshots are owned, so no lock is
+    /// held across a check. Every transport that sends on a lent-only slot
     /// picks its loan here.
     ///
     /// # Errors
@@ -209,20 +220,11 @@ impl Lender {
         &self,
         call: &[(String, String)],
     ) -> Result<Vec<(String, String)>> {
-        let has_credential = call.iter().any(|(name, _)| !is_param_header(name));
-        let loans = if has_credential {
-            self.matching_all(call)
-        } else {
-            self.starter().into_iter().collect()
-        };
+        let loans = self.matching_all(call);
         let Some(first) = loans.first() else {
             return Err(counted_refusal(
                 "unlent",
-                if has_credential {
-                    "the call's credential is not lent on this slot"
-                } else {
-                    "no calling subscriber's credential is lent"
-                },
+                "the call's credential is not lent on this slot",
             ));
         };
         for loan in &loans {
@@ -321,7 +323,7 @@ pub(crate) fn send_refused(why: &str) -> Error {
 fn credential_part(headers: &[(String, String)]) -> Vec<(String, String)> {
     headers
         .iter()
-        .filter(|(name, _)| !crate::protocol::param_headers::is_param_header(name))
+        .filter(|(name, _)| !is_param_header(name))
         .cloned()
         .collect()
 }
@@ -431,6 +433,39 @@ mod tests {
         assert_eq!(lender.starter().map(|s| s.id), Some(first.id()));
         drop(held);
         assert!(lender.starter().is_none());
+    }
+
+    /// While a start runs, a send that carries no credential is refused: only
+    /// the start's own sends, passing [`Lender::starter_headers`] explicitly,
+    /// go out as the starting dispatch.
+    #[test]
+    fn a_send_without_a_credential_never_borrows_the_starting_loan() {
+        let lender = Arc::new(Lender::default());
+        let loan = lender.lend(LentCredential {
+            headers: headers("one"),
+            check: Some(Arc::new(|| Box::pin(async { Ok(()) }))),
+        });
+        let _starting = lender.starting(loan.id());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a runtime");
+
+        runtime.block_on(async {
+            assert!(
+                lender.lent_for(&[]).await.is_err(),
+                "an empty call borrowed the starting dispatch's loan"
+            );
+            let mirror_only = vec![("Mcp-Param-Region".to_owned(), "eu".to_owned())];
+            assert!(
+                lender.lent_for(&mirror_only).await.is_err(),
+                "a mirror-only call borrowed the starting dispatch's loan"
+            );
+            assert_eq!(
+                lender.lent_for(&lender.starter_headers()).await.ok(),
+                Some(headers("one")),
+                "the start's own send, carrying the starter explicitly, goes out"
+            );
+        });
     }
 
     #[test]

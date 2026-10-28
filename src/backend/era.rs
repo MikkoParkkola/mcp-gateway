@@ -271,13 +271,16 @@ impl Backend {
 
     /// A build-first restart's era probe of its candidate (MIK-8012): run
     /// without the slot cache's lock, so the transport still serving keeps its
-    /// verdict, and installed only when the candidate is published.
+    /// verdict, and installed only when the candidate is published. It sends
+    /// as `entry`'s starting dispatch, the start it belongs to.
     pub(super) async fn probe_candidate_era(
         &self,
         transport: &Arc<dyn Transport>,
+        entry: &PooledEntry,
     ) -> crate::protocol::era::DetachedProbe {
         let timeout = self.probe_timeout();
-        crate::protocol::era::EraCache::probe_detached(|| probe(transport, timeout, &[])).await
+        let call = entry.lender.starter_headers();
+        crate::protocol::era::EraCache::probe_detached(|| probe(transport, timeout, &call)).await
     }
 
     /// Resolve the era of a freshly started peer, probing at most once.
@@ -305,10 +308,12 @@ impl Backend {
         // detached re-probe of the old peer must not be able to land between them.
         // A revocation removes a per-user slot without its start lock, so the slot this
         // start serves may be retired before the discard or before the install (MIK-7643).
+        // The start's own probe, sent as the dispatch whose start this is.
+        let call = entry.lender.starter_headers();
         entry
             .era
             .restart_while_serving(
-                || probe(transport, timeout, &[]),
+                || probe(transport, timeout, &call),
                 |step| unless_retired(entry, step),
             )
             .await

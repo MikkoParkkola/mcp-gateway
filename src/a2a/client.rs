@@ -92,6 +92,15 @@ impl A2aClient {
         self.lender.is_some()
     }
 
+    /// The headers the slot start's own sends carry: the starting dispatch's
+    /// loan on a lent-only slot, none otherwise.
+    pub(crate) fn start_call(&self) -> Vec<(String, String)> {
+        self.lender
+            .as_ref()
+            .map(|lender| lender.starter_headers())
+            .unwrap_or_default()
+    }
+
     fn build(
         a2a_url: &str,
         card_path: Option<&str>,

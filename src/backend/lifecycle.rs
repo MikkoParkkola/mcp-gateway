@@ -601,7 +601,7 @@ impl Backend {
                 let era = match era_mode {
                     EraResolution::Shared => self.resolve_era(&peer, entry).await,
                     EraResolution::Deferred => {
-                        let probe = self.probe_candidate_era(&peer).await;
+                        let probe = self.probe_candidate_era(&peer, entry).await;
                         let era = probe.era();
                         deferred = Some(probe);
                         era

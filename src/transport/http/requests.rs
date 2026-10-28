@@ -237,6 +237,16 @@ impl HttpTransport {
         lender.lent_for(call).await
     }
 
+    /// The headers this transport's slot start sends as: the starting
+    /// dispatch's loan ([`Lender::starter_headers`](crate::transport::Lender::starter_headers)),
+    /// empty on a slot that lends nothing. Only the start's own sends pass it.
+    pub(crate) fn start_call(&self) -> Vec<(String, String)> {
+        self.lender
+            .get()
+            .map(|lender| lender.starter_headers())
+            .unwrap_or_default()
+    }
+
     /// Get OAuth access token if OAuth is configured
     pub(super) async fn get_oauth_token(&self) -> Result<Option<String>> {
         if let Some(ref oauth_mutex) = self.oauth_client {
