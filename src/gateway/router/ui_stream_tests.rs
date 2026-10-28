@@ -88,6 +88,7 @@ struct Frame {
     event: String,
     id: Option<String>,
     data: String,
+    retry: Option<u64>,
 }
 
 impl Frame {
@@ -170,12 +171,15 @@ fn parse(raw: &str) -> Frame {
         event: "comment".to_owned(),
         id: None,
         data: String::new(),
+        retry: None,
     };
     for line in raw.lines() {
         if let Some(v) = line.strip_prefix("event:") {
             v.trim().clone_into(&mut f.event);
         } else if let Some(v) = line.strip_prefix("id:") {
             f.id = Some(v.trim().to_owned());
+        } else if let Some(v) = line.strip_prefix("retry:") {
+            f.retry = v.trim().parse().ok();
         } else if let Some(v) = line.strip_prefix("data:") {
             f.data.push_str(v.trim());
         }

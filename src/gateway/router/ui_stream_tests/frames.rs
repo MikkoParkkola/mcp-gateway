@@ -111,3 +111,11 @@ async fn a_counts_only_stream_is_silent_for_admin_fields_and_speaks_for_counts()
         .register(http_backend_at("wiki", "http://127.0.0.1:9/mcp"));
     assert_eq!(counts.until("status").await.json()["server_count"], 2);
 }
+
+#[tokio::test]
+async fn hello_carries_a_jittered_retry_hint() {
+    let (state, _dir) = fixture().await;
+    let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    let retry = s.until("hello").await.retry.expect("a retry line");
+    assert!((3000..=5000).contains(&retry), "{retry}");
+}
