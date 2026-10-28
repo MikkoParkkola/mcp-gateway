@@ -297,9 +297,10 @@ test('L13 stale data is announced, and so is its recovery', async ({ page }) => 
   await expect(page.locator('#content [data-state="stale"]')).toHaveCount(0);
   await drained(page);
   // Both are said, in order: the first is written at once, the second after the dwell.
+  // The stale title (UI1.22) is "Updates stopped · reconnecting", or with its time.
   const said = (await announced(page)).join(' ');
-  expect(said.split('Updates stopped.').length - 1, 'said once, though shown twice').toBe(1);
-  expect(said.indexOf('Updates resumed.')).toBeGreaterThan(said.indexOf('Updates stopped.'));
+  expect(said.split('Updates stopped').length - 1, 'said once, though shown twice').toBe(1);
+  expect(said.indexOf('Updates resumed.')).toBeGreaterThan(said.indexOf('Updates stopped'));
 });
 
 test('L14 while the palette is open the region is inside it, and back after', async ({ page }) => {

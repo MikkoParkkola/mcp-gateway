@@ -92,9 +92,91 @@ export function stateWord(value) {
   if (typeof value === 'string' && Object.hasOwn(GLOSSARY.server, value)) return GLOSSARY.server[value];
   if (!unlistedStates.has(value)) {
     unlistedStates.add(value);
-    console.warn('No glossary word for server state', value);
+    console.warn('A server state this page does not recognise'); // never the raw value
   }
   return 'Unknown state';
+}
+
+/**
+ * One table for every server state the gateway reports (UI1.22): the badge's
+ * glyph and tone, and the banner and next step, which may read the row's own
+ * fields (`circuit_state`, `running`, `next_retry_at`). The gateway's `reason`
+ * is never shown: a Refused reason carries raw policy codes.
+ */
+export const SERVER_STATES = {
+  running: { glyph: '✓', tone: 'success', banner: () => null, next: () => null },
+  paused: {
+    glyph: '⏸',
+    tone: 'neutral',
+    // Only what the fields establish: when calls may try again, not that a retry is under way.
+    banner: (s) => (s.circuit_state === 'half_open'
+      ? `The gateway is letting a few calls through to ${s.name} to see if it has recovered.`
+      : `Calls to ${s.name} are held back after failures. ${s.next_retry_at
+        ? `The gateway lets calls try it again from ${stamp(new Date(s.next_retry_at))}.`
+        : 'The gateway lets calls try it again after a short wait.'}`),
+    next: (s) => (s.circuit_state === 'half_open' ? null : 'To retry now, use the Actions tab.'),
+  },
+  dormant: { glyph: 'ⓘ', tone: 'neutral', banner: () => null, next: () => null },
+  unhealthy: {
+    glyph: '⚠',
+    tone: 'warning',
+    banner: (s) => (s.running ? `${s.name} is failing; calls still go through.` : `${s.name} is failing; the next call starts it again.`),
+    next: () => 'Open Activity and filter by this server.',
+  },
+  refused: {
+    glyph: '⊘',
+    tone: 'danger',
+    // The policy, an unavailable runtime or a missing image: the field does not say which.
+    banner: (s) => `The gateway cannot start ${s.name} with its current runtime configuration.`,
+    next: () => "Check this server's runtime profile and the runtime policy.",
+  },
+  needs_sign_in: {
+    glyph: '⚠',
+    tone: 'warning',
+    banner: (s) => `${s.name} is waiting for someone to sign in.`,
+    next: () => 'Sign in from its Actions tab.',
+  },
+  unmanaged: {
+    glyph: 'ⓘ',
+    tone: 'neutral',
+    banner: (s) => `${s.name} is on this machine but not behind the gateway.`,
+    next: () => 'Add it from the Servers Actions tab.',
+  },
+};
+
+/** A state the table lacks is not shown as harmless. */
+const UNLISTED_STATE = {
+  glyph: '⚠',
+  tone: 'warning',
+  banner: (s) => `${s.name} is in a state this page does not recognise.`,
+  next: () => 'Open Activity and filter by this server.',
+};
+
+const stateRow = (state) => (typeof state === 'string' && Object.hasOwn(SERVER_STATES, state) ? SERVER_STATES[state] : UNLISTED_STATE);
+
+/** A server's line badge: glyph, word, tone; `plain` drops the frame for lists. */
+export function serverBadge(state, { plain = false } = {}) {
+  const row = stateRow(state);
+  return el('span', { class: `lb ${row.tone}${plain ? ' plain' : ''}` },
+    el('span', { class: 'glyph', 'aria-hidden': 'true' }, row.glyph), ' ', stateWord(state));
+}
+
+/** A server's banner and next step, or null when there is nothing to know. */
+export function serverBanner(server) {
+  const row = stateRow(server.state);
+  const text = row.banner(server);
+  if (!text) return null;
+  const next = row.next(server);
+  const node = el('section', { class: `state banner ${row.tone}`, 'data-state': 'server' }, el('h2', {}, text));
+  if (next) node.append(el('p', {}, next));
+  return node;
+}
+
+/** The stale banner's title: when updates stopped, and that it reconnects. */
+export function staleTitle(since) {
+  return since instanceof Date && !Number.isNaN(since.getTime())
+    ? `${GLOSSARY.stream.stopped} at ${stamp(since)} · reconnecting`
+    : `${GLOSSARY.stream.stopped} · reconnecting`;
 }
 
 const STATE_COPY = {
@@ -532,12 +614,15 @@ function screenBanner(into, page, guard) {
     // The same banner again is no transition: leave it, say nothing.
     if (kind && old?.dataset.state === kind && !opts.title) return;
     old?.remove();
+    // While stale, the tab's numbers are dimmed (CSS, [data-stale]).
+    into.toggleAttribute('data-stale', kind === 'stale');
     const subject = `screen:${page}`;
     if (!kind) {
       if (old?.dataset.state === 'stale') announce(GLOSSARY.stream.resumed, { subject, guard });
       return;
     }
-    const node = bannerState(kind, opts);
+    const built = kind === 'stale' ? { ...opts, title: staleTitle(opts.since) } : opts;
+    const node = bannerState(kind, built);
     node.dataset.banner = '';
     into.prepend(node);
     announce(node.querySelector('h2').textContent, { subject, guard });
@@ -722,11 +807,13 @@ function drawNav(current) {
   const decide = nav.querySelector(`[data-page="${NAV[1][0]}"]`);
   let badge = decide.querySelector('.count');
   const n = DECISIONS.count;
-  if (Number.isInteger(n) && n > 0) {
+  // A count that failed reads "?", never a missing badge that looks like zero (UI1.22).
+  const unavailable = n === 'unavailable';
+  if (unavailable || (Number.isInteger(n) && n > 0)) {
     if (!badge) decide.append(badge = el('span', { class: 'count' }), el('span', { class: 'sr-only count-words' }));
-    badge.textContent = String(n);
+    badge.textContent = unavailable ? '?' : String(n);
     // The link's name comes from its text: the words sit beside the number, unseen.
-    decide.querySelector('.count-words').textContent = ' to decide';
+    decide.querySelector('.count-words').textContent = unavailable ? ' count unavailable' : ' to decide';
   } else {
     badge?.remove();
     decide.querySelector('.count-words')?.remove();
@@ -748,21 +835,23 @@ export async function refreshCounts() {
   const seq = ++countSeq;
   let next = null;
   try {
-    const { count } = await api('/ui/api/decisions/count');
-    next = Number.isInteger(count) ? count : null;
-  } catch {
-    next = null; // the count route ships with the To do queue; until then no badge
+    const reply = await api('/ui/api/decisions/count');
+    next = Number.isInteger(reply?.count) && reply.count >= 0 ? reply.count : 'unavailable';
+  } catch (err) {
+    // A 404: the route ships with the To do queue (MIK-8868), so until then no badge.
+    // Anything else failed and reads "?".
+    next = err instanceof ApiError && err.status === 404 ? null : 'unavailable';
   }
   if (epoch !== authEpoch || seq !== countSeq) return; // a newer read, or another identity, owns the badge now
   DECISIONS.count = next;
   drawNav(parse(location.pathname).page);
   if (COUNT_SEEN.epoch !== epoch) {
     COUNT_SEEN.epoch = epoch; // a new identity's first count is not news
-    COUNT_SEEN.value = next;
+    COUNT_SEEN.value = Number.isInteger(next) ? next : null;
     return;
   }
-  if (next === null) return;
-  if (COUNT_SEEN.value !== null && COUNT_SEEN.value !== next) {
+  if (!Number.isInteger(next)) return; // not a value: nothing to say, and the last one is kept
+  if (Number.isInteger(COUNT_SEEN.value) && COUNT_SEEN.value !== next) {
     announce(next === 0 ? 'Nothing to decide.' : `${next} to decide.`, { subject: 'count' });
   }
   COUNT_SEEN.value = next;
