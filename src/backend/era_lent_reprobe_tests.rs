@@ -102,9 +102,22 @@ fn required_backend_at(url: String) -> Arc<Backend> {
 /// decided by it.
 #[tokio::test(flavor = "current_thread")]
 async fn a_lent_only_slots_reprobe_goes_out_as_the_subscriber() {
+    reprobe_carries_the_bearer(subscriber_credential(USER)).await;
+}
+
+/// The same, with a gateway-owned mirror header beside the credential on the
+/// call: the mirror is not part of the credential, and the re-probe still
+/// carries the bearer.
+#[tokio::test(flavor = "current_thread")]
+async fn a_mirror_header_on_the_call_does_not_hide_the_credential_from_the_reprobe() {
+    let mut credential = subscriber_credential(USER);
+    credential.push(("Mcp-Param-Region".to_string(), "eu".to_string()));
+    reprobe_carries_the_bearer(credential).await;
+}
+
+async fn reprobe_carries_the_bearer(credential: Vec<(String, String)>) {
     let (url, seen) = peer_that_turns_legacy().await;
     let backend = required_backend_at(url);
-    let credential = subscriber_credential(USER);
     let bearer = credential[0].1.clone();
 
     let _ = backend

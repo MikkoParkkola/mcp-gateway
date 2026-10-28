@@ -8,7 +8,7 @@
 use std::sync::atomic::Ordering;
 
 use super::*;
-use crate::transport::{Lender, SlotCredential};
+use crate::transport::{Lender, LentCredential, SlotCredential};
 
 /// A transport with a static credential header, marked as a per-user slot.
 fn slot(url: &str, credential: SlotCredential) -> (Arc<HttpTransport>, Arc<Lender>) {
@@ -206,4 +206,65 @@ async fn a_lent_only_slot_never_sends_a_live_gateway_token() {
             .is_err(),
         "with nothing lent the token is no fallback"
     );
+}
+
+fn bearer(value: &str) -> Vec<(String, String)> {
+    vec![("Authorization".to_string(), format!("Bearer {value}"))]
+}
+
+/// A credential whose per-send check always passes.
+fn checked(headers: Vec<(String, String)>) -> LentCredential {
+    LentCredential {
+        headers,
+        check: Some(Arc::new(|| Box::pin(async { Ok(()) }))),
+    }
+}
+
+async fn request_headers(
+    t: &HttpTransport,
+    call: &[(String, String)],
+) -> crate::Result<header::HeaderMap> {
+    t.build_mcp_headers(HeaderMode::Request { method: "m" }, None, call)
+        .await
+}
+
+/// A call whose credential headers are a strict subset of a live loan's is
+/// not that loan's: nothing is sent.
+#[tokio::test]
+async fn a_subset_of_a_loans_credential_sends_nothing() {
+    let (t, lender) = slot("http://localhost", SlotCredential::LentOnly);
+    let mut both = bearer("subscriber");
+    both.push(("X-Api-Key".to_string(), "key".to_string()));
+    let _loan = lender.lend_credential(&checked(both));
+    assert!(request_headers(&t, &bearer("subscriber")).await.is_err());
+}
+
+/// Each send carries the credential of the call it belongs to, never the
+/// newest loan's.
+#[tokio::test]
+async fn a_send_carries_its_own_loan_not_the_newest() {
+    let (t, lender) = slot("http://localhost", SlotCredential::LentOnly);
+    let _a = lender.lend_credential(&checked(bearer("a")));
+    let _b = lender.lend_credential(&checked(bearer("b")));
+    let map = request_headers(&t, &bearer("a")).await.unwrap();
+    assert_eq!(map[header::AUTHORIZATION], "Bearer a");
+}
+
+/// A loan no check is attached to is refused on a lent-only slot.
+#[tokio::test]
+async fn an_unchecked_loan_is_refused_on_a_lent_only_slot() {
+    let (t, lender) = slot("http://localhost", SlotCredential::LentOnly);
+    let _loan = lender.lend(&subscriber());
+    assert!(request_headers(&t, &subscriber()).await.is_err());
+}
+
+/// Two live loans carry one credential; a refusal of either refuses the send.
+#[tokio::test]
+async fn a_refused_twin_loan_refuses_the_send() {
+    let (t, lender) = slot("http://localhost", SlotCredential::LentOnly);
+    let first = lender.lend_credential(&checked(subscriber()));
+    let _second = lender.lend_credential(&checked(subscriber()));
+    assert!(request_headers(&t, &subscriber()).await.is_ok());
+    lender.refuse(first.id(), crate::transport::Refusal::ThisLoan);
+    assert!(request_headers(&t, &subscriber()).await.is_err());
 }
