@@ -447,6 +447,13 @@ pub struct PlaybookResult {
 #[async_trait::async_trait]
 pub trait ToolInvoker: Send + Sync {
     /// Invoke a tool on a server with the given arguments.
+    ///
+    /// The engine re-sends a step under `on_error: retry` only when the error
+    /// returned is [`Error::is_pre_dispatch`](crate::Error::is_pre_dispatch):
+    /// one raised before the request left. Return such an error only when the
+    /// request provably never reached the backend (a connection never made,
+    /// a backend not ready); any other error is read as "the step may have
+    /// run" and is never sent again.
     async fn invoke(&self, server: &str, tool: &str, arguments: Value) -> crate::Result<Value>;
 
     /// Whether `value` carries a continuation envelope this gateway sealed

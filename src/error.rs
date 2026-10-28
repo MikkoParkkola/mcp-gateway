@@ -600,6 +600,67 @@ mod rpc_code_tests {
         assert!(!look_alike.is_pre_dispatch(), "{look_alike}");
     }
 
+    /// MIK-9042: `outcome_undetermined` is exactly "not pre-dispatch", so a
+    /// backend's answer at any status, a plain JSON-RPC error, a refusal and a
+    /// local error all read as "may have run"; a lost round always does, and
+    /// only the pre-dispatch allowlist reads as never sent.
+    #[test]
+    fn only_an_error_raised_before_the_send_is_a_determined_outcome() {
+        let retryable = |status| Error::JsonRpcRetryable {
+            code: -32000,
+            message: "x".into(),
+            status,
+            data: None,
+        };
+        let undetermined = vec![
+            Error::Transport("x".into()),
+            Error::BackendTimeout("x".into()),
+            Error::Io(std::io::Error::other("x")),
+            Error::Config("x".into()),
+            Error::Internal("x".into()),
+            Error::Protocol("x".into()),
+            Error::ResponseFirewallRefused,
+            Error::Forbidden {
+                code: -32003,
+                status: 403,
+                message: "x".into(),
+            },
+            Error::JsonRpc {
+                code: -32602,
+                message: "x".into(),
+                data: None,
+            },
+            retryable(408),
+            retryable(429),
+            retryable(500),
+            retryable(502),
+            retryable(503),
+            retryable(504),
+        ];
+        for error in &undetermined {
+            assert!(error.outcome_undetermined(), "{error:?}");
+        }
+        let determined = [
+            Error::TransportConnect("x".into()),
+            Error::BackendUnavailable("x".into()),
+            Error::BackendNotFound("x".into()),
+            Error::ToolNotFound("x".into()),
+            Error::RateLimited("x".into()),
+        ];
+        for error in &determined {
+            assert!(!error.outcome_undetermined(), "{error:?}");
+        }
+        for lost in [
+            Error::Transport("x".into()),
+            Error::BackendTimeout("x".into()),
+        ] {
+            assert!(
+                lost.is_lost_round() && lost.outcome_undetermined(),
+                "{lost:?}"
+            );
+        }
+    }
+
     #[test]
     fn a_permanent_transport_failure_reports_as_a_backend_error() {
         // Omitting the variant here reported a missing backend command as an
