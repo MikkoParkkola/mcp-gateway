@@ -457,3 +457,19 @@ fn only_a_colour_code_in_a_bridged_target_passes_the_writer() {
     );
     assert!(!out.contains("\x1b[2J"), "{out:?}");
 }
+
+/// The library writes a `%` value raw, and the writer lets a colour code
+/// through, so only the field formatter keeps a value from recolouring the
+/// line: a colour code in a field value is escaped.
+#[test]
+fn a_field_value_cannot_add_a_colour() {
+    for ansi in [false, true] {
+        let out = text(
+            ansi,
+            || tracing::warn!(agent = %"mtls:\x1b[31mred", "denied"),
+        );
+        assert_one_line(&out, ansi);
+        assert!(!out.contains("\x1b[31mred"), "{out:?}");
+        assert!(out.contains(r"\u{1b}[31mred"), "{out:?}");
+    }
+}

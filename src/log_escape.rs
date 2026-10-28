@@ -4,12 +4,15 @@
 //! [`escaping`], so no field value, message or metadata can write a control
 //! character, and so a forged line, into the operator's log.
 //!
-//! Two hooks, one escape rule. The field formatter escapes every value and
-//! the message before the library lays the line out, so layout, colours and
-//! a clean line stay the library's own, byte for byte. The writer then
-//! escapes what the field formatter never sees (an event's target, which a
-//! bridged `log` record sets): every hostile character but the line's own
-//! final newline and the formatter's own colour codes.
+//! Two hooks, one escape rule. The library already escapes ESC and the C1
+//! controls in the message and in an error with its sources, but writes a
+//! `%` or `?` field value raw. The field formatter escapes those values, so a
+//! value cannot even add a colour, and leaves layout, colours and a clean
+//! line the library's own, byte for byte. The writer then escapes, on the
+//! whole line, every hostile character the library leaves (a newline in a
+//! message or an error) and what no field formatter sees (an event's
+//! target, which a bridged `log` record sets), except the line's own final
+//! newline and the formatter's colour codes.
 
 use std::fmt as stdfmt;
 use std::io;
@@ -72,7 +75,7 @@ fn escaped(text: &str) -> std::borrow::Cow<'_, str> {
     out.into()
 }
 
-/// The field formatter: the library's own, fed escaped values.
+/// The field formatter: the library's own, fed escaped `%` and `?` values.
 struct EscapingFields;
 
 impl<'w> MakeVisitor<Writer<'w>> for EscapingFields {
@@ -92,19 +95,16 @@ impl Visit for EscapingVisitor<'_> {
             .record_debug(field, &format_args!("{}", escaped(&rendered)));
     }
 
+    // A str field is written with `{:?}`, which escapes, and a str message
+    // goes through the library's own escape and then the writer.
     fn record_str(&mut self, field: &Field, value: &str) {
-        if field.name() == "message" {
-            // The library writes a str message raw: escape it here.
-            self.0
-                .record_debug(field, &format_args!("{}", escaped(value)));
-        } else {
-            // A str field is written with `{:?}`, which already escapes.
-            self.0.record_str(field, value);
-        }
+        self.0.record_str(field, value);
     }
 
+    // The library writes an error and its sources through its own escape;
+    // the writer handles what that escape leaves (a newline).
     fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {
-        self.0.record_error(field, &Escaped::chain(value));
+        self.0.record_error(field, value);
     }
 
     fn record_i64(&mut self, field: &Field, value: i64) {
@@ -139,48 +139,6 @@ impl VisitOutput<stdfmt::Result> for EscapingVisitor<'_> {
 impl VisitFmt for EscapingVisitor<'_> {
     fn writer(&mut self) -> &mut dyn stdfmt::Write {
         self.0.writer()
-    }
-}
-
-/// An error and its sources, each with its text escaped, so the library
-/// writes the same `value field.sources=[...]` shape.
-#[derive(Debug)]
-struct Escaped {
-    text: String,
-    source: Option<Box<Escaped>>,
-}
-
-impl Escaped {
-    /// Built from the innermost source outwards, without recursion.
-    fn chain(error: &(dyn std::error::Error + 'static)) -> Self {
-        let mut sources = Vec::new();
-        let mut next = error.source();
-        while let Some(e) = next {
-            sources.push(escaped(&e.to_string()).into_owned());
-            next = e.source();
-        }
-        let source = sources.into_iter().rev().fold(None, |inner, text| {
-            Some(Box::new(Self {
-                text,
-                source: inner,
-            }))
-        });
-        Self {
-            text: escaped(&error.to_string()).into_owned(),
-            source,
-        }
-    }
-}
-
-impl stdfmt::Display for Escaped {
-    fn fmt(&self, f: &mut stdfmt::Formatter<'_>) -> stdfmt::Result {
-        f.write_str(&self.text)
-    }
-}
-
-impl std::error::Error for Escaped {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.source.as_deref().map(|s| s as _)
     }
 }
 
