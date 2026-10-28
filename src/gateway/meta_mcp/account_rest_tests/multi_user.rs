@@ -144,7 +144,7 @@ async fn meta_mcp_multi_user_dispatch_reaches_the_account_boundary_for_a_verifie
 /// MULTI-USER GATEWAY, AND THE LEGACY LOGIN IS NEVER TOUCHED.
 ///
 /// Same shape as `an_identical_second_request_from_alice_is_served_from_the_warm_cache`
-/// — explicit positive TTL, `localhost` base URL, no loopback relaxation so the
+/// — explicit positive TTL, fixture-host base URL, no loopback relaxation so the
 /// cache is live — but dispatched through the multi-user `CapabilityBackend`,
 /// which is where the isolation guard sits. A valid gateway-held `oauth:google`
 /// token is seeded as the TRAP: it is exactly the credential the guard exists to
@@ -152,7 +152,7 @@ async fn meta_mcp_multi_user_dispatch_reaches_the_account_boundary_for_a_verifie
 /// never present it, cached or not.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn alices_second_identical_request_hits_the_warm_cache_on_a_multi_user_gateway() {
-    let (port, captured) = capture_endpoint().await;
+    let (port, captured) = tls_capture_endpoint().await;
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
     let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
@@ -431,7 +431,7 @@ async fn a_multi_user_grant_subject_alone_does_not_authorize_a_managed_account()
 /// presence of one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_multi_user_carried_credential_for_another_descriptor_refuses_before_http() {
-    let (port, captured) = capture_endpoint().await;
+    let (port, captured) = tls_capture_endpoint().await;
     let custody = custody_with(&[
         (account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH)),
         (
@@ -481,7 +481,7 @@ async fn a_multi_user_carried_credential_for_another_descriptor_refuses_before_h
 /// and before the wire.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_multi_user_carried_credential_for_another_caller_refuses_before_http() {
-    let (port, captured) = capture_endpoint().await;
+    let (port, captured) = tls_capture_endpoint().await;
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
     let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
@@ -581,7 +581,7 @@ async fn a_multi_user_dispatch_with_invalid_arguments_acquires_no_credential() {
 /// old token (served from cache) NOR the new one (silently re-resolved).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_reconnected_grant_refuses_the_credential_prepared_under_the_old_one() {
-    let (port, captured) = capture_endpoint().await;
+    let (port, captured) = tls_capture_endpoint().await;
     let alice = account_key("alice", WORK);
     let seeded = grant(ALICE_WORK_TOKEN, FRESH);
     let custody = custody_with(&[(alice.clone(), seeded.clone())]);
@@ -648,7 +648,7 @@ async fn a_reconnected_grant_refuses_the_credential_prepared_under_the_old_one()
 /// than a cached reply, and the revoked token must never resurface.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_revoked_grant_is_replaced_by_its_successor_under_a_new_generation() {
-    let (port, captured) = capture_endpoint().await;
+    let (port, captured) = tls_capture_endpoint().await;
     let alice = account_key("alice", WORK);
     let seeded = grant(ALICE_WORK_TOKEN, FRESH);
     let custody = custody_with(&[(alice.clone(), seeded.clone())]);

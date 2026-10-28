@@ -30,7 +30,7 @@ async fn breaker_hint(exposed: Option<&[&str]>, is_admin: bool) -> String {
         .invoke_tool(&invoke_args("alpha", "read"), None, &caller)
         .await
         .expect("a tool result");
-    answer["recovery"]["suggest"]
+    answer["_recovery"]["suggest"]
         .as_str()
         .unwrap_or_else(|| panic!("no recovery hint in {answer}"))
         .to_owned()
@@ -77,5 +77,33 @@ fn with_retry_keeps_the_surface_request() {
             .with_retry(&crate::protocol::mrtr::NO_RETRY)
             .surface_request,
         SurfaceRequest::CodeMode
+    );
+}
+
+/// A backend's own plain `recovery` on an error result is
+/// backend data. It no longer suppresses the gateway's hint, which arrives as
+/// `_recovery`, and it is delivered as the backend sent it.
+#[test]
+fn a_backends_plain_recovery_does_not_suppress_the_gateway_hint() {
+    use crate::gateway::meta_mcp::invoke::post_dispatch::attach_tool_error_recovery;
+    use crate::gateway::recovery::{MetaSurface, Revive};
+    let backend = serde_json::json!({
+        "isError": true,
+        "content": [{"type": "text", "text": "failed"}],
+        "recovery": {"hint": "the backend's own"},
+    });
+    let delivered = attach_tool_error_recovery(
+        backend,
+        "send",
+        "alpha",
+        MetaSurface::Standard(Revive::Offered),
+    );
+    assert_eq!(
+        delivered["recovery"]["hint"], "the backend's own",
+        "{delivered}"
+    );
+    assert!(
+        delivered["_recovery"].is_object(),
+        "the gateway's hint was suppressed: {delivered}"
     );
 }

@@ -48,10 +48,7 @@ async fn update_issue() -> (
         .with_state(Arc::clone(&stored));
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let mut executor = CapabilityExecutor::new();
-    executor.client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(2))
-        .build()
-        .unwrap();
+    executor.client = crate::test_fixture_host::fixture_client(Duration::from_secs(2));
     let text = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("capabilities/linear/linear_update_issue.yaml"),
@@ -62,7 +59,7 @@ async fn update_issue() -> (
     capability.auth.auth_type.clear();
     capability.auth.key.clear();
     let primary = capability.providers.named.get_mut("primary").unwrap();
-    primary.config.base_url = format!("http://localhost:{port}");
+    primary.config.base_url = crate::test_fixture_host::fixture_url(port);
     (executor, capability, stored)
 }
 

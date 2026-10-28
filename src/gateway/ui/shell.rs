@@ -44,6 +44,14 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         "shell.c447a2a479fc.js",
         include_bytes!("shell/shell.c447a2a479fc.js"),
     ),
+    (
+        "tools.6d5b18720c69.css",
+        include_bytes!("shell/tools.6d5b18720c69.css"),
+    ),
+    (
+        "tools.93f340516569.js",
+        include_bytes!("shell/tools.93f340516569.js"),
+    ),
 ];
 
 /// The shell's policy: everything from this origin, nothing inline, no
