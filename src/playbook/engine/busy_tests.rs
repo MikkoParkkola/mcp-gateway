@@ -389,8 +389,9 @@ async fn a_long_tool_text_is_capped_and_kept_out_of_the_message() {
         .await
         .expect("D3 continue: the plan carries on");
     let reason = &result.step_errors["first"];
+    // A run, not a count: the reason's own words may hold a `q`.
     assert!(
-        reason.matches('q').count() <= 256,
+        !reason.contains(&"q".repeat(257)),
         "D3 continue: step_errors is not capped: {} chars",
         reason.chars().count()
     );
