@@ -24,20 +24,3 @@ pub(super) fn watch(gateway: Gateway, discovered: Option<PathBuf>) -> Gateway {
         None => gateway,
     }
 }
-
-/// Refuses a discovered backend whose secret reference does not resolve,
-/// before any byte is written: it would break the next start (ADR-028).
-pub(super) fn refuse_unresolved(
-    backend: &mcp_gateway::config::BackendConfig,
-    name: &str,
-    config: &Config,
-) -> Result<(), String> {
-    backend
-        .check_secret_references(name, &config.env_overlay())
-        .map_err(|refused| {
-            format!(
-                "discovered server {name:?} has secret references that do not resolve: {}",
-                refused.join("; ")
-            )
-        })
-}
