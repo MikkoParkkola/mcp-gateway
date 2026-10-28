@@ -72,3 +72,49 @@ async fn a_client_that_stops_reading_a_real_socket_is_closed_and_its_slot_return
     assert_eq!(fresh.status, StatusCode::OK, "a new stream is admitted");
     drop(client);
 }
+
+/// Changes pushed before the logout: enough to block a write, few enough to
+/// stay well inside the 30 s write limit on the paused clock.
+const BLOCKING_CHANGES: usize = 40;
+
+#[tokio::test]
+async fn a_blocked_write_cannot_stretch_the_credential_recheck() {
+    let (state, _dir) = fixture().await;
+    let busy = big_gateway(&state);
+    let cookie = issue(&state);
+    let addr = serve(&state).await;
+    let socket = TcpSocket::new_v4().expect("socket");
+    socket.set_recv_buffer_size(4096).expect("small buffer");
+    let mut client = socket.connect(addr).await.expect("connect");
+    let ask = format!(
+        "GET {STREAM} HTTP/1.1\r\nHost: {addr}\r\nCookie: {SESSION_COOKIE}={cookie}\r\n\r\n"
+    );
+    client.write_all(ask.as_bytes()).await.expect("request");
+    let mut head = [0u8; 512];
+    let n = client.read(&mut head).await.expect("response head");
+    assert!(String::from_utf8_lossy(&head[..n]).starts_with("HTTP/1.1 200"));
+    let hub = state.dashboard_bootstrap.stream_hub();
+    for _ in 0..BLOCKING_CHANGES {
+        busy.shared_entry_for_test()
+            .failsafe
+            .record_success(Duration::from_millis(5));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    assert_eq!(hub.open_streams(), 1, "still blocked, not yet timed out");
+    let out = Request::builder()
+        .method("POST")
+        .uri("/dashboard/logout")
+        .header(header::COOKIE, format!("{SESSION_COOKIE}={cookie}"))
+        .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 52_346))))
+        .body(Body::empty())
+        .unwrap();
+    let _ = create_router(Arc::clone(&state))
+        .oneshot(out)
+        .await
+        .unwrap();
+    let revoked = tokio::time::Instant::now();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(hub.open_streams(), 0, "closed within a few re-check ticks");
+    assert!(revoked.elapsed() < Duration::from_secs(5));
+    drop(client);
+}

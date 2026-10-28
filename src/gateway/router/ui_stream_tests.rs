@@ -58,6 +58,8 @@ enum Who<'a> {
     Nobody,
     Bearer(&'a str),
     Cookie(&'a str),
+    /// A bearer with a session cookie beside it.
+    Both(&'a str, &'a str),
 }
 
 fn request(uri: &str, who: Who<'_>, last_event_id: Option<&str>) -> Request<Body> {
@@ -68,6 +70,9 @@ fn request(uri: &str, who: Who<'_>, last_event_id: Option<&str>) -> Request<Body
         Who::Nobody => b,
         Who::Bearer(t) => b.header(header::AUTHORIZATION, format!("Bearer {t}")),
         Who::Cookie(h) => b.header(header::COOKIE, format!("{SESSION_COOKIE}={h}")),
+        Who::Both(t, h) => b
+            .header(header::AUTHORIZATION, format!("Bearer {t}"))
+            .header(header::COOKIE, format!("{SESSION_COOKIE}={h}")),
     };
     if let Some(id) = last_event_id {
         b = b.header("last-event-id", id);
@@ -193,5 +198,6 @@ async fn yield_until(mut done: impl FnMut() -> bool) -> bool {
 mod auth;
 mod backpressure;
 mod frames;
+mod generations;
 mod identity;
 mod load;

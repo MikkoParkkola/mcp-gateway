@@ -119,6 +119,16 @@ async fn a_change_raises_the_status_generation_and_a_repeat_does_not() {
 }
 
 #[tokio::test]
+async fn counts_that_differ_only_in_uptime_are_not_a_change() {
+    let hub = StreamHub::new();
+    let rx = hub.subscribe();
+    hub.observe(json!({"a": 1}), json!({"n": 1, "uptime_secs": 1}), false);
+    let g1 = rx.borrow().status_gen;
+    hub.observe(json!({"a": 1}), json!({"n": 1, "uptime_secs": 2}), false);
+    assert_eq!(rx.borrow().status_gen, g1);
+}
+
+#[tokio::test]
 async fn a_reload_raises_only_the_reload_generation() {
     let hub = StreamHub::new();
     let rx = hub.subscribe();

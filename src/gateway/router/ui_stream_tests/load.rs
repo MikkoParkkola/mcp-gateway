@@ -81,3 +81,19 @@ async fn a_stream_ends_cleanly_after_one_hour() {
     assert!(s.ended().await);
     assert!(yield_until(|| hub(&state).open_streams() == 0).await);
 }
+
+#[tokio::test]
+async fn a_changed_ignored_cookie_beside_one_bearer_takes_no_new_slot() {
+    let (state, _dir) = fixture().await;
+    let mut held = Vec::new();
+    for i in 0..MAX_PER_CREDENTIAL {
+        let cookie = format!("junk-{i}");
+        held.push(open(&state, request(STREAM, Who::Both(BEARER, &cookie), None)).await);
+    }
+    let over = open(
+        &state,
+        request(STREAM, Who::Both(BEARER, "junk-last"), None),
+    )
+    .await;
+    assert_eq!(over.status, StatusCode::SERVICE_UNAVAILABLE);
+}
