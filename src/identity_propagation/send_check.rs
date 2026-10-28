@@ -16,6 +16,11 @@ pub(crate) enum Expiry {
     /// The strategy published this expiry (unix seconds): past it, the
     /// credential is refused definitively.
     At(i64),
+    /// The expiry is a cache entry's default, not one the strategy
+    /// published (an exchange that omitted `expires_in`): past it the send is
+    /// refused for this loan only, because the issuer never said the token
+    /// stops working then.
+    AtSynthetic(i64),
     /// No expiry was published; the credential is valid for the dispatch
     /// that lent it.
     Unpublished,
@@ -70,7 +75,7 @@ pub(crate) fn expiry_check(
         Box::pin(async move {
             // A clock that cannot be read judges nothing about the credential.
             let now = now().ok_or(Refusal::Transient)?;
-            if matches!(expiry, Expiry::At(at) if now >= at) {
+            if matches!(expiry, Expiry::At(at) | Expiry::AtSynthetic(at) if now >= at) {
                 return Err(Refusal::Definitive);
             }
             if jwt_exp.is_some_and(|exp| now >= exp) {

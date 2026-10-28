@@ -26,6 +26,7 @@ use crate::Error;
 use crate::Result;
 use crate::oauth::login_gate::{Provenance, fill_scope};
 use crate::protocol::{Tool, ToolsListResult};
+use crate::transport::LentCredential;
 
 // MIK-8014 PERF.12: the fresh-slot answer and completeness `tools_for_check` reads.
 #[path = "metadata_fresh_check.rs"]
@@ -302,7 +303,7 @@ impl Backend {
         binding: Option<&str>,
         select: S,
         family: ListFamily,
-        extra_headers: &[(String, String)],
+        extra_headers: LentCredential,
         bound: FillBound,
         parse: F,
     ) -> Result<Arc<Vec<T>>>
@@ -330,12 +331,17 @@ impl Backend {
         // `Option`, and both sites where a `None` binding arises return empty
         // headers with it. `stateless_tools_slot_tests` keeps a cell that fails
         // if this is deleted, because every other cell would still pass.
-        let fetch_headers: &[(String, String)] = identity_key.map_or(&[], |_| extra_headers);
+        let fetch = if identity_key.is_some() {
+            extra_headers
+        } else {
+            LentCredential::default()
+        };
+        let fetch_headers: &[(String, String)] = &fetch.headers;
         // Resolve the slot ONCE and keep it for both the cache and the fetch.
         let lease = self.begin_internal_activity_for(&key)?;
         let entry = Arc::clone(lease.entry());
         // A lent-only slot's fill, its start included, sends as this caller.
-        let loan = self.lend_to_slot(&key, &entry, fetch_headers)?;
+        let loan = self.lend_to_slot(&key, &entry, &fetch)?;
         // MIK-8399: what a tools fill read, for the permit's abandon hook.
         let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let tools = family.truncated_flag.is_some();
@@ -454,13 +460,15 @@ impl Backend {
     ///
     /// Returns an error if the backend cannot start or the tools request fails.
     pub async fn get_tools_shared(&self) -> Result<Arc<Vec<Tool>>> {
-        self.get_tools_for_binding(None, &[]).await
+        self.get_tools_for_binding(None, LentCredential::default())
+            .await
     }
 
     /// Startup warm-up's fill: recorded on the breaker, never admitted or
     /// charged a token (#1300). Warm-start is its only caller.
     pub(crate) async fn warm_tools(&self) -> Result<Arc<Vec<Tool>>> {
-        self.tools_fill(None, &[], FillBound::Warmup, false).await
+        self.tools_fill(None, LentCredential::default(), FillBound::Warmup, false)
+            .await
     }
 
     /// The tool catalogue THIS CALLER's pool slot serves.
@@ -483,10 +491,10 @@ impl Backend {
     pub async fn get_tools_for_binding(
         &self,
         binding: Option<&str>,
-        extra_headers: &[(String, String)],
+        extra_headers: impl Into<LentCredential>,
     ) -> Result<Arc<Vec<Tool>>> {
         let tools = self
-            .tools_fill(binding, extra_headers, FillBound::DrainBudget, false)
+            .tools_fill(binding, extra_headers.into(), FillBound::DrainBudget, false)
             .await?;
         Ok(self.without_blocked(tools))
     }
@@ -499,7 +507,7 @@ impl Backend {
     async fn tools_fill(
         &self,
         binding: Option<&str>,
-        extra_headers: &[(String, String)],
+        extra_headers: LentCredential,
         bound: FillBound,
         stale_hit: bool,
     ) -> Result<Arc<Vec<Tool>>> {
@@ -562,7 +570,7 @@ impl Backend {
     pub(crate) async fn tools_for_check(
         &self,
         binding: Option<&str>,
-        headers: &[(String, String)],
+        headers: impl Into<LentCredential>,
         stale_hit: bool,
     ) -> Result<(Arc<Vec<Tool>>, Completeness)> {
         // A fresh slot fetches nothing, so no lease, hook or deadline (PERF.12).
@@ -570,7 +578,12 @@ impl Backend {
             return Ok(held);
         }
         let limit = self.config.timeout;
-        let fill = self.tools_fill(binding, headers, FillBound::CallTimeout(limit), stale_hit);
+        let fill = self.tools_fill(
+            binding,
+            headers.into(),
+            FillBound::CallTimeout(limit),
+            stale_hit,
+        );
         // MIK-7982 C3/C4: both deadlines below read this caller's provenance.
         let bounded = async {
             tokio::time::timeout(self.tools_fill_bound(), fill)

@@ -85,3 +85,18 @@ async fn an_unpublished_expiry_is_only_ever_shortened_by_a_jwt_exp() {
         "a JWT exp never extends a published expiry"
     );
 }
+
+#[tokio::test]
+async fn a_synthetic_expiry_refuses_this_loan_and_never_evicts() {
+    let headers = bearer("opaque");
+    assert_eq!(
+        run(expiry_check(Expiry::AtSynthetic(NOW + 60), &headers, now)).await,
+        Ok(()),
+        "before its synthetic expiry the credential is sent"
+    );
+    assert_eq!(
+        run(expiry_check(Expiry::AtSynthetic(NOW - 1), &headers, now)).await,
+        Err(Refusal::ThisLoan),
+        "a default expiry passing is not the issuer's word: no eviction"
+    );
+}

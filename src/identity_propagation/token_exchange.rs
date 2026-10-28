@@ -250,6 +250,7 @@ impl TokenExchangeStrategy {
             return None;
         }
         Some(PropagatedCredential {
+            expiry_synthetic: false,
             headers: vec![(
                 "Authorization".to_string(),
                 format!("Bearer {}", entry.access_token),
@@ -446,6 +447,7 @@ impl IdentityPropagation for TokenExchangeStrategy {
         );
 
         Ok(PropagatedCredential {
+            expiry_synthetic: false,
             headers: vec![(
                 "Authorization".to_string(),
                 format!("Bearer {}", body.access_token),

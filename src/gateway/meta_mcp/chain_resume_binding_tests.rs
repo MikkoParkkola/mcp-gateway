@@ -160,6 +160,7 @@ impl crate::identity_propagation::IdentityPropagation for FixedBinding {
     > {
         self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(crate::identity_propagation::PropagatedCredential {
+            expiry_synthetic: false,
             headers: vec![("Authorization".to_string(), "Bearer minted".to_string())],
             expires_at: i64::MAX,
             cache_binding: BINDING.to_string(),

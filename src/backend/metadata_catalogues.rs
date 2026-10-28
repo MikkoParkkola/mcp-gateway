@@ -12,6 +12,7 @@ use crate::protocol::{
     Prompt, PromptsListResult, Resource, ResourceTemplate, ResourcesListResult,
     ResourcesTemplatesListResult,
 };
+use crate::transport::LentCredential;
 
 impl Backend {
     /// The resource catalogue the SHARED slot serves.
@@ -23,7 +24,8 @@ impl Backend {
     ///
     /// Returns an error if the backend cannot start or the resources request fails.
     pub async fn get_resources_shared(&self) -> Result<Arc<Vec<Resource>>> {
-        self.get_resources_for_binding(None, &[]).await
+        self.get_resources_for_binding(None, LentCredential::default())
+            .await
     }
 
     /// The resource catalogue THIS CALLER's pool slot serves.
@@ -39,7 +41,7 @@ impl Backend {
     pub async fn get_resources_for_binding(
         &self,
         binding: Option<&str>,
-        extra_headers: &[(String, String)],
+        extra_headers: impl Into<LentCredential>,
     ) -> Result<Arc<Vec<Resource>>> {
         self.get_cached_list_for(
             binding,
@@ -52,7 +54,7 @@ impl Backend {
                 cooldown: false,
                 stale_hit: false,
             },
-            extra_headers,
+            extra_headers.into(),
             FillBound::DrainBudget,
             |result| {
                 Ok((
@@ -81,7 +83,8 @@ impl Backend {
     ///
     /// Returns an error if the backend cannot start or the templates request fails.
     pub async fn get_resource_templates_shared(&self) -> Result<Arc<Vec<ResourceTemplate>>> {
-        self.get_resource_templates_for_binding(None, &[]).await
+        self.get_resource_templates_for_binding(None, LentCredential::default())
+            .await
     }
 
     /// The resource-template catalogue THIS CALLER's pool slot serves.
@@ -92,7 +95,7 @@ impl Backend {
     pub async fn get_resource_templates_for_binding(
         &self,
         binding: Option<&str>,
-        extra_headers: &[(String, String)],
+        extra_headers: impl Into<LentCredential>,
     ) -> Result<Arc<Vec<ResourceTemplate>>> {
         self.get_cached_list_for(
             binding,
@@ -105,7 +108,7 @@ impl Backend {
                 cooldown: false,
                 stale_hit: false,
             },
-            extra_headers,
+            extra_headers.into(),
             FillBound::DrainBudget,
             |result| {
                 let templates = serde_json::from_value::<ResourcesTemplatesListResult>(result)?;
@@ -132,7 +135,8 @@ impl Backend {
     ///
     /// Returns an error if the backend cannot start or the prompts request fails.
     pub async fn get_prompts_shared(&self) -> Result<Arc<Vec<Prompt>>> {
-        self.get_prompts_for_binding(None, &[]).await
+        self.get_prompts_for_binding(None, LentCredential::default())
+            .await
     }
 
     /// The prompt catalogue THIS CALLER's pool slot serves.
@@ -143,7 +147,7 @@ impl Backend {
     pub async fn get_prompts_for_binding(
         &self,
         binding: Option<&str>,
-        extra_headers: &[(String, String)],
+        extra_headers: impl Into<LentCredential>,
     ) -> Result<Arc<Vec<Prompt>>> {
         self.get_cached_list_for(
             binding,
@@ -156,7 +160,7 @@ impl Backend {
                 cooldown: false,
                 stale_hit: false,
             },
-            extra_headers,
+            extra_headers.into(),
             FillBound::DrainBudget,
             |result| {
                 Ok((

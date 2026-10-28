@@ -15,7 +15,7 @@ pub use circuit_breaker::{
 pub(crate) use health::Slow;
 pub use health::{HealthMetrics, HealthTracker};
 pub use rate_limiter::RateLimiter;
-pub use retry::{RetryPolicy, with_retry};
+pub use retry::{RetryPolicy, with_retry, with_retry_unless};
 
 use std::sync::Arc;
 

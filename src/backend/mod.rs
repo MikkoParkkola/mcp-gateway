@@ -601,6 +601,10 @@ mod silence_resend_tests;
 mod slot_eviction_tests;
 
 #[cfg(test)]
+#[path = "send_check_eviction_tests.rs"]
+mod send_check_eviction_tests;
+
+#[cfg(test)]
 #[path = "caller_slots_g3_tests.rs"]
 mod caller_slots_g3_tests;
 

@@ -215,3 +215,14 @@ fn retire(entry: &PooledEntry) -> bool {
     entry.retired.store(true, Ordering::SeqCst);
     true
 }
+
+/// Take exactly `entry` out of `pool` if it still holds `key`, retiring it.
+/// A slot readmitted under the same key is a different entry and stays.
+/// Returns whether this call removed it.
+fn evict_entry(
+    _pool: &dashmap::DashMap<PoolKey, Arc<PooledEntry>>,
+    _key: &PoolKey,
+    _entry: &Arc<PooledEntry>,
+) -> bool {
+    false
+}

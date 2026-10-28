@@ -42,12 +42,32 @@ pub(crate) struct LentCredential {
     pub(crate) check: Option<SendCheck>,
 }
 
+/// Plain headers carry no check: a non-mint source (a shared-slot call, a
+/// call with no identity) and the test fixtures lend this way.
 impl From<&[(String, String)]> for LentCredential {
     fn from(headers: &[(String, String)]) -> Self {
         Self {
             headers: headers.to_vec(),
             check: None,
         }
+    }
+}
+
+impl From<&Vec<(String, String)>> for LentCredential {
+    fn from(headers: &Vec<(String, String)>) -> Self {
+        Self::from(headers.as_slice())
+    }
+}
+
+impl<const N: usize> From<&[(String, String); N]> for LentCredential {
+    fn from(headers: &[(String, String); N]) -> Self {
+        Self::from(headers.as_slice())
+    }
+}
+
+impl From<&LentCredential> for LentCredential {
+    fn from(credential: &LentCredential) -> Self {
+        credential.clone()
     }
 }
 
@@ -82,18 +102,15 @@ pub(crate) struct Lender {
 }
 
 impl Lender {
-    /// Lend `headers`, with no check, until the returned [`Loan`] drops.
-    pub(crate) fn lend(self: &Arc<Self>, headers: &[(String, String)]) -> Loan {
-        self.lend_credential(&LentCredential::from(headers))
-    }
-
-    /// Lend `credential` until the returned [`Loan`] drops.
-    pub(crate) fn lend_credential(self: &Arc<Self>, credential: &LentCredential) -> Loan {
+    /// Lend `credential` until the returned [`Loan`] drops. Plain headers
+    /// lend with no check, which a lent-only slot refuses to send.
+    pub(crate) fn lend(self: &Arc<Self>, credential: impl Into<LentCredential>) -> Loan {
+        let credential = credential.into();
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         self.loans.lock().push(Lent {
             id,
             headers: Zeroizing::new(credential_part(&credential.headers)),
-            check: credential.check.clone(),
+            check: credential.check,
             refused: None,
         });
         Loan {
