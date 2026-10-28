@@ -298,7 +298,7 @@ impl crate::transport::Transport for Unsigned {
 /// One backend call either way. Before MIK-9042 the engine re-sent it, and only
 /// the key's stored failure kept a keyed run to one call (unkeyed: two).
 #[tokio::test]
-async fn a_retried_step_in_a_keyed_run_is_served_its_stored_failure() {
+async fn a_step_that_ran_and_failed_is_sent_once_keyed_or_not() {
     use crate::config::{BackendConfig, ChainEmit, ChainMode, FailsafeConfig};
     for (key, want) in [(Some("pk-adr12"), 1), (None, 1)] {
         let definition = serde_json::from_value(json!({
