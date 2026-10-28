@@ -673,10 +673,10 @@ pub use redirect_policy::transport_follows_redirect;
 mod requests;
 mod sse_channel;
 mod sse_decoder;
-mod sse_listen;
 #[cfg(test)]
 #[path = "sse_lent_reopen_tests.rs"]
 mod sse_lent_reopen_tests;
+mod sse_listen;
 #[cfg(test)]
 #[path = "sse_send_tests.rs"]
 mod sse_send_tests;
