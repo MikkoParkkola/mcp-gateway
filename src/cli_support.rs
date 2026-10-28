@@ -55,15 +55,18 @@ impl std::fmt::Display for Shown {
 }
 
 /// `text` with every hidden character (see [`is_hidden_char`]) written as
-/// `\u{..}`; every other character, a backslash included, is kept, so a
-/// Windows path reads as it is. The last step before printing: summarize,
-/// redact or parse first.
+/// `\u{..}`, and a backslash that begins the text `\u{` doubled, so every
+/// `\u{..}` on screen is one this wrote: a name spelling `\u{1b}` out reads
+/// `\\u{1b}`. Every other backslash is kept, so a Windows path reads as it
+/// is. The last step before printing: summarize, redact or parse first.
 #[must_use]
 pub fn shown(text: &str) -> Shown {
     let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
+    for (at, c) in text.char_indices() {
         if is_hidden_char(c) {
             out.extend(c.escape_unicode());
+        } else if c == '\\' && text[at + 1..].starts_with("u{") {
+            out.push_str("\\\\");
         } else {
             out.push(c);
         }
@@ -75,7 +78,7 @@ pub fn shown(text: &str) -> Shown {
 /// it would alter is withheld rather than shown altered.
 #[must_use]
 pub fn shows_unchanged(text: &str) -> bool {
-    !text.chars().any(is_hidden_char)
+    !text.chars().any(is_hidden_char) && !text.contains("\\u{")
 }
 
 /// One discovered server's fate in [`adopt_literals`].

@@ -378,11 +378,24 @@ fn shown_escapes_hidden_characters_and_keeps_the_rest() {
         ("a\nb\rc\td", "a\\u{a}b\\u{d}c\\u{9}d"),
         ("a\u{2028}b\u{2029}c", "a\\u{2028}b\\u{2029}c"),
         ("a\u{7f}b\u{85}c", "a\\u{7f}b\\u{85}c"),
+        // Only a backslash that begins `\u{` is doubled.
+        ("a\\u{1b}b", "a\\\\u{1b}b"),
+        ("C:\\u\\x\\{y}", "C:\\u\\x\\{y}"),
     ];
     for (raw, expected) in rows {
         assert_eq!(shown(raw).to_string(), expected, "{raw:?}");
         assert_eq!(shows_unchanged(raw), raw == expected, "{raw:?}");
     }
+}
+
+/// A name that spells an escape out never reads like one `shown` wrote.
+#[test]
+fn a_spelled_out_escape_is_told_apart_from_a_real_one() {
+    let real = shown("tool\u{1b}x").to_string();
+    let spelled = shown("tool\\u{1b}x").to_string();
+    assert_eq!(real, "tool\\u{1b}x");
+    assert_eq!(spelled, "tool\\\\u{1b}x");
+    assert_ne!(real, spelled);
 }
 
 /// The skip warning keeps its quotes around an escaped name.
