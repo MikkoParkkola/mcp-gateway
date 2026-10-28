@@ -173,7 +173,7 @@ fn a_damaged_record_drops_only_its_bad_entries() {
         assert!(decoded.is_empty(), "{whole}");
     }
     let good = json!({
-        "layer": "value", "dest": ["results", "0", "result", "trace_id"], "kind": ["trace_id"],
+        "layer": "value", "dest": ["results", "0", "result", "_trace_id"], "kind": ["_trace_id"],
         "within": [], "digest": "636810988c0638ebda7b64c4fcac77cae55b300084dd6c553983f9c1aaf350db",
     });
     let with = |key: &str, value: Value| {

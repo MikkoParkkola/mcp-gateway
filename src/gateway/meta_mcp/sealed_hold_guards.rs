@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 /// result, a cached replay, and the task envelope builder itself.
 const PROJECTIONS: &[&str] = &[
     r"\.wire\(\)",
+    r"\.delivered_wire\(\)",
     r"\.result\(\)",
     r"GuardOutcome::CachedResult\(",
     r"SyncAdmission::Replay\(",
@@ -55,6 +56,12 @@ const DECISION_ONLY: &[(&str, &str, &str, &str)] = &[
 /// why)`: projections that DO reach the wire, with their holds owned
 /// elsewhere. Only the named shape is excused.
 const OWNED_ELSEWHERE: &[(&str, &str, &str, &str)] = &[
+    (
+        "task_service/record.rs",
+        "delivered_wire",
+        r"\.wire\(\)",
+        "the stored task's projection for delivery (MIK-9002); it holds no hold of its own, and `.delivered_wire()` is itself a guarded shape, so every caller must deliver the row's holds as it did for `.wire()`",
+    ),
     (
         "router/backend_handlers/direct_idempotency.rs",
         "deliver_replay",
