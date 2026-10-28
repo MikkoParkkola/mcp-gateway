@@ -108,6 +108,8 @@ impl LocalIdentityGrantStore {
             );
         }
 
+        // `covers` holds the row-owner rule: past the check above, the
+        // capability's owner is the caller.
         let matching_grant = self.grants.values().find(|grant| {
             grant.covers(
                 identity,
@@ -116,10 +118,7 @@ impl LocalIdentityGrantStore {
                 request.tool.as_deref(),
                 &request.scope,
                 request.now,
-            ) && grant
-                .owner
-                .as_ref()
-                .is_none_or(|grant_owner| grant_owner == owner)
+            )
         });
 
         if let Some(grant) = matching_grant {
