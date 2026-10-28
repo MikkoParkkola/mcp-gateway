@@ -102,7 +102,11 @@ impl CapabilityBackend {
             // by an admin) or declaring none resolves it; the pin recorded
             // at detection is the changed bytes' own and decides nothing.
             match declared_pin(&content) {
-                Ok(pin) if pin.is_none_or(|pin| pin.eq_ignore_ascii_case(&actual)) => {
+                Ok(pin)
+                    if pin
+                        .as_deref()
+                        .is_none_or(|p| p.eq_ignore_ascii_case(&actual)) =>
+                {
                     self.clear_rug_pull_if(&record.file, &record.actual);
                     continue;
                 }
