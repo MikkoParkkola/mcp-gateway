@@ -73,6 +73,7 @@ impl Fake {
         rows.push(r.clone());
         let _ = self.tx.send(Appended {
             log: LogName::Invocation,
+            part: r.part.clone(),
             entry: Arc::new(r.data),
         });
         n
@@ -358,7 +359,6 @@ async fn the_fourth_lag_recovery_inside_a_minute_closes_the_view() {
 }
 
 #[tokio::test(start_paused = true)]
-#[ignore = "needs `Appended` to carry its position so hidden rows advance a seen counter"]
 async fn rows_hidden_from_the_viewer_do_not_cost_a_scan_per_visible_row() {
     let fake = Fake::new(0, 1_024);
     let mut merge = LogMerge::connect(Arc::clone(&fake), (), None).await;

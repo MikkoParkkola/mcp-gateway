@@ -41,6 +41,9 @@ pub(super) struct Row {
 #[derive(Clone, Debug)]
 pub(super) struct Appended {
     pub(super) log: LogName,
+    /// The announced row's position and hash; the announcing hook fills it,
+    /// so a row hidden from this caller still moves the view's `seen` mark.
+    pub(super) part: LogPart,
     pub(super) entry: Arc<Value>,
 }
 
@@ -106,6 +109,9 @@ pub(super) struct LogMerge<S: LogSource> {
     access: S::Access,
     rx: broadcast::Receiver<Appended>,
     delivered: LogCursor,
+    /// The last announced row observed per log, hidden or not. "In order" is
+    /// judged against it; resume ids come from `delivered`.
+    seen: LogCursor,
     lag_recoveries: usize,
     lag: LagWindow,
     too_slow: bool,
@@ -133,6 +139,7 @@ impl<S: LogSource> LogMerge<S> {
             access,
             rx,
             delivered,
+            seen: head.clone(),
             lag_recoveries: 0,
             lag: LagWindow::default(),
             too_slow: false,
@@ -211,6 +218,7 @@ impl<S: LogSource> LogMerge<S> {
     /// Start paging from the delivered position up to the head as of now.
     async fn begin_scan(&mut self) {
         self.stop = self.source.head(&self.access).await;
+        self.seen = self.stop.clone();
         self.scan = Some(self.delivered.clone());
     }
 
@@ -254,23 +262,37 @@ impl<S: LogSource> LogMerge<S> {
         at(&self.stop.inv, &next.inv) && at(&self.stop.gov, &next.gov)
     }
 
-    /// A live row for the caller. One that does not follow the delivered
-    /// position exactly sends the view back to the source to be checked.
+    /// A live row for the caller. An announcement that does not follow the
+    /// last one seen exactly sends the view back to the source to be checked.
     async fn live(&mut self, appended: &Appended) -> Option<Row> {
-        let row = self.source.frame(&self.access, appended)?;
-        let delivered = match row.log {
-            LogName::Invocation => &self.delivered.inv,
-            LogName::Governance => &self.delivered.gov,
+        let seen = match appended.log {
+            LogName::Invocation => &mut self.seen.inv,
+            LogName::Governance => &mut self.seen.gov,
         };
-        match delivered {
-            Some(d) if row.part.n < d.n => None,
-            Some(d) if row.part.n == d.n && row.part.hash == d.hash => None,
-            Some(d) if row.part.n == d.n + 1 => Some(row),
-            None if row.part.n == 1 => Some(row),
-            _ => {
+        match classify(seen.as_ref(), &appended.part) {
+            Order::Skip => return None,
+            Order::Gap => {
                 self.begin_scan().await;
-                None
+                return None;
             }
+            Order::Next => *seen = Some(appended.part.clone()),
         }
+        self.source.frame(&self.access, appended)
+    }
+}
+
+/// How an announced position relates to the last one seen.
+enum Order {
+    Skip,
+    Next,
+    Gap,
+}
+
+fn classify(seen: Option<&LogPart>, part: &LogPart) -> Order {
+    match seen {
+        Some(s) if part.n < s.n || (part.n == s.n && part.hash == s.hash) => Order::Skip,
+        Some(s) if part.n == s.n + 1 => Order::Next,
+        None if part.n == 1 => Order::Next,
+        _ => Order::Gap,
     }
 }
