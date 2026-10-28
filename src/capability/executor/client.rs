@@ -40,20 +40,12 @@ pub(super) fn build(proxy: Option<&url::Url>) -> Client {
                 .previous()
                 .first()
                 .is_some_and(crate::gateway::is_tls_or_loopback);
-            // A hop to a loopback name is refused as a target is:
+            // A hop naming loopback is refused by the target's own check:
             // with a proxy set it would otherwise go direct, unpinned.
-            if attempt
-                .url()
-                .host_str()
-                .is_some_and(crate::security::ssrf::is_loopback_name)
+            if let Err(Error::Protocol(reason)) =
+                crate::security::ssrf::refuse_loopback_name(attempt.url().as_str())
             {
-                return crate::security::ssrf::refuse_hop(
-                    attempt,
-                    format!(
-                        "{}: redirect to a host naming the loopback interface",
-                        crate::security::ssrf::SSRF_BLOCKED
-                    ),
-                );
+                return crate::security::ssrf::refuse_hop(attempt, reason);
             }
             match redirect_decision(attempt.previous().len(), attempt.url().as_str()) {
                 RedirectDecision::Stop => attempt.stop(),
