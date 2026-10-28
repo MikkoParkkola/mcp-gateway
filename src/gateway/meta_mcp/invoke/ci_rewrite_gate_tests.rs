@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The shared response gate records an enforced context-integrity rewrite as
-//! `rewritten`, once, for every caller. The relay record, which runs the gate
+//! Every caller of the shared response gate records an enforced
+//! context-integrity rewrite as `rewritten`, from the one raise in the
+//! transform. The relay record, which runs the gate
 //! on a copy the client never receives, records nothing. Neither needs the
 //! firewall.
 
@@ -74,21 +75,20 @@ async fn a_relay_record_of_an_enforced_prompt_records_no_rewrite() {
     assert_ne!(effect, Some("rewritten".into()), "{recorded}");
 }
 
-/// A malformed result the enforcing gate refuses is withheld, not rewritten:
-/// its replacement is a refusal text.
+/// A malformed result the enforcing gate refuses records `refused`, not a
+/// rewrite, though the gate built its replacement text.
 #[tokio::test]
-async fn a_malformed_result_under_enforcement_is_withheld() {
+async fn a_malformed_result_under_enforcement_records_refused() {
     let meta = stripping();
     let malformed = json!({ "content": [{ "type": "text", "text": INJECTED }], "resultType": 5 });
     let (gated, effect) =
         effect_of(|| meta.apply_response_gates_effect("alpha", "read", None, "t", malformed)).await;
-    let (value, gate) = gated.expect("answered");
+    let (value, _) = gated.expect("answered");
     assert!(
         value.to_string().contains("malformed result"),
         "premise: refused as malformed: {value}"
     );
-    assert_eq!(gate, GateEffect::Withheld, "{value}");
-    assert_ne!(effect, Some("rewritten".into()), "{value}");
+    assert_eq!(effect, Some("refused".into()), "{value}");
 }
 
 /// A composite's step: the plan's record is unvouched before any step runs,
