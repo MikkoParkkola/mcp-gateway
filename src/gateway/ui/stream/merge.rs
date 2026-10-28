@@ -250,14 +250,14 @@ impl<S: LogSource> LogMerge<S> {
             LogName::Invocation => &self.stop.inv,
             LogName::Governance => &self.stop.gov,
         };
-        head.as_ref().is_none_or(|h| row.part.n > h.n)
+        head.as_ref().is_none_or(|h| row.part.counter > h.counter)
     }
 
     /// Whether a scan cursor has caught up with the captured head in both logs.
     fn reached_head(&self, next: &LogCursor) -> bool {
         let at = |head: &Option<LogPart>, pos: &Option<LogPart>| {
             head.as_ref()
-                .is_none_or(|h| pos.as_ref().is_some_and(|p| p.n >= h.n))
+                .is_none_or(|h| pos.as_ref().is_some_and(|p| p.counter >= h.counter))
         };
         at(&self.stop.inv, &next.inv) && at(&self.stop.gov, &next.gov)
     }
@@ -290,9 +290,14 @@ enum Order {
 
 fn classify(seen: Option<&LogPart>, part: &LogPart) -> Order {
     match seen {
-        Some(s) if part.n < s.n || (part.n == s.n && part.hash == s.hash) => Order::Skip,
-        Some(s) if part.n == s.n + 1 => Order::Next,
-        None if part.n == 1 => Order::Next,
+        Some(s)
+            if part.counter < s.counter
+                || (part.counter == s.counter && part.hash16 == s.hash16) =>
+        {
+            Order::Skip
+        }
+        Some(s) if part.counter == s.counter + 1 => Order::Next,
+        None if part.counter == 1 => Order::Next,
         _ => Order::Gap,
     }
 }

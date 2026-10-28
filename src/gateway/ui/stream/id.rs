@@ -8,8 +8,8 @@
 /// One log's position: the counter and the 16-hex hash of its last row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LogPart {
-    pub(super) n: u64,
-    pub(super) hash: String,
+    pub(super) counter: u64,
+    pub(super) hash16: String,
 }
 
 /// Which log a row belongs to: the export source enum already names both.
@@ -76,13 +76,13 @@ impl StreamId {
             self.cursor
                 .inv
                 .as_ref()
-                .map(|p| format!("i{}-{}", p.n, p.hash)),
+                .map(|p| format!("i{}-{}", p.counter, p.hash16)),
         );
         parts.extend(
             self.cursor
                 .gov
                 .as_ref()
-                .map(|p| format!("g{}-{}", p.n, p.hash)),
+                .map(|p| format!("g{}-{}", p.counter, p.hash16)),
         );
         parts.join(".")
     }
@@ -112,7 +112,7 @@ fn parse_log(text: &str) -> Result<LogPart, IdError> {
         return Err(IdError);
     }
     Ok(LogPart {
-        n: parse_num(n)?,
-        hash: hash.to_owned(),
+        counter: parse_num(n)?,
+        hash16: hash.to_owned(),
     })
 }

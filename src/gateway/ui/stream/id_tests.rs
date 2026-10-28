@@ -6,8 +6,8 @@ use super::id::{IdError, LogCursor, LogPart, StreamId};
 
 fn part(n: u64) -> LogPart {
     LogPart {
-        n,
-        hash: "0123456789abcdef".to_owned(),
+        counter: n,
+        hash16: "0123456789abcdef".to_owned(),
     }
 }
 

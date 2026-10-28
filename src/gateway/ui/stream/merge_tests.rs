@@ -16,8 +16,8 @@ const HASH: &str = "0123456789abcdef";
 
 fn part(n: u64) -> LogPart {
     LogPart {
-        n,
-        hash: HASH.to_owned(),
+        counter: n,
+        hash16: HASH.to_owned(),
     }
 }
 
@@ -57,8 +57,8 @@ impl Fake {
         let swapped = (1..=count)
             .map(|n| Row {
                 part: LogPart {
-                    n,
-                    hash: hash.to_owned(),
+                    counter: n,
+                    hash16: hash.to_owned(),
                 },
                 ..row(n, false)
             })
@@ -126,7 +126,7 @@ impl Fake {
         let rows = self.rows.lock().unwrap();
         let mut b = self.biggest_page.lock().unwrap();
         *b = (*b).max(limit);
-        let known = cursor.inv.as_ref().map(|p| p.n);
+        let known = cursor.inv.as_ref().map(|p| p.counter);
         let reset = known.is_some_and(|n| {
             n > 0
                 && rows
@@ -159,7 +159,7 @@ impl Fake {
 fn ids(out: &[Out]) -> Vec<u64> {
     out.iter()
         .filter_map(|o| match o {
-            Out::Row(r) => Some(r.part.n),
+            Out::Row(r) => Some(r.part.counter),
             Out::Reset => None,
         })
         .collect()
@@ -214,8 +214,8 @@ async fn a_cursor_whose_row_is_gone_resets_then_replays_from_the_oldest() {
     let fake = Fake::new(3, 64);
     let stale = LogCursor {
         inv: Some(LogPart {
-            n: 2,
-            hash: "ffffffffffffffff".to_owned(),
+            counter: 2,
+            hash16: "ffffffffffffffff".to_owned(),
         }),
         gov: None,
     };
