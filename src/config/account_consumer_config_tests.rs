@@ -494,3 +494,6 @@ mod raw_vault;
 
 #[path = "account_consumer_config_tests/managed_transport.rs"]
 mod managed_transport;
+
+#[path = "account_consumer_config_tests/shared_slot.rs"]
+mod shared_slot;

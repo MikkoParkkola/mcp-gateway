@@ -291,8 +291,8 @@ impl StdioTransport {
             debug!("Stdio reader task ended");
         });
 
-        let stderr_tail = early_exit::spawn_stderr_tail(stderr, self.diagnostic_command());
-        self.failure.track(&stderr_tail.1);
+        let stderr = early_exit::spawn_stderr_tail(stderr, self.diagnostic_command());
+        self.failure.track(&stderr.tail);
 
         // Initialize with protocol version negotiation. If initialization
         // fails, tear down the spawned process now rather than waiting for the
@@ -305,18 +305,18 @@ impl StdioTransport {
             // before `close` kills the child, and the stderr after, because the
             // reader only reaches EOF once the child is gone.
             let late_reader = if self.start.exited_early() {
-                error = self.early_exit_error(stderr_tail).await;
+                error = self.early_exit_error(stderr).await;
                 None
             } else {
                 self.settle_child_exit().await;
-                Some(stderr_tail.0)
+                Some(stderr)
             };
             self.shut().await;
             if let Some(reader) = late_reader {
                 // The child `close` just killed: record that ending, so the
                 // failure is not reported as a child still running.
                 self.settle_child_exit().await;
-                Self::settle_stderr_tail(reader).await;
+                self.settle_stderr_tail(reader).await;
             }
             // A retry may start on this same transport. This start's reader
             // must be gone first: at its EOF it clears `pending` and marks the

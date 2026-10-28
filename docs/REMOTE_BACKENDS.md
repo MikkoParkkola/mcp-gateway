@@ -241,6 +241,29 @@ backends:
 
 A changed description gets a new digest and is withheld again. See UPGRADING-4.0 §75.
 
+## Offering only some of a backend's tools
+
+`allowed_tools` names the only tools a backend offers, to every caller:
+
+```yaml
+backends:
+  my-backend:
+    allowed_tools: [search, "get_*"]
+```
+
+Each entry is an exact name or a trailing `prefix*`, matched on `tool` or `my-backend:tool`, the
+same grammar as an API key's `allowed_tools`. A tool outside the list is left out of every tool
+list and refused by name as an absent tool, including one the server adds later. The admin tools
+list still shows it, marked not selected, so it can be added, and the admin config view
+(`/ui/api/config`) shows each backend's list as written. The web UI's add API takes the ticked tools
+(`allowed_tools` in `POST /ui/api/backends`); the preview's checkboxes come with the Servers screen.
+
+The list narrows and never widens. A call must pass all three tool scopes: the API key's
+`allowed_tools` and `denied_tools`, the backend's `allowed_tools`, and the global
+`security.tool_policy`. Each is judged when a call is admitted, so a call admitted before a
+narrowing reload finishes its own retries. An older binary ignores `allowed_tools` and exposes
+every tool: read the rollback note in UPGRADING-4.0 before you roll back.
+
 ## First-time OAuth interactive authorization
 
 The first time an OAuth backend is exercised, the gateway opens a browser tab

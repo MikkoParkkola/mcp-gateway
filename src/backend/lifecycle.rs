@@ -85,9 +85,14 @@ impl Backend {
                 pool
             },
             caller_slots: DashMap::new(),
+            caller_slot_stored: tokio::sync::Notify::new(),
             failsafe_config: failsafe_config.clone(),
             #[cfg(test)]
             after_reprobe_lookup: crate::test_pause::Slot::default(),
+            #[cfg(test)]
+            before_lease_lookup: crate::test_pause::Slot::default(),
+            #[cfg(test)]
+            before_listing_prepass: crate::test_pause::Slot::default(),
             #[cfg(test)]
             cold_winner: crate::test_pause::Slot::default(),
             #[cfg(test)]
@@ -474,6 +479,7 @@ impl Backend {
         entry: &PooledEntry,
         era: EraResolution,
     ) -> Result<Arc<dyn Transport>> {
+        self.refuse_shared_start(key)?;
         let started = self.start_entry_inner(key, entry, era).await;
         match &started {
             Ok(_) => {
@@ -485,6 +491,24 @@ impl Backend {
             Err(_) => entry.start_failed.store(true, Ordering::Relaxed),
         }
         started
+    }
+
+    /// A per-user-sessions-only backend's Shared slot never starts or fills,
+    /// whoever asks: refused before anything is built, charged or counted,
+    /// with the isolation refusal's code (a denial, so never retried).
+    pub(super) fn refuse_shared_start(&self, key: &PoolKey) -> Result<()> {
+        if matches!(key, PoolKey::Shared) && self.shared_slot_refused() {
+            debug!(backend = %self.name, "Not starting the shared slot: per-user sessions only");
+            return Err(Error::Forbidden {
+                code: -32001,
+                status: 403,
+                message: format!(
+                    "backend '{}' takes per-user sessions only; the gateway opens no shared session to it",
+                    self.name
+                ),
+            });
+        }
+        Ok(())
     }
 
     async fn start_entry_inner(

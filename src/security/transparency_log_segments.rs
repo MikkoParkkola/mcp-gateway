@@ -172,7 +172,14 @@ pub(crate) fn read_first_line(path: &Path) -> io::Result<Option<String>> {
 }
 
 fn read_first_line_raw(path: &Path) -> io::Result<Option<String>> {
-    let file = File::open(path)?;
+    first_line_in(&File::open(path)?)
+}
+
+/// The first non-empty line of an open `file`, read from its start through
+/// the same 4 MiB window as [`read_first_line`].
+fn first_line_in(mut file: &File) -> io::Result<Option<String>> {
+    use std::io::{Seek, SeekFrom};
+    file.seek(SeekFrom::Start(0))?;
     let mut buf = Vec::new();
     file.take(MAX_TAIL_SCAN_BYTES).read_to_end(&mut buf)?;
     let text = String::from_utf8_lossy(&buf);
@@ -190,12 +197,26 @@ pub(crate) fn active_segment_seq(path: &Path, after: u64) -> u64 {
     read_first_line(path)
         .ok()
         .flatten()
-        .and_then(|l| serde_json::from_str::<serde_json::Value>(&l).ok())
+        .and_then(|l| opened_seq(&l))
+        .unwrap_or(after)
+}
+
+/// [`active_segment_seq`] for a file already open, read through that
+/// descriptor: a reader checking which segment it opened by the active name.
+pub(crate) fn segment_seq_in(file: &File, after: u64) -> io::Result<u64> {
+    Ok(first_line_in(file)?
+        .and_then(|l| opened_seq(&l))
+        .unwrap_or(after))
+}
+
+/// The segment number an open record line names.
+fn opened_seq(line: &str) -> Option<u64> {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
         .filter(|v| {
             v.get("event").and_then(serde_json::Value::as_str) == Some("audit_segment_opened")
         })
         .and_then(|v| v.get("segment_seq").and_then(serde_json::Value::as_u64))
-        .unwrap_or(after)
 }
 
 /// High-water mark: how far the log got, kept outside the active file so a

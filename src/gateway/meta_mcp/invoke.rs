@@ -91,6 +91,7 @@ mod projection;
 mod resolve;
 // MIK-8488: the send admission and the dispatch, out of `invoke_tool_traced`.
 mod send;
+pub(in crate::gateway::meta_mcp) use caller_verdict::ColdFill;
 pub(crate) use caller_verdict::{CallerVerdict, TargetNaming};
 mod propagation;
 pub(crate) use propagation::ResolvedDispatch;
