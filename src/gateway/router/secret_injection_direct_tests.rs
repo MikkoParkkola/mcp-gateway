@@ -207,6 +207,7 @@ async fn the_secret_is_sent_and_nothing_answered_or_kept_holds_it() {
         let result_headers = [
             ("mcp-protocol-version", "2026-07-28"),
             ("mcp-method", "tasks/get"),
+            ("mcp-name", id.as_str()),
         ];
         let (_, got) = send_with_headers(
             &fx,
