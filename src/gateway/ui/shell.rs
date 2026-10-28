@@ -45,12 +45,24 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/shell.c447a2a479fc.js"),
     ),
     (
-        "tools.6d5b18720c69.css",
-        include_bytes!("shell/tools.6d5b18720c69.css"),
+        "tips.7c43dc6560cf.json",
+        include_bytes!("shell/tips.7c43dc6560cf.json"),
     ),
     (
-        "tools.93f340516569.js",
-        include_bytes!("shell/tools.93f340516569.js"),
+        "tools.16d5412bf038.js",
+        include_bytes!("shell/tools.16d5412bf038.js"),
+    ),
+    (
+        "tools.24f226efcd24.css",
+        include_bytes!("shell/tools.24f226efcd24.css"),
+    ),
+    (
+        "tooltip.a14cbbab7c53.js",
+        include_bytes!("shell/tooltip.a14cbbab7c53.js"),
+    ),
+    (
+        "tooltip.bdf8af3bcb32.css",
+        include_bytes!("shell/tooltip.bdf8af3bcb32.css"),
     ),
 ];
 
@@ -104,6 +116,7 @@ fn content_type(file: &str) -> &'static str {
         Some("woff2") => "font/woff2",
         Some("svg") => "image/svg+xml",
         Some("png") => "image/png",
+        Some("json") => "application/json",
         _ => "application/octet-stream",
     }
 }

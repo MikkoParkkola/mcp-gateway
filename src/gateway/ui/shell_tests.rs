@@ -210,3 +210,50 @@ async fn t7_the_tooltip_copy_is_a_hashed_json_asset() {
         Some(&b"nosniff"[..])
     );
 }
+
+/// Every "load N tools" the shipped Tools screen or tooltip copy says, as N.
+fn load_counts(text: &str) -> Vec<u64> {
+    text.match_indices("load ")
+        .filter_map(|(i, m)| {
+            let rest = &text[i + m.len()..];
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            let after = &rest[digits.len()..];
+            if digits.is_empty() || !after.starts_with(" tools") {
+                None
+            } else {
+                digits.parse().ok()
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn t8_the_meta_tool_count_on_screen_is_the_gateways() {
+    // The Tools screen and its tooltip say how many tools agents load up front.
+    // That is the gateway's own meta-tool count, so a copied number fails here
+    // the day a meta-tool is added or removed.
+    let mut seen = 0;
+    for (name, bytes) in ASSETS
+        .iter()
+        .filter(|(n, _)| n.starts_with("tools.") || n.starts_with("tips."))
+    {
+        for n in load_counts(&String::from_utf8_lossy(bytes)) {
+            assert_eq!(
+                n,
+                crate::honest_task_tokens::README_META_TOOLS,
+                "{name} says agents load {n} tools"
+            );
+            seen += 1;
+        }
+    }
+    assert!(
+        seen >= 2,
+        "the screen and its copy both state the count ({seen} found)"
+    );
+}
+
+#[test]
+fn t8a_the_count_reader_finds_a_planted_number() {
+    assert_eq!(load_counts("Agents load 12 tools and"), vec![12]);
+    assert_eq!(load_counts("load the tools"), Vec::<u64>::new());
+}
