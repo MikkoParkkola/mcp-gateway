@@ -51,7 +51,7 @@ pub(super) async fn status(
     let total = backends.len();
 
     if !is_admin(client.as_ref()) {
-        return with_access(redacted(&backends, auth), access);
+        return with_access(redacted(&backends, &auth), access);
     }
 
     // Full admin view
@@ -132,7 +132,7 @@ pub(super) async fn status(
 }
 
 /// The view for a caller who is not an admin: counts only, no names or details.
-fn redacted(backends: &[Arc<crate::backend::Backend>], auth: Value) -> Value {
+fn redacted(backends: &[Arc<crate::backend::Backend>], auth: &Value) -> Value {
     let total = backends.len();
     let healthy = backends
         .iter()
