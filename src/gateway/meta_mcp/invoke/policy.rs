@@ -84,12 +84,9 @@ impl MetaMcp {
         let backend = self
             .scoped(caller.scope().authorizer.backend_grant())
             .scoped_get(server);
-        match backend.and_then(|b| b.blocked_tool_refusal(None, tool)) {
-            Some(refusal) => {
-                super::audit::note_refused_by(
-                    crate::security::decision_record::DecisionKind::DescriptorBlock,
-                    None,
-                );
+        match backend.and_then(|b| b.blocked_tool_refusal(None, tool).map(|r| (b, r))) {
+            Some((backend, refusal)) => {
+                super::audit::note_refused_by(backend.blocked_tool_kind(tool), None);
                 Err(Error::Protocol(refusal))
             }
             None => Ok(()),

@@ -403,10 +403,7 @@ impl MetaMcp {
         session_id: Option<&str>,
     ) -> bool {
         if backend.is_blocked_tool(tool) {
-            super::invoke::audit::note_refused_by(
-                crate::security::decision_record::DecisionKind::DescriptorBlock,
-                None,
-            );
+            super::invoke::audit::note_refused_by(backend.blocked_tool_kind(tool), None);
             return true;
         }
         if let Err((_, kind)) = self.may_invoke_explained(server, tool, scope, session_id) {

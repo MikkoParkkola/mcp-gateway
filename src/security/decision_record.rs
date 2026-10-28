@@ -31,6 +31,8 @@ pub(crate) enum DecisionKind {
     KillSwitch,
     CapabilityDisabled,
     DescriptorBlock,
+    /// The backend's `allowed_tools` list leaves the tool out.
+    AllowedTools,
     Attestation,
     ResponseGate,
     Syntax,

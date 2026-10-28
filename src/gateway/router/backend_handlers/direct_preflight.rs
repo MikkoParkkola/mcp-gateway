@@ -57,7 +57,7 @@ pub(super) fn withheld_verdict(
     let withheld = withheld_code.is_some() || {
         let blocked = backend.blocked_tool_refusal(None, tool_name).is_some();
         if blocked {
-            note_refused_by(DecisionKind::DescriptorBlock, None);
+            note_refused_by(backend.blocked_tool_kind(tool_name), None);
         }
         blocked
     };
