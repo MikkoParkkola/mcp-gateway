@@ -133,7 +133,10 @@ async fn the_direct_route_applies_a_header_rule() {
 }
 
 /// Every file under `dir`, with its bytes. A directory or file that cannot be
-/// read fails the row: an unread store must not pass as a clean one.
+/// read fails the row: an unread store must not pass as a clean one. The one
+/// exception is an empty lock sidecar the live store holds: Windows refuses
+/// to read a file another handle has locked (`fs_lock::ExclusiveFileLock` is
+/// `LockFileEx` there), and an empty file holds nothing to scan.
 #[cfg(feature = "firewall")]
 fn files_under(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
     let mut files = Vec::new();
@@ -141,12 +144,23 @@ fn files_under(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
         let path = entry.expect("a directory entry reads").path();
         if path.is_dir() {
             files.extend(files_under(&path));
-        } else {
-            let bytes = std::fs::read(&path).expect("a stored file reads");
-            files.push((path, bytes));
+            continue;
+        }
+        match std::fs::read(&path) {
+            Ok(bytes) => files.push((path, bytes)),
+            Err(error) if locked_and_empty(&path, &error) => {}
+            Err(error) => panic!("a stored file reads: {}: {error}", path.display()),
         }
     }
     files
+}
+
+/// Whether `error` is Windows' lock violation (os error 33) on an empty file.
+#[cfg(feature = "firewall")]
+fn locked_and_empty(path: &std::path::Path, error: &std::io::Error) -> bool {
+    cfg!(windows)
+        && error.raw_os_error() == Some(33)
+        && std::fs::metadata(path).is_ok_and(|meta| meta.len() == 0)
 }
 
 /// Whether `bytes` holds `text`.
