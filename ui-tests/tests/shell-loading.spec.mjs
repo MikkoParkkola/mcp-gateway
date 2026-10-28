@@ -272,3 +272,15 @@ test('G7 an error just after the loading state appears waits out its minimum, th
   await shellCall(page, 'announcerIdle');
   expect((await page.evaluate(() => window.__writes)).filter((t) => t.includes('The gateway answered with an error'))).toHaveLength(1);
 });
+
+test('G8 a slow first render is aria-busy while it loads, and not after it settles', async ({ page }) => {
+  const probe = heldProbe();
+  await page.route(PROBE, probe.answer);
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/policies/status');
+  await expect(loading(page)).toBeVisible();
+  await expect(page.locator('#content')).toHaveAttribute('aria-busy', 'true');
+  probe.release();
+  await expect(page.locator('#content')).toContainText('value 1');
+  await expect(page.locator('#content')).not.toHaveAttribute('aria-busy', /.*/);
+});
