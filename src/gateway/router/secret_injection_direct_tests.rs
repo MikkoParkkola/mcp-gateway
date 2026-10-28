@@ -171,9 +171,15 @@ async fn the_secret_is_sent_and_nothing_answered_or_kept_holds_it() {
         assert!(body.get("error").is_none(), "premise: {body}");
         answers.push(body);
     }
-    let task = json!({"name": "gateway_invoke", "task": {},
+    // A task is a modern call that declares the tasks extension.
+    let modern = json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28"});
+    let mut meta = modern.clone();
+    meta["io.modelcontextprotocol/clientCapabilities"] =
+        json!({"extensions": {"io.modelcontextprotocol/tasks": {}}});
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!("idem-secret-task");
+    let task = json!({"name": "gateway_invoke", "task": {}, "_meta": meta,
         "arguments": {"server": "alpha", "tool": "read", "arguments": {}}});
-    let (_, made) = send(&fx, "/mcp", "k-std", "tools/call", task, Some(&session)).await;
+    let (_, made) = send(&fx, "/mcp", "k-std", "tools/call", task, None).await;
     let id = made
         .pointer("/result/task/taskId")
         .or_else(|| made.pointer("/result/taskId"))
@@ -187,8 +193,8 @@ async fn the_secret_is_sent_and_nothing_answered_or_kept_holds_it() {
             "/mcp",
             "k-std",
             "tasks/result",
-            json!({"taskId": id}),
-            Some(&session),
+            json!({"taskId": id, "_meta": modern}),
+            None,
         )
         .await;
         if got.get("result").is_some() {

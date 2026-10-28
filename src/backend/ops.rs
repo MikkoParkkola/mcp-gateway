@@ -162,7 +162,7 @@ impl Backend {
         params: Option<Value>,
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
-    ) -> Result<(Option<Value>, Vec<(String, String)>)> {
+    ) -> Result<super::secret_send::Outbound> {
         let secrets = self.prepare_secrets(method, params)?;
         let headers =
             self.param_header_set(method, secrets.params.as_ref(), extra_headers, identity_key);

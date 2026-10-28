@@ -440,13 +440,13 @@ async fn a_secrets_only_reload_is_diffed_as_a_change_and_applied() {
 #[tokio::test]
 async fn a_reloaded_rule_resolves_a_value_only_an_env_file_assigns() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("keys.env");
+    let env_file = dir.path().join("keys.env");
     crate::gateway::test_helpers::write_owner_only(
-        &path,
+        &env_file,
         "RELOAD_FILE_ONLY_KEY=from-the-file-ff06\n",
     )
     .expect("env file");
-    let overlay = Arc::new(crate::config::EnvOverlay::from_paths(&[path]));
+    let overlay = Arc::new(crate::config::EnvOverlay::from_paths(&[env_file]));
     let env = Arc::new(crate::config::LiveEnv::new(
         overlay,
         crate::config::ResolvedEnvFiles::default(),

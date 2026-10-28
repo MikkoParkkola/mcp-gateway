@@ -105,7 +105,8 @@ pub(crate) async fn fixture_with_secrets(
 
 /// The directory the fixture's gateway writes its stores under.
 pub(crate) fn store_path(fx: &Fx) -> &std::path::Path {
-    fx._store.path()
+    let Fx { _store: store, .. } = fx;
+    store.path()
 }
 
 /// One fixture backend's config: pass-through or not, and, for a propagating

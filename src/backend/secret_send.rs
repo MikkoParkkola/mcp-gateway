@@ -24,6 +24,9 @@ use crate::secret_injection::{CredentialRule, drop_owned, inject_rules, tool_mat
 use crate::secrets::SecretResolver;
 use crate::{Error, Result};
 
+/// What a call is sent with: its params, and its per-call headers.
+pub(super) type Outbound = (Option<Value>, Vec<(String, String)>);
+
 /// A call's params with the keys its rules own dropped, and the resolved
 /// values held back until the mirror has read the params.
 pub(super) struct Prepared {
@@ -37,10 +40,7 @@ pub(super) struct Prepared {
 impl Prepared {
     /// The params and headers to send: the resolved values added, each
     /// header replacing any of the same name, compared case-insensitively.
-    pub(super) fn apply(
-        self,
-        mut headers: Vec<(String, String)>,
-    ) -> (Option<Value>, Vec<(String, String)>) {
+    pub(super) fn apply(self, mut headers: Vec<(String, String)>) -> Outbound {
         let Some((arguments, injected)) = self.injected else {
             return (self.params, headers);
         };

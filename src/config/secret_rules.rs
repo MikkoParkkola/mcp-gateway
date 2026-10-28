@@ -195,7 +195,9 @@ fn url_has_userinfo(transport: &TransportConfig) -> bool {
     let url = match transport {
         TransportConfig::Http { http_url, .. } => http_url,
         TransportConfig::WebSocket { ws_url, .. } => ws_url,
-        _ => return false,
+        TransportConfig::Stdio { .. } => return false,
+        #[cfg(feature = "a2a")]
+        TransportConfig::A2a { .. } => return false,
     };
     url::Url::parse(url).is_ok_and(|url| !url.username().is_empty() || url.password().is_some())
 }
