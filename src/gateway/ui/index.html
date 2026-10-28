@@ -161,7 +161,8 @@ tr:hover td { background: var(--bg3); }
 .reg-dropdown { position: absolute; top: 100%; left: 0; right: 0; z-index: 50; background: var(--bg2); border: 1px solid var(--border); border-radius: 0 0 var(--radius) var(--radius); max-height: 220px; overflow-y: auto; }
 .reg-dropdown .reg-opt { padding: 0.5rem 0.75rem; font-size: 0.875rem; cursor: pointer; border-bottom: 1px solid var(--border); }
 .reg-dropdown .reg-opt:last-child { border-bottom: none; }
-.reg-dropdown .reg-opt[aria-selected="true"] { background: var(--bg3); box-shadow: inset 0 0 0 2px var(--accent); }
+/* An outline, not a shadow: forced-colors mode keeps outlines and drops shadows. */
+.reg-dropdown .reg-opt[aria-selected="true"] { background: var(--bg3); outline: 2px solid var(--accent); outline-offset: -2px; }
 .reg-dropdown .reg-opt .reg-desc { font-size: 0.75rem; color: var(--fg2); }
 
 /* Responsive */
@@ -1218,6 +1219,12 @@ regBox().addEventListener('keydown', (e) => {
   // Keys that belong to an input method composition are the IME's.
   if (e.isComposing || e.keyCode === 229) return;
   const open = document.getElementById('reg-dropdown').style.display !== 'none';
+  // Shift, Ctrl and Meta with an arrow are editing chords (select, jump to an
+  // end): the browser keeps them, and the active option no longer applies.
+  if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && (e.shiftKey || e.ctrlKey || e.metaKey)) {
+    if (regActive >= 0) setRegistryActive(-1);
+    return;
+  }
   switch (e.key) {
     case 'ArrowDown':
     case 'ArrowUp': {
