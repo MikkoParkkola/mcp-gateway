@@ -12,6 +12,10 @@ use std::fmt::Write as _;
 
 use scalar::{analyze, double_quoted, scalar_text, simple_key_ok, single_quoted};
 
+/// The emitter's double-quoted escaper, for an in-place edit that writes one
+/// scalar into existing text.
+pub(crate) use scalar::double_quoted as quote_double;
+
 use super::ser::{PAIRS_MARK, PLAIN_MARK, QUOTED_MARK};
 use super::tagged::{TaggedValue, nobang};
 use super::{Error, Tag, Value};
