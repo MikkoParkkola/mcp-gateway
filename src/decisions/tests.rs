@@ -418,3 +418,26 @@ fn no_name_or_text_from_changed_bytes_reaches_the_list() {
     assert!(!text.contains(CANARY), "{text}");
     assert!(text.contains("stripe.charges"), "the trusted name is shown: {text}");
 }
+
+#[test]
+fn a_changed_capability_carries_the_inferred_risk_class() {
+    let mut set = ready();
+    let content = "name: stripe_charges\ndescription: Charge a card\nproviders:\n  primary:\n    service: rest\n    config:\n      base_url: https://api.stripe.com\n      path: /v1/charges\n".to_string();
+    set.set_capability_changes(
+        "caps",
+        vec![super::CapabilityChange { content, ..change("/c/a.yaml", "h1", Some("stripe_charges")) }],
+        at(1),
+    );
+    let item = &set.list()[0];
+    assert_eq!(item["scan_basis"], "inferred", "{item}");
+    assert!(
+        serde_json::from_value::<crate::trust::TrustRiskClass>(item["scan"].clone()).is_ok(),
+        "the scan is a trust risk class: {item}"
+    );
+
+    let mut unparsed = ready();
+    unparsed.set_capability_changes("caps", vec![change("/c/b.yaml", "h2", None)], at(1));
+    let item = &unparsed.list()[0];
+    assert_eq!(item["scan"], serde_json::Value::Null, "{item}");
+    assert_eq!(item["scan_reason"], "unparsed", "{item}");
+}
