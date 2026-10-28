@@ -453,12 +453,15 @@ impl MetaMcp {
         (server, tool, trace_id): (&str, &str, &str),
         text: &str,
     ) -> Result<Vec<crate::security::response_inspect::Finding>> {
+        use crate::security::response_inspect::ResponseInspectionMode;
         if text.is_empty() {
             return Ok(Vec::new());
         }
+        #[cfg(test)]
+        crate::test_classification_count::note("d2_inspection", text);
         let inspection = crate::security::response_inspect::inspect_response(
             text,
-            self.response_inspection_action_mode,
+            self.response_inspection == ResponseInspectionMode::Action,
         );
         for finding in &inspection.findings {
             warn!(

@@ -99,7 +99,7 @@ impl MetaMcp {
             require_nonce: false,
             transparency_logger: None,
             rejection_audit: std::sync::OnceLock::new(),
-            response_inspection_action_mode: false,
+            response_inspection: crate::security::response_inspect::ResponseInspectionMode::Observe,
             response_contract: None,
             attestation_validator: None,
             attestation_mode: crate::attestation::AttestationMode::Observe,

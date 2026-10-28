@@ -26,6 +26,8 @@ enum Setup {
     Warn,
     /// No firewall; response inspection in action mode is the only screen.
     InspectionOnly,
+    /// No firewall and response inspection turned off: no screen at all.
+    InspectionOff,
     /// The firewall present with response scanning off.
     ScanOff,
     /// The firewall present and disabled.
@@ -57,6 +59,10 @@ async fn stdio_on(backend: Arc<Planted>, setup: Setup) -> (Arc<MetaMcp>, Option<
     let mut meta = MetaMcp::new(registry);
     if matches!(setup, Setup::InspectionOnly) {
         meta.enable_response_inspection_action_mode();
+        return (Arc::new(meta), None);
+    }
+    if matches!(setup, Setup::InspectionOff) {
+        meta.disable_response_inspection();
         return (Arc::new(meta), None);
     }
     let firewall = Arc::new(
@@ -443,4 +449,50 @@ async fn a_screened_notification_leaves_the_answers_facts_alone() {
     assert!(!body.contains(&leak), "premise: withheld: {body}");
     assert_eq!(row["response_effect"], "delivered", "{row}");
     assert_eq!(row["response_findings"], json!([]), "{row}");
+}
+
+/// `security.response_inspection.enabled: false` over stdio: an answer
+/// carrying a pattern inspection finds is not inspected at all (no
+/// `_security_findings`, no "Response inspection finding" log, no inspection
+/// run), while the same text under action-mode inspection in the same
+/// process is still inspected and screened.
+#[test]
+fn inspection_off_inspects_nothing_on_stdio() {
+    use crate::test_classification_count::{MARKER, runs};
+    let marker = format!("{MARKER}inspection-off-stdio");
+    let text = format!("{} {marker}", secret());
+    let mut failures = Vec::new();
+    for setup in [Setup::InspectionOff, Setup::InspectionOnly] {
+        let before = runs("d2_inspection", &marker);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let (seen, warnings) = crate::test_log_capture::capture_warnings(|| {
+            runtime.block_on(cell(setup, "tools/call", Part::ResultText, text.clone()))
+        });
+        let inspected = runs("d2_inspection", &marker) - before;
+        if seen.calls == 0 {
+            failures.push(format!("{setup:?}: never reached the backend"));
+        }
+        if matches!(setup, Setup::InspectionOff) {
+            if inspected != 0 {
+                failures.push(format!("{setup:?}: inspected {inspected} times"));
+            }
+            if seen.body.contains("_security_findings") {
+                failures.push(format!("{setup:?}: annotated: {}", seen.body));
+            }
+            if warnings.contains("Response inspection finding") {
+                failures.push(format!("{setup:?}: logged a finding: {warnings}"));
+            }
+        } else {
+            if inspected == 0 {
+                failures.push(format!("{setup:?}: premise: never inspected"));
+            }
+            if seen.body.contains(&secret()) {
+                failures.push(format!("{setup:?}: premise: not screened: {}", seen.body));
+            }
+        }
+    }
+    report(&failures);
 }

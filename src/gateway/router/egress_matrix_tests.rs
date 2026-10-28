@@ -14,7 +14,8 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use super::direct_guards_fixture::{
-    Fx, fixture_audited_on, fixture_firewalled_on, fixture_inspecting_on, meta_firewall,
+    Fx, fixture_audited_on, fixture_firewalled_on, fixture_inspecting_on,
+    fixture_inspection_off_on, meta_firewall,
 };
 use crate::gateway::egress_fixture::{BACKEND_METHODS, NAME, Part, Planted, URI, secret};
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
@@ -128,6 +129,8 @@ enum Setup {
     Warn,
     /// No firewall; response inspection in action mode is the only screen.
     InspectionOnly,
+    /// No firewall and response inspection turned off: no screen at all.
+    InspectionOff,
 }
 
 /// What one cell observed.
@@ -146,6 +149,7 @@ async fn cell(setup: Setup, route: Route, method: &'static str, part: Part, text
         Setup::Default => fixture_firewalled_on(backend, None).await,
         Setup::Warn => fixture_firewalled_on(backend, Some(FirewallAction::Warn)).await,
         Setup::InspectionOnly => fixture_inspecting_on(backend).await,
+        Setup::InspectionOff => fixture_inspection_off_on(backend).await,
     };
     let firewalls = [fx.state.firewall.clone(), meta_firewall()];
     let count = || -> usize {
@@ -550,3 +554,67 @@ async fn egress_a_stolen_envelope_frees_no_other_slot() {
 /// The continuation-slot release matrix (MIK-8176 family).
 #[path = "egress_matrix_tests/slot_release.rs"]
 mod slot_release;
+
+/// `security.response_inspection.enabled: false`: on every route an answer
+/// carrying a pattern inspection finds is not inspected at all: no
+/// `_security_findings` annotation, no "Response inspection finding" log and
+/// no inspection run. The same text under action-mode inspection, in the
+/// same process (whose inspection memo is shared), is still inspected and
+/// screened: the pattern is one inspection finds, and Off leaves another
+/// gateway's mode alone.
+#[test]
+fn inspection_off_inspects_nothing_on_any_route() {
+    use crate::test_classification_count::{MARKER, runs};
+    let mut failures = Vec::new();
+    for route in ROUTES {
+        let marker = format!("{MARKER}inspection-off-{route:?}");
+        let text = format!("{} {marker}", secret());
+        let at = |setup| format!("{route:?} {setup:?}");
+        for setup in [Setup::InspectionOff, Setup::InspectionOnly] {
+            let before = runs("d2_inspection", &marker);
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime");
+            let (seen, warnings) = crate::test_log_capture::capture_warnings(|| {
+                runtime.block_on(cell(
+                    setup,
+                    route,
+                    "tools/call",
+                    Part::ResultText,
+                    text.clone(),
+                ))
+            });
+            let inspected = runs("d2_inspection", &marker) - before;
+            if seen.calls == 0 {
+                failures.push(format!("{}: never reached the backend", at(setup)));
+            }
+            match setup {
+                Setup::InspectionOff => {
+                    if inspected != 0 {
+                        failures.push(format!("{}: inspected {inspected} times", at(setup)));
+                    }
+                    if seen.body.contains("_security_findings") {
+                        failures.push(format!("{}: annotated: {}", at(setup), seen.body));
+                    }
+                    if warnings.contains("Response inspection finding") {
+                        failures.push(format!("{}: logged a finding: {warnings}", at(setup)));
+                    }
+                }
+                _ => {
+                    if inspected == 0 {
+                        failures.push(format!("{}: premise: never inspected", at(setup)));
+                    }
+                    if seen.body.contains(&secret()) {
+                        failures.push(format!(
+                            "{}: premise: not screened: {}",
+                            at(setup),
+                            seen.body
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    report(&failures);
+}
