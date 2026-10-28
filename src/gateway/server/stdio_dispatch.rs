@@ -158,6 +158,8 @@ impl Gateway {
                     "tools/list" => {
                         // MIK-8356: the same grant recheck HTTP runs before tools/list.
                         meta_mcp.revalidate_caller_slots(scope.caller).await;
+                        // The same own-view warm HTTP runs.
+                        meta_mcp.warm_listing_views(scope, Some(session_id)).await;
                         meta_mcp.handle_tools_list_with_params(id, params, Some(session_id), scope)
                     }
                     m if stdio_catalogue::METHODS.contains(&m) => {

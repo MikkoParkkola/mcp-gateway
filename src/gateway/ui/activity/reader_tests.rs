@@ -201,6 +201,41 @@ fn p2a_rotation_inside_one_request_reads_the_sealed_bytes() {
     assert_eq!(got, (0..8).rev().collect::<Vec<_>>());
 }
 
+/// Retention removes the segment a cursor names after the page resolved it:
+/// the page fails rather than read the active file, a different segment, in
+/// its place.
+#[test]
+fn a_segment_removed_after_resolving_fails_the_page() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir, "inv.jsonl");
+    let l = logger(&path, 1000);
+    for i in 0..30 {
+        call(&l, i);
+    }
+    let limits = Limits {
+        matches: 5,
+        bytes: 8 << 20,
+    };
+    let first = read_page(&path, None, None, limits, is_call).unwrap();
+    // Seal the active file the cursor points into.
+    let before = list_segments(&path).unwrap().len();
+    let mut i = 30;
+    while list_segments(&path).unwrap().len() == before {
+        call(&l, i);
+        i += 1;
+    }
+    let gone = path.clone();
+    AFTER_RESOLVE.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move || {
+            for segment in list_segments(&gone).unwrap() {
+                std::fs::remove_file(sealed_path(&gone, segment.seq)).unwrap();
+            }
+        }));
+    });
+    let page = read_page(&path, None, first.next.as_ref(), limits, is_call);
+    assert!(page.is_err(), "read another segment instead: {page:?}");
+}
+
 /// Write hand-made lines; the reader parses JSON and needs no chain.
 fn write_lines(path: &Path, lines: &[Value]) {
     let body: String = lines.iter().map(|v| v.to_string() + "\n").collect();
@@ -217,8 +252,14 @@ fn p3_a_record_at_the_cap_is_assembled_across_windows() {
     let path = log_path(&dir, "inv.jsonl");
     let mut big = json!({"tool": "tool_1", "pad": ""});
     let base = big.to_string().len();
-    big["pad"] = "x".repeat(4 * 1024 * 1024 - base).into();
-    assert_eq!(big.to_string().len(), 4 * 1024 * 1024, "exactly the cap");
+    // The logger's cap counts the record's newline, so the largest record it
+    // writes holds one byte less than 4 MiB.
+    big["pad"] = "x".repeat(4 * 1024 * 1024 - 1 - base).into();
+    assert_eq!(
+        big.to_string().len() + 1,
+        4 * 1024 * 1024,
+        "exactly the cap"
+    );
     write_lines(&path, &[entry("0", None), big, entry("2", None)]);
     let page = read_page(&path, None, None, ALL, is_call).unwrap();
     assert_eq!(
@@ -226,6 +267,29 @@ fn p3_a_record_at_the_cap_is_assembled_across_windows() {
         vec![2, 1, 0]
     );
     assert!(page.unreadable.is_empty());
+}
+
+/// One byte over the cap (4 MiB of content plus its newline), a line the
+/// logger refuses, is reported once and never served.
+#[test]
+fn p3_a_line_one_byte_over_the_cap_is_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir, "inv.jsonl");
+    let mut big = json!({"tool": "tool_1", "pad": ""});
+    let base = big.to_string().len();
+    big["pad"] = "x".repeat(4 * 1024 * 1024 - base).into();
+    assert_eq!(
+        big.to_string().len(),
+        4 * 1024 * 1024,
+        "one byte over the cap"
+    );
+    write_lines(&path, &[entry("0", None), big, entry("2", None)]);
+    let page = read_page(&path, None, None, ALL, is_call).unwrap();
+    assert_eq!(
+        page.lines.iter().filter_map(call_index).collect::<Vec<_>>(),
+        vec![2, 0]
+    );
+    assert_eq!(page.unreadable.len(), 1, "{:?}", page.unreadable);
 }
 
 #[test]

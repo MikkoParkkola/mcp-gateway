@@ -103,7 +103,7 @@ async fn a_stored_record_round_trips_every_noted_path() {
     });
     let stored = scope(async {
         for layer in [Layer::Value, Layer::Answer] {
-            for &path in NOTED_PATHS {
+            for path in crate::protocol::reserved_members::noted() {
                 note(layer, path, &value);
             }
         }
@@ -111,10 +111,11 @@ async fn a_stored_record_round_trips_every_noted_path() {
     })
     .await;
     let mut entries = stored.as_array().expect("a list").clone();
-    assert_eq!(entries.len(), 2 * NOTED_PATHS.len(), "{stored}");
+    let noted = crate::protocol::reserved_members::noted().count();
+    assert_eq!(entries.len(), 2 * noted, "{stored}");
     entries.push(json!({"layer": "value", "path": ["not_noted"], "digest": 1}));
     let decoded: WriteRecord = serde_json::from_value(Value::Array(entries)).expect("deserializes");
-    assert_eq!(decoded.0.len(), 2 * NOTED_PATHS.len(), "{decoded:?}");
+    assert_eq!(decoded.0.len(), 2 * noted, "{decoded:?}");
     let receipt = without(&value, &decoded);
     assert_eq!(
         receipt.as_ref(),

@@ -497,7 +497,12 @@ fn a_missing_challenge_fails_closed() {
     let slot = ChainSlot::default();
     let mut result = body();
     let err = meta(Some(ChainEmit::OnRequest))
-        .chain_receive((ChainMode::Verify, &[], None), &mut result, None, &slot)
+        .chain_receive(
+            (ChainMode::Verify, &[], None),
+            (&mut result, None),
+            None,
+            &slot,
+        )
         .expect_err("no challenge on record");
     assert_eq!(err.to_rpc_code(), -32001);
     assert!(matches!(*slot.lock(), ChainReceipt::Refused));
