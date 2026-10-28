@@ -175,19 +175,40 @@ fn a_result_prints_client_text_escaped() {
     );
 }
 
-/// A detail's own line breaks (the `--show-stderr` section) stay, and each
-/// line's text, captured stderr included, is escaped.
+/// The gateway's own lines under a detail (the `--show-stderr` tail) each
+/// start a line, escaped; `--format json` gets the same text raw, as before.
 #[test]
-fn a_multi_line_detail_keeps_its_lines_escaped() {
-    let result = CheckResult::warn(
-        "Backend tool",
-        "exited 1\n  stderr tail:\n    \u{1b}[31mpanic\u{202e}",
-    );
-    let lines = human_lines("[WARN]", &result);
+fn gateway_detail_lines_print_escaped_and_join_raw_for_json() {
+    let mut result = CheckResult::fail("Backend tool", "exited 1");
+    result.detail_lines = vec![
+        "  stderr tail:".to_string(),
+        "    \u{1b}[31mpanic\u{202e}".to_string(),
+    ];
+    let lines = human_lines("[FAIL]", &result);
     assert_eq!(lines.lines().count(), 3, "{lines:?}");
     assert!(
         !lines.contains('\u{1b}') && !lines.contains('\u{202e}'),
         "{lines:?}"
     );
     assert!(lines.contains("    \\u{1b}[31mpanic"), "{lines}");
+    assert_eq!(
+        result.full_detail(),
+        "exited 1\n  stderr tail:\n    \u{1b}[31mpanic\u{202e}"
+    );
+}
+
+/// A server name holding a line break cannot print a fake result line: the
+/// detail stays one line, its break shown as `\u{a}`.
+#[test]
+fn a_line_break_in_a_name_cannot_forge_a_result_line() {
+    let result = CheckResult::warn(
+        "ShadowRadar tool",
+        "tool\n\u{2713} all checks passed is unmanaged via stdio.",
+    );
+    let lines = human_lines("[WARN]", &result);
+    assert_eq!(lines.lines().count(), 1, "{lines:?}");
+    assert!(
+        lines.contains("tool\\u{a}\u{2713} all checks passed"),
+        "{lines}"
+    );
 }

@@ -13,21 +13,32 @@ pub(super) fn human_lines(badge: &str, result: &CheckResult) -> String {
     use std::fmt::Write as _;
 
     let mut lines = String::new();
-    // Line by line: a detail's own breaks (the `--show-stderr` section)
-    // stay, and every line's text is escaped, captured stderr included.
-    let detail: Vec<String> = result
-        .detail
-        .split('\n')
-        .map(|line| shown(line).to_string())
-        .collect();
+    // The detail is one line whatever it holds (its own breaks are escaped);
+    // only the gateway's own lines, such as the stderr tail, start a line.
     let _ = writeln!(
         lines,
         "{badge} {}: {}",
         shown(&result.label),
-        detail.join("\n")
+        shown(&result.detail)
     );
+    for line in &result.detail_lines {
+        let _ = writeln!(lines, "{}", shown(line));
+    }
     if let Some(hint) = &result.hint {
         let _ = writeln!(lines, "       Hint: {}", shown(hint));
     }
     lines
+}
+
+impl CheckResult {
+    /// The detail with the gateway's own lines under it, as `--format json`
+    /// emits it: raw, one text.
+    pub(super) fn full_detail(&self) -> String {
+        let mut text = self.detail.clone();
+        for line in &self.detail_lines {
+            text.push('\n');
+            text.push_str(line);
+        }
+        text
+    }
 }

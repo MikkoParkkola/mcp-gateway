@@ -64,6 +64,9 @@ pub struct CheckResult {
     pub status: CheckStatus,
     /// Detail message shown after the status badge.
     pub detail: String,
+    /// Lines the gateway writes under the detail (the `--show-stderr` tail):
+    /// client text sits inside one line, so it can never start a line.
+    pub detail_lines: Vec<String>,
     /// Optional hint printed on the next line when status is Fail or Warn.
     pub hint: Option<String>,
     /// Stable diagnostic category for machine-readable output.
@@ -88,6 +91,7 @@ impl CheckResult {
             label: label.into(),
             status: CheckStatus::Pass,
             detail: detail.into(),
+            detail_lines: Vec::new(),
             hint: None,
             category: "general",
             fix_command: None,
@@ -104,6 +108,7 @@ impl CheckResult {
             label: label.into(),
             status: CheckStatus::Fail,
             detail: detail.into(),
+            detail_lines: Vec::new(),
             hint: None,
             category: "general",
             fix_command: None,
@@ -120,6 +125,7 @@ impl CheckResult {
             label: label.into(),
             status: CheckStatus::Warn,
             detail: detail.into(),
+            detail_lines: Vec::new(),
             hint: None,
             category: "general",
             fix_command: None,
@@ -689,7 +695,7 @@ fn check_result_json_value(result: &CheckResult) -> Value {
         "label": result.label,
         "category": result.category,
         "status": status_str(&result.status),
-        "detail": result.detail,
+        "detail": result.full_detail(),
         "hint": result.hint,
         "fixability": {
             "auto_fixable": result.auto_fixable,
