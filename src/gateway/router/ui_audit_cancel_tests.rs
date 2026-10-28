@@ -375,6 +375,11 @@ async fn a_handler_panic_still_panics_out_of_the_layer() {
         Some(&"handler panic payload"),
         "the handler's own payload"
     );
+    assert!(
+        fx.admin_actions().is_empty(),
+        "a panicking handler's answer is never recorded: {:#?}",
+        fx.admin_actions()
+    );
 }
 
 /// An MCP server on loopback whose `tools/list` waits until `release` has a
