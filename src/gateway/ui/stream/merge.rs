@@ -117,6 +117,10 @@ pub(super) struct LogMerge<S: LogSource> {
     /// The last announced row observed per log, hidden or not. "In order" is
     /// judged against it; resume ids come from `delivered`.
     seen: LogCursor,
+    /// The last source generation seen per log (invocation, governance). An
+    /// unseen log counts as 0, so a rewrite before the first announcement is
+    /// still caught, at the cost of one extra check for a late subscriber.
+    generations: [u64; 2],
     lag_recoveries: usize,
     lag: LagWindow,
     too_slow: bool,
@@ -145,6 +149,7 @@ impl<S: LogSource> LogMerge<S> {
             rx,
             delivered,
             seen: head.clone(),
+            generations: [0; 2],
             lag_recoveries: 0,
             lag: LagWindow::default(),
             too_slow: false,
@@ -270,6 +275,12 @@ impl<S: LogSource> LogMerge<S> {
     /// A live row for the caller. An announcement that does not follow the
     /// last one seen exactly sends the view back to the source to be checked.
     async fn live(&mut self, appended: &Appended) -> Option<Row> {
+        let known = &mut self.generations[appended.log as usize];
+        if std::mem::replace(known, appended.generation) != appended.generation {
+            // The log was replaced or truncated: the source says where we are.
+            self.begin_scan().await;
+            return None;
+        }
         let seen = match appended.log {
             LogName::Invocation => &mut self.seen.inv,
             LogName::Governance => &mut self.seen.gov,
