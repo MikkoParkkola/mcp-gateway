@@ -123,7 +123,7 @@ pub(super) const PAGES: [Page; 9] = [
 pub(super) const TABS: [Tab; 3] = [Tab::Status, Tab::Actions, Tab::Settings];
 
 /// The methods a UI route registers. HEAD is served through GET.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Verb {
     Get,
     Post,
@@ -456,3 +456,36 @@ pub(super) fn row_for(path: &str, method: &axum::http::Method) -> Option<&'stati
     let verb = Verb::of(method)?;
     ROWS.iter().find(|r| r.path == path && r.method == verb)
 }
+
+/// One row as plain data, for the router's agreement test: path, method,
+/// the (page, tab) ids it backs, and whether its tab loads it. Test builds
+/// only, so the table's types keep their production visibility.
+#[cfg(test)]
+pub(in crate::gateway) type PlainRow = (
+    &'static str,
+    &'static str,
+    Vec<(&'static str, &'static str)>,
+    bool,
+);
+
+/// Every row as [`PlainRow`].
+#[cfg(test)]
+pub(in crate::gateway) fn plain_rows() -> Vec<PlainRow> {
+    ROWS.iter()
+        .map(|r| {
+            let method = match r.method {
+                Verb::Get => "GET",
+                Verb::Post => "POST",
+                Verb::Put => "PUT",
+                Verb::Patch => "PATCH",
+                Verb::Delete => "DELETE",
+            };
+            let tabs = r.tabs.iter().map(|&(p, t)| (p.id(), t.id())).collect();
+            (r.path, method, tabs, r.load)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+#[path = "access_table_tests.rs"]
+mod tests;

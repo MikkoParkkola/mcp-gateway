@@ -11,6 +11,8 @@
 
 mod access_report;
 mod access_table;
+#[cfg(test)]
+pub(in crate::gateway) use self::access_table::{PlainRow, plain_rows};
 mod activity;
 pub mod admin_audit;
 pub mod backend_ops;

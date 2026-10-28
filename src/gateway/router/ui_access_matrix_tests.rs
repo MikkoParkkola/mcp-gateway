@@ -724,3 +724,7 @@ fn the_expectation_holds_known_answers() {
         assert_eq!(post(path, "valid+store", "AdminKey"), "409", "{path}");
     }
 }
+
+/// The status report against the guards, through the same fixture.
+#[path = "ui_access_report_tests.rs"]
+mod report;
