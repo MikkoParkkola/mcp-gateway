@@ -123,9 +123,11 @@ async fn counts_that_differ_only_in_uptime_are_not_a_change() {
     let hub = StreamHub::new();
     let rx = hub.subscribe();
     hub.observe(json!({"a": 1}), json!({"n": 1, "uptime_secs": 1}), false);
-    let g1 = rx.borrow().status_gen;
+    let g1 = rx.borrow().counts_gen;
     hub.observe(json!({"a": 1}), json!({"n": 1, "uptime_secs": 2}), false);
-    assert_eq!(rx.borrow().status_gen, g1);
+    assert_eq!(rx.borrow().counts_gen, g1, "uptime alone is not a change");
+    hub.observe(json!({"a": 1}), json!({"n": 2, "uptime_secs": 3}), false);
+    assert!(rx.borrow().counts_gen > g1, "a real count change is one");
 }
 
 #[tokio::test]
