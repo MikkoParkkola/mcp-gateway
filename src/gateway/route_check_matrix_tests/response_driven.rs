@@ -232,7 +232,7 @@ const fn na_pins(reason: RespNa) -> &'static [&'static str] {
         RespNa::IngressRemovesToolCallScope => &[
             "rows::r_stamp_seal_binds_the_delivered_bytes",
             "rows::stdio::r_stamp_stdio_seal_binds_the_delivered_bytes",
-            "rows::r_link_read_scope_clamp_precedes_origin_link",
+            "rows::r_clamp_read_delivers_private",
         ],
         RespNa::NoModernShapeOnLegacy
         | RespNa::NoCacheOnDirect

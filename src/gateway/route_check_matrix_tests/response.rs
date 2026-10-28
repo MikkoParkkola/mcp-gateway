@@ -165,9 +165,10 @@ pub(crate) enum RespNa {
     TaskTailIsClampAndSeal,
     /// The matrix drives `tools/call`, whose answer may not carry
     /// `cacheScope`: ingress removes a backend's copy, so the clamp has
-    /// nothing to change there. Where a backend may still send it, a final
-    /// `resources/read`, `rows::r_link_read_scope_clamp_precedes_origin_link`
-    /// orders the clamp against the link.
+    /// nothing to change there. On the direct route no cacheable method is
+    /// linked or sealed (`finish_direct` links only `tools/call`, and only
+    /// `tools/call` is sealed and signed), so no clamp order exists to state;
+    /// `rows::r_clamp_read_delivers_private` keeps the clamp's own effect.
     IngressRemovesToolCallScope,
 }
 

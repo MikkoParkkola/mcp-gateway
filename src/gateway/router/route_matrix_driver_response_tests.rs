@@ -463,9 +463,6 @@ async fn read_then_relay_stuffed(
     }
 }
 
-/// The chain nonce the R-LINK calls carry.
-pub(crate) const CHAIN_NONCE: &str = "resp-nonce";
-
 /// A final `resources/read` answer claiming `cacheScope: "public"`: the one
 /// kind of answer a backend may still send the member on, so the clamp has
 /// something to change.
@@ -473,16 +470,11 @@ fn public_read() -> Value {
     json!({"contents": [{"uri": "file:///notes.txt", "text": "notes"}], "cacheScope": "public"})
 }
 
-/// One legacy `resources/read` on the direct route with the chain signer
-/// emitting on request and the read carrying [`CHAIN_NONCE`].
-pub(crate) async fn chained_public_read() -> Value {
-    use crate::gateway::chain_test_support::{NONCE_KEY, signer};
-    let fx = fixture::fixture_built(Answer::Built(public_read), |mut meta| {
-        meta.set_chain_signer(signer(), crate::config::ChainEmit::OnRequest);
-        meta
-    })
-    .await;
-    let params = json!({ "uri": "file:///notes.txt", "_meta": { NONCE_KEY: CHAIN_NONCE } });
+/// One legacy `resources/read` on the direct route, the backend answering
+/// [`public_read`].
+pub(crate) async fn direct_public_read() -> Value {
+    let fx = fixture::fixture_built(Answer::Built(public_read), |meta| meta).await;
+    let params = json!({ "uri": "file:///notes.txt" });
     fixture::send(
         &fx,
         HttpRoute::Direct.uri(),

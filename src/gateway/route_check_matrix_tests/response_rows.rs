@@ -9,10 +9,10 @@
 use serde_json::Value;
 
 use crate::gateway::router::route_matrix_driver_tests::response::{
-    BackendAnswer, CHAIN_NONCE, DELIVERED_PROSE, HttpRoute, LEAKED_LINE, chained_public_read,
-    node_verifies, planted_credential, read_then_relay, read_then_relay_own_signature,
-    read_then_relay_rebuilt, signed_call, signed_legacy_then_modern_replay, signed_recorded_call,
-    signed_redacted_call, signed_replay, trust_set,
+    BackendAnswer, DELIVERED_PROSE, HttpRoute, LEAKED_LINE, direct_public_read, node_verifies,
+    planted_credential, read_then_relay, read_then_relay_own_signature, read_then_relay_rebuilt,
+    signed_call, signed_legacy_then_modern_replay, signed_recorded_call, signed_redacted_call,
+    signed_replay, trust_set,
 };
 use crate::protocol::meta::Era;
 use crate::trust::provenance_public::{VerifyRefusal, VerifyStatus, verify_public};
@@ -275,35 +275,21 @@ async fn r_ownsig_the_gateway_signature_is_not_receipted() {
     }
 }
 
-/// R-LINK-READ: the clamp still orders against the origin link where a
-/// backend may send `cacheScope`, a final `resources/read` (on `tools/call`
-/// ingress removes the member, so the matrix cells there are unreachable).
-/// The clamp delivers `private`, and the link verifies over the delivered
-/// digest and refuses the pre-clamp one, so a link signed before the clamp
-/// fails.
+/// R-CLAMP-READ: where a backend may still send `cacheScope`, a final
+/// `resources/read`, its `public` claim is delivered `private` on the direct
+/// route. On `tools/call` ingress removes the member, and the direct route
+/// links and seals no cacheable method, so no order is stated here; this row
+/// keeps the clamp's own effect at route level.
 #[tokio::test]
-async fn r_link_read_scope_clamp_precedes_origin_link() {
-    use crate::gateway::chain_test_support::{chain_of, verify_self};
-    use crate::security::signature_chain::content_digest;
-    let body = chained_public_read().await;
+async fn r_clamp_read_delivers_private() {
+    let body = direct_public_read().await;
     let result = delivered(&body);
     assert_eq!(
         result.get("cacheScope").and_then(Value::as_str),
         Some("private"),
         "the clamp delivers private: {result}"
     );
-    let chain =
-        chain_of(result).unwrap_or_else(|| panic!("the answer carries an origin link: {body}"));
-    let digest = content_digest(result).expect("a hashable result");
-    verify_self(chain, &digest, CHAIN_NONCE)
-        .unwrap_or_else(|e| panic!("the link verifies over the delivered bytes: {e:?}"));
-    let mut pre_clamp = result.clone();
-    pre_clamp["cacheScope"] = Value::from("public");
-    let pre_digest = content_digest(&pre_clamp).expect("a hashable result");
-    assert!(
-        verify_self(chain, &pre_digest, CHAIN_NONCE).is_err(),
-        "the link does not cover the pre-clamp body"
-    );
+    assert_eq!(result["contents"][0]["text"], "notes", "{result}");
 }
 
 /// R-SIGN `seal_precedes_sign` (`Seal` < `Sign`; `Mcp`, `Direct` × `Fresh` ×
