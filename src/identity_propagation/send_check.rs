@@ -86,7 +86,7 @@ pub(crate) fn expiry_check(
                 .as_str()
                 .split_once(' ')
                 .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
-                .map_or(value, |(_, rest)| rest.trim_start_matches(' '));
+                .map_or(value.as_str(), |(_, rest)| rest.trim_start_matches(' '));
             unverified_jwt_exp(token)
         })
         .min();
