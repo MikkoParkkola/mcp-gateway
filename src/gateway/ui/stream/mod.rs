@@ -122,7 +122,7 @@ async fn stream(
     let hub = state.dashboard_bootstrap.stream_hub();
     let who = held
         .as_ref()
-        .map_or_else(|| "anonymous".to_owned(), HeldCredential::digest);
+        .map_or_else(|| "anonymous".to_owned(), HeldCredential::deciding_digest);
     let spawn_watcher = || tokio::spawn(watcher::run(Arc::clone(&state))).abort_handle();
     let guard = match hub.admit(&who, spawn_watcher) {
         Ok(guard) => guard,

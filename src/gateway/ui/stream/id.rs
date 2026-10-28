@@ -12,12 +12,8 @@ pub(super) struct LogPart {
     pub(super) hash: String,
 }
 
-/// Which log a row belongs to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum LogName {
-    Invocation,
-    Governance,
-}
+/// Which log a row belongs to: the export source enum already names both.
+pub(super) use crate::control_plane::export::ExportSource as LogName;
 
 /// A position in both logs. Either half may be absent.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
