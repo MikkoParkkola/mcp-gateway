@@ -335,6 +335,39 @@ test('C19: the active option stays visible in forced-colors mode', async ({ page
   expect(other).toBe('none');
 });
 
+test('C20: a press on an option keeps focus, a press on the list itself (its scrollbar) does not', async ({ page }) => {
+  await addServerForm(page);
+  await search(page);
+  const cancelled = (sel) => page.evaluate((q) => {
+    const target = document.querySelector(q);
+    return !target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+  }, sel);
+  expect(await cancelled('#reg-opt-1')).toBe(true);
+  expect(await cancelled('#reg-dropdown')).toBe(false);
+});
+
+test('C21: a pointer resting over the list does not take the active option when the list is rebuilt', async ({ page }) => {
+  await addServerForm(page);
+  await search(page);
+  await list(page).getByRole('option').nth(2).hover();
+  // The list is rebuilt under the still pointer.
+  await box(page).focus();
+  await page.keyboard.type('-');
+  await expect(list(page).getByRole('option')).toHaveCount(30);
+  await page.keyboard.press('ArrowDown');
+  const first = await list(page).getByRole('option').first().getAttribute('id');
+  await expect(box(page)).toHaveAttribute('aria-activedescendant', first);
+});
+
+test('C22: a rebuilt list starts scrolled to its top', async ({ page }) => {
+  await addServerForm(page);
+  await search(page);
+  for (let i = 0; i < 20; i++) await page.keyboard.press('ArrowDown');
+  await expect.poll(() => list(page).evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  await page.keyboard.type('-');
+  expect(await list(page).evaluate((el) => el.scrollTop)).toBe(0);
+});
+
 for (const width of WIDTHS) {
   test(`C7: axe finds no blocking violation with the list open and an option active at ${width} px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
