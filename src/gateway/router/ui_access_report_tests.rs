@@ -39,6 +39,9 @@ fn passes(matrix: &BTreeMap<String, String>, path: &str, method: &str, caller: C
     !(cell.starts_with("401") || cell.starts_with("403"))
 }
 
+/// A tab's guard outcomes: its load rows', and all its rows'.
+type LoadsAndAll = (Vec<bool>, Vec<bool>);
+
 /// The tabs the report should show for `caller`, per page id, from the rows
 /// and the matrix alone.
 fn expected_tabs(
@@ -46,7 +49,7 @@ fn expected_tabs(
     caller: Caller,
 ) -> BTreeMap<&'static str, BTreeMap<&'static str, bool>> {
     let rows = plain_rows();
-    let mut tabs: BTreeMap<(&str, &str), (Vec<bool>, Vec<bool>)> = BTreeMap::new();
+    let mut tabs: BTreeMap<(&str, &str), LoadsAndAll> = BTreeMap::new();
     for (path, method, backs, load) in &rows {
         let pass = passes(matrix, path, method, caller);
         for &(page, tab) in backs {

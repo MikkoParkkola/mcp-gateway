@@ -89,7 +89,11 @@ fn shell_ids(script: &str, name: &str) -> Vec<String> {
 fn the_page_and_tab_inventory_is_the_shells() {
     let (_, script) = super::super::shell::ASSETS
         .iter()
-        .find(|(name, _)| name.ends_with(".js"))
+        .find(|(name, _)| {
+            std::path::Path::new(name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("js"))
+        })
         .expect("the shell script is an asset");
     let script = std::str::from_utf8(script).expect("the script is UTF-8");
     let pages: Vec<&str> = PAGES.iter().map(|p| p.id()).collect();
