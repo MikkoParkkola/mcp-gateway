@@ -46,12 +46,14 @@ pub(crate) fn fixture_client(timeout: Duration) -> reqwest::Client {
 /// [`fixture_client`]'s builder, for a fixture that sets more options. Its
 /// only trust root is the fixture CA, and it ignores any environment proxy:
 /// the fixture host is not a loopback name, so an inherited `HTTP_PROXY`
-/// would otherwise carry fixture traffic off the machine.
+/// would otherwise carry fixture traffic off the machine. Its timeout is
+/// [`crate::test_wait::HANG_BOUND`] until a caller sets its own.
 pub(crate) fn fixture_client_builder() -> reqwest::ClientBuilder {
     let ca =
         reqwest::Certificate::from_pem(fixture_pki().ca.as_bytes()).expect("the fixture CA is PEM");
     reqwest::Client::builder()
         .no_proxy()
+        .timeout(crate::test_wait::HANG_BOUND)
         .resolve(FIXTURE_HOST, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
         .tls_certs_only([ca])
 }
