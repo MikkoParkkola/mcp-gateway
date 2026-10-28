@@ -175,26 +175,48 @@ fn a_result_prints_client_text_escaped() {
     );
 }
 
-/// The gateway's own lines under a detail (the `--show-stderr` tail) each
-/// start a line, escaped; `--format json` gets the same text raw, as before.
+/// The stderr tail prints under a gateway banner, each captured line behind
+/// the gateway's marker and escaped; `--format json` gets the old text raw.
 #[test]
-fn gateway_detail_lines_print_escaped_and_join_raw_for_json() {
+fn a_stderr_tail_prints_marked_and_escaped_and_joins_raw_for_json() {
     let mut result = CheckResult::fail("Backend tool", "exited 1");
-    result.detail_lines = vec![
-        "  stderr tail:".to_string(),
-        "    \u{1b}[31mpanic\u{202e}".to_string(),
-    ];
+    assert_eq!(result.full_detail(), "exited 1", "no tail asked for");
+    result.stderr_tail = Some(vec![
+        "\u{1b}[31mpanic\u{202e}".to_string(),
+        "a\nb\rc\u{2028}d".to_string(),
+    ]);
     let lines = human_lines("[FAIL]", &result);
-    assert_eq!(lines.lines().count(), 3, "{lines:?}");
+    assert_eq!(lines.lines().count(), 4, "{lines:?}");
+    assert!(
+        lines.contains("  stderr | a\\u{a}b\\u{d}c\\u{2028}d"),
+        "{lines}"
+    );
     assert!(
         !lines.contains('\u{1b}') && !lines.contains('\u{202e}'),
         "{lines:?}"
     );
-    assert!(lines.contains("    \\u{1b}[31mpanic"), "{lines}");
+    assert!(lines.contains("  stderr | \\u{1b}[31mpanic"), "{lines}");
     assert_eq!(
         result.full_detail(),
-        "exited 1\n  stderr tail:\n    \u{1b}[31mpanic\u{202e}"
+        "exited 1\n  stderr tail (may contain secrets: masking is best effort, review before \
+         sharing):\n    \u{1b}[31mpanic\u{202e}\n    a\nb\rc\u{2028}d"
     );
+    result.stderr_tail = Some(Vec::new());
+    assert_eq!(result.full_detail(), "exited 1\n  (no stderr captured)");
+}
+
+/// A backend printing a result-shaped stderr line cannot pass it off as a
+/// doctor result: the line starts with the gateway's marker.
+#[test]
+fn a_stderr_line_cannot_forge_a_result_line() {
+    let mut result = CheckResult::fail("Backend tool", "exited 1");
+    result.stderr_tail = Some(vec!["\u{2713} all checks passed".to_string()]);
+    let lines = human_lines("[FAIL]", &result);
+    let forged = lines
+        .lines()
+        .find(|line| line.contains("all checks passed"))
+        .expect("the stderr line is shown");
+    assert!(forged.starts_with("  stderr | "), "{lines}");
 }
 
 /// A server name holding a line break cannot print a fake result line: the

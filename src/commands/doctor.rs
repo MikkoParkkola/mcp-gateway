@@ -64,9 +64,10 @@ pub struct CheckResult {
     pub status: CheckStatus,
     /// Detail message shown after the status badge.
     pub detail: String,
-    /// Lines the gateway writes under the detail (the `--show-stderr` tail):
-    /// client text sits inside one line, so it can never start a line.
-    pub detail_lines: Vec<String>,
+    /// The backend's captured stderr lines, when `--show-stderr` asked for
+    /// them. Backend text: the terminal prints each behind a gateway marker,
+    /// so none can pass for a result line.
+    pub stderr_tail: Option<Vec<String>>,
     /// Optional hint printed on the next line when status is Fail or Warn.
     pub hint: Option<String>,
     /// Stable diagnostic category for machine-readable output.
@@ -91,7 +92,7 @@ impl CheckResult {
             label: label.into(),
             status: CheckStatus::Pass,
             detail: detail.into(),
-            detail_lines: Vec::new(),
+            stderr_tail: None,
             hint: None,
             category: "general",
             fix_command: None,
@@ -108,7 +109,7 @@ impl CheckResult {
             label: label.into(),
             status: CheckStatus::Fail,
             detail: detail.into(),
-            detail_lines: Vec::new(),
+            stderr_tail: None,
             hint: None,
             category: "general",
             fix_command: None,
@@ -125,7 +126,7 @@ impl CheckResult {
             label: label.into(),
             status: CheckStatus::Warn,
             detail: detail.into(),
-            detail_lines: Vec::new(),
+            stderr_tail: None,
             hint: None,
             category: "general",
             fix_command: None,

@@ -110,7 +110,7 @@ pub(super) async fn start_stdio_backend(
             let mut result =
                 CheckResult::fail(&label, error.to_string()).with_category("backend_stdio");
             if probe == StdioProbe::StartShowingStderr {
-                result.detail_lines = stderr_section(&transport.last_failure_stderr());
+                result.stderr_tail = Some(transport.last_failure_stderr());
             }
             result
         }
@@ -120,21 +120,6 @@ pub(super) async fn start_stdio_backend(
         )
         .with_category("backend_stdio"),
     })
-}
-
-/// The `--show-stderr` lines, banner first: masking is best effort. Each is
-/// one line of its own under the detail; a captured line holding a break
-/// is still one line on screen.
-fn stderr_section(lines: &[String]) -> Vec<String> {
-    if lines.is_empty() {
-        return vec!["  (no stderr captured)".to_string()];
-    }
-    let mut section = vec![
-        "  stderr tail (may contain secrets: masking is best effort, review before sharing):"
-            .to_string(),
-    ];
-    section.extend(lines.iter().map(|line| format!("    {line}")));
-    section
 }
 
 // Unix-only (W-L5): the probed backends are `sh -c` scripts, which Windows does not provide.
