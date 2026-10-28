@@ -166,3 +166,40 @@ async fn a_binding_made_required_on_reload_ends_the_gateway_session() {
         "the gateway's shared stream stayed open"
     );
 }
+
+/// START.2: a subscriber's first call opens their own per-user slot, and that
+/// slot's start (connect, `server/discover`, a legacy `initialize`) carries
+/// the subscriber's credential like every call after it. The backend sees no
+/// request at all without a subscriber's credential.
+#[tokio::test]
+async fn a_per_user_slots_own_start_carries_the_subscribers_credential() {
+    let root = tempfile::tempdir().expect("root");
+    let issuer = issuer::Issuer::start(root.path()).await;
+    let rx = Receiver::start(root.path()).await;
+    let peer = SubjectPeer::start().await;
+    let backend = per_user_backend(&peer, true);
+    let gw = oidc_gateway::start(root.path(), &rx, &issuer, backend, &[]).await;
+    let bearer = issuer.mint("u1", &oidc_gateway::email("u1"));
+    // The call's catalogue check fills the subscriber's own slot, which
+    // starts it; the tool name does not matter.
+    gw.rpc(
+        Some(&bearer),
+        "tools/call",
+        json!({"name": "gateway_invoke", "arguments": {
+            "server": "x", "tool": "any", "arguments": {}
+        }}),
+    )
+    .await;
+    assert!(
+        peer.seen().iter().any(|r| !r.subject.is_empty()),
+        "premise: the subscriber's requests reached the backend: {:?}",
+        peer.seen()
+    );
+    let reached = credential_less(&peer, 0);
+    assert!(
+        reached.is_empty(),
+        "the per-user slot's start reached the backend without the \
+         subscriber's credential: {reached:?}\n{}",
+        gw.logs()
+    );
+}
