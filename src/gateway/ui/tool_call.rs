@@ -33,6 +33,10 @@ use crate::key_server::oidc::VerifiedIdentity;
 /// The largest request body read: a tool's arguments typed into a form.
 const MAX_BODY: usize = 1 << 20;
 
+/// The largest MCP answer read back. A larger one is not shown: the call
+/// may have run, and the route says so.
+const MAX_ANSWER: usize = 32 << 20;
+
 /// How long the route waits for the tool before answering 504. Under the
 /// shell's own 30 s, so the shell hears "may still be running" from us.
 const DEADLINE: Duration = Duration::from_secs(25);
@@ -87,6 +91,25 @@ pub(super) async fn call(State(state): State<Arc<AppState>>, request: Request) -
         return admin_auth_required().into_response();
     }
     let (parts, body) = request.into_parts();
+    // A JSON body only: a cross-site form post cannot send this type without
+    // a preflight, so a session cookie alone cannot start a call.
+    let json = parts
+        .headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.split(';')
+                .next()
+                .is_some_and(|t| t.trim().eq_ignore_ascii_case("application/json"))
+        });
+    if !json {
+        return refusal(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "the body must be application/json",
+            Disposition::NotRun,
+        );
+    }
     let ask = match parse(body).await {
         Ok(ask) => ask,
         Err(refused) => return *refused,
@@ -203,34 +226,27 @@ fn admit(
     }
 }
 
-/// The 504: a call not yet sent is stopped; one sent runs on.
+/// The 504. A call not yet sent is stopped; one sent runs on. Either way
+/// the answer is "may have run": a stop takes effect at the task's next
+/// await, so a send can still begin after any read of its state.
 fn past_deadline(
     ui_call: &UiCall,
     abort: &tokio::task::AbortHandle,
     detail: Map<String, Value>,
 ) -> Response {
     if !ui_call.outcome().dispatched {
-        // Nothing was sent: nothing runs on past this answer.
         abort.abort();
     }
-    // Read after the abort: a send that began in between is marked before
-    // it starts, so it reads here as may-have-run.
-    let outcome = ui_call.outcome();
-    let disposition = if outcome.dispatched {
-        Disposition::MayHaveRun
-    } else {
-        Disposition::NotRun
-    };
     finish(
         refusal(
             StatusCode::GATEWAY_TIMEOUT,
             "deadline",
             "no answer in time; the tool may still be running",
-            disposition,
+            Disposition::MayHaveRun,
         ),
         detail,
-        disposition,
-        outcome.trace,
+        Disposition::MayHaveRun,
+        ui_call.outcome().trace,
     )
 }
 
@@ -315,8 +331,9 @@ fn spawn_call(
 
 /// The status and disposition of a call, from what the dispatch recorded.
 /// A JSON-RPC code is read only once the record says nothing was sent, to
-/// tell a no-such-tool or an audit outage from a refusal: every one of those
-/// is "did not run" whatever the code means.
+/// tell an audit outage from a refusal: both are "did not run" whatever the
+/// code means. A missing server or tool is answered as a refusal, as /mcp
+/// answers it (no 404: the route names no more than /mcp does).
 fn classify(outcome: &Outcome, answer: Option<&Value>) -> (StatusCode, Disposition) {
     let code = answer
         .and_then(|a| a.get("error"))
@@ -339,7 +356,6 @@ fn classify(outcome: &Outcome, answer: Option<&Value>) -> (StatusCode, Dispositi
         // Unreadable: the record says unsent, but the shell is told only
         // what is certain.
         (None, _) => (StatusCode::INTERNAL_SERVER_ERROR, Disposition::MayHaveRun),
-        (Some(_), Some(NO_SUCH_TOOL)) => (StatusCode::NOT_FOUND, Disposition::NotRun),
         (Some(_), _) if audit_down => (StatusCode::SERVICE_UNAVAILABLE, Disposition::NotRun),
         // A gate's refusal, or a sealed refusal answered as an `isError`
         // result before the send.
@@ -347,8 +363,6 @@ fn classify(outcome: &Outcome, answer: Option<&Value>) -> (StatusCode, Dispositi
     }
 }
 
-/// `BackendNotFound` and `ToolNotFound` (`Error::to_rpc_code`).
-const NO_SUCH_TOOL: i64 = -32001;
 /// `Error::AuditUnavailable`.
 const AUDIT_UNAVAILABLE: i32 = -32005;
 
@@ -360,7 +374,6 @@ fn wording(status: StatusCode) -> (&'static str, &'static str) {
             "confirm_write_required",
             "this tool is not declared read-only; send confirm_write to run it",
         ),
-        StatusCode::NOT_FOUND => ("no_such_tool", "no such server or tool"),
         StatusCode::FORBIDDEN => ("refused", "the gateway refused this call; nothing was run"),
         StatusCode::SERVICE_UNAVAILABLE => (
             "audit_unavailable",
@@ -421,7 +434,7 @@ fn internal_request(parts: &axum::http::request::Parts, ask: &CallRequest) -> Re
 
 /// The MCP answer's JSON-RPC body. Reading it commits its delivery record.
 async fn read_answer(reply: Response) -> Option<Value> {
-    let bytes = axum::body::to_bytes(reply.into_body(), usize::MAX)
+    let bytes = axum::body::to_bytes(reply.into_body(), MAX_ANSWER)
         .await
         .ok()?;
     serde_json::from_slice(&bytes).ok()

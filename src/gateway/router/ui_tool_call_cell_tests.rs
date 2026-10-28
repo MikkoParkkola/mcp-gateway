@@ -313,3 +313,19 @@ async fn t24_a_capability_is_judged_by_the_definition_it_runs() {
         );
     }
 }
+
+/// T29 (code review): the send point refuses a UI call its gate did not
+/// admit, and a send to another target; it admits the gated one.
+/// Mutant: the send check always admits.
+#[tokio::test]
+async fn t29_the_send_point_admits_only_the_gated_call() {
+    use crate::gateway::ui_call::{Confirm, UiCall, admit_send, gate};
+    let call = UiCall::new(SERVER, "read", "p", Confirm::Confirmed);
+    call.scope(async {
+        assert!(admit_send((SERVER, "read")).is_err(), "not gated yet");
+        gate((SERVER, "read"), Some("p"), false).expect("the gate admits it");
+        assert!(admit_send((SERVER, "read")).is_ok(), "gated");
+        assert!(admit_send((SERVER, "write")).is_err(), "another target");
+    })
+    .await;
+}

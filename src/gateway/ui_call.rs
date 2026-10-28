@@ -44,6 +44,10 @@ pub(crate) struct UiCall {
     dispatched: AtomicBool,
     failed_after_send: AtomicBool,
     confirm_refused: AtomicBool,
+    /// The gate before the send admitted this call. A send the gate did not
+    /// admit is refused at the send point (`admit_send`), so a path that
+    /// skipped the gate cannot run a UI call.
+    gated: AtomicBool,
 }
 
 /// What the dispatch recorded, read once it returns.
@@ -74,6 +78,7 @@ impl UiCall {
             dispatched: AtomicBool::new(false),
             failed_after_send: AtomicBool::new(false),
             confirm_refused: AtomicBool::new(false),
+            gated: AtomicBool::new(false),
         })
     }
 
@@ -113,26 +118,34 @@ pub(crate) fn note_trace(trace: &str) {
     }
 }
 
-/// A send to `step` begins. Set before the send, so every failure after it
-/// reads as dispatched.
-pub(crate) fn note_dispatched(step: (&str, &str)) {
-    if let Some(call) = current() {
-        call.dispatched.store(true, Ordering::SeqCst);
-        if !call.targets(step) {
-            // The gate refuses a foreign target before any send; reaching
-            // here anyway is a send the route cannot vouch for.
-            call.failed_after_send.store(true, Ordering::SeqCst);
+/// The last check before a send: a UI call goes out only as the call its
+/// gate admitted. `Err` refuses it; nothing is sent.
+pub(crate) fn admit_send(step: (&str, &str)) -> crate::Result<()> {
+    match current() {
+        Some(call) if !call.targets(step) || !call.gated.load(Ordering::SeqCst) => {
+            Err(refused("this send is not the call the web UI checked"))
         }
+        _ => Ok(()),
     }
 }
 
-/// A sent call failed. `pre_dispatch` is the gateway's own judgement that
-/// the backend cannot have acted (`Error::is_pre_dispatch`, the allowlist an
-/// idempotency key is released on): such a failure was never sent (a server
-/// that is not registered fails after the mark), so the call did not run.
-pub(crate) fn note_send_error(pre_dispatch: bool) {
+/// A send to `step` begins. Set before the send, so every failure after it
+/// reads as dispatched.
+pub(crate) fn note_dispatched(_step: (&str, &str)) {
     if let Some(call) = current() {
-        if pre_dispatch {
+        call.dispatched.store(true, Ordering::SeqCst);
+    }
+}
+
+/// A sent call failed. `catalogue_miss`: the backend or tool was not found,
+/// which the dispatch decides from its catalogue before any transport
+/// attempt (a server that is not registered fails after the mark), so the
+/// call did not run. Any other failure may follow an attempt that reached
+/// the backend: a retry can end in a connect failure after a timeout, so the
+/// broader "cannot have acted" list is not used here.
+pub(crate) fn note_send_error(catalogue_miss: bool) {
+    if let Some(call) = current() {
+        if catalogue_miss && !call.failed_after_send.load(Ordering::SeqCst) {
             call.dispatched.store(false, Ordering::SeqCst);
         } else {
             call.failed_after_send.store(true, Ordering::SeqCst);
@@ -161,7 +174,9 @@ pub(crate) fn gate(
     if !call.targets(step) || principal != Some(call.principal.as_str()) {
         return Err(refused("this call is not the one the web UI checked"));
     }
-    confirmed(&call, declared_read_only)
+    confirmed(&call, declared_read_only)?;
+    call.gated.store(true, Ordering::SeqCst);
+    Ok(())
 }
 
 /// The capability executor's arm: `read_only` is the definition it is about

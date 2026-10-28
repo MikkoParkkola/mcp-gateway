@@ -56,6 +56,7 @@ impl Transport for Stub {
                     tool("iserr", &ro),
                     tool("slow", &ro),
                     tool("ask", &ro),
+                    tool("flaky", &ro),
                     tool("write", &json!({})),
                     tool("get_x", &json!({})),
                 ]}),
@@ -87,6 +88,12 @@ impl Transport for Stub {
                     json!({"content": [{"type": "text", "text": "late"}], "isError": false}),
                 ))
             }
+            // Times out once (the request may have reached it), then cannot be
+            // reached: a retry that ends in a connect failure.
+            "flaky" if self.calls.load(Ordering::SeqCst) == 1 => {
+                Err(crate::Error::BackendTimeout("stub timed out".into()))
+            }
+            "flaky" => Err(crate::Error::TransportConnect("stub unreachable".into())),
             "fail" => Err(crate::Error::BackendTimeout("stub timed out".into())),
             "iserr" => Ok(JsonRpcResponse::success(
                 id,
@@ -703,4 +710,89 @@ async fn t27_a_tool_that_asks_a_question_answers_may_have_run() {
     assert_eq!(body["disposition"], "may_have_run", "{body}");
     assert_eq!(sent(&fx), 1, "the call was sent");
     assert!(!body.to_string().contains("Which account"), "{body}");
+}
+
+/// T30 (code review): a retry that ends in a connect failure after an
+/// attempt that timed out may have run: the first attempt may have reached
+/// the backend, so the route answers a 5xx, never "not run".
+/// Mutant: the send mark cleared on any error the gateway calls pre-dispatch.
+#[tokio::test]
+async fn t30_a_retry_ending_unreachable_may_have_run() {
+    let fx = fixture().await;
+    let (status, body) = post(&fx, ADMIN, call("flaky", false)).await;
+    assert!(
+        sent(&fx) >= 2,
+        "the premise: it was retried ({})",
+        sent(&fx)
+    );
+    assert!(status.is_server_error(), "{status} {body}");
+    assert_eq!(body["disposition"], "may_have_run", "{body}");
+}
+
+/// T31 (code review): a body that is not `application/json` is refused
+/// before anything runs, so a cross-site form post cannot start a call.
+/// Mutant: the content-type check removed.
+#[tokio::test]
+async fn t31_a_non_json_body_is_refused() {
+    let fx = fixture().await;
+    let request = Request::builder()
+        .method("POST")
+        .uri(ROUTE)
+        .header("authorization", format!("Bearer {ADMIN}"))
+        .header("content-type", "text/plain")
+        .body(Body::from(call("read", false).to_string()))
+        .expect("request");
+    let response = create_router(Arc::clone(&fx.state))
+        .oneshot(request)
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(sent(&fx), 0);
+}
+
+/// T7b (code review): a dashboard-session caller, whose principal reaches
+/// the gate as the cookie names it: the call runs, its `admin_action` names
+/// `ui:session:`, and its invocation names the same principal.
+#[tokio::test]
+async fn t7b_a_dashboard_session_runs_and_is_audited_as_itself() {
+    use crate::gateway::auth::{Now, SESSION_COOKIE, SessionLimits};
+    let fx = fixture().await;
+    let limits = SessionLimits::from(&fx.state.live_config.get().auth.dashboard_session);
+    let handle = fx
+        .state
+        .dashboard_bootstrap
+        .issue_session_at(Now::read(), &limits);
+    let request = Request::builder()
+        .method("POST")
+        .uri(ROUTE)
+        .header("cookie", format!("{SESSION_COOKIE}={handle}"))
+        .header("content-type", "application/json")
+        .body(Body::from(call("read", false).to_string()))
+        .expect("request");
+    let response = create_router(Arc::clone(&fx.state))
+        .oneshot(request)
+        .await
+        .expect("response");
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    assert_eq!(status, StatusCode::OK, "{body} {:#?}", records(&fx));
+    let receipt = body["receipt"].as_str().expect("a receipt").to_owned();
+    let action = admin_actions(&fx).pop().expect("the admin_action");
+    assert!(
+        action["via"]
+            .as_str()
+            .is_some_and(|v| v.starts_with("ui:session:")),
+        "{action}"
+    );
+    let invocation = records(&fx)
+        .into_iter()
+        .find(|r| r["trace_id"] == receipt.as_str() && r["event"] != "admin_action")
+        .expect("the invocation's record");
+    assert_eq!(
+        invocation["who"]["principal"], action["who"]["principal"],
+        "{invocation}"
+    );
 }
