@@ -413,3 +413,23 @@ async fn a_continuation_under_the_same_generation_is_not_a_reset() {
     assert!(!out.contains(&Out::Reset));
     assert_eq!(ids(&out), vec![6, 7]);
 }
+
+#[tokio::test(start_paused = true)]
+async fn lag_recoveries_do_not_rescan_hidden_rows_they_already_passed() {
+    let fake = Fake::new(0, 4);
+    let mut merge = LogMerge::connect(Arc::clone(&fake), (), None).await;
+    for _ in 0..400 {
+        fake.append(true);
+    }
+    // The first recovery pages through 400 rows nobody can see.
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(30), merge.next()).await;
+    for _ in 0..400 {
+        fake.append(true);
+    }
+    let visible = fake.append(false);
+    assert_eq!(ids(&collect(&mut merge, 1).await), vec![visible]);
+    assert!(merge.lag_recoveries() >= 2);
+    let reads = *fake.reads.lock().unwrap();
+    let pages = (visible as usize).div_ceil(PAGE);
+    assert!(reads <= pages + 1, "{reads} page reads for {pages} pages");
+}
