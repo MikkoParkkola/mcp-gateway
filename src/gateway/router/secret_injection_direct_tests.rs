@@ -149,28 +149,9 @@ fn files_under(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
     files
 }
 
-/// The secret goes into what is sent and into nothing the gateway answers or
-/// keeps: not the answer, not a repeat the idempotency cache serves, not a
-/// task's answer, and not the task store on disk.
-#[tokio::test]
-async fn the_secret_is_sent_and_nothing_answered_or_kept_holds_it() {
-    let fx = fixture_with_secrets(vec![argument_rule()], None).await;
-    let session = initialize(&fx, "k-std").await;
-    let mut answers = Vec::new();
-    for _ in 0..2 {
-        let (_, body) = post_meta_invoke(
-            &fx,
-            "k-std",
-            "alpha",
-            "read",
-            json!({}),
-            Some("idem-secret-1"),
-            Some(&session),
-        )
-        .await;
-        assert!(body.get("error").is_none(), "premise: {body}");
-        answers.push(body);
-    }
+/// `gateway_invoke read` on `alpha` as a task, polled until it leaves
+/// `working`: the creating answer and the finished `tasks/get` answer.
+async fn run_task(fx: &super::direct_guards_fixture::Fx) -> (serde_json::Value, serde_json::Value) {
     // A task is a modern call that declares the tasks extension.
     let modern = json!({
         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
@@ -186,16 +167,8 @@ async fn the_secret_is_sent_and_nothing_answered_or_kept_holds_it() {
         ("mcp-method", "tools/call"),
         ("mcp-name", "gateway_invoke"),
     ];
-    let (_, made) = send_with_headers(
-        &fx,
-        "/mcp",
-        "k-std",
-        "tools/call",
-        task,
-        None,
-        &call_headers,
-    )
-    .await;
+    let (_, made) =
+        send_with_headers(fx, "/mcp", "k-std", "tools/call", task, None, &call_headers).await;
     let id = made
         .pointer("/result/task/taskId")
         .or_else(|| made.pointer("/result/taskId"))
@@ -210,7 +183,7 @@ async fn the_secret_is_sent_and_nothing_answered_or_kept_holds_it() {
             ("mcp-name", id.as_str()),
         ];
         let (_, got) = send_with_headers(
-            &fx,
+            fx,
             "/mcp",
             "k-std",
             "tasks/get",
@@ -233,6 +206,32 @@ async fn the_secret_is_sent_and_nothing_answered_or_kept_holds_it() {
         Some(&json!("completed")),
         "premise: the task completed: {finished}"
     );
+    (made, finished)
+}
+
+/// The secret goes into what is sent and into nothing the gateway answers or
+/// keeps: not the answer, not a repeat the idempotency cache serves, not a
+/// task's answer, and not the task store on disk.
+#[tokio::test]
+async fn the_secret_is_sent_and_nothing_answered_or_kept_holds_it() {
+    let fx = fixture_with_secrets(vec![argument_rule()], None).await;
+    let session = initialize(&fx, "k-std").await;
+    let mut answers = Vec::new();
+    for _ in 0..2 {
+        let (_, body) = post_meta_invoke(
+            &fx,
+            "k-std",
+            "alpha",
+            "read",
+            json!({}),
+            Some("idem-secret-1"),
+            Some(&session),
+        )
+        .await;
+        assert!(body.get("error").is_none(), "premise: {body}");
+        answers.push(body);
+    }
+    let (made, finished) = run_task(&fx).await;
     answers.push(made);
     answers.push(finished);
     let seen = fx.seen.lock().expect("recorder").clone();
