@@ -246,14 +246,14 @@ fn check_host_not_ssrf(host: &str) -> Result<()> {
 }
 
 /// Whether `host` names the loopback interface by name: `localhost` or a name
-/// under it (RFC 6761 §6.3), in any case, with or without one trailing dot.
+/// under it (RFC 6761 §6.3), in any case, with any trailing dots.
 ///
 /// Wider than the router's `is_loopback_host` on purpose: that one decides
 /// where an `http` OAuth origin is RFC-legal, where only `localhost` itself
 /// counts; this one refuses a destination, where every spelling must.
 pub(crate) fn is_loopback_name(host: &str) -> bool {
     const SUFFIX: &str = ".localhost";
-    let host = host.strip_suffix('.').unwrap_or(host);
+    let host = host.trim_end_matches('.');
     host.eq_ignore_ascii_case("localhost")
         || (host.len() > SUFFIX.len()
             && host
@@ -270,12 +270,20 @@ pub(crate) fn is_loopback_name(host: &str) -> bool {
 ///
 /// # Errors
 ///
-/// Returns the SSRF refusal when the host is a loopback name. An unparsable
-/// URL is left to the other checks.
+/// Returns the SSRF refusal when the host is a loopback name, or a name that
+/// is a private or reserved address once its trailing dots are trimmed
+/// (`127.0.0.1..` stays a name to the URL parser). An unparsable URL is left
+/// to the other checks.
 pub(crate) fn refuse_loopback_name(url_str: &str) -> Result<()> {
-    let named_loopback = url::Url::parse(url_str)
-        .ok()
-        .is_some_and(|url| url.host_str().is_some_and(is_loopback_name));
+    let named_loopback = url::Url::parse(url_str).is_ok_and(|url| {
+        url.host_str().is_some_and(|host| {
+            is_loopback_name(host)
+                || host
+                    .trim_end_matches('.')
+                    .parse::<IpAddr>()
+                    .is_ok_and(is_private_or_reserved)
+        })
+    });
     if named_loopback {
         return Err(Error::Protocol(format!(
             "{SSRF_BLOCKED}: host names the loopback interface"

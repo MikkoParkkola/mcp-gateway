@@ -47,8 +47,10 @@ pub(super) fn build(proxy: Option<&url::Url>) -> Client {
                 .host_str()
                 .is_some_and(crate::security::ssrf::is_loopback_name)
             {
-                return attempt
-                    .error("SSRF blocked: redirect to a host naming the loopback interface");
+                return attempt.error(crate::security::ssrf::SsrfDenied::new(format!(
+                    "{}: redirect to a host naming the loopback interface",
+                    crate::security::ssrf::SSRF_BLOCKED
+                )));
             }
             match redirect_decision(attempt.previous().len(), attempt.url().as_str()) {
                 RedirectDecision::Stop => attempt.stop(),
@@ -74,10 +76,13 @@ fn route(proxy: Option<&url::Url>) -> reqwest::ClientBuilder {
         None => crate::security::ssrf::pinned_client_builder(),
         // Loopback goes direct: cleartext to it is allowed only because it
         // stays on the machine, and the proxy would carry it off (#3013).
+        // Only the literals: a loopback name is refused before any send
+        // (MIK-9038), and one a check missed reaches the proxy, never this
+        // unpinned direct path.
         Some(url) => Client::builder().no_proxy().proxy(
             reqwest::Proxy::all(url.as_str())
                 .expect("capabilities.egress_proxy validated at load")
-                .no_proxy(reqwest::NoProxy::from_string("localhost,127.0.0.0/8,::1")),
+                .no_proxy(reqwest::NoProxy::from_string("127.0.0.0/8,::1")),
         ),
     }
 }

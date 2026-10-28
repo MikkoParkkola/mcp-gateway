@@ -17,6 +17,9 @@ fn loopback_names_in_every_spelling() {
         "foo.localhost",
         "foo.localhost.",
         "a.b.LOCALHOST",
+        "localhost..",
+        "LOCALHOST..",
+        "foo.localhost..",
     ] {
         assert!(is_loopback_name(host), "{host:?} is a loopback name");
     }
@@ -35,22 +38,29 @@ fn loopback_names_in_every_spelling() {
     }
 }
 
-/// A capability URL naming loopback is refused with the SSRF refusal; a
-/// public name is not.
+/// A capability URL naming loopback is refused with the SSRF refusal, in
+/// every spelling the URL parser leaves a name: trailing dots, case, percent
+/// encoding and full-width forms (both normalised to `localhost`), and a
+/// loopback literal with extra trailing dots, which stays a name. A public
+/// name is not refused.
 #[test]
 fn a_loopback_name_url_is_refused_as_ssrf() {
     for url in [
         "http://localhost:8080/x",
         "http://LOCALHOST/x",
         "http://localhost.:8080/x",
+        "http://localhost..:8080/x",
         "https://foo.localhost/x",
         "http://foo.localhost.:9/x",
+        "http://local%68ost:8080/x",
+        "http://\u{ff4c}\u{ff4f}\u{ff43}\u{ff41}\u{ff4c}\u{ff48}\u{ff4f}\u{ff53}\u{ff54}:8080/x",
+        "http://127.0.0.1..:8080/x",
+        "http://127.0.0.1/x",
     ] {
         let refused = refuse_loopback_name(url).expect_err(url);
         assert!(is_ssrf_refusal(&refused), "{url}: {refused}");
     }
     refuse_loopback_name("https://api.example.com/x").expect("a public name passes");
-    refuse_loopback_name("http://127.0.0.1/x").expect("a literal is the other check's");
 }
 
 /// Each literal spelling parses to an IP, not a name, so the synchronous
@@ -63,9 +73,11 @@ fn every_literal_spelling_parses_to_an_ip_the_check_refuses() {
         ("0177.0.0.1", "127.0.0.1"),
         ("2130706433", "127.0.0.1"),
         ("127.0.0.1.", "127.0.0.1"),
+        ("0x7f.1", "127.0.0.1"),
         ("0.0.0.0", "0.0.0.0"),
         ("[::1]", "::1"),
         ("[::ffff:127.0.0.1]", "::ffff:127.0.0.1"),
+        ("[64:ff9b::7f00:1]", "64:ff9b::7f00:1"),
     ] {
         let url = format!("http://{spelling}:8080/x");
         let parsed = url::Url::parse(&url).expect("parses");
