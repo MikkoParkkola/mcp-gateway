@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-9002 R2.2/R3: a stored task is delivered without any `Noted`
+//! A stored task is delivered without any `Noted`
 //! gateway-only member its row does not record as the gateway's own write.
-//! Since MIK-9000 ingress strips a backend's copy before store, so a member at
+//! The ingress strip removes a backend's copy before store, so a member at
 //! a noted `(layer, dest)` is the gateway's, even sealed or redacted after its
 //! note; a row stored before the rename notes the plain dest, so a `_` member
 //! planted in it matches nothing and is removed. `Outside` members are left

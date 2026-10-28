@@ -159,7 +159,7 @@ pub(crate) fn strip_with(table: &[Member], value: &mut Value) -> Vec<String> {
 }
 
 /// Remove from a stored value every [`Writer::Noted`] gateway-only member
-/// that `kept` does not claim as the gateway's own write (MIK-9002: a row
+/// that `kept` does not claim as the gateway's own write (a row
 /// stored before ingress stripped, or before the rename, can hold a backend's
 /// copy). [`Writer::Outside`] members are never noted, so they stay as stored.
 /// Returns whether a removed member was one a content digest covers, so a

@@ -466,7 +466,7 @@ async fn noted_array_elements_become_null() {
     );
 }
 
-/// MIK-9002 R2.3: a record stored before the rename names the plain kinds.
+/// A record stored before the rename names the plain kinds.
 /// Each decodes as its renamed row with its stored `dest` and `within` kept
 /// (a composite's rebased path and a projected part included), and is
 /// written back under the new kind.

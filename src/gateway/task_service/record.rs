@@ -527,7 +527,7 @@ impl CommittedTask {
             )
     }
 
-    /// The stored task as a delivery serves it (MIK-9002): every serve site
+    /// The stored task as a delivery serves it: every serve site
     /// (`tasks/get`, a repeat, a notification) sends this, never
     /// `task.wire()` alone, and before any egress scan reads it.
     ///

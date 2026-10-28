@@ -195,7 +195,7 @@ fn a_wrapped_root_is_named_by_its_content() {
     }
 }
 
-/// MIK-9002 pin (green before and after; the guard for every answer source):
+/// Pin (green before and after the rename; the guard for every answer source):
 /// a capability's body, `_recovery` and `_predicted_next` included, is
 /// payload. It lands in `content[0].text` and `structuredContent`, never at
 /// the answer root, so it can neither pose as the gateway's hint or

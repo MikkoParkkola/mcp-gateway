@@ -80,7 +80,7 @@ fn with_retry_keeps_the_surface_request() {
     );
 }
 
-/// MIK-9002 (F2 flip): a backend's own plain `recovery` on an error result is
+/// A backend's own plain `recovery` on an error result is
 /// backend data. It no longer suppresses the gateway's hint, which arrives as
 /// `_recovery`, and it is delivered as the backend sent it.
 #[test]

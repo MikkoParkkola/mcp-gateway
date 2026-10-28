@@ -253,7 +253,7 @@ fn withheld_members_never_show_in_debug_or_on_the_wire() {
     assert!(!wire.contains("FORGED-withheld"), "{wire}");
 }
 
-/// MIK-9002 RENAME.2, per member: each renamed member is stripped from a task
+/// Per member: each renamed member is stripped from a task
 /// envelope's slot and from an error's data, and the plain name a backend may
 /// use for its own data stays beside it.
 #[test]

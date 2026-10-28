@@ -503,7 +503,7 @@ fn d1c_tool_stamp_without_public_seed_is_byte_identical() {
     assert_eq!(bare, result, "stamping adds only _meta");
 }
 
-/// MIK-9002 RENAME.1: the gateway writes its prediction and correlation id
+/// The gateway writes its prediction and correlation id
 /// under the `_` names a backend cannot forge, never under the plain ones,
 /// and leaves a backend's own plain members as they are.
 #[test]
