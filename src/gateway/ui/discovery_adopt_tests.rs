@@ -292,3 +292,35 @@ fn adoption_takes_out_literals_in_a_fixed_order() {
     assert_eq!(backend.headers.len(), 1);
     assert_eq!(backend.headers["X-Plain"], "${H}");
 }
+
+/// muse PR4 r3 L1, L3: the two answers the end-to-end test has no cheap
+/// fixture for, pinned where the typed error becomes a status. A scan that
+/// timed out is a 503, a changed find a 409, and a vault that cannot be
+/// opened a 500 whose body never carries the store's own message.
+#[test]
+fn a_timed_out_scan_and_a_missing_vault_have_fixed_answers() {
+    use crate::discovery::listing::ScanTimedOut;
+    let timed_out = found(Err(ScanTimedOut)).expect_err("a timeout is refused");
+    let (status, json) = futures::executor::block_on(body_of(timed_out));
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{json}");
+    let changed = found(Ok(None)).expect_err("a changed find is refused");
+    let (status, json) = futures::executor::block_on(body_of(changed));
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    assert_eq!(json["error"], "find_changed");
+
+    // Never written: the step is refused before any store is touched.
+    let store = std::sync::Arc::new(crate::secret_store::FilesStore::new(std::path::Path::new(
+        "/nonexistent-zq-adopt",
+    )));
+    let refused = secret_step(
+        "tool",
+        Vec::new(),
+        store,
+        Err(StoreError::Failed(CANARY.to_owned())),
+    )
+    .err()
+    .expect("no vault is refused");
+    let (status, json) = futures::executor::block_on(body_of(refused));
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    assert!(!json.to_string().contains(CANARY), "{json}");
+}

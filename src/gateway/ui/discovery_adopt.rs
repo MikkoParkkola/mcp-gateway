@@ -29,8 +29,9 @@ use crate::config_reload::{
     Expected, FileRevision, RELOAD_LOCK_WAIT, Replace, ReplaceError, ReplaceOutcome, Replaced,
     SecretStep, replace_detached,
 };
+use crate::discovery::DiscoveredServer;
 use crate::discovery::adopt::{AdoptRefusal, Adoption, Literal, adoption, refusals};
-use crate::discovery::listing::DiscoveryCache;
+use crate::discovery::listing::{DiscoveryCache, ScanTimedOut};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
 use crate::secret_store::{
@@ -208,14 +209,17 @@ fn store_for(
 }
 
 /// The writer's secret step: each literal saved under its backend field.
-/// `None` when the vault beside gateway.yaml cannot be opened.
-fn secret_step(
+/// A vault that cannot be opened (no home for its lock) is a 500 with fixed
+/// text; the store's own message is never returned.
+pub(super) fn secret_step(
     name: &str,
     literals: Vec<Literal>,
     store: Arc<dyn SecretStore + Send + Sync>,
-    dir: &std::path::Path,
-) -> Option<SecretStep> {
-    let vault = Vault::for_config_dir(dir).ok()?;
+    vault: Result<Vault, StoreError>,
+) -> Result<SecretStep, Response> {
+    let Ok(vault) = vault else {
+        return Err(fixed(StatusCode::INTERNAL_SERVER_ERROR, FAILED));
+    };
     let values = literals
         .into_iter()
         .map(|literal| NewSecretOwned {
@@ -223,11 +227,28 @@ fn secret_step(
             value: literal.value,
         })
         .collect();
-    Some(SecretStep {
+    Ok(SecretStep {
         vault,
         store,
         values,
     })
+}
+
+/// The find a fresh scan resolved, or the answer when it did not: changed
+/// since the listing (409), or the scan timed out (503).
+pub(super) fn found(
+    resolved: Result<Option<DiscoveredServer>, ScanTimedOut>,
+) -> Result<DiscoveredServer, Response> {
+    match resolved {
+        Ok(Some(server)) => Ok(server),
+        Ok(None) => {
+            Err((StatusCode::CONFLICT, Json(json!({"error": "find_changed"}))).into_response())
+        }
+        Err(ScanTimedOut) => Err(fixed(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "discovery scan timed out",
+        )),
+    }
 }
 
 /// `POST /ui/api/discovery/adopt`.
@@ -278,14 +299,9 @@ pub(super) async fn adopt_discovery(
             "Config reload is not enabled on this gateway",
         );
     };
-    let server = match cache.resolve(&body.find_id).await {
-        Ok(Some(server)) => server,
-        Ok(None) => {
-            return (StatusCode::CONFLICT, Json(json!({"error": "find_changed"}))).into_response();
-        }
-        Err(_) => {
-            return fixed(StatusCode::SERVICE_UNAVAILABLE, "discovery scan timed out");
-        }
+    let server = match found(cache.resolve(&body.find_id).await) {
+        Ok(server) => server,
+        Err(refused) => return refused,
     };
 
     let mut reasons: Vec<(&'static str, String)> = refusals(&server)
@@ -317,10 +333,13 @@ pub(super) async fn adopt_discovery(
         .collect();
     let secrets = match store {
         None => None,
-        Some(store) => match secret_step(&name, adoption.literals, store, &dir) {
-            Some(step) => Some(step),
-            None => return fixed(StatusCode::INTERNAL_SERVER_ERROR, FAILED),
-        },
+        Some(store) => {
+            let vault = Vault::for_config_dir(&dir);
+            match secret_step(&name, adoption.literals, store, vault) {
+                Ok(step) => Some(step),
+                Err(refused) => return refused,
+            }
+        }
     };
     let replace = Replace {
         expected: Expected::Revision(revision.clone()),
