@@ -10,10 +10,24 @@ use crate::context_integrity::{
     ContextActionRisk, ContextIntegrityDecisionKind, ContextIntegrityEvaluation,
     ContextIntegrityInput, ContextProvenance, ContextTrustBoundary,
 };
+use crate::gateway::delivery_facts::ResponseEffect;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::identity_grants::GrantSubject;
 
 use super::BudgetOutcome;
+
+/// Whether enforcement withheld the backend's answer, from what
+/// [`MetaMcp::context_integrity_delivered_result`] says it did: `None` is a
+/// whole withhold and `Refused` a malformed round, both withheld; every other
+/// effect delivered the answer. Exhaustive, so a new effect must be placed.
+fn withheld_by(effect: Option<ResponseEffect>) -> bool {
+    match effect {
+        None | Some(ResponseEffect::Refused) => true,
+        Some(ResponseEffect::Delivered | ResponseEffect::Annotated | ResponseEffect::Rewritten) => {
+            false
+        }
+    }
+}
 
 impl MetaMcp {
     /// Record an outcome against both backend and per-capability error budgets.
@@ -215,9 +229,12 @@ impl MetaMcp {
         }
 
         let (delivered, effect, withheld) = if evaluation.policy.enforcement_applied {
-            let (delivered, withheld) =
+            let (delivered, rebuilt) =
                 Self::context_integrity_delivered_result(&evaluation, &result);
-            (delivered, GateEffect::Enforced, withheld)
+            if let Some(rebuilt) = rebuilt {
+                crate::gateway::delivery_facts::raise(rebuilt);
+            }
+            (delivered, GateEffect::Enforced, withheld_by(rebuilt))
         } else {
             (result, GateEffect::PassedThrough, false)
         };
@@ -241,24 +258,26 @@ impl MetaMcp {
         (false, false)
     }
 
+    /// The answer enforcement delivers, and what that did to the backend's:
+    /// `Rewritten` for a rebuild, `Refused` for a malformed round, and `None`
+    /// for a whole withhold, whose refusal is raised where the withheld
+    /// answer is delivered.
     pub(super) fn context_integrity_delivered_result(
         evaluation: &ContextIntegrityEvaluation,
         original: &Value,
-    ) -> (Value, bool) {
+    ) -> (Value, Option<ResponseEffect>) {
         let Some(delivered) = evaluation.transformed.delivered.clone() else {
-            return (
-                json!({
-                    "isError": true,
-                    "content": [{
-                        "type": "text",
-                        "text": format!(
-                            "Tool result withheld by ContextIntegrityKernel: {}",
-                            evaluation.policy.rationale
-                        )
-                    }]
-                }),
-                true,
-            );
+            let withheld = json!({
+                "isError": true,
+                "content": [{
+                    "type": "text",
+                    "text": format!(
+                        "Tool result withheld by ContextIntegrityKernel: {}",
+                        evaluation.policy.rationale
+                    )
+                }]
+            });
+            return (withheld, None);
         };
 
         let text = delivered
@@ -292,16 +311,14 @@ impl MetaMcp {
         let malformed = result_type.is_some_and(|value| !value.is_string())
             || is_error.is_some_and(|value| !value.is_boolean());
         if malformed {
-            return (
-                json!({
-                    "content": [{
-                        "type": "text",
-                        "text": "The backend returned a malformed result: `resultType`                              must be a string and `isError` a boolean. The response                              was refused rather than delivered."
-                    }],
-                    "isError": true,
-                }),
-                true,
-            );
+            let refused = json!({
+                "content": [{
+                    "type": "text",
+                    "text": "The backend returned a malformed result: `resultType`                              must be a string and `isError` a boolean. The response                              was refused rather than delivered."
+                }],
+                "isError": true,
+            });
+            return (refused, Some(ResponseEffect::Refused));
         }
         let mut envelope = serde_json::Map::new();
         for (field, value) in [("resultType", result_type), ("isError", is_error)] {
@@ -311,7 +328,7 @@ impl MetaMcp {
         }
         envelope.insert("content".to_string(), content);
         envelope.insert("structuredContent".to_string(), delivered);
-        (Value::Object(envelope), false)
+        (Value::Object(envelope), Some(ResponseEffect::Rewritten))
     }
 
     pub(super) fn attach_context_integrity_metadata(
@@ -327,14 +344,50 @@ impl MetaMcp {
             "audit": &evaluation.audit,
         });
 
+        // A counted member written outside `note`: noting it would strip the
+        // verdict from the staged receipt copy, which relay detection reads.
         if let Some(obj) = result.as_object_mut() {
             obj.insert("_context_integrity".to_string(), metadata);
+            crate::gateway::delivery_facts::raise(ResponseEffect::Annotated);
             result
         } else {
+            // A scalar has no member to carry the verdict: the gateway wraps
+            // it, which changes the bytes delivered.
+            crate::gateway::delivery_facts::raise(ResponseEffect::Rewritten);
             json!({
                 "structuredContent": result,
                 "_context_integrity": metadata
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod withheld_by_tests {
+    use super::{ResponseEffect, withheld_by};
+
+    #[test]
+    fn a_whole_withhold_is_withheld() {
+        assert!(withheld_by(None));
+    }
+
+    #[test]
+    fn a_refused_round_is_withheld() {
+        assert!(withheld_by(Some(ResponseEffect::Refused)));
+    }
+
+    #[test]
+    fn a_rewritten_answer_is_delivered() {
+        assert!(!withheld_by(Some(ResponseEffect::Rewritten)));
+    }
+
+    #[test]
+    fn an_annotated_answer_is_delivered() {
+        assert!(!withheld_by(Some(ResponseEffect::Annotated)));
+    }
+
+    #[test]
+    fn an_untouched_answer_is_delivered() {
+        assert!(!withheld_by(Some(ResponseEffect::Delivered)));
     }
 }

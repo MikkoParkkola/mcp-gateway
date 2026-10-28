@@ -744,6 +744,10 @@ mod config_error_leak_tests;
 mod empty_backends_reload_tests;
 #[cfg(test)]
 mod reload_pause;
+/// For the admin audit layer's cancel rows, which pause a UI write between
+/// writing the file and publishing its reload.
+#[cfg(all(test, feature = "webui"))]
+pub(crate) use reload_pause::arm as arm_reload_pause;
 #[cfg(test)]
 mod webhook_base_path_reload_tests;
 #[cfg(test)]
