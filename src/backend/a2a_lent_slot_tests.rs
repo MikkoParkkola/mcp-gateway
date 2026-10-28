@@ -25,20 +25,23 @@ const USER: &str = "u:alpha";
 const STATIC_HEADER: &str = "x-static-credential";
 
 /// One request the agent received: its path, the JSON-RPC method it carried
-/// (empty for a card fetch), its `Authorization`, and whether it carried the
-/// static header.
+/// (empty for a card fetch), the task it concerns (the id a `SendMessage`
+/// was given, or the one a poll or cancel names), its `Authorization`, and
+/// whether it carried the static header.
 #[derive(Debug, Clone)]
 struct Seen {
     path: &'static str,
     method: String,
+    task: String,
     authorization: String,
     static_header: bool,
 }
 
-fn seen(path: &'static str, method: &str, headers: &HeaderMap) -> Seen {
+fn seen(path: &'static str, method: &str, task: &str, headers: &HeaderMap) -> Seen {
     Seen {
         path,
         method: method.to_owned(),
+        task: task.to_owned(),
         authorization: headers
             .get("authorization")
             .and_then(|v| v.to_str().ok())
@@ -57,19 +60,19 @@ enum Script {
     Works,
 }
 
-fn task_reply(state: &str) -> Value {
-    json!({"id": "t-1", "contextId": "c-1",
+fn task_reply(task: &str, state: &str) -> Value {
+    json!({"id": task, "contextId": "c-1",
         "status": {"state": state, "message": {
             "messageId": "m", "role": "ROLE_AGENT", "parts": [{"text": "done"}]}}})
 }
 
-/// The result `script` answers JSON-RPC `method` with.
-fn rpc_result(script: Script, method: &str) -> Value {
+/// The result `script` answers JSON-RPC `method` about `task` with.
+fn rpc_result(script: Script, method: &str, task: &str) -> Value {
     match (script, method) {
-        (Script::Completes, _) => json!({"task": task_reply("TASK_STATE_COMPLETED")}),
-        (Script::Works, "SendMessage") => json!({"task": task_reply("TASK_STATE_WORKING")}),
-        (Script::Works, "CancelTask") => task_reply("TASK_STATE_CANCELED"),
-        (Script::Works, _) => task_reply("TASK_STATE_WORKING"),
+        (Script::Completes, _) => json!({"task": task_reply(task, "TASK_STATE_COMPLETED")}),
+        (Script::Works, "SendMessage") => json!({"task": task_reply(task, "TASK_STATE_WORKING")}),
+        (Script::Works, "CancelTask") => task_reply(task, "TASK_STATE_CANCELED"),
+        (Script::Works, _) => task_reply(task, "TASK_STATE_WORKING"),
     }
 }
 
@@ -87,11 +90,12 @@ async fn agent(script: Script, advertised: Option<String>) -> (String, Arc<Mutex
     let endpoint = advertised.unwrap_or_else(|| format!("{base}/a2a"));
     let log = Arc::new(Mutex::new(Vec::new()));
     let (card_log, rpc_log) = (Arc::clone(&log), Arc::clone(&log));
+    let tasks = Arc::new(std::sync::atomic::AtomicUsize::new(1));
     let app = Router::new()
         .route(
             "/.well-known/agent-card.json",
             get(move |headers: HeaderMap| {
-                card_log.lock().unwrap().push(seen("card", "", &headers));
+                card_log.lock().unwrap().push(seen("card", "", "", &headers));
                 let endpoint = endpoint.clone();
                 async move {
                     axum::Json(json!({"name": "recording", "supportedInterfaces": [
@@ -103,10 +107,16 @@ async fn agent(script: Script, advertised: Option<String>) -> (String, Arc<Mutex
             "/a2a",
             post(move |headers: HeaderMap, axum::Json(body): axum::Json<Value>| {
                 let method = body["method"].as_str().unwrap_or_default().to_owned();
-                rpc_log.lock().unwrap().push(seen("rpc", &method, &headers));
+                // Each new task gets its own id; a poll or cancel names one.
+                let task = if method == "SendMessage" {
+                    format!("t-{}", tasks.fetch_add(1, std::sync::atomic::Ordering::SeqCst))
+                } else {
+                    body["params"]["id"].as_str().unwrap_or_default().to_owned()
+                };
+                rpc_log.lock().unwrap().push(seen("rpc", &method, &task, &headers));
                 async move {
                     axum::Json(
-                        json!({"jsonrpc": "2.0", "id": body["id"], "result": rpc_result(script, &method)}),
+                        json!({"jsonrpc": "2.0", "id": body["id"], "result": rpc_result(script, &method, &task)}),
                     )
                 }
             }),
@@ -366,6 +376,24 @@ async fn two_calls_on_one_pooled_slot_each_send_their_own_credential() {
         foreign.is_empty(),
         "a send carried neither call's credential: {foreign:?}"
     );
+    let created: Vec<&Seen> = log.iter().filter(|s| s.method == "SendMessage").collect();
+    assert_eq!(
+        created.len(),
+        2,
+        "premise: each call created its own task: {log:?}"
+    );
+    for task in created {
+        let swapped: Vec<&Seen> = log
+            .iter()
+            .filter(|s| s.task == task.task && s.authorization != task.authorization)
+            .collect();
+        assert!(
+            swapped.is_empty(),
+            "task {} was created as {} but sent as another credential: {swapped:?}",
+            task.task,
+            task.authorization
+        );
+    }
 }
 
 /// A call whose credential's check refuses sends nothing: neither the card
