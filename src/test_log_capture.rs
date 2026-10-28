@@ -197,20 +197,32 @@ pub(crate) fn count(records: &[serde_json::Value], level: &str, text: &str) -> u
 }
 
 /// The guard's rule for one file's text: it installs a scoped subscriber
-/// but never reaches the keeper. Matched on code only, each line cut at its
-/// first `//`, so a line or doc comment can neither satisfy nor trigger it.
-/// The cut also falls inside a string literal holding `//` (a URL): a keeper
-/// call after one on the same line is not seen, and the file is flagged.
-/// That fails closed; move the call to its own line.
+/// but never reaches the keeper. Matched on code only: each line is cut at
+/// its first `//` that does not follow a `:`, so a line, doc or inner-doc
+/// comment can neither satisfy nor trigger it, while a URL's `scheme://` is
+/// kept as code. Lexical limits: another `//` inside a string literal still
+/// cuts the line, hiding whatever follows on it (a keeper there flags the
+/// file; an install there escapes it), and block comments and string
+/// contents are searched as code. Move such a call to its own line.
 fn misses_keeper(text: &str) -> bool {
-    let code: Vec<&str> = text
-        .lines()
-        .map(|line| line.split("//").next().unwrap_or(""))
-        .collect();
+    let code: Vec<&str> = text.lines().map(code_part).collect();
     let has = |needle: &&str| code.iter().any(|line| line.contains(needle));
     let installs = ["subscriber::with_default(", "subscriber::set_default("];
     let keeps = ["keep_interest_open", "test_log_capture", "error_capture"];
     installs.iter().any(has) && !keeps.iter().any(has)
+}
+
+/// `line` up to its first comment marker: a `//` not preceded by `:`.
+fn code_part(line: &str) -> &str {
+    let mut from = 0;
+    while let Some(found) = line[from..].find("//") {
+        let at = from + found;
+        if !line[..at].ends_with(':') {
+            return &line[..at];
+        }
+        from = at + 2;
+    }
+    line
 }
 
 /// A keeper named only in a line or doc comment does not count: the file is
@@ -231,6 +243,40 @@ fn a_real_keeper_call_passes() {
     let text = "fn t() {\n    crate::test_log_capture::keep_interest_open();\n    \
                 tracing::subscriber::with_default(s, || {});\n}\n";
     assert!(!misses_keeper(text));
+}
+
+/// A keeper named only in a trailing or an inner-doc comment does not
+/// count either.
+#[test]
+fn a_keeper_in_a_trailing_or_inner_doc_comment_is_flagged() {
+    let trailing = "fn t() {\n    tracing::subscriber::with_default(s, || {}); \
+                    // test_log_capture\n}\n";
+    assert!(
+        misses_keeper(trailing),
+        "a trailing comment satisfied the guard"
+    );
+    let inner = "//! Reaches test_log_capture.\nfn t() {\n    \
+                 tracing::subscriber::with_default(s, || {});\n}\n";
+    assert!(
+        misses_keeper(inner),
+        "an inner-doc comment satisfied the guard"
+    );
+}
+
+/// A URL is code, not a comment: an install after one on the same line is
+/// seen, and so is a keeper.
+#[test]
+fn a_url_on_the_line_hides_neither_install_nor_keeper() {
+    let install = "fn t() {\n    let _g = (\"https://x\", \
+                   tracing::subscriber::set_default(s));\n}\n";
+    assert!(
+        misses_keeper(install),
+        "an install after a URL escaped the guard"
+    );
+    let keeper = "fn t() {\n    let _u = \"https://x\"; \
+                  crate::test_log_capture::keep_interest_open();\n    \
+                  tracing::subscriber::with_default(s, || {});\n}\n";
+    assert!(!misses_keeper(keeper), "a keeper after a URL was not seen");
 }
 
 /// An install that is only commented out is not an install.
