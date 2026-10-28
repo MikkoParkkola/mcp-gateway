@@ -15,7 +15,7 @@
 //! spawns (a source row pins that), and the one hand-off to another task, a
 //! task-augmented call's worker, is refused for a UI call before it starts.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, OnceLock};
 
 /// Web UI tool calls that may run at once, per gateway. A constant: the
@@ -48,7 +48,16 @@ pub(crate) struct UiCall {
     /// admit is refused at the send point (`admit_send`), so a path that
     /// skipped the gate cannot run a UI call.
     gated: AtomicBool,
+    /// Who won the race between the send and the route's deadline: one atomic
+    /// transition, so a call the deadline cancelled is never sent and a call
+    /// already sending is never cancelled.
+    race: AtomicU8,
 }
+
+/// `race` states.
+const OPEN: u8 = 0;
+const SENDING: u8 = 1;
+const CANCELLED: u8 = 2;
 
 /// What the dispatch recorded, read once it returns.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -79,6 +88,7 @@ impl UiCall {
             failed_after_send: AtomicBool::new(false),
             confirm_refused: AtomicBool::new(false),
             gated: AtomicBool::new(false),
+            race: AtomicU8::new(OPEN),
         })
     }
 
@@ -94,6 +104,13 @@ impl UiCall {
             failed_after_send: self.failed_after_send.load(Ordering::SeqCst),
             confirm_refused: self.confirm_refused.load(Ordering::SeqCst),
         }
+    }
+
+    /// The deadline's claim: `true` when it won, so nothing will be sent.
+    pub(crate) fn cancel(&self) -> bool {
+        self.race
+            .compare_exchange(OPEN, CANCELLED, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
     }
 
     fn targets(&self, (server, tool): (&str, &str)) -> bool {
@@ -121,11 +138,19 @@ pub(crate) fn note_trace(trace: &str) {
 /// The last check before a send: a UI call goes out only as the call its
 /// gate admitted. `Err` refuses it; nothing is sent.
 pub(crate) fn admit_send(step: (&str, &str)) -> crate::Result<()> {
-    match current() {
-        Some(call) if !call.targets(step) || !call.gated.load(Ordering::SeqCst) => {
-            Err(refused("this send is not the call the web UI checked"))
-        }
-        _ => Ok(()),
+    let Some(call) = current() else {
+        return Ok(());
+    };
+    if !call.targets(step) || !call.gated.load(Ordering::SeqCst) {
+        return Err(refused("this send is not the call the web UI checked"));
+    }
+    // The send's claim: it loses only to a deadline that cancelled first.
+    match call
+        .race
+        .compare_exchange(OPEN, SENDING, Ordering::SeqCst, Ordering::SeqCst)
+    {
+        Ok(_) | Err(SENDING) => Ok(()),
+        Err(_) => Err(refused("the web UI stopped waiting for this call")),
     }
 }
 
