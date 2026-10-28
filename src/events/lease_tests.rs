@@ -536,3 +536,48 @@ async fn a_replace_dropped_during_the_drain_leaves_no_lease() {
     );
     assert_eq!(s.state(&key("p")).await, LeaseState::CredentialNeeded);
 }
+
+/// A lease lends a non-empty `Authorization` or nothing: an empty token is
+/// never installed, and with no current lease of the generation the send
+/// never runs. A per-user slot of a required binding takes a lease-lent send
+/// as the subscriber's own, so this source is where "never lend empty" is
+/// held.
+#[tokio::test]
+async fn a_lease_lends_a_credential_or_nothing() {
+    let s = store();
+    assert_eq!(
+        s.install(key("p"), Zeroizing::new(String::new()), FAR, 0)
+            .await,
+        Err(LeaseRefusal::NoExpiry),
+        "an empty token is never leased"
+    );
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    assert!(
+        s.with_credential(&key("p"), 7, recording(seen.clone(), calls.clone()))
+            .await
+            .is_err(),
+        "no lease: refused"
+    );
+    let g = s
+        .install(key("p"), token_until(now() + 3600), FAR, 0)
+        .await
+        .unwrap();
+    assert!(
+        s.with_credential(&key("p"), g ^ 1, recording(seen.clone(), calls.clone()))
+            .await
+            .is_err(),
+        "another generation: refused"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "a refused lend ran its send"
+    );
+    s.with_credential(&key("p"), g, recording(seen.clone(), calls.clone()))
+        .await
+        .unwrap();
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(!seen[0].is_empty(), "a lent credential is never empty");
+}

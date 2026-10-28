@@ -174,6 +174,65 @@ fn carries_credential(url: &url::Url) -> bool {
         || url.query().is_some()
 }
 
+/// A find made ready for gateway.yaml: the backend, disabled, with its
+/// literal env and header values taken out, and those literals in the order
+/// their store references fill them back in.
+#[cfg(feature = "webui")]
+pub(crate) struct Adoption {
+    pub(crate) backend: crate::config::BackendConfig,
+    pub(crate) literals: Vec<Literal>,
+}
+
+/// One literal value, bound for the secret store.
+#[cfg(feature = "webui")]
+pub(crate) struct Literal {
+    /// A header rather than an env value.
+    pub(crate) header: bool,
+    pub(crate) key: String,
+    pub(crate) value: crate::wiped_bytes::WipedBytes,
+}
+
+#[cfg(feature = "webui")]
+impl Literal {
+    /// `env.KEY` or `headers.KEY`: the client field it came from.
+    pub(crate) fn field(&self) -> String {
+        format!(
+            "{}.{}",
+            if self.header { "headers" } else { "env" },
+            self.key
+        )
+    }
+}
+
+/// `server` as an adopted backend. A template and an empty value stay as
+/// written; every other value is a literal and leaves the backend, env
+/// before headers, each sorted by key, so the order is the same on every
+/// run. Call it only for a find [`refusals`] accepts.
+#[cfg(feature = "webui")]
+pub(crate) fn adoption(server: &DiscoveredServer) -> Adoption {
+    let mut backend = server.to_backend_config();
+    backend.enabled = false;
+    let mut literals = Vec::new();
+    for (header, map) in [(false, &mut backend.env), (true, &mut backend.headers)] {
+        let mut keys: Vec<String> = map
+            .iter()
+            .filter(|(_, value)| !value.is_empty() && !value.contains("${"))
+            .map(|(key, _)| key.clone())
+            .collect();
+        keys.sort();
+        for key in keys {
+            if let Some(value) = map.remove(&key) {
+                literals.push(Literal {
+                    header,
+                    key,
+                    value: crate::wiped_bytes::WipedBytes::new(value.into_bytes()),
+                });
+            }
+        }
+    }
+    Adoption { backend, literals }
+}
+
 #[cfg(test)]
 #[path = "adopt_tests.rs"]
 mod tests;
