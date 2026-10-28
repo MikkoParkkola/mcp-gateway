@@ -48,7 +48,21 @@ pub enum Outcome {
         name: String,
         /// `(reason code, field)` pairs, sorted by field.
         reasons: Vec<(&'static str, String)>,
+        /// Whether a rule left it out or it was refused.
+        skip: Skip,
     },
+}
+
+/// Why a server was left out. A run whose only skips are by rule is a
+/// successful import of nothing; a refusal with nothing adopted fails it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Skip {
+    /// Left out by a rule every import applies, not for a fault of the
+    /// server: the entry named like `capabilities.name`, usually the
+    /// gateway's own export.
+    ByRule,
+    /// The server cannot be adopted as it stands.
+    Refused,
 }
 
 /// What [`adopt_literals`] put into the config, and the secret entries it
@@ -178,11 +192,23 @@ pub(crate) fn adopt_with(
             outcomes[candidate.outcome] = Outcome::Skipped {
                 name: candidate.name.clone(),
                 reasons: over,
+                skip: Skip::Refused,
             };
             false
         });
     }
-    if candidates.is_empty() && !servers.is_empty() {
+    let refused = outcomes.iter().any(|outcome| {
+        matches!(
+            outcome,
+            Outcome::Skipped {
+                skip: Skip::Refused,
+                ..
+            }
+        )
+    });
+    // Nothing adopted fails the run only when a server was refused; a run
+    // whose only finds were left out by rule writes nothing and succeeds.
+    if candidates.is_empty() && refused {
         return Err(format!(
             "no discovered server could be adopted; nothing was written: {}",
             describe_skipped(&outcomes)
@@ -250,7 +276,16 @@ fn classify(
         );
         if !reasons.is_empty() {
             reasons.sort_by(|a, b| a.1.cmp(&b.1));
-            outcomes.push(Outcome::Skipped { name, reasons });
+            let skip = if reasons.iter().all(|(code, _)| *code == "capabilities_name") {
+                Skip::ByRule
+            } else {
+                Skip::Refused
+            };
+            outcomes.push(Outcome::Skipped {
+                name,
+                reasons,
+                skip,
+            });
             continue;
         }
         seen.insert(name.clone());
@@ -353,7 +388,7 @@ pub fn describe_skipped(outcomes: &[Outcome]) -> String {
     outcomes
         .iter()
         .filter_map(|outcome| match outcome {
-            Outcome::Skipped { name, reasons } => Some(format!(
+            Outcome::Skipped { name, reasons, .. } => Some(format!(
                 "{name:?}: {}",
                 reasons
                     .iter()
