@@ -5,7 +5,6 @@
 //! JSON layer is untouched (LOGINJ.5), and no production text layer is built
 //! any other way (LOGINJ.6).
 
-use std::io::Write as _;
 use std::sync::{Arc, Mutex};
 
 use tracing_subscriber::fmt::MakeWriter;
@@ -23,7 +22,8 @@ struct Buf(Arc<Mutex<Vec<u8>>>);
 
 impl std::io::Write for Buf {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().expect("buffer").write(bytes)
+        self.0.lock().expect("buffer").extend_from_slice(bytes);
+        Ok(bytes.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
@@ -299,10 +299,10 @@ const BUILDS: &[&str] = &[
 
 /// Test-only code, which may build its own capture layers (lead ruling): any
 /// `*_tests.rs` file or `*_tests/` and `tests/` directory, this module's own
-/// rows, and the named helpers: src/test_log_capture.rs, src/test_support/
-/// (error_capture.rs, interest.rs), the `#[cfg(test)] mod log_capture` in
-/// src/gateway/session_id.rs, and the other branch's capture in
-/// src/capability/backend_rug_pull_tests.rs (covered by the `_tests.rs` rule).
+/// rows, and the named helpers: `src/test_log_capture.rs`, `src/test_support/`
+/// (`error_capture.rs`, `interest.rs`), the `#[cfg(test)] mod log_capture` in
+/// `src/gateway/session_id.rs`, and the other branch's capture in
+/// `src/capability/backend_rug_pull_tests.rs` (covered by the `_tests.rs` rule).
 fn test_only(rel: &str) -> bool {
     rel.ends_with("_tests.rs")
         || rel.contains("_tests/")
