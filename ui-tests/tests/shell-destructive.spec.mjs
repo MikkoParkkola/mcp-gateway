@@ -61,8 +61,8 @@ test.describe('confirm', () => {
     await expect(dialog(page).locator('li')).toHaveText(['3 tools disappear for 2 keys.', 'They called them 12 times today.']);
     await expect(keep(page)).toBeFocused();
     await expect(action(page)).toHaveClass(/danger/);
-    // The page behind is inert while it is open.
-    expect(await page.evaluate(() => document.querySelector('.main').inert || document.querySelector('.main').closest('[inert]') !== null)).toBe(true);
+    // The page behind is inert while it is open: its links cannot take focus.
+    expect(await page.evaluate(() => { const a = document.querySelector('nav.route-nav a'); a.focus(); return document.activeElement === a; })).toBe(false);
     await page.keyboard.press('Escape');
     await expect(dialog(page)).toHaveCount(0);
     await expect(page.locator('#remove-probe')).toBeFocused();
@@ -365,3 +365,132 @@ for (const width of [390, 1440]) {
     expect(await blockingViolations(page)).toEqual([]);
   });
 }
+
+test.describe('fold check', () => {
+  test('D10 a late first request cannot release a newer lock: a third confirm is still refused', async ({ page }) => {
+    await page.clock.install();
+    const first = held();
+    let calls = 0;
+    const second = held();
+    await page.route(PROBE, (r) => { calls += 1; return (calls === 1 ? first : second).answer(r); });
+    await open(page);
+    await page.click('#remove-probe');
+    await action(page).click();
+    await page.clock.runFor(30_000);
+    await dialog(page).getByRole('button', { name: 'Close' }).click();
+    await page.clock.runFor(150_000); // the first lock is released by the clock
+    // A second operation takes the lock and is still running.
+    await page.evaluate(() => { window.gatewayConfirm({ opener: document.body, key: 'two', verb: 'Remove', object: 'two', progress: 'Removing two…', consequences: [], run: () => fetch('/ui/api/destroy-probe', { method: 'DELETE' }) }); });
+    await page.locator('dialog.confirm').getByRole('button', { name: 'Remove two' }).click();
+    first.release(204); // the first request settles late
+    await page.clock.runFor(1_000);
+    const third = await page.evaluate(() => window.gatewayConfirm({ opener: document.body, key: 'three', verb: 'Remove', object: 'three', progress: 'Removing three…', consequences: [], run: () => null }));
+    expect(third).toEqual({ outcome: 'refused' });
+    second.release(204);
+  });
+
+  test('D11 the unconfirmed set clears on navigation, never on a Retry of the same page', async ({ page }) => {
+    let calls = 0;
+    await page.route(PROBE, (r) => { calls += 1; return r.fulfill({ status: 500, json: {} }); });
+    await open(page);
+    await page.click('#remove-probe');
+    await action(page).click();
+    await expect(message(page)).toContainText('did not confirm');
+    await dialog(page).getByRole('button', { name: 'Close' }).click();
+    // A screen refreshing itself in place does not clear it.
+    await page.evaluate(() => window.gatewayConfirm({ opener: document.body, key: 'probe:one', verb: 'Remove', object: 'probe', progress: 'Removing probe…', consequences: [], run: () => null }));
+    await expect(dialog(page)).toHaveCount(0);
+    // Navigating away and back renders the page anew, and the action opens again.
+    await page.click('nav.route-nav a[data-page="tools"]');
+    await page.click('nav.route-nav a[data-page="gateway"]');
+    await page.click('nav.tabs a[href="/ui/gateway/actions"]');
+    await page.click('#remove-probe');
+    await expect(dialog(page)).toBeVisible();
+    expect(calls).toBe(1);
+  });
+
+  test('D12 failed() marks a retry only under replay safe, a safe 429 retries, and failed() cannot turn a 500 into a refusal', async ({ page }) => {
+    let status = 400;
+    await page.route(PROBE, (r) => r.fulfill({ status, json: {} }));
+    await open(page, "{ replay: 'safe', failed: (e) => ({ reason: 'Busy.', next: 'Wait a moment.', retry: true }) }");
+    await page.click('#remove-probe');
+    await action(page).click();
+    await expect(dialog(page).getByRole('button', { name: 'Try again' })).toBeVisible();
+    await dialog(page).getByRole('button', { name: 'Close' }).click();
+    status = 429;
+    await page.evaluate(() => { window.__confirm = () => ({ replay: 'safe', key: 'probe:429' }); });
+    await page.click('#remove-probe');
+    await action(page).click();
+    await expect(dialog(page).getByRole('button', { name: 'Try again' })).toBeVisible();
+    await dialog(page).getByRole('button', { name: 'Close' }).click();
+    status = 500;
+    await page.evaluate(() => { window.__confirm = () => ({ replay: 'safe', key: 'probe:500', failed: () => ({ reason: 'Fine.', next: 'Retry.', retry: true }) }); });
+    await page.click('#remove-probe');
+    await action(page).click();
+    await expect(message(page)).toContainText('The gateway did not confirm the outcome.');
+    await expect(dialog(page).getByRole('button', { name: 'Try again' })).toHaveCount(0);
+    // Without replay safe, failed()'s retry: true is ignored.
+    await dialog(page).getByRole('button', { name: 'Close' }).click();
+    status = 400;
+    await page.evaluate(() => { window.__confirm = () => ({ key: 'probe:400', failed: () => ({ reason: 'Busy.', next: 'Wait.', retry: true }) }); });
+    await page.click('#remove-probe');
+    await action(page).click();
+    await expect(message(page)).toContainText('Busy.');
+    await expect(dialog(page).getByRole('button', { name: 'Try again' })).toHaveCount(0);
+  });
+
+  test('D13 an opener at the page end on a short page gets temporary room, restored on close with the scroll', async ({ page }) => {
+    await page.setViewportSize({ width: 820, height: 500 });
+    await open(page);
+    const before = await page.evaluate(() => [scrollY, document.getElementById('content').scrollHeight]);
+    await page.click('#remove-probe');
+    const box = await dialog(page).boundingBox();
+    expect(intersects(box, await page.locator('#remove-probe').boundingBox())).toBe(false);
+    await page.keyboard.press('Escape');
+    expect(await page.evaluate(() => [scrollY, document.getElementById('content').scrollHeight])).toEqual(before);
+  });
+
+  test('D14 a pinch-panned visual viewport centres the dialog in the visible part, sideways too', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.addInitScript(() => {
+      const vv = new EventTarget();
+      Object.defineProperties(vv, { height: { get: () => 450 }, width: { get: () => 720 }, offsetTop: { get: () => 0 }, offsetLeft: { get: () => 600 }, scale: { get: () => 2 } });
+      Object.defineProperty(window, 'visualViewport', { get: () => vv });
+    });
+    await open(page);
+    await page.click('#remove-probe');
+    const box = await dialog(page).boundingBox();
+    expect(Math.abs(box.x + box.width / 2 - (600 + 360))).toBeLessThanOrEqual(1);
+  });
+
+  test('D15 the docking fallback: when no centred box fits, the dialog sits in the band away from the opener, buttons in view', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.addInitScript(() => {
+      const vv = new EventTarget();
+      Object.defineProperties(vv, { height: { get: () => 420 }, width: { get: () => 390 }, offsetTop: { get: () => 120 }, offsetLeft: { get: () => 0 }, scale: { get: () => 1 } });
+      Object.defineProperty(window, 'visualViewport', { get: () => vv });
+      addEventListener('DOMContentLoaded', () => { const s = document.createElement('style'); s.textContent = '#remove-probe { min-height: 120px; }'; document.head.append(s); });
+    });
+    await open(page);
+    await page.click('#remove-probe');
+    const box = await dialog(page).boundingBox();
+    const buttons = await dialog(page).locator('.acts').boundingBox();
+    expect(intersects(box, await page.locator('#remove-probe').boundingBox())).toBe(false);
+    expect(buttons.y >= 120 && buttons.y + buttons.height <= 540).toBe(true);
+  });
+
+  test('D16 a done() that throws after success closes as done with a console error; a removed opener hands focus to the content', async ({ page }) => {
+    const errors = [];
+    page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+    await page.route(PROBE, (r) => r.fulfill({ status: 204 }));
+    await open(page, "{ done: () => { throw new Error('screen done bug'); } }");
+    await page.click('#remove-probe');
+    await page.evaluate(() => document.getElementById('remove-probe').remove());
+    await action(page).click();
+    await expect(dialog(page)).toHaveCount(0);
+    await expect(page).toHaveURL(/\/ui\/gateway\/actions$/);
+    await expect(page.locator('#content')).toBeFocused();
+    await expect.poll(async () => (await outcomes(page))[0]?.outcome).toBe('done');
+    expect(errors.some((e) => e.includes('screen done bug'))).toBe(true);
+  });
+});
