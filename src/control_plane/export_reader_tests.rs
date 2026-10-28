@@ -219,3 +219,29 @@ fn export_reads_a_segment_sealed_after_the_listing() {
         assert!(ids.contains(&want), "{want} lost: {ids:?}");
     }
 }
+
+/// Retention removes the oldest segment while a rotation seals the live one,
+/// both between the listing and the opens: the removed segment reads as
+/// vanished (never another segment's bytes under its number), the scan
+/// lists again once, and the poll exports what is kept with no chain break.
+#[test]
+fn export_rescans_once_when_rotation_and_retention_pass_the_listing() {
+    use crate::security::transparency_log::segments::{list_segments, sealed_path};
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("gov.jsonl");
+    let l = logger(&log);
+    (0..3).for_each(|i| event(&l, &format!("a{i}")));
+    rotate(&l, &log);
+    let oldest = list_segments(&log).unwrap()[0].seq;
+    let mut exp = exporter(dir.path(), &log);
+    let (l1, p1) = (Arc::clone(&l), log.clone());
+    set(&EXPORT_LISTED, move || {
+        rotate(&l1, &p1);
+        std::fs::remove_file(sealed_path(&p1, oldest)).unwrap();
+    });
+    EXPORT_PASSES.with(|c| c.set(0));
+    let sink = CollectingSink::new();
+    let out = exp.poll(&sink).unwrap();
+    assert_eq!(passes(), 2, "one rescan for the vanished segment");
+    assert!(out.forwarded > 0, "the kept segments export");
+}
