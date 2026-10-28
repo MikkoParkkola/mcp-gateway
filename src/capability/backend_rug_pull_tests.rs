@@ -242,3 +242,26 @@ async fn an_unreadable_change_keeps_its_record() {
     assert!(mismatches.incomplete);
     assert_eq!(backend.rug_pull_records().len(), 1, "the record stays");
 }
+
+/// A name recorded for a path whose capability was never admitted (the gate
+/// refused it after the load read it) is not trusted.
+#[tokio::test]
+async fn a_name_the_gate_refused_is_not_trusted() {
+    let dir = TempDir::new().unwrap();
+    let body = BODY.replace("name: rugtest", "name: refused");
+    let pinned = rewrite_with_pin(&body, &compute_capability_hash(&body));
+    let path = dir.path().join("refused.yaml");
+    std::fs::write(&path, &pinned).unwrap();
+    let backend = CapabilityBackend::new("test", Arc::new(CapabilityExecutor::new()));
+    backend.register_directories(&[dir.path().to_str().unwrap().to_string()]);
+    // What the load records before the gate runs, with no admission after.
+    let definition = crate::capability::parse_capability(&pinned).unwrap();
+    let _ = backend.note_loaded(vec![(path.display().to_string(), definition)], false);
+    assert!(!backend.has_capability("refused"));
+
+    std::fs::write(&path, pinned.replace("Initially legit", "Changed")).unwrap();
+    let detected = backend.detect_rug_pulls().await;
+
+    assert_eq!(detected.len(), 1);
+    assert_eq!(detected[0].loaded_as, None);
+}

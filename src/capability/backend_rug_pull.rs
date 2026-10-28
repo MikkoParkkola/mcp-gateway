@@ -29,7 +29,14 @@ impl CapabilityBackend {
         // A reload drops a refused file from the map, so a later change to
         // it keeps the name its earlier record took from the same path.
         for record in &mut detected {
-            let loaded = self.loaded_from.read().get(&record.file).cloned();
+            // Recorded at load, before the admission gate: trusted only if the
+            // capability was admitted and is loaded.
+            let loaded = self
+                .loaded_from
+                .read()
+                .get(&record.file)
+                .filter(|name| self.has_capability(name))
+                .cloned();
             record.loaded_as = loaded.or_else(|| {
                 let state = self.rug_pull_state.read();
                 state
