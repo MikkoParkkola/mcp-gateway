@@ -69,8 +69,10 @@ async function ready(page) {
 const tipOf = (page, id) => page.locator(`.has-tip[data-tip="${id}"] .tip`);
 // clock.install() leaves virtual time running with the wall clock, so a slow
 // step between hover() and runFor() can fire a timer early. Pausing makes
-// runFor() the only thing that moves time.
-const pauseClock = async (page) => page.clock.pauseAt(await page.evaluate(() => Date.now() + 1));
+// runFor() the only thing that moves time. The pause lands 5 s ahead because
+// the clock still runs between reading it and pausing; it is called right
+// after mount, before anything arms a timer, so the jump fires nothing.
+const pauseClock = async (page) => page.clock.pauseAt(await page.evaluate(() => Date.now() + 5000));
 
 test.describe('component', () => {
   test('T1 a text entry: a button named from the title, described by one tooltip', async ({ page }) => {
