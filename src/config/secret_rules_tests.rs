@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Each refusal fires at config load with its exact text, and that text is the
-//! one docs/UPGRADING-4.0.md quotes.
+//! one the upgrade guide quotes.
 
 use std::collections::HashMap;
 
@@ -73,14 +73,28 @@ fn assert_refused(backend: BackendConfig, kind: Refusal, rule: &str, header: &st
     );
 }
 
+/// The upgrade guide as it ships: the numbered document and every pending
+/// `upgrading.d` fragment, which release preparation folds into it.
+fn upgrading_guide() -> String {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut guide = std::fs::read_to_string(root.join("docs/UPGRADING-4.0.md")).expect("guide");
+    let fragments = std::fs::read_dir(root.join("upgrading.d")).expect("upgrading.d");
+    for fragment in fragments.flatten() {
+        if fragment.path().extension().is_some_and(|ext| ext == "md") {
+            guide.push_str(&std::fs::read_to_string(fragment.path()).expect("fragment"));
+        }
+    }
+    guide.replace("\r\n", "\n")
+}
+
 #[test]
 fn every_refusal_is_quoted_in_upgrading() {
-    let doc = include_str!("../../docs/UPGRADING-4.0.md").replace("\r\n", "\n");
+    let doc = upgrading_guide();
     for kind in KINDS {
         let text = refusal(kind, "<b>", "<r>", "<h>");
         assert!(
             doc.contains(&format!("`{text}`")),
-            "UPGRADING item 176 does not quote {kind:?}: {text}"
+            "the upgrade guide does not quote {kind:?}: {text}"
         );
     }
 }

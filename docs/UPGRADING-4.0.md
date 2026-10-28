@@ -200,7 +200,6 @@ backend" and "fails a capability file" first.**
 | 173 | `meta_mcp.cache_tools` is retired: nothing ever read it. A config that sets it loads and logs one warning; `upgrade` removes it, or names it when it cannot do so safely, and `init` no longer writes it | Run `mcp-gateway upgrade`, or delete the key. To change how long tool lists are cached, set `meta_mcp.cache_ttl` |
 | 174 | Every frame a backend's text reaches a client in passes one screen (content inspection, context integrity, response firewall) on every route. Over HTTP `/mcp` an interim question the firewall would rewrite is refused (-32600), as over stdio, instead of delivered redacted; backend errors, `prompts/get` and `resources/read` bodies, catalogue listings and notifications streamed during a call can now arrive redacted or be refused | None by default. To allow flagged text in a prompt, resource or listing, add a firewall rule whose `tool_match` names the method (`prompts/get`, `resources/read`, ...) |
 | 175 | The per-backend route `POST /mcp/{name}` refuses what `/mcp` refuses under every security posture, with the same code and status: a malformed request, a contradicted or doubled protocol header, an unsupported revision, or a 2026-07-28 request missing its required `_meta`. Before, only `hardened` checked these; elsewhere the route forwarded them to the backend | None for a client whose requests `/mcp` accepts. A client that sent such a request to `/mcp/{name}` gets the refusal `/mcp` gives it and fixes the request |
-| 176 | A backend's `secrets:` rules now apply on every route, including `/mcp/{name}`, and a config reload's rules apply on the next call. `inject_as: header` sends the header. A rule the send cannot deliver safely is refused at load: `query` on any backend, `header` on stdio, on a required identity binding or naming a header the gateway or the backend's own credential sets, two header rules for one header, and any rule on an A2A backend | A config the load refuses: change the rule as its message says (see item 176) |
 
 Changes not yet numbered wait in `upgrading.d/` at the repository root, one file per pull request; release preparation numbers them into this list.
 
@@ -4618,57 +4617,6 @@ which backends exist.
 A client whose requests `/mcp` accepts sees no change. Only `hardened` still
 refuses a plain legacy request on this route that is not an `initialize`
 declaring elicitation, as before.
-
-## 176. A backend's `secrets:` rules apply on every route, and a rule the send cannot deliver is refused
-
-**Startup:** no notice, the start is refused with its own error, which names the backend and the rule; refuses to start
-
-A backend's `secrets:` rules are now applied where its tool call is sent, so they hold on
-every route: `gateway_invoke`, the per-backend route `/mcp/{name}` and a task. Before:
-
-- `inject_as: header` sent no header.
-- `inject_as: query` put the secret in the tool call's arguments, as `__query_<key>`, where the
-  backend could log or echo it.
-- On `/mcp/{name}` no rule applied, `argument` included.
-- A config reload's rules took effect only after a restart: a backend the reload added had none
-  applied, a changed value kept the old one, and a removed rule kept sending its secret.
-
-The secret is added only to the copy of the call that is sent. The gateway's own records (the
-audit log, a stored task and its repeat, the caches) keep the arguments the caller sent.
-
-A rule the send cannot deliver where it says is refused at load. Each message names the backend
-(`<b>` below), the rule (`<r>`) and, for a header, the header (`<h>`), and never the value:
-
-- A `query` rule, on any backend. The gateway sends no secret in a URL.
-  `backend '<b>' secret rule '<r>' injects into a URL query parameter: the gateway sends no secret in a URL, where proxy and access logs keep it; use inject_as: header`
-  Instead: `inject_as: header` with the header name the server reads.
-- A `header` rule on a stdio backend, which has no request headers. Before, the rule did nothing.
-  `backend '<b>' secret rule '<r>' injects a header on a stdio backend, which has no request headers; use inject_as: argument or the backend's env`
-  Instead: `inject_as: argument`, or the backend's `env:`.
-- A `header` rule on a backend whose identity binding is required (`identity_propagation` with
-  `required: true`, or a `personal_managed` account). Its per-user calls carry only the
-  subscriber's own credential.
-  `backend '<b>' secret rule '<r>' injects a header, but its identity binding is required, so its per-user sends carry only the subscriber's own credential; remove the rule and supply the credential through the per-user binding`
-  Instead: the per-user binding supplies the credential; remove the rule.
-- A `header` rule naming a header the gateway sets (`Content-Type`, `Accept`, `Host`,
-  `Last-Event-ID` and every `Mcp-` header, among others), a header in the backend's own
-  `headers:`, or `Authorization` on a backend with `oauth`, `identity_propagation`, an `account`
-  or credentials in its URL. Header names are compared without regard to case.
-  `backend '<b>' secret rule '<r>' injects the header '<h>', which the gateway or this backend's own credential already sets; inject a header the server reads that nothing else sets`
-  Instead: a header name only this rule sets.
-- Two `header` rules on one backend naming the same header.
-  `backend '<b>' secret rule '<r>' injects the header '<h>', which another of its rules injects too (header names ignore case); keep one`
-- A `header` rule whose name is not a valid HTTP header name.
-  `backend '<b>' secret rule '<r>' injects '<h>', which is not a valid HTTP header name`
-- Any rule on an A2A backend (`a2a_url`). The A2A bridge forwards only the message and its own
-  headers, so no rule ever reached the agent, except an `argument` rule on `message`, which
-  replaced the caller's whole message with the secret.
-  `backend '<b>' secret rule '<r>' is on an A2A backend, whose bridge forwards only the message and its own headers, so the rule never reached the agent; put the agent's credential in the backend's headers`
-  `backend '<b>' secret rule '<r>' is on an A2A backend and injects the argument 'message', which replaces the caller's message with the secret; put the agent's credential in the backend's headers`
-  Instead: the backend's `headers:` (an `Authorization` header for Basic or Bearer).
-
-A `header` or `query` rule on a `ws_url` backend keeps the refusal item 47 describes, which the
-load reports first.
 
 ## Upgrading from 3.5.x: a walkthrough
 

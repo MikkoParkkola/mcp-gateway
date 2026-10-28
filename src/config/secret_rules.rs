@@ -10,7 +10,7 @@
 //! startup registers it: a `personal_managed` account compiles to a required
 //! binding.
 //!
-//! The text of each refusal comes from [`refusal`], which docs/UPGRADING-4.0.md
+//! The text of each refusal comes from [`refusal`], which the upgrade guide
 //! quotes; a test pins the two together.
 
 use reqwest::header::HeaderName;
