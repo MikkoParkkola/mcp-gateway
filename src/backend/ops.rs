@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use serde_json::Value;
 
 use super::Backend;
-use crate::failsafe::{RetryPolicy, with_retry};
+use crate::failsafe::{RetryPolicy, with_retry_unless};
 use crate::protocol::JsonRpcResponse;
 use crate::protocol::param_headers::{is_param_header, mirror_headers};
 use crate::transport::{ResendPermission, resend_permission};
@@ -53,7 +53,7 @@ impl Backend {
                 ),
             });
         }
-        Ok(Some(entry.lender.lend(&credential.headers)))
+        Ok(Some(entry.lender.lend(credential)))
     }
 
     /// Send a request to the backend
@@ -412,7 +412,10 @@ impl Backend {
         let mut result = if matches!(attempts, Attempts::TaskCapabilityOnce) || !policy.enabled {
             send(params, extra_headers).await
         } else {
-            with_retry(&policy, &name, || {
+            // A refused credential repeats its refusal: stop once this
+            // dispatch's own loan was marked.
+            let refused = || loan.as_ref().is_some_and(|held| held.refused().is_some());
+            with_retry_unless(&policy, &name, refused, || {
                 send(params.clone(), extra_headers.clone())
             })
             .await

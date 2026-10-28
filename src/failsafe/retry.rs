@@ -86,7 +86,7 @@ where
 pub async fn with_retry_unless<F, Fut, T>(
     policy: &RetryPolicy,
     name: &str,
-    _stop: impl Fn() -> bool,
+    stop: impl Fn() -> bool,
     mut f: F,
 ) -> Result<T, Error>
 where
@@ -102,7 +102,7 @@ where
 
     (move || f())
         .retry(builder)
-        .when(is_retryable)
+        .when(|error| is_retryable(error) && !stop())
         .notify(|e: &Error, dur| {
             debug!(
                 operation = op_name,
