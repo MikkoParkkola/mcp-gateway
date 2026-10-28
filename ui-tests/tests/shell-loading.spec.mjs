@@ -47,7 +47,7 @@ async function shellCall(page, name, ...args) {
 function heldProbe() {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
-  return { release, answer: async (r) => { await gate; return r.fulfill({ json: { value: 1 } }); } };
+  return { release, gate, answer: async (r) => { await gate; return r.fulfill({ json: { value: 1 } }); } };
 }
 
 test('G1 a slow page shows the loading state after about 300 ms, says so once, and drops it with the data', async ({ page }) => {
@@ -335,14 +335,25 @@ test('G8c busy clears after a first-load error, after an empty completion and af
 const retryButton = (page) => page.locator('#content [data-state="error"]').getByRole('button', { name: /Retry/ });
 
 test('G5b a Retry that is rejected again shows the error again, with aria-busy cleared', async ({ page }) => {
-  await page.route(PROBE, (r) => r.fulfill({ status: 500, json: {} }));
+  let calls = 0;
+  const second = heldProbe();
+  await page.route(PROBE, async (r) => {
+    calls += 1;
+    if (calls === 1) return r.fulfill({ status: 500, json: {} });
+    await second.gate;
+    return r.fulfill({ status: 500, json: {} });
+  });
   await withFixturePages(page, { probes: true });
   await page.goto('/ui/policies/status');
   await retryButton(page).click();
+  await expect.poll(() => calls, 'the Retry sent its own request').toBe(2);
+  await expect(page.locator('#content')).toHaveAttribute('aria-busy', 'true');
+  second.release();
   await expect(page.locator('#content [data-state="error"]')).toBeVisible();
   await expect(retryButton(page)).toBeEnabled();
   await expect(page.locator('#content')).not.toHaveAttribute('aria-busy', /.*/);
   await expect(loading(page)).toHaveCount(0);
+  expect(calls).toBe(2);
 });
 
 test('G5c leaving during a Retry leaves no loading state or aria-busy on the new page', async ({ page }) => {
